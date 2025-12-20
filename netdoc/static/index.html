@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>运维管理平台</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div id="app">
+        <div class="toast" :class="[toast.show ? 'show' : '', 'toast-' + toast.type]">{{ toast.message }}</div>
+
+        <!-- 登录页面 -->
+        <div v-if="!currentUser" class="login-container">
+            <div class="login-box">
+                <div class="login-title">
+                    <h1>运维管理平台</h1>
+                    <p>请登录您的账号</p>
+                </div>
+                <form @submit.prevent="login">
+                    <div class="form-group"><label>用户名</label><input type="text" class="form-input" v-model="loginForm.username" placeholder="请输入用户名" required></div>
+                    <div class="form-group"><label>密码</label><input type="password" class="form-input" v-model="loginForm.password" placeholder="请输入密码" required></div>
+                    <button type="submit" class="btn btn-primary btn-block" :disabled="loginLoading">{{ loginLoading ? '登录中...' : '登 录' }}</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 主布局 -->
+        <div v-else class="app-layout">
+            <!-- 左侧边栏 -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <div class="sidebar-logo"><span>运维管理平台</span></div>
+                </div>
+                <nav class="sidebar-nav">
+                    <div class="nav-group" v-if="hasPermission('records') || hasPermission('domains')">
+                        <div class="nav-group-title" @click="expandedGroups.data = !expandedGroups.data">
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.data }">▶</span>
+                            数据管理
+                        </div>
+                        <div class="nav-group-items" v-show="expandedGroups.data">
+                            <button v-if="hasPermission('records')" class="nav-item" :class="{ active: currentTab === 'records' }" @click="currentTab = 'records'">
+                                <span class="nav-item-icon">🔗</span><span>数据源ID</span>
+                            </button>
+                            <button v-if="hasPermission('domains')" class="nav-item" :class="{ active: currentTab === 'domains' }" @click="currentTab = 'domains'">
+                                <span class="nav-item-icon">🌐</span><span>域名管理</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="nav-group" v-if="hasPermission('inspection')">
+                        <div class="nav-group-title" @click="expandedGroups.ops = !expandedGroups.ops">
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.ops }">▶</span>
+                            运维工具
+                        </div>
+                        <div class="nav-group-items" v-show="expandedGroups.ops">
+                            <button v-if="hasPermission('inspection')" class="nav-item" :class="{ active: currentTab === 'inspection' }" @click="currentTab = 'inspection'">
+                                <span class="nav-item-icon">🔍</span><span>一键巡检</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="nav-group" v-if="hasPermission('datasources') || hasPermission('audit') || hasPermission('users')">
+                        <div class="nav-group-title" @click="expandedGroups.system = !expandedGroups.system">
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.system }">▶</span>
+                            系统管理
+                        </div>
+                        <div class="nav-group-items" v-show="expandedGroups.system">
+                            <button v-if="hasPermission('datasources')" class="nav-item" :class="{ active: currentTab === 'datasources' }" @click="currentTab = 'datasources'; loadDataSources()">
+                                <span class="nav-item-icon">📡</span><span>数据源管理</span>
+                            </button>
+                            <button v-if="hasPermission('audit')" class="nav-item" :class="{ active: currentTab === 'audit' }" @click="currentTab = 'audit'; loadAuditLogs()">
+                                <span class="nav-item-icon">📝</span><span>审计日志</span>
+                            </button>
+                            <button v-if="hasPermission('users')" class="nav-item" :class="{ active: currentTab === 'users' }" @click="currentTab = 'users'; loadUsers()">
+                                <span class="nav-item-icon">👥</span><span>用户管理</span>
+                            </button>
+                        </div>
+                    </div>
+                </nav>
+                <div class="sidebar-footer">
+                    <div class="user-card">
+                        <div class="user-avatar">{{ currentUser.display_name?.charAt(0) || 'U' }}</div>
+                        <div class="user-info">
+                            <div class="user-name">{{ currentUser.display_name }}</div>
+                            <div class="user-role">{{ currentUser.role === 'admin' ? '管理员' : '普通用户' }}</div>
+                        </div>
+                    </div>
+                    <button class="logout-btn" @click="logout">退出登录</button>
+                </div>
+            </aside>
+
+            <!-- 主内容区 -->
+            <main class="main-content">
+                <!-- 数据源ID -->
+                <div v-show="currentTab === 'records'">
+                    <div class="page-header">
+                        <h1 class="page-title">数据源ID</h1>
+                        <div class="header-actions">
+                            <span class="record-count">共 {{ filteredRecords.length }} 条</span>
+                            <button v-if="selectedRecords.length > 0" class="btn btn-danger" @click="confirmBatchDelete">🗑 删除选中 ({{ selectedRecords.length }})</button>
+                            <button class="btn btn-secondary" @click="exportRecords">⬇ 导出CSV</button>
+                            <button class="btn btn-primary" @click="openRecordModal('add')">+ 添加记录</button>
+                            <button class="btn btn-secondary" @click="openBatchModal">⊞ 批量添加</button>
+                        </div>
+                    </div>
+
+                    <div class="search-bar">
+                        <div class="search-wrapper">
+                            <input type="text" class="search-input" placeholder="搜索项目、VID、IP..." v-model="searchQuery">
+                        </div>
+                        <div class="filter-group">
+                            <span style="color: var(--text-muted); font-size: 0.85em;">环境:</span>
+                            <button class="filter-btn" :class="{ active: envFilter === '' }" @click="envFilter = ''">全部</button>
+                            <button class="filter-btn" :class="{ active: envFilter === 'prod' }" @click="envFilter = 'prod'">PROD</button>
+                            <button class="filter-btn" :class="{ active: envFilter === 'uat' }" @click="envFilter = 'uat'">UAT</button>
+                        </div>
+                        <div class="filter-group">
+                            <span style="color: var(--text-muted); font-size: 0.85em;">状态:</span>
+                            <button class="filter-btn" :class="{ active: statusFilter === '' }" @click="statusFilter = ''">全部</button>
+                            <button class="filter-btn" :class="{ active: statusFilter === 'active' }" @click="statusFilter = 'active'">启用</button>
+                            <button class="filter-btn" :class="{ active: statusFilter === 'inactive' }" @click="statusFilter = 'inactive'">停用</button>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <div class="table-wrapper">
+                            <table>
+                                <thead><tr>
+                                    <th style="width: 40px;"><input type="checkbox" @change="toggleSelectAll" :checked="isAllSelected" :indeterminate.prop="isPartialSelected"></th>
+                                    <th class="sortable" @click="toggleSort('project')">项目 <span class="sort-icon">{{ getSortIcon('project') }}</span></th>
+                                    <th class="sortable" @click="toggleSort('env')">环境 <span class="sort-icon">{{ getSortIcon('env') }}</span></th>
+                                    <th class="sortable" @click="toggleSort('vid')">VID <span class="sort-icon">{{ getSortIcon('vid') }}</span></th>
+                                    <th class="sortable" @click="toggleSort('src_ip')">源 IP <span class="sort-icon">{{ getSortIcon('src_ip') }}</span></th>
+                                    <th class="sortable" @click="toggleSort('dest_ip')">目标 IP <span class="sort-icon">{{ getSortIcon('dest_ip') }}</span></th>
+                                    <th class="sortable" @click="toggleSort('port')">端口 <span class="sort-icon">{{ getSortIcon('port') }}</span></th>
+                                    <th class="sortable" @click="toggleSort('status')">状态 <span class="sort-icon">{{ getSortIcon('status') }}</span></th>
+                                    <th class="sortable" @click="toggleSort('updated_by')">更新人 <span class="sort-icon">{{ getSortIcon('updated_by') }}</span></th>
+                                    <th class="sortable" @click="toggleSort('updated_at')">更新时间 <span class="sort-icon">{{ getSortIcon('updated_at') }}</span></th>
+                                    <th>操作</th>
+                                </tr></thead>
+                                <tbody>
+                                    <tr v-if="filteredRecords.length === 0"><td colspan="11"><div class="empty-state"><div class="empty-state-icon">◎</div><div>暂无数据</div></div></td></tr>
+                                    <tr v-for="record in filteredRecords" :key="record.id" :class="{ 'row-selected': selectedRecords.includes(record.id) }">
+                                        <td><input type="checkbox" :value="record.id" v-model="selectedRecords"></td>
+                                        <td class="project-cell">{{ record.project }}</td>
+                                        <td><span class="env-badge" :class="'env-' + record.env">{{ record.env?.toUpperCase() }}</span></td>
+                                        <td class="vid-cell">{{ record.vid }}</td>
+                                        <td class="ip-cell">{{ record.src_ip }}</td>
+                                        <td class="ip-cell">{{ record.dest_ip }}</td>
+                                        <td class="port-cell">{{ record.port }}</td>
+                                        <td><span class="status-badge" :class="'status-' + record.status">{{ getStatusText(record.status) }}</span></td>
+                                        <td class="operator-cell">{{ record.updated_by || '-' }}</td>
+                                        <td class="timestamp">{{ record.updated_at }}</td>
+                                        <td><div class="action-btns"><button class="btn btn-secondary btn-sm" @click="openRecordModal('edit', record)">编辑</button><button class="btn btn-danger btn-sm" @click="confirmDeleteRecord(record)">删除</button></div></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 域名管理 -->
+                <div v-show="currentTab === 'domains'">
+                    <div class="page-header"><h1 class="page-title">域名管理</h1></div>
+                    <div class="coming-soon">
+                        <div class="coming-soon-icon">🌐</div>
+                        <h2>功能开发中</h2>
+                        <p>域名录入与管理功能即将上线</p>
+                        <ul class="feature-list">
+                            <li>✓ 域名信息录入</li>
+                            <li>✓ SSL证书到期提醒</li>
+                            <li>✓ DNS解析记录</li>
+                            <li>✓ 域名状态监控</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- 一键巡检 -->
+                <div v-show="currentTab === 'inspection'">
+                    <div class="page-header">
+                        <h1 class="page-title">一键巡检</h1>
+                        <div class="header-actions">
+                            <button class="btn btn-secondary" :class="{ 'btn-active': inspectionSubTab === 'templates' }" @click="inspectionSubTab = 'templates'">📋 巡检指标</button>
+                            <button class="btn btn-secondary" :class="{ 'btn-active': inspectionSubTab === 'reports' }" @click="inspectionSubTab = 'reports'">📊 巡检报告</button>
+                            <button class="btn btn-primary" @click="openInspectionModal">▶ 执行巡检</button>
+                        </div>
+                    </div>
+
+                    <!-- 巡检指标 -->
+                    <div v-if="inspectionSubTab === 'templates'">
+                        <div class="sub-header"><h2>可用巡检指标</h2></div>
+                        <div class="metrics-grid">
+                            <div v-for="m in availableMetrics" :key="m.key" class="metric-card">
+                                <div class="metric-header">
+                                    <span class="metric-icon">📊</span>
+                                    <span class="metric-name">{{ m.label }}</span>
+                                </div>
+                                <div class="metric-promql">
+                                    <code>{{ m.promql }}</code>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 巡检报告 -->
+                    <div v-if="inspectionSubTab === 'reports'">
+                        <div class="sub-header"><h2>最近巡检结果</h2></div>
+                        <div v-if="!inspectionResults || inspectionResults.length === 0" class="coming-soon" style="padding: 40px;">
+                            <div class="coming-soon-icon">📊</div>
+                            <h2>暂无巡检报告</h2>
+                            <p>点击"执行巡检"开始生成报告</p>
+                        </div>
+                        <div v-else class="inspection-results">
+                            <div v-for="(result, idx) in inspectionResults" :key="idx" class="result-card">
+                                <div class="result-header">
+                                    <span class="result-ds">{{ result.datasource_name }}</span>
+                                    <span class="result-time">{{ result.time }}</span>
+                                </div>
+                                <div class="result-metrics">
+                                    <div v-for="(metric, mIdx) in result.metrics" :key="mIdx" class="result-metric">
+                                        <span class="metric-label">{{ getMetricLabel(metric.name) }}</span>
+                                        <span class="metric-value" :class="{ 'metric-warning': metric.value > 80, 'metric-danger': metric.value > 90 }">
+                                            {{ typeof metric.value === 'number' ? metric.value.toFixed(2) : metric.value }}{{ metric.unit || '' }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 数据源管理 -->
+                <div v-show="currentTab === 'datasources'">
+                    <div class="page-header">
+                        <h1 class="page-title">数据源管理</h1>
+                        <div class="header-actions">
+                            <span class="record-count">共 {{ (datasources || []).length }} 个</span>
+                            <button class="btn btn-primary" @click="openDataSourceModal('add')">+ 添加数据源</button>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr><th>名称</th><th>类型</th><th>URL</th><th>描述</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+                            <tbody>
+                                <tr v-if="!datasources || datasources.length === 0"><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📡</div><div>暂无数据源</div></div></td></tr>
+                                <tr v-for="ds in datasources" :key="ds.id">
+                                    <td class="project-cell">{{ ds.name }}</td>
+                                    <td><span class="type-badge" :class="'type-' + ds.type">{{ getTypeLabel(ds.type) }}</span></td>
+                                    <td class="ip-cell" style="max-width: 250px; overflow: hidden; text-overflow: ellipsis;">{{ ds.url }}</td>
+                                    <td style="color: var(--text-muted);">{{ ds.description || '-' }}</td>
+                                    <td><span class="status-badge" :class="'status-' + ds.status">{{ ds.status === 'active' ? '启用' : '停用' }}</span></td>
+                                    <td class="timestamp">{{ ds.created_at }}</td>
+                                    <td><div class="action-btns">
+                                        <button class="btn btn-secondary btn-sm" @click="testDataSource(ds)">测试</button>
+                                        <button class="btn btn-secondary btn-sm" @click="openDataSourceModal('edit', ds)">编辑</button>
+                                        <button class="btn btn-danger btn-sm" @click="confirmDeleteDataSource(ds)">删除</button>
+                                    </div></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 审计日志 -->
+                <div v-show="currentTab === 'audit'">
+                    <div class="page-header">
+                        <h1 class="page-title">审计日志</h1>
+                        <div class="header-actions">
+                            <span class="record-count">共 {{ filteredAuditLogs.length }} 条</span>
+                            <button class="btn btn-secondary" @click="exportAuditLogs">⬇ 导出CSV</button>
+                            <button class="btn btn-secondary" @click="loadAuditLogs">刷新</button>
+                        </div>
+                    </div>
+                    <div class="search-bar">
+                        <div class="search-wrapper">
+                            <input type="text" class="search-input" placeholder="搜索操作人或内容..." v-model="auditSearchQuery">
+                        </div>
+                        <div class="filter-group">
+                            <span style="color: var(--text-muted); font-size: 0.85em;">操作:</span>
+                            <button class="filter-btn" :class="{ active: actionFilter === '' }" @click="actionFilter = ''">全部</button>
+                            <button class="filter-btn" :class="{ active: actionFilter === 'create' }" @click="actionFilter = 'create'">创建</button>
+                            <button class="filter-btn" :class="{ active: actionFilter === 'update' }" @click="actionFilter = 'update'">修改</button>
+                            <button class="filter-btn" :class="{ active: actionFilter === 'delete' }" @click="actionFilter = 'delete'">删除</button>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr><th>时间</th><th>操作</th><th>操作人</th><th>变更摘要</th><th>IP</th><th>详情</th></tr></thead>
+                            <tbody>
+                                <tr v-if="filteredAuditLogs.length === 0"><td colspan="6"><div class="empty-state"><div class="empty-state-icon">◎</div><div>暂无日志</div></div></td></tr>
+                                <tr v-for="log in filteredAuditLogs" :key="log.id">
+                                    <td class="timestamp">{{ log.created_at }}</td>
+                                    <td><span class="audit-action" :class="'action-' + log.action">{{ getActionText(log.action) }}</span></td>
+                                    <td class="operator-cell">{{ log.operator }}</td>
+                                    <td class="audit-changes">{{ log.changes }}</td>
+                                    <td style="font-size: 0.8em; color: var(--text-muted);">{{ log.ip }}</td>
+                                    <td><button class="btn btn-secondary btn-sm" @click="showAuditDetail(log)">查看</button></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 用户管理 -->
+                <div v-show="currentTab === 'users'">
+                    <div class="page-header">
+                        <h1 class="page-title">用户管理</h1>
+                        <div class="header-actions">
+                            <span class="record-count">共 {{ (users || []).length }} 个用户</span>
+                            <button class="btn btn-primary" @click="openUserModal('add')">+ 添加用户</button>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr><th>用户名</th><th>显示名称</th><th>角色</th><th>权限</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+                            <tbody>
+                                <tr v-for="user in users" :key="user.id">
+                                    <td>{{ user.username }}</td>
+                                    <td class="operator-cell">{{ user.display_name }}</td>
+                                    <td><span class="role-badge" :class="'role-' + user.role">{{ user.role === 'admin' ? '管理员' : '用户' }}</span></td>
+                                    <td><span class="perm-tags">{{ user.role === 'admin' ? '全部权限' : formatPermissions(user.permissions) }}</span></td>
+                                    <td><span class="status-badge" :class="'status-' + user.status">{{ user.status === 'active' ? '启用' : '停用' }}</span></td>
+                                    <td class="timestamp">{{ user.created_at }}</td>
+                                    <td><div class="action-btns"><button class="btn btn-secondary btn-sm" @click="openUserModal('edit', user)">编辑</button><button v-if="user.role !== 'admin'" class="btn btn-danger btn-sm" @click="confirmDeleteUser(user)">删除</button></div></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <!-- 记录编辑弹窗 -->
+        <div class="modal-overlay" :class="{ show: showRecordModal }">
+            <div class="modal">
+                <div class="modal-header"><h2>{{ recordModalMode === 'add' ? '添加记录' : '编辑记录' }}</h2><button class="modal-close" @click="showRecordModal = false">&times;</button></div>
+                <form @submit.prevent="saveRecord">
+                    <div class="modal-body">
+                        <div class="form-row">
+                            <div class="form-group"><label>项目名称 <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.project" required></div>
+                            <div class="form-group"><label>环境 <span class="required">*</span></label><select class="form-select" v-model="recordForm.env"><option value="uat">UAT</option><option value="prod">PROD</option></select></div>
+                        </div>
+                        <div class="form-group"><label>VID <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.vid" required></div>
+                        <div class="form-row">
+                            <div class="form-group"><label>源 IP <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.src_ip" required></div>
+                            <div class="form-group"><label>目标 IP <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.dest_ip" required></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>端口 <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.port" required></div>
+                            <div class="form-group"><label>状态</label><select class="form-select" v-model="recordForm.status"><option value="active">启用</option><option value="inactive">停用</option><option value="pending">待定</option></select></div>
+                        </div>
+                    </div>
+                    <div class="modal-footer"><button type="button" class="btn btn-secondary" @click="showRecordModal = false">取消</button><button type="submit" class="btn btn-success">保存</button></div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 批量添加弹窗 -->
+        <div class="modal-overlay batch-modal" :class="{ show: showBatchModal }">
+            <div class="modal">
+                <div class="modal-header"><h2>批量添加记录</h2><button class="modal-close" @click="showBatchModal = false">&times;</button></div>
+                <div class="modal-body">
+                    <div class="batch-help">
+                        <h4>📋 格式说明</h4>
+                        <p>每行一条记录，字段用 <code>Tab</code>、<code>逗号</code>、<code>|</code> 或 <code>空格</code> 分隔</p>
+                        <p>字段顺序: <code>项目</code> <code>VID</code> <code>源IP</code> <code>目标IP</code> <code>端口</code></p>
+                        <pre class="batch-example">订单系统,VLAN100,192.168.1.10,10.0.0.5,8080
+支付系统,VLAN200,192.168.1.20,10.0.0.6,443
+用户中心,VLAN100,192.168.1.30,10.0.0.7,3306</pre>
+                    </div>
+                    <div class="batch-row-select">
+                        <div><label style="color: var(--text-secondary); font-size: 0.85em; margin-right: 8px;">默认环境:</label><select v-model="batchEnv" @change="parseBatchText"><option value="uat">UAT</option><option value="prod">PROD</option></select></div>
+                        <div><label style="color: var(--text-secondary); font-size: 0.85em; margin-right: 8px;">默认状态:</label><select v-model="batchStatus" @change="parseBatchText"><option value="active">启用</option><option value="inactive">停用</option></select></div>
+                    </div>
+                    <div class="form-group"><label>粘贴数据</label><textarea class="batch-textarea" v-model="batchText" @input="parseBatchText" placeholder="粘贴数据..."></textarea></div>
+                    <div v-if="batchError" class="batch-error">⚠️ {{ batchError }}</div>
+                    <div v-if="batchRecords && batchRecords.length > 0" class="batch-preview">
+                        <h4>预览 ({{ batchRecords.length }} 条)</h4>
+                        <div class="table-container" style="max-height: 200px; overflow: auto;">
+                            <table><thead><tr><th>#</th><th>项目</th><th>VID</th><th>源IP</th><th>目标IP</th><th>端口</th></tr></thead>
+                            <tbody><tr v-for="(r, i) in batchRecords" :key="i"><td>{{ i + 1 }}</td><td class="project-cell">{{ r.project }}</td><td class="vid-cell">{{ r.vid }}</td><td class="ip-cell">{{ r.src_ip }}</td><td class="ip-cell">{{ r.dest_ip }}</td><td class="port-cell">{{ r.port }}</td></tr></tbody></table>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer"><button class="btn btn-secondary" @click="showBatchModal = false">取消</button><button class="btn btn-success" @click="submitBatch" :disabled="batchRecords.length === 0 || !!batchError">添加 {{ batchRecords.length }} 条记录</button></div>
+            </div>
+        </div>
+
+        <!-- 用户编辑弹窗 -->
+        <div class="modal-overlay" :class="{ show: showUserModal }">
+            <div class="modal">
+                <div class="modal-header"><h2>{{ userModalMode === 'add' ? '添加用户' : '编辑用户' }}</h2><button class="modal-close" @click="showUserModal = false">&times;</button></div>
+                <form @submit.prevent="saveUser">
+                    <div class="modal-body">
+                        <div class="form-group"><label>用户名 <span class="required">*</span></label><input type="text" class="form-input" v-model="userForm.username" :disabled="userModalMode === 'edit'" required></div>
+                        <div class="form-group"><label>{{ userModalMode === 'add' ? '密码' : '新密码 (留空不修改)' }} <span v-if="userModalMode === 'add'" class="required">*</span></label><input type="password" class="form-input" v-model="userForm.password" :required="userModalMode === 'add'"></div>
+                        <div class="form-group"><label>显示名称 <span class="required">*</span></label><input type="text" class="form-input" v-model="userForm.display_name" required></div>
+                        <div class="form-row">
+                            <div class="form-group"><label>角色</label><select class="form-select" v-model="userForm.role"><option value="user">用户</option><option value="admin">管理员</option></select></div>
+                            <div class="form-group"><label>状态</label><select class="form-select" v-model="userForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
+                        </div>
+                        <div class="form-group" v-if="userForm.role !== 'admin'">
+                            <label>功能权限</label>
+                            <div class="permission-grid">
+                                <div v-for="group in permissionGroups" :key="group.name" class="permission-group">
+                                    <div class="permission-group-name">{{ group.name }}</div>
+                                    <label v-for="p in group.items" :key="p.key" class="permission-item">
+                                        <input type="checkbox" :value="p.key" v-model="userForm.permissions">
+                                        <span>{{ p.label }}</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="permission-hint">管理员拥有所有权限</div>
+                        </div>
+                    </div>
+                    <div class="modal-footer"><button type="button" class="btn btn-secondary" @click="showUserModal = false">取消</button><button type="submit" class="btn btn-success">保存</button></div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 数据源编辑弹窗 -->
+        <div class="modal-overlay" :class="{ show: showDataSourceModal }">
+            <div class="modal">
+                <div class="modal-header"><h2>{{ dataSourceModalMode === 'add' ? '添加数据源' : '编辑数据源' }}</h2><button class="modal-close" @click="showDataSourceModal = false">&times;</button></div>
+                <form @submit.prevent="saveDataSource">
+                    <div class="modal-body">
+                        <div class="form-row">
+                            <div class="form-group"><label>名称 <span class="required">*</span></label><input type="text" class="form-input" v-model="dataSourceForm.name" placeholder="如：生产环境Prometheus" required></div>
+                            <div class="form-group"><label>类型 <span class="required">*</span></label>
+                                <select class="form-select" v-model="dataSourceForm.type">
+                                    <option value="prometheus">Prometheus</option>
+                                    <option value="jira">Jira</option>
+                                    <option value="domain">域名检测</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group"><label>URL <span class="required">*</span></label><input type="text" class="form-input" v-model="dataSourceForm.url" placeholder="如：http://prometheus:9090" required></div>
+                        <div class="form-row" v-if="dataSourceForm.type !== 'domain'">
+                            <div class="form-group"><label>用户名</label><input type="text" class="form-input" v-model="dataSourceForm.username" placeholder="可选"></div>
+                            <div class="form-group"><label>{{ dataSourceModalMode === 'add' ? '密码' : '密码 (留空不修改)' }}</label><input type="password" class="form-input" v-model="dataSourceForm.password" placeholder="可选"></div>
+                        </div>
+                        <div class="form-group" v-if="dataSourceForm.type === 'jira' || dataSourceForm.type === 'prometheus'">
+                            <label>Token / API Key</label><input type="text" class="form-input" v-model="dataSourceForm.token" placeholder="Bearer Token 或 API Key">
+                        </div>
+                        <div class="form-group"><label>描述</label><textarea class="form-input" v-model="dataSourceForm.description" rows="2" placeholder="数据源描述"></textarea></div>
+                        <div class="form-group"><label>状态</label><select class="form-select" v-model="dataSourceForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" @click="testDataSource(dataSourceForm)">测试连接</button>
+                        <button type="button" class="btn btn-secondary" @click="showDataSourceModal = false">取消</button>
+                        <button type="submit" class="btn btn-success">保存</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 删除确认弹窗 -->
+        <div class="modal-overlay" :class="{ show: showDeleteModal }">
+            <div class="modal" style="max-width: 400px;">
+                <div class="modal-header"><h2>确认删除</h2><button class="modal-close" @click="showDeleteModal = false">&times;</button></div>
+                <div class="modal-body"><p>{{ deleteMessage }}</p></div>
+                <div class="modal-footer"><button class="btn btn-secondary" @click="showDeleteModal = false">取消</button><button class="btn btn-danger" @click="executeDelete">确认删除</button></div>
+            </div>
+        </div>
+
+        <!-- 审计详情弹窗 -->
+        <div class="modal-overlay" :class="{ show: showAuditDetailModal }">
+            <div class="modal" style="max-width: 700px;">
+                <div class="modal-header"><h2>审计详情</h2><button class="modal-close" @click="showAuditDetailModal = false">&times;</button></div>
+                <div class="modal-body" v-if="auditDetail">
+                    <p><strong>时间:</strong> {{ auditDetail.created_at }}</p>
+                    <p><strong>操作人:</strong> {{ auditDetail.operator }}</p>
+                    <p><strong>操作:</strong> <span class="audit-action" :class="'action-' + auditDetail.action">{{ getActionText(auditDetail.action) }}</span></p>
+                    <p><strong>变更:</strong> {{ auditDetail.changes }}</p>
+                    <div v-if="auditDetail.old_data"><div class="diff-label">修改前:</div><pre class="json-preview">{{ formatJSON(auditDetail.old_data) }}</pre></div>
+                    <div v-if="auditDetail.new_data"><div class="diff-label">{{ auditDetail.action === 'create' ? '创建数据:' : '修改后:' }}</div><pre class="json-preview">{{ formatJSON(auditDetail.new_data) }}</pre></div>
+                </div>
+                <div class="modal-footer"><button class="btn btn-secondary" @click="showAuditDetailModal = false">关闭</button></div>
+            </div>
+        </div>
+
+        <!-- 执行巡检弹窗 -->
+        <div class="modal-overlay" :class="{ show: showInspectionModal }">
+            <div class="modal" style="max-width: 650px;">
+                <div class="modal-header"><h2>执行巡检</h2><button class="modal-close" @click="showInspectionModal = false">&times;</button></div>
+                <div class="modal-body">
+                    <!-- 选择数据源 -->
+                    <div class="form-group">
+                        <label>选择数据源 <span class="required">*</span></label>
+                        <div class="datasource-selector">
+                            <div v-if="!prometheusSources || prometheusSources.length === 0" class="no-datasource">
+                                <p>暂无可用的 Prometheus 数据源</p>
+                                <button class="btn btn-secondary btn-sm" @click="showInspectionModal = false; currentTab = 'datasources'; loadDataSources()">
+                                    前往添加数据源
+                                </button>
+                            </div>
+                            <div v-else>
+                                <div class="select-all-row">
+                                    <label class="datasource-item" @click.prevent="selectAllDataSources">
+                                        <input type="checkbox" :checked="(inspectionForm.selectedDataSources || []).length === (prometheusSources || []).length && (prometheusSources || []).length > 0">
+                                        <span class="ds-select-all">全选 ({{ (prometheusSources || []).length }} 个)</span>
+                                    </label>
+                                </div>
+                                <div class="datasource-list">
+                                    <label v-for="ds in prometheusSources" :key="ds.id" class="datasource-item" :class="{ selected: inspectionForm.selectedDataSources.includes(ds.id) }">
+                                        <input type="checkbox" :value="ds.id" v-model="inspectionForm.selectedDataSources">
+                                        <div class="ds-info">
+                                            <span class="ds-name">{{ ds.name }}</span>
+                                            <span class="ds-url">{{ ds.url }}</span>
+                                        </div>
+                                        <span class="type-badge type-prometheus">Prometheus</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 选择指标 -->
+                    <div class="form-group">
+                        <label>巡检指标 <span class="required">*</span></label>
+                        <div class="metrics-selector">
+                            <label v-for="m in availableMetrics" :key="m.key" class="metric-item" :class="{ selected: inspectionForm.includeMetrics.includes(m.key) }">
+                                <input type="checkbox" :value="m.key" v-model="inspectionForm.includeMetrics">
+                                <span class="metric-checkbox-label">{{ m.label }}</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- 报告类型 -->
+                    <div class="form-group">
+                        <label>报告类型</label>
+                        <div class="report-type-selector">
+                            <label class="report-type-item" :class="{ selected: inspectionForm.reportType === 'realtime' }">
+                                <input type="radio" value="realtime" v-model="inspectionForm.reportType">
+                                <span>实时查询</span>
+                            </label>
+                            <label class="report-type-item" :class="{ selected: inspectionForm.reportType === 'daily' }">
+                                <input type="radio" value="daily" v-model="inspectionForm.reportType">
+                                <span>日报 (24h)</span>
+                            </label>
+                            <label class="report-type-item" :class="{ selected: inspectionForm.reportType === 'weekly' }">
+                                <input type="radio" value="weekly" v-model="inspectionForm.reportType">
+                                <span>周报 (7d)</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- 已选概览 -->
+                    <div class="inspection-summary" v-if="inspectionForm && inspectionForm.selectedDataSources && inspectionForm.selectedDataSources.length > 0">
+                        <div class="summary-item">
+                            <span class="summary-label">已选数据源:</span>
+                            <span class="summary-value">{{ inspectionForm.selectedDataSources.length }} 个</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="summary-label">巡检指标:</span>
+                            <span class="summary-value">{{ (inspectionForm.includeMetrics || []).length }} 项</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @click="showInspectionModal = false">取消</button>
+                    <button class="btn btn-primary" @click="executeInspection" :disabled="inspectionRunning || !inspectionForm || !inspectionForm.selectedDataSources || inspectionForm.selectedDataSources.length === 0">
+                        {{ inspectionRunning ? '巡检中...' : '▶ 开始巡检' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
