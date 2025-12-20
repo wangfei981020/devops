@@ -1,0 +1,54 @@
+# 拉取 Apollo 所需的 Docker 镜像
+docker pull apolloconfig/apollo-portal
+docker pull apolloconfig/apollo-configservice
+docker pull apolloconfig/apollo-adminservice
+
+
+
+
+docker run --name apollo-mysql -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=ApolloConfigDB -p 3306:3306 -d mysql:5.7
+
+
+version: '3'
+
+services:
+  apollo-portal:
+    image: apolloconfig/apollo-portal:latest
+    environment:
+      - APOLLO_PORTAL_LOGIN=admin:admin # 设置 Apollo Portal 登录信息
+      - APOLLO_META=http://apollo-configservice:8080 # 指定 Meta Server 地址
+    ports:
+      - "8070:8070"  # 映射端口到主机
+
+  apollo-configservice:
+    image: apolloconfig/apollo-configservice:latest
+    environment:
+      - APOLLO_META=http://apollo-configservice:8080 # Meta Server 配置
+      - SPRING_DATASOURCE_URL=jdbc:mysql://localhost:3306/ApolloConfigDB?characterEncoding=utf8 # 配置数据库连接
+      - SPRING_DATASOURCE_USERNAME=apollo # 数据库用户名
+      - SPRING_DATASOURCE_PASSWORD=apollo # 数据库密码
+    ports:
+      - "8080:8080"  # 映射端口到主机
+
+  apollo-adminservice:
+    image: apolloconfig/apollo-adminservice:latest
+    environment:
+      - APOLLO_META=http://apollo-configservice:8080
+      - SPRING_DATASOURCE_URL=jdbc:mysql://localhost:3306/ApolloConfigDB?characterEncoding=utf8
+      - SPRING_DATASOURCE_USERNAME=apollo
+      - SPRING_DATASOURCE_PASSWORD=apollo
+    ports:
+      - "8090:8090"  # 映射端口到主机
+
+
+
+# 连接 MySQL 容器
+docker exec -it apollo-mysql mysql -u root -p
+
+# 在 MySQL 中执行以下命令，创建数据库表
+CREATE DATABASE ApolloConfigDB;
+USE ApolloConfigDB;
+
+# 下载 Apollo 的数据库脚本并执行
+wget https://github.com/apolloconfig/apollo/releases/download/v1.9.0/apollo-mysql-scripts.sql
+source apollo-mysql-scripts.sql;
