@@ -1,0 +1,11 @@
+apollo:
+  env: "DEV"
+  # 需要复制的apollo地址
+  soure_apollo: "http://192.168.248.131:8070/"
+  # 目前使用的apollo地址
+  dest_apollo: "http://192.168.248.132:8070/"
+  cluster: "default"
+  cookie: "2F7847AF639EC82A275004D74EAFB24C"
+  dest_cookie: "249D1236286C8D69D0B03442949D9EC5"
+  cover: 'false'
+

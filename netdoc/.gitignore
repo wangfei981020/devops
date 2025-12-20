@@ -1,0 +1,37 @@
+# 编译输出
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 测试二进制文件
+*.test
+
+# 输出目录
+/bin/
+/pkg/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+
+# 临时数据文件
+data.json
+
+# 依赖缓存 (go modules 会自动下载)
+# /vendor/
+
+
+
+
+

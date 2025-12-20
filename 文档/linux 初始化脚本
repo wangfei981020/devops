@@ -1,0 +1,84 @@
+systemctl stop firewalld
+systemctl disable firewalld
+systemctl stop iptables
+systemctl disable iptables
+setenforce 0
+getenforce 0
+yum install epel-release -y
+yum install yum-plugin-fastestmirror -y 
+yum install net-tools -y
+yum install vim wget git -y
+yum install bash-completion -y
+yum install lrzsz -y
+yum install -y ntpdate
+yum clean all
+yum makecache
+swapoff -a 
+ntpdate time.google.com
+IPADDR=
+PREFIX=24
+GATEWAY=
+DNS1=
+DNS2=
+
+
+>>> 安装完成了
+1. 可以使用如下命令启动, 然后访问
+cd /opt/jumpserver-installer-v4.4.0
+./jmsctl.sh start
+
+2. 其它一些管理命令
+./jmsctl.sh stop
+./jmsctl.sh restart
+./jmsctl.sh backup
+./jmsctl.sh upgrade
+更多还有一些命令, 你可以 ./jmsctl.sh --help 来了解
+
+3. Web 访问
+http://192.168.248.128:80
+默认用户: admin  默认密码: ChangeMe
+containerd
+
+https://github.com/containerd/containerd/releases/download/v1.7.17/containerd-1.7.17-1.el7.x86_64.rpm
+
+yum install -y yum-utils device-mapper-persistent-data lvm2 wget net-tools nfs-utils lrzsz gcc gcc-c++ make cmake libxml2-devel openssl-devel curl curl-devel unzip sudo ntp libaio-devel wget vim ncurses-devel autoconf automake zlib-devel  python-devel epel-release openssh-server socat  ipvsadm conntrack ntpdate telnet rsync
+
+
+To start using your cluster, you need to run the following as a regular user:
+
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+Alternatively, if you are the root user, you can run:
+
+  export KUBECONFIG=/etc/kubernetes/admin.conf
+
+You should now deploy a pod network to the cluster.
+Run "kubectl apply -f [podnetwork].yaml" with one of the options listed at:
+  https://kubernetes.io/docs/concepts/cluster-administration/addons/
+
+You can now join any number of control-plane nodes by copying certificate authorities
+and service account keys on each node and then running the following as root:
+
+  kubeadm join k8s-master:6443 --token mtb8sj.a2sxo65k5e2vkbv9 \
+	--discovery-token-ca-cert-hash sha256:ab40412fc520b714b960c9be454e78b578ef3831d2dea77591a5f12650539107 \
+	--control-plane 
+
+Then you can join any number of worker nodes by running the following on each as root:
+
+kubeadm join k8s-master:6443 --token mtb8sj.a2sxo65k5e2vkbv9 \
+	--discovery-token-ca-cert-hash sha256:ab40412fc520b714b960c9be454e78b578ef3831d2dea77591a5f12650539107 
+
+kubeadm config images pull \
+--kubernetes-version=v1.30.7 \
+--cri-socket=unix:///run/containerd/containerd.sock
+
+kubeadm init \
+--apiserver-advertise-address=192.168.248.128 \
+--control-plane-endpoint=k8s-master \
+--kubernetes-version=v1.30.7 \
+--service-cidr=10.50.0.0/16 \
+--pod-network-cidr=10.60.0.0/16 \
+--cri-socket=unix:///run/containerd/containerd.sock \
+--v=5
