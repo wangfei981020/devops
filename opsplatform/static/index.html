@@ -31,7 +31,7 @@
         </div>
 
         <!-- 主布局 -->
-        <div v-else class="app-layout">
+        <div v-else class="app-layout" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
             <!-- 左侧边栏 -->
             <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
                 <div class="sidebar-header">

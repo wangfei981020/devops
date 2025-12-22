@@ -130,7 +130,7 @@ body {
 .sidebar.collapsed .nav-item-text { display: none; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 12px; }
 .sidebar.collapsed .nav-item-icon { margin: 0; font-size: 1.2em; }
-.sidebar.collapsed + .main-content { margin-left: 60px; }
+.app-layout.sidebar-collapsed .main-content { margin-left: 60px; }
 
 .sidebar-header {
     padding: 20px;
@@ -253,6 +253,7 @@ body {
     padding: 0;
     min-height: 100vh;
     overflow-x: hidden;
+    transition: margin-left 0.3s ease;
 }
 
 /* 顶部栏 */
