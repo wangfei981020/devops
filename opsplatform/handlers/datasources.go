@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"time"
 
-	"netdoc/database"
-	"netdoc/models"
+	"opsplatform/database"
+	"opsplatform/models"
 
 	"github.com/gorilla/mux"
 )

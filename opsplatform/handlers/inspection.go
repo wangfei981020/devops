@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"time"
 
-	"netdoc/database"
-	"netdoc/models"
+	"opsplatform/database"
+	"opsplatform/models"
 )
 
 // InspectionRequest 巡检请求

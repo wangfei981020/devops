@@ -1,7 +1,7 @@
 # 二进制文件
 *.exe
-netdoc-linux-amd64
-netdoc-linux-arm64
+opsplatform-linux-amd64
+opsplatform-linux-arm64
 
 # 数据库文件
 *.db

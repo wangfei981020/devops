@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"netdoc/database"
-	"netdoc/models"
+	"opsplatform/database"
+	"opsplatform/models"
 )
 
 // 为了测试方便，可替换的时间函数

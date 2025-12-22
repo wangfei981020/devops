@@ -1,4 +1,4 @@
-module netdoc
+module opsplatform
 
 go 1.21
 

@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"os"
 
-	"netdoc/database"
-	"netdoc/handlers"
+	"opsplatform/database"
+	"opsplatform/handlers"
 
 	"github.com/gorilla/mux"
 )
