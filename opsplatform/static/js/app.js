@@ -16,6 +16,7 @@ createApp({
             currentTab: 'records',
             expandedGroups: { data: true, ops: true, system: true },
             inspectionSubTab: 'templates',
+            sidebarCollapsed: false,
 
             // 数据
             records: [],
@@ -27,6 +28,7 @@ createApp({
             // 搜索和过滤
             searchQuery: '',
             auditSearchQuery: '',
+            projectFilter: '',
             statusFilter: '',
             envFilter: '',
             actionFilter: '',
@@ -120,13 +122,18 @@ createApp({
     },
 
     computed: {
+        projectList() {
+            const projects = [...new Set((this.records || []).map(r => r.project).filter(Boolean))];
+            return projects.sort((a, b) => a.localeCompare(b, 'zh-CN'));
+        },
         filteredRecords() {
             let r = this.records || [];
+            if (this.projectFilter) r = r.filter(x => x.project === this.projectFilter);
             if (this.envFilter) r = r.filter(x => x.env === this.envFilter);
             if (this.statusFilter) r = r.filter(x => x.status === this.statusFilter);
             if (this.searchQuery) {
                 const q = this.searchQuery.toLowerCase();
-                r = r.filter(x => [x.connection_id, x.project, x.vid, x.src_ip, x.dest_ip, x.port].some(v => v && v.toLowerCase().includes(q)));
+                r = r.filter(x => [x.connection_id, x.vid, x.src_ip, x.dest_ip, x.port].some(v => v && v.toLowerCase().includes(q)));
             }
             if (this.sortField) {
                 r = [...r].sort((a, b) => {
@@ -217,6 +224,7 @@ createApp({
 
     watch: {
         searchQuery() { this.currentPage = 1; },
+        projectFilter() { this.currentPage = 1; },
         envFilter() { this.currentPage = 1; },
         statusFilter() { this.currentPage = 1; },
         currentPage(val) { this.jumpPage = val; },

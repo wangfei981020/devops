@@ -33,9 +33,12 @@
         <!-- 主布局 -->
         <div v-else class="app-layout">
             <!-- 左侧边栏 -->
-            <aside class="sidebar">
+            <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
                 <div class="sidebar-header">
-                    <div class="sidebar-logo"><span>运维管理平台</span></div>
+                    <div class="sidebar-logo"><span v-show="!sidebarCollapsed">运维管理平台</span></div>
+                    <button class="sidebar-toggle" @click="sidebarCollapsed = !sidebarCollapsed" :title="sidebarCollapsed ? '展开菜单' : '收起菜单'">
+                        {{ sidebarCollapsed ? '▶' : '◀' }}
+                    </button>
                 </div>
                 <nav class="sidebar-nav">
                     <div class="nav-group" v-if="hasPermission('records') || hasPermission('domains')">
@@ -43,12 +46,12 @@
                             <span class="nav-group-arrow" :class="{ expanded: expandedGroups.data }">▶</span>
                             数据管理
                         </div>
-                        <div class="nav-group-items" v-show="expandedGroups.data">
-                            <button v-if="hasPermission('records')" class="nav-item" :class="{ active: currentTab === 'records' }" @click="currentTab = 'records'">
-                                <span class="nav-item-icon">🔗</span><span>数据源ID</span>
+                        <div class="nav-group-items" v-show="expandedGroups.data || sidebarCollapsed">
+                            <button v-if="hasPermission('records')" class="nav-item" :class="{ active: currentTab === 'records' }" @click="currentTab = 'records'" :title="sidebarCollapsed ? '数据源ID' : ''">
+                                <span class="nav-item-icon">🔗</span><span class="nav-item-text">数据源ID</span>
                             </button>
-                            <button v-if="hasPermission('domains')" class="nav-item" :class="{ active: currentTab === 'domains' }" @click="currentTab = 'domains'">
-                                <span class="nav-item-icon">🌐</span><span>域名管理</span>
+                            <button v-if="hasPermission('domains')" class="nav-item" :class="{ active: currentTab === 'domains' }" @click="currentTab = 'domains'" :title="sidebarCollapsed ? '域名管理' : ''">
+                                <span class="nav-item-icon">🌐</span><span class="nav-item-text">域名管理</span>
                             </button>
                         </div>
                     </div>
@@ -57,9 +60,9 @@
                             <span class="nav-group-arrow" :class="{ expanded: expandedGroups.ops }">▶</span>
                             运维工具
                         </div>
-                        <div class="nav-group-items" v-show="expandedGroups.ops">
-                            <button v-if="hasPermission('inspection')" class="nav-item" :class="{ active: currentTab === 'inspection' }" @click="currentTab = 'inspection'">
-                                <span class="nav-item-icon">🔍</span><span>一键巡检</span>
+                        <div class="nav-group-items" v-show="expandedGroups.ops || sidebarCollapsed">
+                            <button v-if="hasPermission('inspection')" class="nav-item" :class="{ active: currentTab === 'inspection' }" @click="currentTab = 'inspection'" :title="sidebarCollapsed ? '一键巡检' : ''">
+                                <span class="nav-item-icon">🔍</span><span class="nav-item-text">一键巡检</span>
                             </button>
                         </div>
                     </div>
@@ -68,15 +71,15 @@
                             <span class="nav-group-arrow" :class="{ expanded: expandedGroups.system }">▶</span>
                             系统管理
                         </div>
-                        <div class="nav-group-items" v-show="expandedGroups.system">
-                            <button v-if="hasPermission('datasources')" class="nav-item" :class="{ active: currentTab === 'datasources' }" @click="currentTab = 'datasources'; loadDataSources()">
-                                <span class="nav-item-icon">📡</span><span>数据源管理</span>
+                        <div class="nav-group-items" v-show="expandedGroups.system || sidebarCollapsed">
+                            <button v-if="hasPermission('datasources')" class="nav-item" :class="{ active: currentTab === 'datasources' }" @click="currentTab = 'datasources'; loadDataSources()" :title="sidebarCollapsed ? '数据源管理' : ''">
+                                <span class="nav-item-icon">📡</span><span class="nav-item-text">数据源管理</span>
                             </button>
-                            <button v-if="hasPermission('audit')" class="nav-item" :class="{ active: currentTab === 'audit' }" @click="currentTab = 'audit'; loadAuditLogs()">
-                                <span class="nav-item-icon">📝</span><span>审计日志</span>
+                            <button v-if="hasPermission('audit')" class="nav-item" :class="{ active: currentTab === 'audit' }" @click="currentTab = 'audit'; loadAuditLogs()" :title="sidebarCollapsed ? '审计日志' : ''">
+                                <span class="nav-item-icon">📝</span><span class="nav-item-text">审计日志</span>
                             </button>
-                            <button v-if="hasPermission('users')" class="nav-item" :class="{ active: currentTab === 'users' }" @click="currentTab = 'users'; loadUsers()">
-                                <span class="nav-item-icon">👥</span><span>用户管理</span>
+                            <button v-if="hasPermission('users')" class="nav-item" :class="{ active: currentTab === 'users' }" @click="currentTab = 'users'; loadUsers()" :title="sidebarCollapsed ? '用户管理' : ''">
+                                <span class="nav-item-icon">👥</span><span class="nav-item-text">用户管理</span>
                             </button>
                         </div>
                     </div>
@@ -87,15 +90,13 @@
             <main class="main-content">
                 <!-- 顶部栏 -->
                 <div class="top-bar">
-                    <div class="breadcrumb-nav" v-if="breadcrumbVisible">
-                        <button class="breadcrumb-close" @click="closeBreadcrumb" title="关闭路径">×</button>
+                    <div class="breadcrumb-nav">
                         <span class="breadcrumb-item" v-for="(item, index) in breadcrumbs" :key="index">
                             <span v-if="index > 0" class="breadcrumb-separator">/</span>
                             <span v-if="index === breadcrumbs.length - 1" class="breadcrumb-current">{{ item }}</span>
                             <button v-else class="breadcrumb-link" @click="goToBreadcrumb(index)">{{ item }}</button>
                         </span>
                     </div>
-                    <button v-else class="breadcrumb-show-btn" @click="breadcrumbVisible = true" title="显示路径">📍</button>
                     <div class="top-bar-right">
                         <button class="theme-toggle-small" @click="toggleTheme" :title="isDarkMode ? '切换白天模式' : '切换夜间模式'">
                             {{ isDarkMode ? '☀️' : '🌙' }}
@@ -152,7 +153,14 @@
 
                     <div class="search-bar">
                         <div class="search-wrapper">
-                            <input type="text" class="search-input" placeholder="搜索项目、VID、IP..." v-model="searchQuery">
+                            <input type="text" class="search-input" placeholder="搜索VID、IP..." v-model="searchQuery">
+                        </div>
+                        <div class="filter-group">
+                            <span style="color: var(--text-muted); font-size: 0.85em;">项目:</span>
+                            <select class="filter-select" v-model="projectFilter">
+                                <option value="">全部</option>
+                                <option v-for="proj in projectList" :key="proj" :value="proj">{{ proj }}</option>
+                            </select>
                         </div>
                         <div class="filter-group">
                             <span style="color: var(--text-muted); font-size: 0.85em;">环境:</span>

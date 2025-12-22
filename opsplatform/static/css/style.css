@@ -119,11 +119,45 @@ body {
     top: 0;
     bottom: 0;
     z-index: 100;
+    transition: width 0.3s ease;
 }
+
+.sidebar.collapsed {
+    width: 60px;
+}
+
+.sidebar.collapsed .nav-group-title { display: none; }
+.sidebar.collapsed .nav-item-text { display: none; }
+.sidebar.collapsed .nav-item { justify-content: center; padding: 12px; }
+.sidebar.collapsed .nav-item-icon { margin: 0; font-size: 1.2em; }
+.sidebar.collapsed + .main-content { margin-left: 60px; }
 
 .sidebar-header {
     padding: 20px;
     border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.sidebar-toggle {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    transition: all 0.2s;
+}
+
+.sidebar-toggle:hover {
+    background: var(--bg-tertiary);
+    color: var(--accent-cyan);
+}
+
+.sidebar.collapsed .sidebar-toggle {
+    margin: 0 auto;
 }
 
 .sidebar-logo {
@@ -244,50 +278,6 @@ body {
     flex: 1;
 }
 
-.breadcrumb-close {
-    width: 24px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-size: 1.2em;
-    line-height: 1;
-    transition: all 0.2s;
-    margin-right: 8px;
-}
-
-.breadcrumb-close:hover {
-    background: var(--bg-card);
-    border-color: var(--accent-red);
-    color: var(--accent-red);
-}
-
-.breadcrumb-show-btn {
-    width: 32px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-size: 1em;
-    transition: all 0.2s;
-    padding: 0;
-}
-
-.breadcrumb-show-btn:hover {
-    background: var(--bg-card);
-    border-color: var(--accent-cyan);
-    color: var(--accent-cyan);
-}
 
 .breadcrumb-item {
     display: flex;
