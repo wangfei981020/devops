@@ -19,7 +19,7 @@ func InitDB() error {
 	port := getEnv("MYSQL_PORT", "3306")
 	user := getEnv("MYSQL_USER", "root")
 	password := getEnv("MYSQL_PASSWORD", "123456")
-	dbname := getEnv("MYSQL_DATABASE", "netdoc")
+	dbname := getEnv("MYSQL_DATABASE", "opsplatform")
 
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local&collation=utf8mb4_unicode_ci",
 		user, password, host, port, dbname)
