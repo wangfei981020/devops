@@ -62,8 +62,9 @@ func HandleExportRecords(w http.ResponseWriter, r *http.Request) {
 		filtered = append(filtered, rec)
 	}
 
+	timestamp := timeNow().Format("20060102_150405")
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", "attachment; filename=records.csv")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=records_%s.csv", timestamp))
 	// 添加 BOM 以支持 Excel 打开中文
 	w.Write([]byte{0xEF, 0xBB, 0xBF})
 
@@ -86,8 +87,9 @@ func HandleExportAuditLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	timestamp := timeNow().Format("20060102_150405")
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", "attachment; filename=audit_logs.csv")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=audit_logs_%s.csv", timestamp))
 	w.Write([]byte{0xEF, 0xBB, 0xBF})
 
 	writer := csv.NewWriter(w)

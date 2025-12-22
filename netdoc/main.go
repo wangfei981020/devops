@@ -44,6 +44,7 @@ func main() {
 	api.HandleFunc("/records/query", handlers.HandleQueryRecords).Methods("GET", "OPTIONS")
 	api.HandleFunc("/records/batch", handlers.HandleBatchAddRecords).Methods("POST", "OPTIONS")
 	api.HandleFunc("/records/batch-delete", handlers.HandleBatchDeleteRecords).Methods("POST", "OPTIONS")
+	api.HandleFunc("/records/batch-status", handlers.HandleBatchUpdateStatus).Methods("POST", "OPTIONS")
 	api.HandleFunc("/records", handlers.HandleGetRecords).Methods("GET", "OPTIONS")
 	api.HandleFunc("/records", handlers.HandleAddRecord).Methods("POST", "OPTIONS")
 	api.HandleFunc("/records/{id}", handlers.HandleGetRecord).Methods("GET", "OPTIONS")

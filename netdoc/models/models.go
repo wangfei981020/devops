@@ -2,19 +2,20 @@ package models
 
 // Record 数据源ID记录
 type Record struct {
-	ID        string `json:"id"`
-	Project   string `json:"project"`
-	Env       string `json:"env"`
-	VID       string `json:"vid"`
-	SrcIP     string `json:"src_ip"`
-	DestIP    string `json:"dest_ip"`
-	Port      string `json:"port"`
-	Status    string `json:"status"`
-	Operator  string `json:"operator"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
-	CreatedBy string `json:"created_by"`
-	UpdatedBy string `json:"updated_by"`
+	ID           string `json:"id"`
+	ConnectionID string `json:"connection_id"` // 连接ID，唯一标识
+	Project      string `json:"project"`
+	Env          string `json:"env"`
+	VID          string `json:"vid"`
+	SrcIP        string `json:"src_ip"`
+	DestIP       string `json:"dest_ip"`
+	Port         string `json:"port"`
+	Status       string `json:"status"`
+	Operator     string `json:"operator"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+	CreatedBy    string `json:"created_by"`
+	UpdatedBy    string `json:"updated_by"`
 }
 
 // User 用户

@@ -10,10 +10,13 @@
 </head>
 <body>
     <div id="app">
-        <div class="toast" :class="[toast.show ? 'show' : '', 'toast-' + toast.type]">{{ toast.message }}</div>
+        <div class="toast" :class="['toast-' + toast.type]" v-show="toast.show">{{ toast.message }}</div>
 
         <!-- 登录页面 -->
         <div v-if="!currentUser" class="login-container">
+            <button class="login-theme-toggle" @click="toggleTheme" :title="isDarkMode ? '切换白天模式' : '切换夜间模式'">
+                {{ isDarkMode ? '☀️' : '🌙' }}
+            </button>
             <div class="login-box">
                 <div class="login-title">
                     <h1>运维管理平台</h1>
@@ -78,27 +81,70 @@
                         </div>
                     </div>
                 </nav>
-                <div class="sidebar-footer">
-                    <div class="user-card">
-                        <div class="user-avatar">{{ currentUser.display_name?.charAt(0) || 'U' }}</div>
-                        <div class="user-info">
-                            <div class="user-name">{{ currentUser.display_name }}</div>
-                            <div class="user-role">{{ currentUser.role === 'admin' ? '管理员' : '普通用户' }}</div>
-                        </div>
-                    </div>
-                    <button class="logout-btn" @click="logout">退出登录</button>
-                </div>
             </aside>
 
             <!-- 主内容区 -->
             <main class="main-content">
+                <!-- 顶部栏 -->
+                <div class="top-bar">
+                    <div class="breadcrumb-nav" v-if="breadcrumbVisible">
+                        <button class="breadcrumb-close" @click="closeBreadcrumb" title="关闭路径">×</button>
+                        <span class="breadcrumb-item" v-for="(item, index) in breadcrumbs" :key="index">
+                            <span v-if="index > 0" class="breadcrumb-separator">/</span>
+                            <span v-if="index === breadcrumbs.length - 1" class="breadcrumb-current">{{ item }}</span>
+                            <button v-else class="breadcrumb-link" @click="goToBreadcrumb(index)">{{ item }}</button>
+                        </span>
+                    </div>
+                    <button v-else class="breadcrumb-show-btn" @click="breadcrumbVisible = true" title="显示路径">📍</button>
+                    <div class="top-bar-right">
+                        <button class="theme-toggle-small" @click="toggleTheme" :title="isDarkMode ? '切换白天模式' : '切换夜间模式'">
+                            {{ isDarkMode ? '☀️' : '🌙' }}
+                        </button>
+                        <div class="user-menu-container">
+                            <button class="user-icon-btn" @click="toggleUserMenu" :title="currentUser.display_name">
+                                <div class="user-avatar-icon">{{ currentUser.display_name?.charAt(0) || 'U' }}</div>
+                            </button>
+                            <div class="user-menu-dropdown" v-show="showUserMenu" @click.stop>
+                                <div class="user-menu-item" @click="openProfileModal(); showUserMenu = false">
+                                    <span class="menu-icon">⚙️</span>
+                                    <span>个人设置</span>
+                                </div>
+                                <div class="user-menu-divider"></div>
+                                <div class="user-menu-item" @click="logout">
+                                    <span class="menu-icon">🚪</span>
+                                    <span>退出登录</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 数据源ID -->
-                <div v-show="currentTab === 'records'">
+                <div v-show="currentTab === 'records'" class="page-content">
                     <div class="page-header">
                         <h1 class="page-title">数据源ID</h1>
                         <div class="header-actions">
                             <span class="record-count">共 {{ filteredRecords.length }} 条</span>
-                            <button v-if="selectedRecords.length > 0" class="btn btn-danger" @click="confirmBatchDelete">🗑 删除选中 ({{ selectedRecords.length }})</button>
+                            <div v-if="selectedRecords.length > 0" class="batch-actions">
+                                <div class="batch-status-dropdown">
+                                    <button class="btn btn-secondary" @click="showBatchStatusMenu = !showBatchStatusMenu">
+                                        ✏️ 批量修改状态 ({{ selectedRecords.length }})
+                                        <span class="dropdown-arrow">▼</span>
+                                    </button>
+                                    <div class="batch-status-menu" v-show="showBatchStatusMenu">
+                                        <div class="batch-status-item" @click="batchUpdateStatus('active')">
+                                            <span class="status-dot status-active"></span> 设为启用
+                                        </div>
+                                        <div class="batch-status-item" @click="batchUpdateStatus('pending')">
+                                            <span class="status-dot status-pending"></span> 设为待定
+                                        </div>
+                                        <div class="batch-status-item" @click="batchUpdateStatus('inactive')">
+                                            <span class="status-dot status-inactive"></span> 设为停用
+                                        </div>
+                                    </div>
+                                </div>
+                                <button class="btn btn-danger" @click="confirmBatchDelete">🗑 删除选中</button>
+                            </div>
                             <button class="btn btn-secondary" @click="exportRecords">⬇ 导出CSV</button>
                             <button class="btn btn-primary" @click="openRecordModal('add')">+ 添加记录</button>
                             <button class="btn btn-secondary" @click="openBatchModal">⊞ 批量添加</button>
@@ -111,15 +157,20 @@
                         </div>
                         <div class="filter-group">
                             <span style="color: var(--text-muted); font-size: 0.85em;">环境:</span>
-                            <button class="filter-btn" :class="{ active: envFilter === '' }" @click="envFilter = ''">全部</button>
-                            <button class="filter-btn" :class="{ active: envFilter === 'prod' }" @click="envFilter = 'prod'">PROD</button>
-                            <button class="filter-btn" :class="{ active: envFilter === 'uat' }" @click="envFilter = 'uat'">UAT</button>
+                            <select class="filter-select" v-model="envFilter">
+                                <option value="">全部</option>
+                                <option value="prod">PROD</option>
+                                <option value="uat">UAT</option>
+                            </select>
                         </div>
                         <div class="filter-group">
                             <span style="color: var(--text-muted); font-size: 0.85em;">状态:</span>
-                            <button class="filter-btn" :class="{ active: statusFilter === '' }" @click="statusFilter = ''">全部</button>
-                            <button class="filter-btn" :class="{ active: statusFilter === 'active' }" @click="statusFilter = 'active'">启用</button>
-                            <button class="filter-btn" :class="{ active: statusFilter === 'inactive' }" @click="statusFilter = 'inactive'">停用</button>
+                            <select class="filter-select" v-model="statusFilter">
+                                <option value="">全部</option>
+                                <option value="active">启用</option>
+                                <option value="pending">待定</option>
+                                <option value="inactive">停用</option>
+                            </select>
                         </div>
                     </div>
 
@@ -134,14 +185,15 @@
                                     <th class="sortable" @click="toggleSort('src_ip')">源 IP <span class="sort-icon">{{ getSortIcon('src_ip') }}</span></th>
                                     <th class="sortable" @click="toggleSort('dest_ip')">目标 IP <span class="sort-icon">{{ getSortIcon('dest_ip') }}</span></th>
                                     <th class="sortable" @click="toggleSort('port')">端口 <span class="sort-icon">{{ getSortIcon('port') }}</span></th>
+                                    <th class="sortable" @click="toggleSort('connection_id')">连接ID <span class="sort-icon">{{ getSortIcon('connection_id') }}</span></th>
                                     <th class="sortable" @click="toggleSort('status')">状态 <span class="sort-icon">{{ getSortIcon('status') }}</span></th>
                                     <th class="sortable" @click="toggleSort('updated_by')">更新人 <span class="sort-icon">{{ getSortIcon('updated_by') }}</span></th>
                                     <th class="sortable" @click="toggleSort('updated_at')">更新时间 <span class="sort-icon">{{ getSortIcon('updated_at') }}</span></th>
                                     <th>操作</th>
                                 </tr></thead>
                                 <tbody>
-                                    <tr v-if="filteredRecords.length === 0"><td colspan="11"><div class="empty-state"><div class="empty-state-icon">◎</div><div>暂无数据</div></div></td></tr>
-                                    <tr v-for="record in filteredRecords" :key="record.id" :class="{ 'row-selected': selectedRecords.includes(record.id) }">
+                                    <tr v-if="filteredRecords.length === 0"><td colspan="12"><div class="empty-state"><div class="empty-state-icon">◎</div><div>暂无数据</div></div></td></tr>
+                                    <tr v-for="record in paginatedRecords" :key="record.id" :class="{ 'row-selected': selectedRecords.includes(record.id) }">
                                         <td><input type="checkbox" :value="record.id" v-model="selectedRecords"></td>
                                         <td class="project-cell">{{ record.project }}</td>
                                         <td><span class="env-badge" :class="'env-' + record.env">{{ record.env?.toUpperCase() }}</span></td>
@@ -149,19 +201,68 @@
                                         <td class="ip-cell">{{ record.src_ip }}</td>
                                         <td class="ip-cell">{{ record.dest_ip }}</td>
                                         <td class="port-cell">{{ record.port }}</td>
+                                        <td class="connection-id-cell">{{ record.connection_id }}</td>
                                         <td><span class="status-badge" :class="'status-' + record.status">{{ getStatusText(record.status) }}</span></td>
                                         <td class="operator-cell">{{ record.updated_by || '-' }}</td>
                                         <td class="timestamp">{{ record.updated_at }}</td>
-                                        <td><div class="action-btns"><button class="btn btn-secondary btn-sm" @click="openRecordModal('edit', record)">编辑</button><button class="btn btn-danger btn-sm" @click="confirmDeleteRecord(record)">删除</button></div></td>
+                                        <td>
+                                            <div class="action-menu-container">
+                                                <button class="action-menu-btn" @click="toggleActionMenu(record.id)">⋯</button>
+                                                <div class="action-menu-dropdown" v-show="activeActionMenu === record.id" @click.stop>
+                                                    <div class="action-menu-item" @click="openRecordModal('edit', record); activeActionMenu = null">
+                                                        <span class="menu-icon">✏️</span>
+                                                        <span>编辑</span>
+                                                    </div>
+                                                    <div class="action-menu-item action-menu-danger" @click="confirmDeleteRecord(record); activeActionMenu = null">
+                                                        <span class="menu-icon">🗑️</span>
+                                                        <span>删除</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </td>
                                     </tr>
                                 </tbody>
                             </table>
+                        </div>
+                        <!-- 分页控件 -->
+                        <div class="pagination-container" v-if="filteredRecords.length > 0">
+                            <div class="pagination-info">
+                                <span>每页</span>
+                                <select class="page-size-select" v-model="pageSize" @change="currentPage = 1">
+                                    <option :value="10">10</option>
+                                    <option :value="20">20</option>
+                                    <option :value="50">50</option>
+                                    <option :value="80">80</option>
+                                    <option :value="100">100</option>
+                                </select>
+                                <span>条，共 {{ filteredRecords.length }} 条</span>
+                            </div>
+                            <div class="pagination-controls">
+                                <button class="page-btn" @click="currentPage = 1" :disabled="currentPage === 1">首页</button>
+                                <button class="page-btn" @click="currentPage--" :disabled="currentPage === 1">上一页</button>
+                                <div class="page-numbers">
+                                    <button v-for="page in displayedPages" :key="page" 
+                                        class="page-number" 
+                                        :class="{ active: page === currentPage, ellipsis: page === '...' }"
+                                        @click="page !== '...' && (currentPage = page)"
+                                        :disabled="page === '...'">
+                                        {{ page }}
+                                    </button>
+                                </div>
+                                <button class="page-btn" @click="currentPage++" :disabled="currentPage === totalPages">下一页</button>
+                                <button class="page-btn" @click="currentPage = totalPages" :disabled="currentPage === totalPages">尾页</button>
+                                <div class="page-jump">
+                                    <span>跳至</span>
+                                    <input type="number" class="page-jump-input" v-model.number="jumpPage" @keyup.enter="goToPage" min="1" :max="totalPages">
+                                    <span>页</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
 
                 <!-- 域名管理 -->
-                <div v-show="currentTab === 'domains'">
+                <div v-show="currentTab === 'domains'" class="page-content">
                     <div class="page-header"><h1 class="page-title">域名管理</h1></div>
                     <div class="coming-soon">
                         <div class="coming-soon-icon">🌐</div>
@@ -177,7 +278,7 @@
                 </div>
 
                 <!-- 一键巡检 -->
-                <div v-show="currentTab === 'inspection'">
+                <div v-show="currentTab === 'inspection'" class="page-content">
                     <div class="page-header">
                         <h1 class="page-title">一键巡检</h1>
                         <div class="header-actions">
@@ -231,7 +332,7 @@
                 </div>
 
                 <!-- 数据源管理 -->
-                <div v-show="currentTab === 'datasources'">
+                <div v-show="currentTab === 'datasources'" class="page-content">
                     <div class="page-header">
                         <h1 class="page-title">数据源管理</h1>
                         <div class="header-actions">
@@ -263,7 +364,7 @@
                 </div>
 
                 <!-- 审计日志 -->
-                <div v-show="currentTab === 'audit'">
+                <div v-show="currentTab === 'audit'" class="page-content">
                     <div class="page-header">
                         <h1 class="page-title">审计日志</h1>
                         <div class="header-actions">
@@ -303,7 +404,7 @@
                 </div>
 
                 <!-- 用户管理 -->
-                <div v-show="currentTab === 'users'">
+                <div v-show="currentTab === 'users'" class="page-content">
                     <div class="page-header">
                         <h1 class="page-title">用户管理</h1>
                         <div class="header-actions">
@@ -337,6 +438,7 @@
                 <div class="modal-header"><h2>{{ recordModalMode === 'add' ? '添加记录' : '编辑记录' }}</h2><button class="modal-close" @click="showRecordModal = false">&times;</button></div>
                 <form @submit.prevent="saveRecord">
                     <div class="modal-body">
+                        <div class="form-group"><label>连接ID <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.connection_id" placeholder="唯一标识，如：CONN-001" required></div>
                         <div class="form-row">
                             <div class="form-group"><label>项目名称 <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.project" required></div>
                             <div class="form-group"><label>环境 <span class="required">*</span></label><select class="form-select" v-model="recordForm.env"><option value="uat">UAT</option><option value="prod">PROD</option></select></div>
@@ -364,10 +466,10 @@
                     <div class="batch-help">
                         <h4>📋 格式说明</h4>
                         <p>每行一条记录，字段用 <code>Tab</code>、<code>逗号</code>、<code>|</code> 或 <code>空格</code> 分隔</p>
-                        <p>字段顺序: <code>项目</code> <code>VID</code> <code>源IP</code> <code>目标IP</code> <code>端口</code></p>
-                        <pre class="batch-example">订单系统,VLAN100,192.168.1.10,10.0.0.5,8080
-支付系统,VLAN200,192.168.1.20,10.0.0.6,443
-用户中心,VLAN100,192.168.1.30,10.0.0.7,3306</pre>
+                        <p>字段顺序: <code>项目</code> <code>VID</code> <code>源IP</code> <code>目标IP</code> <code>端口</code> <code>连接ID</code></p>
+                        <pre class="batch-example">订单系统,VLAN100,192.168.1.10,10.0.0.5,8080,CONN-001
+支付系统,VLAN200,192.168.1.20,10.0.0.6,443,CONN-002
+用户中心,VLAN100,192.168.1.30,10.0.0.7,3306,CONN-003</pre>
                     </div>
                     <div class="batch-row-select">
                         <div><label style="color: var(--text-secondary); font-size: 0.85em; margin-right: 8px;">默认环境:</label><select v-model="batchEnv" @change="parseBatchText"><option value="uat">UAT</option><option value="prod">PROD</option></select></div>
@@ -378,8 +480,8 @@
                     <div v-if="batchRecords && batchRecords.length > 0" class="batch-preview">
                         <h4>预览 ({{ batchRecords.length }} 条)</h4>
                         <div class="table-container" style="max-height: 200px; overflow: auto;">
-                            <table><thead><tr><th>#</th><th>项目</th><th>VID</th><th>源IP</th><th>目标IP</th><th>端口</th></tr></thead>
-                            <tbody><tr v-for="(r, i) in batchRecords" :key="i"><td>{{ i + 1 }}</td><td class="project-cell">{{ r.project }}</td><td class="vid-cell">{{ r.vid }}</td><td class="ip-cell">{{ r.src_ip }}</td><td class="ip-cell">{{ r.dest_ip }}</td><td class="port-cell">{{ r.port }}</td></tr></tbody></table>
+                            <table><thead><tr><th>#</th><th>项目</th><th>VID</th><th>源IP</th><th>目标IP</th><th>端口</th><th>连接ID</th></tr></thead>
+                            <tbody><tr v-for="(r, i) in batchRecords" :key="i"><td>{{ i + 1 }}</td><td class="project-cell">{{ r.project }}</td><td class="vid-cell">{{ r.vid }}</td><td class="ip-cell">{{ r.src_ip }}</td><td class="ip-cell">{{ r.dest_ip }}</td><td class="port-cell">{{ r.port }}</td><td class="connection-id-cell">{{ r.connection_id }}</td></tr></tbody></table>
                         </div>
                     </div>
                 </div>
@@ -477,6 +579,22 @@
                     <div v-if="auditDetail.new_data"><div class="diff-label">{{ auditDetail.action === 'create' ? '创建数据:' : '修改后:' }}</div><pre class="json-preview">{{ formatJSON(auditDetail.new_data) }}</pre></div>
                 </div>
                 <div class="modal-footer"><button class="btn btn-secondary" @click="showAuditDetailModal = false">关闭</button></div>
+            </div>
+        </div>
+
+        <!-- 用户信息编辑弹窗 -->
+        <div class="modal-overlay" :class="{ show: showProfileModal }">
+            <div class="modal" style="max-width: 450px;">
+                <div class="modal-header"><h2>个人信息</h2><button class="modal-close" @click="showProfileModal = false">&times;</button></div>
+                <form @submit.prevent="saveProfile">
+                    <div class="modal-body">
+                        <div class="form-group"><label>用户名</label><input type="text" class="form-input" v-model="profileForm.username" disabled style="background: var(--bg-tertiary);"></div>
+                        <div class="form-group"><label>显示名称 <span class="required">*</span></label><input type="text" class="form-input" v-model="profileForm.display_name" required></div>
+                        <div class="form-group"><label>新密码 (留空不修改)</label><input type="password" class="form-input" v-model="profileForm.password" placeholder="留空则不修改密码"></div>
+                        <div class="form-group"><label>角色</label><input type="text" class="form-input" :value="profileForm.role === 'admin' ? '管理员' : '普通用户'" disabled style="background: var(--bg-tertiary);"></div>
+                    </div>
+                    <div class="modal-footer"><button type="button" class="btn btn-secondary" @click="showProfileModal = false">取消</button><button type="submit" class="btn btn-success">保存</button></div>
+                </form>
             </div>
         </div>
 

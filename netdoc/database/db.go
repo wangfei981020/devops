@@ -53,6 +53,7 @@ func createTables() error {
 	_, err := DB.Exec(`
 		CREATE TABLE IF NOT EXISTS records (
 			id VARCHAR(64) PRIMARY KEY,
+			connection_id VARCHAR(128) NOT NULL,
 			project VARCHAR(255) NOT NULL,
 			env VARCHAR(32) NOT NULL,
 			vid VARCHAR(255) NOT NULL,
@@ -64,12 +65,17 @@ func createTables() error {
 			created_at DATETIME,
 			updated_at DATETIME,
 			created_by VARCHAR(128),
-			updated_by VARCHAR(128)
+			updated_by VARCHAR(128),
+			UNIQUE KEY uk_connection_id (connection_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`)
 	if err != nil {
 		return err
 	}
+
+	// 检查并添加 connection_id 列（兼容旧数据库）
+	DB.Exec(`ALTER TABLE records ADD COLUMN connection_id VARCHAR(128) NOT NULL DEFAULT '' AFTER id`)
+	DB.Exec(`ALTER TABLE records ADD UNIQUE KEY uk_connection_id (connection_id)`)
 
 	// 创建用户表
 	_, err = DB.Exec(`

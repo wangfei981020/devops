@@ -4,6 +4,9 @@ const { createApp } = Vue;
 createApp({
     data() {
         return {
+            // 主题状态
+            isDarkMode: localStorage.getItem('theme') !== 'light',
+
             // 用户状态
             currentUser: JSON.parse(localStorage.getItem('currentUser')),
             loginForm: { username: '', password: '' },
@@ -30,6 +33,11 @@ createApp({
             sortField: '',
             sortOrder: 'asc',
 
+            // 分页
+            currentPage: 1,
+            pageSize: 10,
+            jumpPage: 1,
+
             // 模态框状态
             showRecordModal: false,
             showBatchModal: false,
@@ -37,6 +45,20 @@ createApp({
             showDeleteModal: false,
             showAuditDetailModal: false,
             showDataSourceModal: false,
+            showProfileModal: false,
+
+            // 面包屑导航
+            breadcrumbVisible: true,
+            breadcrumbs: [],
+
+            // 用户菜单
+            showUserMenu: false,
+            
+            // 操作菜单
+            activeActionMenu: null,
+            
+            // 批量状态菜单
+            showBatchStatusMenu: false,
 
             // 表单模式
             recordModalMode: 'add',
@@ -44,9 +66,10 @@ createApp({
             dataSourceModalMode: 'add',
 
             // 表单数据
-            recordForm: { id: '', project: '', env: 'uat', vid: '', src_ip: '', dest_ip: '', port: '', status: 'active' },
+            recordForm: { id: '', connection_id: '', project: '', env: 'uat', vid: '', src_ip: '', dest_ip: '', port: '', status: 'active' },
             userForm: { id: '', username: '', password: '', display_name: '', role: 'user', status: 'active', permissions: [] },
             dataSourceForm: { id: '', name: '', type: 'prometheus', url: '', username: '', password: '', token: '', description: '', status: 'active' },
+            profileForm: { id: '', username: '', password: '', display_name: '', role: '' },
 
             // 批量添加
             batchText: '',
@@ -103,7 +126,7 @@ createApp({
             if (this.statusFilter) r = r.filter(x => x.status === this.statusFilter);
             if (this.searchQuery) {
                 const q = this.searchQuery.toLowerCase();
-                r = r.filter(x => [x.project, x.vid, x.src_ip, x.dest_ip, x.port].some(v => v && v.toLowerCase().includes(q)));
+                r = r.filter(x => [x.connection_id, x.project, x.vid, x.src_ip, x.dest_ip, x.port].some(v => v && v.toLowerCase().includes(q)));
             }
             if (this.sortField) {
                 r = [...r].sort((a, b) => {
@@ -114,6 +137,46 @@ createApp({
                 });
             }
             return r;
+        },
+
+        // 分页后的记录
+        paginatedRecords() {
+            const start = (this.currentPage - 1) * this.pageSize;
+            const end = start + this.pageSize;
+            return this.filteredRecords.slice(start, end);
+        },
+
+        // 总页数
+        totalPages() {
+            return Math.max(1, Math.ceil(this.filteredRecords.length / this.pageSize));
+        },
+
+        // 显示的页码
+        displayedPages() {
+            const total = this.totalPages;
+            const current = this.currentPage;
+            const pages = [];
+            
+            if (total <= 7) {
+                for (let i = 1; i <= total; i++) pages.push(i);
+            } else {
+                if (current <= 4) {
+                    for (let i = 1; i <= 5; i++) pages.push(i);
+                    pages.push('...');
+                    pages.push(total);
+                } else if (current >= total - 3) {
+                    pages.push(1);
+                    pages.push('...');
+                    for (let i = total - 4; i <= total; i++) pages.push(i);
+                } else {
+                    pages.push(1);
+                    pages.push('...');
+                    for (let i = current - 1; i <= current + 1; i++) pages.push(i);
+                    pages.push('...');
+                    pages.push(total);
+                }
+            }
+            return pages;
         },
 
         filteredAuditLogs() {
@@ -152,14 +215,172 @@ createApp({
         }
     },
 
+    watch: {
+        searchQuery() { this.currentPage = 1; },
+        envFilter() { this.currentPage = 1; },
+        statusFilter() { this.currentPage = 1; },
+        currentPage(val) { this.jumpPage = val; },
+        currentTab() { this.updateBreadcrumbs(); }
+    },
+
     mounted() {
+        // 初始化主题
+        this.initTheme();
+
         if (this.currentUser) {
             this.loadRecords();
             this.refreshCurrentUser();
+            this.updateBreadcrumbs();
         }
+
+        // 点击外部关闭用户菜单和操作菜单
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.user-menu-container')) {
+                this.showUserMenu = false;
+            }
+            if (!e.target.closest('.action-menu-container')) {
+                this.activeActionMenu = null;
+            }
+            if (!e.target.closest('.batch-status-dropdown')) {
+                this.showBatchStatusMenu = false;
+            }
+        });
     },
 
     methods: {
+        // ========== 主题相关 ==========
+        initTheme() {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'light') {
+                document.documentElement.setAttribute('data-theme', 'light');
+                this.isDarkMode = false;
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                this.isDarkMode = true;
+            }
+        },
+
+        toggleTheme() {
+            this.isDarkMode = !this.isDarkMode;
+            if (this.isDarkMode) {
+                document.documentElement.removeAttribute('data-theme');
+                localStorage.setItem('theme', 'dark');
+            } else {
+                document.documentElement.setAttribute('data-theme', 'light');
+                localStorage.setItem('theme', 'light');
+            }
+        },
+
+        // ========== 面包屑导航 ==========
+        updateBreadcrumbs() {
+            const tabMap = {
+                'records': '数据源ID',
+                'domains': '域名管理',
+                'inspection': '一键巡检',
+                'datasources': '数据源管理',
+                'audit': '审计日志',
+                'users': '用户管理'
+            };
+            const groupMap = {
+                'records': '数据管理',
+                'domains': '数据管理',
+                'inspection': '运维工具',
+                'datasources': '系统管理',
+                'audit': '系统管理',
+                'users': '系统管理'
+            };
+            const current = tabMap[this.currentTab] || '';
+            const group = groupMap[this.currentTab] || '';
+            if (current) {
+                this.breadcrumbs = ['运维管理平台', group, current];
+            } else {
+                this.breadcrumbs = ['运维管理平台'];
+            }
+            // 切换页面时自动显示面包屑
+            this.breadcrumbVisible = true;
+        },
+
+        goToBreadcrumb(index) {
+            if (index === 0) {
+                // 回到首页，可以设置默认tab
+                this.currentTab = 'records';
+            } else if (index === 1) {
+                // 跳转到分组的第一项
+                const group = this.breadcrumbs[1];
+                if (group === '数据管理') {
+                    this.currentTab = 'records';
+                } else if (group === '运维工具') {
+                    this.currentTab = 'inspection';
+                } else if (group === '系统管理') {
+                    this.currentTab = 'datasources';
+                }
+            }
+        },
+
+        closeBreadcrumb() {
+            this.breadcrumbVisible = false;
+        },
+
+        toggleUserMenu() {
+            this.showUserMenu = !this.showUserMenu;
+        },
+
+        toggleActionMenu(id) {
+            if (this.activeActionMenu === id) {
+                this.activeActionMenu = null;
+            } else {
+                this.activeActionMenu = id;
+            }
+        },
+
+        // ========== 用户信息编辑 ==========
+        openProfileModal() {
+            this.profileForm = {
+                id: this.currentUser.id,
+                username: this.currentUser.username,
+                password: '',
+                display_name: this.currentUser.display_name,
+                role: this.currentUser.role
+            };
+            this.showProfileModal = true;
+        },
+
+        async saveProfile() {
+            try {
+                const userData = { ...this.profileForm };
+                if (!userData.password) {
+                    delete userData.password;
+                }
+                const res = await API.updateUser(this.currentUser.id, userData);
+                if (res.ok) {
+                    const updated = await res.json();
+                    this.currentUser = { ...this.currentUser, ...updated };
+                    localStorage.setItem('currentUser', JSON.stringify(this.currentUser));
+                    this.showToast('个人信息更新成功', 'success');
+                    this.showProfileModal = false;
+                } else {
+                    this.showToast(await res.text(), 'error');
+                }
+            } catch (e) {
+                this.showToast('更新失败', 'error');
+            }
+        },
+
+        // ========== 分页相关 ==========
+        goToPage() {
+            const page = parseInt(this.jumpPage);
+            if (page >= 1 && page <= this.totalPages) {
+                this.currentPage = page;
+            } else {
+                this.jumpPage = this.currentPage;
+            }
+        },
+
+        resetPagination() {
+            this.currentPage = 1;
+            this.jumpPage = 1;
+        },
+
         // ========== 认证相关 ==========
         async login() {
             this.loginLoading = true;
@@ -301,7 +522,7 @@ createApp({
         // ========== 记录操作 ==========
         openRecordModal(mode, record = null) {
             this.recordModalMode = mode;
-            this.recordForm = record ? { ...record } : { id: '', project: '', env: 'uat', vid: '', src_ip: '', dest_ip: '', port: '', status: 'active' };
+            this.recordForm = record ? { ...record } : { id: '', connection_id: '', project: '', env: 'uat', vid: '', src_ip: '', dest_ip: '', port: '', status: 'active' };
             this.showRecordModal = true;
         },
 
@@ -336,6 +557,30 @@ createApp({
             this.showDeleteModal = true;
         },
 
+        async batchUpdateStatus(status) {
+            this.showBatchStatusMenu = false;
+            if (this.selectedRecords.length === 0) return;
+            
+            const statusText = { active: '启用', pending: '待定', inactive: '停用' }[status];
+            try {
+                const res = await API.request('POST', '/records/batch-status', {
+                    ids: this.selectedRecords,
+                    status: status,
+                    operator: this.currentUser.username
+                });
+                if (res.ok) {
+                    const r = await res.json();
+                    this.showToast(`成功将 ${r.count} 条记录设为${statusText}`, 'success');
+                    this.selectedRecords = [];
+                    this.loadRecords();
+                } else {
+                    this.showToast(await res.text(), 'error');
+                }
+            } catch (e) {
+                this.showToast('批量修改状态失败', 'error');
+            }
+        },
+
         async executeBatchDelete() {
             try {
                 const res = await API.batchDeleteRecords(this.selectedRecords, this.currentUser.username);
@@ -365,6 +610,7 @@ createApp({
             this.batchRecords = [];
             if (!this.batchText.trim()) return;
             const lines = this.batchText.trim().split('\n');
+            const seenConnIds = new Set();
             for (let i = 0; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (!line || line.startsWith('#')) continue;
@@ -374,16 +620,23 @@ createApp({
                 else if (line.includes('|')) parts = line.split('|');
                 else parts = line.split(/\s+/);
                 parts = parts.map(p => p.trim()).filter(p => p);
-                if (parts.length < 5) {
-                    this.batchError = `第 ${i + 1} 行: 需要5个字段（项目、VID、源IP、目标IP、端口）`;
+                if (parts.length < 6) {
+                    this.batchError = `第 ${i + 1} 行: 需要6个字段（项目、VID、源IP、目标IP、端口、连接ID）`;
                     return;
                 }
+                const connId = parts[5]; // 连接ID在最后
+                if (seenConnIds.has(connId)) {
+                    this.batchError = `第 ${i + 1} 行: 连接ID "${connId}" 重复`;
+                    return;
+                }
+                seenConnIds.add(connId);
                 this.batchRecords.push({
                     project: parts[0],
                     vid: parts[1],
                     src_ip: parts[2],
                     dest_ip: parts[3],
                     port: parts[4],
+                    connection_id: parts[5], // 连接ID在最后
                     env: this.batchEnv,
                     status: this.batchStatus
                 });
