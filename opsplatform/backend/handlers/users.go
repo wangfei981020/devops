@@ -9,7 +9,20 @@ import (
 	"opsplatform/models"
 
 	"github.com/gorilla/mux"
+	"golang.org/x/crypto/bcrypt"
 )
+
+// hashPassword 使用 bcrypt 加密密码
+func hashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return string(bytes), err
+}
+
+// checkPassword 验证密码是否正确
+func checkPassword(hashedPassword, password string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
+	return err == nil
+}
 
 // HandleLogin 用户登录
 func HandleLogin(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +42,8 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.Password != req.Password {
+	// 验证密码（支持 bcrypt 加密和明文兼容）
+	if !checkPassword(user.Password, req.Password) && user.Password != req.Password {
 		http.Error(w, "密码错误", http.StatusUnauthorized)
 		return
 	}
@@ -195,10 +209,16 @@ func AddUser(u *models.User) error {
 	u.ID = fmt.Sprintf("user_%d", timeNow().UnixNano())
 	u.CreatedAt = timeNow().Format("2006-01-02 15:04:05")
 
-	_, err := database.DB.Exec(`
+	// 加密密码
+	hashedPassword, err := hashPassword(u.Password)
+	if err != nil {
+		return fmt.Errorf("密码加密失败: %v", err)
+	}
+
+	_, err = database.DB.Exec(`
 		INSERT INTO users (id, username, password, display_name, role, status, permissions, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, u.ID, u.Username, u.Password, u.DisplayName, u.Role, u.Status, u.Permissions, u.CreatedAt)
+	`, u.ID, u.Username, hashedPassword, u.DisplayName, u.Role, u.Status, u.Permissions, u.CreatedAt)
 	return err
 }
 
@@ -208,15 +228,20 @@ func UpdateUser(id string, u *models.User) error {
 		return fmt.Errorf("用户不存在: %s", id)
 	}
 
-	// 如果密码为空，保留旧密码
-	if u.Password == "" {
-		u.Password = oldUser.Password
+	// 如果密码为空，保留旧密码；否则加密新密码
+	passwordToSave := oldUser.Password
+	if u.Password != "" {
+		hashedPassword, err := hashPassword(u.Password)
+		if err != nil {
+			return fmt.Errorf("密码加密失败: %v", err)
+		}
+		passwordToSave = hashedPassword
 	}
 
 	_, err = database.DB.Exec(`
 		UPDATE users SET display_name=?, role=?, status=?, permissions=?, password=?
 		WHERE id=?
-	`, u.DisplayName, u.Role, u.Status, u.Permissions, u.Password, id)
+	`, u.DisplayName, u.Role, u.Status, u.Permissions, passwordToSave, id)
 	return err
 }
 

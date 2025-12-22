@@ -65,9 +65,10 @@ func main() {
 	// 巡检功能
 	api.HandleFunc("/inspection/execute", handlers.HandleExecuteInspection).Methods("POST", "OPTIONS")
 
-	// 静态文件
-	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
-	r.PathPrefix("/").Handler(http.FileServer(http.Dir("static")))
+	// 静态文件 - 从 frontend 目录提供
+	r.PathPrefix("/css/").Handler(http.StripPrefix("/css/", http.FileServer(http.Dir("../frontend/css"))))
+	r.PathPrefix("/js/").Handler(http.StripPrefix("/js/", http.FileServer(http.Dir("../frontend/js"))))
+	r.PathPrefix("/").Handler(http.FileServer(http.Dir("../frontend")))
 
 	// 启动服务器
 	port := os.Getenv("PORT")

@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: opsplatform
+data:
+  MYSQL_HOST: "mysql"
+  MYSQL_PORT: "3306"
+  MYSQL_USER: "root"
+  MYSQL_DATABASE: "opsplatform"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsplatform-backend
+  namespace: opsplatform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: opsplatform-backend
+  template:
+    metadata:
+      labels:
+        app: opsplatform-backend
+    spec:
+      containers:
+      - name: backend
+        image: opsplatform-backend:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8088
+        envFrom:
+        - configMapRef:
+            name: backend-config
+        - secretRef:
+            name: mysql-secret
+        env:
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: MYSQL_ROOT_PASSWORD
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /api/records
+            port: 8088
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsplatform-backend
+  namespace: opsplatform
+spec:
+  selector:
+    app: opsplatform-backend
+  ports:
+  - port: 8088
+    targetPort: 8088
+

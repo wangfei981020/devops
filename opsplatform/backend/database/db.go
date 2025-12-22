@@ -132,7 +132,41 @@ func createTables() error {
 		return err
 	}
 
+	// 创建索引（提升查询性能）
+	createIndexes()
+
 	return nil
+}
+
+// createIndexes 创建数据库索引（提升查询性能）
+func createIndexes() {
+	indexes := []string{
+		// records 表索引
+		"CREATE INDEX idx_records_project ON records(project)",
+		"CREATE INDEX idx_records_env ON records(env)",
+		"CREATE INDEX idx_records_status ON records(status)",
+		"CREATE INDEX idx_records_created_at ON records(created_at)",
+		"CREATE INDEX idx_records_updated_at ON records(updated_at)",
+
+		// users 表索引
+		"CREATE INDEX idx_users_role ON users(role)",
+		"CREATE INDEX idx_users_status ON users(status)",
+
+		// audit_logs 表索引
+		"CREATE INDEX idx_audit_action ON audit_logs(action)",
+		"CREATE INDEX idx_audit_operator ON audit_logs(operator)",
+		"CREATE INDEX idx_audit_created_at ON audit_logs(created_at)",
+		"CREATE INDEX idx_audit_record_id ON audit_logs(record_id)",
+
+		// datasources 表索引
+		"CREATE INDEX idx_datasources_type ON datasources(type)",
+		"CREATE INDEX idx_datasources_status ON datasources(status)",
+	}
+
+	for _, sql := range indexes {
+		// 忽略错误（索引可能已存在，MySQL 会报 Duplicate key name）
+		DB.Exec(sql)
+	}
 }
 
 func getEnv(key, defaultValue string) string {
