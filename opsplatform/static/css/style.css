@@ -583,13 +583,13 @@ tr.row-selected:hover td { background: rgba(57, 213, 255, 0.12); }
 input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-cyan); }
 
 /* 单元格样式 */
-.connection-id-cell { color: var(--accent-cyan); font-weight: 600; font-family: 'JetBrains Mono', monospace; min-width: 120px; }
-.ip-cell { color: var(--accent-blue); min-width: 130px; }
-.port-cell { color: var(--accent-purple); min-width: 70px; }
-.vid-cell { color: var(--accent-orange); font-weight: 500; min-width: 100px; }
+.connection-id-cell { color: var(--text-primary); font-family: 'JetBrains Mono', monospace; min-width: 120px; }
+.ip-cell { color: var(--text-primary); min-width: 130px; }
+.port-cell { color: var(--text-primary); min-width: 70px; }
+.vid-cell { color: var(--text-primary); min-width: 100px; }
 .project-cell { color: var(--text-primary); font-weight: 500; font-family: 'Noto Sans SC', sans-serif; min-width: 100px; }
-.operator-cell { color: var(--accent-green); font-family: 'Noto Sans SC', sans-serif; min-width: 80px; }
-.timestamp { font-size: 0.8em; color: var(--text-muted); min-width: 170px; }
+.operator-cell { color: var(--text-secondary); font-family: 'Noto Sans SC', sans-serif; min-width: 80px; }
+.timestamp { font-size: 0.85em; color: var(--text-muted); min-width: 170px; }
 
 /* 徽章 */
 .env-badge { display: inline-flex; padding: 4px 10px; border-radius: 4px; font-size: 0.75em; font-weight: 600; text-transform: uppercase; font-family: 'JetBrains Mono', monospace; }
