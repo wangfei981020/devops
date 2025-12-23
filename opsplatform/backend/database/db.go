@@ -87,12 +87,18 @@ func createTables() error {
 			role VARCHAR(32) DEFAULT 'user',
 			status VARCHAR(32) DEFAULT 'active',
 			permissions TEXT,
+			mfa_enabled TINYINT(1) DEFAULT 0,
+			mfa_secret VARCHAR(64),
 			created_at DATETIME
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`)
 	if err != nil {
 		return err
 	}
+
+	// 兼容旧数据库：添加 MFA 字段
+	DB.Exec(`ALTER TABLE users ADD COLUMN mfa_enabled TINYINT(1) DEFAULT 0`)
+	DB.Exec(`ALTER TABLE users ADD COLUMN mfa_secret VARCHAR(64)`)
 
 	// 创建审计日志表
 	_, err = DB.Exec(`

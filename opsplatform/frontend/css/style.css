@@ -1197,3 +1197,246 @@ body,
     .user-menu-dropdown { right: -8px; }
 }
 
+/* ========== MFA 样式 ========== */
+.mfa-input {
+    font-size: 24px !important;
+    letter-spacing: 8px;
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.mfa-settings {
+    margin-top: 20px;
+    padding: 16px;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.mfa-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.mfa-title {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.mfa-status {
+    font-size: 0.85em;
+    padding: 4px 10px;
+    border-radius: 12px;
+}
+
+.mfa-status.mfa-enabled {
+    background: rgba(63, 185, 80, 0.2);
+    color: var(--accent-green);
+}
+
+.mfa-status.mfa-disabled {
+    background: rgba(139, 148, 158, 0.2);
+    color: var(--text-muted);
+}
+
+.mfa-desc {
+    font-size: 0.85em;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
+.mfa-actions {
+    display: flex;
+    gap: 10px;
+}
+
+/* MFA 设置步骤 */
+.mfa-setup-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.mfa-step {
+    display: flex;
+    gap: 15px;
+    align-items: flex-start;
+}
+
+.step-number {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    background: var(--accent-cyan);
+    color: #000;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.step-content {
+    flex: 1;
+}
+
+.step-content h4 {
+    color: var(--text-primary);
+    margin-bottom: 8px;
+    font-size: 0.95em;
+}
+
+.step-content p {
+    color: var(--text-secondary);
+    font-size: 0.85em;
+    margin-bottom: 10px;
+}
+
+.mfa-qr-container {
+    display: flex;
+    justify-content: center;
+    padding: 15px;
+    background: #fff;
+    border-radius: 8px;
+    margin-bottom: 10px;
+}
+
+.mfa-qr-image {
+    width: 180px;
+    height: 180px;
+}
+
+.mfa-secret {
+    font-size: 0.85em;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.mfa-secret code {
+    display: block;
+    margin-top: 5px;
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--bg-tertiary);
+    padding: 8px 12px;
+    border-radius: 4px;
+    color: var(--accent-cyan);
+    word-break: break-all;
+}
+
+/* MFA 管理员设置 */
+.mfa-admin-setting {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid var(--border-color);
+}
+
+.mfa-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.mfa-toggle-label {
+    font-size: 0.9em;
+    color: var(--text-secondary);
+}
+
+.mfa-admin-hint {
+    font-size: 0.8em;
+    color: var(--accent-orange);
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: rgba(240, 136, 62, 0.1);
+    border-radius: 4px;
+}
+
+.mfa-admin-actions {
+    margin-top: 10px;
+}
+
+.btn-warning {
+    background: var(--accent-orange);
+    color: #fff;
+    border: none;
+}
+
+.btn-warning:hover {
+    background: #e07830;
+}
+
+/* Toggle Switch */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 48px;
+    height: 24px;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    transition: 0.3s;
+    border-radius: 24px;
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 2px;
+    bottom: 2px;
+    background-color: var(--text-muted);
+    transition: 0.3s;
+    border-radius: 50%;
+}
+
+input:checked + .slider {
+    background-color: var(--accent-green);
+    border-color: var(--accent-green);
+}
+
+input:checked + .slider:before {
+    transform: translateX(24px);
+    background-color: #fff;
+}
+
+/* MFA 状态徽章 */
+.mfa-badge {
+    font-size: 0.75em;
+    padding: 3px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+}
+
+.mfa-badge.mfa-off {
+    background: rgba(139, 148, 158, 0.2);
+    color: var(--text-muted);
+}
+
+.mfa-badge.mfa-bound {
+    background: rgba(63, 185, 80, 0.2);
+    color: var(--accent-green);
+}
+
+.mfa-badge.mfa-pending {
+    background: rgba(240, 136, 62, 0.2);
+    color: var(--accent-orange);
+}
+

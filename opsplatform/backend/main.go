@@ -39,6 +39,13 @@ func main() {
 	api.HandleFunc("/users/{id}", handlers.HandleUpdateUser).Methods("PUT", "OPTIONS")
 	api.HandleFunc("/users/{id}", handlers.HandleDeleteUser).Methods("DELETE", "OPTIONS")
 
+	// MFA 多因素认证
+	api.HandleFunc("/mfa/setup", handlers.HandleMFASetup).Methods("POST", "OPTIONS")
+	api.HandleFunc("/mfa/bind", handlers.HandleMFABind).Methods("POST", "OPTIONS")
+	api.HandleFunc("/mfa/verify", handlers.HandleMFAVerify).Methods("POST", "OPTIONS")
+	api.HandleFunc("/mfa/disable", handlers.HandleMFADisable).Methods("POST", "OPTIONS")
+	api.HandleFunc("/mfa/reset", handlers.HandleMFAReset).Methods("POST", "OPTIONS")
+
 	// 记录管理 - 特殊路由放在前面
 	api.HandleFunc("/records/export", handlers.HandleExportRecords).Methods("GET", "OPTIONS")
 	api.HandleFunc("/records/query", handlers.HandleQueryRecords).Methods("GET", "OPTIONS")
@@ -86,7 +93,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Operator")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)

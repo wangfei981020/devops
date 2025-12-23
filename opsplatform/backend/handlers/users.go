@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"opsplatform/database"
 	"opsplatform/models"
@@ -22,6 +23,14 @@ func hashPassword(password string) (string, error) {
 func checkPassword(hashedPassword, password string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
 	return err == nil
+}
+
+// LoginResponse 登录响应
+type LoginResponse struct {
+	RequireMFA  bool         `json:"require_mfa"`            // 是否需要 MFA 验证
+	UserID      string       `json:"user_id,omitempty"`      // 需要 MFA 时返回用户 ID
+	User        *models.User `json:"user,omitempty"`         // 登录成功时返回用户信息
+	NeedBinding bool         `json:"need_binding,omitempty"` // 是否需要绑定 MFA
 }
 
 // HandleLogin 用户登录
@@ -53,10 +62,43 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 返回用户信息（不含密码）
-	user.Password = ""
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(user)
+
+	// 计算是否已绑定 MFA
+	user.MFABound = user.MFASecret != ""
+
+	// 检查是否启用了 MFA 且已绑定
+	if user.MFAEnabled && user.MFABound {
+		// 需要进行 MFA 验证
+		json.NewEncoder(w).Encode(LoginResponse{
+			RequireMFA: true,
+			UserID:     user.ID,
+		})
+		return
+	}
+
+	// 如果启用了 MFA 但未绑定，需要先绑定
+	if user.MFAEnabled && !user.MFABound {
+		user.Password = ""
+		user.MFASecret = ""
+		json.NewEncoder(w).Encode(LoginResponse{
+			RequireMFA:  false,
+			User:        user,
+			NeedBinding: true, // 需要绑定 MFA
+		})
+		return
+	}
+
+	// 未启用 MFA，直接登录成功
+	ip := GetClientIP(r)
+	AddAuditLog("login", "user:"+user.ID, user.Username, "", "", fmt.Sprintf("用户登录成功: %s (%s)", user.Username, user.DisplayName), ip)
+
+	user.Password = ""
+	user.MFASecret = ""
+	json.NewEncoder(w).Encode(LoginResponse{
+		RequireMFA: false,
+		User:       user,
+	})
 }
 
 // HandleGetUsers 获取所有用户
@@ -67,9 +109,11 @@ func HandleGetUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 移除密码
+	// 移除敏感信息，计算 MFABound
 	for _, u := range users {
+		u.MFABound = u.MFASecret != "" // 有密钥即为已绑定
 		u.Password = ""
+		u.MFASecret = "" // 不返回 MFA 密钥
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -105,6 +149,11 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 记录审计日志
+	ip := GetClientIP(r)
+	changes := fmt.Sprintf("创建用户: %s (%s), 角色=%s", req.User.Username, req.User.DisplayName, req.User.Role)
+	AddAuditLog("create", "user:"+req.User.ID, req.CreatedBy, "", "", changes, ip)
+
 	req.User.Password = ""
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
@@ -116,15 +165,60 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
+	// 获取旧用户信息用于审计
+	oldUser, _ := GetUserByID(id)
+
 	var user models.User
 	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
 		http.Error(w, "无效的请求数据", http.StatusBadRequest)
 		return
 	}
 
+	// 获取操作者（从请求头或body）
+	operator := r.Header.Get("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+
 	if err := UpdateUser(id, &user); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
+	}
+
+	// 记录审计日志
+	ip := GetClientIP(r)
+	var changes []string
+	if oldUser != nil {
+		if oldUser.DisplayName != user.DisplayName && user.DisplayName != "" {
+			changes = append(changes, fmt.Sprintf("显示名称: %s → %s", oldUser.DisplayName, user.DisplayName))
+		}
+		if oldUser.Role != user.Role && user.Role != "" {
+			changes = append(changes, fmt.Sprintf("角色: %s → %s", oldUser.Role, user.Role))
+		}
+		if oldUser.Status != user.Status && user.Status != "" {
+			changes = append(changes, fmt.Sprintf("状态: %s → %s", oldUser.Status, user.Status))
+		}
+		if oldUser.Permissions != user.Permissions {
+			oldPerms := oldUser.Permissions
+			newPerms := user.Permissions
+			if oldPerms == "" {
+				oldPerms = "无"
+			}
+			if newPerms == "" {
+				newPerms = "无"
+			}
+			changes = append(changes, fmt.Sprintf("权限: %s → %s", oldPerms, newPerms))
+		}
+		if oldUser.MFAEnabled != user.MFAEnabled {
+			if user.MFAEnabled {
+				changes = append(changes, "启用 MFA")
+			} else {
+				changes = append(changes, "禁用 MFA")
+			}
+		}
+	}
+	if len(changes) > 0 {
+		AddAuditLog("update", "user:"+id, operator, "", "", fmt.Sprintf("更新用户 %s: %s", user.Username, strings.Join(changes, ", ")), ip)
 	}
 
 	user.Password = ""
@@ -149,10 +243,21 @@ func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 获取操作者
+	operator := r.Header.Get("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+
 	if err := DeleteUser(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+
+	// 记录审计日志
+	ip := GetClientIP(r)
+	changes := fmt.Sprintf("删除用户: %s (%s)", user.Username, user.DisplayName)
+	AddAuditLog("delete", "user:"+id, operator, "", "", changes, ip)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]string{"message": "删除成功"})
@@ -161,7 +266,8 @@ func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 // 数据库操作函数
 func GetAllUsers() ([]*models.User, error) {
 	rows, err := database.DB.Query(`
-		SELECT id, username, password, display_name, role, status, COALESCE(permissions, ''), created_at
+		SELECT id, username, password, display_name, role, status, COALESCE(permissions, ''), 
+		       COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), created_at
 		FROM users ORDER BY created_at DESC
 	`)
 	if err != nil {
@@ -172,10 +278,12 @@ func GetAllUsers() ([]*models.User, error) {
 	var users []*models.User
 	for rows.Next() {
 		u := &models.User{}
-		err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Role, &u.Status, &u.Permissions, &u.CreatedAt)
+		err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
+		// 计算 MFABound：有 MFASecret 即表示已绑定
+		u.MFABound = u.MFASecret != ""
 		users = append(users, u)
 	}
 	return users, nil
@@ -184,30 +292,44 @@ func GetAllUsers() ([]*models.User, error) {
 func GetUserByUsername(username string) (*models.User, error) {
 	u := &models.User{}
 	err := database.DB.QueryRow(`
-		SELECT id, username, password, display_name, role, status, COALESCE(permissions, ''), created_at
+		SELECT id, username, password, display_name, role, status, COALESCE(permissions, ''), 
+		       COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), created_at
 		FROM users WHERE username = ?
-	`, username).Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Role, &u.Status, &u.Permissions, &u.CreatedAt)
+	`, username).Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.CreatedAt)
 	if err != nil {
 		return nil, nil
 	}
+	// 计算 MFABound
+	u.MFABound = u.MFASecret != ""
 	return u, nil
 }
 
 func GetUserByID(id string) (*models.User, error) {
 	u := &models.User{}
 	err := database.DB.QueryRow(`
-		SELECT id, username, password, display_name, role, status, COALESCE(permissions, ''), created_at
+		SELECT id, username, password, display_name, role, status, COALESCE(permissions, ''), 
+		       COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), created_at
 		FROM users WHERE id = ?
-	`, id).Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Role, &u.Status, &u.Permissions, &u.CreatedAt)
+	`, id).Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.CreatedAt)
 	if err != nil {
 		return nil, nil
 	}
+	// 计算 MFABound
+	u.MFABound = u.MFASecret != ""
 	return u, nil
 }
 
 func AddUser(u *models.User) error {
 	u.ID = fmt.Sprintf("user_%d", timeNow().UnixNano())
 	u.CreatedAt = timeNow().Format("2006-01-02 15:04:05")
+
+	// 设置默认值
+	if u.Status == "" {
+		u.Status = "active"
+	}
+	if u.Role == "" {
+		u.Role = "user"
+	}
 
 	// 加密密码
 	hashedPassword, err := hashPassword(u.Password)
@@ -216,9 +338,9 @@ func AddUser(u *models.User) error {
 	}
 
 	_, err = database.DB.Exec(`
-		INSERT INTO users (id, username, password, display_name, role, status, permissions, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, u.ID, u.Username, hashedPassword, u.DisplayName, u.Role, u.Status, u.Permissions, u.CreatedAt)
+		INSERT INTO users (id, username, password, display_name, role, status, permissions, mfa_enabled, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, u.ID, u.Username, hashedPassword, u.DisplayName, u.Role, u.Status, u.Permissions, u.MFAEnabled, u.CreatedAt)
 	return err
 }
 
@@ -226,6 +348,20 @@ func UpdateUser(id string, u *models.User) error {
 	oldUser, err := GetUserByID(id)
 	if err != nil || oldUser == nil {
 		return fmt.Errorf("用户不存在: %s", id)
+	}
+
+	// 确保 status 和 role 不为空（保留原值或使用默认值）
+	if u.Status == "" {
+		u.Status = oldUser.Status
+		if u.Status == "" {
+			u.Status = "active"
+		}
+	}
+	if u.Role == "" {
+		u.Role = oldUser.Role
+		if u.Role == "" {
+			u.Role = "user"
+		}
 	}
 
 	// 如果密码为空，保留旧密码；否则加密新密码
@@ -238,10 +374,26 @@ func UpdateUser(id string, u *models.User) error {
 		passwordToSave = hashedPassword
 	}
 
+	// MFA 逻辑：保留原有 mfa_secret，只有当明确从开启变为关闭时才清除
+	mfaSecret := oldUser.MFASecret
+	mfaEnabled := u.MFAEnabled
+	
+	// 如果请求中没有明确设置 mfa_enabled，保留原值
+	// 注意：Go 中 bool 的零值是 false，但我们应该保留原值
+	// 只在管理员明确从 enabled=true 改为 enabled=false 时清空 secret
+	if oldUser.MFAEnabled && !u.MFAEnabled {
+		// 明确关闭 MFA，清空密钥
+		mfaSecret = ""
+	} else if !oldUser.MFAEnabled && !u.MFAEnabled {
+		// 原本就是关闭的，保持 mfa_enabled 和 mfa_secret 不变
+		mfaEnabled = oldUser.MFAEnabled
+		mfaSecret = oldUser.MFASecret
+	}
+
 	_, err = database.DB.Exec(`
-		UPDATE users SET display_name=?, role=?, status=?, permissions=?, password=?
+		UPDATE users SET display_name=?, role=?, status=?, permissions=?, password=?, mfa_enabled=?, mfa_secret=?
 		WHERE id=?
-	`, u.DisplayName, u.Role, u.Status, u.Permissions, passwordToSave, id)
+	`, u.DisplayName, u.Role, u.Status, u.Permissions, passwordToSave, mfaEnabled, mfaSecret, id)
 	return err
 }
 

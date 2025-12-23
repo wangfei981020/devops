@@ -27,6 +27,9 @@ type User struct {
 	Role        string `json:"role"`
 	Status      string `json:"status"`
 	Permissions string `json:"permissions"`
+	MFAEnabled  bool   `json:"mfa_enabled"`           // 是否启用 MFA（管理员配置）
+	MFASecret   string `json:"mfa_secret,omitempty"`  // MFA 密钥（不返回给前端）
+	MFABound    bool   `json:"mfa_bound"`             // 是否已绑定 MFA（有密钥即为已绑定）
 	CreatedAt   string `json:"created_at"`
 }
 

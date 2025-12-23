@@ -17,7 +17,9 @@
             <button class="login-theme-toggle" @click="toggleTheme" :title="isDarkMode ? '切换白天模式' : '切换夜间模式'">
                 {{ isDarkMode ? '☀️' : '🌙' }}
             </button>
-            <div class="login-box">
+            
+            <!-- 普通登录 -->
+            <div class="login-box" v-if="!mfaPending">
                 <div class="login-title">
                     <h1>运维管理平台</h1>
                     <p>请登录您的账号</p>
@@ -26,6 +28,22 @@
                     <div class="form-group"><label>用户名</label><input type="text" class="form-input" v-model="loginForm.username" placeholder="请输入用户名" required></div>
                     <div class="form-group"><label>密码</label><input type="password" class="form-input" v-model="loginForm.password" placeholder="请输入密码" required></div>
                     <button type="submit" class="btn btn-primary btn-block" :disabled="loginLoading">{{ loginLoading ? '登录中...' : '登 录' }}</button>
+                </form>
+            </div>
+
+            <!-- MFA 验证 -->
+            <div class="login-box" v-else>
+                <div class="login-title">
+                    <h1>🔐 MFA 验证</h1>
+                    <p>请输入您的动态验证码</p>
+                </div>
+                <form @submit.prevent="verifyMFA">
+                    <div class="form-group">
+                        <label>6位验证码</label>
+                        <input type="text" class="form-input mfa-input" v-model="mfaCode" placeholder="000000" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block" :disabled="loginLoading">{{ loginLoading ? '验证中...' : '验 证' }}</button>
+                    <button type="button" class="btn btn-secondary btn-block" style="margin-top: 10px;" @click="cancelMFA">返回登录</button>
                 </form>
             </div>
         </div>
@@ -343,7 +361,6 @@
                     <div class="page-header">
                         <h1 class="page-title">数据源管理</h1>
                         <div class="header-actions">
-                            <span class="record-count">共 {{ (datasources || []).length }} 个</span>
                             <button class="btn btn-primary" @click="openDataSourceModal('add')">+ 添加数据源</button>
                         </div>
                     </div>
@@ -352,7 +369,7 @@
                             <thead><tr><th>名称</th><th>类型</th><th>URL</th><th>描述</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
                             <tbody>
                                 <tr v-if="!datasources || datasources.length === 0"><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📡</div><div>暂无数据源</div></div></td></tr>
-                                <tr v-for="ds in datasources" :key="ds.id">
+                                <tr v-for="ds in pagedDatasources" :key="ds.id">
                                     <td class="project-cell">{{ ds.name }}</td>
                                     <td><span class="type-badge" :class="'type-' + ds.type">{{ getTypeLabel(ds.type) }}</span></td>
                                     <td class="ip-cell" style="max-width: 250px; overflow: hidden; text-overflow: ellipsis;">{{ ds.url }}</td>
@@ -368,6 +385,39 @@
                             </tbody>
                         </table>
                     </div>
+                    <!-- 数据源分页 -->
+                    <div class="pagination-container" v-if="(datasources || []).length > 0">
+                        <div class="pagination-info">
+                            <span>每页</span>
+                            <select class="page-size-select" v-model="dsPageSize" @change="dsCurrentPage = 1">
+                                <option :value="10">10</option>
+                                <option :value="20">20</option>
+                                <option :value="50">50</option>
+                                <option :value="100">100</option>
+                            </select>
+                            <span>条，共 {{ (datasources || []).length }} 条</span>
+                        </div>
+                        <div class="pagination-controls">
+                            <button class="page-btn" @click="dsCurrentPage = 1" :disabled="dsCurrentPage === 1">首页</button>
+                            <button class="page-btn" @click="dsCurrentPage--" :disabled="dsCurrentPage === 1">上一页</button>
+                            <div class="page-numbers">
+                                <button v-for="page in dsDisplayedPages" :key="'ds-'+page" 
+                                    class="page-number" 
+                                    :class="{ active: page === dsCurrentPage, ellipsis: page === '...' }"
+                                    @click="page !== '...' && (dsCurrentPage = page)"
+                                    :disabled="page === '...'">
+                                    {{ page }}
+                                </button>
+                            </div>
+                            <button class="page-btn" @click="dsCurrentPage++" :disabled="dsCurrentPage === dsTotalPages">下一页</button>
+                            <button class="page-btn" @click="dsCurrentPage = dsTotalPages" :disabled="dsCurrentPage === dsTotalPages">尾页</button>
+                            <div class="page-jump">
+                                <span>跳至</span>
+                                <input type="number" class="page-jump-input" v-model.number="dsJumpPage" @keyup.enter="dsGoToPage" min="1" :max="dsTotalPages">
+                                <span>页</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- 审计日志 -->
@@ -375,7 +425,6 @@
                     <div class="page-header">
                         <h1 class="page-title">审计日志</h1>
                         <div class="header-actions">
-                            <span class="record-count">共 {{ filteredAuditLogs.length }} 条</span>
                             <button class="btn btn-secondary" @click="exportAuditLogs">⬇ 导出CSV</button>
                             <button class="btn btn-secondary" @click="loadAuditLogs">刷新</button>
                         </div>
@@ -397,7 +446,7 @@
                             <thead><tr><th>时间</th><th>操作</th><th>操作人</th><th>变更摘要</th><th>IP</th><th>详情</th></tr></thead>
                             <tbody>
                                 <tr v-if="filteredAuditLogs.length === 0"><td colspan="6"><div class="empty-state"><div class="empty-state-icon">◎</div><div>暂无日志</div></div></td></tr>
-                                <tr v-for="log in filteredAuditLogs" :key="log.id">
+                                <tr v-for="log in pagedAuditLogs" :key="log.id">
                                     <td class="timestamp">{{ log.created_at }}</td>
                                     <td><span class="audit-action" :class="'action-' + log.action">{{ getActionText(log.action) }}</span></td>
                                     <td class="operator-cell">{{ log.operator }}</td>
@@ -408,6 +457,39 @@
                             </tbody>
                         </table>
                     </div>
+                    <!-- 审计日志分页 -->
+                    <div class="pagination-container" v-if="filteredAuditLogs.length > 0">
+                        <div class="pagination-info">
+                            <span>每页</span>
+                            <select class="page-size-select" v-model="auditPageSize" @change="auditCurrentPage = 1">
+                                <option :value="10">10</option>
+                                <option :value="20">20</option>
+                                <option :value="50">50</option>
+                                <option :value="100">100</option>
+                            </select>
+                            <span>条，共 {{ filteredAuditLogs.length }} 条</span>
+                        </div>
+                        <div class="pagination-controls">
+                            <button class="page-btn" @click="auditCurrentPage = 1" :disabled="auditCurrentPage === 1">首页</button>
+                            <button class="page-btn" @click="auditCurrentPage--" :disabled="auditCurrentPage === 1">上一页</button>
+                            <div class="page-numbers">
+                                <button v-for="page in auditDisplayedPages" :key="'audit-'+page" 
+                                    class="page-number" 
+                                    :class="{ active: page === auditCurrentPage, ellipsis: page === '...' }"
+                                    @click="page !== '...' && (auditCurrentPage = page)"
+                                    :disabled="page === '...'">
+                                    {{ page }}
+                                </button>
+                            </div>
+                            <button class="page-btn" @click="auditCurrentPage++" :disabled="auditCurrentPage === auditTotalPages">下一页</button>
+                            <button class="page-btn" @click="auditCurrentPage = auditTotalPages" :disabled="auditCurrentPage === auditTotalPages">尾页</button>
+                            <div class="page-jump">
+                                <span>跳至</span>
+                                <input type="number" class="page-jump-input" v-model.number="auditJumpPage" @keyup.enter="auditGoToPage" min="1" :max="auditTotalPages">
+                                <span>页</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- 用户管理 -->
@@ -415,25 +497,62 @@
                     <div class="page-header">
                         <h1 class="page-title">用户管理</h1>
                         <div class="header-actions">
-                            <span class="record-count">共 {{ (users || []).length }} 个用户</span>
                             <button class="btn btn-primary" @click="openUserModal('add')">+ 添加用户</button>
                         </div>
                     </div>
                     <div class="table-container">
                         <table>
-                            <thead><tr><th>用户名</th><th>显示名称</th><th>角色</th><th>权限</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+                            <thead><tr><th>用户名</th><th>显示名称</th><th>角色</th><th>权限</th><th>MFA</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
                             <tbody>
-                                <tr v-for="user in users" :key="user.id">
+                                <tr v-for="user in pagedUsers" :key="user.id">
                                     <td>{{ user.username }}</td>
                                     <td class="operator-cell">{{ user.display_name }}</td>
                                     <td><span class="role-badge" :class="'role-' + user.role">{{ user.role === 'admin' ? '管理员' : '用户' }}</span></td>
                                     <td><span class="perm-tags">{{ user.role === 'admin' ? '全部权限' : formatPermissions(user.permissions) }}</span></td>
+                                    <td>
+                                        <span v-if="!user.mfa_enabled" class="mfa-badge mfa-off">未启用</span>
+                                        <span v-else-if="user.mfa_bound" class="mfa-badge mfa-bound">已绑定</span>
+                                        <span v-else class="mfa-badge mfa-pending">待绑定</span>
+                                    </td>
                                     <td><span class="status-badge" :class="'status-' + user.status">{{ user.status === 'active' ? '启用' : '停用' }}</span></td>
                                     <td class="timestamp">{{ user.created_at }}</td>
                                     <td><div class="action-btns"><button class="btn btn-secondary btn-sm" @click="openUserModal('edit', user)">编辑</button><button v-if="user.role !== 'admin'" class="btn btn-danger btn-sm" @click="confirmDeleteUser(user)">删除</button></div></td>
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                    <!-- 用户管理分页 -->
+                    <div class="pagination-container" v-if="(users || []).length > 0">
+                        <div class="pagination-info">
+                            <span>每页</span>
+                            <select class="page-size-select" v-model="userPageSize" @change="userCurrentPage = 1">
+                                <option :value="10">10</option>
+                                <option :value="20">20</option>
+                                <option :value="50">50</option>
+                                <option :value="100">100</option>
+                            </select>
+                            <span>条，共 {{ (users || []).length }} 条</span>
+                        </div>
+                        <div class="pagination-controls">
+                            <button class="page-btn" @click="userCurrentPage = 1" :disabled="userCurrentPage === 1">首页</button>
+                            <button class="page-btn" @click="userCurrentPage--" :disabled="userCurrentPage === 1">上一页</button>
+                            <div class="page-numbers">
+                                <button v-for="page in userDisplayedPages" :key="'user-'+page" 
+                                    class="page-number" 
+                                    :class="{ active: page === userCurrentPage, ellipsis: page === '...' }"
+                                    @click="page !== '...' && (userCurrentPage = page)"
+                                    :disabled="page === '...'">
+                                    {{ page }}
+                                </button>
+                            </div>
+                            <button class="page-btn" @click="userCurrentPage++" :disabled="userCurrentPage === userTotalPages">下一页</button>
+                            <button class="page-btn" @click="userCurrentPage = userTotalPages" :disabled="userCurrentPage === userTotalPages">尾页</button>
+                            <div class="page-jump">
+                                <span>跳至</span>
+                                <input type="number" class="page-jump-input" v-model.number="userJumpPage" @keyup.enter="userGoToPage" min="1" :max="userTotalPages">
+                                <span>页</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </main>
@@ -522,6 +641,28 @@
                             </div>
                             <div class="permission-hint">管理员拥有所有权限</div>
                         </div>
+                        
+                        <!-- MFA 设置（管理员配置） -->
+                        <div class="form-group mfa-admin-setting">
+                            <label>🔐 多因素认证 (MFA)</label>
+                            <div class="mfa-toggle-row">
+                                <label class="switch">
+                                    <input type="checkbox" v-model="userForm.mfa_enabled">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="mfa-toggle-label">
+                                    {{ userForm.mfa_enabled ? (userForm.mfa_bound ? '已启用（已绑定）' : '已启用（待绑定）') : '未启用' }}
+                                </span>
+                            </div>
+                            <div class="mfa-admin-actions" v-if="userModalMode === 'edit' && userForm.mfa_bound">
+                                <button type="button" class="btn btn-warning btn-sm" @click="resetUserMFA(userForm.id)">
+                                    🔄 重置 MFA（让用户重新绑定）
+                                </button>
+                            </div>
+                            <div class="mfa-admin-hint" v-if="userForm.mfa_enabled && !userForm.mfa_bound">
+                                ⚠️ 启用后，用户首次登录需要绑定认证器应用
+                            </div>
+                        </div>
                     </div>
                     <div class="modal-footer"><button type="button" class="btn btn-secondary" @click="showUserModal = false">取消</button><button type="submit" class="btn btn-success">保存</button></div>
                 </form>
@@ -591,7 +732,7 @@
 
         <!-- 用户信息编辑弹窗 -->
         <div class="modal-overlay" :class="{ show: showProfileModal }">
-            <div class="modal" style="max-width: 450px;">
+            <div class="modal" style="max-width: 500px;">
                 <div class="modal-header"><h2>个人信息</h2><button class="modal-close" @click="showProfileModal = false">&times;</button></div>
                 <form @submit.prevent="saveProfile">
                     <div class="modal-body">
@@ -599,9 +740,111 @@
                         <div class="form-group"><label>显示名称 <span class="required">*</span></label><input type="text" class="form-input" v-model="profileForm.display_name" required></div>
                         <div class="form-group"><label>新密码 (留空不修改)</label><input type="password" class="form-input" v-model="profileForm.password" placeholder="留空则不修改密码"></div>
                         <div class="form-group"><label>角色</label><input type="text" class="form-input" :value="profileForm.role === 'admin' ? '管理员' : '普通用户'" disabled style="background: var(--bg-tertiary);"></div>
+                        
+                        <!-- MFA 设置 -->
+                        <div class="mfa-settings">
+                            <div class="mfa-header">
+                                <span class="mfa-title">🔐 多因素认证 (MFA)</span>
+                                <span class="mfa-status" :class="currentUser && currentUser.mfa_enabled ? 'mfa-enabled' : 'mfa-disabled'">
+                                    {{ currentUser && currentUser.mfa_enabled ? (currentUser.mfa_bound ? '已绑定' : '待绑定') : '未启用' }}
+                                </span>
+                            </div>
+                            
+                            <!-- 管理员：可以自行开启/关闭 -->
+                            <template v-if="currentUser && currentUser.role === 'admin'">
+                                <p class="mfa-desc">管理员可自行管理 MFA，其他用户由管理员在用户管理中配置。</p>
+                                <div class="mfa-actions">
+                                    <button type="button" v-if="!currentUser.mfa_enabled" class="btn btn-primary btn-sm" @click="showMFASetupModal = true; setupMFA()">
+                                        🔒 启用 MFA
+                                    </button>
+                                    <template v-else>
+                                        <button type="button" v-if="!currentUser.mfa_bound" class="btn btn-primary btn-sm" @click="showMFASetupModal = true; setupMFA()">
+                                            📱 绑定认证器
+                                        </button>
+                                        <button type="button" class="btn btn-danger btn-sm" @click="showMFADisableModal = true">
+                                            🔓 禁用 MFA
+                                        </button>
+                                    </template>
+                                </div>
+                            </template>
+                            
+                            <!-- 普通用户：只能绑定（如果管理员启用了） -->
+                            <template v-else-if="currentUser">
+                                <p class="mfa-desc" v-if="!currentUser.mfa_enabled">MFA 由管理员统一配置，如需开启请联系管理员。</p>
+                                <template v-else>
+                                    <p class="mfa-desc" v-if="!currentUser.mfa_bound">管理员已为您启用 MFA，请绑定认证器应用。</p>
+                                    <p class="mfa-desc" v-else>您已成功绑定 MFA，登录时需输入动态验证码。</p>
+                                    <div class="mfa-actions" v-if="!currentUser.mfa_bound">
+                                        <button type="button" class="btn btn-primary btn-sm" @click="showMFASetupModal = true; setupMFA()">
+                                            📱 绑定认证器
+                                        </button>
+                                    </div>
+                                </template>
+                            </template>
+                        </div>
                     </div>
                     <div class="modal-footer"><button type="button" class="btn btn-secondary" @click="showProfileModal = false">取消</button><button type="submit" class="btn btn-success">保存</button></div>
                 </form>
+            </div>
+        </div>
+
+        <!-- MFA 设置弹窗 -->
+        <div class="modal-overlay" :class="{ show: showMFASetupModal }">
+            <div class="modal" style="max-width: 450px;">
+                <div class="modal-header"><h2>🔐 启用 MFA</h2><button class="modal-close" @click="showMFASetupModal = false">&times;</button></div>
+                <div class="modal-body">
+                    <div class="mfa-setup-steps">
+                        <div class="mfa-step">
+                            <div class="step-number">1</div>
+                            <div class="step-content">
+                                <h4>下载认证器应用</h4>
+                                <p>推荐使用 Google Authenticator、Microsoft Authenticator 或其他 TOTP 应用</p>
+                            </div>
+                        </div>
+                        <div class="mfa-step">
+                            <div class="step-number">2</div>
+                            <div class="step-content">
+                                <h4>扫描二维码</h4>
+                                <div class="mfa-qr-container" v-if="mfaSetup.qr_code">
+                                    <img :src="mfaSetup.qr_code" alt="MFA QR Code" class="mfa-qr-image">
+                                </div>
+                                <div class="mfa-secret" v-if="mfaSetup.secret">
+                                    <span>或手动输入密钥：</span>
+                                    <code>{{ mfaSetup.secret }}</code>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mfa-step">
+                            <div class="step-number">3</div>
+                            <div class="step-content">
+                                <h4>输入验证码</h4>
+                                <input type="text" class="form-input mfa-input" v-model="mfaBindCode" placeholder="输入6位验证码" maxlength="6">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @click="showMFASetupModal = false">取消</button>
+                    <button class="btn btn-success" @click="bindMFA" :disabled="!mfaBindCode || mfaBindCode.length !== 6">确认绑定</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- MFA 禁用确认弹窗 -->
+        <div class="modal-overlay" :class="{ show: showMFADisableModal }">
+            <div class="modal" style="max-width: 400px;">
+                <div class="modal-header"><h2>⚠️ 禁用 MFA</h2><button class="modal-close" @click="showMFADisableModal = false">&times;</button></div>
+                <div class="modal-body">
+                    <p style="color: var(--color-warning); margin-bottom: 15px;">禁用 MFA 会降低您账号的安全性，确定要继续吗？</p>
+                    <div class="form-group">
+                        <label>请输入密码确认</label>
+                        <input type="password" class="form-input" v-model="mfaDisablePassword" placeholder="输入当前密码">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @click="showMFADisableModal = false">取消</button>
+                    <button class="btn btn-danger" @click="disableMFA" :disabled="!mfaDisablePassword">确认禁用</button>
+                </div>
             </div>
         </div>
 

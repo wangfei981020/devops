@@ -25,10 +25,12 @@ spec:
       labels:
         app: opsplatform-backend
     spec:
+      imagePullSecrets:
+      - name: ghcr-secret
       containers:
       - name: backend
-        image: opsplatform-backend:latest
-        imagePullPolicy: Never
+        image: ghcr.io/wangfei981020/opsplatform-backend:v4
+        imagePullPolicy: Always
         ports:
         - containerPort: 8088
         envFrom:

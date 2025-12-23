@@ -2,10 +2,23 @@
 const API = {
     baseURL: '/api',
 
+    // 获取当前登录用户名
+    getOperator() {
+        try {
+            const user = JSON.parse(localStorage.getItem('currentUser'));
+            return user ? user.username : 'system';
+        } catch {
+            return 'system';
+        }
+    },
+
     async request(method, url, data = null) {
         const options = {
             method,
-            headers: { 'Content-Type': 'application/json' }
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-Operator': this.getOperator() // 添加操作者 header
+            }
         };
         if (data) {
             options.body = JSON.stringify(data);
@@ -94,6 +107,27 @@ const API = {
 
     exportAuditLogs() {
         window.open(`${this.baseURL}/audit-logs/export`, '_blank');
+    },
+
+    // MFA 多因素认证
+    async mfaSetup(userId) {
+        return this.request('POST', '/mfa/setup', { user_id: userId });
+    },
+
+    async mfaBind(userId, code) {
+        return this.request('POST', '/mfa/bind', { user_id: userId, code });
+    },
+
+    async mfaVerify(userId, code) {
+        return this.request('POST', '/mfa/verify', { user_id: userId, code });
+    },
+
+    async mfaDisable(userId, password) {
+        return this.request('POST', '/mfa/disable', { user_id: userId, password });
+    },
+
+    async mfaReset(userId) {
+        return this.request('POST', '/mfa/reset', { user_id: userId });
     }
 };
 

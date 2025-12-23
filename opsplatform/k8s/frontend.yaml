@@ -13,10 +13,12 @@ spec:
       labels:
         app: opsplatform-frontend
     spec:
+      imagePullSecrets:
+      - name: ghcr-secret
       containers:
       - name: frontend
-        image: opsplatform-frontend:latest
-        imagePullPolicy: Never
+        image: ghcr.io/wangfei981020/opsplatform-frontend:v4
+        imagePullPolicy: Always
         ports:
         - containerPort: 80
         resources:

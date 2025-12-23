@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"opsplatform/database"
@@ -53,6 +54,11 @@ func HandleAddDataSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 记录审计日志
+	ip := GetClientIP(r)
+	changes := fmt.Sprintf("添加数据源: %s (%s), 类型=%s, URL=%s", req.DataSource.Name, req.DataSource.Description, req.DataSource.Type, req.DataSource.URL)
+	AddAuditLog("create", "datasource:"+req.DataSource.ID, req.Operator, "", "", changes, ip)
+
 	req.DataSource.Password = ""
 	req.DataSource.Token = ""
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -65,15 +71,41 @@ func HandleUpdateDataSource(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
+	// 获取旧数据源信息
+	oldDS, _ := GetDataSourceByID(id)
+
 	var ds models.DataSource
 	if err := json.NewDecoder(r.Body).Decode(&ds); err != nil {
 		http.Error(w, "无效的请求数据", http.StatusBadRequest)
 		return
 	}
 
+	operator := r.Header.Get("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+
 	if err := UpdateDataSource(id, &ds); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
+	}
+
+	// 记录审计日志
+	ip := GetClientIP(r)
+	var changes []string
+	if oldDS != nil {
+		if oldDS.Name != ds.Name && ds.Name != "" {
+			changes = append(changes, fmt.Sprintf("名称: %s → %s", oldDS.Name, ds.Name))
+		}
+		if oldDS.URL != ds.URL && ds.URL != "" {
+			changes = append(changes, fmt.Sprintf("URL: %s → %s", oldDS.URL, ds.URL))
+		}
+		if oldDS.Status != ds.Status && ds.Status != "" {
+			changes = append(changes, fmt.Sprintf("状态: %s → %s", oldDS.Status, ds.Status))
+		}
+	}
+	if len(changes) > 0 {
+		AddAuditLog("update", "datasource:"+id, operator, "", "", fmt.Sprintf("更新数据源 %s: %s", ds.Name, strings.Join(changes, ", ")), ip)
 	}
 
 	ds.Password = ""
@@ -87,9 +119,24 @@ func HandleDeleteDataSource(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
+	// 获取数据源信息用于审计
+	ds, _ := GetDataSourceByID(id)
+
+	operator := r.Header.Get("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+
 	if err := DeleteDataSource(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
+	}
+
+	// 记录审计日志
+	ip := GetClientIP(r)
+	if ds != nil {
+		changes := fmt.Sprintf("删除数据源: %s (%s)", ds.Name, ds.Type)
+		AddAuditLog("delete", "datasource:"+id, operator, "", "", changes, ip)
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
