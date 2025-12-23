@@ -10,25 +10,30 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       packages: write
+      contents: read
     steps:
       - name: Delete old untagged backend images
         uses: actions/delete-package-versions@v5
         with:
           package-name: 'opsplatform-backend'
           package-type: 'container'
+          owner: 'wangfei981020'
           min-versions-to-keep: 5
           delete-only-untagged-versions: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   cleanup-frontend:
     runs-on: ubuntu-latest
     permissions:
       packages: write
+      contents: read
     steps:
       - name: Delete old untagged frontend images
         uses: actions/delete-package-versions@v5
         with:
           package-name: 'opsplatform-frontend'
           package-type: 'container'
+          owner: 'wangfei981020'
           min-versions-to-keep: 5
           delete-only-untagged-versions: true
-
+          token: ${{ secrets.GITHUB_TOKEN }}
