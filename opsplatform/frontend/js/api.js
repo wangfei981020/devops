@@ -53,6 +53,14 @@ const API = {
         return this.request('GET', '/records');
     },
 
+    async getRecordHistory(recordId) {
+        return this.request('GET', `/records/${recordId}/history`);
+    },
+
+    async rollbackRecord(recordId, historyId, operator) {
+        return this.request('POST', `/records/${recordId}/rollback`, { history_id: historyId, operator: operator });
+    },
+
     async createRecord(record, operator) {
         return this.request('POST', '/records', { record, operator });
     },
@@ -109,6 +117,11 @@ const API = {
         window.open(`${this.baseURL}/audit-logs/export`, '_blank');
     },
 
+    exportDomains(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        window.open(`${this.baseURL}/domains/export${query ? '?' + query : ''}`, '_blank');
+    },
+
     // MFA 多因素认证
     async mfaSetup(userId) {
         return this.request('POST', '/mfa/setup', { user_id: userId });
@@ -128,6 +141,56 @@ const API = {
 
     async mfaReset(userId) {
         return this.request('POST', '/mfa/reset', { user_id: userId });
+    },
+
+    // 自定义指标管理
+    async getMetrics() {
+        return this.request('GET', '/metrics');
+    },
+
+    async createMetric(metric) {
+        return this.request('POST', '/metrics', metric);
+    },
+
+    async updateMetric(metric) {
+        return this.request('PUT', '/metrics', metric);
+    },
+
+    async deleteMetric(id) {
+        return this.request('DELETE', `/metrics?id=${id}`);
+    },
+
+    async initDefaultMetrics() {
+        return this.request('POST', '/metrics/init');
+    },
+
+    // 域名管理
+    async getDomains() {
+        return this.request('GET', '/domains');
+    },
+
+    async createDomain(domain) {
+        return this.request('POST', '/domains', domain);
+    },
+
+    async updateDomain(id, domain) {
+        return this.request('PUT', `/domains/${id}`, domain);
+    },
+
+    async deleteDomain(id) {
+        return this.request('DELETE', `/domains/${id}`);
+    },
+
+    async batchDomains(ids, action, operator) {
+        return this.request('POST', '/domains/batch', { ids, action, operator });
+    },
+
+    async batchAddDomains(domains, createdBy) {
+        return this.request('POST', '/domains/batch-add', { domains, created_by: createdBy });
+    },
+
+    async checkDomainCert(domain) {
+        return this.request('GET', `/domains/check-cert?domain=${encodeURIComponent(domain)}`);
     }
 };
 

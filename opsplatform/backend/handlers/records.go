@@ -8,6 +8,7 @@ import (
 	"opsplatform/database"
 	"opsplatform/models"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )
 
@@ -358,6 +359,9 @@ func AddRecord(r *models.Record, operator, ip string) error {
 		return err
 	}
 
+	// 保存历史记录
+	SaveRecordHistory(r.ID, "create", r, "创建记录", operator)
+
 	newDataJSON, _ := json.Marshal(r)
 	return AddAuditLog("create", r.ID, operator, "", string(newDataJSON),
 		fmt.Sprintf("创建记录: 连接ID=%s, 项目=%s, VID=%s, %s->%s:%s", r.ConnectionID, r.Project, r.VID, r.SrcIP, r.DestIP, r.Port), ip)
@@ -378,6 +382,7 @@ func UpdateRecord(id string, r *models.Record, operator, ip string) error {
 
 	oldDataJSON, _ := json.Marshal(oldRecord)
 	changes := generateChanges(oldRecord, r)
+	changesJSON := generateChangesJSON(oldRecord, r)
 
 	r.ID = id
 	r.CreatedAt = oldRecord.CreatedAt
@@ -392,6 +397,9 @@ func UpdateRecord(id string, r *models.Record, operator, ip string) error {
 	if err != nil {
 		return err
 	}
+
+	// 保存历史记录（保存更新后的版本）
+	SaveRecordHistory(id, "update", r, changesJSON, operator)
 
 	newDataJSON, _ := json.Marshal(r)
 	return AddAuditLog("update", id, operator, string(oldDataJSON), string(newDataJSON), changes, ip)
@@ -488,4 +496,167 @@ func generateChanges(old, new *models.Record) string {
 		result += c
 	}
 	return result
+}
+
+// generateChangesJSON 生成JSON格式的变更记录
+func generateChangesJSON(old, new *models.Record) string {
+	changes := make(map[string]map[string]string)
+
+	if old.Project != new.Project {
+		changes["project"] = map[string]string{"old": old.Project, "new": new.Project}
+	}
+	if old.Env != new.Env {
+		changes["env"] = map[string]string{"old": old.Env, "new": new.Env}
+	}
+	if old.VID != new.VID {
+		changes["vid"] = map[string]string{"old": old.VID, "new": new.VID}
+	}
+	if old.SrcIP != new.SrcIP {
+		changes["src_ip"] = map[string]string{"old": old.SrcIP, "new": new.SrcIP}
+	}
+	if old.DestIP != new.DestIP {
+		changes["dest_ip"] = map[string]string{"old": old.DestIP, "new": new.DestIP}
+	}
+	if old.Port != new.Port {
+		changes["port"] = map[string]string{"old": old.Port, "new": new.Port}
+	}
+	if old.Status != new.Status {
+		changes["status"] = map[string]string{"old": old.Status, "new": new.Status}
+	}
+	if old.ConnectionID != new.ConnectionID {
+		changes["connection_id"] = map[string]string{"old": old.ConnectionID, "new": new.ConnectionID}
+	}
+
+	if len(changes) == 0 {
+		return "{}"
+	}
+
+	data, _ := json.Marshal(changes)
+	return string(data)
+}
+
+// ========== 历史记录相关 ==========
+
+// SaveRecordHistory 保存记录历史
+func SaveRecordHistory(recordID, action string, record *models.Record, changes string, operator string) error {
+	snapshot, _ := json.Marshal(record)
+	id := uuid.New().String()
+	createdAt := timeNow().Format("2006-01-02 15:04:05")
+
+	_, err := database.DB.Exec(`
+		INSERT INTO record_history (id, record_id, action, snapshot, changes, created_at, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, id, recordID, action, string(snapshot), changes, createdAt, operator)
+	return err
+}
+
+// HandleGetRecordHistory 获取记录历史
+func HandleGetRecordHistory(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	recordID := vars["id"]
+
+	rows, err := database.DB.Query(`
+		SELECT id, record_id, action, snapshot, changes, created_at, created_by
+		FROM record_history
+		WHERE record_id = ?
+		ORDER BY created_at DESC
+	`, recordID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type History struct {
+		ID        string `json:"id"`
+		RecordID  string `json:"record_id"`
+		Action    string `json:"action"`
+		Snapshot  string `json:"snapshot"`
+		Changes   string `json:"changes"`
+		CreatedAt string `json:"created_at"`
+		CreatedBy string `json:"created_by"`
+	}
+
+	histories := []History{}
+	for rows.Next() {
+		var h History
+		if err := rows.Scan(&h.ID, &h.RecordID, &h.Action, &h.Snapshot, &h.Changes, &h.CreatedAt, &h.CreatedBy); err != nil {
+			continue
+		}
+		histories = append(histories, h)
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(histories)
+}
+
+// HandleRollbackRecord 回滚记录到指定版本
+func HandleRollbackRecord(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	recordID := vars["id"]
+
+	var req struct {
+		HistoryID string `json:"history_id"`
+		Operator  string `json:"operator"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "无效的请求数据", http.StatusBadRequest)
+		return
+	}
+
+	operator := req.Operator
+	if operator == "" {
+		operator = "system"
+	}
+
+	// 获取历史快照
+	var snapshot string
+	var historyCreatedBy string
+	err := database.DB.QueryRow(`
+		SELECT snapshot, created_by FROM record_history WHERE id = ? AND record_id = ?
+	`, req.HistoryID, recordID).Scan(&snapshot, &historyCreatedBy)
+	if err != nil {
+		http.Error(w, "历史记录不存在", http.StatusNotFound)
+		return
+	}
+
+	// 解析快照
+	var oldRecord models.Record
+	if err := json.Unmarshal([]byte(snapshot), &oldRecord); err != nil {
+		http.Error(w, "解析快照失败", http.StatusInternalServerError)
+		return
+	}
+
+	// 获取当前记录（用于保存回滚前的历史）
+	currentRecord, err := GetRecord(recordID)
+	if err != nil || currentRecord == nil {
+		http.Error(w, "当前记录不存在", http.StatusNotFound)
+		return
+	}
+
+	// 保存回滚前的历史
+	ip := GetClientIP(r)
+	SaveRecordHistory(recordID, "update", currentRecord, "回滚前备份", operator)
+
+	// 更新记录为历史版本
+	now := timeNow().Format("2006-01-02 15:04:05")
+	_, err = database.DB.Exec(`
+		UPDATE records SET connection_id=?, project=?, env=?, vid=?, src_ip=?, dest_ip=?, port=?, status=?, updated_at=?, updated_by=?
+		WHERE id=?
+	`, oldRecord.ConnectionID, oldRecord.Project, oldRecord.Env, oldRecord.VID, oldRecord.SrcIP, oldRecord.DestIP, oldRecord.Port, oldRecord.Status, now, operator, recordID)
+	if err != nil {
+		http.Error(w, "回滚失败", http.StatusInternalServerError)
+		return
+	}
+
+	// 保存回滚后的历史
+	oldRecord.UpdatedAt = now
+	oldRecord.UpdatedBy = operator
+	SaveRecordHistory(recordID, "rollback", &oldRecord, "回滚到历史版本", operator)
+
+	// 记录审计日志
+	AddAuditLog("rollback", recordID, operator, "", snapshot, "回滚到历史版本", ip)
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }

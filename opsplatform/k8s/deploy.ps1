@@ -37,3 +37,4 @@ Write-Host "访问地址: http://localhost:30080" -ForegroundColor Cyan
 Write-Host "`n查看 Pod 状态:" -ForegroundColor Yellow
 kubectl get pods -n opsplatform
 
+

@@ -138,6 +138,67 @@ func createTables() error {
 		return err
 	}
 
+	// 创建自定义指标表
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS metrics (
+			id VARCHAR(64) PRIMARY KEY,
+			name VARCHAR(128) NOT NULL,
+			label VARCHAR(255) NOT NULL,
+			promql TEXT NOT NULL,
+			unit VARCHAR(32),
+			group_name VARCHAR(64),
+			description TEXT,
+			enabled TINYINT(1) DEFAULT 1,
+			sort_order INT DEFAULT 0,
+			created_at DATETIME,
+			created_by VARCHAR(128)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	// 创建域名管理表
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS domains (
+			id VARCHAR(64) PRIMARY KEY,
+			project VARCHAR(255) NOT NULL,
+			module VARCHAR(255),
+			domain_name VARCHAR(512) NOT NULL,
+			origin VARCHAR(512),
+			cdn_provider VARCHAR(128),
+			expire_time DATE,
+			cert_expire_time DATE,
+			status VARCHAR(32) DEFAULT 'active',
+			remark TEXT,
+			created_at DATETIME,
+			created_by VARCHAR(128),
+			updated_at DATETIME,
+			updated_by VARCHAR(128)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	// 创建记录历史表（用于修改历史和回滚）
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS record_history (
+			id VARCHAR(64) PRIMARY KEY,
+			record_id VARCHAR(64) NOT NULL,
+			action VARCHAR(32) NOT NULL,
+			snapshot TEXT NOT NULL,
+			changes TEXT,
+			created_at DATETIME,
+			created_by VARCHAR(128),
+			INDEX idx_record_history_record_id (record_id),
+			INDEX idx_record_history_created_at (created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
 	// 创建索引（提升查询性能）
 	createIndexes()
 
@@ -167,6 +228,12 @@ func createIndexes() {
 		// datasources 表索引
 		"CREATE INDEX idx_datasources_type ON datasources(type)",
 		"CREATE INDEX idx_datasources_status ON datasources(status)",
+
+		// domains 表索引
+		"CREATE INDEX idx_domains_project ON domains(project)",
+		"CREATE INDEX idx_domains_status ON domains(status)",
+		"CREATE INDEX idx_domains_expire_time ON domains(expire_time)",
+		"CREATE INDEX idx_domains_cert_expire_time ON domains(cert_expire_time)",
 	}
 
 	for _, sql := range indexes {

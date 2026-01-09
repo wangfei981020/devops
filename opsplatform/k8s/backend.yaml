@@ -29,8 +29,8 @@ spec:
       - name: ghcr-secret
       containers:
       - name: backend
-        image: ghcr.io/wangfei981020/opsplatform-backend:v4
-        imagePullPolicy: Always
+        image: localhost:8070/library/opsplatform-backend:v4
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8088
         envFrom:

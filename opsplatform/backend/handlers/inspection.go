@@ -36,18 +36,76 @@ type MetricResult struct {
 	Unit  string  `json:"unit"`
 }
 
-// 预定义的 PromQL 查询
-var metricQueries = map[string]struct {
+// MetricDef 指标定义
+type MetricDef struct {
 	Query string
 	Unit  string
-}{
-	"cpu":     {"100 - (avg(irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)", "%"},
-	"memory":  {"(1 - avg(node_memory_MemAvailable_bytes) / avg(node_memory_MemTotal_bytes)) * 100", "%"},
-	"disk":    {"(1 - avg(node_filesystem_avail_bytes{mountpoint=\"/\"}) / avg(node_filesystem_size_bytes{mountpoint=\"/\"})) * 100", "%"},
-	"network": {"sum(irate(node_network_receive_bytes_total[5m])) / 1024 / 1024", "MB/s"},
-	"uptime":  {"(avg(node_time_seconds) - avg(node_boot_time_seconds)) / 86400", "天"},
-	"load":    {"avg(node_load1)", ""},
 }
+
+// Node 级别指标（需要 node_exporter）
+var nodeMetricQueries = map[string]MetricDef{
+	"node_cpu":     {"100 - (avg(irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)", "%"},
+	"node_memory":  {"(1 - avg(node_memory_MemAvailable_bytes) / avg(node_memory_MemTotal_bytes)) * 100", "%"},
+	"node_disk":    {"(1 - avg(node_filesystem_avail_bytes{mountpoint=\"/\"}) / avg(node_filesystem_size_bytes{mountpoint=\"/\"})) * 100", "%"},
+	"node_network": {"sum(irate(node_network_receive_bytes_total[5m])) / 1024 / 1024", "MB/s"},
+	"node_uptime":  {"(avg(node_time_seconds) - avg(node_boot_time_seconds)) / 86400", "天"},
+	"node_load":    {"avg(node_load1)", ""},
+}
+
+// 容器级别指标（Kubernetes 环境）
+var containerMetricQueries = map[string]MetricDef{
+	"container_cpu":     {"sum(rate(container_cpu_usage_seconds_total[5m])) * 100", "%"},
+	"container_memory":  {"sum(container_memory_working_set_bytes) / 1024 / 1024 / 1024", "GB"},
+	"container_disk":    {"sum(container_fs_usage_bytes) / 1024 / 1024 / 1024", "GB"},
+	"container_network": {"sum(rate(container_network_receive_bytes_total[5m])) / 1024 / 1024", "MB/s"},
+	"container_restart": {"sum(increase(kube_pod_container_status_restarts_total[24h])) or sum(increase(container_start_time_seconds[24h]))", "次"},
+	"container_count":   {"count(container_last_seen)", "个"},
+}
+
+// K8s 集群级别指标（给老板看的核心指标）
+var k8sMetricQueries = map[string]MetricDef{
+	// Pod 健康状态
+	"pod_running":       {"count(kube_pod_status_phase{phase=\"Running\"})", "个"},
+	"pod_pending":       {"count(kube_pod_status_phase{phase=\"Pending\"}) or vector(0)", "个"},
+	"pod_failed":        {"count(kube_pod_status_phase{phase=\"Failed\"}) or vector(0)", "个"},
+	"pod_available":     {"sum(kube_deployment_status_replicas_available) / sum(kube_deployment_status_replicas) * 100 or vector(100)", "%"},
+	"pod_restart_total": {"sum(increase(kube_pod_container_status_restarts_total[24h])) or vector(0)", "次"},
+
+	// 资源使用率
+	"cluster_cpu_usage":    {"sum(rate(container_cpu_usage_seconds_total[5m])) / sum(machine_cpu_cores) * 100 or sum(rate(container_cpu_usage_seconds_total[5m])) * 100", "%"},
+	"cluster_memory_usage": {"sum(container_memory_working_set_bytes) / sum(machine_memory_bytes) * 100 or sum(container_memory_working_set_bytes) / 1024 / 1024 / 1024", "%"},
+
+	// 部署状态
+	"deployment_total":     {"count(kube_deployment_created) or vector(0)", "个"},
+	"deployment_available": {"sum(kube_deployment_status_replicas_available) or vector(0)", "个"},
+
+	// API 服务健康（如果有 ingress-nginx）
+	"api_request_rate": {"sum(rate(nginx_ingress_controller_requests[5m])) or vector(0)", "req/s"},
+	"api_success_rate": {"sum(rate(nginx_ingress_controller_requests{status=~\"2..\"}[5m])) / sum(rate(nginx_ingress_controller_requests[5m])) * 100 or vector(100)", "%"},
+	"api_latency_avg":  {"avg(nginx_ingress_controller_request_duration_seconds_sum / nginx_ingress_controller_request_duration_seconds_count) * 1000 or vector(0)", "ms"},
+}
+
+// 合并所有指标
+var metricQueries = func() map[string]MetricDef {
+	m := make(map[string]MetricDef)
+	for k, v := range nodeMetricQueries {
+		m[k] = v
+	}
+	for k, v := range containerMetricQueries {
+		m[k] = v
+	}
+	for k, v := range k8sMetricQueries {
+		m[k] = v
+	}
+	// 兼容旧的指标名（默认使用容器指标）
+	m["cpu"] = containerMetricQueries["container_cpu"]
+	m["memory"] = containerMetricQueries["container_memory"]
+	m["disk"] = containerMetricQueries["container_disk"]
+	m["network"] = containerMetricQueries["container_network"]
+	m["uptime"] = MetricDef{"(time() - min(container_start_time_seconds{container!=\"\"})) / 86400", "天"}
+	m["load"] = MetricDef{"sum(rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\"}[5m]))", "核"}
+	return m
+}()
 
 // HandleExecuteInspection 执行巡检
 func HandleExecuteInspection(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +123,13 @@ func HandleExecuteInspection(w http.ResponseWriter, r *http.Request) {
 	if len(req.Metrics) == 0 {
 		http.Error(w, "请选择至少一个巡检指标", http.StatusBadRequest)
 		return
+	}
+
+	// 从数据库加载自定义指标
+	dbMetrics, _ := GetEnabledMetrics()
+	customMetricMap := make(map[string]MetricDef)
+	for _, m := range dbMetrics {
+		customMetricMap[m.Name] = MetricDef{Query: m.PromQL, Unit: m.Unit}
 	}
 
 	results := make([]InspectionResult, 0, len(req.DataSourceIDs))
@@ -92,9 +157,13 @@ func HandleExecuteInspection(w http.ResponseWriter, r *http.Request) {
 		timeRange := getTimeRange(req.ReportType)
 
 		for _, metricKey := range req.Metrics {
-			metricDef, ok := metricQueries[metricKey]
+			// 优先从数据库自定义指标查找，否则使用内置指标
+			metricDef, ok := customMetricMap[metricKey]
 			if !ok {
-				continue
+				metricDef, ok = metricQueries[metricKey]
+				if !ok {
+					continue
+				}
 			}
 
 			value, err := queryPrometheus(ds, metricDef.Query, timeRange)
@@ -240,8 +309,3 @@ func saveInspectionLog(operator string, dsIDs, metrics []string, reportType stri
 
 	AddAuditLog("create", "inspection", operator, "", newData, changes, "")
 }
-
-
-
-
-

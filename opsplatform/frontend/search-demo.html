@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>搜索框样式展示</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #f0f6fc;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --border-color: #30363d;
+            --accent-cyan: #39d5ff;
+            --shadow-color: rgba(0, 0, 0, 0.3);
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 40px;
+            min-height: 100vh;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 40px;
+            color: var(--accent-cyan);
+        }
+        
+        .demo-section {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .demo-title {
+            font-size: 18px;
+            color: var(--accent-cyan);
+            margin-bottom: 8px;
+        }
+        
+        .demo-desc {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+        }
+        
+        /* ========== 样式1: 基础搜索框 ========== */
+        .search-bar { display: flex; gap: 12px; margin-bottom: 25px; flex-wrap: wrap; }
+        
+        .search-input-style1 {
+            flex: 1;
+            min-width: 250px;
+            max-width: 400px;
+            padding: 12px 16px 12px 40px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 0.95em;
+            font-family: inherit;
+        }
+        
+        .search-input-style1:focus { outline: none; border-color: var(--accent-cyan); }
+        .search-input-style1::placeholder { color: var(--text-muted); }
+        .search-wrapper { position: relative; }
+        .search-wrapper::before { content: '⌕'; position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 18px; }
+        
+        /* ========== 样式2: 缩小版搜索框 ========== */
+        .search-input-style2 {
+            min-width: 180px;
+            max-width: 200px;
+            padding: 8px 12px;
+            font-size: 13px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+        }
+        
+        .search-input-style2:focus { outline: none; border-color: var(--accent-cyan); }
+        .search-input-style2::placeholder { color: var(--text-muted); }
+        
+        /* ========== 样式3: 增强版搜索框 ========== */
+        .domain-filter-bar {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            padding: 16px 20px;
+            background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 2px 8px var(--shadow-color);
+        }
+        
+        .search-box {
+            flex: 1;
+            position: relative;
+            max-width: 400px;
+        }
+        
+        .search-icon {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 16px;
+            opacity: 0.6;
+        }
+        
+        .search-input-style3 {
+            width: 100%;
+            padding: 12px 16px 12px 44px;
+            background: var(--bg-primary);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            color: var(--text-primary);
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+        
+        .search-input-style3:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 0 3px rgba(57, 213, 255, 0.15);
+        }
+        
+        .search-input-style3::placeholder {
+            color: var(--text-muted);
+        }
+        
+        /* ========== 样式4: 现代圆角搜索框 ========== */
+        .search-container-style4 {
+            position: relative;
+            max-width: 350px;
+        }
+        
+        .search-input-style4 {
+            width: 100%;
+            padding: 14px 20px 14px 50px;
+            background: linear-gradient(145deg, #1a1f26, #151a21);
+            border: none;
+            border-radius: 25px;
+            color: var(--text-primary);
+            font-size: 14px;
+            box-shadow: 
+                inset 2px 2px 5px rgba(0, 0, 0, 0.3),
+                inset -2px -2px 5px rgba(255, 255, 255, 0.05);
+            transition: all 0.3s ease;
+        }
+        
+        .search-input-style4:focus {
+            outline: none;
+            box-shadow: 
+                inset 2px 2px 5px rgba(0, 0, 0, 0.3),
+                inset -2px -2px 5px rgba(255, 255, 255, 0.05),
+                0 0 15px rgba(57, 213, 255, 0.3);
+        }
+        
+        .search-input-style4::placeholder { color: var(--text-muted); }
+        
+        .search-icon-style4 {
+            position: absolute;
+            left: 18px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 18px;
+            color: var(--accent-cyan);
+        }
+        
+        /* ========== 样式5: 下划线搜索框 ========== */
+        .search-input-style5 {
+            width: 300px;
+            padding: 12px 8px;
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid var(--border-color);
+            color: var(--text-primary);
+            font-size: 15px;
+            transition: border-color 0.3s ease;
+        }
+        
+        .search-input-style5:focus {
+            outline: none;
+            border-bottom-color: var(--accent-cyan);
+        }
+        
+        .search-input-style5::placeholder { color: var(--text-muted); }
+        
+        /* ========== 样式6: 玻璃态搜索框 ========== */
+        .glass-container {
+            background: linear-gradient(135deg, rgba(255,255,255,0.1), rgba(255,255,255,0.05));
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .search-container-style6 {
+            position: relative;
+            max-width: 400px;
+        }
+        
+        .search-input-style6 {
+            width: 100%;
+            padding: 14px 20px 14px 48px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            color: var(--text-primary);
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+        
+        .search-input-style6:focus {
+            outline: none;
+            background: rgba(255, 255, 255, 0.12);
+            border-color: var(--accent-cyan);
+            box-shadow: 0 4px 20px rgba(57, 213, 255, 0.2);
+        }
+        
+        .search-input-style6::placeholder { color: rgba(255, 255, 255, 0.5); }
+        
+        .search-icon-style6 {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 18px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        /* ========== 样式7: 渐变边框搜索框 ========== */
+        .gradient-border-wrapper {
+            position: relative;
+            max-width: 380px;
+            padding: 2px;
+            background: linear-gradient(90deg, #39d5ff, #7b68ee, #ff6b9d);
+            border-radius: 10px;
+        }
+        
+        .search-input-style7 {
+            width: 100%;
+            padding: 12px 16px 12px 44px;
+            background: var(--bg-primary);
+            border: none;
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+        
+        .search-input-style7:focus { outline: none; }
+        .search-input-style7::placeholder { color: var(--text-muted); }
+        
+        .search-icon-style7 {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 16px;
+            color: var(--accent-cyan);
+            z-index: 1;
+        }
+        
+        /* ========== 样式8: 动态搜索框 ========== */
+        .search-container-style8 {
+            position: relative;
+            max-width: 60px;
+            transition: max-width 0.4s ease;
+        }
+        
+        .search-container-style8:focus-within {
+            max-width: 350px;
+        }
+        
+        .search-input-style8 {
+            width: 100%;
+            padding: 12px 16px 12px 44px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 25px;
+            color: var(--text-primary);
+            font-size: 14px;
+            transition: all 0.4s ease;
+        }
+        
+        .search-input-style8:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+        }
+        
+        .search-input-style8::placeholder { color: var(--text-muted); opacity: 0; transition: opacity 0.3s; }
+        .search-container-style8:focus-within .search-input-style8::placeholder { opacity: 1; }
+        
+        .search-icon-style8 {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 18px;
+            color: var(--accent-cyan);
+        }
+
+        /* 选择标记 */
+        .selected-badge {
+            display: inline-block;
+            background: var(--accent-cyan);
+            color: var(--bg-primary);
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 搜索框样式展示</h1>
+    
+    <!-- 样式1 -->
+    <div class="demo-section">
+        <div class="demo-title">样式1: 基础搜索框 <span class="selected-badge">当前使用</span></div>
+        <div class="demo-desc">带搜索图标的标准样式，宽度 250-400px</div>
+        <div class="search-wrapper">
+            <input type="text" class="search-input-style1" placeholder="搜索域名...">
+        </div>
+    </div>
+    
+    <!-- 样式2 -->
+    <div class="demo-section">
+        <div class="demo-title">样式2: 缩小版搜索框</div>
+        <div class="demo-desc">紧凑型设计，宽度 180-200px，适合过滤栏</div>
+        <input type="text" class="search-input-style2" placeholder="搜索...">
+    </div>
+    
+    <!-- 样式3 -->
+    <div class="demo-section">
+        <div class="demo-title">样式3: 增强版搜索框</div>
+        <div class="demo-desc">带渐变背景容器和发光聚焦效果</div>
+        <div class="domain-filter-bar">
+            <div class="search-box">
+                <span class="search-icon">🔍</span>
+                <input type="text" class="search-input-style3" placeholder="搜索域名、项目、模块...">
+            </div>
+        </div>
+    </div>
+    
+    <!-- 样式4 -->
+    <div class="demo-section">
+        <div class="demo-title">样式4: 现代圆角搜索框 (Neumorphism)</div>
+        <div class="demo-desc">新拟态设计，内凹阴影效果，完全圆角</div>
+        <div class="search-container-style4">
+            <span class="search-icon-style4">🔍</span>
+            <input type="text" class="search-input-style4" placeholder="搜索...">
+        </div>
+    </div>
+    
+    <!-- 样式5 -->
+    <div class="demo-section">
+        <div class="demo-title">样式5: 下划线搜索框</div>
+        <div class="demo-desc">极简设计，只有底部边框</div>
+        <input type="text" class="search-input-style5" placeholder="输入搜索内容...">
+    </div>
+    
+    <!-- 样式6 -->
+    <div class="demo-section">
+        <div class="demo-title">样式6: 玻璃态搜索框 (Glassmorphism)</div>
+        <div class="demo-desc">毛玻璃效果，半透明背景</div>
+        <div class="glass-container">
+            <div class="search-container-style6">
+                <span class="search-icon-style6">🔍</span>
+                <input type="text" class="search-input-style6" placeholder="搜索域名...">
+            </div>
+        </div>
+    </div>
+    
+    <!-- 样式7 -->
+    <div class="demo-section">
+        <div class="demo-title">样式7: 渐变边框搜索框</div>
+        <div class="demo-desc">彩虹渐变边框，视觉冲击力强</div>
+        <div class="gradient-border-wrapper">
+            <span class="search-icon-style7">🔍</span>
+            <input type="text" class="search-input-style7" placeholder="搜索域名...">
+        </div>
+    </div>
+    
+    <!-- 样式8 -->
+    <div class="demo-section">
+        <div class="demo-title">样式8: 可展开搜索框</div>
+        <div class="demo-desc">点击展开，节省空间（点击试试）</div>
+        <div class="search-container-style8">
+            <span class="search-icon-style8">🔍</span>
+            <input type="text" class="search-input-style8" placeholder="搜索域名...">
+        </div>
+    </div>
+    
+</body>
+</html>
+

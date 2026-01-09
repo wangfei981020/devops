@@ -57,6 +57,8 @@ func main() {
 	api.HandleFunc("/records/{id}", handlers.HandleGetRecord).Methods("GET", "OPTIONS")
 	api.HandleFunc("/records/{id}", handlers.HandleUpdateRecord).Methods("PUT", "OPTIONS")
 	api.HandleFunc("/records/{id}", handlers.HandleDeleteRecord).Methods("DELETE", "OPTIONS")
+	api.HandleFunc("/records/{id}/history", handlers.HandleGetRecordHistory).Methods("GET", "OPTIONS")
+	api.HandleFunc("/records/{id}/rollback", handlers.HandleRollbackRecord).Methods("POST", "OPTIONS")
 
 	// 审计日志
 	api.HandleFunc("/audit-logs", handlers.HandleGetAuditLogs).Methods("GET", "OPTIONS")
@@ -69,8 +71,25 @@ func main() {
 	api.HandleFunc("/datasources/{id}", handlers.HandleUpdateDataSource).Methods("PUT", "OPTIONS")
 	api.HandleFunc("/datasources/{id}", handlers.HandleDeleteDataSource).Methods("DELETE", "OPTIONS")
 
+	// 自定义指标管理
+	api.HandleFunc("/metrics", handlers.HandleGetMetrics).Methods("GET", "OPTIONS")
+	api.HandleFunc("/metrics", handlers.HandleCreateMetric).Methods("POST", "OPTIONS")
+	api.HandleFunc("/metrics", handlers.HandleUpdateMetric).Methods("PUT", "OPTIONS")
+	api.HandleFunc("/metrics", handlers.HandleDeleteMetric).Methods("DELETE", "OPTIONS")
+	api.HandleFunc("/metrics/init", handlers.HandleInitDefaultMetrics).Methods("POST", "OPTIONS")
+
 	// 巡检功能
 	api.HandleFunc("/inspection/execute", handlers.HandleExecuteInspection).Methods("POST", "OPTIONS")
+
+	// 域名管理
+	api.HandleFunc("/domains", handlers.HandleGetDomains).Methods("GET", "OPTIONS")
+	api.HandleFunc("/domains", handlers.HandleAddDomain).Methods("POST", "OPTIONS")
+	api.HandleFunc("/domains/export", handlers.HandleExportDomains).Methods("GET", "OPTIONS")
+	api.HandleFunc("/domains/batch", handlers.HandleBatchDomains).Methods("POST", "OPTIONS")
+	api.HandleFunc("/domains/batch-add", handlers.HandleBatchAddDomains).Methods("POST", "OPTIONS")
+	api.HandleFunc("/domains/check-cert", handlers.HandleCheckCert).Methods("GET", "OPTIONS")
+	api.HandleFunc("/domains/{id}", handlers.HandleUpdateDomain).Methods("PUT", "OPTIONS")
+	api.HandleFunc("/domains/{id}", handlers.HandleDeleteDomain).Methods("DELETE", "OPTIONS")
 
 	// 静态文件 - 从 frontend 目录提供
 	r.PathPrefix("/css/").Handler(http.StripPrefix("/css/", http.FileServer(http.Dir("../frontend/css"))))

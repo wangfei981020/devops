@@ -60,3 +60,36 @@ type DataSource struct {
 	CreatedAt   string `json:"created_at"`
 	CreatedBy   string `json:"created_by"`
 }
+
+// Metric 自定义监控指标
+type Metric struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`        // 指标唯一标识，如 pod_running
+	Label       string `json:"label"`       // 显示名称，如 "☸️ 运行中Pod数"
+	PromQL      string `json:"promql"`      // PromQL 查询语句
+	Unit        string `json:"unit"`        // 单位，如 %, GB, 个
+	Group       string `json:"group"`       // 分组，如 k8s, container, node
+	Description string `json:"description"` // 描述
+	Enabled     bool   `json:"enabled"`     // 是否启用
+	SortOrder   int    `json:"sort_order"`  // 排序
+	CreatedAt   string `json:"created_at"`
+	CreatedBy   string `json:"created_by"`
+}
+
+// Domain 域名管理
+type Domain struct {
+	ID              string `json:"id"`
+	Project         string `json:"project"`          // 项目
+	Module          string `json:"module"`           // 模块
+	DomainName      string `json:"domain_name"`      // 域名
+	Origin          string `json:"origin"`           // 回源地址
+	CDNProvider     string `json:"cdn_provider"`     // CDN 厂商
+	ExpireTime      string `json:"expire_time"`      // 域名到期时间
+	CertExpireTime  string `json:"cert_expire_time"` // 证书到期时间
+	Status          string `json:"status"`           // 状态：active, inactive, expired
+	Remark          string `json:"remark"`           // 备注
+	CreatedAt       string `json:"created_at"`
+	CreatedBy       string `json:"created_by"`
+	UpdatedAt       string `json:"updated_at"`
+	UpdatedBy       string `json:"updated_by"`
+}

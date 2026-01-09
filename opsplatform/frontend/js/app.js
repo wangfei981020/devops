@@ -26,6 +26,9 @@ createApp({
             currentTab: localStorage.getItem('currentTab') || 'records',
             expandedGroups: { data: true, ops: true, system: true },
             inspectionSubTab: 'templates',
+            metricsGroupFilter: 'all', // 指标分组筛选: all, k8s, container, node, custom
+            metricsCurrentPage: 1,
+            metricsPageSize: 10,
             sidebarCollapsed: false,
 
             // 数据
@@ -33,7 +36,13 @@ createApp({
             users: [],
             auditLogs: [],
             datasources: [],
+            domains: [],
             selectedRecords: [],
+            selectedDomains: [],
+            activeDomainMenu: null,
+            activeMetricMenu: null,
+            activeDsMenu: null,
+            activeUserMenu: null,
 
             // 搜索和过滤
             searchQuery: '',
@@ -45,7 +54,7 @@ createApp({
             sortField: '',
             sortOrder: 'asc',
 
-            // 分页 - 数据源ID
+            // 分页 - 数据源管理
             currentPage: 1,
             pageSize: 10,
             jumpPage: 1,
@@ -60,16 +69,36 @@ createApp({
             userPageSize: 10,
             userJumpPage: 1,
             
+            // 分页 - 巡检报告
+            inspectionCurrentPage: 1,
+            inspectionPageSize: 5,
+            
             // 分页 - 数据源管理
             dsCurrentPage: 1,
             dsPageSize: 10,
             dsJumpPage: 1,
 
+            // 分页 - 域名管理
+            domainCurrentPage: 1,
+            domainPageSize: 10,
+            domainJumpPage: 1,
+
             // 模态框状态
             showRecordModal: false,
+            showDomainModal: false,
+            showBatchDomainModal: false,
             showBatchModal: false,
             showUserModal: false,
             showDeleteModal: false,
+            showHistoryModal: false,
+            showPreviewModal: false,
+            
+            // 历史记录
+            historyRecord: null,
+            recordHistories: [],
+            previewData: null,
+            previewHistory: null,
+            previewVersion: 0,
             showAuditDetailModal: false,
             showDataSourceModal: false,
             showProfileModal: false,
@@ -96,7 +125,21 @@ createApp({
             recordForm: { id: '', connection_id: '', project: '', env: 'uat', vid: '', src_ip: '', dest_ip: '', port: '', status: 'active' },
             userForm: { id: '', username: '', password: '', display_name: '', role: 'user', status: 'active', permissions: [] },
             dataSourceForm: { id: '', name: '', type: 'prometheus', url: '', username: '', password: '', token: '', description: '', status: 'active' },
+            domainForm: { id: '', project: '', module: '', domain_name: '', origin: '', cdn_provider: '', expire_time: '', cert_expire_time: '', status: 'active', remark: '' },
             profileForm: { id: '', username: '', password: '', display_name: '', role: '' },
+
+            // 域名筛选
+            domainSearchQuery: '',
+            domainProjectFilter: '',
+            domainStatusFilter: '',
+            domainCdnFilter: '',
+            domainExpireFilter: '',
+
+            // 批量添加域名
+            batchDomainText: '',
+            batchDomainRecords: [],
+            batchDomainError: '',
+            batchDomainProject: '',  // 批量添加时的默认项目
 
             // 批量添加
             batchText: '',
@@ -121,25 +164,25 @@ createApp({
             inspectionForm: {
                 selectedDataSources: [],
                 reportType: 'daily',
-                includeMetrics: ['cpu', 'memory', 'disk', 'network']
+                includeMetrics: [] // 默认不勾选
             },
             inspectionRunning: false,
             inspectionResults: [],
-            availableMetrics: [
-                { key: 'cpu', label: 'CPU 使用率', promql: '100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)' },
-                { key: 'memory', label: '内存使用率', promql: '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100' },
-                { key: 'disk', label: '磁盘使用率', promql: '(1 - node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100' },
-                { key: 'network', label: '网络流量', promql: 'irate(node_network_receive_bytes_total[5m])' },
-                { key: 'uptime', label: '运行时间', promql: 'node_time_seconds - node_boot_time_seconds' },
-                { key: 'load', label: '系统负载', promql: 'node_load1' }
-            ],
+            availableMetrics: [], // 从数据库加载
+            
+            // 指标管理
+            showMetricModal: false,
+            metricForm: { id: '', name: '', label: '', promql: '', unit: '', group: 'k8s', description: '', enabled: true, sort_order: 0 },
+            editingMetric: false,
+            selectedMetricIds: [], // 批量选择的指标
 
             // 权限配置
             allPermissions: [
-                { key: 'records', label: '数据源ID', group: '数据管理' },
+                { key: 'records', label: '网络管理', group: '数据管理' },
                 { key: 'domains', label: '域名管理', group: '数据管理' },
+                { key: 'cmdb', label: 'CMDB', group: '数据管理' },
                 { key: 'inspection', label: '一键巡检', group: '运维工具' },
-                { key: 'datasources', label: '数据源管理', group: '系统管理' },
+                { key: 'datasources', label: '数据源配置', group: '系统管理' },
                 { key: 'audit', label: '审计日志', group: '系统管理' },
                 { key: 'users', label: '用户管理', group: '系统管理' }
             ]
@@ -233,6 +276,61 @@ createApp({
             return this.getDisplayedPages(this.auditTotalPages, this.auditCurrentPage);
         },
         
+        // 巡检报告分页
+        pagedInspectionResults() {
+            const start = (this.inspectionCurrentPage - 1) * this.inspectionPageSize;
+            return (this.inspectionResults || []).slice(start, start + this.inspectionPageSize);
+        },
+        inspectionTotalPages() {
+            return Math.max(1, Math.ceil((this.inspectionResults || []).length / this.inspectionPageSize));
+        },
+        inspectionDisplayedPages() {
+            return this.getDisplayedPages(this.inspectionTotalPages, this.inspectionCurrentPage);
+        },
+
+        // 指标分组
+        metricGroups() {
+            const groups = {};
+            const groupLabels = { k8s: '☸️ K8s 集群', container: '📦 容器', node: '🖥️ 节点', custom: '🔧 自定义' };
+            (this.availableMetrics || []).filter(m => m.enabled !== false).forEach(m => {
+                const g = m.group || 'custom';
+                if (!groups[g]) groups[g] = { key: g, label: groupLabels[g] || g, metrics: [] };
+                groups[g].metrics.push(m);
+            });
+            return Object.values(groups);
+        },
+
+        // 过滤后的指标列表（用于指标管理页面）
+        filteredMetrics() {
+            if (this.metricsGroupFilter === 'all') {
+                return this.availableMetrics || [];
+            }
+            return (this.availableMetrics || []).filter(m => (m.group || 'custom') === this.metricsGroupFilter);
+        },
+
+        // 获取分组统计
+        metricGroupStats() {
+            const stats = { all: 0, k8s: 0, container: 0, node: 0, custom: 0 };
+            (this.availableMetrics || []).forEach(m => {
+                stats.all++;
+                const g = m.group || 'custom';
+                if (stats[g] !== undefined) stats[g]++;
+            });
+            return stats;
+        },
+
+        // 分页后的指标列表
+        pagedMetrics() {
+            const start = (this.metricsCurrentPage - 1) * this.metricsPageSize;
+            return this.filteredMetrics.slice(start, start + this.metricsPageSize);
+        },
+        metricsTotalPages() {
+            return Math.max(1, Math.ceil(this.filteredMetrics.length / this.metricsPageSize));
+        },
+        metricsDisplayedPages() {
+            return this.getDisplayedPages(this.metricsTotalPages, this.metricsCurrentPage);
+        },
+        
         // 用户管理分页
         pagedUsers() {
             const start = (this.userCurrentPage - 1) * this.userPageSize;
@@ -255,6 +353,63 @@ createApp({
         },
         dsDisplayedPages() {
             return this.getDisplayedPages(this.dsTotalPages, this.dsCurrentPage);
+        },
+
+        // 域名项目列表
+        domainProjectList() {
+            const projects = [...new Set((this.domains || []).map(d => d.project).filter(Boolean))];
+            return projects.sort((a, b) => a.localeCompare(b, 'zh-CN'));
+        },
+        // CDN厂商列表
+        cdnProviderList() {
+            const providers = [...new Set((this.domains || []).map(d => d.cdn_provider).filter(Boolean))];
+            return providers.sort((a, b) => a.localeCompare(b, 'zh-CN'));
+        },
+        // 过滤后的域名
+        filteredDomains() {
+            let d = this.domains || [];
+            if (this.domainProjectFilter) d = d.filter(x => x.project === this.domainProjectFilter);
+            if (this.domainStatusFilter) d = d.filter(x => x.status === this.domainStatusFilter);
+            if (this.domainCdnFilter) d = d.filter(x => x.cdn_provider === this.domainCdnFilter);
+            // 到期时间筛选
+            if (this.domainExpireFilter) {
+                d = d.filter(x => {
+                    if (!x.expire_time) return false;
+                    const expireDate = new Date(x.expire_time);
+                    const now = new Date();
+                    const diffDays = Math.ceil((expireDate - now) / (1000 * 60 * 60 * 24));
+                    if (this.domainExpireFilter === '90+') {
+                        return diffDays > 90;
+                    }
+                    const days = parseInt(this.domainExpireFilter);
+                    return diffDays >= 0 && diffDays <= days;
+                });
+            }
+            if (this.domainSearchQuery) {
+                const q = this.domainSearchQuery.toLowerCase();
+                d = d.filter(x => 
+                    (x.domain_name && x.domain_name.toLowerCase().includes(q)) ||
+                    (x.project && x.project.toLowerCase().includes(q)) ||
+                    (x.module && x.module.toLowerCase().includes(q)) ||
+                    (x.origin && x.origin.toLowerCase().includes(q))
+                );
+            }
+            return d;
+        },
+        // 分页后的域名
+        pagedDomains() {
+            const start = (this.domainCurrentPage - 1) * this.domainPageSize;
+            return this.filteredDomains.slice(start, start + this.domainPageSize);
+        },
+        domainTotalPages() {
+            return Math.max(1, Math.ceil(this.filteredDomains.length / this.domainPageSize));
+        },
+        domainDisplayedPages() {
+            return this.getDisplayedPages(this.domainTotalPages, this.domainCurrentPage);
+        },
+        // 域名全选
+        isAllDomainsSelected() {
+            return this.filteredDomains.length > 0 && this.selectedDomains.length === this.filteredDomains.length;
         },
 
         isAllSelected() {
@@ -310,6 +465,8 @@ createApp({
             this.loadDataForCurrentTab();
             this.refreshCurrentUser();
             this.updateBreadcrumbs();
+            // 加载自定义指标
+            this.loadMetrics();
         }
 
         // 点击外部关闭用户菜单和操作菜单
@@ -317,8 +474,12 @@ createApp({
             if (!e.target.closest('.user-menu-container')) {
                 this.showUserMenu = false;
             }
-            if (!e.target.closest('.action-menu-container')) {
+            if (!e.target.closest('.action-inline')) {
                 this.activeActionMenu = null;
+                this.activeDomainMenu = null;
+                this.activeMetricMenu = null;
+                this.activeDsMenu = null;
+                this.activeUserMenu = null;
             }
             if (!e.target.closest('.batch-status-dropdown')) {
                 this.showBatchStatusMenu = false;
@@ -365,7 +526,7 @@ createApp({
                     this.loadUsers();
                     break;
                 case 'datasources':
-                    this.loadDatasources();
+                    this.loadDataSources();
                     break;
                 case 'domains':
                     this.loadDomains();
@@ -401,10 +562,10 @@ createApp({
         // ========== 面包屑导航 ==========
         updateBreadcrumbs() {
             const tabMap = {
-                'records': '数据源ID',
+                'records': '网络管理',
                 'domains': '域名管理',
                 'inspection': '一键巡检',
-                'datasources': '数据源管理',
+                'datasources': '数据源配置',
                 'audit': '审计日志',
                 'users': '用户管理'
             };
@@ -728,7 +889,7 @@ createApp({
 
         formatPermissions(perms) {
             if (!perms) return '-';
-            const permMap = { records: '数据源ID', domains: '域名', inspection: '巡检', datasources: '数据源', audit: '日志', users: '用户' };
+            const permMap = { records: '网络', domains: '域名', inspection: '巡检', datasources: '数据源', audit: '日志', users: '用户' };
             return perms.split(',').map(p => permMap[p.trim()] || p).join(', ') || '-';
         },
 
@@ -767,6 +928,506 @@ createApp({
             } catch (e) {
                 this.showToast('加载失败', 'error');
             }
+        },
+
+        // ========== 域名管理 ==========
+        async loadDomains() {
+            try {
+                const res = await API.getDomains();
+                const data = await res.json();
+                this.domains = data.domains || [];
+            } catch (e) {
+                this.showToast('加载域名失败', 'error');
+            }
+        },
+
+        openDomainModal(domain = null) {
+            if (domain) {
+                this.domainForm = { ...domain };
+            } else {
+                this.domainForm = { id: '', project: '', module: '', domain_name: '', origin: '', cdn_provider: '', expire_time: '', cert_expire_time: '', status: 'active', remark: '' };
+            }
+            this.showDomainModal = true;
+        },
+
+        async saveDomain() {
+            if (!this.domainForm.project) {
+                this.showToast('请填写项目名称', 'error');
+                return;
+            }
+            if (!this.domainForm.domain_name) {
+                this.showToast('请填写域名', 'error');
+                return;
+            }
+
+            try {
+                let res;
+                if (this.domainForm.id) {
+                    res = await API.updateDomain(this.domainForm.id, {
+                        ...this.domainForm,
+                        updated_by: this.currentUser?.username
+                    });
+                } else {
+                    res = await API.createDomain({
+                        ...this.domainForm,
+                        created_by: this.currentUser?.username
+                    });
+                }
+                if (res.ok) {
+                    this.showToast(this.domainForm.id ? '域名更新成功' : '域名添加成功', 'success');
+                    this.showDomainModal = false;
+                    await this.loadDomains();
+                } else {
+                    const err = await res.text();
+                    this.showToast(err || '操作失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('操作失败: ' + e.message, 'error');
+            }
+        },
+
+        async deleteDomain(domain) {
+            if (!confirm(`确定删除域名 ${domain.domain_name}？`)) return;
+            try {
+                const res = await API.deleteDomain(domain.id);
+                if (res.ok) {
+                    this.showToast('删除成功', 'success');
+                    await this.loadDomains();
+                } else {
+                    this.showToast('删除失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('删除失败', 'error');
+            }
+        },
+
+        toggleDomainSelection(id) {
+            const idx = this.selectedDomains.indexOf(id);
+            if (idx === -1) {
+                this.selectedDomains.push(id);
+            } else {
+                this.selectedDomains.splice(idx, 1);
+            }
+        },
+
+        toggleAllDomains() {
+            if (this.isAllDomainsSelected) {
+                this.selectedDomains = [];
+            } else {
+                this.selectedDomains = this.filteredDomains.map(d => d.id);
+            }
+        },
+
+        async batchDomainAction(action) {
+            if (this.selectedDomains.length === 0) {
+                this.showToast('请先选择域名', 'error');
+                return;
+            }
+            const actionNames = { delete: '删除', enable: '启用', disable: '停用' };
+            if (!confirm(`确定${actionNames[action]}选中的 ${this.selectedDomains.length} 个域名？`)) return;
+
+            try {
+                const res = await API.batchDomains(this.selectedDomains, action, this.currentUser?.username);
+                if (res.ok) {
+                    this.showToast(`批量${actionNames[action]}成功`, 'success');
+                    this.selectedDomains = [];
+                    await this.loadDomains();
+                } else {
+                    this.showToast('操作失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('操作失败', 'error');
+            }
+        },
+
+        async checkDomainCert() {
+            if (!this.domainForm.domain_name) {
+                this.showToast('请先填写域名', 'error');
+                return;
+            }
+            try {
+                const res = await API.checkDomainCert(this.domainForm.domain_name);
+                const data = await res.json();
+                if (data.success) {
+                    let messages = [];
+                    if (data.cert_expire_time) {
+                        this.domainForm.cert_expire_time = data.cert_expire_time;
+                        messages.push('证书到期: ' + data.cert_expire_time);
+                    }
+                    if (data.expire_time) {
+                        this.domainForm.expire_time = data.expire_time;
+                        messages.push('域名到期: ' + data.expire_time);
+                    }
+                    if (messages.length > 0) {
+                        this.showToast(messages.join(', '), 'success');
+                    } else {
+                        this.showToast('未能获取到期时间', 'error');
+                    }
+                } else {
+                    this.showToast(data.message || '获取失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('获取域名信息失败', 'error');
+            }
+        },
+
+        domainGoToPage() {
+            const page = parseInt(this.domainJumpPage);
+            if (page >= 1 && page <= this.domainTotalPages) {
+                this.domainCurrentPage = page;
+            } else {
+                this.domainJumpPage = this.domainCurrentPage;
+            }
+        },
+
+        toggleDomainActionMenu(id) {
+            this.activeDomainMenu = this.activeDomainMenu === id ? null : id;
+        },
+
+        // 刷新单个域名的到期时间
+        async refreshDomainExpire(domain) {
+            this.showToast('正在获取到期时间...', 'info');
+            try {
+                const res = await API.checkDomainCert(domain.domain_name);
+                const data = await res.json();
+                if (data.success) {
+                    // 更新域名信息
+                    const updateData = { ...domain };
+                    let updated = false;
+                    if (data.expire_time) {
+                        updateData.expire_time = data.expire_time;
+                        updated = true;
+                    }
+                    if (data.cert_expire_time) {
+                        updateData.cert_expire_time = data.cert_expire_time;
+                        updated = true;
+                    }
+                    if (updated) {
+                        updateData.updated_by = this.currentUser?.username;
+                        const updateRes = await API.updateDomain(domain.id, updateData);
+                        if (updateRes.ok) {
+                            this.showToast('到期时间已更新', 'success');
+                            await this.loadDomains();
+                        } else {
+                            this.showToast('保存失败', 'error');
+                        }
+                    } else {
+                        this.showToast('未能获取到期时间', 'error');
+                    }
+                } else {
+                    this.showToast(data.message || '获取失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('获取失败: ' + e.message, 'error');
+            }
+        },
+
+        getDomainStatusClass(domain) {
+            // 检查证书是否即将过期（30天内）
+            if (domain.cert_expire_time) {
+                const expireDate = new Date(domain.cert_expire_time);
+                const now = new Date();
+                const daysLeft = Math.ceil((expireDate - now) / (1000 * 60 * 60 * 24));
+                if (daysLeft < 0) return 'status-expired';
+                if (daysLeft <= 30) return 'status-warning';
+            }
+            return domain.status === 'active' ? 'status-active' : 'status-inactive';
+        },
+
+        getCertDaysLeft(certExpireTime) {
+            if (!certExpireTime) return null;
+            const expireDate = new Date(certExpireTime);
+            const now = new Date();
+            return Math.ceil((expireDate - now) / (1000 * 60 * 60 * 24));
+        },
+
+        // 获取域名到期时间的样式类
+        getDomainExpireClass(expireTime) {
+            if (!expireTime) return '';
+            const days = this.getCertDaysLeft(expireTime);
+            if (days === null) return '';
+            if (days <= 0) return 'text-danger';
+            if (days <= 15) return 'text-danger';
+            return 'text-success';
+        },
+
+        // 格式化日期显示（处理ISO格式）
+        formatDate(dateStr) {
+            if (!dateStr) return '-';
+            try {
+                const date = new Date(dateStr);
+                if (isNaN(date.getTime())) return dateStr;
+                return date.toISOString().split('T')[0];
+            } catch (e) {
+                return dateStr;
+            }
+        },
+
+        // 打开批量添加域名弹窗
+        openBatchDomainModal() {
+            this.batchDomainText = '';
+            this.batchDomainRecords = [];
+            this.batchDomainError = '';
+            this.batchDomainProject = '';
+            this.showBatchDomainModal = true;
+        },
+
+        // 解析批量域名文本
+        parseBatchDomains() {
+            this.batchDomainError = '';
+            this.batchDomainRecords = [];
+            
+            if (!this.batchDomainText.trim()) return;
+            if (!this.batchDomainProject.trim()) {
+                this.batchDomainError = '请先填写项目名称';
+                return;
+            }
+
+            const lines = this.batchDomainText.trim().split('\n');
+            const records = [];
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+
+                // 支持两种格式:
+                // 1. 只有域名: example.com
+                // 2. 完整格式: 域名,模块,回源,CDN厂商,域名到期,备注 (用逗号或制表符分隔)
+                const parts = line.split(/[,\t]+/).map(s => s.trim());
+                
+                if (parts.length === 0 || !parts[0]) continue;
+
+                const domain = {
+                    project: this.batchDomainProject,
+                    domain_name: parts[0],
+                    module: parts[1] || '',
+                    origin: parts[2] || '',
+                    cdn_provider: parts[3] || '',
+                    expire_time: parts[4] || '',
+                    remark: parts[5] || '',
+                    status: 'active'
+                };
+
+                records.push(domain);
+            }
+
+            this.batchDomainRecords = records;
+        },
+
+        // 提交批量添加域名
+        async submitBatchDomains() {
+            if (this.batchDomainRecords.length === 0) {
+                this.showToast('没有可添加的域名', 'error');
+                return;
+            }
+
+            try {
+                const res = await API.batchAddDomains(this.batchDomainRecords, this.currentUser?.username);
+                const data = await res.json();
+                
+                if (data.success) {
+                    this.showToast(`成功添加 ${data.success_count} 个域名`, 'success');
+                    if (data.failed_count > 0) {
+                        console.warn('添加失败的域名:', data.failed_domains);
+                    }
+                    this.showBatchDomainModal = false;
+                    await this.loadDomains();
+                } else {
+                    this.showToast(data.message || '批量添加失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('批量添加失败: ' + e.message, 'error');
+            }
+        },
+
+        // ========== 自定义指标管理 ==========
+        async loadMetrics() {
+            try {
+                const res = await API.getMetrics();
+                const metrics = await res.json() || [];
+                // 转换格式供巡检使用
+                this.availableMetrics = metrics.map(m => ({
+                    key: m.name,
+                    label: m.label,
+                    promql: m.promql,
+                    unit: m.unit,
+                    group: m.group,
+                    enabled: m.enabled,
+                    id: m.id,
+                    sort_order: m.sort_order,
+                    description: m.description
+                }));
+                // 如果没有指标，初始化默认指标
+                if (this.availableMetrics.length === 0) {
+                    await API.initDefaultMetrics();
+                    await this.loadMetrics();
+                }
+            } catch (e) {
+                console.error('加载指标失败', e);
+            }
+        },
+
+        openMetricModal(metric = null) {
+            if (metric) {
+                this.editingMetric = true;
+                this.metricForm = {
+                    id: metric.id,
+                    name: metric.key || metric.name,
+                    label: metric.label,
+                    promql: metric.promql,
+                    unit: metric.unit || '',
+                    group: metric.group || 'k8s',
+                    description: metric.description || '',
+                    enabled: metric.enabled !== false,
+                    sort_order: metric.sort_order || 0
+                };
+            } else {
+                this.editingMetric = false;
+                this.metricForm = { id: '', name: '', label: '', promql: '', unit: '', group: 'k8s', description: '', enabled: true, sort_order: 0 };
+            }
+            this.showMetricModal = true;
+        },
+
+        async saveMetric() {
+            if (!this.metricForm.name || !this.metricForm.label || !this.metricForm.promql) {
+                this.showToast('名称、标签和PromQL不能为空', 'error');
+                return;
+            }
+
+            try {
+                const data = {
+                    ...this.metricForm,
+                    group_name: this.metricForm.group,
+                    created_by: this.currentUser.username
+                };
+
+                let res;
+                if (this.editingMetric) {
+                    res = await API.updateMetric(data);
+                } else {
+                    res = await API.createMetric(data);
+                }
+
+                if (res.ok) {
+                    this.showToast(this.editingMetric ? '更新成功' : '创建成功', 'success');
+                    this.showMetricModal = false;
+                    await this.loadMetrics();
+                } else {
+                    this.showToast(await res.text(), 'error');
+                }
+            } catch (e) {
+                this.showToast('保存失败: ' + e.message, 'error');
+            }
+        },
+
+        async deleteMetric(metric) {
+            if (!confirm(`确定删除指标 "${metric.label}"？`)) return;
+
+            try {
+                const res = await API.deleteMetric(metric.id);
+                if (res.ok) {
+                    this.showToast('删除成功', 'success');
+                    await this.loadMetrics();
+                } else {
+                    this.showToast(await res.text(), 'error');
+                }
+            } catch (e) {
+                this.showToast('删除失败: ' + e.message, 'error');
+            }
+        },
+
+        // 切换指标选中状态
+        toggleMetricSelection(metricId) {
+            const idx = this.selectedMetricIds.indexOf(metricId);
+            if (idx > -1) {
+                this.selectedMetricIds.splice(idx, 1);
+            } else {
+                this.selectedMetricIds.push(metricId);
+            }
+        },
+
+        // 全选/取消全选当前显示的指标
+        toggleSelectAllMetrics() {
+            const currentIds = this.filteredMetrics.map(m => m.id);
+            const allSelected = currentIds.every(id => this.selectedMetricIds.includes(id));
+            if (allSelected) {
+                this.selectedMetricIds = this.selectedMetricIds.filter(id => !currentIds.includes(id));
+            } else {
+                currentIds.forEach(id => {
+                    if (!this.selectedMetricIds.includes(id)) {
+                        this.selectedMetricIds.push(id);
+                    }
+                });
+            }
+        },
+
+        // 批量启用指标
+        async batchEnableMetrics() {
+            if (this.selectedMetricIds.length === 0) {
+                this.showToast('请先选择要操作的指标', 'error');
+                return;
+            }
+            await this.batchUpdateMetricsEnabled(true);
+        },
+
+        // 批量停用指标
+        async batchDisableMetrics() {
+            if (this.selectedMetricIds.length === 0) {
+                this.showToast('请先选择要操作的指标', 'error');
+                return;
+            }
+            await this.batchUpdateMetricsEnabled(false);
+        },
+
+        // 批量更新指标启用状态
+        async batchUpdateMetricsEnabled(enabled) {
+            let successCount = 0;
+            for (const id of this.selectedMetricIds) {
+                const metric = this.availableMetrics.find(m => m.id === id);
+                if (metric) {
+                    try {
+                        const res = await API.updateMetric({
+                            id: metric.id,
+                            name: metric.key || metric.name,
+                            label: metric.label,
+                            promql: metric.promql,
+                            unit: metric.unit || '',
+                            group_name: metric.group || 'custom',
+                            description: metric.description || '',
+                            enabled: enabled,
+                            sort_order: metric.sort_order || 0
+                        });
+                        if (res.ok) successCount++;
+                    } catch (e) {
+                        console.error('更新失败', e);
+                    }
+                }
+            }
+            this.showToast(`已${enabled ? '启用' : '停用'} ${successCount} 个指标`, 'success');
+            this.selectedMetricIds = [];
+            await this.loadMetrics();
+        },
+
+        // 批量删除指标
+        async batchDeleteMetrics() {
+            if (this.selectedMetricIds.length === 0) {
+                this.showToast('请先选择要删除的指标', 'error');
+                return;
+            }
+            if (!confirm(`确定删除选中的 ${this.selectedMetricIds.length} 个指标？`)) return;
+
+            let successCount = 0;
+            for (const id of this.selectedMetricIds) {
+                try {
+                    const res = await API.deleteMetric(id);
+                    if (res.ok) successCount++;
+                } catch (e) {
+                    console.error('删除失败', e);
+                }
+            }
+            this.showToast(`已删除 ${successCount} 个指标`, 'success');
+            this.selectedMetricIds = [];
+            await this.loadMetrics();
         },
 
         // ========== 工具方法 ==========
@@ -846,6 +1507,78 @@ createApp({
             this.deleteType = 'record';
             this.deleteMessage = `确定删除记录 "${record.project} - ${record.vid}" 吗？`;
             this.showDeleteModal = true;
+        },
+
+        // ========== 历史记录相关 ==========
+        async openRecordHistory(record) {
+            this.historyRecord = record;
+            this.recordHistories = [];
+            this.showHistoryModal = true;
+            try {
+                const res = await API.getRecordHistory(record.id);
+                if (res.ok) {
+                    this.recordHistories = await res.json() || [];
+                }
+            } catch (e) {
+                this.showToast('加载历史记录失败', 'error');
+            }
+        },
+
+        getHistoryActionText(action) {
+            const map = { create: '创建', update: '修改', delete: '删除', rollback: '回滚' };
+            return map[action] || action;
+        },
+
+        parseChanges(changesStr) {
+            try {
+                return JSON.parse(changesStr);
+            } catch (e) {
+                return {};
+            }
+        },
+
+        getFieldLabel(field) {
+            const map = {
+                project: '项目', env: '环境', vid: 'VID', src_ip: '源IP', 
+                dest_ip: '目标IP', port: '端口', connection_id: '连接ID', 
+                status: '状态', remark: '备注'
+            };
+            return map[field] || field;
+        },
+
+        previewHistoryVersion(history, idx) {
+            try {
+                this.previewData = JSON.parse(history.snapshot);
+                this.previewHistory = history;
+                this.previewVersion = this.recordHistories.length - idx;
+                this.showPreviewModal = true;
+            } catch (e) {
+                this.showToast('解析快照失败', 'error');
+            }
+        },
+
+        rollbackFromPreview() {
+            if (this.previewHistory) {
+                this.showPreviewModal = false;
+                this.rollbackToVersion(this.previewHistory);
+            }
+        },
+
+        async rollbackToVersion(history) {
+            if (!confirm(`确定回滚到此版本吗？当前数据将被覆盖。`)) return;
+            try {
+                const operator = this.currentUser?.username || 'admin';
+                const res = await API.rollbackRecord(this.historyRecord.id, history.id, operator);
+                if (res.ok) {
+                    this.showToast('回滚成功', 'success');
+                    this.showHistoryModal = false;
+                    await this.loadRecords();
+                } else {
+                    this.showToast('回滚失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('回滚失败', 'error');
+            }
         },
 
         confirmBatchDelete() {
@@ -1097,15 +1830,65 @@ createApp({
             this.showToast('正在导出...', 'success');
         },
 
+        exportDomains() {
+            const params = {};
+            if (this.domainProjectFilter) params.project = this.domainProjectFilter;
+            if (this.domainStatusFilter) params.status = this.domainStatusFilter;
+            if (this.domainCdnFilter) params.cdn_provider = this.domainCdnFilter;
+            if (this.domainExpireFilter) params.expire_filter = this.domainExpireFilter;
+            if (this.domainSearchQuery) params.search = this.domainSearchQuery;
+            API.exportDomains(params);
+            this.showToast('正在导出...', 'success');
+        },
+
         // ========== 巡检相关 ==========
         openInspectionModal() {
             this.loadDataSources();
-            this.inspectionForm = {
-                selectedDataSources: [],
-                reportType: 'daily',
-                includeMetrics: ['cpu', 'memory', 'disk', 'network']
-            };
+            // 保留上次的选择，只在第一次时初始化
+            if (!this.inspectionForm || this.inspectionForm.includeMetrics === undefined) {
+                this.inspectionForm = {
+                    selectedDataSources: [],
+                    reportType: 'daily',
+                    includeMetrics: [] // 默认不勾选
+                };
+            }
+            this.inspectionRunning = false; // 确保状态重置
             this.showInspectionModal = true;
+        },
+
+        // 指标全选/取消全选
+        selectAllMetrics() {
+            const enabledMetrics = this.availableMetrics.filter(m => m.enabled !== false);
+            if (this.inspectionForm.includeMetrics.length === enabledMetrics.length) {
+                this.inspectionForm.includeMetrics = [];
+            } else {
+                this.inspectionForm.includeMetrics = enabledMetrics.map(m => m.key);
+            }
+        },
+
+        // 按分组全选/取消
+        selectGroupMetrics(group) {
+            const groupMetrics = this.availableMetrics.filter(m => m.group === group && m.enabled !== false);
+            const groupKeys = groupMetrics.map(m => m.key);
+            const allSelected = groupKeys.every(k => this.inspectionForm.includeMetrics.includes(k));
+            
+            if (allSelected) {
+                // 取消该分组
+                this.inspectionForm.includeMetrics = this.inspectionForm.includeMetrics.filter(k => !groupKeys.includes(k));
+            } else {
+                // 选中该分组
+                const newMetrics = [...this.inspectionForm.includeMetrics];
+                groupKeys.forEach(k => {
+                    if (!newMetrics.includes(k)) newMetrics.push(k);
+                });
+                this.inspectionForm.includeMetrics = newMetrics;
+            }
+        },
+
+        // 检查分组是否全选
+        isGroupAllSelected(group) {
+            const groupMetrics = this.availableMetrics.filter(m => m.group === group && m.enabled !== false);
+            return groupMetrics.length > 0 && groupMetrics.every(m => this.inspectionForm.includeMetrics.includes(m.key));
         },
 
         toggleDataSource(dsId) {
@@ -1159,7 +1942,9 @@ createApp({
 
                 if (res.ok) {
                     const result = await res.json();
-                    this.inspectionResults = result.results || [];
+                    // 追加新的巡检结果到历史记录（最新的在前面）
+                    const newResults = result.results || [];
+                    this.inspectionResults = [...newResults, ...this.inspectionResults];
                     this.showToast(`巡检完成，共检查 ${result.total || 0} 项`, 'success');
                     this.showInspectionModal = false;
                     this.inspectionSubTab = 'reports';
@@ -1168,9 +1953,9 @@ createApp({
                 }
             } catch (e) {
                 this.showToast('巡检执行失败: ' + e.message, 'error');
+            } finally {
+                this.inspectionRunning = false;
             }
-
-            this.inspectionRunning = false;
         },
 
         getMetricLabel(key) {
