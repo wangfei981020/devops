@@ -13,12 +13,10 @@ spec:
       labels:
         app: opsplatform-frontend
     spec:
-      imagePullSecrets:
-      - name: ghcr-secret
       containers:
       - name: frontend
-        image: localhost:8070/library/opsplatform-frontend:v4
-        imagePullPolicy: IfNotPresent
+        image: marks26/opsplatform-frontend:v21
+        imagePullPolicy: Always
         ports:
         - containerPort: 80
         resources:
