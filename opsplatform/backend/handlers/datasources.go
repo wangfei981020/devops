@@ -18,7 +18,7 @@ import (
 func HandleGetDataSources(w http.ResponseWriter, r *http.Request) {
 	sources, err := GetAllDataSources()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SafeError(w, "操作失败", http.StatusInternalServerError, err)
 		return
 	}
 
@@ -50,7 +50,7 @@ func HandleAddDataSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := AddDataSource(&req.DataSource, req.Operator); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SafeError(w, "操作失败", http.StatusInternalServerError, err)
 		return
 	}
 
@@ -86,7 +86,7 @@ func HandleUpdateDataSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := UpdateDataSource(id, &ds); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		SafeError(w, "资源不存在", http.StatusNotFound, err)
 		return
 	}
 
@@ -128,7 +128,7 @@ func HandleDeleteDataSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := DeleteDataSource(id); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		SafeError(w, "资源不存在", http.StatusNotFound, err)
 		return
 	}
 
@@ -284,6 +284,7 @@ func DeleteDataSource(id string) error {
 	_, err := database.DB.Exec("DELETE FROM datasources WHERE id=?", id)
 	return err
 }
+
 
 
 

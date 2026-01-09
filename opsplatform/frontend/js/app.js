@@ -92,6 +92,8 @@ createApp({
             showDeleteModal: false,
             showHistoryModal: false,
             showPreviewModal: false,
+            showRollbackModal: false,
+            rollbackTarget: null,
             
             // 历史记录
             historyRecord: null,
@@ -122,7 +124,7 @@ createApp({
             dataSourceModalMode: 'add',
 
             // 表单数据
-            recordForm: { id: '', connection_id: '', project: '', env: 'uat', vid: '', src_ip: '', dest_ip: '', port: '', status: 'active' },
+            recordForm: { id: '', connection_id: '', project: '', env: 'uat', module: '', vid: '', src_ip: '', dest_ip: '', port: '', status: 'active' },
             userForm: { id: '', username: '', password: '', display_name: '', role: 'user', status: 'active', permissions: [] },
             dataSourceForm: { id: '', name: '', type: 'prometheus', url: '', username: '', password: '', token: '', description: '', status: 'active' },
             domainForm: { id: '', project: '', module: '', domain_name: '', origin: '', cdn_provider: '', expire_time: '', cert_expire_time: '', status: 'active', remark: '' },
@@ -720,6 +722,10 @@ createApp({
                         // 登录成功
                         this.currentUser = data.user;
                         localStorage.setItem('currentUser', JSON.stringify(this.currentUser));
+                        // 保存 JWT token
+                        if (data.token) {
+                            API.setToken(data.token);
+                        }
                         this.loadRecords();
                         
                         // 检查是否需要绑定 MFA
@@ -752,8 +758,13 @@ createApp({
             try {
                 const res = await API.mfaVerify(this.mfaPendingUserId, this.mfaCode);
                 if (res.ok) {
-                    this.currentUser = await res.json();
+                    const data = await res.json();
+                    this.currentUser = data.user;
                     localStorage.setItem('currentUser', JSON.stringify(this.currentUser));
+                    // 保存 JWT token
+                    if (data.token) {
+                        API.setToken(data.token);
+                    }
                     this.showToast('登录成功', 'success');
                     this.mfaPending = false;
                     this.mfaPendingUserId = '';
@@ -779,6 +790,7 @@ createApp({
         logout() {
             this.currentUser = null;
             localStorage.removeItem('currentUser');
+            API.clearToken(); // 清除 JWT token
             this.loginForm = { username: '', password: '' };
             this.mfaPending = false;
             this.mfaPendingUserId = '';
@@ -1481,7 +1493,7 @@ createApp({
         // ========== 记录操作 ==========
         openRecordModal(mode, record = null) {
             this.recordModalMode = mode;
-            this.recordForm = record ? { ...record } : { id: '', connection_id: '', project: '', env: 'uat', vid: '', src_ip: '', dest_ip: '', port: '', status: 'active' };
+            this.recordForm = record ? { ...record } : { id: '', connection_id: '', project: '', env: 'uat', module: '', vid: '', src_ip: '', dest_ip: '', port: '', status: 'active' };
             this.showRecordModal = true;
         },
 
@@ -1560,18 +1572,27 @@ createApp({
         rollbackFromPreview() {
             if (this.previewHistory) {
                 this.showPreviewModal = false;
-                this.rollbackToVersion(this.previewHistory);
+                this.confirmRollback(this.previewHistory);
             }
         },
 
-        async rollbackToVersion(history) {
-            if (!confirm(`确定回滚到此版本吗？当前数据将被覆盖。`)) return;
+        // 显示回滚确认弹窗
+        confirmRollback(history) {
+            this.rollbackTarget = history;
+            this.showRollbackModal = true;
+        },
+
+        // 执行回滚
+        async executeRollback() {
+            if (!this.rollbackTarget) return;
+            this.showRollbackModal = false;
             try {
                 const operator = this.currentUser?.username || 'admin';
-                const res = await API.rollbackRecord(this.historyRecord.id, history.id, operator);
+                const res = await API.rollbackRecord(this.historyRecord.id, this.rollbackTarget.id, operator);
                 if (res.ok) {
                     this.showToast('回滚成功', 'success');
                     this.showHistoryModal = false;
+                    this.rollbackTarget = null;
                     await this.loadRecords();
                 } else {
                     this.showToast('回滚失败', 'error');
@@ -1579,6 +1600,11 @@ createApp({
             } catch (e) {
                 this.showToast('回滚失败', 'error');
             }
+        },
+
+        // 保留旧方法兼容
+        async rollbackToVersion(history) {
+            this.confirmRollback(history);
         },
 
         confirmBatchDelete() {
@@ -1651,11 +1677,11 @@ createApp({
                 else if (line.includes('|')) parts = line.split('|');
                 else parts = line.split(/\s+/);
                 parts = parts.map(p => p.trim()).filter(p => p);
-                if (parts.length < 6) {
-                    this.batchError = `第 ${i + 1} 行: 需要6个字段（项目、VID、源IP、目标IP、端口、连接ID）`;
+                if (parts.length < 7) {
+                    this.batchError = `第 ${i + 1} 行: 需要7个字段（项目、模块名、VID、源IP、目标IP、端口、连接ID）`;
                     return;
                 }
-                const connId = parts[5]; // 连接ID在最后
+                const connId = parts[6]; // 连接ID在最后
                 if (seenConnIds.has(connId)) {
                     this.batchError = `第 ${i + 1} 行: 连接ID "${connId}" 重复`;
                     return;
@@ -1663,11 +1689,12 @@ createApp({
                 seenConnIds.add(connId);
                 this.batchRecords.push({
                     project: parts[0],
-                    vid: parts[1],
-                    src_ip: parts[2],
-                    dest_ip: parts[3],
-                    port: parts[4],
-                    connection_id: parts[5], // 连接ID在最后
+                    module: parts[1],
+                    vid: parts[2],
+                    src_ip: parts[3],
+                    dest_ip: parts[4],
+                    port: parts[5],
+                    connection_id: parts[6], // 连接ID在最后
                     env: this.batchEnv,
                     status: this.batchStatus
                 });

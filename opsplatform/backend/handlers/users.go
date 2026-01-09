@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
+	"os"
 	"strings"
 
 	"opsplatform/database"
@@ -30,6 +33,7 @@ type LoginResponse struct {
 	RequireMFA  bool         `json:"require_mfa"`            // 是否需要 MFA 验证
 	UserID      string       `json:"user_id,omitempty"`      // 需要 MFA 时返回用户 ID
 	User        *models.User `json:"user,omitempty"`         // 登录成功时返回用户信息
+	Token       string       `json:"token,omitempty"`        // JWT token
 	NeedBinding bool         `json:"need_binding,omitempty"` // 是否需要绑定 MFA
 }
 
@@ -45,17 +49,30 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := GetUserByUsername(req.Username)
-	if err != nil || user == nil {
-		http.Error(w, "用户不存在", http.StatusUnauthorized)
+	// 检查登录速率限制
+	ip := GetClientIP(r)
+	allowed, remaining := CheckLoginRateLimit(ip)
+	if !allowed {
+		http.Error(w, fmt.Sprintf("登录尝试过多，请在 %d 分钟后重试", int(remaining.Minutes())+1), http.StatusTooManyRequests)
 		return
 	}
 
-	// 验证密码（支持 bcrypt 加密和明文兼容）
-	if !checkPassword(user.Password, req.Password) && user.Password != req.Password {
-		http.Error(w, "密码错误", http.StatusUnauthorized)
+	user, err := GetUserByUsername(req.Username)
+	if err != nil || user == nil {
+		RecordLoginAttempt(ip, false)
+		http.Error(w, "用户名或密码错误", http.StatusUnauthorized)
 		return
 	}
+
+	// 验证密码（仅支持 bcrypt 加密）
+	if !checkPassword(user.Password, req.Password) {
+		RecordLoginAttempt(ip, false)
+		http.Error(w, "用户名或密码错误", http.StatusUnauthorized)
+		return
+	}
+
+	// 记录登录成功
+	RecordLoginAttempt(ip, true)
 
 	if user.Status != "active" {
 		http.Error(w, "用户已被禁用", http.StatusForbidden)
@@ -90,7 +107,13 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 未启用 MFA，直接登录成功
-	ip := GetClientIP(r)
+	// 生成 JWT token
+	token, err := GenerateToken(user.ID, user.Username, user.Role)
+	if err != nil {
+		http.Error(w, "生成认证令牌失败", http.StatusInternalServerError)
+		return
+	}
+
 	AddAuditLog("login", "user:"+user.ID, user.Username, "", "", fmt.Sprintf("用户登录成功: %s (%s)", user.Username, user.DisplayName), ip)
 
 	user.Password = ""
@@ -98,6 +121,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(LoginResponse{
 		RequireMFA: false,
 		User:       user,
+		Token:      token,
 	})
 }
 
@@ -105,7 +129,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 func HandleGetUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := GetAllUsers()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SafeError(w, "获取用户列表失败", http.StatusInternalServerError, err)
 		return
 	}
 
@@ -145,7 +169,7 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := AddUser(&req.User); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SafeError(w, "创建用户失败", http.StatusInternalServerError, err)
 		return
 	}
 
@@ -181,7 +205,7 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := UpdateUser(id, &user); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		SafeError(w, "更新用户失败", http.StatusNotFound, err)
 		return
 	}
 
@@ -250,7 +274,7 @@ func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := DeleteUser(id); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		SafeError(w, "删除用户失败", http.StatusNotFound, err)
 		return
 	}
 
@@ -406,9 +430,23 @@ func DeleteUser(id string) error {
 func InitDefaultAdmin() error {
 	admin, _ := GetUserByUsername("admin")
 	if admin == nil {
+		// 从环境变量获取初始密码，否则生成随机密码
+		password := os.Getenv("ADMIN_PASSWORD")
+		if password == "" {
+			// 生成随机密码
+			password = generateSecurePassword(16)
+			fmt.Printf("\n╔════════════════════════════════════════════════════════════════╗\n")
+			fmt.Printf("║  ⚠️  首次启动 - 默认管理员账号已创建                            ║\n")
+			fmt.Printf("╠════════════════════════════════════════════════════════════════╣\n")
+			fmt.Printf("║  用户名: admin                                                  ║\n")
+			fmt.Printf("║  密码:   %-54s ║\n", password)
+			fmt.Printf("║  ⚠️  请立即登录并修改密码！                                     ║\n")
+			fmt.Printf("╚════════════════════════════════════════════════════════════════╝\n\n")
+		}
+
 		u := &models.User{
 			Username:    "admin",
-			Password:    "admin123",
+			Password:    password,
 			DisplayName: "管理员",
 			Role:        "admin",
 			Status:      "active",
@@ -417,6 +455,17 @@ func InitDefaultAdmin() error {
 		return AddUser(u)
 	}
 	return nil
+}
+
+// generateSecurePassword 生成安全随机密码
+func generateSecurePassword(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+	b := make([]byte, length)
+	for i := range b {
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		b[i] = charset[n.Int64()]
+	}
+	return string(b)
 }
 
 

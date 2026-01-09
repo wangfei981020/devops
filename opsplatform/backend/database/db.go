@@ -56,6 +56,7 @@ func createTables() error {
 			connection_id VARCHAR(128) NOT NULL,
 			project VARCHAR(255) NOT NULL,
 			env VARCHAR(32) NOT NULL,
+			module VARCHAR(255) DEFAULT '',
 			vid VARCHAR(255) NOT NULL,
 			src_ip VARCHAR(64) NOT NULL,
 			dest_ip VARCHAR(64) NOT NULL,
@@ -76,6 +77,9 @@ func createTables() error {
 	// 检查并添加 connection_id 列（兼容旧数据库）
 	DB.Exec(`ALTER TABLE records ADD COLUMN connection_id VARCHAR(128) NOT NULL DEFAULT '' AFTER id`)
 	DB.Exec(`ALTER TABLE records ADD UNIQUE KEY uk_connection_id (connection_id)`)
+
+	// 检查并添加 module 列（兼容旧数据库）
+	DB.Exec(`ALTER TABLE records ADD COLUMN module VARCHAR(255) DEFAULT '' AFTER env`)
 
 	// 创建用户表
 	_, err = DB.Exec(`

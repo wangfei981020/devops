@@ -6,6 +6,7 @@ type Record struct {
 	ConnectionID string `json:"connection_id"` // 连接ID，唯一标识
 	Project      string `json:"project"`
 	Env          string `json:"env"`
+	Module       string `json:"module"` // 模块名
 	VID          string `json:"vid"`
 	SrcIP        string `json:"src_ip"`
 	DestIP       string `json:"dest_ip"`
@@ -27,9 +28,9 @@ type User struct {
 	Role        string `json:"role"`
 	Status      string `json:"status"`
 	Permissions string `json:"permissions"`
-	MFAEnabled  bool   `json:"mfa_enabled"`           // 是否启用 MFA（管理员配置）
-	MFASecret   string `json:"mfa_secret,omitempty"`  // MFA 密钥（不返回给前端）
-	MFABound    bool   `json:"mfa_bound"`             // 是否已绑定 MFA（有密钥即为已绑定）
+	MFAEnabled  bool   `json:"mfa_enabled"`          // 是否启用 MFA（管理员配置）
+	MFASecret   string `json:"mfa_secret,omitempty"` // MFA 密钥（不返回给前端）
+	MFABound    bool   `json:"mfa_bound"`            // 是否已绑定 MFA（有密钥即为已绑定）
 	CreatedAt   string `json:"created_at"`
 }
 
@@ -78,18 +79,18 @@ type Metric struct {
 
 // Domain 域名管理
 type Domain struct {
-	ID              string `json:"id"`
-	Project         string `json:"project"`          // 项目
-	Module          string `json:"module"`           // 模块
-	DomainName      string `json:"domain_name"`      // 域名
-	Origin          string `json:"origin"`           // 回源地址
-	CDNProvider     string `json:"cdn_provider"`     // CDN 厂商
-	ExpireTime      string `json:"expire_time"`      // 域名到期时间
-	CertExpireTime  string `json:"cert_expire_time"` // 证书到期时间
-	Status          string `json:"status"`           // 状态：active, inactive, expired
-	Remark          string `json:"remark"`           // 备注
-	CreatedAt       string `json:"created_at"`
-	CreatedBy       string `json:"created_by"`
-	UpdatedAt       string `json:"updated_at"`
-	UpdatedBy       string `json:"updated_by"`
+	ID             string `json:"id"`
+	Project        string `json:"project"`          // 项目
+	Module         string `json:"module"`           // 模块
+	DomainName     string `json:"domain_name"`      // 域名
+	Origin         string `json:"origin"`           // 回源地址
+	CDNProvider    string `json:"cdn_provider"`     // CDN 厂商
+	ExpireTime     string `json:"expire_time"`      // 域名到期时间
+	CertExpireTime string `json:"cert_expire_time"` // 证书到期时间
+	Status         string `json:"status"`           // 状态：active, inactive, expired
+	Remark         string `json:"remark"`           // 备注
+	CreatedAt      string `json:"created_at"`
+	CreatedBy      string `json:"created_by"`
+	UpdatedAt      string `json:"updated_at"`
+	UpdatedBy      string `json:"updated_by"`
 }

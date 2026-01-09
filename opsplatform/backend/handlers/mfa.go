@@ -153,6 +153,13 @@ func HandleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	// 获取完整用户信息返回
 	user, _ := GetUserByID(req.UserID)
 	
+	// 生成 JWT token
+	token, err := GenerateToken(user.ID, user.Username, user.Role)
+	if err != nil {
+		http.Error(w, "生成认证令牌失败", http.StatusInternalServerError)
+		return
+	}
+
 	// 记录 MFA 登录成功日志
 	ip := GetClientIP(r)
 	AddAuditLog("login", "user:"+user.ID, user.Username, "", "", fmt.Sprintf("用户 MFA 验证登录成功: %s (%s)", user.Username, user.DisplayName), ip)
@@ -162,7 +169,10 @@ func HandleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	user.MFASecret = ""
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(user)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"user":  user,
+		"token": token,
+	})
 }
 
 // HandleMFADisable 禁用 MFA

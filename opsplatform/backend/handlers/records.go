@@ -16,7 +16,7 @@ import (
 func HandleGetRecords(w http.ResponseWriter, r *http.Request) {
 	records, err := GetAllRecords()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SafeError(w, "操作失败", http.StatusInternalServerError, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -30,7 +30,7 @@ func HandleGetRecord(w http.ResponseWriter, r *http.Request) {
 
 	record, err := GetRecord(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SafeError(w, "操作失败", http.StatusInternalServerError, err)
 		return
 	}
 	if record == nil {
@@ -72,7 +72,7 @@ func HandleAddRecord(w http.ResponseWriter, r *http.Request) {
 
 	ip := GetClientIP(r)
 	if err := AddRecord(&req.Record, req.Operator, ip); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SafeError(w, "操作失败", http.StatusInternalServerError, err)
 		return
 	}
 
@@ -121,7 +121,7 @@ func HandleBatchAddRecords(w http.ResponseWriter, r *http.Request) {
 	for _, record := range req.Records {
 		rec := record
 		if err := AddRecord(&rec, req.Operator, ip); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			SafeError(w, "操作失败", http.StatusInternalServerError, err)
 			return
 		}
 		addedRecords = append(addedRecords, rec)
@@ -158,7 +158,7 @@ func HandleUpdateRecord(w http.ResponseWriter, r *http.Request) {
 
 	ip := GetClientIP(r)
 	if err := UpdateRecord(id, &req.Record, req.Operator, ip); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		SafeError(w, "资源不存在", http.StatusNotFound, err)
 		return
 	}
 
@@ -187,7 +187,7 @@ func HandleDeleteRecord(w http.ResponseWriter, r *http.Request) {
 
 	ip := GetClientIP(r)
 	if err := DeleteRecord(id, req.Operator, ip); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		SafeError(w, "资源不存在", http.StatusNotFound, err)
 		return
 	}
 
@@ -289,7 +289,7 @@ func GetClientIP(r *http.Request) string {
 // 数据库操作函数
 func GetAllRecords() ([]*models.Record, error) {
 	rows, err := database.DB.Query(`
-		SELECT id, COALESCE(connection_id, ''), project, env, vid, src_ip, dest_ip, port, status, 
+		SELECT id, COALESCE(connection_id, ''), project, env, COALESCE(module, ''), vid, src_ip, dest_ip, port, status, 
 		       COALESCE(operator, ''), created_at, updated_at, 
 		       COALESCE(created_by, ''), COALESCE(updated_by, '')
 		FROM records ORDER BY updated_at DESC
@@ -302,7 +302,7 @@ func GetAllRecords() ([]*models.Record, error) {
 	var records []*models.Record
 	for rows.Next() {
 		r := &models.Record{}
-		err := rows.Scan(&r.ID, &r.ConnectionID, &r.Project, &r.Env, &r.VID, &r.SrcIP, &r.DestIP,
+		err := rows.Scan(&r.ID, &r.ConnectionID, &r.Project, &r.Env, &r.Module, &r.VID, &r.SrcIP, &r.DestIP,
 			&r.Port, &r.Status, &r.Operator, &r.CreatedAt, &r.UpdatedAt,
 			&r.CreatedBy, &r.UpdatedBy)
 		if err != nil {
@@ -331,11 +331,11 @@ func ConnectionIDExists(connectionID, excludeID string) (bool, error) {
 func GetRecord(id string) (*models.Record, error) {
 	r := &models.Record{}
 	err := database.DB.QueryRow(`
-		SELECT id, COALESCE(connection_id, ''), project, env, vid, src_ip, dest_ip, port, status,
+		SELECT id, COALESCE(connection_id, ''), project, env, COALESCE(module, ''), vid, src_ip, dest_ip, port, status,
 		       COALESCE(operator, ''), created_at, updated_at,
 		       COALESCE(created_by, ''), COALESCE(updated_by, '')
 		FROM records WHERE id = ?
-	`, id).Scan(&r.ID, &r.ConnectionID, &r.Project, &r.Env, &r.VID, &r.SrcIP, &r.DestIP,
+	`, id).Scan(&r.ID, &r.ConnectionID, &r.Project, &r.Env, &r.Module, &r.VID, &r.SrcIP, &r.DestIP,
 		&r.Port, &r.Status, &r.Operator, &r.CreatedAt, &r.UpdatedAt,
 		&r.CreatedBy, &r.UpdatedBy)
 	if err != nil {
@@ -352,9 +352,9 @@ func AddRecord(r *models.Record, operator, ip string) error {
 	r.UpdatedBy = operator
 
 	_, err := database.DB.Exec(`
-		INSERT INTO records (id, connection_id, project, env, vid, src_ip, dest_ip, port, status, operator, created_at, updated_at, created_by, updated_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, r.ID, r.ConnectionID, r.Project, r.Env, r.VID, r.SrcIP, r.DestIP, r.Port, r.Status, r.Operator, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.UpdatedBy)
+		INSERT INTO records (id, connection_id, project, env, module, vid, src_ip, dest_ip, port, status, operator, created_at, updated_at, created_by, updated_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, r.ID, r.ConnectionID, r.Project, r.Env, r.Module, r.VID, r.SrcIP, r.DestIP, r.Port, r.Status, r.Operator, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.UpdatedBy)
 	if err != nil {
 		return err
 	}
@@ -391,9 +391,9 @@ func UpdateRecord(id string, r *models.Record, operator, ip string) error {
 	r.UpdatedBy = operator
 
 	_, err = database.DB.Exec(`
-		UPDATE records SET connection_id=?, project=?, env=?, vid=?, src_ip=?, dest_ip=?, port=?, status=?, operator=?, updated_at=?, updated_by=?
+		UPDATE records SET connection_id=?, project=?, env=?, module=?, vid=?, src_ip=?, dest_ip=?, port=?, status=?, operator=?, updated_at=?, updated_by=?
 		WHERE id=?
-	`, r.ConnectionID, r.Project, r.Env, r.VID, r.SrcIP, r.DestIP, r.Port, r.Status, r.Operator, r.UpdatedAt, r.UpdatedBy, id)
+	`, r.ConnectionID, r.Project, r.Env, r.Module, r.VID, r.SrcIP, r.DestIP, r.Port, r.Status, r.Operator, r.UpdatedAt, r.UpdatedBy, id)
 	if err != nil {
 		return err
 	}
@@ -562,7 +562,7 @@ func HandleGetRecordHistory(w http.ResponseWriter, r *http.Request) {
 		ORDER BY created_at DESC
 	`, recordID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SafeError(w, "操作失败", http.StatusInternalServerError, err)
 		return
 	}
 	defer rows.Close()
@@ -641,9 +641,9 @@ func HandleRollbackRecord(w http.ResponseWriter, r *http.Request) {
 	// 更新记录为历史版本
 	now := timeNow().Format("2006-01-02 15:04:05")
 	_, err = database.DB.Exec(`
-		UPDATE records SET connection_id=?, project=?, env=?, vid=?, src_ip=?, dest_ip=?, port=?, status=?, updated_at=?, updated_by=?
+		UPDATE records SET connection_id=?, project=?, env=?, module=?, vid=?, src_ip=?, dest_ip=?, port=?, status=?, updated_at=?, updated_by=?
 		WHERE id=?
-	`, oldRecord.ConnectionID, oldRecord.Project, oldRecord.Env, oldRecord.VID, oldRecord.SrcIP, oldRecord.DestIP, oldRecord.Port, oldRecord.Status, now, operator, recordID)
+	`, oldRecord.ConnectionID, oldRecord.Project, oldRecord.Env, oldRecord.Module, oldRecord.VID, oldRecord.SrcIP, oldRecord.DestIP, oldRecord.Port, oldRecord.Status, now, operator, recordID)
 	if err != nil {
 		http.Error(w, "回滚失败", http.StatusInternalServerError)
 		return
@@ -660,3 +660,4 @@ func HandleRollbackRecord(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
+

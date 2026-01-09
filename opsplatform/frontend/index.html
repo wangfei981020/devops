@@ -209,6 +209,7 @@
                                 <th style="width: 40px;"><input type="checkbox" @change="toggleSelectAll" :checked="isAllSelected" :indeterminate.prop="isPartialSelected"></th>
                                 <th class="sortable" @click="toggleSort('project')">项目 <span class="sort-icon">{{ getSortIcon('project') }}</span></th>
                                 <th class="sortable" @click="toggleSort('env')">环境 <span class="sort-icon">{{ getSortIcon('env') }}</span></th>
+                                <th class="sortable" @click="toggleSort('module')">模块名 <span class="sort-icon">{{ getSortIcon('module') }}</span></th>
                                 <th class="sortable" @click="toggleSort('vid')">VID <span class="sort-icon">{{ getSortIcon('vid') }}</span></th>
                                 <th class="sortable" @click="toggleSort('src_ip')">源 IP <span class="sort-icon">{{ getSortIcon('src_ip') }}</span></th>
                                 <th class="sortable" @click="toggleSort('dest_ip')">目标 IP <span class="sort-icon">{{ getSortIcon('dest_ip') }}</span></th>
@@ -221,11 +222,12 @@
                                 <th>操作</th>
                             </tr></thead>
                             <tbody>
-                                <tr v-if="filteredRecords.length === 0"><td colspan="13"><div class="empty-state"><div class="empty-state-icon">◎</div><div>暂无数据</div></div></td></tr>
+                                <tr v-if="filteredRecords.length === 0"><td colspan="14"><div class="empty-state"><div class="empty-state-icon">◎</div><div>暂无数据</div></div></td></tr>
                                 <tr v-for="record in paginatedRecords" :key="record.id" :class="{ 'row-selected': selectedRecords.includes(record.id) }">
                                     <td><input type="checkbox" :value="record.id" v-model="selectedRecords"></td>
                                     <td class="project-cell">{{ record.project }}</td>
                                     <td><span class="env-badge" :class="'env-' + record.env">{{ record.env?.toUpperCase() }}</span></td>
+                                    <td class="module-cell">{{ record.module || '-' }}</td>
                                     <td class="vid-cell">{{ record.vid }}</td>
                                     <td class="ip-cell">{{ record.src_ip }}</td>
                                     <td class="ip-cell">{{ record.dest_ip }}</td>
@@ -790,7 +792,10 @@
                             <div class="form-group"><label>项目名称 <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.project" required></div>
                             <div class="form-group"><label>环境 <span class="required">*</span></label><select class="form-select" v-model="recordForm.env"><option value="uat">UAT</option><option value="prod">PROD</option></select></div>
                         </div>
-                        <div class="form-group"><label>VID <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.vid" required></div>
+                        <div class="form-row">
+                            <div class="form-group"><label>模块名 <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.module" placeholder="请输入模块名" required></div>
+                            <div class="form-group"><label>VID <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.vid" required></div>
+                        </div>
                         <div class="form-row">
                             <div class="form-group"><label>源 IP <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.src_ip" required></div>
                             <div class="form-group"><label>目标 IP <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.dest_ip" required></div>
@@ -923,10 +928,10 @@
                     <div class="batch-help">
                         <h4>📋 格式说明</h4>
                         <p>每行一条记录，字段用 <code>Tab</code>、<code>逗号</code>、<code>|</code> 或 <code>空格</code> 分隔</p>
-                        <p>字段顺序: <code>项目</code> <code>VID</code> <code>源IP</code> <code>目标IP</code> <code>端口</code> <code>连接ID</code></p>
-                        <pre class="batch-example">订单系统,VLAN100,192.168.1.10,10.0.0.5,8080,CONN-001
-支付系统,VLAN200,192.168.1.20,10.0.0.6,443,CONN-002
-用户中心,VLAN100,192.168.1.30,10.0.0.7,3306,CONN-003</pre>
+                        <p>字段顺序: <code>项目</code> <code>模块名</code> <code>VID</code> <code>源IP</code> <code>目标IP</code> <code>端口</code> <code>连接ID</code></p>
+                        <pre class="batch-example">订单系统,订单模块,VLAN100,192.168.1.10,10.0.0.5,8080,CONN-001
+支付系统,支付模块,VLAN200,192.168.1.20,10.0.0.6,443,CONN-002
+用户中心,用户模块,VLAN100,192.168.1.30,10.0.0.7,3306,CONN-003</pre>
                     </div>
                     <div class="batch-row-select">
                         <div><label style="color: var(--text-secondary); font-size: 0.85em; margin-right: 8px;">默认环境:</label><select v-model="batchEnv" @change="parseBatchText"><option value="uat">UAT</option><option value="prod">PROD</option></select></div>
@@ -937,8 +942,8 @@
                     <div v-if="batchRecords && batchRecords.length > 0" class="batch-preview">
                         <h4>预览 ({{ batchRecords.length }} 条)</h4>
                         <div class="table-container" style="max-height: 200px; overflow: auto;">
-                            <table><thead><tr><th>#</th><th>项目</th><th>VID</th><th>源IP</th><th>目标IP</th><th>端口</th><th>连接ID</th></tr></thead>
-                            <tbody><tr v-for="(r, i) in batchRecords" :key="i"><td>{{ i + 1 }}</td><td class="project-cell">{{ r.project }}</td><td class="vid-cell">{{ r.vid }}</td><td class="ip-cell">{{ r.src_ip }}</td><td class="ip-cell">{{ r.dest_ip }}</td><td class="port-cell">{{ r.port }}</td><td class="connection-id-cell">{{ r.connection_id }}</td></tr></tbody></table>
+                            <table><thead><tr><th>#</th><th>项目</th><th>模块名</th><th>VID</th><th>源IP</th><th>目标IP</th><th>端口</th><th>连接ID</th></tr></thead>
+                            <tbody><tr v-for="(r, i) in batchRecords" :key="i"><td>{{ i + 1 }}</td><td class="project-cell">{{ r.project }}</td><td class="module-cell">{{ r.module }}</td><td class="vid-cell">{{ r.vid }}</td><td class="ip-cell">{{ r.src_ip }}</td><td class="ip-cell">{{ r.dest_ip }}</td><td class="port-cell">{{ r.port }}</td><td class="connection-id-cell">{{ r.connection_id }}</td></tr></tbody></table>
                         </div>
                     </div>
                 </div>
@@ -1182,6 +1187,33 @@
                 <div class="modal-header"><h2>确认删除</h2><button class="modal-close" @click="showDeleteModal = false">&times;</button></div>
                 <div class="modal-body"><p>{{ deleteMessage }}</p></div>
                 <div class="modal-footer"><button class="btn btn-secondary" @click="showDeleteModal = false">取消</button><button class="btn btn-danger" @click="executeDelete">确认删除</button></div>
+            </div>
+        </div>
+
+        <!-- 回滚确认弹窗 -->
+        <div class="modal-overlay" :class="{ show: showRollbackModal }">
+            <div class="modal confirm-modal" style="max-width: 420px;">
+                <div class="modal-header" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white;">
+                    <h2 style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 24px;">⚠️</span> 确认回滚
+                    </h2>
+                    <button class="modal-close" @click="showRollbackModal = false" style="color: white;">&times;</button>
+                </div>
+                <div class="modal-body" style="text-align: center; padding: 30px 20px;">
+                    <div style="font-size: 48px; margin-bottom: 15px;">🔄</div>
+                    <p style="font-size: 16px; color: #374151; margin-bottom: 10px;">确定要回滚到此版本吗？</p>
+                    <p style="font-size: 14px; color: #6b7280;">当前数据将被覆盖，此操作不可撤销</p>
+                    <div v-if="rollbackTarget" style="margin-top: 15px; padding: 10px; background: #fef3c7; border-radius: 8px; font-size: 13px; color: #92400e;">
+                        回滚目标: <strong>{{ rollbackTarget.action === 'create' ? '创建' : '修改' }}</strong> 
+                        - {{ formatDate(rollbackTarget.created_at) }}
+                    </div>
+                </div>
+                <div class="modal-footer" style="justify-content: center; gap: 15px; padding: 20px;">
+                    <button class="btn btn-secondary" @click="showRollbackModal = false" style="min-width: 100px;">取消</button>
+                    <button class="btn btn-warning" @click="executeRollback" style="min-width: 100px; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); border: none;">
+                        确认回滚
+                    </button>
+                </div>
             </div>
         </div>
 

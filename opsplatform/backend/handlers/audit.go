@@ -18,7 +18,7 @@ var timeNow = time.Now
 func HandleGetAuditLogs(w http.ResponseWriter, r *http.Request) {
 	logs, err := GetAllAuditLogs()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SafeError(w, "操作失败", http.StatusInternalServerError, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -29,7 +29,7 @@ func HandleGetAuditLogs(w http.ResponseWriter, r *http.Request) {
 func HandleExportRecords(w http.ResponseWriter, r *http.Request) {
 	records, err := GetAllRecords()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SafeError(w, "操作失败", http.StatusInternalServerError, err)
 		return
 	}
 
@@ -83,7 +83,7 @@ func HandleExportRecords(w http.ResponseWriter, r *http.Request) {
 func HandleExportAuditLogs(w http.ResponseWriter, r *http.Request) {
 	logs, err := GetAllAuditLogs()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SafeError(w, "操作失败", http.StatusInternalServerError, err)
 		return
 	}
 
@@ -106,7 +106,7 @@ func HandleExportAuditLogs(w http.ResponseWriter, r *http.Request) {
 func HandleQueryRecords(w http.ResponseWriter, r *http.Request) {
 	records, err := GetAllRecords()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SafeError(w, "操作失败", http.StatusInternalServerError, err)
 		return
 	}
 
@@ -215,6 +215,7 @@ func toLower(s string) string {
 	}
 	return string(b)
 }
+
 
 
 

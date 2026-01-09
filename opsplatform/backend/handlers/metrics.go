@@ -60,7 +60,7 @@ func HandleCreateMetric(w http.ResponseWriter, r *http.Request) {
 	`, m.ID, m.Name, m.Label, m.PromQL, m.Unit, m.Group, m.Description, m.Enabled, m.SortOrder, m.CreatedAt, m.CreatedBy)
 
 	if err != nil {
-		http.Error(w, "创建失败: "+err.Error(), http.StatusInternalServerError)
+		SafeError(w, "创建失败", http.StatusInternalServerError, err)
 		return
 	}
 
@@ -91,7 +91,7 @@ func HandleUpdateMetric(w http.ResponseWriter, r *http.Request) {
 	`, m.Name, m.Label, m.PromQL, m.Unit, m.Group, m.Description, m.Enabled, m.SortOrder, m.ID)
 
 	if err != nil {
-		http.Error(w, "更新失败: "+err.Error(), http.StatusInternalServerError)
+		SafeError(w, "更新失败", http.StatusInternalServerError, err)
 		return
 	}
 
@@ -118,7 +118,7 @@ func HandleDeleteMetric(w http.ResponseWriter, r *http.Request) {
 
 	_, err := database.DB.Exec("DELETE FROM metrics WHERE id = ?", id)
 	if err != nil {
-		http.Error(w, "删除失败: "+err.Error(), http.StatusInternalServerError)
+		SafeError(w, "删除失败", http.StatusInternalServerError, err)
 		return
 	}
 
@@ -197,4 +197,5 @@ func GetEnabledMetrics() ([]models.Metric, error) {
 	}
 	return metrics, nil
 }
+
 

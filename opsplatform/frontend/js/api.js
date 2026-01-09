@@ -12,18 +12,51 @@ const API = {
         }
     },
 
+    // 获取 JWT token
+    getToken() {
+        return localStorage.getItem('authToken') || '';
+    },
+
+    // 保存 JWT token
+    setToken(token) {
+        if (token) {
+            localStorage.setItem('authToken', token);
+        }
+    },
+
+    // 清除 token
+    clearToken() {
+        localStorage.removeItem('authToken');
+    },
+
     async request(method, url, data = null) {
+        const headers = { 
+            'Content-Type': 'application/json',
+            'X-Operator': this.getOperator()
+        };
+
+        // 添加 JWT token
+        const token = this.getToken();
+        if (token) {
+            headers['Authorization'] = 'Bearer ' + token;
+        }
+
         const options = {
             method,
-            headers: { 
-                'Content-Type': 'application/json',
-                'X-Operator': this.getOperator() // 添加操作者 header
-            }
+            headers
         };
         if (data) {
             options.body = JSON.stringify(data);
         }
         const response = await fetch(this.baseURL + url, options);
+
+        // 如果返回 401，清除 token 并跳转到登录
+        if (response.status === 401) {
+            this.clearToken();
+            localStorage.removeItem('currentUser');
+            window.location.reload();
+        }
+
         return response;
     },
 
