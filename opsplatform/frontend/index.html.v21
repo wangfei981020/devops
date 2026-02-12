@@ -1,0 +1,1541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>运维管理平台</title>
+    <script src="/js/vue.global.js"></script>
+    <!-- 使用系统字体，无需加载外部字体 -->
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div id="app">
+        <div class="toast" :class="['toast-' + toast.type]" v-show="toast.show">{{ toast.message }}</div>
+
+        <!-- 登录页面 -->
+        <div v-if="!currentUser" class="login-container">
+            <button class="login-theme-toggle" @click="toggleTheme" :title="isDarkMode ? '切换白天模式' : '切换夜间模式'">
+                {{ isDarkMode ? '☀️' : '🌙' }}
+            </button>
+            
+            <!-- 普通登录 -->
+            <div class="login-box" v-if="!mfaPending">
+                <div class="login-title">
+                    <h1>运维管理平台</h1>
+                    <p>请登录您的账号</p>
+                </div>
+                <form @submit.prevent="login">
+                    <div class="form-group"><label>用户名</label><input type="text" class="form-input" v-model="loginForm.username" placeholder="请输入用户名" required></div>
+                    <div class="form-group"><label>密码</label><input type="password" class="form-input" v-model="loginForm.password" placeholder="请输入密码" required></div>
+                    <button type="submit" class="btn btn-primary btn-block" :disabled="loginLoading">{{ loginLoading ? '登录中...' : '登 录' }}</button>
+                </form>
+            </div>
+
+            <!-- MFA 验证 -->
+            <div class="login-box" v-else>
+                <div class="login-title">
+                    <h1>🔐 MFA 验证</h1>
+                    <p>请输入您的动态验证码</p>
+                </div>
+                <form @submit.prevent="verifyMFA">
+                    <div class="form-group">
+                        <label>6位验证码</label>
+                        <input type="text" class="form-input mfa-input" v-model="mfaCode" placeholder="000000" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block" :disabled="loginLoading">{{ loginLoading ? '验证中...' : '验 证' }}</button>
+                    <button type="button" class="btn btn-secondary btn-block" style="margin-top: 10px;" @click="cancelMFA">返回登录</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 主布局 -->
+        <div v-else class="app-layout" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
+            <!-- 左侧边栏 -->
+            <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
+                <div class="sidebar-header">
+                    <div class="sidebar-logo"><span v-show="!sidebarCollapsed">运维管理平台</span></div>
+                    <button class="sidebar-toggle" @click="sidebarCollapsed = !sidebarCollapsed" :title="sidebarCollapsed ? '展开菜单' : '收起菜单'">
+                        {{ sidebarCollapsed ? '▶' : '◀' }}
+                    </button>
+                </div>
+                <nav class="sidebar-nav">
+                    <div class="nav-group" v-if="hasPermission('records') || hasPermission('domains')">
+                        <div class="nav-group-title" @click="expandedGroups.data = !expandedGroups.data">
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.data }">▶</span>
+                            数据管理
+                        </div>
+                        <div class="nav-group-items" v-show="expandedGroups.data || sidebarCollapsed">
+                            <button v-if="hasPermission('records')" class="nav-item" :class="{ active: currentTab === 'records' }" @click="currentTab = 'records'" :title="sidebarCollapsed ? '网络管理' : ''">
+                                <span class="nav-item-icon">🔗</span><span class="nav-item-text">网络管理</span>
+                            </button>
+                            <button v-if="hasPermission('domains')" class="nav-item" :class="{ active: currentTab === 'domains' }" @click="currentTab = 'domains'" :title="sidebarCollapsed ? '域名管理' : ''">
+                                <span class="nav-item-icon">🌐</span><span class="nav-item-text">域名管理</span>
+                            </button>
+                            <button v-if="hasPermission('cmdb')" class="nav-item" :class="{ active: currentTab === 'cmdb' }" @click="currentTab = 'cmdb'" :title="sidebarCollapsed ? 'CMDB' : ''">
+                                <span class="nav-item-icon">🖥️</span><span class="nav-item-text">CMDB</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="nav-group" v-if="hasPermission('inspection')">
+                        <div class="nav-group-title" @click="expandedGroups.ops = !expandedGroups.ops">
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.ops }">▶</span>
+                            运维工具
+                        </div>
+                        <div class="nav-group-items" v-show="expandedGroups.ops || sidebarCollapsed">
+                            <button v-if="hasPermission('inspection')" class="nav-item" :class="{ active: currentTab === 'inspection' }" @click="currentTab = 'inspection'" :title="sidebarCollapsed ? '一键巡检' : ''">
+                                <span class="nav-item-icon">🔍</span><span class="nav-item-text">一键巡检</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="nav-group" v-if="hasPermission('datasources') || hasPermission('audit') || hasPermission('users')">
+                        <div class="nav-group-title" @click="expandedGroups.system = !expandedGroups.system">
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.system }">▶</span>
+                            系统管理
+                        </div>
+                        <div class="nav-group-items" v-show="expandedGroups.system || sidebarCollapsed">
+                            <button v-if="hasPermission('datasources')" class="nav-item" :class="{ active: currentTab === 'datasources' }" @click="currentTab = 'datasources'; loadDataSources()" :title="sidebarCollapsed ? '数据源配置' : ''">
+                                <span class="nav-item-icon">📡</span><span class="nav-item-text">数据源配置</span>
+                            </button>
+                            <button v-if="hasPermission('audit')" class="nav-item" :class="{ active: currentTab === 'audit' }" @click="currentTab = 'audit'; loadAuditLogs()" :title="sidebarCollapsed ? '审计日志' : ''">
+                                <span class="nav-item-icon">📝</span><span class="nav-item-text">审计日志</span>
+                            </button>
+                            <button v-if="hasPermission('users')" class="nav-item" :class="{ active: currentTab === 'users' }" @click="currentTab = 'users'; loadUsers()" :title="sidebarCollapsed ? '用户管理' : ''">
+                                <span class="nav-item-icon">👥</span><span class="nav-item-text">用户管理</span>
+                            </button>
+                        </div>
+                    </div>
+                </nav>
+            </aside>
+
+            <!-- 主内容区 -->
+            <main class="main-content">
+                <!-- 顶部栏 -->
+                <div class="top-bar">
+                    <div class="breadcrumb-nav">
+                        <span class="breadcrumb-item" v-for="(item, index) in breadcrumbs" :key="index">
+                            <span v-if="index > 0" class="breadcrumb-separator">/</span>
+                            <span v-if="index === breadcrumbs.length - 1" class="breadcrumb-current">{{ item }}</span>
+                            <button v-else class="breadcrumb-link" @click="goToBreadcrumb(index)">{{ item }}</button>
+                        </span>
+                    </div>
+                    <div class="top-bar-right">
+                        <button class="theme-toggle-small" @click="toggleTheme" :title="isDarkMode ? '切换白天模式' : '切换夜间模式'">
+                            {{ isDarkMode ? '☀️' : '🌙' }}
+                        </button>
+                        <div class="user-menu-container">
+                            <button class="user-icon-btn" @click="toggleUserMenu" :title="currentUser.display_name">
+                                <div class="user-avatar-icon">{{ currentUser.display_name?.charAt(0) || 'U' }}</div>
+                            </button>
+                            <div class="user-menu-dropdown" v-show="showUserMenu" @click.stop>
+                                <div class="user-menu-item" @click="openProfileModal(); showUserMenu = false">
+                                    <span class="menu-icon">⚙️</span>
+                                    <span>个人设置</span>
+                                </div>
+                                <div class="user-menu-divider"></div>
+                                <div class="user-menu-item" @click="logout">
+                                    <span class="menu-icon">🚪</span>
+                                    <span>退出登录</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 网络管理 -->
+                <div v-show="currentTab === 'records'" class="page-content">
+                    <div class="page-header">
+                        <h1 class="page-title">网络管理</h1>
+                        <div class="header-actions">
+                            <div v-if="selectedRecords.length > 0" class="batch-actions">
+                                <div class="batch-status-dropdown">
+                                    <button class="btn btn-secondary" @click="showBatchStatusMenu = !showBatchStatusMenu">
+                                        ✏️ 批量修改状态 ({{ selectedRecords.length }})
+                                        <span class="dropdown-arrow">▼</span>
+                                    </button>
+                                    <div class="batch-status-menu" v-show="showBatchStatusMenu">
+                                        <div class="batch-status-item" @click="batchUpdateStatus('active')">
+                                            <span class="status-dot status-active"></span> 设为启用
+                                        </div>
+                                        <div class="batch-status-item" @click="batchUpdateStatus('pending')">
+                                            <span class="status-dot status-pending"></span> 设为待定
+                                        </div>
+                                        <div class="batch-status-item" @click="batchUpdateStatus('inactive')">
+                                            <span class="status-dot status-inactive"></span> 设为停用
+                                        </div>
+                                    </div>
+                                </div>
+                                <button class="btn btn-danger" @click="confirmBatchDelete">🗑 删除选中</button>
+                            </div>
+                            <button class="btn btn-secondary" @click="exportRecords">⬇ 导出CSV</button>
+                            <button class="btn btn-primary" @click="openRecordModal('add')">+ 添加记录</button>
+                            <button class="btn btn-secondary" @click="openBatchModal">⊞ 批量添加</button>
+                        </div>
+                    </div>
+
+                    <div class="search-bar">
+                        <div class="gradient-search-wrapper">
+                            <span class="search-icon">🔍</span>
+                            <input type="text" class="gradient-search-input" placeholder="搜索VID、IP..." v-model="searchQuery">
+                        </div>
+                        <div class="filter-group">
+                            <span style="color: var(--text-muted); font-size: 0.85em;">项目:</span>
+                            <select class="filter-select" v-model="projectFilter">
+                                <option value="">全部</option>
+                                <option v-for="proj in projectList" :key="proj" :value="proj">{{ proj }}</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <span style="color: var(--text-muted); font-size: 0.85em;">环境:</span>
+                            <select class="filter-select" v-model="envFilter">
+                                <option value="">全部</option>
+                                <option value="prod">PROD</option>
+                                <option value="uat">UAT</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <span style="color: var(--text-muted); font-size: 0.85em;">状态:</span>
+                            <select class="filter-select" v-model="statusFilter">
+                                <option value="">全部</option>
+                                <option value="active">启用</option>
+                                <option value="pending">待定</option>
+                                <option value="inactive">停用</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead><tr>
+                                <th style="width: 40px;"><input type="checkbox" @change="toggleSelectAll" :checked="isAllSelected" :indeterminate.prop="isPartialSelected"></th>
+                                <th class="sortable" @click="toggleSort('project')">项目 <span class="sort-icon">{{ getSortIcon('project') }}</span></th>
+                                <th class="sortable" @click="toggleSort('env')">环境 <span class="sort-icon">{{ getSortIcon('env') }}</span></th>
+                                <th class="sortable" @click="toggleSort('module')">模块名 <span class="sort-icon">{{ getSortIcon('module') }}</span></th>
+                                <th class="sortable" @click="toggleSort('vid')">VID <span class="sort-icon">{{ getSortIcon('vid') }}</span></th>
+                                <th class="sortable" @click="toggleSort('src_ip')">源 IP <span class="sort-icon">{{ getSortIcon('src_ip') }}</span></th>
+                                <th class="sortable" @click="toggleSort('dest_ip')">目标 IP <span class="sort-icon">{{ getSortIcon('dest_ip') }}</span></th>
+                                <th class="sortable" @click="toggleSort('port')">端口 <span class="sort-icon">{{ getSortIcon('port') }}</span></th>
+                                <th class="sortable" @click="toggleSort('connection_id')">连接ID <span class="sort-icon">{{ getSortIcon('connection_id') }}</span></th>
+                                <th class="sortable" @click="toggleSort('status')">状态 <span class="sort-icon">{{ getSortIcon('status') }}</span></th>
+                                <th class="sortable" @click="toggleSort('updated_by')">更新人 <span class="sort-icon">{{ getSortIcon('updated_by') }}</span></th>
+                                <th class="sortable" @click="toggleSort('created_at')">创建时间 <span class="sort-icon">{{ getSortIcon('created_at') }}</span></th>
+                                <th class="sortable" @click="toggleSort('updated_at')">更新时间 <span class="sort-icon">{{ getSortIcon('updated_at') }}</span></th>
+                                <th>操作</th>
+                            </tr></thead>
+                            <tbody>
+                                <tr v-if="filteredRecords.length === 0"><td colspan="14"><div class="empty-state"><div class="empty-state-icon">◎</div><div>暂无数据</div></div></td></tr>
+                                <tr v-for="record in paginatedRecords" :key="record.id" :class="{ 'row-selected': selectedRecords.includes(record.id) }">
+                                    <td><input type="checkbox" :value="record.id" v-model="selectedRecords"></td>
+                                    <td class="project-cell">{{ record.project }}</td>
+                                    <td><span class="env-badge" :class="'env-' + record.env">{{ record.env?.toUpperCase() }}</span></td>
+                                    <td class="module-cell">{{ record.module || '-' }}</td>
+                                    <td class="vid-cell">{{ record.vid }}</td>
+                                    <td class="ip-cell">{{ record.src_ip }}</td>
+                                    <td class="ip-cell">{{ record.dest_ip }}</td>
+                                    <td class="port-cell">{{ record.port }}</td>
+                                    <td class="connection-id-cell">{{ record.connection_id }}</td>
+                                    <td><span class="status-badge" :class="'status-' + record.status">{{ getStatusText(record.status) }}</span></td>
+                                    <td class="operator-cell">{{ record.updated_by || '-' }}</td>
+                                    <td class="timestamp">{{ record.created_at }}</td>
+                                    <td class="timestamp">{{ record.updated_at }}</td>
+                                    <td>
+                                        <div class="action-btns-inline">
+                                            <button class="action-btn-sm action-btn-history" @click="openRecordHistory(record)" title="历史记录">📜</button>
+                                            <button class="action-btn-sm action-btn-edit" @click="openRecordModal('edit', record)" title="编辑">✏️</button>
+                                            <button class="action-btn-sm action-btn-delete" @click="confirmDeleteRecord(record)" title="删除">🗑️</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <!-- 分页控件 -->
+                    <div class="pagination-container" v-if="filteredRecords.length > 0">
+                        <div class="pagination-info">
+                            <span>每页</span>
+                            <select class="page-size-select" v-model="pageSize" @change="currentPage = 1">
+                                <option :value="10">10</option>
+                                <option :value="20">20</option>
+                                <option :value="50">50</option>
+                                <option :value="80">80</option>
+                                <option :value="100">100</option>
+                            </select>
+                            <span>条，共 {{ filteredRecords.length }} 条</span>
+                        </div>
+                        <div class="pagination-controls">
+                            <button class="page-btn" @click="currentPage = 1" :disabled="currentPage === 1">首页</button>
+                            <button class="page-btn" @click="currentPage--" :disabled="currentPage === 1">上一页</button>
+                            <div class="page-numbers">
+                                <button v-for="page in displayedPages" :key="page" 
+                                    class="page-number" 
+                                    :class="{ active: page === currentPage, ellipsis: page === '...' }"
+                                    @click="page !== '...' && (currentPage = page)"
+                                    :disabled="page === '...'">
+                                    {{ page }}
+                                </button>
+                            </div>
+                            <button class="page-btn" @click="currentPage++" :disabled="currentPage === totalPages">下一页</button>
+                            <button class="page-btn" @click="currentPage = totalPages" :disabled="currentPage === totalPages">尾页</button>
+                            <div class="page-jump">
+                                <span>跳至</span>
+                                <input type="number" class="page-jump-input" v-model.number="jumpPage" @keyup.enter="goToPage" min="1" :max="totalPages">
+                                <span>页</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 域名管理 -->
+                <div v-show="currentTab === 'domains'" class="page-content">
+                    <div class="page-header">
+                        <h1 class="page-title">域名管理</h1>
+                        <div class="header-actions">
+                            <button class="btn btn-secondary" @click="exportDomains">⬇ 导出CSV</button>
+                            <button class="btn btn-secondary" @click="openBatchDomainModal()">📋 批量添加</button>
+                            <button class="btn btn-primary" @click="openDomainModal()">+ 添加域名</button>
+                        </div>
+                    </div>
+
+                    <!-- 搜索和筛选 -->
+                    <div class="filter-bar">
+                        <div class="gradient-search-wrapper">
+                            <span class="search-icon">🔍</span>
+                            <input type="text" v-model="domainSearchQuery" placeholder="搜索域名、项目、模块..." class="gradient-search-input">
+                        </div>
+                        <select v-model="domainProjectFilter" class="filter-select">
+                            <option value="">所有项目</option>
+                            <option v-for="p in domainProjectList" :key="p" :value="p">{{ p }}</option>
+                        </select>
+                        <select v-model="domainCdnFilter" class="filter-select">
+                            <option value="">所有CDN厂商</option>
+                            <option v-for="c in cdnProviderList" :key="c" :value="c">{{ c }}</option>
+                        </select>
+                        <select v-model="domainStatusFilter" class="filter-select">
+                            <option value="">所有状态</option>
+                            <option value="active">启用</option>
+                            <option value="inactive">停用</option>
+                        </select>
+                        <select v-model="domainExpireFilter" class="filter-select">
+                            <option value="">所有到期时间</option>
+                            <option value="7">7天内到期</option>
+                            <option value="15">15天内到期</option>
+                            <option value="30">30天内到期</option>
+                            <option value="60">60天内到期</option>
+                            <option value="90">90天内到期</option>
+                            <option value="90+">90天以上到期</option>
+                        </select>
+                    </div>
+
+                    <!-- 批量操作 -->
+                    <div class="batch-actions-bar" v-if="selectedDomains.length > 0">
+                        <span class="selected-count">已选 {{ selectedDomains.length }} 项</span>
+                        <div class="batch-buttons">
+                            <button class="btn btn-sm btn-success" @click="batchDomainAction('enable')">✓ 批量启用</button>
+                            <button class="btn btn-sm btn-warning" @click="batchDomainAction('disable')">✗ 批量停用</button>
+                            <button class="btn btn-sm btn-danger" @click="batchDomainAction('delete')">🗑 批量删除</button>
+                        </div>
+                    </div>
+
+                    <!-- 域名表格 -->
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 40px;">
+                                        <input type="checkbox" @click="toggleAllDomains" :checked="isAllDomainsSelected">
+                                    </th>
+                                    <th>项目</th>
+                                    <th>模块</th>
+                                    <th>域名</th>
+                                    <th>回源</th>
+                                    <th>CDN厂商</th>
+                                    <th>域名到期</th>
+                                    <th>证书到期</th>
+                                    <th>创建时间</th>
+                                    <th>更新时间</th>
+                                    <th>状态</th>
+                                    <th>备注</th>
+                                    <th style="width: 80px;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="d in pagedDomains" :key="d.id" :class="{ 'row-selected': selectedDomains.includes(d.id) }">
+                                    <td><input type="checkbox" :checked="selectedDomains.includes(d.id)" @click="toggleDomainSelection(d.id)"></td>
+                                    <td>{{ d.project }}</td>
+                                    <td>{{ d.module || '-' }}</td>
+                                    <td><a :href="'https://' + d.domain_name" target="_blank" class="domain-link">{{ d.domain_name }}</a></td>
+                                    <td>{{ d.origin || '-' }}</td>
+                                    <td>{{ d.cdn_provider || '-' }}</td>
+                                    <td>
+                                        <span v-if="d.expire_time" :class="getDomainExpireClass(d.expire_time)">
+                                            {{ formatDate(d.expire_time) }}
+                                            <small v-if="getCertDaysLeft(d.expire_time) !== null" class="days-left">
+                                                ({{ getCertDaysLeft(d.expire_time) > 0 ? getCertDaysLeft(d.expire_time) + '天' : '已过期' }})
+                                            </small>
+                                        </span>
+                                        <span v-else>-</span>
+                                    </td>
+                                    <td>
+                                        <span v-if="d.cert_expire_time" :class="getCertDaysLeft(d.cert_expire_time) <= 30 ? 'text-warning' : (getCertDaysLeft(d.cert_expire_time) <= 0 ? 'text-danger' : '')">
+                                            {{ formatDate(d.cert_expire_time) }}
+                                            <small v-if="getCertDaysLeft(d.cert_expire_time) !== null" class="days-left">
+                                                ({{ getCertDaysLeft(d.cert_expire_time) > 0 ? getCertDaysLeft(d.cert_expire_time) + '天' : '已过期' }})
+                                            </small>
+                                        </span>
+                                        <span v-else>-</span>
+                                    </td>
+                                    <td class="timestamp">{{ formatDate(d.created_at) }}</td>
+                                    <td class="timestamp">{{ formatDate(d.updated_at) }}</td>
+                                    <td><span class="status-badge" :class="d.status === 'active' ? 'status-active' : 'status-inactive'">{{ d.status === 'active' ? '启用' : '停用' }}</span></td>
+                                    <td :title="d.remark">{{ d.remark ? (d.remark.length > 15 ? d.remark.substring(0, 15) + '...' : d.remark) : '-' }}</td>
+                                    <td>
+                                        <div class="action-btns-inline">
+                                            <button class="action-btn-sm action-btn-refresh" @click="refreshDomainExpire(d)" title="刷新到期时间">🔄</button>
+                                            <button class="action-btn-sm action-btn-edit" @click="openDomainModal(d)" title="编辑">✏️</button>
+                                            <button class="action-btn-sm action-btn-delete" @click="deleteDomain(d)" title="删除">🗑️</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr v-if="filteredDomains.length === 0">
+                                    <td colspan="12" class="no-data">暂无域名数据</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- 分页 -->
+                    <div class="pagination" v-if="filteredDomains.length > 0">
+                        <span class="pagination-info">共 {{ filteredDomains.length }} 条，第 {{ domainCurrentPage }}/{{ domainTotalPages }} 页</span>
+                        <div class="pagination-controls">
+                            <button class="btn btn-sm" @click="domainCurrentPage = 1" :disabled="domainCurrentPage === 1">首页</button>
+                            <button class="btn btn-sm" @click="domainCurrentPage--" :disabled="domainCurrentPage === 1">上一页</button>
+                            <button v-for="p in domainDisplayedPages" :key="p" class="btn btn-sm" :class="{ 'btn-primary': p === domainCurrentPage }" @click="domainCurrentPage = p">{{ p }}</button>
+                            <button class="btn btn-sm" @click="domainCurrentPage++" :disabled="domainCurrentPage >= domainTotalPages">下一页</button>
+                            <button class="btn btn-sm" @click="domainCurrentPage = domainTotalPages" :disabled="domainCurrentPage >= domainTotalPages">末页</button>
+                            <input type="number" v-model.number="domainJumpPage" @keyup.enter="domainGoToPage" min="1" :max="domainTotalPages" class="page-input">
+                            <button class="btn btn-sm" @click="domainGoToPage">跳转</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CMDB -->
+                <div v-show="currentTab === 'cmdb'" class="page-content">
+                    <div class="page-header"><h1 class="page-title">CMDB</h1></div>
+                    <div class="coming-soon">
+                        <div class="coming-soon-icon">🖥️</div>
+                        <h2>功能开发中</h2>
+                        <p>配置管理数据库功能即将上线</p>
+                        <ul class="feature-list">
+                            <li>✓ 服务器资产管理</li>
+                            <li>✓ 应用服务管理</li>
+                            <li>✓ 资产关联关系</li>
+                            <li>✓ 自动发现与同步</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- 一键巡检 -->
+                <div v-show="currentTab === 'inspection'" class="page-content">
+                    <div class="page-header">
+                        <h1 class="page-title">一键巡检</h1>
+                        <div class="header-actions">
+                            <button class="btn btn-secondary" :class="{ 'btn-active': inspectionSubTab === 'templates' }" @click="inspectionSubTab = 'templates'">📋 巡检指标</button>
+                            <button class="btn btn-secondary" :class="{ 'btn-active': inspectionSubTab === 'reports' }" @click="inspectionSubTab = 'reports'">📊 巡检报告</button>
+                            <button class="btn btn-primary" @click="openInspectionModal">▶ 执行巡检</button>
+                        </div>
+                    </div>
+
+                    <!-- 巡检指标 -->
+                    <div v-if="inspectionSubTab === 'templates'">
+                        <div class="sub-header">
+                            <h2>可用巡检指标</h2>
+                            <div class="header-actions-group">
+                                <button class="btn btn-primary btn-sm" @click="openMetricModal()">+ 添加指标</button>
+                            </div>
+                        </div>
+                        <!-- 批量操作栏 -->
+                        <div class="batch-actions-bar" v-if="selectedMetricIds.length > 0">
+                            <span class="selected-count">已选 {{ selectedMetricIds.length }} 项</span>
+                            <div class="batch-buttons">
+                                <button class="btn btn-sm btn-success" @click="batchEnableMetrics">✓ 批量启用</button>
+                                <button class="btn btn-sm btn-warning" @click="batchDisableMetrics">✗ 批量停用</button>
+                                <button class="btn btn-sm btn-danger" @click="batchDeleteMetrics">🗑 批量删除</button>
+                            </div>
+                        </div>
+                        <!-- 分组筛选 -->
+                        <div class="group-filter-tabs">
+                            <button class="filter-tab" :class="{ active: metricsGroupFilter === 'all' }" @click="metricsGroupFilter = 'all'; metricsCurrentPage = 1">
+                                全部 <span class="tab-count">{{ metricGroupStats.all }}</span>
+                            </button>
+                            <button class="filter-tab" :class="{ active: metricsGroupFilter === 'k8s' }" @click="metricsGroupFilter = 'k8s'; metricsCurrentPage = 1">
+                                ☸️ K8s 集群 <span class="tab-count">{{ metricGroupStats.k8s }}</span>
+                            </button>
+                            <button class="filter-tab" :class="{ active: metricsGroupFilter === 'container' }" @click="metricsGroupFilter = 'container'; metricsCurrentPage = 1">
+                                📦 容器 <span class="tab-count">{{ metricGroupStats.container }}</span>
+                            </button>
+                            <button class="filter-tab" :class="{ active: metricsGroupFilter === 'node' }" @click="metricsGroupFilter = 'node'; metricsCurrentPage = 1">
+                                🖥️ 节点 <span class="tab-count">{{ metricGroupStats.node }}</span>
+                            </button>
+                            <button class="filter-tab" :class="{ active: metricsGroupFilter === 'custom' }" @click="metricsGroupFilter = 'custom'; metricsCurrentPage = 1">
+                                🔧 自定义 <span class="tab-count">{{ metricGroupStats.custom }}</span>
+                            </button>
+                        </div>
+                        <div class="metrics-table-container">
+                            <table class="data-table metrics-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 40px;">
+                                            <input type="checkbox" @click="toggleSelectAllMetrics" :checked="filteredMetrics.length > 0 && filteredMetrics.every(m => selectedMetricIds.includes(m.id))">
+                                        </th>
+                                        <th style="width: 200px;">指标名称</th>
+                                        <th style="width: 100px;">分组</th>
+                                        <th>PromQL 查询</th>
+                                        <th style="width: 80px;">单位</th>
+                                        <th style="width: 80px;">状态</th>
+                                        <th style="width: 120px;">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="m in pagedMetrics" :key="m.key" :class="{ 'row-disabled': !m.enabled, 'row-selected': selectedMetricIds.includes(m.id) }">
+                                        <td><input type="checkbox" :checked="selectedMetricIds.includes(m.id)" @click="toggleMetricSelection(m.id)"></td>
+                                        <td>
+                                            <div class="metric-name-cell">
+                                                <span class="metric-label">{{ m.label }}</span>
+                                                <span class="metric-key">{{ m.key }}</span>
+                                            </div>
+                                        </td>
+                                        <td><span class="group-tag" :class="'group-' + m.group">{{ {k8s: '☸️ K8s', container: '📦 容器', node: '🖥️ 节点', custom: '🔧 自定义'}[m.group] || m.group }}</span></td>
+                                        <td><code class="promql-code">{{ m.promql }}</code></td>
+                                        <td>{{ m.unit || '-' }}</td>
+                                        <td><span class="status-badge" :class="m.enabled ? 'status-active' : 'status-inactive'">{{ m.enabled ? '启用' : '停用' }}</span></td>
+                                        <td>
+                                            <div class="action-btns-inline">
+                                                <button class="action-btn-sm action-btn-edit" @click="openMetricModal(m)" title="编辑">✏️</button>
+                                                <button class="action-btn-sm action-btn-delete" @click="deleteMetric(m)" title="删除">🗑️</button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <div v-if="filteredMetrics.length === 0" class="empty-table">
+                                <p>暂无指标数据</p>
+                            </div>
+                        </div>
+                        <!-- 分页 -->
+                        <div class="pagination" v-if="filteredMetrics.length > 0">
+                            <span class="pagination-info">共 {{ filteredMetrics.length }} 条，第 {{ metricsCurrentPage }}/{{ metricsTotalPages }} 页</span>
+                            <div class="pagination-controls">
+                                <button class="btn btn-sm" @click="metricsCurrentPage = 1" :disabled="metricsCurrentPage === 1">首页</button>
+                                <button class="btn btn-sm" @click="metricsCurrentPage--" :disabled="metricsCurrentPage === 1">上一页</button>
+                                <button v-for="p in metricsDisplayedPages" :key="p" class="btn btn-sm" :class="{ 'btn-primary': p === metricsCurrentPage }" @click="metricsCurrentPage = p">{{ p }}</button>
+                                <button class="btn btn-sm" @click="metricsCurrentPage++" :disabled="metricsCurrentPage >= metricsTotalPages">下一页</button>
+                                <button class="btn btn-sm" @click="metricsCurrentPage = metricsTotalPages" :disabled="metricsCurrentPage >= metricsTotalPages">末页</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 巡检报告 -->
+                    <div v-if="inspectionSubTab === 'reports'">
+                        <div class="sub-header"><h2>最近巡检结果</h2></div>
+                        <div v-if="!inspectionResults || inspectionResults.length === 0" class="coming-soon" style="padding: 40px;">
+                            <div class="coming-soon-icon">📊</div>
+                            <h2>暂无巡检报告</h2>
+                            <p>点击"执行巡检"开始生成报告</p>
+                        </div>
+                        <div v-else class="inspection-results">
+                            <div v-for="(result, idx) in pagedInspectionResults" :key="idx" class="result-card">
+                                <div class="result-header">
+                                    <span class="result-ds">{{ result.datasource_name }}</span>
+                                    <span class="result-time">{{ result.time }}</span>
+                                </div>
+                                <div class="result-metrics">
+                                    <div v-for="(metric, mIdx) in result.metrics" :key="mIdx" class="result-metric">
+                                        <span class="metric-label">{{ getMetricLabel(metric.name) }}</span>
+                                        <span class="metric-value" :class="{ 'metric-warning': metric.value > 80, 'metric-danger': metric.value > 90 }">
+                                            {{ typeof metric.value === 'number' ? metric.value.toFixed(2) : metric.value }}{{ metric.unit || '' }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- 巡检报告分页 -->
+                        <div class="pagination" v-if="inspectionResults && inspectionResults.length > 0">
+                            <span class="pagination-info">共 {{ inspectionResults.length }} 条记录，第 {{ inspectionCurrentPage }}/{{ inspectionTotalPages }} 页</span>
+                            <div class="pagination-controls">
+                                <button class="btn btn-sm" @click="inspectionCurrentPage = 1" :disabled="inspectionCurrentPage === 1">首页</button>
+                                <button class="btn btn-sm" @click="inspectionCurrentPage--" :disabled="inspectionCurrentPage === 1">上一页</button>
+                                <button v-for="p in inspectionDisplayedPages" :key="p" class="btn btn-sm" :class="{ 'btn-primary': p === inspectionCurrentPage }" @click="inspectionCurrentPage = p">{{ p }}</button>
+                                <button class="btn btn-sm" @click="inspectionCurrentPage++" :disabled="inspectionCurrentPage >= inspectionTotalPages">下一页</button>
+                                <button class="btn btn-sm" @click="inspectionCurrentPage = inspectionTotalPages" :disabled="inspectionCurrentPage >= inspectionTotalPages">末页</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 数据源配置 -->
+                <div v-show="currentTab === 'datasources'" class="page-content">
+                    <div class="page-header">
+                        <h1 class="page-title">数据源配置</h1>
+                        <div class="header-actions">
+                            <button class="btn btn-primary" @click="openDataSourceModal('add')">+ 添加数据源</button>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead><tr><th>名称</th><th>类型</th><th>URL</th><th>描述</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+                            <tbody>
+                                <tr v-if="!datasources || datasources.length === 0"><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📡</div><div>暂无数据源</div></div></td></tr>
+                                <tr v-for="ds in pagedDatasources" :key="ds.id">
+                                    <td class="project-cell">{{ ds.name }}</td>
+                                    <td><span class="type-badge" :class="'type-' + ds.type">{{ getTypeLabel(ds.type) }}</span></td>
+                                    <td class="ip-cell" style="max-width: 250px; overflow: hidden; text-overflow: ellipsis;">{{ ds.url }}</td>
+                                    <td style="color: var(--text-muted);">{{ ds.description || '-' }}</td>
+                                    <td><span class="status-badge" :class="'status-' + ds.status">{{ ds.status === 'active' ? '启用' : '停用' }}</span></td>
+                                    <td class="timestamp">{{ ds.created_at }}</td>
+                                    <td>
+                                        <div class="action-btns-inline">
+                                            <button class="action-btn-sm action-btn-test" @click="testDataSource(ds)" title="测试连接">🔗</button>
+                                            <button class="action-btn-sm action-btn-edit" @click="openDataSourceModal('edit', ds)" title="编辑">✏️</button>
+                                            <button class="action-btn-sm action-btn-delete" @click="confirmDeleteDataSource(ds)" title="删除">🗑️</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <!-- 数据源分页 -->
+                    <div class="pagination-container" v-if="(datasources || []).length > 0">
+                        <div class="pagination-info">
+                            <span>每页</span>
+                            <select class="page-size-select" v-model="dsPageSize" @change="dsCurrentPage = 1">
+                                <option :value="10">10</option>
+                                <option :value="20">20</option>
+                                <option :value="50">50</option>
+                                <option :value="100">100</option>
+                            </select>
+                            <span>条，共 {{ (datasources || []).length }} 条</span>
+                        </div>
+                        <div class="pagination-controls">
+                            <button class="page-btn" @click="dsCurrentPage = 1" :disabled="dsCurrentPage === 1">首页</button>
+                            <button class="page-btn" @click="dsCurrentPage--" :disabled="dsCurrentPage === 1">上一页</button>
+                            <div class="page-numbers">
+                                <button v-for="page in dsDisplayedPages" :key="'ds-'+page" 
+                                    class="page-number" 
+                                    :class="{ active: page === dsCurrentPage, ellipsis: page === '...' }"
+                                    @click="page !== '...' && (dsCurrentPage = page)"
+                                    :disabled="page === '...'">
+                                    {{ page }}
+                                </button>
+                            </div>
+                            <button class="page-btn" @click="dsCurrentPage++" :disabled="dsCurrentPage === dsTotalPages">下一页</button>
+                            <button class="page-btn" @click="dsCurrentPage = dsTotalPages" :disabled="dsCurrentPage === dsTotalPages">尾页</button>
+                            <div class="page-jump">
+                                <span>跳至</span>
+                                <input type="number" class="page-jump-input" v-model.number="dsJumpPage" @keyup.enter="dsGoToPage" min="1" :max="dsTotalPages">
+                                <span>页</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 审计日志 -->
+                <div v-show="currentTab === 'audit'" class="page-content">
+                    <div class="page-header">
+                        <h1 class="page-title">审计日志</h1>
+                        <div class="header-actions">
+                            <button class="btn btn-secondary" @click="exportAuditLogs">⬇ 导出CSV</button>
+                            <button class="btn btn-secondary" @click="loadAuditLogs">刷新</button>
+                        </div>
+                    </div>
+                    <div class="search-bar">
+                        <div class="gradient-search-wrapper">
+                            <span class="search-icon">🔍</span>
+                            <input type="text" class="gradient-search-input" placeholder="搜索操作人或内容..." v-model="auditSearchQuery">
+                        </div>
+                        <div class="filter-group">
+                            <span style="color: var(--text-muted); font-size: 0.85em;">操作:</span>
+                            <button class="filter-btn" :class="{ active: actionFilter === '' }" @click="actionFilter = ''">全部</button>
+                            <button class="filter-btn" :class="{ active: actionFilter === 'create' }" @click="actionFilter = 'create'">创建</button>
+                            <button class="filter-btn" :class="{ active: actionFilter === 'update' }" @click="actionFilter = 'update'">修改</button>
+                            <button class="filter-btn" :class="{ active: actionFilter === 'delete' }" @click="actionFilter = 'delete'">删除</button>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr><th>时间</th><th>操作</th><th>操作人</th><th>变更摘要</th><th>IP</th><th>详情</th></tr></thead>
+                            <tbody>
+                                <tr v-if="filteredAuditLogs.length === 0"><td colspan="6"><div class="empty-state"><div class="empty-state-icon">◎</div><div>暂无日志</div></div></td></tr>
+                                <tr v-for="log in pagedAuditLogs" :key="log.id">
+                                    <td class="timestamp">{{ log.created_at }}</td>
+                                    <td><span class="audit-action" :class="'action-' + log.action">{{ getActionText(log.action) }}</span></td>
+                                    <td class="operator-cell">{{ log.operator }}</td>
+                                    <td class="audit-changes">{{ log.changes }}</td>
+                                    <td style="font-size: 0.8em; color: var(--text-muted);">{{ log.ip }}</td>
+                                    <td><button class="btn btn-secondary btn-sm" @click="showAuditDetail(log)">查看</button></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <!-- 审计日志分页 -->
+                    <div class="pagination-container" v-if="filteredAuditLogs.length > 0">
+                        <div class="pagination-info">
+                            <span>每页</span>
+                            <select class="page-size-select" v-model="auditPageSize" @change="auditCurrentPage = 1">
+                                <option :value="10">10</option>
+                                <option :value="20">20</option>
+                                <option :value="50">50</option>
+                                <option :value="100">100</option>
+                            </select>
+                            <span>条，共 {{ filteredAuditLogs.length }} 条</span>
+                        </div>
+                        <div class="pagination-controls">
+                            <button class="page-btn" @click="auditCurrentPage = 1" :disabled="auditCurrentPage === 1">首页</button>
+                            <button class="page-btn" @click="auditCurrentPage--" :disabled="auditCurrentPage === 1">上一页</button>
+                            <div class="page-numbers">
+                                <button v-for="page in auditDisplayedPages" :key="'audit-'+page" 
+                                    class="page-number" 
+                                    :class="{ active: page === auditCurrentPage, ellipsis: page === '...' }"
+                                    @click="page !== '...' && (auditCurrentPage = page)"
+                                    :disabled="page === '...'">
+                                    {{ page }}
+                                </button>
+                            </div>
+                            <button class="page-btn" @click="auditCurrentPage++" :disabled="auditCurrentPage === auditTotalPages">下一页</button>
+                            <button class="page-btn" @click="auditCurrentPage = auditTotalPages" :disabled="auditCurrentPage === auditTotalPages">尾页</button>
+                            <div class="page-jump">
+                                <span>跳至</span>
+                                <input type="number" class="page-jump-input" v-model.number="auditJumpPage" @keyup.enter="auditGoToPage" min="1" :max="auditTotalPages">
+                                <span>页</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 用户管理 -->
+                <div v-show="currentTab === 'users'" class="page-content">
+                    <div class="page-header">
+                        <h1 class="page-title">用户管理</h1>
+                        <div class="header-actions">
+                            <button class="btn btn-primary" @click="openUserModal('add')">+ 添加用户</button>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead><tr><th>用户名</th><th>显示名称</th><th>角色</th><th>权限</th><th>MFA</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+                            <tbody>
+                                <tr v-for="user in pagedUsers" :key="user.id">
+                                    <td>{{ user.username }}</td>
+                                    <td class="operator-cell">{{ user.display_name }}</td>
+                                    <td><span class="role-badge" :class="'role-' + user.role">{{ user.role === 'admin' ? '管理员' : '用户' }}</span></td>
+                                    <td><span class="perm-tags">{{ user.role === 'admin' ? '全部权限' : formatPermissions(user.permissions) }}</span></td>
+                                    <td>
+                                        <span v-if="!user.mfa_enabled" class="mfa-badge mfa-off">未启用</span>
+                                        <span v-else-if="user.mfa_bound" class="mfa-badge mfa-bound">已绑定</span>
+                                        <span v-else class="mfa-badge mfa-pending">待绑定</span>
+                                    </td>
+                                    <td><span class="status-badge" :class="'status-' + user.status">{{ user.status === 'active' ? '启用' : '停用' }}</span></td>
+                                    <td class="timestamp">{{ user.created_at }}</td>
+                                    <td>
+                                        <div class="action-btns-inline">
+                                            <button class="action-btn-sm action-btn-edit" @click="openUserModal('edit', user)" title="编辑">✏️</button>
+                                            <button v-if="user.role !== 'admin'" class="action-btn-sm action-btn-delete" @click="confirmDeleteUser(user)" title="删除">🗑️</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <!-- 用户管理分页 -->
+                    <div class="pagination-container" v-if="(users || []).length > 0">
+                        <div class="pagination-info">
+                            <span>每页</span>
+                            <select class="page-size-select" v-model="userPageSize" @change="userCurrentPage = 1">
+                                <option :value="10">10</option>
+                                <option :value="20">20</option>
+                                <option :value="50">50</option>
+                                <option :value="100">100</option>
+                            </select>
+                            <span>条，共 {{ (users || []).length }} 条</span>
+                        </div>
+                        <div class="pagination-controls">
+                            <button class="page-btn" @click="userCurrentPage = 1" :disabled="userCurrentPage === 1">首页</button>
+                            <button class="page-btn" @click="userCurrentPage--" :disabled="userCurrentPage === 1">上一页</button>
+                            <div class="page-numbers">
+                                <button v-for="page in userDisplayedPages" :key="'user-'+page" 
+                                    class="page-number" 
+                                    :class="{ active: page === userCurrentPage, ellipsis: page === '...' }"
+                                    @click="page !== '...' && (userCurrentPage = page)"
+                                    :disabled="page === '...'">
+                                    {{ page }}
+                                </button>
+                            </div>
+                            <button class="page-btn" @click="userCurrentPage++" :disabled="userCurrentPage === userTotalPages">下一页</button>
+                            <button class="page-btn" @click="userCurrentPage = userTotalPages" :disabled="userCurrentPage === userTotalPages">尾页</button>
+                            <div class="page-jump">
+                                <span>跳至</span>
+                                <input type="number" class="page-jump-input" v-model.number="userJumpPage" @keyup.enter="userGoToPage" min="1" :max="userTotalPages">
+                                <span>页</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <!-- 记录编辑弹窗 -->
+        <div class="modal-overlay" :class="{ show: showRecordModal }">
+            <div class="modal">
+                <div class="modal-header"><h2>{{ recordModalMode === 'add' ? '添加记录' : '编辑记录' }}</h2><button class="modal-close" @click="showRecordModal = false">&times;</button></div>
+                <form @submit.prevent="saveRecord">
+                    <div class="modal-body">
+                        <div class="form-group"><label>连接ID <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.connection_id" placeholder="唯一标识，如：CONN-001" required></div>
+                        <div class="form-row">
+                            <div class="form-group"><label>项目名称 <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.project" required></div>
+                            <div class="form-group"><label>环境 <span class="required">*</span></label><select class="form-select" v-model="recordForm.env"><option value="uat">UAT</option><option value="prod">PROD</option></select></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>模块名 <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.module" placeholder="请输入模块名" required></div>
+                            <div class="form-group"><label>VID <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.vid" required></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>源 IP <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.src_ip" required></div>
+                            <div class="form-group"><label>目标 IP <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.dest_ip" required></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>端口 <span class="required">*</span></label><input type="text" class="form-input" v-model="recordForm.port" required></div>
+                            <div class="form-group"><label>状态</label><select class="form-select" v-model="recordForm.status"><option value="active">启用</option><option value="inactive">停用</option><option value="pending">待定</option></select></div>
+                        </div>
+                    </div>
+                    <div class="modal-footer"><button type="button" class="btn btn-secondary" @click="showRecordModal = false">取消</button><button type="submit" class="btn btn-success">保存</button></div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 历史记录弹窗 -->
+        <div class="modal-overlay history-modal" :class="{ show: showHistoryModal }">
+            <div class="modal modal-lg">
+                <div class="modal-header">
+                    <h2>📜 修改历史 - {{ historyRecord?.connection_id }}</h2>
+                    <button class="modal-close" @click="showHistoryModal = false">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div v-if="recordHistories.length === 0" class="empty-state">
+                        <div class="empty-state-icon">📭</div>
+                        <div>暂无修改历史</div>
+                    </div>
+                    <div v-else class="history-timeline">
+                        <div v-for="(h, idx) in recordHistories" :key="h.id" class="history-item" :class="{ 'history-current': idx === 0 }">
+                            <div class="history-header">
+                                <span class="history-version">v{{ recordHistories.length - idx }}</span>
+                                <span class="history-time">{{ h.created_at }}</span>
+                                <span class="history-user">{{ h.created_by }}</span>
+                                <span class="history-action" :class="'action-' + h.action">{{ getHistoryActionText(h.action) }}</span>
+                            </div>
+                            <div class="history-changes">
+                                <div v-if="h.changes" class="changes-detail">
+                                    <div v-for="(change, field) in parseChanges(h.changes)" :key="field" class="change-item">
+                                        <span class="change-field">{{ getFieldLabel(field) }}:</span>
+                                        <span class="change-old">{{ change.old || '-' }}</span>
+                                        <span class="change-arrow">→</span>
+                                        <span class="change-new">{{ change.new || '-' }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="history-actions" v-if="idx > 0">
+                                <button class="btn btn-sm btn-secondary" @click="previewHistoryVersion(h, idx)">👁 预览</button>
+                                <button class="btn btn-sm btn-warning" @click="rollbackToVersion(h)">⏪ 回滚到此版本</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @click="showHistoryModal = false">关闭</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 历史版本预览弹窗 -->
+        <div class="modal-overlay preview-modal" :class="{ show: showPreviewModal }">
+            <div class="modal modal-lg">
+                <div class="modal-header">
+                    <h2>👁 版本预览 - v{{ previewVersion }}</h2>
+                    <button class="modal-close" @click="showPreviewModal = false">&times;</button>
+                </div>
+                <div class="modal-body" v-if="previewData">
+                    <div class="preview-info">
+                        <div class="preview-meta">
+                            <span class="preview-badge">📅 {{ previewHistory?.created_at }}</span>
+                            <span class="preview-badge">👤 {{ previewHistory?.created_by }}</span>
+                            <span class="preview-badge action-badge" :class="'action-' + previewHistory?.action">{{ getHistoryActionText(previewHistory?.action) }}</span>
+                        </div>
+                    </div>
+                    <div class="preview-card">
+                        <div class="preview-row">
+                            <span class="preview-label">连接ID</span>
+                            <span class="preview-value code">{{ previewData.connection_id }}</span>
+                        </div>
+                        <div class="preview-row">
+                            <span class="preview-label">项目</span>
+                            <span class="preview-value">{{ previewData.project }}</span>
+                        </div>
+                        <div class="preview-row">
+                            <span class="preview-label">环境</span>
+                            <span class="preview-value"><span class="env-badge" :class="'env-' + previewData.env">{{ previewData.env?.toUpperCase() }}</span></span>
+                        </div>
+                        <div class="preview-row">
+                            <span class="preview-label">VID</span>
+                            <span class="preview-value code">{{ previewData.vid }}</span>
+                        </div>
+                        <div class="preview-row">
+                            <span class="preview-label">源 IP</span>
+                            <span class="preview-value code">{{ previewData.src_ip }}</span>
+                        </div>
+                        <div class="preview-row">
+                            <span class="preview-label">目标 IP</span>
+                            <span class="preview-value code">{{ previewData.dest_ip }}</span>
+                        </div>
+                        <div class="preview-row">
+                            <span class="preview-label">端口</span>
+                            <span class="preview-value code">{{ previewData.port }}</span>
+                        </div>
+                        <div class="preview-row">
+                            <span class="preview-label">状态</span>
+                            <span class="preview-value"><span class="status-badge" :class="'status-' + previewData.status">{{ previewData.status === 'active' ? '启用' : '停用' }}</span></span>
+                        </div>
+                        <div class="preview-row" v-if="previewData.created_at">
+                            <span class="preview-label">创建时间</span>
+                            <span class="preview-value">{{ previewData.created_at }}</span>
+                        </div>
+                        <div class="preview-row" v-if="previewData.updated_at">
+                            <span class="preview-label">更新时间</span>
+                            <span class="preview-value">{{ previewData.updated_at }}</span>
+                        </div>
+                    </div>
+                    <div class="preview-actions" v-if="previewHistory && previewVersion < recordHistories.length">
+                        <button class="btn btn-warning" @click="rollbackFromPreview">⏪ 回滚到此版本</button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @click="showPreviewModal = false">关闭</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 批量添加弹窗 -->
+        <div class="modal-overlay batch-modal" :class="{ show: showBatchModal }">
+            <div class="modal">
+                <div class="modal-header"><h2>批量添加记录</h2><button class="modal-close" @click="showBatchModal = false">&times;</button></div>
+                <div class="modal-body">
+                    <div class="batch-help">
+                        <h4>📋 格式说明</h4>
+                        <p>每行一条记录，字段用 <code>Tab</code>、<code>逗号</code>、<code>|</code> 或 <code>空格</code> 分隔</p>
+                        <p>字段顺序: <code>项目</code> <code>模块名</code> <code>VID</code> <code>源IP</code> <code>目标IP</code> <code>端口</code> <code>连接ID</code></p>
+                        <pre class="batch-example">订单系统,订单模块,VLAN100,192.168.1.10,10.0.0.5,8080,CONN-001
+支付系统,支付模块,VLAN200,192.168.1.20,10.0.0.6,443,CONN-002
+用户中心,用户模块,VLAN100,192.168.1.30,10.0.0.7,3306,CONN-003</pre>
+                    </div>
+                    <div class="batch-row-select">
+                        <div><label style="color: var(--text-secondary); font-size: 0.85em; margin-right: 8px;">默认环境:</label><select v-model="batchEnv" @change="parseBatchText"><option value="uat">UAT</option><option value="prod">PROD</option></select></div>
+                        <div><label style="color: var(--text-secondary); font-size: 0.85em; margin-right: 8px;">默认状态:</label><select v-model="batchStatus" @change="parseBatchText"><option value="active">启用</option><option value="pending">待定</option><option value="inactive">停用</option></select></div>
+                    </div>
+                    <div class="form-group"><label>粘贴数据</label><textarea class="batch-textarea" v-model="batchText" @input="parseBatchText" placeholder="粘贴数据..."></textarea></div>
+                    <div v-if="batchError" class="batch-error">⚠️ {{ batchError }}</div>
+                    <div v-if="batchRecords && batchRecords.length > 0" class="batch-preview">
+                        <h4>预览 ({{ batchRecords.length }} 条)</h4>
+                        <div class="table-container" style="max-height: 200px; overflow: auto;">
+                            <table><thead><tr><th>#</th><th>项目</th><th>模块名</th><th>VID</th><th>源IP</th><th>目标IP</th><th>端口</th><th>连接ID</th></tr></thead>
+                            <tbody><tr v-for="(r, i) in batchRecords" :key="i"><td>{{ i + 1 }}</td><td class="project-cell">{{ r.project }}</td><td class="module-cell">{{ r.module }}</td><td class="vid-cell">{{ r.vid }}</td><td class="ip-cell">{{ r.src_ip }}</td><td class="ip-cell">{{ r.dest_ip }}</td><td class="port-cell">{{ r.port }}</td><td class="connection-id-cell">{{ r.connection_id }}</td></tr></tbody></table>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer"><button class="btn btn-secondary" @click="showBatchModal = false">取消</button><button class="btn btn-success" @click="submitBatch" :disabled="batchRecords.length === 0 || !!batchError">添加 {{ batchRecords.length }} 条记录</button></div>
+            </div>
+        </div>
+
+        <!-- 用户编辑弹窗 -->
+        <div class="modal-overlay" :class="{ show: showUserModal }">
+            <div class="modal">
+                <div class="modal-header"><h2>{{ userModalMode === 'add' ? '添加用户' : '编辑用户' }}</h2><button class="modal-close" @click="showUserModal = false">&times;</button></div>
+                <form @submit.prevent="saveUser">
+                    <div class="modal-body">
+                        <div class="form-group"><label>用户名 <span class="required">*</span></label><input type="text" class="form-input" v-model="userForm.username" :disabled="userModalMode === 'edit'" required></div>
+                        <div class="form-group"><label>{{ userModalMode === 'add' ? '密码' : '新密码 (留空不修改)' }} <span v-if="userModalMode === 'add'" class="required">*</span></label><input type="password" class="form-input" v-model="userForm.password" :required="userModalMode === 'add'"></div>
+                        <div class="form-group"><label>显示名称 <span class="required">*</span></label><input type="text" class="form-input" v-model="userForm.display_name" required></div>
+                        <div class="form-row">
+                            <div class="form-group"><label>角色</label><select class="form-select" v-model="userForm.role"><option value="user">用户</option><option value="admin">管理员</option></select></div>
+                            <div class="form-group"><label>状态</label><select class="form-select" v-model="userForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
+                        </div>
+                        <div class="form-group" v-if="userForm.role !== 'admin'">
+                            <label>功能权限</label>
+                            <div class="permission-grid">
+                                <div v-for="group in permissionGroups" :key="group.name" class="permission-group">
+                                    <div class="permission-group-name">{{ group.name }}</div>
+                                    <label v-for="p in group.items" :key="p.key" class="permission-item">
+                                        <input type="checkbox" :value="p.key" v-model="userForm.permissions">
+                                        <span>{{ p.label }}</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="permission-hint">管理员拥有所有权限</div>
+                        </div>
+                        
+                        <!-- MFA 设置（管理员配置） -->
+                        <div class="form-group mfa-admin-setting">
+                            <label>🔐 多因素认证 (MFA)</label>
+                            <div class="mfa-toggle-row">
+                                <label class="switch">
+                                    <input type="checkbox" v-model="userForm.mfa_enabled">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="mfa-toggle-label">
+                                    {{ userForm.mfa_enabled ? (userForm.mfa_bound ? '已启用（已绑定）' : '已启用（待绑定）') : '未启用' }}
+                                </span>
+                            </div>
+                            <div class="mfa-admin-actions" v-if="userModalMode === 'edit' && userForm.mfa_bound">
+                                <button type="button" class="btn btn-warning btn-sm" @click="resetUserMFA(userForm.id)">
+                                    🔄 重置 MFA（让用户重新绑定）
+                                </button>
+                            </div>
+                            <div class="mfa-admin-hint" v-if="userForm.mfa_enabled && !userForm.mfa_bound">
+                                ⚠️ 启用后，用户首次登录需要绑定认证器应用
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer"><button type="button" class="btn btn-secondary" @click="showUserModal = false">取消</button><button type="submit" class="btn btn-success">保存</button></div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 数据源编辑弹窗 -->
+        <div class="modal-overlay" :class="{ show: showDataSourceModal }">
+            <div class="modal">
+                <div class="modal-header"><h2>{{ dataSourceModalMode === 'add' ? '添加数据源' : '编辑数据源' }}</h2><button class="modal-close" @click="showDataSourceModal = false">&times;</button></div>
+                <form @submit.prevent="saveDataSource">
+                    <div class="modal-body">
+                        <div class="form-row">
+                            <div class="form-group"><label>名称 <span class="required">*</span></label><input type="text" class="form-input" v-model="dataSourceForm.name" placeholder="如：生产环境Prometheus" required></div>
+                            <div class="form-group"><label>类型 <span class="required">*</span></label>
+                                <select class="form-select" v-model="dataSourceForm.type">
+                                    <option value="prometheus">Prometheus</option>
+                                    <option value="jira">Jira</option>
+                                    <option value="domain">域名检测</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group"><label>URL <span class="required">*</span></label><input type="text" class="form-input" v-model="dataSourceForm.url" placeholder="如：http://prometheus:9090" required></div>
+                        <div class="form-row" v-if="dataSourceForm.type !== 'domain'">
+                            <div class="form-group"><label>用户名</label><input type="text" class="form-input" v-model="dataSourceForm.username" placeholder="可选"></div>
+                            <div class="form-group"><label>{{ dataSourceModalMode === 'add' ? '密码' : '密码 (留空不修改)' }}</label><input type="password" class="form-input" v-model="dataSourceForm.password" placeholder="可选"></div>
+                        </div>
+                        <div class="form-group" v-if="dataSourceForm.type === 'jira' || dataSourceForm.type === 'prometheus'">
+                            <label>Token / API Key</label><input type="text" class="form-input" v-model="dataSourceForm.token" placeholder="Bearer Token 或 API Key">
+                        </div>
+                        <div class="form-group"><label>描述</label><textarea class="form-input" v-model="dataSourceForm.description" rows="2" placeholder="数据源描述"></textarea></div>
+                        <div class="form-group"><label>状态</label><select class="form-select" v-model="dataSourceForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" @click="testDataSource(dataSourceForm)">测试连接</button>
+                        <button type="button" class="btn btn-secondary" @click="showDataSourceModal = false">取消</button>
+                        <button type="submit" class="btn btn-success">保存</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 域名编辑弹窗 -->
+        <div class="modal-overlay" :class="{ show: showDomainModal }">
+            <div class="modal" style="max-width: 700px;">
+                <div class="modal-header">
+                    <h2>{{ domainForm.id ? '编辑域名' : '添加域名' }}</h2>
+                    <button class="modal-close" @click="showDomainModal = false">&times;</button>
+                </div>
+                <form @submit.prevent="saveDomain">
+                    <div class="modal-body">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>项目 <span class="required">*</span></label>
+                                <input type="text" class="form-input" v-model="domainForm.project" placeholder="项目名称" required>
+                            </div>
+                            <div class="form-group">
+                                <label>模块</label>
+                                <input type="text" class="form-input" v-model="domainForm.module" placeholder="模块名称">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group" style="flex: 2;">
+                                <label>域名 <span class="required">*</span></label>
+                                <div class="input-with-button">
+                                    <input type="text" class="form-input" v-model="domainForm.domain_name" placeholder="example.com" required>
+                                    <button type="button" class="btn btn-sm btn-secondary" @click="checkDomainCert" title="自动获取域名和证书到期时间">🔍 自动检测</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>回源地址</label>
+                                <input type="text" class="form-input" v-model="domainForm.origin" placeholder="回源IP或域名">
+                            </div>
+                            <div class="form-group">
+                                <label>CDN厂商</label>
+                                <select class="form-input" v-model="domainForm.cdn_provider">
+                                    <option value="">请选择</option>
+                                    <option value="阿里云CDN">阿里云CDN</option>
+                                    <option value="腾讯云CDN">腾讯云CDN</option>
+                                    <option value="华为云CDN">华为云CDN</option>
+                                    <option value="七牛云CDN">七牛云CDN</option>
+                                    <option value="网宿CDN">网宿CDN</option>
+                                    <option value="Cloudflare">Cloudflare</option>
+                                    <option value="其他">其他</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>域名到期时间</label>
+                                <input type="date" class="form-input" v-model="domainForm.expire_time">
+                            </div>
+                            <div class="form-group">
+                                <label>证书到期时间</label>
+                                <input type="date" class="form-input" v-model="domainForm.cert_expire_time">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>状态</label>
+                                <select class="form-input" v-model="domainForm.status">
+                                    <option value="active">启用</option>
+                                    <option value="inactive">停用</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>备注</label>
+                            <textarea class="form-input" v-model="domainForm.remark" placeholder="备注信息" rows="2"></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" @click="showDomainModal = false">取消</button>
+                        <button type="submit" class="btn btn-success">保存</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 批量添加域名弹窗 -->
+        <div class="modal-overlay" :class="{ show: showBatchDomainModal }">
+            <div class="modal" style="max-width: 800px;">
+                <div class="modal-header">
+                    <h2>📋 批量添加域名</h2>
+                    <button class="modal-close" @click="showBatchDomainModal = false">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>项目名称 <span class="required">*</span></label>
+                        <input type="text" class="form-input" v-model="batchDomainProject" placeholder="所有域名将归属此项目" @input="parseBatchDomains">
+                    </div>
+                    <div class="form-group">
+                        <label>域名列表 <span class="required">*</span></label>
+                        <div class="batch-hint">
+                            每行一个域名，支持以下格式：<br>
+                            • 仅域名：<code>example.com</code><br>
+                            • 完整格式：<code>域名,模块,回源,CDN厂商,域名到期,备注</code>（逗号或Tab分隔）
+                        </div>
+                        <textarea class="form-input batch-textarea" v-model="batchDomainText" @input="parseBatchDomains" 
+                            placeholder="example.com&#10;api.example.com,API模块,192.168.1.1,阿里云CDN,2025-12-31,生产环境&#10;www.example.com,Web模块" rows="8"></textarea>
+                    </div>
+                    <div v-if="batchDomainError" class="batch-error">{{ batchDomainError }}</div>
+                    <div v-if="batchDomainRecords && batchDomainRecords.length > 0" class="batch-preview">
+                        <h4>预览 ({{ batchDomainRecords.length }} 条)</h4>
+                        <div class="batch-preview-table">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>域名</th>
+                                        <th>模块</th>
+                                        <th>回源</th>
+                                        <th>CDN厂商</th>
+                                        <th>域名到期</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="(d, idx) in batchDomainRecords.slice(0, 10)" :key="idx">
+                                        <td>{{ d.domain_name }}</td>
+                                        <td>{{ d.module || '-' }}</td>
+                                        <td>{{ d.origin || '-' }}</td>
+                                        <td>{{ d.cdn_provider || '-' }}</td>
+                                        <td>{{ d.expire_time || '-' }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <div v-if="batchDomainRecords.length > 10" class="batch-more">
+                                ... 还有 {{ batchDomainRecords.length - 10 }} 条
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @click="showBatchDomainModal = false">取消</button>
+                    <button class="btn btn-success" @click="submitBatchDomains" :disabled="batchDomainRecords.length === 0 || !batchDomainProject">
+                        添加 {{ batchDomainRecords.length }} 个域名
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 删除确认弹窗 -->
+        <div class="modal-overlay" :class="{ show: showDeleteModal }">
+            <div class="modal" style="max-width: 400px;">
+                <div class="modal-header"><h2>确认删除</h2><button class="modal-close" @click="showDeleteModal = false">&times;</button></div>
+                <div class="modal-body"><p>{{ deleteMessage }}</p></div>
+                <div class="modal-footer"><button class="btn btn-secondary" @click="showDeleteModal = false">取消</button><button class="btn btn-danger" @click="executeDelete">确认删除</button></div>
+            </div>
+        </div>
+
+        <!-- 回滚确认弹窗 -->
+        <div class="modal-overlay" :class="{ show: showRollbackModal }">
+            <div class="modal confirm-modal" style="max-width: 420px;">
+                <div class="modal-header" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white;">
+                    <h2 style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 24px;">⚠️</span> 确认回滚
+                    </h2>
+                    <button class="modal-close" @click="showRollbackModal = false" style="color: white;">&times;</button>
+                </div>
+                <div class="modal-body" style="text-align: center; padding: 30px 20px;">
+                    <div style="font-size: 48px; margin-bottom: 15px;">🔄</div>
+                    <p style="font-size: 16px; color: #374151; margin-bottom: 10px;">确定要回滚到此版本吗？</p>
+                    <p style="font-size: 14px; color: #6b7280;">当前数据将被覆盖，此操作不可撤销</p>
+                    <div v-if="rollbackTarget" style="margin-top: 15px; padding: 10px; background: #fef3c7; border-radius: 8px; font-size: 13px; color: #92400e;">
+                        回滚目标: <strong>{{ rollbackTarget.action === 'create' ? '创建' : '修改' }}</strong> 
+                        - {{ formatDate(rollbackTarget.created_at) }}
+                    </div>
+                </div>
+                <div class="modal-footer" style="justify-content: center; gap: 15px; padding: 20px;">
+                    <button class="btn btn-secondary" @click="showRollbackModal = false" style="min-width: 100px;">取消</button>
+                    <button class="btn btn-warning" @click="executeRollback" style="min-width: 100px; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); border: none;">
+                        确认回滚
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 审计详情弹窗 -->
+        <div class="modal-overlay" :class="{ show: showAuditDetailModal }">
+            <div class="modal" style="max-width: 700px;">
+                <div class="modal-header"><h2>审计详情</h2><button class="modal-close" @click="showAuditDetailModal = false">&times;</button></div>
+                <div class="modal-body" v-if="auditDetail">
+                    <p><strong>时间:</strong> {{ auditDetail.created_at }}</p>
+                    <p><strong>操作人:</strong> {{ auditDetail.operator }}</p>
+                    <p><strong>操作:</strong> <span class="audit-action" :class="'action-' + auditDetail.action">{{ getActionText(auditDetail.action) }}</span></p>
+                    <p><strong>变更:</strong> {{ auditDetail.changes }}</p>
+                    <div v-if="auditDetail.old_data"><div class="diff-label">修改前:</div><pre class="json-preview">{{ formatJSON(auditDetail.old_data) }}</pre></div>
+                    <div v-if="auditDetail.new_data"><div class="diff-label">{{ auditDetail.action === 'create' ? '创建数据:' : '修改后:' }}</div><pre class="json-preview">{{ formatJSON(auditDetail.new_data) }}</pre></div>
+                </div>
+                <div class="modal-footer"><button class="btn btn-secondary" @click="showAuditDetailModal = false">关闭</button></div>
+            </div>
+        </div>
+
+        <!-- 用户信息编辑弹窗 -->
+        <div class="modal-overlay" :class="{ show: showProfileModal }">
+            <div class="modal" style="max-width: 500px;">
+                <div class="modal-header"><h2>个人信息</h2><button class="modal-close" @click="showProfileModal = false">&times;</button></div>
+                <form @submit.prevent="saveProfile">
+                    <div class="modal-body">
+                        <div class="form-group"><label>用户名</label><input type="text" class="form-input" v-model="profileForm.username" disabled style="background: var(--bg-tertiary);"></div>
+                        <div class="form-group"><label>显示名称 <span class="required">*</span></label><input type="text" class="form-input" v-model="profileForm.display_name" required></div>
+                        <div class="form-group"><label>新密码 (留空不修改)</label><input type="password" class="form-input" v-model="profileForm.password" placeholder="留空则不修改密码"></div>
+                        <div class="form-group"><label>角色</label><input type="text" class="form-input" :value="profileForm.role === 'admin' ? '管理员' : '普通用户'" disabled style="background: var(--bg-tertiary);"></div>
+                        
+                        <!-- MFA 设置 -->
+                        <div class="mfa-settings">
+                            <div class="mfa-header">
+                                <span class="mfa-title">🔐 多因素认证 (MFA)</span>
+                                <span class="mfa-status" :class="currentUser && currentUser.mfa_enabled ? 'mfa-enabled' : 'mfa-disabled'">
+                                    {{ currentUser && currentUser.mfa_enabled ? (currentUser.mfa_bound ? '已绑定' : '待绑定') : '未启用' }}
+                                </span>
+                            </div>
+                            
+                            <!-- 管理员：可以自行开启/关闭 -->
+                            <template v-if="currentUser && currentUser.role === 'admin'">
+                                <p class="mfa-desc">管理员可自行管理 MFA，其他用户由管理员在用户管理中配置。</p>
+                                <div class="mfa-actions">
+                                    <button type="button" v-if="!currentUser.mfa_enabled" class="btn btn-primary btn-sm" @click="showMFASetupModal = true; setupMFA()">
+                                        🔒 启用 MFA
+                                    </button>
+                                    <template v-else>
+                                        <button type="button" v-if="!currentUser.mfa_bound" class="btn btn-primary btn-sm" @click="showMFASetupModal = true; setupMFA()">
+                                            📱 绑定认证器
+                                        </button>
+                                        <button type="button" class="btn btn-danger btn-sm" @click="showMFADisableModal = true">
+                                            🔓 禁用 MFA
+                                        </button>
+                                    </template>
+                                </div>
+                            </template>
+                            
+                            <!-- 普通用户：只能绑定（如果管理员启用了） -->
+                            <template v-else-if="currentUser">
+                                <p class="mfa-desc" v-if="!currentUser.mfa_enabled">MFA 由管理员统一配置，如需开启请联系管理员。</p>
+                                <template v-else>
+                                    <p class="mfa-desc" v-if="!currentUser.mfa_bound">管理员已为您启用 MFA，请绑定认证器应用。</p>
+                                    <p class="mfa-desc" v-else>您已成功绑定 MFA，登录时需输入动态验证码。</p>
+                                    <div class="mfa-actions" v-if="!currentUser.mfa_bound">
+                                        <button type="button" class="btn btn-primary btn-sm" @click="showMFASetupModal = true; setupMFA()">
+                                            📱 绑定认证器
+                                        </button>
+                                    </div>
+                                </template>
+                            </template>
+                        </div>
+                    </div>
+                    <div class="modal-footer"><button type="button" class="btn btn-secondary" @click="showProfileModal = false">取消</button><button type="submit" class="btn btn-success">保存</button></div>
+                </form>
+            </div>
+        </div>
+
+        <!-- MFA 设置弹窗 -->
+        <div class="modal-overlay" :class="{ show: showMFASetupModal }">
+            <div class="modal" style="max-width: 450px;">
+                <div class="modal-header"><h2>🔐 启用 MFA</h2><button class="modal-close" @click="showMFASetupModal = false">&times;</button></div>
+                <div class="modal-body">
+                    <div class="mfa-setup-steps">
+                        <div class="mfa-step">
+                            <div class="step-number">1</div>
+                            <div class="step-content">
+                                <h4>下载认证器应用</h4>
+                                <p>推荐使用 Google Authenticator、Microsoft Authenticator 或其他 TOTP 应用</p>
+                            </div>
+                        </div>
+                        <div class="mfa-step">
+                            <div class="step-number">2</div>
+                            <div class="step-content">
+                                <h4>扫描二维码</h4>
+                                <div class="mfa-qr-container" v-if="mfaSetup.qr_code">
+                                    <img :src="mfaSetup.qr_code" alt="MFA QR Code" class="mfa-qr-image">
+                                </div>
+                                <div class="mfa-secret" v-if="mfaSetup.secret">
+                                    <span>或手动输入密钥：</span>
+                                    <code>{{ mfaSetup.secret }}</code>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mfa-step">
+                            <div class="step-number">3</div>
+                            <div class="step-content">
+                                <h4>输入验证码</h4>
+                                <input type="text" class="form-input mfa-input" v-model="mfaBindCode" placeholder="输入6位验证码" maxlength="6">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @click="showMFASetupModal = false">取消</button>
+                    <button class="btn btn-success" @click="bindMFA" :disabled="!mfaBindCode || mfaBindCode.length !== 6">确认绑定</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- MFA 禁用确认弹窗 -->
+        <div class="modal-overlay" :class="{ show: showMFADisableModal }">
+            <div class="modal" style="max-width: 400px;">
+                <div class="modal-header"><h2>⚠️ 禁用 MFA</h2><button class="modal-close" @click="showMFADisableModal = false">&times;</button></div>
+                <div class="modal-body">
+                    <p style="color: var(--color-warning); margin-bottom: 15px;">禁用 MFA 会降低您账号的安全性，确定要继续吗？</p>
+                    <div class="form-group">
+                        <label>请输入密码确认</label>
+                        <input type="password" class="form-input" v-model="mfaDisablePassword" placeholder="输入当前密码">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @click="showMFADisableModal = false">取消</button>
+                    <button class="btn btn-danger" @click="disableMFA" :disabled="!mfaDisablePassword">确认禁用</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 指标编辑弹窗 -->
+        <div class="modal-overlay" :class="{ show: showMetricModal }">
+            <div class="modal metric-edit-modal">
+                <div class="modal-header">
+                    <h2>{{ editingMetric ? '✏️ 编辑指标' : '➕ 添加指标' }}</h2>
+                    <button class="modal-close" @click="showMetricModal = false">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="metric-form-grid">
+                        <div class="form-section">
+                            <h3 class="section-title">基本信息</h3>
+                            <div class="form-row">
+                                <div class="form-group flex-1">
+                                    <label>指标名称 <span class="required">*</span></label>
+                                    <input type="text" v-model="metricForm.name" placeholder="pod_running">
+                                    <span class="form-hint">英文标识符，用于内部引用</span>
+                                </div>
+                                <div class="form-group flex-1">
+                                    <label>显示标签 <span class="required">*</span></label>
+                                    <input type="text" v-model="metricForm.label" placeholder="☸️ 运行中Pod数">
+                                    <span class="form-hint">前端显示的名称</span>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group flex-1">
+                                    <label>分组</label>
+                                    <select v-model="metricForm.group" class="styled-select">
+                                        <option value="k8s">☸️ K8s 集群</option>
+                                        <option value="container">📦 容器</option>
+                                        <option value="node">🖥️ 节点</option>
+                                        <option value="custom">🔧 自定义</option>
+                                    </select>
+                                </div>
+                                <div class="form-group flex-1">
+                                    <label>单位</label>
+                                    <input type="text" v-model="metricForm.unit" placeholder="%, GB, 个, 次">
+                                </div>
+                                <div class="form-group flex-1">
+                                    <label>排序</label>
+                                    <input type="number" v-model.number="metricForm.sort_order" placeholder="0">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="form-section">
+                            <h3 class="section-title">查询配置</h3>
+                            <div class="form-group">
+                                <label>PromQL 查询语句 <span class="required">*</span></label>
+                                <textarea v-model="metricForm.promql" rows="4" class="promql-textarea" placeholder="count(kube_pod_status_phase{phase=&quot;Running&quot;})"></textarea>
+                                <span class="form-hint">Prometheus 查询语句，支持所有 PromQL 语法</span>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <h3 class="section-title">其他设置</h3>
+                            <div class="form-row">
+                                <div class="form-group flex-2">
+                                    <label>描述说明</label>
+                                    <input type="text" v-model="metricForm.description" placeholder="可选，简要描述此指标用途">
+                                </div>
+                                <div class="form-group flex-1">
+                                    <label>状态</label>
+                                    <div class="status-toggle">
+                                        <label class="toggle-switch-inline">
+                                            <input type="checkbox" v-model="metricForm.enabled">
+                                            <span class="toggle-slider-inline"></span>
+                                        </label>
+                                        <span class="toggle-text" :class="metricForm.enabled ? 'text-success' : 'text-muted'">{{ metricForm.enabled ? '启用' : '停用' }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @click="showMetricModal = false">取消</button>
+                    <button class="btn btn-primary" @click="saveMetric">💾 保存</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 执行巡检弹窗 -->
+        <div class="modal-overlay" :class="{ show: showInspectionModal }">
+            <div class="modal" style="max-width: 650px;">
+                <div class="modal-header"><h2>执行巡检</h2><button class="modal-close" @click="showInspectionModal = false">&times;</button></div>
+                <div class="modal-body">
+                    <!-- 选择数据源 -->
+                    <div class="form-group">
+                        <label>选择数据源 <span class="required">*</span></label>
+                        <div class="datasource-selector">
+                            <div v-if="!prometheusSources || prometheusSources.length === 0" class="no-datasource">
+                                <p>暂无可用的 Prometheus 数据源</p>
+                                <button class="btn btn-secondary btn-sm" @click="showInspectionModal = false; currentTab = 'datasources'; loadDataSources()">
+                                    前往添加数据源
+                                </button>
+                            </div>
+                            <div v-else>
+                                <div class="select-all-row">
+                                    <label class="datasource-item" @click.prevent="selectAllDataSources">
+                                        <input type="checkbox" :checked="(inspectionForm.selectedDataSources || []).length === (prometheusSources || []).length && (prometheusSources || []).length > 0">
+                                        <span class="ds-select-all">全选 ({{ (prometheusSources || []).length }} 个)</span>
+                                    </label>
+                                </div>
+                                <div class="datasource-list">
+                                    <label v-for="ds in prometheusSources" :key="ds.id" class="datasource-item" :class="{ selected: inspectionForm.selectedDataSources.includes(ds.id) }">
+                                        <input type="checkbox" :value="ds.id" v-model="inspectionForm.selectedDataSources">
+                                        <div class="ds-info">
+                                            <span class="ds-name">{{ ds.name }}</span>
+                                            <span class="ds-url">{{ ds.url }}</span>
+                                        </div>
+                                        <span class="type-badge type-prometheus">Prometheus</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 选择指标 -->
+                    <div class="form-group">
+                        <label>巡检指标 <span class="required">*</span></label>
+                        <div class="metrics-selector-header">
+                            <label class="select-all-item" @click.prevent="selectAllMetrics">
+                                <input type="checkbox" :checked="(inspectionForm.includeMetrics || []).length === (availableMetrics || []).filter(m => m.enabled !== false).length && (availableMetrics || []).length > 0">
+                                <span>全选 ({{ (availableMetrics || []).filter(m => m.enabled !== false).length }} 个指标)</span>
+                            </label>
+                        </div>
+                        <div class="metrics-selector-grouped">
+                            <div v-for="group in metricGroups" :key="group.key" class="metric-group-section">
+                                <div class="metric-group-header" @click="selectGroupMetrics(group.key)">
+                                    <input type="checkbox" :checked="isGroupAllSelected(group.key)">
+                                    <span class="group-label">{{ group.label }}</span>
+                                    <span class="group-count">({{ (group.metrics || []).length }})</span>
+                                </div>
+                                <div class="metric-group-items">
+                                    <label v-for="m in group.metrics" :key="m.key" class="metric-item" :class="{ selected: inspectionForm.includeMetrics.includes(m.key) }">
+                                        <input type="checkbox" :value="m.key" v-model="inspectionForm.includeMetrics">
+                                        <span class="metric-checkbox-label">{{ m.label }}</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 报告类型 -->
+                    <div class="form-group">
+                        <label>报告类型</label>
+                        <div class="report-type-selector">
+                            <label class="report-type-item" :class="{ selected: inspectionForm.reportType === 'realtime' }">
+                                <input type="radio" value="realtime" v-model="inspectionForm.reportType">
+                                <span>实时查询</span>
+                            </label>
+                            <label class="report-type-item" :class="{ selected: inspectionForm.reportType === 'daily' }">
+                                <input type="radio" value="daily" v-model="inspectionForm.reportType">
+                                <span>日报 (24h)</span>
+                            </label>
+                            <label class="report-type-item" :class="{ selected: inspectionForm.reportType === 'weekly' }">
+                                <input type="radio" value="weekly" v-model="inspectionForm.reportType">
+                                <span>周报 (7d)</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- 已选概览 -->
+                    <div class="inspection-summary" v-if="inspectionForm && inspectionForm.selectedDataSources && inspectionForm.selectedDataSources.length > 0">
+                        <div class="summary-item">
+                            <span class="summary-label">已选数据源:</span>
+                            <span class="summary-value">{{ inspectionForm.selectedDataSources.length }} 个</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="summary-label">巡检指标:</span>
+                            <span class="summary-value">{{ (inspectionForm.includeMetrics || []).length }} 项</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @click="showInspectionModal = false">取消</button>
+                    <button class="btn btn-primary" @click="executeInspection" :disabled="inspectionRunning || !inspectionForm || !inspectionForm.selectedDataSources || inspectionForm.selectedDataSources.length === 0">
+                        {{ inspectionRunning ? '巡检中...' : '▶ 开始巡检' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>

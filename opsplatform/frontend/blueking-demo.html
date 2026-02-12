@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>蓝鲸BI风格 - 运维平台</title>
+    <style>
+        :root {
+            --bk-primary: #3a84ff;
+            --bk-primary-light: #699df4;
+            --bk-success: #2dcb56;
+            --bk-warning: #ff9c01;
+            --bk-danger: #ea3636;
+            --bk-sidebar-bg: #1a2234;
+            --bk-sidebar-dark: #151d2b;
+            --bk-header-bg: #1a2234;
+            --bk-content-bg: #f0f1f5;
+            --bk-white: #ffffff;
+            --bk-border: #dcdee5;
+            --bk-text: #63656e;
+            --bk-text-light: #979ba5;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Microsoft YaHei', sans-serif;
+            font-size: 12px;
+            background: var(--bk-content-bg);
+            color: var(--bk-text);
+        }
+
+        /* 顶部导航 */
+        .header {
+            height: 52px;
+            background: var(--bk-header-bg);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding-right: 20px;
+            border-right: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .logo-icon {
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, #3a84ff, #699df4);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .logo-text {
+            color: #fff;
+            font-size: 16px;
+            font-weight: 500;
+        }
+
+        .logo-text span {
+            color: var(--bk-primary-light);
+        }
+
+        .header-nav {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #d3d9e4;
+        }
+
+        .nav-select {
+            background: rgba(255,255,255,0.1);
+            border: none;
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 2px;
+            font-size: 12px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .header-btn {
+            background: var(--bk-warning);
+            color: #fff;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 2px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .header-text {
+            color: #d3d9e4;
+            font-size: 12px;
+        }
+
+        .header-icon {
+            color: #d3d9e4;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        .user-avatar {
+            width: 28px;
+            height: 28px;
+            background: #4a90e2;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 12px;
+        }
+
+        /* 侧边栏 */
+        .sidebar {
+            width: 200px;
+            background: var(--bk-sidebar-bg);
+            position: fixed;
+            top: 52px;
+            left: 0;
+            bottom: 0;
+            overflow-y: auto;
+        }
+
+        .menu-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            height: 40px;
+            color: #96a2b9;
+            cursor: pointer;
+            transition: all 0.2s;
+            border-left: 3px solid transparent;
+        }
+
+        .menu-item:hover {
+            background: rgba(255,255,255,0.05);
+            color: #fff;
+        }
+
+        .menu-item.active {
+            background: var(--bk-primary);
+            color: #fff;
+            border-left-color: transparent;
+        }
+
+        .menu-item.expanded {
+            background: var(--bk-sidebar-dark);
+            color: #fff;
+        }
+
+        .menu-item-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .menu-icon {
+            font-size: 14px;
+            width: 16px;
+            text-align: center;
+        }
+
+        .menu-arrow {
+            font-size: 10px;
+            transition: transform 0.2s;
+        }
+
+        .menu-arrow.open {
+            transform: rotate(90deg);
+        }
+
+        .submenu {
+            background: var(--bk-sidebar-dark);
+        }
+
+        .submenu .menu-item {
+            padding-left: 42px;
+            height: 36px;
+            font-size: 12px;
+        }
+
+        .submenu .menu-item.active {
+            background: transparent;
+            color: var(--bk-primary);
+            border-left-color: var(--bk-primary);
+        }
+
+        /* 主内容 */
+        .main {
+            margin-left: 200px;
+            margin-top: 52px;
+            padding: 16px;
+            min-height: calc(100vh - 52px);
+        }
+
+        /* 面包屑 */
+        .breadcrumb {
+            margin-bottom: 12px;
+        }
+
+        .breadcrumb a {
+            color: var(--bk-primary);
+            text-decoration: none;
+            font-size: 12px;
+        }
+
+        .breadcrumb span {
+            color: var(--bk-text-light);
+            margin: 0 4px;
+        }
+
+        /* 时间选择栏 */
+        .time-bar {
+            background: #fff;
+            padding: 12px 16px;
+            border-radius: 2px;
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+
+        .time-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--bk-text);
+        }
+
+        .time-select {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .time-btn {
+            padding: 4px 12px;
+            border: 1px solid var(--bk-border);
+            background: #fff;
+            border-radius: 2px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .time-btn.active {
+            border-color: var(--bk-primary);
+            color: var(--bk-primary);
+        }
+
+        .date-input {
+            padding: 4px 8px;
+            border: 1px solid var(--bk-border);
+            border-radius: 2px;
+            font-size: 12px;
+        }
+
+        /* 图表卡片 */
+        .chart-card {
+            background: #fff;
+            border-radius: 2px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+
+        .chart-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid #f0f1f5;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .chart-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: #313238;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .chart-title .icon {
+            color: var(--bk-text-light);
+            cursor: pointer;
+        }
+
+        .export-btn {
+            color: var(--bk-primary);
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .chart-body {
+            padding: 16px;
+        }
+
+        .chart-legend {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--bk-text);
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+
+        .legend-dot.blue { background: var(--bk-primary); }
+        .legend-dot.cyan { background: #45e6c7; }
+
+        /* 模拟图表 */
+        .chart-area {
+            height: 200px;
+            display: flex;
+            align-items: flex-end;
+            gap: 40px;
+            padding: 20px 40px;
+            border-bottom: 1px solid #f0f1f5;
+            position: relative;
+        }
+
+        .chart-bar {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .bar {
+            width: 40px;
+            background: var(--bk-primary);
+            border-radius: 2px 2px 0 0;
+            position: relative;
+        }
+
+        .bar-label {
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px;
+            color: var(--bk-text);
+            white-space: nowrap;
+        }
+
+        .bar-name {
+            font-size: 11px;
+            color: var(--bk-text-light);
+            white-space: nowrap;
+        }
+
+        .chart-line {
+            width: 100%;
+            height: 40px;
+            position: relative;
+            margin-top: 20px;
+        }
+
+        .line-svg {
+            width: 100%;
+            height: 40px;
+        }
+
+        /* 表格 */
+        .table-card {
+            background: #fff;
+            border-radius: 2px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+
+        .table-header {
+            padding: 12px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #f0f1f5;
+        }
+
+        .table-search {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .search-input {
+            width: 200px;
+            padding: 6px 10px;
+            border: 1px solid var(--bk-border);
+            border-radius: 2px;
+            font-size: 12px;
+        }
+
+        .search-btn {
+            background: var(--bk-primary);
+            color: #fff;
+            border: none;
+            padding: 6px 16px;
+            border-radius: 2px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .table th {
+            background: #fafbfd;
+            padding: 10px 12px;
+            text-align: left;
+            font-weight: 500;
+            color: var(--bk-text);
+            border-bottom: 1px solid #f0f1f5;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .table th .sort-icon {
+            color: var(--bk-text-light);
+            margin-left: 4px;
+            cursor: pointer;
+        }
+
+        .table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #f0f1f5;
+            font-size: 12px;
+        }
+
+        .table tr:hover td {
+            background: #f5f7fa;
+        }
+
+        .table tr.total-row {
+            background: #fafbfd;
+            font-weight: 500;
+        }
+
+        .table tr.total-row td {
+            border-bottom: none;
+        }
+
+        .table .link {
+            color: var(--bk-primary);
+            text-decoration: none;
+        }
+
+        .table .link:hover {
+            text-decoration: underline;
+        }
+
+        .table .number {
+            text-align: right;
+            font-family: 'Consolas', monospace;
+        }
+
+        .table .percent {
+            color: var(--bk-success);
+        }
+
+        .table .percent.negative {
+            color: var(--bk-danger);
+        }
+
+        /* 分页 */
+        .pagination {
+            padding: 12px 16px;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+            border-top: 1px solid #f0f1f5;
+        }
+
+        .page-info {
+            color: var(--bk-text-light);
+            margin-right: 16px;
+        }
+
+        .page-btn {
+            min-width: 28px;
+            height: 28px;
+            border: 1px solid var(--bk-border);
+            background: #fff;
+            border-radius: 2px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .page-btn:hover {
+            border-color: var(--bk-primary);
+            color: var(--bk-primary);
+        }
+
+        .page-btn.active {
+            background: var(--bk-primary);
+            border-color: var(--bk-primary);
+            color: #fff;
+        }
+
+        /* 左右箭头 */
+        .nav-arrow {
+            position: fixed;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 32px;
+            height: 64px;
+            background: rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            cursor: pointer;
+            font-size: 20px;
+            z-index: 100;
+        }
+
+        .nav-arrow.left { left: 0; border-radius: 0 4px 4px 0; }
+        .nav-arrow.right { right: 0; border-radius: 4px 0 0 4px; }
+
+        .nav-arrow:hover { background: rgba(0,0,0,0.5); }
+    </style>
+</head>
+<body>
+    <!-- 顶部导航 -->
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">
+                <div class="logo-icon">O</div>
+                <span class="logo-text">运维<span>BI</span></span>
+            </div>
+            <div class="header-nav">
+                <span style="margin-right: 8px;">☰</span>
+                <select class="nav-select">
+                    <option>Mexico /全店铺</option>
+                </select>
+            </div>
+        </div>
+        <div class="header-right">
+            <button class="header-btn">切换到旧版</button>
+            <span class="header-text">币种：墨西哥(MXN)</span>
+            <span class="header-text">▼</span>
+            <span class="header-text">版本记录</span>
+            <span class="header-icon">❓</span>
+            <span class="header-icon">⚙️</span>
+            <div class="user-avatar">T</div>
+            <span class="header-text">test ▼</span>
+        </div>
+    </header>
+
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+        <div class="menu-item">
+            <div class="menu-item-left">
+                <span class="menu-icon">📊</span>
+                <span>经营总览</span>
+            </div>
+        </div>
+        <div class="menu-item expanded">
+            <div class="menu-item-left">
+                <span class="menu-icon">📈</span>
+                <span>交易分析</span>
+            </div>
+            <span class="menu-arrow open">›</span>
+        </div>
+        <div class="menu-item">
+            <div class="menu-item-left">
+                <span class="menu-icon">📋</span>
+                <span>订单管理</span>
+            </div>
+        </div>
+        <div class="menu-item">
+            <div class="menu-item-left">
+                <span class="menu-icon">📦</span>
+                <span>库存管理</span>
+            </div>
+        </div>
+        <div class="menu-item">
+            <div class="menu-item-left">
+                <span class="menu-icon">⭕</span>
+                <span>Listing优化</span>
+            </div>
+            <span class="menu-arrow">›</span>
+        </div>
+        <div class="menu-item">
+            <div class="menu-item-left">
+                <span class="menu-icon">🔍</span>
+                <span>竞品监控</span>
+            </div>
+        </div>
+        <div class="menu-item active">
+            <div class="menu-item-left">
+                <span class="menu-icon">💹</span>
+                <span>经营决策</span>
+            </div>
+            <span class="menu-arrow open">›</span>
+        </div>
+        <div class="submenu">
+            <div class="menu-item active">
+                <span>店铺报表</span>
+            </div>
+            <div class="menu-item">
+                <span>商品报表</span>
+            </div>
+        </div>
+        <div class="menu-item">
+            <div class="menu-item-left">
+                <span class="menu-icon">📨</span>
+                <span>售前消息</span>
+            </div>
+            <span class="menu-arrow">›</span>
+        </div>
+        <div class="menu-item">
+            <div class="menu-item-left">
+                <span class="menu-icon">📩</span>
+                <span>售后消息</span>
+            </div>
+        </div>
+        <div class="menu-item">
+            <div class="menu-item-left">
+                <span class="menu-icon">⭐</span>
+                <span>DOTD</span>
+            </div>
+        </div>
+        <div class="menu-item">
+            <div class="menu-item-left">
+                <span class="menu-icon">⭐</span>
+                <span>评价管理</span>
+            </div>
+        </div>
+        <div class="menu-item">
+            <div class="menu-item-left">
+                <span class="menu-icon">🏪</span>
+                <span>店铺声誉</span>
+            </div>
+        </div>
+        <div class="menu-item">
+            <div class="menu-item-left">
+                <span class="menu-icon">👤</span>
+                <span>个人中心</span>
+            </div>
+            <span class="menu-arrow">›</span>
+        </div>
+        <div class="menu-item">
+            <div class="menu-item-left">
+                <span class="menu-icon">⚙️</span>
+                <span>配置</span>
+            </div>
+            <span class="menu-arrow">›</span>
+        </div>
+    </aside>
+
+    <!-- 主内容 -->
+    <main class="main">
+        <!-- 面包屑 -->
+        <div class="breadcrumb">
+            <a href="#">店铺报表</a>
+            <span>*</span>
+        </div>
+
+        <!-- 时间选择 -->
+        <div class="time-bar">
+            <div class="time-info">
+                <span>墨西哥时间 (UTC-6)：2023-10-10 01:40:18</span>
+            </div>
+            <div class="time-select">
+                <span>墨西哥时区 (UTC-6)</span>
+                <button class="time-btn active">近7天</button>
+                <button class="time-btn">▼</button>
+                <input type="text" class="date-input" value="2023-10-01">
+                <span>至</span>
+                <input type="text" class="date-input" value="2023-10-08">
+            </div>
+        </div>
+
+        <!-- 图表 -->
+        <div class="chart-card">
+            <div class="chart-header">
+                <div class="chart-title">
+                    店铺分析报表 <span class="icon">ⓘ</span>
+                </div>
+                <span class="export-btn">⬇ 导出明细</span>
+            </div>
+            <div class="chart-body">
+                <div class="chart-legend">
+                    <div class="legend-item">
+                        <span class="legend-dot blue"></span>
+                        <span>销售额</span>
+                    </div>
+                </div>
+                <div class="chart-area">
+                    <div class="chart-bar">
+                        <div class="bar" style="height: 30px;"><span class="bar-label">39,093.26</span></div>
+                        <span class="bar-name">美客多Mexico</span>
+                    </div>
+                    <div class="chart-bar">
+                        <div class="bar" style="height: 180px;"><span class="bar-label">835,121.26</span></div>
+                        <span class="bar-name">美客多Mexico</span>
+                    </div>
+                    <div class="chart-bar">
+                        <div class="bar" style="height: 8px;"><span class="bar-label">598.73</span></div>
+                        <span class="bar-name">美客多Mexico</span>
+                    </div>
+                    <div class="chart-bar">
+                        <div class="bar" style="height: 4px;"><span class="bar-label">-7157.00</span></div>
+                        <span class="bar-name">美客多Mexico</span>
+                    </div>
+                    <div class="chart-bar">
+                        <div class="bar" style="height: 2px;"><span class="bar-label">0.00</span></div>
+                        <span class="bar-name">美客多Mexico</span>
+                    </div>
+                </div>
+                <div class="chart-line">
+                    <svg class="line-svg" viewBox="0 0 800 40">
+                        <polyline points="50,35 150,30 250,25 350,28 450,20 550,15 650,25 750,30" 
+                            fill="none" stroke="#45e6c7" stroke-width="2"/>
+                        <circle cx="50" cy="35" r="3" fill="#45e6c7"/>
+                        <circle cx="250" cy="25" r="3" fill="#45e6c7"/>
+                        <circle cx="450" cy="20" r="3" fill="#45e6c7"/>
+                        <circle cx="650" cy="25" r="3" fill="#45e6c7"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+
+        <!-- 表格 -->
+        <div class="table-card">
+            <div class="table-header">
+                <div></div>
+                <div class="table-search">
+                    <input type="text" class="search-input" placeholder="搜索店铺名或代号">
+                    <button class="search-btn">查询</button>
+                </div>
+            </div>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>平台/站点</th>
+                        <th>店铺名</th>
+                        <th>销售数量 <span class="sort-icon">⇅</span></th>
+                        <th>实际销量 <span class="sort-icon">⇅</span></th>
+                        <th>日均销量 <span class="sort-icon">⇅</span></th>
+                        <th>日均实际销量 <span class="sort-icon">⇅</span></th>
+                        <th class="number">销售额(MXN) <span class="sort-icon">⇅</span></th>
+                        <th class="number">实际销售额(MXN) <span class="sort-icon">⇅</span></th>
+                        <th class="number">日均实际销售额(MXN)</th>
+                        <th class="number">净利润(MXN)</th>
+                        <th>净利率</th>
+                        <th class="number">在售库存 <span class="sort-icon">⇅</span></th>
+                        <th class="number">总库存</th>
+                        <th class="number">在库金额(MXN)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="total-row">
+                        <td></td>
+                        <td>合计/合计</td>
+                        <td class="number">1,690</td>
+                        <td class="number">1,550</td>
+                        <td class="number">241.43</td>
+                        <td class="number">221.43</td>
+                        <td class="number">835,719.99</td>
+                        <td class="number">731,337.02</td>
+                        <td class="number">104,476.72</td>
+                        <td class="number">507,469.67</td>
+                        <td>-</td>
+                        <td class="number">14,472</td>
+                        <td class="number">15,782</td>
+                        <td class="number">147.74</td>
+                    </tr>
+                    <tr>
+                        <td>美客多<br/>Mexico</td>
+                        <td><a href="#" class="link">OIMXPLMK0001</a></td>
+                        <td class="number">1,687</td>
+                        <td class="number">1,547</td>
+                        <td class="number">241</td>
+                        <td class="number">221</td>
+                        <td class="number">835,121.26</td>
+                        <td class="number">730,738.29</td>
+                        <td class="number">104,391.18</td>
+                        <td class="number">507,059.28</td>
+                        <td class="percent">69.39%</td>
+                        <td class="number">11,944</td>
+                        <td class="number">13,254</td>
+                        <td class="number">0</td>
+                    </tr>
+                    <tr>
+                        <td>美客多<br/>Mexico</td>
+                        <td><a href="#" class="link">OIMXPLMK0002</a></td>
+                        <td class="number">3</td>
+                        <td class="number">3</td>
+                        <td class="number">0.43</td>
+                        <td class="number">0.43</td>
+                        <td class="number">598.73</td>
+                        <td class="number">598.73</td>
+                        <td class="number">85.53</td>
+                        <td class="number">410.39</td>
+                        <td class="percent">68.54%</td>
+                        <td class="number">2,032</td>
+                        <td class="number">2,032</td>
+                        <td class="number">0.00</td>
+                    </tr>
+                    <tr>
+                        <td>美客多<br/>Mexico</td>
+                        <td><a href="#" class="link">OIMXPLMK0003</a></td>
+                        <td class="number">0</td>
+                        <td class="number">0</td>
+                        <td class="number">0</td>
+                        <td class="number">0</td>
+                        <td class="number">0.00</td>
+                        <td class="number">0.00</td>
+                        <td class="number">0.00</td>
+                        <td class="number">0.00</td>
+                        <td class="percent">0.00%</td>
+                        <td class="number">496</td>
+                        <td class="number">496</td>
+                        <td class="number">147.74</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </main>
+
+    <!-- 左右箭头 -->
+    <div class="nav-arrow left">‹</div>
+    <div class="nav-arrow right">›</div>
+</body>
+</html>

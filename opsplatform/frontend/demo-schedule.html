@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>排班表 - 运维平台风格设计</title>
+    <style>
+        /* ==================== 基础变量 - 与运维平台一致 ==================== */
+        :root {
+            --primary: #1890ff;
+            --primary-hover: #40a9ff;
+            --primary-active: #096dd9;
+            --success: #52c41a;
+            --warning: #faad14;
+            --error: #ff4d4f;
+            --sidebar-bg: #001529;
+            --sidebar-width: 208px;
+            --content-bg: #f5f7fa;
+            --card-bg: #ffffff;
+            --header-bg: #ffffff;
+            --border-color: #e8e8e8;
+            --text-primary: rgba(0, 0, 0, 0.85);
+            --text-secondary: rgba(0, 0, 0, 0.65);
+            --text-disabled: rgba(0, 0, 0, 0.25);
+            --header-height: 48px;
+            --radius: 4px;
+            --hover-bg: rgba(0, 0, 0, 0.04);
+            
+            /* 班次颜色 */
+            --shift-a: #52c41a;
+            --shift-a-bg: rgba(82, 196, 26, 0.1);
+            --shift-b: #fa8c16;
+            --shift-b-bg: rgba(250, 140, 22, 0.1);
+            --shift-c: #1890ff;
+            --shift-c-bg: rgba(24, 144, 255, 0.1);
+            --shift-h: #8c8c8c;
+            --shift-h-bg: rgba(140, 140, 140, 0.1);
+            --shift-pl: #722ed1;
+            --shift-pl-bg: rgba(114, 46, 209, 0.1);
+            --shift-sl: #ff4d4f;
+            --shift-sl-bg: rgba(255, 77, 79, 0.1);
+            --shift-al: #13c2c2;
+            --shift-al-bg: rgba(19, 194, 194, 0.1);
+            --shift-ct: #faad14;
+            --shift-ct-bg: rgba(250, 173, 20, 0.1);
+            --duty-color: #faad14;
+        }
+
+        /* 深色主题 */
+        [data-theme="dark"] {
+            --content-bg: #141414;
+            --card-bg: #1f1f1f;
+            --header-bg: #1f1f1f;
+            --border-color: #303030;
+            --text-primary: rgba(255, 255, 255, 0.85);
+            --text-secondary: rgba(255, 255, 255, 0.65);
+            --text-disabled: rgba(255, 255, 255, 0.25);
+            --hover-bg: rgba(255, 255, 255, 0.08);
+            
+            --shift-a-bg: rgba(82, 196, 26, 0.15);
+            --shift-b-bg: rgba(250, 140, 22, 0.15);
+            --shift-c-bg: rgba(24, 144, 255, 0.15);
+            --shift-h-bg: rgba(140, 140, 140, 0.15);
+            --shift-pl-bg: rgba(114, 46, 209, 0.15);
+            --shift-sl-bg: rgba(255, 77, 79, 0.15);
+            --shift-al-bg: rgba(19, 194, 194, 0.15);
+            --shift-ct-bg: rgba(250, 173, 20, 0.15);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            color: var(--text-primary);
+            background: var(--content-bg);
+        }
+
+        /* ==================== 布局 ==================== */
+        .app-layout {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* 侧边栏 */
+        .sidebar {
+            width: var(--sidebar-width);
+            height: 100vh;
+            background: var(--sidebar-bg);
+            position: fixed;
+            left: 0;
+            top: 0;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            height: 64px;
+            padding: 0 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .sidebar-logo {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--primary), #40a9ff);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+
+        .sidebar-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .sidebar-nav {
+            flex: 1;
+            padding: 12px 0;
+            overflow-y: auto;
+        }
+
+        .nav-group {
+            margin-bottom: 4px;
+        }
+
+        .nav-group-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            color: rgba(255,255,255,0.65);
+            font-size: 14px;
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            width: 100%;
+            text-align: left;
+            transition: all 0.2s;
+        }
+
+        .nav-group-header:hover {
+            color: #fff;
+            background: rgba(255,255,255,0.08);
+        }
+
+        .nav-group-header.active {
+            color: #fff;
+            background: var(--primary);
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px 10px 42px;
+            color: rgba(255,255,255,0.65);
+            font-size: 14px;
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            width: 100%;
+            text-align: left;
+            transition: all 0.2s;
+        }
+
+        .nav-item:hover {
+            color: #fff;
+            background: rgba(255,255,255,0.08);
+        }
+
+        .nav-item.active {
+            color: #fff;
+            background: var(--primary);
+        }
+
+        /* 主内容区 */
+        .main-content {
+            flex: 1;
+            margin-left: var(--sidebar-width);
+            padding: 24px;
+        }
+
+        /* 顶部导航 */
+        .top-header {
+            height: 48px;
+            background: var(--header-bg);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            margin: -24px -24px 24px -24px;
+        }
+
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .breadcrumb span {
+            color: var(--text-primary);
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .theme-toggle {
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            border: none;
+            background: var(--hover-bg);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+
+        /* ==================== 页面头部卡片 ==================== */
+        .page-header-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px 24px;
+            margin-bottom: 16px;
+        }
+
+        .page-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 0 16px;
+            height: 32px;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-hover);
+            border-color: var(--primary-hover);
+        }
+
+        .btn-default {
+            background: var(--card-bg);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+        }
+
+        .btn-default:hover {
+            color: var(--primary);
+            border-color: var(--primary);
+        }
+
+        [data-theme="dark"] .btn-default {
+            background: #262626;
+            border-color: #434343;
+            color: rgba(255, 255, 255, 0.85);
+        }
+
+        [data-theme="dark"] .btn-default:hover {
+            background: #303030;
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        /* ==================== 统计卡片 ==================== */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px 24px;
+            text-align: center;
+        }
+
+        .stat-card-value {
+            font-size: 36px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .stat-card-value.primary { color: var(--primary); }
+        .stat-card-value.success { color: var(--success); }
+        .stat-card-value.warning { color: var(--warning); }
+        .stat-card-value.info { color: #1890ff; }
+
+        .stat-card-title {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        /* ==================== 月份导航 ==================== */
+        .month-nav {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px 20px;
+            margin-bottom: 16px;
+        }
+
+        .month-nav .nav-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+            background: transparent;
+            color: var(--text-primary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .month-nav .nav-btn:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        .month-nav .current-month {
+            font-size: 16px;
+            font-weight: 600;
+            min-width: 140px;
+            text-align: center;
+            color: var(--text-primary);
+        }
+
+        .month-nav .today-btn {
+            padding: 6px 16px;
+            border-radius: 4px;
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .month-nav .today-btn:hover {
+            background: var(--primary-hover);
+        }
+
+        /* ==================== 图例 ==================== */
+        .legend-card {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-bottom: 16px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .legend-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 28px;
+            height: 22px;
+            padding: 0 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .legend-badge.shift-a { background: var(--shift-a-bg); color: var(--shift-a); }
+        .legend-badge.shift-b { background: var(--shift-b-bg); color: var(--shift-b); }
+        .legend-badge.shift-c { background: var(--shift-c-bg); color: var(--shift-c); }
+        .legend-badge.shift-h { background: var(--shift-h-bg); color: var(--shift-h); }
+        .legend-badge.shift-pl { background: var(--shift-pl-bg); color: var(--shift-pl); }
+        .legend-badge.shift-sl { background: var(--shift-sl-bg); color: var(--shift-sl); }
+        .legend-badge.shift-al { background: var(--shift-al-bg); color: var(--shift-al); }
+        .legend-badge.shift-ct { background: var(--shift-ct-bg); color: var(--shift-ct); }
+        .legend-badge.duty {
+            border: 2px solid var(--duty-color);
+            box-shadow: 0 0 8px rgba(250, 173, 20, 0.4);
+        }
+
+        /* ==================== 排班表格 ==================== */
+        .schedule-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .schedule-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .schedule-table th,
+        .schedule-table td {
+            padding: 12px 8px;
+            text-align: center;
+            border-bottom: 1px solid var(--border-color);
+            border-right: 1px solid var(--border-color);
+        }
+
+        .schedule-table th:last-child,
+        .schedule-table td:last-child {
+            border-right: none;
+        }
+
+        .schedule-table thead tr:last-child th,
+        .schedule-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .schedule-table thead th {
+            background: rgba(24, 144, 255, 0.06);
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        [data-theme="dark"] .schedule-table thead th {
+            background: #262626;
+        }
+
+        .schedule-table thead th.weekend {
+            background: rgba(255, 77, 79, 0.08);
+            color: var(--error);
+        }
+
+        [data-theme="dark"] .schedule-table thead th.weekend {
+            background: rgba(255, 77, 79, 0.15);
+        }
+
+        .schedule-table thead th.today {
+            background: var(--primary);
+            color: #fff;
+        }
+
+        .schedule-table .date-num {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .schedule-table thead th.weekend .date-num,
+        .schedule-table thead th.today .date-num {
+            color: inherit;
+        }
+
+        .schedule-table .date-day {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        .schedule-table thead th.weekend .date-day,
+        .schedule-table thead th.today .date-day {
+            color: inherit;
+            opacity: 0.8;
+        }
+
+        .schedule-table tbody tr:hover {
+            background: var(--hover-bg);
+        }
+
+        /* 员工信息列 */
+        .employee-cell {
+            text-align: left !important;
+            padding-left: 16px !important;
+            min-width: 140px;
+            position: sticky;
+            left: 0;
+            background: var(--card-bg);
+            z-index: 1;
+        }
+
+        .schedule-table tbody tr:hover .employee-cell {
+            background: var(--hover-bg);
+        }
+
+        [data-theme="dark"] .employee-cell {
+            background: var(--card-bg);
+        }
+
+        .employee-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .employee-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary), #40a9ff);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: 600;
+            color: #fff;
+            flex-shrink: 0;
+        }
+
+        .employee-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .employee-role {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* 班次单元格 */
+        .shift-cell {
+            min-width: 48px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .shift-cell:hover {
+            background: var(--hover-bg);
+        }
+
+        .shift-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 32px;
+            height: 24px;
+            padding: 0 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .shift-badge.shift-a { background: var(--shift-a-bg); color: var(--shift-a); }
+        .shift-badge.shift-b { background: var(--shift-b-bg); color: var(--shift-b); }
+        .shift-badge.shift-c { background: var(--shift-c-bg); color: var(--shift-c); }
+        .shift-badge.shift-h { background: var(--shift-h-bg); color: var(--shift-h); }
+        .shift-badge.shift-pl { background: var(--shift-pl-bg); color: var(--shift-pl); }
+        .shift-badge.shift-sl { background: var(--shift-sl-bg); color: var(--shift-sl); }
+        .shift-badge.shift-al { background: var(--shift-al-bg); color: var(--shift-al); }
+        .shift-badge.shift-ct { background: var(--shift-ct-bg); color: var(--shift-ct); }
+
+        /* 值班标记 */
+        .shift-badge.duty {
+            border: 2px solid var(--duty-color);
+            box-shadow: 0 0 10px rgba(250, 173, 20, 0.5);
+            animation: dutyPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes dutyPulse {
+            0%, 100% { box-shadow: 0 0 6px rgba(250, 173, 20, 0.4); }
+            50% { box-shadow: 0 0 14px rgba(250, 173, 20, 0.7); }
+        }
+
+        /* 值班汇总行 */
+        .duty-row {
+            background: rgba(250, 173, 20, 0.05) !important;
+        }
+
+        [data-theme="dark"] .duty-row {
+            background: rgba(250, 173, 20, 0.08) !important;
+        }
+
+        .duty-row td {
+            border-top: 2px solid rgba(250, 173, 20, 0.3) !important;
+        }
+
+        .duty-row .employee-cell {
+            background: rgba(250, 173, 20, 0.05);
+        }
+
+        [data-theme="dark"] .duty-row .employee-cell {
+            background: rgba(250, 173, 20, 0.08);
+        }
+
+        .duty-person {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--duty-color);
+        }
+
+        /* ==================== 响应式 ==================== */
+        @media (max-width: 1200px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                display: none;
+            }
+            .main-content {
+                margin-left: 0;
+            }
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-layout">
+        <!-- 侧边栏 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">⚡</div>
+                <span class="sidebar-title">AI-CloudOps</span>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-group">
+                    <button class="nav-group-header">
+                        <span>🏠</span>
+                        <span>系统管理</span>
+                    </button>
+                </div>
+                <div class="nav-group">
+                    <button class="nav-group-header active">
+                        <span>📅</span>
+                        <span>排班管理</span>
+                    </button>
+                    <button class="nav-item active">排班表</button>
+                    <button class="nav-item">班次设置</button>
+                    <button class="nav-item">人员管理</button>
+                </div>
+                <div class="nav-group">
+                    <button class="nav-group-header">
+                        <span>📦</span>
+                        <span>资源管理</span>
+                    </button>
+                </div>
+                <div class="nav-group">
+                    <button class="nav-group-header">
+                        <span>📊</span>
+                        <span>监控告警</span>
+                    </button>
+                </div>
+            </nav>
+        </div>
+
+        <!-- 主内容区 -->
+        <div class="main-content">
+            <!-- 顶部导航 -->
+            <div class="top-header">
+                <div class="breadcrumb">
+                    运维管理平台 / 排班管理 / <span>排班表</span>
+                </div>
+                <div class="header-actions">
+                    <button class="theme-toggle" onclick="toggleTheme()">🌙</button>
+                </div>
+            </div>
+
+            <!-- 页面头部 -->
+            <div class="page-header-card">
+                <h1 class="page-title">排班表</h1>
+                <div style="display: flex; gap: 12px;">
+                    <button class="btn btn-default">↓ 导出</button>
+                    <button class="btn btn-default">↑ 导入</button>
+                    <button class="btn btn-primary">+ 添加排班</button>
+                </div>
+            </div>
+
+            <!-- 统计卡片 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-card-value primary">124</div>
+                    <div class="stat-card-title">本月总班次</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-value success">45</div>
+                    <div class="stat-card-title">早班 (A)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-value warning">42</div>
+                    <div class="stat-card-title">中班 (B)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-value info">37</div>
+                    <div class="stat-card-title">晚班 (C)</div>
+                </div>
+            </div>
+
+            <!-- 月份导航 -->
+            <div class="month-nav">
+                <button class="nav-btn">◀</button>
+                <span class="current-month">2026年1月</span>
+                <button class="nav-btn">▶</button>
+                <button class="today-btn">今天</button>
+            </div>
+
+            <!-- 图例 -->
+            <div class="legend-card">
+                <div class="legend-item">
+                    <span class="legend-badge shift-a">A</span>
+                    <span>早班 09:00-18:00</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-badge shift-b">B</span>
+                    <span>中班 15:00-00:00</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-badge shift-c">C</span>
+                    <span>晚班 00:00-09:00</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-badge shift-h">H</span>
+                    <span>休息</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-badge shift-pl">PL</span>
+                    <span>事假</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-badge shift-sl">SL</span>
+                    <span>病假</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-badge shift-al">AL</span>
+                    <span>年假</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-badge shift-ct">CT</span>
+                    <span>调休</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-badge shift-a duty">A★</span>
+                    <span>早班值班</span>
+                </div>
+            </div>
+
+            <!-- 排班表格 -->
+            <div class="schedule-card">
+                <table class="schedule-table">
+                    <thead>
+                        <tr>
+                            <th class="employee-cell">员工</th>
+                            <th><div class="date-num">1</div><div class="date-day">周四</div></th>
+                            <th><div class="date-num">2</div><div class="date-day">周五</div></th>
+                            <th class="weekend"><div class="date-num">3</div><div class="date-day">周六</div></th>
+                            <th class="weekend"><div class="date-num">4</div><div class="date-day">周日</div></th>
+                            <th><div class="date-num">5</div><div class="date-day">周一</div></th>
+                            <th><div class="date-num">6</div><div class="date-day">周二</div></th>
+                            <th><div class="date-num">7</div><div class="date-day">周三</div></th>
+                            <th><div class="date-num">8</div><div class="date-day">周四</div></th>
+                            <th><div class="date-num">9</div><div class="date-day">周五</div></th>
+                            <th class="weekend"><div class="date-num">10</div><div class="date-day">周六</div></th>
+                            <th class="weekend"><div class="date-num">11</div><div class="date-day">周日</div></th>
+                            <th><div class="date-num">12</div><div class="date-day">周一</div></th>
+                            <th><div class="date-num">13</div><div class="date-day">周二</div></th>
+                            <th class="today"><div class="date-num">14</div><div class="date-day">周三</div></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="employee-cell">
+                                <div class="employee-info">
+                                    <div class="employee-avatar">张</div>
+                                    <div>
+                                        <div class="employee-name">张三</div>
+                                        <div class="employee-role">运维工程师</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-c">C</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a">A</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-c">C</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a">A</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-pl">PL</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                        </tr>
+                        <tr>
+                            <td class="employee-cell">
+                                <div class="employee-info">
+                                    <div class="employee-avatar" style="background: linear-gradient(135deg, #fa8c16, #ff7a45);">李</div>
+                                    <div>
+                                        <div class="employee-name">李四</div>
+                                        <div class="employee-role">高级运维</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="shift-cell"><span class="shift-badge shift-a">A</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-c">C</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a">A</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-c">C</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a">A</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a">A</span></td>
+                        </tr>
+                        <tr>
+                            <td class="employee-cell">
+                                <div class="employee-info">
+                                    <div class="employee-avatar" style="background: linear-gradient(135deg, #52c41a, #73d13d);">王</div>
+                                    <div>
+                                        <div class="employee-name">王五</div>
+                                        <div class="employee-role">运维工程师</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-c">C</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a">A</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-c">C</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a">A</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-al">AL</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-al">AL</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-al">AL</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-c">C</span></td>
+                        </tr>
+                        <tr>
+                            <td class="employee-cell">
+                                <div class="employee-info">
+                                    <div class="employee-avatar" style="background: linear-gradient(135deg, #722ed1, #9254de);">赵</div>
+                                    <div>
+                                        <div class="employee-name">赵六</div>
+                                        <div class="employee-role">运维工程师</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="shift-cell"><span class="shift-badge shift-c">C</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a">A</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-c">C</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-ct">CT</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a duty">A★</span></td>
+                        </tr>
+                        <tr>
+                            <td class="employee-cell">
+                                <div class="employee-info">
+                                    <div class="employee-avatar" style="background: linear-gradient(135deg, #faad14, #ffc53d);">钱</div>
+                                    <div>
+                                        <div class="employee-name">钱七</div>
+                                        <div class="employee-role">运维主管</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a">A</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a">A</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-c">C</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-a">A</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-b">B</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-sl">SL</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-sl">SL</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-c">C</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-c">C</span></td>
+                            <td class="shift-cell"><span class="shift-badge shift-h">H</span></td>
+                        </tr>
+                        <!-- 值班汇总行 -->
+                        <tr class="duty-row">
+                            <td class="employee-cell">
+                                <div class="employee-info">
+                                    <div class="employee-avatar" style="background: linear-gradient(135deg, #faad14, #ffc53d);">★</div>
+                                    <div>
+                                        <div class="employee-name" style="color: #faad14;">值班人员</div>
+                                        <div class="employee-role">早班值班</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td><span class="duty-person">张三</span></td>
+                            <td><span class="duty-person">李四</span></td>
+                            <td><span class="duty-person">王五</span></td>
+                            <td><span class="duty-person">赵六</span></td>
+                            <td><span class="duty-person">赵六</span></td>
+                            <td><span class="duty-person">李四</span></td>
+                            <td><span class="duty-person">赵六</span></td>
+                            <td><span class="duty-person">王五</span></td>
+                            <td><span class="duty-person">张三</span></td>
+                            <td><span class="duty-person">-</span></td>
+                            <td><span class="duty-person">赵六</span></td>
+                            <td><span class="duty-person">赵六</span></td>
+                            <td><span class="duty-person">李四</span></td>
+                            <td><span class="duty-person">赵六</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function toggleTheme() {
+            const html = document.documentElement;
+            const btn = document.querySelector('.theme-toggle');
+            if (html.getAttribute('data-theme') === 'dark') {
+                html.removeAttribute('data-theme');
+                btn.textContent = '🌙';
+            } else {
+                html.setAttribute('data-theme', 'dark');
+                btn.textContent = '☀️';
+            }
+        }
+    </script>
+</body>
+</html>

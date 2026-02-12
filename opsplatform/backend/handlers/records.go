@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"opsplatform/database"
 	"opsplatform/models"
@@ -59,14 +60,21 @@ func HandleAddRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Record.ConnectionID == "" || req.Record.Project == "" || req.Record.VID == "" || req.Record.SrcIP == "" || req.Record.DestIP == "" || req.Record.Port == "" {
+	if req.Record.ConnectionID == "" || req.Record.Project == "" || req.Record.VID == "" || req.Record.SrcIP == "" || req.Record.DestIP == "" || req.Record.DestPort == "" {
 		http.Error(w, "连接ID、项目、VID、源IP、目标IP、端口不能为空", http.StatusBadRequest)
 		return
 	}
 
 	// 检查连接ID唯一性
 	if exists, _ := ConnectionIDExists(req.Record.ConnectionID, ""); exists {
-		http.Error(w, "连接ID已存在，请使用不同的连接ID", http.StatusBadRequest)
+		// 查询现有记录的详细信息
+		existingRecord, _ := GetRecordByConnectionID(req.Record.ConnectionID)
+		if existingRecord != nil {
+			http.Error(w, fmt.Sprintf("连接ID已存在，禁止添加！\n现有记录：项目=%s, VID=%s, 连接ID=%s", 
+				existingRecord.Project, existingRecord.VID, existingRecord.ConnectionID), http.StatusBadRequest)
+		} else {
+			http.Error(w, "连接ID已存在，请使用不同的连接ID", http.StatusBadRequest)
+		}
 		return
 	}
 
@@ -79,6 +87,81 @@ func HandleAddRecord(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(req.Record)
+}
+
+// HandleBatchCheckRecords 批量检测连接ID是否存在
+func HandleBatchCheckRecords(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Records []models.Record `json:"records"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "请求格式错误", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Records) == 0 {
+		http.Error(w, "记录列表不能为空", http.StatusBadRequest)
+		return
+	}
+
+	// 检测结果
+	type CheckResult struct {
+		ConnectionID string `json:"connection_id"`
+		Project      string `json:"project"`
+		Module       string `json:"module"`
+		VID          string `json:"vid"`
+		SrcAddr      string `json:"src_addr"`
+		DestAddr     string `json:"dest_addr"`
+		Exists       bool   `json:"exists"`
+		ExistingInfo string `json:"existing_info,omitempty"` // 已存在记录的信息
+	}
+
+	existsRecords := make([]CheckResult, 0)
+	newRecords := make([]CheckResult, 0)
+
+	for _, record := range req.Records {
+		srcAddr := record.SrcIP
+		if record.SrcPort != "" {
+			srcAddr = record.SrcIP + ":" + record.SrcPort
+		}
+		destAddr := record.DestIP
+		if record.DestPort != "" {
+			destAddr = record.DestIP + ":" + record.DestPort
+		}
+
+		result := CheckResult{
+			ConnectionID: record.ConnectionID,
+			Project:      record.Project,
+			Module:       record.Module,
+			VID:          record.VID,
+			SrcAddr:      srcAddr,
+			DestAddr:     destAddr,
+		}
+
+		// 检查连接ID是否存在
+		if exists, _ := ConnectionIDExists(record.ConnectionID, ""); exists {
+			result.Exists = true
+			// 获取已存在记录的详细信息
+			if existingRec, err := GetRecordByConnectionID(record.ConnectionID); err == nil && existingRec != nil {
+				result.ExistingInfo = fmt.Sprintf("项目=%s, VID=%s, 源=%s:%s, 目标=%s:%s", 
+					existingRec.Project, existingRec.VID, existingRec.SrcIP, existingRec.SrcPort, 
+					existingRec.DestIP, existingRec.DestPort)
+			}
+			existsRecords = append(existsRecords, result)
+		} else {
+			result.Exists = false
+			newRecords = append(newRecords, result)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"exists_count": len(existsRecords),
+		"new_count":    len(newRecords),
+		"exists":       existsRecords,
+		"new":          newRecords,
+	})
 }
 
 // HandleBatchAddRecords 批量添加记录
@@ -104,36 +187,70 @@ func HandleBatchAddRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ip := GetClientIP(r)
-	addedRecords := make([]models.Record, 0, len(req.Records))
-
-	// 先检查所有连接ID的唯一性
-	for i, record := range req.Records {
+	
+	// 第一遍：检查所有记录的连接ID是否有重复
+	duplicateRecords := make([]string, 0)
+	seenConnIds := make(map[string]models.Record) // 记录连接ID和对应的记录信息
+	
+	for _, record := range req.Records {
 		if record.ConnectionID == "" {
-			http.Error(w, fmt.Sprintf("第 %d 条记录的连接ID不能为空", i+1), http.StatusBadRequest)
+			http.Error(w, "连接ID不能为空", http.StatusBadRequest)
 			return
 		}
+		
+		// 检查批次内是否有重复
+		if existingRec, found := seenConnIds[record.ConnectionID]; found {
+			duplicateRecords = append(duplicateRecords, fmt.Sprintf("连接ID=%s 批次内重复（项目=%s, VID=%s 与 项目=%s, VID=%s）", 
+				record.ConnectionID, record.Project, record.VID, existingRec.Project, existingRec.VID))
+		} else {
+			seenConnIds[record.ConnectionID] = record
+		}
+		
+		// 检查数据库中是否已存在
 		if exists, _ := ConnectionIDExists(record.ConnectionID, ""); exists {
-			http.Error(w, fmt.Sprintf("连接ID '%s' 已存在", record.ConnectionID), http.StatusBadRequest)
-			return
+			existingRec, _ := GetRecordByConnectionID(record.ConnectionID)
+			if existingRec != nil {
+				duplicateRecords = append(duplicateRecords, fmt.Sprintf("连接ID=%s 数据库已存在（现有记录：项目=%s, VID=%s）", 
+					record.ConnectionID, existingRec.Project, existingRec.VID))
+			} else {
+				duplicateRecords = append(duplicateRecords, record.ConnectionID+" (数据库已存在)")
+			}
 		}
 	}
-
+	
+	// 如果有任何重复的连接ID，直接报错，不添加任何记录
+	if len(duplicateRecords) > 0 {
+		http.Error(w, fmt.Sprintf("存在重复的连接ID，禁止添加:\n%s", strings.Join(duplicateRecords, "\n")), http.StatusBadRequest)
+		return
+	}
+	
+	// 第二遍：添加所有记录
+	addedRecords := make([]models.Record, 0, len(req.Records))
+	failedRecords := make([]string, 0)
+	
 	for _, record := range req.Records {
 		rec := record
 		if err := AddRecord(&rec, req.Operator, ip); err != nil {
-			SafeError(w, "操作失败", http.StatusInternalServerError, err)
-			return
+			failedRecords = append(failedRecords, record.ConnectionID+" ("+err.Error()+")")
+			continue
 		}
 		addedRecords = append(addedRecords, rec)
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message": fmt.Sprintf("成功添加 %d 条记录", len(addedRecords)),
+	
+	response := map[string]interface{}{
 		"count":   len(addedRecords),
 		"records": addedRecords,
-	})
+		"message": fmt.Sprintf("成功添加 %d 条记录", len(addedRecords)),
+	}
+	
+	if len(failedRecords) > 0 {
+		response["failed"] = failedRecords
+	}
+	
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(response)
 }
 
 // HandleUpdateRecord 更新记录
@@ -156,8 +273,7 @@ func HandleUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := GetClientIP(r)
-	if err := UpdateRecord(id, &req.Record, req.Operator, ip); err != nil {
+	if err := UpdateRecord(id, &req.Record, req.Operator, r); err != nil {
 		SafeError(w, "资源不存在", http.StatusNotFound, err)
 		return
 	}
@@ -185,8 +301,7 @@ func HandleDeleteRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := GetClientIP(r)
-	if err := DeleteRecord(id, req.Operator, ip); err != nil {
+	if err := DeleteRecord(id, req.Operator, r); err != nil {
 		SafeError(w, "资源不存在", http.StatusNotFound, err)
 		return
 	}
@@ -217,10 +332,9 @@ func HandleBatchDeleteRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := GetClientIP(r)
 	deleted := 0
 	for _, id := range req.IDs {
-		if err := DeleteRecord(id, req.Operator, ip); err == nil {
+		if err := DeleteRecord(id, req.Operator, r); err == nil {
 			deleted++
 		}
 	}
@@ -260,10 +374,9 @@ func HandleBatchUpdateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := GetClientIP(r)
 	updated := 0
 	for _, id := range req.IDs {
-		if err := UpdateRecordStatus(id, req.Status, req.Operator, ip); err == nil {
+		if err := UpdateRecordStatus(id, req.Status, req.Operator, r); err == nil {
 			updated++
 		}
 	}
@@ -272,6 +385,50 @@ func HandleBatchUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": fmt.Sprintf("成功更新 %d 条记录状态", updated),
 		"count":   updated,
+	})
+}
+
+// HandleBatchUpdate 批量更新记录
+func HandleBatchUpdate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Records  []models.Record `json:"records"`
+		Operator string          `json:"operator"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "无效的请求数据", http.StatusBadRequest)
+		return
+	}
+
+	if req.Operator == "" {
+		http.Error(w, "操作人不能为空", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Records) == 0 {
+		http.Error(w, "记录列表不能为空", http.StatusBadRequest)
+		return
+	}
+
+	updated := 0
+	failed := 0
+	for _, record := range req.Records {
+		if record.ID == "" {
+			failed++
+			continue
+		}
+		if err := UpdateRecord(record.ID, &record, req.Operator, r); err != nil {
+			failed++
+			continue
+		}
+		updated++
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": fmt.Sprintf("成功更新 %d 条记录", updated),
+		"count":   updated,
+		"failed":  failed,
 	})
 }
 
@@ -289,7 +446,8 @@ func GetClientIP(r *http.Request) string {
 // 数据库操作函数
 func GetAllRecords() ([]*models.Record, error) {
 	rows, err := database.DB.Query(`
-		SELECT id, COALESCE(connection_id, ''), project, env, COALESCE(module, ''), vid, src_ip, dest_ip, port, status, 
+		SELECT id, COALESCE(connection_id, ''), project, env, COALESCE(module, ''), vid, 
+		       src_ip, COALESCE(src_port, ''), dest_ip, dest_port, status, 
 		       COALESCE(operator, ''), created_at, updated_at, 
 		       COALESCE(created_by, ''), COALESCE(updated_by, '')
 		FROM records ORDER BY updated_at DESC
@@ -302,9 +460,9 @@ func GetAllRecords() ([]*models.Record, error) {
 	var records []*models.Record
 	for rows.Next() {
 		r := &models.Record{}
-		err := rows.Scan(&r.ID, &r.ConnectionID, &r.Project, &r.Env, &r.Module, &r.VID, &r.SrcIP, &r.DestIP,
-			&r.Port, &r.Status, &r.Operator, &r.CreatedAt, &r.UpdatedAt,
-			&r.CreatedBy, &r.UpdatedBy)
+		err := rows.Scan(&r.ID, &r.ConnectionID, &r.Project, &r.Env, &r.Module, &r.VID, 
+			&r.SrcIP, &r.SrcPort, &r.DestIP, &r.DestPort, &r.Status, 
+			&r.Operator, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.UpdatedBy)
 		if err != nil {
 			return nil, err
 		}
@@ -328,16 +486,36 @@ func ConnectionIDExists(connectionID, excludeID string) (bool, error) {
 	return count > 0, nil
 }
 
+// GetRecordByConnectionID 根据连接ID获取记录
+func GetRecordByConnectionID(connectionID string) (*models.Record, error) {
+	r := &models.Record{}
+	err := database.DB.QueryRow(`
+		SELECT id, COALESCE(connection_id, ''), COALESCE(project, ''), COALESCE(env, 'UAT'), 
+		       COALESCE(module, ''), COALESCE(vid, ''), 
+		       COALESCE(src_ip, ''), COALESCE(src_port, ''), COALESCE(dest_ip, ''), COALESCE(dest_port, ''), 
+		       COALESCE(status, 'active'), COALESCE(operator, ''), created_at, updated_at,
+		       COALESCE(created_by, ''), COALESCE(updated_by, '')
+		FROM records WHERE connection_id = ?
+	`, connectionID).Scan(&r.ID, &r.ConnectionID, &r.Project, &r.Env, &r.Module, &r.VID, 
+		&r.SrcIP, &r.SrcPort, &r.DestIP, &r.DestPort, &r.Status, 
+		&r.Operator, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.UpdatedBy)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
 func GetRecord(id string) (*models.Record, error) {
 	r := &models.Record{}
 	err := database.DB.QueryRow(`
-		SELECT id, COALESCE(connection_id, ''), project, env, COALESCE(module, ''), vid, src_ip, dest_ip, port, status,
+		SELECT id, COALESCE(connection_id, ''), project, env, COALESCE(module, ''), vid, 
+		       src_ip, COALESCE(src_port, ''), dest_ip, dest_port, status,
 		       COALESCE(operator, ''), created_at, updated_at,
 		       COALESCE(created_by, ''), COALESCE(updated_by, '')
 		FROM records WHERE id = ?
-	`, id).Scan(&r.ID, &r.ConnectionID, &r.Project, &r.Env, &r.Module, &r.VID, &r.SrcIP, &r.DestIP,
-		&r.Port, &r.Status, &r.Operator, &r.CreatedAt, &r.UpdatedAt,
-		&r.CreatedBy, &r.UpdatedBy)
+	`, id).Scan(&r.ID, &r.ConnectionID, &r.Project, &r.Env, &r.Module, &r.VID, 
+		&r.SrcIP, &r.SrcPort, &r.DestIP, &r.DestPort, &r.Status, 
+		&r.Operator, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.UpdatedBy)
 	if err != nil {
 		return nil, nil
 	}
@@ -352,9 +530,9 @@ func AddRecord(r *models.Record, operator, ip string) error {
 	r.UpdatedBy = operator
 
 	_, err := database.DB.Exec(`
-		INSERT INTO records (id, connection_id, project, env, module, vid, src_ip, dest_ip, port, status, operator, created_at, updated_at, created_by, updated_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, r.ID, r.ConnectionID, r.Project, r.Env, r.Module, r.VID, r.SrcIP, r.DestIP, r.Port, r.Status, r.Operator, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.UpdatedBy)
+		INSERT INTO records (id, connection_id, project, env, module, vid, src_ip, src_port, dest_ip, dest_port, status, operator, created_at, updated_at, created_by, updated_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, r.ID, r.ConnectionID, r.Project, r.Env, r.Module, r.VID, r.SrcIP, r.SrcPort, r.DestIP, r.DestPort, r.Status, r.Operator, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.UpdatedBy)
 	if err != nil {
 		return err
 	}
@@ -364,48 +542,48 @@ func AddRecord(r *models.Record, operator, ip string) error {
 
 	newDataJSON, _ := json.Marshal(r)
 	return AddAuditLog("create", r.ID, operator, "", string(newDataJSON),
-		fmt.Sprintf("创建记录: 连接ID=%s, 项目=%s, VID=%s, %s->%s:%s", r.ConnectionID, r.Project, r.VID, r.SrcIP, r.DestIP, r.Port), ip)
+		fmt.Sprintf("创建记录: 连接ID=%s, 项目=%s, VID=%s, %s->%s:%s", r.ConnectionID, r.Project, r.VID, r.SrcIP, r.DestIP, r.DestPort), ip)
 }
 
-func UpdateRecord(id string, r *models.Record, operator, ip string) error {
+func UpdateRecord(id string, rec *models.Record, operator string, req *http.Request) error {
 	oldRecord, err := GetRecord(id)
 	if err != nil || oldRecord == nil {
 		return fmt.Errorf("记录不存在: %s", id)
 	}
 
 	// 检查连接ID唯一性（排除当前记录）
-	if r.ConnectionID != oldRecord.ConnectionID {
-		if exists, _ := ConnectionIDExists(r.ConnectionID, id); exists {
-			return fmt.Errorf("连接ID '%s' 已存在", r.ConnectionID)
+	if rec.ConnectionID != oldRecord.ConnectionID {
+		if exists, _ := ConnectionIDExists(rec.ConnectionID, id); exists {
+			return fmt.Errorf("连接ID '%s' 已存在", rec.ConnectionID)
 		}
 	}
 
 	oldDataJSON, _ := json.Marshal(oldRecord)
-	changes := generateChanges(oldRecord, r)
-	changesJSON := generateChangesJSON(oldRecord, r)
+	changes := generateChanges(oldRecord, rec)
+	changesJSON := generateChangesJSON(oldRecord, rec)
 
-	r.ID = id
-	r.CreatedAt = oldRecord.CreatedAt
-	r.CreatedBy = oldRecord.CreatedBy
-	r.UpdatedAt = timeNow().Format("2006-01-02 15:04:05")
-	r.UpdatedBy = operator
+	rec.ID = id
+	rec.CreatedAt = oldRecord.CreatedAt
+	rec.CreatedBy = oldRecord.CreatedBy
+	rec.UpdatedAt = timeNow().Format("2006-01-02 15:04:05")
+	rec.UpdatedBy = operator
 
 	_, err = database.DB.Exec(`
-		UPDATE records SET connection_id=?, project=?, env=?, module=?, vid=?, src_ip=?, dest_ip=?, port=?, status=?, operator=?, updated_at=?, updated_by=?
+		UPDATE records SET connection_id=?, project=?, env=?, module=?, vid=?, src_ip=?, src_port=?, dest_ip=?, dest_port=?, status=?, operator=?, updated_at=?, updated_by=?
 		WHERE id=?
-	`, r.ConnectionID, r.Project, r.Env, r.Module, r.VID, r.SrcIP, r.DestIP, r.Port, r.Status, r.Operator, r.UpdatedAt, r.UpdatedBy, id)
+	`, rec.ConnectionID, rec.Project, rec.Env, rec.Module, rec.VID, rec.SrcIP, rec.SrcPort, rec.DestIP, rec.DestPort, rec.Status, rec.Operator, rec.UpdatedAt, rec.UpdatedBy, id)
 	if err != nil {
 		return err
 	}
 
 	// 保存历史记录（保存更新后的版本）
-	SaveRecordHistory(id, "update", r, changesJSON, operator)
+	SaveRecordHistory(id, "update", rec, changesJSON, operator)
 
-	newDataJSON, _ := json.Marshal(r)
-	return AddAuditLog("update", id, operator, string(oldDataJSON), string(newDataJSON), changes, ip)
+	newDataJSON, _ := json.Marshal(rec)
+	return AddAuditLogFromRequest(req, "update", "record:"+id, operator, string(oldDataJSON), string(newDataJSON), changes)
 }
 
-func DeleteRecord(id string, operator, ip string) error {
+func DeleteRecord(id string, operator string, req *http.Request) error {
 	oldRecord, err := GetRecord(id)
 	if err != nil || oldRecord == nil {
 		return fmt.Errorf("记录不存在: %s", id)
@@ -418,12 +596,12 @@ func DeleteRecord(id string, operator, ip string) error {
 		return err
 	}
 
-	return AddAuditLog("delete", id, operator, string(oldDataJSON), "",
-		fmt.Sprintf("删除记录: 项目=%s, VID=%s, %s->%s:%s", oldRecord.Project, oldRecord.VID, oldRecord.SrcIP, oldRecord.DestIP, oldRecord.Port), ip)
+	return AddAuditLogFromRequest(req, "delete", "record:"+id, operator, string(oldDataJSON), "",
+		fmt.Sprintf("删除记录: 项目=%s, VID=%s, %s->%s:%s", oldRecord.Project, oldRecord.VID, oldRecord.SrcIP, oldRecord.DestIP, oldRecord.DestPort))
 }
 
 // UpdateRecordStatus 更新记录状态
-func UpdateRecordStatus(id, status, operator, ip string) error {
+func UpdateRecordStatus(id, status, operator string, req *http.Request) error {
 	oldRecord, err := GetRecord(id)
 	if err != nil || oldRecord == nil {
 		return fmt.Errorf("记录不存在: %s", id)
@@ -453,7 +631,7 @@ func UpdateRecordStatus(id, status, operator, ip string) error {
 	statusText := map[string]string{"active": "启用", "inactive": "停用", "pending": "待定"}
 	changes := fmt.Sprintf("状态: %s → %s", statusText[oldStatus], statusText[status])
 
-	return AddAuditLog("update", id, operator, string(oldDataJSON), string(newDataJSON), changes, ip)
+	return AddAuditLogFromRequest(req, "update", "record:"+id, operator, string(oldDataJSON), string(newDataJSON), changes)
 }
 
 func generateChanges(old, new *models.Record) string {
@@ -477,8 +655,8 @@ func generateChanges(old, new *models.Record) string {
 	if old.DestIP != new.DestIP {
 		changes = append(changes, fmt.Sprintf("目标IP: %s → %s", old.DestIP, new.DestIP))
 	}
-	if old.Port != new.Port {
-		changes = append(changes, fmt.Sprintf("端口: %s → %s", old.Port, new.Port))
+	if old.DestPort != new.DestPort {
+		changes = append(changes, fmt.Sprintf("端口: %s → %s", old.DestPort, new.DestPort))
 	}
 	if old.Status != new.Status {
 		changes = append(changes, fmt.Sprintf("状态: %s → %s", old.Status, new.Status))
@@ -517,8 +695,8 @@ func generateChangesJSON(old, new *models.Record) string {
 	if old.DestIP != new.DestIP {
 		changes["dest_ip"] = map[string]string{"old": old.DestIP, "new": new.DestIP}
 	}
-	if old.Port != new.Port {
-		changes["port"] = map[string]string{"old": old.Port, "new": new.Port}
+	if old.DestPort != new.DestPort {
+		changes["port"] = map[string]string{"old": old.DestPort, "new": new.DestPort}
 	}
 	if old.Status != new.Status {
 		changes["status"] = map[string]string{"old": old.Status, "new": new.Status}
@@ -635,15 +813,14 @@ func HandleRollbackRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 保存回滚前的历史
-	ip := GetClientIP(r)
 	SaveRecordHistory(recordID, "update", currentRecord, "回滚前备份", operator)
 
 	// 更新记录为历史版本
 	now := timeNow().Format("2006-01-02 15:04:05")
 	_, err = database.DB.Exec(`
-		UPDATE records SET connection_id=?, project=?, env=?, module=?, vid=?, src_ip=?, dest_ip=?, port=?, status=?, updated_at=?, updated_by=?
+		UPDATE records SET connection_id=?, project=?, env=?, module=?, vid=?, src_ip=?, src_port=?, dest_ip=?, dest_port=?, status=?, updated_at=?, updated_by=?
 		WHERE id=?
-	`, oldRecord.ConnectionID, oldRecord.Project, oldRecord.Env, oldRecord.Module, oldRecord.VID, oldRecord.SrcIP, oldRecord.DestIP, oldRecord.Port, oldRecord.Status, now, operator, recordID)
+	`, oldRecord.ConnectionID, oldRecord.Project, oldRecord.Env, oldRecord.Module, oldRecord.VID, oldRecord.SrcIP, oldRecord.SrcPort, oldRecord.DestIP, oldRecord.DestPort, oldRecord.Status, now, operator, recordID)
 	if err != nil {
 		http.Error(w, "回滚失败", http.StatusInternalServerError)
 		return
@@ -655,7 +832,7 @@ func HandleRollbackRecord(w http.ResponseWriter, r *http.Request) {
 	SaveRecordHistory(recordID, "rollback", &oldRecord, "回滚到历史版本", operator)
 
 	// 记录审计日志
-	AddAuditLog("rollback", recordID, operator, "", snapshot, "回滚到历史版本", ip)
+	AddAuditLogFromRequest(r, "rollback", recordID, operator, "", snapshot, "回滚到历史版本")
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})

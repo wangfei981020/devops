@@ -154,15 +154,17 @@ func HandleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	user, _ := GetUserByID(req.UserID)
 	
 	// 生成 JWT token
-	token, err := GenerateToken(user.ID, user.Username, user.Role)
+	token, expiresAt, err := GenerateToken(user.ID, user.Username, user.Role)
 	if err != nil {
 		http.Error(w, "生成认证令牌失败", http.StatusInternalServerError)
 		return
 	}
 
+	// 设置 HttpOnly Cookie
+	SetAuthCookie(w, token, expiresAt)
+
 	// 记录 MFA 登录成功日志
-	ip := GetClientIP(r)
-	AddAuditLog("login", "user:"+user.ID, user.Username, "", "", fmt.Sprintf("用户 MFA 验证登录成功: %s (%s)", user.Username, user.DisplayName), ip)
+	AddAuditLogFromRequest(r, "login", "user:"+user.ID, user.Username, "", "", fmt.Sprintf("用户 MFA 验证登录成功: %s (%s)", user.Username, user.DisplayName))
 
 	user.MFABound = user.MFASecret != ""
 	user.Password = ""
@@ -170,8 +172,10 @@ func HandleMFAVerify(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"user":  user,
-		"token": token,
+		"user":           user,
+		"token":          token, // 兼容旧客户端
+		"expires_at":     expiresAt.Format("2006-01-02T15:04:05Z07:00"),
+		"timeout_minutes": int(GetSessionTimeout().Minutes()),
 	})
 }
 
@@ -193,8 +197,8 @@ func HandleMFADisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 验证密码
-	if !checkPassword(user.Password, req.Password) && user.Password != req.Password {
+	// 验证密码（只使用 bcrypt）
+	if !checkPassword(user.Password, req.Password) {
 		http.Error(w, "密码错误", http.StatusUnauthorized)
 		return
 	}

@@ -55,9 +55,8 @@ func HandleAddDataSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 记录审计日志
-	ip := GetClientIP(r)
 	changes := fmt.Sprintf("添加数据源: %s (%s), 类型=%s, URL=%s", req.DataSource.Name, req.DataSource.Description, req.DataSource.Type, req.DataSource.URL)
-	AddAuditLog("create", "datasource:"+req.DataSource.ID, req.Operator, "", "", changes, ip)
+	AddAuditLogFromRequest(r, "create", "datasource:"+req.DataSource.ID, req.Operator, "", "", changes)
 
 	req.DataSource.Password = ""
 	req.DataSource.Token = ""
@@ -91,7 +90,6 @@ func HandleUpdateDataSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 记录审计日志
-	ip := GetClientIP(r)
 	var changes []string
 	if oldDS != nil {
 		if oldDS.Name != ds.Name && ds.Name != "" {
@@ -105,7 +103,7 @@ func HandleUpdateDataSource(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(changes) > 0 {
-		AddAuditLog("update", "datasource:"+id, operator, "", "", fmt.Sprintf("更新数据源 %s: %s", ds.Name, strings.Join(changes, ", ")), ip)
+		AddAuditLogFromRequest(r, "update", "datasource:"+id, operator, "", "", fmt.Sprintf("更新数据源 %s: %s", ds.Name, strings.Join(changes, ", ")))
 	}
 
 	ds.Password = ""
@@ -133,10 +131,9 @@ func HandleDeleteDataSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 记录审计日志
-	ip := GetClientIP(r)
 	if ds != nil {
 		changes := fmt.Sprintf("删除数据源: %s (%s)", ds.Name, ds.Type)
-		AddAuditLog("delete", "datasource:"+id, operator, "", "", changes, ip)
+		AddAuditLogFromRequest(r, "delete", "datasource:"+id, operator, "", "", changes)
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

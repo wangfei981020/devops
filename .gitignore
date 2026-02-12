@@ -2,6 +2,8 @@
 *.exe
 opsplatform-linux-amd64
 opsplatform-linux-arm64
+opsplatform/backend/opsplatform
+opsplatform/backend/opsplatform-backend
 
 # 数据库文件
 *.db
@@ -13,6 +15,8 @@ opsplatform-linux-arm64
 # IDE
 .idea/
 .vscode/
+.cursor/
+.shared/
 *.swp
 *.swo
 
@@ -22,4 +26,12 @@ Thumbs.db
 
 # Go
 vendor/
+
+# 备份文件
+*.bak/
+opsplatform/backend.bak/
+opsplatform/frontend.bak/
+
+# Harbor 配置
+harbor/
 

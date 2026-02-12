@@ -23,7 +23,7 @@ import (
 // HandleGetDomains 获取域名列表
 func HandleGetDomains(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`
-		SELECT id, project, module, domain_name, origin, cdn_provider, 
+		SELECT id, project, module, domain_name, origin, cdn_provider, env,
 		       expire_time, cert_expire_time, status, remark,
 		       created_at, created_by, updated_at, updated_by 
 		FROM domains ORDER BY created_at DESC
@@ -38,8 +38,8 @@ func HandleGetDomains(w http.ResponseWriter, r *http.Request) {
 	domains := []models.Domain{}
 	for rows.Next() {
 		var d models.Domain
-		var module, origin, cdnProvider, expireTime, certExpireTime, remark, updatedAt, updatedBy sql.NullString
-		err := rows.Scan(&d.ID, &d.Project, &module, &d.DomainName, &origin, &cdnProvider,
+		var module, origin, cdnProvider, env, expireTime, certExpireTime, remark, updatedAt, updatedBy sql.NullString
+		err := rows.Scan(&d.ID, &d.Project, &module, &d.DomainName, &origin, &cdnProvider, &env,
 			&expireTime, &certExpireTime, &d.Status, &remark,
 			&d.CreatedAt, &d.CreatedBy, &updatedAt, &updatedBy)
 		if err != nil {
@@ -49,6 +49,10 @@ func HandleGetDomains(w http.ResponseWriter, r *http.Request) {
 		d.Module = module.String
 		d.Origin = origin.String
 		d.CDNProvider = cdnProvider.String
+		d.Env = env.String
+		if d.Env == "" {
+			d.Env = "PROD"
+		}
 		d.ExpireTime = expireTime.String
 		d.CertExpireTime = certExpireTime.String
 		d.Remark = remark.String
@@ -104,11 +108,14 @@ func HandleAddDomain(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if domain.Env == "" {
+		domain.Env = "PROD"
+	}
 	_, err := database.DB.Exec(`
-		INSERT INTO domains (id, project, module, domain_name, origin, cdn_provider, 
+		INSERT INTO domains (id, project, module, domain_name, origin, cdn_provider, env,
 		                     expire_time, cert_expire_time, status, remark, created_at, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, domain.ID, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.CDNProvider,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, domain.ID, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.CDNProvider, domain.Env,
 		nullIfEmpty(domain.ExpireTime), nullIfEmpty(domain.CertExpireTime), domain.Status, domain.Remark,
 		domain.CreatedAt, domain.CreatedBy)
 
@@ -119,7 +126,7 @@ func HandleAddDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 审计日志
-	AddAuditLog("create", domain.ID, domain.CreatedBy, "", toJSON(domain), "创建域名: "+domain.DomainName, r.RemoteAddr)
+	AddAuditLogFromRequest(r, "create", domain.ID, domain.CreatedBy, "", toJSON(domain), "创建域名: "+domain.DomainName)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -168,12 +175,15 @@ func HandleUpdateDomain(w http.ResponseWriter, r *http.Request) {
 
 	domain.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
 
+	if domain.Env == "" {
+		domain.Env = "PROD"
+	}
 	_, err = database.DB.Exec(`
-		UPDATE domains SET project = ?, module = ?, domain_name = ?, origin = ?, cdn_provider = ?,
+		UPDATE domains SET project = ?, module = ?, domain_name = ?, origin = ?, cdn_provider = ?, env = ?,
 		                   expire_time = ?, cert_expire_time = ?, status = ?, remark = ?,
 		                   updated_at = ?, updated_by = ?
 		WHERE id = ?
-	`, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.CDNProvider,
+	`, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.CDNProvider, domain.Env,
 		nullIfEmpty(domain.ExpireTime), nullIfEmpty(domain.CertExpireTime), domain.Status, domain.Remark,
 		domain.UpdatedAt, domain.UpdatedBy, id)
 
@@ -184,7 +194,7 @@ func HandleUpdateDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 审计日志
-	AddAuditLog("update", id, domain.UpdatedBy, toJSON(oldDomain), toJSON(domain), "更新域名: "+domain.DomainName, r.RemoteAddr)
+	AddAuditLogFromRequest(r, "update", id, domain.UpdatedBy, toJSON(oldDomain), toJSON(domain), "更新域名: "+domain.DomainName)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -220,7 +230,7 @@ func HandleDeleteDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 审计日志
-	AddAuditLog("delete", id, operator, toJSON(oldDomain), "", "删除域名: "+oldDomain.DomainName, r.RemoteAddr)
+	AddAuditLogFromRequest(r, "delete", id, operator, toJSON(oldDomain), "", "删除域名: "+oldDomain.DomainName)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -277,7 +287,7 @@ func HandleBatchDomains(w http.ResponseWriter, r *http.Request) {
 
 		if err == nil {
 			successCount++
-			AddAuditLog(req.Action, id, req.Operator, "", "", fmt.Sprintf("批量%s域名: %s", req.Action, domainName), r.RemoteAddr)
+			AddAuditLogFromRequest(r, req.Action, id, req.Operator, "", "", fmt.Sprintf("批量%s域名: %s", req.Action, domainName))
 		}
 	}
 
@@ -297,8 +307,9 @@ func HandleBatchDomains(w http.ResponseWriter, r *http.Request) {
 // HandleBatchAddDomains 批量添加域名
 func HandleBatchAddDomains(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Domains   []models.Domain `json:"domains"`
-		CreatedBy string          `json:"created_by"`
+		Domains     []models.Domain `json:"domains"`
+		CreatedBy   string          `json:"created_by"`
+		FetchExpiry bool            `json:"fetch_expiry"` // 是否自动获取到期时间
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "无效的请求数据", http.StatusBadRequest)
@@ -326,8 +337,8 @@ func HandleBatchAddDomains(w http.ResponseWriter, r *http.Request) {
 			domain.Status = "active"
 		}
 
-		// 自动获取证书到期时间和域名到期时间
-		if domain.DomainName != "" {
+		// 只有在 FetchExpiry 为 true 时才自动获取到期时间
+		if req.FetchExpiry && domain.DomainName != "" {
 			if domain.CertExpireTime == "" {
 				certExpire, err := getCertExpireTime(domain.DomainName)
 				if err == nil {
@@ -342,11 +353,14 @@ func HandleBatchAddDomains(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if domain.Env == "" {
+			domain.Env = "PROD"
+		}
 		_, err := database.DB.Exec(`
-			INSERT INTO domains (id, project, module, domain_name, origin, cdn_provider, 
+			INSERT INTO domains (id, project, module, domain_name, origin, cdn_provider, env,
 			                     expire_time, cert_expire_time, status, remark, created_at, created_by)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, domain.ID, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.CDNProvider,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, domain.ID, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.CDNProvider, domain.Env,
 			nullIfEmpty(domain.ExpireTime), nullIfEmpty(domain.CertExpireTime), domain.Status, domain.Remark,
 			domain.CreatedAt, domain.CreatedBy)
 
@@ -359,8 +373,8 @@ func HandleBatchAddDomains(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 审计日志
-	AddAuditLog("batch_create", "domains", req.CreatedBy, "", "",
-		fmt.Sprintf("批量添加域名: 成功 %d 个, 失败 %d 个", successCount, len(failedDomains)), r.RemoteAddr)
+	AddAuditLogFromRequest(r, "batch_create", "domains", req.CreatedBy, "", "",
+		fmt.Sprintf("批量添加域名: 成功 %d 个, 失败 %d 个", successCount, len(failedDomains)))
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]interface{}{

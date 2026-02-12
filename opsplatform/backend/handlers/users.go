@@ -30,11 +30,13 @@ func checkPassword(hashedPassword, password string) bool {
 
 // LoginResponse 登录响应
 type LoginResponse struct {
-	RequireMFA  bool         `json:"require_mfa"`            // 是否需要 MFA 验证
-	UserID      string       `json:"user_id,omitempty"`      // 需要 MFA 时返回用户 ID
-	User        *models.User `json:"user,omitempty"`         // 登录成功时返回用户信息
-	Token       string       `json:"token,omitempty"`        // JWT token
-	NeedBinding bool         `json:"need_binding,omitempty"` // 是否需要绑定 MFA
+	RequireMFA      bool         `json:"require_mfa"`               // 是否需要 MFA 验证
+	UserID          string       `json:"user_id,omitempty"`         // 需要 MFA 时返回用户 ID
+	User            *models.User `json:"user,omitempty"`            // 登录成功时返回用户信息
+	Token           string       `json:"token,omitempty"`           // JWT token（兼容旧客户端）
+	NeedBinding     bool         `json:"need_binding,omitempty"`    // 是否需要绑定 MFA
+	ExpiresAt       string       `json:"expires_at,omitempty"`      // 会话过期时间
+	TimeoutMinutes  int          `json:"timeout_minutes,omitempty"` // 会话超时（分钟）
 }
 
 // HandleLogin 用户登录
@@ -49,8 +51,22 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 检查登录速率限制
+	// 获取客户端 IP
 	ip := GetClientIP(r)
+	
+	// 检查 IP 白名单
+	if !IsIPWhitelisted(ip) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "IP_BLOCKED",
+			"message": "您的 IP 地址不在白名单中",
+			"ip":      ip,
+		})
+		return
+	}
+
+	// 检查登录速率限制
 	allowed, remaining := CheckLoginRateLimit(ip)
 	if !allowed {
 		http.Error(w, fmt.Sprintf("登录尝试过多，请在 %d 分钟后重试", int(remaining.Minutes())+1), http.StatusTooManyRequests)
@@ -108,20 +124,25 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// 未启用 MFA，直接登录成功
 	// 生成 JWT token
-	token, err := GenerateToken(user.ID, user.Username, user.Role)
+	token, expiresAt, err := GenerateToken(user.ID, user.Username, user.Role)
 	if err != nil {
 		http.Error(w, "生成认证令牌失败", http.StatusInternalServerError)
 		return
 	}
 
-	AddAuditLog("login", "user:"+user.ID, user.Username, "", "", fmt.Sprintf("用户登录成功: %s (%s)", user.Username, user.DisplayName), ip)
+	// 设置 HttpOnly Cookie
+	SetAuthCookie(w, token, expiresAt)
+
+	AddAuditLogFromRequest(r, "login", "user:"+user.ID, user.Username, "", "", fmt.Sprintf("用户登录成功: %s (%s)", user.Username, user.DisplayName))
 
 	user.Password = ""
 	user.MFASecret = ""
 	json.NewEncoder(w).Encode(LoginResponse{
-		RequireMFA: false,
-		User:       user,
-		Token:      token,
+		RequireMFA:     false,
+		User:           user,
+		Token:          token, // 兼容旧客户端
+		ExpiresAt:      expiresAt.Format("2006-01-02T15:04:05Z07:00"),
+		TimeoutMinutes: int(GetSessionTimeout().Minutes()),
 	})
 }
 
@@ -174,9 +195,8 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 记录审计日志
-	ip := GetClientIP(r)
 	changes := fmt.Sprintf("创建用户: %s (%s), 角色=%s", req.User.Username, req.User.DisplayName, req.User.Role)
-	AddAuditLog("create", "user:"+req.User.ID, req.CreatedBy, "", "", changes, ip)
+	AddAuditLogFromRequest(r, "create", "user:"+req.User.ID, req.CreatedBy, "", "", changes)
 
 	req.User.Password = ""
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -210,7 +230,6 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 记录审计日志
-	ip := GetClientIP(r)
 	var changes []string
 	if oldUser != nil {
 		if oldUser.DisplayName != user.DisplayName && user.DisplayName != "" {
@@ -242,7 +261,7 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(changes) > 0 {
-		AddAuditLog("update", "user:"+id, operator, "", "", fmt.Sprintf("更新用户 %s: %s", user.Username, strings.Join(changes, ", ")), ip)
+		AddAuditLogFromRequest(r, "update", "user:"+id, operator, "", "", fmt.Sprintf("更新用户 %s: %s", user.Username, strings.Join(changes, ", ")))
 	}
 
 	user.Password = ""
@@ -279,9 +298,8 @@ func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 记录审计日志
-	ip := GetClientIP(r)
 	changes := fmt.Sprintf("删除用户: %s (%s)", user.Username, user.DisplayName)
-	AddAuditLog("delete", "user:"+id, operator, "", "", changes, ip)
+	AddAuditLogFromRequest(r, "delete", "user:"+id, operator, "", "", changes)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]string{"message": "删除成功"})
@@ -290,8 +308,8 @@ func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 // 数据库操作函数
 func GetAllUsers() ([]*models.User, error) {
 	rows, err := database.DB.Query(`
-		SELECT id, username, password, display_name, role, status, COALESCE(permissions, ''), 
-		       COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), created_at
+		SELECT id, username, password, display_name, COALESCE(phone, ''), COALESCE(email, ''), COALESCE(description, ''),
+		       role, status, COALESCE(permissions, ''), COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), created_at
 		FROM users ORDER BY created_at DESC
 	`)
 	if err != nil {
@@ -302,7 +320,7 @@ func GetAllUsers() ([]*models.User, error) {
 	var users []*models.User
 	for rows.Next() {
 		u := &models.User{}
-		err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.CreatedAt)
+		err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Phone, &u.Email, &u.Description, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -316,10 +334,10 @@ func GetAllUsers() ([]*models.User, error) {
 func GetUserByUsername(username string) (*models.User, error) {
 	u := &models.User{}
 	err := database.DB.QueryRow(`
-		SELECT id, username, password, display_name, role, status, COALESCE(permissions, ''), 
-		       COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), created_at
+		SELECT id, username, password, display_name, COALESCE(phone, ''), COALESCE(email, ''), COALESCE(description, ''),
+		       role, status, COALESCE(permissions, ''), COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), created_at
 		FROM users WHERE username = ?
-	`, username).Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.CreatedAt)
+	`, username).Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Phone, &u.Email, &u.Description, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.CreatedAt)
 	if err != nil {
 		return nil, nil
 	}
@@ -331,10 +349,10 @@ func GetUserByUsername(username string) (*models.User, error) {
 func GetUserByID(id string) (*models.User, error) {
 	u := &models.User{}
 	err := database.DB.QueryRow(`
-		SELECT id, username, password, display_name, role, status, COALESCE(permissions, ''), 
-		       COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), created_at
+		SELECT id, username, password, display_name, COALESCE(phone, ''), COALESCE(email, ''), COALESCE(description, ''),
+		       role, status, COALESCE(permissions, ''), COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), created_at
 		FROM users WHERE id = ?
-	`, id).Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.CreatedAt)
+	`, id).Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Phone, &u.Email, &u.Description, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.CreatedAt)
 	if err != nil {
 		return nil, nil
 	}
@@ -362,9 +380,9 @@ func AddUser(u *models.User) error {
 	}
 
 	_, err = database.DB.Exec(`
-		INSERT INTO users (id, username, password, display_name, role, status, permissions, mfa_enabled, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, u.ID, u.Username, hashedPassword, u.DisplayName, u.Role, u.Status, u.Permissions, u.MFAEnabled, u.CreatedAt)
+		INSERT INTO users (id, username, password, display_name, phone, email, description, role, status, permissions, mfa_enabled, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, u.ID, u.Username, hashedPassword, u.DisplayName, u.Phone, u.Email, u.Description, u.Role, u.Status, u.Permissions, u.MFAEnabled, u.CreatedAt)
 	return err
 }
 
@@ -415,9 +433,9 @@ func UpdateUser(id string, u *models.User) error {
 	}
 
 	_, err = database.DB.Exec(`
-		UPDATE users SET display_name=?, role=?, status=?, permissions=?, password=?, mfa_enabled=?, mfa_secret=?
+		UPDATE users SET display_name=?, phone=?, email=?, description=?, role=?, status=?, permissions=?, password=?, mfa_enabled=?, mfa_secret=?
 		WHERE id=?
-	`, u.DisplayName, u.Role, u.Status, u.Permissions, passwordToSave, mfaEnabled, mfaSecret, id)
+	`, u.DisplayName, u.Phone, u.Email, u.Description, u.Role, u.Status, u.Permissions, passwordToSave, mfaEnabled, mfaSecret, id)
 	return err
 }
 

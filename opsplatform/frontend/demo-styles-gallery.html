@@ -1,0 +1,1195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ 运维平台 - 20套风格展示</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #0a0a0f;
+            color: #fff;
+            min-height: 100vh;
+            padding: 40px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        .header h1 {
+            font-size: 42px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #3b82f6, #8b5cf6, #06b6d4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 16px;
+        }
+
+        .header p {
+            color: #64748b;
+            font-size: 18px;
+        }
+
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            gap: 30px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .style-card {
+            border-radius: 20px;
+            overflow: hidden;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .style-card:hover {
+            transform: translateY(-8px) scale(1.02);
+            z-index: 10;
+        }
+
+        .style-preview {
+            height: 280px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .style-info {
+            padding: 20px 24px;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(10px);
+        }
+
+        .style-number {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 32px;
+            height: 32px;
+            background: rgba(0,0,0,0.5);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .style-name {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .style-desc {
+            font-size: 13px;
+            color: rgba(255,255,255,0.7);
+        }
+
+        .style-tags {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            flex-wrap: wrap;
+        }
+
+        .tag {
+            padding: 4px 10px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+            font-size: 11px;
+        }
+
+        /* 预览内部组件 */
+        .preview-sidebar {
+            width: 50px;
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding-top: 20px;
+            gap: 12px;
+        }
+
+        .preview-logo {
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+
+        .preview-nav-item {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+
+        .preview-main {
+            margin-left: 60px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .preview-header {
+            height: 36px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 12px;
+        }
+
+        .preview-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        }
+
+        .preview-stat {
+            height: 50px;
+            border-radius: 8px;
+            padding: 8px;
+        }
+
+        .preview-stat-value {
+            font-size: 16px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .preview-stat-label {
+            font-size: 9px;
+            opacity: 0.7;
+            margin-top: 2px;
+        }
+
+        .preview-chart {
+            flex: 1;
+            border-radius: 8px;
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-around;
+            padding: 12px;
+            gap: 6px;
+        }
+
+        .preview-bar {
+            width: 100%;
+            border-radius: 4px 4px 0 0;
+        }
+
+        /* ========== 20种风格 ========== */
+
+        /* 1. Glassmorphism 玻璃态 */
+        .style-1 .style-preview {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+        }
+        .style-1 .preview-sidebar { background: rgba(255,255,255,0.1); backdrop-filter: blur(20px); border-right: 1px solid rgba(255,255,255,0.2); }
+        .style-1 .preview-logo { background: rgba(255,255,255,0.2); }
+        .style-1 .preview-nav-item { background: rgba(255,255,255,0.1); }
+        .style-1 .preview-nav-item:first-of-type { background: rgba(255,255,255,0.3); }
+        .style-1 .preview-header { background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); }
+        .style-1 .preview-stat { background: rgba(255,255,255,0.15); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); }
+        .style-1 .preview-chart { background: rgba(255,255,255,0.1); }
+        .style-1 .preview-bar { background: rgba(255,255,255,0.4); }
+
+        /* 2. Dark Mode OLED 深黑模式 */
+        .style-2 .style-preview {
+            background: #000000;
+        }
+        .style-2 .preview-sidebar { background: #0a0a0a; border-right: 1px solid #1a1a1a; }
+        .style-2 .preview-logo { background: linear-gradient(135deg, #3b82f6, #8b5cf6); }
+        .style-2 .preview-nav-item { background: #111; }
+        .style-2 .preview-nav-item:first-of-type { background: #3b82f6; }
+        .style-2 .preview-header { background: #0a0a0a; border: 1px solid #1a1a1a; }
+        .style-2 .preview-stat { background: #111; border: 1px solid #222; }
+        .style-2 .preview-stat:nth-child(1) .preview-stat-value { color: #3b82f6; }
+        .style-2 .preview-stat:nth-child(2) .preview-stat-value { color: #22c55e; }
+        .style-2 .preview-stat:nth-child(3) .preview-stat-value { color: #f59e0b; }
+        .style-2 .preview-chart { background: #0a0a0a; border: 1px solid #1a1a1a; }
+        .style-2 .preview-bar { background: linear-gradient(180deg, #3b82f6, #1d4ed8); }
+
+        /* 3. Neumorphism 新拟态 */
+        .style-3 .style-preview {
+            background: #e0e5ec;
+            color: #333;
+        }
+        .style-3 .preview-sidebar { background: #e0e5ec; box-shadow: inset -5px 0 10px rgba(0,0,0,0.05); }
+        .style-3 .preview-logo { background: #e0e5ec; box-shadow: 5px 5px 10px #b8bec5, -5px -5px 10px #fff; }
+        .style-3 .preview-nav-item { background: #e0e5ec; box-shadow: 3px 3px 6px #b8bec5, -3px -3px 6px #fff; }
+        .style-3 .preview-nav-item:first-of-type { box-shadow: inset 3px 3px 6px #b8bec5, inset -3px -3px 6px #fff; }
+        .style-3 .preview-header { background: #e0e5ec; box-shadow: 5px 5px 10px #b8bec5, -5px -5px 10px #fff; }
+        .style-3 .preview-stat { background: #e0e5ec; box-shadow: 5px 5px 10px #b8bec5, -5px -5px 10px #fff; }
+        .style-3 .preview-stat-value { color: #3b82f6; }
+        .style-3 .preview-chart { background: #e0e5ec; box-shadow: inset 5px 5px 10px #b8bec5, inset -5px -5px 10px #fff; }
+        .style-3 .preview-bar { background: linear-gradient(180deg, #3b82f6, #60a5fa); border-radius: 20px; }
+
+        /* 4. Cyberpunk 赛博朋克 */
+        .style-4 .style-preview {
+            background: linear-gradient(180deg, #0a0014 0%, #1a0028 100%);
+        }
+        .style-4 .preview-sidebar { background: rgba(255,0,128,0.1); border-right: 2px solid #ff0080; }
+        .style-4 .preview-logo { background: #ff0080; box-shadow: 0 0 20px #ff0080; }
+        .style-4 .preview-nav-item { background: transparent; border: 1px solid #00ffff; }
+        .style-4 .preview-nav-item:first-of-type { background: #00ffff; color: #000; box-shadow: 0 0 10px #00ffff; }
+        .style-4 .preview-header { background: transparent; border: 1px solid #ff0080; }
+        .style-4 .preview-stat { background: rgba(0,255,255,0.1); border: 1px solid #00ffff; }
+        .style-4 .preview-stat-value { color: #00ffff; text-shadow: 0 0 10px #00ffff; }
+        .style-4 .preview-chart { background: rgba(255,0,128,0.1); border: 1px solid #ff0080; }
+        .style-4 .preview-bar { background: linear-gradient(180deg, #ff0080, #00ffff); box-shadow: 0 0 10px #ff0080; }
+
+        /* 5. Minimalism 极简主义 */
+        .style-5 .style-preview {
+            background: #ffffff;
+            color: #111;
+        }
+        .style-5 .preview-sidebar { background: #fafafa; border-right: 1px solid #eee; }
+        .style-5 .preview-logo { background: #111; color: #fff; }
+        .style-5 .preview-nav-item { background: transparent; }
+        .style-5 .preview-nav-item:first-of-type { background: #f5f5f5; }
+        .style-5 .preview-header { background: #fff; border-bottom: 1px solid #eee; }
+        .style-5 .preview-stat { background: #fafafa; }
+        .style-5 .preview-stat-value { color: #111; }
+        .style-5 .preview-chart { background: #fafafa; }
+        .style-5 .preview-bar { background: #111; }
+
+        /* 6. Aurora 极光 */
+        .style-6 .style-preview {
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+        }
+        .style-6::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 150px;
+            background: linear-gradient(180deg, rgba(0,255,136,0.3), rgba(0,200,255,0.2), transparent);
+            filter: blur(30px);
+        }
+        .style-6 .preview-sidebar { background: rgba(255,255,255,0.05); }
+        .style-6 .preview-logo { background: linear-gradient(135deg, #00ff88, #00c8ff); }
+        .style-6 .preview-nav-item { background: rgba(255,255,255,0.05); }
+        .style-6 .preview-nav-item:first-of-type { background: linear-gradient(135deg, #00ff88, #00c8ff); }
+        .style-6 .preview-header { background: rgba(255,255,255,0.05); }
+        .style-6 .preview-stat { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); }
+        .style-6 .preview-stat-value { background: linear-gradient(135deg, #00ff88, #00c8ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .style-6 .preview-chart { background: rgba(255,255,255,0.05); }
+        .style-6 .preview-bar { background: linear-gradient(180deg, #00ff88, #00c8ff); }
+
+        /* 7. Corporate Blue 企业蓝 */
+        .style-7 .style-preview {
+            background: #f0f4f8;
+            color: #1e3a5f;
+        }
+        .style-7 .preview-sidebar { background: #1e3a5f; }
+        .style-7 .preview-logo { background: #fff; color: #1e3a5f; }
+        .style-7 .preview-nav-item { background: rgba(255,255,255,0.1); }
+        .style-7 .preview-nav-item:first-of-type { background: #3b82f6; }
+        .style-7 .preview-header { background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .style-7 .preview-stat { background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        .style-7 .preview-stat-value { color: #1e3a5f; }
+        .style-7 .preview-chart { background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        .style-7 .preview-bar { background: #3b82f6; }
+
+        /* 8. Terminal/Hacker 终端风格 */
+        .style-8 .style-preview {
+            background: #0d1117;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .style-8 .preview-sidebar { background: #010409; border-right: 1px solid #21262d; }
+        .style-8 .preview-logo { background: transparent; border: 1px solid #22c55e; color: #22c55e; }
+        .style-8 .preview-nav-item { background: transparent; color: #22c55e; }
+        .style-8 .preview-nav-item:first-of-type { background: rgba(34,197,94,0.2); }
+        .style-8 .preview-header { background: #010409; border: 1px solid #21262d; }
+        .style-8 .preview-stat { background: #010409; border: 1px solid #21262d; }
+        .style-8 .preview-stat-value { color: #22c55e; }
+        .style-8 .preview-stat-label { color: #22c55e; }
+        .style-8 .preview-chart { background: #010409; border: 1px solid #21262d; }
+        .style-8 .preview-bar { background: #22c55e; }
+
+        /* 9. Gradient Rich 渐变丰富 */
+        .style-9 .style-preview {
+            background: linear-gradient(135deg, #ff6b6b 0%, #feca57 25%, #48dbfb 50%, #ff9ff3 75%, #54a0ff 100%);
+        }
+        .style-9 .preview-sidebar { background: rgba(0,0,0,0.3); backdrop-filter: blur(10px); }
+        .style-9 .preview-logo { background: #fff; color: #ff6b6b; }
+        .style-9 .preview-nav-item { background: rgba(255,255,255,0.2); }
+        .style-9 .preview-nav-item:first-of-type { background: #fff; color: #333; }
+        .style-9 .preview-header { background: rgba(255,255,255,0.2); backdrop-filter: blur(10px); }
+        .style-9 .preview-stat { background: rgba(255,255,255,0.25); backdrop-filter: blur(10px); }
+        .style-9 .preview-chart { background: rgba(255,255,255,0.2); }
+        .style-9 .preview-bar { background: #fff; }
+
+        /* 10. Neon Glow 霓虹发光 */
+        .style-10 .style-preview {
+            background: #0a0a0a;
+        }
+        .style-10 .preview-sidebar { background: #111; border-right: 1px solid #222; }
+        .style-10 .preview-logo { background: #8b5cf6; box-shadow: 0 0 30px #8b5cf6, 0 0 60px rgba(139,92,246,0.5); }
+        .style-10 .preview-nav-item { background: #111; border: 1px solid #333; }
+        .style-10 .preview-nav-item:first-of-type { border-color: #8b5cf6; box-shadow: 0 0 10px #8b5cf6; }
+        .style-10 .preview-header { background: #111; border: 1px solid #333; }
+        .style-10 .preview-stat { background: #111; border: 1px solid #333; }
+        .style-10 .preview-stat:nth-child(1) { border-color: #8b5cf6; box-shadow: 0 0 10px rgba(139,92,246,0.3); }
+        .style-10 .preview-stat:nth-child(1) .preview-stat-value { color: #8b5cf6; text-shadow: 0 0 10px #8b5cf6; }
+        .style-10 .preview-stat:nth-child(2) .preview-stat-value { color: #22c55e; text-shadow: 0 0 10px #22c55e; }
+        .style-10 .preview-stat:nth-child(3) .preview-stat-value { color: #f59e0b; text-shadow: 0 0 10px #f59e0b; }
+        .style-10 .preview-chart { background: #111; border: 1px solid #333; }
+        .style-10 .preview-bar { background: linear-gradient(180deg, #8b5cf6, #3b82f6); box-shadow: 0 0 10px #8b5cf6; }
+
+        /* 11. Ocean Wave 海洋波浪 */
+        .style-11 .style-preview {
+            background: linear-gradient(180deg, #0077b6 0%, #023e8a 50%, #03045e 100%);
+        }
+        .style-11 .preview-sidebar { background: rgba(0,0,0,0.3); }
+        .style-11 .preview-logo { background: #90e0ef; color: #03045e; }
+        .style-11 .preview-nav-item { background: rgba(144,224,239,0.2); }
+        .style-11 .preview-nav-item:first-of-type { background: #90e0ef; color: #03045e; }
+        .style-11 .preview-header { background: rgba(255,255,255,0.1); }
+        .style-11 .preview-stat { background: rgba(255,255,255,0.15); }
+        .style-11 .preview-stat-value { color: #90e0ef; }
+        .style-11 .preview-chart { background: rgba(255,255,255,0.1); }
+        .style-11 .preview-bar { background: linear-gradient(180deg, #90e0ef, #48cae4); }
+
+        /* 12. Sunset Warm 日落暖色 */
+        .style-12 .style-preview {
+            background: linear-gradient(135deg, #ff512f 0%, #f09819 100%);
+        }
+        .style-12 .preview-sidebar { background: rgba(0,0,0,0.2); }
+        .style-12 .preview-logo { background: #fff; color: #ff512f; }
+        .style-12 .preview-nav-item { background: rgba(255,255,255,0.2); }
+        .style-12 .preview-nav-item:first-of-type { background: #fff; color: #ff512f; }
+        .style-12 .preview-header { background: rgba(255,255,255,0.15); }
+        .style-12 .preview-stat { background: rgba(255,255,255,0.2); }
+        .style-12 .preview-chart { background: rgba(255,255,255,0.15); }
+        .style-12 .preview-bar { background: #fff; }
+
+        /* 13. Forest Nature 森林自然 */
+        .style-13 .style-preview {
+            background: linear-gradient(180deg, #134e4a 0%, #0f3d3a 50%, #022c22 100%);
+        }
+        .style-13 .preview-sidebar { background: rgba(0,0,0,0.3); }
+        .style-13 .preview-logo { background: #34d399; color: #022c22; }
+        .style-13 .preview-nav-item { background: rgba(52,211,153,0.2); }
+        .style-13 .preview-nav-item:first-of-type { background: #34d399; color: #022c22; }
+        .style-13 .preview-header { background: rgba(255,255,255,0.1); }
+        .style-13 .preview-stat { background: rgba(255,255,255,0.1); border: 1px solid rgba(52,211,153,0.3); }
+        .style-13 .preview-stat-value { color: #34d399; }
+        .style-13 .preview-chart { background: rgba(255,255,255,0.08); }
+        .style-13 .preview-bar { background: linear-gradient(180deg, #34d399, #059669); }
+
+        /* 14. Monochrome 单色 */
+        .style-14 .style-preview {
+            background: #18181b;
+        }
+        .style-14 .preview-sidebar { background: #09090b; border-right: 1px solid #27272a; }
+        .style-14 .preview-logo { background: #fff; color: #000; }
+        .style-14 .preview-nav-item { background: #27272a; }
+        .style-14 .preview-nav-item:first-of-type { background: #fff; color: #000; }
+        .style-14 .preview-header { background: #09090b; border: 1px solid #27272a; }
+        .style-14 .preview-stat { background: #27272a; }
+        .style-14 .preview-chart { background: #09090b; border: 1px solid #27272a; }
+        .style-14 .preview-bar { background: linear-gradient(180deg, #fff, #a1a1aa); }
+
+        /* 15. Vibrant Bold 鲜艳大胆 */
+        .style-15 .style-preview {
+            background: #1a1a2e;
+        }
+        .style-15 .preview-sidebar { background: #16213e; border-right: 2px solid #e94560; }
+        .style-15 .preview-logo { background: #e94560; }
+        .style-15 .preview-nav-item { background: rgba(233,69,96,0.2); }
+        .style-15 .preview-nav-item:first-of-type { background: #e94560; }
+        .style-15 .preview-header { background: #16213e; }
+        .style-15 .preview-stat { background: #16213e; border: 2px solid #0f3460; }
+        .style-15 .preview-stat:nth-child(1) .preview-stat-value { color: #e94560; }
+        .style-15 .preview-stat:nth-child(2) .preview-stat-value { color: #00d9ff; }
+        .style-15 .preview-stat:nth-child(3) .preview-stat-value { color: #00ff88; }
+        .style-15 .preview-chart { background: #16213e; border: 2px solid #0f3460; }
+        .style-15 .preview-bar { background: linear-gradient(180deg, #e94560, #00d9ff); }
+
+        /* 16. Elegant Dark 优雅深色 */
+        .style-16 .style-preview {
+            background: linear-gradient(180deg, #1a1a2e 0%, #0f0f1a 100%);
+        }
+        .style-16 .preview-sidebar { background: rgba(255,255,255,0.03); border-right: 1px solid rgba(255,255,255,0.08); }
+        .style-16 .preview-logo { background: linear-gradient(135deg, #c9a227, #f4d03f); color: #1a1a2e; }
+        .style-16 .preview-nav-item { background: rgba(255,255,255,0.05); }
+        .style-16 .preview-nav-item:first-of-type { background: rgba(201,162,39,0.3); border: 1px solid #c9a227; }
+        .style-16 .preview-header { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); }
+        .style-16 .preview-stat { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); }
+        .style-16 .preview-stat-value { color: #c9a227; }
+        .style-16 .preview-chart { background: rgba(255,255,255,0.03); }
+        .style-16 .preview-bar { background: linear-gradient(180deg, #c9a227, #f4d03f); }
+
+        /* 17. Material Design 材质设计 */
+        .style-17 .style-preview {
+            background: #fafafa;
+            color: #212121;
+        }
+        .style-17 .preview-sidebar { background: #6200ea; }
+        .style-17 .preview-logo { background: #fff; color: #6200ea; }
+        .style-17 .preview-nav-item { background: rgba(255,255,255,0.1); }
+        .style-17 .preview-nav-item:first-of-type { background: rgba(255,255,255,0.25); }
+        .style-17 .preview-header { background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .style-17 .preview-stat { background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .style-17 .preview-stat-value { color: #6200ea; }
+        .style-17 .preview-chart { background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .style-17 .preview-bar { background: #6200ea; }
+
+        /* 18. Claymorphism 粘土态 */
+        .style-18 .style-preview {
+            background: #e8f0fe;
+            color: #333;
+        }
+        .style-18 .preview-sidebar { background: #d4e4fc; border-radius: 0 20px 20px 0; box-shadow: 8px 8px 16px rgba(0,0,0,0.1), -8px -8px 16px #fff; }
+        .style-18 .preview-logo { background: #4285f4; border-radius: 12px; box-shadow: 4px 4px 8px rgba(0,0,0,0.15); }
+        .style-18 .preview-nav-item { background: #e8f0fe; border-radius: 10px; box-shadow: 4px 4px 8px rgba(0,0,0,0.1), -4px -4px 8px #fff; }
+        .style-18 .preview-header { background: #e8f0fe; border-radius: 16px; box-shadow: 8px 8px 16px rgba(0,0,0,0.1), -8px -8px 16px #fff; }
+        .style-18 .preview-stat { background: #e8f0fe; border-radius: 16px; box-shadow: 8px 8px 16px rgba(0,0,0,0.1), -8px -8px 16px #fff; }
+        .style-18 .preview-stat-value { color: #4285f4; }
+        .style-18 .preview-chart { background: #e8f0fe; border-radius: 16px; box-shadow: inset 4px 4px 8px rgba(0,0,0,0.08), inset -4px -4px 8px #fff; }
+        .style-18 .preview-bar { background: #4285f4; border-radius: 8px; }
+
+        /* 19. Brutalism 野蛮主义 */
+        .style-19 .style-preview {
+            background: #fff;
+            color: #000;
+        }
+        .style-19 .preview-sidebar { background: #000; }
+        .style-19 .preview-logo { background: #ff0000; border: 3px solid #000; }
+        .style-19 .preview-nav-item { background: #000; }
+        .style-19 .preview-nav-item:first-of-type { background: #ffff00; color: #000; }
+        .style-19 .preview-header { background: #fff; border: 3px solid #000; }
+        .style-19 .preview-stat { background: #fff; border: 3px solid #000; }
+        .style-19 .preview-stat:nth-child(1) { background: #ff0000; color: #fff; }
+        .style-19 .preview-stat:nth-child(2) { background: #0000ff; color: #fff; }
+        .style-19 .preview-stat:nth-child(3) { background: #ffff00; }
+        .style-19 .preview-chart { background: #fff; border: 3px solid #000; }
+        .style-19 .preview-bar { background: #000; }
+
+        /* 20. Flat Design 扁平设计 */
+        .style-20 .style-preview {
+            background: #ecf0f1;
+            color: #2c3e50;
+        }
+        .style-20 .preview-sidebar { background: #2c3e50; }
+        .style-20 .preview-logo { background: #3498db; }
+        .style-20 .preview-nav-item { background: #34495e; }
+        .style-20 .preview-nav-item:first-of-type { background: #3498db; }
+        .style-20 .preview-header { background: #fff; }
+        .style-20 .preview-stat { background: #fff; }
+        .style-20 .preview-stat:nth-child(1) .preview-stat-value { color: #3498db; }
+        .style-20 .preview-stat:nth-child(2) .preview-stat-value { color: #2ecc71; }
+        .style-20 .preview-stat:nth-child(3) .preview-stat-value { color: #e74c3c; }
+        .style-20 .preview-chart { background: #fff; }
+        .style-20 .preview-bar { background: #3498db; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>⚡ 运维平台 · 20套风格展示</h1>
+        <p>基于 UI UX Pro Max 设计数据库生成 · 点击卡片可查看大图</p>
+    </div>
+
+    <div class="gallery">
+        <!-- 1. Glassmorphism -->
+        <div class="style-card style-1" onclick="alert('风格1: Glassmorphism 玻璃态\n\n特点: 毛玻璃效果、半透明、模糊背景、渐变\n适用: 现代SaaS、金融科技、高端产品')">
+            <div class="style-preview">
+                <span class="style-number">01</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Glassmorphism 玻璃态</div>
+                <div class="style-desc">毛玻璃效果、半透明、模糊背景</div>
+                <div class="style-tags"><span class="tag">现代</span><span class="tag">高端</span><span class="tag">SaaS</span></div>
+            </div>
+        </div>
+
+        <!-- 2. Dark Mode OLED -->
+        <div class="style-card style-2" onclick="alert('风格2: Dark Mode OLED\n\n特点: 纯黑背景、省电、护眼、高对比度\n适用: 开发工具、长时间使用的应用')">
+            <div class="style-preview">
+                <span class="style-number">02</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Dark Mode OLED 深黑模式</div>
+                <div class="style-desc">纯黑背景、省电护眼、高对比度</div>
+                <div class="style-tags"><span class="tag">护眼</span><span class="tag">专业</span><span class="tag">开发</span></div>
+            </div>
+        </div>
+
+        <!-- 3. Neumorphism -->
+        <div class="style-card style-3">
+            <div class="style-preview">
+                <span class="style-number">03</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Neumorphism 新拟态</div>
+                <div class="style-desc">柔和阴影、凹凸效果、触感设计</div>
+                <div class="style-tags"><span class="tag">柔和</span><span class="tag">健康</span><span class="tag">简约</span></div>
+            </div>
+        </div>
+
+        <!-- 4. Cyberpunk -->
+        <div class="style-card style-4">
+            <div class="style-preview">
+                <span class="style-number">04</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Cyberpunk 赛博朋克</div>
+                <div class="style-desc">霓虹色、深紫背景、科幻感</div>
+                <div class="style-tags"><span class="tag">科幻</span><span class="tag">炫酷</span><span class="tag">游戏</span></div>
+            </div>
+        </div>
+
+        <!-- 5. Minimalism -->
+        <div class="style-card style-5">
+            <div class="style-preview">
+                <span class="style-number">05</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Minimalism 极简主义</div>
+                <div class="style-desc">纯净白色、大留白、专注内容</div>
+                <div class="style-tags"><span class="tag">简洁</span><span class="tag">高效</span><span class="tag">企业</span></div>
+            </div>
+        </div>
+
+        <!-- 6. Aurora -->
+        <div class="style-card style-6">
+            <div class="style-preview">
+                <span class="style-number">06</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Aurora UI 极光</div>
+                <div class="style-desc">渐变光晕、流动色彩、梦幻氛围</div>
+                <div class="style-tags"><span class="tag">梦幻</span><span class="tag">创意</span><span class="tag">高端</span></div>
+            </div>
+        </div>
+
+        <!-- 7. Corporate Blue -->
+        <div class="style-card style-7">
+            <div class="style-preview">
+                <span class="style-number">07</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Corporate Blue 企业蓝</div>
+                <div class="style-desc">专业蓝色、信任感、传统企业</div>
+                <div class="style-tags"><span class="tag">专业</span><span class="tag">信任</span><span class="tag">政企</span></div>
+            </div>
+        </div>
+
+        <!-- 8. Terminal -->
+        <div class="style-card style-8">
+            <div class="style-preview">
+                <span class="style-number">08</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Terminal 终端风格</div>
+                <div class="style-desc">绿色终端、代码感、极客风</div>
+                <div class="style-tags"><span class="tag">极客</span><span class="tag">开发</span><span class="tag">技术</span></div>
+            </div>
+        </div>
+
+        <!-- 9. Gradient Rich -->
+        <div class="style-card style-9">
+            <div class="style-preview">
+                <span class="style-number">09</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Gradient Rich 渐变丰富</div>
+                <div class="style-desc">多彩渐变、活力四射、年轻化</div>
+                <div class="style-tags"><span class="tag">活力</span><span class="tag">年轻</span><span class="tag">创意</span></div>
+            </div>
+        </div>
+
+        <!-- 10. Neon Glow -->
+        <div class="style-card style-10">
+            <div class="style-preview">
+                <span class="style-number">10</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Neon Glow 霓虹发光</div>
+                <div class="style-desc">发光效果、紫色主题、科技感</div>
+                <div class="style-tags"><span class="tag">炫酷</span><span class="tag">科技</span><span class="tag">夜店</span></div>
+            </div>
+        </div>
+
+        <!-- 11. Ocean Wave -->
+        <div class="style-card style-11">
+            <div class="style-preview">
+                <span class="style-number">11</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Ocean Wave 海洋波浪</div>
+                <div class="style-desc">深蓝渐变、宁静感、清爽</div>
+                <div class="style-tags"><span class="tag">清爽</span><span class="tag">宁静</span><span class="tag">健康</span></div>
+            </div>
+        </div>
+
+        <!-- 12. Sunset Warm -->
+        <div class="style-card style-12">
+            <div class="style-preview">
+                <span class="style-number">12</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Sunset Warm 日落暖色</div>
+                <div class="style-desc">橙红渐变、温暖感、活力</div>
+                <div class="style-tags"><span class="tag">温暖</span><span class="tag">活力</span><span class="tag">热情</span></div>
+            </div>
+        </div>
+
+        <!-- 13. Forest Nature -->
+        <div class="style-card style-13">
+            <div class="style-preview">
+                <span class="style-number">13</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Forest Nature 森林自然</div>
+                <div class="style-desc">深绿色调、自然感、环保</div>
+                <div class="style-tags"><span class="tag">自然</span><span class="tag">环保</span><span class="tag">健康</span></div>
+            </div>
+        </div>
+
+        <!-- 14. Monochrome -->
+        <div class="style-card style-14">
+            <div class="style-preview">
+                <span class="style-number">14</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Monochrome 单色</div>
+                <div class="style-desc">黑白灰、高级感、专业</div>
+                <div class="style-tags"><span class="tag">高级</span><span class="tag">专业</span><span class="tag">稳重</span></div>
+            </div>
+        </div>
+
+        <!-- 15. Vibrant Bold -->
+        <div class="style-card style-15">
+            <div class="style-preview">
+                <span class="style-number">15</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Vibrant Bold 鲜艳大胆</div>
+                <div class="style-desc">高饱和度、对比强烈、活力</div>
+                <div class="style-tags"><span class="tag">大胆</span><span class="tag">年轻</span><span class="tag">潮流</span></div>
+            </div>
+        </div>
+
+        <!-- 16. Elegant Dark -->
+        <div class="style-card style-16">
+            <div class="style-preview">
+                <span class="style-number">16</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Elegant Dark 优雅深色</div>
+                <div class="style-desc">深色背景、金色点缀、奢华</div>
+                <div class="style-tags"><span class="tag">奢华</span><span class="tag">高端</span><span class="tag">金融</span></div>
+            </div>
+        </div>
+
+        <!-- 17. Material Design -->
+        <div class="style-card style-17">
+            <div class="style-preview">
+                <span class="style-number">17</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Material Design 材质设计</div>
+                <div class="style-desc">卡片阴影、紫色主题、Google风</div>
+                <div class="style-tags"><span class="tag">Google</span><span class="tag">标准</span><span class="tag">通用</span></div>
+            </div>
+        </div>
+
+        <!-- 18. Claymorphism -->
+        <div class="style-card style-18">
+            <div class="style-preview">
+                <span class="style-number">18</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Claymorphism 粘土态</div>
+                <div class="style-desc">圆润阴影、3D立体、可爱风</div>
+                <div class="style-tags"><span class="tag">可爱</span><span class="tag">友好</span><span class="tag">教育</span></div>
+            </div>
+        </div>
+
+        <!-- 19. Brutalism -->
+        <div class="style-card style-19">
+            <div class="style-preview">
+                <span class="style-number">19</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Brutalism 野蛮主义</div>
+                <div class="style-desc">粗边框、原始色、反设计</div>
+                <div class="style-tags"><span class="tag">另类</span><span class="tag">艺术</span><span class="tag">个性</span></div>
+            </div>
+        </div>
+
+        <!-- 20. Flat Design -->
+        <div class="style-card style-20">
+            <div class="style-preview">
+                <span class="style-number">20</span>
+                <div class="preview-sidebar">
+                    <div class="preview-logo">⚡</div>
+                    <div class="preview-nav-item">🏠</div>
+                    <div class="preview-nav-item">📊</div>
+                    <div class="preview-nav-item">⚙️</div>
+                </div>
+                <div class="preview-main">
+                    <div class="preview-header"></div>
+                    <div class="preview-stats">
+                        <div class="preview-stat"><div class="preview-stat-value">1.2K</div><div class="preview-stat-label">服务器</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">99.9%</div><div class="preview-stat-label">可用率</div></div>
+                        <div class="preview-stat"><div class="preview-stat-value">23</div><div class="preview-stat-label">告警</div></div>
+                    </div>
+                    <div class="preview-chart">
+                        <div class="preview-bar" style="height: 60%"></div>
+                        <div class="preview-bar" style="height: 80%"></div>
+                        <div class="preview-bar" style="height: 45%"></div>
+                        <div class="preview-bar" style="height: 90%"></div>
+                        <div class="preview-bar" style="height: 65%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="style-info">
+                <div class="style-name">Flat Design 扁平设计</div>
+                <div class="style-desc">无阴影、纯色块、经典2D</div>
+                <div class="style-tags"><span class="tag">经典</span><span class="tag">清晰</span><span class="tag">通用</span></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 添加悬停效果
+        document.querySelectorAll('.style-card').forEach(card => {
+            card.addEventListener('mouseenter', function() {
+                this.style.boxShadow = '0 20px 60px rgba(0,0,0,0.5)';
+            });
+            card.addEventListener('mouseleave', function() {
+                this.style.boxShadow = 'none';
+            });
+        });
+    </script>
+</body>
+</html>

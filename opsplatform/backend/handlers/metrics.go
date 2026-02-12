@@ -66,7 +66,7 @@ func HandleCreateMetric(w http.ResponseWriter, r *http.Request) {
 
 	// 记录审计日志
 	newData, _ := json.Marshal(m)
-	AddAuditLog("create", "metric", m.CreatedBy, "", string(newData), "创建指标: "+m.Label, "")
+	AddAuditLogFromRequest(r, "create", "metric", m.CreatedBy, "", string(newData), "创建指标: "+m.Label)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(m)
@@ -98,7 +98,7 @@ func HandleUpdateMetric(w http.ResponseWriter, r *http.Request) {
 	// 记录审计日志
 	operator := r.Header.Get("X-Operator")
 	newData, _ := json.Marshal(m)
-	AddAuditLog("update", "metric", operator, "", string(newData), "更新指标: "+m.Label, "")
+	AddAuditLogFromRequest(r, "update", "metric", operator, "", string(newData), "更新指标: "+m.Label)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -124,7 +124,7 @@ func HandleDeleteMetric(w http.ResponseWriter, r *http.Request) {
 
 	// 记录审计日志
 	operator := r.Header.Get("X-Operator")
-	AddAuditLog("delete", "metric", operator, "", "", "删除指标: "+label, "")
+	AddAuditLogFromRequest(r, "delete", "metric", operator, "", "", "删除指标: "+label)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

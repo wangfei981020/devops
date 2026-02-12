@@ -70,4 +70,14 @@ func respondInternalError(w http.ResponseWriter, message string) {
 	respondError(w, http.StatusInternalServerError, message)
 }
 
+// sendError 发送错误响应（简化版）
+func sendError(w http.ResponseWriter, message string, status int) {
+	respondError(w, status, message)
+}
+
+// sendSuccess 发送成功响应（简化版）
+func sendSuccess(w http.ResponseWriter, data interface{}) {
+	respondSuccess(w, data)
+}
+
 

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ 运维平台 - 20套风格预览</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #0a0a0f;
+            color: #fff;
+            min-height: 100vh;
+            padding: 40px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        .header h1 {
+            font-size: 48px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #3b82f6, #8b5cf6, #06b6d4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 16px;
+        }
+
+        .header p {
+            color: #64748b;
+            font-size: 18px;
+            margin-bottom: 24px;
+        }
+
+        .tip {
+            display: inline-block;
+            background: rgba(59,130,246,0.1);
+            border: 1px solid rgba(59,130,246,0.3);
+            padding: 12px 24px;
+            border-radius: 8px;
+            color: #60a5fa;
+            font-size: 14px;
+        }
+
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 24px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .style-card {
+            background: #111827;
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid #1f2937;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .style-card:hover {
+            transform: translateY(-8px);
+            border-color: #3b82f6;
+            box-shadow: 0 20px 40px rgba(59,130,246,0.2);
+        }
+
+        .style-preview {
+            height: 200px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .style-preview iframe {
+            width: 200%;
+            height: 200%;
+            transform: scale(0.5);
+            transform-origin: top left;
+            border: none;
+            pointer-events: none;
+        }
+
+        .style-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.5) 100%);
+            display: flex;
+            align-items: flex-end;
+            padding: 16px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .style-card:hover .style-overlay {
+            opacity: 1;
+        }
+
+        .view-btn {
+            background: #3b82f6;
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .style-info {
+            padding: 20px;
+        }
+
+        .style-number {
+            display: inline-block;
+            background: #3b82f6;
+            color: #fff;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .style-name {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .style-desc {
+            font-size: 13px;
+            color: #64748b;
+            margin-bottom: 12px;
+        }
+
+        .style-tags {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .tag {
+            padding: 4px 10px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
+            font-size: 11px;
+            color: #94a3b8;
+        }
+
+        @media (max-width: 768px) {
+            body { padding: 20px; }
+            .header h1 { font-size: 32px; }
+            .gallery { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>⚡ 运维平台 · 20套风格</h1>
+        <p>基于 UI UX Pro Max 设计数据库生成 · 点击卡片查看完整页面</p>
+        <div class="tip">💡 选中喜欢的风格后告诉我编号，我帮你应用到正式项目</div>
+    </div>
+
+    <div class="gallery" id="gallery"></div>
+
+    <script>
+        const styles = [
+            { num: 1, file: 'style-01-glass.html', name: 'Glassmorphism 玻璃态', desc: '毛玻璃效果、半透明、模糊背景', tags: ['现代', '高端', 'SaaS'] },
+            { num: 2, file: 'style-02-dark.html', name: 'Dark Mode OLED 深黑', desc: '纯黑背景、省电护眼、高对比度', tags: ['护眼', '专业', '开发'] },
+            { num: 3, file: 'style-03-neumorphism.html', name: 'Neumorphism 新拟态', desc: '柔和阴影、凹凸效果、触感设计', tags: ['柔和', '健康', '简约'] },
+            { num: 4, file: 'style-04-cyberpunk.html', name: 'Cyberpunk 赛博朋克', desc: '霓虹色、深紫背景、科幻感', tags: ['科幻', '炫酷', '游戏'] },
+            { num: 5, file: 'style-05-minimal.html', name: 'Minimalism 极简主义', desc: '纯净白色、大留白、专注内容', tags: ['简洁', '高效', '企业'] },
+            { num: 6, file: 'style-06-aurora.html', name: 'Aurora UI 极光', desc: '渐变光晕、流动色彩、梦幻氛围', tags: ['梦幻', '创意', '高端'] },
+            { num: 7, file: 'style-07-corporate.html', name: 'Corporate Blue 企业蓝', desc: '专业蓝色、信任感、传统企业', tags: ['专业', '信任', '政企'] },
+            { num: 8, file: 'style-08-terminal.html', name: 'Terminal 终端风格', desc: '绿色终端、代码感、极客风', tags: ['极客', '开发', '技术'] },
+            { num: 9, file: 'style-09-gradient.html', name: 'Gradient Rich 渐变丰富', desc: '多彩渐变、活力四射、年轻化', tags: ['活力', '年轻', '创意'] },
+            { num: 10, file: 'style-10-neon.html', name: 'Neon Glow 霓虹发光', desc: '发光效果、紫色主题、科技感', tags: ['炫酷', '科技', '夜店'] },
+            { num: 11, file: 'style-11-ocean.html', name: 'Ocean Wave 海洋波浪', desc: '深蓝渐变、宁静感、清爽', tags: ['清爽', '宁静', '健康'] },
+            { num: 12, file: 'style-12-sunset.html', name: 'Sunset Warm 日落暖色', desc: '橙红渐变、温暖感、活力', tags: ['温暖', '活力', '热情'] },
+            { num: 13, file: 'style-13-forest.html', name: 'Forest Nature 森林自然', desc: '深绿色调、自然感、环保', tags: ['自然', '环保', '健康'] },
+            { num: 14, file: 'style-14-mono.html', name: 'Monochrome 单色', desc: '黑白灰、高级感、专业', tags: ['高级', '专业', '稳重'] },
+            { num: 15, file: 'style-15-vibrant.html', name: 'Vibrant Bold 鲜艳大胆', desc: '高饱和度、对比强烈、活力', tags: ['大胆', '年轻', '潮流'] },
+            { num: 16, file: 'style-16-elegant.html', name: 'Elegant Dark 优雅深色', desc: '深色背景、金色点缀、奢华', tags: ['奢华', '高端', '金融'] },
+            { num: 17, file: 'style-17-material.html', name: 'Material Design 材质设计', desc: '卡片阴影、紫色主题、Google风', tags: ['Google', '标准', '通用'] },
+            { num: 18, file: 'style-18-clay.html', name: 'Claymorphism 粘土态', desc: '圆润阴影、3D立体、可爱风', tags: ['可爱', '友好', '教育'] },
+            { num: 19, file: 'style-19-brutalism.html', name: 'Brutalism 野蛮主义', desc: '粗边框、原始色、反设计', tags: ['另类', '艺术', '个性'] },
+            { num: 20, file: 'style-20-flat.html', name: 'Flat Design 扁平设计', desc: '无阴影、纯色块、经典2D', tags: ['经典', '清晰', '通用'] },
+        ];
+
+        const gallery = document.getElementById('gallery');
+
+        styles.forEach(style => {
+            const card = document.createElement('div');
+            card.className = 'style-card';
+            card.onclick = () => window.open(style.file, '_blank');
+            
+            card.innerHTML = `
+                <div class="style-preview">
+                    <iframe src="${style.file}" loading="lazy"></iframe>
+                    <div class="style-overlay">
+                        <button class="view-btn">👁️ 查看完整页面</button>
+                    </div>
+                </div>
+                <div class="style-info">
+                    <span class="style-number">${String(style.num).padStart(2, '0')}</span>
+                    <h3 class="style-name">${style.name}</h3>
+                    <p class="style-desc">${style.desc}</p>
+                    <div class="style-tags">
+                        ${style.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}
+                    </div>
+                </div>
+            `;
+            
+            gallery.appendChild(card);
+        });
+    </script>
+</body>
+</html>
