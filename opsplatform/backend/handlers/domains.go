@@ -23,7 +23,7 @@ import (
 // HandleGetDomains 获取域名列表
 func HandleGetDomains(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`
-		SELECT id, project, module, domain_name, origin, cdn_provider, env,
+		SELECT id, project, module, domain_name, origin, COALESCE(origin_ip,''), cdn_provider, env,
 		       expire_time, cert_expire_time, status, remark,
 		       created_at, created_by, updated_at, updated_by 
 		FROM domains ORDER BY created_at DESC
@@ -38,8 +38,8 @@ func HandleGetDomains(w http.ResponseWriter, r *http.Request) {
 	domains := []models.Domain{}
 	for rows.Next() {
 		var d models.Domain
-		var module, origin, cdnProvider, env, expireTime, certExpireTime, remark, updatedAt, updatedBy sql.NullString
-		err := rows.Scan(&d.ID, &d.Project, &module, &d.DomainName, &origin, &cdnProvider, &env,
+		var module, origin, originIP, cdnProvider, env, expireTime, certExpireTime, remark, updatedAt, updatedBy sql.NullString
+		err := rows.Scan(&d.ID, &d.Project, &module, &d.DomainName, &origin, &originIP, &cdnProvider, &env,
 			&expireTime, &certExpireTime, &d.Status, &remark,
 			&d.CreatedAt, &d.CreatedBy, &updatedAt, &updatedBy)
 		if err != nil {
@@ -48,6 +48,7 @@ func HandleGetDomains(w http.ResponseWriter, r *http.Request) {
 		}
 		d.Module = module.String
 		d.Origin = origin.String
+		d.OriginIP = originIP.String
 		d.CDNProvider = cdnProvider.String
 		d.Env = env.String
 		if d.Env == "" {
@@ -112,10 +113,10 @@ func HandleAddDomain(w http.ResponseWriter, r *http.Request) {
 		domain.Env = "PROD"
 	}
 	_, err := database.DB.Exec(`
-		INSERT INTO domains (id, project, module, domain_name, origin, cdn_provider, env,
+		INSERT INTO domains (id, project, module, domain_name, origin, origin_ip, cdn_provider, env,
 		                     expire_time, cert_expire_time, status, remark, created_at, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, domain.ID, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.CDNProvider, domain.Env,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, domain.ID, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.OriginIP, domain.CDNProvider, domain.Env,
 		nullIfEmpty(domain.ExpireTime), nullIfEmpty(domain.CertExpireTime), domain.Status, domain.Remark,
 		domain.CreatedAt, domain.CreatedBy)
 
@@ -179,11 +180,11 @@ func HandleUpdateDomain(w http.ResponseWriter, r *http.Request) {
 		domain.Env = "PROD"
 	}
 	_, err = database.DB.Exec(`
-		UPDATE domains SET project = ?, module = ?, domain_name = ?, origin = ?, cdn_provider = ?, env = ?,
+		UPDATE domains SET project = ?, module = ?, domain_name = ?, origin = ?, origin_ip = ?, cdn_provider = ?, env = ?,
 		                   expire_time = ?, cert_expire_time = ?, status = ?, remark = ?,
 		                   updated_at = ?, updated_by = ?
 		WHERE id = ?
-	`, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.CDNProvider, domain.Env,
+	`, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.OriginIP, domain.CDNProvider, domain.Env,
 		nullIfEmpty(domain.ExpireTime), nullIfEmpty(domain.CertExpireTime), domain.Status, domain.Remark,
 		domain.UpdatedAt, domain.UpdatedBy, id)
 
@@ -357,10 +358,10 @@ func HandleBatchAddDomains(w http.ResponseWriter, r *http.Request) {
 			domain.Env = "PROD"
 		}
 		_, err := database.DB.Exec(`
-			INSERT INTO domains (id, project, module, domain_name, origin, cdn_provider, env,
+			INSERT INTO domains (id, project, module, domain_name, origin, origin_ip, cdn_provider, env,
 			                     expire_time, cert_expire_time, status, remark, created_at, created_by)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, domain.ID, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.CDNProvider, domain.Env,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, domain.ID, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.OriginIP, domain.CDNProvider, domain.Env,
 			nullIfEmpty(domain.ExpireTime), nullIfEmpty(domain.CertExpireTime), domain.Status, domain.Remark,
 			domain.CreatedAt, domain.CreatedBy)
 
@@ -710,17 +711,237 @@ func HandleExportDomains(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte{0xEF, 0xBB, 0xBF})
 
 	writer := csv.NewWriter(w)
-	writer.Write([]string{"ID", "项目", "模块", "域名", "回源", "CDN厂商", "域名到期时间", "证书到期时间", "状态", "备注", "创建时间", "创建人", "更新时间", "更新人"})
+	writer.Write([]string{"ID", "项目", "模块", "域名", "回源", "源站IP", "CDN厂商", "域名到期时间", "证书到期时间", "状态", "备注", "创建时间", "创建人", "更新时间", "更新人"})
 	for _, d := range filtered {
 		statusText := "启用"
 		if d.Status != "active" {
 			statusText = "停用"
 		}
 		writer.Write([]string{
-			d.ID, d.Project, d.Module, d.DomainName, d.Origin, d.CDNProvider,
+			d.ID, d.Project, d.Module, d.DomainName, d.Origin, d.OriginIP, d.CDNProvider,
 			d.ExpireTime, d.CertExpireTime, statusText, d.Remark,
 			d.CreatedAt, d.CreatedBy, d.UpdatedAt, d.UpdatedBy,
 		})
 	}
 	writer.Flush()
+}
+
+// HandleBatchRefreshDomains 批量刷新所有域名的到期时间
+func HandleBatchRefreshDomains(w http.ResponseWriter, r *http.Request) {
+	// 获取所有启用的域名
+	rows, err := database.DB.Query(`
+		SELECT id, domain_name FROM domains WHERE status = 'active'
+	`)
+	if err != nil {
+		http.Error(w, "查询域名失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var domains []struct {
+		ID     string
+		Domain string
+	}
+	for rows.Next() {
+		var d struct {
+			ID     string
+			Domain string
+		}
+		if err := rows.Scan(&d.ID, &d.Domain); err != nil {
+			continue
+		}
+		domains = append(domains, d)
+	}
+
+	total := len(domains)
+	successCount := 0
+	failCount := 0
+	var failDetails []string
+
+	// 分批处理，每批5个，控制并发
+	batchSize := 5
+	for i := 0; i < len(domains); i += batchSize {
+		end := i + batchSize
+		if end > len(domains) {
+			end = len(domains)
+		}
+		batch := domains[i:end]
+
+		// 并发处理当前批次
+		type result struct {
+			id      string
+			domain  string
+			success bool
+			err     string
+		}
+		results := make(chan result, len(batch))
+
+		for _, d := range batch {
+			go func(id, domain string) {
+				res := result{id: id, domain: domain, success: true}
+
+				// 获取证书到期时间
+				certExpire, certErr := getCertExpireTime(domain)
+				if certErr != nil {
+					res.success = false
+					res.err = "证书: " + certErr.Error()
+				}
+
+				// 获取域名到期时间
+				domainExpire, domainErr := getDomainExpireTime(domain)
+				if domainErr != nil && certErr != nil {
+					// 两个都失败才算失败
+					results <- res
+					return
+				}
+
+				// 更新数据库
+				updateSQL := "UPDATE domains SET updated_at = NOW()"
+				var args []interface{}
+				if certErr == nil && certExpire != "" {
+					updateSQL += ", cert_expire_time = ?"
+					args = append(args, certExpire)
+				}
+				if domainErr == nil && domainExpire != "" {
+					updateSQL += ", expire_time = ?"
+					args = append(args, domainExpire)
+				}
+				updateSQL += " WHERE id = ?"
+				args = append(args, id)
+
+				if len(args) > 1 { // 至少有一个时间需要更新
+					_, err := database.DB.Exec(updateSQL, args...)
+					if err != nil {
+						res.success = false
+						res.err = "更新失败: " + err.Error()
+					} else {
+						res.success = true
+					}
+				}
+
+				results <- res
+			}(d.ID, d.Domain)
+		}
+
+		// 收集结果
+		for range batch {
+			res := <-results
+			if res.success {
+				successCount++
+			} else {
+				failCount++
+				if len(failDetails) < 20 { // 最多记录20条失败详情
+					failDetails = append(failDetails, res.domain+": "+res.err)
+				}
+			}
+		}
+
+		// 批次间短暂休息，避免请求过于密集
+		if end < len(domains) {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":      true,
+		"message":      fmt.Sprintf("批量刷新完成：成功 %d 个，失败 %d 个，共 %d 个", successCount, failCount, total),
+		"total":        total,
+		"success_count": successCount,
+		"fail_count":   failCount,
+		"fail_details": failDetails,
+	})
+}
+
+// RefreshAllDomainsExpire 定时任务：刷新所有域名到期时间
+// 适合大量域名的场景，分批处理避免资源耗尽
+func RefreshAllDomainsExpire() {
+	log.Println("[定时任务] 开始刷新所有域名到期时间...")
+
+	// 获取所有启用的域名
+	rows, err := database.DB.Query(`
+		SELECT id, domain_name FROM domains WHERE status = 'active'
+	`)
+	if err != nil {
+		log.Printf("[定时任务] 查询域名失败: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var domains []struct {
+		ID     string
+		Domain string
+	}
+	for rows.Next() {
+		var d struct {
+			ID     string
+			Domain string
+		}
+		if err := rows.Scan(&d.ID, &d.Domain); err != nil {
+			continue
+		}
+		domains = append(domains, d)
+	}
+
+	total := len(domains)
+	successCount := 0
+	failCount := 0
+
+	log.Printf("[定时任务] 共 %d 个域名需要刷新", total)
+
+	// 分批处理，每批5个，每批间隔1秒
+	batchSize := 5
+	for i := 0; i < len(domains); i += batchSize {
+		end := i + batchSize
+		if end > len(domains) {
+			end = len(domains)
+		}
+		batch := domains[i:end]
+
+		// 串行处理当前批次，避免过多并发
+		for _, d := range batch {
+			// 获取证书到期时间
+			certExpire, _ := getCertExpireTime(d.Domain)
+
+			// 获取域名到期时间
+			domainExpire, _ := getDomainExpireTime(d.Domain)
+
+			// 更新数据库
+			updateSQL := "UPDATE domains SET updated_at = NOW()"
+			var args []interface{}
+			if certExpire != "" {
+				updateSQL += ", cert_expire_time = ?"
+				args = append(args, certExpire)
+			}
+			if domainExpire != "" {
+				updateSQL += ", expire_time = ?"
+				args = append(args, domainExpire)
+			}
+			updateSQL += " WHERE id = ?"
+			args = append(args, d.ID)
+
+			if len(args) > 1 {
+				_, err := database.DB.Exec(updateSQL, args...)
+				if err != nil {
+					failCount++
+				} else {
+					successCount++
+				}
+			} else {
+				failCount++
+			}
+		}
+
+		// 批次间休息1秒，避免请求过于密集
+		if end < len(domains) {
+			time.Sleep(1 * time.Second)
+		}
+
+		// 每处理100个打印进度
+		if (i+batchSize)%100 == 0 || end == len(domains) {
+			log.Printf("[定时任务] 进度: %d/%d (成功: %d, 失败: %d)", end, total, successCount, failCount)
+		}
+	}
+
+	log.Printf("[定时任务] 域名到期时间刷新完成：成功 %d 个，失败 %d 个，共 %d 个", successCount, failCount, total)
 }

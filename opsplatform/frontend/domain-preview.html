@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>域名管理 - 方案B预览</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --card-bg: #1c2128;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --border-color: #30363d;
+            --accent-blue: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-yellow: #d29922;
+            --accent-red: #f85149;
+            --accent-cyan: #39c5cf;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 24px;
+            min-height: 100vh;
+        }
+
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding: 20px 24px;
+            background: var(--card-bg);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+
+        .page-title {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            color: white;
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: white;
+        }
+
+        .btn-default {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        /* 筛选栏 */
+        .filter-bar {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .filter-select {
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 14px;
+            min-width: 140px;
+        }
+
+        /* 统计卡片 */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .stat-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+
+        .stat-icon.blue { background: linear-gradient(135deg, #3b82f6, #2563eb); }
+        .stat-icon.green { background: linear-gradient(135deg, #10b981, #059669); }
+        .stat-icon.yellow { background: linear-gradient(135deg, #f59e0b, #d97706); }
+        .stat-icon.red { background: linear-gradient(135deg, #ef4444, #dc2626); }
+
+        .stat-info h3 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .stat-info p {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        /* 模块分组表格 */
+        .module-table {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .module-group {
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .module-group:last-child {
+            border-bottom: none;
+        }
+
+        .module-header {
+            display: flex;
+            align-items: center;
+            padding: 14px 20px;
+            background: var(--bg-tertiary);
+            cursor: pointer;
+            transition: background 0.2s;
+            user-select: none;
+        }
+
+        .module-header:hover {
+            background: #2d333b;
+        }
+
+        .module-toggle {
+            width: 20px;
+            height: 20px;
+            margin-right: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            transition: transform 0.2s;
+        }
+
+        .module-toggle.expanded {
+            transform: rotate(90deg);
+        }
+
+        .module-info {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .module-project {
+            font-weight: 600;
+            color: var(--accent-cyan);
+            min-width: 100px;
+        }
+
+        .module-env {
+            padding: 2px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            min-width: 50px;
+            text-align: center;
+        }
+
+        .module-env.prod {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+        }
+
+        .module-env.uat {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: white;
+        }
+
+        .module-env.dev {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+        }
+
+        .module-name {
+            font-weight: 500;
+            color: var(--text-primary);
+            min-width: 80px;
+        }
+
+        .module-stats {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-left: auto;
+        }
+
+        .module-stat {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .module-stat .count {
+            background: var(--bg-secondary);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .status-dot.ok { background: var(--accent-green); }
+        .status-dot.warning { background: var(--accent-yellow); }
+        .status-dot.danger { background: var(--accent-red); }
+
+        .module-actions {
+            display: flex;
+            gap: 8px;
+            margin-left: 20px;
+        }
+
+        .module-actions .btn {
+            padding: 4px 10px;
+            font-size: 12px;
+        }
+
+        /* 域名列表 */
+        .domain-list {
+            display: none;
+            background: var(--bg-secondary);
+        }
+
+        .domain-list.show {
+            display: block;
+        }
+
+        .domain-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .domain-table th {
+            text-align: left;
+            padding: 10px 16px;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .domain-table td {
+            padding: 12px 16px;
+            font-size: 14px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .domain-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .domain-table tr:hover {
+            background: rgba(56, 139, 253, 0.05);
+        }
+
+        .domain-name {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .domain-name .indent {
+            color: var(--text-muted);
+            margin-right: 4px;
+        }
+
+        .domain-link {
+            color: var(--accent-blue);
+            text-decoration: none;
+        }
+
+        .domain-link:hover {
+            text-decoration: underline;
+        }
+
+        .expiry-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .expiry-badge.ok {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+        }
+
+        .expiry-badge.warning {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+        }
+
+        .expiry-badge.danger {
+            background: rgba(239, 68, 68, 0.15);
+            color: #f87171;
+        }
+
+        .action-icons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .action-icon-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .action-icon-btn:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .action-icon-btn.danger:hover {
+            background: rgba(239, 68, 68, 0.15);
+            color: #f87171;
+        }
+
+        /* 空状态提示 */
+        .empty-hint {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-muted);
+        }
+
+        /* 设计说明 */
+        .design-notes {
+            margin-top: 40px;
+            padding: 24px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+        }
+
+        .design-notes h2 {
+            font-size: 18px;
+            margin-bottom: 16px;
+            color: var(--accent-cyan);
+        }
+
+        .design-notes ul {
+            list-style: none;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+
+        .design-notes li {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .design-notes li::before {
+            content: "✓";
+            color: var(--accent-green);
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="page-header">
+        <h1 class="page-title">域名管理</h1>
+        <div class="header-actions">
+            <button class="btn btn-default">↻ 刷新</button>
+            <button class="btn btn-warning">🔄 批量刷新到期时间</button>
+            <button class="btn btn-default">↓ 导出</button>
+            <button class="btn btn-default">⊞ 批量添加</button>
+            <button class="btn btn-primary">+ 添加域名</button>
+        </div>
+    </div>
+
+    <!-- 筛选栏 -->
+    <div class="filter-bar">
+        <select class="filter-select">
+            <option>所有项目</option>
+            <option>test</option>
+            <option>project2</option>
+        </select>
+        <select class="filter-select">
+            <option>所有环境</option>
+            <option>PROD</option>
+            <option>UAT</option>
+            <option>DEV</option>
+        </select>
+        <select class="filter-select">
+            <option>所有模块</option>
+            <option>web</option>
+            <option>api</option>
+            <option>admin</option>
+        </select>
+        <select class="filter-select">
+            <option>所有状态</option>
+            <option>正常</option>
+            <option>即将到期</option>
+            <option>已过期</option>
+        </select>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="stats-row">
+        <div class="stat-card">
+            <div class="stat-icon blue">📦</div>
+            <div class="stat-info">
+                <h3>8</h3>
+                <p>模块总数</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon green">🌐</div>
+            <div class="stat-info">
+                <h3>24</h3>
+                <p>域名总数</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon yellow">⚠️</div>
+            <div class="stat-info">
+                <h3>3</h3>
+                <p>证书即将到期</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon red">🔴</div>
+            <div class="stat-info">
+                <h3>0</h3>
+                <p>已过期</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模块分组表格 -->
+    <div class="module-table">
+        <!-- 模块1: test / PROD / web -->
+        <div class="module-group">
+            <div class="module-header" onclick="toggleModule(this)">
+                <div class="module-toggle expanded">▶</div>
+                <div class="module-info">
+                    <span class="module-project">test</span>
+                    <span class="module-env prod">PROD</span>
+                    <span class="module-name">web</span>
+                </div>
+                <div class="module-stats">
+                    <div class="module-stat">
+                        <span>域名</span>
+                        <span class="count">3</span>
+                    </div>
+                    <div class="module-stat">
+                        <span class="status-dot ok"></span>
+                        <span>域名正常</span>
+                    </div>
+                    <div class="module-stat">
+                        <span class="status-dot warning"></span>
+                        <span>证书 2个预警</span>
+                    </div>
+                </div>
+                <div class="module-actions">
+                    <button class="btn btn-default">+ 添加</button>
+                    <button class="btn btn-default">⟲ 刷新</button>
+                </div>
+            </div>
+            <div class="domain-list show">
+                <table class="domain-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 30%">域名</th>
+                            <th>回源</th>
+                            <th>CDN</th>
+                            <th>域名到期</th>
+                            <th>证书到期</th>
+                            <th>更新时间</th>
+                            <th style="width: 100px">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>
+                                <div class="domain-name">
+                                    <span class="indent">├─</span>
+                                    <a href="#" class="domain-link">www.baidu.com</a>
+                                </div>
+                            </td>
+                            <td style="color: var(--text-muted)">-</td>
+                            <td style="color: var(--text-muted)">-</td>
+                            <td>
+                                <span class="expiry-badge ok">
+                                    2028-10-11
+                                    <small>964天</small>
+                                </span>
+                            </td>
+                            <td>
+                                <span class="expiry-badge warning">
+                                    2026-08-10
+                                    <small>171天</small>
+                                </span>
+                            </td>
+                            <td style="color: var(--text-secondary); font-size: 13px;">2026-02-20 13:08</td>
+                            <td>
+                                <div class="action-icons">
+                                    <button class="action-icon-btn" title="刷新">⟲</button>
+                                    <button class="action-icon-btn" title="编辑">✎</button>
+                                    <button class="action-icon-btn danger" title="删除">🗑</button>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <div class="domain-name">
+                                    <span class="indent">├─</span>
+                                    <a href="#" class="domain-link">m.baidu.com</a>
+                                </div>
+                            </td>
+                            <td style="color: var(--text-muted)">-</td>
+                            <td style="color: var(--text-muted)">-</td>
+                            <td>
+                                <span class="expiry-badge ok">
+                                    2028-10-11
+                                    <small>964天</small>
+                                </span>
+                            </td>
+                            <td>
+                                <span class="expiry-badge warning">
+                                    2026-08-10
+                                    <small>171天</small>
+                                </span>
+                            </td>
+                            <td style="color: var(--text-secondary); font-size: 13px;">2026-02-20 13:08</td>
+                            <td>
+                                <div class="action-icons">
+                                    <button class="action-icon-btn" title="刷新">⟲</button>
+                                    <button class="action-icon-btn" title="编辑">✎</button>
+                                    <button class="action-icon-btn danger" title="删除">🗑</button>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <div class="domain-name">
+                                    <span class="indent">└─</span>
+                                    <a href="#" class="domain-link">static.baidu.com</a>
+                                </div>
+                            </td>
+                            <td style="color: var(--text-muted)">-</td>
+                            <td style="color: var(--text-muted)">-</td>
+                            <td>
+                                <span class="expiry-badge ok">
+                                    2028-10-11
+                                    <small>964天</small>
+                                </span>
+                            </td>
+                            <td>
+                                <span class="expiry-badge ok">
+                                    2027-01-15
+                                    <small>329天</small>
+                                </span>
+                            </td>
+                            <td style="color: var(--text-secondary); font-size: 13px;">2026-02-20 13:08</td>
+                            <td>
+                                <div class="action-icons">
+                                    <button class="action-icon-btn" title="刷新">⟲</button>
+                                    <button class="action-icon-btn" title="编辑">✎</button>
+                                    <button class="action-icon-btn danger" title="删除">🗑</button>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 模块2: test / PROD / api -->
+        <div class="module-group">
+            <div class="module-header" onclick="toggleModule(this)">
+                <div class="module-toggle">▶</div>
+                <div class="module-info">
+                    <span class="module-project">test</span>
+                    <span class="module-env prod">PROD</span>
+                    <span class="module-name">api</span>
+                </div>
+                <div class="module-stats">
+                    <div class="module-stat">
+                        <span>域名</span>
+                        <span class="count">2</span>
+                    </div>
+                    <div class="module-stat">
+                        <span class="status-dot ok"></span>
+                        <span>域名正常</span>
+                    </div>
+                    <div class="module-stat">
+                        <span class="status-dot ok"></span>
+                        <span>证书正常</span>
+                    </div>
+                </div>
+                <div class="module-actions">
+                    <button class="btn btn-default">+ 添加</button>
+                    <button class="btn btn-default">⟲ 刷新</button>
+                </div>
+            </div>
+            <div class="domain-list">
+                <table class="domain-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 30%">域名</th>
+                            <th>回源</th>
+                            <th>CDN</th>
+                            <th>域名到期</th>
+                            <th>证书到期</th>
+                            <th>更新时间</th>
+                            <th style="width: 100px">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>
+                                <div class="domain-name">
+                                    <span class="indent">├─</span>
+                                    <a href="#" class="domain-link">api.baidu.com</a>
+                                </div>
+                            </td>
+                            <td style="color: var(--text-muted)">10.0.0.1</td>
+                            <td>Cloudflare</td>
+                            <td>
+                                <span class="expiry-badge ok">
+                                    2028-10-11
+                                    <small>964天</small>
+                                </span>
+                            </td>
+                            <td>
+                                <span class="expiry-badge ok">
+                                    2027-06-15
+                                    <small>480天</small>
+                                </span>
+                            </td>
+                            <td style="color: var(--text-secondary); font-size: 13px;">2026-02-20 13:08</td>
+                            <td>
+                                <div class="action-icons">
+                                    <button class="action-icon-btn" title="刷新">⟲</button>
+                                    <button class="action-icon-btn" title="编辑">✎</button>
+                                    <button class="action-icon-btn danger" title="删除">🗑</button>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <div class="domain-name">
+                                    <span class="indent">└─</span>
+                                    <a href="#" class="domain-link">api2.baidu.com</a>
+                                </div>
+                            </td>
+                            <td style="color: var(--text-muted)">10.0.0.2</td>
+                            <td>Cloudflare</td>
+                            <td>
+                                <span class="expiry-badge ok">
+                                    2028-10-11
+                                    <small>964天</small>
+                                </span>
+                            </td>
+                            <td>
+                                <span class="expiry-badge ok">
+                                    2027-06-15
+                                    <small>480天</small>
+                                </span>
+                            </td>
+                            <td style="color: var(--text-secondary); font-size: 13px;">2026-02-20 13:08</td>
+                            <td>
+                                <div class="action-icons">
+                                    <button class="action-icon-btn" title="刷新">⟲</button>
+                                    <button class="action-icon-btn" title="编辑">✎</button>
+                                    <button class="action-icon-btn danger" title="删除">🗑</button>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 模块3: test / UAT / web -->
+        <div class="module-group">
+            <div class="module-header" onclick="toggleModule(this)">
+                <div class="module-toggle">▶</div>
+                <div class="module-info">
+                    <span class="module-project">test</span>
+                    <span class="module-env uat">UAT</span>
+                    <span class="module-name">web</span>
+                </div>
+                <div class="module-stats">
+                    <div class="module-stat">
+                        <span>域名</span>
+                        <span class="count">1</span>
+                    </div>
+                    <div class="module-stat">
+                        <span class="status-dot ok"></span>
+                        <span>域名正常</span>
+                    </div>
+                    <div class="module-stat">
+                        <span class="status-dot ok"></span>
+                        <span>证书正常</span>
+                    </div>
+                </div>
+                <div class="module-actions">
+                    <button class="btn btn-default">+ 添加</button>
+                    <button class="btn btn-default">⟲ 刷新</button>
+                </div>
+            </div>
+            <div class="domain-list">
+                <table class="domain-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 30%">域名</th>
+                            <th>回源</th>
+                            <th>CDN</th>
+                            <th>域名到期</th>
+                            <th>证书到期</th>
+                            <th>更新时间</th>
+                            <th style="width: 100px">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>
+                                <div class="domain-name">
+                                    <span class="indent">└─</span>
+                                    <a href="#" class="domain-link">uat.baidu.com</a>
+                                </div>
+                            </td>
+                            <td style="color: var(--text-muted)">-</td>
+                            <td style="color: var(--text-muted)">-</td>
+                            <td>
+                                <span class="expiry-badge ok">
+                                    2028-10-11
+                                    <small>964天</small>
+                                </span>
+                            </td>
+                            <td>
+                                <span class="expiry-badge ok">
+                                    2027-03-20
+                                    <small>393天</small>
+                                </span>
+                            </td>
+                            <td style="color: var(--text-secondary); font-size: 13px;">2026-02-20 13:08</td>
+                            <td>
+                                <div class="action-icons">
+                                    <button class="action-icon-btn" title="刷新">⟲</button>
+                                    <button class="action-icon-btn" title="编辑">✎</button>
+                                    <button class="action-icon-btn danger" title="删除">🗑</button>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 模块4: project2 / PROD / admin -->
+        <div class="module-group">
+            <div class="module-header" onclick="toggleModule(this)">
+                <div class="module-toggle">▶</div>
+                <div class="module-info">
+                    <span class="module-project">project2</span>
+                    <span class="module-env prod">PROD</span>
+                    <span class="module-name">admin</span>
+                </div>
+                <div class="module-stats">
+                    <div class="module-stat">
+                        <span>域名</span>
+                        <span class="count">4</span>
+                    </div>
+                    <div class="module-stat">
+                        <span class="status-dot ok"></span>
+                        <span>域名正常</span>
+                    </div>
+                    <div class="module-stat">
+                        <span class="status-dot danger"></span>
+                        <span>证书 1个过期</span>
+                    </div>
+                </div>
+                <div class="module-actions">
+                    <button class="btn btn-default">+ 添加</button>
+                    <button class="btn btn-default">⟲ 刷新</button>
+                </div>
+            </div>
+            <div class="domain-list">
+                <!-- 隐藏内容 -->
+            </div>
+        </div>
+
+        <!-- 模块5: project2 / DEV / api -->
+        <div class="module-group">
+            <div class="module-header" onclick="toggleModule(this)">
+                <div class="module-toggle">▶</div>
+                <div class="module-info">
+                    <span class="module-project">project2</span>
+                    <span class="module-env dev">DEV</span>
+                    <span class="module-name">api</span>
+                </div>
+                <div class="module-stats">
+                    <div class="module-stat">
+                        <span>域名</span>
+                        <span class="count">2</span>
+                    </div>
+                    <div class="module-stat">
+                        <span class="status-dot ok"></span>
+                        <span>域名正常</span>
+                    </div>
+                    <div class="module-stat">
+                        <span class="status-dot ok"></span>
+                        <span>证书正常</span>
+                    </div>
+                </div>
+                <div class="module-actions">
+                    <button class="btn btn-default">+ 添加</button>
+                    <button class="btn btn-default">⟲ 刷新</button>
+                </div>
+            </div>
+            <div class="domain-list">
+                <!-- 隐藏内容 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 设计说明 -->
+    <div class="design-notes">
+        <h2>📋 方案B 设计说明</h2>
+        <ul>
+            <li>按 项目 / 环境 / 模块 三级分组展示</li>
+            <li>每个模块可折叠展开，默认展开有预警的</li>
+            <li>模块行显示域名数量和到期预警汇总</li>
+            <li>支持在模块级别快速添加域名</li>
+            <li>环境用不同颜色区分（PROD红/UAT黄/DEV绿）</li>
+            <li>到期时间用徽章显示，含剩余天数</li>
+            <li>顶部统计卡片一目了然</li>
+            <li>筛选栏支持多维度筛选</li>
+        </ul>
+    </div>
+
+    <script>
+        function toggleModule(header) {
+            const toggle = header.querySelector('.module-toggle');
+            const list = header.nextElementSibling;
+            
+            toggle.classList.toggle('expanded');
+            list.classList.toggle('show');
+        }
+    </script>
+</body>
+</html>

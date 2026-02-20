@@ -531,6 +531,22 @@ const API = {
         }
     },
 
+    // ========== 商户管理 ==========
+    async getMerchants(project = '', env = '') {
+        let p = [];
+        if (project) p.push('project=' + encodeURIComponent(project));
+        if (env) p.push('env=' + encodeURIComponent(env));
+        return this.request('GET', '/merchants' + (p.length ? '?' + p.join('&') : ''));
+    },
+    async createMerchant(m) { return this.request('POST', '/merchants', m); },
+    async batchCreateMerchants(list) { return this.request('POST', '/merchants/batch', list); },
+    async updateMerchant(id, m) { return this.request('PUT', '/merchants/' + id, m); },
+    async deleteMerchant(id) { return this.request('DELETE', '/merchants/' + id); },
+    async exportMerchants() {
+        const res = await this.request('GET', '/merchants/export');
+        if (res.ok) { const blob = await res.blob(); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `merchants_${new Date().toISOString().slice(0,10)}.csv`; link.click(); URL.revokeObjectURL(link.href); }
+    },
+
     // ========== 服务配置管理 ==========
     async getServiceConfigs(project = '', env = '', type = '') {
         let params = [];

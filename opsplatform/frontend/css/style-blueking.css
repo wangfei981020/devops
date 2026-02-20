@@ -282,10 +282,24 @@ body {
     height: 44px;
     background: transparent;
     border: none;
+    outline: none;
     color: rgba(255, 255, 255, 0.85);
     font-size: 14px;
     cursor: pointer;
     transition: all 0.3s;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.nav-group-header:focus {
+    outline: none;
+    box-shadow: none;
+}
+
+.nav-group-header * {
+    outline: none;
+    border: none;
+    box-shadow: none;
 }
 
 .nav-group-header:hover {
@@ -311,10 +325,27 @@ body {
 }
 
 .nav-group-arrow {
-    font-size: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
     color: rgba(255, 255, 255, 0.45);
     margin-left: auto;
-    transition: transform 0.3s;
+    transition: transform 0.2s ease;
+    border: none;
+    background: transparent;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.nav-group-arrow svg {
+    width: 14px;
+    height: 14px;
+}
+
+.nav-group-arrow.expanded {
+    transform: rotate(90deg);
 }
 
 /* 子菜单 */
@@ -353,6 +384,7 @@ body {
     display: flex;
     flex-direction: column;
     background: var(--content-bg);
+    overflow-x: hidden;
 }
 
 /* 顶部栏 - 精确复刻 */
@@ -512,6 +544,26 @@ body {
     margin: 4px 0;
 }
 
+.user-menu-section-title {
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 6px 16px 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+}
+
+.user-menu-item.active {
+    background: var(--accent-cyan-bg);
+    color: var(--accent-cyan);
+}
+
+.user-menu-item .menu-check {
+    margin-left: auto;
+    color: var(--accent-cyan);
+    font-weight: bold;
+}
+
 /* ==================== 页面容器 ==================== */
 .page-container {
     flex: 1;
@@ -586,6 +638,26 @@ body {
 .btn-secondary:hover {
     color: var(--primary);
     border-color: var(--primary);
+}
+
+.btn-warning {
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    border-color: #f59e0b;
+    color: #fff;
+}
+
+.btn-warning:hover {
+    background: linear-gradient(135deg, #fbbf24, #f59e0b);
+    border-color: #fbbf24;
+    transform: translateY(-1px);
+}
+
+.btn-warning:disabled {
+    background: #9ca3af;
+    border-color: #9ca3af;
+    cursor: not-allowed;
+    opacity: 0.7;
+    transform: none;
 }
 
 .btn-danger {
@@ -1537,10 +1609,12 @@ body {
 /* 域名状态标签 */
 .domain-status-badge {
     display: inline-block;
-    padding: 2px 10px;
+    padding: 4px 12px;
     font-size: 12px;
     font-weight: 500;
-    border-radius: 10px;
+    border-radius: 12px;
+    white-space: nowrap;
+    line-height: 1;
 }
 
 .domain-status-badge.domain-status-active {
@@ -5378,3 +5452,835 @@ a:hover { color: var(--primary-hover); }
 [data-theme="dark"] .task-category-security { background: #2b1d11; color: #ffc53d; }
 [data-theme="dark"] .task-category-other { background: #262626; color: #8c8c8c; }
 [data-theme="dark"] .task-delay-tag { background: #2a1215; color: #ff7875; border-color: #58181c; }
+
+/* ==================== 商户管理标签输入 ==================== */
+.merchant-tags-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--card-bg);
+    min-height: 34px;
+    align-items: center;
+    cursor: text;
+}
+.merchant-tags-wrap:focus-within {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+}
+.merchant-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    background: #e6f7ff;
+    color: #1890ff;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.merchant-tag-close {
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    opacity: 0.6;
+}
+.merchant-tag-close:hover { opacity: 1; color: #ff4d4f; }
+.merchant-tag-input {
+    border: none;
+    outline: none;
+    flex: 1;
+    min-width: 100px;
+    font-size: 12px;
+    background: transparent;
+    color: var(--text-primary);
+    padding: 2px 0;
+}
+[data-theme="dark"] .merchant-tag {
+    background: #111d2c;
+    color: #40a9ff;
+}
+.row-selected {
+    background: rgba(24, 144, 255, 0.06) !important;
+}
+[data-theme="dark"] .row-selected {
+    background: rgba(24, 144, 255, 0.12) !important;
+}
+
+/* ============================================
+   商户管理 - 专业标签颜色系统
+   ============================================ */
+
+/* 项目标签基础样式 */
+.tag-project {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    letter-spacing: 0.3px;
+    border: 1px solid transparent;
+}
+
+/* 项目颜色变体 */
+.tag-project-red { background: #FEF2F2; color: #B91C1C; border-color: #FECACA; }
+.tag-project-orange { background: #FFF7ED; color: #C2410C; border-color: #FED7AA; }
+.tag-project-amber { background: #FFFBEB; color: #B45309; border-color: #FDE68A; }
+.tag-project-emerald { background: #ECFDF5; color: #047857; border-color: #A7F3D0; }
+.tag-project-teal { background: #F0FDFA; color: #0F766E; border-color: #99F6E4; }
+.tag-project-cyan { background: #ECFEFF; color: #0E7490; border-color: #A5F3FC; }
+.tag-project-blue { background: #EFF6FF; color: #1D4ED8; border-color: #BFDBFE; }
+.tag-project-indigo { background: #EEF2FF; color: #4338CA; border-color: #C7D2FE; }
+.tag-project-violet { background: #F5F3FF; color: #6D28D9; border-color: #DDD6FE; }
+.tag-project-purple { background: #FAF5FF; color: #7C3AED; border-color: #E9D5FF; }
+.tag-project-pink { background: #FDF2F8; color: #BE185D; border-color: #FBCFE8; }
+.tag-project-rose { background: #FFF1F2; color: #BE123C; border-color: #FECDD3; }
+
+/* 环境标签 */
+.tag-env {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.tag-env-prod {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(5, 150, 105, 0.3);
+}
+.tag-env-prod::before { content: "●"; font-size: 8px; }
+
+.tag-env-uat {
+    background: linear-gradient(135deg, #EA580C 0%, #C2410C 100%);
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(234, 88, 12, 0.3);
+}
+.tag-env-uat::before { content: "◐"; font-size: 8px; }
+
+.tag-env-dev {
+    background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%);
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+}
+.tag-env-dev::before { content: "◯"; font-size: 8px; }
+
+/* 网站方标签基础样式 */
+.tag-website {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+    letter-spacing: 0.3px;
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+/* 网站方颜色变体 - 使用渐变色区分不同网站 */
+.tag-website-teal { background: linear-gradient(135deg, #0F766E 0%, #115E59 100%); }
+.tag-website-indigo { background: linear-gradient(135deg, #4F46E5 0%, #4338CA 100%); }
+.tag-website-purple { background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%); }
+.tag-website-pink { background: linear-gradient(135deg, #DB2777 0%, #BE185D 100%); }
+.tag-website-rose { background: linear-gradient(135deg, #E11D48 0%, #BE123C 100%); }
+.tag-website-orange { background: linear-gradient(135deg, #EA580C 0%, #C2410C 100%); }
+.tag-website-amber { background: linear-gradient(135deg, #D97706 0%, #B45309 100%); }
+.tag-website-lime { background: linear-gradient(135deg, #65A30D 0%, #4D7C0F 100%); }
+.tag-website-emerald { background: linear-gradient(135deg, #059669 0%, #047857 100%); }
+.tag-website-cyan { background: linear-gradient(135deg, #0891B2 0%, #0E7490 100%); }
+.tag-website-sky { background: linear-gradient(135deg, #0284C7 0%, #0369A1 100%); }
+.tag-website-blue { background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%); }
+
+/* ============================================
+   域名到期时间徽章 - 专业状态指示器
+   ============================================ */
+
+/* 到期时间徽章基础样式 */
+.expiry-badge {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    min-width: 80px;
+    text-align: center;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.expiry-badge-date {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-weight: 600;
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+.expiry-badge-days {
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.2;
+    opacity: 0.9;
+}
+
+.expiry-badge-icon {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+}
+
+/* 安全状态 - 绿色 (>30天) */
+.expiry-safe {
+    background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%);
+    color: #047857;
+    border: 1px solid #A7F3D0;
+}
+.expiry-safe .expiry-badge-icon {
+    color: #059669;
+}
+
+/* 注意状态 - 黄色 (15-30天) */
+.expiry-warning {
+    background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%);
+    color: #B45309;
+    border: 1px solid #FDE68A;
+}
+.expiry-warning .expiry-badge-icon {
+    color: #D97706;
+}
+
+/* 危险状态 - 橙色 (7-15天) */
+.expiry-danger {
+    background: linear-gradient(135deg, #FFF7ED 0%, #FFEDD5 100%);
+    color: #C2410C;
+    border: 1px solid #FDBA74;
+}
+.expiry-danger .expiry-badge-icon {
+    color: #EA580C;
+}
+
+/* 紧急状态 - 红色 (<7天) */
+.expiry-critical {
+    background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%);
+    color: #B91C1C;
+    border: 1px solid #FECACA;
+    animation: expiry-pulse 2s ease-in-out infinite;
+}
+.expiry-critical .expiry-badge-icon {
+    color: #DC2626;
+}
+
+@keyframes expiry-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.2); }
+    50% { box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.1); }
+}
+
+/* 已过期状态 - 深红色 */
+.expiry-expired {
+    background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%);
+    color: #fff;
+    border: 1px solid #7F1D1D;
+}
+.expiry-expired .expiry-badge-days {
+    opacity: 1;
+    font-weight: 600;
+}
+
+/* 无数据状态 */
+.expiry-none {
+    background: #F3F4F6;
+    color: #9CA3AF;
+    border: 1px solid #E5E7EB;
+}
+
+/* 深色主题适配 */
+[data-theme="dark"] .expiry-safe {
+    background: linear-gradient(135deg, #064E3B 0%, #065F46 100%);
+    color: #6EE7B7;
+    border-color: #047857;
+}
+[data-theme="dark"] .expiry-warning {
+    background: linear-gradient(135deg, #78350F 0%, #92400E 100%);
+    color: #FCD34D;
+    border-color: #B45309;
+}
+[data-theme="dark"] .expiry-danger {
+    background: linear-gradient(135deg, #7C2D12 0%, #9A3412 100%);
+    color: #FDBA74;
+    border-color: #C2410C;
+}
+[data-theme="dark"] .expiry-critical {
+    background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%);
+    color: #FCA5A5;
+    border-color: #B91C1C;
+}
+[data-theme="dark"] .expiry-expired {
+    background: linear-gradient(135deg, #450A0A 0%, #7F1D1D 100%);
+    color: #fff;
+    border-color: #450A0A;
+}
+[data-theme="dark"] .expiry-none {
+    background: #374151;
+    color: #6B7280;
+    border-color: #4B5563;
+}
+
+/* ============================================
+   操作图标按钮
+   ============================================ */
+
+.action-icons {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: center;
+}
+
+.action-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    color: #6B7280;
+    transition: all 0.2s ease;
+}
+
+.action-icon-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+.action-icon-btn:hover {
+    background: #F3F4F6;
+    color: #3B82F6;
+}
+
+.action-icon-btn.danger:hover {
+    background: #FEF2F2;
+    color: #EF4444;
+}
+
+[data-theme="dark"] .action-icon-btn {
+    color: #9CA3AF;
+}
+
+[data-theme="dark"] .action-icon-btn:hover {
+    background: #374151;
+    color: #60A5FA;
+}
+
+[data-theme="dark"] .action-icon-btn.danger:hover {
+    background: #7F1D1D;
+    color: #FCA5A5;
+}
+
+/* ============================================
+   表格横向滚动 + 固定操作列
+   ============================================ */
+
+.table-scroll-container {
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    position: relative;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    max-width: calc(100vw - 280px);
+}
+
+.table-scroll-container::-webkit-scrollbar {
+    height: 8px;
+}
+
+.table-scroll-container::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+.table-scroll-container::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 4px;
+}
+
+.table-scroll-container::-webkit-scrollbar-thumb:hover {
+    background: #a1a1a1;
+}
+
+[data-theme="dark"] .table-scroll-container::-webkit-scrollbar-track {
+    background: #374151;
+}
+
+[data-theme="dark"] .table-scroll-container::-webkit-scrollbar-thumb {
+    background: #4B5563;
+}
+
+[data-theme="dark"] .table-scroll-container::-webkit-scrollbar-thumb:hover {
+    background: #6B7280;
+}
+
+.table-fixed-action {
+    min-width: 1400px;
+    border: none;
+}
+
+.th-action-fixed,
+.td-action-fixed {
+    position: sticky;
+    right: 0;
+    background: var(--card-bg);
+    z-index: 2;
+    box-shadow: -2px 0 4px rgba(0, 0, 0, 0.05);
+    min-width: 100px;
+    text-align: center;
+}
+
+.th-action-fixed {
+    background: var(--table-header-bg, #fafafa);
+}
+
+[data-theme="dark"] .th-action-fixed {
+    background: #1f2937;
+}
+
+[data-theme="dark"] .td-action-fixed {
+    background: var(--card-bg);
+}
+
+/* ========== 自定义确认弹窗 ========== */
+.confirm-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    animation: confirmFadeIn 0.2s ease;
+}
+
+@keyframes confirmFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes confirmSlideIn {
+    from { 
+        opacity: 0;
+        transform: scale(0.9) translateY(-20px);
+    }
+    to { 
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+.confirm-dialog {
+    background: var(--card-bg, #fff);
+    border-radius: 16px;
+    padding: 32px;
+    width: 420px;
+    max-width: 90vw;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    text-align: center;
+    animation: confirmSlideIn 0.3s ease;
+}
+
+.confirm-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 20px;
+}
+
+.confirm-icon svg {
+    width: 32px;
+    height: 32px;
+}
+
+.confirm-dialog.warning .confirm-icon {
+    background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+    color: #D97706;
+}
+
+.confirm-dialog.danger .confirm-icon {
+    background: linear-gradient(135deg, #FEE2E2, #FECACA);
+    color: #DC2626;
+}
+
+.confirm-dialog.info .confirm-icon {
+    background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+    color: #2563EB;
+}
+
+.confirm-dialog.success .confirm-icon {
+    background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
+    color: #059669;
+}
+
+.confirm-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 12px 0;
+}
+
+.confirm-message {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin: 0 0 24px 0;
+    line-height: 1.6;
+    white-space: pre-line;
+}
+
+.confirm-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+
+.confirm-actions .btn {
+    min-width: 100px;
+    padding: 10px 24px;
+    font-weight: 500;
+}
+
+/* 暗色模式 */
+[data-theme="dark"] .confirm-dialog {
+    background: #1F2937;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="dark"] .confirm-dialog.warning .confirm-icon {
+    background: linear-gradient(135deg, #78350F, #92400E);
+    color: #FCD34D;
+}
+
+[data-theme="dark"] .confirm-dialog.danger .confirm-icon {
+    background: linear-gradient(135deg, #7F1D1D, #991B1B);
+    color: #FCA5A5;
+}
+
+[data-theme="dark"] .confirm-dialog.info .confirm-icon {
+    background: linear-gradient(135deg, #1E3A8A, #1E40AF);
+    color: #93C5FD;
+}
+
+[data-theme="dark"] .confirm-dialog.success .confirm-icon {
+    background: linear-gradient(135deg, #064E3B, #065F46);
+    color: #6EE7B7;
+}
+
+/* ========== 权限配置样式 ========== */
+.permission-config-body {
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.permission-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.permission-section {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 16px;
+}
+
+.permission-section .section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.permission-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.permission-item {
+    display: flex;
+    align-items: center;
+}
+
+.permission-item.parent {
+    font-weight: 500;
+}
+
+.permission-children {
+    margin-left: 24px;
+    padding-left: 12px;
+    border-left: 2px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 6px;
+    margin-bottom: 6px;
+}
+
+.permission-item.child {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.permission-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.checkbox-label:hover {
+    background: var(--bg-tertiary);
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-cyan);
+    cursor: pointer;
+}
+
+.checkbox-label span {
+    user-select: none;
+}
+
+/* 角色复选框列表 */
+.role-checkbox-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.role-checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.role-checkbox-item:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--accent-cyan);
+}
+
+.role-checkbox-item input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent-cyan);
+    cursor: pointer;
+}
+
+.role-checkbox-info {
+    flex: 1;
+}
+
+.role-checkbox-name {
+    font-weight: 500;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+}
+
+.role-checkbox-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* 权限类型徽章 */
+.badge-menu { background: linear-gradient(135deg, #3B82F6, #2563EB); color: white; }
+.badge-button { background: linear-gradient(135deg, #8B5CF6, #7C3AED); color: white; }
+.badge-data { background: linear-gradient(135deg, #F59E0B, #D97706); color: white; }
+.badge-api { background: linear-gradient(135deg, #10B981, #059669); color: white; }
+
+/* 权限表格样式 */
+.parent-row {
+    background: var(--bg-tertiary);
+    font-weight: 500;
+}
+
+.child-row td:first-child {
+    padding-left: 24px;
+}
+
+.indent-mark {
+    color: var(--text-muted);
+    margin-right: 6px;
+}
+
+/* 模态框大尺寸 */
+.modal.modal-lg {
+    width: 700px;
+    max-width: 90vw;
+}
+
+/* ==================== 批量添加域名弹窗样式 ==================== */
+.batch-domain-modal {
+    width: 720px;
+    max-width: 95vw;
+    max-height: 90vh;
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.batch-domain-modal .modal-body {
+    flex: 1;
+    overflow-y: auto;
+    max-height: calc(90vh - 180px);
+}
+
+.batch-domain-modal .modal-footer {
+    flex-shrink: 0;
+    background: var(--bg-primary);
+}
+
+/* 环境选择卡片 */
+.env-radio-card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 12px 8px;
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: var(--card-bg);
+}
+
+.env-radio-card:hover {
+    border-color: var(--primary);
+    background: rgba(102, 126, 234, 0.05);
+}
+
+.env-radio-card.active {
+    border-color: var(--primary);
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+}
+
+/* 选项卡片 */
+.option-card {
+    display: block;
+    padding: 16px;
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: var(--card-bg);
+}
+
+.option-card:hover {
+    border-color: var(--primary);
+    background: rgba(102, 126, 234, 0.03);
+}
+
+.option-card.active {
+    border-color: var(--primary);
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.08) 100%);
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.12);
+}
+
+/* 旋转动画 */
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.spin {
+    animation: spin 1s linear infinite;
+}
+
+/* 环境徽章优化 */
+.env-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.env-badge.prod {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: white;
+}
+
+.env-badge.uat {
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    color: white;
+}
+
+.env-badge.dev {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    color: white;
+}
+
+/* 深色模式适配 */
+[data-theme="dark"] .env-radio-card {
+    background: var(--bg-secondary);
+}
+
+[data-theme="dark"] .env-radio-card.active {
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%);
+}
+
+[data-theme="dark"] .option-card {
+    background: var(--bg-secondary);
+}
+
+[data-theme="dark"] .option-card.active {
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.12) 0%, rgba(118, 75, 162, 0.12) 100%);
+}

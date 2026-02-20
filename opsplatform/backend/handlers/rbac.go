@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -347,10 +348,16 @@ func HandlePermissions(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var perm Permission
 		var createdAt time.Time
-		err := rows.Scan(&perm.ID, &perm.Code, &perm.Name, &perm.Type, &perm.Resource, &perm.ParentID, &perm.Icon, &perm.SortOrder, &perm.Description, &createdAt)
+		var resource, parentID, icon, description sql.NullString
+		err := rows.Scan(&perm.ID, &perm.Code, &perm.Name, &perm.Type, &resource, &parentID, &icon, &perm.SortOrder, &description, &createdAt)
 		if err != nil {
+			log.Printf("扫描权限行失败: %v", err)
 			continue
 		}
+		perm.Resource = resource.String
+		perm.ParentID = parentID.String
+		perm.Icon = icon.String
+		perm.Description = description.String
 		perm.CreatedAt = createdAt.Format("2006-01-02 15:04:05")
 		permissions = append(permissions, perm)
 	}

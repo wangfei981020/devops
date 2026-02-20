@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"os"
@@ -41,15 +42,19 @@ type LoginResponse struct {
 
 // HandleLogin 用户登录
 func HandleLogin(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[登录] 收到登录请求")
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("[登录] 解析请求失败: %v", err)
 		http.Error(w, "无效的请求数据", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("[登录] 用户: %s 尝试登录", req.Username)
 
 	// 获取客户端 IP
 	ip := GetClientIP(r)
@@ -99,6 +104,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// 计算是否已绑定 MFA
 	user.MFABound = user.MFASecret != ""
+	log.Printf("[登录] 用户 %s MFA状态: enabled=%v, bound=%v, secret长度=%d", req.Username, user.MFAEnabled, user.MFABound, len(user.MFASecret))
 
 	// 检查是否启用了 MFA 且已绑定
 	if user.MFAEnabled && user.MFABound {
@@ -110,14 +116,13 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 如果启用了 MFA 但未绑定，需要先绑定
+	// 如果启用了 MFA 但未绑定，需要先绑定（不发 token，强制在登录页完成绑定）
 	if user.MFAEnabled && !user.MFABound {
-		user.Password = ""
-		user.MFASecret = ""
+		log.Printf("[登录] 用户 %s 需要绑定 MFA", req.Username)
 		json.NewEncoder(w).Encode(LoginResponse{
 			RequireMFA:  false,
-			User:        user,
-			NeedBinding: true, // 需要绑定 MFA
+			UserID:      user.ID,
+			NeedBinding: true, // 需要绑定 MFA，前端需显示绑定界面
 		})
 		return
 	}
@@ -305,6 +310,116 @@ func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "删除成功"})
 }
 
+// HandleEnableUserMFA 为用户启用 MFA
+func HandleEnableUserMFA(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	user, err := GetUserByID(id)
+	if err != nil || user == nil {
+		http.Error(w, "用户不存在", http.StatusNotFound)
+		return
+	}
+
+	_, err = database.DB.Exec(`UPDATE users SET mfa_enabled = 1 WHERE id = ?`, id)
+	if err != nil {
+		http.Error(w, "启用 MFA 失败", http.StatusInternalServerError)
+		return
+	}
+
+	operator := r.Header.Get("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+	AddAuditLogFromRequest(r, "update", "user:"+id, operator, "", "", fmt.Sprintf("为用户 %s 启用 MFA", user.Username))
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{"message": "MFA 已启用"})
+}
+
+// HandleResetUserMFA 重置用户 MFA
+func HandleResetUserMFA(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	user, err := GetUserByID(id)
+	if err != nil || user == nil {
+		http.Error(w, "用户不存在", http.StatusNotFound)
+		return
+	}
+
+	_, err = database.DB.Exec(`UPDATE users SET mfa_enabled = 0, mfa_secret = '' WHERE id = ?`, id)
+	if err != nil {
+		http.Error(w, "重置 MFA 失败", http.StatusInternalServerError)
+		return
+	}
+
+	operator := r.Header.Get("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+	AddAuditLogFromRequest(r, "update", "user:"+id, operator, "", "", fmt.Sprintf("重置用户 %s 的 MFA", user.Username))
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{"message": "MFA 已重置"})
+}
+
+// HandleChangePassword 修改用户密码
+func HandleChangePassword(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	var req struct {
+		Password string `json:"password"`
+		Operator string `json:"operator"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "无效的请求数据", http.StatusBadRequest)
+		return
+	}
+
+	if req.Password == "" {
+		http.Error(w, "密码不能为空", http.StatusBadRequest)
+		return
+	}
+
+	// 获取用户信息
+	user, err := GetUserByID(id)
+	if err != nil || user == nil {
+		http.Error(w, "用户不存在", http.StatusNotFound)
+		return
+	}
+
+	// 加密新密码
+	hashedPassword, err := hashPassword(req.Password)
+	if err != nil {
+		http.Error(w, "密码加密失败", http.StatusInternalServerError)
+		return
+	}
+
+	// 更新密码
+	_, err = database.DB.Exec("UPDATE users SET password = ? WHERE id = ?", hashedPassword, id)
+	if err != nil {
+		http.Error(w, "更新密码失败", http.StatusInternalServerError)
+		return
+	}
+
+	// 获取操作者
+	operator := req.Operator
+	if operator == "" {
+		operator = r.Header.Get("X-Operator")
+	}
+	if operator == "" {
+		operator = "system"
+	}
+
+	// 记录审计日志
+	AddAuditLogFromRequest(r, "update", "user:"+id, operator, "", "", fmt.Sprintf("修改用户 %s 的密码", user.Username))
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "message": "密码修改成功"})
+}
+
 // 数据库操作函数
 func GetAllUsers() ([]*models.User, error) {
 	rows, err := database.DB.Query(`
@@ -335,9 +450,9 @@ func GetUserByUsername(username string) (*models.User, error) {
 	u := &models.User{}
 	err := database.DB.QueryRow(`
 		SELECT id, username, password, display_name, COALESCE(phone, ''), COALESCE(email, ''), COALESCE(description, ''),
-		       role, status, COALESCE(permissions, ''), COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), created_at
+		       role, status, COALESCE(permissions, ''), COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), COALESCE(language, 'zh-CN'), created_at
 		FROM users WHERE username = ?
-	`, username).Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Phone, &u.Email, &u.Description, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.CreatedAt)
+	`, username).Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Phone, &u.Email, &u.Description, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.Language, &u.CreatedAt)
 	if err != nil {
 		return nil, nil
 	}
@@ -350,9 +465,9 @@ func GetUserByID(id string) (*models.User, error) {
 	u := &models.User{}
 	err := database.DB.QueryRow(`
 		SELECT id, username, password, display_name, COALESCE(phone, ''), COALESCE(email, ''), COALESCE(description, ''),
-		       role, status, COALESCE(permissions, ''), COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), created_at
+		       role, status, COALESCE(permissions, ''), COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), COALESCE(language, 'zh-CN'), created_at
 		FROM users WHERE id = ?
-	`, id).Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Phone, &u.Email, &u.Description, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.CreatedAt)
+	`, id).Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Phone, &u.Email, &u.Description, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.Language, &u.CreatedAt)
 	if err != nil {
 		return nil, nil
 	}
@@ -379,10 +494,15 @@ func AddUser(u *models.User) error {
 		return fmt.Errorf("密码加密失败: %v", err)
 	}
 
+	// 默认语言为中文
+	if u.Language == "" {
+		u.Language = "zh-CN"
+	}
+
 	_, err = database.DB.Exec(`
-		INSERT INTO users (id, username, password, display_name, phone, email, description, role, status, permissions, mfa_enabled, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, u.ID, u.Username, hashedPassword, u.DisplayName, u.Phone, u.Email, u.Description, u.Role, u.Status, u.Permissions, u.MFAEnabled, u.CreatedAt)
+		INSERT INTO users (id, username, password, display_name, phone, email, description, role, status, permissions, mfa_enabled, language, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, u.ID, u.Username, hashedPassword, u.DisplayName, u.Phone, u.Email, u.Description, u.Role, u.Status, u.Permissions, u.MFAEnabled, u.Language, u.CreatedAt)
 	return err
 }
 
@@ -432,10 +552,19 @@ func UpdateUser(id string, u *models.User) error {
 		mfaSecret = oldUser.MFASecret
 	}
 
+	// 保留语言设置
+	language := u.Language
+	if language == "" {
+		language = oldUser.Language
+		if language == "" {
+			language = "zh-CN"
+		}
+	}
+
 	_, err = database.DB.Exec(`
-		UPDATE users SET display_name=?, phone=?, email=?, description=?, role=?, status=?, permissions=?, password=?, mfa_enabled=?, mfa_secret=?
+		UPDATE users SET display_name=?, phone=?, email=?, description=?, role=?, status=?, permissions=?, password=?, mfa_enabled=?, mfa_secret=?, language=?
 		WHERE id=?
-	`, u.DisplayName, u.Phone, u.Email, u.Description, u.Role, u.Status, u.Permissions, passwordToSave, mfaEnabled, mfaSecret, id)
+	`, u.DisplayName, u.Phone, u.Email, u.Description, u.Role, u.Status, u.Permissions, passwordToSave, mfaEnabled, mfaSecret, language, id)
 	return err
 }
 

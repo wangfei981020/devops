@@ -22,6 +22,7 @@ type MFASetupResponse struct {
 }
 
 // HandleMFASetup 生成 MFA 密钥和二维码（用于绑定）
+// 注意：不在此处保存密钥，仅返回给前端，在 bind-login 验证成功后才保存
 func HandleMFASetup(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		UserID string `json:"user_id"`
@@ -58,12 +59,7 @@ func HandleMFASetup(w http.ResponseWriter, r *http.Request) {
 	png.Encode(&buf, img)
 	qrCodeBase64 := base64.StdEncoding.EncodeToString(buf.Bytes())
 
-	// 临时保存密钥到数据库（未启用状态）
-	_, err = database.DB.Exec(`UPDATE users SET mfa_secret = ? WHERE id = ?`, key.Secret(), req.UserID)
-	if err != nil {
-		http.Error(w, "保存 MFA 密钥失败", http.StatusInternalServerError)
-		return
-	}
+	// 不在此处保存密钥，返回给前端在 bind-login 时提交
 
 	response := MFASetupResponse{
 		Secret:      key.Secret(),
@@ -175,6 +171,73 @@ func HandleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		"user":           user,
 		"token":          token, // 兼容旧客户端
 		"expires_at":     expiresAt.Format("2006-01-02T15:04:05Z07:00"),
+		"timeout_minutes": int(GetSessionTimeout().Minutes()),
+	})
+}
+
+// HandleMFABindAndLogin 绑定 MFA 并完成登录（用于首次绑定场景）
+func HandleMFABindAndLogin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID string `json:"user_id"`
+		Code   string `json:"code"`   // 用户输入的 6 位验证码
+		Secret string `json:"secret"` // 从 setup 获取的密钥
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "无效的请求数据", http.StatusBadRequest)
+		return
+	}
+
+	if req.Secret == "" {
+		http.Error(w, "缺少 MFA 密钥", http.StatusBadRequest)
+		return
+	}
+
+	// 验证 TOTP 代码
+	valid := totp.Validate(req.Code, req.Secret)
+	if !valid {
+		http.Error(w, "验证码错误，请重试", http.StatusUnauthorized)
+		return
+	}
+
+	// 获取完整用户信息
+	user, _ := GetUserByID(req.UserID)
+	if user == nil {
+		http.Error(w, "用户不存在", http.StatusNotFound)
+		return
+	}
+
+	// 验证成功，保存密钥到数据库
+	_, err := database.DB.Exec(`UPDATE users SET mfa_secret = ? WHERE id = ?`, req.Secret, req.UserID)
+	if err != nil {
+		http.Error(w, "保存 MFA 密钥失败", http.StatusInternalServerError)
+		return
+	}
+
+	// 生成 JWT token
+	token, expiresAt, err := GenerateToken(user.ID, user.Username, user.Role)
+	if err != nil {
+		http.Error(w, "生成认证令牌失败", http.StatusInternalServerError)
+		return
+	}
+
+	// 设置 HttpOnly Cookie
+	SetAuthCookie(w, token, expiresAt)
+
+	// 记录绑定并登录日志
+	AddAuditLogFromRequest(r, "mfa_bind", "user:"+user.ID, user.Username, "", "", fmt.Sprintf("用户 %s 首次绑定 MFA 并登录", user.Username))
+
+	user.MFABound = true
+	user.Password = ""
+	user.MFASecret = ""
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":         true,
+		"message":         "MFA 绑定成功",
+		"user":            user,
+		"token":           token,
+		"expires_at":      expiresAt.Format("2006-01-02T15:04:05Z07:00"),
 		"timeout_minutes": int(GetSessionTimeout().Minutes()),
 	})
 }

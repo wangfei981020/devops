@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>域名管理 - 20种样式展示</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --card-bg: #1c2128;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --border-color: #30363d;
+            --accent-blue: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-yellow: #d29922;
+            --accent-red: #f85149;
+            --accent-cyan: #39c5cf;
+            --accent-purple: #a371f7;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 24px;
+            line-height: 1.5;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 40px;
+            font-size: 28px;
+            color: var(--accent-cyan);
+        }
+
+        .style-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 30px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .style-item {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .style-header {
+            padding: 16px 20px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .style-header h3 {
+            font-size: 16px;
+            color: var(--accent-cyan);
+        }
+
+        .style-header .num {
+            background: var(--accent-purple);
+            color: white;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+
+        .style-content {
+            padding: 20px;
+            min-height: 280px;
+        }
+
+        /* ========== 样式1: 极简表格 ========== */
+        .s1-table {
+            width: 100%;
+            font-size: 12px;
+        }
+        .s1-table th, .s1-table td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .s1-table th { color: var(--text-muted); font-weight: 500; }
+        .s1-tag { padding: 2px 6px; border-radius: 3px; font-size: 10px; }
+        .s1-tag.ok { background: #0d4429; color: #3fb950; }
+        .s1-tag.warn { background: #4d3800; color: #d29922; }
+
+        /* ========== 样式2: 卡片网格 ========== */
+        .s2-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+        .s2-card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 12px;
+            border-left: 3px solid var(--accent-green);
+        }
+        .s2-card.warn { border-left-color: var(--accent-yellow); }
+        .s2-domain { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+        .s2-meta { font-size: 11px; color: var(--text-muted); }
+
+        /* ========== 样式3: 时间线 ========== */
+        .s3-timeline {
+            position: relative;
+            padding-left: 20px;
+        }
+        .s3-timeline::before {
+            content: '';
+            position: absolute;
+            left: 6px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: var(--border-color);
+        }
+        .s3-item {
+            position: relative;
+            padding: 10px 0 10px 20px;
+            font-size: 12px;
+        }
+        .s3-item::before {
+            content: '';
+            position: absolute;
+            left: -17px;
+            top: 14px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--accent-green);
+        }
+        .s3-item.warn::before { background: var(--accent-yellow); }
+
+        /* ========== 样式4: 看板 ========== */
+        .s4-kanban {
+            display: flex;
+            gap: 12px;
+        }
+        .s4-column {
+            flex: 1;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 10px;
+        }
+        .s4-column-title {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+        .s4-item {
+            background: var(--bg-tertiary);
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            margin-bottom: 6px;
+        }
+
+        /* ========== 样式5: 列表分组 ========== */
+        .s5-group {
+            margin-bottom: 16px;
+        }
+        .s5-group-title {
+            font-size: 12px;
+            color: var(--accent-cyan);
+            padding: 6px 10px;
+            background: var(--bg-tertiary);
+            border-radius: 6px 6px 0 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .s5-group-title .badge {
+            background: var(--accent-blue);
+            color: white;
+            padding: 1px 6px;
+            border-radius: 8px;
+            font-size: 10px;
+        }
+        .s5-list {
+            background: var(--bg-secondary);
+            border-radius: 0 0 6px 6px;
+        }
+        .s5-item {
+            padding: 8px 12px;
+            font-size: 12px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* ========== 样式6: 仪表盘 ========== */
+        .s6-dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .s6-stat {
+            background: var(--bg-secondary);
+            padding: 16px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .s6-stat .value {
+            font-size: 28px;
+            font-weight: 600;
+            color: var(--accent-cyan);
+        }
+        .s6-stat .label {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        .s6-list {
+            grid-column: span 2;
+            font-size: 12px;
+        }
+        .s6-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        /* ========== 样式7: 标签云 ========== */
+        .s7-cloud {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .s7-tag {
+            padding: 8px 14px;
+            background: var(--bg-secondary);
+            border-radius: 20px;
+            font-size: 12px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .s7-tag .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+        .s7-tag .dot.ok { background: var(--accent-green); }
+        .s7-tag .dot.warn { background: var(--accent-yellow); }
+
+        /* ========== 样式8: 树形结构 ========== */
+        .s8-tree {
+            font-size: 12px;
+        }
+        .s8-node {
+            padding-left: 20px;
+        }
+        .s8-label {
+            padding: 6px 10px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+        .s8-label:hover {
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+        .s8-icon { color: var(--text-muted); }
+        .s8-children {
+            border-left: 1px dashed var(--border-color);
+            margin-left: 10px;
+        }
+
+        /* ========== 样式9: 进度条 ========== */
+        .s9-list { }
+        .s9-item {
+            margin-bottom: 16px;
+        }
+        .s9-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            margin-bottom: 6px;
+        }
+        .s9-bar {
+            height: 6px;
+            background: var(--bg-tertiary);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .s9-fill {
+            height: 100%;
+            border-radius: 3px;
+        }
+        .s9-fill.ok { background: var(--accent-green); }
+        .s9-fill.warn { background: var(--accent-yellow); }
+        .s9-fill.danger { background: var(--accent-red); }
+
+        /* ========== 样式10: 瀑布流 ========== */
+        .s10-masonry {
+            column-count: 2;
+            column-gap: 12px;
+        }
+        .s10-card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 12px;
+            break-inside: avoid;
+        }
+        .s10-title {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--accent-blue);
+            margin-bottom: 8px;
+        }
+        .s10-domain {
+            font-size: 11px;
+            padding: 4px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        /* ========== 样式11: 日历视图 ========== */
+        .s11-calendar {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 4px;
+            font-size: 10px;
+        }
+        .s11-day {
+            aspect-ratio: 1;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 4px;
+        }
+        .s11-day.has-expire {
+            background: rgba(245, 158, 11, 0.2);
+            border: 1px solid var(--accent-yellow);
+        }
+        .s11-day .num { font-weight: 600; }
+        .s11-day .count { font-size: 8px; color: var(--text-muted); }
+
+        /* ========== 样式12: 饼图统计 ========== */
+        .s12-pie-container {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+        .s12-pie {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: conic-gradient(
+                var(--accent-green) 0% 70%,
+                var(--accent-yellow) 70% 90%,
+                var(--accent-red) 90% 100%
+            );
+            position: relative;
+        }
+        .s12-pie::after {
+            content: '';
+            position: absolute;
+            inset: 20px;
+            background: var(--card-bg);
+            border-radius: 50%;
+        }
+        .s12-legend {
+            font-size: 12px;
+        }
+        .s12-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+        .s12-legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+        }
+
+        /* ========== 样式13: 折叠面板 ========== */
+        .s13-accordion {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .s13-panel {
+            border-bottom: 1px solid var(--border-color);
+        }
+        .s13-panel:last-child { border-bottom: none; }
+        .s13-header {
+            padding: 10px 14px;
+            background: var(--bg-secondary);
+            font-size: 12px;
+            display: flex;
+            justify-content: space-between;
+            cursor: pointer;
+        }
+        .s13-body {
+            padding: 10px 14px;
+            font-size: 11px;
+            background: var(--bg-tertiary);
+        }
+
+        /* ========== 样式14: 横向滚动 ========== */
+        .s14-scroll {
+            display: flex;
+            gap: 12px;
+            overflow-x: auto;
+            padding-bottom: 10px;
+        }
+        .s14-card {
+            min-width: 140px;
+            background: var(--bg-secondary);
+            border-radius: 10px;
+            padding: 14px;
+            text-align: center;
+        }
+        .s14-domain {
+            font-size: 11px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            white-space: nowrap;
+        }
+        .s14-badge {
+            font-size: 10px;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        /* ========== 样式15: 矩阵热力图 ========== */
+        .s15-matrix {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 4px;
+        }
+        .s15-cell {
+            aspect-ratio: 1;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 8px;
+            color: white;
+        }
+        .s15-cell.l1 { background: #0d4429; }
+        .s15-cell.l2 { background: #1a7f37; }
+        .s15-cell.l3 { background: #d29922; }
+        .s15-cell.l4 { background: #cf222e; }
+
+        /* ========== 样式16: 堆叠卡片 ========== */
+        .s16-stack {
+            position: relative;
+            padding-top: 10px;
+        }
+        .s16-card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: -60px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            position: relative;
+        }
+        .s16-card:last-child { margin-bottom: 0; }
+        .s16-title {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--accent-cyan);
+            margin-bottom: 6px;
+        }
+        .s16-content { font-size: 11px; color: var(--text-secondary); }
+
+        /* ========== 样式17: 状态指示器 ========== */
+        .s17-indicators {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+        }
+        .s17-item {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }
+        .s17-light {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            margin: 0 auto 8px;
+            box-shadow: 0 0 10px currentColor;
+        }
+        .s17-light.ok { background: var(--accent-green); color: var(--accent-green); }
+        .s17-light.warn { background: var(--accent-yellow); color: var(--accent-yellow); }
+        .s17-light.off { background: var(--text-muted); color: var(--text-muted); }
+        .s17-label { font-size: 10px; color: var(--text-muted); }
+
+        /* ========== 样式18: 对比视图 ========== */
+        .s18-compare {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .s18-side {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 12px;
+        }
+        .s18-title {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        .s18-value {
+            font-size: 24px;
+            font-weight: 600;
+            text-align: center;
+        }
+        .s18-value.good { color: var(--accent-green); }
+        .s18-value.bad { color: var(--accent-red); }
+
+        /* ========== 样式19: 迷你地图 ========== */
+        .s19-map {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 3px;
+        }
+        .s19-block {
+            width: 16px;
+            height: 16px;
+            border-radius: 2px;
+            font-size: 7px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+        .s19-block.ok { background: var(--accent-green); }
+        .s19-block.warn { background: var(--accent-yellow); }
+        .s19-block.danger { background: var(--accent-red); }
+
+        /* ========== 样式20: 环形进度 ========== */
+        .s20-rings {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+        }
+        .s20-ring {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            border: 6px solid var(--bg-tertiary);
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+        .s20-ring.ok { border-color: var(--accent-green); border-top-color: var(--bg-tertiary); }
+        .s20-ring.warn { border-color: var(--accent-yellow); border-top-color: var(--bg-tertiary); border-right-color: var(--bg-tertiary); }
+        .s20-ring .value { font-size: 16px; font-weight: 600; }
+        .s20-ring .label { font-size: 9px; color: var(--text-muted); }
+    </style>
+</head>
+<body>
+    <h1>🎨 域名管理 - 20种展示样式</h1>
+
+    <div class="style-grid">
+        <!-- 样式1: 极简表格 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式1: 极简表格</h3>
+                <span class="num">01</span>
+            </div>
+            <div class="style-content">
+                <table class="s1-table">
+                    <tr><th>域名</th><th>模块</th><th>域名</th><th>证书</th></tr>
+                    <tr><td>www.baidu.com</td><td>web</td><td><span class="s1-tag ok">964d</span></td><td><span class="s1-tag warn">171d</span></td></tr>
+                    <tr><td>api.baidu.com</td><td>api</td><td><span class="s1-tag ok">964d</span></td><td><span class="s1-tag ok">480d</span></td></tr>
+                    <tr><td>m.baidu.com</td><td>web</td><td><span class="s1-tag ok">964d</span></td><td><span class="s1-tag warn">171d</span></td></tr>
+                    <tr><td>admin.test.com</td><td>admin</td><td><span class="s1-tag ok">500d</span></td><td><span class="s1-tag ok">300d</span></td></tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- 样式2: 卡片网格 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式2: 卡片网格</h3>
+                <span class="num">02</span>
+            </div>
+            <div class="style-content">
+                <div class="s2-grid">
+                    <div class="s2-card"><div class="s2-domain">www.baidu.com</div><div class="s2-meta">web · PROD · 964d</div></div>
+                    <div class="s2-card warn"><div class="s2-domain">m.baidu.com</div><div class="s2-meta">web · PROD · 171d ⚠️</div></div>
+                    <div class="s2-card"><div class="s2-domain">api.baidu.com</div><div class="s2-meta">api · PROD · 480d</div></div>
+                    <div class="s2-card"><div class="s2-domain">uat.baidu.com</div><div class="s2-meta">web · UAT · 393d</div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式3: 时间线 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式3: 时间线</h3>
+                <span class="num">03</span>
+            </div>
+            <div class="style-content">
+                <div class="s3-timeline">
+                    <div class="s3-item warn"><strong>2026-08-10</strong> - www.baidu.com 证书到期</div>
+                    <div class="s3-item warn"><strong>2026-08-10</strong> - m.baidu.com 证书到期</div>
+                    <div class="s3-item"><strong>2027-01-15</strong> - static.baidu.com 证书到期</div>
+                    <div class="s3-item"><strong>2027-06-15</strong> - api.baidu.com 证书到期</div>
+                    <div class="s3-item"><strong>2028-10-11</strong> - 所有域名到期</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式4: 看板 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式4: 看板视图</h3>
+                <span class="num">04</span>
+            </div>
+            <div class="style-content">
+                <div class="s4-kanban">
+                    <div class="s4-column">
+                        <div class="s4-column-title">🟢 正常 (8)</div>
+                        <div class="s4-item">api.baidu.com</div>
+                        <div class="s4-item">static.baidu.com</div>
+                        <div class="s4-item">uat.baidu.com</div>
+                    </div>
+                    <div class="s4-column">
+                        <div class="s4-column-title">🟡 预警 (2)</div>
+                        <div class="s4-item">www.baidu.com</div>
+                        <div class="s4-item">m.baidu.com</div>
+                    </div>
+                    <div class="s4-column">
+                        <div class="s4-column-title">🔴 过期 (0)</div>
+                        <div style="color: var(--text-muted); font-size: 11px; text-align: center; padding: 20px;">无</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式5: 列表分组 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式5: 列表分组</h3>
+                <span class="num">05</span>
+            </div>
+            <div class="style-content">
+                <div class="s5-group">
+                    <div class="s5-group-title">test / PROD / web <span class="badge">3</span></div>
+                    <div class="s5-list">
+                        <div class="s5-item"><span>www.baidu.com</span><span style="color: var(--accent-yellow)">171d</span></div>
+                        <div class="s5-item"><span>m.baidu.com</span><span style="color: var(--accent-yellow)">171d</span></div>
+                        <div class="s5-item"><span>static.baidu.com</span><span style="color: var(--accent-green)">329d</span></div>
+                    </div>
+                </div>
+                <div class="s5-group">
+                    <div class="s5-group-title">test / PROD / api <span class="badge">2</span></div>
+                    <div class="s5-list">
+                        <div class="s5-item"><span>api.baidu.com</span><span style="color: var(--accent-green)">480d</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式6: 仪表盘 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式6: 仪表盘</h3>
+                <span class="num">06</span>
+            </div>
+            <div class="style-content">
+                <div class="s6-dashboard">
+                    <div class="s6-stat"><div class="value">12</div><div class="label">总域名</div></div>
+                    <div class="s6-stat"><div class="value" style="color: var(--accent-green)">10</div><div class="label">正常</div></div>
+                    <div class="s6-stat"><div class="value" style="color: var(--accent-yellow)">2</div><div class="label">预警</div></div>
+                    <div class="s6-stat"><div class="value" style="color: var(--accent-red)">0</div><div class="label">过期</div></div>
+                    <div class="s6-list">
+                        <div class="s6-row"><span>最近到期</span><span>www.baidu.com (171d)</span></div>
+                        <div class="s6-row"><span>最后更新</span><span>2026-02-20 13:08</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式7: 标签云 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式7: 标签云</h3>
+                <span class="num">07</span>
+            </div>
+            <div class="style-content">
+                <div class="s7-cloud">
+                    <div class="s7-tag"><span class="dot warn"></span>www.baidu.com</div>
+                    <div class="s7-tag"><span class="dot warn"></span>m.baidu.com</div>
+                    <div class="s7-tag"><span class="dot ok"></span>api.baidu.com</div>
+                    <div class="s7-tag"><span class="dot ok"></span>static.baidu.com</div>
+                    <div class="s7-tag"><span class="dot ok"></span>uat.baidu.com</div>
+                    <div class="s7-tag"><span class="dot ok"></span>admin.test.com</div>
+                    <div class="s7-tag"><span class="dot ok"></span>dev.test.com</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式8: 树形结构 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式8: 树形结构</h3>
+                <span class="num">08</span>
+            </div>
+            <div class="style-content">
+                <div class="s8-tree">
+                    <div class="s8-label"><span class="s8-icon">📁</span> test (PROD)</div>
+                    <div class="s8-node s8-children">
+                        <div class="s8-label"><span class="s8-icon">📂</span> web (3)</div>
+                        <div class="s8-node s8-children">
+                            <div class="s8-label">🌐 www.baidu.com</div>
+                            <div class="s8-label">🌐 m.baidu.com</div>
+                            <div class="s8-label">🌐 static.baidu.com</div>
+                        </div>
+                        <div class="s8-label"><span class="s8-icon">📂</span> api (2)</div>
+                        <div class="s8-node s8-children">
+                            <div class="s8-label">🌐 api.baidu.com</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式9: 进度条 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式9: 进度条</h3>
+                <span class="num">09</span>
+            </div>
+            <div class="style-content">
+                <div class="s9-list">
+                    <div class="s9-item">
+                        <div class="s9-header"><span>www.baidu.com</span><span>171天 / 365天</span></div>
+                        <div class="s9-bar"><div class="s9-fill warn" style="width: 47%"></div></div>
+                    </div>
+                    <div class="s9-item">
+                        <div class="s9-header"><span>api.baidu.com</span><span>480天 / 365天</span></div>
+                        <div class="s9-bar"><div class="s9-fill ok" style="width: 100%"></div></div>
+                    </div>
+                    <div class="s9-item">
+                        <div class="s9-header"><span>static.baidu.com</span><span>329天 / 365天</span></div>
+                        <div class="s9-bar"><div class="s9-fill ok" style="width: 90%"></div></div>
+                    </div>
+                    <div class="s9-item">
+                        <div class="s9-header"><span>admin.test.com</span><span>30天 / 365天</span></div>
+                        <div class="s9-bar"><div class="s9-fill danger" style="width: 8%"></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式10: 瀑布流 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式10: 瀑布流</h3>
+                <span class="num">10</span>
+            </div>
+            <div class="style-content">
+                <div class="s10-masonry">
+                    <div class="s10-card">
+                        <div class="s10-title">test / web</div>
+                        <div class="s10-domain">www.baidu.com</div>
+                        <div class="s10-domain">m.baidu.com</div>
+                        <div class="s10-domain">static.baidu.com</div>
+                    </div>
+                    <div class="s10-card">
+                        <div class="s10-title">test / api</div>
+                        <div class="s10-domain">api.baidu.com</div>
+                        <div class="s10-domain">api2.baidu.com</div>
+                    </div>
+                    <div class="s10-card">
+                        <div class="s10-title">project2 / admin</div>
+                        <div class="s10-domain">admin.project2.com</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式11: 日历视图 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式11: 日历视图</h3>
+                <span class="num">11</span>
+            </div>
+            <div class="style-content">
+                <div style="font-size: 12px; margin-bottom: 10px; color: var(--text-muted)">2026年8月 证书到期日历</div>
+                <div class="s11-calendar">
+                    <div class="s11-day"><span class="num">1</span></div>
+                    <div class="s11-day"><span class="num">2</span></div>
+                    <div class="s11-day"><span class="num">3</span></div>
+                    <div class="s11-day"><span class="num">4</span></div>
+                    <div class="s11-day"><span class="num">5</span></div>
+                    <div class="s11-day"><span class="num">6</span></div>
+                    <div class="s11-day"><span class="num">7</span></div>
+                    <div class="s11-day"><span class="num">8</span></div>
+                    <div class="s11-day"><span class="num">9</span></div>
+                    <div class="s11-day has-expire"><span class="num">10</span><span class="count">2个</span></div>
+                    <div class="s11-day"><span class="num">11</span></div>
+                    <div class="s11-day"><span class="num">12</span></div>
+                    <div class="s11-day"><span class="num">13</span></div>
+                    <div class="s11-day"><span class="num">14</span></div>
+                    <div class="s11-day"><span class="num">15</span></div>
+                    <div class="s11-day"><span class="num">16</span></div>
+                    <div class="s11-day"><span class="num">17</span></div>
+                    <div class="s11-day"><span class="num">18</span></div>
+                    <div class="s11-day"><span class="num">19</span></div>
+                    <div class="s11-day has-expire"><span class="num">20</span><span class="count">1个</span></div>
+                    <div class="s11-day"><span class="num">21</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式12: 饼图统计 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式12: 饼图统计</h3>
+                <span class="num">12</span>
+            </div>
+            <div class="style-content">
+                <div class="s12-pie-container">
+                    <div class="s12-pie"></div>
+                    <div class="s12-legend">
+                        <div class="s12-legend-item"><div class="s12-legend-dot" style="background: var(--accent-green)"></div>正常 (70%)</div>
+                        <div class="s12-legend-item"><div class="s12-legend-dot" style="background: var(--accent-yellow)"></div>预警 (20%)</div>
+                        <div class="s12-legend-item"><div class="s12-legend-dot" style="background: var(--accent-red)"></div>过期 (10%)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式13: 折叠面板 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式13: 折叠面板</h3>
+                <span class="num">13</span>
+            </div>
+            <div class="style-content">
+                <div class="s13-accordion">
+                    <div class="s13-panel">
+                        <div class="s13-header"><span>▼ test / PROD / web (3个)</span><span style="color: var(--accent-yellow)">⚠️</span></div>
+                        <div class="s13-body">www.baidu.com · m.baidu.com · static.baidu.com</div>
+                    </div>
+                    <div class="s13-panel">
+                        <div class="s13-header"><span>▶ test / PROD / api (2个)</span><span style="color: var(--accent-green)">✓</span></div>
+                    </div>
+                    <div class="s13-panel">
+                        <div class="s13-header"><span>▶ test / UAT / web (1个)</span><span style="color: var(--accent-green)">✓</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式14: 横向滚动 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式14: 横向滚动卡片</h3>
+                <span class="num">14</span>
+            </div>
+            <div class="style-content">
+                <div class="s14-scroll">
+                    <div class="s14-card"><div class="s14-domain">www.baidu.com</div><div class="s14-badge" style="background: var(--accent-yellow); color: #000">171天</div></div>
+                    <div class="s14-card"><div class="s14-domain">m.baidu.com</div><div class="s14-badge" style="background: var(--accent-yellow); color: #000">171天</div></div>
+                    <div class="s14-card"><div class="s14-domain">api.baidu.com</div><div class="s14-badge" style="background: var(--accent-green); color: #000">480天</div></div>
+                    <div class="s14-card"><div class="s14-domain">static.baidu.com</div><div class="s14-badge" style="background: var(--accent-green); color: #000">329天</div></div>
+                    <div class="s14-card"><div class="s14-domain">uat.baidu.com</div><div class="s14-badge" style="background: var(--accent-green); color: #000">393天</div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式15: 矩阵热力图 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式15: 矩阵热力图</h3>
+                <span class="num">15</span>
+            </div>
+            <div class="style-content">
+                <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px">每个方块代表一个域名，颜色表示证书剩余时间</div>
+                <div class="s15-matrix">
+                    <div class="s15-cell l1" title="www">w</div>
+                    <div class="s15-cell l3" title="m">m</div>
+                    <div class="s15-cell l1" title="api">a</div>
+                    <div class="s15-cell l2" title="static">s</div>
+                    <div class="s15-cell l1" title="uat">u</div>
+                    <div class="s15-cell l1" title="admin">a</div>
+                    <div class="s15-cell l3" title="dev">d</div>
+                    <div class="s15-cell l1" title="test">t</div>
+                    <div class="s15-cell l1" title="cdn">c</div>
+                    <div class="s15-cell l4" title="old">o</div>
+                    <div class="s15-cell l2" title="new">n</div>
+                    <div class="s15-cell l1" title="app">a</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式16: 堆叠卡片 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式16: 堆叠卡片</h3>
+                <span class="num">16</span>
+            </div>
+            <div class="style-content">
+                <div class="s16-stack">
+                    <div class="s16-card"><div class="s16-title">test / web</div><div class="s16-content">3个域名 · 2个预警</div></div>
+                    <div class="s16-card"><div class="s16-title">test / api</div><div class="s16-content">2个域名 · 全部正常</div></div>
+                    <div class="s16-card"><div class="s16-title">project2 / admin</div><div class="s16-content">4个域名 · 1个过期</div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式17: 状态指示器 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式17: 状态指示器</h3>
+                <span class="num">17</span>
+            </div>
+            <div class="style-content">
+                <div class="s17-indicators">
+                    <div class="s17-item"><div class="s17-light ok"></div><div class="s17-label">www</div></div>
+                    <div class="s17-item"><div class="s17-light warn"></div><div class="s17-label">m</div></div>
+                    <div class="s17-item"><div class="s17-light ok"></div><div class="s17-label">api</div></div>
+                    <div class="s17-item"><div class="s17-light ok"></div><div class="s17-label">static</div></div>
+                    <div class="s17-item"><div class="s17-light ok"></div><div class="s17-label">uat</div></div>
+                    <div class="s17-item"><div class="s17-light ok"></div><div class="s17-label">admin</div></div>
+                    <div class="s17-item"><div class="s17-light warn"></div><div class="s17-label">dev</div></div>
+                    <div class="s17-item"><div class="s17-light off"></div><div class="s17-label">test</div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式18: 对比视图 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式18: 对比视图</h3>
+                <span class="num">18</span>
+            </div>
+            <div class="style-content">
+                <div class="s18-compare">
+                    <div class="s18-side">
+                        <div class="s18-title">域名到期</div>
+                        <div class="s18-value good">100%</div>
+                        <div style="text-align: center; font-size: 11px; color: var(--text-muted)">全部正常</div>
+                    </div>
+                    <div class="s18-side">
+                        <div class="s18-title">证书到期</div>
+                        <div class="s18-value bad">83%</div>
+                        <div style="text-align: center; font-size: 11px; color: var(--text-muted)">2个需续期</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式19: 迷你地图 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式19: 迷你概览图</h3>
+                <span class="num">19</span>
+            </div>
+            <div class="style-content">
+                <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px">每个方块 = 1个域名</div>
+                <div class="s19-map">
+                    <div class="s19-block ok">1</div>
+                    <div class="s19-block warn">2</div>
+                    <div class="s19-block ok">3</div>
+                    <div class="s19-block ok">4</div>
+                    <div class="s19-block ok">5</div>
+                    <div class="s19-block ok">6</div>
+                    <div class="s19-block warn">7</div>
+                    <div class="s19-block ok">8</div>
+                    <div class="s19-block ok">9</div>
+                    <div class="s19-block danger">10</div>
+                    <div class="s19-block ok">11</div>
+                    <div class="s19-block ok">12</div>
+                </div>
+                <div style="margin-top: 12px; font-size: 10px; display: flex; gap: 16px;">
+                    <span>🟢 正常: 9</span>
+                    <span>🟡 预警: 2</span>
+                    <span>🔴 过期: 1</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 样式20: 环形进度 -->
+        <div class="style-item">
+            <div class="style-header">
+                <h3>样式20: 环形进度</h3>
+                <span class="num">20</span>
+            </div>
+            <div class="style-content">
+                <div class="s20-rings">
+                    <div class="s20-ring ok">
+                        <div class="value">12</div>
+                        <div class="label">总域名</div>
+                    </div>
+                    <div class="s20-ring ok">
+                        <div class="value">83%</div>
+                        <div class="label">健康率</div>
+                    </div>
+                    <div class="s20-ring warn">
+                        <div class="value">2</div>
+                        <div class="label">需关注</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div style="text-align: center; margin-top: 40px; color: var(--text-muted); font-size: 14px;">
+        选择你喜欢的样式编号，我来实现到正式页面中
+    </div>
+</body>
+</html>

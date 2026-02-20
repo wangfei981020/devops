@@ -136,6 +136,8 @@ func createTables() error {
 	DB.Exec(`ALTER TABLE users ADD COLUMN phone VARCHAR(32) DEFAULT ''`)
 	DB.Exec(`ALTER TABLE users ADD COLUMN email VARCHAR(128) DEFAULT ''`)
 	DB.Exec(`ALTER TABLE users ADD COLUMN description TEXT`)
+	// 兼容旧数据库：添加 language 字段（用户界面语言）
+	DB.Exec(`ALTER TABLE users ADD COLUMN language VARCHAR(10) DEFAULT 'zh-CN'`)
 
 	// 创建审计日志表
 	_, err = DB.Exec(`
@@ -234,6 +236,8 @@ func createTables() error {
 
 	// 兼容旧数据库：添加 env 列到 domains 表
 	DB.Exec(`ALTER TABLE domains ADD COLUMN env VARCHAR(32) DEFAULT 'PROD' AFTER cdn_provider`)
+	// 添加源站IP列
+	DB.Exec(`ALTER TABLE domains ADD COLUMN origin_ip VARCHAR(512) AFTER origin`)
 
 	// 创建记录历史表（用于修改历史和回滚）
 	_, err = DB.Exec(`
@@ -416,6 +420,47 @@ func createTables() error {
 			INDEX idx_vault_gm_group (group_id),
 			INDEX idx_vault_gm_user (user_id),
 			UNIQUE KEY uk_vault_gm (group_id, user_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	// ========== 商户管理表 ==========
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS merchants (
+			id VARCHAR(64) PRIMARY KEY,
+			project VARCHAR(255) DEFAULT '',
+			env VARCHAR(32) DEFAULT 'prod',
+			website_name VARCHAR(255) NOT NULL DEFAULT '',
+			contact_emails TEXT COMMENT '对接邮箱JSON数组',
+			website_urls TEXT COMMENT '网站方网址JSON数组',
+			player_regions TEXT COMMENT '玩家地区JSON数组',
+			estimated_players VARCHAR(64) DEFAULT '',
+			game_types TEXT COMMENT '游戏种类JSON数组',
+			handicaps TEXT COMMENT '盘口JSON数组',
+			languages TEXT COMMENT '语言JSON数组',
+			currencies TEXT COMMENT '币种JSON数组',
+			supported_ports TEXT COMMENT '支持端口JSON数组',
+			wallet_types TEXT COMMENT '钱包类型JSON数组',
+			callback_domains TEXT COMMENT '三方回调域名JSON数组',
+			whitelist_ips TEXT COMMENT '三方白名单',
+			hall_domains TEXT COMMENT '三方调用厅房域名JSON数组',
+			site_domains TEXT COMMENT '厅方站点系统域名JSON数组',
+			site_accounts TEXT COMMENT '站点系统账号JSON数组',
+			app_keys TEXT COMMENT 'appkey JSON数组',
+			app_secrets TEXT COMMENT 'appsecret 密码系统查看',
+			game_domains TEXT COMMENT '游戏域名JSON数组',
+			redirect_domains TEXT COMMENT '301域名JSON数组',
+			remark TEXT,
+			status VARCHAR(32) DEFAULT 'active',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			created_by VARCHAR(128),
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			updated_by VARCHAR(128),
+			INDEX idx_merchant_project (project),
+			INDEX idx_merchant_env (env),
+			INDEX idx_merchant_status (status)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`)
 	if err != nil {
@@ -719,22 +764,77 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_audit", "menu:audit", "审计日志", "/system/audit", "perm_menu_system", "", 50},
 		{"perm_menu_api", "menu:api", "接口管理", "/system/api", "perm_menu_system", "", 60},
 		{"perm_menu_schedule", "menu:schedule", "排班管理", "/system/schedule", "perm_menu_system", "", 70},
+		{"perm_menu_taskpool", "menu:taskpool", "任务池", "/system/taskpool", "perm_menu_system", "", 80},
+		{"perm_menu_incidents", "menu:incidents", "事件记录", "/system/incidents", "perm_menu_system", "", 90},
 
 		// 资源管理
 		{"perm_menu_resource", "menu:resource", "资源管理", "/resource", "", "resource", 2},
 		{"perm_menu_assets", "menu:assets", "资产管理", "/resource/assets", "perm_menu_resource", "", 10},
 		{"perm_menu_domains", "menu:domains", "域名管理", "/resource/domains", "perm_menu_resource", "", 20},
+		{"perm_menu_merchants", "menu:merchants", "商户管理", "/resource/merchants", "perm_menu_resource", "", 25},
 		{"perm_menu_network", "menu:network", "网络管理", "/resource/network", "perm_menu_resource", "", 30},
+		{"perm_menu_serviceconfig", "menu:serviceconfig", "服务配置", "/resource/serviceconfig", "perm_menu_resource", "", 35},
 		{"perm_menu_topology", "menu:topology", "服务拓扑", "/resource/topology", "perm_menu_resource", "", 40},
 
 		// 监控告警
 		{"perm_menu_monitor", "menu:monitor", "监控告警", "/monitor", "", "monitor", 3},
+		{"perm_menu_metrics", "menu:metrics", "指标监控", "/monitor/metrics", "perm_menu_monitor", "", 10},
+		{"perm_menu_alerts", "menu:alerts", "告警管理", "/monitor/alerts", "perm_menu_monitor", "", 20},
+		{"perm_menu_alertrules", "menu:alertrules", "告警规则", "/monitor/alertrules", "perm_menu_monitor", "", 30},
+		{"perm_menu_alertnotify", "menu:alertnotify", "通知配置", "/monitor/alertnotify", "perm_menu_monitor", "", 40},
+		{"perm_menu_dashboard", "menu:dashboard", "大屏展示", "/monitor/dashboard", "perm_menu_monitor", "", 50},
 
-		// 安全管理
-		{"perm_menu_security", "menu:security", "安全管理", "/security", "", "security", 4},
+		// K8S运维
+		{"perm_menu_k8s", "menu:k8s", "K8S运维", "/k8s", "", "k8s", 4},
+		{"perm_menu_clusters", "menu:clusters", "集群管理", "/k8s/clusters", "perm_menu_k8s", "", 10},
+		{"perm_menu_workloads", "menu:workloads", "工作负载", "/k8s/workloads", "perm_menu_k8s", "", 20},
+		{"perm_menu_configmaps", "menu:configmaps", "配置管理", "/k8s/configmaps", "perm_menu_k8s", "", 30},
+		{"perm_menu_storage", "menu:storage", "存储管理", "/k8s/storage", "perm_menu_k8s", "", 40},
+		{"perm_menu_terminal", "menu:terminal", "容器终端", "/k8s/terminal", "perm_menu_k8s", "", 50},
+
+		// 工单系统
+		{"perm_menu_ticket", "menu:ticket", "工单系统", "/ticket", "", "ticket", 5},
+		{"perm_menu_tickets", "menu:tickets", "工单管理", "/ticket/tickets", "perm_menu_ticket", "", 10},
+		{"perm_menu_sla", "menu:sla", "SLA管理", "/ticket/sla", "perm_menu_ticket", "", 20},
+		{"perm_menu_tickettemplate", "menu:tickettemplate", "工单模板", "/ticket/template", "perm_menu_ticket", "", 30},
+
+		// 自动化运维
+		{"perm_menu_automation", "menu:automation", "自动化运维", "/automation", "", "automation", 6},
+		{"perm_menu_jobs", "menu:jobs", "作业平台", "/automation/jobs", "perm_menu_automation", "", 10},
+		{"perm_menu_crontab", "menu:crontab", "定时任务", "/automation/crontab", "perm_menu_automation", "", 20},
+		{"perm_menu_inspection", "menu:inspection", "自动巡检", "/automation/inspection", "perm_menu_automation", "", 30},
+		{"perm_menu_selfhealing", "menu:selfhealing", "自愈策略", "/automation/selfhealing", "perm_menu_automation", "", 40},
+
+		// 智能运维
+		{"perm_menu_aiops", "menu:aiops", "智能运维", "/aiops", "", "aiops", 7},
+		{"perm_menu_anomaly", "menu:anomaly", "异常检测", "/aiops/anomaly", "perm_menu_aiops", "", 10},
+		{"perm_menu_rootcause", "menu:rootcause", "根因分析", "/aiops/rootcause", "perm_menu_aiops", "", 20},
+		{"perm_menu_predict", "menu:predict", "故障预测", "/aiops/predict", "perm_menu_aiops", "", 30},
+		{"perm_menu_smartalert", "menu:smartalert", "智能告警", "/aiops/smartalert", "perm_menu_aiops", "", 40},
+		{"perm_menu_capacity", "menu:capacity", "容量预测", "/aiops/capacity", "perm_menu_aiops", "", 50},
+
+		// 变更发布
+		{"perm_menu_release", "menu:release", "变更发布", "/release", "", "release", 8},
+		{"perm_menu_deploy", "menu:deploy", "发布管理", "/release/deploy", "perm_menu_release", "", 10},
+		{"perm_menu_change", "menu:change", "变更管理", "/release/change", "perm_menu_release", "", 20},
+		{"perm_menu_rollback", "menu:rollback", "回滚管理", "/release/rollback", "perm_menu_release", "", 30},
+
+		// 日志服务
+		{"perm_menu_logs", "menu:logs", "日志服务", "/logs", "", "logs", 9},
+		{"perm_menu_logquery", "menu:logquery", "日志查询", "/logs/query", "perm_menu_logs", "", 10},
+		{"perm_menu_loganalysis", "menu:loganalysis", "日志分析", "/logs/analysis", "perm_menu_logs", "", 20},
+		{"perm_menu_logalert", "menu:logalert", "日志告警", "/logs/alert", "perm_menu_logs", "", 30},
+
+		// 安全工具
+		{"perm_menu_security", "menu:security", "安全工具", "/security", "", "security", 10},
 		{"perm_menu_vault", "menu:vault", "密码库", "/security/vault", "perm_menu_security", "", 10},
 		{"perm_menu_secrets", "menu:secrets", "密钥管理", "/security/secrets", "perm_menu_security", "", 20},
 		{"perm_menu_certs", "menu:certs", "证书管理", "/security/certs", "perm_menu_security", "", 30},
+
+		// 系统设置
+		{"perm_menu_settings", "menu:settings", "系统设置", "/settings", "", "settings", 11},
+		{"perm_menu_datasources", "menu:datasources", "数据源配置", "/settings/datasources", "perm_menu_settings", "", 10},
+		{"perm_menu_sysparams", "menu:sysparams", "系统参数", "/settings/sysparams", "perm_menu_settings", "", 20},
 	}
 
 	for _, perm := range menuPermissions {

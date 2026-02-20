@@ -7,10 +7,24 @@ const vueApp = createApp({
             // 主题状态
             isDarkMode: localStorage.getItem('theme') === 'dark',
 
+            // 语言状态
+            currentLanguage: localStorage.getItem('language') || 'zh-CN',
+            availableLanguages: [
+                { code: 'zh-CN', name: '中文', flag: '🇨🇳' },
+                { code: 'en-US', name: 'English', flag: '🇺🇸' }
+            ],
+
             // 用户状态
             currentUser: JSON.parse(localStorage.getItem('currentUser')),
             loginForm: { username: '', password: '' },
             loginLoading: false,
+
+            // 国际化
+            currentLang: localStorage.getItem('language') || 'zh-CN',
+            availableLanguages: [
+                { code: 'zh-CN', name: '中文', flag: '🇨🇳' },
+                { code: 'en-US', name: 'English', flag: '🇺🇸' }
+            ],
 
             // MFA 状态
             mfaPending: false,           // 是否等待 MFA 验证
@@ -136,17 +150,6 @@ const vueApp = createApp({
             dragOverIndex: null,
             // 批量选择
             selectedShifts: [],
-            // 自定义确认弹窗
-            confirmDialog: {
-                show: false,
-                title: '确认',
-                message: '',
-                icon: '⚠️',
-                confirmText: '确定',
-                confirmColor: '#ff4d4f',
-                onConfirm: null,
-                onCancel: null
-            },
             showImportModal: false,
             importData: '',
             importStartDate: '',
@@ -370,7 +373,7 @@ const vueApp = createApp({
 
             // 表单数据
             recordForm: { id: '', connection_id: '', project: '', env: 'uat', module: '', vid: '', src_ip: '', src_port: '', dest_ip: '', dest_port: '', status: 'active' },
-            userForm: { id: '', username: '', password: '', display_name: '', role: 'user', status: 'active', permissions: [], phone: '', email: '', description: '', session_timeout: '' },
+            userForm: { id: '', username: '', password: '', display_name: '', role: 'user', status: 'active', permissions: [], phone: '', email: '', description: '', session_timeout: '', language: 'zh-CN' },
             dataSourceForm: { id: '', name: '', type: 'prometheus', url: '', username: '', password: '', token: '', description: '', status: 'active' },
             domainForm: { id: '', project: '', module: '', domain_name: '', origin: '', cdn_provider: '', env: 'PROD', expire_time: '', cert_expire_time: '', status: 'active', remark: '' },
             websiteForm: { id: '', name: '', url: '', category: 'internal', description: '', icon: '', biz_contact: '', biz_phone: '', tech_contact: '', tech_phone: '', username: '', password: '', contract_no: '', contract_start: '', contract_end: '', cost_info: '', sort_order: 0, status: 'active' },
@@ -380,6 +383,10 @@ const vueApp = createApp({
             showHallModal: false,
             currentWebsiteForHall: null,
             profileForm: { id: '', username: '', password: '', display_name: '', role: '', session_timeout: '' },
+
+            // 域名批量刷新
+            batchRefreshing: false,
+            batchRefreshProgress: '',
 
             // 域名筛选
             domainSearchQuery: '',
@@ -438,6 +445,30 @@ const vueApp = createApp({
                 status: 'pending', severity: 'medium', reason: '', impact: '', solution: '',
                 checker: '', check_time: '', check_result: '', remark: ''
             },
+
+            // 商户管理
+            merchants: [],
+            merchantSearch: '',
+            merchantProjectFilter: '',
+            merchantEnvFilter: '',
+            merchantCurrentPage: 1,
+            merchantPageSize: 10,
+            showMerchantModal: false,
+            editMerchantMode: false,
+            merchantForm: {
+                id: '', project: '', env: 'prod', website_name: '', contact_emails: [], website_urls: [],
+                player_regions: [], estimated_players: '', game_types: [], handicaps: [], languages: [],
+                currencies: [], supported_ports: [], wallet_types: [], callback_domains: [],
+                whitelist_ips: '', hall_domains: [], site_domains: [], site_accounts: [], app_keys: [],
+                app_secrets: '', game_domains: [], redirect_domains: [], remark: '', status: 'active'
+            },
+            merchantTagInput: {},
+            showMerchantDetail: null,
+            selectedMerchantIds: [],
+            showBatchMerchantModal: false,
+            batchMerchantText: '',
+            batchMerchantLoading: false,
+            batchMerchantResult: null,
 
             // 服务配置管理
             serviceConfigs: [],
@@ -538,6 +569,7 @@ const vueApp = createApp({
             batchDomainRecords: [],
             batchDomainError: '',
             batchDomainProject: '',  // 批量添加时的默认项目
+            batchDomainEnv: 'PROD',  // 批量添加时的默认环境
             batchDomainFetchExpiry: 'skip',  // 'skip' 跳过到期时间查询，'fetch' 自动获取
 
             // 批量添加
@@ -550,6 +582,17 @@ const vueApp = createApp({
 
             // 删除 (popconfirm)
             activePopconfirm: null,
+
+            // 自定义确认弹窗
+            confirmDialog: {
+                show: false,
+                type: 'warning', // warning, danger, info, success
+                title: '',
+                message: '',
+                okText: '确定',
+                cancelText: '取消',
+                resolve: null
+            },
             // 批量删除弹窗
             showDeleteModal: false,
             deleteTarget: null,
@@ -579,16 +622,8 @@ const vueApp = createApp({
             editingMetric: false,
             selectedMetricIds: [], // 批量选择的指标
 
-            // 权限配置
-            allPermissions: [
-                { key: 'records', label: '网络管理', group: '数据管理' },
-                { key: 'domains', label: '域名管理', group: '数据管理' },
-                { key: 'cmdb', label: 'CMDB', group: '数据管理' },
-                { key: 'inspection', label: '一键巡检', group: '运维工具' },
-                { key: 'datasources', label: '数据源配置', group: '系统管理' },
-                { key: 'audit', label: '审计日志', group: '系统管理' },
-                { key: 'users', label: '用户管理', group: '系统管理' }
-            ]
+            // 指标批量选择完成
+            selectedMetricIds_placeholder: null
         };
     },
 
@@ -1014,7 +1049,10 @@ const vueApp = createApp({
     mounted() {
         // 初始化主题
         this.initTheme();
-        
+
+        // 初始化语言
+        this.initLanguage();
+
         // 加载 Logo 配置（无需登录）
         this.loadLogoSettings();
 
@@ -1113,6 +1151,24 @@ const vueApp = createApp({
                 case 'permissions':
                     this.loadAllPermissions();
                     break;
+                case 'merchants':
+                    this.loadMerchants();
+                    break;
+                case 'taskPool':
+                    this.loadTaskData();
+                    break;
+                case 'incidents':
+                    this.loadIncidentData();
+                    break;
+                case 'serviceConfig':
+                    this.loadServiceConfigData();
+                    break;
+                case 'topology':
+                    this.loadTopologyData();
+                    break;
+                case 'websites':
+                    this.loadWebsites();
+                    break;
                 default:
                     this.loadRecords();
             }
@@ -1139,6 +1195,57 @@ const vueApp = createApp({
                 document.documentElement.removeAttribute('data-theme');
                 localStorage.removeItem('theme');
             }
+        },
+
+        // ========== 语言切换 ==========
+        t(key) {
+            const lang = window.i18n && window.i18n[this.currentLanguage];
+            if (!lang) return key;
+            
+            const keys = key.split('.');
+            let value = lang;
+            for (const k of keys) {
+                if (value && typeof value === 'object' && k in value) {
+                    value = value[k];
+                } else {
+                    return key;
+                }
+            }
+            return typeof value === 'string' ? value : key;
+        },
+
+        async setLanguage(langCode) {
+            this.currentLanguage = langCode;
+            localStorage.setItem('language', langCode);
+            document.documentElement.setAttribute('lang', langCode);
+            
+            // 如果用户已登录，同步到服务器
+            if (this.currentUser) {
+                try {
+                    const res = await API.updateUser(this.currentUser.id, { language: langCode });
+                    if (res.ok) {
+                        this.currentUser.language = langCode;
+                        localStorage.setItem('currentUser', JSON.stringify(this.currentUser));
+                    }
+                } catch (e) {
+                    console.error('保存语言设置失败:', e);
+                }
+            }
+            
+            this.showToast(langCode === 'zh-CN' ? '语言已切换为中文' : 'Language changed to English', 'success');
+        },
+
+        initLanguage() {
+            // 优先从用户设置读取，其次从本地存储，最后默认中文
+            let lang = 'zh-CN';
+            if (this.currentUser && this.currentUser.language) {
+                lang = this.currentUser.language;
+            } else if (localStorage.getItem('language')) {
+                lang = localStorage.getItem('language');
+            }
+            this.currentLanguage = lang;
+            localStorage.setItem('language', lang);
+            document.documentElement.setAttribute('lang', lang);
         },
 
         // ========== 面包屑导航 ==========
@@ -1530,10 +1637,6 @@ const vueApp = createApp({
             this.showViewUserModal = true;
         },
         
-        openRoleModal(user) {
-            this.showToast(`角色设置: ${user.username}`, 'info');
-        },
-        
         dsGoToPage() {
             const page = parseInt(this.dsJumpPage);
             if (page >= 1 && page <= this.dsTotalPages) {
@@ -1664,6 +1767,47 @@ const vueApp = createApp({
             this.mfaPendingUserId = '';
             // 跳转到登录页面
             window.location.href = '/login.html';
+        },
+
+        // ========== 国际化 ==========
+        t(key) {
+            const lang = window.i18n?.[this.currentLang] || window.i18n?.['zh-CN'] || {};
+            const keys = key.split('.');
+            let value = lang;
+            for (const k of keys) {
+                value = value?.[k];
+                if (value === undefined) break;
+            }
+            return value || key;
+        },
+
+        async changeLanguage(langCode) {
+            this.currentLang = langCode;
+            localStorage.setItem('language', langCode);
+            
+            // 如果用户已登录，同步到服务器
+            if (this.currentUser) {
+                try {
+                    const res = await API.updateUser(this.currentUser.id, { language: langCode });
+                    if (res.ok) {
+                        this.currentUser.language = langCode;
+                        localStorage.setItem('currentUser', JSON.stringify(this.currentUser));
+                        this.showToast(this.currentLang === 'zh-CN' ? '语言已切换' : 'Language changed', 'success');
+                    }
+                } catch (e) {
+                    console.error('保存语言设置失败:', e);
+                }
+            }
+        },
+
+        initLanguage() {
+            // 优先使用用户设置的语言，否则使用本地存储，最后默认中文
+            if (this.currentUser?.language) {
+                this.currentLang = this.currentUser.language;
+            } else {
+                this.currentLang = localStorage.getItem('language') || 'zh-CN';
+            }
+            localStorage.setItem('language', this.currentLang);
         },
 
         async refreshCurrentUser() {
@@ -2062,6 +2206,71 @@ const vueApp = createApp({
             }
         },
 
+        async batchRefreshDomains() {
+            if (this.batchRefreshing) return;
+            
+            const confirmed = await this.showConfirm({
+                type: 'warning',
+                title: '批量刷新到期时间',
+                message: '这将刷新所有启用域名的证书和域名到期时间。\n如果域名数量较多，可能需要几分钟时间。',
+                okText: '开始刷新',
+                cancelText: '取消'
+            });
+            
+            if (!confirmed) return;
+
+            this.batchRefreshing = true;
+            this.batchRefreshProgress = '准备中...';
+
+            try {
+                const res = await fetch('/api/domains/batch-refresh', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': this.csrfToken
+                    },
+                    credentials: 'include'
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    await this.loadDomains();
+                    
+                    // 根据结果显示不同类型的提示
+                    if (data.total === 0) {
+                        this.showToast('没有找到启用状态的域名', 'warning');
+                    } else if (data.success_count === 0 && data.fail_count > 0) {
+                        // 全部失败
+                        let msg = `刷新失败：共 ${data.total} 个域名全部失败`;
+                        if (data.fail_details && data.fail_details.length > 0) {
+                            msg += '\n\n失败原因：\n' + data.fail_details.slice(0, 5).join('\n');
+                            if (data.fail_details.length > 5) {
+                                msg += `\n... 等 ${data.fail_details.length} 条`;
+                            }
+                        }
+                        this.showToast(msg, 'error');
+                    } else if (data.fail_count > 0) {
+                        // 部分失败
+                        let msg = `刷新完成：成功 ${data.success_count} 个，失败 ${data.fail_count} 个`;
+                        if (data.fail_details && data.fail_details.length > 0) {
+                            msg += '\n\n失败详情：\n' + data.fail_details.slice(0, 3).join('\n');
+                        }
+                        this.showToast(msg, 'warning');
+                    } else {
+                        // 全部成功
+                        this.showToast(`刷新成功：共更新 ${data.success_count} 个域名的到期时间`, 'success');
+                    }
+                } else {
+                    this.showToast(data.message || '批量刷新失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('批量刷新失败: ' + e.message, 'error');
+            } finally {
+                this.batchRefreshing = false;
+                this.batchRefreshProgress = '';
+            }
+        },
+
         openDomainModal(domain = null) {
             if (domain) {
                 this.domainForm = { ...domain };
@@ -2069,7 +2278,7 @@ const vueApp = createApp({
                     this.domainForm.env = 'PROD';
                 }
             } else {
-                this.domainForm = { id: '', project: '', module: '', domain_name: '', origin: '', cdn_provider: '', env: 'PROD', expire_time: '', cert_expire_time: '', status: 'active', remark: '' };
+                this.domainForm = { id: '', project: '', module: '', domain_name: '', origin: '', origin_ip: '', cdn_provider: '', env: 'PROD', expire_time: '', cert_expire_time: '', status: 'active', remark: '' };
             }
             this.showDomainModal = true;
         },
@@ -2120,6 +2329,11 @@ const vueApp = createApp({
                 const res = await API.deleteDomain(domain.id);
                 if (res.ok) {
                     this.showToast('删除成功', 'success');
+                    // 从已选中列表中移除该域名
+                    const idx = this.selectedDomains.indexOf(domain.id);
+                    if (idx !== -1) {
+                        this.selectedDomains.splice(idx, 1);
+                    }
                     await this.loadDomains();
                 } else {
                     this.showToast('删除失败', 'error');
@@ -2285,6 +2499,19 @@ const vueApp = createApp({
             return 'text-success';
         },
 
+        // 获取到期时间徽章样式类
+        // 30天以上: 绿色, 15-30天: 黄色, 7-15天: 橙色, 7天以下: 红色
+        getExpiryBadgeClass(expireTime) {
+            if (!expireTime) return 'expiry-none';
+            const days = this.getCertDaysLeft(expireTime);
+            if (days === null) return 'expiry-none';
+            if (days <= 0) return 'expiry-expired';    // 已过期 - 深红
+            if (days <= 7) return 'expiry-critical';   // 7天以下 - 红色
+            if (days <= 15) return 'expiry-danger';    // 7-15天 - 橙色
+            if (days <= 30) return 'expiry-warning';   // 15-30天 - 黄色
+            return 'expiry-safe';                       // 30天以上 - 绿色
+        },
+
         // 格式化日期显示（处理ISO格式）
         formatDate(dateStr) {
             if (!dateStr) return '-';
@@ -2292,6 +2519,24 @@ const vueApp = createApp({
                 const date = new Date(dateStr);
                 if (isNaN(date.getTime())) return dateStr;
                 return date.toISOString().split('T')[0];
+            } catch (e) {
+                return dateStr;
+            }
+        },
+
+        // 格式化日期时间显示（精确到秒）
+        formatDateTime(dateStr) {
+            if (!dateStr) return '-';
+            try {
+                const date = new Date(dateStr);
+                if (isNaN(date.getTime())) return dateStr;
+                const y = date.getFullYear();
+                const m = String(date.getMonth() + 1).padStart(2, '0');
+                const d = String(date.getDate()).padStart(2, '0');
+                const h = String(date.getHours()).padStart(2, '0');
+                const min = String(date.getMinutes()).padStart(2, '0');
+                const s = String(date.getSeconds()).padStart(2, '0');
+                return `${y}-${m}-${d} ${h}:${min}:${s}`;
             } catch (e) {
                 return dateStr;
             }
@@ -2327,21 +2572,41 @@ const vueApp = createApp({
 
                 // 支持两种格式:
                 // 1. 只有域名: example.com
-                // 2. 完整格式: 域名,模块,回源,CDN厂商,域名到期,备注 (用逗号或制表符分隔)
+                // 2. 完整格式: 模块,域名,回源,源站IP,CDN厂商,域名到期,备注 (用逗号或制表符分隔)
                 const parts = line.split(/[,\t]+/).map(s => s.trim());
                 
                 if (parts.length === 0 || !parts[0]) continue;
 
-                const domain = {
-                    project: this.batchDomainProject,
-                    domain_name: parts[0],
-                    module: parts[1] || '',
-                    origin: parts[2] || '',
-                    cdn_provider: parts[3] || '',
-                    expire_time: parts[4] || '',
-                    remark: parts[5] || '',
-                    status: 'active'
-                };
+                let domain;
+                if (parts.length === 1) {
+                    // 只有一个字段，当做域名处理
+                    domain = {
+                        project: this.batchDomainProject,
+                        env: this.batchDomainEnv,
+                        domain_name: parts[0],
+                        module: '',
+                        origin: '',
+                        origin_ip: '',
+                        cdn_provider: '',
+                        expire_time: '',
+                        remark: '',
+                        status: 'active'
+                    };
+                } else {
+                    // 完整格式: 模块,域名,回源,源站IP,CDN厂商,域名到期,备注
+                    domain = {
+                        project: this.batchDomainProject,
+                        env: this.batchDomainEnv,
+                        module: parts[0] || '',
+                        domain_name: parts[1] || '',
+                        origin: parts[2] || '',
+                        origin_ip: parts[3] || '',
+                        cdn_provider: parts[4] || '',
+                        expire_time: parts[5] || '',
+                        remark: parts[6] || '',
+                        status: 'active'
+                    };
+                }
 
                 records.push(domain);
             }
@@ -2914,6 +3179,35 @@ const vueApp = createApp({
             setTimeout(() => { this.toast.show = false; }, 3000);
         },
 
+        // 自定义确认弹窗
+        showConfirm(options) {
+            return new Promise((resolve) => {
+                this.confirmDialog = {
+                    show: true,
+                    type: options.type || 'warning',
+                    title: options.title || '确认操作',
+                    message: options.message || '确定要执行此操作吗？',
+                    okText: options.okText || '确定',
+                    cancelText: options.cancelText || '取消',
+                    resolve: resolve
+                };
+            });
+        },
+
+        handleConfirmOk() {
+            if (this.confirmDialog.resolve) {
+                this.confirmDialog.resolve(true);
+            }
+            this.confirmDialog.show = false;
+        },
+
+        handleConfirmCancel() {
+            if (this.confirmDialog.resolve) {
+                this.confirmDialog.resolve(false);
+            }
+            this.confirmDialog.show = false;
+        },
+
         // ========== 记录操作 ==========
         openRecordModal(mode, record = null) {
             this.recordModalMode = mode;
@@ -3361,11 +3655,15 @@ const vueApp = createApp({
         },
 
         // ========== 用户管理 ==========
-        openUserModal(mode, user = null) {
+        async openUserModal(mode, user = null) {
+            // 确保角色列表已加载
+            if (this.roles.length === 0) {
+                await this.loadRoles();
+            }
             this.userModalMode = mode;
             if (user) {
                 const perms = (user.permissions || '').split(',').map(p => p.trim()).filter(p => p);
-                this.userForm = { 
+                this.userForm = {
                     id: user.id,
                     username: user.username,
                     password: '',
@@ -3378,10 +3676,11 @@ const vueApp = createApp({
                     phone: user.phone || '',
                     email: user.email || '',
                     description: user.description || '',
-                    session_timeout: user.session_timeout || this.globalSessionTimeout
+                    session_timeout: user.session_timeout || this.globalSessionTimeout,
+                    language: user.language || 'zh-CN'
                 };
             } else {
-                this.userForm = { id: '', username: '', password: '', display_name: '', role: 'user', status: 'active', permissions: ['records', 'audit'], mfa_enabled: false, mfa_bound: false, phone: '', email: '', description: '', session_timeout: this.globalSessionTimeout };
+                this.userForm = { id: '', username: '', password: '', display_name: '', role: 'user', status: 'active', permissions: ['records', 'audit'], mfa_enabled: false, mfa_bound: false, phone: '', email: '', description: '', session_timeout: this.globalSessionTimeout, language: 'zh-CN' };
             }
             this.showUserModal = true;
             this.showUserPassword = false;
@@ -3893,35 +4192,21 @@ const vueApp = createApp({
             }
         },
         
-        // 显示确认弹窗
-        showConfirm(options) {
-            this.confirmDialog = {
-                show: true,
-                title: options.title || '确认',
-                message: options.message || '确定要执行此操作吗？',
-                icon: options.icon || '⚠️',
-                confirmText: options.confirmText || '确定',
-                confirmColor: options.confirmColor || '#ff4d4f',
-                onConfirm: options.onConfirm || null,
-                onCancel: options.onCancel || null
-            };
-        },
-        
         // 批量删除班次
-        batchDeleteShifts() {
+        async batchDeleteShifts() {
             if (this.selectedShifts.length === 0) return;
-            this.showConfirm({
+            const confirmed = await this.showConfirm({
+                type: 'danger',
                 title: '删除班次',
-                message: `确定要删除选中的 ${this.selectedShifts.length} 个班次吗？删除后需要点击"保存"才会生效。`,
-                icon: '🗑️',
-                confirmText: '删除',
-                confirmColor: '#ff4d4f',
-                onConfirm: () => {
-                    this.shiftTypes = this.shiftTypes.filter(s => !this.selectedShifts.includes(s.code));
-                    this.selectedShifts = [];
-                    this.showToast('已删除选中班次，请点击保存', 'success');
-                }
+                message: `确定要删除选中的 ${this.selectedShifts.length} 个班次吗？\n删除后需要点击"保存"才会生效。`,
+                okText: '删除',
+                cancelText: '取消'
             });
+            if (confirmed) {
+                this.shiftTypes = this.shiftTypes.filter(s => !this.selectedShifts.includes(s.code));
+                this.selectedShifts = [];
+                this.showToast('已删除选中班次，请点击保存', 'success');
+            }
         },
         
         // 恢复默认班次配置（只更新界面，不保存）
@@ -4738,7 +5023,14 @@ const vueApp = createApp({
         },
 
         async deleteVaultItem(item) {
-            if (!confirm(`确定要删除 "${item.name}" 吗？`)) return;
+            const confirmed = await this.showConfirm({
+                type: 'danger',
+                title: '删除密码',
+                message: `确定要删除 "${item.name}" 吗？\n此操作不可恢复。`,
+                okText: '删除',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
 
             try {
                 const res = await API.deleteVaultItem(this.vaultSession, item.id);
@@ -4898,7 +5190,14 @@ const vueApp = createApp({
         },
 
         async deleteVaultFolder(folder) {
-            if (!confirm(`确定要删除文件夹 "${folder.name}" 吗？\n\n注意：文件夹中的密码不会被删除，只会变为无文件夹状态。`)) return;
+            const confirmed = await this.showConfirm({
+                type: 'warning',
+                title: '删除文件夹',
+                message: `确定要删除文件夹 "${folder.name}" 吗？\n\n文件夹中的密码不会被删除，只会变为无文件夹状态。`,
+                okText: '删除',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
 
             try {
                 const res = await API.deleteVaultFolder(this.vaultSession, folder.id);
@@ -4978,7 +5277,14 @@ const vueApp = createApp({
         },
 
         async deleteVaultGroup(group) {
-            if (!confirm(`确定要删除用户组 "${group.name}" 吗？`)) return;
+            const confirmed = await this.showConfirm({
+                type: 'danger',
+                title: '删除用户组',
+                message: `确定要删除用户组 "${group.name}" 吗？\n此操作不可恢复。`,
+                okText: '删除',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
 
             try {
                 const res = await API.deleteVaultGroup(group.id);
@@ -5034,7 +5340,14 @@ const vueApp = createApp({
 
         async removeGroupMember(member) {
             if (!this.vaultCurrentGroup) return;
-            if (!confirm(`确定要移除成员 "${member.user_id}" 吗？`)) return;
+            const confirmed = await this.showConfirm({
+                type: 'warning',
+                title: '移除成员',
+                message: `确定要移除成员 "${member.user_id}" 吗？`,
+                okText: '移除',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
 
             try {
                 const res = await API.removeVaultGroupMember(this.vaultCurrentGroup.id, member.id);
@@ -5094,7 +5407,14 @@ const vueApp = createApp({
         },
 
         async deleteVaultShare(share) {
-            if (!confirm('确定要取消此分享吗？')) return;
+            const confirmed = await this.showConfirm({
+                type: 'warning',
+                title: '取消分享',
+                message: '确定要取消此分享吗？',
+                okText: '取消分享',
+                cancelText: '返回'
+            });
+            if (!confirmed) return;
 
             try {
                 const res = await API.deleteVaultShare(share.id);
@@ -5142,8 +5462,8 @@ const vueApp = createApp({
                 const res = await API.getPermissions();
                 if (res.ok) {
                     const data = await res.json() || [];
-                    // 展平树形结构（如果权限有 children 属性）
-                    this.allPermissions = this.flattenPermissions(data);
+                    // 后端返回平铺数据，前端构建树形结构
+                    this.allPermissions = this.buildPermissionTree(data);
                     console.log('加载权限完成，共', this.allPermissions.length, '条');
                 }
             } catch (e) {
@@ -5151,17 +5471,43 @@ const vueApp = createApp({
             }
         },
 
-        // 展平权限树形结构
-        flattenPermissions(permissions, result = []) {
+        // 根据 parent_id 构建权限树形结构
+        buildPermissionTree(permissions) {
+            const permMap = {};
+            const roots = [];
+
+            // 第一遍：建立映射
             for (const perm of permissions) {
-                // 复制权限对象（不包含 children）
-                const { children, ...permData } = perm;
-                result.push(permData);
-                // 递归处理子权限
-                if (children && children.length > 0) {
-                    this.flattenPermissions(children, result);
+                perm.children = [];
+                permMap[perm.id] = perm;
+            }
+
+            // 第二遍：构建树
+            for (const perm of permissions) {
+                if (!perm.parent_id || perm.parent_id === '') {
+                    roots.push(perm);
+                } else if (permMap[perm.parent_id]) {
+                    permMap[perm.parent_id].children.push(perm);
+                } else {
+                    roots.push(perm);
                 }
             }
+
+            return roots;
+        },
+
+        // 获取所有权限的平铺列表（用于权限配置页面显示）
+        getAllPermissionsFlat() {
+            const result = [];
+            const flatten = (perms) => {
+                for (const perm of perms) {
+                    result.push(perm);
+                    if (perm.children && perm.children.length > 0) {
+                        flatten(perm.children);
+                    }
+                }
+            };
+            flatten(this.allPermissions);
             return result;
         },
 
@@ -5227,7 +5573,14 @@ const vueApp = createApp({
                 this.showToast('系统内置角色不能删除', 'error');
                 return;
             }
-            if (!confirm(`确定要删除角色 "${role.name}" 吗？`)) return;
+            const confirmed = await this.showConfirm({
+                type: 'danger',
+                title: '删除角色',
+                message: `确定要删除角色 "${role.name}" 吗？\n删除后，使用此角色的用户将失去相关权限。`,
+                okText: '删除',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
 
             try {
                 const res = await API.deleteRole(role.id);
@@ -5380,7 +5733,14 @@ const vueApp = createApp({
         },
 
         async deletePermission(perm) {
-            if (!confirm(`确定要删除权限 "${perm.name}" 吗？`)) return;
+            const confirmed = await this.showConfirm({
+                type: 'danger',
+                title: '删除权限',
+                message: `确定要删除权限 "${perm.name}" 吗？\n此操作不可恢复。`,
+                okText: '删除',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
 
             try {
                 const res = await API.deletePermission(perm.id);
@@ -5468,7 +5828,14 @@ const vueApp = createApp({
         },
 
         async deleteTask(task) {
-            if (!confirm(`确定要删除任务 "${task.title}" 吗？`)) return;
+            const confirmed = await this.showConfirm({
+                type: 'danger',
+                title: '删除任务',
+                message: `确定要删除任务 "${task.title}" 吗？`,
+                okText: '删除',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
             try {
                 const res = await API.deleteTask(task.id);
                 if (res.ok) { this.showToast('任务已删除', 'success'); await this.loadTaskData(); }
@@ -5658,7 +6025,14 @@ const vueApp = createApp({
         },
 
         async deleteIncident(inc) {
-            if (!confirm(`确定要删除该失误记录吗？`)) return;
+            const confirmed = await this.showConfirm({
+                type: 'danger',
+                title: '删除失误记录',
+                message: '确定要删除该失误记录吗？',
+                okText: '删除',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
             try {
                 const res = await API.deleteIncident(inc.id);
                 if (res.ok) {
@@ -5701,6 +6075,290 @@ const vueApp = createApp({
         getPagedIncidents() {
             const start = (this.incidentCurrentPage - 1) * this.incidentPageSize;
             return this.getFilteredIncidents().slice(start, start + this.incidentPageSize);
+        },
+
+        // ========== 商户管理 ==========
+        async loadMerchants() {
+            try {
+                const res = await API.getMerchants(this.merchantProjectFilter, this.merchantEnvFilter);
+                if (res.ok) {
+                    let list = await res.json() || [];
+                    // 解析JSON字符串为数组
+                    list.forEach(m => {
+                        ['contact_emails','website_urls','player_regions','game_types','handicaps','languages','currencies','supported_ports','wallet_types','callback_domains','hall_domains','site_domains','site_accounts','app_keys','game_domains','redirect_domains'].forEach(f => {
+                            try { if (typeof m[f] === 'string') m[f] = JSON.parse(m[f]); } catch(e) { m[f] = []; }
+                            if (!Array.isArray(m[f])) m[f] = [];
+                        });
+                    });
+                    this.merchants = list;
+                }
+            } catch (e) { this.showToast('加载商户失败', 'error'); }
+        },
+
+        openMerchantModal(m = null) {
+            this.merchantTagInput = {};
+            if (m) {
+                this.editMerchantMode = true;
+                this.merchantForm = JSON.parse(JSON.stringify(m));
+            } else {
+                this.editMerchantMode = false;
+                this.merchantForm = {
+                    id: '', project: '', env: 'prod', website_name: '', contact_emails: [], website_urls: [],
+                    player_regions: [], estimated_players: '', game_types: [], handicaps: [], languages: [],
+                    currencies: [], supported_ports: [], wallet_types: [], callback_domains: [],
+                    whitelist_ips: '', hall_domains: [], site_domains: [], site_accounts: [], app_keys: [],
+                    app_secrets: '', game_domains: [], redirect_domains: [], remark: '', status: 'active'
+                };
+            }
+            this.showMerchantModal = true;
+        },
+
+        async saveMerchant() {
+            if (!this.merchantForm.website_name) { this.showToast('请输入网站方名称', 'error'); return; }
+            try {
+                // 将数组序列化为JSON字符串
+                const data = { ...this.merchantForm };
+                ['contact_emails','website_urls','player_regions','game_types','handicaps','languages','currencies','supported_ports','wallet_types','callback_domains','hall_domains','site_domains','site_accounts','app_keys','game_domains','redirect_domains'].forEach(f => {
+                    if (Array.isArray(data[f])) data[f] = JSON.stringify(data[f]);
+                });
+                let res;
+                if (this.editMerchantMode) {
+                    res = await API.updateMerchant(data.id, data);
+                } else {
+                    res = await API.createMerchant(data);
+                }
+                if (res.ok) {
+                    this.showMerchantModal = false;
+                    this.showToast(this.editMerchantMode ? '商户已更新' : '商户已创建', 'success');
+                    await this.loadMerchants();
+                } else { this.showToast('保存失败', 'error'); }
+            } catch (e) { this.showToast('保存失败: ' + e.message, 'error'); }
+        },
+
+        async deleteMerchant(m) {
+            const confirmed = await this.showConfirm({
+                type: 'danger',
+                title: '删除商户',
+                message: `确定要删除商户「${m.website_name}」吗？此操作不可撤销。`,
+                okText: '确认删除',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
+            
+            try {
+                const res = await API.deleteMerchant(m.id);
+                if (res.ok) { this.showToast('已删除', 'success'); await this.loadMerchants(); }
+            } catch (e) { this.showToast('删除失败', 'error'); }
+        },
+
+        async batchDeleteMerchants() {
+            if (this.selectedMerchantIds.length === 0) { this.showToast('请先选择商户', 'error'); return; }
+            
+            const confirmed = await this.showConfirm({
+                type: 'danger',
+                title: '批量删除',
+                message: `确定要删除选中的 ${this.selectedMerchantIds.length} 个商户吗？此操作不可撤销。`,
+                okText: `删除 ${this.selectedMerchantIds.length} 个`,
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
+            
+            let success = 0;
+            for (const id of this.selectedMerchantIds) {
+                try {
+                    const res = await API.deleteMerchant(id);
+                    if (res.ok) success++;
+                } catch (e) { }
+            }
+            this.showToast(`成功删除 ${success} 个商户`, 'success');
+            this.selectedMerchantIds = [];
+            await this.loadMerchants();
+        },
+
+        toggleMerchantSelect(id) {
+            const idx = this.selectedMerchantIds.indexOf(id);
+            if (idx > -1) this.selectedMerchantIds.splice(idx, 1);
+            else this.selectedMerchantIds.push(id);
+        },
+
+        toggleAllMerchants() {
+            const current = this.getPagedMerchants();
+            if (this.selectedMerchantIds.length === current.length) {
+                this.selectedMerchantIds = [];
+            } else {
+                this.selectedMerchantIds = current.map(m => m.id);
+            }
+        },
+
+        // 标签输入辅助
+        addMerchantTag(field) {
+            const val = (this.merchantTagInput[field] || '').trim();
+            if (!val) return;
+            if (!this.merchantForm[field]) this.merchantForm[field] = [];
+            if (!this.merchantForm[field].includes(val)) {
+                this.merchantForm[field].push(val);
+            }
+            this.merchantTagInput[field] = '';
+        },
+
+        removeMerchantTag(field, index) {
+            this.merchantForm[field].splice(index, 1);
+        },
+
+        getFilteredMerchants() {
+            let list = this.merchants || [];
+            if (this.merchantProjectFilter) {
+                list = list.filter(m => m.project === this.merchantProjectFilter);
+            }
+            if (this.merchantSearch) {
+                const q = this.merchantSearch.toLowerCase();
+                list = list.filter(m => m.website_name.toLowerCase().includes(q) || (m.project||'').toLowerCase().includes(q));
+            }
+            return list;
+        },
+
+        getMerchantTotalPages() { return Math.ceil(this.getFilteredMerchants().length / this.merchantPageSize) || 1; },
+
+        getPagedMerchants() {
+            const start = (this.merchantCurrentPage - 1) * this.merchantPageSize;
+            return this.getFilteredMerchants().slice(start, start + this.merchantPageSize);
+        },
+
+        formatTags(arr) {
+            if (!arr || !Array.isArray(arr) || arr.length === 0) return '-';
+            return arr.join(', ');
+        },
+
+        // 根据项目名称生成颜色名称（用于 CSS data-color 属性）
+        getProjectColor(project) {
+            if (!project) return 'blue';
+            // 预定义的项目颜色映射（使用语义化颜色名）
+            const colorMap = {
+                '皇冠项目': 'red',
+                '金沙项目': 'amber',
+                '星辰项目': 'blue',
+                '银河项目': 'violet',
+                '永利项目': 'emerald',
+                '威尼斯项目': 'rose',
+                '澳门项目': 'cyan',
+                '新濠项目': 'orange'
+            };
+            if (colorMap[project]) return colorMap[project];
+            // 如果没有预定义，根据项目名生成一个稳定的颜色
+            const colors = ['red', 'orange', 'amber', 'emerald', 'teal', 'cyan', 'blue', 'indigo', 'violet', 'purple', 'pink', 'rose'];
+            let hash = 0;
+            for (let i = 0; i < project.length; i++) {
+                hash = project.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            return colors[Math.abs(hash) % colors.length];
+        },
+
+        // 根据网站方名称生成颜色名称
+        getWebsiteColor(websiteName) {
+            if (!websiteName) return 'teal';
+            // 预定义的网站方颜色映射
+            const colorMap = {
+                '星辰娱乐': 'indigo',
+                '皇冠体育': 'rose',
+                '金沙娱乐': 'amber',
+                '银河娱乐': 'purple',
+                '永利娱乐': 'emerald',
+                '威尼斯人': 'pink',
+                '澳门娱乐': 'cyan',
+                '新濠天地': 'orange'
+            };
+            if (colorMap[websiteName]) return colorMap[websiteName];
+            // 如果没有预定义，根据名称生成一个稳定的颜色
+            const colors = ['teal', 'indigo', 'purple', 'pink', 'rose', 'orange', 'amber', 'lime', 'emerald', 'cyan', 'sky', 'blue'];
+            let hash = 0;
+            for (let i = 0; i < websiteName.length; i++) {
+                hash = websiteName.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            return colors[Math.abs(hash) % colors.length];
+        },
+
+        // 批量添加商户
+        openBatchMerchantModal() {
+            this.batchMerchantText = '';
+            this.batchMerchantResult = null;
+            this.showBatchMerchantModal = true;
+        },
+
+        parseBatchMerchantText() {
+            // 完整字段顺序（与表格一致）: 
+            // 1.项目, 2.环境, 3.网站方, 4.对接邮箱, 5.网站方网址, 6.玩家地区, 7.预计玩家, 8.游戏种类, 
+            // 9.盘口, 10.语言, 11.币种, 12.支持端口, 13.钱包类型, 14.三方回调域名, 15.三方白名单, 
+            // 16.厅房域名, 17.站点系统域名, 18.站点账号, 19.AppKey, 20.游戏域名, 21.301域名
+            // 空值: 连续的分隔符表示空，如: 项目,,网站方 表示环境为空
+            const lines = this.batchMerchantText.trim().split('\n').filter(l => l.trim() && !l.startsWith('#'));
+            const merchants = [];
+            for (const line of lines) {
+                let parts;
+                if (line.includes('\t')) parts = line.split('\t');
+                else if (line.includes('|')) parts = line.split('|');
+                else parts = line.split(',');
+                parts = parts.map(p => p.trim());
+                if (parts.length < 3 || !parts[2]) continue; // 至少需要项目、环境、网站方
+                const toArr = (s) => s ? JSON.stringify(s.split(';').map(x => x.trim()).filter(x => x)) : '[]';
+                // 环境值转换为小写存储（支持大写输入）
+                const envValue = (parts[1] || 'prod').toLowerCase();
+                merchants.push({
+                    project: parts[0] || '',
+                    env: envValue,
+                    website_name: parts[2] || '',
+                    contact_emails: toArr(parts[3]),
+                    website_urls: toArr(parts[4]),
+                    player_regions: toArr(parts[5]),
+                    estimated_players: parts[6] || '',
+                    game_types: toArr(parts[7]),
+                    handicaps: toArr(parts[8]),
+                    languages: toArr(parts[9]),
+                    currencies: toArr(parts[10]),
+                    supported_ports: toArr(parts[11]),
+                    wallet_types: toArr(parts[12]),
+                    callback_domains: toArr(parts[13]),
+                    whitelist_ips: parts[14] || '',
+                    hall_domains: toArr(parts[15]),
+                    site_domains: toArr(parts[16]),
+                    site_accounts: toArr(parts[17]),
+                    app_keys: toArr(parts[18]),
+                    game_domains: toArr(parts[19]),
+                    redirect_domains: toArr(parts[20]),
+                    app_secrets: '', remark: '', status: 'active'
+                });
+            }
+            return merchants;
+        },
+
+        async executeBatchMerchant() {
+            const merchants = this.parseBatchMerchantText();
+            if (merchants.length === 0) { this.showToast('请输入至少一条商户', 'error'); return; }
+            this.batchMerchantLoading = true;
+            this.batchMerchantResult = null;
+            try {
+                const res = await API.batchCreateMerchants(merchants);
+                if (res.ok) {
+                    this.batchMerchantResult = await res.json();
+                    if (this.batchMerchantResult.fail_count === 0) {
+                        this.showToast(`成功添加 ${this.batchMerchantResult.success_count} 个商户`, 'success');
+                        this.showBatchMerchantModal = false;
+                    } else {
+                        // 有失败的，显示详细信息，不关闭弹窗
+                        this.showToast(this.batchMerchantResult.message, 'warning');
+                    }
+                    await this.loadMerchants();
+                } else { this.showToast('批量添加失败', 'error'); }
+            } catch (e) { this.showToast('批量添加失败: ' + e.message, 'error'); }
+            finally { this.batchMerchantLoading = false; }
+        },
+
+        fillBatchMerchantExample() {
+            this.batchMerchantText = `# 字段顺序（21个字段，空值用连续逗号表示）:
+# 1.项目, 2.环境(PROD/UAT/DEV), 3.网站方, 4.对接邮箱, 5.网站方网址, 6.玩家地区, 7.预计玩家, 8.游戏种类, 9.盘口, 10.语言, 11.币种, 12.支持端口, 13.钱包类型, 14.三方回调域名, 15.三方白名单, 16.厅房域名, 17.站点系统域名, 18.站点账号, 19.AppKey, 20.游戏域名, 21.301域名
+# 多个值用 ; 分号分隔，空值直接留空（连续逗号）
+星辰项目, PROD, 星辰娱乐, contact@star.com;tech@star.com, www.star.com;m.star.com, 中国;菲律宾, 5000, 真人;体育;电竞, A盘;B盘, 中文;英语, CNY;USDT, H5;APP;PC, 转账钱包, api.star.com, 1.1.1.1;2.2.2.2, hall.star.com, site.star.com, admin, key123, game.star.com, jump.star.com
+皇冠项目, PROD, 皇冠体育, admin@crown.com, www.crown.com, 泰国;印尼, 3000, 体育;真人, A盘, 中文;泰语, THB;USDT, H5;APP, 单一钱包, , , , , , , ,
+金沙项目, UAT, 金沙娱乐, test@sands.com, test.sands.com, 中国, 2000, 真人;电子, A盘, 中文, CNY, H5;PC, 转账钱包, , , , , , , ,`;
         },
 
         // ========== 服务配置管理 ==========
@@ -5798,7 +6456,14 @@ const vueApp = createApp({
         },
 
         async deleteServiceConfig(config) {
-            if (!confirm(`确定要删除服务 "${config.service_name}" 及其所有依赖吗？`)) return;
+            const confirmed = await this.showConfirm({
+                type: 'danger',
+                title: '删除服务配置',
+                message: `确定要删除服务 "${config.service_name}" 及其所有依赖吗？\n此操作不可恢复。`,
+                okText: '删除',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
 
             try {
                 const res = await API.deleteServiceConfig(config.id);
@@ -5879,7 +6544,14 @@ const vueApp = createApp({
         },
 
         async deleteServiceDep(dep) {
-            if (!confirm(`确定要删除依赖 "${dep.dependency_name}" 吗？`)) return;
+            const confirmed = await this.showConfirm({
+                type: 'warning',
+                title: '删除依赖',
+                message: `确定要删除依赖 "${dep.dependency_name}" 吗？`,
+                okText: '删除',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
             if (!this.currentServiceForDeps) return;
 
             try {
@@ -6526,7 +7198,14 @@ const vueApp = createApp({
 
         // K8s Restart
         async restartDeployment(dep) {
-            if (!confirm(`确定要重启部署 "${dep.name}" 吗？`)) return;
+            const confirmed = await this.showConfirm({
+                type: 'warning',
+                title: '重启部署',
+                message: `确定要重启部署 "${dep.name}" 吗？\n这将导致服务短暂不可用。`,
+                okText: '重启',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
 
             try {
                 const res = await API.k8sRestart(dep.namespace || this.k8sSelectedNamespace, dep.name);
@@ -6681,7 +7360,14 @@ const vueApp = createApp({
 
         // K8s Delete Pod
         async deletePod(pod) {
-            if (!confirm(`确定要删除 Pod "${pod.name}" 吗？`)) return;
+            const confirmed = await this.showConfirm({
+                type: 'danger',
+                title: '删除 Pod',
+                message: `确定要删除 Pod "${pod.name}" 吗？\nPod 删除后会由 Deployment 自动重建。`,
+                okText: '删除',
+                cancelText: '取消'
+            });
+            if (!confirmed) return;
 
             try {
                 const res = await API.deleteK8sPod(pod.name, pod.namespace || this.k8sSelectedNamespace);

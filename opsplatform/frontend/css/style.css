@@ -486,6 +486,9 @@ body {
 .btn-danger:hover { background: var(--accent-red); color: white; }
 .btn-success { background: var(--accent-green); color: var(--bg-primary); border-color: var(--accent-green); }
 .btn-success:hover { background: #4cc45e; }
+.btn-warning { background: linear-gradient(135deg, #f59e0b, #d97706); color: white; border-color: #f59e0b; }
+.btn-warning:hover { background: linear-gradient(135deg, #fbbf24, #f59e0b); transform: translateY(-1px); }
+.btn-warning:disabled { background: #6b7280; border-color: #6b7280; cursor: not-allowed; opacity: 0.7; transform: none; }
 .btn-sm { padding: 6px 12px; font-size: 0.8em; }
 .btn-block { width: 100%; justify-content: center; }
 .btn-active { background: var(--accent-cyan); color: var(--bg-primary); }
@@ -2467,6 +2470,333 @@ input:checked + .slider:before {
     justify-content: center;
 }
 
+/* ============================================
+   商户管理 - 专业标签颜色系统
+   设计原则：
+   - 项目：使用柔和的背景色 + 深色文字（可读性优先）
+   - 环境：使用语义化颜色（生产=稳定绿，UAT=警示橙，开发=信息蓝）
+   - 网站方：使用品牌强调色（深蓝绿渐变）
+   ============================================ */
+
+/* 项目标签 - 柔和背景 + 深色边框 + 深色文字 */
+.tag-project {
+    display: inline-block;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    letter-spacing: 0.3px;
+    border: 1px solid transparent;
+    transition: all 0.2s ease;
+}
+
+/* 项目颜色变体 */
+.tag-project-red {
+    background: #FEF2F2;
+    color: #B91C1C;
+    border-color: #FECACA;
+}
+.tag-project-orange {
+    background: #FFF7ED;
+    color: #C2410C;
+    border-color: #FED7AA;
+}
+.tag-project-amber {
+    background: #FFFBEB;
+    color: #B45309;
+    border-color: #FDE68A;
+}
+.tag-project-emerald {
+    background: #ECFDF5;
+    color: #047857;
+    border-color: #A7F3D0;
+}
+.tag-project-teal {
+    background: #F0FDFA;
+    color: #0F766E;
+    border-color: #99F6E4;
+}
+.tag-project-cyan {
+    background: #ECFEFF;
+    color: #0E7490;
+    border-color: #A5F3FC;
+}
+.tag-project-blue {
+    background: #EFF6FF;
+    color: #1D4ED8;
+    border-color: #BFDBFE;
+}
+.tag-project-indigo {
+    background: #EEF2FF;
+    color: #4338CA;
+    border-color: #C7D2FE;
+}
+.tag-project-violet {
+    background: #F5F3FF;
+    color: #6D28D9;
+    border-color: #DDD6FE;
+}
+.tag-project-purple {
+    background: #FAF5FF;
+    color: #7C3AED;
+    border-color: #E9D5FF;
+}
+.tag-project-pink {
+    background: #FDF2F8;
+    color: #BE185D;
+    border-color: #FBCFE8;
+}
+.tag-project-rose {
+    background: #FFF1F2;
+    color: #BE123C;
+    border-color: #FECDD3;
+}
+
+/* 环境标签 - 语义化颜色设计 */
+.tag-env {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+/* 生产环境 - 稳定可靠的绿色 */
+.tag-env-prod {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(5, 150, 105, 0.35);
+}
+.tag-env-prod::before {
+    content: "●";
+    font-size: 8px;
+    animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* UAT环境 - 测试警示的橙色 */
+.tag-env-uat {
+    background: linear-gradient(135deg, #EA580C 0%, #C2410C 100%);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(234, 88, 12, 0.35);
+}
+.tag-env-uat::before {
+    content: "◐";
+    font-size: 8px;
+}
+
+/* 开发环境 - 信息蓝色 */
+.tag-env-dev {
+    background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.35);
+}
+.tag-env-dev::before {
+    content: "◯";
+    font-size: 8px;
+}
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* 网站方标签 - 品牌强调色（深蓝绿渐变） */
+.tag-website {
+    display: inline-block;
+    padding: 5px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+    background: linear-gradient(135deg, #0F766E 0%, #115E59 100%);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(15, 118, 110, 0.4);
+    letter-spacing: 0.5px;
+    position: relative;
+    overflow: hidden;
+}
+.tag-website::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    transition: left 0.5s ease;
+}
+.tag-website:hover::before {
+    left: 100%;
+}
+
+/* ========== 权限配置样式 ========== */
+.permission-config-body {
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.permission-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.permission-section {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 16px;
+}
+
+.permission-section .section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.permission-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.permission-item {
+    display: flex;
+    align-items: center;
+}
+
+.permission-item.parent {
+    font-weight: 500;
+}
+
+.permission-children {
+    margin-left: 24px;
+    padding-left: 12px;
+    border-left: 2px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 6px;
+    margin-bottom: 6px;
+}
+
+.permission-item.child {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.permission-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.checkbox-label:hover {
+    background: var(--bg-tertiary);
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-cyan);
+    cursor: pointer;
+}
+
+.checkbox-label span {
+    user-select: none;
+}
+
+/* 角色复选框列表 */
+.role-checkbox-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.role-checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.role-checkbox-item:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--accent-cyan);
+}
+
+.role-checkbox-item input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent-cyan);
+    cursor: pointer;
+}
+
+.role-checkbox-info {
+    flex: 1;
+}
+
+.role-checkbox-name {
+    font-weight: 500;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+}
+
+.role-checkbox-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* 权限类型徽章 */
+.badge-menu { background: linear-gradient(135deg, #3B82F6, #2563EB); color: white; }
+.badge-button { background: linear-gradient(135deg, #8B5CF6, #7C3AED); color: white; }
+.badge-data { background: linear-gradient(135deg, #F59E0B, #D97706); color: white; }
+.badge-api { background: linear-gradient(135deg, #10B981, #059669); color: white; }
+
+/* 权限表格样式 */
+.parent-row {
+    background: var(--bg-tertiary);
+    font-weight: 500;
+}
+
+.child-row td:first-child {
+    padding-left: 24px;
+}
+
+.indent-mark {
+    color: var(--text-muted);
+    margin-right: 6px;
+}
+
+/* 模态框大尺寸 */
+.modal.modal-lg {
+    width: 700px;
+    max-width: 90vw;
+}
 
 
 

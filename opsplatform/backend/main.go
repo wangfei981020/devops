@@ -54,6 +54,7 @@ func main() {
 	// MFA 多因素认证（登录流程）
 	api.HandleFunc("/mfa/setup", handlers.HandleMFASetup).Methods("POST", "OPTIONS")
 	api.HandleFunc("/mfa/bind", handlers.HandleMFABind).Methods("POST", "OPTIONS")
+	api.HandleFunc("/mfa/bind-login", handlers.HandleMFABindAndLogin).Methods("POST", "OPTIONS") // 绑定并登录
 	api.HandleFunc("/mfa/verify", handlers.HandleMFAVerify).Methods("POST", "OPTIONS")
 
 	// Logo 配置（公开接口）
@@ -77,7 +78,9 @@ func main() {
 	adminOnly.HandleFunc("/users", handlers.HandleCreateUser).Methods("POST", "OPTIONS")
 	adminOnly.HandleFunc("/users/{id}", handlers.HandleUpdateUser).Methods("PUT", "OPTIONS")
 	adminOnly.HandleFunc("/users/{id}", handlers.HandleDeleteUser).Methods("DELETE", "OPTIONS")
-	// adminOnly.HandleFunc("/users/{id}/password", handlers.HandleChangePassword).Methods("PUT", "OPTIONS") // TODO: implement
+	adminOnly.HandleFunc("/users/{id}/password", handlers.HandleChangePassword).Methods("PUT", "OPTIONS")
+	adminOnly.HandleFunc("/users/{id}/mfa/enable", handlers.HandleEnableUserMFA).Methods("POST", "OPTIONS")
+	adminOnly.HandleFunc("/users/{id}/mfa/reset", handlers.HandleResetUserMFA).Methods("POST", "OPTIONS")
 
 	// MFA 管理（仅管理员可重置他人）
 	protected.HandleFunc("/mfa/disable", handlers.HandleMFADisable).Methods("POST", "OPTIONS")
@@ -147,6 +150,7 @@ func main() {
 	protected.HandleFunc("/domains/batch", handlers.HandleBatchDomains).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/domains/batch-add", handlers.HandleBatchAddDomains).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/domains/check-cert", handlers.HandleCheckCert).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/domains/batch-refresh", handlers.HandleBatchRefreshDomains).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/domains/{id}", handlers.HandleUpdateDomain).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/domains/{id}", handlers.HandleDeleteDomain).Methods("DELETE", "OPTIONS")
 
@@ -210,6 +214,14 @@ func main() {
 	protected.HandleFunc("/incidents/{id}", handlers.HandleUpdateIncident).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/incidents/{id}", handlers.HandleDeleteIncident).Methods("DELETE", "OPTIONS")
 
+	// 商户管理
+	protected.HandleFunc("/merchants", handlers.HandleGetMerchants).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/merchants", handlers.HandleCreateMerchant).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/merchants/batch", handlers.HandleBatchCreateMerchants).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/merchants/export", handlers.HandleExportMerchants).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/merchants/{id}", handlers.HandleUpdateMerchant).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/merchants/{id}", handlers.HandleDeleteMerchant).Methods("DELETE", "OPTIONS")
+
 	// 服务配置管理
 	protected.HandleFunc("/service-configs", handlers.HandleGetServiceConfigs).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/service-configs", handlers.HandleCreateServiceConfig).Methods("POST", "OPTIONS")
@@ -245,6 +257,9 @@ func main() {
 	r.PathPrefix("/css/").Handler(http.StripPrefix("/css/", http.FileServer(http.Dir("../frontend/css"))))
 	r.PathPrefix("/js/").Handler(http.StripPrefix("/js/", http.FileServer(http.Dir("../frontend/js"))))
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir("../frontend")))
+
+	// 启动域名到期时间定时刷新任务（每天0点执行）
+	go startDomainRefreshScheduler()
 
 	// 启动 Prometheus metrics 服务器 (8088)
 	go func() {
@@ -293,6 +308,27 @@ func auditMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// startDomainRefreshScheduler 启动域名到期时间定时刷新任务
+// 每天凌晨0点执行
+func startDomainRefreshScheduler() {
+	log.Println("[定时任务] 域名刷新调度器已启动，将在每天0点执行")
+
+	for {
+		now := time.Now()
+		// 计算距离下一个0点的时间
+		next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
+		duration := next.Sub(now)
+
+		log.Printf("[定时任务] 下次执行时间: %s (还有 %v)", next.Format("2006-01-02 15:04:05"), duration)
+
+		// 等待到下一个0点
+		time.Sleep(duration)
+
+		// 执行刷新任务
+		handlers.RefreshAllDomainsExpire()
+	}
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

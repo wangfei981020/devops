@@ -1,8 +1,6 @@
 module opsplatform
 
-go 1.24.0
-
-toolchain go1.24.11
+go 1.23.0
 
 require (
 	github.com/go-sql-driver/mysql v1.8.1
@@ -10,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/pquerna/otp v1.5.0
-	golang.org/x/crypto v0.46.0
+	golang.org/x/crypto v0.31.0
 )
 
 require (

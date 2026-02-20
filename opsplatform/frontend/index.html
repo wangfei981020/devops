@@ -6,9 +6,9 @@
     <title>AI-CloudOps 运维平台</title>
     <!-- Favicon - 云+齿轮图标 -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%233b82f6'/%3E%3Cstop offset='50%25' style='stop-color:%238b5cf6'/%3E%3Cstop offset='100%25' style='stop-color:%2306b6d4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M6.5 18C4 18 2 16 2 13.5c0-2.1 1.5-3.9 3.5-4.4C6.3 6.5 8.9 4.5 12 4.5c2.5 0 4.7 1.4 5.9 3.4.4 0 .7-.1 1.1-.1 2.5 0 4.5 2 4.5 4.5s-2 4.5-4.5 4.5H6.5z' fill='url(%23g)'/%3E%3Ccircle cx='13' cy='12' r='2' fill='none' stroke='white' stroke-width='1.5'/%3E%3Cpath d='M13 7v1.5M13 15v1.5M8.5 12H10M16 12h1.5M9.4 8.9l1 1M15.6 15.1l1 1M9.4 15.1l1-1M15.6 8.9l1-1' stroke='white' stroke-width='1' stroke-linecap='round'/%3E%3C/svg%3E">
-    <script src="/js/vue.global.prod.js?v=218"></script>
+    <script src="/js/vue.global.prod.js?v=332"></script>
     <!-- 蓝鲸BI风格样式 -->
-    <link rel="stylesheet" href="/css/style-blueking.css?v=218">
+    <link rel="stylesheet" href="/css/style-blueking.css?v=357">
 </head>
 <body>
     <div id="app">
@@ -57,19 +57,21 @@
                     <div class="nav-group">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.system }" @click="expandedGroups.system = !expandedGroups.system">
                             <span class="nav-group-icon">🏠</span>
-                            <span class="nav-group-title">系统管理</span>
-                            <span class="nav-group-arrow">{{ expandedGroups.system ? '∨' : '›' }}</span>
+                            <span class="nav-group-title">{{ t('nav.systemManagement') }}</span>
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.system }">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+                            </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.system">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'dashboard' }" @click="currentTab = 'dashboard'">欢迎页</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'users' }" @click="currentTab = 'users'; loadUsers()">用户管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'roles' }" @click="currentTab = 'roles'; loadRoles()">角色管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'permissions' }" @click="currentTab = 'permissions'; loadAllPermissions()">权限配置</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'audit' }" @click="currentTab = 'audit'; loadAuditLogs()">审计日志</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'apiManage' }" @click="currentTab = 'apiManage'">接口管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'schedule' }" @click="currentTab = 'schedule'; loadSchedule()">排班管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'taskPool' }" @click="currentTab = 'taskPool'; loadTaskData()">任务池</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'incidents' }" @click="currentTab = 'incidents'; loadIncidentData()">失误记录</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'dashboard' }" @click="currentTab = 'dashboard'">{{ t('nav.dashboard') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'users' }" @click="currentTab = 'users'; loadUsers()">{{ t('nav.userManagement') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'roles' }" @click="currentTab = 'roles'; loadRoles()">{{ t('nav.roleManagement') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'permissions' }" @click="currentTab = 'permissions'; loadAllPermissions()">{{ t('nav.permissionManagement') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'audit' }" @click="currentTab = 'audit'; loadAuditLogs()">{{ t('nav.auditLog') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'apiManage' }" @click="currentTab = 'apiManage'">{{ t('nav.apiManagement') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'schedule' }" @click="currentTab = 'schedule'; loadSchedule()">{{ t('nav.scheduleManagement') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'taskPool' }" @click="currentTab = 'taskPool'; loadTaskData()">{{ t('nav.taskPool') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'incidents' }" @click="currentTab = 'incidents'; loadIncidentData()">{{ t('nav.incidentLog') }}</button>
                         </div>
                     </div>
 
@@ -77,16 +79,18 @@
                     <div class="nav-group">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.resource }" @click="expandedGroups.resource = !expandedGroups.resource">
                             <span class="nav-group-icon">📦</span>
-                            <span class="nav-group-title">资源管理</span>
-                            <span class="nav-group-arrow">{{ expandedGroups.resource ? '∨' : '›' }}</span>
+                            <span class="nav-group-title">{{ t('nav.resourceManagement') }}</span>
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.resource }">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+                            </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.resource">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'cmdb' }" @click="currentTab = 'cmdb'">资产管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'domains' }" @click="currentTab = 'domains'">域名管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'websites' }" @click="currentTab = 'websites'; loadWebsites()">网站管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'records' }" @click="currentTab = 'records'">网络管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'serviceConfig' }" @click="currentTab = 'serviceConfig'; loadServiceConfigData()">服务配置</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'topology' }" @click="currentTab = 'topology'; loadTopologyData()">网络架构图</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'cmdb' }" @click="currentTab = 'cmdb'">{{ t('nav.cmdb') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'domains' }" @click="currentTab = 'domains'">{{ t('nav.domainManagement') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'merchants' }" @click="currentTab = 'merchants'; loadMerchants()">{{ t('nav.merchantManagement') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'records' }" @click="currentTab = 'records'">{{ t('nav.networkManagement') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'serviceConfig' }" @click="currentTab = 'serviceConfig'; loadServiceConfigData()">{{ t('nav.serviceConfig') }}</button>
+                            <button class="nav-item sub" :class="{ active: currentTab === 'topology' }" @click="currentTab = 'topology'; loadTopologyData()">{{ t('nav.networkTopology') }}</button>
                         </div>
                     </div>
 
@@ -95,7 +99,9 @@
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.monitor }" @click="expandedGroups.monitor = !expandedGroups.monitor">
                             <span class="nav-group-icon">📊</span>
                             <span class="nav-group-title">监控告警</span>
-                            <span class="nav-group-arrow">{{ expandedGroups.monitor ? '∨' : '›' }}</span>
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.monitor }">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+                            </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.monitor">
                             <button class="nav-item sub" :class="{ active: currentTab === 'metrics' }" @click="currentTab = 'metrics'">指标监控</button>
@@ -111,7 +117,9 @@
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.k8s }" @click="expandedGroups.k8s = !expandedGroups.k8s">
                             <span class="nav-group-icon">☸️</span>
                             <span class="nav-group-title">K8S运维</span>
-                            <span class="nav-group-arrow">{{ expandedGroups.k8s ? '∨' : '›' }}</span>
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.k8s }">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+                            </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.k8s">
                             <button class="nav-item sub" :class="{ active: currentTab === 'clusters' }" @click="currentTab = 'clusters'">集群管理</button>
@@ -127,7 +135,9 @@
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.ticket }" @click="expandedGroups.ticket = !expandedGroups.ticket">
                             <span class="nav-group-icon">🎫</span>
                             <span class="nav-group-title">工单系统</span>
-                            <span class="nav-group-arrow">{{ expandedGroups.ticket ? '∨' : '›' }}</span>
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.ticket }">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+                            </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.ticket">
                             <button class="nav-item sub" :class="{ active: currentTab === 'tickets' }" @click="currentTab = 'tickets'">工单管理</button>
@@ -142,7 +152,9 @@
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.automation }" @click="expandedGroups.automation = !expandedGroups.automation">
                             <span class="nav-group-icon">🤖</span>
                             <span class="nav-group-title">自动化运维</span>
-                            <span class="nav-group-arrow">{{ expandedGroups.automation ? '∨' : '›' }}</span>
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.automation }">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+                            </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.automation">
                             <button class="nav-item sub" :class="{ active: currentTab === 'jobs' }" @click="currentTab = 'jobs'">作业平台</button>
@@ -157,7 +169,9 @@
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.aiops }" @click="expandedGroups.aiops = !expandedGroups.aiops">
                             <span class="nav-group-icon">🧠</span>
                             <span class="nav-group-title">智能运维</span>
-                            <span class="nav-group-arrow">{{ expandedGroups.aiops ? '∨' : '›' }}</span>
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.aiops }">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+                            </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.aiops">
                             <button class="nav-item sub" :class="{ active: currentTab === 'anomaly' }" @click="currentTab = 'anomaly'">异常检测</button>
@@ -173,7 +187,9 @@
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.release }" @click="expandedGroups.release = !expandedGroups.release">
                             <span class="nav-group-icon">🚀</span>
                             <span class="nav-group-title">变更发布</span>
-                            <span class="nav-group-arrow">{{ expandedGroups.release ? '∨' : '›' }}</span>
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.release }">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+                            </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.release">
                             <button class="nav-item sub" :class="{ active: currentTab === 'deploy' }" @click="currentTab = 'deploy'">发布管理</button>
@@ -187,7 +203,9 @@
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.logs }" @click="expandedGroups.logs = !expandedGroups.logs">
                             <span class="nav-group-icon">📝</span>
                             <span class="nav-group-title">日志服务</span>
-                            <span class="nav-group-arrow">{{ expandedGroups.logs ? '∨' : '›' }}</span>
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.logs }">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+                            </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.logs">
                             <button class="nav-item sub" :class="{ active: currentTab === 'logQuery' }" @click="currentTab = 'logQuery'">日志查询</button>
@@ -201,7 +219,9 @@
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.security }" @click="expandedGroups.security = !expandedGroups.security">
                             <span class="nav-group-icon">🔐</span>
                             <span class="nav-group-title">安全工具</span>
-                            <span class="nav-group-arrow">{{ expandedGroups.security ? '∨' : '›' }}</span>
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.security }">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+                            </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.security">
                             <button class="nav-item sub" :class="{ active: currentTab === 'vault' }" @click="currentTab = 'vault'; initVault()">密码库</button>
@@ -215,7 +235,9 @@
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.settings }" @click="expandedGroups.settings = !expandedGroups.settings">
                             <span class="nav-group-icon">⚙️</span>
                             <span class="nav-group-title">系统设置</span>
-                            <span class="nav-group-arrow">{{ expandedGroups.settings ? '∨' : '›' }}</span>
+                            <span class="nav-group-arrow" :class="{ expanded: expandedGroups.settings }">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+                            </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.settings">
                             <button class="nav-item sub" :class="{ active: currentTab === 'datasources' }" @click="currentTab = 'datasources'; loadDataSources()">数据源配置</button>
@@ -250,12 +272,22 @@
                             <div class="user-menu-dropdown" v-show="showUserMenu" @click.stop>
                                 <div class="user-menu-item" @click="openProfileModal(); showUserMenu = false">
                                     <span class="menu-icon">⚙️</span>
-                                    <span>个人设置</span>
+                                    <span>{{ t('nav.personalSettings') }}</span>
+                                </div>
+                                <div class="user-menu-divider"></div>
+                                <div class="user-menu-section-title">{{ t('nav.interfaceLanguage') }}</div>
+                                <div class="user-menu-item" 
+                                     v-for="lang in availableLanguages" :key="lang.code"
+                                     :class="{ active: currentLang === lang.code }"
+                                     @click="changeLanguage(lang.code); showUserMenu = false">
+                                    <span class="menu-icon">{{ lang.flag }}</span>
+                                    <span>{{ lang.name }}</span>
+                                    <span v-if="currentLang === lang.code" class="menu-check">✓</span>
                                 </div>
                                 <div class="user-menu-divider"></div>
                                 <div class="user-menu-item" @click="logout">
                                     <span class="menu-icon">🚪</span>
-                                    <span>退出登录</span>
+                                    <span>{{ t('nav.logout') }}</span>
                                 </div>
                             </div>
                         </div>
@@ -434,12 +466,16 @@
                 <!-- 域名管理 -->
                 <div v-show="currentTab === 'domains'" class="page-content">
                     <div class="page-header-card">
-                        <h1 class="page-title">域名管理</h1>
+                        <h1 class="page-title">{{ t('domain.title') }}</h1>
                         <div class="header-actions">
-                            <button class="btn btn-default" @click="loadDomains">↻ 刷新</button>
-                            <button class="btn btn-default" @click="exportDomains">↓ 导出</button>
-                            <button class="btn btn-default" @click="openBatchDomainModal()">⊞ 批量添加</button>
-                            <button class="btn btn-primary" @click="openDomainModal()">+ 添加</button>
+                            <button class="btn btn-default" @click="loadDomains">↻ {{ t('common.refresh') }}</button>
+                            <button class="btn btn-warning" @click="batchRefreshDomains" :disabled="batchRefreshing">
+                                <span v-if="batchRefreshing">⏳ {{ t('domain.refreshing') }} {{ batchRefreshProgress }}</span>
+                                <span v-else>🔄 {{ t('domain.batchRefreshExpiry') }}</span>
+                            </button>
+                            <button class="btn btn-default" @click="exportDomains">↓ {{ t('domain.export') }}</button>
+                            <button class="btn btn-default" @click="openBatchDomainModal()">⊞ {{ t('domain.batchAdd') }}</button>
+                            <button class="btn btn-primary" @click="openDomainModal()">+ {{ t('common.add') }}</button>
                         </div>
                     </div>
 
@@ -447,29 +483,29 @@
                     <div class="filter-bar">
                         <div class="search-box">
                             <span class="search-icon">🔍</span>
-                            <input type="text" class="form-input" v-model="domainSearchQuery" placeholder="搜索域名、项目、模块..." autocomplete="off">
+                            <input type="text" class="form-input" v-model="domainSearchQuery" :placeholder="t('domain.searchPlaceholder')" autocomplete="off">
                         </div>
                         <select v-model="domainProjectFilter" class="filter-select">
-                            <option value="">所有项目</option>
+                            <option value="">{{ t('domain.allProjects') }}</option>
                             <option v-for="p in domainProjectList" :key="p" :value="p">{{ p }}</option>
                         </select>
                         <select v-model="domainCdnFilter" class="filter-select">
-                            <option value="">所有CDN厂商</option>
+                            <option value="">{{ t('domain.allCdnProviders') }}</option>
                             <option v-for="c in cdnProviderList" :key="c" :value="c">{{ c }}</option>
                         </select>
                         <select v-model="domainEnvFilter" class="filter-select">
-                            <option value="">所有环境</option>
+                            <option value="">{{ t('domain.allEnvironments') }}</option>
                             <option value="PROD">PROD</option>
                             <option value="UAT">UAT</option>
                             <option value="DEV">DEV</option>
                         </select>
                         <select v-model="domainStatusFilter" class="filter-select">
-                            <option value="">所有状态</option>
+                            <option value="">{{ t('domain.allStatus') }}</option>
                             <option value="active">启用</option>
                             <option value="inactive">停用</option>
                         </select>
                         <select v-model="domainDuplicateFilter" class="filter-select">
-                            <option value="">域名重复</option>
+                            <option value="">所有域名</option>
                             <option value="duplicate">重复域名</option>
                             <option value="unique">唯一域名</option>
                         </select>
@@ -493,65 +529,109 @@
                     </div>
 
                     <!-- 域名表格 -->
-                    <div class="table-container">
-                        <table class="data-table">
+                    <div class="table-scroll-container">
+                        <table class="data-table table-fixed-action">
                             <thead>
                                 <tr>
                                     <th style="width: 40px;">
                                         <input type="checkbox" @click="toggleAllDomains" :checked="isAllDomainsSelected">
                                     </th>
-                                    <th>项目</th>
-                                    <th>模块</th>
-                                    <th>域名</th>
-                                    <th>回源</th>
+                                    <th style="min-width: 80px;">项目</th>
+                                    <th style="width: 60px;">环境</th>
+                                    <th style="min-width: 350px;">模块</th>
+                                    <th style="min-width: 400px;">域名</th>
+                                    <th style="min-width: 300px;">回源</th>
+                                    <th style="min-width: 120px;">源站IP</th>
                                     <th>CDN厂商</th>
-                                    <th>环境</th>
                                     <th>域名到期</th>
                                     <th>证书到期</th>
                                     <th>创建时间</th>
                                     <th>更新时间</th>
                                     <th>状态</th>
                                     <th>备注</th>
-                                    <th style="width: 80px;">操作</th>
+                                    <th class="th-action-fixed">操作</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <tr v-for="d in pagedDomains" :key="d.id" :class="{ 'row-selected': selectedDomains.includes(d.id) }">
                                     <td><input type="checkbox" :checked="selectedDomains.includes(d.id)" @click="toggleDomainSelection(d.id)"></td>
                                     <td>{{ d.project }}</td>
-                                    <td>{{ d.module || '-' }}</td>
-                                    <td><a :href="'https://' + d.domain_name" target="_blank" class="domain-link">{{ d.domain_name }}</a></td>
-                                    <td>{{ d.origin || '-' }}</td>
-                                    <td>{{ d.cdn_provider || '-' }}</td>
                                     <td><span class="env-badge" :class="'env-' + (d.env || 'PROD').toLowerCase()">{{ d.env || 'PROD' }}</span></td>
+                                    <td style="max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="d.module">{{ d.module || '-' }}</td>
+                                    <td style="max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="d.domain_name"><a :href="'https://' + d.domain_name" target="_blank" class="domain-link">{{ d.domain_name }}</a></td>
+                                    <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="d.origin">{{ d.origin || '-' }}</td>
+                                    <td>{{ d.origin_ip || '-' }}</td>
+                                    <td>{{ d.cdn_provider || '-' }}</td>
                                     <td>
-                                        <span v-if="d.expire_time" :class="getDomainExpireClass(d.expire_time)">
-                                            {{ formatDate(d.expire_time) }}
-                                            <small v-if="getCertDaysLeft(d.expire_time) !== null" class="days-left">
-                                                ({{ getCertDaysLeft(d.expire_time) > 0 ? getCertDaysLeft(d.expire_time) + '天' : '已过期' }})
-                                            </small>
-                                        </span>
-                                        <span v-else>-</span>
+                                        <div v-if="d.expire_time" class="expiry-badge" :class="getExpiryBadgeClass(d.expire_time)">
+                                            <span class="expiry-badge-date">
+                                                <svg v-if="getCertDaysLeft(d.expire_time) > 30" class="expiry-badge-icon" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                                                </svg>
+                                                <svg v-else-if="getCertDaysLeft(d.expire_time) > 15" class="expiry-badge-icon" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                                </svg>
+                                                <svg v-else-if="getCertDaysLeft(d.expire_time) > 7" class="expiry-badge-icon" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                                </svg>
+                                                <svg v-else-if="getCertDaysLeft(d.expire_time) > 0" class="expiry-badge-icon" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                                </svg>
+                                                <svg v-else class="expiry-badge-icon" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                                                </svg>
+                                                {{ formatDate(d.expire_time) }}
+                                            </span>
+                                            <span class="expiry-badge-days">{{ getCertDaysLeft(d.expire_time) > 0 ? getCertDaysLeft(d.expire_time) + '天' : '已过期' }}</span>
+                                        </div>
+                                        <span v-else class="expiry-badge expiry-none">-</span>
                                     </td>
                                     <td>
-                                        <span v-if="d.cert_expire_time" :class="getCertDaysLeft(d.cert_expire_time) <= 30 ? 'text-warning' : (getCertDaysLeft(d.cert_expire_time) <= 0 ? 'text-danger' : '')">
-                                            {{ formatDate(d.cert_expire_time) }}
-                                            <small v-if="getCertDaysLeft(d.cert_expire_time) !== null" class="days-left">
-                                                ({{ getCertDaysLeft(d.cert_expire_time) > 0 ? getCertDaysLeft(d.cert_expire_time) + '天' : '已过期' }})
-                                            </small>
-                                        </span>
-                                        <span v-else>-</span>
+                                        <div v-if="d.cert_expire_time" class="expiry-badge" :class="getExpiryBadgeClass(d.cert_expire_time)">
+                                            <span class="expiry-badge-date">
+                                                <svg v-if="getCertDaysLeft(d.cert_expire_time) > 30" class="expiry-badge-icon" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                                                </svg>
+                                                <svg v-else-if="getCertDaysLeft(d.cert_expire_time) > 15" class="expiry-badge-icon" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                                </svg>
+                                                <svg v-else-if="getCertDaysLeft(d.cert_expire_time) > 7" class="expiry-badge-icon" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                                </svg>
+                                                <svg v-else-if="getCertDaysLeft(d.cert_expire_time) > 0" class="expiry-badge-icon" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                                </svg>
+                                                <svg v-else class="expiry-badge-icon" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                                                </svg>
+                                                {{ formatDate(d.cert_expire_time) }}
+                                            </span>
+                                            <span class="expiry-badge-days">{{ getCertDaysLeft(d.cert_expire_time) > 0 ? getCertDaysLeft(d.cert_expire_time) + '天' : '已过期' }}</span>
+                                        </div>
+                                        <span v-else class="expiry-badge expiry-none">-</span>
                                     </td>
-                                    <td class="timestamp">{{ formatDate(d.created_at) }}</td>
-                                    <td class="timestamp">{{ formatDate(d.updated_at) }}</td>
-                                    <td><span class="domain-status-badge" :class="d.status === 'active' ? 'domain-status-active' : 'domain-status-inactive'">{{ d.status === 'active' ? '启用' : '停用' }}</span></td>
+                                    <td class="timestamp" style="white-space:nowrap;">{{ formatDateTime(d.created_at) }}</td>
+                                    <td class="timestamp" style="white-space:nowrap;">{{ formatDateTime(d.updated_at) }}</td>
+                                    <td style="white-space: nowrap;"><span class="domain-status-badge" :class="d.status === 'active' ? 'domain-status-active' : 'domain-status-inactive'">{{ d.status === 'active' ? '启用' : '停用' }}</span></td>
                                     <td :title="d.remark">{{ d.remark ? (d.remark.length > 15 ? d.remark.substring(0, 15) + '...' : d.remark) : '-' }}</td>
-                                    <td>
-                                        <div class="action-links">
-                                            <button class="action-link" @click="refreshDomainExpire(d)">刷新</button>
-                                            <button class="action-link" @click="openDomainModal(d)">编辑</button>
+                                    <td class="td-action-fixed">
+                                        <div class="action-icons">
+                                            <button class="action-icon-btn" @click="refreshDomainExpire(d)" title="刷新">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                                                </svg>
+                                            </button>
+                                            <button class="action-icon-btn" @click="openDomainModal(d)" title="编辑">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                                </svg>
+                                            </button>
                                             <div class="popconfirm-wrapper">
-                                                <button class="action-link danger" @click.stop="togglePopconfirm('domain', d.id)">删除</button>
+                                                <button class="action-icon-btn danger" @click.stop="togglePopconfirm('domain', d.id)" title="删除">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                        <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                                    </svg>
+                                                </button>
                                                 <div class="popconfirm" :class="{ show: activePopconfirm === 'domain-' + d.id }">
                                                     <div class="popconfirm-content">
                                                         <span class="popconfirm-icon">⚠</span>
@@ -1317,20 +1397,20 @@
                         <div class="modal-body">
                             <div class="form-group">
                                 <label>角色代码 <span class="required">*</span></label>
-                                <input type="text" v-model="newRole.code" class="form-control" placeholder="如：operator" :disabled="editRoleMode">
+                                <input type="text" v-model="newRole.code" class="form-input" placeholder="如：operator" :disabled="editRoleMode">
                                 <small class="form-hint">角色的唯一标识，创建后不可修改</small>
                             </div>
                             <div class="form-group">
                                 <label>角色名称 <span class="required">*</span></label>
-                                <input type="text" v-model="newRole.name" class="form-control" placeholder="如：运维人员">
+                                <input type="text" v-model="newRole.name" class="form-input" placeholder="如：运维人员">
                             </div>
                             <div class="form-group">
                                 <label>描述</label>
-                                <textarea v-model="newRole.description" class="form-control" rows="3" placeholder="角色描述信息"></textarea>
+                                <textarea v-model="newRole.description" class="form-input" rows="3" placeholder="角色描述信息"></textarea>
                             </div>
                             <div class="form-group">
                                 <label>状态</label>
-                                <select v-model="newRole.status" class="form-control">
+                                <select v-model="newRole.status" class="form-select">
                                     <option value="active">启用</option>
                                     <option value="disabled">禁用</option>
                                 </select>
@@ -1356,7 +1436,7 @@
                                 <div class="permission-section">
                                     <h4 class="section-title">菜单权限</h4>
                                     <div class="permission-tree">
-                                        <template v-for="perm in allPermissions.filter(p => p.type === 'menu' && !p.parent_id)" :key="perm.id">
+                                        <template v-for="perm in allPermissions.filter(p => p.type === 'menu')" :key="perm.id">
                                             <div class="permission-item parent">
                                                 <label class="checkbox-label">
                                                     <input type="checkbox" :checked="selectedRolePermissions[perm.id]" @change="togglePermission(perm.id)">
@@ -1379,7 +1459,7 @@
                                 <div class="permission-section">
                                     <h4 class="section-title">操作权限</h4>
                                     <div class="permission-grid">
-                                        <div v-for="perm in allPermissions.filter(p => p.type === 'button')" :key="perm.id" class="permission-item">
+                                        <div v-for="perm in getAllPermissionsFlat().filter(p => p.type === 'button')" :key="perm.id" class="permission-item">
                                             <label class="checkbox-label">
                                                 <input type="checkbox" :checked="selectedRolePermissions[perm.id]" @change="togglePermission(perm.id)">
                                                 <span>{{ perm.name }}</span>
@@ -1983,28 +2063,28 @@
                             <div class="stat-card">
                                 <div class="stat-icon menu-icon">📋</div>
                                 <div class="stat-info">
-                                    <div class="stat-value">{{ allPermissions.filter(p => p.type === 'menu').length }}</div>
+                                    <div class="stat-value">{{ getAllPermissionsFlat().filter(p => p.type === 'menu').length }}</div>
                                     <div class="stat-label">菜单权限</div>
                                 </div>
                             </div>
                             <div class="stat-card">
                                 <div class="stat-icon button-icon">🔘</div>
                                 <div class="stat-info">
-                                    <div class="stat-value">{{ allPermissions.filter(p => p.type === 'button').length }}</div>
+                                    <div class="stat-value">{{ getAllPermissionsFlat().filter(p => p.type === 'button').length }}</div>
                                     <div class="stat-label">按钮权限</div>
                                 </div>
                             </div>
                             <div class="stat-card">
                                 <div class="stat-icon data-icon">📊</div>
                                 <div class="stat-info">
-                                    <div class="stat-value">{{ allPermissions.filter(p => p.type === 'data').length }}</div>
+                                    <div class="stat-value">{{ getAllPermissionsFlat().filter(p => p.type === 'data').length }}</div>
                                     <div class="stat-label">数据权限</div>
                                 </div>
                             </div>
                             <div class="stat-card">
                                 <div class="stat-icon api-icon">🔌</div>
                                 <div class="stat-info">
-                                    <div class="stat-value">{{ allPermissions.filter(p => p.type === 'api').length }}</div>
+                                    <div class="stat-value">{{ getAllPermissionsFlat().filter(p => p.type === 'api').length }}</div>
                                     <div class="stat-label">API权限</div>
                                 </div>
                             </div>
@@ -2106,11 +2186,11 @@
                             <div class="form-row">
                                 <div class="form-group flex-1">
                                     <label>权限代码 <span class="required">*</span></label>
-                                    <input type="text" v-model="newPermission.code" class="form-control" placeholder="如：user:create" :disabled="editPermissionMode">
+                                    <input type="text" v-model="newPermission.code" class="form-input" placeholder="如：user:create" :disabled="editPermissionMode">
                                 </div>
                                 <div class="form-group flex-1">
                                     <label>权限类型 <span class="required">*</span></label>
-                                    <select v-model="newPermission.type" class="form-control">
+                                    <select v-model="newPermission.type" class="form-select">
                                         <option value="menu">菜单权限</option>
                                         <option value="button">按钮权限</option>
                                         <option value="data">数据权限</option>
@@ -2120,24 +2200,24 @@
                             </div>
                             <div class="form-group">
                                 <label>权限名称 <span class="required">*</span></label>
-                                <input type="text" v-model="newPermission.name" class="form-control" placeholder="如：创建用户">
+                                <input type="text" v-model="newPermission.name" class="form-input" placeholder="如：创建用户">
                             </div>
                             <div class="form-group" v-if="newPermission.type === 'menu'">
                                 <label>资源路径</label>
-                                <input type="text" v-model="newPermission.resource" class="form-control" placeholder="如：/system/users">
+                                <input type="text" v-model="newPermission.resource" class="form-input" placeholder="如：/system/users">
                             </div>
                             <div class="form-group" v-if="newPermission.type === 'menu'">
                                 <label>父级菜单</label>
-                                <select v-model="newPermission.parent_id" class="form-control">
+                                <select v-model="newPermission.parent_id" class="form-select">
                                     <option value="">无（顶级菜单）</option>
-                                    <option v-for="p in allPermissions.filter(x => x.type === 'menu' && !x.parent_id)" :key="p.id" :value="p.id">
+                                    <option v-for="p in allPermissions.filter(x => x.type === 'menu')" :key="p.id" :value="p.id">
                                         {{ p.name }}
                                     </option>
                                 </select>
                             </div>
                             <div class="form-group">
                                 <label>描述</label>
-                                <textarea v-model="newPermission.description" class="form-control" rows="2" placeholder="权限描述"></textarea>
+                                <textarea v-model="newPermission.description" class="form-input" rows="2" placeholder="权限描述"></textarea>
                             </div>
                         </div>
                         <div class="modal-footer">
@@ -2789,6 +2869,313 @@
                     </div>
                 </div>
 
+                <!-- 商户管理 -->
+                <div v-show="currentTab === 'merchants'" class="page-content">
+                    <div class="page-header-card">
+                        <h1 class="page-title">商户管理</h1>
+                        <div class="header-actions">
+                            <button class="btn btn-default" @click="loadMerchants">↻ 刷新</button>
+                            <button class="btn btn-default" @click="API.exportMerchants()">↓ 导出</button>
+                            <button class="btn btn-primary" @click="openMerchantModal()">+ 添加商户</button>
+                            <button class="btn btn-default" @click="openBatchMerchantModal()">⊞ 批量添加</button>
+                        </div>
+                    </div>
+
+                    <!-- 筛选栏 -->
+                    <div class="filter-bar">
+                        <div class="search-box">
+                            <span class="search-icon">🔍</span>
+                            <input type="text" v-model="merchantSearch" placeholder="搜索网站方、项目...">
+                        </div>
+                        <select class="form-select filter-select" v-model="merchantProjectFilter" @change="loadMerchants">
+                            <option value="">所有项目</option>
+                            <option v-for="p in [...new Set(merchants.map(m => m.project).filter(Boolean))]" :key="p" :value="p">{{ p }}</option>
+                        </select>
+                        <select class="form-select filter-select" v-model="merchantEnvFilter" @change="loadMerchants">
+                            <option value="">所有环境</option>
+                            <option value="prod">PROD</option>
+                            <option value="uat">UAT</option>
+                            <option value="dev">DEV</option>
+                        </select>
+                        <button v-if="selectedMerchantIds.length > 0" class="btn btn-danger btn-small" @click="batchDeleteMerchants" style="margin-left:8px;">
+                            🗑️ 删除选中 ({{ selectedMerchantIds.length }})
+                        </button>
+                    </div>
+
+                    <!-- 列表 -->
+                    <div class="data-table-container" style="overflow-x: auto; max-width: calc(100vw - 240px);">
+                        <table class="data-table" style="min-width: 2800px; white-space: nowrap;">
+                            <thead>
+                                <tr>
+                                    <th style="min-width:40px;"><input type="checkbox" @change="toggleAllMerchants()" :checked="selectedMerchantIds.length > 0 && selectedMerchantIds.length === getPagedMerchants().length"></th>
+                                    <th style="min-width:90px;">项目</th>
+                                    <th style="min-width:60px;">环境</th>
+                                    <th style="min-width:100px;">网站方</th>
+                                    <th style="min-width:160px;">对接邮箱</th>
+                                    <th style="min-width:140px;">网站方网址</th>
+                                    <th style="min-width:120px;">玩家地区</th>
+                                    <th style="min-width:80px;">在线玩家</th>
+                                    <th style="min-width:140px;">游戏种类</th>
+                                    <th style="min-width:100px;">盘口</th>
+                                    <th style="min-width:120px;">语言</th>
+                                    <th style="min-width:120px;">币种</th>
+                                    <th style="min-width:100px;">支持端口</th>
+                                    <th style="min-width:100px;">钱包类型</th>
+                                    <th style="min-width:160px;">三方回调域名</th>
+                                    <th style="min-width:140px;">三方白名单</th>
+                                    <th style="min-width:160px;">厅房域名</th>
+                                    <th style="min-width:160px;">站点系统域名</th>
+                                    <th style="min-width:120px;">站点账号</th>
+                                    <th style="min-width:120px;">AppKey</th>
+                                    <th style="min-width:160px;">游戏域名</th>
+                                    <th style="min-width:160px;">301域名</th>
+                                    <th class="th-action-fixed">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="m in getPagedMerchants()" :key="m.id" :class="{ 'row-selected': selectedMerchantIds.includes(m.id) }">
+                                    <td><input type="checkbox" :checked="selectedMerchantIds.includes(m.id)" @change="toggleMerchantSelect(m.id)"></td>
+                                    <td><span :class="'tag-project tag-project-' + getProjectColor(m.project)">{{ m.project || '-' }}</span></td>
+                                    <td><span class="tag-env" :class="{ 'tag-env-prod': m.env==='prod', 'tag-env-uat': m.env==='uat', 'tag-env-dev': m.env==='dev' }">{{ m.env==='prod'?'PROD':m.env==='uat'?'UAT':'DEV' }}</span></td>
+                                    <td><span :class="'tag-website tag-website-' + getWebsiteColor(m.website_name)">{{ m.website_name }}</span></td>
+                                    <td style="font-size:12px;">{{ formatTags(m.contact_emails) }}</td>
+                                    <td style="font-size:12px;">{{ formatTags(m.website_urls) }}</td>
+                                    <td>{{ formatTags(m.player_regions) }}</td>
+                                    <td>{{ m.estimated_players || '-' }}</td>
+                                    <td>{{ formatTags(m.game_types) }}</td>
+                                    <td>{{ formatTags(m.handicaps) }}</td>
+                                    <td>{{ formatTags(m.languages) }}</td>
+                                    <td>{{ formatTags(m.currencies) }}</td>
+                                    <td>{{ formatTags(m.supported_ports) }}</td>
+                                    <td>{{ formatTags(m.wallet_types) }}</td>
+                                    <td style="font-size:12px;">{{ formatTags(m.callback_domains) }}</td>
+                                    <td style="font-size:12px; white-space:pre-line;">{{ m.whitelist_ips || '-' }}</td>
+                                    <td style="font-size:12px;">{{ formatTags(m.hall_domains) }}</td>
+                                    <td style="font-size:12px;">{{ formatTags(m.site_domains) }}</td>
+                                    <td style="font-size:12px;">{{ formatTags(m.site_accounts) }}</td>
+                                    <td style="font-size:12px;">{{ formatTags(m.app_keys) }}</td>
+                                    <td style="font-size:12px;">{{ formatTags(m.game_domains) }}</td>
+                                    <td style="font-size:12px;">{{ formatTags(m.redirect_domains) }}</td>
+                                    <td class="td-action-fixed">
+                                        <div class="action-icons">
+                                            <button class="action-icon-btn" @click="openMerchantModal(m)" title="编辑">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                                </svg>
+                                            </button>
+                                            <div class="popconfirm-wrapper">
+                                                <button class="action-icon-btn danger" @click.stop="togglePopconfirm('merchant', m.id)" title="删除">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                        <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                                    </svg>
+                                                </button>
+                                                <div class="popconfirm" :class="{ show: activePopconfirm === 'merchant-' + m.id }">
+                                                    <div class="popconfirm-content">
+                                                        <span class="popconfirm-icon">⚠</span>
+                                                        <span class="popconfirm-message">确定要删除吗?</span>
+                                                    </div>
+                                                    <div class="popconfirm-buttons">
+                                                        <button class="btn btn-cancel" @click.stop="activePopconfirm = null">取消</button>
+                                                        <button class="btn btn-confirm" @click.stop="deleteMerchant(m)">确定</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr v-if="getFilteredMerchants().length === 0">
+                                    <td colspan="23" class="empty-row">暂无商户数据</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="pagination-container">
+                        <div class="pagination-info">
+                            共 <strong>{{ getFilteredMerchants().length }}</strong> 条记录，
+                            每页
+                            <select v-model.number="merchantPageSize" @change="merchantCurrentPage = 1" class="page-size-select">
+                                <option :value="10">10</option>
+                                <option :value="20">20</option>
+                                <option :value="50">50</option>
+                                <option :value="100">100</option>
+                            </select>
+                            条
+                        </div>
+                        <div class="pagination">
+                            <button class="btn btn-small btn-default" @click="merchantCurrentPage = 1" :disabled="merchantCurrentPage<=1" title="首页">«</button>
+                            <button class="btn btn-small btn-default" @click="merchantCurrentPage = Math.max(1, merchantCurrentPage-1)" :disabled="merchantCurrentPage<=1">上一页</button>
+                            <span class="page-info">第 <strong>{{ merchantCurrentPage }}</strong> / {{ getMerchantTotalPages() }} 页</span>
+                            <button class="btn btn-small btn-default" @click="merchantCurrentPage = Math.min(getMerchantTotalPages(), merchantCurrentPage+1)" :disabled="merchantCurrentPage>=getMerchantTotalPages()">下一页</button>
+                            <button class="btn btn-small btn-default" @click="merchantCurrentPage = getMerchantTotalPages()" :disabled="merchantCurrentPage>=getMerchantTotalPages()" title="末页">»</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 商户详情弹窗 -->
+                <div class="modal-overlay" :class="{ show: showMerchantDetail }" @click.self="showMerchantDetail = null">
+                    <div class="modal" style="width: 900px; max-height: 85vh; overflow-y: auto;" v-if="showMerchantDetail">
+                        <div class="modal-header">
+                            <h3>商户详情 - {{ showMerchantDetail.website_name }}</h3>
+                            <button class="modal-close" @click="showMerchantDetail = null">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; font-size:13px;">
+                                <div><strong>项目:</strong> {{ showMerchantDetail.project || '-' }}</div>
+                                <div><strong>环境:</strong> {{ showMerchantDetail.env }}</div>
+                                <div style="grid-column:1/-1;"><strong>对接邮箱:</strong> {{ formatTags(showMerchantDetail.contact_emails) }}</div>
+                                <div style="grid-column:1/-1;"><strong>网站方网址:</strong> {{ formatTags(showMerchantDetail.website_urls) }}</div>
+                                <div><strong>玩家地区:</strong> {{ formatTags(showMerchantDetail.player_regions) }}</div>
+                                <div><strong>预计在线玩家:</strong> {{ showMerchantDetail.estimated_players || '-' }}</div>
+                                <div><strong>游戏种类:</strong> {{ formatTags(showMerchantDetail.game_types) }}</div>
+                                <div><strong>盘口:</strong> {{ formatTags(showMerchantDetail.handicaps) }}</div>
+                                <div><strong>语言:</strong> {{ formatTags(showMerchantDetail.languages) }}</div>
+                                <div><strong>币种:</strong> {{ formatTags(showMerchantDetail.currencies) }}</div>
+                                <div><strong>支持端口:</strong> {{ formatTags(showMerchantDetail.supported_ports) }}</div>
+                                <div><strong>钱包类型:</strong> {{ formatTags(showMerchantDetail.wallet_types) }}</div>
+                                <div style="grid-column:1/-1;"><strong>三方回调域名:</strong> {{ formatTags(showMerchantDetail.callback_domains) }}</div>
+                                <div style="grid-column:1/-1;"><strong>三方白名单:</strong> {{ showMerchantDetail.whitelist_ips || '-' }}</div>
+                                <div style="grid-column:1/-1;"><strong>三方调用厅房域名:</strong> {{ formatTags(showMerchantDetail.hall_domains) }}</div>
+                                <div style="grid-column:1/-1;"><strong>厅方站点系统域名:</strong> {{ formatTags(showMerchantDetail.site_domains) }}</div>
+                                <div style="grid-column:1/-1;"><strong>站点系统账号:</strong> {{ formatTags(showMerchantDetail.site_accounts) }}</div>
+                                <div style="grid-column:1/-1;"><strong>AppKey:</strong> {{ formatTags(showMerchantDetail.app_keys) }}</div>
+                                <div style="grid-column:1/-1;"><strong>AppSecret:</strong> (密码系统查看)</div>
+                                <div style="grid-column:1/-1;"><strong>游戏域名:</strong> {{ formatTags(showMerchantDetail.game_domains) }}</div>
+                                <div style="grid-column:1/-1;"><strong>301域名:</strong> {{ formatTags(showMerchantDetail.redirect_domains) }}</div>
+                                <div style="grid-column:1/-1;"><strong>备注:</strong> {{ showMerchantDetail.remark || '-' }}</div>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-default" @click="showMerchantDetail = null">关闭</button>
+                            <button class="btn btn-primary" @click="openMerchantModal(showMerchantDetail); showMerchantDetail = null">编辑</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 商户批量添加弹窗 -->
+                <div class="modal-overlay" :class="{ show: showBatchMerchantModal }" @click.self="showBatchMerchantModal = false">
+                    <div class="modal" style="width: 900px; max-height: 85vh; overflow-y: auto;">
+                        <div class="modal-header">
+                            <h3>批量添加商户</h3>
+                            <button class="modal-close" @click="showBatchMerchantModal = false">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="form-group">
+                                <label>格式说明</label>
+                                <div style="background: var(--content-bg); padding: 12px; border-radius: 8px; font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.8;">
+                                    每行一个商户，支持 <code>,</code> 逗号、<code>Tab</code>、<code>|</code> 分隔，<code>#</code> 开头忽略。<br>
+                                    <strong>字段顺序（共21个字段）:</strong><br>
+                                    <span style="color: var(--primary);">1.项目, 2.环境(PROD/UAT/DEV), 3.网站方</span>, 4.对接邮箱, 5.网站方网址, 6.玩家地区, 7.预计玩家, 8.游戏种类, 9.盘口, 10.语言, 11.币种, 12.支持端口, 13.钱包类型, 14.三方回调域名, 15.三方白名单, 16.厅房域名, 17.站点系统域名, 18.站点账号, 19.AppKey, 20.游戏域名, 21.301域名<br>
+                                    <strong>多个值用 <code>;</code> 分号分隔</strong>，如: <code>中文;英语;泰语</code><br>
+                                    <strong>空值处理:</strong> 直接留空（连续逗号），如: <code>项目,PROD,网站方,邮箱,,,,</code> 表示第5-8字段为空
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <div style="display:flex; justify-content:space-between; align-items:center;">
+                                    <label>商户列表（{{ parseBatchMerchantText().length }} 条）</label>
+                                    <button class="btn btn-small btn-default" type="button" @click="fillBatchMerchantExample()">填入示例</button>
+                                </div>
+                                <textarea class="form-textarea" v-model="batchMerchantText" rows="14" placeholder="# 项目, 环境(PROD/UAT/DEV), 网站方, 对接邮箱(;分隔), 网站方网址(;分隔), 玩家地区(;分隔), 预计玩家, 游戏种类(;分隔), 盘口(;分隔), 语言(;分隔), 币种(;分隔), 支持端口(;分隔), 钱包类型(;分隔)...
+星辰项目, PROD, 星辰娱乐, contact@star.com;tech@star.com, www.star.com, 中国;菲律宾, 5000, 真人;体育;电竞, A盘;B盘, 中文;英语, CNY;USDT, H5;APP;PC, 转账钱包" style="font-family: monospace; font-size: 12px;"></textarea>
+                            </div>
+                            <div v-if="batchMerchantResult" class="alert" :class="batchMerchantResult.fail_count === 0 ? 'alert-success' : 'alert-warning'" style="margin-top: 12px;">
+                                <strong>{{ batchMerchantResult.message }}</strong>
+                                <div v-if="batchMerchantResult.skip_details && batchMerchantResult.skip_details.length > 0" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(0,0,0,0.1);">
+                                    <div style="font-weight: 600; margin-bottom: 4px; color: #d97706;">失败原因：</div>
+                                    <ul style="margin: 0; padding-left: 20px; font-size: 12px; max-height: 120px; overflow-y: auto;">
+                                        <li v-for="(detail, idx) in batchMerchantResult.skip_details" :key="idx" style="margin-bottom: 2px;">{{ detail }}</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-default" @click="showBatchMerchantModal = false">取消</button>
+                            <button class="btn btn-primary" @click="executeBatchMerchant" :disabled="batchMerchantLoading">
+                                {{ batchMerchantLoading ? '添加中...' : '确认添加' }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 商户新建/编辑弹窗 -->
+                <div class="modal-overlay" :class="{ show: showMerchantModal }" @click.self="showMerchantModal = false">
+                    <div class="modal" style="width: 900px; max-height: 85vh; overflow-y: auto;">
+                        <div class="modal-header">
+                            <h3>{{ editMerchantMode ? '编辑商户' : '添加商户' }}</h3>
+                            <button class="modal-close" @click="showMerchantModal = false">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="form-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                                <div class="form-group">
+                                    <label>网站方 *</label>
+                                    <input type="text" class="form-input" v-model="merchantForm.website_name" placeholder="网站方名称">
+                                </div>
+                                <div class="form-group">
+                                    <label>项目</label>
+                                    <input type="text" class="form-input" v-model="merchantForm.project" placeholder="所属项目">
+                                </div>
+                                <div class="form-group">
+                                    <label>环境</label>
+                                    <select class="form-select" v-model="merchantForm.env"><option value="prod">PROD</option><option value="uat">UAT</option><option value="dev">DEV</option></select>
+                                </div>
+                                <div class="form-group">
+                                    <label>预计在线玩家数量</label>
+                                    <input type="text" class="form-input" v-model="merchantForm.estimated_players" placeholder="如: 5000">
+                                </div>
+                            </div>
+
+                            <!-- 多值字段 - 标签输入 -->
+                            <div style="margin-top:16px; display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                                <div class="form-group" v-for="field in [
+                                    {key:'contact_emails', label:'对接邮箱', ph:'输入邮箱后回车'},
+                                    {key:'website_urls', label:'网站方网址', ph:'输入网址后回车'},
+                                    {key:'player_regions', label:'玩家地区', ph:'如: 中国、菲律宾'},
+                                    {key:'game_types', label:'游戏种类', ph:'如: 真人、体育、电竞'},
+                                    {key:'handicaps', label:'盘口', ph:'如: A盘、B盘'},
+                                    {key:'languages', label:'语言', ph:'如: 中文、英语、泰语'},
+                                    {key:'currencies', label:'币种', ph:'如: CNY、USD、USDT'},
+                                    {key:'supported_ports', label:'支持端口', ph:'如: H5、APP、PC'},
+                                    {key:'wallet_types', label:'钱包类型', ph:'如: 转账钱包、单一钱包'},
+                                    {key:'callback_domains', label:'三方回调域名', ph:'输入域名后回车'},
+                                    {key:'hall_domains', label:'三方调用厅房域名', ph:'输入域名后回车'},
+                                    {key:'site_domains', label:'厅方站点系统域名', ph:'输入域名后回车'},
+                                    {key:'site_accounts', label:'站点系统账号', ph:'输入账号后回车'},
+                                    {key:'app_keys', label:'AppKey', ph:'输入key后回车'},
+                                    {key:'game_domains', label:'游戏域名', ph:'输入域名后回车'},
+                                    {key:'redirect_domains', label:'301域名', ph:'输入域名后回车'}
+                                ]" :key="field.key">
+                                    <label>{{ field.label }}</label>
+                                    <div class="merchant-tags-wrap">
+                                        <span v-for="(tag, i) in merchantForm[field.key]" :key="i" class="merchant-tag">
+                                            {{ tag }} <span class="merchant-tag-close" @click="removeMerchantTag(field.key, i)">&times;</span>
+                                        </span>
+                                        <input type="text" class="merchant-tag-input" v-model="merchantTagInput[field.key]" :placeholder="field.ph" @keydown.enter.prevent="addMerchantTag(field.key)" @blur="addMerchantTag(field.key)">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style="margin-top:14px; display:grid; grid-template-columns:1fr; gap:12px;">
+                                <div class="form-group">
+                                    <label>三方白名单</label>
+                                    <textarea class="form-textarea" v-model="merchantForm.whitelist_ips" rows="2" placeholder="IP白名单，一行一个"></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label>AppSecret <span style="color:var(--text-secondary);font-weight:normal;">(默认填写在密码系统查看)</span></label>
+                                    <input type="password" class="form-input" v-model="merchantForm.app_secrets" placeholder="加密存储">
+                                </div>
+                                <div class="form-group">
+                                    <label>备注</label>
+                                    <textarea class="form-textarea" v-model="merchantForm.remark" rows="2"></textarea>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-default" @click="showMerchantModal = false">取消</button>
+                            <button class="btn btn-primary" @click="saveMerchant">保存</button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 网络架构图 -->
                 <div v-show="currentTab === 'topology'" class="page-content">
                     <div class="page-header-card">
@@ -2800,9 +3187,9 @@
                             </select>
                             <select class="form-select" v-model="topoEnvFilter" @change="renderTopology" style="width:120px;">
                                 <option value="">所有环境</option>
-                                <option value="prod">生产</option>
+                                <option value="prod">PROD</option>
                                 <option value="uat">UAT</option>
-                                <option value="dev">开发</option>
+                                <option value="dev">DEV</option>
                             </select>
                             <button class="btn btn-default" @click="loadTopologyData">↻ 刷新</button>
                             <button class="btn btn-default" @click="topoZoom = Math.min(topoZoom + 0.1, 2)">🔍+</button>
@@ -2890,7 +3277,7 @@
                             <div class="topo-detail-row" v-if="topoSelectedNode.project"><span class="topo-detail-label">项目:</span> {{ topoSelectedNode.project }}</div>
                             <div class="topo-detail-row" v-if="topoSelectedNode.domain"><span class="topo-detail-label">域名:</span> {{ topoSelectedNode.domain }}</div>
                             <div class="topo-detail-row" v-if="topoSelectedNode.port"><span class="topo-detail-label">端口:</span> {{ topoSelectedNode.port }}</div>
-                            <div class="topo-detail-row" v-if="topoSelectedNode.env"><span class="topo-detail-label">环境:</span> {{ topoSelectedNode.env === 'prod' ? '生产' : topoSelectedNode.env === 'uat' ? 'UAT' : '开发' }}</div>
+                            <div class="topo-detail-row" v-if="topoSelectedNode.env"><span class="topo-detail-label">环境:</span> {{ topoSelectedNode.env === 'prod' ? 'PROD' : topoSelectedNode.env === 'uat' ? 'UAT' : 'DEV' }}</div>
                             <div class="topo-detail-row" v-if="topoSelectedNode.namespace"><span class="topo-detail-label">命名空间:</span> {{ topoSelectedNode.namespace }}</div>
                             <div class="topo-detail-row" v-if="topoSelectedNode.image"><span class="topo-detail-label">镜像:</span> <code style="font-size:11px; word-break:break-all;">{{ topoSelectedNode.image }}</code></div>
                             <div v-if="topoSelectedNode.deps && topoSelectedNode.deps.length > 0" style="margin-top:12px;">
@@ -2947,9 +3334,9 @@
                         </select>
                         <select class="form-select filter-select" v-model="serviceConfigEnvFilter" @change="loadServiceConfigs">
                             <option value="">所有环境</option>
-                            <option value="prod">生产</option>
+                            <option value="prod">PROD</option>
                             <option value="uat">UAT</option>
-                            <option value="dev">开发</option>
+                            <option value="dev">DEV</option>
                         </select>
                         <select class="form-select filter-select" v-model="serviceConfigTypeFilter" @change="loadServiceConfigs">
                             <option value="">所有类型</option>
@@ -2989,7 +3376,7 @@
                                     <td>{{ svc.port || '-' }}</td>
                                     <td>
                                         <span class="badge" :class="{ 'badge-success': svc.env === 'prod', 'badge-warning': svc.env === 'uat', 'badge-info': svc.env === 'dev' }">
-                                            {{ svc.env === 'prod' ? '生产' : svc.env === 'uat' ? 'UAT' : '开发' }}
+                                            {{ svc.env === 'prod' ? 'PROD' : svc.env === 'uat' ? 'UAT' : 'DEV' }}
                                         </span>
                                     </td>
                                     <td>
@@ -3112,9 +3499,9 @@
                                 <div class="form-group">
                                     <label>环境</label>
                                     <select class="form-select" v-model="serviceConfigForm.env">
-                                        <option value="prod">生产</option>
+                                        <option value="prod">PROD</option>
                                         <option value="uat">UAT</option>
-                                        <option value="dev">开发</option>
+                                        <option value="dev">DEV</option>
                                     </select>
                                 </div>
                                 <div class="form-group">
@@ -3954,7 +4341,7 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                             </div>
                             <div class="form-group" v-if="vaultFolders.length > 0">
                                 <label>导入到文件夹</label>
-                                <select v-model="vaultSelectedFolder" class="form-control">
+                                <select v-model="vaultSelectedFolder" class="form-select">
                                     <option value="">无文件夹</option>
                                     <option v-for="folder in vaultFolders" :key="folder.id" :value="folder.id">
                                         {{ folder.name }}
@@ -3979,7 +4366,7 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                         <div class="modal-body">
                             <div class="form-group">
                                 <label>文件夹名称 <span class="required">*</span></label>
-                                <input type="text" v-model="vaultNewFolder.name" class="form-control" placeholder="输入文件夹名称">
+                                <input type="text" v-model="vaultNewFolder.name" class="form-input" placeholder="输入文件夹名称">
                             </div>
                         </div>
                         <div class="modal-footer">
@@ -3999,11 +4386,11 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                         <div class="modal-body">
                             <div class="form-group">
                                 <label>用户组名称 <span class="required">*</span></label>
-                                <input type="text" v-model="vaultNewGroup.name" class="form-control" placeholder="输入用户组名称">
+                                <input type="text" v-model="vaultNewGroup.name" class="form-input" placeholder="输入用户组名称">
                             </div>
                             <div class="form-group">
                                 <label>描述</label>
-                                <textarea v-model="vaultNewGroup.description" class="form-control" rows="3" placeholder="可选的描述信息"></textarea>
+                                <textarea v-model="vaultNewGroup.description" class="form-input" rows="3" placeholder="可选的描述信息"></textarea>
                             </div>
                         </div>
                         <div class="modal-footer">
@@ -4024,7 +4411,7 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                             <div class="form-group">
                                 <label>添加成员</label>
                                 <div class="member-add-row">
-                                    <select v-model="vaultNewShare.shared_with" class="form-control">
+                                    <select v-model="vaultNewShare.shared_with" class="form-select">
                                         <option value="">选择用户</option>
                                         <option v-for="user in vaultAvailableUsers" :key="user.username" :value="user.username">
                                             {{ user.display_name || user.username }}
@@ -4069,14 +4456,14 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                         <div class="modal-body">
                             <div class="form-group">
                                 <label>分享类型</label>
-                                <select v-model="vaultNewShare.target_type" class="form-control">
+                                <select v-model="vaultNewShare.target_type" class="form-select">
                                     <option value="item">单个密码</option>
                                     <option value="folder">整个文件夹</option>
                                 </select>
                             </div>
                             <div class="form-group">
                                 <label>选择{{ vaultNewShare.target_type === 'folder' ? '文件夹' : '密码' }}</label>
-                                <select v-model="vaultNewShare.target_id" class="form-control">
+                                <select v-model="vaultNewShare.target_id" class="form-select">
                                     <option value="">请选择</option>
                                     <template v-if="vaultNewShare.target_type === 'folder'">
                                         <option v-for="folder in vaultFolders" :key="folder.id" :value="folder.id">
@@ -4092,7 +4479,7 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                             </div>
                             <div class="form-group">
                                 <label>分享给</label>
-                                <select v-model="vaultNewShare.shared_with" class="form-control">
+                                <select v-model="vaultNewShare.shared_with" class="form-select">
                                     <option value="">选择用户</option>
                                     <option v-for="user in vaultAvailableUsers" :key="user.username" :value="user.username">
                                         {{ user.display_name || user.username }}
@@ -4101,7 +4488,7 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                             </div>
                             <div class="form-group">
                                 <label>权限</label>
-                                <select v-model="vaultNewShare.permission" class="form-control">
+                                <select v-model="vaultNewShare.permission" class="form-select">
                                     <option value="read">只读 - 只能查看</option>
                                     <option value="write">读写 - 可以编辑</option>
                                     <option value="admin">管理 - 可以删除和再分享</option>
@@ -5280,10 +5667,12 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                                 </div>
                                 <div class="form-row">
                                     <div class="form-group">
-                                        <label>账号类型</label>
+                                        <label>账号角色</label>
                                         <select class="form-select" v-model="userForm.role">
-                                            <option value="user">普通用户</option>
-                                            <option value="admin">管理员</option>
+                                            <option v-for="role in roles" :key="role.id" :value="role.code">
+                                                {{ role.name }}
+                                            </option>
+                                            <option v-if="roles.length === 0" value="user">普通用户</option>
                                         </select>
                                     </div>
                                     <div class="form-group">
@@ -5365,6 +5754,25 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                                 <button type="button" class="btn btn-outline-warning btn-sm" @click="confirmResetUserMFA(userForm.id)">
                                     重置 MFA 绑定
                                 </button>
+                            </div>
+                        </div>
+
+                        <!-- 语言设置 -->
+                        <div class="profile-section">
+                            <div class="profile-section-title">
+                                <span class="section-icon">🌐</span>
+                                语言设置
+                            </div>
+                            <div class="profile-form">
+                                <div class="form-group">
+                                    <label>界面语言</label>
+                                    <select class="form-select" v-model="userForm.language">
+                                        <option v-for="lang in availableLanguages" :key="lang.code" :value="lang.code">
+                                            {{ lang.flag }} {{ lang.name }}
+                                        </option>
+                                    </select>
+                                    <div class="form-hint">设置该用户登录后的默认界面语言</div>
+                                </div>
                             </div>
                         </div>
 
@@ -5557,6 +5965,10 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                                 <input type="text" class="form-input" v-model="domainForm.origin" placeholder="回源IP或域名">
                             </div>
                             <div class="form-group">
+                                <label>源站IP</label>
+                                <input type="text" class="form-input" v-model="domainForm.origin_ip" placeholder="源站IP地址">
+                            </div>
+                            <div class="form-group">
                                 <label>CDN厂商</label>
                                 <select class="form-input" v-model="domainForm.cdn_provider">
                                     <option value="">请选择</option>
@@ -5584,9 +5996,9 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                             <div class="form-group">
                                 <label>环境</label>
                                 <select class="form-input" v-model="domainForm.env">
-                                    <option value="PROD">PROD (生产)</option>
-                                    <option value="UAT">UAT (测试)</option>
-                                    <option value="DEV">DEV (开发)</option>
+                                    <option value="PROD">PROD</option>
+                                    <option value="UAT">UAT</option>
+                                    <option value="DEV">DEV</option>
                                 </select>
                             </div>
                             <div class="form-group">
@@ -5779,83 +6191,242 @@ order-service, backend, myproject, , 8082, prod, 订单服务
             </div>
         </div>
 
-        <!-- 批量添加域名弹窗 -->
+        <!-- 批量添加域名弹窗 - 全新设计 -->
         <div class="modal-overlay" :class="{ show: showBatchDomainModal }">
-            <div class="modal" style="max-width: 800px;">
-                <div class="modal-header">
-                    <h2>📋 批量添加域名</h2>
-                    <button class="modal-close" @click="showBatchDomainModal = false">&times;</button>
+            <div class="modal batch-domain-modal">
+                <!-- 渐变头部 -->
+                <div class="modal-header" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 12px 12px 0 0; padding: 20px 24px;">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <div style="width: 40px; height: 40px; background: rgba(255,255,255,0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22">
+                                <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                                <path d="M2 17l10 5 10-5"></path>
+                                <path d="M2 12l10 5 10-5"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <h2 style="margin: 0; font-size: 18px; font-weight: 600;">批量添加域名</h2>
+                            <p style="margin: 4px 0 0 0; font-size: 13px; opacity: 0.85;">快速导入多个域名到系统</p>
+                        </div>
+                    </div>
+                    <button class="modal-close" @click="showBatchDomainModal = false" style="color: white; opacity: 0.8;">&times;</button>
                 </div>
-                <div class="modal-body">
-                    <div class="form-group">
-                        <label>项目名称 <span class="required">*</span></label>
-                        <input type="text" class="form-input" v-model="batchDomainProject" placeholder="所有域名将归属此项目" @input="parseBatchDomains">
-                    </div>
-                    <div class="form-group">
-                        <label>域名列表 <span class="required">*</span></label>
-                        <div class="batch-hint">
-                            每行一个域名，支持以下格式：<br>
-                            • 仅域名：<code>example.com</code><br>
-                            • 完整格式：<code>域名,模块,回源,CDN厂商,域名到期,备注</code>（逗号或Tab分隔）
+                
+                <div class="modal-body" style="padding: 24px; overflow-y: auto; max-height: calc(80vh - 160px);">
+                    <!-- 步骤指示器 -->
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 24px; padding: 12px 16px; background: var(--bg-tertiary); border-radius: 8px;">
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span style="width: 24px; height: 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600;">1</span>
+                            <span style="font-size: 13px; color: var(--text-primary);">设置项目信息</span>
                         </div>
-                        <textarea class="form-input batch-textarea" v-model="batchDomainText" @input="parseBatchDomains" 
-                            placeholder="example.com&#10;api.example.com,API模块,192.168.1.1,阿里云CDN,2025-12-31,生产环境&#10;www.example.com,Web模块" rows="8"></textarea>
-                    </div>
-                    <!-- 到期时间获取选项 -->
-                    <div class="form-group">
-                        <label>到期时间获取方式</label>
-                        <div class="radio-group">
-                            <label class="radio-item">
-                                <input type="radio" v-model="batchDomainFetchExpiry" value="skip">
-                                <span class="radio-label">⚡ 快速添加（跳过到期时间查询）</span>
-                                <span class="radio-hint">推荐，添加后可手动刷新单个域名获取到期时间</span>
-                            </label>
-                            <label class="radio-item">
-                                <input type="radio" v-model="batchDomainFetchExpiry" value="fetch">
-                                <span class="radio-label">🔍 自动获取到期时间</span>
-                                <span class="radio-hint">添加速度较慢，约 1-2 秒/个域名</span>
-                            </label>
+                        <div style="flex: 1; height: 2px; background: var(--border-color);"></div>
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span style="width: 24px; height: 24px; background: var(--border-color); color: var(--text-secondary); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600;">2</span>
+                            <span style="font-size: 13px; color: var(--text-secondary);">输入域名</span>
+                        </div>
+                        <div style="flex: 1; height: 2px; background: var(--border-color);"></div>
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span style="width: 24px; height: 24px; background: var(--border-color); color: var(--text-secondary); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600;">3</span>
+                            <span style="font-size: 13px; color: var(--text-secondary);">预览确认</span>
                         </div>
                     </div>
-                    <div v-if="batchDomainError" class="batch-error">{{ batchDomainError }}</div>
-                    <div v-if="batchDomainRecords && batchDomainRecords.length > 0" class="batch-preview">
-                        <h4>预览 ({{ batchDomainRecords.length }} 条)</h4>
-                        <div class="batch-preview-table">
-                            <table class="data-table">
+
+                    <!-- 项目和环境选择 - 卡片式设计 -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
+                        <div class="form-group" style="margin: 0;">
+                            <label style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" width="16" height="16">
+                                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                                    <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                                </svg>
+                                项目名称 <span class="required">*</span>
+                            </label>
+                            <input type="text" class="form-input" v-model="batchDomainProject" placeholder="输入项目名称，如：商城项目" @input="parseBatchDomains" style="height: 40px;">
+                        </div>
+                        <div class="form-group" style="margin: 0;">
+                            <label style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" width="16" height="16">
+                                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                                    <line x1="8" y1="21" x2="16" y2="21"></line>
+                                    <line x1="12" y1="17" x2="12" y2="21"></line>
+                                </svg>
+                                环境 <span class="required">*</span>
+                            </label>
+                            <div style="display: flex; gap: 8px;">
+                                <label class="env-radio-card" :class="{ active: batchDomainEnv === 'PROD' }" @click="batchDomainEnv = 'PROD'; parseBatchDomains()">
+                                    <input type="radio" v-model="batchDomainEnv" value="PROD" style="display: none;">
+                                    <span class="env-badge prod">PROD</span>
+                                </label>
+                                <label class="env-radio-card" :class="{ active: batchDomainEnv === 'UAT' }" @click="batchDomainEnv = 'UAT'; parseBatchDomains()">
+                                    <input type="radio" v-model="batchDomainEnv" value="UAT" style="display: none;">
+                                    <span class="env-badge uat">UAT</span>
+                                </label>
+                                <label class="env-radio-card" :class="{ active: batchDomainEnv === 'DEV' }" @click="batchDomainEnv = 'DEV'; parseBatchDomains()">
+                                    <input type="radio" v-model="batchDomainEnv" value="DEV" style="display: none;">
+                                    <span class="env-badge dev">DEV</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 域名输入区 -->
+                    <div class="form-group" style="margin-bottom: 20px;">
+                        <label style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                            <span style="display: flex; align-items: center; gap: 6px;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" width="16" height="16">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                                </svg>
+                                域名列表 <span class="required">*</span>
+                            </span>
+                            <span style="font-size: 12px; color: var(--text-secondary);">
+                                已识别 <strong style="color: var(--primary);">{{ batchDomainRecords.length }}</strong> 个域名
+                            </span>
+                        </label>
+                        <!-- 格式提示 - 折叠式 -->
+                        <div style="background: linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.08) 100%); border: 1px solid rgba(102, 126, 234, 0.2); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;">
+                            <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.6;">
+                                <div style="margin-bottom: 6px; font-weight: 500; color: var(--text-primary);">支持格式：</div>
+                                <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+                                    <span>• 简单：<code style="background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px; font-size: 11px;">example.com</code></span>
+                                    <span>• 完整：<code style="background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px; font-size: 11px;">模块,域名,回源,源站IP,CDN厂商,到期日,备注</code></span>
+                                </div>
+                            </div>
+                        </div>
+                        <textarea class="form-input" v-model="batchDomainText" @input="parseBatchDomains" 
+                            placeholder="example.com&#10;API模块,api.example.com,origin.com,192.168.1.1,阿里云CDN,2025-12-31,生产环境&#10;Web模块,www.example.com" 
+                            rows="8" style="width: 100%; min-height: 180px; font-family: 'Monaco', 'Menlo', monospace; font-size: 13px; line-height: 1.6; resize: vertical;"></textarea>
+                    </div>
+
+                    <!-- 到期时间获取选项 - 卡片选择 -->
+                    <div class="form-group" style="margin-bottom: 20px;">
+                        <label style="display: flex; align-items: center; gap: 6px; margin-bottom: 10px;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" width="16" height="16">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12 6 12 12 16 14"></polyline>
+                            </svg>
+                            到期时间获取方式
+                        </label>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                            <label class="option-card" :class="{ active: batchDomainFetchExpiry === 'skip' }">
+                                <input type="radio" v-model="batchDomainFetchExpiry" value="skip" style="display: none;">
+                                <div style="display: flex; align-items: flex-start; gap: 12px;">
+                                    <div style="width: 36px; height: 36px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" width="18" height="18">
+                                            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                                        </svg>
+                                    </div>
+                                    <div>
+                                        <div style="font-weight: 600; font-size: 14px; color: var(--text-primary);">快速添加</div>
+                                        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">跳过到期查询，后续手动刷新</div>
+                                        <span style="display: inline-block; margin-top: 6px; padding: 2px 8px; background: #10b981; color: white; border-radius: 4px; font-size: 11px;">推荐</span>
+                                    </div>
+                                </div>
+                            </label>
+                            <label class="option-card" :class="{ active: batchDomainFetchExpiry === 'fetch' }">
+                                <input type="radio" v-model="batchDomainFetchExpiry" value="fetch" style="display: none;">
+                                <div style="display: flex; align-items: flex-start; gap: 12px;">
+                                    <div style="width: 36px; height: 36px; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" width="18" height="18">
+                                            <circle cx="11" cy="11" r="8"></circle>
+                                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                        </svg>
+                                    </div>
+                                    <div>
+                                        <div style="font-weight: 600; font-size: 14px; color: var(--text-primary);">自动获取</div>
+                                        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">自动查询到期时间，约1-2秒/个</div>
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- 错误提示 -->
+                    <div v-if="batchDomainError" style="background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(220, 38, 38, 0.1) 100%); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" width="18" height="18">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="8" x2="12" y2="12"></line>
+                            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                        </svg>
+                        <span style="font-size: 13px; color: #ef4444;">{{ batchDomainError }}</span>
+                    </div>
+
+                    <!-- 预览表格 -->
+                    <div v-if="batchDomainRecords && batchDomainRecords.length > 0" style="border: 1px solid var(--border-color); border-radius: 10px; overflow: hidden;">
+                        <div style="background: var(--bg-tertiary); padding: 12px 16px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between;">
+                            <span style="font-weight: 600; font-size: 14px; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" width="16" height="16">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                                    <polyline points="10 9 9 9 8 9"></polyline>
+                                </svg>
+                                预览数据
+                            </span>
+                            <span style="font-size: 12px; padding: 4px 10px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 12px;">
+                                {{ batchDomainRecords.length }} 条
+                            </span>
+                        </div>
+                        <div style="max-height: 200px; overflow-y: auto;">
+                            <table class="data-table" style="margin: 0; font-size: 13px; table-layout: fixed;">
                                 <thead>
                                     <tr>
-                                        <th>域名</th>
-                                        <th>模块</th>
-                                        <th>回源</th>
-                                        <th>CDN厂商</th>
-                                        <th>域名到期</th>
+                                        <th style="position: sticky; top: 0; background: var(--card-bg); z-index: 1; min-width: 350px;">模块</th>
+                                        <th style="position: sticky; top: 0; background: var(--card-bg); z-index: 1; min-width: 400px;">域名</th>
+                                        <th style="position: sticky; top: 0; background: var(--card-bg); z-index: 1; width: 60px;">环境</th>
+                                        <th style="position: sticky; top: 0; background: var(--card-bg); z-index: 1; min-width: 300px;">回源</th>
+                                        <th style="position: sticky; top: 0; background: var(--card-bg); z-index: 1; min-width: 120px;">源站IP</th>
+                                        <th style="position: sticky; top: 0; background: var(--card-bg); z-index: 1; width: 80px;">CDN</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr v-for="(d, idx) in batchDomainRecords.slice(0, 10)" :key="idx">
-                                        <td>{{ d.domain_name }}</td>
-                                        <td>{{ d.module || '-' }}</td>
-                                        <td>{{ d.origin || '-' }}</td>
+                                    <tr v-for="(d, idx) in batchDomainRecords.slice(0, 20)" :key="idx">
+                                        <td style="max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="d.module">{{ d.module || '-' }}</td>
+                                        <td style="font-family: monospace; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="d.domain_name">{{ d.domain_name }}</td>
+                                        <td><span class="env-badge" :class="d.env.toLowerCase()">{{ d.env }}</span></td>
+                                        <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="d.origin">{{ d.origin || '-' }}</td>
+                                        <td style="font-family: monospace;">{{ d.origin_ip || '-' }}</td>
                                         <td>{{ d.cdn_provider || '-' }}</td>
-                                        <td>{{ d.expire_time || '-' }}</td>
                                     </tr>
                                 </tbody>
                             </table>
-                            <div v-if="batchDomainRecords.length > 10" class="batch-more">
-                                ... 还有 {{ batchDomainRecords.length - 10 }} 条
-                            </div>
                         </div>
-                        <div v-if="batchDomainFetchExpiry === 'fetch' && batchDomainRecords.length > 20" class="batch-warning">
-                            ⚠️ 域名数量较多，自动获取到期时间可能需要 {{ Math.ceil(batchDomainRecords.length * 1.5 / 60) }} 分钟以上，建议选择"快速添加"
+                        <div v-if="batchDomainRecords.length > 20" style="padding: 10px 16px; background: var(--bg-tertiary); border-top: 1px solid var(--border-color); text-align: center; font-size: 12px; color: var(--text-secondary);">
+                            ... 还有 {{ batchDomainRecords.length - 20 }} 条未显示
                         </div>
                     </div>
+                    
+                    <div v-if="batchDomainFetchExpiry === 'fetch' && batchDomainRecords.length > 20" class="batch-warning">
+                        ⚠️ 域名数量较多，自动获取到期时间可能需要 {{ Math.ceil(batchDomainRecords.length * 1.5 / 60) }} 分钟以上，建议选择"快速添加"
+                    </div>
                 </div>
-                <div class="modal-footer">
-                    <button class="btn btn-secondary" @click="showBatchDomainModal = false" :disabled="batchDomainLoading">取消</button>
-                    <button class="btn btn-success" @click="submitBatchDomains" :disabled="batchDomainRecords.length === 0 || !batchDomainProject || batchDomainLoading">
-                        <span v-if="batchDomainLoading">⏳ 添加中...</span>
-                        <span v-else>添加 {{ batchDomainRecords.length }} 个域名</span>
-                    </button>
+                <div class="modal-footer" style="border-top: 1px solid var(--border-color); padding: 16px 24px; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="font-size: 12px; color: var(--text-secondary);">
+                        <span v-if="batchDomainRecords.length > 0">
+                            将添加到 <strong style="color: var(--primary);">{{ batchDomainProject || '未指定项目' }}</strong> / 
+                            <span class="env-badge" :class="batchDomainEnv.toLowerCase()" style="font-size: 11px;">{{ batchDomainEnv }}</span>
+                        </span>
+                    </div>
+                    <div style="display: flex; gap: 12px;">
+                        <button class="btn btn-secondary" @click="showBatchDomainModal = false" :disabled="batchDomainLoading" style="min-width: 80px;">取消</button>
+                        <button class="btn" @click="submitBatchDomains" :disabled="batchDomainRecords.length === 0 || !batchDomainProject || batchDomainLoading"
+                            style="min-width: 140px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none;">
+                            <span v-if="batchDomainLoading" style="display: flex; align-items: center; gap: 6px;">
+                                <svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                    <path d="M21 12a9 9 0 11-6.219-8.56"></path>
+                                </svg>
+                                添加中...
+                            </span>
+                            <span v-else style="display: flex; align-items: center; gap: 6px;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                    <path d="M12 5v14M5 12h14"></path>
+                                </svg>
+                                添加 {{ batchDomainRecords.length }} 个域名
+                            </span>
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -6425,18 +6996,34 @@ order-service, backend, myproject, , 8082, prod, 订单服务
         </div>
         
         <!-- 自定义确认弹窗 -->
-        <div class="modal-overlay" :class="{ show: confirmDialog.show }" @click.self="confirmDialog.show = false" style="z-index: 10000;">
-            <div class="modal" style="max-width: 400px; text-align: center;">
-                <div class="modal-header" style="border-bottom: none; padding-bottom: 0;">
-                    <h2 style="width: 100%; text-align: center;">{{ confirmDialog.title }}</h2>
+        <div v-show="confirmDialog.show" class="confirm-overlay" style="display: none;" @click.self="handleConfirmCancel">
+            <div class="confirm-dialog" :class="confirmDialog.type">
+                <div class="confirm-icon">
+                    <svg v-if="confirmDialog.type === 'warning'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                    <svg v-else-if="confirmDialog.type === 'danger'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="15" y1="9" x2="9" y2="15"></line>
+                        <line x1="9" y1="9" x2="15" y2="15"></line>
+                    </svg>
+                    <svg v-else-if="confirmDialog.type === 'info'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                    </svg>
+                    <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 12l2 2 4-4"></path>
+                        <circle cx="12" cy="12" r="10"></circle>
+                    </svg>
                 </div>
-                <div class="modal-body" style="padding: 20px 30px 30px;">
-                    <div style="font-size: 48px; margin-bottom: 16px;">{{ confirmDialog.icon }}</div>
-                    <p style="color: var(--text-secondary); font-size: 14px; line-height: 1.6;">{{ confirmDialog.message }}</p>
-                </div>
-                <div class="modal-footer" style="justify-content: center; gap: 16px; border-top: none; padding-top: 0;">
-                    <button class="btn btn-secondary" @click="confirmDialog.show = false; confirmDialog.onCancel && confirmDialog.onCancel()">取消</button>
-                    <button class="btn" :style="{ background: confirmDialog.confirmColor || '#ff4d4f', color: '#fff' }" @click="confirmDialog.onConfirm && confirmDialog.onConfirm(); confirmDialog.show = false">{{ confirmDialog.confirmText || '确定' }}</button>
+                <h3 class="confirm-title">{{ confirmDialog.title }}</h3>
+                <p class="confirm-message">{{ confirmDialog.message }}</p>
+                <div class="confirm-actions">
+                    <button class="btn btn-default" @click="handleConfirmCancel">{{ confirmDialog.cancelText || '取消' }}</button>
+                    <button class="btn" :class="confirmDialog.type === 'danger' ? 'btn-danger' : 'btn-primary'" @click="handleConfirmOk">{{ confirmDialog.okText || '确定' }}</button>
                 </div>
             </div>
         </div>
@@ -7003,7 +7590,9 @@ N,年假</pre>
         </div>
     </div>
 
-    <script src="/js/api.js?v=218"></script>
-    <script src="/js/app.js?v=218"></script>
+    <script src="/js/i18n/zh-CN.js?v=352"></script>
+    <script src="/js/i18n/en-US.js?v=352"></script>
+    <script src="/js/api.js?v=349"></script>
+    <script src="/js/app.js?v=358"></script>
 </body>
 </html>

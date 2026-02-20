@@ -35,6 +35,7 @@ type User struct {
 	MFAEnabled  bool   `json:"mfa_enabled"`          // 是否启用 MFA（管理员配置）
 	MFASecret   string `json:"mfa_secret,omitempty"` // MFA 密钥（不返回给前端）
 	MFABound    bool   `json:"mfa_bound"`            // 是否已绑定 MFA（有密钥即为已绑定）
+	Language    string `json:"language"`             // 用户界面语言: zh-CN, en-US
 	CreatedAt   string `json:"created_at"`
 }
 
@@ -95,6 +96,7 @@ type Domain struct {
 	Module         string `json:"module"`           // 模块
 	DomainName     string `json:"domain_name"`      // 域名
 	Origin         string `json:"origin"`           // 回源地址
+	OriginIP       string `json:"origin_ip"`        // 源站IP
 	CDNProvider    string `json:"cdn_provider"`     // CDN 厂商
 	Env            string `json:"env"`              // 环境：PROD, UAT, DEV
 	ExpireTime     string `json:"expire_time"`      // 域名到期时间
@@ -105,6 +107,39 @@ type Domain struct {
 	CreatedBy      string `json:"created_by"`
 	UpdatedAt      string `json:"updated_at"`
 	UpdatedBy      string `json:"updated_by"`
+}
+
+// Merchant 商户管理
+type Merchant struct {
+	ID               string `json:"id"`
+	Project          string `json:"project"`           // 项目
+	Env              string `json:"env"`               // 环境: prod, uat, dev
+	WebsiteName      string `json:"website_name"`      // 网站方
+	ContactEmails    string `json:"contact_emails"`    // 对接邮箱（多个，JSON数组）
+	WebsiteUrls      string `json:"website_urls"`      // 网站方网址（多个）
+	PlayerRegions    string `json:"player_regions"`    // 玩家地区（多个）
+	EstimatedPlayers string `json:"estimated_players"` // 预计在线玩家数量
+	GameTypes        string `json:"game_types"`        // 游戏种类（多个）
+	Handicaps        string `json:"handicaps"`         // 盘口（多个）
+	Languages        string `json:"languages"`         // 语言（多个）
+	Currencies       string `json:"currencies"`        // 币种（多个）
+	SupportedPorts   string `json:"supported_ports"`   // 支持端口（多个）
+	WalletTypes      string `json:"wallet_types"`      // 钱包类型（多个）
+	CallbackDomains  string `json:"callback_domains"`  // 三方回调域名（多个）
+	WhitelistIPs     string `json:"whitelist_ips"`     // 三方白名单
+	HallDomains      string `json:"hall_domains"`      // 三方调用厅房域名（多个）
+	SiteDomains      string `json:"site_domains"`      // 厅方站点系统域名（多个）
+	SiteAccounts     string `json:"site_accounts"`     // 站点系统账号（多个）
+	AppKeys          string `json:"app_keys"`          // appkey（多个）
+	AppSecrets       string `json:"app_secrets"`       // appsecret（密码系统查看）
+	GameDomains      string `json:"game_domains"`      // 游戏域名（多个）
+	RedirectDomains  string `json:"redirect_domains"`  // 301域名（多个）
+	Remark           string `json:"remark"`            // 备注
+	Status           string `json:"status"`            // 状态
+	CreatedAt        string `json:"created_at"`
+	CreatedBy        string `json:"created_by"`
+	UpdatedAt        string `json:"updated_at"`
+	UpdatedBy        string `json:"updated_by"`
 }
 
 // Website 网站管理 - 乙方（网站方/服务提供方）信息
