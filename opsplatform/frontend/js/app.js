@@ -292,6 +292,7 @@ const vueApp = createApp({
             userSearchQuery: '',
             userStatusFilter: '',
             userRoleFilter: '',
+            userMfaFilter: '',
             
             // 分页 - 巡检报告
             inspectionCurrentPage: 1,
@@ -369,6 +370,7 @@ const vueApp = createApp({
             // 表单模式
             recordModalMode: 'add',
             userModalMode: 'add',
+            userEditTab: 'basic',
             dataSourceModalMode: 'add',
 
             // 表单数据
@@ -830,6 +832,13 @@ const vueApp = createApp({
             }
             if (this.userRoleFilter) {
                 result = result.filter(u => u.role === this.userRoleFilter);
+            }
+            if (this.userMfaFilter) {
+                if (this.userMfaFilter === 'bound') {
+                    result = result.filter(u => u.mfa_bound);
+                } else if (this.userMfaFilter === 'unbound') {
+                    result = result.filter(u => !u.mfa_bound);
+                }
             }
             return result;
         },
@@ -1491,6 +1500,7 @@ const vueApp = createApp({
             this.userSearchQuery = '';
             this.userStatusFilter = '';
             this.userRoleFilter = '';
+            this.userMfaFilter = '';
             this.userCurrentPage = 1;
         },
 
@@ -1952,6 +1962,36 @@ const vueApp = createApp({
             this.deleteType = 'mfa';
             this.deleteMessage = '确定要重置该用户的 MFA 吗？用户需要重新绑定认证器。';
             this.showDeleteModal = true;
+        },
+
+        // 确认删除用户
+        confirmDeleteUser(user) {
+            this.showConfirm('warning', '删除用户', `确定要删除用户 "${user.username}" 吗？此操作不可恢复。`, async () => {
+                try {
+                    await API.deleteUser(user.id);
+                    this.showToast('用户已删除', 'success');
+                    this.loadUsers();
+                } catch (e) {
+                    this.showToast('删除失败', 'error');
+                }
+            });
+        },
+
+        // 强制所有用户启用 MFA
+        async forceEnableMFA() {
+            this.showConfirm('warning', '强制启用 MFA', '确定要强制所有用户启用 MFA 吗？未绑定的用户下次登录时将被要求绑定。', async () => {
+                try {
+                    for (const user of this.users) {
+                        if (!user.mfa_enabled) {
+                            await API.updateUser(user.id, { ...user, mfa_enabled: true });
+                        }
+                    }
+                    this.showToast('已强制所有用户启用 MFA', 'success');
+                    this.loadUsers();
+                } catch (e) {
+                    this.showToast('操作失败', 'error');
+                }
+            });
         },
 
         // ========== 权限相关 ==========
@@ -2887,6 +2927,13 @@ const vueApp = createApp({
             }
             return colors[Math.abs(hash) % colors.length];
         },
+
+        // 根据角色代码获取角色名称
+        getRoleName(roleCode) {
+            if (!roleCode) return '普通用户';
+            const role = this.roles.find(r => r.code === roleCode);
+            return role ? role.name : roleCode;
+        },
         
         // Logo 配置相关
         getLogoIconEmoji(icon) {
@@ -3684,9 +3731,10 @@ const vueApp = createApp({
             }
             this.showUserModal = true;
             this.showUserPassword = false;
+            this.userEditTab = 'basic';
             // 确保弹窗滚动到顶部
             this.$nextTick(() => {
-                const modal = document.querySelector('.modal-overlay.show .modal-body');
+                const modal = document.querySelector('.modal-overlay.show .content-body');
                 if (modal) modal.scrollTop = 0;
             });
         },
