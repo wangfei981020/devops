@@ -88,6 +88,11 @@ const vueApp = createApp({
             },
             savingSettings: false,
 
+            // 欢迎页数据
+            domainStats: { total: 0, expiring: 0 },
+            merchantStats: { total: 0, active: 0 },
+            expiringDomains: [],
+
             // 排班管理
             scheduleYear: new Date().getFullYear(),
             scheduleMonth: new Date().getMonth() + 1,
@@ -642,6 +647,9 @@ const vueApp = createApp({
     },
 
     computed: {
+        expiringDomainsCount() {
+            return this.expiringDomains ? this.expiringDomains.length : 0;
+        },
         sessionTimeoutDisplay() {
             const minutes = parseInt(this.globalSessionTimeout) || 30;
             if (minutes >= 1440) return '24 小时';
@@ -1155,6 +1163,8 @@ const vueApp = createApp({
         this.refreshCurrentUser();
         this.updateBreadcrumbs();
         this.updatePageTitle(this.currentTab);
+        // 加载欢迎页数据
+        this.loadWelcomeData();
         // 加载自定义指标
         this.loadMetrics();
 
@@ -1181,6 +1191,62 @@ const vueApp = createApp({
     },
 
     methods: {
+        // ========== 欢迎页方法 ==========
+        async loadWelcomeData() {
+            try {
+                const [domainsRes, merchantsRes] = await Promise.all([
+                    fetch('/api/domains', { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') } }),
+                    fetch('/api/merchants', { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') } })
+                ]);
+
+                if (domainsRes.ok) {
+                    const domains = await domainsRes.json();
+                    const now = new Date();
+                    const thirtyDaysLater = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+                    
+                    this.expiringDomains = (domains || []).filter(d => {
+                        if (!d.expire_time) return false;
+                        const expireDate = new Date(d.expire_time);
+                        return expireDate <= thirtyDaysLater;
+                    }).sort((a, b) => new Date(a.expire_time) - new Date(b.expire_time));
+                    
+                    this.domainStats = {
+                        total: domains.length || 0,
+                        expiring: this.expiringDomains.length
+                    };
+                }
+
+                if (merchantsRes.ok) {
+                    const merchants = await merchantsRes.json();
+                    this.merchantStats = {
+                        total: merchants.length || 0,
+                        active: (merchants || []).filter(m => m.status === '运营中' || m.status === 'active').length
+                    };
+                }
+            } catch (e) {
+                console.error('加载欢迎页数据失败:', e);
+            }
+        },
+
+        getDomainStatusClass(domain) {
+            if (!domain.expire_time) return 'safe';
+            const now = new Date();
+            const expireDate = new Date(domain.expire_time);
+            const daysLeft = Math.ceil((expireDate - now) / (1000 * 60 * 60 * 24));
+            if (daysLeft <= 7) return 'danger';
+            if (daysLeft <= 30) return 'warning';
+            return 'safe';
+        },
+
+        getDomainDaysLeft(domain) {
+            if (!domain.expire_time) return '未知';
+            const now = new Date();
+            const expireDate = new Date(domain.expire_time);
+            const daysLeft = Math.ceil((expireDate - now) / (1000 * 60 * 60 * 24));
+            if (daysLeft <= 0) return '已过期';
+            return daysLeft + ' 天后到期';
+        },
+
         // ========== 通用方法 ==========
         getDisplayedPages(total, current) {
             const pages = [];
@@ -5703,12 +5769,10 @@ const vueApp = createApp({
 
         // 检查菜单项权限
         hasMenu(menuCode) {
+            // 欢迎页所有用户都能看到
+            if (menuCode === 'welcome') return true;
             if (this.currentUser && this.currentUser.role === 'super_admin') return true;
             const result = this.myPermissions['menu:' + menuCode] === true;
-            // 调试日志
-            if (menuCode === 'system' || menuCode === 'resource') {
-                console.log(`hasMenu(${menuCode}):`, result, 'myPermissions:', this.myPermissions);
-            }
             return result;
         },
 

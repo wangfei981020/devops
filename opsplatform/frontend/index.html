@@ -10,7 +10,7 @@
     <!-- 本地字体 -->
     <link rel="stylesheet" href="/fonts/fonts.css?v=535">
     <!-- 蓝鲸BI风格样式 -->
-    <link rel="stylesheet" href="/css/style-blueking.css?v=605">
+    <link rel="stylesheet" href="/css/style-blueking.css?v=610">
 </head>
 <body>
     <div id="app">
@@ -865,18 +865,123 @@
                 </div>
 
                 <!-- 首页概览 -->
-                <div v-show="currentTab === 'dashboard'" class="page-content">
-                    <div class="page-header-card"><h1 class="page-title">首页概览</h1></div>
-                    <div class="coming-soon">
-                        <div class="coming-soon-icon">📊</div>
-                        <h2>功能开发中</h2>
-                        <p>运维概览仪表盘即将上线</p>
-                        <ul class="feature-list">
-                            <li>✓ 资源统计卡片</li>
-                            <li>✓ 告警趋势图表</li>
-                            <li>✓ 快捷操作入口</li>
-                            <li>✓ 待办事项提醒</li>
-                        </ul>
+                <div v-show="currentTab === 'dashboard'" class="page-content welcome-page">
+                    <!-- 欢迎横幅 -->
+                    <div class="welcome-banner">
+                        <div class="welcome-greeting">欢迎回来，{{ currentUser?.username || '用户' }}</div>
+                        <div class="welcome-date">今天是 {{ new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }) }}</div>
+                        <div class="welcome-tip" v-if="expiringDomainsCount > 0">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                            提示：有 {{ expiringDomainsCount }} 个域名将在 30 天内到期，请及时处理
+                        </div>
+                    </div>
+
+                    <!-- 统计卡片 -->
+                    <div class="welcome-stats-grid">
+                        <div class="welcome-stat-card" @click="currentTab = 'domains'; loadDomains()" v-if="hasMenu('domains')">
+                            <div class="welcome-stat-icon green">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                            </div>
+                            <div class="welcome-stat-content">
+                                <div class="welcome-stat-label">域名总数</div>
+                                <div class="welcome-stat-value">{{ domainStats.total || 0 }}</div>
+                                <div class="welcome-stat-sub">即将到期 {{ domainStats.expiring || 0 }} 个</div>
+                            </div>
+                        </div>
+
+                        <div class="welcome-stat-card" @click="currentTab = 'merchants'; loadMerchants()" v-if="hasMenu('merchants')">
+                            <div class="welcome-stat-icon orange">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                            </div>
+                            <div class="welcome-stat-content">
+                                <div class="welcome-stat-label">商户总数</div>
+                                <div class="welcome-stat-value">{{ merchantStats.total || 0 }}</div>
+                                <div class="welcome-stat-sub">运营中 {{ merchantStats.active || 0 }} 个</div>
+                            </div>
+                        </div>
+
+                        <div class="welcome-stat-card" v-if="hasMenu('users')">
+                            <div class="welcome-stat-icon blue">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                            </div>
+                            <div class="welcome-stat-content">
+                                <div class="welcome-stat-label">用户总数</div>
+                                <div class="welcome-stat-value">{{ (users || []).length }}</div>
+                                <div class="welcome-stat-sub">活跃用户</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 快捷入口 -->
+                    <div class="welcome-card">
+                        <div class="welcome-card-header">
+                            <div class="welcome-card-title">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                                快捷入口
+                            </div>
+                        </div>
+                        <div class="welcome-card-body">
+                            <div class="welcome-quick-actions">
+                                <div class="welcome-quick-item" v-if="hasMenu('domains')" @click="currentTab = 'domains'; loadDomains()">
+                                    <div class="welcome-quick-icon">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                                    </div>
+                                    <div class="welcome-quick-title">域名管理</div>
+                                    <div class="welcome-quick-desc">管理域名和证书</div>
+                                </div>
+                                <div class="welcome-quick-item" v-if="hasMenu('merchants')" @click="currentTab = 'merchants'; loadMerchants()">
+                                    <div class="welcome-quick-icon">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                                    </div>
+                                    <div class="welcome-quick-title">商户管理</div>
+                                    <div class="welcome-quick-desc">管理商户信息</div>
+                                </div>
+                                <div class="welcome-quick-item" v-if="hasMenu('network')" @click="currentTab = 'network'">
+                                    <div class="welcome-quick-icon">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                                    </div>
+                                    <div class="welcome-quick-title">网络管理</div>
+                                    <div class="welcome-quick-desc">管理网络节点</div>
+                                </div>
+                                <div class="welcome-quick-item" v-if="hasMenu('users')" @click="currentTab = 'users'; loadUsers()">
+                                    <div class="welcome-quick-icon">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+                                    </div>
+                                    <div class="welcome-quick-title">用户管理</div>
+                                    <div class="welcome-quick-desc">管理系统用户</div>
+                                </div>
+                                <div class="welcome-quick-item" v-if="hasMenu('audit')" @click="currentTab = 'audit'; loadAuditLogs()">
+                                    <div class="welcome-quick-icon">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+                                    </div>
+                                    <div class="welcome-quick-title">审计日志</div>
+                                    <div class="welcome-quick-desc">查看操作记录</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 域名到期提醒 -->
+                    <div class="welcome-card" v-if="hasMenu('domains') && expiringDomains.length > 0">
+                        <div class="welcome-card-header">
+                            <div class="welcome-card-title">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                域名到期提醒
+                            </div>
+                            <a class="welcome-card-link" @click="currentTab = 'domains'; loadDomains()">查看全部</a>
+                        </div>
+                        <div class="welcome-card-body">
+                            <div class="welcome-domain-list">
+                                <div class="welcome-domain-item" v-for="domain in expiringDomains.slice(0, 5)" :key="domain.id">
+                                    <span class="welcome-domain-status" :class="getDomainStatusClass(domain)"></span>
+                                    <div class="welcome-domain-info">
+                                        <div class="welcome-domain-name">{{ domain.domain_name }}</div>
+                                        <div class="welcome-domain-expire">到期时间：{{ domain.expire_time }}</div>
+                                    </div>
+                                    <span class="welcome-domain-badge" :class="getDomainStatusClass(domain)">{{ getDomainDaysLeft(domain) }}</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -8153,6 +8258,6 @@ N,年假</pre>
     <script src="/js/i18n/zh-CN.js?v=352"></script>
     <script src="/js/i18n/en-US.js?v=352"></script>
     <script src="/js/api.js?v=535"></script>
-    <script src="/js/app.js?v=603"></script>
+    <script src="/js/app.js?v=610"></script>
 </body>
 </html>

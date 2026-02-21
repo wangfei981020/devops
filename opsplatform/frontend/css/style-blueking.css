@@ -9052,3 +9052,305 @@ a:hover { color: var(--primary-hover); }
         grid-column: 1;
     }
 }
+
+/* ==================== 欢迎页样式 ==================== */
+.welcome-page {
+    padding: 0 !important;
+}
+
+.welcome-banner {
+    background: linear-gradient(135deg, #3a84ff 0%, #699df4 100%);
+    border-radius: 12px;
+    padding: 32px;
+    color: #fff;
+    margin-bottom: 24px;
+    position: relative;
+    overflow: hidden;
+}
+
+.welcome-banner::before {
+    content: '';
+    position: absolute;
+    right: -50px;
+    top: -50px;
+    width: 200px;
+    height: 200px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 50%;
+}
+
+.welcome-banner::after {
+    content: '';
+    position: absolute;
+    right: 80px;
+    bottom: -80px;
+    width: 160px;
+    height: 160px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 50%;
+}
+
+.welcome-greeting {
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.welcome-date {
+    font-size: 14px;
+    opacity: 0.9;
+}
+
+.welcome-tip {
+    margin-top: 16px;
+    padding: 12px 16px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 8px;
+    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.welcome-tip svg {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+
+/* 统计卡片 */
+.welcome-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.welcome-stat-card {
+    background: var(--card-bg);
+    border-radius: 8px;
+    padding: 24px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.welcome-stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+}
+
+.welcome-stat-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.welcome-stat-icon svg {
+    width: 28px;
+    height: 28px;
+}
+
+.welcome-stat-icon.blue { background: rgba(58, 132, 255, 0.1); color: var(--primary); }
+.welcome-stat-icon.green { background: rgba(45, 203, 86, 0.1); color: var(--success); }
+.welcome-stat-icon.orange { background: rgba(255, 156, 1, 0.1); color: var(--warning); }
+
+.welcome-stat-content { flex: 1; }
+
+.welcome-stat-label {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+
+.welcome-stat-value {
+    font-size: 32px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+
+.welcome-stat-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+/* 卡片 */
+.welcome-card {
+    background: var(--card-bg);
+    border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    overflow: hidden;
+    margin-bottom: 24px;
+}
+
+.welcome-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.welcome-card-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.welcome-card-title svg {
+    width: 18px;
+    height: 18px;
+    color: var(--primary);
+}
+
+.welcome-card-link {
+    font-size: 13px;
+    color: var(--primary);
+    cursor: pointer;
+}
+
+.welcome-card-link:hover {
+    text-decoration: underline;
+}
+
+.welcome-card-body {
+    padding: 20px;
+}
+
+/* 快捷入口 */
+.welcome-quick-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 16px;
+}
+
+.welcome-quick-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 24px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: center;
+}
+
+.welcome-quick-item:hover {
+    border-color: var(--primary);
+    background: rgba(58, 132, 255, 0.04);
+    transform: translateY(-2px);
+}
+
+.welcome-quick-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-secondary);
+}
+
+.welcome-quick-icon svg {
+    width: 24px;
+    height: 24px;
+    color: var(--primary);
+}
+
+.welcome-quick-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.welcome-quick-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* 域名列表 */
+.welcome-domain-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.welcome-domain-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.welcome-domain-item:last-child {
+    border-bottom: none;
+}
+
+.welcome-domain-status {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.welcome-domain-status.danger { background: var(--error); }
+.welcome-domain-status.warning { background: var(--warning); }
+.welcome-domain-status.safe { background: var(--success); }
+
+.welcome-domain-info { flex: 1; min-width: 0; }
+
+.welcome-domain-name {
+    font-size: 14px;
+    color: var(--text-primary);
+    font-family: 'Monaco', 'Consolas', monospace;
+}
+
+.welcome-domain-expire {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.welcome-domain-badge {
+    padding: 4px 10px;
+    font-size: 12px;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.welcome-domain-badge.danger {
+    background: rgba(234, 54, 54, 0.1);
+    color: var(--error);
+}
+
+.welcome-domain-badge.warning {
+    background: rgba(255, 156, 1, 0.1);
+    color: var(--warning);
+}
+
+/* 响应式 */
+@media (max-width: 1024px) {
+    .welcome-stats-grid {
+        grid-template-columns: repeat(1, 1fr);
+    }
+}
+
+@media (max-width: 640px) {
+    .welcome-quick-actions {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
