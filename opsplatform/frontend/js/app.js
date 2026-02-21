@@ -2514,17 +2514,28 @@ const vueApp = createApp({
                 const data = await res.json();
                 if (data.success) {
                     let messages = [];
+                    let errors = [];
                     if (data.cert_expire_time) {
                         this.domainForm.cert_expire_time = data.cert_expire_time;
                         messages.push('证书到期: ' + data.cert_expire_time);
+                    } else if (data.cert_error) {
+                        errors.push('证书: ' + data.cert_error);
                     }
                     if (data.expire_time) {
                         this.domainForm.expire_time = data.expire_time;
                         messages.push('域名到期: ' + data.expire_time);
+                    } else if (data.domain_error) {
+                        errors.push('域名: ' + data.domain_error);
                     }
                     if (messages.length > 0) {
                         this.showToast(messages.join(', '), 'success');
-                    } else {
+                    }
+                    if (errors.length > 0) {
+                        setTimeout(() => {
+                            this.showToast(errors.join('; '), 'error');
+                        }, messages.length > 0 ? 2000 : 0);
+                    }
+                    if (messages.length === 0 && errors.length === 0) {
                         this.showToast('未能获取到期时间', 'error');
                     }
                 } else {
@@ -5663,13 +5674,29 @@ const vueApp = createApp({
         // 检查菜单组是否有权限（只要有一个子菜单有权限就显示）
         hasMenuGroup(groupCode) {
             if (this.currentUser && this.currentUser.role === 'super_admin') return true;
-            // 检查是否有该组的任意子菜单权限
-            const groupPrefix = 'menu:' + groupCode;
-            for (const code in this.myPermissions) {
-                if (code.startsWith(groupPrefix) && this.myPermissions[code]) {
+            
+            // 菜单组与子菜单的映射关系
+            const menuGroupMap = {
+                'system': ['users', 'roles', 'permissions', 'audit', 'ipwhitelist'],
+                'resource': ['assets', 'domains', 'merchants', 'network', 'serviceconfig', 'topology'],
+                'monitor': ['metrics', 'alerts', 'alertrules', 'alertnotify', 'dashboard'],
+                'k8s': ['clusters', 'deployments', 'services', 'pods', 'configmaps', 'jobs'],
+                'ticket': ['taskpool', 'incidents'],
+                'automation': ['scripts', 'tasks', 'schedule', 'pipelines'],
+                'aiops': ['anomaly', 'rootcause', 'predict', 'chatops'],
+                'release': ['deploy', 'canary', 'rollback'],
+                'logs': ['search', 'realtime', 'archive'],
+                'security': ['vault', 'secrets', 'audit'],
+                'settings': ['profile', 'notifications', 'integrations']
+            };
+            
+            const subMenus = menuGroupMap[groupCode] || [];
+            for (const sub of subMenus) {
+                if (this.myPermissions['menu:' + sub] === true) {
                     return true;
                 }
             }
+            
             // 也检查组本身的权限
             return this.myPermissions['menu:' + groupCode] === true;
         },

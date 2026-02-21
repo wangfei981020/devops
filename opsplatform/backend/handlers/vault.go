@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"opsplatform/database"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -360,8 +361,10 @@ func HandleVaultUnlock(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// 密码库会话存储（简化实现，生产环境应使用 Redis）
+// 密码库会话存储（优先使用 Redis，降级到内存）
 var vaultSessions = make(map[string]vaultSession)
+var vaultSessionMutex sync.RWMutex
+var vaultSessionDuration = 8 * time.Hour
 
 type vaultSession struct {
 	UserID    string
@@ -371,21 +374,53 @@ type vaultSession struct {
 
 func generateVaultSession(userID string, dek []byte) string {
 	token := uuid.New().String()
-	vaultSessions[token] = vaultSession{
-		UserID:    userID,
-		DEK:       dek,
-		ExpiresAt: time.Now().Add(8 * time.Hour), // 延长到8小时
+
+	if database.RedisEnabled {
+		key := "vault:session:" + token
+		dekBase64 := base64.StdEncoding.EncodeToString(dek)
+		database.RedisHSet(key, "user_id", userID, "dek", dekBase64)
+		database.RedisExpire(key, vaultSessionDuration)
+	} else {
+		vaultSessionMutex.Lock()
+		vaultSessions[token] = vaultSession{
+			UserID:    userID,
+			DEK:       dek,
+			ExpiresAt: time.Now().Add(vaultSessionDuration),
+		}
+		vaultSessionMutex.Unlock()
 	}
+
 	return token
 }
 
 func getVaultSession(token string) (*vaultSession, bool) {
+	if database.RedisEnabled {
+		key := "vault:session:" + token
+		data, err := database.RedisHGetAll(key)
+		if err != nil || len(data) == 0 {
+			return nil, false
+		}
+		dek, err := base64.StdEncoding.DecodeString(data["dek"])
+		if err != nil {
+			return nil, false
+		}
+		return &vaultSession{
+			UserID: data["user_id"],
+			DEK:    dek,
+		}, true
+	}
+
+	vaultSessionMutex.RLock()
 	session, ok := vaultSessions[token]
+	vaultSessionMutex.RUnlock()
+
 	if !ok {
 		return nil, false
 	}
 	if time.Now().After(session.ExpiresAt) {
+		vaultSessionMutex.Lock()
 		delete(vaultSessions, token)
+		vaultSessionMutex.Unlock()
 		return nil, false
 	}
 	return &session, true

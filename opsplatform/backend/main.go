@@ -20,6 +20,11 @@ func main() {
 	}
 	defer database.Close()
 
+	// 初始化 Redis（可选，不影响启动）
+	if err := database.InitRedis(); err != nil {
+		log.Printf("Redis 初始化警告: %v", err)
+	}
+
 	// 初始化默认管理员
 	if err := handlers.InitDefaultAdmin(); err != nil {
 		log.Printf("创建默认管理员失败: %v", err)

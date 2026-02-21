@@ -117,7 +117,7 @@ func HandleAddDomain(w http.ResponseWriter, r *http.Request) {
 		                     expire_time, cert_expire_time, status, remark, created_at, created_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, domain.ID, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.OriginIP, domain.CDNProvider, domain.Env,
-		nullIfEmpty(domain.ExpireTime), nullIfEmpty(domain.CertExpireTime), domain.Status, domain.Remark,
+		formatDateForDB(domain.ExpireTime), formatDateForDB(domain.CertExpireTime), domain.Status, domain.Remark,
 		domain.CreatedAt, domain.CreatedBy)
 
 	if err != nil {
@@ -185,7 +185,7 @@ func HandleUpdateDomain(w http.ResponseWriter, r *http.Request) {
 		                   updated_at = ?, updated_by = ?
 		WHERE id = ?
 	`, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.OriginIP, domain.CDNProvider, domain.Env,
-		nullIfEmpty(domain.ExpireTime), nullIfEmpty(domain.CertExpireTime), domain.Status, domain.Remark,
+		formatDateForDB(domain.ExpireTime), formatDateForDB(domain.CertExpireTime), domain.Status, domain.Remark,
 		domain.UpdatedAt, domain.UpdatedBy, id)
 
 	if err != nil {
@@ -362,7 +362,7 @@ func HandleBatchAddDomains(w http.ResponseWriter, r *http.Request) {
 			                     expire_time, cert_expire_time, status, remark, created_at, created_by)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, domain.ID, domain.Project, domain.Module, domain.DomainName, domain.Origin, domain.OriginIP, domain.CDNProvider, domain.Env,
-			nullIfEmpty(domain.ExpireTime), nullIfEmpty(domain.CertExpireTime), domain.Status, domain.Remark,
+			formatDateForDB(domain.ExpireTime), formatDateForDB(domain.CertExpireTime), domain.Status, domain.Remark,
 			domain.CreatedAt, domain.CreatedBy)
 
 		if err != nil {
@@ -403,6 +403,10 @@ func HandleCheckCert(w http.ResponseWriter, r *http.Request) {
 
 	certExpireTime, certErr := getCertExpireTime(domain)
 	domainExpireTime, domainErr := getDomainExpireTime(domain)
+
+	// 添加日志
+	log.Printf("[检测域名] %s - 证书到期: %s, 证书错误: %v, 域名到期: %s, 域名错误: %v",
+		domain, certExpireTime, certErr, domainExpireTime, domainErr)
 
 	result := map[string]interface{}{
 		"success": true,
@@ -604,6 +608,18 @@ func parseWhoisExpireTime(whoisData string) string {
 func nullIfEmpty(s string) interface{} {
 	if s == "" {
 		return nil
+	}
+	return s
+}
+
+// formatDateForDB 将日期字符串转换为 MySQL DATE 格式 (YYYY-MM-DD)
+func formatDateForDB(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	// 处理 ISO 8601 格式: 2027-06-17T00:00:00Z 或 2027-06-17T00:00:00.000Z
+	if len(s) >= 10 {
+		return s[:10]
 	}
 	return s
 }

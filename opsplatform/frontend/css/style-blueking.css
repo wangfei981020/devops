@@ -8746,3 +8746,304 @@ a:hover { color: var(--primary-hover); }
 [data-theme="light"] .tabs-new {
     background: #f1f5f9;
 }
+
+/* ===== 域名编辑弹窗（新设计） ===== */
+.domain-modal {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    width: 100%;
+    max-width: 720px;
+    max-height: 90vh;
+    overflow: hidden;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    animation: domainModalIn 0.2s ease-out;
+}
+
+@keyframes domainModalIn {
+    from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.domain-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--table-header-bg);
+}
+
+.domain-modal-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.domain-modal-icon {
+    width: 24px;
+    height: 24px;
+    color: var(--primary);
+}
+
+.domain-modal-close {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.domain-modal-close:hover {
+    background: var(--hover-bg);
+    color: var(--text-primary);
+}
+
+.domain-modal-body {
+    padding: 24px;
+    overflow-y: auto;
+    max-height: calc(90vh - 140px);
+}
+
+.domain-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+}
+
+.domain-form-grid .domain-full-width {
+    grid-column: 1 / -1;
+}
+
+.domain-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.domain-form-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.domain-form-label .required {
+    color: #f85149;
+}
+
+.domain-form-input,
+.domain-form-textarea {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 14px;
+    color: var(--text-primary);
+    background: var(--input-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    transition: all 0.15s;
+    outline: none;
+}
+
+.domain-form-input:focus,
+.domain-form-textarea:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.domain-form-input::placeholder,
+.domain-form-textarea::placeholder {
+    color: var(--text-muted);
+}
+
+.domain-form-textarea {
+    min-height: 80px;
+    resize: vertical;
+}
+
+.domain-input-with-btn {
+    display: flex;
+    gap: 8px;
+}
+
+.domain-input-with-btn .domain-form-input {
+    flex: 1;
+}
+
+.domain-input-btn {
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--primary);
+    background: transparent;
+    border: 1px solid var(--primary);
+    border-radius: 8px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.domain-input-btn:hover {
+    background: var(--primary);
+    color: white;
+}
+
+.domain-input-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+.domain-section-divider {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 8px 0;
+}
+
+.domain-section-divider::before,
+.domain-section-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-color);
+}
+
+.domain-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.domain-cdn-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+}
+
+.domain-cdn-option {
+    padding: 10px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--input-bg);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.domain-cdn-option:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.domain-cdn-option.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+}
+
+.domain-env-tags,
+.domain-status-tags {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.domain-env-tag,
+.domain-status-tag {
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--input-bg);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.domain-env-tag:hover,
+.domain-status-tag:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.domain-env-tag.active,
+.domain-status-tag.active {
+    color: white;
+}
+
+.domain-env-tag.dev.active { background: #3fb950; border-color: #3fb950; }
+.domain-env-tag.uat.active { background: #d29922; border-color: #d29922; }
+.domain-env-tag.prod.active { background: #f85149; border-color: #f85149; }
+
+.domain-status-tag.active { background: #3fb950; border-color: #3fb950; }
+.domain-status-tag.disabled.active { background: #6e7681; border-color: #6e7681; }
+
+.domain-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 24px;
+    border-top: 1px solid var(--border-color);
+    background: var(--table-header-bg);
+}
+
+/* 浅色主题适配 */
+[data-theme="light"] .domain-modal {
+    background: #ffffff;
+    border-color: #d0d7de;
+}
+
+[data-theme="light"] .domain-modal-header,
+[data-theme="light"] .domain-modal-footer {
+    background: #f6f8fa;
+}
+
+[data-theme="light"] .domain-form-input,
+[data-theme="light"] .domain-form-textarea,
+[data-theme="light"] .domain-cdn-option,
+[data-theme="light"] .domain-env-tag,
+[data-theme="light"] .domain-status-tag {
+    background: #ffffff;
+    border-color: #d0d7de;
+}
+
+[data-theme="light"] .domain-modal-close:hover {
+    background: #f0f2f5;
+}
+
+/* 响应式 */
+@media (max-width: 640px) {
+    .domain-cdn-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .domain-form-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .domain-form-grid .domain-full-width {
+        grid-column: 1;
+    }
+}

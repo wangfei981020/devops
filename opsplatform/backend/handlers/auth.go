@@ -164,18 +164,33 @@ func hashToken(token string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// UpdateSessionActivity 更新会话活动时间（数据库存储）
+// UpdateSessionActivity 更新会话活动时间（优先 Redis）
 func UpdateSessionActivity(token string) {
 	tokenHash := hashToken(token)
+	timeout := GetSessionTimeout()
+
+	if database.RedisEnabled {
+		key := "session:" + tokenHash
+		database.RedisExpire(key, timeout)
+		return
+	}
+
 	database.DB.Exec(`
 		UPDATE sessions SET expires_at = DATE_ADD(NOW(), INTERVAL ? MINUTE) 
 		WHERE token_hash = ? AND expires_at > NOW()
-	`, int(GetSessionTimeout().Minutes()), tokenHash)
+	`, int(timeout.Minutes()), tokenHash)
 }
 
-// IsSessionActive 检查会话是否活跃（数据库存储）
+// IsSessionActive 检查会话是否活跃（优先 Redis）
 func IsSessionActive(token string) bool {
 	tokenHash := hashToken(token)
+
+	if database.RedisEnabled {
+		key := "session:" + tokenHash
+		exists, err := database.RedisExists(key)
+		return err == nil && exists
+	}
+
 	var expiresAt time.Time
 	err := database.DB.QueryRow(`
 		SELECT expires_at FROM sessions WHERE token_hash = ?
@@ -188,15 +203,30 @@ func IsSessionActive(token string) bool {
 	return time.Now().Before(expiresAt)
 }
 
-// RemoveSession 移除会话（数据库存储）
+// RemoveSession 移除会话（优先 Redis）
 func RemoveSession(token string) {
 	tokenHash := hashToken(token)
+
+	if database.RedisEnabled {
+		database.RedisDelete("session:" + tokenHash)
+		return
+	}
+
 	database.DB.Exec("DELETE FROM sessions WHERE token_hash = ?", tokenHash)
 }
 
-// CreateSession 创建新会话（数据库存储）
+// CreateSession 创建新会话（优先 Redis）
 func CreateSession(token, userID, username, role string, expiresAt time.Time) {
 	tokenHash := hashToken(token)
+	ttl := time.Until(expiresAt)
+
+	if database.RedisEnabled {
+		key := "session:" + tokenHash
+		database.RedisHSet(key, "user_id", userID, "username", username, "role", role)
+		database.RedisExpire(key, ttl)
+		return
+	}
+
 	sessionID := uuid.New().String()
 	database.DB.Exec(`
 		INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)
@@ -513,8 +543,26 @@ var (
 	resetDuration = 10 * time.Minute
 )
 
-// CheckLoginRateLimit 检查登录速率限制
+// CheckLoginRateLimit 检查登录速率限制（优先使用 Redis）
 func CheckLoginRateLimit(ip string) (bool, time.Duration) {
+	if database.RedisEnabled {
+		return checkLoginRateLimitRedis(ip)
+	}
+	return checkLoginRateLimitMemory(ip)
+}
+
+func checkLoginRateLimitRedis(ip string) (bool, time.Duration) {
+	lockKey := "login:lock:" + ip
+	
+	ttl, err := database.RedisTTL(lockKey)
+	if err == nil && ttl > 0 {
+		return false, ttl
+	}
+	
+	return true, 0
+}
+
+func checkLoginRateLimitMemory(ip string) (bool, time.Duration) {
 	loginMutex.Lock()
 	defer loginMutex.Unlock()
 
@@ -524,19 +572,16 @@ func CheckLoginRateLimit(ip string) (bool, time.Duration) {
 		return true, 0
 	}
 
-	// 如果被锁定，检查是否解锁
 	if !attempt.lockedAt.IsZero() {
 		remaining := lockDuration - time.Since(attempt.lockedAt)
 		if remaining > 0 {
 			return false, remaining
 		}
-		// 解锁
 		attempt.lockedAt = time.Time{}
 		attempt.count = 0
 		attempt.lastReset = time.Now()
 	}
 
-	// 重置计数器
 	if time.Since(attempt.lastReset) > resetDuration {
 		attempt.count = 0
 		attempt.lastReset = time.Now()
@@ -545,8 +590,35 @@ func CheckLoginRateLimit(ip string) (bool, time.Duration) {
 	return true, 0
 }
 
-// RecordLoginAttempt 记录登录尝试
+// RecordLoginAttempt 记录登录尝试（优先使用 Redis）
 func RecordLoginAttempt(ip string, success bool) {
+	if database.RedisEnabled {
+		recordLoginAttemptRedis(ip, success)
+		return
+	}
+	recordLoginAttemptMemory(ip, success)
+}
+
+func recordLoginAttemptRedis(ip string, success bool) {
+	attemptKey := "login:attempts:" + ip
+	lockKey := "login:lock:" + ip
+
+	if success {
+		database.RedisDelete(attemptKey)
+		database.RedisDelete(lockKey)
+		return
+	}
+
+	count, _ := database.RedisIncr(attemptKey)
+	database.RedisExpire(attemptKey, resetDuration)
+
+	if int(count) >= maxAttempts {
+		database.RedisSet(lockKey, "1", lockDuration)
+		database.RedisDelete(attemptKey)
+	}
+}
+
+func recordLoginAttemptMemory(ip string, success bool) {
 	loginMutex.Lock()
 	defer loginMutex.Unlock()
 
@@ -557,11 +629,9 @@ func RecordLoginAttempt(ip string, success bool) {
 	}
 
 	if success {
-		// 登录成功，重置计数
 		attempt.count = 0
 		attempt.lastReset = time.Now()
 	} else {
-		// 登录失败，增加计数
 		attempt.count++
 		if attempt.count >= maxAttempts {
 			attempt.lockedAt = time.Now()
@@ -569,13 +639,19 @@ func RecordLoginAttempt(ip string, success bool) {
 	}
 }
 
-// ===== CSRF 保护（数据库存储，支持多实例部署） =====
+// ===== CSRF 保护（优先 Redis，降级到数据库） =====
 
-// GenerateCSRFToken 生成 CSRF token（存储到数据库）
+// GenerateCSRFToken 生成 CSRF token（优先 Redis）
 func GenerateCSRFToken() string {
 	b := make([]byte, 32)
 	rand.Read(b)
 	token := hex.EncodeToString(b)
+
+	if database.RedisEnabled {
+		key := "csrf:" + token
+		database.RedisSet(key, "1", 1*time.Hour)
+		return token
+	}
 
 	expiresAt := time.Now().Add(1 * time.Hour)
 	database.DB.Exec(`
@@ -585,8 +661,18 @@ func GenerateCSRFToken() string {
 	return token
 }
 
-// ValidateCSRFToken 验证 CSRF token（从数据库验证）
+// ValidateCSRFToken 验证 CSRF token（优先 Redis）
 func ValidateCSRFToken(token string) bool {
+	if database.RedisEnabled {
+		key := "csrf:" + token
+		exists, err := database.RedisExists(key)
+		if err != nil || !exists {
+			return false
+		}
+		database.RedisDelete(key)
+		return true
+	}
+
 	var expiresAt time.Time
 	err := database.DB.QueryRow(`
 		SELECT expires_at FROM csrf_tokens WHERE token = ?
@@ -596,7 +682,6 @@ func ValidateCSRFToken(token string) bool {
 		return false
 	}
 
-	// 使用后删除（单次使用）
 	database.DB.Exec("DELETE FROM csrf_tokens WHERE token = ?", token)
 
 	return true
@@ -738,17 +823,13 @@ var apiRateLimitConfig = map[string]int{
 	"default":            100, // 默认：每分钟100次
 }
 
-// RateLimitMiddleware API 速率限制中间件
+// RateLimitMiddleware API 速率限制中间件（优先使用 Redis）
 func RateLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 获取客户端 IP
 		ip := GetClientIP(r)
-		
-		// 获取路径的速率限制
 		path := r.URL.Path
 		limit := apiRateLimitConfig["default"]
 		
-		// 匹配特定路径的限制
 		for configPath, configLimit := range apiRateLimitConfig {
 			if configPath != "default" && strings.HasPrefix(path, configPath) {
 				limit = configLimit
@@ -756,47 +837,67 @@ func RateLimitMiddleware(next http.Handler) http.Handler {
 			}
 		}
 		
-		// 生成限制键
-		key := ip + ":" + path
-		
-		apiRateMutex.Lock()
-		record, exists := apiRateLimits[key]
-		now := time.Now()
-		
-		if !exists || now.Sub(record.WindowStart) > time.Minute {
-			// 新窗口
-			apiRateLimits[key] = &apiRateRecord{
-				Count:       1,
-				WindowStart: now,
-			}
-			apiRateMutex.Unlock()
+		var count int
+		var allowed bool
+
+		if database.RedisEnabled {
+			count, allowed = checkRateLimitRedis(ip, path, limit)
 		} else {
-			record.Count++
-			if record.Count > limit {
-				apiRateMutex.Unlock()
-				// 返回 429 Too Many Requests
-				w.Header().Set("Retry-After", "60")
-				w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limit))
-				w.Header().Set("X-RateLimit-Remaining", "0")
-				http.Error(w, "请求过于频繁，请稍后再试", http.StatusTooManyRequests)
-				log.Printf("[RATE_LIMIT] IP=%s Path=%s Count=%d Limit=%d", ip, path, record.Count, limit)
-				return
-			}
-			apiRateMutex.Unlock()
+			count, allowed = checkRateLimitMemory(ip, path, limit)
 		}
-		
-		// 添加速率限制响应头
-		apiRateMutex.RLock()
-		if rec, ok := apiRateLimits[key]; ok {
-			remaining := limit - rec.Count
-			if remaining < 0 {
-				remaining = 0
-			}
+
+		if !allowed {
+			w.Header().Set("Retry-After", "60")
 			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limit))
-			w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			http.Error(w, "请求过于频繁，请稍后再试", http.StatusTooManyRequests)
+			log.Printf("[RATE_LIMIT] IP=%s Path=%s Count=%d Limit=%d", ip, path, count, limit)
+			return
 		}
-		apiRateMutex.RUnlock()
+
+		remaining := limit - count
+		if remaining < 0 {
+			remaining = 0
+		}
+		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limit))
+		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
 		
 		next.ServeHTTP(w, r)
 	})
+}
+
+func checkRateLimitRedis(ip, path string, limit int) (int, bool) {
+	key := "rate:" + ip + ":" + path
+	
+	count, err := database.RedisIncr(key)
+	if err != nil {
+		return 0, true
+	}
+	
+	if count == 1 {
+		database.RedisExpire(key, time.Minute)
+	}
+	
+	return int(count), int(count) <= limit
+}
+
+func checkRateLimitMemory(ip, path string, limit int) (int, bool) {
+	key := ip + ":" + path
+	
+	apiRateMutex.Lock()
+	defer apiRateMutex.Unlock()
+	
+	record, exists := apiRateLimits[key]
+	now := time.Now()
+	
+	if !exists || now.Sub(record.WindowStart) > time.Minute {
+		apiRateLimits[key] = &apiRateRecord{
+			Count:       1,
+			WindowStart: now,
+		}
+		return 1, true
+	}
+	
+	record.Count++
+	return record.Count, record.Count <= limit
 }
