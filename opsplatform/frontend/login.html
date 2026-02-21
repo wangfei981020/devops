@@ -5,11 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>⚡ 运维平台 - 登录</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
-    <!-- 非阻塞加载字体 -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-    <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"></noscript>
+    <link rel="stylesheet" href="/fonts/fonts.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
@@ -27,7 +23,7 @@
         }
 
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
             min-height: 100vh;
             display: flex;
             background: var(--bg-light);
@@ -1467,31 +1463,63 @@
                 });
 
                 if (!response.ok) {
-                    // 检查是否是 IP 限制错误 (403)
-                    if (response.status === 403) {
-                        try {
-                            const data = await response.json();
-                            if (data.error === 'IP_BLOCKED') {
-                                showIPBlockedAlert(data.ip || '未知');
-                                return;
+                    // 尝试读取文本内容
+                    let errorMessage = '';
+                    try {
+                        errorMessage = await response.text();
+                        // 去掉可能的换行符
+                        errorMessage = errorMessage.trim();
+                    } catch (e) {
+                        errorMessage = '';
+                    }
+                    
+                    // 根据状态码处理不同错误
+                    switch (response.status) {
+                        case 403:
+                            // 检查是否是 IP 限制错误
+                            try {
+                                const data = JSON.parse(errorMessage);
+                                if (data.error === 'IP_BLOCKED') {
+                                    showIPBlockedAlert(data.ip || '未知');
+                                    return;
+                                }
+                            } catch (e) {
+                                // 不是 JSON
                             }
-                        } catch (e) {
-                            // JSON 解析失败，尝试读取文本
-                            const text = await response.text();
-                            if (text.includes('IP')) {
+                            // 检查是否包含 IP 相关文本
+                            if (errorMessage.includes('IP')) {
                                 showIPBlockedAlert('未知');
                                 return;
                             }
-                            errorText.textContent = text || '访问被拒绝';
+                            // 账号被禁用
+                            errorText.textContent = errorMessage || '账号已被禁用，请联系管理员';
                             errorDiv.classList.add('show');
                             return;
-                        }
+                        
+                        case 401:
+                            // 用户名或密码错误
+                            errorText.textContent = errorMessage || '用户名或密码错误';
+                            errorDiv.classList.add('show');
+                            return;
+                        
+                        case 429:
+                            // 登录尝试过多
+                            errorText.textContent = errorMessage || '登录尝试过多，请稍后再试';
+                            errorDiv.classList.add('show');
+                            return;
+                        
+                        case 500:
+                            // 服务器错误
+                            errorText.textContent = '服务器错误，请稍后重试';
+                            errorDiv.classList.add('show');
+                            return;
+                        
+                        default:
+                            // 其他错误
+                            errorText.textContent = errorMessage || '登录失败，请重试';
+                            errorDiv.classList.add('show');
+                            return;
                     }
-                    
-                    const text = await response.text();
-                    errorText.textContent = text || '用户名或密码错误';
-                    errorDiv.classList.add('show');
-                    return;
                 }
 
                 const data = await response.json();
@@ -1547,7 +1575,15 @@
                     errorDiv.classList.add('show');
                 }
             } catch (err) {
-                errorText.textContent = '网络错误，请稍后重试';
+                console.error('登录请求失败:', err);
+                // 区分不同类型的网络错误
+                if (err.name === 'TypeError' && err.message.includes('Failed to fetch')) {
+                    errorText.textContent = '无法连接服务器，请检查网络连接';
+                } else if (err.name === 'AbortError') {
+                    errorText.textContent = '请求超时，请稍后重试';
+                } else {
+                    errorText.textContent = '网络错误，请稍后重试';
+                }
                 errorDiv.classList.add('show');
             } finally {
                 btn.classList.remove('loading');

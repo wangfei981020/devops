@@ -10,7 +10,8 @@ const API = {
     getOperator() {
         try {
             const user = JSON.parse(localStorage.getItem('currentUser'));
-            return user ? user.username : 'system';
+            // 返回 user.id 而不是 username，因为后端 user_roles 表使用的是 user_id
+            return user ? (user.id || user.username) : 'system';
         } catch {
             return 'system';
         }

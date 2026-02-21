@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"opsplatform/database"
 )
 
@@ -156,60 +158,50 @@ type sessionInfo struct {
 	ExpiresAt  time.Time
 }
 
-var (
-	activeSessions = make(map[string]*sessionInfo) // token -> session
-	sessionMutex   sync.RWMutex
-)
+// hashToken 对 token 进行 hash（不在数据库中存储明文 token）
+func hashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
 
-// UpdateSessionActivity 更新会话活动时间
+// UpdateSessionActivity 更新会话活动时间（数据库存储）
 func UpdateSessionActivity(token string) {
-	sessionMutex.Lock()
-	defer sessionMutex.Unlock()
-	if session, exists := activeSessions[token]; exists {
-		session.LastActive = time.Now()
-	}
+	tokenHash := hashToken(token)
+	database.DB.Exec(`
+		UPDATE sessions SET expires_at = DATE_ADD(NOW(), INTERVAL ? MINUTE) 
+		WHERE token_hash = ? AND expires_at > NOW()
+	`, int(GetSessionTimeout().Minutes()), tokenHash)
 }
 
-// IsSessionActive 检查会话是否活跃
+// IsSessionActive 检查会话是否活跃（数据库存储）
 func IsSessionActive(token string) bool {
-	sessionMutex.RLock()
-	defer sessionMutex.RUnlock()
+	tokenHash := hashToken(token)
+	var expiresAt time.Time
+	err := database.DB.QueryRow(`
+		SELECT expires_at FROM sessions WHERE token_hash = ?
+	`, tokenHash).Scan(&expiresAt)
 
-	session, exists := activeSessions[token]
-	if !exists {
+	if err != nil {
 		return false
 	}
 
-	timeout := GetSessionTimeout()
-	// 检查无操作超时
-	if time.Since(session.LastActive) > timeout {
-		return false
-	}
-	// 检查绝对过期时间
-	if time.Now().After(session.ExpiresAt) {
-		return false
-	}
-	return true
+	return time.Now().Before(expiresAt)
 }
 
-// RemoveSession 移除会话
+// RemoveSession 移除会话（数据库存储）
 func RemoveSession(token string) {
-	sessionMutex.Lock()
-	defer sessionMutex.Unlock()
-	delete(activeSessions, token)
+	tokenHash := hashToken(token)
+	database.DB.Exec("DELETE FROM sessions WHERE token_hash = ?", tokenHash)
 }
 
-// CreateSession 创建新会话
+// CreateSession 创建新会话（数据库存储）
 func CreateSession(token, userID, username, role string, expiresAt time.Time) {
-	sessionMutex.Lock()
-	defer sessionMutex.Unlock()
-	activeSessions[token] = &sessionInfo{
-		UserID:     userID,
-		Username:   username,
-		Role:       role,
-		LastActive: time.Now(),
-		ExpiresAt:  expiresAt,
-	}
+	tokenHash := hashToken(token)
+	sessionID := uuid.New().String()
+	database.DB.Exec(`
+		INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE expires_at = VALUES(expires_at)
+	`, sessionID, userID, tokenHash, expiresAt)
 }
 
 // Claims JWT 声明
@@ -421,49 +413,69 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 // HandleGetSessionInfo 获取当前会话信息
 func HandleGetSessionInfo(w http.ResponseWriter, r *http.Request) {
 	token := GetTokenFromRequest(r)
-	
-	sessionMutex.RLock()
-	session, exists := activeSessions[token]
-	sessionMutex.RUnlock()
+	tokenHash := hashToken(token)
 
-	if !exists {
+	var userID string
+	var expiresAt time.Time
+	err := database.DB.QueryRow(`
+		SELECT user_id, expires_at FROM sessions WHERE token_hash = ?
+	`, tokenHash).Scan(&userID, &expiresAt)
+
+	if err != nil {
 		http.Error(w, "会话不存在", http.StatusUnauthorized)
 		return
 	}
 
 	timeout := GetSessionTimeout()
-	remaining := timeout - time.Since(session.LastActive)
+	remaining := time.Until(expiresAt)
 	if remaining < 0 {
 		remaining = 0
 	}
 
+	// 从 JWT 获取用户信息
+	claims, _ := ValidateToken(token)
+	username := ""
+	role := ""
+	if claims != nil {
+		username = claims.Username
+		role = claims.Role
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"user_id":          session.UserID,
-		"username":         session.Username,
-		"role":             session.Role,
-		"last_active":      session.LastActive.Format(time.RFC3339),
-		"expires_at":       session.ExpiresAt.Format(time.RFC3339),
+		"user_id":           userID,
+		"username":          username,
+		"role":              role,
+		"expires_at":        expiresAt.Format(time.RFC3339),
 		"remaining_seconds": int(remaining.Seconds()),
-		"timeout_minutes":  int(timeout.Minutes()),
+		"timeout_minutes":   int(timeout.Minutes()),
 	})
 }
 
 // HandleRefreshSession 刷新会话
 func HandleRefreshSession(w http.ResponseWriter, r *http.Request) {
 	token := GetTokenFromRequest(r)
-	
-	sessionMutex.RLock()
-	session, exists := activeSessions[token]
-	sessionMutex.RUnlock()
+	tokenHash := hashToken(token)
 
-	if !exists {
+	var userID string
+	err := database.DB.QueryRow(`
+		SELECT user_id FROM sessions WHERE token_hash = ? AND expires_at > NOW()
+	`, tokenHash).Scan(&userID)
+
+	if err != nil {
 		http.Error(w, "会话不存在", http.StatusUnauthorized)
 		return
 	}
 
+	// 从 JWT 获取用户信息
+	claims, _ := ValidateToken(token)
+	if claims == nil {
+		http.Error(w, "会话无效", http.StatusUnauthorized)
+		return
+	}
+
 	// 生成新 Token
-	newToken, expiresAt, err := GenerateToken(session.UserID, session.Username, session.Role)
+	newToken, expiresAt, err := GenerateToken(claims.UserID, claims.Username, claims.Role)
 	if err != nil {
 		http.Error(w, "刷新会话失败", http.StatusInternalServerError)
 		return
@@ -471,6 +483,9 @@ func HandleRefreshSession(w http.ResponseWriter, r *http.Request) {
 
 	// 移除旧会话
 	RemoveSession(token)
+
+	// 创建新会话
+	CreateSession(newToken, claims.UserID, claims.Username, claims.Role, expiresAt)
 
 	// 设置新 Cookie
 	SetAuthCookie(w, newToken, expiresAt)
@@ -554,40 +569,35 @@ func RecordLoginAttempt(ip string, success bool) {
 	}
 }
 
-// ===== CSRF 保护（默认启用） =====
+// ===== CSRF 保护（数据库存储，支持多实例部署） =====
 
-var (
-	csrfTokens = make(map[string]time.Time)
-	csrfMutex  sync.RWMutex
-)
-
-// GenerateCSRFToken 生成 CSRF token
+// GenerateCSRFToken 生成 CSRF token（存储到数据库）
 func GenerateCSRFToken() string {
 	b := make([]byte, 32)
 	rand.Read(b)
 	token := hex.EncodeToString(b)
 
-	csrfMutex.Lock()
-	csrfTokens[token] = time.Now().Add(1 * time.Hour)
-	csrfMutex.Unlock()
+	expiresAt := time.Now().Add(1 * time.Hour)
+	database.DB.Exec(`
+		INSERT INTO csrf_tokens (token, expires_at) VALUES (?, ?)
+	`, token, expiresAt)
 
 	return token
 }
 
-// ValidateCSRFToken 验证 CSRF token
+// ValidateCSRFToken 验证 CSRF token（从数据库验证）
 func ValidateCSRFToken(token string) bool {
-	csrfMutex.RLock()
-	expiry, exists := csrfTokens[token]
-	csrfMutex.RUnlock()
+	var expiresAt time.Time
+	err := database.DB.QueryRow(`
+		SELECT expires_at FROM csrf_tokens WHERE token = ?
+	`, token).Scan(&expiresAt)
 
-	if !exists || time.Now().After(expiry) {
+	if err != nil || time.Now().After(expiresAt) {
 		return false
 	}
 
 	// 使用后删除（单次使用）
-	csrfMutex.Lock()
-	delete(csrfTokens, token)
-	csrfMutex.Unlock()
+	database.DB.Exec("DELETE FROM csrf_tokens WHERE token = ?", token)
 
 	return true
 }
@@ -642,25 +652,11 @@ func init() {
 			}
 			loginMutex.Unlock()
 
-			// 清理过期会话
-			timeout := GetSessionTimeout()
-			sessionMutex.Lock()
-			for token, session := range activeSessions {
-				// 检查无操作超时或绝对过期
-				if time.Since(session.LastActive) > timeout || time.Now().After(session.ExpiresAt) {
-					delete(activeSessions, token)
-				}
-			}
-			sessionMutex.Unlock()
+			// 清理过期会话（从数据库）
+			database.DB.Exec("DELETE FROM sessions WHERE expires_at < NOW()")
 
-			// 清理 CSRF tokens
-			csrfMutex.Lock()
-			for token, expiry := range csrfTokens {
-				if time.Now().After(expiry) {
-					delete(csrfTokens, token)
-				}
-			}
-			csrfMutex.Unlock()
+			// 清理过期 CSRF tokens（从数据库）
+			database.DB.Exec("DELETE FROM csrf_tokens WHERE expires_at < NOW()")
 
 			// 清理 API 速率限制记录
 			apiRateMutex.Lock()
@@ -688,12 +684,13 @@ func SecurityHeadersMiddleware(next http.Handler) http.Handler {
 		// XSS 防护（现代浏览器）
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		
-		// 内容安全策略（CSP）
-		// 允许同源资源、内联样式和脚本（Vue.js 需要）、Google Fonts
+		// 内容安全策略（CSP）- 已加固
+		// 注意：Vue.js 运行时模板编译需要 unsafe-eval；迁移到 SFC 预编译后可移除
+		// unsafe-inline 仅用于内联样式；已移除外部字体源
 		csp := "default-src 'self'; " +
-			"script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
-			"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-			"font-src 'self' https://fonts.gstatic.com data:; " +
+			"script-src 'self' 'unsafe-eval'; " +
+			"style-src 'self' 'unsafe-inline'; " +
+			"font-src 'self' data:; " +
 			"img-src 'self' data: blob:; " +
 			"connect-src 'self'; " +
 			"frame-ancestors 'none'; " +

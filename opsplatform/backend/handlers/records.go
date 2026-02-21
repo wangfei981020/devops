@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -231,7 +232,8 @@ func HandleBatchAddRecords(w http.ResponseWriter, r *http.Request) {
 	for _, record := range req.Records {
 		rec := record
 		if err := AddRecord(&rec, req.Operator, ip); err != nil {
-			failedRecords = append(failedRecords, record.ConnectionID+" ("+err.Error()+")")
+			log.Printf("[记录] 添加失败 %s: %v", record.ConnectionID, err)
+			failedRecords = append(failedRecords, record.ConnectionID+" (添加失败)")
 			continue
 		}
 		addedRecords = append(addedRecords, rec)

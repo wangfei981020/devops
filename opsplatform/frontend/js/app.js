@@ -241,6 +241,17 @@ const vueApp = createApp({
             selectedUserForRole: null,
             myPermissions: {},
             myMenus: [],
+            // 角色筛选与分页
+            roleSearchQuery: '',
+            roleTypeFilter: '',
+            roleStatusFilter: '',
+            roleCurrentPage: 1,
+            rolePageSize: 10,
+            // 权限筛选与分页
+            permSearchQuery: '',
+            permTypeFilter: '',
+            permCurrentPage: 1,
+            permPageSize: 10,
 
             // 数据
             records: [],
@@ -371,6 +382,7 @@ const vueApp = createApp({
             recordModalMode: 'add',
             userModalMode: 'add',
             userEditTab: 'basic',
+            profileEditTab: 'basic',
             dataSourceModalMode: 'add',
 
             // 表单数据
@@ -685,6 +697,67 @@ const vueApp = createApp({
         // 总页数
         totalPages() {
             return Math.max(1, Math.ceil(this.filteredRecords.length / this.pageSize));
+        },
+
+        // 筛选后的角色列表
+        filteredRoles() {
+            let r = this.roles || [];
+            if (this.roleSearchQuery) {
+                const q = this.roleSearchQuery.toLowerCase();
+                r = r.filter(x => 
+                    (x.code && x.code.toLowerCase().includes(q)) || 
+                    (x.name && x.name.toLowerCase().includes(q))
+                );
+            }
+            if (this.roleTypeFilter === 'system') {
+                r = r.filter(x => x.is_system);
+            } else if (this.roleTypeFilter === 'custom') {
+                r = r.filter(x => !x.is_system);
+            }
+            if (this.roleStatusFilter) {
+                r = r.filter(x => x.status === this.roleStatusFilter);
+            }
+            return r;
+        },
+
+        // 分页后的角色列表
+        paginatedRoles() {
+            const start = (this.roleCurrentPage - 1) * this.rolePageSize;
+            const end = start + this.rolePageSize;
+            return this.filteredRoles.slice(start, end);
+        },
+
+        // 角色总页数
+        roleTotalPages() {
+            return Math.max(1, Math.ceil(this.filteredRoles.length / this.rolePageSize));
+        },
+
+        // 筛选后的权限列表
+        filteredPermissions() {
+            let r = this.allPermissions || [];
+            if (this.permSearchQuery) {
+                const q = this.permSearchQuery.toLowerCase();
+                r = r.filter(x => 
+                    (x.code && x.code.toLowerCase().includes(q)) || 
+                    (x.name && x.name.toLowerCase().includes(q))
+                );
+            }
+            if (this.permTypeFilter) {
+                r = r.filter(x => x.type === this.permTypeFilter);
+            }
+            return r;
+        },
+
+        // 分页后的权限列表
+        paginatedPermissions() {
+            const start = (this.permCurrentPage - 1) * this.permPageSize;
+            const end = start + this.permPageSize;
+            return this.filteredPermissions.slice(start, end);
+        },
+
+        // 权限总页数
+        permTotalPages() {
+            return Math.max(1, Math.ceil(this.filteredPermissions.length / this.permPageSize));
         },
 
         // 显示的页码
@@ -1073,6 +1146,9 @@ const vueApp = createApp({
 
         // 设置会话超时检测
         this.setupSessionTimeout();
+
+        // 加载当前用户权限
+        this.loadMyPermissions();
 
         // 根据当前页面加载对应数据
         this.loadDataForCurrentTab();
@@ -5561,11 +5637,17 @@ const vueApp = createApp({
 
         async loadMyPermissions() {
             try {
+                console.log('开始加载用户权限...');
                 const res = await API.getMyPermissions();
                 if (res.ok) {
                     const data = await res.json();
+                    console.log('获取到的权限数据:', data);
+                    console.log('权限对象:', data.permissions);
+                    console.log('菜单权限:', Object.keys(data.permissions || {}).filter(k => k.startsWith('menu:')));
                     this.myPermissions = data.permissions || {};
                     this.myMenus = data.menus || [];
+                } else {
+                    console.error('加载权限失败:', res.status, await res.text());
                 }
             } catch (e) {
                 console.error('加载我的权限失败:', e);
@@ -5574,8 +5656,33 @@ const vueApp = createApp({
 
         hasPermission(code) {
             // 如果是管理员，拥有所有权限
-            if (this.currentUser === 'admin') return true;
+            if (this.currentUser && this.currentUser.role === 'super_admin') return true;
             return this.myPermissions[code] === true;
+        },
+
+        // 检查菜单组是否有权限（只要有一个子菜单有权限就显示）
+        hasMenuGroup(groupCode) {
+            if (this.currentUser && this.currentUser.role === 'super_admin') return true;
+            // 检查是否有该组的任意子菜单权限
+            const groupPrefix = 'menu:' + groupCode;
+            for (const code in this.myPermissions) {
+                if (code.startsWith(groupPrefix) && this.myPermissions[code]) {
+                    return true;
+                }
+            }
+            // 也检查组本身的权限
+            return this.myPermissions['menu:' + groupCode] === true;
+        },
+
+        // 检查菜单项权限
+        hasMenu(menuCode) {
+            if (this.currentUser && this.currentUser.role === 'super_admin') return true;
+            const result = this.myPermissions['menu:' + menuCode] === true;
+            // 调试日志
+            if (menuCode === 'system' || menuCode === 'resource') {
+                console.log(`hasMenu(${menuCode}):`, result, 'myPermissions:', this.myPermissions);
+            }
+            return result;
         },
 
         openRoleModal(role = null) {

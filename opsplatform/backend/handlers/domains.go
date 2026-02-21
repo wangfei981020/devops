@@ -366,7 +366,8 @@ func HandleBatchAddDomains(w http.ResponseWriter, r *http.Request) {
 			domain.CreatedAt, domain.CreatedBy)
 
 		if err != nil {
-			failedDomains = append(failedDomains, domain.DomainName+" ("+err.Error()+")")
+			log.Printf("[域名] 添加域名失败 %s: %v", domain.DomainName, err)
+			failedDomains = append(failedDomains, domain.DomainName+" (创建失败)")
 			continue
 		}
 
@@ -733,7 +734,8 @@ func HandleBatchRefreshDomains(w http.ResponseWriter, r *http.Request) {
 		SELECT id, domain_name FROM domains WHERE status = 'active'
 	`)
 	if err != nil {
-		http.Error(w, "查询域名失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[域名] 查询域名失败: %v", err)
+		http.Error(w, "查询域名失败", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()

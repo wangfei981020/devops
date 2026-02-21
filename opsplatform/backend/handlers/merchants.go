@@ -54,7 +54,8 @@ func HandleGetMerchants(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := database.DB.Query(query, args...)
 	if err != nil {
-		sendError(w, "查询失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[商户] 查询失败: %v", err)
+		sendError(w, "查询失败", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -106,7 +107,8 @@ func HandleCreateMerchant(w http.ResponseWriter, r *http.Request) {
 	// 检查唯一性：同一网站方+环境只能存在一个
 	exists, err := checkMerchantExists(m.WebsiteName, m.Env, "")
 	if err != nil {
-		sendError(w, "检查失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[商户] 检查失败: %v", err)
+		sendError(w, "检查失败", http.StatusInternalServerError)
 		return
 	}
 	if exists {
@@ -139,7 +141,8 @@ func HandleCreateMerchant(w http.ResponseWriter, r *http.Request) {
 		m.RedirectDomains, m.Remark, m.Status,
 		now, user, now, user)
 	if err != nil {
-		sendError(w, "创建失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[商户] 创建失败: %v", err)
+		sendError(w, "创建失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -167,7 +170,8 @@ func HandleUpdateMerchant(w http.ResponseWriter, r *http.Request) {
 	if m.WebsiteName != "" && m.Env != "" {
 		exists, err := checkMerchantExists(m.WebsiteName, m.Env, id)
 		if err != nil {
-			sendError(w, "检查失败: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("[商户] 检查失败: %v", err)
+		sendError(w, "检查失败", http.StatusInternalServerError)
 			return
 		}
 		if exists {
@@ -196,7 +200,8 @@ func HandleUpdateMerchant(w http.ResponseWriter, r *http.Request) {
 		m.RedirectDomains, m.Remark, m.Status,
 		now, user, id)
 	if err != nil {
-		sendError(w, "更新失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[商户] 更新失败: %v", err)
+		sendError(w, "更新失败", http.StatusInternalServerError)
 		return
 	}
 

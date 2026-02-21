@@ -7,8 +7,10 @@
     <!-- Favicon - 云+齿轮图标 -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%233b82f6'/%3E%3Cstop offset='50%25' style='stop-color:%238b5cf6'/%3E%3Cstop offset='100%25' style='stop-color:%2306b6d4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M6.5 18C4 18 2 16 2 13.5c0-2.1 1.5-3.9 3.5-4.4C6.3 6.5 8.9 4.5 12 4.5c2.5 0 4.7 1.4 5.9 3.4.4 0 .7-.1 1.1-.1 2.5 0 4.5 2 4.5 4.5s-2 4.5-4.5 4.5H6.5z' fill='url(%23g)'/%3E%3Ccircle cx='13' cy='12' r='2' fill='none' stroke='white' stroke-width='1.5'/%3E%3Cpath d='M13 7v1.5M13 15v1.5M8.5 12H10M16 12h1.5M9.4 8.9l1 1M15.6 15.1l1 1M9.4 15.1l1-1M15.6 8.9l1-1' stroke='white' stroke-width='1' stroke-linecap='round'/%3E%3C/svg%3E">
     <script src="/js/vue.global.prod.js?v=332"></script>
+    <!-- 本地字体 -->
+    <link rel="stylesheet" href="/fonts/fonts.css?v=535">
     <!-- 蓝鲸BI风格样式 -->
-    <link rel="stylesheet" href="/css/style-blueking.css?v=518">
+    <link rel="stylesheet" href="/css/style-blueking.css?v=535">
 </head>
 <body>
     <div id="app">
@@ -54,7 +56,7 @@
                 </div>
                 <nav class="sidebar-nav">
                     <!-- 系统管理 -->
-                    <div class="nav-group">
+                    <div class="nav-group" v-show="hasMenu('system')">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.system }" @click="expandedGroups.system = !expandedGroups.system">
                             <span class="nav-group-icon">🏠</span>
                             <span class="nav-group-title">{{ t('nav.systemManagement') }}</span>
@@ -63,20 +65,20 @@
                             </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.system">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'dashboard' }" @click="currentTab = 'dashboard'">{{ t('nav.dashboard') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'users' }" @click="currentTab = 'users'; loadUsers()">{{ t('nav.userManagement') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'roles' }" @click="currentTab = 'roles'; loadRoles()">{{ t('nav.roleManagement') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'permissions' }" @click="currentTab = 'permissions'; loadAllPermissions()">{{ t('nav.permissionManagement') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'audit' }" @click="currentTab = 'audit'; loadAuditLogs()">{{ t('nav.auditLog') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'apiManage' }" @click="currentTab = 'apiManage'">{{ t('nav.apiManagement') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'schedule' }" @click="currentTab = 'schedule'; loadSchedule()">{{ t('nav.scheduleManagement') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'taskPool' }" @click="currentTab = 'taskPool'; loadTaskData()">{{ t('nav.taskPool') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'incidents' }" @click="currentTab = 'incidents'; loadIncidentData()">{{ t('nav.incidentLog') }}</button>
+                            <button v-show="hasMenu('welcome')" class="nav-item sub" :class="{ active: currentTab === 'dashboard' }" @click="currentTab = 'dashboard'">{{ t('nav.dashboard') }}</button>
+                            <button v-show="hasMenu('users')" class="nav-item sub" :class="{ active: currentTab === 'users' }" @click="currentTab = 'users'; loadUsers()">{{ t('nav.userManagement') }}</button>
+                            <button v-show="hasMenu('roles')" class="nav-item sub" :class="{ active: currentTab === 'roles' }" @click="currentTab = 'roles'; loadRoles()">{{ t('nav.roleManagement') }}</button>
+                            <button v-show="hasMenu('permissions')" class="nav-item sub" :class="{ active: currentTab === 'permissions' }" @click="currentTab = 'permissions'; loadAllPermissions()">{{ t('nav.permissionManagement') }}</button>
+                            <button v-show="hasMenu('audit')" class="nav-item sub" :class="{ active: currentTab === 'audit' }" @click="currentTab = 'audit'; loadAuditLogs()">{{ t('nav.auditLog') }}</button>
+                            <button v-show="hasMenu('api')" class="nav-item sub" :class="{ active: currentTab === 'apiManage' }" @click="currentTab = 'apiManage'">{{ t('nav.apiManagement') }}</button>
+                            <button v-show="hasMenu('schedule')" class="nav-item sub" :class="{ active: currentTab === 'schedule' }" @click="currentTab = 'schedule'; loadSchedule()">{{ t('nav.scheduleManagement') }}</button>
+                            <button v-show="hasMenu('taskpool')" class="nav-item sub" :class="{ active: currentTab === 'taskPool' }" @click="currentTab = 'taskPool'; loadTaskData()">{{ t('nav.taskPool') }}</button>
+                            <button v-show="hasMenu('incidents')" class="nav-item sub" :class="{ active: currentTab === 'incidents' }" @click="currentTab = 'incidents'; loadIncidentData()">{{ t('nav.incidentLog') }}</button>
                         </div>
                     </div>
 
                     <!-- 资源管理 -->
-                    <div class="nav-group">
+                    <div class="nav-group" v-show="hasMenu('resource')">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.resource }" @click="expandedGroups.resource = !expandedGroups.resource">
                             <span class="nav-group-icon">📦</span>
                             <span class="nav-group-title">{{ t('nav.resourceManagement') }}</span>
@@ -85,17 +87,17 @@
                             </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.resource">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'cmdb' }" @click="currentTab = 'cmdb'">{{ t('nav.cmdb') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'domains' }" @click="currentTab = 'domains'">{{ t('nav.domainManagement') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'merchants' }" @click="currentTab = 'merchants'; loadMerchants()">{{ t('nav.merchantManagement') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'records' }" @click="currentTab = 'records'">{{ t('nav.networkManagement') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'serviceConfig' }" @click="currentTab = 'serviceConfig'; loadServiceConfigData()">{{ t('nav.serviceConfig') }}</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'topology' }" @click="currentTab = 'topology'; loadTopologyData()">{{ t('nav.networkTopology') }}</button>
+                            <button v-show="hasMenu('assets')" class="nav-item sub" :class="{ active: currentTab === 'cmdb' }" @click="currentTab = 'cmdb'">{{ t('nav.cmdb') }}</button>
+                            <button v-show="hasMenu('domains')" class="nav-item sub" :class="{ active: currentTab === 'domains' }" @click="currentTab = 'domains'">{{ t('nav.domainManagement') }}</button>
+                            <button v-show="hasMenu('merchants')" class="nav-item sub" :class="{ active: currentTab === 'merchants' }" @click="currentTab = 'merchants'; loadMerchants()">{{ t('nav.merchantManagement') }}</button>
+                            <button v-show="hasMenu('network')" class="nav-item sub" :class="{ active: currentTab === 'records' }" @click="currentTab = 'records'">{{ t('nav.networkManagement') }}</button>
+                            <button v-show="hasMenu('serviceconfig')" class="nav-item sub" :class="{ active: currentTab === 'serviceConfig' }" @click="currentTab = 'serviceConfig'; loadServiceConfigData()">{{ t('nav.serviceConfig') }}</button>
+                            <button v-show="hasMenu('topology')" class="nav-item sub" :class="{ active: currentTab === 'topology' }" @click="currentTab = 'topology'; loadTopologyData()">{{ t('nav.networkTopology') }}</button>
                         </div>
                     </div>
 
                     <!-- 监控告警 -->
-                    <div class="nav-group">
+                    <div class="nav-group" v-show="hasMenu('monitor')">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.monitor }" @click="expandedGroups.monitor = !expandedGroups.monitor">
                             <span class="nav-group-icon">📊</span>
                             <span class="nav-group-title">监控告警</span>
@@ -104,16 +106,16 @@
                             </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.monitor">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'metrics' }" @click="currentTab = 'metrics'">指标监控</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'alerts' }" @click="currentTab = 'alerts'">告警管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'alertRules' }" @click="currentTab = 'alertRules'">告警规则</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'alertNotify' }" @click="currentTab = 'alertNotify'">通知配置</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'dashboard-screen' }" @click="currentTab = 'dashboard-screen'">大屏展示</button>
+                            <button v-show="hasMenu('metrics')" class="nav-item sub" :class="{ active: currentTab === 'metrics' }" @click="currentTab = 'metrics'">指标监控</button>
+                            <button v-show="hasMenu('alerts')" class="nav-item sub" :class="{ active: currentTab === 'alerts' }" @click="currentTab = 'alerts'">告警管理</button>
+                            <button v-show="hasMenu('alertrules')" class="nav-item sub" :class="{ active: currentTab === 'alertRules' }" @click="currentTab = 'alertRules'">告警规则</button>
+                            <button v-show="hasMenu('alertnotify')" class="nav-item sub" :class="{ active: currentTab === 'alertNotify' }" @click="currentTab = 'alertNotify'">通知配置</button>
+                            <button v-show="hasMenu('dashboard')" class="nav-item sub" :class="{ active: currentTab === 'dashboard-screen' }" @click="currentTab = 'dashboard-screen'">大屏展示</button>
                         </div>
                     </div>
 
                     <!-- K8S运维 -->
-                    <div class="nav-group">
+                    <div class="nav-group" v-show="hasMenu('k8s')">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.k8s }" @click="expandedGroups.k8s = !expandedGroups.k8s">
                             <span class="nav-group-icon">☸️</span>
                             <span class="nav-group-title">K8S运维</span>
@@ -122,16 +124,16 @@
                             </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.k8s">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'clusters' }" @click="currentTab = 'clusters'">集群管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'k8s-workloads' }" @click="currentTab = 'k8s-workloads'; loadK8sData()">工作负载</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'configMaps' }" @click="currentTab = 'configMaps'">配置管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'storage' }" @click="currentTab = 'storage'">存储管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'terminal' }" @click="currentTab = 'terminal'">容器终端</button>
+                            <button v-show="hasMenu('clusters')" class="nav-item sub" :class="{ active: currentTab === 'clusters' }" @click="currentTab = 'clusters'">集群管理</button>
+                            <button v-show="hasMenu('workloads')" class="nav-item sub" :class="{ active: currentTab === 'k8s-workloads' }" @click="currentTab = 'k8s-workloads'; loadK8sData()">工作负载</button>
+                            <button v-show="hasMenu('configmaps')" class="nav-item sub" :class="{ active: currentTab === 'configMaps' }" @click="currentTab = 'configMaps'">配置管理</button>
+                            <button v-show="hasMenu('storage')" class="nav-item sub" :class="{ active: currentTab === 'storage' }" @click="currentTab = 'storage'">存储管理</button>
+                            <button v-show="hasMenu('terminal')" class="nav-item sub" :class="{ active: currentTab === 'terminal' }" @click="currentTab = 'terminal'">容器终端</button>
                         </div>
                     </div>
 
                     <!-- 工单系统 -->
-                    <div class="nav-group">
+                    <div class="nav-group" v-show="hasMenu('ticket')">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.ticket }" @click="expandedGroups.ticket = !expandedGroups.ticket">
                             <span class="nav-group-icon">🎫</span>
                             <span class="nav-group-title">工单系统</span>
@@ -140,15 +142,15 @@
                             </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.ticket">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'tickets' }" @click="currentTab = 'tickets'">工单管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'workflow' }" @click="currentTab = 'workflow'">流程引擎</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'sla' }" @click="currentTab = 'sla'">SLA管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'ticketTemplate' }" @click="currentTab = 'ticketTemplate'">工单模板</button>
+                            <button v-show="hasMenu('tickets')" class="nav-item sub" :class="{ active: currentTab === 'tickets' }" @click="currentTab = 'tickets'">工单管理</button>
+                            <button v-show="hasMenu('workflow')" class="nav-item sub" :class="{ active: currentTab === 'workflow' }" @click="currentTab = 'workflow'">流程引擎</button>
+                            <button v-show="hasMenu('sla')" class="nav-item sub" :class="{ active: currentTab === 'sla' }" @click="currentTab = 'sla'">SLA管理</button>
+                            <button v-show="hasMenu('tickettemplate')" class="nav-item sub" :class="{ active: currentTab === 'ticketTemplate' }" @click="currentTab = 'ticketTemplate'">工单模板</button>
                         </div>
                     </div>
 
                     <!-- 自动化运维 -->
-                    <div class="nav-group">
+                    <div class="nav-group" v-show="hasMenu('automation')">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.automation }" @click="expandedGroups.automation = !expandedGroups.automation">
                             <span class="nav-group-icon">🤖</span>
                             <span class="nav-group-title">自动化运维</span>
@@ -157,15 +159,15 @@
                             </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.automation">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'jobs' }" @click="currentTab = 'jobs'">作业平台</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'crontab' }" @click="currentTab = 'crontab'">定时任务</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'inspection' }" @click="currentTab = 'inspection'">自动巡检</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'selfHealing' }" @click="currentTab = 'selfHealing'">自愈策略</button>
+                            <button v-show="hasMenu('jobs')" class="nav-item sub" :class="{ active: currentTab === 'jobs' }" @click="currentTab = 'jobs'">作业平台</button>
+                            <button v-show="hasMenu('crontab')" class="nav-item sub" :class="{ active: currentTab === 'crontab' }" @click="currentTab = 'crontab'">定时任务</button>
+                            <button v-show="hasMenu('inspection')" class="nav-item sub" :class="{ active: currentTab === 'inspection' }" @click="currentTab = 'inspection'">自动巡检</button>
+                            <button v-show="hasMenu('selfhealing')" class="nav-item sub" :class="{ active: currentTab === 'selfHealing' }" @click="currentTab = 'selfHealing'">自愈策略</button>
                         </div>
                     </div>
 
                     <!-- 智能运维 -->
-                    <div class="nav-group">
+                    <div class="nav-group" v-show="hasMenu('aiops')">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.aiops }" @click="expandedGroups.aiops = !expandedGroups.aiops">
                             <span class="nav-group-icon">🧠</span>
                             <span class="nav-group-title">智能运维</span>
@@ -174,16 +176,16 @@
                             </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.aiops">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'anomaly' }" @click="currentTab = 'anomaly'">异常检测</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'rootCause' }" @click="currentTab = 'rootCause'">根因分析</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'predict' }" @click="currentTab = 'predict'">故障预测</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'smartAlert' }" @click="currentTab = 'smartAlert'">智能告警</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'capacity' }" @click="currentTab = 'capacity'">容量预测</button>
+                            <button v-show="hasMenu('anomaly')" class="nav-item sub" :class="{ active: currentTab === 'anomaly' }" @click="currentTab = 'anomaly'">异常检测</button>
+                            <button v-show="hasMenu('rootcause')" class="nav-item sub" :class="{ active: currentTab === 'rootCause' }" @click="currentTab = 'rootCause'">根因分析</button>
+                            <button v-show="hasMenu('predict')" class="nav-item sub" :class="{ active: currentTab === 'predict' }" @click="currentTab = 'predict'">故障预测</button>
+                            <button v-show="hasMenu('smartalert')" class="nav-item sub" :class="{ active: currentTab === 'smartAlert' }" @click="currentTab = 'smartAlert'">智能告警</button>
+                            <button v-show="hasMenu('capacity')" class="nav-item sub" :class="{ active: currentTab === 'capacity' }" @click="currentTab = 'capacity'">容量预测</button>
                         </div>
                     </div>
 
                     <!-- 变更发布 -->
-                    <div class="nav-group">
+                    <div class="nav-group" v-show="hasMenu('release')">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.release }" @click="expandedGroups.release = !expandedGroups.release">
                             <span class="nav-group-icon">🚀</span>
                             <span class="nav-group-title">变更发布</span>
@@ -192,14 +194,14 @@
                             </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.release">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'deploy' }" @click="currentTab = 'deploy'">发布管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'change' }" @click="currentTab = 'change'">变更管理</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'rollback' }" @click="currentTab = 'rollback'">回滚管理</button>
+                            <button v-show="hasMenu('deploy')" class="nav-item sub" :class="{ active: currentTab === 'deploy' }" @click="currentTab = 'deploy'">发布管理</button>
+                            <button v-show="hasMenu('change')" class="nav-item sub" :class="{ active: currentTab === 'change' }" @click="currentTab = 'change'">变更管理</button>
+                            <button v-show="hasMenu('rollback')" class="nav-item sub" :class="{ active: currentTab === 'rollback' }" @click="currentTab = 'rollback'">回滚管理</button>
                         </div>
                     </div>
 
                     <!-- 日志服务 -->
-                    <div class="nav-group">
+                    <div class="nav-group" v-show="hasMenu('logs')">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.logs }" @click="expandedGroups.logs = !expandedGroups.logs">
                             <span class="nav-group-icon">📝</span>
                             <span class="nav-group-title">日志服务</span>
@@ -208,14 +210,14 @@
                             </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.logs">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'logQuery' }" @click="currentTab = 'logQuery'">日志查询</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'logAnalysis' }" @click="currentTab = 'logAnalysis'">日志分析</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'logAlert' }" @click="currentTab = 'logAlert'">日志告警</button>
+                            <button v-show="hasMenu('logquery')" class="nav-item sub" :class="{ active: currentTab === 'logQuery' }" @click="currentTab = 'logQuery'">日志查询</button>
+                            <button v-show="hasMenu('loganalysis')" class="nav-item sub" :class="{ active: currentTab === 'logAnalysis' }" @click="currentTab = 'logAnalysis'">日志分析</button>
+                            <button v-show="hasMenu('logalert')" class="nav-item sub" :class="{ active: currentTab === 'logAlert' }" @click="currentTab = 'logAlert'">日志告警</button>
                         </div>
                     </div>
 
                     <!-- 安全工具 -->
-                    <div class="nav-group">
+                    <div class="nav-group" v-show="hasMenu('security')">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.security }" @click="expandedGroups.security = !expandedGroups.security">
                             <span class="nav-group-icon">🔐</span>
                             <span class="nav-group-title">安全工具</span>
@@ -224,14 +226,14 @@
                             </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.security">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'vault' }" @click="currentTab = 'vault'; initVault()">密码库</button>
+                            <button v-show="hasMenu('vault')" class="nav-item sub" :class="{ active: currentTab === 'vault' }" @click="currentTab = 'vault'; initVault()">密码库</button>
                             <button class="nav-item sub" :class="{ active: currentTab === 'secrets' }" @click="currentTab = 'secrets'">密钥管理</button>
                             <button class="nav-item sub" :class="{ active: currentTab === 'certificates' }" @click="currentTab = 'certificates'">证书管理</button>
                         </div>
                     </div>
 
                     <!-- 系统设置 -->
-                    <div class="nav-group">
+                    <div class="nav-group" v-show="hasMenu('settings')">
                         <button class="nav-group-header" :class="{ expanded: expandedGroups.settings }" @click="expandedGroups.settings = !expandedGroups.settings">
                             <span class="nav-group-icon">⚙️</span>
                             <span class="nav-group-title">系统设置</span>
@@ -240,8 +242,8 @@
                             </span>
                         </button>
                         <div class="nav-sub-menu" v-show="expandedGroups.settings">
-                            <button class="nav-item sub" :class="{ active: currentTab === 'datasources' }" @click="currentTab = 'datasources'; loadDataSources()">数据源配置</button>
-                            <button class="nav-item sub" :class="{ active: currentTab === 'sysParams' }" @click="currentTab = 'sysParams'">系统参数</button>
+                            <button v-show="hasMenu('datasources')" class="nav-item sub" :class="{ active: currentTab === 'datasources' }" @click="currentTab = 'datasources'; loadDataSources()">数据源配置</button>
+                            <button v-show="hasMenu('sysparams')" class="nav-item sub" :class="{ active: currentTab === 'sysParams' }" @click="currentTab = 'sysParams'">系统参数</button>
                         </div>
                     </div>
                 </nav>
@@ -1313,7 +1315,10 @@
                 <!-- 角色管理 -->
                 <div v-show="currentTab === 'roles'" class="page-content">
                     <div class="page-header-card">
-                        <h1 class="page-title">角色管理</h1>
+                        <div class="page-title-badge">
+                            <h1 class="page-title">角色管理</h1>
+                            <span class="badge-count">RBAC</span>
+                        </div>
                         <div class="header-actions">
                             <button class="btn btn-primary" @click="openRoleModal()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
@@ -1324,9 +1329,86 @@
                             </button>
                         </div>
                     </div>
-                    
-                    <div class="card">
-                        <table class="data-table">
+
+                    <!-- 统计卡片 -->
+                    <div class="role-stats-grid">
+                        <div class="role-stat-card">
+                            <div class="role-stat-icon blue">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                    <circle cx="9" cy="7" r="4"/>
+                                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                                </svg>
+                            </div>
+                            <div class="role-stat-info">
+                                <h3>{{ roles.length }}</h3>
+                                <p>总角色数</p>
+                            </div>
+                        </div>
+                        <div class="role-stat-card">
+                            <div class="role-stat-icon purple">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                                </svg>
+                            </div>
+                            <div class="role-stat-info">
+                                <h3>{{ roles.filter(r => r.is_system).length }}</h3>
+                                <p>系统角色</p>
+                            </div>
+                        </div>
+                        <div class="role-stat-card">
+                            <div class="role-stat-icon green">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                                    <path d="M9 12l2 2 4-4"/>
+                                </svg>
+                            </div>
+                            <div class="role-stat-info">
+                                <h3>{{ roles.filter(r => !r.is_system).length }}</h3>
+                                <p>自定义角色</p>
+                            </div>
+                        </div>
+                        <div class="role-stat-card">
+                            <div class="role-stat-icon orange">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                                    <circle cx="9" cy="7" r="4"/>
+                                    <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+                                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                                </svg>
+                            </div>
+                            <div class="role-stat-info">
+                                <h3>{{ roles.reduce((sum, r) => sum + (r.user_count || 0), 0) }}</h3>
+                                <p>关联用户</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 筛选栏 -->
+                    <div class="filter-bar">
+                        <div class="filter-search">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8"/>
+                                <path d="M21 21l-4.35-4.35"/>
+                            </svg>
+                            <input type="text" v-model="roleSearchQuery" placeholder="搜索角色代码或名称...">
+                        </div>
+                        <select class="filter-select-new" v-model="roleTypeFilter">
+                            <option value="">全部类型</option>
+                            <option value="system">系统角色</option>
+                            <option value="custom">自定义角色</option>
+                        </select>
+                        <select class="filter-select-new" v-model="roleStatusFilter">
+                            <option value="">全部状态</option>
+                            <option value="active">启用</option>
+                            <option value="disabled">禁用</option>
+                        </select>
+                    </div>
+
+                    <!-- 表格 -->
+                    <div class="table-card-new">
+                        <table>
                             <thead>
                                 <tr>
                                     <th>角色代码</th>
@@ -1340,50 +1422,83 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr v-for="role in roles" :key="role.id">
-                                    <td><code class="code-tag">{{ role.code }}</code></td>
+                                <tr v-for="role in paginatedRoles" :key="role.id">
+                                    <td><span class="role-code">{{ role.code }}</span></td>
                                     <td>{{ role.name }}</td>
-                                    <td>{{ role.description || '-' }}</td>
-                                    <td>{{ role.user_count }}</td>
+                                    <td style="color: var(--text-secondary); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ role.description || '-' }}</td>
                                     <td>
-                                        <span class="badge" :class="role.is_system ? 'badge-warning' : 'badge-info'">
+                                        <span class="user-count-badge">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                                                <circle cx="12" cy="7" r="4"/>
+                                            </svg>
+                                            {{ role.user_count || 0 }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="type-badge-new" :class="role.is_system ? 'system' : 'custom'">
                                             {{ role.is_system ? '系统' : '自定义' }}
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="status-dot" :class="role.status === 'active' ? 'status-success' : 'status-disabled'"></span>
-                                        {{ getRoleStatusLabel(role.status) }}
+                                        <span class="status-badge-new" :class="role.status === 'active' ? 'enabled' : 'disabled'">
+                                            {{ role.status === 'active' ? '启用' : '禁用' }}
+                                        </span>
                                     </td>
-                                    <td>{{ role.created_at }}</td>
+                                    <td style="color: var(--text-secondary); font-size: 0.8125rem;">{{ role.created_at }}</td>
                                     <td>
-                                        <div class="action-buttons">
-                                            <button class="btn btn-sm btn-default" @click="openRolePermissionModal(role)" title="配置权限">
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                                                    <circle cx="12" cy="12" r="3"></circle>
-                                                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-                                                </svg>
-                                                权限
-                                            </button>
-                                            <button class="btn btn-sm btn-default" @click="openRoleModal(role)" :disabled="role.is_system" title="编辑">
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                        <div class="action-buttons" style="gap: 8px;">
+                                            <button class="action-btn view" @click="openRolePermissionModal(role)" title="查看权限">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                                    <circle cx="12" cy="12" r="3"/>
                                                 </svg>
                                             </button>
-                                            <button class="btn btn-sm btn-danger" @click="deleteRole(role)" :disabled="role.is_system" title="删除">
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                                                    <polyline points="3 6 5 6 21 6"></polyline>
-                                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                            <button class="action-btn edit" @click="openRoleModal(role)" :disabled="role.is_system" title="编辑">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                                </svg>
+                                            </button>
+                                            <button class="action-btn delete" @click="deleteRole(role)" :disabled="role.is_system" title="删除">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
                                                 </svg>
                                             </button>
                                         </div>
                                     </td>
                                 </tr>
-                                <tr v-if="roles.length === 0">
+                                <tr v-if="paginatedRoles.length === 0">
                                     <td colspan="8" class="empty-row">暂无角色数据</td>
                                 </tr>
                             </tbody>
                         </table>
+                        <div class="table-footer-new">
+                            <div class="page-info">
+                                显示 {{ (roleCurrentPage - 1) * rolePageSize + 1 }}-{{ Math.min(roleCurrentPage * rolePageSize, filteredRoles.length) }} 条，共 {{ filteredRoles.length }} 条
+                            </div>
+                            <div class="pagination-controls">
+                                <select class="page-size-select" v-model="rolePageSize" @change="roleCurrentPage = 1">
+                                    <option :value="10">10 条/页</option>
+                                    <option :value="20">20 条/页</option>
+                                    <option :value="50">50 条/页</option>
+                                    <option :value="100">100 条/页</option>
+                                </select>
+                                <div class="pagination-btns">
+                                    <button class="page-btn" @click="roleCurrentPage = Math.max(1, roleCurrentPage - 1)" :disabled="roleCurrentPage <= 1">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                            <path d="M15 18l-6-6 6-6"/>
+                                        </svg>
+                                    </button>
+                                    <span class="page-number">{{ roleCurrentPage }} / {{ roleTotalPages }}</span>
+                                    <button class="page-btn" @click="roleCurrentPage = Math.min(roleTotalPages, roleCurrentPage + 1)" :disabled="roleCurrentPage >= roleTotalPages">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                            <path d="M9 18l6-6-6-6"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -2191,7 +2306,10 @@
                 <!-- 权限配置 -->
                 <div v-show="currentTab === 'permissions'" class="page-content">
                     <div class="page-header-card">
-                        <h1 class="page-title">权限配置</h1>
+                        <div class="page-title-badge">
+                            <h1 class="page-title">权限配置</h1>
+                            <span class="badge-count">{{ getAllPermissionsFlat().length }} 项权限</span>
+                        </div>
                         <div class="header-actions">
                             <button class="btn btn-primary" @click="openPermissionModal()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
@@ -2202,121 +2320,187 @@
                             </button>
                         </div>
                     </div>
-                    
-                    <div class="permission-overview">
-                        <!-- 权限类型统计 -->
-                        <div class="stats-grid">
-                            <div class="stat-card">
-                                <div class="stat-icon menu-icon">📋</div>
-                                <div class="stat-info">
-                                    <div class="stat-value">{{ getAllPermissionsFlat().filter(p => p.type === 'menu').length }}</div>
-                                    <div class="stat-label">菜单权限</div>
-                                </div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-icon button-icon">🔘</div>
-                                <div class="stat-info">
-                                    <div class="stat-value">{{ getAllPermissionsFlat().filter(p => p.type === 'button').length }}</div>
-                                    <div class="stat-label">按钮权限</div>
-                                </div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-icon data-icon">📊</div>
-                                <div class="stat-info">
-                                    <div class="stat-value">{{ getAllPermissionsFlat().filter(p => p.type === 'data').length }}</div>
-                                    <div class="stat-label">数据权限</div>
-                                </div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-icon api-icon">🔌</div>
-                                <div class="stat-info">
-                                    <div class="stat-value">{{ getAllPermissionsFlat().filter(p => p.type === 'api').length }}</div>
-                                    <div class="stat-label">API权限</div>
-                                </div>
-                            </div>
-                        </div>
 
-                        <!-- 权限列表 -->
-                        <div class="card">
-                            <div class="card-header">
-                                <h3>权限列表</h3>
+                    <!-- 权限统计大卡片 -->
+                    <div class="perm-stats-grid">
+                        <div class="perm-stat-card menu">
+                            <div class="perm-stat-header">
+                                <div class="perm-stat-icon menu">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <rect x="3" y="3" width="7" height="7"/>
+                                        <rect x="14" y="3" width="7" height="7"/>
+                                        <rect x="14" y="14" width="7" height="7"/>
+                                        <rect x="3" y="14" width="7" height="7"/>
+                                    </svg>
+                                </div>
+                                <span class="perm-stat-label">菜单权限</span>
                             </div>
-                            <table class="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>权限代码</th>
-                                        <th>权限名称</th>
-                                        <th>类型</th>
-                                        <th>资源路径</th>
-                                        <th>描述</th>
-                                        <th>操作</th>
+                            <div class="perm-stat-value">{{ getAllPermissionsFlat().filter(p => p.type === 'menu').length }}</div>
+                        </div>
+                        <div class="perm-stat-card button">
+                            <div class="perm-stat-header">
+                                <div class="perm-stat-icon button">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10"/>
+                                        <path d="M8 12h8"/>
+                                    </svg>
+                                </div>
+                                <span class="perm-stat-label">按钮权限</span>
+                            </div>
+                            <div class="perm-stat-value">{{ getAllPermissionsFlat().filter(p => p.type === 'button').length }}</div>
+                        </div>
+                        <div class="perm-stat-card data">
+                            <div class="perm-stat-header">
+                                <div class="perm-stat-icon data">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                                        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                                        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                                    </svg>
+                                </div>
+                                <span class="perm-stat-label">数据权限</span>
+                            </div>
+                            <div class="perm-stat-value">{{ getAllPermissionsFlat().filter(p => p.type === 'data').length }}</div>
+                        </div>
+                        <div class="perm-stat-card api">
+                            <div class="perm-stat-header">
+                                <div class="perm-stat-icon api">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                                    </svg>
+                                </div>
+                                <span class="perm-stat-label">API 权限</span>
+                            </div>
+                            <div class="perm-stat-value">{{ getAllPermissionsFlat().filter(p => p.type === 'api').length }}</div>
+                        </div>
+                    </div>
+
+                    <!-- 筛选栏 -->
+                    <div class="filter-bar">
+                        <div class="filter-search">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8"/>
+                                <path d="M21 21l-4.35-4.35"/>
+                            </svg>
+                            <input type="text" v-model="permSearchQuery" placeholder="搜索权限代码或名称...">
+                        </div>
+                        <select class="filter-select-new" v-model="permTypeFilter">
+                            <option value="">全部类型</option>
+                            <option value="menu">菜单权限</option>
+                            <option value="button">按钮权限</option>
+                            <option value="data">数据权限</option>
+                            <option value="api">API 权限</option>
+                        </select>
+                    </div>
+
+                    <!-- 权限列表表格 -->
+                    <div class="table-card-new">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>权限代码</th>
+                                    <th>权限名称</th>
+                                    <th>类型</th>
+                                    <th>资源路径</th>
+                                    <th>描述</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template v-for="perm in paginatedPermissions" :key="perm.id">
+                                    <tr :class="{ 'parent-row': !perm.parent_id && perm.type === 'menu' }">
+                                        <td><span class="role-code">{{ perm.code }}</span></td>
+                                        <td>
+                                            <span v-if="perm.parent_id" class="indent-mark">└─</span>
+                                            {{ perm.name }}
+                                        </td>
+                                        <td>
+                                            <span class="type-badge-new" :class="perm.type">
+                                                {{ getPermissionTypeLabel(perm.type) }}
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span v-if="perm.resource" class="resource-path">{{ perm.resource }}</span>
+                                            <span v-else style="color: var(--text-muted);">-</span>
+                                        </td>
+                                        <td style="color: var(--text-secondary);">{{ perm.description || '-' }}</td>
+                                        <td>
+                                            <div class="action-buttons" style="gap: 8px;">
+                                                <button class="action-btn edit" @click="openPermissionModal(perm)" title="编辑">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                                    </svg>
+                                                </button>
+                                                <button class="action-btn delete" @click="deletePermission(perm)" title="删除">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                        <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        </td>
                                     </tr>
-                                </thead>
-                                <tbody>
-                                    <template v-for="perm in allPermissions" :key="perm.id">
-                                        <tr :class="{ 'parent-row': !perm.parent_id && perm.type === 'menu' }">
-                                            <td><code class="code-tag">{{ perm.code }}</code></td>
-                                            <td>
-                                                <span v-if="perm.parent_id" class="indent-mark">└─</span>
-                                                {{ perm.name }}
-                                            </td>
-                                            <td>
-                                                <span class="badge" :class="'badge-' + perm.type">
-                                                    {{ getPermissionTypeLabel(perm.type) }}
-                                                </span>
-                                            </td>
-                                            <td>{{ perm.resource || '-' }}</td>
-                                            <td>{{ perm.description || '-' }}</td>
-                                            <td>
-                                                <div class="action-buttons">
-                                                    <button class="btn btn-sm btn-default" @click="openPermissionModal(perm)" title="编辑">
-                                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                                                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                                                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                                                        </svg>
-                                                    </button>
-                                                    <button class="btn btn-sm btn-danger" @click="deletePermission(perm)" title="删除">
-                                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                                                            <polyline points="3 6 5 6 21 6"></polyline>
-                                                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                                                        </svg>
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                        <tr v-for="child in perm.children" :key="child.id" class="child-row">
-                                            <td><code class="code-tag">{{ child.code }}</code></td>
-                                            <td><span class="indent-mark">└─</span> {{ child.name }}</td>
-                                            <td>
-                                                <span class="badge" :class="'badge-' + child.type">
-                                                    {{ getPermissionTypeLabel(child.type) }}
-                                                </span>
-                                            </td>
-                                            <td>{{ child.resource || '-' }}</td>
-                                            <td>{{ child.description || '-' }}</td>
-                                            <td>
-                                                <div class="action-buttons">
-                                                    <button class="btn btn-sm btn-default" @click="openPermissionModal(child)" title="编辑">
-                                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                                                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                                                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                                                        </svg>
-                                                    </button>
-                                                    <button class="btn btn-sm btn-danger" @click="deletePermission(child)" title="删除">
-                                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                                                            <polyline points="3 6 5 6 21 6"></polyline>
-                                                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                                                        </svg>
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    </template>
-                                    <tr v-if="allPermissions.length === 0">
-                                        <td colspan="6" class="empty-row">暂无权限数据</td>
+                                    <tr v-for="child in perm.children" :key="child.id" class="child-row">
+                                        <td><span class="role-code">{{ child.code }}</span></td>
+                                        <td><span class="indent-mark">└─</span> {{ child.name }}</td>
+                                        <td>
+                                            <span class="type-badge-new" :class="child.type">
+                                                {{ getPermissionTypeLabel(child.type) }}
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span v-if="child.resource" class="resource-path">{{ child.resource }}</span>
+                                            <span v-else style="color: var(--text-muted);">-</span>
+                                        </td>
+                                        <td style="color: var(--text-secondary);">{{ child.description || '-' }}</td>
+                                        <td>
+                                            <div class="action-buttons" style="gap: 8px;">
+                                                <button class="action-btn edit" @click="openPermissionModal(child)" title="编辑">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                                    </svg>
+                                                </button>
+                                                <button class="action-btn delete" @click="deletePermission(child)" title="删除">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                        <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        </td>
                                     </tr>
-                                </tbody>
-                            </table>
+                                </template>
+                                <tr v-if="paginatedPermissions.length === 0">
+                                    <td colspan="6" class="empty-row">暂无权限数据</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div class="table-footer-new">
+                            <div class="page-info">
+                                显示 {{ (permCurrentPage - 1) * permPageSize + 1 }}-{{ Math.min(permCurrentPage * permPageSize, filteredPermissions.length) }} 条，共 {{ filteredPermissions.length }} 条
+                            </div>
+                            <div class="pagination-controls">
+                                <select class="page-size-select" v-model="permPageSize" @change="permCurrentPage = 1">
+                                    <option :value="10">10 条/页</option>
+                                    <option :value="20">20 条/页</option>
+                                    <option :value="50">50 条/页</option>
+                                    <option :value="100">100 条/页</option>
+                                </select>
+                                <div class="pagination-btns">
+                                    <button class="page-btn" @click="permCurrentPage = Math.max(1, permCurrentPage - 1)" :disabled="permCurrentPage <= 1">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                            <path d="M15 18l-6-6 6-6"/>
+                                        </svg>
+                                    </button>
+                                    <span class="page-number">{{ permCurrentPage }} / {{ permTotalPages }}</span>
+                                    <button class="page-btn" @click="permCurrentPage = Math.min(permTotalPages, permCurrentPage + 1)" :disabled="permCurrentPage >= permTotalPages">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                            <path d="M9 18l6-6-6-6"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -5769,7 +5953,7 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                         <div class="sidebar-header">
                             <div class="sidebar-title">{{ userModalMode === 'add' ? '添加用户' : '编辑用户' }}</div>
                             <div class="user-card">
-                                <div class="user-avatar-sm" :style="{ background: getAvatarColor(userForm.username || 'U') }">
+                                <div class="user-avatar" :style="{ background: getAvatarColor(userForm.username || 'U') }">
                                     {{ (userForm.display_name || userForm.username || 'U').charAt(0).toUpperCase() }}
                                 </div>
                                 <div class="user-card-info">
@@ -5793,12 +5977,18 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                                 </svg>
                                 <span>安全设置</span>
                             </li>
-                            <li class="nav-item" :class="{ active: userEditTab === 'preferences' }" @click="userEditTab = 'preferences'">
+                            <li class="nav-item" :class="{ active: userEditTab === 'permissions' }" @click="userEditTab = 'permissions'">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <circle cx="12" cy="12" r="3"/>
-                                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                                 </svg>
-                                <span>偏好设置</span>
+                                <span>权限管理</span>
+                            </li>
+                            <li class="nav-item" :class="{ active: userEditTab === 'history' }" @click="userEditTab = 'history'">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <polyline points="12 6 12 12 16 14"/>
+                                </svg>
+                                <span>登录历史</span>
                             </li>
                         </ul>
                     </div>
@@ -5807,8 +5997,8 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                     <div class="user-edit-content">
                         <div class="content-header">
                             <div>
-                                <div class="content-title">{{ userEditTab === 'basic' ? '基本信息' : userEditTab === 'security' ? '安全设置' : '偏好设置' }}</div>
-                                <div class="content-subtitle">{{ userEditTab === 'basic' ? '管理用户账号和个人资料' : userEditTab === 'security' ? '配置密码和多因素认证' : '自定义语言和备注信息' }}</div>
+                                <div class="content-title">{{ userEditTab === 'basic' ? '基本信息' : userEditTab === 'security' ? '安全设置' : userEditTab === 'permissions' ? '权限管理' : '登录历史' }}</div>
+                                <div class="content-subtitle">{{ userEditTab === 'basic' ? '更新用户的基本资料' : userEditTab === 'security' ? '配置密码和多因素认证' : userEditTab === 'permissions' ? '管理用户的系统权限' : '查看用户的登录记录' }}</div>
                             </div>
                             <button type="button" class="close-btn" @click="showUserModal = false">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -5866,6 +6056,13 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                                         <select class="form-select" v-model="userForm.role">
                                             <option v-for="role in roles" :key="role.id" :value="role.code">{{ role.name }}</option>
                                             <option v-if="roles.length === 0" value="user">普通用户</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">界面语言</label>
+                                        <select class="form-select" v-model="userForm.language">
+                                            <option value="zh-CN">简体中文</option>
+                                            <option value="en-US">English</option>
                                         </select>
                                     </div>
                                 </div>
@@ -5946,33 +6143,109 @@ order-service, backend, myproject, , 8082, prod, 订单服务
                                 </div>
                             </div>
 
-                            <!-- 偏好设置 Tab -->
-                            <div v-show="userEditTab === 'preferences'">
-                                <div class="section-divider">语言设置</div>
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label class="form-label">界面语言</label>
-                                        <select class="form-select" v-model="userForm.language">
-                                            <option v-for="lang in availableLanguages" :key="lang.code" :value="lang.code">
-                                                {{ lang.flag }} {{ lang.name }}
-                                            </option>
-                                        </select>
-                                        <div class="form-hint">设置该用户登录后的默认界面语言</div>
+                            <!-- 权限管理 Tab -->
+                            <div v-show="userEditTab === 'permissions'">
+                                <div class="section-divider">角色权限</div>
+                                <div class="permission-info-card">
+                                    <div class="permission-icon">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                                        </svg>
+                                    </div>
+                                    <div class="permission-content">
+                                        <div class="permission-title">当前角色: {{ getRoleName(userForm.role) || '普通用户' }}</div>
+                                        <div class="permission-desc">用户权限由所属角色决定，如需修改权限请在基本信息中调整角色</div>
                                     </div>
                                 </div>
 
-                                <div class="section-divider">备注信息</div>
-                                <div class="form-row">
-                                    <div class="form-group" style="flex: 1;">
-                                        <label class="form-label">用户描述</label>
-                                        <textarea class="form-textarea" v-model="userForm.description" rows="4" placeholder="请输入用户备注信息（可选）"></textarea>
+                                <div class="section-divider">功能权限</div>
+                                <div class="permission-list">
+                                    <div class="permission-item">
+                                        <span class="permission-name">用户管理</span>
+                                        <span class="permission-badge" :class="userForm.role === 'admin' ? 'granted' : 'denied'">
+                                            {{ userForm.role === 'admin' ? '已授权' : '未授权' }}
+                                        </span>
                                     </div>
+                                    <div class="permission-item">
+                                        <span class="permission-name">角色管理</span>
+                                        <span class="permission-badge" :class="userForm.role === 'admin' ? 'granted' : 'denied'">
+                                            {{ userForm.role === 'admin' ? '已授权' : '未授权' }}
+                                        </span>
+                                    </div>
+                                    <div class="permission-item">
+                                        <span class="permission-name">系统设置</span>
+                                        <span class="permission-badge" :class="userForm.role === 'admin' ? 'granted' : 'denied'">
+                                            {{ userForm.role === 'admin' ? '已授权' : '未授权' }}
+                                        </span>
+                                    </div>
+                                    <div class="permission-item">
+                                        <span class="permission-name">数据查看</span>
+                                        <span class="permission-badge granted">已授权</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 登录历史 Tab -->
+                            <div v-show="userEditTab === 'history'">
+                                <div class="section-divider">最近登录</div>
+                                <div class="login-history-list">
+                                    <div class="history-item">
+                                        <div class="history-icon success">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <polyline points="20 6 9 17 4 12"/>
+                                            </svg>
+                                        </div>
+                                        <div class="history-content">
+                                            <div class="history-title">登录成功</div>
+                                            <div class="history-meta">
+                                                <span>IP: 192.168.1.100</span>
+                                                <span>Chrome / Windows</span>
+                                            </div>
+                                        </div>
+                                        <div class="history-time">2 小时前</div>
+                                    </div>
+                                    <div class="history-item">
+                                        <div class="history-icon success">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <polyline points="20 6 9 17 4 12"/>
+                                            </svg>
+                                        </div>
+                                        <div class="history-content">
+                                            <div class="history-title">登录成功</div>
+                                            <div class="history-meta">
+                                                <span>IP: 192.168.1.100</span>
+                                                <span>Chrome / Windows</span>
+                                            </div>
+                                        </div>
+                                        <div class="history-time">昨天 14:30</div>
+                                    </div>
+                                    <div class="history-item">
+                                        <div class="history-icon warning">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <circle cx="12" cy="12" r="10"/>
+                                                <line x1="12" y1="8" x2="12" y2="12"/>
+                                                <line x1="12" y1="16" x2="12.01" y2="16"/>
+                                            </svg>
+                                        </div>
+                                        <div class="history-content">
+                                            <div class="history-title">密码错误</div>
+                                            <div class="history-meta">
+                                                <span>IP: 10.0.0.50</span>
+                                                <span>Firefox / macOS</span>
+                                            </div>
+                                        </div>
+                                        <div class="history-time">3 天前</div>
+                                    </div>
+                                </div>
+                                <div class="history-empty-hint" v-if="false">
+                                    暂无登录记录
                                 </div>
                             </div>
                         </div>
 
                         <div class="content-footer">
-                            <span class="footer-hint" v-if="userModalMode === 'edit'">ID: {{ userForm.id }}</span>
+                            <span class="footer-hint" v-if="userModalMode === 'edit' && userForm.updated_at">最后更新: {{ formatDate(userForm.updated_at) }}</span>
+                            <span class="footer-hint" v-else-if="userModalMode === 'edit'">ID: {{ userForm.id }}</span>
                             <span class="footer-hint" v-else></span>
                             <div class="btn-group">
                                 <button type="button" class="btn btn-ghost" @click="showUserModal = false">取消</button>
@@ -7415,83 +7688,124 @@ N,年假</pre>
             </div>
         </div>
 
-        <!-- 用户信息编辑弹窗 -->
+        <!-- 个人设置弹窗 (侧边栏标签页设计) -->
         <div class="modal-overlay" :class="{ show: showProfileModal }">
-            <div class="modal profile-modal">
-                <div class="modal-header">
-                    <h2>个人设置</h2>
-                    <button type="button" class="modal-close" @click="showProfileModal = false">&times;</button>
-                </div>
-                <form @submit.prevent="saveProfile">
-                    <div class="modal-body">
-                        <!-- 用户头像和基本信息 -->
-                        <div class="profile-header">
-                            <div class="profile-avatar" :style="{ background: getAvatarColor(profileForm.username) }">
-                                {{ (profileForm.display_name || profileForm.username || 'U').charAt(0).toUpperCase() }}
-                            </div>
-                            <div class="profile-info">
-                                <div class="profile-name">{{ profileForm.display_name || profileForm.username }}</div>
-                                <div class="profile-username">@{{ profileForm.username }}</div>
-                                <div class="profile-badges">
-                                    <span class="profile-badge role" :class="profileForm.role">
-                                        {{ profileForm.role === 'admin' ? '管理员' : '普通用户' }}
-                                    </span>
-                                    <span class="profile-badge mfa" :class="currentUser && currentUser.mfa_enabled ? 'enabled' : ''">
-                                        {{ currentUser && currentUser.mfa_enabled ? 'MFA 已启用' : 'MFA 未启用' }}
-                                    </span>
+            <div class="modal user-edit-modal">
+                <form @submit.prevent="saveProfile" class="user-edit-form">
+                    <!-- 左侧导航 -->
+                    <div class="user-edit-sidebar">
+                        <div class="sidebar-header">
+                            <div class="sidebar-title">个人设置</div>
+                            <div class="user-card">
+                                <div class="user-avatar" :style="{ background: getAvatarColor(profileForm.username) }">
+                                    {{ (profileForm.display_name || profileForm.username || 'U').charAt(0).toUpperCase() }}
+                                </div>
+                                <div class="user-card-info">
+                                    <div class="user-card-name">{{ profileForm.display_name || profileForm.username }}</div>
+                                    <div class="user-card-role">{{ profileForm.role === 'admin' ? '管理员' : '普通用户' }}</div>
                                 </div>
                             </div>
                         </div>
+                        <ul class="nav-list">
+                            <li class="nav-item" :class="{ active: profileEditTab === 'basic' }" @click="profileEditTab = 'basic'">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                                    <circle cx="12" cy="7" r="4"/>
+                                </svg>
+                                <span>个人资料</span>
+                            </li>
+                            <li class="nav-item" :class="{ active: profileEditTab === 'security' }" @click="profileEditTab = 'security'">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                                </svg>
+                                <span>安全设置</span>
+                            </li>
+                        </ul>
+                    </div>
 
-                        <!-- 个人资料表单 -->
-                        <div class="profile-section">
-                            <div class="profile-section-title">
-                                <span class="section-icon">📝</span>
-                                个人资料
+                    <!-- 右侧内容 -->
+                    <div class="user-edit-content">
+                        <div class="content-header">
+                            <div>
+                                <div class="content-title">{{ profileEditTab === 'basic' ? '个人资料' : '安全设置' }}</div>
+                                <div class="content-subtitle">{{ profileEditTab === 'basic' ? '管理您的个人信息' : '配置账号安全选项' }}</div>
                             </div>
-                            <div class="profile-form">
+                            <button type="button" class="close-btn" @click="showProfileModal = false">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M18 6L6 18M6 6l12 12"/>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="content-body">
+                            <!-- 个人资料 Tab -->
+                            <div v-show="profileEditTab === 'basic'">
                                 <div class="form-row">
                                     <div class="form-group">
-                                        <label>显示名称 <span class="required">*</span></label>
-                                        <input type="text" class="form-input" v-model="profileForm.display_name" required>
+                                        <label class="form-label"><span class="required">*</span> 显示名称</label>
+                                        <input type="text" class="form-input" v-model="profileForm.display_name" required placeholder="请输入显示名称">
                                     </div>
                                     <div class="form-group">
-                                        <label>用户名</label>
+                                        <label class="form-label">用户名</label>
                                         <input type="text" class="form-input" :value="profileForm.username" disabled>
                                     </div>
                                 </div>
                                 <div class="form-group">
-                                    <label>修改密码</label>
-                                    <div class="password-field">
+                                    <label class="form-label">修改密码</label>
+                                    <div class="password-input-wrapper">
                                         <input :type="showProfilePassword ? 'text' : 'password'" class="form-input" v-model="profileForm.password" placeholder="留空则不修改">
-                                        <button type="button" class="password-eye" @click="showProfilePassword = !showProfilePassword">
-                                            <span v-if="showProfilePassword">👁️</span>
-                                            <span v-else>👁️‍🗨️</span>
+                                        <button type="button" class="password-toggle-btn" @click="showProfilePassword = !showProfilePassword">
+                                            <svg v-if="!showProfilePassword" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                                <circle cx="12" cy="12" r="3"/>
+                                            </svg>
+                                            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                                                <line x1="1" y1="1" x2="23" y2="23"/>
+                                            </svg>
                                         </button>
                                     </div>
                                 </div>
-                            </div>
-                        </div>
 
-                        <!-- 安全设置 -->
-                        <div class="profile-section">
-                            <div class="profile-section-title">
-                                <span class="section-icon">🔒</span>
-                                安全设置
-                            </div>
-                            <div class="security-card">
-                                <!-- MFA 设置 -->
-                                <div class="security-item">
-                                    <div class="security-icon">🔐</div>
-                                    <div class="security-content">
-                                        <div class="security-title">多因素认证 (MFA)</div>
-                                        <div class="security-desc">
-                                            <template v-if="currentUser && currentUser.mfa_enabled && currentUser.mfa_bound">登录时需要输入动态验证码</template>
-                                            <template v-else-if="currentUser && currentUser.mfa_enabled">已启用，请绑定认证器应用</template>
-                                            <template v-else>建议开启以提升账号安全性</template>
+                                <div class="form-section-divider"></div>
+
+                                <div class="info-card">
+                                    <div class="info-card-icon">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <circle cx="12" cy="12" r="10"/>
+                                            <path d="M12 16v-4M12 8h.01"/>
+                                        </svg>
+                                    </div>
+                                    <div class="info-card-content">
+                                        <div class="info-card-title">账号信息</div>
+                                        <div class="info-card-text">
+                                            角色：{{ profileForm.role === 'admin' ? '管理员' : '普通用户' }}<br>
+                                            MFA 状态：{{ currentUser && currentUser.mfa_enabled && currentUser.mfa_bound ? '已启用' : currentUser && currentUser.mfa_enabled ? '待绑定' : '未启用' }}
                                         </div>
                                     </div>
-                                    <div class="security-action">
+                                </div>
+                            </div>
+
+                            <!-- 安全设置 Tab -->
+                            <div v-show="profileEditTab === 'security'">
+                                <!-- MFA 设置 -->
+                                <div class="security-setting-card">
+                                    <div class="security-setting-icon mfa">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                                            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                                        </svg>
+                                    </div>
+                                    <div class="security-setting-content">
+                                        <div class="security-setting-title">多因素认证 (MFA)</div>
+                                        <div class="security-setting-desc">
+                                            <template v-if="currentUser && currentUser.mfa_enabled && currentUser.mfa_bound">登录时需要输入动态验证码，账号安全性更高</template>
+                                            <template v-else-if="currentUser && currentUser.mfa_enabled">MFA 已启用，请完成绑定以生效</template>
+                                            <template v-else>建议开启多因素认证以提升账号安全性</template>
+                                        </div>
+                                    </div>
+                                    <div class="security-setting-action">
                                         <template v-if="currentUser && currentUser.role === 'admin'">
                                             <button type="button" v-if="!currentUser.mfa_enabled" class="btn btn-primary btn-sm" @click="showMFASetupModal = true; setupMFA()">启用</button>
                                             <template v-else>
@@ -7502,19 +7816,30 @@ N,年假</pre>
                                         <template v-else-if="currentUser && currentUser.mfa_enabled && !currentUser.mfa_bound">
                                             <button type="button" class="btn btn-primary btn-sm" @click="showMFASetupModal = true; setupMFA()">绑定</button>
                                         </template>
-                                        <span v-else-if="currentUser && !currentUser.mfa_enabled" class="security-hint">由管理员配置</span>
-                                        <span v-else class="security-status enabled">✓ 已保护</span>
+                                        <span v-else-if="currentUser && !currentUser.mfa_enabled" class="security-hint-text">由管理员配置</span>
+                                        <span v-else class="security-status-badge enabled">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                                <path d="M20 6L9 17l-5-5"/>
+                                            </svg>
+                                            已保护
+                                        </span>
                                     </div>
                                 </div>
+
                                 <!-- 会话超时设置 -->
-                                <div class="security-item">
-                                    <div class="security-icon">⏱️</div>
-                                    <div class="security-content">
-                                        <div class="security-title">会话超时</div>
-                                        <div class="security-desc">无操作自动退出登录的时间</div>
+                                <div class="security-setting-card">
+                                    <div class="security-setting-icon session">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <circle cx="12" cy="12" r="10"/>
+                                            <path d="M12 6v6l4 2"/>
+                                        </svg>
                                     </div>
-                                    <div class="security-action">
-                                        <select class="form-select session-timeout-select" v-model="profileForm.session_timeout">
+                                    <div class="security-setting-content">
+                                        <div class="security-setting-title">会话超时</div>
+                                        <div class="security-setting-desc">设置无操作自动退出登录的时间，建议不要设置过长</div>
+                                    </div>
+                                    <div class="security-setting-action">
+                                        <select class="form-select" v-model="profileForm.session_timeout">
                                             <option value="30">30 分钟</option>
                                             <option value="60">1 小时</option>
                                             <option value="180">3 小时</option>
@@ -7524,10 +7849,14 @@ N,年假</pre>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" @click="showProfileModal = false">取消</button>
-                        <button type="submit" class="btn btn-primary">保存</button>
+
+                        <div class="content-footer">
+                            <span class="user-id">ID: {{ currentUser ? currentUser.id : '' }}</span>
+                            <div class="footer-actions">
+                                <button type="button" class="btn btn-secondary" @click="showProfileModal = false">取消</button>
+                                <button type="submit" class="btn btn-primary">保存</button>
+                            </div>
+                        </div>
                     </div>
                 </form>
             </div>
@@ -7779,7 +8108,7 @@ N,年假</pre>
 
     <script src="/js/i18n/zh-CN.js?v=352"></script>
     <script src="/js/i18n/en-US.js?v=352"></script>
-    <script src="/js/api.js?v=349"></script>
-    <script src="/js/app.js?v=518"></script>
+    <script src="/js/api.js?v=535"></script>
+    <script src="/js/app.js?v=534"></script>
 </body>
 </html>

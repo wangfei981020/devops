@@ -562,13 +562,16 @@ func HandleMyPermissions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := r.Header.Get("X-Operator")
+	log.Printf("[权限调试] X-Operator header: '%s'", userID)
 	if userID == "" {
 		userID = "admin"
+		log.Printf("[权限调试] X-Operator为空，使用默认值: %s", userID)
 	}
 
 	// 获取用户的所有角色
 	roleRows, err := database.DB.Query("SELECT role_id FROM user_roles WHERE user_id = ?", userID)
 	if err != nil {
+		log.Printf("[权限调试] 查询用户角色失败: %v", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -580,10 +583,16 @@ func HandleMyPermissions(w http.ResponseWriter, r *http.Request) {
 		roleRows.Scan(&roleID)
 		roleIDs = append(roleIDs, roleID)
 	}
+	log.Printf("[权限调试] 用户 %s 的角色IDs: %v", userID, roleIDs)
 
-	// 如果用户没有分配角色，默认给予只读权限
+	// 安全修复：无角色用户无任何权限（不再默认给予 role_viewer）
 	if len(roleIDs) == 0 {
-		roleIDs = append(roleIDs, "role_viewer")
+		log.Printf("[权限调试] 用户 %s 没有角色，返回空权限", userID)
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"permissions": []string{},
+			"menus":       []Permission{},
+		})
+		return
 	}
 
 	// 获取所有角色的权限

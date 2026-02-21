@@ -63,7 +63,8 @@ func HandleGetTasks(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := database.DB.Query(query, args...)
 	if err != nil {
-		sendError(w, "查询失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[任务] 查询失败: %v", err)
+		sendError(w, "查询失败", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -140,7 +141,8 @@ func HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 		t.IsDelayed, t.DelayReason, t.DelayDesc, delayEndTime, t.CompletionType,
 		now, user, now, user)
 	if err != nil {
-		sendError(w, "创建失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[任务] 创建失败: %v", err)
+		sendError(w, "创建失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -183,7 +185,8 @@ func HandleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		t.IsDelayed, t.DelayReason, t.DelayDesc, delayEndTime, t.CompletionType,
 		now, user, id)
 	if err != nil {
-		sendError(w, "更新失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[任务] 更新失败: %v", err)
+		sendError(w, "更新失败", http.StatusInternalServerError)
 		return
 	}
 

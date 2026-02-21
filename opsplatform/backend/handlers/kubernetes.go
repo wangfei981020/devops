@@ -4,13 +4,37 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
 )
+
+// K8s 资源名称验证正则（只允许字母、数字、-、_、.）
+var k8sNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+// validateK8sName 验证 K8s 资源名称，防止命令注入
+func validateK8sName(name, fieldName string) error {
+	if name == "" {
+		return fmt.Errorf("%s 不能为空", fieldName)
+	}
+	if len(name) > 253 {
+		return fmt.Errorf("%s 长度不能超过 253 字符", fieldName)
+	}
+	if !k8sNameRegex.MatchString(name) {
+		return fmt.Errorf("%s 包含非法字符，只允许字母、数字、-、_、.", fieldName)
+	}
+	// 防止路径遍历
+	if strings.Contains(name, "..") || strings.Contains(name, "/") {
+		return fmt.Errorf("%s 包含非法路径字符", fieldName)
+	}
+	return nil
+}
 
 // K8sCluster K8s集群配置
 type K8sCluster struct {
@@ -131,7 +155,8 @@ func execKubectl(args ...string) (string, error) {
 func HandleGetNamespaces(w http.ResponseWriter, r *http.Request) {
 	output, err := execKubectl("get", "namespaces", "-o", "json")
 	if err != nil {
-		sendError(w, "获取命名空间失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[K8s] 获取命名空间失败: %v", err)
+		sendError(w, "获取命名空间失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -174,6 +199,14 @@ func HandleGetDeployments(w http.ResponseWriter, r *http.Request) {
 		namespace = "default"
 	}
 
+	// 安全验证：防止命令注入
+	if namespace != "all" {
+		if err := validateK8sName(namespace, "namespace"); err != nil {
+			sendError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	args := []string{"get", "deployments", "-n", namespace, "-o", "json"}
 	if namespace == "all" {
 		args = []string{"get", "deployments", "--all-namespaces", "-o", "json"}
@@ -181,7 +214,8 @@ func HandleGetDeployments(w http.ResponseWriter, r *http.Request) {
 
 	output, err := execKubectl(args...)
 	if err != nil {
-		sendError(w, "获取部署列表失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[K8s] 获取部署列表失败: %v", err)
+		sendError(w, "获取部署列表失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -251,6 +285,14 @@ func HandleGetServices(w http.ResponseWriter, r *http.Request) {
 		namespace = "default"
 	}
 
+	// 安全验证：防止命令注入
+	if namespace != "all" {
+		if err := validateK8sName(namespace, "namespace"); err != nil {
+			sendError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	args := []string{"get", "services", "-n", namespace, "-o", "json"}
 	if namespace == "all" {
 		args = []string{"get", "services", "--all-namespaces", "-o", "json"}
@@ -258,7 +300,8 @@ func HandleGetServices(w http.ResponseWriter, r *http.Request) {
 
 	output, err := execKubectl(args...)
 	if err != nil {
-		sendError(w, "获取服务列表失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[K8s] 获取服务列表失败: %v", err)
+		sendError(w, "获取服务列表失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -326,6 +369,14 @@ func HandleGetPods(w http.ResponseWriter, r *http.Request) {
 		namespace = "default"
 	}
 
+	// 安全验证：防止命令注入
+	if namespace != "all" {
+		if err := validateK8sName(namespace, "namespace"); err != nil {
+			sendError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	args := []string{"get", "pods", "-n", namespace, "-o", "json"}
 	if namespace == "all" {
 		args = []string{"get", "pods", "--all-namespaces", "-o", "json"}
@@ -333,7 +384,8 @@ func HandleGetPods(w http.ResponseWriter, r *http.Request) {
 
 	output, err := execKubectl(args...)
 	if err != nil {
-		sendError(w, "获取 Pod 列表失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[K8s] 获取 Pod 列表失败: %v", err)
+		sendError(w, "获取 Pod 列表失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -395,7 +447,8 @@ func HandleGetPods(w http.ResponseWriter, r *http.Request) {
 func HandleGetNodes(w http.ResponseWriter, r *http.Request) {
 	output, err := execKubectl("get", "nodes", "-o", "json")
 	if err != nil {
-		sendError(w, "获取节点列表失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[K8s] 获取节点列表失败: %v", err)
+		sendError(w, "获取节点列表失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -491,17 +544,24 @@ func HandleK8sApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 安全验证：namespace
+	if req.Namespace != "" {
+		if err := validateK8sName(req.Namespace, "namespace"); err != nil {
+			sendError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	var output string
 	var err error
 
+	// 安全修复：禁用 YamlPath，防止路径遍历攻击
 	if req.YamlPath != "" {
-		// 从文件 apply
-		args := []string{"apply", "-f", req.YamlPath}
-		if req.Namespace != "" {
-			args = append(args, "-n", req.Namespace)
-		}
-		output, err = execKubectl(args...)
-	} else if req.YamlContent != "" {
+		sendError(w, "出于安全考虑，不支持从文件路径 apply，请使用 yaml_content", http.StatusForbidden)
+		return
+	}
+
+	if req.YamlContent != "" {
 		// 从内容 apply（使用 stdin）
 		cmd := exec.Command("kubectl", "apply", "-f", "-")
 		if req.Namespace != "" {
@@ -517,7 +577,7 @@ func HandleK8sApply(w http.ResponseWriter, r *http.Request) {
 			output += stderr.String()
 		}
 	} else {
-		sendError(w, "请提供 yaml_path 或 yaml_content", http.StatusBadRequest)
+		sendError(w, "请提供 yaml_content", http.StatusBadRequest)
 		return
 	}
 
@@ -550,6 +610,16 @@ func HandleK8sRestartDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 安全验证：防止命令注入
+	if err := validateK8sName(req.Namespace, "namespace"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateK8sName(req.Deployment, "deployment"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	output, err := execKubectl("rollout", "restart", "deployment", req.Deployment, "-n", req.Namespace)
 	if err != nil {
 		respondJSON(w, http.StatusOK, K8sApplyResult{
@@ -577,6 +647,16 @@ func HandleK8sScaleDeployment(w http.ResponseWriter, r *http.Request) {
 
 	if req.Namespace == "" || req.Deployment == "" {
 		sendError(w, "请提供 namespace 和 deployment", http.StatusBadRequest)
+		return
+	}
+
+	// 安全验证：防止命令注入
+	if err := validateK8sName(req.Namespace, "namespace"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateK8sName(req.Deployment, "deployment"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -611,6 +691,25 @@ func HandleK8sUpdateImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 安全验证：防止命令注入
+	if err := validateK8sName(req.Namespace, "namespace"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateK8sName(req.Deployment, "deployment"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateK8sName(req.Container, "container"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// 镜像名称验证（允许更多字符：斜杠、冒号用于仓库和标签）
+	if strings.ContainsAny(req.Image, ";|&$`") {
+		sendError(w, "镜像名称包含非法字符", http.StatusBadRequest)
+		return
+	}
+
 	output, err := execKubectl("set", "image", "deployment/"+req.Deployment,
 		req.Container+"="+req.Image, "-n", req.Namespace)
 	if err != nil {
@@ -638,9 +737,19 @@ func HandleK8sGetDeploymentYaml(w http.ResponseWriter, r *http.Request) {
 		namespace = "default"
 	}
 
+	// 安全验证：防止命令注入
+	if err := validateK8sName(namespace, "namespace"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateK8sName(name, "deployment"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	output, err := execKubectl("get", "deployment", name, "-n", namespace, "-o", "yaml")
 	if err != nil {
-		sendError(w, "获取 YAML 失败: "+err.Error(), http.StatusInternalServerError)
+		sendError(w, "获取 YAML 失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -663,6 +772,27 @@ func HandleK8sGetPodLogs(w http.ResponseWriter, r *http.Request) {
 		tail = "100"
 	}
 
+	// 安全验证：防止命令注入
+	if err := validateK8sName(namespace, "namespace"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateK8sName(name, "pod"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if container != "" {
+		if err := validateK8sName(container, "container"); err != nil {
+			sendError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	// tail 必须是数字
+	if _, err := strconv.Atoi(tail); err != nil {
+		sendError(w, "tail 参数必须是数字", http.StatusBadRequest)
+		return
+	}
+
 	args := []string{"logs", name, "-n", namespace, "--tail", tail}
 	if container != "" {
 		args = append(args, "-c", container)
@@ -670,7 +800,7 @@ func HandleK8sGetPodLogs(w http.ResponseWriter, r *http.Request) {
 
 	output, err := execKubectl(args...)
 	if err != nil {
-		sendError(w, "获取日志失败: "+err.Error(), http.StatusInternalServerError)
+		sendError(w, "获取日志失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -688,12 +818,22 @@ func HandleK8sDeletePod(w http.ResponseWriter, r *http.Request) {
 		namespace = "default"
 	}
 
+	// 安全验证：防止命令注入
+	if err := validateK8sName(namespace, "namespace"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateK8sName(name, "pod"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	output, err := execKubectl("delete", "pod", name, "-n", namespace)
 	if err != nil {
 		respondJSON(w, http.StatusOK, K8sApplyResult{
 			Success: false,
 			Message: "删除 Pod 失败",
-			Output:  err.Error(),
+			Output:  "",
 		})
 		return
 	}
@@ -715,9 +855,18 @@ func HandleK8sRolloutStatus(w http.ResponseWriter, r *http.Request) {
 		namespace = "default"
 	}
 
+	// 安全验证：防止命令注入
+	if err := validateK8sName(namespace, "namespace"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateK8sName(name, "deployment"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	output, err := execKubectl("rollout", "status", "deployment", name, "-n", namespace, "--timeout=5s")
 	if err != nil {
-		// 超时不一定是错误，可能还在进行中
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"status":  "in_progress",
 			"message": output,
@@ -741,9 +890,19 @@ func HandleK8sRolloutHistory(w http.ResponseWriter, r *http.Request) {
 		namespace = "default"
 	}
 
+	// 安全验证：防止命令注入
+	if err := validateK8sName(namespace, "namespace"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateK8sName(name, "deployment"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	output, err := execKubectl("rollout", "history", "deployment", name, "-n", namespace)
 	if err != nil {
-		sendError(w, "获取历史失败: "+err.Error(), http.StatusInternalServerError)
+		sendError(w, "获取历史失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -758,7 +917,7 @@ func HandleK8sRollback(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Namespace string `json:"namespace"`
-		Revision  int    `json:"revision"` // 可选，不指定则回滚到上一版本
+		Revision  int    `json:"revision"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, "请求参数无效", http.StatusBadRequest)
@@ -767,6 +926,16 @@ func HandleK8sRollback(w http.ResponseWriter, r *http.Request) {
 
 	if req.Namespace == "" {
 		req.Namespace = "default"
+	}
+
+	// 安全验证：防止命令注入
+	if err := validateK8sName(req.Namespace, "namespace"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateK8sName(name, "deployment"); err != nil {
+		sendError(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	args := []string{"rollout", "undo", "deployment", name, "-n", req.Namespace}
@@ -779,7 +948,7 @@ func HandleK8sRollback(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusOK, K8sApplyResult{
 			Success: false,
 			Message: "回滚失败",
-			Output:  err.Error(),
+			Output:  "",
 		})
 		return
 	}

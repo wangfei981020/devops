@@ -171,6 +171,39 @@ func createTables() error {
 		return err
 	}
 
+	// 创建会话表（用于多实例部署的会话共享）
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS sessions (
+			id VARCHAR(64) PRIMARY KEY,
+			user_id VARCHAR(64) NOT NULL,
+			token_hash VARCHAR(128) NOT NULL,
+			ip VARCHAR(64),
+			user_agent TEXT,
+			expires_at DATETIME NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_user_id (user_id),
+			INDEX idx_token_hash (token_hash),
+			INDEX idx_expires_at (expires_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	// 创建 CSRF 令牌表（用于多实例部署的 CSRF 保护）
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS csrf_tokens (
+			token VARCHAR(64) PRIMARY KEY,
+			user_id VARCHAR(64),
+			expires_at DATETIME NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_expires_at (expires_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
 	// 创建数据源表
 	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS datasources (

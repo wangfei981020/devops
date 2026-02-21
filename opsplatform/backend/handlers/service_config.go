@@ -41,7 +41,8 @@ func HandleGetServiceConfigs(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := database.DB.Query(query, args...)
 	if err != nil {
-		sendError(w, "查询失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[服务配置] 查询失败: %v", err)
+		sendError(w, "查询失败", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -112,7 +113,8 @@ func HandleCreateServiceConfig(w http.ResponseWriter, r *http.Request) {
 	_, err := database.DB.Exec(`INSERT INTO service_configs (id, project, service_name, service_type, domain, port, env, namespace, replicas, image, remark, status, sort_order, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, s.Project, s.ServiceName, s.ServiceType, s.Domain, s.Port, s.Env, s.Namespace, s.Replicas, s.Image, s.Remark, s.Status, s.SortOrder, now, operator, now, operator)
 	if err != nil {
-		sendError(w, "创建失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[服务配置] 创建失败: %v", err)
+		sendError(w, "创建失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -203,7 +205,8 @@ func HandleBatchCreateServiceConfigs(w http.ResponseWriter, r *http.Request) {
 			s.ID, s.Project, s.ServiceName, s.ServiceType, s.Domain, s.Port, s.Env, s.Namespace, s.Replicas, s.Image, s.Remark, s.Status, s.SortOrder, now, operator, now, operator)
 		if err != nil {
 			failCount++
-			failReasons = append(failReasons, s.ServiceName+": "+err.Error())
+			log.Printf("[服务配置] 批量创建失败 %s: %v", s.ServiceName, err)
+			failReasons = append(failReasons, s.ServiceName+": 创建失败")
 			continue
 		}
 
@@ -240,7 +243,8 @@ func HandleUpdateServiceConfig(w http.ResponseWriter, r *http.Request) {
 	_, err := database.DB.Exec(`UPDATE service_configs SET project=?, service_name=?, service_type=?, domain=?, port=?, env=?, namespace=?, replicas=?, image=?, remark=?, status=?, sort_order=?, updated_at=?, updated_by=? WHERE id=?`,
 		s.Project, s.ServiceName, s.ServiceType, s.Domain, s.Port, s.Env, s.Namespace, s.Replicas, s.Image, s.Remark, s.Status, s.SortOrder, now, operator, id)
 	if err != nil {
-		sendError(w, "更新失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[服务配置] 更新失败: %v", err)
+			sendError(w, "更新失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -311,7 +315,8 @@ func HandleCreateServiceDependency(w http.ResponseWriter, r *http.Request) {
 	_, err := database.DB.Exec(`INSERT INTO service_dependencies (id, service_id, dependency_type, dependency_name, host, port, database_name, username, password, conn_string, remark, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		dep.ID, serviceID, dep.DependencyType, dep.DependencyName, dep.Host, dep.Port, dep.Database, dep.Username, encPwd, dep.ConnString, dep.Remark, dep.Status, now, now)
 	if err != nil {
-		sendError(w, "创建失败: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("[服务配置] 创建失败: %v", err)
+		sendError(w, "创建失败", http.StatusInternalServerError)
 		return
 	}
 
@@ -345,7 +350,8 @@ func HandleUpdateServiceDependency(w http.ResponseWriter, r *http.Request) {
 		_, err = database.DB.Exec(`UPDATE service_dependencies SET dependency_type=?, dependency_name=?, host=?, port=?, database_name=?, username=?, password=?, conn_string=?, remark=?, status=?, updated_at=? WHERE id=?`,
 			dep.DependencyType, dep.DependencyName, dep.Host, dep.Port, dep.Database, dep.Username, encPwd, dep.ConnString, dep.Remark, dep.Status, now, depID)
 		if err != nil {
-			sendError(w, "更新失败: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("[服务配置] 更新失败: %v", err)
+			sendError(w, "更新失败", http.StatusInternalServerError)
 			return
 		}
 	} else {
@@ -353,7 +359,8 @@ func HandleUpdateServiceDependency(w http.ResponseWriter, r *http.Request) {
 		_, err := database.DB.Exec(`UPDATE service_dependencies SET dependency_type=?, dependency_name=?, host=?, port=?, database_name=?, username=?, conn_string=?, remark=?, status=?, updated_at=? WHERE id=?`,
 			dep.DependencyType, dep.DependencyName, dep.Host, dep.Port, dep.Database, dep.Username, dep.ConnString, dep.Remark, dep.Status, now, depID)
 		if err != nil {
-			sendError(w, "更新失败: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("[服务配置] 更新失败: %v", err)
+			sendError(w, "更新失败", http.StatusInternalServerError)
 			return
 		}
 	}

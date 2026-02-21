@@ -503,7 +503,21 @@ func AddUser(u *models.User) error {
 		INSERT INTO users (id, username, password, display_name, phone, email, description, role, status, permissions, mfa_enabled, language, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, u.ID, u.Username, hashedPassword, u.DisplayName, u.Phone, u.Email, u.Description, u.Role, u.Status, u.Permissions, u.MFAEnabled, u.Language, u.CreatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 同步 user_roles 表：根据 role code 查找 role_id 并建立关联
+	if u.Role != "" {
+		var roleID string
+		database.DB.QueryRow("SELECT id FROM roles WHERE code = ?", u.Role).Scan(&roleID)
+		if roleID != "" {
+			database.DB.Exec(`INSERT INTO user_roles (id, user_id, role_id) VALUES (?, ?, ?)`,
+				fmt.Sprintf("ur_%d", timeNow().UnixNano()), u.ID, roleID)
+		}
+	}
+
+	return nil
 }
 
 func UpdateUser(id string, u *models.User) error {
@@ -565,7 +579,26 @@ func UpdateUser(id string, u *models.User) error {
 		UPDATE users SET display_name=?, phone=?, email=?, description=?, role=?, status=?, permissions=?, password=?, mfa_enabled=?, mfa_secret=?, language=?
 		WHERE id=?
 	`, u.DisplayName, u.Phone, u.Email, u.Description, u.Role, u.Status, u.Permissions, passwordToSave, mfaEnabled, mfaSecret, language, id)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 同步 user_roles 表：根据 role code 查找 role_id 并更新关联
+	if u.Role != "" && u.Role != oldUser.Role {
+		// 先删除用户旧的角色关联
+		database.DB.Exec("DELETE FROM user_roles WHERE user_id = ?", id)
+
+		// 根据 role code 查找 role_id
+		var roleID string
+		err = database.DB.QueryRow("SELECT id FROM roles WHERE code = ?", u.Role).Scan(&roleID)
+		if err == nil && roleID != "" {
+			// 插入新的用户角色关联
+			database.DB.Exec(`INSERT INTO user_roles (id, user_id, role_id) VALUES (?, ?, ?)`,
+				fmt.Sprintf("ur_%d", timeNow().UnixNano()), id, roleID)
+		}
+	}
+
+	return nil
 }
 
 func DeleteUser(id string) error {
@@ -613,6 +646,65 @@ func generateSecurePassword(length int) string {
 		b[i] = charset[n.Int64()]
 	}
 	return string(b)
+}
+
+// SyncUserRoles 同步现有用户的角色到 user_roles 表
+func SyncUserRoles() error {
+	log.Println("开始同步用户角色到 user_roles 表...")
+
+	// 获取所有用户
+	rows, err := database.DB.Query("SELECT id, role FROM users WHERE role IS NOT NULL AND role != ''")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	syncCount := 0
+	for rows.Next() {
+		var userID, roleCode string
+		if err := rows.Scan(&userID, &roleCode); err != nil {
+			log.Printf("读取用户失败: %v", err)
+			continue
+		}
+
+		log.Printf("处理用户 %s, role code: %s", userID, roleCode)
+
+		// 根据 role code 查找 role_id
+		var roleID string
+		err = database.DB.QueryRow("SELECT id FROM roles WHERE code = ?", roleCode).Scan(&roleID)
+		if err != nil || roleID == "" {
+			log.Printf("用户 %s 的角色 %s 在 roles 表中不存在", userID, roleCode)
+			continue
+		}
+
+		log.Printf("找到角色 ID: %s", roleID)
+
+		// 检查用户当前的角色关联是否正确
+		var existingRoleID string
+		database.DB.QueryRow("SELECT role_id FROM user_roles WHERE user_id = ? LIMIT 1", userID).Scan(&existingRoleID)
+
+		// 如果已有正确的角色关联，跳过
+		if existingRoleID == roleID {
+			log.Printf("用户 %s 角色关联已正确，跳过", userID)
+			continue
+		}
+
+		// 删除旧的角色关联
+		database.DB.Exec("DELETE FROM user_roles WHERE user_id = ?", userID)
+
+		// 插入新的角色关联
+		_, err = database.DB.Exec(`INSERT INTO user_roles (id, user_id, role_id) VALUES (?, ?, ?)`,
+			fmt.Sprintf("ur_sync_%d", timeNow().UnixNano()), userID, roleID)
+		if err == nil {
+			syncCount++
+			log.Printf("用户 %s 角色同步成功", userID)
+		} else {
+			log.Printf("用户 %s 角色同步失败: %v", userID, err)
+		}
+	}
+
+	log.Printf("用户角色同步完成，共同步 %d 个用户", syncCount)
+	return nil
 }
 
 

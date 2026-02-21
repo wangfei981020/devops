@@ -25,6 +25,11 @@ func main() {
 		log.Printf("创建默认管理员失败: %v", err)
 	}
 
+	// 同步用户角色到 user_roles 表
+	if err := handlers.SyncUserRoles(); err != nil {
+		log.Printf("同步用户角色失败: %v", err)
+	}
+
 	// 创建路由
 	r := mux.NewRouter()
 
