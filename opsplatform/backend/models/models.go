@@ -36,6 +36,7 @@ type User struct {
 	MFASecret   string `json:"mfa_secret,omitempty"` // MFA 密钥（不返回给前端）
 	MFABound    bool   `json:"mfa_bound"`            // 是否已绑定 MFA（有密钥即为已绑定）
 	Language    string `json:"language"`             // 用户界面语言: zh-CN, en-US
+	AuthSource  string `json:"auth_source"`          // 认证来源: local, sso
 	CreatedAt   string `json:"created_at"`
 }
 

@@ -439,7 +439,7 @@ func HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 func GetAllUsers() ([]*models.User, error) {
 	rows, err := database.DB.Query(`
 		SELECT id, username, password, display_name, COALESCE(phone, ''), COALESCE(email, ''), COALESCE(description, ''),
-		       role, status, COALESCE(permissions, ''), COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), created_at
+		       role, status, COALESCE(permissions, ''), COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), COALESCE(auth_source, 'local'), created_at
 		FROM users ORDER BY created_at DESC
 	`)
 	if err != nil {
@@ -450,7 +450,7 @@ func GetAllUsers() ([]*models.User, error) {
 	var users []*models.User
 	for rows.Next() {
 		u := &models.User{}
-		err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Phone, &u.Email, &u.Description, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.CreatedAt)
+		err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Phone, &u.Email, &u.Description, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.AuthSource, &u.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -515,8 +515,8 @@ func AddUser(u *models.User) error {
 	}
 
 	_, err = database.DB.Exec(`
-		INSERT INTO users (id, username, password, display_name, phone, email, description, role, status, permissions, mfa_enabled, language, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO users (id, username, password, display_name, phone, email, description, role, status, permissions, mfa_enabled, language, auth_source, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', ?)
 	`, u.ID, u.Username, hashedPassword, u.DisplayName, u.Phone, u.Email, u.Description, u.Role, u.Status, u.Permissions, u.MFAEnabled, u.Language, u.CreatedAt)
 	if err != nil {
 		return err

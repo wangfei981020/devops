@@ -170,6 +170,33 @@ const paginatedRecords = computed(() => {
   return records.value.slice(start, start + pageSize.value)
 })
 
+// 待处理的交接记录（排除已解决和检测正常，按更新时间倒序）
+const recentHandovers = computed(() => {
+  return records.value
+    .filter(r => r.has_handover && r.handover_content && !['resolved', 'normal'].includes(r.status))
+    .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+})
+
+// 格式化交接时间
+function formatHandoverTime(dateStr) {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  if (isNaN(date.getTime())) return dateStr
+  const now = new Date()
+  const diffMs = now - date
+  const diffMin = Math.floor(diffMs / 60000)
+  const diffHour = Math.floor(diffMs / 3600000)
+  const diffDay = Math.floor(diffMs / 86400000)
+  
+  if (diffMin < 1) return '刚刚'
+  if (diffMin < 60) return `${diffMin}分钟前`
+  if (diffHour < 24) return `${diffHour}小时前`
+  if (diffDay < 7) return `${diffDay}天前`
+  
+  const pad = n => n.toString().padStart(2, '0')
+  return `${date.getMonth()+1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 // 全选功能
 const selectAll = computed({
   get: () => paginatedRecords.value.length > 0 && selectedRecords.value.length === paginatedRecords.value.length,
@@ -243,7 +270,7 @@ const statusOptions = [
 ]
 
 const feedbackTypeOptions = [
-  { value: 'proactive', label: '主动反馈' },
+  { value: 'proactive', label: '主动发现' },
   { value: 'customer', label: '客户反馈' }
 ]
 
@@ -559,7 +586,7 @@ function getChartConfig(chartKey, chartType) {
     'proactive_check': '值班人员主动排查'
   }
   const feedbackTypeMap = {
-    'proactive': '主动反馈',
+    'proactive': '主动发现',
     'customer': '客户反馈'
   }
   const escalateToMap = {
@@ -1408,35 +1435,46 @@ async function deleteProject(project) {
       </div>
 
       <div class="stats-details">
-        <div class="stats-section">
-          <h4>按处理人统计</h4>
-          <div class="handler-list" v-if="stats.by_handler?.length">
-            <div v-for="h in stats.by_handler" :key="h.handler" class="handler-item">
-              <span class="handler-name">{{ h.handler || '未分配' }}</span>
-              <div class="handler-stats">
-                <span class="badge resolved" title="已解决">{{ h.resolved }}</span>
-                <span class="badge pending" title="待解决">{{ h.pending }}</span>
-                <span class="badge in-progress" title="正在解决">{{ h.in_progress }}</span>
-                <span class="badge temporary" title="临时解决">{{ h.temporary }}</span>
-                <span v-if="h.overdue > 0" class="badge overdue" title="逾期">逾{{ h.overdue }}</span>
+        <div class="stats-section handover-section">
+          <h4>
+            待处理交接记录
+            <span class="count">共 {{ recentHandovers.length }} 条待处理</span>
+          </h4>
+          <div class="handover-list" v-if="recentHandovers.length">
+            <div v-for="h in recentHandovers" :key="h.id" class="handover-item">
+              <!-- 顶部标签行：项目、反馈类型、事件类型、交接人、状态 -->
+              <div class="handover-tags-row">
+                <span class="tag-inline project"><b>项目:</b> {{ h.project_name || '未知项目' }}</span>
+                <span class="tag-inline" :class="['feedback', h.feedback_type]"><b>反馈类型:</b> {{ getFeedbackLabel(h.feedback_type) }}</span>
+                <span class="tag-inline event"><b>事件类型:</b> {{ getEventTypeLabel(h.event_type) }}</span>
+                <span class="tag-inline handover-person"><b>交接人:</b> {{ h.handover_person || '-' }}</span>
+                <span :class="['tag-inline', 'status', h.status]"><b>状态:</b> {{ getStatusLabel(h.status) }}</span>
+              </div>
+              
+              <!-- 字段信息：按表格顺序 -->
+              <div class="handover-fields">
+                <div class="field-item">
+                  <span class="field-label">值班人</span>
+                  <span class="field-value">{{ h.duty_person || '-' }}</span>
+                </div>
+                <div class="field-item">
+                  <span class="field-label">处理人</span>
+                  <span class="field-value">{{ h.handler || '-' }}</span>
+                </div>
+                <div class="field-item">
+                  <span class="field-label">交接时间</span>
+                  <span class="field-value time">{{ h.updated_at || '-' }}</span>
+                </div>
+              </div>
+              
+              <!-- 交接内容 -->
+              <div class="handover-content-section">
+                <span class="content-label">交接内容</span>
+                <div class="content-text">{{ h.handover_content || '无交接内容' }}</div>
               </div>
             </div>
           </div>
-          <div v-else class="empty-stats">暂无数据</div>
-        </div>
-        <div class="stats-section">
-          <h4>按项目统计</h4>
-          <div class="project-list" v-if="stats.by_project?.length">
-            <div v-for="p in stats.by_project" :key="p.project" class="project-item">
-              <span class="project-name">{{ p.project }}</span>
-              <div class="project-stats">
-                <span>总{{ p.total }}</span>
-                <span class="resolved">解决{{ p.resolved }}</span>
-                <span v-if="p.overdue > 0" class="overdue">逾期{{ p.overdue }}</span>
-              </div>
-            </div>
-          </div>
-          <div v-else class="empty-stats">暂无数据</div>
+          <div v-else class="empty-stats">暂无待处理的交接记录</div>
         </div>
       </div>
     </div>
@@ -1618,7 +1656,7 @@ async function deleteProject(project) {
               <span v-else>无</span>
             </td>
             <td class="col-handover nowrap">{{ r.has_handover ? (r.handover_person || '有') : '无' }}</td>
-            <td class="col-handover-content nowrap" :title="r.handover_content">{{ r.has_handover ? (r.handover_content?.slice(0, 10) || '无') : '无' }}{{ r.handover_content?.length > 10 ? '...' : '' }}</td>
+            <td class="col-handover-content" :title="r.handover_content">{{ r.has_handover ? (r.handover_content || '无') : '无' }}</td>
             <td class="col-attach nowrap" @click.stop>
               <div v-if="r.attachments?.length" class="attachments-preview">
                 <img v-for="(img, idx) in r.attachments.slice(0, 2)" :key="idx" :src="getDisplayUrl(img)" @click="openImagePreview(r.attachments, idx)" class="thumb">
@@ -2842,6 +2880,44 @@ async function deleteProject(project) {
 .project-stats .overdue { color: #dc2626; }
 .empty-stats { color: var(--text-muted); font-size: 0.8125rem; text-align: center; padding: 20px; }
 
+/* 交接记录样式 */
+.handover-section { grid-column: 1 / -1; }
+.handover-section h4 { display: flex; align-items: center; justify-content: space-between; }
+.handover-section h4 .count { font-size: 0.75rem; color: var(--text-muted); font-weight: 400; background: var(--bg-hover); padding: 2px 8px; border-radius: 10px; }
+.handover-list { display: flex; flex-direction: column; gap: 10px; max-height: 320px; overflow-y: auto; padding-right: 8px; }
+.handover-list::-webkit-scrollbar { width: 6px; }
+.handover-list::-webkit-scrollbar-track { background: var(--bg-hover); border-radius: 3px; }
+.handover-list::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+.handover-list::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+.handover-item { padding: 12px 14px; background: var(--bg-hover); border-radius: 8px; border-left: 3px solid #3b82f6; transition: all 0.15s; overflow: visible; }
+.handover-item:hover { background: var(--bg-card); box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+
+/* 顶部标签行 */
+.handover-tags-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; align-items: center; }
+.tag-inline { font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; font-weight: 500; white-space: nowrap; }
+.tag-inline.project { background: rgba(59, 130, 246, 0.12); color: #1d4ed8; }
+.tag-inline.feedback.proactive { background: rgba(16, 185, 129, 0.12); color: #059669; }
+.tag-inline.feedback.customer { background: rgba(245, 158, 11, 0.12); color: #b45309; }
+.tag-inline.event { background: rgba(139, 92, 246, 0.12); color: #7c3aed; }
+.tag-inline.handover-person { background: rgba(236, 72, 153, 0.12); color: #db2777; }
+.tag-inline.status { font-weight: 600; }
+.tag-inline.status.resolved { background: #d1fae5; color: #059669; }
+.tag-inline.status.pending { background: #fef3c7; color: #d97706; }
+.tag-inline.status.in_progress { background: #ede9fe; color: #7c3aed; }
+.tag-inline.status.normal { background: #e0f2fe; color: #0284c7; }
+
+/* 字段信息行 */
+.handover-fields { display: flex; gap: 20px; margin-bottom: 10px; flex-wrap: wrap; }
+.field-item { display: flex; align-items: center; gap: 6px; }
+.field-label { font-size: 0.7rem; color: var(--text-muted); font-weight: 500; }
+.field-value { font-size: 0.8rem; color: var(--text-primary); font-weight: 500; }
+.field-value.time { font-size: 0.75rem; color: var(--text-secondary); }
+
+/* 交接内容 */
+.handover-content-section { margin-top: 8px; overflow: visible; }
+.content-label { display: block; font-size: 0.65rem; color: var(--text-muted); font-weight: 500; margin-bottom: 4px; }
+.content-text { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.6; background: var(--bg-card); padding: 10px 12px; border-radius: 5px; border: 1px solid var(--border-color); white-space: pre-wrap; word-break: break-word; overflow: visible; display: block; }
+
 /* 筛选 */
 .filters { background: var(--bg-card); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; border: 1px solid var(--border-color); }
 .filter-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
@@ -2886,7 +2962,7 @@ async function deleteProject(project) {
 .col-resp { width: 45px; text-align: center; }
 .col-escalate { width: 65px; }
 .col-handover { width: 55px; }
-.col-handover-content { max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+.col-handover-content { min-width: 120px; max-width: 200px; word-break: break-word; white-space: normal; }
 .col-status { width: 60px; }
 .col-planned { width: 70px; }
 .col-overdue { width: 40px; }

@@ -141,6 +141,8 @@ func createTables() error {
 	// 兼容旧数据库：添加 oidc_sub 字段（OIDC用户标识）
 	DB.Exec(`ALTER TABLE users ADD COLUMN oidc_sub VARCHAR(255) DEFAULT ''`)
 	DB.Exec(`CREATE INDEX idx_users_oidc_sub ON users(oidc_sub)`)
+	// 兼容旧数据库：添加 auth_source 字段（认证来源: local, sso）
+	DB.Exec(`ALTER TABLE users ADD COLUMN auth_source VARCHAR(20) DEFAULT 'local'`)
 
 	// 创建审计日志表
 	_, err = DB.Exec(`

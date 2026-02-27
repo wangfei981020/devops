@@ -336,7 +336,7 @@ function formatDate(str) {
           <thead><tr><th>用户信息</th><th>角色</th><th>状态</th><th>MFA</th><th>最后登录</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="u in filteredUsers" :key="u.id">
-              <td><div class="user-cell"><div class="avatar" :style="{ background: getAvatarColor(u.username) }">{{ (u.display_name || u.username || 'U').charAt(0).toUpperCase() }}</div><div class="user-info"><span class="name">{{ u.display_name || u.username }}</span><span class="email">{{ u.email || u.username }}</span></div></div></td>
+              <td><div class="user-cell"><div class="avatar" :style="{ background: getAvatarColor(u.username) }">{{ (u.display_name || u.username || 'U').charAt(0).toUpperCase() }}</div><div class="user-info"><span class="name">{{ u.display_name || u.username }}<span v-if="u.auth_source === 'sso'" class="auth-badge sso" title="SSO 账号">SSO</span><span v-else class="auth-badge local" title="本地账号">本地</span></span><span class="email">{{ u.email || u.username }}</span></div></div></td>
               <td><span class="role-badge" :class="u.role === 'super_admin' || u.role === 'admin' ? 'admin' : ''">{{ getRoleName(u.role) }}</span></td>
               <td><span class="status-cell"><span class="status-dot" :class="u.status"></span>{{ u.status === 'active' ? '活跃' : '禁用' }}</span></td>
               <td><span class="mfa-badge" :class="u.mfa_bound ? 'bound' : 'unbound'"><svg v-if="u.mfa_bound" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>{{ u.mfa_bound ? '已绑定' : '未启用' }}</span></td>
@@ -573,8 +573,11 @@ function formatDate(str) {
 .user-cell { display: flex; align-items: center; gap: 12px; }
 .avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 600; font-size: 0.875rem; }
 .user-info { display: flex; flex-direction: column; }
-.user-info .name { font-weight: 500; }
+.user-info .name { font-weight: 500; display: flex; align-items: center; gap: 6px; }
 .user-info .email { font-size: 0.75rem; color: var(--text-secondary); }
+.auth-badge { font-size: 0.6rem; padding: 1px 5px; border-radius: 3px; font-weight: 500; text-transform: uppercase; }
+.auth-badge.local { background: rgba(34, 197, 94, 0.12); color: #16a34a; }
+.auth-badge.sso { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
 .role-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
 .role-badge.admin { background: rgba(139, 92, 246, 0.1); color: #8b5cf6; }
 .status-cell { display: flex; align-items: center; gap: 6px; }

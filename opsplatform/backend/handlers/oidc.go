@@ -569,8 +569,8 @@ func findOrCreateOIDCUser(config *OIDCConfig, userInfo *UserInfo) (*models.User,
 	log.Printf("[OIDC] 创建新用户: username=%s, role=%s", username, config.DefaultRole)
 
 	_, err = database.DB.Exec(`
-		INSERT INTO users (id, username, display_name, email, password, role, status, oidc_sub, created_at, updated_at)
-		VALUES (?, ?, ?, ?, '', ?, 'active', ?, NOW(), NOW())
+		INSERT INTO users (id, username, display_name, email, password, role, status, oidc_sub, auth_source, created_at, updated_at)
+		VALUES (?, ?, ?, ?, '', ?, 'active', ?, 'sso', NOW(), NOW())
 	`, newID, username, displayName, userInfo.Email, config.DefaultRole, userInfo.Sub)
 
 	if err != nil {
