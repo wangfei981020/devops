@@ -201,11 +201,19 @@ func AddAuditLog(action, recordID, operator, oldData, newData, changes, ip strin
 	return AddAuditLogWithDetails(action, recordID, operator, oldData, newData, changes, ip, "", "", 200, 0)
 }
 
-// AddAuditLogFromRequest 从 HTTP 请求中自动获取 IP、方法、路径和耗时
+// AddAuditLogFromRequest 从 HTTP 请求中自动获取 IP、方法、路径、耗时和当前用户
 func AddAuditLogFromRequest(r *http.Request, action, recordID, operator, oldData, newData, changes string) error {
 	ip := GetClientIP(r)
 	method := r.Method
 	path := r.URL.Path
+	
+	// 如果 operator 为空，自动从 context 获取当前登录用户
+	if operator == "" {
+		_, username, _ := GetUserFromContext(r)
+		if username != "" {
+			operator = username
+		}
+	}
 	
 	// 计算耗时（使用微秒，确保快速操作也有值）
 	duration := int64(0)
@@ -374,6 +382,172 @@ func AddAuditLogWithDetails(action, recordID, operator, oldData, newData, change
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, log.ID, log.TraceID, log.Action, log.Method, log.Path, log.StatusCode, log.Duration, log.RecordID, log.TargetType, log.TargetID, log.Operator, log.OldData, log.NewData, log.Changes, log.IP, log.CreatedAt)
 	return err
+}
+
+// HandleDeleteAuditLog 删除审计日志（仅超级管理员）
+func HandleDeleteAuditLog(w http.ResponseWriter, r *http.Request) {
+	// 从 context 获取当前登录用户
+	_, username, _ := GetUserFromContext(r)
+	if username == "" {
+		SafeError(w, "未授权", http.StatusUnauthorized, nil)
+		return
+	}
+
+	// 检查是否是超级管理员
+	user, err := GetUserByUsername(username)
+	if err != nil || user == nil {
+		SafeError(w, "用户不存在", http.StatusNotFound, err)
+		return
+	}
+
+	if user.Role != "super_admin" {
+		SafeError(w, "只有超级管理员才能删除审计日志", http.StatusForbidden, nil)
+		return
+	}
+
+	// 获取要删除的日志ID
+	logID := strings.TrimPrefix(r.URL.Path, "/api/audit-logs/")
+	if logID == "" {
+		SafeError(w, "日志ID不能为空", http.StatusBadRequest, nil)
+		return
+	}
+
+	// 先查询要删除的日志详情（用于记录）
+	log, err := GetAuditLogByID(logID)
+	if err != nil {
+		SafeError(w, "日志不存在", http.StatusNotFound, err)
+		return
+	}
+
+	// 执行删除
+	err = DeleteAuditLog(logID)
+	if err != nil {
+		SafeError(w, "删除失败", http.StatusInternalServerError, err)
+		return
+	}
+
+	// 记录删除操作的审计日志
+	oldDataJSON, _ := json.Marshal(log)
+	AddAuditLogFromRequest(r, "DELETE", "audit_log:"+logID, username, string(oldDataJSON), "", 
+		fmt.Sprintf("删除审计日志: trace_id=%s, action=%s, operator=%s", log.TraceID, log.Action, log.Operator))
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{"message": "删除成功"})
+}
+
+// HandleBatchDeleteAuditLogs 批量删除审计日志（仅超级管理员）
+func HandleBatchDeleteAuditLogs(w http.ResponseWriter, r *http.Request) {
+	// 从 context 获取当前登录用户
+	_, username, _ := GetUserFromContext(r)
+	if username == "" {
+		SafeError(w, "未授权", http.StatusUnauthorized, nil)
+		return
+	}
+
+	user, err := GetUserByUsername(username)
+	if err != nil || user == nil {
+		SafeError(w, "用户不存在", http.StatusNotFound, err)
+		return
+	}
+
+	if user.Role != "super_admin" {
+		SafeError(w, "只有超级管理员才能删除审计日志", http.StatusForbidden, nil)
+		return
+	}
+
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		SafeError(w, "参数错误", http.StatusBadRequest, err)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		SafeError(w, "请选择要删除的日志", http.StatusBadRequest, nil)
+		return
+	}
+
+	// 批量删除
+	deletedCount := 0
+	for _, id := range req.IDs {
+		if err := DeleteAuditLog(id); err == nil {
+			deletedCount++
+		}
+	}
+
+	// 记录批量删除操作
+	AddAuditLogFromRequest(r, "DELETE", "audit_log:batch", username, "", "",
+		fmt.Sprintf("批量删除审计日志: 共%d条", deletedCount))
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "删除成功",
+		"count":   deletedCount,
+	})
+}
+
+// GetAuditLogByID 根据ID获取审计日志
+func GetAuditLogByID(id string) (*models.AuditLog, error) {
+	log := &models.AuditLog{}
+	err := database.DB.QueryRow(`
+		SELECT id, COALESCE(trace_id, ''), action, COALESCE(method, ''), COALESCE(path, ''),
+		       COALESCE(status_code, 200), COALESCE(duration, 0), record_id,
+		       COALESCE(target_type, ''), COALESCE(target_id, ''),
+		       operator, COALESCE(old_data, ''), COALESCE(new_data, ''), changes, ip, created_at
+		FROM audit_logs WHERE id = ?
+	`, id).Scan(&log.ID, &log.TraceID, &log.Action, &log.Method, &log.Path, &log.StatusCode, &log.Duration,
+		&log.RecordID, &log.TargetType, &log.TargetID, &log.Operator, &log.OldData, &log.NewData, &log.Changes, &log.IP, &log.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return log, nil
+}
+
+// DeleteAuditLog 删除审计日志
+func DeleteAuditLog(id string) error {
+	_, err := database.DB.Exec("DELETE FROM audit_logs WHERE id = ?", id)
+	return err
+}
+
+// HandleFixEmptyOperators 修复空的 operator 字段
+func HandleFixEmptyOperators(w http.ResponseWriter, r *http.Request) {
+	// 从 context 获取当前登录用户，确保是超级管理员
+	_, username, role := GetUserFromContext(r)
+	if username == "" {
+		SafeError(w, "未授权", http.StatusUnauthorized, nil)
+		return
+	}
+
+	if role != "super_admin" {
+		SafeError(w, "只有超级管理员才能执行此操作", http.StatusForbidden, nil)
+		return
+	}
+
+	// 将空的、unknown 的 operator 更新为 admin
+	result, err := database.DB.Exec(`
+		UPDATE audit_logs
+		SET operator = 'admin'
+		WHERE (operator = '' OR operator IS NULL OR operator = 'unknown')
+	`)
+	if err != nil {
+		SafeError(w, "修复失败", http.StatusInternalServerError, err)
+		return
+	}
+
+	affected, _ := result.RowsAffected()
+
+	// 记录这次修复操作
+	AddAuditLog("FIX", "audit_logs:fix_operators", username, "", "",
+		fmt.Sprintf("修复空的 operator 字段：共 %d 条记录", affected),
+		GetClientIP(r))
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"message":  fmt.Sprintf("修复完成，共更新 %d 条记录", affected),
+		"affected": affected,
+	})
 }
 
 func containsIgnoreCase(s, substr string) bool {

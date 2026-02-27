@@ -15,6 +15,7 @@ import (
 type ScheduleEmployee struct {
 	ID          int               `json:"id"`
 	Name        string            `json:"name"`
+	GroupName   string            `json:"group_name"`
 	Role        string            `json:"role"`
 	AvatarColor string            `json:"avatarColor"`
 	Shifts      map[string]string `json:"shifts"`
@@ -48,13 +49,17 @@ func HandleGetSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 获取该月的排班数据
+	// 获取该月的排班数据 - 计算正确的月末日期
 	startDate := fmt.Sprintf("%04d-%02d-01", year, month)
-	endDate := fmt.Sprintf("%04d-%02d-31", year, month)
+	// 使用下个月第1天减1天来获取当月最后一天
+	lastDay := time.Date(year, time.Month(month+1), 0, 0, 0, 0, 0, time.UTC).Day()
+	endDate := fmt.Sprintf("%04d-%02d-%02d", year, month, lastDay)
+	log.Printf("查询排班数据: year=%d, month=%d, startDate=%s, endDate=%s", year, month, startDate, endDate)
 
 	for i := range employees {
 		shifts, err := getEmployeeShifts(employees[i].ID, startDate, endDate)
 		if err != nil {
+			log.Printf("获取员工 %d 排班失败: %v", employees[i].ID, err)
 			continue
 		}
 		employees[i].Shifts = shifts
@@ -199,6 +204,34 @@ func HandleDeleteEmployee(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// HandleEmployeeOrder 更新员工排序
+func HandleEmployeeOrder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var orders []struct {
+		ID        int `json:"id"`
+		SortOrder int `json:"sort_order"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&orders); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	for _, o := range orders {
+		_, err := database.DB.Exec(`UPDATE schedule_employees SET sort_order = ? WHERE id = ?`, o.SortOrder, o.ID)
+		if err != nil {
+			log.Printf("更新员工排序失败: id=%d, err=%v", o.ID, err)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
 // HandleUpdateShift 更新单个排班
 func HandleUpdateShift(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -244,12 +277,70 @@ func HandleUpdateShift(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// HandleBatchUpdateShift 批量更新排班
+func HandleBatchUpdateShift(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Updates []struct {
+			EmployeeID int    `json:"employee_id"`
+			Date       string `json:"date"`
+			ShiftCode  string `json:"shift_code"`
+		} `json:"updates"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("批量更新排班解析失败: %v", err)
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("批量更新排班: %d 条记录", len(req.Updates))
+
+	successCount := 0
+	for i, u := range req.Updates {
+		log.Printf("批量排班[%d]: employeeId=%d, date=%s, shiftCode=%s", i, u.EmployeeID, u.Date, u.ShiftCode)
+		if u.ShiftCode == "" {
+			deleteShift(u.EmployeeID, u.Date)
+			successCount++
+		} else {
+			err := upsertShift(u.EmployeeID, u.Date, u.ShiftCode)
+			if err != nil {
+				log.Printf("批量排班保存失败: employeeId=%d, date=%s, err=%v", u.EmployeeID, u.Date, err)
+			} else {
+				log.Printf("批量排班保存成功: employeeId=%d, date=%s", u.EmployeeID, u.Date)
+				successCount++
+			}
+		}
+	}
+	log.Printf("批量排班完成: total=%d, success=%d", len(req.Updates), successCount)
+
+	// 记录审计日志
+	operator := r.Header.Get("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+	AddAuditLogFromRequest(r, "批量排班", "batch", operator, "",
+		fmt.Sprintf(`{"total":%d,"success":%d}`, len(req.Updates), successCount),
+		fmt.Sprintf("批量更新排班: 共%d条, 成功%d条", len(req.Updates), successCount))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"total":   len(req.Updates),
+		"success": successCount,
+	})
+}
+
 // 辅助函数
 func getScheduleEmployees() ([]ScheduleEmployee, error) {
 	rows, err := database.DB.Query(`
-		SELECT id, name, role, avatar_color 
+		SELECT id, name, COALESCE(group_name,''), role, avatar_color 
 		FROM schedule_employees 
-		ORDER BY sort_order, id
+		ORDER BY group_name, sort_order, id
 	`)
 	if err != nil {
 		return nil, err
@@ -259,7 +350,7 @@ func getScheduleEmployees() ([]ScheduleEmployee, error) {
 	var employees []ScheduleEmployee
 	for rows.Next() {
 		var emp ScheduleEmployee
-		if err := rows.Scan(&emp.ID, &emp.Name, &emp.Role, &emp.AvatarColor); err != nil {
+		if err := rows.Scan(&emp.ID, &emp.Name, &emp.GroupName, &emp.Role, &emp.AvatarColor); err != nil {
 			continue
 		}
 		emp.Shifts = make(map[string]string)
@@ -270,24 +361,27 @@ func getScheduleEmployees() ([]ScheduleEmployee, error) {
 
 func getEmployeeShifts(employeeID int, startDate, endDate string) (map[string]string, error) {
 	rows, err := database.DB.Query(`
-		SELECT shift_date, shift_type 
+		SELECT DATE_FORMAT(shift_date, '%Y-%m-%d'), shift_type 
 		FROM schedule_shifts 
 		WHERE employee_id = ? AND shift_date BETWEEN ? AND ?
 	`, employeeID, startDate, endDate)
 	if err != nil {
+		log.Printf("获取排班失败 employeeID=%d: %v", employeeID, err)
 		return nil, err
 	}
 	defer rows.Close()
 
 	shifts := make(map[string]string)
 	for rows.Next() {
-		var date time.Time
+		var dateStr string
 		var shiftType string
-		if err := rows.Scan(&date, &shiftType); err != nil {
+		if err := rows.Scan(&dateStr, &shiftType); err != nil {
+			log.Printf("扫描排班数据失败: %v", err)
 			continue
 		}
-		shifts[date.Format("2006-01-02")] = shiftType
+		shifts[dateStr] = shiftType
 	}
+	log.Printf("员工 %d 排班数据: %d 条", employeeID, len(shifts))
 	return shifts, nil
 }
 
@@ -299,10 +393,14 @@ func insertEmployee(emp ScheduleEmployee) (int, error) {
 		emp.AvatarColor = "linear-gradient(135deg, #667eea, #764ba2)"
 	}
 
+	// 获取当前最大的 sort_order，新员工添加到最后
+	var maxOrder int
+	database.DB.QueryRow("SELECT COALESCE(MAX(sort_order), 0) FROM schedule_employees").Scan(&maxOrder)
+
 	result, err := database.DB.Exec(`
-		INSERT INTO schedule_employees (name, role, avatar_color) 
-		VALUES (?, ?, ?)
-	`, emp.Name, emp.Role, emp.AvatarColor)
+		INSERT INTO schedule_employees (name, group_name, role, avatar_color, sort_order)
+		VALUES (?, ?, ?, ?, ?)
+	`, emp.Name, emp.GroupName, emp.Role, emp.AvatarColor, maxOrder+1)
 	if err != nil {
 		return 0, err
 	}
@@ -314,9 +412,9 @@ func insertEmployee(emp ScheduleEmployee) (int, error) {
 func updateEmployee(emp ScheduleEmployee) error {
 	_, err := database.DB.Exec(`
 		UPDATE schedule_employees 
-		SET name = ?, role = ?, avatar_color = ? 
+		SET name = ?, group_name = ?, role = ?, avatar_color = ? 
 		WHERE id = ?
-	`, emp.Name, emp.Role, emp.AvatarColor, emp.ID)
+	`, emp.Name, emp.GroupName, emp.Role, emp.AvatarColor, emp.ID)
 	return err
 }
 
@@ -439,4 +537,65 @@ func HandleSaveShiftConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// HandleResetSchedule 重置指定月份的排班数据
+func HandleResetSchedule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Year  int `json:"year"`
+		Month int `json:"month"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.Year == 0 || req.Month == 0 {
+		http.Error(w, "年份和月份必填", http.StatusBadRequest)
+		return
+	}
+
+	// 计算该月的日期范围
+	startDate := fmt.Sprintf("%04d-%02d-01", req.Year, req.Month)
+	lastDay := time.Date(req.Year, time.Month(req.Month+1), 0, 0, 0, 0, 0, time.UTC).Day()
+	endDate := fmt.Sprintf("%04d-%02d-%02d", req.Year, req.Month, lastDay)
+
+	// 删除该月的所有排班数据
+	result, err := database.DB.Exec(`
+		DELETE FROM schedule_shifts 
+		WHERE shift_date >= ? AND shift_date <= ?
+	`, startDate, endDate)
+
+	if err != nil {
+		log.Printf("重置排班失败: %v", err)
+		http.Error(w, "重置排班失败", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	log.Printf("重置排班成功: year=%d, month=%d, startDate=%s, endDate=%s, deleted=%d",
+		req.Year, req.Month, startDate, endDate, rowsAffected)
+
+	// 记录审计日志
+	operator := r.Header.Get("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+
+	AddAuditLogFromRequest(r, "重置排班", "schedule", operator, "",
+		fmt.Sprintf("重置 %d年%d月 的排班数据", req.Year, req.Month),
+		fmt.Sprintf("删除了 %d 条排班记录", rowsAffected))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": fmt.Sprintf("已重置 %d年%d月 的排班数据，共删除 %d 条记录", req.Year, req.Month, rowsAffected),
+		"deleted": rowsAffected,
+	})
 }

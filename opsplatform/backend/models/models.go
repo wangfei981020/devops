@@ -134,6 +134,7 @@ type Merchant struct {
 	AppSecrets       string `json:"app_secrets"`       // appsecret（密码系统查看）
 	GameDomains      string `json:"game_domains"`      // 游戏域名（多个）
 	RedirectDomains  string `json:"redirect_domains"`  // 301域名（多个）
+	CustomFields     string `json:"custom_fields"`     // 自定义字段（JSON对象）
 	Remark           string `json:"remark"`            // 备注
 	Status           string `json:"status"`            // 状态
 	CreatedAt        string `json:"created_at"`
@@ -255,6 +256,59 @@ type Incident struct {
 	CreatedBy     string `json:"created_by"`
 	UpdatedAt     string `json:"updated_at"`
 	UpdatedBy     string `json:"updated_by"`
+}
+
+// DutyProject 值班项目配置
+type DutyProject struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`        // 项目名称
+	Code        string `json:"code"`        // 项目代码
+	Description string `json:"description"` // 项目描述
+	Status      string `json:"status"`      // 状态: active, disabled
+	SortOrder   int    `json:"sort_order"`  // 排序
+	CreatedAt   string `json:"created_at"`
+	CreatedBy   string `json:"created_by"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// DutyRecord 值班记录
+type DutyRecord struct {
+	ID           string   `json:"id"`
+	DutyDate     string   `json:"duty_date"`     // 值班日期时间
+	DutyPerson   string   `json:"duty_person"`   // 值班人
+	ProjectID    string   `json:"project_id"`    // 项目ID
+	ProjectName  string   `json:"project_name"`  // 项目名称（关联查询）
+	TaskDesc     string   `json:"task_desc"`     // 任务描述
+	FeedbackType string   `json:"feedback_type"` // 反馈类型: proactive=主动反馈, customer=客户反馈
+	EventType    string   `json:"event_type"`    // 事件类型: inspection=巡检发现, alert=监控告警, customer_feedback=客户反馈, proactive_check=值班人员主动排查
+	Handler      string   `json:"handler"`       // 处理人
+	HandleResult string   `json:"handle_result"` // 处理结果
+	ProblemDesc  string   `json:"problem_desc"`  // 问题描述
+
+	FirstCallTime string `json:"first_call_time"` // 首次拨打时间
+	AnswerTime    string `json:"answer_time"`     // 接听时间
+	CallCount     int    `json:"call_count"`      // 拨打次数
+	IsAnswered    bool   `json:"is_answered"`     // 是否接听
+	ResponseTime  int    `json:"response_time"`   // 响应时间(分钟)
+
+	IsEscalated bool   `json:"is_escalated"` // 是否升级问题
+	EscalateTo  string `json:"escalate_to"`  // 升级给谁: leader=组长, hod=HOD
+
+	HasHandover     bool   `json:"has_handover"`     // 是否有工作交接
+	HandoverPerson  string `json:"handover_person"`  // 工作交接人
+	HandoverContent string `json:"handover_content"` // 工作交接内容
+
+	Status                string   `json:"status"`                   // 状态: resolved=已解决, unresolved=未解决, pending=待解决, temporary=临时解决
+	PlannedFixTime        string   `json:"planned_fix_time"`         // 计划修复时间
+	PlannedFixTimeEdited  bool     `json:"planned_fix_time_edited"`  // 计划修复时间是否被编辑过
+	IsOverdue             bool     `json:"is_overdue"`               // 是否逾期
+	OverdueReason  string   `json:"overdue_reason"`   // 逾期原因
+	Attachments    []string `json:"attachments"`      // 附件列表(图片URL数组)
+
+	CreatedAt string `json:"created_at"`
+	CreatedBy string `json:"created_by"`
+	UpdatedAt string `json:"updated_at"`
+	UpdatedBy string `json:"updated_by"`
 }
 
 // WebsiteHall 甲方（厅方/客户方）信息

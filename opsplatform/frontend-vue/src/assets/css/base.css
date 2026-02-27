@@ -1,0 +1,442 @@
+:root {
+  --primary: #3b82f6;
+  --primary-dark: #2563eb;
+  --primary-bg: rgba(59, 130, 246, 0.1);
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --info: #06b6d4;
+  
+  --bg-main: #0f172a;
+  --bg-card: #1e293b;
+  --bg-sidebar: #1e293b;
+  --bg-input: #334155;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  
+  --border-color: rgba(255, 255, 255, 0.1);
+  
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.3);
+}
+
+.light-mode {
+  --bg-main: #f8fafc;
+  --bg-card: #ffffff;
+  --bg-sidebar: #ffffff;
+  --bg-input: #f1f5f9;
+  --bg-hover: rgba(0, 0, 0, 0.05);
+  
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  
+  --border-color: rgba(0, 0, 0, 0.1);
+  
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  height: 100%;
+  overflow-x: hidden;
+}
+
+#app {
+  height: 100%;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+button {
+  font-family: inherit;
+}
+
+input, textarea, select {
+  font-family: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* 全局通用弹窗遮罩层 - 用于所有页面的 Teleport 弹窗 */
+/* 使用 body 选择器确保全局生效 */
+body .modal-overlay,
+body .user-modal-overlay {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  background: rgba(0, 0, 0, 0.6) !important;
+  backdrop-filter: blur(4px) !important;
+  z-index: 10000 !important;
+  display: none !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 20px !important;
+  box-sizing: border-box !important;
+}
+
+body .modal-overlay.active,
+body .modal-overlay.show,
+body .user-modal-overlay.show {
+  display: flex !important;
+}
+
+/* 全局弹窗样式 - 用于所有 Teleport 弹窗 */
+.roles-modal-overlay,
+.perm-modal-overlay,
+.domain-modal-overlay,
+.merchant-modal-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  background: rgba(0, 0, 0, 0.6) !important;
+  backdrop-filter: blur(4px) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  z-index: 99999 !important;
+  padding: 20px !important;
+}
+
+.roles-modal,
+.perm-modal,
+.domain-modal,
+.merchant-modal {
+  background: #fff !important;
+  border-radius: 16px !important;
+  width: 90% !important;
+  max-width: 500px !important;
+  max-height: 90vh !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.4) !important;
+}
+
+.roles-modal.modal-lg,
+.perm-modal.modal-lg {
+  max-width: 800px !important;
+}
+
+.roles-modal .modal-header,
+.perm-modal .modal-header,
+.domain-modal .modal-header,
+.merchant-modal .modal-header {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  padding: 20px 24px !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+  background: #fff !important;
+}
+
+.roles-modal .modal-header h3,
+.perm-modal .modal-header h3,
+.domain-modal .modal-header h3,
+.merchant-modal .modal-header h3 {
+  margin: 0 !important;
+  font-size: 1.125rem !important;
+  font-weight: 600 !important;
+  color: #1e293b !important;
+}
+
+.roles-modal .modal-close,
+.perm-modal .modal-close,
+.domain-modal .modal-close,
+.merchant-modal .modal-close {
+  background: none !important;
+  border: none !important;
+  font-size: 1.5rem !important;
+  cursor: pointer !important;
+  color: #94a3b8 !important;
+  line-height: 1 !important;
+  padding: 0 !important;
+  width: 32px !important;
+  height: 32px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 8px !important;
+  transition: all 0.2s !important;
+}
+
+.roles-modal .modal-close:hover,
+.perm-modal .modal-close:hover,
+.domain-modal .modal-close:hover,
+.merchant-modal .modal-close:hover {
+  background: #f1f5f9 !important;
+  color: #475569 !important;
+}
+
+.roles-modal .modal-body,
+.perm-modal .modal-body,
+.domain-modal .modal-body,
+.merchant-modal .modal-body {
+  padding: 24px !important;
+  overflow-y: auto !important;
+  flex: 1 !important;
+  background: #fff !important;
+}
+
+.roles-modal .modal-footer,
+.perm-modal .modal-footer,
+.domain-modal .modal-footer,
+.merchant-modal .modal-footer {
+  display: flex !important;
+  justify-content: flex-end !important;
+  gap: 12px !important;
+  padding: 16px 24px !important;
+  border-top: 1px solid #e2e8f0 !important;
+  background: #f8fafc !important;
+}
+
+.roles-modal .form-group,
+.perm-modal .form-group,
+.domain-modal .form-group,
+.merchant-modal .form-group {
+  margin-bottom: 16px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+}
+
+.roles-modal .form-group label,
+.perm-modal .form-group label,
+.domain-modal .form-group label,
+.merchant-modal .form-group label {
+  display: block !important;
+  font-weight: 500 !important;
+  font-size: 0.875rem !important;
+  color: #1e293b !important;
+}
+
+.roles-modal .form-group .required,
+.perm-modal .form-group .required,
+.domain-modal .form-group .required,
+.merchant-modal .form-group .required {
+  color: #ef4444 !important;
+}
+
+.roles-modal .form-input,
+.roles-modal .form-select,
+.perm-modal .form-input,
+.perm-modal .form-select,
+.domain-modal .form-group input,
+.domain-modal .form-group select,
+.domain-modal .form-group textarea,
+.merchant-modal .form-group input,
+.merchant-modal .form-group select,
+.merchant-modal .form-group textarea {
+  width: 100% !important;
+  padding: 10px 14px !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 8px !important;
+  font-size: 0.875rem !important;
+  background: #fff !important;
+  color: #1e293b !important;
+  box-sizing: border-box !important;
+  transition: border-color 0.2s, box-shadow 0.2s !important;
+}
+
+.roles-modal .form-input:focus,
+.roles-modal .form-select:focus,
+.perm-modal .form-input:focus,
+.perm-modal .form-select:focus,
+.domain-modal .form-group input:focus,
+.domain-modal .form-group select:focus,
+.domain-modal .form-group textarea:focus,
+.merchant-modal .form-group input:focus,
+.merchant-modal .form-group select:focus,
+.merchant-modal .form-group textarea:focus {
+  outline: none !important;
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+}
+
+.roles-modal .form-hint,
+.perm-modal .form-hint {
+  font-size: 0.75rem !important;
+  color: #94a3b8 !important;
+  margin-top: 4px !important;
+}
+
+.roles-modal .btn,
+.perm-modal .btn,
+.domain-modal .btn,
+.merchant-modal .btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 10px 18px !important;
+  border-radius: 8px !important;
+  font-size: 0.875rem !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+  border: none !important;
+  transition: all 0.2s !important;
+}
+
+.roles-modal .btn-default,
+.perm-modal .btn-default,
+.domain-modal .btn-secondary,
+.merchant-modal .btn-secondary {
+  background: #f1f5f9 !important;
+  color: #475569 !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+.roles-modal .btn-default:hover,
+.perm-modal .btn-default:hover,
+.domain-modal .btn-secondary:hover,
+.merchant-modal .btn-secondary:hover {
+  background: #e2e8f0 !important;
+}
+
+.roles-modal .btn-primary,
+.perm-modal .btn-primary,
+.domain-modal .btn-primary,
+.merchant-modal .btn-primary {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+  color: #fff !important;
+}
+
+.roles-modal .btn-primary:hover,
+.perm-modal .btn-primary:hover,
+.domain-modal .btn-primary:hover,
+.merchant-modal .btn-primary:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important;
+}
+
+.roles-modal .form-row,
+.domain-modal .form-row,
+.merchant-modal .form-row {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 16px !important;
+}
+
+.roles-modal .permission-sections {
+  display: grid !important;
+  grid-template-columns: repeat(2, 1fr) !important;
+  gap: 24px !important;
+}
+
+.roles-modal .permission-section {
+  background: #f8fafc !important;
+  border-radius: 12px !important;
+  padding: 16px !important;
+}
+
+.roles-modal .section-title {
+  font-size: 0.875rem !important;
+  font-weight: 600 !important;
+  margin-bottom: 12px !important;
+  color: #1e293b !important;
+  padding-bottom: 8px !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+  margin-top: 0 !important;
+}
+
+.roles-modal .permission-tree {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+  max-height: 200px !important;
+  overflow-y: auto !important;
+}
+
+.roles-modal .permission-item {
+  padding: 8px 12px !important;
+  background: #fff !important;
+  border-radius: 6px !important;
+  border: 1px solid #e2e8f0 !important;
+  transition: all 0.2s !important;
+}
+
+.roles-modal .permission-item:hover {
+  border-color: #3b82f6 !important;
+}
+
+.roles-modal .checkbox-label {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  cursor: pointer !important;
+  font-size: 0.875rem !important;
+  color: #1e293b !important;
+}
+
+.roles-modal .checkbox-label input[type="checkbox"] {
+  width: 18px !important;
+  height: 18px !important;
+  accent-color: #3b82f6 !important;
+  cursor: pointer !important;
+}
+
+.roles-modal .permission-item.parent {
+  font-weight: 500 !important;
+}
+
+.roles-modal .permission-children {
+  margin-left: 24px !important;
+  padding-left: 12px !important;
+  border-left: 2px solid #e2e8f0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+  margin-top: 6px !important;
+  margin-bottom: 6px !important;
+}
+
+.roles-modal .permission-item.child {
+  font-size: 13px !important;
+  color: #64748b !important;
+  padding: 6px 10px !important;
+}
+
+.roles-modal .permission-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)) !important;
+  gap: 10px !important;
+  max-height: 200px !important;
+  overflow-y: auto !important;
+}

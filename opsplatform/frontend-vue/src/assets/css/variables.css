@@ -1,0 +1,55 @@
+:root {
+  /* 主色调 */
+  --primary: #3b82f6;
+  --primary-dark: #2563eb;
+  --primary-bg: rgba(59, 130, 246, 0.1);
+  
+  /* 状态色 */
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --info: #06b6d4;
+  
+  /* 深色主题（默认） */
+  --bg-main: #0f1419;
+  --bg-card: #1a1f2e;
+  --bg-sidebar: #141824;
+  --bg-hover: #252d3d;
+  --bg-input: #1e2433;
+  --bg-card-hover: rgba(58, 132, 255, 0.05);
+  --bg-card-highlight: linear-gradient(135deg, rgba(58, 132, 255, 0.08), rgba(58, 132, 255, 0.02));
+  
+  --border-color: #2d3748;
+  
+  --text-primary: #f0f4f8;
+  --text-secondary: #a0aec0;
+  --text-muted: #718096;
+  
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.3);
+  --shadow-color: rgba(0, 0, 0, 0.15);
+}
+
+/* 浅色主题 */
+body.light-mode {
+  --bg-main: #f5f7fa;
+  --bg-card: #ffffff;
+  --bg-sidebar: #ffffff;
+  --bg-hover: #f0f2f5;
+  --bg-input: #f8fafc;
+  --bg-card-hover: rgba(58, 132, 255, 0.06);
+  --bg-card-highlight: linear-gradient(135deg, rgba(58, 132, 255, 0.06), rgba(58, 132, 255, 0.02));
+  
+  --border-color: #e2e8f0;
+  
+  --text-primary: #1a202c;
+  --text-secondary: #4a5568;
+  --text-muted: #718096;
+  
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+  --shadow-color: rgba(0, 0, 0, 0.08);
+}

@@ -925,7 +925,7 @@ func RefreshAllDomainsExpire() {
 			domainExpire, _ := getDomainExpireTime(d.Domain)
 
 			// 更新数据库
-			updateSQL := "UPDATE domains SET updated_at = NOW()"
+			updateSQL := "UPDATE domains SET updated_at = NOW(), updated_by = 'system'"
 			var args []interface{}
 			if certExpire != "" {
 				updateSQL += ", cert_expire_time = ?"
@@ -960,6 +960,11 @@ func RefreshAllDomainsExpire() {
 			log.Printf("[定时任务] 进度: %d/%d (成功: %d, 失败: %d)", end, total, successCount, failCount)
 		}
 	}
+
+	// 记录定时任务的审计日志
+	AddAuditLog("SCHEDULER", "domains:batch_refresh", "system", "", "",
+		fmt.Sprintf("定时刷新域名到期时间：成功 %d 个，失败 %d 个，共 %d 个", successCount, failCount, total),
+		"127.0.0.1")
 
 	log.Printf("[定时任务] 域名到期时间刷新完成：成功 %d 个，失败 %d 个，共 %d 个", successCount, failCount, total)
 }

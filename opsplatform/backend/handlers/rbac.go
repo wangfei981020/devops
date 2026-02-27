@@ -561,12 +561,27 @@ func HandleMyPermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := r.Header.Get("X-Operator")
-	log.Printf("[权限调试] X-Operator header: '%s'", userID)
-	if userID == "" {
-		userID = "admin"
-		log.Printf("[权限调试] X-Operator为空，使用默认值: %s", userID)
+	username := r.Header.Get("X-Operator")
+	log.Printf("[权限调试] X-Operator header (username): '%s'", username)
+	if username == "" {
+		username = "admin"
+		log.Printf("[权限调试] X-Operator为空，使用默认值: %s", username)
 	}
+
+	// 通过用户名查找用户 ID
+	var userID string
+	err := database.DB.QueryRow("SELECT id FROM users WHERE username = ?", username).Scan(&userID)
+	if err != nil {
+		log.Printf("[权限调试] 根据用户名 %s 查找用户ID失败: %v", username, err)
+		// 如果找不到用户，返回空权限
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"permissions": map[string]bool{},
+			"menus":       []Permission{},
+			"roles":       []string{},
+		})
+		return
+	}
+	log.Printf("[权限调试] 用户名 %s 对应的用户ID: %s", username, userID)
 
 	// 获取用户的所有角色
 	roleRows, err := database.DB.Query("SELECT role_id FROM user_roles WHERE user_id = ?", userID)
@@ -598,20 +613,26 @@ func HandleMyPermissions(w http.ResponseWriter, r *http.Request) {
 	// 获取所有角色的权限
 	permissions := make(map[string]bool)
 	for _, roleID := range roleIDs {
-		permRows, _ := database.DB.Query(`
+		permRows, err := database.DB.Query(`
 			SELECT p.code FROM permissions p
 			JOIN role_permissions rp ON p.id = rp.permission_id
 			WHERE rp.role_id = ?
 		`, roleID)
-		if permRows != nil {
-			for permRows.Next() {
-				var code string
-				permRows.Scan(&code)
-				permissions[code] = true
-			}
-			permRows.Close()
+		if err != nil {
+			log.Printf("[权限调试] 查询角色 %s 的权限失败: %v", roleID, err)
+			continue
 		}
+		count := 0
+		for permRows.Next() {
+			var code string
+			permRows.Scan(&code)
+			permissions[code] = true
+			count++
+		}
+		permRows.Close()
+		log.Printf("[权限调试] 角色 %s 共有 %d 个权限", roleID, count)
 	}
+	log.Printf("[权限调试] 用户 %s 最终权限: %v", username, permissions)
 
 	// 获取菜单权限（用于前端渲染菜单）
 	var menus []Permission

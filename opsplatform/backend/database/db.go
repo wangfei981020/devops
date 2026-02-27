@@ -138,6 +138,9 @@ func createTables() error {
 	DB.Exec(`ALTER TABLE users ADD COLUMN description TEXT`)
 	// 兼容旧数据库：添加 language 字段（用户界面语言）
 	DB.Exec(`ALTER TABLE users ADD COLUMN language VARCHAR(10) DEFAULT 'zh-CN'`)
+	// 兼容旧数据库：添加 oidc_sub 字段（OIDC用户标识）
+	DB.Exec(`ALTER TABLE users ADD COLUMN oidc_sub VARCHAR(255) DEFAULT ''`)
+	DB.Exec(`CREATE INDEX idx_users_oidc_sub ON users(oidc_sub)`)
 
 	// 创建审计日志表
 	_, err = DB.Exec(`
@@ -295,6 +298,7 @@ func createTables() error {
 		CREATE TABLE IF NOT EXISTS schedule_employees (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			name VARCHAR(64) NOT NULL,
+			group_name VARCHAR(64) DEFAULT '' COMMENT '组别',
 			role VARCHAR(64) DEFAULT '运维工程师',
 			avatar_color VARCHAR(128) DEFAULT 'linear-gradient(135deg, #667eea, #764ba2)',
 			sort_order INT DEFAULT 0,
@@ -305,6 +309,8 @@ func createTables() error {
 	if err != nil {
 		return err
 	}
+	// 兼容旧数据库：添加 group_name 列
+	DB.Exec(`ALTER TABLE schedule_employees ADD COLUMN group_name VARCHAR(64) DEFAULT '' COMMENT '组别' AFTER name`)
 
 	// 创建排班记录表
 	_, err = DB.Exec(`
@@ -485,6 +491,7 @@ func createTables() error {
 			app_secrets TEXT COMMENT 'appsecret 密码系统查看',
 			game_domains TEXT COMMENT '游戏域名JSON数组',
 			redirect_domains TEXT COMMENT '301域名JSON数组',
+			custom_fields JSON COMMENT '自定义字段JSON对象',
 			remark TEXT,
 			status VARCHAR(32) DEFAULT 'active',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -494,6 +501,28 @@ func createTables() error {
 			INDEX idx_merchant_project (project),
 			INDEX idx_merchant_env (env),
 			INDEX idx_merchant_status (status)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+	// 兼容已有数据库：添加 custom_fields 字段
+	DB.Exec(`ALTER TABLE merchants ADD COLUMN custom_fields JSON COMMENT '自定义字段JSON对象' AFTER redirect_domains`)
+
+	// ========== 商户自定义列表（全局共享） ==========
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS merchant_custom_columns (
+			id VARCHAR(64) PRIMARY KEY,
+			col_key VARCHAR(100) NOT NULL COMMENT '列标识，如 custom_note',
+			col_title VARCHAR(100) NOT NULL DEFAULT '' COMMENT '列显示名称',
+			col_type VARCHAR(32) DEFAULT 'text' COMMENT '列类型: text, multi, tags, tag',
+			col_width VARCHAR(32) DEFAULT '120px' COMMENT '列宽度',
+			sort_order INT DEFAULT 0 COMMENT '排序顺序',
+			is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			created_by VARCHAR(128),
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uk_col_key (col_key)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`)
 	if err != nil {
@@ -560,6 +589,109 @@ func createTables() error {
 			INDEX idx_incident_operator (operator),
 			INDEX idx_incident_status (status),
 			INDEX idx_incident_type (operation_type)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	// ========== 值班记录相关表 ==========
+
+	// 值班项目配置表
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS duty_projects (
+			id VARCHAR(64) PRIMARY KEY,
+			name VARCHAR(128) NOT NULL COMMENT '项目名称',
+			code VARCHAR(64) NOT NULL COMMENT '项目代码',
+			description TEXT COMMENT '项目描述',
+			status VARCHAR(32) DEFAULT 'active' COMMENT 'active/disabled',
+			sort_order INT DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			created_by VARCHAR(128),
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uk_code (code),
+			INDEX idx_status (status)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	// 值班记录主表
+	_, err = DB.Exec(`
+CREATE TABLE IF NOT EXISTS duty_records (
+			id VARCHAR(64) PRIMARY KEY,
+			duty_date DATETIME NOT NULL COMMENT '值班日期时间',
+			duty_person VARCHAR(128) NOT NULL COMMENT '值班人',
+			project_id VARCHAR(64) NOT NULL COMMENT '项目ID',
+			task_desc TEXT COMMENT '任务描述',
+			feedback_type VARCHAR(32) DEFAULT 'customer' COMMENT 'proactive=主动反馈, customer=客户反馈',
+			event_type VARCHAR(32) DEFAULT 'customer_feedback' COMMENT '事件类型: inspection=巡检发现, alert=监控告警, customer_feedback=客户反馈, proactive_check=值班人员主动排查',
+			handler VARCHAR(128) DEFAULT '' COMMENT '处理人',
+			handle_result TEXT COMMENT '处理结果',
+			problem_desc TEXT COMMENT '问题描述',
+
+			first_call_time DATETIME DEFAULT NULL COMMENT '首次拨打时间',
+			answer_time DATETIME DEFAULT NULL COMMENT '接听时间',
+			call_count INT DEFAULT 0 COMMENT '拨打次数',
+			is_answered TINYINT(1) DEFAULT 0 COMMENT '是否接听',
+			response_time INT DEFAULT 0 COMMENT '响应时间(分钟)',
+
+			is_escalated TINYINT(1) DEFAULT 0 COMMENT '是否升级问题',
+			escalate_to VARCHAR(64) DEFAULT '' COMMENT '升级给谁: leader=组长, hod=HOD',
+
+			has_handover TINYINT(1) DEFAULT 0 COMMENT '是否有工作交接',
+			handover_person VARCHAR(128) DEFAULT '' COMMENT '工作交接人',
+			handover_content TEXT COMMENT '工作交接内容',
+
+			status VARCHAR(32) DEFAULT 'pending' COMMENT 'pending=待解决, in_progress=正在解决, resolved=已解决, temporary=临时解决',
+			planned_fix_time DATETIME DEFAULT NULL COMMENT '计划修复时间',
+			planned_fix_time_edited TINYINT(1) DEFAULT 0 COMMENT '计划修复时间是否被编辑过',
+			is_overdue TINYINT(1) DEFAULT 0 COMMENT '是否逾期',
+			overdue_reason TEXT COMMENT '逾期原因',
+
+			attachments JSON COMMENT '附件列表(图片URL数组)',
+			
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			created_by VARCHAR(128),
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			updated_by VARCHAR(128),
+			INDEX idx_duty_date (duty_date),
+			INDEX idx_duty_person (duty_person),
+			INDEX idx_project (project_id),
+			INDEX idx_handler (handler),
+			INDEX idx_status (status),
+			INDEX idx_overdue (is_overdue)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	// 兼容已有数据库：添加 event_type 字段和修改 duty_date 为 DATETIME
+	DB.Exec(`ALTER TABLE duty_records ADD COLUMN event_type VARCHAR(32) DEFAULT 'customer_feedback' COMMENT '事件类型' AFTER feedback_type`)
+	DB.Exec(`ALTER TABLE duty_records MODIFY COLUMN duty_date DATETIME NOT NULL COMMENT '值班日期时间'`)
+	// 添加 planned_fix_time_edited 字段跟踪是否被编辑过
+	DB.Exec(`ALTER TABLE duty_records ADD COLUMN planned_fix_time_edited TINYINT(1) DEFAULT 0 COMMENT '计划修复时间是否被编辑过' AFTER planned_fix_time`)
+	// 将 planned_fix_time 改为 DATETIME 类型以支持时分秒
+	DB.Exec(`ALTER TABLE duty_records MODIFY COLUMN planned_fix_time DATETIME DEFAULT NULL COMMENT '计划修复时间'`)
+
+	// ========== 文件分享表 ==========
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS file_shares (
+			id VARCHAR(64) PRIMARY KEY,
+			code VARCHAR(32) NOT NULL COMMENT '分享码',
+			file_path VARCHAR(512) NOT NULL COMMENT '文件路径（object name）',
+			file_name VARCHAR(255) DEFAULT '' COMMENT '原始文件名',
+			expires_at DATETIME DEFAULT NULL COMMENT '过期时间，NULL表示永久',
+			view_count INT DEFAULT 0 COMMENT '查看次数',
+			max_views INT DEFAULT 0 COMMENT '最大查看次数，0表示无限制',
+			password VARCHAR(128) DEFAULT '' COMMENT '访问密码（可选）',
+			created_by VARCHAR(128) NOT NULL COMMENT '创建人',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE KEY uk_code (code),
+			INDEX idx_file_path (file_path),
+			INDEX idx_expires (expires_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`)
 	if err != nil {
@@ -799,6 +931,8 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_schedule", "menu:schedule", "排班管理", "/system/schedule", "perm_menu_system", "", 70},
 		{"perm_menu_taskpool", "menu:taskpool", "任务池", "/system/taskpool", "perm_menu_system", "", 80},
 		{"perm_menu_incidents", "menu:incidents", "事件记录", "/system/incidents", "perm_menu_system", "", 90},
+		{"perm_menu_duty", "menu:duty", "值班记录", "/system/duty", "perm_menu_system", "", 100},
+		{"perm_menu_duty_projects", "menu:duty_projects", "值班项目", "/system/duty-projects", "perm_menu_system", "", 110},
 
 		// 资源管理
 		{"perm_menu_resource", "menu:resource", "资源管理", "/resource", "", "resource", 2},
@@ -883,34 +1017,72 @@ func initDefaultRolesAndPermissions() {
 		Description string
 	}{
 		// 用户管理
-		{"perm_btn_user_create", "user:create", "创建用户", "允许创建新用户"},
-		{"perm_btn_user_update", "user:update", "编辑用户", "允许编辑用户信息"},
-		{"perm_btn_user_delete", "user:delete", "删除用户", "允许删除用户"},
-		{"perm_btn_user_reset_pwd", "user:reset_password", "重置密码", "允许重置用户密码"},
+		{"perm_btn_user_create", "user:create", "[用户管理] 添加用户", "允许创建新用户"},
+		{"perm_btn_user_update", "user:update", "[用户管理] 编辑用户", "允许编辑用户信息"},
+		{"perm_btn_user_delete", "user:delete", "[用户管理] 删除用户", "允许删除用户"},
+		{"perm_btn_user_reset_pwd", "user:reset_password", "[用户管理] 重置密码", "允许重置用户密码"},
 
 		// 角色管理
-		{"perm_btn_role_create", "role:create", "创建角色", "允许创建新角色"},
-		{"perm_btn_role_update", "role:update", "编辑角色", "允许编辑角色信息"},
-		{"perm_btn_role_delete", "role:delete", "删除角色", "允许删除角色"},
-		{"perm_btn_role_assign", "role:assign", "分配权限", "允许为角色分配权限"},
+		{"perm_btn_role_create", "role:create", "[角色管理] 创建角色", "允许创建新角色"},
+		{"perm_btn_role_update", "role:update", "[角色管理] 编辑角色", "允许编辑角色信息"},
+		{"perm_btn_role_delete", "role:delete", "[角色管理] 删除角色", "允许删除角色"},
+		{"perm_btn_role_assign", "role:assign", "[角色管理] 分配权限", "允许为角色分配权限"},
 
 		// 资产管理
-		{"perm_btn_asset_create", "asset:create", "添加资产", "允许添加新资产"},
-		{"perm_btn_asset_update", "asset:update", "编辑资产", "允许编辑资产信息"},
-		{"perm_btn_asset_delete", "asset:delete", "删除资产", "允许删除资产"},
-		{"perm_btn_asset_import", "asset:import", "导入资产", "允许批量导入资产"},
-		{"perm_btn_asset_export", "asset:export", "导出资产", "允许导出资产列表"},
+		{"perm_btn_asset_create", "asset:create", "[资产管理] 添加资产", "允许添加新资产"},
+		{"perm_btn_asset_update", "asset:update", "[资产管理] 编辑资产", "允许编辑资产信息"},
+		{"perm_btn_asset_delete", "asset:delete", "[资产管理] 删除资产", "允许删除资产"},
+		{"perm_btn_asset_import", "asset:import", "[资产管理] 导入资产", "允许批量导入资产"},
+		{"perm_btn_asset_export", "asset:export", "[资产管理] 导出资产", "允许导出资产列表"},
 
 		// 域名管理
-		{"perm_btn_domain_create", "domain:create", "添加域名", "允许添加新域名"},
-		{"perm_btn_domain_update", "domain:update", "编辑域名", "允许编辑域名信息"},
-		{"perm_btn_domain_delete", "domain:delete", "删除域名", "允许删除域名"},
+		{"perm_btn_domain_create", "domain:create", "[域名管理] 添加域名", "允许添加新域名"},
+		{"perm_btn_domain_update", "domain:update", "[域名管理] 编辑域名", "允许编辑域名信息"},
+		{"perm_btn_domain_delete", "domain:delete", "[域名管理] 删除域名", "允许删除域名"},
+		{"perm_btn_domain_export", "domain:export", "[域名管理] 导出域名", "允许导出域名列表"},
+		{"perm_btn_domain_batch_add", "domain:batch_add", "[域名管理] 批量添加", "允许批量添加域名"},
+		{"perm_btn_domain_refresh", "domain:refresh", "[域名管理] 刷新到期时间", "允许刷新域名到期时间"},
 
 		// 密码库
-		{"perm_btn_vault_create", "vault:create", "添加密码", "允许添加密码条目"},
-		{"perm_btn_vault_update", "vault:update", "编辑密码", "允许编辑密码条目"},
-		{"perm_btn_vault_delete", "vault:delete", "删除密码", "允许删除密码条目"},
-		{"perm_btn_vault_share", "vault:share", "分享密码", "允许分享密码给其他用户"},
+		{"perm_btn_vault_create", "vault:create", "[密码库] 添加密码", "允许添加密码条目"},
+		{"perm_btn_vault_update", "vault:update", "[密码库] 编辑密码", "允许编辑密码条目"},
+		{"perm_btn_vault_delete", "vault:delete", "[密码库] 删除密码", "允许删除密码条目"},
+		{"perm_btn_vault_share", "vault:share", "[密码库] 分享密码", "允许分享密码给其他用户"},
+
+		// 排班管理
+		{"perm_btn_schedule_add_employee", "schedule:add_employee", "[排班管理] 添加员工", "允许添加排班员工"},
+		{"perm_btn_schedule_edit_employee", "schedule:edit_employee", "[排班管理] 编辑员工", "允许编辑排班员工信息"},
+		{"perm_btn_schedule_delete_employee", "schedule:delete_employee", "[排班管理] 删除员工", "允许删除排班员工"},
+		{"perm_btn_schedule_batch", "schedule:batch", "[排班管理] 批量排班", "允许批量设置排班"},
+		{"perm_btn_schedule_config", "schedule:config", "[排班管理] 班次配置", "允许配置班次类型"},
+		{"perm_btn_schedule_export", "schedule:export", "[排班管理] 导出Excel", "允许导出排班表"},
+		{"perm_btn_schedule_reset", "schedule:reset", "[排班管理] 重置排班", "允许重置指定月份的排班数据"},
+		{"perm_btn_schedule_edit_shift", "schedule:edit_shift", "[排班管理] 编辑班次", "允许编辑单个班次"},
+
+		// 商户管理
+		{"perm_btn_merchant_create", "merchant:create", "[商户管理] 添加商户", "允许添加新商户"},
+		{"perm_btn_merchant_update", "merchant:update", "[商户管理] 编辑商户", "允许编辑商户信息"},
+		{"perm_btn_merchant_delete", "merchant:delete", "[商户管理] 删除商户", "允许删除商户"},
+		{"perm_btn_merchant_export", "merchant:export", "[商户管理] 导出商户", "允许导出商户列表"},
+
+		// 网络管理
+		{"perm_btn_network_create", "network:create", "[网络管理] 添加记录", "允许添加网络记录"},
+		{"perm_btn_network_update", "network:update", "[网络管理] 编辑记录", "允许编辑网络记录"},
+		{"perm_btn_network_delete", "network:delete", "[网络管理] 删除记录", "允许删除网络记录"},
+		{"perm_btn_network_batch", "network:batch", "[网络管理] 批量导入", "允许批量导入网络记录"},
+
+		// 值班记录
+		{"perm_btn_duty_create", "duty:create", "[值班记录] 添加记录", "允许添加值班记录"},
+		{"perm_btn_duty_update", "duty:update", "[值班记录] 编辑记录", "允许编辑值班记录"},
+		{"perm_btn_duty_edit_planned_fix_time", "duty:edit_planned_fix_time", "[值班记录] 编辑计划修复时间", "允许单独编辑计划修复时间"},
+		{"perm_btn_duty_delete", "duty:delete", "[值班记录] 删除记录", "允许删除值班记录"},
+		{"perm_btn_duty_export", "duty:export", "[值班记录] 导出记录", "允许导出值班记录"},
+		{"perm_btn_duty_upload", "duty:upload", "[值班记录] 上传附件", "允许上传附件"},
+
+		// 值班项目配置
+		{"perm_btn_duty_project_create", "duty_project:create", "[值班项目] 添加项目", "允许添加值班项目"},
+		{"perm_btn_duty_project_update", "duty_project:update", "[值班项目] 编辑项目", "允许编辑值班项目"},
+		{"perm_btn_duty_project_delete", "duty_project:delete", "[值班项目] 删除项目", "允许删除值班项目"},
 	}
 
 	for _, perm := range buttonPermissions {

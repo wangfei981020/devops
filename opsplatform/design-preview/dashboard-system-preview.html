@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>统计仪表盘 - Grafana 风格设计预览</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #111217; min-height: 100vh; color: #d0d7de; display: flex; }
+    
+    /* 侧边栏 */
+    .sidebar { width: 60px; background: #181b1f; border-right: 1px solid #2c3036; display: flex; flex-direction: column; position: fixed; top: 0; left: 0; height: 100vh; z-index: 200; }
+    .sidebar-logo { height: 60px; display: flex; align-items: center; justify-content: center; border-bottom: 1px solid #2c3036; }
+    .sidebar-logo svg { width: 32px; height: 32px; color: #ff6b00; }
+    .sidebar-nav { flex: 1; padding: 12px 0; }
+    .sidebar-item { width: 100%; height: 48px; display: flex; align-items: center; justify-content: center; color: #8e9297; cursor: pointer; transition: all 0.15s; position: relative; }
+    .sidebar-item:hover { color: #fff; background: rgba(255,255,255,0.05); }
+    .sidebar-item.active { color: #ff6b00; }
+    .sidebar-item.active::before { content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 3px; height: 32px; background: #ff6b00; border-radius: 0 2px 2px 0; }
+    .sidebar-item svg { width: 22px; height: 22px; }
+    .sidebar-bottom { padding: 12px 0; border-top: 1px solid #2c3036; }
+    
+    /* 主内容区 */
+    .main-wrapper { flex: 1; margin-left: 60px; display: flex; flex-direction: column; }
+    
+    /* 顶部栏 */
+    .top-bar { height: 52px; background: #181b1f; border-bottom: 1px solid #2c3036; display: flex; align-items: center; padding: 0 16px; position: sticky; top: 0; z-index: 100; }
+    .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 0.875rem; }
+    .breadcrumb-item { color: #8e9297; }
+    .breadcrumb-item.current { color: #fff; font-weight: 500; }
+    .breadcrumb-sep { color: #4a4f56; }
+    .top-bar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+    .dashboard-selector { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #22252a; border: 1px solid #2c3036; border-radius: 4px; cursor: pointer; transition: all 0.15s; }
+    .dashboard-selector:hover { border-color: #3d4149; }
+    .dashboard-selector svg { width: 16px; height: 16px; color: #8e9297; }
+    .dashboard-selector span { font-size: 0.8125rem; color: #d0d7de; }
+    .time-picker { display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: #22252a; border: 1px solid #2c3036; border-radius: 4px; font-size: 0.8125rem; color: #d0d7de; cursor: pointer; }
+    .time-picker svg { width: 14px; height: 14px; color: #8e9297; }
+    .refresh-interval { display: flex; align-items: center; gap: 4px; padding: 6px 10px; background: #22252a; border: 1px solid #2c3036; border-radius: 4px; font-size: 0.8125rem; color: #d0d7de; }
+    .icon-btn { width: 32px; height: 32px; background: #22252a; border: 1px solid #2c3036; border-radius: 4px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; }
+    .icon-btn:hover { background: #2c3036; }
+    .icon-btn svg { width: 16px; height: 16px; color: #8e9297; }
+    
+    /* 子导航 */
+    .sub-nav { height: 44px; background: #181b1f; border-bottom: 1px solid #2c3036; display: flex; align-items: center; padding: 0 16px; gap: 4px; }
+    .sub-nav-tab { padding: 8px 16px; font-size: 0.8125rem; color: #8e9297; cursor: pointer; border-radius: 4px; transition: all 0.15s; display: flex; align-items: center; gap: 6px; }
+    .sub-nav-tab:hover { color: #d0d7de; background: rgba(255,255,255,0.05); }
+    .sub-nav-tab.active { color: #fff; background: #2c3036; }
+    .sub-nav-tab svg { width: 14px; height: 14px; }
+    .sub-nav-tab .badge { padding: 2px 6px; background: #ff6b00; color: #fff; font-size: 0.625rem; font-weight: 600; border-radius: 10px; }
+    
+    /* 仪表盘内容 */
+    .dashboard-content { flex: 1; padding: 16px; overflow-y: auto; }
+    
+    /* 仪表盘网格 */
+    .dashboard-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
+    
+    /* 面板基础样式 */
+    .panel { background: #181b1f; border: 1px solid #2c3036; border-radius: 4px; display: flex; flex-direction: column; min-height: 200px; }
+    .panel-header { height: 36px; display: flex; align-items: center; padding: 0 12px; border-bottom: 1px solid #2c3036; flex-shrink: 0; }
+    .panel-title { font-size: 0.8125rem; font-weight: 500; color: #d0d7de; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .panel-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
+    .panel:hover .panel-actions { opacity: 1; }
+    .panel-action { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: 3px; transition: all 0.15s; }
+    .panel-action:hover { background: #2c3036; }
+    .panel-action svg { width: 14px; height: 14px; color: #8e9297; }
+    .panel-body { flex: 1; padding: 12px; position: relative; overflow: hidden; }
+    
+    /* 数据源标签 */
+    .datasource-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 3px; font-size: 0.625rem; font-weight: 600; margin-left: 8px; }
+    .datasource-tag.prometheus { background: rgba(230, 82, 44, 0.2); color: #e6522c; }
+    .datasource-tag.elasticsearch { background: rgba(0, 169, 225, 0.2); color: #00a9e1; }
+    .datasource-tag.loki { background: rgba(249, 174, 0, 0.2); color: #f9ae00; }
+    .datasource-tag.mysql { background: rgba(0, 117, 143, 0.2); color: #00758f; }
+    .datasource-tag.postgres { background: rgba(51, 103, 145, 0.2); color: #336791; }
+    .datasource-tag.influxdb { background: rgba(34, 174, 199, 0.2); color: #22aec7; }
+    
+    /* 统计数字面板 */
+    .stat-panel { grid-column: span 2; min-height: 120px; }
+    .stat-value { font-size: 2.5rem; font-weight: 700; line-height: 1; margin-bottom: 4px; }
+    .stat-value.up { color: #73bf69; }
+    .stat-value.down { color: #f2495c; }
+    .stat-value.neutral { color: #73c0de; }
+    .stat-label { font-size: 0.75rem; color: #8e9297; }
+    .stat-sparkline { position: absolute; bottom: 0; left: 0; right: 0; height: 40px; opacity: 0.3; }
+    
+    /* 图表面板 */
+    .chart-panel { grid-column: span 6; min-height: 280px; }
+    .chart-panel.full { grid-column: span 12; }
+    .chart-panel.third { grid-column: span 4; }
+    .chart-container { width: 100%; height: 100%; position: relative; }
+    
+    /* 表格面板 */
+    .table-panel { grid-column: span 6; min-height: 300px; }
+    .panel-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+    .panel-table th { text-align: left; padding: 8px 12px; color: #8e9297; font-weight: 500; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; border-bottom: 1px solid #2c3036; background: #1a1d21; }
+    .panel-table td { padding: 8px 12px; border-bottom: 1px solid #22252a; color: #d0d7de; }
+    .panel-table tr:hover td { background: rgba(255,255,255,0.02); }
+    
+    /* 仪表盘面板 */
+    .gauge-panel { grid-column: span 3; min-height: 200px; display: flex; flex-direction: column; }
+    .gauge-container { flex: 1; display: flex; align-items: center; justify-content: center; }
+    .gauge { width: 140px; height: 70px; position: relative; }
+    .gauge-bg { fill: none; stroke: #2c3036; stroke-width: 12; }
+    .gauge-fill { fill: none; stroke-width: 12; stroke-linecap: round; transition: stroke-dashoffset 0.5s; }
+    .gauge-fill.green { stroke: #73bf69; }
+    .gauge-fill.yellow { stroke: #f2cc0c; }
+    .gauge-fill.red { stroke: #f2495c; }
+    .gauge-value { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); font-size: 1.5rem; font-weight: 700; color: #fff; }
+    .gauge-label { text-align: center; font-size: 0.75rem; color: #8e9297; margin-top: 8px; }
+    
+    /* 日志面板 */
+    .logs-panel { grid-column: span 12; min-height: 300px; }
+    .log-entry { padding: 6px 0; border-bottom: 1px solid #22252a; font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace; font-size: 0.75rem; display: flex; gap: 12px; }
+    .log-time { color: #73c0de; flex-shrink: 0; }
+    .log-level { padding: 1px 6px; border-radius: 2px; font-weight: 600; flex-shrink: 0; }
+    .log-level.info { background: rgba(115, 192, 222, 0.2); color: #73c0de; }
+    .log-level.warn { background: rgba(242, 204, 12, 0.2); color: #f2cc0c; }
+    .log-level.error { background: rgba(242, 73, 92, 0.2); color: #f2495c; }
+    .log-message { color: #d0d7de; flex: 1; word-break: break-all; }
+    .log-labels { display: flex; gap: 4px; flex-shrink: 0; }
+    .log-label { padding: 1px 4px; background: #2c3036; border-radius: 2px; color: #8e9297; font-size: 0.6875rem; }
+    
+    /* 数据源选择弹窗 */
+    .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 1000; }
+    .modal-overlay.show { display: flex; }
+    .modal { background: #181b1f; border: 1px solid #2c3036; border-radius: 8px; width: 600px; max-height: 80vh; display: flex; flex-direction: column; }
+    .modal-header { padding: 16px 20px; border-bottom: 1px solid #2c3036; display: flex; align-items: center; }
+    .modal-title { font-size: 1rem; font-weight: 600; color: #fff; flex: 1; }
+    .modal-close { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: 4px; transition: all 0.15s; }
+    .modal-close:hover { background: #2c3036; }
+    .modal-close svg { width: 18px; height: 18px; color: #8e9297; }
+    .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
+    
+    /* 数据源列表 */
+    .datasource-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .datasource-card { padding: 16px; background: #22252a; border: 1px solid #2c3036; border-radius: 6px; cursor: pointer; transition: all 0.15s; }
+    .datasource-card:hover { border-color: #3d4149; background: #2c3036; }
+    .datasource-card.selected { border-color: #ff6b00; background: rgba(255, 107, 0, 0.1); }
+    .datasource-card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+    .datasource-icon { width: 40px; height: 40px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.875rem; }
+    .datasource-icon.prometheus { background: linear-gradient(135deg, #e6522c, #c43e1c); color: #fff; }
+    .datasource-icon.elasticsearch { background: linear-gradient(135deg, #00bfb3, #00a9e1); color: #fff; }
+    .datasource-icon.loki { background: linear-gradient(135deg, #f9ae00, #e67700); color: #fff; }
+    .datasource-icon.mysql { background: linear-gradient(135deg, #00758f, #005d72); color: #fff; }
+    .datasource-icon.postgres { background: linear-gradient(135deg, #336791, #275378); color: #fff; }
+    .datasource-icon.influxdb { background: linear-gradient(135deg, #22aec7, #1a8fa3); color: #fff; }
+    .datasource-icon.redis { background: linear-gradient(135deg, #dc382d, #a41e11); color: #fff; }
+    .datasource-icon.mongodb { background: linear-gradient(135deg, #00ed64, #00c853); color: #fff; }
+    .datasource-name { font-size: 0.9375rem; font-weight: 600; color: #fff; }
+    .datasource-type { font-size: 0.75rem; color: #8e9297; }
+    .datasource-url { font-size: 0.75rem; color: #5a6068; margin-top: 4px; font-family: 'SF Mono', Consolas, monospace; }
+    .datasource-status { display: inline-flex; align-items: center; gap: 4px; font-size: 0.6875rem; margin-top: 8px; }
+    .datasource-status.online { color: #73bf69; }
+    .datasource-status.offline { color: #f2495c; }
+    .datasource-status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; }
+    .datasource-status.online::before { background: #73bf69; }
+    .datasource-status.offline::before { background: #f2495c; }
+    
+    /* 仪表盘列表 */
+    .dashboard-list { margin-top: 20px; }
+    .dashboard-list-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .dashboard-list-title { font-size: 0.875rem; font-weight: 600; color: #d0d7de; }
+    .dashboard-list-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .dashboard-card { padding: 14px; background: #22252a; border: 1px solid #2c3036; border-radius: 6px; cursor: pointer; transition: all 0.15s; }
+    .dashboard-card:hover { border-color: #3d4149; transform: translateY(-2px); }
+    .dashboard-card-icon { width: 36px; height: 36px; background: #2c3036; border-radius: 6px; display: flex; align-items: center; justify-content: center; margin-bottom: 10px; }
+    .dashboard-card-icon svg { width: 20px; height: 20px; color: #ff6b00; }
+    .dashboard-card-title { font-size: 0.875rem; font-weight: 500; color: #fff; margin-bottom: 4px; }
+    .dashboard-card-desc { font-size: 0.75rem; color: #8e9297; line-height: 1.4; }
+    .dashboard-card-meta { display: flex; gap: 8px; margin-top: 10px; }
+    .dashboard-card-tag { padding: 2px 6px; background: #2c3036; border-radius: 3px; font-size: 0.625rem; color: #8e9297; }
+    
+    /* 查询编辑器 */
+    .query-editor { background: #111217; border: 1px solid #2c3036; border-radius: 4px; margin-top: 16px; }
+    .query-header { padding: 8px 12px; background: #181b1f; border-bottom: 1px solid #2c3036; display: flex; align-items: center; gap: 8px; }
+    .query-datasource { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: #22252a; border-radius: 4px; font-size: 0.75rem; color: #d0d7de; }
+    .query-datasource-icon { width: 16px; height: 16px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 0.5rem; font-weight: 700; }
+    .query-input { flex: 1; background: none; border: none; color: #73c0de; font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace; font-size: 0.8125rem; outline: none; }
+    .query-body { padding: 12px; }
+    .query-textarea { width: 100%; min-height: 80px; background: none; border: none; color: #73c0de; font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace; font-size: 0.8125rem; outline: none; resize: vertical; line-height: 1.5; }
+    
+    /* 变量栏 */
+    .variables-bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: #181b1f; border-bottom: 1px solid #2c3036; }
+    .variable-group { display: flex; align-items: center; gap: 6px; }
+    .variable-label { font-size: 0.75rem; color: #8e9297; }
+    .variable-select { padding: 4px 8px; background: #22252a; border: 1px solid #2c3036; border-radius: 4px; color: #d0d7de; font-size: 0.8125rem; cursor: pointer; }
+    .variable-select:focus { border-color: #ff6b00; outline: none; }
+    
+    /* 响应式 */
+    @media (max-width: 1400px) {
+      .stat-panel { grid-column: span 3; }
+      .chart-panel { grid-column: span 6; }
+      .chart-panel.third { grid-column: span 6; }
+    }
+    @media (max-width: 1000px) {
+      .stat-panel { grid-column: span 6; }
+      .chart-panel, .table-panel { grid-column: span 12; }
+      .gauge-panel { grid-column: span 6; }
+    }
+  </style>
+</head>
+<body>
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="sidebar-item" title="搜索">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      </div>
+      <div class="sidebar-item active" title="仪表盘">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      </div>
+      <div class="sidebar-item" title="探索">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="16.24,7.76 14.12,14.12 7.76,16.24 9.88,9.88"/></svg>
+      </div>
+      <div class="sidebar-item" title="告警">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+      </div>
+      <div class="sidebar-item" title="数据源">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+      </div>
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="sidebar-item" title="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 主内容 -->
+  <div class="main-wrapper">
+    <!-- 顶部栏 -->
+    <header class="top-bar">
+      <div class="breadcrumb">
+        <span class="breadcrumb-item">仪表盘</span>
+        <span class="breadcrumb-sep">/</span>
+        <span class="breadcrumb-item current">系统监控总览</span>
+      </div>
+      <div class="top-bar-right">
+        <div class="dashboard-selector" onclick="showDashboardModal()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          <span>选择仪表盘</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6,9 12,15 18,9"/></svg>
+        </div>
+        <div class="time-picker">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>
+          最近 1 小时
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;"><polyline points="6,9 12,15 18,9"/></svg>
+        </div>
+        <div class="refresh-interval">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+          30s
+        </div>
+        <button class="icon-btn" title="添加面板">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <button class="icon-btn" title="保存">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17,21 17,13 7,13 7,21"/><polyline points="7,3 7,8 15,8"/></svg>
+        </button>
+        <button class="icon-btn" title="分享">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 变量栏 -->
+    <div class="variables-bar">
+      <div class="variable-group">
+        <span class="variable-label">数据源:</span>
+        <select class="variable-select">
+          <option>Prometheus (生产)</option>
+          <option>Prometheus (测试)</option>
+          <option>InfluxDB</option>
+        </select>
+      </div>
+      <div class="variable-group">
+        <span class="variable-label">实例:</span>
+        <select class="variable-select">
+          <option>全部</option>
+          <option>node-01</option>
+          <option>node-02</option>
+          <option>node-03</option>
+        </select>
+      </div>
+      <div class="variable-group">
+        <span class="variable-label">命名空间:</span>
+        <select class="variable-select">
+          <option>default</option>
+          <option>kube-system</option>
+          <option>monitoring</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 子导航 -->
+    <nav class="sub-nav">
+      <div class="sub-nav-tab active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        总览
+      </div>
+      <div class="sub-nav-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        主机监控
+      </div>
+      <div class="sub-nav-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+        容器监控
+        <span class="badge">12</span>
+      </div>
+      <div class="sub-nav-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+        数据库
+      </div>
+      <div class="sub-nav-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/></svg>
+        应用性能
+      </div>
+      <div class="sub-nav-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        日志
+      </div>
+    </nav>
+
+    <!-- 仪表盘内容 -->
+    <main class="dashboard-content">
+      <div class="dashboard-grid">
+        <!-- 统计卡片 -->
+        <div class="panel stat-panel">
+          <div class="panel-header">
+            <span class="panel-title">CPU 使用率</span>
+            <span class="datasource-tag prometheus">Prometheus</span>
+          </div>
+          <div class="panel-body">
+            <div class="stat-value up">78.5%</div>
+            <div class="stat-label">平均值 (所有节点)</div>
+          </div>
+        </div>
+        <div class="panel stat-panel">
+          <div class="panel-header">
+            <span class="panel-title">内存使用率</span>
+            <span class="datasource-tag prometheus">Prometheus</span>
+          </div>
+          <div class="panel-body">
+            <div class="stat-value neutral">62.3%</div>
+            <div class="stat-label">平均值 (所有节点)</div>
+          </div>
+        </div>
+        <div class="panel stat-panel">
+          <div class="panel-header">
+            <span class="panel-title">活跃连接数</span>
+            <span class="datasource-tag mysql">MySQL</span>
+          </div>
+          <div class="panel-body">
+            <div class="stat-value neutral">1,247</div>
+            <div class="stat-label">当前连接</div>
+          </div>
+        </div>
+        <div class="panel stat-panel">
+          <div class="panel-header">
+            <span class="panel-title">请求量 QPS</span>
+            <span class="datasource-tag prometheus">Prometheus</span>
+          </div>
+          <div class="panel-body">
+            <div class="stat-value up">12.5K</div>
+            <div class="stat-label">每秒请求数</div>
+          </div>
+        </div>
+        <div class="panel stat-panel">
+          <div class="panel-header">
+            <span class="panel-title">错误率</span>
+            <span class="datasource-tag elasticsearch">ES</span>
+          </div>
+          <div class="panel-body">
+            <div class="stat-value down">0.12%</div>
+            <div class="stat-label">5xx 错误</div>
+          </div>
+        </div>
+        <div class="panel stat-panel">
+          <div class="panel-header">
+            <span class="panel-title">平均响应时间</span>
+            <span class="datasource-tag prometheus">Prometheus</span>
+          </div>
+          <div class="panel-body">
+            <div class="stat-value neutral">45ms</div>
+            <div class="stat-label">P95 延迟</div>
+          </div>
+        </div>
+
+        <!-- 趋势图 -->
+        <div class="panel chart-panel">
+          <div class="panel-header">
+            <span class="panel-title">系统负载趋势</span>
+            <span class="datasource-tag prometheus">Prometheus</span>
+            <div class="panel-actions">
+              <div class="panel-action" title="编辑"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></div>
+              <div class="panel-action" title="查看"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15,3 21,3 21,9"/><polyline points="9,21 3,21 3,15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></div>
+              <div class="panel-action" title="更多"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></div>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="chart-container">
+              <canvas id="loadChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- 网络流量图 -->
+        <div class="panel chart-panel">
+          <div class="panel-header">
+            <span class="panel-title">网络流量</span>
+            <span class="datasource-tag prometheus">Prometheus</span>
+            <div class="panel-actions">
+              <div class="panel-action" title="编辑"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></div>
+              <div class="panel-action" title="查看"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15,3 21,3 21,9"/><polyline points="9,21 3,21 3,15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></div>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="chart-container">
+              <canvas id="networkChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- 仪表盘 -->
+        <div class="panel gauge-panel">
+          <div class="panel-header">
+            <span class="panel-title">磁盘使用率</span>
+            <span class="datasource-tag prometheus">Prometheus</span>
+          </div>
+          <div class="panel-body">
+            <div class="gauge-container">
+              <svg class="gauge" viewBox="0 0 140 80">
+                <path class="gauge-bg" d="M 10 70 A 60 60 0 0 1 130 70"/>
+                <path class="gauge-fill yellow" d="M 10 70 A 60 60 0 0 1 130 70" stroke-dasharray="188.5" stroke-dashoffset="56.5"/>
+              </svg>
+              <div class="gauge-value">72%</div>
+            </div>
+            <div class="gauge-label">/dev/sda1</div>
+          </div>
+        </div>
+        <div class="panel gauge-panel">
+          <div class="panel-header">
+            <span class="panel-title">内存使用</span>
+            <span class="datasource-tag prometheus">Prometheus</span>
+          </div>
+          <div class="panel-body">
+            <div class="gauge-container">
+              <svg class="gauge" viewBox="0 0 140 80">
+                <path class="gauge-bg" d="M 10 70 A 60 60 0 0 1 130 70"/>
+                <path class="gauge-fill green" d="M 10 70 A 60 60 0 0 1 130 70" stroke-dasharray="188.5" stroke-dashoffset="94.25"/>
+              </svg>
+              <div class="gauge-value">50%</div>
+            </div>
+            <div class="gauge-label">16GB / 32GB</div>
+          </div>
+        </div>
+        <div class="panel gauge-panel">
+          <div class="panel-header">
+            <span class="panel-title">CPU 温度</span>
+            <span class="datasource-tag prometheus">Prometheus</span>
+          </div>
+          <div class="panel-body">
+            <div class="gauge-container">
+              <svg class="gauge" viewBox="0 0 140 80">
+                <path class="gauge-bg" d="M 10 70 A 60 60 0 0 1 130 70"/>
+                <path class="gauge-fill red" d="M 10 70 A 60 60 0 0 1 130 70" stroke-dasharray="188.5" stroke-dashoffset="28.3"/>
+              </svg>
+              <div class="gauge-value">85°C</div>
+            </div>
+            <div class="gauge-label">Core 0</div>
+          </div>
+        </div>
+        <div class="panel gauge-panel">
+          <div class="panel-header">
+            <span class="panel-title">缓存命中率</span>
+            <span class="datasource-tag mysql">MySQL</span>
+          </div>
+          <div class="panel-body">
+            <div class="gauge-container">
+              <svg class="gauge" viewBox="0 0 140 80">
+                <path class="gauge-bg" d="M 10 70 A 60 60 0 0 1 130 70"/>
+                <path class="gauge-fill green" d="M 10 70 A 60 60 0 0 1 130 70" stroke-dasharray="188.5" stroke-dashoffset="18.85"/>
+              </svg>
+              <div class="gauge-value">90%</div>
+            </div>
+            <div class="gauge-label">InnoDB Buffer Pool</div>
+          </div>
+        </div>
+
+        <!-- 表格 -->
+        <div class="panel table-panel">
+          <div class="panel-header">
+            <span class="panel-title">Top 10 慢查询</span>
+            <span class="datasource-tag mysql">MySQL</span>
+          </div>
+          <div class="panel-body" style="padding:0;overflow:auto;">
+            <table class="panel-table">
+              <thead>
+                <tr>
+                  <th>查询</th>
+                  <th>执行时间</th>
+                  <th>调用次数</th>
+                  <th>平均时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style="font-family:monospace;font-size:0.75rem;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">SELECT * FROM users WHERE status = ? AND...</td>
+                  <td>12.5s</td>
+                  <td>1,234</td>
+                  <td>10ms</td>
+                </tr>
+                <tr>
+                  <td style="font-family:monospace;font-size:0.75rem;">SELECT COUNT(*) FROM orders WHERE...</td>
+                  <td>8.2s</td>
+                  <td>856</td>
+                  <td>9.6ms</td>
+                </tr>
+                <tr>
+                  <td style="font-family:monospace;font-size:0.75rem;">UPDATE products SET stock = stock - ?...</td>
+                  <td>6.1s</td>
+                  <td>2,341</td>
+                  <td>2.6ms</td>
+                </tr>
+                <tr>
+                  <td style="font-family:monospace;font-size:0.75rem;">INSERT INTO logs (user_id, action...)...</td>
+                  <td>4.8s</td>
+                  <td>15,234</td>
+                  <td>0.3ms</td>
+                </tr>
+                <tr>
+                  <td style="font-family:monospace;font-size:0.75rem;">SELECT p.*, c.name FROM products p JOIN...</td>
+                  <td>3.2s</td>
+                  <td>567</td>
+                  <td>5.6ms</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ES 索引统计表格 -->
+        <div class="panel table-panel">
+          <div class="panel-header">
+            <span class="panel-title">Elasticsearch 索引状态</span>
+            <span class="datasource-tag elasticsearch">ES</span>
+          </div>
+          <div class="panel-body" style="padding:0;overflow:auto;">
+            <table class="panel-table">
+              <thead>
+                <tr>
+                  <th>索引名称</th>
+                  <th>文档数</th>
+                  <th>存储大小</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>logs-2026.02.27</td>
+                  <td>15,234,567</td>
+                  <td>12.5 GB</td>
+                  <td><span style="color:#73bf69;">● green</span></td>
+                </tr>
+                <tr>
+                  <td>logs-2026.02.26</td>
+                  <td>18,456,789</td>
+                  <td>14.2 GB</td>
+                  <td><span style="color:#73bf69;">● green</span></td>
+                </tr>
+                <tr>
+                  <td>metrics-2026.02</td>
+                  <td>8,234,123</td>
+                  <td>6.8 GB</td>
+                  <td><span style="color:#73bf69;">● green</span></td>
+                </tr>
+                <tr>
+                  <td>traces-2026.02</td>
+                  <td>3,456,789</td>
+                  <td>4.1 GB</td>
+                  <td><span style="color:#f2cc0c;">● yellow</span></td>
+                </tr>
+                <tr>
+                  <td>events-2026.02</td>
+                  <td>1,234,567</td>
+                  <td>1.8 GB</td>
+                  <td><span style="color:#73bf69;">● green</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 日志面板 -->
+        <div class="panel logs-panel">
+          <div class="panel-header">
+            <span class="panel-title">实时日志流</span>
+            <span class="datasource-tag loki">Loki</span>
+            <div class="panel-actions">
+              <div class="panel-action"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
+              <div class="panel-action"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5,3 19,12 5,21"/></svg></div>
+            </div>
+          </div>
+          <div class="panel-body" style="overflow-y:auto;max-height:200px;">
+            <div class="log-entry">
+              <span class="log-time">07:59:58</span>
+              <span class="log-level info">INFO</span>
+              <span class="log-message">Successfully connected to database cluster mysql-primary:3306</span>
+              <div class="log-labels"><span class="log-label">app=api-server</span><span class="log-label">pod=api-7d8f9-x2k4l</span></div>
+            </div>
+            <div class="log-entry">
+              <span class="log-time">07:59:57</span>
+              <span class="log-level warn">WARN</span>
+              <span class="log-message">High memory usage detected: 85% of allocated memory in use</span>
+              <div class="log-labels"><span class="log-label">app=worker</span><span class="log-label">pod=worker-5c9d2-k8m3n</span></div>
+            </div>
+            <div class="log-entry">
+              <span class="log-time">07:59:55</span>
+              <span class="log-level error">ERROR</span>
+              <span class="log-message">Failed to process message: connection timeout after 30s</span>
+              <div class="log-labels"><span class="log-label">app=consumer</span><span class="log-label">pod=consumer-3f7e1-p9q2r</span></div>
+            </div>
+            <div class="log-entry">
+              <span class="log-time">07:59:54</span>
+              <span class="log-level info">INFO</span>
+              <span class="log-message">Request completed: GET /api/v1/users 200 45ms</span>
+              <div class="log-labels"><span class="log-label">app=api-server</span><span class="log-label">method=GET</span></div>
+            </div>
+            <div class="log-entry">
+              <span class="log-time">07:59:52</span>
+              <span class="log-level info">INFO</span>
+              <span class="log-message">Cache hit for key: user:12345:profile, TTL: 3600s</span>
+              <div class="log-labels"><span class="log-label">app=api-server</span><span class="log-label">cache=redis</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- 仪表盘选择弹窗 -->
+  <div class="modal-overlay" id="dashboardModal">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title">选择仪表盘</span>
+        <div class="modal-close" onclick="hideDashboardModal()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </div>
+      </div>
+      <div class="modal-body">
+        <!-- 数据源列表 -->
+        <h4 style="font-size:0.8125rem;color:#8e9297;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">已配置数据源</h4>
+        <div class="datasource-list">
+          <div class="datasource-card selected">
+            <div class="datasource-card-header">
+              <div class="datasource-icon prometheus">P</div>
+              <div>
+                <div class="datasource-name">Prometheus (生产)</div>
+                <div class="datasource-type">prometheus</div>
+              </div>
+            </div>
+            <div class="datasource-url">http://prometheus.monitoring:9090</div>
+            <div class="datasource-status online">已连接</div>
+          </div>
+          <div class="datasource-card">
+            <div class="datasource-card-header">
+              <div class="datasource-icon elasticsearch">ES</div>
+              <div>
+                <div class="datasource-name">Elasticsearch</div>
+                <div class="datasource-type">elasticsearch</div>
+              </div>
+            </div>
+            <div class="datasource-url">http://es-cluster:9200</div>
+            <div class="datasource-status online">已连接</div>
+          </div>
+          <div class="datasource-card">
+            <div class="datasource-card-header">
+              <div class="datasource-icon loki">L</div>
+              <div>
+                <div class="datasource-name">Loki</div>
+                <div class="datasource-type">loki</div>
+              </div>
+            </div>
+            <div class="datasource-url">http://loki:3100</div>
+            <div class="datasource-status online">已连接</div>
+          </div>
+          <div class="datasource-card">
+            <div class="datasource-card-header">
+              <div class="datasource-icon mysql">M</div>
+              <div>
+                <div class="datasource-name">MySQL (主库)</div>
+                <div class="datasource-type">mysql</div>
+              </div>
+            </div>
+            <div class="datasource-url">mysql-primary:3306</div>
+            <div class="datasource-status online">已连接</div>
+          </div>
+          <div class="datasource-card">
+            <div class="datasource-card-header">
+              <div class="datasource-icon postgres">PG</div>
+              <div>
+                <div class="datasource-name">PostgreSQL</div>
+                <div class="datasource-type">postgres</div>
+              </div>
+            </div>
+            <div class="datasource-url">postgres-primary:5432</div>
+            <div class="datasource-status online">已连接</div>
+          </div>
+          <div class="datasource-card">
+            <div class="datasource-card-header">
+              <div class="datasource-icon influxdb">IF</div>
+              <div>
+                <div class="datasource-name">InfluxDB</div>
+                <div class="datasource-type">influxdb</div>
+              </div>
+            </div>
+            <div class="datasource-url">http://influxdb:8086</div>
+            <div class="datasource-status offline">未连接</div>
+          </div>
+          <div class="datasource-card">
+            <div class="datasource-card-header">
+              <div class="datasource-icon redis">R</div>
+              <div>
+                <div class="datasource-name">Redis</div>
+                <div class="datasource-type">redis</div>
+              </div>
+            </div>
+            <div class="datasource-url">redis-cluster:6379</div>
+            <div class="datasource-status online">已连接</div>
+          </div>
+          <div class="datasource-card">
+            <div class="datasource-card-header">
+              <div class="datasource-icon mongodb">MG</div>
+              <div>
+                <div class="datasource-name">MongoDB</div>
+                <div class="datasource-type">mongodb</div>
+              </div>
+            </div>
+            <div class="datasource-url">mongodb://mongo:27017</div>
+            <div class="datasource-status online">已连接</div>
+          </div>
+        </div>
+
+        <!-- 仪表盘列表 -->
+        <div class="dashboard-list">
+          <div class="dashboard-list-header">
+            <h4 class="dashboard-list-title">可用仪表盘</h4>
+          </div>
+          <div class="dashboard-list-grid">
+            <div class="dashboard-card">
+              <div class="dashboard-card-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              </div>
+              <div class="dashboard-card-title">系统监控总览</div>
+              <div class="dashboard-card-desc">CPU、内存、磁盘、网络全面监控</div>
+              <div class="dashboard-card-meta">
+                <span class="dashboard-card-tag">Prometheus</span>
+              </div>
+            </div>
+            <div class="dashboard-card">
+              <div class="dashboard-card-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+              </div>
+              <div class="dashboard-card-title">Kubernetes 集群</div>
+              <div class="dashboard-card-desc">Pod、Deployment、Service 状态监控</div>
+              <div class="dashboard-card-meta">
+                <span class="dashboard-card-tag">Prometheus</span>
+              </div>
+            </div>
+            <div class="dashboard-card">
+              <div class="dashboard-card-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+              </div>
+              <div class="dashboard-card-title">MySQL 性能</div>
+              <div class="dashboard-card-desc">连接数、慢查询、InnoDB 指标</div>
+              <div class="dashboard-card-meta">
+                <span class="dashboard-card-tag">MySQL</span>
+                <span class="dashboard-card-tag">Prometheus</span>
+              </div>
+            </div>
+            <div class="dashboard-card">
+              <div class="dashboard-card-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              </div>
+              <div class="dashboard-card-title">日志分析</div>
+              <div class="dashboard-card-desc">日志搜索、错误统计、趋势分析</div>
+              <div class="dashboard-card-meta">
+                <span class="dashboard-card-tag">Loki</span>
+                <span class="dashboard-card-tag">ES</span>
+              </div>
+            </div>
+            <div class="dashboard-card">
+              <div class="dashboard-card-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+              </div>
+              <div class="dashboard-card-title">告警中心</div>
+              <div class="dashboard-card-desc">告警统计、趋势、处理效率</div>
+              <div class="dashboard-card-meta">
+                <span class="dashboard-card-tag">Prometheus</span>
+                <span class="dashboard-card-tag">夜莺</span>
+              </div>
+            </div>
+            <div class="dashboard-card">
+              <div class="dashboard-card-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/></svg>
+              </div>
+              <div class="dashboard-card-title">APM 应用性能</div>
+              <div class="dashboard-card-desc">请求量、延迟、错误率、依赖追踪</div>
+              <div class="dashboard-card-meta">
+                <span class="dashboard-card-tag">ES</span>
+                <span class="dashboard-card-tag">Prometheus</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 系统负载趋势图
+    const loadCtx = document.getElementById('loadChart').getContext('2d');
+    new Chart(loadCtx, {
+      type: 'line',
+      data: {
+        labels: ['07:00', '07:10', '07:20', '07:30', '07:40', '07:50', '08:00'],
+        datasets: [{
+          label: 'CPU',
+          data: [45, 52, 48, 61, 75, 78, 78],
+          borderColor: '#73bf69',
+          backgroundColor: 'rgba(115, 191, 105, 0.1)',
+          fill: true,
+          tension: 0.3,
+          borderWidth: 2
+        }, {
+          label: '内存',
+          data: [55, 58, 56, 60, 62, 63, 62],
+          borderColor: '#73c0de',
+          backgroundColor: 'rgba(115, 192, 222, 0.1)',
+          fill: true,
+          tension: 0.3,
+          borderWidth: 2
+        }, {
+          label: '负载',
+          data: [2.1, 2.3, 2.2, 2.8, 3.5, 3.8, 3.6],
+          borderColor: '#f2cc0c',
+          backgroundColor: 'rgba(242, 204, 12, 0.1)',
+          fill: true,
+          tension: 0.3,
+          borderWidth: 2,
+          yAxisID: 'y1'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: {
+          legend: { position: 'top', align: 'end', labels: { color: '#8e9297', font: { size: 11 }, boxWidth: 12, padding: 16 } }
+        },
+        scales: {
+          x: { grid: { color: '#22252a', drawBorder: false }, ticks: { color: '#6e7278', font: { size: 10 } } },
+          y: { position: 'left', grid: { color: '#22252a', drawBorder: false }, ticks: { color: '#6e7278', font: { size: 10 }, callback: v => v + '%' }, min: 0, max: 100 },
+          y1: { position: 'right', grid: { display: false }, ticks: { color: '#6e7278', font: { size: 10 } }, min: 0, max: 5 }
+        }
+      }
+    });
+
+    // 网络流量图
+    const networkCtx = document.getElementById('networkChart').getContext('2d');
+    new Chart(networkCtx, {
+      type: 'line',
+      data: {
+        labels: ['07:00', '07:10', '07:20', '07:30', '07:40', '07:50', '08:00'],
+        datasets: [{
+          label: '入站流量',
+          data: [120, 145, 138, 156, 189, 210, 195],
+          borderColor: '#5794f2',
+          backgroundColor: 'rgba(87, 148, 242, 0.1)',
+          fill: true,
+          tension: 0.3,
+          borderWidth: 2
+        }, {
+          label: '出站流量',
+          data: [95, 110, 102, 125, 148, 165, 152],
+          borderColor: '#b877d9',
+          backgroundColor: 'rgba(184, 119, 217, 0.1)',
+          fill: true,
+          tension: 0.3,
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: {
+          legend: { position: 'top', align: 'end', labels: { color: '#8e9297', font: { size: 11 }, boxWidth: 12, padding: 16 } }
+        },
+        scales: {
+          x: { grid: { color: '#22252a', drawBorder: false }, ticks: { color: '#6e7278', font: { size: 10 } } },
+          y: { grid: { color: '#22252a', drawBorder: false }, ticks: { color: '#6e7278', font: { size: 10 }, callback: v => v + ' Mbps' } }
+        }
+      }
+    });
+
+    // 弹窗控制
+    function showDashboardModal() {
+      document.getElementById('dashboardModal').classList.add('show');
+    }
+    function hideDashboardModal() {
+      document.getElementById('dashboardModal').classList.remove('show');
+    }
+    document.getElementById('dashboardModal').addEventListener('click', function(e) {
+      if (e.target === this) hideDashboardModal();
+    });
+
+    // 导航交互
+    document.querySelectorAll('.sidebar-item').forEach(item => {
+      item.addEventListener('click', () => {
+        document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+      });
+    });
+    document.querySelectorAll('.sub-nav-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.sub-nav-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+      });
+    });
+    document.querySelectorAll('.datasource-card').forEach(card => {
+      card.addEventListener('click', () => {
+        document.querySelectorAll('.datasource-card').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+      });
+    });
+  </script>
+</body>
+</html>

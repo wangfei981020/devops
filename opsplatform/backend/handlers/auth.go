@@ -407,7 +407,11 @@ const (
 func AdminOnlyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		role := r.Context().Value(contextKeyRole)
-		if role == nil || role.(string) != "admin" {
+		roleStr := ""
+		if role != nil {
+			roleStr = role.(string)
+		}
+		if roleStr != "admin" && roleStr != "super_admin" {
 			http.Error(w, "权限不足，需要管理员权限", http.StatusForbidden)
 			return
 		}
@@ -427,6 +431,46 @@ func GetUserFromContext(r *http.Request) (userID, username, role string) {
 		role = v.(string)
 	}
 	return
+}
+
+// UserHasPermission 检查用户是否拥有指定权限（超级管理员/管理员默认放行）
+func UserHasPermission(username, role, permissionCode string) (bool, error) {
+	// 兼容旧角色体系：admin/super_admin 直接拥有全部权限
+	if role == "super_admin" || role == "admin" || role == "超级管理员" {
+		return true, nil
+	}
+	if username == "" {
+		return false, nil
+	}
+
+	// 兼容新 RBAC：角色 code 为 super_admin/admin 时也放行
+	var adminRoleCount int
+	if err := database.DB.QueryRow(`
+		SELECT COUNT(*)
+		FROM users u
+		JOIN user_roles ur ON ur.user_id = u.id
+		JOIN roles r ON r.id = ur.role_id
+		WHERE u.username = ? AND r.code IN ('super_admin', 'admin')
+	`, username).Scan(&adminRoleCount); err != nil {
+		return false, err
+	}
+	if adminRoleCount > 0 {
+		return true, nil
+	}
+
+	var count int
+	err := database.DB.QueryRow(`
+		SELECT COUNT(*)
+		FROM users u
+		JOIN user_roles ur ON ur.user_id = u.id
+		JOIN role_permissions rp ON rp.role_id = ur.role_id
+		JOIN permissions p ON p.id = rp.permission_id
+		WHERE u.username = ? AND p.code = ?
+	`, username, permissionCode).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // HandleLogout 处理登出请求

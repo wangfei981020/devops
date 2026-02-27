@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>告警监控中心 - 设计预览</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1419; min-height: 100vh; color: #d0d7de; }
+    
+    /* 顶部导航 */
+    .top-nav { background: #161b22; border-bottom: 1px solid #30363d; padding: 0 20px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+    .nav-left { display: flex; align-items: center; gap: 20px; }
+    .logo { display: flex; align-items: center; gap: 10px; font-size: 1.125rem; font-weight: 600; color: #fff; }
+    .logo svg { width: 28px; height: 28px; color: #f97316; }
+    .nav-tabs { display: flex; gap: 4px; }
+    .nav-tab { padding: 8px 16px; background: transparent; border: none; color: #8b949e; font-size: 0.875rem; cursor: pointer; border-radius: 6px; transition: all 0.15s; display: flex; align-items: center; gap: 6px; }
+    .nav-tab:hover { background: #21262d; color: #d0d7de; }
+    .nav-tab.active { background: #238636; color: #fff; }
+    .nav-tab svg { width: 16px; height: 16px; }
+    .nav-right { display: flex; align-items: center; gap: 12px; }
+    .time-range { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #21262d; border: 1px solid #30363d; border-radius: 6px; font-size: 0.8125rem; color: #d0d7de; }
+    .time-range svg { width: 14px; height: 14px; color: #8b949e; }
+    .refresh-btn { width: 36px; height: 36px; background: #21262d; border: 1px solid #30363d; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; }
+    .refresh-btn:hover { background: #30363d; }
+    .refresh-btn svg { width: 16px; height: 16px; color: #8b949e; }
+    
+    /* 主内容区 */
+    .main-content { padding: 20px; }
+    
+    /* 告警概览卡片 */
+    .alert-overview { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 20px; }
+    @media (max-width: 1400px) { .alert-overview { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 900px) { .alert-overview { grid-template-columns: repeat(2, 1fr); } }
+    
+    .alert-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; position: relative; overflow: hidden; }
+    .alert-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+    .alert-card.critical::before { background: linear-gradient(90deg, #f85149, #da3633); }
+    .alert-card.warning::before { background: linear-gradient(90deg, #d29922, #bb8009); }
+    .alert-card.info::before { background: linear-gradient(90deg, #58a6ff, #388bfd); }
+    .alert-card.success::before { background: linear-gradient(90deg, #3fb950, #238636); }
+    .alert-card.total::before { background: linear-gradient(90deg, #8b949e, #6e7681); }
+    
+    .alert-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+    .alert-card-title { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }
+    .alert-card-icon { width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+    .alert-card.critical .alert-card-icon { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+    .alert-card.warning .alert-card-icon { background: rgba(210, 153, 34, 0.15); color: #d29922; }
+    .alert-card.info .alert-card-icon { background: rgba(88, 166, 255, 0.15); color: #58a6ff; }
+    .alert-card.success .alert-card-icon { background: rgba(63, 185, 80, 0.15); color: #3fb950; }
+    .alert-card.total .alert-card-icon { background: rgba(139, 148, 158, 0.15); color: #8b949e; }
+    .alert-card-icon svg { width: 18px; height: 18px; }
+    
+    .alert-card-value { font-size: 2.5rem; font-weight: 700; line-height: 1; margin-bottom: 8px; }
+    .alert-card.critical .alert-card-value { color: #f85149; }
+    .alert-card.warning .alert-card-value { color: #d29922; }
+    .alert-card.info .alert-card-value { color: #58a6ff; }
+    .alert-card.success .alert-card-value { color: #3fb950; }
+    .alert-card.total .alert-card-value { color: #d0d7de; }
+    
+    .alert-card-change { font-size: 0.75rem; display: flex; align-items: center; gap: 4px; }
+    .alert-card-change.up { color: #f85149; }
+    .alert-card-change.down { color: #3fb950; }
+    .alert-card-change svg { width: 12px; height: 12px; }
+    
+    /* 数据源状态 */
+    .datasource-status { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .datasource-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px 16px; display: flex; align-items: center; gap: 12px; }
+    .datasource-icon { width: 40px; height: 40px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; font-weight: 700; }
+    .datasource-icon.prometheus { background: linear-gradient(135deg, #e6522c, #c43e1c); color: white; }
+    .datasource-icon.nightingale { background: linear-gradient(135deg, #6366f1, #4f46e5); color: white; }
+    .datasource-icon.alertmanager { background: linear-gradient(135deg, #f59e0b, #d97706); color: white; }
+    .datasource-info { flex: 1; }
+    .datasource-name { font-size: 0.875rem; font-weight: 600; color: #d0d7de; }
+    .datasource-url { font-size: 0.75rem; color: #8b949e; }
+    .datasource-status-badge { padding: 4px 10px; border-radius: 20px; font-size: 0.7rem; font-weight: 500; }
+    .datasource-status-badge.online { background: rgba(63, 185, 80, 0.15); color: #3fb950; }
+    .datasource-status-badge.offline { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+    
+    /* 图表区域 */
+    .charts-section { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 20px; }
+    @media (max-width: 1200px) { .charts-section { grid-template-columns: 1fr; } }
+    
+    .chart-panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+    .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #21262d; }
+    .panel-title { font-size: 0.9375rem; font-weight: 600; color: #d0d7de; display: flex; align-items: center; gap: 8px; }
+    .panel-title svg { width: 18px; height: 18px; color: #8b949e; }
+    .panel-actions { display: flex; gap: 8px; }
+    .panel-btn { width: 28px; height: 28px; background: #21262d; border: 1px solid #30363d; border-radius: 4px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; }
+    .panel-btn:hover { background: #30363d; }
+    .panel-btn svg { width: 14px; height: 14px; color: #8b949e; }
+    .chart-container { height: 250px; position: relative; }
+    
+    /* 告警分布饼图 */
+    .pie-chart-container { height: 200px; display: flex; align-items: center; justify-content: center; }
+    .pie-legend { margin-top: 16px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #21262d; }
+    .legend-item:last-child { border-bottom: none; }
+    .legend-color { width: 12px; height: 12px; border-radius: 3px; }
+    .legend-label { flex: 1; font-size: 0.8125rem; color: #8b949e; }
+    .legend-value { font-size: 0.875rem; font-weight: 600; color: #d0d7de; }
+    
+    /* 告警列表 */
+    .alert-list-section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+    .list-header { display: flex; justify-content: space-between; align-items: center; padding: 16px; border-bottom: 1px solid #21262d; }
+    .list-title { font-size: 0.9375rem; font-weight: 600; color: #d0d7de; }
+    .list-filters { display: flex; gap: 8px; }
+    .filter-btn { padding: 6px 12px; background: #21262d; border: 1px solid #30363d; border-radius: 4px; font-size: 0.75rem; color: #8b949e; cursor: pointer; transition: all 0.15s; }
+    .filter-btn:hover { background: #30363d; color: #d0d7de; }
+    .filter-btn.active { background: #388bfd; border-color: #388bfd; color: #fff; }
+    
+    .alert-table { width: 100%; border-collapse: collapse; }
+    .alert-table th { padding: 12px 16px; text-align: left; font-size: 0.75rem; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; background: #0d1117; border-bottom: 1px solid #21262d; }
+    .alert-table td { padding: 12px 16px; font-size: 0.8125rem; color: #d0d7de; border-bottom: 1px solid #21262d; }
+    .alert-table tr:hover { background: #21262d; }
+    
+    .severity-badge { padding: 3px 8px; border-radius: 3px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
+    .severity-badge.critical { background: rgba(248, 81, 73, 0.2); color: #f85149; }
+    .severity-badge.warning { background: rgba(210, 153, 34, 0.2); color: #d29922; }
+    .severity-badge.info { background: rgba(88, 166, 255, 0.2); color: #58a6ff; }
+    
+    .source-badge { padding: 3px 8px; border-radius: 3px; font-size: 0.7rem; font-weight: 500; }
+    .source-badge.prometheus { background: rgba(230, 82, 44, 0.2); color: #e6522c; }
+    .source-badge.nightingale { background: rgba(99, 102, 241, 0.2); color: #818cf8; }
+    
+    .status-badge { padding: 3px 8px; border-radius: 3px; font-size: 0.7rem; font-weight: 500; }
+    .status-badge.firing { background: rgba(248, 81, 73, 0.2); color: #f85149; }
+    .status-badge.resolved { background: rgba(63, 185, 80, 0.2); color: #3fb950; }
+    .status-badge.silenced { background: rgba(139, 148, 158, 0.2); color: #8b949e; }
+    
+    .alert-name { display: flex; flex-direction: column; gap: 2px; }
+    .alert-name-text { font-weight: 500; color: #d0d7de; }
+    .alert-instance { font-size: 0.7rem; color: #8b949e; font-family: 'SF Mono', Consolas, monospace; }
+    
+    .alert-time { font-size: 0.75rem; color: #8b949e; white-space: nowrap; }
+    
+    .action-btn { padding: 4px 8px; background: #21262d; border: 1px solid #30363d; border-radius: 4px; font-size: 0.7rem; color: #8b949e; cursor: pointer; transition: all 0.15s; }
+    .action-btn:hover { background: #30363d; color: #d0d7de; }
+    
+    /* 右侧面板 */
+    .side-panels { display: grid; gap: 16px; }
+    
+    /* 按服务分组 */
+    .service-list { }
+    .service-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #21262d; cursor: pointer; transition: all 0.15s; }
+    .service-item:hover { background: #21262d; margin: 0 -16px; padding: 10px 16px; }
+    .service-item:last-child { border-bottom: none; }
+    .service-icon { width: 36px; height: 36px; background: #21262d; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+    .service-icon svg { width: 18px; height: 18px; color: #8b949e; }
+    .service-info { flex: 1; }
+    .service-name { font-size: 0.875rem; font-weight: 500; color: #d0d7de; }
+    .service-alerts { font-size: 0.75rem; color: #8b949e; }
+    .service-count { display: flex; gap: 6px; }
+    .service-count-badge { min-width: 24px; height: 20px; padding: 0 6px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+    .service-count-badge.critical { background: rgba(248, 81, 73, 0.2); color: #f85149; }
+    .service-count-badge.warning { background: rgba(210, 153, 34, 0.2); color: #d29922; }
+    
+    /* 最近告警 */
+    .recent-alerts { }
+    .recent-alert-item { padding: 12px 0; border-bottom: 1px solid #21262d; }
+    .recent-alert-item:last-child { border-bottom: none; }
+    .recent-alert-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .recent-alert-severity { width: 8px; height: 8px; border-radius: 50%; }
+    .recent-alert-severity.critical { background: #f85149; }
+    .recent-alert-severity.warning { background: #d29922; }
+    .recent-alert-severity.info { background: #58a6ff; }
+    .recent-alert-name { font-size: 0.8125rem; font-weight: 500; color: #d0d7de; flex: 1; }
+    .recent-alert-time { font-size: 0.7rem; color: #8b949e; }
+    .recent-alert-desc { font-size: 0.75rem; color: #8b949e; line-height: 1.4; }
+    
+    /* 分页 */
+    .pagination { display: flex; justify-content: space-between; align-items: center; padding: 16px; border-top: 1px solid #21262d; }
+    .pagination-info { font-size: 0.8125rem; color: #8b949e; }
+    .pagination-buttons { display: flex; gap: 4px; }
+    .page-btn { width: 32px; height: 32px; background: #21262d; border: 1px solid #30363d; border-radius: 4px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; font-size: 0.8125rem; color: #8b949e; }
+    .page-btn:hover { background: #30363d; color: #d0d7de; }
+    .page-btn.active { background: #388bfd; border-color: #388bfd; color: #fff; }
+    .page-btn svg { width: 14px; height: 14px; }
+    
+    /* 空状态 */
+    .empty-state { text-align: center; padding: 60px 20px; color: #8b949e; }
+    .empty-icon { width: 64px; height: 64px; margin: 0 auto 16px; background: #21262d; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+    .empty-icon svg { width: 32px; height: 32px; }
+  </style>
+</head>
+<body>
+  <!-- 顶部导航 -->
+  <nav class="top-nav">
+    <div class="nav-left">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        告警监控中心
+      </div>
+      <div class="nav-tabs">
+        <button class="nav-tab active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          告警总览
+        </button>
+        <button class="nav-tab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+          告警规则
+        </button>
+        <button class="nav-tab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+          静默管理
+        </button>
+        <button class="nav-tab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+          设置
+        </button>
+      </div>
+    </div>
+    <div class="nav-right">
+      <div class="time-range">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>
+        最近 1 小时
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;"><polyline points="6,9 12,15 18,9"/></svg>
+      </div>
+      <button class="refresh-btn" title="刷新">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <!-- 主内容 -->
+  <main class="main-content">
+    <!-- 告警概览 -->
+    <div class="alert-overview">
+      <div class="alert-card critical">
+        <div class="alert-card-header">
+          <span class="alert-card-title">严重告警</span>
+          <div class="alert-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+          </div>
+        </div>
+        <div class="alert-card-value">12</div>
+        <div class="alert-card-change up">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,6 13.5,15.5 8.5,10.5 1,18"/></svg>
+          +3 较上小时
+        </div>
+      </div>
+      <div class="alert-card warning">
+        <div class="alert-card-header">
+          <span class="alert-card-title">警告告警</span>
+          <div class="alert-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </div>
+        </div>
+        <div class="alert-card-value">28</div>
+        <div class="alert-card-change down">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,18 13.5,8.5 8.5,13.5 1,6"/></svg>
+          -5 较上小时
+        </div>
+      </div>
+      <div class="alert-card info">
+        <div class="alert-card-header">
+          <span class="alert-card-title">信息告警</span>
+          <div class="alert-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          </div>
+        </div>
+        <div class="alert-card-value">45</div>
+        <div class="alert-card-change down">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,18 13.5,8.5 8.5,13.5 1,6"/></svg>
+          -12 较上小时
+        </div>
+      </div>
+      <div class="alert-card success">
+        <div class="alert-card-header">
+          <span class="alert-card-title">已恢复</span>
+          <div class="alert-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22,4 12,14.01 9,11.01"/></svg>
+          </div>
+        </div>
+        <div class="alert-card-value">156</div>
+        <div class="alert-card-change down">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,18 13.5,8.5 8.5,13.5 1,6"/></svg>
+          今日恢复
+        </div>
+      </div>
+      <div class="alert-card total">
+        <div class="alert-card-header">
+          <span class="alert-card-title">活跃告警</span>
+          <div class="alert-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+          </div>
+        </div>
+        <div class="alert-card-value">85</div>
+        <div class="alert-card-change">
+          <span style="color:#8b949e;">共 241 条规则</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 数据源状态 -->
+    <div class="datasource-status">
+      <div class="datasource-card">
+        <div class="datasource-icon prometheus">P</div>
+        <div class="datasource-info">
+          <div class="datasource-name">Prometheus</div>
+          <div class="datasource-url">prometheus.internal:9090</div>
+        </div>
+        <span class="datasource-status-badge online">● 在线</span>
+      </div>
+      <div class="datasource-card">
+        <div class="datasource-icon nightingale">N9E</div>
+        <div class="datasource-info">
+          <div class="datasource-name">夜莺 Nightingale</div>
+          <div class="datasource-url">n9e.internal:17000</div>
+        </div>
+        <span class="datasource-status-badge online">● 在线</span>
+      </div>
+      <div class="datasource-card">
+        <div class="datasource-icon alertmanager">AM</div>
+        <div class="datasource-info">
+          <div class="datasource-name">AlertManager</div>
+          <div class="datasource-url">alertmanager.internal:9093</div>
+        </div>
+        <span class="datasource-status-badge online">● 在线</span>
+      </div>
+    </div>
+
+    <!-- 图表区域 -->
+    <div class="charts-section">
+      <div class="chart-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            告警趋势 (24小时)
+          </div>
+          <div class="panel-actions">
+            <button class="panel-btn" title="放大">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15,3 21,3 21,9"/><polyline points="9,21 3,21 3,15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+            </button>
+            <button class="panel-btn" title="下载">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="trendChart"></canvas>
+        </div>
+      </div>
+      <div class="side-panels">
+        <div class="chart-panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.21 15.89A10 10 0 118 2.83"/><path d="M22 12A10 10 0 0012 2v10z"/></svg>
+              告警分布
+            </div>
+          </div>
+          <div class="pie-chart-container">
+            <canvas id="pieChart"></canvas>
+          </div>
+          <div class="pie-legend">
+            <div class="legend-item">
+              <span class="legend-color" style="background:#f85149;"></span>
+              <span class="legend-label">严重</span>
+              <span class="legend-value">12</span>
+            </div>
+            <div class="legend-item">
+              <span class="legend-color" style="background:#d29922;"></span>
+              <span class="legend-label">警告</span>
+              <span class="legend-value">28</span>
+            </div>
+            <div class="legend-item">
+              <span class="legend-color" style="background:#58a6ff;"></span>
+              <span class="legend-label">信息</span>
+              <span class="legend-value">45</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 告警列表 -->
+    <div class="alert-list-section">
+      <div class="list-header">
+        <div class="list-title">实时告警列表</div>
+        <div class="list-filters">
+          <button class="filter-btn active">全部</button>
+          <button class="filter-btn">严重</button>
+          <button class="filter-btn">警告</button>
+          <button class="filter-btn">信息</button>
+          <button class="filter-btn">Prometheus</button>
+          <button class="filter-btn">夜莺</button>
+        </div>
+      </div>
+      <table class="alert-table">
+        <thead>
+          <tr>
+            <th>级别</th>
+            <th>告警名称</th>
+            <th>来源</th>
+            <th>状态</th>
+            <th>触发时间</th>
+            <th>持续时间</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="severity-badge critical">严重</span></td>
+            <td>
+              <div class="alert-name">
+                <span class="alert-name-text">MySQL 主从延迟过高</span>
+                <span class="alert-instance">mysql-slave-01:3306</span>
+              </div>
+            </td>
+            <td><span class="source-badge prometheus">Prometheus</span></td>
+            <td><span class="status-badge firing">触发中</span></td>
+            <td class="alert-time">2026-02-27 07:45:23</td>
+            <td class="alert-time">15分钟</td>
+            <td><button class="action-btn">静默</button> <button class="action-btn">详情</button></td>
+          </tr>
+          <tr>
+            <td><span class="severity-badge critical">严重</span></td>
+            <td>
+              <div class="alert-name">
+                <span class="alert-name-text">容器 OOMKilled</span>
+                <span class="alert-instance">pod/api-server-7d8f9-x2k4l</span>
+              </div>
+            </td>
+            <td><span class="source-badge nightingale">夜莺</span></td>
+            <td><span class="status-badge firing">触发中</span></td>
+            <td class="alert-time">2026-02-27 07:42:11</td>
+            <td class="alert-time">18分钟</td>
+            <td><button class="action-btn">静默</button> <button class="action-btn">详情</button></td>
+          </tr>
+          <tr>
+            <td><span class="severity-badge warning">警告</span></td>
+            <td>
+              <div class="alert-name">
+                <span class="alert-name-text">CPU 使用率超过 80%</span>
+                <span class="alert-instance">node-worker-03.internal</span>
+              </div>
+            </td>
+            <td><span class="source-badge prometheus">Prometheus</span></td>
+            <td><span class="status-badge firing">触发中</span></td>
+            <td class="alert-time">2026-02-27 07:38:45</td>
+            <td class="alert-time">21分钟</td>
+            <td><button class="action-btn">静默</button> <button class="action-btn">详情</button></td>
+          </tr>
+          <tr>
+            <td><span class="severity-badge warning">警告</span></td>
+            <td>
+              <div class="alert-name">
+                <span class="alert-name-text">磁盘空间不足</span>
+                <span class="alert-instance">/dev/sda1 (85% used)</span>
+              </div>
+            </td>
+            <td><span class="source-badge nightingale">夜莺</span></td>
+            <td><span class="status-badge firing">触发中</span></td>
+            <td class="alert-time">2026-02-27 07:30:12</td>
+            <td class="alert-time">30分钟</td>
+            <td><button class="action-btn">静默</button> <button class="action-btn">详情</button></td>
+          </tr>
+          <tr>
+            <td><span class="severity-badge info">信息</span></td>
+            <td>
+              <div class="alert-name">
+                <span class="alert-name-text">Pod 重启次数增加</span>
+                <span class="alert-instance">nginx-ingress-controller-5f7d9</span>
+              </div>
+            </td>
+            <td><span class="source-badge prometheus">Prometheus</span></td>
+            <td><span class="status-badge resolved">已恢复</span></td>
+            <td class="alert-time">2026-02-27 06:15:33</td>
+            <td class="alert-time">1小时</td>
+            <td><button class="action-btn">详情</button></td>
+          </tr>
+          <tr>
+            <td><span class="severity-badge warning">警告</span></td>
+            <td>
+              <div class="alert-name">
+                <span class="alert-name-text">Redis 连接数过高</span>
+                <span class="alert-instance">redis-cluster-01:6379</span>
+              </div>
+            </td>
+            <td><span class="source-badge nightingale">夜莺</span></td>
+            <td><span class="status-badge silenced">已静默</span></td>
+            <td class="alert-time">2026-02-27 05:22:18</td>
+            <td class="alert-time">2小时</td>
+            <td><button class="action-btn">取消静默</button> <button class="action-btn">详情</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="pagination">
+        <div class="pagination-info">显示 1-6 条，共 85 条</div>
+        <div class="pagination-buttons">
+          <button class="page-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15,18 9,12 15,6"/></svg>
+          </button>
+          <button class="page-btn active">1</button>
+          <button class="page-btn">2</button>
+          <button class="page-btn">3</button>
+          <button class="page-btn">...</button>
+          <button class="page-btn">15</button>
+          <button class="page-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9,18 15,12 9,6"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // 告警趋势图
+    const trendCtx = document.getElementById('trendChart').getContext('2d');
+    new Chart(trendCtx, {
+      type: 'line',
+      data: {
+        labels: ['00:00', '02:00', '04:00', '06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00'],
+        datasets: [{
+          label: '严重',
+          data: [8, 6, 5, 7, 9, 12, 15, 18, 14, 11, 10, 12],
+          borderColor: '#f85149',
+          backgroundColor: 'rgba(248, 81, 73, 0.1)',
+          fill: true,
+          tension: 0.4
+        }, {
+          label: '警告',
+          data: [20, 18, 15, 22, 25, 28, 32, 35, 30, 28, 25, 28],
+          borderColor: '#d29922',
+          backgroundColor: 'rgba(210, 153, 34, 0.1)',
+          fill: true,
+          tension: 0.4
+        }, {
+          label: '信息',
+          data: [35, 32, 28, 40, 45, 50, 55, 60, 52, 48, 42, 45],
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88, 166, 255, 0.1)',
+          fill: true,
+          tension: 0.4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'top',
+            labels: { color: '#8b949e', font: { size: 11 }, boxWidth: 12 }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: '#21262d' },
+            ticks: { color: '#8b949e', font: { size: 10 } }
+          },
+          y: {
+            grid: { color: '#21262d' },
+            ticks: { color: '#8b949e', font: { size: 10 } }
+          }
+        }
+      }
+    });
+
+    // 告警分布饼图
+    const pieCtx = document.getElementById('pieChart').getContext('2d');
+    new Chart(pieCtx, {
+      type: 'doughnut',
+      data: {
+        labels: ['严重', '警告', '信息'],
+        datasets: [{
+          data: [12, 28, 45],
+          backgroundColor: ['#f85149', '#d29922', '#58a6ff'],
+          borderColor: '#161b22',
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false }
+        },
+        cutout: '65%'
+      }
+    });
+
+    // 交互效果
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+      });
+    });
+
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    document.querySelectorAll('.page-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!btn.querySelector('svg')) {
+          document.querySelectorAll('.page-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+        }
+      });
+    });
+  </script>
+</body>
+</html>

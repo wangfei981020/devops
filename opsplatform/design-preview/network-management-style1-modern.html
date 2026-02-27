@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>网络管理 - 现代蓝鲸风格</title>
+  <style>
+    :root {
+      --bg-dark: #0d1117;
+      --bg-card: #161b22;
+      --bg-hover: #21262d;
+      --bg-input: #0d1117;
+      --border: #30363d;
+      --text-primary: #e6edf3;
+      --text-secondary: #8b949e;
+      --text-muted: #6e7681;
+      --primary: #3a84ff;
+      --success: #2dcb56;
+      --warning: #ff9c01;
+      --danger: #ea3636;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg-dark); color: var(--text-primary); padding: 24px; min-height: 100vh; }
+
+    .container { max-width: 1600px; margin: 0 auto; }
+
+    .page-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 24px 28px; background: var(--bg-card); border-radius: 16px;
+      border: 1px solid var(--border); margin-bottom: 20px;
+    }
+    .page-title { font-size: 26px; font-weight: 700; color: var(--text-primary); }
+    .page-subtitle { font-size: 14px; color: var(--text-secondary); margin-top: 4px; }
+    .header-actions { display: flex; gap: 12px; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 12px 20px; border-radius: 10px; font-size: 14px; font-weight: 500;
+      border: none; cursor: pointer; transition: all 0.2s;
+    }
+    .btn-primary { background: linear-gradient(135deg, #3a84ff, #6366f1); color: #fff; box-shadow: 0 4px 14px rgba(58, 132, 255, 0.35); }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(58, 132, 255, 0.45); }
+    .btn-secondary { background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border); }
+    .btn-secondary:hover { border-color: var(--primary); color: var(--primary); }
+
+    .stats-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px;
+    }
+    .stat-card {
+      background: var(--bg-card); border-radius: 16px; border: 1px solid var(--border);
+      padding: 24px; position: relative; overflow: hidden;
+    }
+    .stat-card::before {
+      content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%;
+      border-radius: 16px 0 0 16px;
+    }
+    .stat-card.primary::before { background: linear-gradient(to bottom, #3a84ff, #6366f1); }
+    .stat-card.success::before { background: linear-gradient(to bottom, #2dcb56, #10b981); }
+    .stat-card.warning::before { background: linear-gradient(to bottom, #ff9c01, #f59e0b); }
+    .stat-card.danger::before { background: linear-gradient(to bottom, #ea3636, #ef4444); }
+    .stat-value { font-size: 36px; font-weight: 700; margin-bottom: 4px; }
+    .stat-card.primary .stat-value { color: #3a84ff; }
+    .stat-card.success .stat-value { color: #2dcb56; }
+    .stat-card.warning .stat-value { color: #ff9c01; }
+    .stat-card.danger .stat-value { color: #ea3636; }
+    .stat-label { font-size: 14px; color: var(--text-secondary); }
+    .stat-icon { position: absolute; right: 20px; top: 50%; transform: translateY(-50%); width: 48px; height: 48px; opacity: 0.15; }
+
+    .filter-bar {
+      display: flex; gap: 12px; padding: 20px;
+      background: var(--bg-card); border-radius: 16px; border: 1px solid var(--border);
+      margin-bottom: 20px; flex-wrap: wrap; align-items: center;
+    }
+    .search-box { flex: 1; min-width: 280px; position: relative; }
+    .search-box svg { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; color: var(--text-muted); }
+    .search-input {
+      width: 100%; padding: 12px 16px 12px 48px; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--bg-input); color: var(--text-primary);
+      font-size: 14px; transition: all 0.2s;
+    }
+    .search-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(58, 132, 255, 0.1); }
+    .filter-select {
+      padding: 12px 40px 12px 16px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--bg-input); color: var(--text-primary); font-size: 14px;
+      appearance: none; cursor: pointer; min-width: 140px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 12px center;
+    }
+    .filter-select:focus { outline: none; border-color: var(--primary); }
+
+    .table-container {
+      background: var(--bg-card); border-radius: 16px; border: 1px solid var(--border); overflow: hidden;
+    }
+    .data-table { width: 100%; border-collapse: collapse; }
+    .data-table th {
+      padding: 16px 20px; text-align: left; font-weight: 600; font-size: 13px;
+      color: var(--text-secondary); background: var(--bg-hover);
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .data-table td {
+      padding: 18px 20px; border-bottom: 1px solid var(--border);
+      font-size: 14px; color: var(--text-primary);
+    }
+    .data-table tbody tr { transition: all 0.15s; }
+    .data-table tbody tr:hover { background: var(--bg-hover); }
+    .data-table tbody tr:last-child td { border-bottom: none; }
+
+    .type-tag {
+      display: inline-flex; padding: 6px 14px; border-radius: 6px;
+      font-size: 12px; font-weight: 600;
+    }
+    .type-tag.prod { background: rgba(234, 54, 54, 0.15); color: #ea3636; }
+    .type-tag.uat { background: rgba(255, 156, 1, 0.15); color: #ff9c01; }
+
+    .vid-cell { font-family: 'Monaco', 'Consolas', monospace; font-size: 12px; color: #22d3ee; white-space: pre-line; }
+
+    .ip-cell { font-family: 'Monaco', 'Consolas', monospace; font-size: 13px; color: var(--text-primary); }
+
+    .conn-id { font-family: 'Monaco', 'Consolas', monospace; font-size: 13px; color: #a78bfa; font-weight: 500; }
+
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px;
+      border-radius: 20px; font-size: 12px; font-weight: 600;
+    }
+    .status-badge.active { background: rgba(45, 203, 86, 0.15); color: #2dcb56; }
+    .status-badge.active::before { content: ''; width: 8px; height: 8px; background: #2dcb56; border-radius: 50%; animation: pulse 2s infinite; }
+    .status-badge.pending { background: rgba(255, 156, 1, 0.15); color: #ff9c01; }
+    .status-badge.inactive { background: rgba(234, 54, 54, 0.15); color: #ea3636; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .action-btns { display: flex; gap: 8px; }
+    .action-btn {
+      width: 34px; height: 34px; border-radius: 8px; border: none;
+      background: var(--bg-hover); color: var(--text-secondary);
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s;
+    }
+    .action-btn:hover { background: var(--primary); color: #fff; }
+    .action-btn.danger:hover { background: var(--danger); }
+    .action-btn svg { width: 16px; height: 16px; }
+
+    .pagination {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 24px; border-top: 1px solid var(--border);
+    }
+    .pagination-info { font-size: 14px; color: var(--text-secondary); }
+    .pagination-controls { display: flex; gap: 8px; }
+    .page-btn {
+      min-width: 38px; height: 38px; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--bg-input);
+      color: var(--text-primary); font-size: 14px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s;
+    }
+    .page-btn:hover { border-color: var(--primary); color: var(--primary); }
+    .page-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+    .design-badge {
+      position: fixed; bottom: 24px; right: 24px;
+      background: linear-gradient(135deg, #3a84ff, #8b5cf6);
+      color: #fff; padding: 12px 20px; border-radius: 30px;
+      font-size: 13px; font-weight: 600; box-shadow: 0 4px 20px rgba(58, 132, 255, 0.4);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">网络管理</h1>
+        <p class="page-subtitle">管理网络连接记录、VID配置、源地址和目标地址映射</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-secondary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          刷新
+        </button>
+        <button class="btn btn-secondary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          导出
+        </button>
+        <button class="btn btn-primary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          添加记录
+        </button>
+        <button class="btn btn-secondary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          批量添加
+        </button>
+        <button class="btn btn-secondary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          批量检测
+        </button>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card primary">
+        <div class="stat-value">17</div>
+        <div class="stat-label">总记录数</div>
+        <svg class="stat-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2"/></svg>
+      </div>
+      <div class="stat-card success">
+        <div class="stat-value">12</div>
+        <div class="stat-label">启用</div>
+        <svg class="stat-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+      </div>
+      <div class="stat-card warning">
+        <div class="stat-value">0</div>
+        <div class="stat-label">待定</div>
+        <svg class="stat-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+      </div>
+      <div class="stat-card danger">
+        <div class="stat-value">5</div>
+        <div class="stat-label">停用</div>
+        <svg class="stat-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+      </div>
+    </div>
+
+    <div class="filter-bar">
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input type="text" class="search-input" placeholder="搜索VID、IP..." />
+      </div>
+      <select class="filter-select">
+        <option>所有项目</option>
+        <option>订单系统</option>
+        <option>支付系统</option>
+        <option>用户中心</option>
+      </select>
+      <select class="filter-select">
+        <option>所有环境</option>
+        <option>PROD</option>
+        <option>UAT</option>
+      </select>
+      <select class="filter-select">
+        <option>所有状态</option>
+        <option>启用</option>
+        <option>待定</option>
+        <option>停用</option>
+      </select>
+      <select class="filter-select">
+        <option>连接ID</option>
+        <option>重复ID</option>
+        <option>不重复ID</option>
+      </select>
+      <button class="btn btn-primary" style="padding: 12px 28px;">搜 索</button>
+      <button class="btn btn-secondary">重 置</button>
+    </div>
+
+    <div class="table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th><input type="checkbox" /></th>
+            <th>项目 ⇅</th>
+            <th>环境 ⇅</th>
+            <th>模块名 ⇅</th>
+            <th>VID ⇅</th>
+            <th>源地址 ⇅</th>
+            <th>目标地址 ⇅</th>
+            <th>连接ID ⇅</th>
+            <th>状态 ⇅</th>
+            <th>更新人</th>
+            <th>更新时间</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><input type="checkbox" /></td>
+            <td>订单系统</td>
+            <td><span class="type-tag uat">UAT</span></td>
+            <td>test</td>
+            <td class="vid-cell">VLAN100</td>
+            <td class="ip-cell">1.4.1.1:11</td>
+            <td class="ip-cell">1.1.1.1:11</td>
+            <td class="conn-id">VILAN100</td>
+            <td><span class="status-badge active">启用</span></td>
+            <td>admin</td>
+            <td>2026-02-02</td>
+            <td>
+              <div class="action-btns">
+                <button class="action-btn" title="历史"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></button>
+                <button class="action-btn" title="编辑"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg></button>
+                <button class="action-btn danger" title="删除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><input type="checkbox" /></td>
+            <td>订单系统</td>
+            <td><span class="type-tag uat">UAT</span></td>
+            <td>订单模块</td>
+            <td class="vid-cell">VLAN100<br/>VLAN200</td>
+            <td class="ip-cell">192.168.1.10:8080</td>
+            <td class="ip-cell">10.0.0.5:8080</td>
+            <td class="conn-id">CONN-001</td>
+            <td><span class="status-badge active">启用</span></td>
+            <td>admin</td>
+            <td>2026-01-15</td>
+            <td>
+              <div class="action-btns">
+                <button class="action-btn" title="历史"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></button>
+                <button class="action-btn" title="编辑"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg></button>
+                <button class="action-btn danger" title="删除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><input type="checkbox" /></td>
+            <td>订单系统</td>
+            <td><span class="type-tag uat">UAT</span></td>
+            <td>订单模块</td>
+            <td class="vid-cell">VLAN100<br/>VLAN200</td>
+            <td class="ip-cell">192.168.1.10:8080</td>
+            <td class="ip-cell">10.0.0.5:8080</td>
+            <td class="conn-id">CONN-001</td>
+            <td><span class="status-badge active">启用</span></td>
+            <td>admin</td>
+            <td>2026-01-15</td>
+            <td>
+              <div class="action-btns">
+                <button class="action-btn" title="历史"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></button>
+                <button class="action-btn" title="编辑"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg></button>
+                <button class="action-btn danger" title="删除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><input type="checkbox" /></td>
+            <td>订单系统</td>
+            <td><span class="type-tag uat">UAT</span></td>
+            <td>订单模块</td>
+            <td class="vid-cell">VLAN100<br/>VLAN200<br/>VLAN300<br/>VLAN100</td>
+            <td class="ip-cell">192.168.1.10:8080</td>
+            <td class="ip-cell">10.0.0.5:8080</td>
+            <td class="conn-id">CONN_001</td>
+            <td><span class="status-badge inactive">停用</span></td>
+            <td>admin</td>
+            <td>2026-01-15</td>
+            <td>
+              <div class="action-btns">
+                <button class="action-btn" title="历史"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></button>
+                <button class="action-btn" title="编辑"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg></button>
+                <button class="action-btn danger" title="删除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="pagination">
+        <div class="pagination-info">共 17 条记录，第 1/2 页</div>
+        <div class="pagination-controls">
+          <button class="page-btn">首页</button>
+          <button class="page-btn">上一页</button>
+          <button class="page-btn active">1</button>
+          <button class="page-btn">2</button>
+          <button class="page-btn">下一页</button>
+          <button class="page-btn">尾页</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="design-badge">Style 1: 现代蓝鲸风格</div>
+</body>
+</html>

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"opsplatform/database"
 )
 
@@ -28,6 +29,19 @@ func init() {
 				setting_value TEXT,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 			)
+		`)
+		// 创建用户设置表（存储用户个人配置，如列设置）
+		database.DB.Exec(`
+			CREATE TABLE IF NOT EXISTS user_settings (
+				id VARCHAR(64) PRIMARY KEY,
+				user_id VARCHAR(64) NOT NULL,
+				setting_key VARCHAR(100) NOT NULL,
+				setting_value LONGTEXT,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				UNIQUE KEY uk_user_setting (user_id, setting_key),
+				INDEX idx_user_id (user_id)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 		`)
 		// 插入默认 Logo 设置
 		database.DB.Exec(`
@@ -282,4 +296,127 @@ func HandleGetLogoConfig(w http.ResponseWriter, r *http.Request) {
 	
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(logoConfig)
+}
+
+// ========== 用户个人设置 API ==========
+
+// HandleGetUserSettings 获取用户个人设置
+func HandleGetUserSettings(w http.ResponseWriter, r *http.Request) {
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		userID = r.Header.Get("X-Operator")
+	}
+	if userID == "" {
+		http.Error(w, "未授权", http.StatusUnauthorized)
+		return
+	}
+
+	settingKey := r.URL.Query().Get("key")
+	if settingKey == "" {
+		http.Error(w, "缺少 key 参数", http.StatusBadRequest)
+		return
+	}
+
+	var settingValue string
+	err := database.DB.QueryRow(`
+		SELECT setting_value FROM user_settings 
+		WHERE user_id = ? AND setting_key = ?
+	`, userID, settingKey).Scan(&settingValue)
+
+	if err != nil {
+		// 没有找到设置，返回空
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"key":   settingKey,
+			"value": nil,
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"key":   settingKey,
+		"value": json.RawMessage(settingValue),
+	})
+}
+
+// HandleSaveUserSettings 保存用户个人设置
+func HandleSaveUserSettings(w http.ResponseWriter, r *http.Request) {
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		userID = r.Header.Get("X-Operator")
+	}
+	if userID == "" {
+		http.Error(w, "未授权", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		Key   string          `json:"key"`
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "无效的请求数据", http.StatusBadRequest)
+		return
+	}
+
+	if req.Key == "" {
+		http.Error(w, "缺少 key 参数", http.StatusBadRequest)
+		return
+	}
+
+	// 将 JSON 值转为字符串存储
+	valueStr := string(req.Value)
+
+	// 使用 UPSERT 语法保存设置
+	id := fmt.Sprintf("us_%s_%s_%d", userID, req.Key, time.Now().UnixNano())
+	_, err := database.DB.Exec(`
+		INSERT INTO user_settings (id, user_id, setting_key, setting_value, created_at, updated_at)
+		VALUES (?, ?, ?, ?, NOW(), NOW())
+		ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()
+	`, id, userID, req.Key, valueStr)
+
+	if err != nil {
+		SafeError(w, "保存设置失败", http.StatusInternalServerError, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "设置已保存",
+	})
+}
+
+// HandleDeleteUserSettings 删除用户个人设置（恢复默认）
+func HandleDeleteUserSettings(w http.ResponseWriter, r *http.Request) {
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		userID = r.Header.Get("X-Operator")
+	}
+	if userID == "" {
+		http.Error(w, "未授权", http.StatusUnauthorized)
+		return
+	}
+
+	settingKey := r.URL.Query().Get("key")
+	if settingKey == "" {
+		http.Error(w, "缺少 key 参数", http.StatusBadRequest)
+		return
+	}
+
+	_, err := database.DB.Exec(`
+		DELETE FROM user_settings WHERE user_id = ? AND setting_key = ?
+	`, userID, settingKey)
+
+	if err != nil {
+		SafeError(w, "删除设置失败", http.StatusInternalServerError, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "已恢复默认设置",
+	})
 }

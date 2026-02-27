@@ -833,8 +833,10 @@ func HandleRollbackRecord(w http.ResponseWriter, r *http.Request) {
 	oldRecord.UpdatedBy = operator
 	SaveRecordHistory(recordID, "rollback", &oldRecord, "回滚到历史版本", operator)
 
-	// 记录审计日志
-	AddAuditLogFromRequest(r, "rollback", recordID, operator, "", snapshot, "回滚到历史版本")
+	// 记录审计日志 - 包含回滚前和回滚后的完整数据
+	currentSnapshot, _ := json.Marshal(currentRecord)
+	rollbackSnapshot, _ := json.Marshal(oldRecord)
+	AddAuditLogFromRequest(r, "rollback", recordID, operator, string(currentSnapshot), string(rollbackSnapshot), "回滚到历史版本")
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})

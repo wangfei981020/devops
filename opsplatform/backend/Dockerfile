@@ -16,6 +16,12 @@ FROM alpine:latest
 
 WORKDIR /app
 
+# 设置时区为北京时间
+RUN apk add --no-cache tzdata && \
+    cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo "Asia/Shanghai" > /etc/timezone && \
+    apk del tzdata
+
 # 复制二进制文件
 COPY --from=builder /app/opsplatform .
 

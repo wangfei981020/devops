@@ -58,9 +58,11 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// 获取客户端 IP
 	ip := GetClientIP(r)
+	log.Printf("[登录调试] 客户端IP: %s", ip)
 	
 	// 检查 IP 白名单
 	if !IsIPWhitelisted(ip) {
+		log.Printf("[登录调试] IP %s 不在白名单中", ip)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -70,27 +72,40 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	log.Printf("[登录调试] IP白名单检查通过")
 
 	// 检查登录速率限制
 	allowed, remaining := CheckLoginRateLimit(ip)
 	if !allowed {
+		log.Printf("[登录调试] IP %s 登录速率限制，剩余 %v", ip, remaining)
 		http.Error(w, fmt.Sprintf("登录尝试过多，请在 %d 分钟后重试", int(remaining.Minutes())+1), http.StatusTooManyRequests)
 		return
 	}
+	log.Printf("[登录调试] 速率限制检查通过")
 
 	user, err := GetUserByUsername(req.Username)
-	if err != nil || user == nil {
+	if err != nil {
+		log.Printf("[登录调试] 查询用户 %s 失败: %v", req.Username, err)
 		RecordLoginAttempt(ip, false)
 		http.Error(w, "用户名或密码错误", http.StatusUnauthorized)
 		return
 	}
+	if user == nil {
+		log.Printf("[登录调试] 用户 %s 不存在", req.Username)
+		RecordLoginAttempt(ip, false)
+		http.Error(w, "用户名或密码错误", http.StatusUnauthorized)
+		return
+	}
+	log.Printf("[登录调试] 找到用户 %s, ID: %s, 密码长度: %d", user.Username, user.ID, len(user.Password))
 
 	// 验证密码（仅支持 bcrypt 加密）
 	if !checkPassword(user.Password, req.Password) {
+		log.Printf("[登录调试] 用户 %s 密码验证失败", req.Username)
 		RecordLoginAttempt(ip, false)
 		http.Error(w, "用户名或密码错误", http.StatusUnauthorized)
 		return
 	}
+	log.Printf("[登录调试] 用户 %s 密码验证成功", req.Username)
 
 	// 记录登录成功
 	RecordLoginAttempt(ip, true)
@@ -707,7 +722,35 @@ func SyncUserRoles() error {
 	return nil
 }
 
+// HandleGetCurrentUser 获取当前登录用户信息
+func HandleGetCurrentUser(w http.ResponseWriter, r *http.Request) {
+	userID, _, _ := GetUserFromContext(r)
+	if userID == "" {
+		sendError(w, "未登录", http.StatusUnauthorized)
+		return
+	}
 
+	var user models.User
+	var mfaSecret string
+	err := database.DB.QueryRow(`
+		SELECT id, username, display_name, email, role, status, IFNULL(mfa_secret, ''), created_at
+		FROM users WHERE id = ?
+	`, userID).Scan(
+		&user.ID, &user.Username, &user.DisplayName, &user.Email,
+		&user.Role, &user.Status, &mfaSecret, &user.CreatedAt,
+	)
 
+	if err != nil {
+		log.Printf("[GetCurrentUser] 查询用户失败: %v", err)
+		sendError(w, "用户不存在", http.StatusNotFound)
+		return
+	}
 
+	user.MFABound = mfaSecret != ""
+	user.Password = ""
+	user.MFASecret = ""
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(user)
+}
 

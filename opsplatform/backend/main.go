@@ -9,6 +9,7 @@ import (
 
 	"opsplatform/database"
 	"opsplatform/handlers"
+	"opsplatform/storage"
 
 	"github.com/gorilla/mux"
 )
@@ -23,6 +24,11 @@ func main() {
 	// 初始化 Redis（可选，不影响启动）
 	if err := database.InitRedis(); err != nil {
 		log.Printf("Redis 初始化警告: %v", err)
+	}
+
+	// 初始化对象存储
+	if err := storage.Init(); err != nil {
+		log.Printf("对象存储初始化警告: %v", err)
 	}
 
 	// 初始化默认管理员
@@ -70,6 +76,11 @@ func main() {
 	// Logo 配置（公开接口）
 	api.HandleFunc("/logo-config", handlers.HandleGetLogoConfig).Methods("GET", "OPTIONS")
 
+	// OIDC 单点登录（公开接口）
+	api.HandleFunc("/oidc/config", handlers.HandleGetOIDCConfig).Methods("GET", "OPTIONS")
+	api.HandleFunc("/oidc/login", handlers.HandleOIDCLogin).Methods("GET", "OPTIONS")
+	api.HandleFunc("/oidc/callback", handlers.HandleOIDCCallback).Methods("GET", "OPTIONS")
+
 	// ===== 需要认证的路由 =====
 	protected := api.PathPrefix("").Subrouter()
 	protected.Use(handlers.AuthMiddleware)
@@ -82,6 +93,9 @@ func main() {
 	adminOnly := api.PathPrefix("").Subrouter()
 	adminOnly.Use(handlers.AuthMiddleware)
 	adminOnly.Use(handlers.AdminOnlyMiddleware)
+
+	// 当前用户信息（所有已登录用户）
+	protected.HandleFunc("/users/me", handlers.HandleGetCurrentUser).Methods("GET", "OPTIONS")
 
 	// 用户管理（仅管理员）
 	protected.HandleFunc("/users", handlers.HandleGetUsers).Methods("GET", "OPTIONS")
@@ -99,6 +113,15 @@ func main() {
 	// 系统设置（仅管理员）
 	protected.HandleFunc("/settings", handlers.HandleGetSettings).Methods("GET", "OPTIONS")
 	adminOnly.HandleFunc("/settings", handlers.HandleUpdateSettings).Methods("POST", "OPTIONS")
+
+	// OIDC 配置管理（仅管理员）
+	adminOnly.HandleFunc("/oidc/admin-config", handlers.HandleGetOIDCConfigAdmin).Methods("GET", "OPTIONS")
+	adminOnly.HandleFunc("/oidc/admin-config", handlers.HandleSaveOIDCConfig).Methods("POST", "OPTIONS")
+
+	// 用户个人设置（列配置等）
+	protected.HandleFunc("/user-settings", handlers.HandleGetUserSettings).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/user-settings", handlers.HandleSaveUserSettings).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/user-settings", handlers.HandleDeleteUserSettings).Methods("DELETE", "OPTIONS")
 
 	// 安全设置（仅管理员）
 	adminOnly.HandleFunc("/security-settings", handlers.HandleGetSecuritySettings).Methods("GET", "OPTIONS")
@@ -126,6 +149,9 @@ func main() {
 	// 审计日志
 	protected.HandleFunc("/audit-logs", handlers.HandleGetAuditLogs).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/audit-logs/export", handlers.HandleExportAuditLogs).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/audit-logs/batch-delete", handlers.HandleBatchDeleteAuditLogs).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/audit-logs/fix-operators", handlers.HandleFixEmptyOperators).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/audit-logs/{id}", handlers.HandleDeleteAuditLog).Methods("DELETE", "OPTIONS")
 
 	// 数据源管理
 	protected.HandleFunc("/datasources", handlers.HandleGetDataSources).Methods("GET", "OPTIONS")
@@ -145,9 +171,12 @@ func main() {
 	protected.HandleFunc("/schedule", handlers.HandleSaveSchedule).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/schedule/employee", handlers.HandleAddEmployee).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/schedule/employee", handlers.HandleDeleteEmployee).Methods("DELETE", "OPTIONS")
+	protected.HandleFunc("/schedule/employee/order", handlers.HandleEmployeeOrder).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/schedule/shift", handlers.HandleUpdateShift).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/schedule/batch", handlers.HandleBatchUpdateShift).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/schedule/config", handlers.HandleGetShiftConfig).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/schedule/config", handlers.HandleSaveShiftConfig).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/schedule/reset", handlers.HandleResetSchedule).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/metrics/init", handlers.HandleInitDefaultMetrics).Methods("POST", "OPTIONS")
 
 	// 巡检功能
@@ -224,6 +253,35 @@ func main() {
 	protected.HandleFunc("/incidents/{id}", handlers.HandleUpdateIncident).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/incidents/{id}", handlers.HandleDeleteIncident).Methods("DELETE", "OPTIONS")
 
+	// 值班项目配置
+	protected.HandleFunc("/duty-projects", handlers.HandleGetDutyProjects).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/duty-projects", handlers.HandleCreateDutyProject).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/duty-projects/{id}", handlers.HandleUpdateDutyProject).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/duty-projects/{id}", handlers.HandleDeleteDutyProject).Methods("DELETE", "OPTIONS")
+
+	// 值班记录
+	protected.HandleFunc("/duty-records", handlers.HandleGetDutyRecords).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/duty-records", handlers.HandleCreateDutyRecord).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/duty-records/stats", handlers.HandleGetDutyStats).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/duty-records/stats/detail", handlers.HandleGetDutyStatsDetail).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/duty-records/export", handlers.HandleExportDutyRecords).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/duty-records/upload", handlers.HandleUploadDutyAttachment).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/duty-records/generate-test-data", handlers.HandleGenerateTestDutyRecords).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/duty-records/batch/status", handlers.HandleBatchUpdateDutyStatus).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/duty-records/batch", handlers.HandleBatchDeleteDutyRecords).Methods("DELETE", "OPTIONS")
+	protected.HandleFunc("/duty-records/{id}", handlers.HandleGetDutyRecord).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/duty-records/{id}", handlers.HandleUpdateDutyRecord).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/duty-records/{id}/planned-fix-time", handlers.HandleUpdateDutyPlannedFixTime).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/duty-records/{id}", handlers.HandleDeleteDutyRecord).Methods("DELETE", "OPTIONS")
+
+	// 存储 - 预签名URL和文件分享
+	protected.HandleFunc("/storage/presign", handlers.HandleGetPresignedURL).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/storage/presign/batch", handlers.HandleBatchPresignedURL).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/storage/shares", handlers.HandleListFileShares).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/storage/shares", handlers.HandleCreateFileShare).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/storage/shares/{id}", handlers.HandleDeleteFileShare).Methods("DELETE", "OPTIONS")
+	protected.HandleFunc("/share/{code}", handlers.HandleAccessFileShare).Methods("GET", "OPTIONS")
+
 	// 商户管理
 	protected.HandleFunc("/merchants", handlers.HandleGetMerchants).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/merchants", handlers.HandleCreateMerchant).Methods("POST", "OPTIONS")
@@ -231,6 +289,11 @@ func main() {
 	protected.HandleFunc("/merchants/export", handlers.HandleExportMerchants).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/merchants/{id}", handlers.HandleUpdateMerchant).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/merchants/{id}", handlers.HandleDeleteMerchant).Methods("DELETE", "OPTIONS")
+	// 商户自定义列管理（全局共享）
+	protected.HandleFunc("/merchant-columns", handlers.HandleGetMerchantColumns).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/merchant-columns", handlers.HandleCreateMerchantColumn).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/merchant-columns/{id}", handlers.HandleUpdateMerchantColumn).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/merchant-columns/{id}", handlers.HandleDeleteMerchantColumn).Methods("DELETE", "OPTIONS")
 
 	// 服务配置管理
 	protected.HandleFunc("/service-configs", handlers.HandleGetServiceConfigs).Methods("GET", "OPTIONS")
@@ -266,6 +329,7 @@ func main() {
 	// 静态文件 - 从 frontend 目录提供
 	r.PathPrefix("/css/").Handler(http.StripPrefix("/css/", http.FileServer(http.Dir("../frontend/css"))))
 	r.PathPrefix("/js/").Handler(http.StripPrefix("/js/", http.FileServer(http.Dir("../frontend/js"))))
+	r.PathPrefix("/uploads/").Handler(http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))))
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir("../frontend")))
 
 	// 启动域名到期时间定时刷新任务（每天0点执行）
