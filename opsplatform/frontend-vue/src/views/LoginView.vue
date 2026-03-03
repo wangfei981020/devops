@@ -59,6 +59,19 @@ onMounted(async () => {
   }
 })
 
+function applyUserLanguage(userData) {
+  // 如果个人设置中已有语言配置，则优先使用个人设置，不覆盖
+  const personalLang = localStorage.getItem('language')
+  if (personalLang && (personalLang === 'zh-CN' || personalLang === 'en-US')) {
+    return
+  }
+  // 否则使用用户管理中配置的语言
+  const userLang = userData?.language || authStore.user?.language
+  if (userLang && (userLang === 'zh-CN' || userLang === 'en-US')) {
+    appStore.setLanguage(userLang)
+  }
+}
+
 async function handleLogin() {
   if (!form.value.username || !form.value.password) {
     error.value = '请输入用户名和密码'
@@ -84,6 +97,7 @@ async function handleLogin() {
       if (form.value.rememberMe) {
         localStorage.setItem('rememberUser', form.value.username)
       }
+      applyUserLanguage(result.user)
       router.push('/welcome')
     } else {
       error.value = '登录失败，请检查用户名和密码'
@@ -115,10 +129,11 @@ async function verifyMFA() {
   loading.value = true
   error.value = ''
   try {
-    await authStore.verifyMFA(mfaUserId.value, mfaCode.value)
+    const result = await authStore.verifyMFA(mfaUserId.value, mfaCode.value)
     if (form.value.rememberMe) {
       localStorage.setItem('rememberUser', form.value.username)
     }
+    applyUserLanguage(result.user)
     router.push('/welcome')
   } catch (e) {
     error.value = e.response?.data || '验证码错误'
@@ -135,10 +150,11 @@ async function bindMFA() {
   loading.value = true
   error.value = ''
   try {
-    await authStore.bindMFA(mfaUserId.value, mfaCode.value, mfaSecret.value)
+    const result = await authStore.bindMFA(mfaUserId.value, mfaCode.value, mfaSecret.value)
     if (form.value.rememberMe) {
       localStorage.setItem('rememberUser', form.value.username)
     }
+    applyUserLanguage(result.user)
     router.push('/welcome')
   } catch (e) {
     error.value = e.response?.data || '绑定失败'

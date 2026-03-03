@@ -6,8 +6,10 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -331,4 +333,65 @@ func HandleDeleteFileShare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"message": "删除成功"})
+}
+
+// HandleStorageUpload 通用文件上传接口
+func HandleStorageUpload(w http.ResponseWriter, r *http.Request) {
+	userID, _, _ := GetUserFromContext(r)
+	if userID == "" {
+		sendError(w, "未登录", http.StatusUnauthorized)
+		return
+	}
+
+	err := r.ParseMultipartForm(32 << 20) // 32MB
+	if err != nil {
+		sendError(w, "解析表单失败", http.StatusBadRequest)
+		return
+	}
+
+	file, fileHeader, err := r.FormFile("file")
+	if err != nil {
+		sendError(w, "未选择文件", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	allowedExts := map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true, ".bmp": true}
+	contentTypes := map[string]string{
+		".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+		".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+	}
+
+	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
+	if !allowedExts[ext] {
+		sendError(w, fmt.Sprintf("不支持的文件类型: %s，仅支持图片格式", ext), http.StatusBadRequest)
+		return
+	}
+
+	if fileHeader.Size > 10*1024*1024 {
+		sendError(w, "文件超过10MB限制", http.StatusBadRequest)
+		return
+	}
+
+	objectName := fmt.Sprintf("uploads/%s_%s%s", time.Now().Format("20060102150405"), uuid.New().String()[:8], ext)
+	contentType := contentTypes[ext]
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	store := storage.GetStorage()
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	fileURL, err := store.Upload(ctx, objectName, file, fileHeader.Size, contentType)
+	if err != nil {
+		log.Printf("[Storage] 上传文件失败: %v", err)
+		sendError(w, "上传失败", http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{
+		"path": fileURL,
+		"name": fileHeader.Filename,
+	})
 }

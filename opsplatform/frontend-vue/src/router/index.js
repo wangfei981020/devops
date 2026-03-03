@@ -23,6 +23,8 @@ const routes = [
       { path: 'task-pool', name: 'TaskPool', component: () => import('@/views/PlaceholderView.vue'), meta: { title: '任务池' } },
       { path: 'incidents', name: 'Incidents', component: () => import('@/views/PlaceholderView.vue'), meta: { title: '失误记录' } },
       { path: 'duty-records', name: 'DutyRecords', component: () => import('@/views/DutyRecordsView.vue'), meta: { title: '值班记录' } },
+      { path: 'table-maintenance', name: 'TableMaintenance', component: () => import('@/views/TableMaintenanceView.vue'), meta: { title: '桌台维护记录' } },
+      { path: 'table-hierarchy-config', name: 'TableHierarchyConfig', component: () => import('@/views/TableHierarchyConfigView.vue'), meta: { title: '桌台层级配置' } },
       { path: 'assets', name: 'Assets', component: () => import('@/views/PlaceholderView.vue'), meta: { title: '资产管理' } },
       { path: 'domains', name: 'Domains', component: () => import('@/views/DomainsView.vue'), meta: { title: '域名管理' } },
       { path: 'merchants', name: 'Merchants', component: () => import('@/views/MerchantsView.vue'), meta: { title: '商户管理' } },
@@ -106,6 +108,39 @@ async function checkCookieAuth(authStore) {
   return false
 }
 
+// 路径到权限代码的映射
+const pathToPermMap = {
+  '/users': 'users',
+  '/roles': 'roles',
+  '/permissions': 'permissions',
+  '/audit': 'audit',
+  '/api-manage': 'api-manage',
+  '/schedule': 'schedule',
+  '/task-pool': 'task-pool',
+  '/incidents': 'incidents',
+  '/duty-records': 'duty',
+  '/table-maintenance': 'table_maintenance',
+  '/table-hierarchy-config': 'table_hierarchy_config',
+  '/assets': 'assets',
+  '/domains': 'domains',
+  '/merchants': 'merchants',
+  '/network': 'network',
+  '/service-config': 'service-config',
+  '/topology': 'topology',
+  '/metrics': 'metrics',
+  '/alerts': 'alerts',
+  '/alert-rules': 'alert-rules',
+  '/alert-notify': 'alert-notify',
+  '/dashboard-screen': 'dashboard-screen',
+  '/vault': 'vault',
+  '/secrets': 'secrets',
+  '/certificates': 'certificates',
+  '/datasources': 'datasources',
+  '/sys-params': 'sys-params',
+  '/settings': 'settings',
+  '/sso-config': 'sso-config'
+}
+
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
   const token = localStorage.getItem('token')
@@ -126,6 +161,15 @@ router.beforeEach(async (to, from, next) => {
       console.log('[路由守卫] 权限未加载，正在加载...')
       await authStore.loadMyPermissions()
     }
+    
+    // 检查页面权限
+    const permCode = pathToPermMap[to.path]
+    if (permCode && !authStore.hasMenu(permCode)) {
+      console.log('[路由守卫] 无权限访问:', to.path, permCode)
+      next('/welcome')
+      return
+    }
+    
     next()
   }
 })

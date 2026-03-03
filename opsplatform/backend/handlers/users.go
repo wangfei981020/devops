@@ -439,7 +439,7 @@ func HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 func GetAllUsers() ([]*models.User, error) {
 	rows, err := database.DB.Query(`
 		SELECT id, username, password, display_name, COALESCE(phone, ''), COALESCE(email, ''), COALESCE(description, ''),
-		       role, status, COALESCE(permissions, ''), COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), COALESCE(auth_source, 'local'), created_at
+		       role, status, COALESCE(permissions, ''), COALESCE(mfa_enabled, 0), COALESCE(mfa_secret, ''), COALESCE(auth_source, 'local'), COALESCE(language, 'zh-CN'), created_at
 		FROM users ORDER BY created_at DESC
 	`)
 	if err != nil {
@@ -450,7 +450,7 @@ func GetAllUsers() ([]*models.User, error) {
 	var users []*models.User
 	for rows.Next() {
 		u := &models.User{}
-		err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Phone, &u.Email, &u.Description, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.AuthSource, &u.CreatedAt)
+		err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.DisplayName, &u.Phone, &u.Email, &u.Description, &u.Role, &u.Status, &u.Permissions, &u.MFAEnabled, &u.MFASecret, &u.AuthSource, &u.Language, &u.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -733,11 +733,11 @@ func HandleGetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	var user models.User
 	var mfaSecret string
 	err := database.DB.QueryRow(`
-		SELECT id, username, display_name, email, role, status, IFNULL(mfa_secret, ''), created_at
+		SELECT id, username, display_name, email, role, status, IFNULL(mfa_secret, ''), IFNULL(language, 'zh-CN'), created_at
 		FROM users WHERE id = ?
 	`, userID).Scan(
 		&user.ID, &user.Username, &user.DisplayName, &user.Email,
-		&user.Role, &user.Status, &mfaSecret, &user.CreatedAt,
+		&user.Role, &user.Status, &mfaSecret, &user.Language, &user.CreatedAt,
 	)
 
 	if err != nil {

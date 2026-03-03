@@ -21,6 +21,18 @@ const loading = ref(false)
 const currentYear = ref(new Date().getFullYear())
 const currentMonth = ref(new Date().getMonth() + 1)
 
+// 标签页切换
+const activeTab = ref('schedule') // 'schedule' | 'contacts'
+
+// 联系人管理
+const contacts = ref([])
+const contactsLoading = ref(false)
+const showContactModal = ref(false)
+const contactModalMode = ref('add')
+const contactForm = ref({ name: '', phone: '', department: '', position: '', remark: '' })
+const editingContactId = ref(null)
+const contactSearchQuery = ref('')
+
 const showEmployeeModal = ref(false)
 const employeeForm = ref({ name: '', group_name: '', role: '运维工程师' })
 const employeeModalMode = ref('add')
@@ -500,13 +512,112 @@ const weekdayOptions = [
   { value: 5, label: '周五' },
   { value: 6, label: '周六' }
 ]
+
+// 联系人过滤
+const filteredContacts = computed(() => {
+  if (!contactSearchQuery.value) return contacts.value
+  const q = contactSearchQuery.value.toLowerCase()
+  return contacts.value.filter(c => 
+    c.name?.toLowerCase().includes(q) ||
+    c.phone?.toLowerCase().includes(q) ||
+    c.department?.toLowerCase().includes(q) ||
+    c.position?.toLowerCase().includes(q)
+  )
+})
+
+// 加载联系人列表
+async function loadContacts() {
+  contactsLoading.value = true
+  try {
+    const res = await api.get('/api/schedule/contacts')
+    contacts.value = res.data || []
+  } catch (e) {
+    console.error('加载联系人失败:', e)
+    contacts.value = []
+  } finally {
+    contactsLoading.value = false
+  }
+}
+
+// 打开联系人弹窗
+function openContactModal(mode, contact = null) {
+  contactModalMode.value = mode
+  if (mode === 'edit' && contact) {
+    editingContactId.value = contact.id
+    contactForm.value = { 
+      name: contact.name || '', 
+      phone: contact.phone || '', 
+      department: contact.department || '', 
+      position: contact.position || '',
+      remark: contact.remark || ''
+    }
+  } else {
+    editingContactId.value = null
+    contactForm.value = { name: '', phone: '', department: '', position: '', remark: '' }
+  }
+  showContactModal.value = true
+}
+
+// 保存联系人
+async function saveContact() {
+  if (!contactForm.value.name?.trim()) {
+    appStore.showToast('请填写姓名', 'error')
+    return
+  }
+  if (!contactForm.value.phone?.trim()) {
+    appStore.showToast('请填写电话', 'error')
+    return
+  }
+  try {
+    if (contactModalMode.value === 'add') {
+      await api.post('/api/schedule/contacts', contactForm.value)
+      appStore.showToast('联系人添加成功', 'success')
+    } else {
+      await api.put(`/api/schedule/contacts/${editingContactId.value}`, contactForm.value)
+      appStore.showToast('联系人更新成功', 'success')
+    }
+    showContactModal.value = false
+    await loadContacts()
+  } catch (e) {
+    appStore.showToast('保存失败: ' + (e.response?.data || e.message), 'error')
+  }
+}
+
+// 删除联系人
+async function deleteContact(contact) {
+  if (!confirm(`确定要删除联系人 "${contact.name}" 吗？`)) return
+  try {
+    await api.delete(`/api/schedule/contacts/${contact.id}`)
+    appStore.showToast('联系人已删除', 'success')
+    await loadContacts()
+  } catch (e) {
+    appStore.showToast('删除失败: ' + (e.response?.data || e.message), 'error')
+  }
+}
+
+// 切换标签页时加载数据
+watch(activeTab, (tab) => {
+  if (tab === 'contacts' && contacts.value.length === 0) {
+    loadContacts()
+  }
+})
 </script>
 
 <template>
   <div class="schedule-page">
     <div class="page-header">
       <h2>排班管理</h2>
-      <div class="header-actions">
+      <div class="page-tabs">
+        <button class="tab-btn" :class="{ active: activeTab === 'schedule' }" @click="activeTab = 'schedule'">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          排班表
+        </button>
+        <button class="tab-btn" :class="{ active: activeTab === 'contacts' }" @click="activeTab = 'contacts'">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+          联系人电话
+        </button>
+      </div>
+      <div class="header-actions" v-show="activeTab === 'schedule'">
         <button v-if="canConfigShift" class="btn btn-secondary" @click="showConfigModal = true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
           班次配置
@@ -530,6 +641,8 @@ const weekdayOptions = [
       </div>
     </div>
 
+    <!-- 排班表内容 -->
+    <template v-if="activeTab === 'schedule'">
     <div class="month-nav">
       <button class="nav-btn" @click="prevMonth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg></button>
       <span class="current-month">{{ currentYear }}年{{ currentMonth }}月</span>
@@ -618,6 +731,88 @@ const weekdayOptions = [
         </table>
       </div>
     </div>
+    </template>
+
+    <!-- 联系人电话页面 -->
+    <template v-if="activeTab === 'contacts'">
+      <div class="contacts-section">
+        <div class="contacts-toolbar">
+          <div class="search-box">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" v-model="contactSearchQuery" placeholder="搜索姓名、电话、部门...">
+          </div>
+          <button class="btn btn-primary" @click="openContactModal('add')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            添加联系人
+          </button>
+        </div>
+
+        <div v-if="contactsLoading" class="loading-state">加载中...</div>
+        <div v-else-if="filteredContacts.length === 0" class="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+          <div>暂无联系人</div>
+          <p>点击"添加联系人"开始添加</p>
+        </div>
+        <div v-else class="contacts-table-wrapper">
+          <table class="contacts-table">
+            <thead>
+              <tr>
+                <th>姓名</th>
+                <th>电话</th>
+                <th>部门</th>
+                <th>职位</th>
+                <th>备注</th>
+                <th class="th-actions">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="contact in filteredContacts" :key="contact.id">
+                <td class="td-name">{{ contact.name }}</td>
+                <td class="td-phone">
+                  <a :href="'tel:' + contact.phone" class="phone-link">{{ contact.phone }}</a>
+                </td>
+                <td>{{ contact.department || '-' }}</td>
+                <td>{{ contact.position || '-' }}</td>
+                <td class="td-remark">{{ contact.remark || '-' }}</td>
+                <td class="td-actions">
+                  <button class="btn-icon" title="编辑" @click="openContactModal('edit', contact)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  </button>
+                  <button class="btn-icon btn-danger" title="删除" @click="deleteContact(contact)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- 添加/编辑联系人弹窗 -->
+    <Teleport to="body">
+      <div class="modal-overlay" :class="{ active: showContactModal }">
+        <div class="modal contact-modal">
+          <div class="modal-header">
+            <h2>{{ contactModalMode === 'edit' ? '编辑联系人' : '添加联系人' }}</h2>
+            <button class="modal-close" @click="showContactModal = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          </div>
+          <form class="modal-form" @submit.prevent="saveContact">
+            <div class="modal-body">
+              <div class="form-group"><label>姓名 *</label><input type="text" class="form-input" v-model="contactForm.name" placeholder="联系人姓名" required /></div>
+              <div class="form-group"><label>电话 *</label><input type="tel" class="form-input" v-model="contactForm.phone" placeholder="联系电话" required /></div>
+              <div class="form-group"><label>部门</label><input type="text" class="form-input" v-model="contactForm.department" placeholder="所属部门" /></div>
+              <div class="form-group"><label>职位</label><input type="text" class="form-input" v-model="contactForm.position" placeholder="职位/岗位" /></div>
+              <div class="form-group"><label>备注</label><textarea class="form-input" v-model="contactForm.remark" placeholder="备注信息" rows="3"></textarea></div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" @click="showContactModal = false">取消</button>
+              <button type="submit" class="btn btn-primary">保存</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- 添加/编辑员工弹窗 -->
     <Teleport to="body">
@@ -773,6 +968,44 @@ const weekdayOptions = [
 .page-header h2 { font-size: 20px; font-weight: 600; margin: 0; }
 .header-actions { display: flex; gap: 10px; }
 
+/* 标签页切换 */
+.page-tabs { display: flex; gap: 4px; margin-left: 24px; }
+.tab-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; }
+.tab-btn svg { width: 16px; height: 16px; }
+.tab-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tab-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+/* 联系人页面 */
+.contacts-section { display: flex; flex-direction: column; gap: 16px; }
+.contacts-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.contacts-toolbar .search-box { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; min-width: 280px; }
+.contacts-toolbar .search-box svg { width: 18px; height: 18px; color: var(--text-muted); flex-shrink: 0; }
+.contacts-toolbar .search-box input { flex: 1; border: none; background: transparent; color: var(--text-primary); font-size: 14px; outline: none; }
+.contacts-toolbar .search-box input::placeholder { color: var(--text-muted); }
+
+.contacts-table-wrapper { background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border-color); overflow: auto; max-height: calc(100vh - 240px); }
+.contacts-table { width: 100%; border-collapse: collapse; }
+.contacts-table th, .contacts-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border-color); }
+.contacts-table thead { position: sticky; top: 0; z-index: 10; background: var(--bg-hover); }
+.contacts-table th { font-weight: 600; font-size: 13px; color: var(--text-secondary); }
+.contacts-table tbody tr { transition: background 0.15s; }
+.contacts-table tbody tr:hover { background: var(--bg-hover); }
+.contacts-table tbody tr:last-child td { border-bottom: none; }
+.contacts-table .td-name { font-weight: 500; color: var(--text-primary); }
+.contacts-table .td-phone { font-family: 'SF Mono', 'Monaco', 'Consolas', monospace; }
+.contacts-table .phone-link { color: var(--primary); text-decoration: none; }
+.contacts-table .phone-link:hover { text-decoration: underline; }
+.contacts-table .td-remark { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.contacts-table .th-actions { width: 100px; text-align: center; }
+.contacts-table .td-actions { text-align: center; }
+.contacts-table .btn-icon { width: 32px; height: 32px; border-radius: 6px; border: none; background: transparent; color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all 0.15s; }
+.contacts-table .btn-icon:hover { background: var(--bg-hover); color: var(--primary); }
+.contacts-table .btn-icon.btn-danger:hover { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+.contacts-table .btn-icon svg { width: 16px; height: 16px; }
+
+/* 联系人弹窗 */
+.contact-modal { width: 480px; max-width: 95vw; }
+
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; }
 .btn svg { width: 15px; height: 15px; }
 .btn-primary { background: var(--primary); color: white; }
@@ -816,16 +1049,32 @@ const weekdayOptions = [
 .header-row th { background: var(--bg-hover); font-weight: 600; font-size: 12px; height: 50px; }
 
 /* Sticky 姓名列 - width必须与col-name-def一致 */
-.sticky-name { position: sticky; left: 0; z-index: 15; background: var(--bg-hover); padding: 4px 6px !important; text-align: left; width: 120px; min-width: 120px; max-width: 120px; box-sizing: border-box; }
-.header-row .sticky-name { z-index: 25; }
-.td-name { background: var(--bg-card); }
-.stats-row .sticky-name { background: linear-gradient(180deg, rgba(59,130,246,0.12), rgba(59,130,246,0.05)); }
+/* Sticky 姓名列 - 深色模式用不透明背景 */
+.sticky-name { position: sticky; left: 0; z-index: 15; background: #1e2433; padding: 4px 6px !important; text-align: left; width: 120px; min-width: 120px; max-width: 120px; box-sizing: border-box; }
+.header-row .sticky-name { z-index: 25; background: #141824; }
+.td-name { background: #1a1f2e; }
+.stats-row .sticky-name { background: #1a2744; }
+.employee-row:hover .sticky-name { background: #252d3d; }
 
 /* Sticky 职位列 - left必须等于姓名列宽度120px */
-.sticky-role { position: sticky; left: 120px; z-index: 15; background: var(--bg-hover); padding: 4px 6px !important; box-shadow: 2px 0 4px rgba(0,0,0,0.08); white-space: nowrap; width: 80px; min-width: 80px; max-width: 80px; box-sizing: border-box; }
-.header-row .sticky-role { z-index: 25; }
-.td-role { background: var(--bg-card); font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.stats-row .sticky-role { background: linear-gradient(180deg, rgba(59,130,246,0.12), rgba(59,130,246,0.05)); }
+.sticky-role { position: sticky; left: 120px; z-index: 15; background: #1e2433; padding: 4px 6px !important; box-shadow: 4px 0 8px rgba(0,0,0,0.3); white-space: nowrap; width: 80px; min-width: 80px; max-width: 80px; box-sizing: border-box; }
+.header-row .sticky-role { z-index: 25; background: #141824; }
+.td-role { background: #1a1f2e; font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stats-row .sticky-role { background: #1a2744; }
+.employee-row:hover .sticky-role { background: #252d3d; }
+
+/* 浅色模式固定列 */
+body.light-mode .sticky-name { background: #f1f5f9; }
+body.light-mode .header-row .sticky-name { background: #f8fafc; }
+body.light-mode .td-name { background: #ffffff; }
+body.light-mode .stats-row .sticky-name { background: #e0f2fe; }
+body.light-mode .employee-row:hover .sticky-name { background: #f1f5f9; }
+
+body.light-mode .sticky-role { background: #f1f5f9; box-shadow: 4px 0 8px rgba(0,0,0,0.1); }
+body.light-mode .header-row .sticky-role { background: #f8fafc; }
+body.light-mode .td-role { background: #ffffff; }
+body.light-mode .stats-row .sticky-role { background: #e0f2fe; }
+body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 
 /* 日期表头 */
 .th-day { padding: 4px 2px !important; width: 38px; min-width: 38px; max-width: 38px; box-sizing: border-box; }

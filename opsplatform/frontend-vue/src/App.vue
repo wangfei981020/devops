@@ -5,11 +5,19 @@ import { useAppStore, useAuthStore } from '@/stores'
 const appStore = useAppStore()
 const authStore = useAuthStore()
 
-onMounted(() => {
+onMounted(async () => {
   appStore.initTheme()
   
   if (authStore.token) {
-    authStore.fetchUser()
+    const userData = await authStore.fetchUser()
+    if (userData) {
+      localStorage.setItem('currentUser', JSON.stringify(userData))
+      // 只有当个人设置中没有语言配置时，才使用用户管理中的语言
+      const personalLang = localStorage.getItem('language')
+      if (!personalLang && userData.language && (userData.language === 'zh-CN' || userData.language === 'en-US')) {
+        appStore.setLanguage(userData.language)
+      }
+    }
   }
 })
 

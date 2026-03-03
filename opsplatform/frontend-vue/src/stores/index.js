@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import api from '@/api'
+import { createI18n } from '@/locales'
 
 export const useAuthStore = defineStore('auth', () => {
   // 从 localStorage 初始化用户信息
@@ -163,7 +164,7 @@ export const useAuthStore = defineStore('auth', () => {
   function hasMenuGroup(groupCode) {
     if (isSuperAdmin()) return true
     const menuGroupMap = {
-      'system': ['welcome', 'users', 'roles', 'permissions', 'audit', 'api-manage', 'schedule', 'task-pool', 'incidents', 'duty'],
+      'system': ['welcome', 'users', 'roles', 'permissions', 'audit', 'api-manage', 'schedule', 'task-pool', 'incidents', 'duty', 'table_maintenance', 'table_hierarchy_config'],
       'resource': ['assets', 'domains', 'merchants', 'network', 'service-config', 'topology'],
       'monitor': ['metrics', 'alerts', 'alert-rules', 'alert-notify', 'dashboard-screen'],
       'k8s': ['clusters', 'workloads', 'configmaps', 'storage', 'terminal'],
@@ -218,11 +219,46 @@ export const useAuthStore = defineStore('auth', () => {
 
 export const useAppStore = defineStore('app', () => {
   const theme = ref(localStorage.getItem('theme') || 'dark')
+  
+  // 语言设置优先级：1.个人设置(localStorage.language) > 2.用户管理设置(currentUser.language) > 3.默认中文
+  function getInitialLanguage() {
+    // 优先使用个人设置的语言（用户主动在个人设置页面修改的）
+    const personalLang = localStorage.getItem('language')
+    if (personalLang && (personalLang === 'zh-CN' || personalLang === 'en-US')) {
+      return personalLang
+    }
+    // 其次使用用户管理中配置的语言
+    const cachedUser = localStorage.getItem('currentUser')
+    if (cachedUser) {
+      try {
+        const user = JSON.parse(cachedUser)
+        if (user.language && (user.language === 'zh-CN' || user.language === 'en-US')) {
+          return user.language
+        }
+      } catch (e) {}
+    }
+    return 'zh-CN'
+  }
+  const language = ref(getInitialLanguage())
   const showToastFlag = ref(false)
   const toastMessage = ref('')
   const toastType = ref('info')
   
   let toastTimeout = null
+
+  // 国际化翻译
+  const i18n = createI18n(() => language.value)
+  
+  function t(key, params = {}) {
+    // 访问 language.value 以建立响应式依赖
+    const _ = language.value
+    return i18n.t(key, params)
+  }
+
+  // 监听语言变化，清除缓存
+  watch(language, () => {
+    i18n.clearCache()
+  })
 
   // 确认弹窗状态
   const confirmDialog = ref({
@@ -244,6 +280,13 @@ export const useAppStore = defineStore('app', () => {
   function toggleTheme() {
     setTheme(theme.value === 'dark' ? 'light' : 'dark')
   }
+
+  function setLanguage(lang) {
+    language.value = lang
+    localStorage.setItem('language', lang)
+  }
+
+  const isEnglish = computed(() => language.value === 'en-US')
 
   function showToast(message, type = 'info', duration = 3000) {
     if (toastTimeout) {
@@ -293,16 +336,20 @@ export const useAppStore = defineStore('app', () => {
 
   return {
     theme,
+    language,
+    isEnglish,
     showToastFlag,
     toastMessage,
     toastType,
     confirmDialog,
     setTheme,
     toggleTheme,
+    setLanguage,
     showToast,
     showConfirm,
     confirmOk,
     confirmCancel,
-    initTheme
+    initTheme,
+    t
   }
 })

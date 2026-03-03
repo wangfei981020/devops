@@ -10,8 +10,10 @@ const authStore = useAuthStore()
 const appStore = useAppStore()
 
 const showUserMenu = ref(false)
-const currentLang = ref('zh-CN')
 const permissionsLoaded = ref(false)
+
+// 语言从 appStore 获取
+const currentLang = computed(() => appStore.language)
 
 const pageTitle = computed(() => route.meta?.title || '欢迎页')
 
@@ -72,8 +74,7 @@ function openProfileSettings() {
 }
 
 function setLang(code) {
-  currentLang.value = code
-  localStorage.setItem('lang', code)
+  appStore.setLanguage(code)
 }
 
 function getAvatarColor(name) {
@@ -146,7 +147,7 @@ function getAvatarColor(name) {
       </header>
       
       <main class="main-content">
-        <router-view />
+        <router-view :key="currentLang" />
       </main>
     </div>
 

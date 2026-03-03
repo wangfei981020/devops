@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>搜索筛选器 - 风格9: 浮动标签</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f1f5f9; 
+      padding: 40px; 
+      min-height: 100vh;
+    }
+    h2 { margin-bottom: 20px; color: #1e293b; font-weight: 600; }
+    
+    /* 风格9: 浮动标签 - Material Design风格 */
+    .filter-container {
+      background: #fff;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
+    
+    .filter-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+    }
+    
+    .filter-field {
+      position: relative;
+    }
+    
+    .filter-field.span-2 {
+      grid-column: span 2;
+    }
+    
+    .filter-field input,
+    .filter-field select {
+      width: 100%;
+      padding: 20px 16px 8px;
+      border: 2px solid #e2e8f0;
+      border-radius: 10px;
+      font-size: 15px;
+      color: #1e293b;
+      background: #fff;
+      transition: all 0.2s;
+      appearance: none;
+    }
+    
+    .filter-field select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+      background-size: 18px;
+      padding-right: 40px;
+      cursor: pointer;
+    }
+    
+    .filter-field input:focus,
+    .filter-field select:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    
+    .filter-field input:focus + label,
+    .filter-field input:not(:placeholder-shown) + label,
+    .filter-field select:focus + label,
+    .filter-field select:valid + label {
+      top: 6px;
+      font-size: 11px;
+      color: #3b82f6;
+    }
+    
+    .filter-field label {
+      position: absolute;
+      left: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 14px;
+      color: #94a3b8;
+      pointer-events: none;
+      transition: all 0.2s;
+      background: #fff;
+      padding: 0 4px;
+    }
+    
+    .filter-field.has-value label,
+    .filter-field select + label {
+      top: 6px;
+      font-size: 11px;
+      color: #64748b;
+    }
+    
+    .filter-field.search {
+      position: relative;
+    }
+    
+    .filter-field.search svg {
+      position: absolute;
+      right: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 20px;
+      height: 20px;
+      color: #94a3b8;
+    }
+    
+    .filter-field.search input {
+      padding-right: 48px;
+    }
+    
+    .date-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    
+    .date-row .filter-field {
+      flex: 1;
+    }
+    
+    .date-row span {
+      color: #94a3b8;
+      font-size: 14px;
+    }
+    
+    .filter-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid #f1f5f9;
+    }
+    
+    .btn {
+      padding: 14px 28px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .btn-primary {
+      background: #3b82f6;
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(59,130,246,0.3);
+    }
+    
+    .btn-primary:hover {
+      background: #2563eb;
+      transform: translateY(-1px);
+    }
+    
+    .btn-secondary {
+      background: #f1f5f9;
+      color: #64748b;
+    }
+    
+    .btn-secondary:hover {
+      background: #e2e8f0;
+    }
+    
+    .spacer {
+      flex: 1;
+    }
+  </style>
+</head>
+<body>
+  <h2>风格9: 浮动标签 (Material Design)</h2>
+  
+  <div class="filter-container">
+    <div class="filter-grid">
+      <div class="filter-field search span-2 has-value">
+        <input type="text" placeholder=" ">
+        <label>搜索桌号/局号/操作人/原因</label>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+        </svg>
+      </div>
+      
+      <div class="filter-field has-value">
+        <select>
+          <option value="all">全部状态</option>
+          <option value="normal">正常</option>
+          <option value="abnormal">异常</option>
+        </select>
+        <label>质检状态</label>
+      </div>
+      
+      <div class="filter-field has-value">
+        <select>
+          <option value="all">全部项目</option>
+          <option value="a">项目A</option>
+          <option value="b">项目B</option>
+        </select>
+        <label>项目</label>
+      </div>
+      
+      <div class="filter-field has-value">
+        <select>
+          <option value="all">全部时长</option>
+          <option value="2">两分钟内</option>
+          <option value="5">五分钟内</option>
+        </select>
+        <label>维护时长</label>
+      </div>
+      
+      <div class="filter-field has-value">
+        <select>
+          <option value="all">全部操作人</option>
+          <option value="zhangsan">张三</option>
+          <option value="lisi">李四</option>
+        </select>
+        <label>操作人</label>
+      </div>
+      
+      <div class="filter-field span-2">
+        <div class="date-row">
+          <div class="filter-field has-value">
+            <input type="date">
+            <label>开始日期</label>
+          </div>
+          <span>至</span>
+          <div class="filter-field has-value">
+            <input type="date">
+            <label>结束日期</label>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="filter-actions">
+      <button class="btn btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+        </svg>
+        搜索
+      </button>
+      <button class="btn btn-secondary">重置筛选</button>
+      <div class="spacer"></div>
+    </div>
+  </div>
+</body>
+</html>

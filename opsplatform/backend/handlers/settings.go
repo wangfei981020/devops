@@ -101,13 +101,25 @@ func HandleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "无效的请求数据", http.StatusBadRequest)
 		return
 	}
-	
+
+	// 检查是否是桌台层级配置，需要特殊权限
+	for key := range settings {
+		if key == "table_hierarchy_config" {
+			// 检查权限：需要 table_hierarchy:create 或 table_hierarchy:update
+			if !HasAnyPermission(r, "table_hierarchy:create", "table_hierarchy:update") {
+				http.Error(w, "无权限保存桌台层级配置", http.StatusForbidden)
+				return
+			}
+			break
+		}
+	}
+
 	// 获取操作者
 	operator := r.Header.Get("X-Operator")
 	if operator == "" {
 		operator = "system"
 	}
-	
+
 	// 批量更新设置
 	for key, value := range settings {
 		_, err := database.DB.Exec(`
@@ -120,9 +132,18 @@ func HandleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	
-	// 记录审计日志
+	// 记录审计日志 - 根据设置类型记录不同的日志
 	changesJSON, _ := json.Marshal(settings)
-	AddAuditLogFromRequest(r, "更新系统设置", "settings:logo", operator, "", string(changesJSON), "修改系统设置")
+	logAction := "更新系统设置"
+	logDesc := "修改系统设置"
+	for key := range settings {
+		if key == "table_hierarchy_config" {
+			logAction = "更新桌台层级配置"
+			logDesc = "修改桌台层级配置（项目/现场/桌号/游戏类型/维护类型）"
+			break
+		}
+	}
+	AddAuditLogFromRequest(r, logAction, "settings", operator, "", string(changesJSON), logDesc)
 	
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

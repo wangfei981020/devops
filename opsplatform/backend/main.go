@@ -176,6 +176,10 @@ func main() {
 	protected.HandleFunc("/schedule/batch", handlers.HandleBatchUpdateShift).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/schedule/config", handlers.HandleGetShiftConfig).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/schedule/config", handlers.HandleSaveShiftConfig).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/schedule/contacts", handlers.HandleGetContacts).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/schedule/contacts", handlers.HandleAddContact).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/schedule/contacts/{id}", handlers.HandleUpdateContact).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/schedule/contacts/{id}", handlers.HandleDeleteContact).Methods("DELETE", "OPTIONS")
 	protected.HandleFunc("/schedule/reset", handlers.HandleResetSchedule).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/metrics/init", handlers.HandleInitDefaultMetrics).Methods("POST", "OPTIONS")
 
@@ -192,6 +196,21 @@ func main() {
 	protected.HandleFunc("/domains/batch-refresh", handlers.HandleBatchRefreshDomains).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/domains/{id}", handlers.HandleUpdateDomain).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/domains/{id}", handlers.HandleDeleteDomain).Methods("DELETE", "OPTIONS")
+
+	// 自定义表格（多维表格）
+	protected.HandleFunc("/custom-tables", handlers.HandleGetCustomTables).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/custom-tables", handlers.HandleCreateCustomTable).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/custom-tables/{id}", handlers.HandleGetCustomTable).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/custom-tables/{id}", handlers.HandleUpdateCustomTable).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/custom-tables/{id}", handlers.HandleDeleteCustomTable).Methods("DELETE", "OPTIONS")
+	protected.HandleFunc("/custom-tables/{id}/columns", handlers.HandleAddCustomColumn).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/custom-tables/{id}/columns/{colId}", handlers.HandleUpdateCustomColumn).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/custom-tables/{id}/columns/{colId}", handlers.HandleDeleteCustomColumn).Methods("DELETE", "OPTIONS")
+	protected.HandleFunc("/custom-tables/{id}/rows", handlers.HandleAddCustomRow).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/custom-tables/{id}/rows/{rowId}", handlers.HandleUpdateCustomRow).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/custom-tables/{id}/rows/{rowId}", handlers.HandleDeleteCustomRow).Methods("DELETE", "OPTIONS")
+	protected.HandleFunc("/custom-tables/{id}/stats", handlers.HandleGetCustomTableStats).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/custom-tables/{id}/column-config", handlers.HandleSaveColumnConfig).Methods("PUT", "OPTIONS")
 
 	// 网站管理
 	protected.HandleFunc("/websites", handlers.HandleGetWebsites).Methods("GET", "OPTIONS")
@@ -275,6 +294,7 @@ func main() {
 	protected.HandleFunc("/duty-records/{id}", handlers.HandleDeleteDutyRecord).Methods("DELETE", "OPTIONS")
 
 	// 存储 - 预签名URL和文件分享
+	protected.HandleFunc("/storage/upload", handlers.HandleStorageUpload).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/storage/presign", handlers.HandleGetPresignedURL).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/storage/presign/batch", handlers.HandleBatchPresignedURL).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/storage/shares", handlers.HandleListFileShares).Methods("GET", "OPTIONS")

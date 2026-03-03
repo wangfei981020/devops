@@ -139,6 +139,11 @@ const batchStatus = ref('')
 const dragOver = ref(false)
 const fileInput = ref(null)
 
+// 复制/粘贴功能
+const copiedRecord = ref(null)
+const showPasteModal = ref(false)
+const pasteCount = ref(1)
+
 // 自动计算响应时间 (接听时间 - 首次拨打时间)
 const calculatedResponseTime = computed(() => {
   if (!form.value.first_call_time || !form.value.answer_time) return 0
@@ -154,6 +159,13 @@ const calculatedResponseTime = computed(() => {
 watch(calculatedResponseTime, (val) => {
   form.value.response_time = val
 })
+
+// 接听时间变化时自动更新是否接听状态
+function onAnswerTimeChange() {
+  if (form.value.answer_time) {
+    form.value.is_answered = '已接听'
+  }
+}
 
 const showProjectModal = ref(false)
 const projectForm = ref({ id: '', name: '', code: '', description: '', status: 'active', sort_order: 0 })
@@ -245,7 +257,7 @@ function getEmptyForm() {
     first_call_time: '',
     answer_time: '',
     call_count: 0,
-    is_answered: false,
+    is_answered: '无',
     response_time: 0,
     is_escalated: false,
     escalate_to: [],
@@ -261,25 +273,28 @@ function getEmptyForm() {
   }
 }
 
-const statusOptions = [
-  { value: 'normal', label: '检测正常', color: '#10b981' },
-  { value: 'pending', label: '待解决', color: '#f59e0b' },
-  { value: 'in_progress', label: '正在解决', color: '#8b5cf6' },
-  { value: 'resolved', label: '已解决', color: '#22c55e' },
-  { value: 'temporary', label: '临时解决', color: '#3b82f6' }
-]
+// 翻译函数
+const t = (key, params) => appStore.t(key, params)
 
-const feedbackTypeOptions = [
-  { value: 'proactive', label: '主动发现' },
-  { value: 'customer', label: '客户反馈' }
-]
+const statusOptions = computed(() => [
+  { value: 'normal', label: t('dutyRecords.statusOptions.normal'), color: '#10b981' },
+  { value: 'pending', label: t('dutyRecords.statusOptions.pending'), color: '#f59e0b' },
+  { value: 'in_progress', label: t('dutyRecords.statusOptions.inProgress'), color: '#8b5cf6' },
+  { value: 'resolved', label: t('dutyRecords.statusOptions.resolved'), color: '#22c55e' },
+  { value: 'temporary', label: t('dutyRecords.statusOptions.temporary'), color: '#3b82f6' }
+])
 
-const eventTypeOptions = [
-  { value: 'inspection', label: '巡检发现' },
-  { value: 'alert', label: '监控告警' },
-  { value: 'customer_feedback', label: '客户反馈' },
-  { value: 'proactive_check', label: '值班人员主动排查' }
-]
+const feedbackTypeOptions = computed(() => [
+  { value: 'proactive', label: t('dutyRecords.feedbackTypeOptions.proactive') },
+  { value: 'customer', label: t('dutyRecords.feedbackTypeOptions.customer') }
+])
+
+const eventTypeOptions = computed(() => [
+  { value: 'inspection', label: t('dutyRecords.eventTypeOptions.inspection') },
+  { value: 'alert', label: t('dutyRecords.eventTypeOptions.alert') },
+  { value: 'customer_feedback', label: t('dutyRecords.eventTypeOptions.customerFeedback') },
+  { value: 'proactive_check', label: t('dutyRecords.eventTypeOptions.proactiveCheck') }
+])
 
 // 从记录中提取唯一的处理人和值班人列表
 const uniqueHandlers = computed(() => {
@@ -298,10 +313,10 @@ const uniqueDutyPersons = computed(() => {
   return Array.from(persons).sort()
 })
 
-const escalateOptions = [
-  { value: 'leader', label: '组长' },
-  { value: 'hod', label: 'HOD' }
-]
+const escalateOptions = computed(() => [
+  { value: 'leader', label: t('dutyRecords.escalateOptions.leader') },
+  { value: 'hod', label: t('dutyRecords.escalateOptions.hod') }
+])
 
 onMounted(() => {
   loadProjects()
@@ -356,7 +371,7 @@ async function loadRecords() {
     }
   } catch (e) {
     console.error('加载记录失败', e)
-    appStore.showToast('加载失败', 'error')
+    appStore.showToast(t('dutyRecords.actions.loadFailed'), 'error')
   } finally {
     loading.value = false
   }
@@ -438,9 +453,9 @@ async function createShare() {
       shareUrl: window.location.origin + '/api/share/' + res.data.code,
       expiresAt: res.data.expires_at
     }
-    appStore.showToast('分享链接创建成功', 'success')
+    appStore.showToast(t('dutyRecords.actions.shareSuccess'), 'success')
   } catch (e) {
-    appStore.showToast('创建分享失败: ' + (e.response?.data?.error || e.message), 'error')
+    appStore.showToast(t('dutyRecords.actions.shareFailed') + ': ' + (e.response?.data?.error || e.message), 'error')
   }
 }
 
@@ -448,7 +463,7 @@ async function createShare() {
 function copyShareUrl() {
   if (!shareResult.value?.shareUrl) return
   navigator.clipboard.writeText(shareResult.value.shareUrl)
-  appStore.showToast('链接已复制', 'success')
+  appStore.showToast(t('dutyRecords.actions.linkCopied'), 'success')
 }
 
 // 加载详细统计数据
@@ -485,7 +500,7 @@ async function loadDetailedStats() {
     setTimeout(() => renderAllCharts(), 100)
   } catch (e) {
     console.error('加载详细统计失败', e)
-    appStore.showToast('加载统计失败', 'error')
+    appStore.showToast(t('dutyRecords.actions.loadStatsFailed'), 'error')
   } finally {
     statsLoading.value = false
   }
@@ -505,7 +520,7 @@ function clearStatsFilters() {
 }
 
 function exportStats() {
-  appStore.showToast('导出功能开发中', 'info')
+  appStore.showToast(t('dutyRecords.actions.exportDeveloping'), 'info')
 }
 
 function getPieOffset(idx) {
@@ -984,7 +999,7 @@ async function savePlannedFixTime() {
     await api.put(`/api/duty-records/${plannedFixForm.value.id}/planned-fix-time`, {
       planned_fix_time: plannedFixForm.value.planned_fix_time || ''
     })
-    appStore.showToast('计划修复时间更新成功', 'success')
+    appStore.showToast(t('dutyRecords.actions.plannedFixTimeUpdated'), 'success')
     showPlannedFixModal.value = false
     loadRecords()
     loadStats()
@@ -992,7 +1007,7 @@ async function savePlannedFixTime() {
     const errMsg = typeof e.response?.data === 'object'
       ? (e.response.data.error || JSON.stringify(e.response.data))
       : (e.response?.data || e.message)
-    appStore.showToast('更新失败: ' + errMsg, 'error')
+    appStore.showToast(t('dutyRecords.actions.updateFailed') + ': ' + errMsg, 'error')
   }
 }
 
@@ -1003,11 +1018,11 @@ function viewDetail(record) {
 
 async function saveRecord() {
   if (!form.value.duty_date || !form.value.duty_person || !form.value.project_id) {
-    appStore.showToast('请填写必填项（值班时间、值班人、项目）', 'warning')
+    appStore.showToast(t('dutyRecords.actions.fillRequired'), 'warning')
     return
   }
   if (!form.value.status) {
-    appStore.showToast('请选择处理结果', 'warning')
+    appStore.showToast(t('dutyRecords.actions.selectStatus'), 'warning')
     return
   }
 
@@ -1019,10 +1034,10 @@ async function saveRecord() {
   try {
     if (modalMode.value === 'add') {
       await api.post('/api/duty-records', payload)
-      appStore.showToast('创建成功', 'success')
+      appStore.showToast(t('dutyRecords.actions.createSuccess'), 'success')
     } else {
       await api.put(`/api/duty-records/${form.value.id}`, payload)
-      appStore.showToast('更新成功', 'success')
+      appStore.showToast(t('dutyRecords.actions.updateSuccess'), 'success')
     }
     showModal.value = false
     loadRecords()
@@ -1030,7 +1045,7 @@ async function saveRecord() {
   } catch (e) {
     console.error('保存失败', e)
     const errMsg = typeof e.response?.data === 'object' ? (e.response.data.error || JSON.stringify(e.response.data)) : (e.response?.data || e.message)
-    appStore.showToast('保存失败: ' + errMsg, 'error')
+    appStore.showToast(t('dutyRecords.actions.saveFailed') + ': ' + errMsg, 'error')
   }
 }
 
@@ -1046,18 +1061,65 @@ async function deleteRecord(record) {
 
   try {
     await api.delete(`/api/duty-records/${record.id}`)
-    appStore.showToast('删除成功', 'success')
+    appStore.showToast(t('dutyRecords.actions.deleteSuccess'), 'success')
     loadRecords()
     loadStats()
   } catch (e) {
-    appStore.showToast('删除失败', 'error')
+    appStore.showToast(t('dutyRecords.actions.deleteFailed'), 'error')
+  }
+}
+
+// 复制记录
+function copyRecord(record) {
+  const copy = { ...record }
+  delete copy.id
+  delete copy.created_at
+  delete copy.updated_at
+  copiedRecord.value = copy
+  appStore.showToast('已复制记录', 'success')
+}
+
+// 打开粘贴弹窗
+function openPasteModal() {
+  if (!copiedRecord.value) {
+    appStore.showToast('请先复制一条记录', 'warning')
+    return
+  }
+  pasteCount.value = 1
+  showPasteModal.value = true
+}
+
+// 粘贴记录
+async function pasteRecords() {
+  if (!copiedRecord.value || pasteCount.value < 1) return
+  
+  try {
+    for (let i = 0; i < pasteCount.value; i++) {
+      const newRecord = { ...copiedRecord.value }
+      // 更新日期为当前日期时间
+      const now = new Date()
+      const pad = n => n.toString().padStart(2, '0')
+      newRecord.duty_date = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`
+      // 转换 escalate_to 数组为字符串
+      const payload = {
+        ...newRecord,
+        escalate_to: Array.isArray(newRecord.escalate_to) ? newRecord.escalate_to.join(',') : newRecord.escalate_to
+      }
+      await api.post('/api/duty-records', payload)
+    }
+    appStore.showToast(`成功粘贴 ${pasteCount.value} 条记录`, 'success')
+    showPasteModal.value = false
+    await loadRecords()
+    await loadStats()
+  } catch (err) {
+    appStore.showToast('粘贴失败: ' + (err.response?.data?.error || err.message), 'error')
   }
 }
 
 // 批量修改处理结果
 function openBatchStatusModal() {
   if (selectedRecords.value.length === 0) {
-    appStore.showToast('请先选择要修改的记录', 'warning')
+    appStore.showToast(t('dutyRecords.actions.selectRecordsFirst'), 'warning')
     return
   }
   batchStatus.value = ''
@@ -1066,7 +1128,7 @@ function openBatchStatusModal() {
 
 async function submitBatchStatus() {
   if (!batchStatus.value) {
-    appStore.showToast('请选择处理结果', 'warning')
+    appStore.showToast(t('dutyRecords.actions.selectStatus'), 'warning')
     return
   }
   try {
@@ -1080,14 +1142,14 @@ async function submitBatchStatus() {
     loadRecords()
     loadStats()
   } catch (e) {
-    appStore.showToast('批量修改失败', 'error')
+    appStore.showToast(t('dutyRecords.actions.batchModifyFailed'), 'error')
   }
 }
 
 // 批量删除
 async function batchDelete() {
   if (selectedRecords.value.length === 0) {
-    appStore.showToast('请先选择要删除的记录', 'warning')
+    appStore.showToast(t('dutyRecords.actions.selectDeleteFirst'), 'warning')
     return
   }
   const confirmed = await appStore.showConfirm({
@@ -1108,7 +1170,7 @@ async function batchDelete() {
     loadRecords()
     loadStats()
   } catch (e) {
-    appStore.showToast('批量删除失败', 'error')
+    appStore.showToast(t('dutyRecords.actions.batchDeleteFailed'), 'error')
   }
 }
 
@@ -1127,7 +1189,7 @@ async function uploadFiles(files) {
   
   const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'))
   if (imageFiles.length === 0) {
-    appStore.showToast('请选择图片文件', 'warning')
+    appStore.showToast(t('dutyRecords.actions.selectImageFile'), 'warning')
     return
   }
 
@@ -1145,7 +1207,7 @@ async function uploadFiles(files) {
     }
   } catch (e) {
     console.error('上传失败', e)
-    appStore.showToast('上传失败: ' + (e.response?.data || e.message), 'error')
+    appStore.showToast(t('dutyRecords.actions.uploadFailed') + ': ' + (e.response?.data || e.message), 'error')
   } finally {
     uploading.value = false
   }
@@ -1192,19 +1254,125 @@ async function openImagePreview(images, index) {
   showImagePreview.value = true
 }
 
-function exportRecords() {
-  const params = new URLSearchParams()
-  if (filters.value.status) params.append('status', filters.value.status)
-  if (filters.value.project_id) params.append('project_id', filters.value.project_id)
-  window.open(`/api/duty-records/export?${params.toString()}`, '_blank')
+async function exportRecords() {
+  const data = records.value
+  if (!data.length) {
+    appStore.showToast('没有数据可导出', 'warning')
+    return
+  }
+
+  appStore.showToast('正在准备导出...', 'info')
+
+  // 动态导入xlsx库
+  const XLSX = await import('xlsx')
+
+  // 定义导出字段顺序（不包含附件列）
+  const exportFields = [
+    { key: 'duty_date', title: '值班时间', width: 18 },
+    { key: 'duty_person', title: '值班人员', width: 12 },
+    { key: 'project_name', title: '项目', width: 15 },
+    { key: 'feedback_type', title: '反馈类型', width: 12 },
+    { key: 'event_type', title: '事件类型', width: 12 },
+    { key: 'problem_desc', title: '问题描述', width: 30 },
+    { key: 'handler', title: '处理人', width: 12 },
+    { key: 'handle_result', title: '处理结果', width: 20 },
+    { key: 'first_call_time', title: '首次拨打时间', width: 18 },
+    { key: 'answer_time', title: '接听时间', width: 18 },
+    { key: 'call_count', title: '拨打次数', width: 10 },
+    { key: 'is_answered', title: '是否接听', width: 10 },
+    { key: 'response_time', title: '响应时间(分钟)', width: 14 },
+    { key: 'is_escalated', title: '是否上报', width: 10 },
+    { key: 'escalate_to', title: '上报至', width: 15 },
+    { key: 'has_handover', title: '是否交接', width: 10 },
+    { key: 'handover_person', title: '交接人', width: 12 },
+    { key: 'handover_content', title: '交接内容', width: 20 },
+    { key: 'status', title: '状态', width: 12 },
+    { key: 'planned_fix_time', title: '计划修复时间', width: 18 },
+    { key: 'is_overdue', title: '是否超期', width: 10 },
+    { key: 'overdue_reason', title: '超期原因', width: 20 },
+    { key: 'created_at', title: '创建时间', width: 18 },
+    { key: 'updated_at', title: '更新时间', width: 18 }
+  ]
+
+  const headers = exportFields.map(f => f.title)
+  
+  // 构建数据行
+  const rows = data.map(r => {
+    const row = {}
+    exportFields.forEach(f => {
+      let val = r[f.key]
+      
+      // 处理项目名称
+      if (f.key === 'project_name') {
+        row[f.title] = projects.value.find(p => p.id == r.project_id)?.name || r.project_name || ''
+        return
+      }
+      
+      // 处理布尔值
+      if (f.key === 'is_escalated' || f.key === 'has_handover' || f.key === 'is_overdue') {
+        row[f.title] = val ? '是' : '否'
+        return
+      }
+      
+      // 处理是否接听
+      if (f.key === 'is_answered') {
+        if (val === true || val === '已接听') row[f.title] = '已接听'
+        else if (val === false || val === '未接听') row[f.title] = '未接听'
+        else row[f.title] = val || '无'
+        return
+      }
+      
+      // 处理状态
+      if (f.key === 'status') {
+        row[f.title] = getStatusLabel(val)
+        return
+      }
+      
+      // 处理反馈类型
+      if (f.key === 'feedback_type') {
+        row[f.title] = getFeedbackLabel(val)
+        return
+      }
+      
+      // 处理事件类型
+      if (f.key === 'event_type') {
+        row[f.title] = getEventTypeLabel(val)
+        return
+      }
+      
+      // 处理日期时间
+      if (f.key === 'duty_date' || f.key === 'first_call_time' || f.key === 'answer_time' || 
+          f.key === 'planned_fix_time' || f.key === 'created_at' || f.key === 'updated_at') {
+        row[f.title] = formatTimeDisplay(val)
+        return
+      }
+      
+      row[f.title] = val ?? ''
+    })
+    return row
+  })
+
+  // 创建工作簿和工作表
+  const ws = XLSX.utils.json_to_sheet(rows, { header: headers })
+  
+  // 设置列宽
+  ws['!cols'] = exportFields.map(f => ({ wch: f.width }))
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, '值班记录')
+  
+  // 导出为xlsx文件
+  XLSX.writeFile(wb, `值班记录_${new Date().toISOString().slice(0, 10)}.xlsx`)
+
+  appStore.showToast('导出成功', 'success')
 }
 
 function getStatusLabel(status) {
-  return statusOptions.find(s => s.value === status)?.label || status
+  return statusOptions.value.find(s => s.value === status)?.label || status
 }
 
 function formatDate(dateStr) {
-  if (!dateStr) return '无'
+  if (!dateStr) return t('common.none')
   return dateStr.replace('T', ' ').slice(0, 16)
 }
 
@@ -1219,27 +1387,27 @@ function formatDateOnly(dateStr) {
 }
 
 function formatTimeDisplay(timeStr) {
-  if (!timeStr) return '无'
+  if (!timeStr) return t('common.none')
   // 去掉时区后缀如 +08:00 或 Z
   return timeStr.replace(/[+-]\d{2}:\d{2}$/, '').replace('Z', '').replace('T', ' ')
 }
 
 function getStatusColor(status) {
-  return statusOptions.find(s => s.value === status)?.color || '#6b7280'
+  return statusOptions.value.find(s => s.value === status)?.color || '#6b7280'
 }
 
 function getFeedbackLabel(type) {
-  return feedbackTypeOptions.find(t => t.value === type)?.label || type
+  return feedbackTypeOptions.value.find(t => t.value === type)?.label || type
 }
 
 function getEscalateLabel(type) {
-  if (!type) return '无'
+  if (!type) return t('common.none')
   const types = type.split(',').filter(s => s)
-  return types.map(t => escalateOptions.find(o => o.value === t)?.label || t).join(', ')
+  return types.map(tp => escalateOptions.value.find(o => o.value === tp)?.label || tp).join(', ')
 }
 
 function getEventTypeLabel(type) {
-  return eventTypeOptions.find(t => t.value === type)?.label || type || '无'
+  return eventTypeOptions.value.find(tp => tp.value === type)?.label || type || t('common.none')
 }
 
 function isRecordOverdue(record) {
@@ -1279,11 +1447,11 @@ function toggleStats() {
 
 function openProjectModal(mode, project = null) {
   if (mode === 'add' && !canProjectCreate.value) {
-    appStore.showToast('无权限：不可添加项目', 'warning')
+    appStore.showToast(t('dutyRecords.actions.noPermissionAdd'), 'warning')
     return
   }
   if (mode === 'edit' && !canProjectUpdate.value) {
-    appStore.showToast('无权限：不可编辑项目', 'warning')
+    appStore.showToast(t('dutyRecords.actions.noPermissionEdit'), 'warning')
     return
   }
   projectModalMode.value = mode
@@ -1297,35 +1465,35 @@ function openProjectModal(mode, project = null) {
 
 async function saveProject() {
   if (projectModalMode.value === 'add' && !canProjectCreate.value) {
-    appStore.showToast('无权限：不可添加项目', 'warning')
+    appStore.showToast(t('dutyRecords.actions.noPermissionAdd'), 'warning')
     return
   }
   if (projectModalMode.value === 'edit' && !canProjectUpdate.value) {
-    appStore.showToast('无权限：不可编辑项目', 'warning')
+    appStore.showToast(t('dutyRecords.actions.noPermissionEdit'), 'warning')
     return
   }
   if (!projectForm.value.name || !projectForm.value.code) {
-    appStore.showToast('请填写项目名称和代码', 'warning')
+    appStore.showToast(t('dutyRecords.actions.fillProjectNameCode'), 'warning')
     return
   }
   try {
     if (projectModalMode.value === 'add') {
       await api.post('/api/duty-projects', projectForm.value)
-      appStore.showToast('创建成功', 'success')
+      appStore.showToast(t('dutyRecords.actions.createSuccess'), 'success')
     } else {
       await api.put(`/api/duty-projects/${projectForm.value.id}`, projectForm.value)
-      appStore.showToast('更新成功', 'success')
+      appStore.showToast(t('dutyRecords.actions.updateSuccess'), 'success')
     }
     showProjectModal.value = false
     loadProjects()
   } catch (e) {
-    appStore.showToast('保存失败: ' + (e.response?.data || e.message), 'error')
+    appStore.showToast(t('dutyRecords.actions.saveFailed') + ': ' + (e.response?.data || e.message), 'error')
   }
 }
 
 async function deleteProject(project) {
   if (!canProjectDelete.value) {
-    appStore.showToast('无权限：不可删除项目', 'warning')
+    appStore.showToast(t('dutyRecords.actions.noPermissionDelete'), 'warning')
     return
   }
   const confirmed = await appStore.showConfirm({
@@ -1338,10 +1506,10 @@ async function deleteProject(project) {
   if (!confirmed) return
   try {
     await api.delete(`/api/duty-projects/${project.id}`)
-    appStore.showToast('删除成功', 'success')
+    appStore.showToast(t('dutyRecords.actions.deleteSuccess'), 'success')
     loadProjects()
   } catch (e) {
-    appStore.showToast('删除失败: ' + (e.response?.data || e.message), 'error')
+    appStore.showToast(t('dutyRecords.actions.deleteFailed') + ': ' + (e.response?.data || e.message), 'error')
   }
 }
 
@@ -1351,25 +1519,29 @@ async function deleteProject(project) {
   <div class="duty-records-page">
     <div class="page-header">
       <div class="header-left">
-        <h2>值班记录</h2>
-        <span class="record-count" v-if="activeTab === 'list'">共 {{ records.length }} 条记录</span>
+        <h2>{{ t('dutyRecords.pageTitle') }}</h2>
+        <span class="record-count" v-if="activeTab === 'list'">{{ t('dutyRecords.recordCount', { count: records.length }) }}</span>
       </div>
       <div class="header-actions">
         <button v-if="canOpenProjectConfig" class="btn btn-secondary" @click="openProjectModal('list')" type="button">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
-          项目配置
+          {{ t('dutyRecords.projectConfig') }}
         </button>
         <button v-if="activeTab === 'list' && canExport" class="btn btn-default" @click="exportRecords" type="button">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-          导出
+          {{ t('common.export') }}
         </button>
         <button v-if="activeTab === 'list'" class="btn btn-secondary" @click="showStatsPanel = !showStatsPanel" type="button">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
-          {{ showStatsPanel ? '隐藏统计' : '统计面板' }}
+          {{ showStatsPanel ? t('dutyRecords.hideStats') : t('dutyRecords.showStats') }}
         </button>
         <button v-if="activeTab === 'list' && canCreate" class="btn btn-primary" @click="openModal('add')" type="button">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-          添加记录
+          {{ t('dutyRecords.addRecord') }}
+        </button>
+        <button v-if="activeTab === 'list' && canCreate && copiedRecord" class="btn btn-secondary" @click="openPasteModal" type="button">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+          粘贴记录
         </button>
       </div>
     </div>
@@ -1382,7 +1554,7 @@ async function deleteProject(project) {
         @click="activeTab = 'list'"
       >
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
-        记录列表
+        {{ t('dutyRecords.tabs.list') }}
       </button>
       <button 
         class="tab-btn" 
@@ -1390,7 +1562,7 @@ async function deleteProject(project) {
         @click="activeTab = 'stats'"
       >
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
-        统计分析
+        {{ t('dutyRecords.tabs.stats') }}
       </button>
     </div>
 
@@ -1402,79 +1574,79 @@ async function deleteProject(project) {
       <div class="stats-cards">
         <div class="stat-card">
           <div class="stat-value">{{ stats.total || 0 }}</div>
-          <div class="stat-label">总记录</div>
+          <div class="stat-label">{{ t('dutyRecords.stats.total') }}</div>
         </div>
         <div class="stat-card normal">
           <div class="stat-value">{{ stats.normal || 0 }}</div>
-          <div class="stat-label">检测正常</div>
+          <div class="stat-label">{{ t('dutyRecords.stats.normal') }}</div>
         </div>
         <div class="stat-card resolved">
           <div class="stat-value">{{ stats.resolved || 0 }}</div>
-          <div class="stat-label">已解决</div>
+          <div class="stat-label">{{ t('dutyRecords.stats.resolved') }}</div>
         </div>
         <div class="stat-card pending">
           <div class="stat-value">{{ stats.pending || 0 }}</div>
-          <div class="stat-label">待解决</div>
+          <div class="stat-label">{{ t('dutyRecords.stats.pending') }}</div>
         </div>
         <div class="stat-card in-progress">
           <div class="stat-value">{{ stats.in_progress || 0 }}</div>
-          <div class="stat-label">正在解决</div>
+          <div class="stat-label">{{ t('dutyRecords.stats.inProgress') }}</div>
         </div>
         <div class="stat-card temporary">
           <div class="stat-value">{{ stats.temporary || 0 }}</div>
-          <div class="stat-label">临时解决</div>
+          <div class="stat-label">{{ t('dutyRecords.stats.temporary') }}</div>
         </div>
         <div class="stat-card overdue">
           <div class="stat-value">{{ stats.overdue || 0 }}</div>
-          <div class="stat-label">逾期</div>
+          <div class="stat-label">{{ t('dutyRecords.stats.overdue') }}</div>
         </div>
         <div class="stat-card month">
           <div class="stat-value">{{ stats.this_month || 0 }}</div>
-          <div class="stat-label">本月记录</div>
+          <div class="stat-label">{{ t('dutyRecords.stats.thisMonth') }}</div>
         </div>
       </div>
 
       <div class="stats-details">
         <div class="stats-section handover-section">
           <h4>
-            待处理交接记录
-            <span class="count">共 {{ recentHandovers.length }} 条待处理</span>
+            {{ t('dutyRecords.stats.pendingHandover') }}
+            <span class="count">{{ t('dutyRecords.stats.pendingCount', { count: recentHandovers.length }) }}</span>
           </h4>
           <div class="handover-list" v-if="recentHandovers.length">
             <div v-for="h in recentHandovers" :key="h.id" class="handover-item">
               <!-- 顶部标签行：项目、反馈类型、事件类型、交接人、状态 -->
               <div class="handover-tags-row">
-                <span class="tag-inline project"><b>项目:</b> {{ h.project_name || '未知项目' }}</span>
-                <span class="tag-inline" :class="['feedback', h.feedback_type]"><b>反馈类型:</b> {{ getFeedbackLabel(h.feedback_type) }}</span>
-                <span class="tag-inline event"><b>事件类型:</b> {{ getEventTypeLabel(h.event_type) }}</span>
-                <span class="tag-inline handover-person"><b>交接人:</b> {{ h.handover_person || '-' }}</span>
-                <span :class="['tag-inline', 'status', h.status]"><b>状态:</b> {{ getStatusLabel(h.status) }}</span>
+                <span class="tag-inline project"><b>{{ t('dutyRecords.handover.project') }}:</b> {{ h.project_name || t('dutyRecords.handover.unknownProject') }}</span>
+                <span class="tag-inline" :class="['feedback', h.feedback_type]"><b>{{ t('dutyRecords.handover.feedbackType') }}:</b> {{ getFeedbackLabel(h.feedback_type) }}</span>
+                <span class="tag-inline event"><b>{{ t('dutyRecords.handover.eventType') }}:</b> {{ getEventTypeLabel(h.event_type) }}</span>
+                <span class="tag-inline handover-person"><b>{{ t('dutyRecords.handover.handoverPerson') }}:</b> {{ h.handover_person || '-' }}</span>
+                <span :class="['tag-inline', 'status', h.status]"><b>{{ t('dutyRecords.handover.status') }}:</b> {{ getStatusLabel(h.status) }}</span>
               </div>
               
               <!-- 字段信息：按表格顺序 -->
               <div class="handover-fields">
                 <div class="field-item">
-                  <span class="field-label">值班人</span>
+                  <span class="field-label">{{ t('dutyRecords.handover.dutyPerson') }}</span>
                   <span class="field-value">{{ h.duty_person || '-' }}</span>
                 </div>
                 <div class="field-item">
-                  <span class="field-label">处理人</span>
+                  <span class="field-label">{{ t('dutyRecords.handover.handler') }}</span>
                   <span class="field-value">{{ h.handler || '-' }}</span>
                 </div>
                 <div class="field-item">
-                  <span class="field-label">交接时间</span>
+                  <span class="field-label">{{ t('dutyRecords.handover.handoverTime') }}</span>
                   <span class="field-value time">{{ h.updated_at || '-' }}</span>
                 </div>
               </div>
               
               <!-- 交接内容 -->
               <div class="handover-content-section">
-                <span class="content-label">交接内容</span>
-                <div class="content-text">{{ h.handover_content || '无交接内容' }}</div>
+                <span class="content-label">{{ t('dutyRecords.handover.handoverContent') }}</span>
+                <div class="content-text">{{ h.handover_content || t('dutyRecords.handover.noContent') }}</div>
               </div>
             </div>
           </div>
-          <div v-else class="empty-stats">暂无待处理的交接记录</div>
+          <div v-else class="empty-stats">{{ t('dutyRecords.stats.noHandover') }}</div>
         </div>
       </div>
     </div>
@@ -1483,83 +1655,83 @@ async function deleteProject(project) {
     <div class="filters">
       <div class="filter-row">
         <div class="filter-group">
-          <label>处理结果</label>
+          <label>{{ t('dutyRecords.filters.status') }}</label>
           <select v-model="filters.status">
-            <option value="">全部</option>
+            <option value="">{{ t('common.all') }}</option>
             <option v-for="s in statusOptions" :key="s.value" :value="s.value">{{ s.label }}</option>
           </select>
         </div>
         <div class="filter-group">
-          <label>事件类型</label>
+          <label>{{ t('dutyRecords.filters.eventType') }}</label>
           <select v-model="filters.event_type">
-            <option value="">全部</option>
+            <option value="">{{ t('common.all') }}</option>
             <option v-for="e in eventTypeOptions" :key="e.value" :value="e.value">{{ e.label }}</option>
           </select>
         </div>
         <div class="filter-group">
-          <label>项目</label>
+          <label>{{ t('dutyRecords.filters.project') }}</label>
           <select v-model="filters.project_id">
-            <option value="">全部</option>
+            <option value="">{{ t('common.all') }}</option>
             <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
         </div>
         <div class="filter-group">
-          <label>处理人</label>
-          <input type="text" v-model="filters.handler" placeholder="搜索">
+          <label>{{ t('dutyRecords.filters.handler') }}</label>
+          <input type="text" v-model="filters.handler" :placeholder="t('common.search')">
         </div>
         <div class="filter-group">
-          <label>值班人</label>
-          <input type="text" v-model="filters.duty_person" placeholder="搜索">
+          <label>{{ t('dutyRecords.filters.dutyPerson') }}</label>
+          <input type="text" v-model="filters.duty_person" :placeholder="t('common.search')">
         </div>
         <div class="filter-group">
-          <label>响应时长</label>
+          <label>{{ t('dutyRecords.filters.responseTime') }}</label>
           <select v-model="filters.response_time_range">
-            <option value="">全部</option>
-            <option value="2min">2分钟内</option>
-            <option value="5min">5分钟内</option>
-            <option value="10min">10分钟内</option>
-            <option value="10min+">10分钟以上</option>
+            <option value="">{{ t('common.all') }}</option>
+            <option value="2min">{{ t('dutyRecords.filters.responseTimeOptions.within2min') }}</option>
+            <option value="5min">{{ t('dutyRecords.filters.responseTimeOptions.within5min') }}</option>
+            <option value="10min">{{ t('dutyRecords.filters.responseTimeOptions.within10min') }}</option>
+            <option value="10min+">{{ t('dutyRecords.filters.responseTimeOptions.over10min') }}</option>
           </select>
         </div>
         <div class="filter-group">
-          <label>开始日期</label>
+          <label>{{ t('dutyRecords.filters.startDate') }}</label>
           <input type="date" v-model="filters.start_date">
         </div>
         <div class="filter-group">
-          <label>结束日期</label>
+          <label>{{ t('dutyRecords.filters.endDate') }}</label>
           <input type="date" v-model="filters.end_date">
         </div>
         <div class="filter-group checkbox-group">
           <label class="checkbox-label">
             <input type="checkbox" v-model="filters.is_overdue">
-            <span>仅逾期</span>
+            <span>{{ t('dutyRecords.filters.overdueOnly') }}</span>
           </label>
         </div>
         <div class="filter-actions">
           <button class="btn btn-sm btn-primary" @click="loadRecords" type="button">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-            搜索
+            {{ t('common.search') }}
           </button>
-          <button class="btn btn-sm btn-default" @click="clearFilters" type="button">重置</button>
+          <button class="btn btn-sm btn-default" @click="clearFilters" type="button">{{ t('common.reset') }}</button>
         </div>
       </div>
     </div>
 
     <!-- 批量操作栏 -->
     <div v-if="selectedRecords.length > 0 && activeTab === 'list'" class="batch-action-bar">
-      <span class="batch-info">已选择 <strong>{{ selectedRecords.length }}</strong> 条记录</span>
+      <span class="batch-info">{{ t('common.selected') }} <strong>{{ selectedRecords.length }}</strong> {{ t('common.items') }}</span>
       <div class="batch-actions">
         <button type="button" class="batch-btn status-btn" @click.stop="openBatchStatusModal" v-if="canUpdate">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-          批量修改处理结果
+          {{ t('common.batchModifyStatus') }}
         </button>
         <button type="button" class="batch-btn delete-btn" @click.stop="batchDelete" v-if="canDelete">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-          批量删除
+          {{ t('dutyRecords.batch.batchDelete') }}
         </button>
         <button type="button" class="batch-btn cancel-btn" @click.stop="selectedRecords = []">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18L18 6M6 6l12 12"/></svg>
-          取消选择
+          {{ t('dutyRecords.batch.cancelSelect') }}
         </button>
       </div>
     </div>
@@ -1570,32 +1742,32 @@ async function deleteProject(project) {
         <thead>
           <tr>
             <th class="col-checkbox sticky-left">
-              <input type="checkbox" v-model="selectAll" title="全选/取消全选">
+              <input type="checkbox" v-model="selectAll" :title="t('common.selectAll')">
             </th>
-            <th class="col-date">日期</th>
-            <th class="col-person">值班人</th>
-            <th class="col-project">项目</th>
-            <th class="col-task">任务描述</th>
-            <th class="col-feedback">反馈类型</th>
-            <th class="col-event">事件类型</th>
-            <th class="col-desc">问题描述</th>
-            <th class="col-handler">处理人</th>
-            <th class="col-status">处理结果</th>
-            <th class="col-planned">计划修复时间</th>
-            <th class="col-overdue">逾期</th>
-            <th class="col-time">首次拨打</th>
-            <th class="col-time">接听时间</th>
-            <th class="col-call">拨打次数</th>
-            <th class="col-answered">是否接听</th>
-            <th class="col-resp">响应(分)</th>
-            <th class="col-escalate">上报问题</th>
-            <th class="col-handover">交接人</th>
-            <th class="col-handover-content">交接内容</th>
-            <th class="col-attach">附件</th>
-            <th class="col-creator">操作人</th>
-            <th class="col-time">创建时间</th>
-            <th class="col-time">更新时间</th>
-            <th class="col-action sticky-right">操作</th>
+            <th class="col-date">{{ t('dutyRecords.columns.date') }}</th>
+            <th class="col-person">{{ t('dutyRecords.columns.dutyPerson') }}</th>
+            <th class="col-project">{{ t('dutyRecords.columns.project') }}</th>
+            <th class="col-task">{{ t('dutyRecords.columns.taskDesc') }}</th>
+            <th class="col-feedback">{{ t('dutyRecords.columns.feedbackType') }}</th>
+            <th class="col-event">{{ t('dutyRecords.columns.eventType') }}</th>
+            <th class="col-desc">{{ t('dutyRecords.columns.problemDesc') }}</th>
+            <th class="col-handler">{{ t('dutyRecords.columns.handler') }}</th>
+            <th class="col-status">{{ t('dutyRecords.columns.status') }}</th>
+            <th class="col-planned">{{ t('dutyRecords.columns.plannedFixTime') }}</th>
+            <th class="col-overdue">{{ t('dutyRecords.columns.overdue') }}</th>
+            <th class="col-time">{{ t('dutyRecords.columns.firstCallTime') }}</th>
+            <th class="col-time">{{ t('dutyRecords.columns.answerTime') }}</th>
+            <th class="col-call">{{ t('dutyRecords.columns.callCount') }}</th>
+            <th class="col-answered">{{ t('dutyRecords.columns.answered') }}</th>
+            <th class="col-resp">{{ t('dutyRecords.columns.responseTime') }}</th>
+            <th class="col-escalate">{{ t('dutyRecords.columns.escalate') }}</th>
+            <th class="col-handover">{{ t('dutyRecords.columns.handoverPerson') }}</th>
+            <th class="col-handover-content">{{ t('dutyRecords.columns.handoverContent') }}</th>
+            <th class="col-attach">{{ t('dutyRecords.columns.attachments') }}</th>
+            <th class="col-creator">{{ t('dutyRecords.columns.operator') }}</th>
+            <th class="col-time">{{ t('dutyRecords.columns.createdAt') }}</th>
+            <th class="col-time">{{ t('dutyRecords.columns.updatedAt') }}</th>
+            <th class="col-action sticky-right">{{ t('common.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -1608,7 +1780,7 @@ async function deleteProject(project) {
           <tr v-else-if="paginatedRecords.length === 0">
             <td colspan="25" class="empty-cell">
               <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
-              <p>暂无值班记录</p>
+              <p>{{ t('dutyRecords.empty.noRecords') }}</p>
             </td>
           </tr>
           <tr v-for="r in paginatedRecords" :key="r.id" :class="{ overdue: r.is_overdue, selected: selectedRecords.includes(r.id) }">
@@ -1617,68 +1789,72 @@ async function deleteProject(project) {
             </td>
             <td class="col-date nowrap">{{ formatDate(r.duty_date) }}</td>
             <td class="col-person nowrap">{{ r.duty_person }}</td>
-            <td class="col-project nowrap">{{ r.project_name || '无' }}</td>
-            <td class="col-task">{{ r.task_desc || '无' }}</td>
+            <td class="col-project nowrap">{{ r.project_name || t('common.none') }}</td>
+            <td class="col-task">{{ r.task_desc || t('common.none') }}</td>
             <td class="col-feedback nowrap">
               <span class="feedback-badge" :class="r.feedback_type">{{ getFeedbackLabel(r.feedback_type) }}</span>
             </td>
             <td class="col-event nowrap">{{ getEventTypeLabel(r.event_type) }}</td>
-            <td class="col-desc">{{ r.problem_desc || '无' }}</td>
-            <td class="col-handler nowrap">{{ r.handler || '无' }}</td>
+            <td class="col-desc">{{ r.problem_desc || t('common.none') }}</td>
+            <td class="col-handler nowrap">{{ r.handler || t('common.none') }}</td>
             <td class="col-status nowrap">
               <span class="status-badge" :style="{ backgroundColor: getStatusColor(r.status) }">{{ getStatusLabel(r.status) }}</span>
             </td>
             <td class="col-planned nowrap">
-              <span>{{ formatDateTime(r.planned_fix_time) || '无' }}</span>
+              <span>{{ formatDateTime(r.planned_fix_time) || t('common.none') }}</span>
               <button
                 v-if="canEditPlannedFixTime"
                 class="btn-mini-link"
                 @click.stop="openPlannedFixModal(r)"
-                title="单独编辑计划修复时间"
+                :title="t('common.edit')"
               >
-                编辑
+                {{ t('common.edit') }}
               </button>
             </td>
             <td class="col-overdue nowrap">
-              <span v-if="isRecordOverdue(r)" class="overdue-badge" :title="r.overdue_reason">逾期</span>
-              <span v-else>无</span>
+              <span v-if="isRecordOverdue(r)" class="overdue-badge" :title="r.overdue_reason">{{ t('dutyRecords.stats.overdue') }}</span>
+              <span v-else>{{ t('common.none') }}</span>
             </td>
-            <td class="col-time nowrap">{{ formatDateTime(r.first_call_time) || '无' }}</td>
-            <td class="col-time nowrap">{{ formatDateTime(r.answer_time) || '无' }}</td>
+            <td class="col-time nowrap">{{ formatDateTime(r.first_call_time) || t('common.none') }}</td>
+            <td class="col-time nowrap">{{ formatDateTime(r.answer_time) || t('common.none') }}</td>
             <td class="col-call nowrap">{{ r.call_count || 0 }}</td>
             <td class="col-answered nowrap">
-              <span v-if="r.is_answered" class="answered-badge">已接听</span>
-              <span v-else class="not-answered-badge">未接听</span>
+              <span v-if="r.is_answered === '已接听' || r.is_answered === true || (r.answer_time && r.is_answered !== '未接听' && r.is_answered !== false)" class="answered-badge">已接听</span>
+              <span v-else-if="r.is_answered === '未接听'" class="not-answered-badge">未接听</span>
+              <span v-else class="none-badge">无</span>
             </td>
-            <td class="col-resp nowrap">{{ r.response_time || '无' }}</td>
+            <td class="col-resp nowrap">{{ r.response_time || t('common.none') }}</td>
             <td class="col-escalate nowrap">
               <span v-if="r.is_escalated" class="escalate-badge">{{ getEscalateLabel(r.escalate_to) }}</span>
-              <span v-else>无</span>
+              <span v-else>{{ t('common.none') }}</span>
             </td>
-            <td class="col-handover nowrap">{{ r.has_handover ? (r.handover_person || '有') : '无' }}</td>
-            <td class="col-handover-content" :title="r.handover_content">{{ r.has_handover ? (r.handover_content || '无') : '无' }}</td>
+            <td class="col-handover nowrap">{{ r.has_handover ? (r.handover_person || t('common.yes')) : t('common.none') }}</td>
+            <td class="col-handover-content" :title="r.handover_content">{{ r.has_handover ? (r.handover_content || t('common.none')) : t('common.none') }}</td>
             <td class="col-attach nowrap" @click.stop>
               <div v-if="r.attachments?.length" class="attachments-preview">
                 <img v-for="(img, idx) in r.attachments.slice(0, 2)" :key="idx" :src="getDisplayUrl(img)" @click="openImagePreview(r.attachments, idx)" class="thumb">
                 <span v-if="r.attachments.length > 2" class="more-count" @click="openImagePreview(r.attachments, 2)">+{{ r.attachments.length - 2 }}</span>
               </div>
-              <span v-else>无</span>
+              <span v-else>{{ t('common.none') }}</span>
             </td>
-            <td class="col-creator nowrap">{{ r.updated_by || r.created_by || '无' }}</td>
+            <td class="col-creator nowrap">{{ r.updated_by || r.created_by || t('common.none') }}</td>
             <td class="col-time nowrap">{{ formatTimeDisplay(r.created_at) }}</td>
             <td class="col-time nowrap">{{ formatTimeDisplay(r.updated_at) }}</td>
             <td class="col-action nowrap sticky-right">
               <div class="action-buttons">
-                <button class="btn-icon" @click="viewDetail(r)" title="查看详情">
+                <button class="btn-icon" @click="viewDetail(r)" :title="t('common.view')">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                 </button>
-                <button v-if="canUpdate" class="btn-icon" @click="openModal('edit', r)" title="编辑">
+                <button v-if="canCreate" class="btn-icon" @click="copyRecord(r)" title="复制">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                </button>
+                <button v-if="canUpdate" class="btn-icon" @click="openModal('edit', r)" :title="t('common.edit')">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                 </button>
-                <button v-if="canEditPlannedFixTime" class="btn-icon warning" @click="openPlannedFixModal(r)" title="编辑计划修复时间">
+                <button v-if="canEditPlannedFixTime" class="btn-icon warning" @click="openPlannedFixModal(r)" :title="t('dutyRecords.actions.editPlannedFixTime')">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 </button>
-                <button v-if="canDelete" class="btn-icon danger" @click="deleteRecord(r)" title="删除">
+                <button v-if="canDelete" class="btn-icon danger" @click="deleteRecord(r)" :title="t('common.delete')">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
                 </button>
               </div>
@@ -1691,22 +1867,22 @@ async function deleteProject(project) {
     <!-- 分页 -->
     <div class="pagination-wrapper" v-if="records.length > 0">
       <div class="pagination-info">
-        共 {{ records.length }} 条记录，第 {{ currentPage }} / {{ totalPages }} 页
+        {{ t('dutyRecords.pagination.total') }} {{ records.length }} {{ t('common.records') }}，{{ t('dutyRecords.pagination.page') }} {{ currentPage }} / {{ totalPages }}
       </div>
       <div class="pagination-controls">
         <select v-model="pageSize" @change="currentPage = 1" class="page-size-select">
-          <option :value="10">10条/页</option>
-          <option :value="20">20条/页</option>
-          <option :value="50">50条/页</option>
-          <option :value="100">100条/页</option>
+          <option :value="10">10 {{ t('dutyRecords.pagination.perPage') }}</option>
+          <option :value="20">20 {{ t('dutyRecords.pagination.perPage') }}</option>
+          <option :value="50">50 {{ t('dutyRecords.pagination.perPage') }}</option>
+          <option :value="100">100 {{ t('dutyRecords.pagination.perPage') }}</option>
         </select>
-        <button class="page-btn" :disabled="currentPage === 1" @click="currentPage = 1">首页</button>
-        <button class="page-btn" :disabled="currentPage === 1" @click="currentPage--">上一页</button>
+        <button class="page-btn" :disabled="currentPage === 1" @click="currentPage = 1">{{ t('dutyRecords.pagination.first') }}</button>
+        <button class="page-btn" :disabled="currentPage === 1" @click="currentPage--">{{ t('dutyRecords.pagination.prev') }}</button>
         <span class="page-nums">
           <button v-for="p in visiblePages" :key="p" class="page-num" :class="{ active: p === currentPage }" @click="currentPage = p">{{ p }}</button>
         </span>
-        <button class="page-btn" :disabled="currentPage === totalPages" @click="currentPage++">下一页</button>
-        <button class="page-btn" :disabled="currentPage === totalPages" @click="currentPage = totalPages">末页</button>
+        <button class="page-btn" :disabled="currentPage === totalPages" @click="currentPage++">{{ t('dutyRecords.pagination.next') }}</button>
+        <button class="page-btn" :disabled="currentPage === totalPages" @click="currentPage = totalPages">{{ t('dutyRecords.pagination.last') }}</button>
       </div>
     </div>
     
@@ -1717,15 +1893,15 @@ async function deleteProject(project) {
       <!-- 页面头部 - 时间范围快捷选择 -->
       <div class="stats-page-header">
         <div class="time-range-selector">
-          <button class="time-range-btn" :class="{ active: timeRangePreset === 'today' }" @click="setTimeRange('today')">今日</button>
-          <button class="time-range-btn" :class="{ active: timeRangePreset === 'week' }" @click="setTimeRange('week')">本周</button>
-          <button class="time-range-btn" :class="{ active: timeRangePreset === 'month' }" @click="setTimeRange('month')">本月</button>
-          <button class="time-range-btn" :class="{ active: timeRangePreset === 'quarter' }" @click="setTimeRange('quarter')">本季度</button>
-          <button class="time-range-btn" :class="{ active: timeRangePreset === 'all' }" @click="setTimeRange('all')">全部</button>
+          <button class="time-range-btn" :class="{ active: timeRangePreset === 'today' }" @click="setTimeRange('today')">{{ t('dutyRecords.statsPage.filters.today') }}</button>
+          <button class="time-range-btn" :class="{ active: timeRangePreset === 'week' }" @click="setTimeRange('week')">{{ t('dutyRecords.statsPage.filters.thisWeek') }}</button>
+          <button class="time-range-btn" :class="{ active: timeRangePreset === 'month' }" @click="setTimeRange('month')">{{ t('dutyRecords.statsPage.filters.thisMonth') }}</button>
+          <button class="time-range-btn" :class="{ active: timeRangePreset === 'quarter' }" @click="setTimeRange('quarter')">{{ t('dutyRecords.statsPage.filters.thisQuarter') }}</button>
+          <button class="time-range-btn" :class="{ active: timeRangePreset === 'all' }" @click="setTimeRange('all')">{{ t('dutyRecords.statsPage.filters.all') }}</button>
         </div>
         <button class="btn btn-sm btn-default" @click="exportStats" type="button">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-          导出报表
+          {{ t('dutyRecords.statsPage.exportReport') }}
         </button>
       </div>
       
@@ -1733,42 +1909,42 @@ async function deleteProject(project) {
       <div class="stats-filters">
         <div class="filter-row">
           <div class="filter-group">
-            <label>项目</label>
+            <label>{{ t('dutyRecords.statsPage.filters.project') }}</label>
             <select v-model="statsFilters.project_id">
-              <option value="">全部项目</option>
+              <option value="">{{ t('dutyRecords.statsPage.filters.allProjects') }}</option>
               <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
           </div>
           <div class="filter-group">
-            <label>处理人</label>
+            <label>{{ t('dutyRecords.statsPage.filters.handler') }}</label>
             <select v-model="statsFilters.handler">
-              <option value="">全部处理人</option>
+              <option value="">{{ t('dutyRecords.statsPage.filters.allHandlers') }}</option>
               <option v-for="h in uniqueHandlers" :key="h" :value="h">{{ h }}</option>
             </select>
           </div>
           <div class="filter-group">
-            <label>值班人</label>
+            <label>{{ t('dutyRecords.statsPage.filters.dutyPerson') }}</label>
             <select v-model="statsFilters.duty_person">
-              <option value="">全部值班人</option>
+              <option value="">{{ t('dutyRecords.statsPage.filters.allDutyPersons') }}</option>
               <option v-for="d in uniqueDutyPersons" :key="d" :value="d">{{ d }}</option>
             </select>
           </div>
           <div class="filter-group">
-            <label>事件类型</label>
+            <label>{{ t('dutyRecords.statsPage.filters.eventType') }}</label>
             <select v-model="statsFilters.event_type">
-              <option value="">全部类型</option>
+              <option value="">{{ t('dutyRecords.statsPage.filters.allTypes') }}</option>
               <option v-for="e in eventTypeOptions" :key="e.value" :value="e.value">{{ e.label }}</option>
             </select>
           </div>
           <div class="filter-group">
-            <label>开始日期</label>
+            <label>{{ t('dutyRecords.statsPage.filters.startDate') }}</label>
             <input type="date" v-model="statsFilters.start_date">
           </div>
           <div class="filter-group">
-            <label>结束日期</label>
+            <label>{{ t('dutyRecords.statsPage.filters.endDate') }}</label>
             <input type="date" v-model="statsFilters.end_date">
           </div>
-          <button class="btn btn-sm btn-primary" @click="loadDetailedStats" type="button">应用筛选</button>
+          <button class="btn btn-sm btn-primary" @click="loadDetailedStats" type="button">{{ t('common.apply') }}</button>
         </div>
       </div>
       
@@ -1776,31 +1952,31 @@ async function deleteProject(project) {
       <div class="stats-overview-cards">
         <div class="overview-card total">
           <div class="card-value">{{ statsData.overview.total || 0 }}</div>
-          <div class="card-label">总记录</div>
+          <div class="card-label">{{ t('dutyRecords.stats.total') }}</div>
         </div>
         <div class="overview-card normal">
           <div class="card-value">{{ statsData.overview.normal || 0 }}</div>
-          <div class="card-label">检测正常</div>
+          <div class="card-label">{{ t('dutyRecords.stats.normal') }}</div>
         </div>
         <div class="overview-card resolved">
           <div class="card-value">{{ statsData.overview.resolved || 0 }}</div>
-          <div class="card-label">已解决</div>
+          <div class="card-label">{{ t('dutyRecords.stats.resolved') }}</div>
         </div>
         <div class="overview-card pending">
           <div class="card-value">{{ statsData.overview.pending || 0 }}</div>
-          <div class="card-label">待解决</div>
+          <div class="card-label">{{ t('dutyRecords.stats.pending') }}</div>
         </div>
         <div class="overview-card in-progress">
           <div class="card-value">{{ statsData.overview.in_progress || 0 }}</div>
-          <div class="card-label">正在解决</div>
+          <div class="card-label">{{ t('dutyRecords.stats.inProgress') }}</div>
         </div>
         <div class="overview-card temporary">
           <div class="card-value">{{ statsData.overview.temporary || 0 }}</div>
-          <div class="card-label">临时解决</div>
+          <div class="card-label">{{ t('dutyRecords.stats.temporary') }}</div>
         </div>
         <div class="overview-card overdue">
           <div class="card-value">{{ statsData.overview.overdue || 0 }}</div>
-          <div class="card-label">逾期</div>
+          <div class="card-label">{{ t('dutyRecords.stats.overdue') }}</div>
         </div>
       </div>
       
@@ -2254,23 +2430,23 @@ async function deleteProject(project) {
               <div class="detail-row"><label>值班人</label><span>{{ detailRecord.duty_person }}</span></div>
               <div class="detail-row"><label>项目</label><span>{{ detailRecord.project_name }}</span></div>
               <div class="detail-row"><label>反馈类型</label><span>{{ getFeedbackLabel(detailRecord.feedback_type) }}</span></div>
-              <div class="detail-row full"><label>任务描述</label><span>{{ detailRecord.task_desc || '无' }}</span></div>
-              <div class="detail-row full"><label>问题描述</label><span>{{ detailRecord.problem_desc || '无' }}</span></div>
+              <div class="detail-row full"><label>{{ t('dutyRecords.form.taskDesc') }}</label><span>{{ detailRecord.task_desc || t('common.none') }}</span></div>
+              <div class="detail-row full"><label>{{ t('dutyRecords.form.problemDesc') }}</label><span>{{ detailRecord.problem_desc || t('common.none') }}</span></div>
             </div>
             <div class="detail-section">
               <h4>处理信息</h4>
-              <div class="detail-row"><label>处理人</label><span>{{ detailRecord.handler || '无' }}</span></div>
+              <div class="detail-row"><label>{{ t('dutyRecords.form.handler') }}</label><span>{{ detailRecord.handler || t('common.none') }}</span></div>
               <div class="detail-row"><label>处理结果</label><span class="status-badge" :style="{ backgroundColor: getStatusColor(detailRecord.status) }">{{ getStatusLabel(detailRecord.status) }}</span></div>
-              <div class="detail-row"><label>计划修复时间</label><span>{{ detailRecord.planned_fix_time || '无' }}</span></div>
-              <div class="detail-row full"><label>处理结果</label><span>{{ detailRecord.handle_result || '无' }}</span></div>
+              <div class="detail-row"><label>{{ t('dutyRecords.form.plannedFixTime') }}</label><span>{{ detailRecord.planned_fix_time || t('common.none') }}</span></div>
+              <div class="detail-row full"><label>{{ t('dutyRecords.columns.status') }}</label><span>{{ detailRecord.handle_result || t('common.none') }}</span></div>
               <div class="detail-row" v-if="detailRecord.is_overdue"><label>逾期</label><span class="overdue-text">是 - {{ detailRecord.overdue_reason }}</span></div>
             </div>
             <div class="detail-section">
               <h4>通话信息</h4>
-              <div class="detail-row"><label>首次拨打时间</label><span>{{ detailRecord.first_call_time || '无' }}</span></div>
-              <div class="detail-row"><label>接听时间</label><span>{{ detailRecord.answer_time || '无' }}</span></div>
+              <div class="detail-row"><label>{{ t('dutyRecords.form.firstCallTime') }}</label><span>{{ detailRecord.first_call_time || t('common.none') }}</span></div>
+              <div class="detail-row"><label>{{ t('dutyRecords.form.answerTime') }}</label><span>{{ detailRecord.answer_time || t('common.none') }}</span></div>
               <div class="detail-row"><label>拨打次数</label><span>{{ detailRecord.call_count }} 次</span></div>
-              <div class="detail-row"><label>是否接听</label><span>{{ detailRecord.is_answered ? '是' : '否' }}</span></div>
+              <div class="detail-row"><label>是否接听</label><span>{{ detailRecord.is_answered || '无' }}</span></div>
               <div class="detail-row"><label>响应时间</label><span>{{ detailRecord.response_time }} 分钟</span></div>
             </div>
             <div class="detail-section">
@@ -2316,7 +2492,7 @@ async function deleteProject(project) {
           </div>
           <div class="form-group">
             <label>项目</label>
-            <input type="text" :value="plannedFixForm.project_name || '无'" disabled>
+            <input type="text" :value="plannedFixForm.project_name || t('common.none')" disabled>
           </div>
           <div class="form-group">
             <label>计划修复时间</label>
@@ -2335,122 +2511,127 @@ async function deleteProject(project) {
     <div class="modal-overlay" :class="{ show: showModal }">
       <div v-if="showModal" class="modal duty-modal">
         <div class="modal-header">
-          <h3>{{ modalMode === 'add' ? '添加值班记录' : '编辑值班记录' }}</h3>
+          <h3>{{ modalMode === 'add' ? t('dutyRecords.form.addTitle') : t('dutyRecords.form.editTitle') }}</h3>
           <button class="close-btn" @click="showModal = false">&times;</button>
         </div>
         <div class="modal-body">
           <div class="form-sections">
             <!-- 基本信息 -->
             <div class="form-section">
-              <h4>基本信息</h4>
+              <h4>{{ t('dutyRecords.form.basicInfo') }}</h4>
               <div class="form-grid">
                 <div class="form-group">
-                  <label>值班时间 <span class="required">*</span></label>
+                  <label>{{ t('dutyRecords.form.dutyTime') }} <span class="required">*</span></label>
                   <input type="datetime-local" v-model="form.duty_date" required>
                 </div>
                 <div class="form-group">
-                  <label>值班人 <span class="required">*</span></label>
-                  <input type="text" v-model="form.duty_person" required placeholder="输入值班人姓名">
+                  <label>{{ t('dutyRecords.form.dutyPerson') }} <span class="required">*</span></label>
+                  <input type="text" v-model="form.duty_person" required :placeholder="t('dutyRecords.form.dutyPersonPlaceholder')">
                 </div>
                 <div class="form-group">
-                  <label>项目 <span class="required">*</span></label>
+                  <label>{{ t('dutyRecords.form.project') }} <span class="required">*</span></label>
                   <select v-model="form.project_id" required>
-                    <option value="">请选择项目</option>
+                    <option value="">{{ t('dutyRecords.form.selectProject') }}</option>
                     <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
                   </select>
                 </div>
                 <div class="form-group">
-                  <label>反馈类型</label>
+                  <label>{{ t('dutyRecords.form.feedbackType') }}</label>
                   <select v-model="form.feedback_type">
-                    <option v-for="t in feedbackTypeOptions" :key="t.value" :value="t.value">{{ t.label }}</option>
+                    <option v-for="tp in feedbackTypeOptions" :key="tp.value" :value="tp.value">{{ tp.label }}</option>
                   </select>
                 </div>
                 <div class="form-group">
-                  <label>事件类型</label>
+                  <label>{{ t('dutyRecords.form.eventType') }}</label>
                   <select v-model="form.event_type">
                     <option v-for="e in eventTypeOptions" :key="e.value" :value="e.value">{{ e.label }}</option>
                   </select>
                 </div>
               </div>
               <div class="form-group full-width">
-                <label>任务描述</label>
-                <textarea v-model="form.task_desc" rows="2" placeholder="描述值班任务内容..."></textarea>
+                <label>{{ t('dutyRecords.form.taskDesc') }}</label>
+                <textarea v-model="form.task_desc" rows="2" :placeholder="t('dutyRecords.form.taskDescPlaceholder')"></textarea>
               </div>
               <div class="form-group full-width">
-                <label>问题描述</label>
-                <textarea v-model="form.problem_desc" rows="3" placeholder="详细描述遇到的问题..."></textarea>
+                <label>{{ t('dutyRecords.form.problemDesc') }}</label>
+                <textarea v-model="form.problem_desc" rows="3" :placeholder="t('dutyRecords.form.problemDescPlaceholder')"></textarea>
               </div>
             </div>
 
             <!-- 处理信息 -->
             <div class="form-section">
-              <h4>处理信息</h4>
+              <h4>{{ t('dutyRecords.form.handleInfo') }}</h4>
               <div class="form-grid">
                 <div class="form-group">
-                  <label>处理人</label>
-                  <input type="text" v-model="form.handler" placeholder="处理该问题的人">
+                  <label>{{ t('dutyRecords.form.handler') }}</label>
+                  <input type="text" v-model="form.handler" :placeholder="t('dutyRecords.form.handlerPlaceholder')">
                 </div>
                 <div class="form-group">
-                  <label>处理结果 <span class="required">*</span></label>
+                  <label>{{ t('dutyRecords.form.status') }} <span class="required">*</span></label>
                   <select v-model="form.status" required>
-                    <option value="" disabled>请选择处理结果</option>
+                    <option value="" disabled>{{ t('dutyRecords.form.selectStatus') }}</option>
                     <option v-for="s in statusOptions" :key="s.value" :value="s.value">{{ s.label }}</option>
                   </select>
                 </div>
                 <div class="form-group">
-                  <label>计划修复时间</label>
+                  <label>{{ t('dutyRecords.form.plannedFixTime') }}</label>
                   <input type="datetime-local" v-model="form.planned_fix_time" :disabled="!canEditPlannedFixTimeInForm" :class="{ 'disabled-field': !canEditPlannedFixTimeInForm }">
-                  <span v-if="!canEditPlannedFixTimeInForm" class="helper-text warning">此字段已被编辑过，需要"编辑计划修复时间"权限才能修改</span>
-                  <span v-else-if="modalMode === 'edit' && !form.planned_fix_time_edited" class="helper-text info">首次编辑，可修改一次</span>
+                  <span v-if="!canEditPlannedFixTimeInForm" class="helper-text warning">{{ t('dutyRecords.form.plannedFixTimeEdited') }}</span>
+                  <span v-else-if="modalMode === 'edit' && !form.planned_fix_time_edited" class="helper-text info">{{ t('dutyRecords.form.plannedFixTimeFirstEdit') }}</span>
                 </div>
               </div>
               <div class="form-grid">
                 <div class="form-group checkbox">
-                  <label><input type="checkbox" v-model="form.is_overdue"><span>标记为逾期</span></label>
+                  <label><input type="checkbox" v-model="form.is_overdue"><span>{{ t('dutyRecords.form.markOverdue') }}</span></label>
                 </div>
                 <div class="form-group" v-if="form.is_overdue">
-                  <label>逾期原因</label>
-                  <input type="text" v-model="form.overdue_reason" placeholder="说明逾期原因">
+                  <label>{{ t('dutyRecords.form.overdueReason') }}</label>
+                  <input type="text" v-model="form.overdue_reason" :placeholder="t('dutyRecords.form.overdueReasonPlaceholder')">
                 </div>
               </div>
             </div>
 
             <!-- 通话信息 -->
             <div class="form-section">
-              <h4>通话信息</h4>
+              <h4>{{ t('dutyRecords.form.callInfo') }}</h4>
               <div class="form-grid">
                 <div class="form-group">
-                  <label>首次拨打时间</label>
+                  <label>{{ t('dutyRecords.form.firstCallTime') }}</label>
                   <input type="datetime-local" v-model="form.first_call_time">
                 </div>
                 <div class="form-group">
-                  <label>接听时间</label>
-                  <input type="datetime-local" v-model="form.answer_time">
+                  <label>{{ t('dutyRecords.form.answerTime') }}</label>
+                  <input type="datetime-local" v-model="form.answer_time" @change="onAnswerTimeChange">
                 </div>
                 <div class="form-group">
-                  <label>拨打次数</label>
+                  <label>{{ t('dutyRecords.form.callCount') }}</label>
                   <input type="number" v-model.number="form.call_count" min="0">
                 </div>
-                <div class="form-group checkbox">
-                  <label><input type="checkbox" v-model="form.is_answered"><span>已接听</span></label>
+                <div class="form-group">
+                  <label>{{ t('dutyRecords.form.answered') }}</label>
+                  <select v-model="form.is_answered" class="form-select">
+                    <option value="无">无</option>
+                    <option value="已接听">已接听</option>
+                    <option value="未接听">未接听</option>
+                  </select>
                 </div>
                 <div class="form-group">
-                  <label>响应时间(分钟)</label>
-                  <div class="response-time-display">{{ calculatedResponseTime }} 分钟</div>
-                  <span class="helper-text">自动计算：接听时间 - 首次拨打时间</span>
+                  <label>{{ t('dutyRecords.form.responseTime') }}</label>
+                  <div class="response-time-display">{{ calculatedResponseTime }} {{ t('dutyRecords.form.minutes') }}</div>
+                  <span class="helper-text">{{ t('dutyRecords.form.autoCalculated') }}</span>
                 </div>
               </div>
             </div>
 
             <!-- 升级与交接 -->
             <div class="form-section">
-              <h4>升级与交接</h4>
+              <h4>{{ t('dutyRecords.form.escalateAndHandover') }}</h4>
               <div class="form-grid">
                 <div class="form-group checkbox">
-                  <label><input type="checkbox" v-model="form.is_escalated"><span>升级问题</span></label>
+                  <label><input type="checkbox" v-model="form.is_escalated"><span>{{ t('dutyRecords.form.escalate') }}</span></label>
                 </div>
                 <div class="form-group escalate-options" v-if="form.is_escalated">
-                  <label>升级给</label>
+                  <label>{{ t('dutyRecords.form.escalateTo') }}</label>
                   <div class="checkbox-group">
                     <label v-for="e in escalateOptions" :key="e.value" class="checkbox-item">
                       <input type="checkbox" :value="e.value" v-model="form.escalate_to">
@@ -2459,22 +2640,22 @@ async function deleteProject(project) {
                   </div>
                 </div>
                 <div class="form-group checkbox">
-                  <label><input type="checkbox" v-model="form.has_handover"><span>工作交接</span></label>
+                  <label><input type="checkbox" v-model="form.has_handover"><span>{{ t('dutyRecords.form.hasHandover') }}</span></label>
                 </div>
                 <div class="form-group" v-if="form.has_handover">
-                  <label>交接人</label>
-                  <input type="text" v-model="form.handover_person" placeholder="交接给谁">
+                  <label>{{ t('dutyRecords.form.handoverPerson') }}</label>
+                  <input type="text" v-model="form.handover_person" :placeholder="t('dutyRecords.form.handoverPersonPlaceholder')">
                 </div>
               </div>
               <div class="form-group full-width" v-if="form.has_handover">
-                <label>交接内容</label>
-                <textarea v-model="form.handover_content" rows="2" placeholder="交接的具体内容..."></textarea>
+                <label>{{ t('dutyRecords.form.handoverContent') }}</label>
+                <textarea v-model="form.handover_content" rows="2" :placeholder="t('dutyRecords.form.handoverContentPlaceholder')"></textarea>
               </div>
             </div>
 
             <!-- 附件 -->
             <div class="form-section">
-              <h4>附件 ({{ form.attachments?.length || 0 }})</h4>
+              <h4>{{ t('dutyRecords.form.attachments') }} ({{ form.attachments?.length || 0 }})</h4>
               <div class="attachments-area">
                 <div class="attachment-list" v-if="form.attachments?.length">
                   <div v-for="(img, idx) in form.attachments" :key="idx" class="attachment-item">
@@ -2492,11 +2673,11 @@ async function deleteProject(project) {
                   <input type="file" multiple accept="image/*" @change="handleFileUpload" :disabled="uploading" id="file-upload" ref="fileInput">
                   <div class="upload-content">
                     <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-                    <p v-if="uploading" class="upload-text">上传中...</p>
+                    <p v-if="uploading" class="upload-text">{{ t('dutyRecords.form.uploadingFile') }}</p>
                     <p v-else class="upload-text">
-                      <span class="primary-action" @click="$refs.fileInput.click()">点击选择</span>、拖拽或 <kbd>Ctrl+V</kbd> 粘贴图片
+                      <span class="primary-action" @click="$refs.fileInput.click()">{{ t('dutyRecords.form.clickToSelect') }}</span>{{ t('dutyRecords.form.dragOrPaste') }}
                     </p>
-                    <p class="upload-hint">支持多张图片同时上传</p>
+                    <p class="upload-hint">{{ t('dutyRecords.form.multipleImages') }}</p>
                   </div>
                 </div>
               </div>
@@ -2504,8 +2685,8 @@ async function deleteProject(project) {
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-default" @click="showModal = false">取消</button>
-          <button class="btn btn-primary" @click="saveRecord">保存</button>
+          <button class="btn btn-default" @click="showModal = false">{{ t('common.cancel') }}</button>
+          <button class="btn btn-primary" @click="saveRecord">{{ t('common.save') }}</button>
         </div>
       </div>
     </div>
@@ -2657,6 +2838,53 @@ async function deleteProject(project) {
         <div class="batch-modal-footer">
           <button class="batch-btn-cancel" @click="showShareModal = false">关闭</button>
           <button v-if="!shareResult" class="batch-btn-confirm" @click="createShare">生成链接</button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- 粘贴记录弹窗 -->
+  <Teleport to="body">
+    <div v-if="showPasteModal" class="modal-overlay" @click.self="showPasteModal = false">
+      <div class="paste-modal">
+        <div class="modal-header">
+          <h3>粘贴记录</h3>
+          <button class="close-btn" @click="showPasteModal = false">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="paste-info">
+            <p class="paste-hint">将复制的记录粘贴多条，日期将更新为当前时间</p>
+            <div class="paste-preview" v-if="copiedRecord">
+              <div class="preview-item">
+                <span class="preview-label">值班人员：</span>
+                <span class="preview-value">{{ copiedRecord.duty_person || '-' }}</span>
+              </div>
+              <div class="preview-item">
+                <span class="preview-label">项目：</span>
+                <span class="preview-value">{{ projects.find(p => p.id == copiedRecord.project_id)?.name || '-' }}</span>
+              </div>
+              <div class="preview-item">
+                <span class="preview-label">问题描述：</span>
+                <span class="preview-value">{{ copiedRecord.problem_desc?.substring(0, 50) || '-' }}{{ (copiedRecord.problem_desc?.length > 50) ? '...' : '' }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="paste-count-group">
+            <label>粘贴数量：</label>
+            <div class="paste-count-input">
+              <button class="count-btn" @click="pasteCount = Math.max(1, pasteCount - 1)">-</button>
+              <input type="number" v-model.number="pasteCount" min="1" max="50" class="count-input">
+              <button class="count-btn" @click="pasteCount = Math.min(50, pasteCount + 1)">+</button>
+            </div>
+            <span class="count-hint">最多50条</span>
+          </div>
+          <div class="paste-quick-btns">
+            <button v-for="n in [1, 5, 10, 20]" :key="n" class="quick-btn" :class="{ active: pasteCount === n }" @click="pasteCount = n">{{ n }}</button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="showPasteModal = false">取消</button>
+          <button class="btn btn-primary" @click="pasteRecords">粘贴 {{ pasteCount }} 条</button>
         </div>
       </div>
     </div>
@@ -3047,8 +3275,9 @@ tr.selected:hover { background: #254b75 !important; }
 .call-info { display: flex; flex-direction: column; gap: 2px; font-size: 0.75rem; }
 .call-count { font-weight: 500; }
 .call-count.answered { color: #10b981; }
-.answered-badge { color: #10b981; font-size: 0.7rem; }
-.not-answered-badge { color: #ef4444; font-size: 0.7rem; }
+.answered-badge { color: #10b981; font-size: 0.7rem; font-weight: 500; }
+.not-answered-badge { color: #ef4444; font-size: 0.7rem; font-weight: 500; }
+.none-badge { color: var(--text-muted); font-size: 0.7rem; }
 
 .escalate-badge { background: #fef3c7; color: #b45309; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; }
 .handover-badge { background: #dbeafe; color: #1d4ed8; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; }
@@ -3358,5 +3587,154 @@ tr.selected:hover { background: #254b75 !important; }
 .batch-btn-confirm:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 粘贴弹窗样式 */
+.paste-modal {
+  background: var(--bg-card);
+  border-radius: 16px;
+  width: 420px;
+  max-width: 95vw;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-color);
+}
+.paste-modal .modal-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.paste-modal .modal-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.paste-modal .close-btn {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+}
+.paste-modal .close-btn:hover {
+  color: var(--text-primary);
+}
+.paste-modal .modal-body {
+  padding: 24px;
+}
+.paste-info {
+  margin-bottom: 20px;
+}
+.paste-hint {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+.paste-preview {
+  background: var(--bg-hover);
+  border-radius: 8px;
+  padding: 12px;
+}
+.preview-item {
+  display: flex;
+  gap: 8px;
+  font-size: 0.875rem;
+  margin-bottom: 6px;
+}
+.preview-item:last-child {
+  margin-bottom: 0;
+}
+.preview-label {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.preview-value {
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.paste-count-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.paste-count-group label {
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.paste-count-input {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.count-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.count-btn:hover {
+  background: var(--bg-input);
+}
+.count-input {
+  width: 60px;
+  height: 36px;
+  border: none;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  text-align: center;
+  font-size: 1rem;
+  font-weight: 600;
+  -moz-appearance: textfield;
+}
+.count-input::-webkit-outer-spin-button,
+.count-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.count-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.paste-quick-btns {
+  display: flex;
+  gap: 8px;
+}
+.quick-btn {
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.quick-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--text-muted);
+}
+.quick-btn.active {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: white;
+  border-color: transparent;
+}
+.paste-modal .modal-footer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
 }
 </style>

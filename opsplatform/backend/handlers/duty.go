@@ -482,7 +482,11 @@ func HandleCreateDutyRecord(w http.ResponseWriter, r *http.Request) {
 	if rec.AnswerTime != "" {
 		answerTime = formatDateTimeForDB(rec.AnswerTime)
 	}
-	if rec.PlannedFixTime != "" {
+	// 状态是"检测正常"或"已解决"时，计划修复时间应为空
+	if rec.Status == "normal" || rec.Status == "resolved" {
+		plannedFixTime = nil
+		rec.PlannedFixTime = ""
+	} else if rec.PlannedFixTime != "" {
 		plannedFixTime = formatDateTimeForDB(rec.PlannedFixTime)
 		plannedFixTimeEdited = 1
 	} else {
@@ -516,6 +520,19 @@ func HandleCreateDutyRecord(w http.ResponseWriter, r *http.Request) {
 
 	rec.CreatedAt = now
 	rec.CreatedBy = user
+
+	// 查询项目名称用于审计日志
+	var projectName string
+	database.DB.QueryRow("SELECT name FROM duty_projects WHERE id = ?", rec.ProjectID).Scan(&projectName)
+	if projectName == "" {
+		projectName = rec.ProjectID
+	}
+
+	// 记录审计日志 - 记录完整的新增数据
+	newDataJSON, _ := json.Marshal(rec)
+	AddAuditLogFromRequest(r, "CREATE_DUTY_RECORD", "duty:"+rec.ID, user, "", string(newDataJSON),
+		fmt.Sprintf("创建值班记录: 日期=%s, 项目=%s, 值班人=%s, 状态=%s", rec.DutyDate, projectName, rec.DutyPerson, rec.Status))
+
 	respondJSON(w, http.StatusCreated, rec)
 }
 
@@ -550,7 +567,11 @@ func HandleUpdateDutyRecord(w http.ResponseWriter, r *http.Request) {
 	if rec.AnswerTime != "" {
 		answerTime = formatDateTimeForDB(rec.AnswerTime)
 	}
-	if rec.PlannedFixTime != "" {
+	// 状态是"检测正常"或"已解决"时，计划修复时间应为空
+	if rec.Status == "normal" || rec.Status == "resolved" {
+		plannedFixTime = nil
+		rec.PlannedFixTime = ""
+	} else if rec.PlannedFixTime != "" {
 		plannedFixTime = formatDateTimeForDB(rec.PlannedFixTime)
 	}
 
@@ -620,6 +641,18 @@ func HandleUpdateDutyRecord(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "更新失败", http.StatusInternalServerError)
 		return
 	}
+
+	// 查询项目名称用于审计日志
+	var projectName string
+	database.DB.QueryRow("SELECT name FROM duty_projects WHERE id = ?", rec.ProjectID).Scan(&projectName)
+	if projectName == "" {
+		projectName = rec.ProjectID
+	}
+
+	// 记录审计日志 - 记录更新后的数据
+	newDataJSON, _ := json.Marshal(rec)
+	AddAuditLogFromRequest(r, "UPDATE_DUTY_RECORD", "duty:"+id, user, "", string(newDataJSON),
+		fmt.Sprintf("更新值班记录: 日期=%s, 项目=%s, 值班人=%s, 状态=%s", rec.DutyDate, projectName, rec.DutyPerson, rec.Status))
 
 	respondJSON(w, http.StatusOK, map[string]string{"message": "更新成功"})
 }
@@ -697,12 +730,29 @@ func HandleDeleteDutyRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	vars := mux.Vars(r)
 	id := vars["id"]
+	user := r.Header.Get("X-Operator")
+
+	// 先查询被删除的记录，用于审计日志
+	var dutyDate, dutyPerson, projectID, status string
+	database.DB.QueryRow("SELECT duty_date, duty_person, project_id, status FROM duty_records WHERE id = ?", id).Scan(&dutyDate, &dutyPerson, &projectID, &status)
+
+	// 查询项目名称
+	var projectName string
+	database.DB.QueryRow("SELECT name FROM duty_projects WHERE id = ?", projectID).Scan(&projectName)
+	if projectName == "" {
+		projectName = projectID
+	}
 
 	_, err := database.DB.Exec("DELETE FROM duty_records WHERE id = ?", id)
 	if err != nil {
 		sendError(w, "删除失败", http.StatusInternalServerError)
 		return
 	}
+
+	// 记录审计日志 - 记录被删除的数据摘要
+	oldData := fmt.Sprintf(`{"duty_date":"%s","duty_person":"%s","project":"%s","status":"%s"}`, dutyDate, dutyPerson, projectName, status)
+	AddAuditLogFromRequest(r, "DELETE_DUTY_RECORD", "duty:"+id, user, oldData, "",
+		fmt.Sprintf("删除值班记录: 日期=%s, 项目=%s, 值班人=%s", dutyDate, projectName, dutyPerson))
 
 	respondJSON(w, http.StatusOK, map[string]string{"message": "删除成功"})
 }

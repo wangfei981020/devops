@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>域名管理 - 预览</title>
+    <style>
+        :root {
+            --primary: #3a84ff;
+            --primary-hover: #2b6ee6;
+            --success: #2dcb56;
+            --warning: #ff9c01;
+            --danger: #ea3636;
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --card-bg: #161b22;
+            --border-color: #30363d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.5;
+            padding: 24px;
+        }
+
+        .page-container {
+            max-width: 100%;
+            margin: 0 auto;
+        }
+
+        /* 页面头部 */
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+            padding: 20px 24px;
+            background: var(--card-bg);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+
+        .page-title-section {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .page-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--primary) 0%, #699df4 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .page-icon svg {
+            width: 24px;
+            height: 24px;
+            color: #fff;
+        }
+
+        .page-title {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .page-subtitle {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        /* 按钮 */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 18px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .btn svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-hover);
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: #2d333b;
+            border-color: #444c56;
+        }
+
+        .btn-warning {
+            background: var(--warning);
+            color: #000;
+        }
+
+        /* 筛选栏 */
+        .filter-bar {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+            padding: 16px;
+            background: var(--card-bg);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            flex-wrap: wrap;
+        }
+
+        .search-box {
+            flex: 1;
+            min-width: 240px;
+            position: relative;
+        }
+
+        .search-box svg {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 18px;
+            height: 18px;
+            color: var(--text-muted);
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 10px 14px 10px 42px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .filter-select {
+            padding: 10px 36px 10px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-size: 14px;
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+        }
+
+        .filter-select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        /* 批量操作栏 */
+        .batch-bar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 12px 16px;
+            background: rgba(58, 132, 255, 0.1);
+            border: 1px solid rgba(58, 132, 255, 0.3);
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+
+        .batch-info {
+            font-size: 14px;
+            color: var(--primary);
+            font-weight: 500;
+        }
+
+        .batch-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 13px;
+        }
+
+        .btn-success { background: var(--success); color: #fff; }
+        .btn-danger { background: var(--danger); color: #fff; }
+
+        /* 表格 */
+        .table-container {
+            background: var(--card-bg);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+        }
+
+        .table-scroll {
+            overflow-x: auto;
+        }
+
+        .data-table {
+            width: 100%;
+            min-width: 2200px;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .data-table th {
+            padding: 12px 14px;
+            text-align: left;
+            font-weight: 500;
+            color: var(--text-secondary);
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+        }
+
+        .data-table td {
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .data-table tbody tr {
+            transition: background 0.15s;
+        }
+
+        .data-table tbody tr:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .data-table tbody tr.selected {
+            background: rgba(58, 132, 255, 0.08);
+        }
+
+        /* 固定操作列 */
+        .th-action-fixed,
+        .td-action-fixed {
+            position: sticky;
+            right: 0;
+            background: var(--bg-tertiary);
+            z-index: 10;
+            box-shadow: -4px 0 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .td-action-fixed {
+            background: var(--card-bg);
+        }
+
+        tr:hover .td-action-fixed {
+            background: var(--bg-tertiary);
+        }
+
+        /* 自定义复选框 */
+        .checkbox {
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+            border: 2px solid var(--border-color);
+            background: var(--bg-tertiary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+
+        .checkbox.checked {
+            background: var(--primary);
+            border-color: var(--primary);
+        }
+
+        .checkbox svg {
+            width: 12px;
+            height: 12px;
+            color: #fff;
+            opacity: 0;
+        }
+
+        .checkbox.checked svg {
+            opacity: 1;
+        }
+
+        /* 环境标签 */
+        .env-badge {
+            display: inline-flex;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .env-prod { background: rgba(234, 54, 54, 0.15); color: #f87171; }
+        .env-uat { background: rgba(255, 156, 1, 0.15); color: #fbbf24; }
+        .env-dev { background: rgba(45, 203, 86, 0.15); color: #4ade80; }
+
+        /* 状态标签 */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        .status-active { background: rgba(45, 203, 86, 0.15); color: var(--success); }
+        .status-active .status-dot { background: var(--success); }
+        .status-inactive { background: rgba(110, 118, 129, 0.15); color: var(--text-muted); }
+        .status-inactive .status-dot { background: var(--text-muted); }
+
+        /* 到期时间标签 */
+        .expiry-cell {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .expiry-date {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+        }
+
+        .expiry-date svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        .expiry-days {
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-block;
+            width: fit-content;
+        }
+
+        .expiry-safe { color: var(--success); }
+        .expiry-safe .expiry-days { background: rgba(45, 203, 86, 0.1); color: var(--success); }
+        .expiry-warning { color: var(--warning); }
+        .expiry-warning .expiry-days { background: rgba(255, 156, 1, 0.1); color: var(--warning); }
+        .expiry-danger { color: var(--danger); }
+        .expiry-danger .expiry-days { background: rgba(234, 54, 54, 0.1); color: var(--danger); }
+
+        /* 域名链接 */
+        .domain-link {
+            color: var(--primary);
+            text-decoration: none;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+        }
+
+        .domain-link:hover {
+            text-decoration: underline;
+        }
+
+        /* 文本溢出 */
+        .text-ellipsis {
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .text-ellipsis-lg {
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* CDN 厂商标签 */
+        .cdn-badge {
+            display: inline-flex;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+        }
+
+        /* IP 样式 */
+        .ip-text {
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* 时间戳 */
+        .timestamp {
+            font-size: 12px;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        /* 备注 */
+        .remark-text {
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+
+        /* 操作按钮 */
+        .action-btns {
+            display: flex;
+            gap: 6px;
+        }
+
+        .action-btn {
+            width: 30px;
+            height: 30px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .action-btn:hover {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #fff;
+        }
+
+        .action-btn.danger:hover {
+            background: var(--danger);
+            border-color: var(--danger);
+        }
+
+        .action-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        /* 分页 */
+        .pagination {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .pagination-info {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .pagination-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: nowrap;
+        }
+
+        .page-btn {
+            min-width: 36px;
+            height: 36px;
+            padding: 0 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-size: 14px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+
+        .page-btn:hover:not(:disabled) {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        .page-btn.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #fff;
+        }
+
+        .page-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* 响应式 */
+        @media (max-width: 768px) {
+            .page-header {
+                flex-direction: column;
+                gap: 16px;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page-container">
+        <!-- 页面头部 -->
+        <div class="page-header">
+            <div class="page-title-section">
+                <div class="page-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="page-title">域名管理</h1>
+                    <p class="page-subtitle">管理域名、回源配置、证书到期时间</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button class="btn btn-secondary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    刷新
+                </button>
+                <button class="btn btn-warning">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h5M20 20v-5h-5"/><path d="M20.5 9A9 9 0 0 0 5.6 5.6L4 4m16 16l-1.6-1.6A9 9 0 0 1 3.5 15"/></svg>
+                    批量刷新到期时间
+                </button>
+                <button class="btn btn-secondary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                    导出
+                </button>
+                <button class="btn btn-secondary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                    批量添加
+                </button>
+                <button class="btn btn-primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    添加域名
+                </button>
+            </div>
+        </div>
+
+        <!-- 筛选栏 -->
+        <div class="filter-bar">
+            <div class="search-box">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                <input type="text" class="search-input" placeholder="搜索域名、项目、模块...">
+            </div>
+            <select class="filter-select">
+                <option>所有项目</option>
+                <option>电商平台</option>
+                <option>金融系统</option>
+                <option>游戏平台</option>
+            </select>
+            <select class="filter-select">
+                <option>所有CDN</option>
+                <option>阿里云</option>
+                <option>腾讯云</option>
+                <option>Cloudflare</option>
+                <option>AWS CloudFront</option>
+            </select>
+            <select class="filter-select">
+                <option>所有环境</option>
+                <option>PROD</option>
+                <option>UAT</option>
+                <option>DEV</option>
+            </select>
+            <select class="filter-select">
+                <option>所有状态</option>
+                <option>启用</option>
+                <option>停用</option>
+            </select>
+            <select class="filter-select">
+                <option>所有域名</option>
+                <option>重复域名</option>
+                <option>唯一域名</option>
+            </select>
+            <select class="filter-select">
+                <option>到期时间</option>
+                <option>7天内到期</option>
+                <option>15天内到期</option>
+                <option>30天内到期</option>
+                <option>60天内到期</option>
+                <option>90天内到期</option>
+                <option>90天以上</option>
+            </select>
+        </div>
+
+        <!-- 批量操作栏 -->
+        <div class="batch-bar">
+            <span class="batch-info">已选择 2 项</span>
+            <div class="batch-actions">
+                <button class="btn btn-success btn-sm">批量启用</button>
+                <button class="btn btn-warning btn-sm">批量停用</button>
+                <button class="btn btn-danger btn-sm">批量删除</button>
+            </div>
+        </div>
+
+        <!-- 表格 -->
+        <div class="table-container">
+            <div class="table-scroll">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 50px;">
+                                <div class="checkbox">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                                </div>
+                            </th>
+                            <th style="min-width: 80px;">项目</th>
+                            <th style="min-width: 60px;">环境</th>
+                            <th style="min-width: 200px;">模块</th>
+                            <th style="min-width: 280px;">域名</th>
+                            <th style="min-width: 220px;">回源</th>
+                            <th style="min-width: 120px;">源站IP</th>
+                            <th style="min-width: 100px;">CDN厂商</th>
+                            <th style="min-width: 140px;">域名到期</th>
+                            <th style="min-width: 140px;">证书到期</th>
+                            <th style="min-width: 100px;">创建时间</th>
+                            <th style="min-width: 100px;">更新时间</th>
+                            <th style="min-width: 70px;">状态</th>
+                            <th style="min-width: 100px;">备注</th>
+                            <th class="th-action-fixed" style="min-width: 120px;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- 行1 - 选中 -->
+                        <tr class="selected">
+                            <td>
+                                <div class="checkbox checked">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                                </div>
+                            </td>
+                            <td>电商平台</td>
+                            <td><span class="env-badge env-prod">PROD</span></td>
+                            <td class="text-ellipsis" title="支付网关-核心服务">支付网关-核心服务</td>
+                            <td><a href="#" class="domain-link">pay.example.com</a></td>
+                            <td class="text-ellipsis" title="origin-pay.internal.com">origin-pay.internal.com</td>
+                            <td class="ip-text">192.168.1.100</td>
+                            <td><span class="cdn-badge">阿里云</span></td>
+                            <td>
+                                <div class="expiry-cell expiry-safe">
+                                    <span class="expiry-date">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                        2027-03-15
+                                    </span>
+                                    <span class="expiry-days">389天</span>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="expiry-cell expiry-warning">
+                                    <span class="expiry-date">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                        2026-03-25
+                                    </span>
+                                    <span class="expiry-days">33天</span>
+                                </div>
+                            </td>
+                            <td class="timestamp">2024-01-15</td>
+                            <td class="timestamp">2026-02-18</td>
+                            <td><span class="status-badge status-active"><span class="status-dot"></span>启用</span></td>
+                            <td class="remark-text" title="核心支付域名，优先处理">核心支付域名...</td>
+                            <td class="td-action-fixed">
+                                <div class="action-btns">
+                                    <button class="action-btn" title="刷新">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h5M20 20v-5h-5"/></svg>
+                                    </button>
+                                    <button class="action-btn" title="编辑">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                    </button>
+                                    <button class="action-btn danger" title="删除">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        <!-- 行2 - 选中 -->
+                        <tr class="selected">
+                            <td>
+                                <div class="checkbox checked">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                                </div>
+                            </td>
+                            <td>电商平台</td>
+                            <td><span class="env-badge env-prod">PROD</span></td>
+                            <td class="text-ellipsis" title="用户中心-会员系统">用户中心-会员系统</td>
+                            <td><a href="#" class="domain-link">user.example.com</a></td>
+                            <td class="text-ellipsis" title="origin-user.internal.com">origin-user.internal.com</td>
+                            <td class="ip-text">192.168.1.101</td>
+                            <td><span class="cdn-badge">腾讯云</span></td>
+                            <td>
+                                <div class="expiry-cell expiry-safe">
+                                    <span class="expiry-date">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                        2027-05-20
+                                    </span>
+                                    <span class="expiry-days">455天</span>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="expiry-cell expiry-safe">
+                                    <span class="expiry-date">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                        2026-08-10
+                                    </span>
+                                    <span class="expiry-days">170天</span>
+                                </div>
+                            </td>
+                            <td class="timestamp">2024-02-20</td>
+                            <td class="timestamp">2026-02-15</td>
+                            <td><span class="status-badge status-active"><span class="status-dot"></span>启用</span></td>
+                            <td class="remark-text" title="用户登录主域名">用户登录主域名</td>
+                            <td class="td-action-fixed">
+                                <div class="action-btns">
+                                    <button class="action-btn" title="刷新">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h5M20 20v-5h-5"/></svg>
+                                    </button>
+                                    <button class="action-btn" title="编辑">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                    </button>
+                                    <button class="action-btn danger" title="删除">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        <!-- 行3 - 危险到期 -->
+                        <tr>
+                            <td>
+                                <div class="checkbox">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                                </div>
+                            </td>
+                            <td>金融系统</td>
+                            <td><span class="env-badge env-uat">UAT</span></td>
+                            <td class="text-ellipsis" title="交易系统-UAT测试">交易系统-UAT测试</td>
+                            <td><a href="#" class="domain-link">trade-uat.finance.com</a></td>
+                            <td class="text-ellipsis" title="origin-trade.uat.com">origin-trade.uat.com</td>
+                            <td class="ip-text">10.0.1.50</td>
+                            <td><span class="cdn-badge">Cloudflare</span></td>
+                            <td>
+                                <div class="expiry-cell expiry-danger">
+                                    <span class="expiry-date">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                                        2026-02-25
+                                    </span>
+                                    <span class="expiry-days">5天</span>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="expiry-cell expiry-danger">
+                                    <span class="expiry-date">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                                        2026-02-28
+                                    </span>
+                                    <span class="expiry-days">8天</span>
+                                </div>
+                            </td>
+                            <td class="timestamp">2023-11-10</td>
+                            <td class="timestamp">2026-02-10</td>
+                            <td><span class="status-badge status-active"><span class="status-dot"></span>启用</span></td>
+                            <td class="remark-text" title="UAT测试环境">UAT测试环境</td>
+                            <td class="td-action-fixed">
+                                <div class="action-btns">
+                                    <button class="action-btn" title="刷新">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h5M20 20v-5h-5"/></svg>
+                                    </button>
+                                    <button class="action-btn" title="编辑">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                    </button>
+                                    <button class="action-btn danger" title="删除">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        <!-- 行4 - 停用 -->
+                        <tr>
+                            <td>
+                                <div class="checkbox">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                                </div>
+                            </td>
+                            <td>后台管理</td>
+                            <td><span class="env-badge env-dev">DEV</span></td>
+                            <td class="text-ellipsis" title="管理后台-开发版">管理后台-开发版</td>
+                            <td><a href="#" class="domain-link">admin-dev.internal.com</a></td>
+                            <td class="text-ellipsis" title="localhost:8080">localhost:8080</td>
+                            <td class="ip-text">127.0.0.1</td>
+                            <td><span class="cdn-badge">-</span></td>
+                            <td>
+                                <div class="expiry-cell expiry-safe">
+                                    <span class="expiry-date">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                        2028-01-01
+                                    </span>
+                                    <span class="expiry-days">680天</span>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="expiry-cell expiry-safe">
+                                    <span class="expiry-date">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                        2026-12-01
+                                    </span>
+                                    <span class="expiry-days">283天</span>
+                                </div>
+                            </td>
+                            <td class="timestamp">2024-06-01</td>
+                            <td class="timestamp">2026-01-20</td>
+                            <td><span class="status-badge status-inactive"><span class="status-dot"></span>停用</span></td>
+                            <td class="remark-text" title="开发环境已迁移">开发环境已迁移</td>
+                            <td class="td-action-fixed">
+                                <div class="action-btns">
+                                    <button class="action-btn" title="刷新">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h5M20 20v-5h-5"/></svg>
+                                    </button>
+                                    <button class="action-btn" title="编辑">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                    </button>
+                                    <button class="action-btn danger" title="删除">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="pagination">
+                <div class="pagination-info">共 1,286 条记录，第 1/129 页</div>
+                <div class="pagination-controls">
+                    <button class="page-btn" disabled>首页</button>
+                    <button class="page-btn" disabled>上一页</button>
+                    <button class="page-btn active">1</button>
+                    <button class="page-btn">2</button>
+                    <button class="page-btn">3</button>
+                    <button class="page-btn">4</button>
+                    <button class="page-btn">5</button>
+                    <button class="page-btn">...</button>
+                    <button class="page-btn">129</button>
+                    <button class="page-btn">下一页</button>
+                    <button class="page-btn">尾页</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,11 +1,38 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores'
+import { useAuthStore, useAppStore } from '@/stores'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const appStore = useAppStore()
+const t = (key, params) => appStore.t(key, params)
+
+function getGroupName(groupKey) {
+  return t('menu.groups.' + groupKey) || groupKey
+}
+
+function getItemName(itemKey) {
+  const keyMap = {
+    'table-maintenance': 'tableMaintenance',
+    'table-hierarchy-config': 'tableHierarchyConfig',
+    'alertrules': 'alertRules',
+    'alertnotify': 'alertNotify',
+    'dashboard': 'dashboardScreen',
+    'tickettemplate': 'ticketTemplate',
+    'selfhealing': 'selfHealing',
+    'rootcause': 'rootCause',
+    'smartalert': 'smartAlert',
+    'logquery': 'logQuery',
+    'loganalysis': 'logAnalysis',
+    'logalert': 'logAlert',
+    'sysparams': 'sysParams',
+    'sso-config': 'ssoConfig'
+  }
+  const key = keyMap[itemKey] || itemKey
+  return t('menu.items.' + key) || itemKey
+}
 
 const currentUser = computed(() => authStore.user || JSON.parse(localStorage.getItem('currentUser') || '{}'))
 
@@ -27,7 +54,7 @@ function hasMenu(menuCode) {
 function hasMenuGroup(groupCode) {
   if (isAdmin.value) return true
   const menuGroupMap = {
-    'system': ['welcome', 'users', 'roles', 'permissions', 'audit', 'api-manage', 'schedule', 'task-pool', 'incidents', 'duty'],
+    'system': ['welcome', 'users', 'roles', 'permissions', 'audit', 'api-manage', 'schedule', 'task-pool', 'incidents', 'duty', 'table_maintenance', 'table_hierarchy_config'],
     'resource': ['assets', 'domains', 'merchants', 'network', 'service-config', 'topology'],
     'monitor': ['metrics', 'alerts', 'alert-rules', 'alert-notify', 'dashboard-screen'],
     'k8s': ['clusters', 'workloads', 'configmaps', 'storage', 'terminal'],
@@ -81,7 +108,9 @@ const menuGroups = [
       { key: 'schedule', perm: 'schedule', name: '排班管理', path: '/schedule' },
       { key: 'taskpool', perm: 'task-pool', name: '任务池', path: '/task-pool' },
       { key: 'incidents', perm: 'incidents', name: '失误记录', path: '/incidents' },
-      { key: 'duty', perm: 'duty', name: '值班记录', path: '/duty-records' }
+      { key: 'duty', perm: 'duty', name: '值班记录', path: '/duty-records' },
+      { key: 'table-maintenance', perm: 'table_maintenance', name: '桌台维护记录', path: '/table-maintenance' },
+      { key: 'table-hierarchy-config', perm: 'table_hierarchy_config', name: '桌台层级配置', path: '/table-hierarchy-config' }
     ]
   },
   {
@@ -257,7 +286,7 @@ function navigateTo(path) {
           @click="toggleGroup(group.key)"
         >
           <span class="nav-group-icon">{{ group.icon }}</span>
-          <span class="nav-group-title">{{ group.name }}</span>
+          <span class="nav-group-title">{{ getGroupName(group.key) }}</span>
           <span class="nav-group-arrow" :class="{ expanded: expandedGroups[group.key] }">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M9 5l7 7-7 7"/>
@@ -273,7 +302,7 @@ function navigateTo(path) {
             :class="{ active: isActive(item.path) }"
             @click="navigateTo(item.path)"
           >
-            {{ item.name }}
+            {{ getItemName(item.key) }}
           </button>
         </div>
       </div>

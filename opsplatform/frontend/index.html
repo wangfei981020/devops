@@ -8,9 +8,9 @@
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%233b82f6'/%3E%3Cstop offset='50%25' style='stop-color:%238b5cf6'/%3E%3Cstop offset='100%25' style='stop-color:%2306b6d4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M6.5 18C4 18 2 16 2 13.5c0-2.1 1.5-3.9 3.5-4.4C6.3 6.5 8.9 4.5 12 4.5c2.5 0 4.7 1.4 5.9 3.4.4 0 .7-.1 1.1-.1 2.5 0 4.5 2 4.5 4.5s-2 4.5-4.5 4.5H6.5z' fill='url(%23g)'/%3E%3Ccircle cx='13' cy='12' r='2' fill='none' stroke='white' stroke-width='1.5'/%3E%3Cpath d='M13 7v1.5M13 15v1.5M8.5 12H10M16 12h1.5M9.4 8.9l1 1M15.6 15.1l1 1M9.4 15.1l1-1M15.6 8.9l1-1' stroke='white' stroke-width='1' stroke-linecap='round'/%3E%3C/svg%3E">
     <script src="/js/vue.global.prod.js?v=332"></script>
     <!-- 本地字体 -->
-    <link rel="stylesheet" href="/fonts/fonts.css?v=535">
+    <link rel="stylesheet" href="/fonts/fonts.css?v=612">
     <!-- 蓝鲸BI风格样式 -->
-    <link rel="stylesheet" href="/css/style-blueking.css?v=610">
+    <link rel="stylesheet" href="/css/style-blueking.css?v=617">
 </head>
 <body>
     <div id="app">
@@ -3313,6 +3313,7 @@
                             <button class="btn btn-default" @click="API.exportMerchants()">↓ 导出</button>
                             <button class="btn btn-primary" @click="openMerchantModal()">+ 添加商户</button>
                             <button class="btn btn-default" @click="openBatchMerchantModal()">⊞ 批量添加</button>
+                            <button class="btn btn-default" @click="openMerchantColumnSettings()">⚙ 列设置</button>
                         </div>
                     </div>
 
@@ -3337,89 +3338,221 @@
                         </button>
                     </div>
 
-                    <!-- 列表 -->
-                    <div class="data-table-container" style="overflow-x: auto; max-width: calc(100vw - 240px);">
-                        <table class="data-table" style="min-width: 2800px; white-space: nowrap;">
+                    <!-- 列表 - 动态渲染 -->
+                    <div class="data-table-container merchant-table-container" style="overflow-x: auto; max-width: calc(100vw - 240px);">
+                        <table class="data-table merchant-table" style="min-width: 3200px;">
                             <thead>
                                 <tr>
-                                    <th style="min-width:40px;"><input type="checkbox" @change="toggleAllMerchants()" :checked="selectedMerchantIds.length > 0 && selectedMerchantIds.length === getPagedMerchants().length"></th>
-                                    <th style="min-width:90px;">项目</th>
-                                    <th style="min-width:60px;">环境</th>
-                                    <th style="min-width:100px;">网站方</th>
-                                    <th style="min-width:160px;">对接邮箱</th>
-                                    <th style="min-width:140px;">网站方网址</th>
-                                    <th style="min-width:120px;">玩家地区</th>
-                                    <th style="min-width:80px;">在线玩家</th>
-                                    <th style="min-width:140px;">游戏种类</th>
-                                    <th style="min-width:100px;">盘口</th>
-                                    <th style="min-width:120px;">语言</th>
-                                    <th style="min-width:120px;">币种</th>
-                                    <th style="min-width:100px;">支持端口</th>
-                                    <th style="min-width:100px;">钱包类型</th>
-                                    <th style="min-width:160px;">三方回调域名</th>
-                                    <th style="min-width:140px;">三方白名单</th>
-                                    <th style="min-width:160px;">厅房域名</th>
-                                    <th style="min-width:160px;">站点系统域名</th>
-                                    <th style="min-width:120px;">站点账号</th>
-                                    <th style="min-width:120px;">AppKey</th>
-                                    <th style="min-width:160px;">游戏域名</th>
-                                    <th style="min-width:160px;">301域名</th>
-                                    <th class="th-action-fixed">操作</th>
+                                    <template v-for="col in getVisibleMerchantColumns()" :key="col.key">
+                                        <!-- 复选框列 -->
+                                        <th v-if="col.type === 'checkbox'" :style="{ width: col.width }">
+                                            <input type="checkbox" @change="toggleAllMerchants()" :checked="selectedMerchantIds.length > 0 && selectedMerchantIds.length === getPagedMerchants().length">
+                                        </th>
+                                        <!-- 操作列 -->
+                                        <th v-else-if="col.type === 'actions'" class="th-action-fixed" :style="{ width: col.width }">{{ col.title }}</th>
+                                        <!-- 普通列 -->
+                                        <th v-else :style="{ width: col.width }">{{ col.title }}</th>
+                                    </template>
                                 </tr>
                             </thead>
                             <tbody>
                                 <tr v-for="m in getPagedMerchants()" :key="m.id" :class="{ 'row-selected': selectedMerchantIds.includes(m.id) }">
-                                    <td><input type="checkbox" :checked="selectedMerchantIds.includes(m.id)" @change="toggleMerchantSelect(m.id)"></td>
-                                    <td><span :class="'tag-project tag-project-' + getProjectColor(m.project)">{{ m.project || '-' }}</span></td>
-                                    <td><span class="tag-env" :class="{ 'tag-env-prod': m.env==='prod', 'tag-env-uat': m.env==='uat', 'tag-env-dev': m.env==='dev' }">{{ m.env==='prod'?'PROD':m.env==='uat'?'UAT':'DEV' }}</span></td>
-                                    <td><span :class="'tag-website tag-website-' + getWebsiteColor(m.website_name)">{{ m.website_name }}</span></td>
-                                    <td style="font-size:12px;">{{ formatTags(m.contact_emails) }}</td>
-                                    <td style="font-size:12px;">{{ formatTags(m.website_urls) }}</td>
-                                    <td>{{ formatTags(m.player_regions) }}</td>
-                                    <td>{{ m.estimated_players || '-' }}</td>
-                                    <td>{{ formatTags(m.game_types) }}</td>
-                                    <td>{{ formatTags(m.handicaps) }}</td>
-                                    <td>{{ formatTags(m.languages) }}</td>
-                                    <td>{{ formatTags(m.currencies) }}</td>
-                                    <td>{{ formatTags(m.supported_ports) }}</td>
-                                    <td>{{ formatTags(m.wallet_types) }}</td>
-                                    <td style="font-size:12px;">{{ formatTags(m.callback_domains) }}</td>
-                                    <td style="font-size:12px; white-space:pre-line;">{{ m.whitelist_ips || '-' }}</td>
-                                    <td style="font-size:12px;">{{ formatTags(m.hall_domains) }}</td>
-                                    <td style="font-size:12px;">{{ formatTags(m.site_domains) }}</td>
-                                    <td style="font-size:12px;">{{ formatTags(m.site_accounts) }}</td>
-                                    <td style="font-size:12px;">{{ formatTags(m.app_keys) }}</td>
-                                    <td style="font-size:12px;">{{ formatTags(m.game_domains) }}</td>
-                                    <td style="font-size:12px;">{{ formatTags(m.redirect_domains) }}</td>
-                                    <td class="td-action-fixed">
-                                        <div class="action-icons">
-                                            <button class="action-icon-btn" @click="openMerchantModal(m)" title="编辑">
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                    <path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                                                </svg>
-                                            </button>
-                                            <div class="popconfirm-wrapper">
-                                                <button class="action-icon-btn danger" @click.stop="togglePopconfirm('merchant', m.id)" title="删除">
+                                    <template v-for="col in getVisibleMerchantColumns()" :key="col.key">
+                                        <!-- 复选框 -->
+                                        <td v-if="col.type === 'checkbox'" class="td-checkbox">
+                                            <input type="checkbox" :checked="selectedMerchantIds.includes(m.id)" @change="toggleMerchantSelect(m.id)">
+                                        </td>
+                                        <!-- 项目 -->
+                                        <td v-else-if="col.key === 'project'">
+                                            <span :class="'merchant-tag tag-project-' + getProjectColor(m.project)">{{ m.project || '-' }}</span>
+                                        </td>
+                                        <!-- 环境 -->
+                                        <td v-else-if="col.key === 'env'">
+                                            <span class="merchant-tag" :class="{ 'tag-env-prod': m.env==='prod', 'tag-env-uat': m.env==='uat', 'tag-env-dev': m.env==='dev' }">{{ m.env==='prod'?'PROD':m.env==='uat'?'UAT':'DEV' }}</span>
+                                        </td>
+                                        <!-- 网站方 -->
+                                        <td v-else-if="col.key === 'website_name'">
+                                            <span :class="'merchant-tag tag-website-' + getWebsiteColor(m.website_name)">{{ m.website_name }}</span>
+                                        </td>
+                                        <!-- 多行展示：邮箱 -->
+                                        <td v-else-if="col.key === 'contact_emails'" class="td-multi">
+                                            <div class="multi-list" v-if="m.contact_emails && m.contact_emails.length">
+                                                <a v-for="(email, idx) in getMultiItems(m.contact_emails, 5).items" :key="idx" class="multi-item multi-item-link" :href="'mailto:' + email">{{ email }}</a>
+                                                <span v-if="getMultiItems(m.contact_emails, 5).more > 0" class="multi-more">+{{ getMultiItems(m.contact_emails, 5).more }} 更多</span>
+                                            </div>
+                                            <span v-else class="text-muted">-</span>
+                                        </td>
+                                        <!-- 多行展示：网址 -->
+                                        <td v-else-if="col.key === 'website_urls'" class="td-multi">
+                                            <div class="multi-list" v-if="m.website_urls && m.website_urls.length">
+                                                <a v-for="(url, idx) in getMultiItems(m.website_urls, 5).items" :key="idx" class="multi-item multi-item-link" :href="'https://' + url" target="_blank">{{ url }}</a>
+                                                <span v-if="getMultiItems(m.website_urls, 5).more > 0" class="multi-more">+{{ getMultiItems(m.website_urls, 5).more }} 更多</span>
+                                            </div>
+                                            <span v-else class="text-muted">-</span>
+                                        </td>
+                                        <!-- 玩家地区 -->
+                                        <td v-else-if="col.key === 'player_regions'" class="td-tags">
+                                            <span v-for="(r, idx) in (m.player_regions || []).slice(0, 5)" :key="idx" class="mini-tag">{{ r }}</span>
+                                            <span v-if="(m.player_regions || []).length === 0" class="text-muted">-</span>
+                                        </td>
+                                        <!-- 在线玩家 -->
+                                        <td v-else-if="col.key === 'estimated_players'" class="td-multi">
+                                            <span v-if="m.estimated_players">{{ m.estimated_players }}</span>
+                                            <span v-else class="text-muted">-</span>
+                                        </td>
+                                        <!-- 游戏种类 -->
+                                        <td v-else-if="col.key === 'game_types'" class="td-tags">
+                                            <span v-for="(g, idx) in (m.game_types || []).slice(0, 4)" :key="idx" class="mini-tag">{{ g }}</span>
+                                            <span v-if="(m.game_types || []).length === 0" class="text-muted">-</span>
+                                        </td>
+                                        <!-- 盘口 -->
+                                        <td v-else-if="col.key === 'handicaps'" class="td-tags">
+                                            <span v-for="(h, idx) in (m.handicaps || [])" :key="idx" class="mini-tag">{{ h }}</span>
+                                            <span v-if="(m.handicaps || []).length === 0" class="text-muted">-</span>
+                                        </td>
+                                        <!-- 语言 -->
+                                        <td v-else-if="col.key === 'languages'" class="td-tags">
+                                            <span v-for="(l, idx) in (m.languages || [])" :key="idx" class="mini-tag">{{ l }}</span>
+                                            <span v-if="(m.languages || []).length === 0" class="text-muted">-</span>
+                                        </td>
+                                        <!-- 币种 -->
+                                        <td v-else-if="col.key === 'currencies'" class="td-tags">
+                                            <span v-for="(c, idx) in (m.currencies || [])" :key="idx" class="mini-tag">{{ c }}</span>
+                                            <span v-if="(m.currencies || []).length === 0" class="text-muted">-</span>
+                                        </td>
+                                        <!-- 支持端口 -->
+                                        <td v-else-if="col.key === 'supported_ports'" class="td-tags">
+                                            <span v-for="(p, idx) in (m.supported_ports || [])" :key="idx" class="mini-tag">{{ p }}</span>
+                                            <span v-if="(m.supported_ports || []).length === 0" class="text-muted">-</span>
+                                        </td>
+                                        <!-- 钱包类型 -->
+                                        <td v-else-if="col.key === 'wallet_types'" class="td-tags">
+                                            <span v-for="(w, idx) in (m.wallet_types || [])" :key="idx" class="mini-tag">{{ w }}</span>
+                                            <span v-if="(m.wallet_types || []).length === 0" class="text-muted">-</span>
+                                        </td>
+                                        <!-- 回调域名 -->
+                                        <td v-else-if="col.key === 'callback_domains'" class="td-multi">
+                                            <div class="multi-list" v-if="m.callback_domains && m.callback_domains.length">
+                                                <span v-for="(d, idx) in getMultiItems(m.callback_domains, 5).items" :key="idx" class="multi-item multi-item-domain">{{ d }}</span>
+                                                <span v-if="getMultiItems(m.callback_domains, 5).more > 0" class="multi-more">+{{ getMultiItems(m.callback_domains, 5).more }} 更多</span>
+                                            </div>
+                                            <span v-else class="text-muted">-</span>
+                                        </td>
+                                        <!-- 白名单 -->
+                                        <td v-else-if="col.key === 'whitelist_ips'" class="td-multi">
+                                            <div class="multi-list" v-if="m.whitelist_ips">
+                                                <span v-for="(ip, idx) in m.whitelist_ips.split('\n').filter(Boolean).slice(0, 5)" :key="idx" class="multi-item multi-item-mono">{{ ip }}</span>
+                                                <span v-if="m.whitelist_ips.split('\n').filter(Boolean).length > 5" class="multi-more">+{{ m.whitelist_ips.split('\n').filter(Boolean).length - 5 }} 更多</span>
+                                            </div>
+                                            <span v-else class="text-muted">-</span>
+                                        </td>
+                                        <!-- 厅房域名 -->
+                                        <td v-else-if="col.key === 'hall_domains'" class="td-multi">
+                                            <div class="multi-list" v-if="m.hall_domains && m.hall_domains.length">
+                                                <span v-for="(d, idx) in getMultiItems(m.hall_domains, 5).items" :key="idx" class="multi-item multi-item-domain">{{ d }}</span>
+                                                <span v-if="getMultiItems(m.hall_domains, 5).more > 0" class="multi-more">+{{ getMultiItems(m.hall_domains, 5).more }} 更多</span>
+                                            </div>
+                                            <span v-else class="text-muted">-</span>
+                                        </td>
+                                        <!-- 站点域名 -->
+                                        <td v-else-if="col.key === 'site_domains'" class="td-multi">
+                                            <div class="multi-list" v-if="m.site_domains && m.site_domains.length">
+                                                <span v-for="(d, idx) in getMultiItems(m.site_domains, 5).items" :key="idx" class="multi-item multi-item-domain">{{ d }}</span>
+                                                <span v-if="getMultiItems(m.site_domains, 5).more > 0" class="multi-more">+{{ getMultiItems(m.site_domains, 5).more }} 更多</span>
+                                            </div>
+                                            <span v-else class="text-muted">-</span>
+                                        </td>
+                                        <!-- 站点账号 -->
+                                        <td v-else-if="col.key === 'site_accounts'" class="td-multi">
+                                            <div class="multi-list" v-if="m.site_accounts && m.site_accounts.length">
+                                                <span v-for="(a, idx) in getMultiItems(m.site_accounts, 5).items" :key="idx" class="multi-item multi-item-account">{{ a }}</span>
+                                                <span v-if="getMultiItems(m.site_accounts, 5).more > 0" class="multi-more">+{{ getMultiItems(m.site_accounts, 5).more }} 更多</span>
+                                            </div>
+                                            <span v-else class="text-muted">-</span>
+                                        </td>
+                                        <!-- AppKey -->
+                                        <td v-else-if="col.key === 'app_keys'" class="td-multi">
+                                            <div class="multi-list" v-if="m.app_keys && m.app_keys.length">
+                                                <span v-for="(k, idx) in getMultiItems(m.app_keys, 3).items" :key="idx" class="multi-item multi-item-key">{{ k }}</span>
+                                                <span v-if="getMultiItems(m.app_keys, 3).more > 0" class="multi-more">+{{ getMultiItems(m.app_keys, 3).more }} 更多</span>
+                                            </div>
+                                            <span v-else class="text-muted">-</span>
+                                        </td>
+                                        <!-- 游戏域名 -->
+                                        <td v-else-if="col.key === 'game_domains'" class="td-multi">
+                                            <div class="multi-list" v-if="m.game_domains && m.game_domains.length">
+                                                <span v-for="(d, idx) in getMultiItems(m.game_domains, 5).items" :key="idx" class="multi-item multi-item-domain">{{ d }}</span>
+                                                <span v-if="getMultiItems(m.game_domains, 5).more > 0" class="multi-more">+{{ getMultiItems(m.game_domains, 5).more }} 更多</span>
+                                            </div>
+                                            <span v-else class="text-muted">-</span>
+                                        </td>
+                                        <!-- 301域名 -->
+                                        <td v-else-if="col.key === 'redirect_domains'" class="td-multi">
+                                            <div class="multi-list" v-if="m.redirect_domains && m.redirect_domains.length">
+                                                <span v-for="(d, idx) in getMultiItems(m.redirect_domains, 5).items" :key="idx" class="multi-item multi-item-domain">{{ d }}</span>
+                                                <span v-if="getMultiItems(m.redirect_domains, 5).more > 0" class="multi-more">+{{ getMultiItems(m.redirect_domains, 5).more }} 更多</span>
+                                            </div>
+                                            <span v-else class="text-muted">-</span>
+                                        </td>
+                                        <!-- 状态 -->
+                                        <td v-else-if="col.key === 'status'">
+                                            <span class="merchant-tag" :class="{ 'tag-env-prod': m.status === 'active', 'tag-env-dev': m.status !== 'active' }">
+                                                {{ m.status === 'active' ? '运营中' : '停用' }}
+                                            </span>
+                                        </td>
+                                        <!-- 操作 -->
+                                        <td v-else-if="col.type === 'actions'" class="td-action-fixed">
+                                            <div class="action-icons">
+                                                <button class="action-icon-btn" @click="openMerchantModal(m)" title="编辑">
                                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                        <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                                        <path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                                                     </svg>
                                                 </button>
-                                                <div class="popconfirm" :class="{ show: activePopconfirm === 'merchant-' + m.id }">
-                                                    <div class="popconfirm-content">
-                                                        <span class="popconfirm-icon">⚠</span>
-                                                        <span class="popconfirm-message">确定要删除吗?</span>
-                                                    </div>
-                                                    <div class="popconfirm-buttons">
-                                                        <button class="btn btn-cancel" @click.stop="activePopconfirm = null">取消</button>
-                                                        <button class="btn btn-confirm" @click.stop="deleteMerchant(m)">确定</button>
+                                                <div class="popconfirm-wrapper">
+                                                    <button class="action-icon-btn danger" @click.stop="togglePopconfirm('merchant', m.id)" title="删除">
+                                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                            <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                                        </svg>
+                                                    </button>
+                                                    <div class="popconfirm" :class="{ show: activePopconfirm === 'merchant-' + m.id }">
+                                                        <div class="popconfirm-content">
+                                                            <span class="popconfirm-icon">⚠</span>
+                                                            <span class="popconfirm-message">确定要删除吗?</span>
+                                                        </div>
+                                                        <div class="popconfirm-buttons">
+                                                            <button class="btn btn-cancel" @click.stop="activePopconfirm = null">取消</button>
+                                                            <button class="btn btn-confirm" @click.stop="deleteMerchant(m)">确定</button>
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </div>
-                                        </div>
-                                    </td>
+                                        </td>
+                                        <!-- 自定义列 -->
+                                        <td v-else-if="col.isCustom" class="td-multi">
+                                            <template v-if="m.custom_fields && typeof m.custom_fields === 'object'">
+                                                <template v-if="col.type === 'multi' && Array.isArray(getCustomFieldValue(m, col.key))">
+                                                    <div class="multi-list">
+                                                        <span v-for="(item, idx) in getMultiItems(getCustomFieldValue(m, col.key), 5).items" :key="idx" class="multi-item">{{ item }}</span>
+                                                        <span v-if="getMultiItems(getCustomFieldValue(m, col.key), 5).more > 0" class="multi-more">+{{ getMultiItems(getCustomFieldValue(m, col.key), 5).more }} 更多</span>
+                                                    </div>
+                                                </template>
+                                                <template v-else-if="col.type === 'tags' && Array.isArray(getCustomFieldValue(m, col.key))">
+                                                    <span v-for="(tag, idx) in getCustomFieldValue(m, col.key)" :key="idx" class="mini-tag">{{ tag }}</span>
+                                                </template>
+                                                <template v-else>
+                                                    {{ getCustomFieldValue(m, col.key) || '-' }}
+                                                </template>
+                                            </template>
+                                            <span v-else class="text-muted">-</span>
+                                        </td>
+                                        <!-- 默认列 -->
+                                        <td v-else>
+                                            {{ m[col.key] || '-' }}
+                                        </td>
+                                    </template>
                                 </tr>
                                 <tr v-if="getFilteredMerchants().length === 0">
-                                    <td colspan="23" class="empty-row">暂无商户数据</td>
+                                    <td :colspan="getVisibleMerchantColumns().length" class="empty-row">暂无商户数据</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -3443,6 +3576,103 @@
                             <span class="page-info">第 <strong>{{ merchantCurrentPage }}</strong> / {{ getMerchantTotalPages() }} 页</span>
                             <button class="btn btn-small btn-default" @click="merchantCurrentPage = Math.min(getMerchantTotalPages(), merchantCurrentPage+1)" :disabled="merchantCurrentPage>=getMerchantTotalPages()">下一页</button>
                             <button class="btn btn-small btn-default" @click="merchantCurrentPage = getMerchantTotalPages()" :disabled="merchantCurrentPage>=getMerchantTotalPages()" title="末页">»</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 商户列设置弹窗 -->
+                <div class="modal-overlay" :class="{ show: showMerchantColumnSettings }" @click.self="showMerchantColumnSettings = false">
+                    <div class="modal" style="width: 650px; max-height: 85vh;">
+                        <div class="modal-header">
+                            <h3>列设置</h3>
+                            <button class="modal-close" @click="showMerchantColumnSettings = false">&times;</button>
+                        </div>
+                        <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                                <p style="color:#666; font-size:13px; margin:0;">拖拽调整顺序，点击复选框显示/隐藏列</p>
+                                <button class="btn btn-primary btn-sm" @click="openAddColumnModal()">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                    新增列
+                                </button>
+                            </div>
+                            <div class="column-settings-list">
+                                <template v-for="(col, index) in merchantColumnConfig" :key="col.key">
+                                    <div v-if="col.type !== 'checkbox' && col.type !== 'actions'"
+                                         class="column-setting-item"
+                                         draggable="true"
+                                         @dragstart="handleMerchantColumnDragStart(index)"
+                                         @dragover.prevent
+                                         @drop="handleMerchantColumnDrop(index)"
+                                         :style="{ opacity: merchantColumnDragIndex === index ? 0.5 : 1 }">
+                                        <div class="column-drag-handle">⋮⋮</div>
+                                        <label class="column-visible-check">
+                                            <input type="checkbox" :checked="col.visible !== false" @change="toggleMerchantColumnVisible(index)">
+                                        </label>
+                                        <div class="column-key-label" :class="{ 'is-custom': col.isCustom }">
+                                            {{ col.key }}
+                                            <span v-if="col.isCustom" class="custom-badge">自定义</span>
+                                        </div>
+                                        <input type="text" class="form-input column-title-input"
+                                               :value="col.title"
+                                               @input="updateMerchantColumnTitle(index, $event.target.value)"
+                                               placeholder="列标题">
+                                        <input type="text" class="form-input column-width-input"
+                                               :value="col.width"
+                                               @input="updateMerchantColumnWidth(index, $event.target.value)"
+                                               placeholder="宽度"
+                                               style="width:70px;">
+                                        <button v-if="col.isCustom" class="btn-icon-danger" @click="deleteMerchantColumn(index)" title="删除此列">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                        </button>
+                                        <button v-else class="btn-icon-muted" @click="deleteMerchantColumn(index)" title="隐藏此列">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+                                        </button>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-default" @click="resetMerchantColumnConfig()">恢复默认</button>
+                            <button class="btn btn-default" @click="showMerchantColumnSettings = false">取消</button>
+                            <button class="btn btn-primary" @click="saveMerchantColumnConfig()">保存设置</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 新增自定义列弹窗 -->
+                <div class="modal-overlay" :class="{ show: showAddColumnModal }" @click.self="closeAddColumnModal()">
+                    <div class="modal" style="width: 420px;">
+                        <div class="modal-header">
+                            <h3>新增自定义列</h3>
+                            <button class="modal-close" @click="closeAddColumnModal()">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="form-group">
+                                <label>列标识 <span class="required">*</span></label>
+                                <input type="text" class="form-input" v-model="newColumnForm.key" placeholder="英文标识，如：custom_note">
+                                <small style="color:#888;">唯一标识符，建议使用英文和下划线</small>
+                            </div>
+                            <div class="form-group">
+                                <label>列名称 <span class="required">*</span></label>
+                                <input type="text" class="form-input" v-model="newColumnForm.title" placeholder="显示的列标题">
+                            </div>
+                            <div class="form-group">
+                                <label>列宽度</label>
+                                <input type="text" class="form-input" v-model="newColumnForm.width" placeholder="如：120px">
+                            </div>
+                            <div class="form-group">
+                                <label>列类型</label>
+                                <select class="form-input" v-model="newColumnForm.type">
+                                    <option value="text">文本</option>
+                                    <option value="multi">多行文本</option>
+                                    <option value="tags">标签</option>
+                                    <option value="tag">单标签</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-default" @click="closeAddColumnModal()">取消</button>
+                            <button class="btn btn-primary" @click="addCustomColumn()">添加</button>
                         </div>
                     </div>
                 </div>
@@ -8258,6 +8488,6 @@ N,年假</pre>
     <script src="/js/i18n/zh-CN.js?v=352"></script>
     <script src="/js/i18n/en-US.js?v=352"></script>
     <script src="/js/api.js?v=535"></script>
-    <script src="/js/app.js?v=610"></script>
+    <script src="/js/app.js?v=617"></script>
 </body>
 </html>

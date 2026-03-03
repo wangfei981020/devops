@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MFA 绑定 - 预览</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0d1b2a 0%, #1b263b 50%, #0d1b2a 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .login-container {
+            display: flex;
+            width: 900px;
+            max-width: 95vw;
+            min-height: 520px;
+            background: #0d1117;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5);
+        }
+
+        /* 左侧品牌区 */
+        .brand-section {
+            flex: 1;
+            background: linear-gradient(180deg, #1a365d 0%, #0d47a1 100%);
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .brand-section::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.03) 0%, transparent 60%);
+        }
+
+        .brand-logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 24px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .logo-icon {
+            width: 44px;
+            height: 44px;
+            background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .logo-icon svg {
+            width: 24px;
+            height: 24px;
+            color: #1a365d;
+        }
+
+        .logo-text {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .brand-tagline {
+            font-size: 1.1rem;
+            color: rgba(255, 255, 255, 0.9);
+            margin-bottom: 8px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .brand-desc {
+            font-size: 0.875rem;
+            color: rgba(255, 255, 255, 0.6);
+            line-height: 1.6;
+            position: relative;
+            z-index: 1;
+        }
+
+        .feature-list {
+            margin-top: 32px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 0;
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 0.875rem;
+        }
+
+        .feature-icon {
+            width: 32px;
+            height: 32px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .feature-icon svg {
+            width: 16px;
+            height: 16px;
+            color: #60a5fa;
+        }
+
+        /* 右侧 MFA 绑定区 */
+        .mfa-section {
+            flex: 1;
+            padding: 32px 40px;
+            display: flex;
+            flex-direction: column;
+            background: #161b22;
+        }
+
+        .mfa-header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .mfa-icon {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(147, 51, 234, 0.2));
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 12px;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .mfa-icon svg {
+            width: 24px;
+            height: 24px;
+            color: #60a5fa;
+        }
+
+        .mfa-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #f0f6fc;
+            margin-bottom: 4px;
+        }
+
+        .mfa-subtitle {
+            font-size: 0.8125rem;
+            color: #8b949e;
+        }
+
+        /* 二维码区域 - 水平布局 */
+        .qr-row {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .qr-container {
+            background: #fff;
+            border-radius: 12px;
+            padding: 12px;
+            flex-shrink: 0;
+        }
+
+        .qr-code {
+            width: 120px;
+            height: 120px;
+            display: block;
+        }
+
+        .qr-info {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .qr-instruction {
+            font-size: 0.8125rem;
+            color: #8b949e;
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+
+        .secret-key {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .secret-key code {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.6875rem;
+            color: #58a6ff;
+            letter-spacing: 0.5px;
+            word-break: break-all;
+        }
+
+        .copy-btn {
+            background: transparent;
+            border: none;
+            color: #8b949e;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+
+        .copy-btn:hover {
+            background: #30363d;
+            color: #f0f6fc;
+        }
+
+        .copy-btn svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        /* 验证码输入 */
+        .code-section {
+            text-align: center;
+        }
+
+        .code-label {
+            font-size: 0.8125rem;
+            color: #8b949e;
+            margin-bottom: 12px;
+        }
+
+        .code-inputs {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .code-input {
+            width: 44px;
+            height: 52px;
+            background: #0d1117;
+            border: 2px solid #30363d;
+            border-radius: 10px;
+            text-align: center;
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #f0f6fc;
+            transition: all 0.2s;
+        }
+
+        .code-input:focus {
+            outline: none;
+            border-color: #58a6ff;
+            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+        }
+
+        .code-input::placeholder {
+            color: #484f58;
+        }
+
+        /* 按钮 */
+        .btn-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: auto;
+        }
+
+        .btn-primary {
+            width: 100%;
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #238636 0%, #2ea043 100%);
+            border: none;
+            border-radius: 10px;
+            color: #fff;
+            font-size: 0.9375rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #2ea043 0%, #3fb950 100%);
+            transform: translateY(-1px);
+        }
+
+        .btn-primary svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        .btn-secondary {
+            width: 100%;
+            padding: 10px 20px;
+            background: transparent;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            color: #8b949e;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-secondary:hover {
+            background: #21262d;
+            border-color: #8b949e;
+            color: #f0f6fc;
+        }
+
+        /* 错误提示 */
+        .error-message {
+            display: none;
+            background: rgba(248, 81, 73, 0.1);
+            border: 1px solid rgba(248, 81, 73, 0.4);
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-bottom: 12px;
+            color: #f85149;
+            font-size: 0.8125rem;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .error-message.show {
+            display: flex;
+        }
+
+        .error-message svg {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+        }
+
+        /* 响应式 */
+        @media (max-width: 768px) {
+            .login-container {
+                flex-direction: column;
+                min-height: auto;
+            }
+
+            .brand-section {
+                padding: 24px;
+            }
+
+            .feature-list {
+                display: none;
+            }
+
+            .mfa-section {
+                padding: 24px;
+            }
+
+            .qr-row {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .qr-info {
+                text-align: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <!-- 左侧品牌区 -->
+        <div class="brand-section">
+            <div class="brand-logo">
+                <div class="logo-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                </div>
+                <span class="logo-text">运维平台</span>
+            </div>
+            <div class="brand-tagline">一站式智能运维解决方案</div>
+            <div class="brand-desc">让运维更简单、更高效、更智能</div>
+
+            <div class="feature-list">
+                <div class="feature-item">
+                    <div class="feature-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                        </svg>
+                    </div>
+                    <span>双因素认证保护账户安全</span>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                        </svg>
+                    </div>
+                    <span>支持主流 Authenticator 应用</span>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    </div>
+                    <span>30秒动态验证码更安全</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧 MFA 绑定区 -->
+        <div class="mfa-section">
+            <div class="mfa-header">
+                <div class="mfa-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                </div>
+                <h2 class="mfa-title">绑定双因素认证</h2>
+                <p class="mfa-subtitle">扫描二维码完成安全设置</p>
+            </div>
+
+            <!-- 二维码和密钥 - 水平布局 -->
+            <div class="qr-row">
+                <div class="qr-container">
+                    <img class="qr-code" src="https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=otpauth://totp/OPS:test@example.com?secret=JBSWY3DPEHPK3PXP&issuer=OPS" alt="QR Code">
+                </div>
+                <div class="qr-info">
+                    <div class="qr-instruction">
+                        使用 Google Authenticator 或其他 TOTP 应用扫描左侧二维码，或手动输入下方密钥：
+                    </div>
+                    <div class="secret-key">
+                        <code>JBSWY3DPEHPK3PXP</code>
+                        <button class="copy-btn" title="复制密钥">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 验证码输入 -->
+            <div class="code-section">
+                <div class="code-label">输入 APP 显示的 6 位验证码</div>
+                <div class="code-inputs">
+                    <input type="text" class="code-input" maxlength="1" inputmode="numeric">
+                    <input type="text" class="code-input" maxlength="1" inputmode="numeric">
+                    <input type="text" class="code-input" maxlength="1" inputmode="numeric">
+                    <input type="text" class="code-input" maxlength="1" inputmode="numeric">
+                    <input type="text" class="code-input" maxlength="1" inputmode="numeric">
+                    <input type="text" class="code-input" maxlength="1" inputmode="numeric">
+                </div>
+
+                <div class="error-message" id="errorMessage">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <span>验证码错误，请重试</span>
+                </div>
+            </div>
+
+            <!-- 按钮组 -->
+            <div class="btn-group">
+                <button class="btn-primary">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    绑定并登录
+                </button>
+                <button class="btn-secondary">← 返回登录</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 验证码输入框交互
+        const inputs = document.querySelectorAll('.code-input');
+        inputs.forEach((input, index) => {
+            input.addEventListener('input', (e) => {
+                const value = e.target.value;
+                if (value && index < inputs.length - 1) {
+                    inputs[index + 1].focus();
+                }
+            });
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Backspace' && !e.target.value && index > 0) {
+                    inputs[index - 1].focus();
+                }
+            });
+            input.addEventListener('paste', (e) => {
+                e.preventDefault();
+                const paste = (e.clipboardData || window.clipboardData).getData('text');
+                const digits = paste.replace(/\D/g, '').slice(0, 6);
+                digits.split('').forEach((digit, i) => {
+                    if (inputs[i]) inputs[i].value = digit;
+                });
+                if (digits.length > 0) {
+                    inputs[Math.min(digits.length, 5)].focus();
+                }
+            });
+        });
+
+        // 复制密钥
+        document.querySelector('.copy-btn').addEventListener('click', () => {
+            navigator.clipboard.writeText('JBSWY3DPEHPK3PXP');
+            alert('密钥已复制');
+        });
+    </script>
+</body>
+</html>

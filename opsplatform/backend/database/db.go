@@ -143,6 +143,75 @@ func createTables() error {
 	DB.Exec(`CREATE INDEX idx_users_oidc_sub ON users(oidc_sub)`)
 	// 兼容旧数据库：添加 auth_source 字段（认证来源: local, sso）
 	DB.Exec(`ALTER TABLE users ADD COLUMN auth_source VARCHAR(20) DEFAULT 'local'`)
+	// 自动修复：把有 oidc_sub 的用户标记为 SSO 账号
+	DB.Exec(`UPDATE users SET auth_source = 'sso' WHERE oidc_sub IS NOT NULL AND oidc_sub != '' AND (auth_source IS NULL OR auth_source = 'local')`)
+
+	// 创建自定义表格表（多维表格功能）
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS custom_tables (
+			id VARCHAR(64) PRIMARY KEY,
+			name VARCHAR(128) NOT NULL,
+			description TEXT,
+			icon VARCHAR(32) DEFAULT 'table',
+			column_config JSON,
+			created_by VARCHAR(64),
+			created_at DATETIME DEFAULT NOW(),
+			updated_at DATETIME DEFAULT NOW()
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		log.Printf("创建 custom_tables 表失败: %v", err)
+	}
+
+	// 添加 column_config 字段（如果不存在）- MySQL 不支持 IF NOT EXISTS，需要检查
+	var columnExists int
+	DB.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_tables' AND COLUMN_NAME = 'column_config'`).Scan(&columnExists)
+	if columnExists == 0 {
+		_, err = DB.Exec(`ALTER TABLE custom_tables ADD COLUMN column_config JSON`)
+		if err != nil {
+			log.Printf("添加 column_config 字段失败: %v", err)
+		} else {
+			log.Printf("成功添加 column_config 字段")
+		}
+	}
+
+	// 创建自定义列表
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS custom_columns (
+			id VARCHAR(64) PRIMARY KEY,
+			table_id VARCHAR(64) NOT NULL,
+			name VARCHAR(128) NOT NULL,
+			field_key VARCHAR(64) NOT NULL,
+			field_type VARCHAR(32) NOT NULL,
+			options JSON,
+			required BOOLEAN DEFAULT FALSE,
+			default_value TEXT,
+			sort_order INT DEFAULT 0,
+			created_at DATETIME DEFAULT NOW(),
+			INDEX idx_table_id (table_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		log.Printf("创建 custom_columns 表失败: %v", err)
+	}
+
+	// 创建自定义行数据表
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS custom_rows (
+			id VARCHAR(64) PRIMARY KEY,
+			table_id VARCHAR(64) NOT NULL,
+			data JSON,
+			attachments JSON,
+			created_by VARCHAR(64),
+			created_at DATETIME DEFAULT NOW(),
+			updated_at DATETIME DEFAULT NOW(),
+			INDEX idx_table_id (table_id),
+			INDEX idx_created_at (created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		log.Printf("创建 custom_rows 表失败: %v", err)
+	}
 
 	// 创建审计日志表
 	_, err = DB.Exec(`
@@ -346,6 +415,25 @@ func createTables() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			UNIQUE KEY uk_code (code)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	// 创建联系人电话表
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS schedule_contacts (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			name VARCHAR(64) NOT NULL,
+			phone VARCHAR(32) NOT NULL,
+			department VARCHAR(64) DEFAULT '',
+			position VARCHAR(64) DEFAULT '',
+			remark TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			INDEX idx_name (name),
+			INDEX idx_phone (phone)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`)
 	if err != nil {
@@ -935,6 +1023,8 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_incidents", "menu:incidents", "事件记录", "/system/incidents", "perm_menu_system", "", 90},
 		{"perm_menu_duty", "menu:duty", "值班记录", "/system/duty", "perm_menu_system", "", 100},
 		{"perm_menu_duty_projects", "menu:duty_projects", "值班项目", "/system/duty-projects", "perm_menu_system", "", 110},
+		{"perm_menu_table_maintenance", "menu:table_maintenance", "桌台维护记录", "/system/table-maintenance", "perm_menu_system", "", 120},
+		{"perm_menu_table_hierarchy_config", "menu:table_hierarchy_config", "桌台层级配置", "/system/table-hierarchy-config", "perm_menu_system", "", 130},
 
 		// 资源管理
 		{"perm_menu_resource", "menu:resource", "资源管理", "/resource", "", "resource", 2},
@@ -1085,6 +1175,18 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_duty_project_create", "duty_project:create", "[值班项目] 添加项目", "允许添加值班项目"},
 		{"perm_btn_duty_project_update", "duty_project:update", "[值班项目] 编辑项目", "允许编辑值班项目"},
 		{"perm_btn_duty_project_delete", "duty_project:delete", "[值班项目] 删除项目", "允许删除值班项目"},
+
+		// 桌台维护记录
+		{"perm_btn_table_maint_create", "table_maintenance:create", "[桌台维护] 添加记录", "允许添加桌台维护记录"},
+		{"perm_btn_table_maint_update", "table_maintenance:update", "[桌台维护] 编辑记录", "允许编辑桌台维护记录"},
+		{"perm_btn_table_maint_delete", "table_maintenance:delete", "[桌台维护] 删除记录", "允许删除桌台维护记录"},
+		{"perm_btn_table_maint_export", "table_maintenance:export", "[桌台维护] 导出记录", "允许导出桌台维护记录"},
+		{"perm_btn_table_maint_upload", "table_maintenance:upload", "[桌台维护] 上传附件", "允许上传附件"},
+
+		// 桌台层级配置
+		{"perm_btn_table_hierarchy_create", "table_hierarchy:create", "[桌台配置] 添加配置", "允许添加桌台层级配置"},
+		{"perm_btn_table_hierarchy_update", "table_hierarchy:update", "[桌台配置] 编辑配置", "允许编辑桌台层级配置"},
+		{"perm_btn_table_hierarchy_delete", "table_hierarchy:delete", "[桌台配置] 删除配置", "允许删除桌台层级配置"},
 	}
 
 	for _, perm := range buttonPermissions {

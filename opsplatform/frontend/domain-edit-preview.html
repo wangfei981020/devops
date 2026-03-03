@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>编辑域名 - 设计预览</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --border-color: #30363d;
+            --text-primary: #f0f6fc;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --accent-blue: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-orange: #d29922;
+            --accent-red: #f85149;
+            --input-bg: #0d1117;
+        }
+
+        [data-theme="light"] {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f6f8fa;
+            --bg-tertiary: #f0f2f5;
+            --border-color: #d0d7de;
+            --text-primary: #1f2328;
+            --text-secondary: #656d76;
+            --text-muted: #8c959f;
+            --accent-blue: #0969da;
+            --accent-green: #1a7f37;
+            --accent-orange: #9a6700;
+            --accent-red: #cf222e;
+            --input-bg: #ffffff;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            gap: 8px;
+        }
+
+        .theme-btn {
+            padding: 8px 16px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .theme-btn:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .theme-btn.active {
+            background: var(--accent-blue);
+            color: white;
+            border-color: var(--accent-blue);
+        }
+
+        /* Modal Container */
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            width: 100%;
+            max-width: 720px;
+            max-height: 90vh;
+            overflow: hidden;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            animation: modalIn 0.2s ease-out;
+        }
+
+        @keyframes modalIn {
+            from {
+                opacity: 0;
+                transform: scale(0.95) translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        /* Modal Header */
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .modal-title-icon {
+            width: 24px;
+            height: 24px;
+            color: var(--accent-blue);
+        }
+
+        .modal-close {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .modal-close:hover {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+        }
+
+        /* Modal Body */
+        .modal-body {
+            padding: 24px;
+            overflow-y: auto;
+            max-height: calc(90vh - 140px);
+        }
+
+        /* Form Grid */
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+
+        .form-grid .full-width {
+            grid-column: 1 / -1;
+        }
+
+        /* Form Group */
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .form-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .form-label .required {
+            color: var(--accent-red);
+        }
+
+        .form-input,
+        .form-select,
+        .form-textarea {
+            width: 100%;
+            padding: 10px 12px;
+            font-size: 14px;
+            color: var(--text-primary);
+            background: var(--input-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            transition: all 0.15s;
+            outline: none;
+        }
+
+        .form-input:focus,
+        .form-select:focus,
+        .form-textarea:focus {
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+        }
+
+        .form-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .form-select {
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%238b949e'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 16px;
+            padding-right: 40px;
+        }
+
+        .form-textarea {
+            min-height: 80px;
+            resize: vertical;
+        }
+
+        /* Input with Button */
+        .input-with-btn {
+            display: flex;
+            gap: 8px;
+        }
+
+        .input-with-btn .form-input {
+            flex: 1;
+        }
+
+        .input-btn {
+            padding: 10px 14px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--accent-blue);
+            background: transparent;
+            border: 1px solid var(--accent-blue);
+            border-radius: 8px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .input-btn:hover {
+            background: var(--accent-blue);
+            color: white;
+        }
+
+        .input-btn svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        /* Section Divider */
+        .section-divider {
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 8px 0;
+        }
+
+        .section-divider::before,
+        .section-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border-color);
+        }
+
+        .section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Environment Tags */
+        .env-tags {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .env-tag {
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 500;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .env-tag:hover {
+            border-color: var(--accent-blue);
+            color: var(--accent-blue);
+        }
+
+        .env-tag.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+
+        .env-tag.dev { --tag-color: #3fb950; }
+        .env-tag.uat { --tag-color: #d29922; }
+        .env-tag.prod { --tag-color: #f85149; }
+
+        .env-tag.active.dev { background: var(--tag-color); border-color: var(--tag-color); }
+        .env-tag.active.uat { background: var(--tag-color); border-color: var(--tag-color); }
+        .env-tag.active.prod { background: var(--tag-color); border-color: var(--tag-color); }
+
+        /* Status Tags */
+        .status-tags {
+            display: flex;
+            gap: 8px;
+        }
+
+        .status-tag {
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 500;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .status-tag:hover {
+            border-color: var(--accent-green);
+            color: var(--accent-green);
+        }
+
+        .status-tag.active {
+            background: var(--accent-green);
+            border-color: var(--accent-green);
+            color: white;
+        }
+
+        .status-tag.disabled.active {
+            background: var(--text-muted);
+            border-color: var(--text-muted);
+        }
+
+        /* Modal Footer */
+        .modal-footer {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 12px;
+            padding: 16px 24px;
+            border-top: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+        }
+
+        .btn {
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-secondary {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .btn-primary {
+            background: var(--accent-blue);
+            border: 1px solid var(--accent-blue);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            filter: brightness(1.1);
+        }
+
+        .btn svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        /* Date Input */
+        .date-input {
+            position: relative;
+        }
+
+        .date-input input {
+            width: 100%;
+        }
+
+        input[type="date"] {
+            color-scheme: dark;
+        }
+
+        [data-theme="light"] input[type="date"] {
+            color-scheme: light;
+        }
+
+        /* CDN Provider Select */
+        .cdn-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+
+        .cdn-option {
+            padding: 10px;
+            text-align: center;
+            font-size: 12px;
+            font-weight: 500;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .cdn-option:hover {
+            border-color: var(--accent-blue);
+            color: var(--accent-blue);
+        }
+
+        .cdn-option.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+    </style>
+</head>
+<body data-theme="dark">
+    <!-- Theme Toggle -->
+    <div class="theme-toggle">
+        <button class="theme-btn active" onclick="setTheme('dark')">Dark</button>
+        <button class="theme-btn" onclick="setTheme('light')">Light</button>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-backdrop">
+        <div class="modal">
+            <!-- Header -->
+            <div class="modal-header">
+                <div class="modal-title">
+                    <svg class="modal-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M2 12h20"/>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                    </svg>
+                    编辑域名
+                </div>
+                <button class="modal-close">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Body -->
+            <div class="modal-body">
+                <div class="form-grid">
+                    <!-- 基本信息 -->
+                    <div class="form-group">
+                        <label class="form-label">项目 <span class="required">*</span></label>
+                        <input type="text" class="form-input" value="test" placeholder="请输入项目名称">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">模块</label>
+                        <input type="text" class="form-input" value="test1" placeholder="请输入模块名称">
+                    </div>
+
+                    <div class="form-group full-width">
+                        <label class="form-label">域名 <span class="required">*</span></label>
+                        <div class="input-with-btn">
+                            <input type="text" class="form-input" value="test.com" placeholder="请输入域名">
+                            <button class="input-btn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                                </svg>
+                                自动检测
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 分割线 -->
+                    <div class="section-divider">
+                        <span class="section-title">网络配置</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">回源地址</label>
+                        <input type="text" class="form-input" value="cname.test.com" placeholder="CNAME 或 IP 地址">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">源站 IP</label>
+                        <input type="text" class="form-input" value="1.1.1.1" placeholder="源站服务器 IP">
+                    </div>
+
+                    <div class="form-group full-width">
+                        <label class="form-label">CDN 厂商</label>
+                        <div class="cdn-grid">
+                            <div class="cdn-option">无</div>
+                            <div class="cdn-option active">阿里云</div>
+                            <div class="cdn-option">腾讯云</div>
+                            <div class="cdn-option">Cloudflare</div>
+                            <div class="cdn-option">AWS</div>
+                            <div class="cdn-option">华为云</div>
+                            <div class="cdn-option">百度云</div>
+                            <div class="cdn-option">其他</div>
+                        </div>
+                    </div>
+
+                    <!-- 分割线 -->
+                    <div class="section-divider">
+                        <span class="section-title">有效期</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">域名到期时间</label>
+                        <div class="date-input">
+                            <input type="date" class="form-input" value="2025-12-31">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">证书到期时间</label>
+                        <div class="date-input">
+                            <input type="date" class="form-input" value="2025-06-30">
+                        </div>
+                    </div>
+
+                    <!-- 分割线 -->
+                    <div class="section-divider">
+                        <span class="section-title">环境与状态</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">环境</label>
+                        <div class="env-tags">
+                            <div class="env-tag dev active">DEV</div>
+                            <div class="env-tag uat">UAT</div>
+                            <div class="env-tag prod">PROD</div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">状态</label>
+                        <div class="status-tags">
+                            <div class="status-tag active">启用</div>
+                            <div class="status-tag disabled">停用</div>
+                        </div>
+                    </div>
+
+                    <div class="form-group full-width">
+                        <label class="form-label">备注</label>
+                        <textarea class="form-textarea" placeholder="输入备注信息..."></textarea>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="modal-footer">
+                <button class="btn btn-secondary">
+                    取消
+                </button>
+                <button class="btn btn-primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M5 13l4 4L19 7"/>
+                    </svg>
+                    保存
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function setTheme(theme) {
+            document.body.setAttribute('data-theme', theme);
+            document.querySelectorAll('.theme-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.textContent.toLowerCase() === theme) {
+                    btn.classList.add('active');
+                }
+            });
+        }
+
+        // CDN options click
+        document.querySelectorAll('.cdn-option').forEach(option => {
+            option.addEventListener('click', () => {
+                document.querySelectorAll('.cdn-option').forEach(o => o.classList.remove('active'));
+                option.classList.add('active');
+            });
+        });
+
+        // Env tags click
+        document.querySelectorAll('.env-tag').forEach(tag => {
+            tag.addEventListener('click', () => {
+                document.querySelectorAll('.env-tag').forEach(t => t.classList.remove('active'));
+                tag.classList.add('active');
+            });
+        });
+
+        // Status tags click
+        document.querySelectorAll('.status-tag').forEach(tag => {
+            tag.addEventListener('click', () => {
+                document.querySelectorAll('.status-tag').forEach(t => t.classList.remove('active'));
+                tag.classList.add('active');
+            });
+        });
+    </script>
+</body>
+</html>

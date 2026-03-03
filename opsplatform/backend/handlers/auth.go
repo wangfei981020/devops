@@ -473,6 +473,18 @@ func UserHasPermission(username, role, permissionCode string) (bool, error) {
 	return count > 0, nil
 }
 
+// HasAnyPermission 检查请求用户是否拥有任一指定权限
+func HasAnyPermission(r *http.Request, permissionCodes ...string) bool {
+	_, username, role := GetUserFromContext(r)
+	for _, code := range permissionCodes {
+		ok, err := UserHasPermission(username, role, code)
+		if err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
 // HandleLogout 处理登出请求
 func HandleLogout(w http.ResponseWriter, r *http.Request) {
 	token := GetTokenFromRequest(r)

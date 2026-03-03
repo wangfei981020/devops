@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>搜索筛选器 - 风格5: 极简紧凑</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #ffffff; 
+      padding: 40px; 
+      min-height: 100vh;
+    }
+    h2 { margin-bottom: 20px; color: #1e293b; font-weight: 600; }
+    
+    /* 风格5: 极简紧凑 - 无边框、底线风格 */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      padding: 16px 0;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    
+    .search-input {
+      flex: 1;
+      max-width: 320px;
+      position: relative;
+    }
+    
+    .search-input svg {
+      position: absolute;
+      left: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 18px;
+      height: 18px;
+      color: #94a3b8;
+    }
+    
+    .search-input input {
+      width: 100%;
+      padding: 8px 8px 8px 28px;
+      border: none;
+      border-bottom: 2px solid #e2e8f0;
+      font-size: 14px;
+      background: transparent;
+      transition: all 0.2s;
+    }
+    
+    .search-input input:focus {
+      outline: none;
+      border-bottom-color: #3b82f6;
+    }
+    
+    .search-input input::placeholder {
+      color: #94a3b8;
+    }
+    
+    .filter-divider {
+      width: 1px;
+      height: 24px;
+      background: #e2e8f0;
+    }
+    
+    .filter-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .filter-item label {
+      font-size: 12px;
+      color: #94a3b8;
+      white-space: nowrap;
+    }
+    
+    .filter-item select {
+      padding: 6px 24px 6px 8px;
+      border: none;
+      border-bottom: 1px solid transparent;
+      font-size: 14px;
+      color: #1e293b;
+      background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E") no-repeat right center;
+      background-size: 14px;
+      appearance: none;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .filter-item select:hover {
+      border-bottom-color: #3b82f6;
+    }
+    
+    .filter-item select:focus {
+      outline: none;
+      border-bottom-color: #3b82f6;
+    }
+    
+    .date-range {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .date-range input {
+      padding: 6px 8px;
+      border: none;
+      border-bottom: 1px solid transparent;
+      font-size: 14px;
+      color: #1e293b;
+      background: transparent;
+      width: 130px;
+      transition: all 0.2s;
+    }
+    
+    .date-range input:hover,
+    .date-range input:focus {
+      outline: none;
+      border-bottom-color: #3b82f6;
+    }
+    
+    .date-range span {
+      color: #94a3b8;
+      font-size: 12px;
+    }
+    
+    .filter-actions {
+      display: flex;
+      gap: 16px;
+      margin-left: auto;
+    }
+    
+    .btn-search {
+      padding: 8px 20px;
+      background: #1e293b;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .btn-search:hover {
+      background: #0f172a;
+    }
+    
+    .btn-reset {
+      padding: 8px;
+      background: none;
+      border: none;
+      color: #64748b;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .btn-reset:hover {
+      color: #3b82f6;
+    }
+  </style>
+</head>
+<body>
+  <h2>风格5: 极简紧凑 (Minimal)</h2>
+  
+  <div class="filter-bar">
+    <div class="search-input">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+      <input type="text" placeholder="搜索桌号/局号/操作人...">
+    </div>
+    
+    <div class="filter-divider"></div>
+    
+    <div class="filter-item">
+      <label>状态</label>
+      <select>
+        <option>全部</option>
+        <option>正常</option>
+        <option>异常</option>
+      </select>
+    </div>
+    
+    <div class="filter-item">
+      <label>项目</label>
+      <select>
+        <option>全部</option>
+        <option>项目A</option>
+        <option>项目B</option>
+      </select>
+    </div>
+    
+    <div class="filter-item">
+      <label>时长</label>
+      <select>
+        <option>全部</option>
+        <option>≤2分钟</option>
+        <option>≤5分钟</option>
+      </select>
+    </div>
+    
+    <div class="filter-item">
+      <label>操作人</label>
+      <select>
+        <option>全部</option>
+        <option>张三</option>
+        <option>李四</option>
+      </select>
+    </div>
+    
+    <div class="filter-divider"></div>
+    
+    <div class="filter-item">
+      <label>日期</label>
+      <div class="date-range">
+        <input type="date">
+        <span>-</span>
+        <input type="date">
+      </div>
+    </div>
+    
+    <div class="filter-actions">
+      <button class="btn-search">搜索</button>
+      <button class="btn-reset">重置</button>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>搜索筛选器 - 风格6: Bento网格</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f7; 
+      padding: 40px; 
+      min-height: 100vh;
+    }
+    h2 { margin-bottom: 20px; color: #1d1d1f; font-weight: 600; }
+    
+    /* 风格6: Bento网格 - Apple风格模块化 */
+    .filter-bento {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      grid-template-rows: auto auto;
+      gap: 12px;
+    }
+    
+    .bento-item {
+      background: #fff;
+      border-radius: 16px;
+      padding: 16px 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+      transition: all 0.3s ease;
+    }
+    
+    .bento-item:hover {
+      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+    }
+    
+    .bento-label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: #86868b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    
+    .bento-search {
+      grid-column: span 2;
+    }
+    
+    .search-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .search-input-bento {
+      flex: 1;
+      position: relative;
+    }
+    
+    .search-input-bento svg {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 18px;
+      height: 18px;
+      color: #86868b;
+    }
+    
+    .search-input-bento input {
+      width: 100%;
+      padding: 12px 12px 12px 42px;
+      border: none;
+      border-radius: 10px;
+      font-size: 15px;
+      background: #f5f5f7;
+      transition: all 0.2s;
+    }
+    
+    .search-input-bento input:focus {
+      outline: none;
+      background: #e8e8ed;
+    }
+    
+    .bento-item select {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      background: #f5f5f7;
+      color: #1d1d1f;
+      appearance: none;
+      cursor: pointer;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2386868b'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      background-size: 16px;
+      transition: all 0.2s;
+    }
+    
+    .bento-item select:focus {
+      outline: none;
+      background-color: #e8e8ed;
+    }
+    
+    .bento-date {
+      grid-column: span 2;
+    }
+    
+    .date-inputs-bento {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .date-inputs-bento input {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      background: #f5f5f7;
+      transition: all 0.2s;
+    }
+    
+    .date-inputs-bento input:focus {
+      outline: none;
+      background: #e8e8ed;
+    }
+    
+    .date-inputs-bento span {
+      color: #86868b;
+      font-size: 14px;
+    }
+    
+    .bento-actions {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .btn-bento {
+      flex: 1;
+      padding: 12px 16px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .btn-bento-primary {
+      background: #0071e3;
+      color: #fff;
+    }
+    
+    .btn-bento-primary:hover {
+      background: #0077ed;
+    }
+    
+    .btn-bento-secondary {
+      background: #f5f5f7;
+      color: #1d1d1f;
+    }
+    
+    .btn-bento-secondary:hover {
+      background: #e8e8ed;
+    }
+  </style>
+</head>
+<body>
+  <h2>风格6: Bento网格 (Apple Style)</h2>
+  
+  <div class="filter-bento">
+    <div class="bento-item bento-search">
+      <span class="bento-label">搜索</span>
+      <div class="search-wrapper">
+        <div class="search-input-bento">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          </svg>
+          <input type="text" placeholder="搜索桌号/局号/操作人/原因...">
+        </div>
+      </div>
+    </div>
+    
+    <div class="bento-item">
+      <span class="bento-label">质检状态</span>
+      <select>
+        <option>全部状态</option>
+        <option>正常</option>
+        <option>异常</option>
+      </select>
+    </div>
+    
+    <div class="bento-item">
+      <span class="bento-label">项目</span>
+      <select>
+        <option>全部项目</option>
+        <option>项目A</option>
+        <option>项目B</option>
+      </select>
+    </div>
+    
+    <div class="bento-item">
+      <span class="bento-label">维护时长</span>
+      <select>
+        <option>全部时长</option>
+        <option>两分钟内</option>
+        <option>五分钟内</option>
+      </select>
+    </div>
+    
+    <div class="bento-item">
+      <span class="bento-label">操作人</span>
+      <select>
+        <option>全部操作人</option>
+        <option>张三</option>
+        <option>李四</option>
+      </select>
+    </div>
+    
+    <div class="bento-item bento-date">
+      <span class="bento-label">日期范围</span>
+      <div class="date-inputs-bento">
+        <input type="date">
+        <span>至</span>
+        <input type="date">
+      </div>
+    </div>
+    
+    <div class="bento-item">
+      <span class="bento-label">操作</span>
+      <div class="bento-actions">
+        <button class="btn-bento btn-bento-primary">搜索</button>
+        <button class="btn-bento btn-bento-secondary">重置</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

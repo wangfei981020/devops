@@ -488,6 +488,44 @@ const vueApp = createApp({
             batchMerchantText: '',
             batchMerchantLoading: false,
             batchMerchantResult: null,
+            
+            // 商户列配置
+            showMerchantColumnSettings: false,
+            merchantColumnConfig: [],
+            merchantDefaultColumnConfig: [
+                { key: 'checkbox', title: '', width: '40px', type: 'checkbox', visible: true },
+                { key: 'project', title: '项目', width: '90px', type: 'text', visible: true },
+                { key: 'env', title: '环境', width: '60px', type: 'tag', visible: true },
+                { key: 'website_name', title: '网站方', width: '100px', type: 'text', visible: true },
+                { key: 'contact_emails', title: '对接邮箱', width: '180px', type: 'multi', visible: true },
+                { key: 'website_urls', title: '网站网址', width: '200px', type: 'multi', visible: true },
+                { key: 'player_regions', title: '玩家地区', width: '120px', type: 'tags', visible: true },
+                { key: 'estimated_players', title: '在线玩家', width: '100px', type: 'text', visible: true },
+                { key: 'game_types', title: '游戏种类', width: '140px', type: 'tags', visible: true },
+                { key: 'handicaps', title: '盘口', width: '100px', type: 'tags', visible: true },
+                { key: 'languages', title: '语言', width: '120px', type: 'tags', visible: true },
+                { key: 'currencies', title: '币种', width: '120px', type: 'tags', visible: true },
+                { key: 'supported_ports', title: '支持端口', width: '100px', type: 'tags', visible: true },
+                { key: 'wallet_types', title: '钱包类型', width: '100px', type: 'tags', visible: true },
+                { key: 'callback_domains', title: '回调域名', width: '220px', type: 'multi', visible: true },
+                { key: 'whitelist_ips', title: '白名单', width: '180px', type: 'text', visible: true },
+                { key: 'hall_domains', title: '厅房域名', width: '220px', type: 'multi', visible: true },
+                { key: 'site_domains', title: '站点域名', width: '220px', type: 'multi', visible: true },
+                { key: 'site_accounts', title: '站点账号', width: '160px', type: 'multi', visible: true },
+                { key: 'app_keys', title: 'AppKey', width: '180px', type: 'multi', visible: true },
+                { key: 'game_domains', title: '游戏域名', width: '220px', type: 'multi', visible: true },
+                { key: 'redirect_domains', title: '301域名', width: '220px', type: 'multi', visible: true },
+                { key: 'status', title: '状态', width: '80px', type: 'tag', visible: true },
+                { key: 'actions', title: '操作', width: '100px', type: 'actions', visible: true, fixed: true }
+            ],
+            merchantColumnDragIndex: null,
+            showAddColumnModal: false,
+            newColumnForm: {
+                key: '',
+                title: '',
+                width: '120px',
+                type: 'text'
+            },
 
             // 服务配置管理
             serviceConfigs: [],
@@ -6326,6 +6364,10 @@ const vueApp = createApp({
         // ========== 商户管理 ==========
         async loadMerchants() {
             try {
+                // 首次加载时，同时加载列配置
+                if (this.merchantColumnConfig.length === 0) {
+                    await this.loadMerchantColumnConfig();
+                }
                 const res = await API.getMerchants(this.merchantProjectFilter, this.merchantEnvFilter);
                 if (res.ok) {
                     let list = await res.json() || [];
@@ -6470,9 +6512,300 @@ const vueApp = createApp({
             return this.getFilteredMerchants().slice(start, start + this.merchantPageSize);
         },
 
+        // ========== 商户列配置 ==========
+        async loadMerchantColumnConfig() {
+            try {
+                // 1. 获取全局自定义列
+                const globalRes = await fetch('/api/merchant-columns', {
+                    headers: {
+                        'Authorization': 'Bearer ' + localStorage.getItem('token')
+                    }
+                });
+                let globalCustomColumns = [];
+                if (globalRes.ok) {
+                    globalCustomColumns = await globalRes.json();
+                }
+
+                // 2. 构建完整的列配置（系统列 + 全局自定义列）
+                const systemColumns = JSON.parse(JSON.stringify(this.merchantDefaultColumnConfig));
+                const actionsIndex = systemColumns.findIndex(c => c.key === 'actions');
+                
+                // 将全局自定义列插入到 actions 之前
+                const customCols = globalCustomColumns.map(gc => ({
+                    key: gc.col_key,
+                    title: gc.col_title,
+                    width: gc.col_width,
+                    type: gc.col_type,
+                    visible: true,
+                    isCustom: true,
+                    globalId: gc.id
+                }));
+
+                if (actionsIndex !== -1) {
+                    systemColumns.splice(actionsIndex, 0, ...customCols);
+                } else {
+                    systemColumns.push(...customCols);
+                }
+
+                // 3. 获取用户偏好设置
+                const userRes = await fetch('/api/user-settings?key=merchant_column_prefs', {
+                    headers: {
+                        'Authorization': 'Bearer ' + localStorage.getItem('token'),
+                        'X-Operator': this.currentUser?.username || 'user'
+                    }
+                });
+                
+                if (userRes.ok) {
+                    const userData = await userRes.json();
+                    if (userData.value && typeof userData.value === 'object') {
+                        const prefs = userData.value;
+                        // 应用用户偏好（顺序、显示/隐藏、宽度）
+                        if (prefs.order && Array.isArray(prefs.order)) {
+                            const orderedColumns = [];
+                            for (const key of prefs.order) {
+                                const col = systemColumns.find(c => c.key === key);
+                                if (col) orderedColumns.push(col);
+                            }
+                            // 添加新增的列（不在用户偏好中的）
+                            for (const col of systemColumns) {
+                                if (!orderedColumns.find(c => c.key === col.key)) {
+                                    const actIdx = orderedColumns.findIndex(c => c.key === 'actions');
+                                    if (actIdx !== -1) {
+                                        orderedColumns.splice(actIdx, 0, col);
+                                    } else {
+                                        orderedColumns.push(col);
+                                    }
+                                }
+                            }
+                            this.merchantColumnConfig = orderedColumns;
+                        } else {
+                            this.merchantColumnConfig = systemColumns;
+                        }
+                        // 应用显示/隐藏偏好
+                        if (prefs.visibility) {
+                            for (const col of this.merchantColumnConfig) {
+                                if (prefs.visibility[col.key] !== undefined) {
+                                    col.visible = prefs.visibility[col.key];
+                                }
+                            }
+                        }
+                        // 应用宽度偏好
+                        if (prefs.widths) {
+                            for (const col of this.merchantColumnConfig) {
+                                if (prefs.widths[col.key]) {
+                                    col.width = prefs.widths[col.key];
+                                }
+                            }
+                        }
+                        console.log('[商户列配置] 已合并全局列和用户偏好');
+                        return;
+                    }
+                }
+                
+                this.merchantColumnConfig = systemColumns;
+                console.log('[商户列配置] 使用默认配置 + 全局自定义列');
+            } catch (e) {
+                console.warn('[商户列配置] 加载失败:', e);
+                this.merchantColumnConfig = JSON.parse(JSON.stringify(this.merchantDefaultColumnConfig));
+            }
+        },
+
+        async saveMerchantColumnConfig() {
+            try {
+                // 只保存用户偏好（顺序、显示/隐藏、宽度）
+                const prefs = {
+                    order: this.merchantColumnConfig.map(c => c.key),
+                    visibility: {},
+                    widths: {}
+                };
+                for (const col of this.merchantColumnConfig) {
+                    prefs.visibility[col.key] = col.visible !== false;
+                    if (col.width) prefs.widths[col.key] = col.width;
+                }
+                
+                const res = await fetch('/api/user-settings', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + localStorage.getItem('token'),
+                        'X-Operator': this.currentUser?.username || 'user'
+                    },
+                    body: JSON.stringify({
+                        key: 'merchant_column_prefs',
+                        value: prefs
+                    })
+                });
+                if (res.ok) {
+                    this.showMerchantColumnSettings = false;
+                    this.showToast('列设置已保存', 'success');
+                } else {
+                    this.showToast('保存失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('保存失败: ' + e.message, 'error');
+            }
+        },
+
+        async resetMerchantColumnConfig() {
+            try {
+                await fetch('/api/user-settings?key=merchant_column_prefs', {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': 'Bearer ' + localStorage.getItem('token'),
+                        'X-Operator': this.currentUser?.username || 'user'
+                    }
+                });
+                // 重新加载配置（包含全局自定义列）
+                await this.loadMerchantColumnConfig();
+                this.showToast('已恢复默认设置', 'success');
+            } catch (e) {
+                this.showToast('重置失败', 'error');
+            }
+        },
+
+        openMerchantColumnSettings() {
+            this.showMerchantColumnSettings = true;
+        },
+
+        toggleMerchantColumnVisible(index) {
+            this.merchantColumnConfig[index].visible = !this.merchantColumnConfig[index].visible;
+        },
+
+        updateMerchantColumnTitle(index, title) {
+            this.merchantColumnConfig[index].title = title;
+        },
+
+        updateMerchantColumnWidth(index, width) {
+            this.merchantColumnConfig[index].width = width;
+        },
+
+        getVisibleMerchantColumns() {
+            return (this.merchantColumnConfig || []).filter(c => c.visible !== false);
+        },
+
+        handleMerchantColumnDragStart(index) {
+            this.merchantColumnDragIndex = index;
+        },
+
+        handleMerchantColumnDrop(dropIndex) {
+            if (this.merchantColumnDragIndex !== null && this.merchantColumnDragIndex !== dropIndex) {
+                const item = this.merchantColumnConfig.splice(this.merchantColumnDragIndex, 1)[0];
+                this.merchantColumnConfig.splice(dropIndex, 0, item);
+            }
+            this.merchantColumnDragIndex = null;
+        },
+
+        openAddColumnModal() {
+            this.newColumnForm = { key: '', title: '', width: '120px', type: 'text' };
+            this.showAddColumnModal = true;
+        },
+
+        closeAddColumnModal() {
+            this.showAddColumnModal = false;
+        },
+
+        async addCustomColumn() {
+            if (!this.newColumnForm.key || !this.newColumnForm.title) {
+                this.showToast('请输入列标识和列名称', 'error');
+                return;
+            }
+            
+            try {
+                const res = await fetch('/api/merchant-columns', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + localStorage.getItem('token'),
+                        'X-Operator': this.currentUser?.username || 'user'
+                    },
+                    body: JSON.stringify({
+                        col_key: this.newColumnForm.key,
+                        col_title: this.newColumnForm.title,
+                        col_width: this.newColumnForm.width || '120px',
+                        col_type: this.newColumnForm.type || 'text'
+                    })
+                });
+                
+                if (res.ok) {
+                    this.showAddColumnModal = false;
+                    // 重新加载列配置以获取新添加的列
+                    await this.loadMerchantColumnConfig();
+                    this.showToast('自定义列已添加（全局生效）', 'success');
+                } else {
+                    const err = await res.json();
+                    this.showToast(err.error || '添加失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('添加失败: ' + e.message, 'error');
+            }
+        },
+
+        async deleteMerchantColumn(index) {
+            const col = this.merchantColumnConfig[index];
+            if (col.fixed) {
+                this.showToast('固定列不可删除', 'error');
+                return;
+            }
+            if (col.isCustom && col.globalId) {
+                // 删除全局自定义列
+                if (!confirm('确定要删除此自定义列吗？此操作会影响所有用户。')) {
+                    return;
+                }
+                try {
+                    const res = await fetch('/api/merchant-columns/' + col.globalId, {
+                        method: 'DELETE',
+                        headers: {
+                            'Authorization': 'Bearer ' + localStorage.getItem('token'),
+                            'X-Operator': this.currentUser?.username || 'user'
+                        }
+                    });
+                    if (res.ok) {
+                        await this.loadMerchantColumnConfig();
+                        this.showToast('自定义列已删除（全局生效）', 'success');
+                    } else {
+                        this.showToast('删除失败', 'error');
+                    }
+                } catch (e) {
+                    this.showToast('删除失败: ' + e.message, 'error');
+                }
+            } else {
+                // 系统列只能隐藏
+                this.merchantColumnConfig[index].visible = false;
+                this.showToast('系统列已隐藏（可在列设置中恢复）', 'success');
+            }
+        },
+
+        getCustomFieldValue(merchant, colKey) {
+            if (!merchant || !merchant.custom_fields) return null;
+            let customFields = merchant.custom_fields;
+            if (typeof customFields === 'string') {
+                try {
+                    customFields = JSON.parse(customFields);
+                } catch (e) {
+                    return null;
+                }
+            }
+            const fieldKey = colKey.replace('custom_', '');
+            return customFields[fieldKey] || customFields[colKey] || null;
+        },
+
         formatTags(arr) {
             if (!arr || !Array.isArray(arr) || arr.length === 0) return '-';
             return arr.join(', ');
+        },
+
+        // 获取多行数据的显示列表（最多显示 maxShow 个，其余折叠）
+        getMultiItems(arr, maxShow = 5) {
+            if (!arr || !Array.isArray(arr) || arr.length === 0) return { items: [], more: 0 };
+            const items = arr.slice(0, maxShow);
+            const more = arr.length > maxShow ? arr.length - maxShow : 0;
+            return { items, more, all: arr };
+        },
+
+        // 渲染多行数据（带展开/收起功能）
+        renderMultiCell(arr, type = 'text') {
+            if (!arr || !Array.isArray(arr) || arr.length === 0) return '-';
+            return arr;
         },
 
         // 根据项目名称生成颜色名称（用于 CSS data-color 属性）

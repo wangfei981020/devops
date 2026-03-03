@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>下拉框测试</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: #f5f7fa;
+            padding: 40px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+        }
+
+        h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        /* 原始样式 - 有问题 */
+        .select-original {
+            height: 32px;
+            padding: 4px 12px;
+            font-size: 14px;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            width: 100%;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+        }
+
+        /* 修复后的样式 */
+        .select-fixed {
+            height: auto;
+            min-height: 40px;
+            padding: 10px 40px 10px 16px;
+            font-size: 14px;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            width: 100%;
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 14px center;
+            cursor: pointer;
+            line-height: 1.5;
+        }
+
+        .select-fixed:focus,
+        .select-original:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .note {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #999;
+        }
+
+        .comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>下拉框样式测试</h2>
+        
+        <div class="comparison">
+            <div class="form-group">
+                <label>原始样式 (height: 32px, padding: 4px 12px)</label>
+                <select class="select-original">
+                    <option>业务运维组</option>
+                    <option>超级管理员</option>
+                    <option>普通用户</option>
+                </select>
+                <div class="note">可能会出现文字截断</div>
+            </div>
+
+            <div class="form-group">
+                <label>修复后样式 (height: auto, padding: 10px 40px 10px 16px)</label>
+                <select class="select-fixed">
+                    <option>业务运维组</option>
+                    <option>超级管理员</option>
+                    <option>普通用户</option>
+                </select>
+                <div class="note">文字应该完整显示</div>
+            </div>
+        </div>
+
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
+
+        <div class="form-group">
+            <label>语言选择测试</label>
+            <select class="select-fixed">
+                <option>🇨🇳 中文</option>
+                <option>🇺🇸 English</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label>会话超时测试</label>
+            <select class="select-fixed">
+                <option>3 小时</option>
+                <option>30 分钟</option>
+                <option>1 小时</option>
+                <option>24 小时</option>
+            </select>
+        </div>
+    </div>
+</body>
+</html>

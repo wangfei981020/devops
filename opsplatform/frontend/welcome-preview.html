@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>首页概览 - 预览</title>
+    <style>
+        :root {
+            --primary: #3a84ff;
+            --primary-light: #699df4;
+            --success: #2dcb56;
+            --warning: #ff9c01;
+            --error: #ea3636;
+            --bg-primary: #f5f7fa;
+            --bg-secondary: #fff;
+            --text-primary: #313238;
+            --text-secondary: #63656e;
+            --text-muted: #979ba5;
+            --border-color: #dcdee5;
+            --card-shadow: 0 2px 6px rgba(0,0,0,0.08);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .welcome-container {
+            padding: 24px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* 欢迎横幅 */
+        .welcome-banner {
+            background: linear-gradient(135deg, #3a84ff 0%, #699df4 100%);
+            border-radius: 12px;
+            padding: 32px;
+            color: #fff;
+            margin-bottom: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .welcome-banner::before {
+            content: '';
+            position: absolute;
+            right: -50px;
+            top: -50px;
+            width: 200px;
+            height: 200px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 50%;
+        }
+
+        .welcome-banner::after {
+            content: '';
+            position: absolute;
+            right: 80px;
+            bottom: -80px;
+            width: 160px;
+            height: 160px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 50%;
+        }
+
+        .welcome-greeting {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .welcome-date {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .welcome-tip {
+            margin-top: 16px;
+            padding: 12px 16px;
+            background: rgba(255,255,255,0.15);
+            border-radius: 8px;
+            font-size: 13px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .welcome-tip svg {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+        }
+
+        /* 统计卡片网格 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 24px;
+            box-shadow: var(--card-shadow);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            transition: transform 0.2s, box-shadow 0.2s;
+            cursor: pointer;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+        }
+
+        .stat-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .stat-icon svg {
+            width: 28px;
+            height: 28px;
+        }
+
+        .stat-icon.blue { background: rgba(58, 132, 255, 0.1); color: var(--primary); }
+        .stat-icon.green { background: rgba(45, 203, 86, 0.1); color: var(--success); }
+        .stat-icon.orange { background: rgba(255, 156, 1, 0.1); color: var(--warning); }
+
+        .stat-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 600;
+            color: var(--text-primary);
+            line-height: 1.2;
+        }
+
+        .stat-sub {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* 主内容区域 */
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+
+        .content-card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            box-shadow: var(--card-shadow);
+            overflow: hidden;
+        }
+
+        .content-card.full-width {
+            grid-column: span 2;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .card-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-title svg {
+            width: 18px;
+            height: 18px;
+            color: var(--primary);
+        }
+
+        .card-link {
+            font-size: 13px;
+            color: var(--primary);
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .card-link:hover {
+            text-decoration: underline;
+        }
+
+        .card-body {
+            padding: 20px;
+        }
+
+        /* 快捷入口 */
+        .quick-actions {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }
+
+        .quick-action-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            padding: 28px 16px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+        }
+
+        .quick-action-item:hover {
+            border-color: var(--primary);
+            background: rgba(58, 132, 255, 0.04);
+            transform: translateY(-2px);
+        }
+
+        .quick-action-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-primary);
+        }
+
+        .quick-action-icon svg {
+            width: 28px;
+            height: 28px;
+            color: var(--primary);
+        }
+
+        .quick-action-title {
+            font-size: 15px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .quick-action-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* 域名到期提醒 */
+        .domain-list {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .domain-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .domain-item:last-child {
+            border-bottom: none;
+        }
+
+        .domain-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .domain-status.danger { background: var(--error); }
+        .domain-status.warning { background: var(--warning); }
+        .domain-status.safe { background: var(--success); }
+
+        .domain-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .domain-name {
+            font-size: 14px;
+            color: var(--text-primary);
+            font-family: 'Monaco', 'Consolas', monospace;
+        }
+
+        .domain-expire {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .domain-badge {
+            padding: 4px 10px;
+            font-size: 12px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+
+        .domain-badge.danger {
+            background: rgba(234, 54, 54, 0.1);
+            color: var(--error);
+        }
+
+        .domain-badge.warning {
+            background: rgba(255, 156, 1, 0.1);
+            color: var(--warning);
+        }
+
+        /* 商户列表 */
+        .merchant-list {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .merchant-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .merchant-item:last-child {
+            border-bottom: none;
+        }
+
+        .merchant-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+
+        .merchant-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .merchant-name {
+            font-size: 14px;
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        .merchant-domain {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .merchant-status {
+            padding: 4px 10px;
+            font-size: 12px;
+            border-radius: 4px;
+            background: rgba(45, 203, 86, 0.1);
+            color: var(--success);
+        }
+
+        /* 空状态 */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state svg {
+            width: 48px;
+            height: 48px;
+            margin-bottom: 12px;
+            opacity: 0.5;
+        }
+
+        /* 响应式 */
+        @media (max-width: 1024px) {
+            .stats-grid {
+                grid-template-columns: repeat(1, 1fr);
+            }
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            .content-card.full-width {
+                grid-column: span 1;
+            }
+            .quick-actions {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        @media (max-width: 640px) {
+            .quick-actions {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* 暗色主题 */
+        [data-theme="dark"] {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #242424;
+            --text-primary: #e5e5e5;
+            --text-secondary: #a3a3a3;
+            --text-muted: #737373;
+            --border-color: #333;
+            --card-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+    </style>
+</head>
+<body>
+    <div class="welcome-container">
+        <!-- 欢迎横幅 -->
+        <div class="welcome-banner">
+            <div class="welcome-greeting">欢迎回来，admin</div>
+            <div class="welcome-date">今天是 2026年2月21日 星期五</div>
+            <div class="welcome-tip">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 16v-4M12 8h.01"/>
+                </svg>
+                提示：有 3 个域名将在 30 天内到期，请及时处理
+            </div>
+        </div>
+
+        <!-- 统计卡片 -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon green">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                    </svg>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-label">域名总数</div>
+                    <div class="stat-value">12</div>
+                    <div class="stat-sub">即将到期 3 个</div>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon orange">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                        <polyline points="9 22 9 12 15 12 15 22"/>
+                    </svg>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-label">商户总数</div>
+                    <div class="stat-value">8</div>
+                    <div class="stat-sub">运营中 6 个</div>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon blue">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2"/>
+                        <path d="M8 21h8M12 17v4"/>
+                    </svg>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-label">网络节点</div>
+                    <div class="stat-value">5</div>
+                    <div class="stat-sub">全部在线</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 快捷入口 -->
+        <div class="content-card full-width" style="margin-bottom: 24px;">
+            <div class="card-header">
+                <div class="card-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7"/>
+                        <rect x="14" y="3" width="7" height="7"/>
+                        <rect x="3" y="14" width="7" height="7"/>
+                        <rect x="14" y="14" width="7" height="7"/>
+                    </svg>
+                    快捷入口
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="quick-actions">
+                    <div class="quick-action-item">
+                        <div class="quick-action-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"/>
+                                <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                            </svg>
+                        </div>
+                        <div class="quick-action-title">域名管理</div>
+                        <div class="quick-action-desc">管理域名和证书</div>
+                    </div>
+                    <div class="quick-action-item">
+                        <div class="quick-action-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                                <polyline points="9 22 9 12 15 12 15 22"/>
+                            </svg>
+                        </div>
+                        <div class="quick-action-title">商户管理</div>
+                        <div class="quick-action-desc">管理商户信息</div>
+                    </div>
+                    <div class="quick-action-item">
+                        <div class="quick-action-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="2" y="3" width="20" height="14" rx="2"/>
+                                <path d="M8 21h8M12 17v4"/>
+                            </svg>
+                        </div>
+                        <div class="quick-action-title">网络管理</div>
+                        <div class="quick-action-desc">管理网络节点</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 主内容区域 -->
+        <div class="main-content">
+            <!-- 域名到期提醒 -->
+            <div class="content-card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                        域名到期提醒
+                    </div>
+                    <a class="card-link">查看全部</a>
+                </div>
+                <div class="card-body">
+                    <div class="domain-list">
+                        <div class="domain-item">
+                            <span class="domain-status danger"></span>
+                            <div class="domain-info">
+                                <div class="domain-name">api.example.com</div>
+                                <div class="domain-expire">到期时间：2026-03-01</div>
+                            </div>
+                            <span class="domain-badge danger">8天后</span>
+                        </div>
+                        <div class="domain-item">
+                            <span class="domain-status warning"></span>
+                            <div class="domain-info">
+                                <div class="domain-name">shop.example.com</div>
+                                <div class="domain-expire">到期时间：2026-03-15</div>
+                            </div>
+                            <span class="domain-badge warning">22天后</span>
+                        </div>
+                        <div class="domain-item">
+                            <span class="domain-status warning"></span>
+                            <div class="domain-info">
+                                <div class="domain-name">admin.example.com</div>
+                                <div class="domain-expire">到期时间：2026-03-20</div>
+                            </div>
+                            <span class="domain-badge warning">27天后</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 最近商户 -->
+            <div class="content-card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                            <polyline points="9 22 9 12 15 12 15 22"/>
+                        </svg>
+                        商户列表
+                    </div>
+                    <a class="card-link">查看全部</a>
+                </div>
+                <div class="card-body">
+                    <div class="merchant-list">
+                        <div class="merchant-item">
+                            <div class="merchant-avatar">A</div>
+                            <div class="merchant-info">
+                                <div class="merchant-name">商户 A</div>
+                                <div class="merchant-domain">shop-a.example.com</div>
+                            </div>
+                            <span class="merchant-status">运营中</span>
+                        </div>
+                        <div class="merchant-item">
+                            <div class="merchant-avatar">B</div>
+                            <div class="merchant-info">
+                                <div class="merchant-name">商户 B</div>
+                                <div class="merchant-domain">shop-b.example.com</div>
+                            </div>
+                            <span class="merchant-status">运营中</span>
+                        </div>
+                        <div class="merchant-item">
+                            <div class="merchant-avatar">C</div>
+                            <div class="merchant-info">
+                                <div class="merchant-name">商户 C</div>
+                                <div class="merchant-domain">shop-c.example.com</div>
+                            </div>
+                            <span class="merchant-status">运营中</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>商户管理 - 预览</title>
+    <style>
+        :root {
+            --primary: #3a84ff;
+            --primary-hover: #2b6ee6;
+            --success: #2dcb56;
+            --warning: #ff9c01;
+            --danger: #ea3636;
+            --purple: #a855f7;
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --card-bg: #161b22;
+            --border-color: #30363d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.5;
+            padding: 24px;
+        }
+
+        .page-container { max-width: 100%; margin: 0 auto; }
+
+        /* 页面头部 */
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+            padding: 20px 24px;
+            background: var(--card-bg);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+
+        .page-title-section { display: flex; align-items: center; gap: 16px; }
+
+        .page-icon {
+            width: 48px; height: 48px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--warning) 0%, #fbbf24 100%);
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        .page-icon svg { width: 24px; height: 24px; color: #000; }
+        .page-title { font-size: 24px; font-weight: 600; }
+        .page-subtitle { font-size: 14px; color: var(--text-secondary); margin-top: 4px; }
+        .header-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+
+        /* 按钮 */
+        .btn {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 10px 18px; border-radius: 8px;
+            font-size: 14px; font-weight: 500;
+            border: none; cursor: pointer;
+            transition: all 0.2s; white-space: nowrap;
+        }
+        .btn svg { width: 16px; height: 16px; }
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); }
+        .btn-secondary:hover { background: #2d333b; border-color: #444c56; }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn-sm { padding: 8px 14px; font-size: 13px; }
+
+        /* 筛选栏 */
+        .filter-bar {
+            display: flex; gap: 12px; margin-bottom: 16px; padding: 16px;
+            background: var(--card-bg); border-radius: 12px;
+            border: 1px solid var(--border-color);
+            flex-wrap: wrap; align-items: center;
+        }
+
+        .search-box { flex: 1; min-width: 240px; position: relative; }
+        .search-box svg {
+            position: absolute; left: 14px; top: 50%;
+            transform: translateY(-50%);
+            width: 18px; height: 18px; color: var(--text-muted);
+        }
+        .search-input {
+            width: 100%; padding: 10px 14px 10px 42px;
+            border-radius: 8px; border: 1px solid var(--border-color);
+            background: var(--bg-tertiary); color: var(--text-primary); font-size: 14px;
+        }
+        .search-input:focus { outline: none; border-color: var(--primary); }
+
+        .filter-select {
+            padding: 10px 36px 10px 14px; border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-tertiary); color: var(--text-primary);
+            font-size: 14px; cursor: pointer; appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 10px center;
+        }
+        .filter-select:focus { outline: none; border-color: var(--primary); }
+
+        /* 表格 */
+        .table-container {
+            background: var(--card-bg); border-radius: 12px;
+            border: 1px solid var(--border-color); overflow: hidden;
+        }
+        .table-scroll { overflow-x: auto; }
+        .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .data-table th {
+            padding: 12px 14px; text-align: left; font-weight: 500;
+            color: var(--text-secondary); background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            white-space: nowrap; position: sticky; top: 0;
+        }
+        .data-table td {
+            padding: 12px 14px; border-bottom: 1px solid var(--border-color);
+            vertical-align: top;
+        }
+        .data-table tbody tr { transition: background 0.15s; }
+        .data-table tbody tr:hover { background: var(--bg-tertiary); }
+        .data-table tbody tr.selected { background: rgba(58, 132, 255, 0.08); }
+
+        /* 固定操作列 */
+        .th-action-fixed, .td-action-fixed {
+            position: sticky; right: 0; background: var(--bg-tertiary);
+            z-index: 10; box-shadow: -4px 0 8px rgba(0, 0, 0, 0.2);
+        }
+        .td-action-fixed { background: var(--card-bg); }
+        tr:hover .td-action-fixed { background: var(--bg-tertiary); }
+
+        /* 复选框 */
+        .checkbox {
+            width: 18px; height: 18px; border-radius: 4px;
+            border: 2px solid var(--border-color); background: var(--bg-tertiary);
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.15s;
+        }
+        .checkbox.checked { background: var(--primary); border-color: var(--primary); }
+        .checkbox svg { width: 12px; height: 12px; color: #fff; opacity: 0; }
+        .checkbox.checked svg { opacity: 1; }
+
+        /* 标签 */
+        .tag-project { display: inline-flex; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+        .tag-project-blue { background: rgba(58, 132, 255, 0.15); color: #60a5fa; }
+        .tag-project-green { background: rgba(45, 203, 86, 0.15); color: #4ade80; }
+        .tag-project-purple { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
+        .tag-project-orange { background: rgba(255, 156, 1, 0.15); color: #fbbf24; }
+
+        .tag-env { display: inline-flex; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+        .tag-env-prod { background: rgba(234, 54, 54, 0.15); color: #f87171; }
+        .tag-env-uat { background: rgba(255, 156, 1, 0.15); color: #fbbf24; }
+        .tag-env-dev { background: rgba(45, 203, 86, 0.15); color: #4ade80; }
+
+        .tag-website { display: inline-flex; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+        .tag-website-1 { background: rgba(236, 72, 153, 0.15); color: #f472b6; }
+        .tag-website-2 { background: rgba(34, 211, 238, 0.15); color: #22d3ee; }
+        .tag-website-3 { background: rgba(163, 230, 53, 0.15); color: #a3e635; }
+        .tag-website-4 { background: rgba(251, 146, 60, 0.15); color: #fb923c; }
+
+        /* 多值列表 */
+        .multi-list { display: flex; flex-direction: column; gap: 3px; max-width: 200px; }
+        .multi-item {
+            font-size: 11px; color: var(--text-secondary);
+            padding: 3px 8px; background: var(--bg-tertiary);
+            border-radius: 4px; white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis;
+            border: 1px solid var(--border-color);
+        }
+        .multi-item-link {
+            font-family: 'Monaco', 'Consolas', monospace; font-size: 10px;
+            color: var(--primary); padding: 3px 8px;
+            background: rgba(58, 132, 255, 0.08); border-radius: 4px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .multi-item-mono {
+            font-family: 'Monaco', 'Consolas', monospace; font-size: 10px;
+            color: var(--text-muted); padding: 3px 8px;
+            background: var(--bg-tertiary); border-radius: 4px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .multi-item-email {
+            font-size: 10px; color: #22d3ee; padding: 3px 8px;
+            background: rgba(34, 211, 238, 0.08); border-radius: 4px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .multi-item-key {
+            font-family: 'Monaco', 'Consolas', monospace; font-size: 9px;
+            color: #a3e635; padding: 3px 8px;
+            background: rgba(163, 230, 53, 0.08); border-radius: 4px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .multi-item-account {
+            font-size: 10px; color: #f472b6; padding: 3px 8px;
+            background: rgba(236, 72, 153, 0.08); border-radius: 4px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .multi-more {
+            font-size: 10px; color: var(--text-muted); padding: 3px 8px;
+            cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+        }
+        .multi-more:hover { color: var(--primary); }
+        .multi-count {
+            display: inline-flex; align-items: center; justify-content: center;
+            min-width: 18px; height: 18px; padding: 0 5px;
+            background: var(--primary); color: #fff; border-radius: 9px;
+            font-size: 10px; font-weight: 600;
+        }
+        .cell-tags { display: flex; flex-wrap: wrap; gap: 4px; max-width: 140px; }
+        .mini-tag {
+            display: inline-flex; padding: 2px 6px; border-radius: 3px;
+            font-size: 10px; background: var(--bg-tertiary);
+            color: var(--text-secondary); border: 1px solid var(--border-color);
+        }
+
+        /* 操作按钮 */
+        .action-btns { display: flex; gap: 6px; }
+        .action-btn {
+            width: 28px; height: 28px; border-radius: 6px;
+            border: 1px solid var(--border-color); background: var(--bg-secondary);
+            color: var(--text-secondary); display: flex;
+            align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.15s;
+        }
+        .action-btn:hover { background: var(--primary); border-color: var(--primary); color: #fff; }
+        .action-btn.danger:hover { background: var(--danger); border-color: var(--danger); }
+        .action-btn svg { width: 14px; height: 14px; }
+
+        /* 分页 */
+        .pagination {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 16px 20px; border-top: 1px solid var(--border-color);
+        }
+        .pagination-info { font-size: 14px; color: var(--text-secondary); }
+        .pagination-controls { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+        .page-btn {
+            min-width: 36px; height: 36px; padding: 0 12px;
+            border-radius: 6px; border: 1px solid var(--border-color);
+            background: var(--bg-tertiary); color: var(--text-primary);
+            font-size: 14px; cursor: pointer; display: inline-flex;
+            align-items: center; justify-content: center;
+            transition: all 0.15s; white-space: nowrap;
+        }
+        .page-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+        .page-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+        .page-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .cell-single { font-size: 11px; color: var(--text-secondary); }
+
+        /* ========== 列设置弹窗 ========== */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.7); z-index: 1000;
+            display: none; align-items: center; justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        
+        .modal {
+            background: var(--card-bg); border-radius: 16px;
+            border: 1px solid var(--border-color);
+            width: 600px; max-width: 90vw; max-height: 85vh;
+            display: flex; flex-direction: column;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+        }
+        
+        .modal-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 20px 24px; border-bottom: 1px solid var(--border-color);
+        }
+        .modal-title { font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+        .modal-title svg { width: 22px; height: 22px; color: var(--primary); }
+        .modal-close {
+            width: 32px; height: 32px; border-radius: 8px;
+            border: none; background: var(--bg-tertiary);
+            color: var(--text-secondary); cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.15s;
+        }
+        .modal-close:hover { background: var(--danger); color: #fff; }
+        .modal-close svg { width: 18px; height: 18px; }
+        
+        .modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+        
+        .modal-footer {
+            display: flex; justify-content: flex-end; gap: 12px;
+            padding: 16px 24px; border-top: 1px solid var(--border-color);
+        }
+
+        /* 列配置列表 */
+        .column-list { display: flex; flex-direction: column; gap: 8px; }
+        
+        .column-item {
+            display: flex; align-items: center; gap: 12px;
+            padding: 12px 16px; background: var(--bg-tertiary);
+            border-radius: 8px; border: 1px solid var(--border-color);
+            transition: all 0.15s;
+        }
+        .column-item:hover { border-color: var(--primary); }
+        .column-item.dragging { opacity: 0.5; border-style: dashed; }
+        .column-item.drag-over { border-color: var(--success); background: rgba(45, 203, 86, 0.1); }
+        
+        .column-drag {
+            cursor: grab; color: var(--text-muted); padding: 4px;
+            display: flex; align-items: center;
+        }
+        .column-drag:active { cursor: grabbing; }
+        .column-drag svg { width: 16px; height: 16px; }
+        
+        .column-checkbox {
+            width: 20px; height: 20px; border-radius: 4px;
+            border: 2px solid var(--border-color); background: var(--bg-secondary);
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.15s;
+        }
+        .column-checkbox.checked { background: var(--primary); border-color: var(--primary); }
+        .column-checkbox svg { width: 12px; height: 12px; color: #fff; opacity: 0; }
+        .column-checkbox.checked svg { opacity: 1; }
+        
+        .column-info { flex: 1; }
+        .column-key { font-size: 11px; color: var(--text-muted); font-family: monospace; }
+        
+        .column-title-input {
+            width: 100%; padding: 6px 10px; margin-top: 4px;
+            border-radius: 6px; border: 1px solid var(--border-color);
+            background: var(--bg-secondary); color: var(--text-primary);
+            font-size: 14px;
+        }
+        .column-title-input:focus { outline: none; border-color: var(--primary); }
+        
+        .column-width-input {
+            width: 80px; padding: 6px 10px;
+            border-radius: 6px; border: 1px solid var(--border-color);
+            background: var(--bg-secondary); color: var(--text-primary);
+            font-size: 13px; text-align: center;
+        }
+        .column-width-input:focus { outline: none; border-color: var(--primary); }
+
+        /* 提示信息 */
+        .modal-tip {
+            display: flex; align-items: center; gap: 8px;
+            padding: 12px 16px; background: rgba(58, 132, 255, 0.1);
+            border-radius: 8px; margin-bottom: 16px;
+            font-size: 13px; color: var(--text-secondary);
+        }
+        .modal-tip svg { width: 18px; height: 18px; color: var(--primary); flex-shrink: 0; }
+
+        /* Toast 通知 */
+        .toast {
+            position: fixed; bottom: 24px; right: 24px;
+            padding: 14px 20px; border-radius: 8px;
+            background: var(--success); color: #fff;
+            font-size: 14px; font-weight: 500;
+            display: flex; align-items: center; gap: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            transform: translateY(100px); opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 2000;
+        }
+        .toast.show { transform: translateY(0); opacity: 1; }
+        .toast svg { width: 20px; height: 20px; }
+
+        @media (max-width: 768px) {
+            .page-header { flex-direction: column; gap: 16px; align-items: flex-start; }
+        }
+    </style>
+</head>
+<body>
+    <div class="page-container">
+        <!-- 页面头部 -->
+        <div class="page-header">
+            <div class="page-title-section">
+                <div class="page-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                        <polyline points="9 22 9 12 15 12 15 22"/>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="page-title">商户管理</h1>
+                    <p class="page-subtitle">管理商户信息、域名配置、接入参数</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button class="btn btn-secondary" onclick="openColumnSettings()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707"/><circle cx="12" cy="12" r="4"/></svg>
+                    列设置
+                </button>
+                <button class="btn btn-secondary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    刷新
+                </button>
+                <button class="btn btn-secondary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                    导出
+                </button>
+                <button class="btn btn-primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    添加商户
+                </button>
+            </div>
+        </div>
+
+        <!-- 筛选栏 -->
+        <div class="filter-bar">
+            <div class="search-box">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                <input type="text" class="search-input" placeholder="搜索网站方、项目...">
+            </div>
+            <select class="filter-select" id="projectFilter"><option value="">所有项目</option></select>
+            <select class="filter-select">
+                <option>所有环境</option>
+                <option>PROD</option>
+                <option>UAT</option>
+                <option>DEV</option>
+            </select>
+            <button class="btn btn-danger btn-sm" style="margin-left: auto;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                删除选中 (0)
+            </button>
+        </div>
+
+        <!-- 表格 -->
+        <div class="table-container">
+            <div class="table-scroll">
+                <table class="data-table" id="merchantTable">
+                    <thead id="tableHead"></thead>
+                    <tbody id="tableBody"></tbody>
+                </table>
+            </div>
+            <div class="pagination">
+                <div class="pagination-info">共 <span id="totalCount">0</span> 个商户，第 1/1 页</div>
+                <div class="pagination-controls">
+                    <button class="page-btn" disabled>首页</button>
+                    <button class="page-btn" disabled>上一页</button>
+                    <button class="page-btn active">1</button>
+                    <button class="page-btn">下一页</button>
+                    <button class="page-btn">尾页</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 列设置弹窗 -->
+    <div class="modal-overlay" id="columnSettingsModal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                    列设置
+                </div>
+                <button class="modal-close" onclick="closeColumnSettings()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-tip">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                    拖拽调整列顺序，点击复选框显示/隐藏列，可编辑列标题和宽度
+                </div>
+                <div class="column-list" id="columnList"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="resetColumns()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    恢复默认
+                </button>
+                <button class="btn btn-primary" onclick="saveColumnSettings()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    保存设置
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 通知 -->
+    <div class="toast" id="toast">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        <span id="toastMessage">保存成功</span>
+    </div>
+
+    <script>
+    // ========================================
+    // 【默认列配置】
+    // ========================================
+    const DEFAULT_COLUMN_CONFIG = [
+        { key: 'checkbox',          title: '',              width: '40px',   type: 'checkbox', visible: true, fixed: false },
+        { key: 'project',           title: '',              width: '90px',   type: 'tag-project', visible: true },
+        { key: 'environment',       title: '',              width: '60px',   type: 'tag-env', visible: true },
+        { key: 'website_party',     title: '',              width: '100px',  type: 'tag-website', visible: true },
+        { key: 'contact_emails',    title: '',              width: '180px',  type: 'multi-email', visible: true },
+        { key: 'website_urls',      title: '',              width: '200px',  type: 'multi-link', visible: true },
+        { key: 'player_regions',    title: '',              width: '120px',  type: 'tags', visible: true },
+        { key: 'online_players',    title: '',              width: '100px',  type: 'multi-text', visible: true },
+        { key: 'business_types',    title: '',              width: '140px',  type: 'tags', visible: true },
+        { key: 'handicap',          title: '',              width: '100px',  type: 'tags', visible: true },
+        { key: 'languages',         title: '',              width: '120px',  type: 'tags', visible: true },
+        { key: 'currencies',        title: '',              width: '120px',  type: 'tags', visible: true },
+        { key: 'supported_ports',   title: '',              width: '100px',  type: 'tags', visible: true },
+        { key: 'wallet_type',       title: '',              width: '100px',  type: 'tags', visible: true },
+        { key: 'callback_domains',  title: '',              width: '220px',  type: 'multi-link', visible: true },
+        { key: 'whitelist_ips',     title: '',              width: '180px',  type: 'multi-mono', visible: true },
+        { key: 'hall_domains',      title: '',              width: '220px',  type: 'multi-link', visible: true },
+        { key: 'system_domains',    title: '',              width: '220px',  type: 'multi-link', visible: true },
+        { key: 'site_accounts',     title: '',              width: '160px',  type: 'multi-account', visible: true },
+        { key: 'app_keys',          title: '',              width: '180px',  type: 'multi-key', visible: true },
+        { key: 'business_domains',  title: '',              width: '220px',  type: 'multi-link', visible: true },
+        { key: 'redirect_domains',  title: '',              width: '220px',  type: 'multi-link', visible: true },
+        { key: 'actions',           title: '',              width: '100px',  type: 'actions', visible: true, fixed: true }
+    ];
+
+    // 当前列配置（初始使用默认，后续从后端加载）
+    let COLUMN_CONFIG = JSON.parse(JSON.stringify(DEFAULT_COLUMN_CONFIG));
+
+    // API 配置
+    const API_BASE = '/api';
+    const SETTING_KEY = 'merchant_column_config';
+
+    // 从后端加载列配置
+    async function loadColumnConfig() {
+        try {
+            const token = localStorage.getItem('token');
+            const res = await fetch(`${API_BASE}/user-settings?key=${SETTING_KEY}`, {
+                headers: {
+                    'Authorization': 'Bearer ' + token,
+                    'X-Operator': localStorage.getItem('username') || 'user'
+                }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.value && Array.isArray(data.value)) {
+                    COLUMN_CONFIG = data.value;
+                    renderTableHead();
+                    renderTableBody();
+                    console.log('[列配置] 已从后端加载');
+                }
+            }
+        } catch (e) {
+            console.warn('[列配置] 加载失败，使用默认配置:', e);
+        }
+    }
+
+    // 保存列配置到后端
+    async function saveColumnConfigToServer() {
+        try {
+            const token = localStorage.getItem('token');
+            const res = await fetch(`${API_BASE}/user-settings`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token,
+                    'X-Operator': localStorage.getItem('username') || 'user'
+                },
+                body: JSON.stringify({
+                    key: SETTING_KEY,
+                    value: COLUMN_CONFIG
+                })
+            });
+            return res.ok;
+        } catch (e) {
+            console.error('[列配置] 保存失败:', e);
+            return false;
+        }
+    }
+
+    // 删除后端列配置（恢复默认）
+    async function deleteColumnConfigFromServer() {
+        try {
+            const token = localStorage.getItem('token');
+            const res = await fetch(`${API_BASE}/user-settings?key=${SETTING_KEY}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': 'Bearer ' + token,
+                    'X-Operator': localStorage.getItem('username') || 'user'
+                }
+            });
+            return res.ok;
+        } catch (e) {
+            console.error('[列配置] 删除失败:', e);
+            return false;
+        }
+    }
+
+    // 项目配置
+    const PROJECT_CONFIG = [
+        { id: 'project1', name: '甲方1', color: 'blue' },
+        { id: 'project2', name: '甲方2', color: 'green' },
+        { id: 'project3', name: '甲方3', color: 'purple' },
+        { id: 'project4', name: '甲方4', color: 'orange' },
+    ];
+
+    // 模拟商户数据
+    const MERCHANT_DATA = [
+        {
+            id: 1, selected: true, project: 'project1', environment: 'PROD',
+            website_party: { name: '商户A', style: 1 },
+            contact_emails: ['tech@merchant-a.com', 'dev@merchant-a.com', 'ops@merchant-a.com', 'support@merchant-a.com', 'api@merchant-a.com', 'admin@merchant-a.com'],
+            website_urls: ['www.site-a1.com', 'www.site-a2.com', 'www.site-a3.com', 'm.site-a1.com', 'm.site-a2.com', 'app.site-a1.com', 'h5.site-a1.com', 'wap.site-a1.com'],
+            player_regions: ['CN', 'MY', 'VN', 'TH', 'PH'],
+            online_players: ['CN: 25,000', 'MY: 12,000', 'VN: 8,000', 'TH: 5,000'],
+            business_types: ['类型A', '类型B', '类型C', '类型D'],
+            handicap: ['A盘', 'B盘', 'C盘'],
+            languages: ['中文', '英文', '越南语', '泰语'],
+            currencies: ['CNY', 'USDT', 'VND', 'THB'],
+            supported_ports: ['PC', 'H5', 'APP'],
+            wallet_type: ['转账', '单钱包'],
+            callback_domains: ['callback1.a.com', 'callback2.a.com', 'callback3.a.com', 'callback4.a.com', 'callback5.a.com', 'callback6.a.com', 'callback7.a.com', 'callback8.a.com', 'callback9.a.com', 'callback10.a.com'],
+            whitelist_ips: ['103.21.244.0/24', '45.33.32.0/24', '52.76.128.0/24', '18.162.0.0/16', '13.250.0.0/16', '54.169.0.0/16', '3.1.0.0/16', '99.83.0.0/16'],
+            hall_domains: ['hall1.a-live.com', 'hall2.a-live.com', 'hall3.a-live.com', 'hall4.a-live.com', 'hall5.a-live.com', 'hall6.a-live.com'],
+            system_domains: ['admin1.a-sys.com', 'admin2.a-sys.com', 'admin3.a-sys.com', 'admin4.a-sys.com'],
+            site_accounts: ['a_admin_01', 'a_admin_02', 'a_operator_01', 'a_operator_02', 'a_viewer_01'],
+            app_keys: ['ak_a_prod_xxxx1234', 'ak_a_prod_yyyy5678', 'ak_a_backup_zzzz9012', 'ak_a_test_abcd3456'],
+            business_domains: ['biz1.a-play.com', 'biz2.a-play.com', 'biz3.a-play.com', 'biz4.a-play.com', 'biz5.a-play.com', 'biz6.a-play.com', 'biz7.a-play.com'],
+            redirect_domains: ['go1.a.com', 'go2.a.com', 'go3.a.com', 'go4.a.com', 'go5.a.com']
+        },
+        {
+            id: 2, selected: false, project: 'project2', environment: 'PROD',
+            website_party: { name: '商户B', style: 2 },
+            contact_emails: ['dev@merchant-b.net', 'tech@merchant-b.net', 'api@merchant-b.net'],
+            website_urls: ['www.site-b1.com', 'www.site-b2.com', 'm.site-b1.com', 'm.site-b2.com'],
+            player_regions: ['CN', 'PH', 'ID'],
+            online_players: ['CN: 18,000', 'PH: 8,000', 'ID: 4,000'],
+            business_types: ['类型A', '类型D'],
+            handicap: ['C盘', 'D盘'],
+            languages: ['中文', '英文', '印尼语'],
+            currencies: ['CNY', 'PHP', 'IDR'],
+            supported_ports: ['PC', 'H5'],
+            wallet_type: ['单钱包'],
+            callback_domains: ['api1.b.net', 'api2.b.net', 'api3.b.net', 'api4.b.net'],
+            whitelist_ips: ['52.76.128.0/24', '18.162.0.0/16', '13.250.0.0/16'],
+            hall_domains: ['hall1.b.net', 'hall2.b.net', 'hall3.b.net', 'hall4.b.net', 'hall5.b.net'],
+            system_domains: ['mgmt1.b.net', 'mgmt2.b.net', 'mgmt3.b.net'],
+            site_accounts: ['b_manager_01', 'b_manager_02', 'b_op_01'],
+            app_keys: ['ak_b_prod_main', 'ak_b_prod_backup', 'ak_b_test_01'],
+            business_domains: ['play1.b.net', 'play2.b.net', 'play3.b.net', 'play4.b.net', 'play5.b.net'],
+            redirect_domains: ['go1.b.com', 'go2.b.com', 'go3.b.com', 'go4.b.com']
+        }
+    ];
+
+    // 拖拽相关
+    let draggedItem = null;
+
+    // ========================================
+    // 渲染函数
+    // ========================================
+    function renderTableHead() {
+        const thead = document.getElementById('tableHead');
+        const visibleCols = COLUMN_CONFIG.filter(c => c.visible !== false);
+        let html = '<tr>';
+        
+        visibleCols.forEach(col => {
+            const fixedClass = col.fixed ? 'th-action-fixed' : '';
+            const style = col.width ? `style="min-width: ${col.width}"` : '';
+            
+            if (col.type === 'checkbox') {
+                html += `<th ${style}>
+                    <div class="checkbox" onclick="toggleSelectAll()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                    </div>
+                </th>`;
+            } else {
+                html += `<th class="${fixedClass}" ${style}>${col.title}</th>`;
+            }
+        });
+        
+        html += '</tr>';
+        thead.innerHTML = html;
+    }
+
+    function renderMultiCell(items, type, maxShow = 5) {
+        if (!items || items.length === 0) return '<span class="cell-single">-</span>';
+        
+        const itemClass = {
+            'multi-email': 'multi-item-email',
+            'multi-link': 'multi-item-link',
+            'multi-mono': 'multi-item-mono',
+            'multi-key': 'multi-item-key',
+            'multi-account': 'multi-item-account',
+            'multi-text': 'multi-item'
+        }[type] || 'multi-item';
+        
+        let html = '<div class="multi-list">';
+        const showItems = items.slice(0, maxShow);
+        const moreCount = items.length - maxShow;
+        
+        showItems.forEach(item => {
+            html += `<span class="${itemClass}">${item}</span>`;
+        });
+        
+        if (moreCount > 0) {
+            html += `<span class="multi-more">+${moreCount} 更多 <span class="multi-count">${items.length}</span></span>`;
+        }
+        
+        html += '</div>';
+        return html;
+    }
+
+    function renderTagsCell(items) {
+        if (!items || items.length === 0) return '<span class="cell-single">-</span>';
+        let html = '<div class="cell-tags">';
+        items.forEach(item => { html += `<span class="mini-tag">${item}</span>`; });
+        html += '</div>';
+        return html;
+    }
+
+    function renderCell(row, col) {
+        const value = row[col.key];
+        
+        switch (col.type) {
+            case 'checkbox':
+                return `<div class="checkbox ${row.selected ? 'checked' : ''}" onclick="toggleRow(${row.id})">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>`;
+            case 'tag-project':
+                const proj = PROJECT_CONFIG.find(p => p.id === value) || { name: value, color: 'blue' };
+                return `<span class="tag-project tag-project-${proj.color}">${proj.name}</span>`;
+            case 'tag-env':
+                const envClass = { 'PROD': 'prod', 'UAT': 'uat', 'DEV': 'dev' }[value] || 'dev';
+                return `<span class="tag-env tag-env-${envClass}">${value}</span>`;
+            case 'tag-website':
+                return `<span class="tag-website tag-website-${value.style}">${value.name}</span>`;
+            case 'tags':
+                return renderTagsCell(value);
+            case 'multi-email':
+            case 'multi-link':
+            case 'multi-mono':
+            case 'multi-key':
+            case 'multi-account':
+            case 'multi-text':
+                return renderMultiCell(value, col.type);
+            case 'actions':
+                return `<div class="action-btns">
+                    <button class="action-btn" title="编辑">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    </button>
+                    <button class="action-btn danger" title="删除">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    </button>
+                </div>`;
+            default:
+                return value || '-';
+        }
+    }
+
+    function renderTableBody() {
+        const tbody = document.getElementById('tableBody');
+        const visibleCols = COLUMN_CONFIG.filter(c => c.visible !== false);
+        let html = '';
+        
+        MERCHANT_DATA.forEach(row => {
+            html += `<tr class="${row.selected ? 'selected' : ''}">`;
+            visibleCols.forEach(col => {
+                const fixedClass = col.fixed ? 'td-action-fixed' : '';
+                html += `<td class="${fixedClass}">${renderCell(row, col)}</td>`;
+            });
+            html += '</tr>';
+        });
+        
+        tbody.innerHTML = html;
+        document.getElementById('totalCount').textContent = MERCHANT_DATA.length;
+        calculateTableWidth();
+    }
+
+    function calculateTableWidth() {
+        const visibleCols = COLUMN_CONFIG.filter(c => c.visible !== false);
+        let totalWidth = 0;
+        visibleCols.forEach(col => { totalWidth += parseInt(col.width) || 100; });
+        document.querySelector('.data-table').style.minWidth = totalWidth + 'px';
+    }
+
+    function toggleRow(id) {
+        const row = MERCHANT_DATA.find(r => r.id === id);
+        if (row) { row.selected = !row.selected; renderTableBody(); updateSelectedCount(); }
+    }
+
+    function toggleSelectAll() {
+        const allSelected = MERCHANT_DATA.every(r => r.selected);
+        MERCHANT_DATA.forEach(r => r.selected = !allSelected);
+        renderTableBody(); updateSelectedCount();
+    }
+
+    function updateSelectedCount() {
+        const count = MERCHANT_DATA.filter(r => r.selected).length;
+        document.querySelector('.btn-danger').innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            删除选中 (${count})`;
+    }
+
+    function renderProjectFilter() {
+        const select = document.getElementById('projectFilter');
+        PROJECT_CONFIG.forEach(proj => {
+            const option = document.createElement('option');
+            option.value = proj.id;
+            option.textContent = proj.name;
+            select.appendChild(option);
+        });
+    }
+
+    // ========================================
+    // 列设置弹窗
+    // ========================================
+    function openColumnSettings() {
+        document.getElementById('columnSettingsModal').classList.add('active');
+        renderColumnList();
+    }
+
+    function closeColumnSettings() {
+        document.getElementById('columnSettingsModal').classList.remove('active');
+    }
+
+    function renderColumnList() {
+        const container = document.getElementById('columnList');
+        let html = '';
+        
+        COLUMN_CONFIG.forEach((col, index) => {
+            if (col.type === 'checkbox' || col.type === 'actions') return;
+            
+            html += `
+            <div class="column-item" draggable="true" data-index="${index}"
+                 ondragstart="handleDragStart(event, ${index})"
+                 ondragover="handleDragOver(event)"
+                 ondragenter="handleDragEnter(event)"
+                 ondragleave="handleDragLeave(event)"
+                 ondrop="handleDrop(event, ${index})"
+                 ondragend="handleDragEnd(event)">
+                <div class="column-drag">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
+                </div>
+                <div class="column-checkbox ${col.visible !== false ? 'checked' : ''}" onclick="toggleColumnVisible(${index})">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <div class="column-info">
+                    <div class="column-key">${col.key}</div>
+                    <input type="text" class="column-title-input" value="${col.title}" 
+                           onchange="updateColumnTitle(${index}, this.value)" placeholder="列标题">
+                </div>
+                <input type="text" class="column-width-input" value="${col.width}" 
+                       onchange="updateColumnWidth(${index}, this.value)" placeholder="宽度">
+            </div>`;
+        });
+        
+        container.innerHTML = html;
+    }
+
+    function toggleColumnVisible(index) {
+        COLUMN_CONFIG[index].visible = COLUMN_CONFIG[index].visible === false ? true : false;
+        renderColumnList();
+    }
+
+    function updateColumnTitle(index, title) {
+        COLUMN_CONFIG[index].title = title;
+    }
+
+    function updateColumnWidth(index, width) {
+        COLUMN_CONFIG[index].width = width;
+    }
+
+    async function saveColumnSettings() {
+        const success = await saveColumnConfigToServer();
+        if (success) {
+            renderTableHead();
+            renderTableBody();
+            closeColumnSettings();
+            showToast('列设置已保存到服务器');
+        } else {
+            showToast('保存失败，请重试');
+        }
+    }
+
+    async function resetColumns() {
+        COLUMN_CONFIG = JSON.parse(JSON.stringify(DEFAULT_COLUMN_CONFIG));
+        const success = await deleteColumnConfigFromServer();
+        renderColumnList();
+        renderTableHead();
+        renderTableBody();
+        if (success) {
+            showToast('已恢复默认设置');
+        } else {
+            showToast('已恢复默认设置（本地）');
+        }
+    }
+
+    // 拖拽排序
+    function handleDragStart(e, index) {
+        draggedItem = index;
+        e.target.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+    }
+
+    function handleDragOver(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+    }
+
+    function handleDragEnter(e) {
+        e.target.closest('.column-item')?.classList.add('drag-over');
+    }
+
+    function handleDragLeave(e) {
+        e.target.closest('.column-item')?.classList.remove('drag-over');
+    }
+
+    function handleDrop(e, dropIndex) {
+        e.preventDefault();
+        e.target.closest('.column-item')?.classList.remove('drag-over');
+        
+        if (draggedItem !== null && draggedItem !== dropIndex) {
+            const item = COLUMN_CONFIG.splice(draggedItem, 1)[0];
+            COLUMN_CONFIG.splice(dropIndex, 0, item);
+            renderColumnList();
+        }
+    }
+
+    function handleDragEnd(e) {
+        e.target.classList.remove('dragging');
+        document.querySelectorAll('.column-item').forEach(el => el.classList.remove('drag-over'));
+        draggedItem = null;
+    }
+
+    // Toast 通知
+    function showToast(message) {
+        const toast = document.getElementById('toast');
+        document.getElementById('toastMessage').textContent = message;
+        toast.classList.add('show');
+        setTimeout(() => { toast.classList.remove('show'); }, 3000);
+    }
+
+    // 点击外部关闭弹窗
+    document.getElementById('columnSettingsModal').addEventListener('click', function(e) {
+        if (e.target === this) closeColumnSettings();
+    });
+
+    // 初始化
+    async function init() {
+        renderProjectFilter();
+        renderTableHead();
+        renderTableBody();
+        updateSelectedCount();
+        // 从后端加载用户的列配置
+        await loadColumnConfig();
+    }
+
+    init();
+    </script>
+</body>
+</html>

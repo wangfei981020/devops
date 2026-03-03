@@ -599,3 +599,167 @@ func HandleResetSchedule(w http.ResponseWriter, r *http.Request) {
 		"deleted": rowsAffected,
 	})
 }
+
+// ScheduleContact 联系人
+type ScheduleContact struct {
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	Phone      string `json:"phone"`
+	Department string `json:"department"`
+	Position   string `json:"position"`
+	Remark     string `json:"remark"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
+}
+
+// HandleGetContacts 获取联系人列表
+func HandleGetContacts(w http.ResponseWriter, r *http.Request) {
+	rows, err := database.DB.Query(`
+		SELECT id, name, phone, COALESCE(department, '') as department, 
+		       COALESCE(position, '') as position, COALESCE(remark, '') as remark,
+		       created_at, updated_at
+		FROM schedule_contacts
+		ORDER BY name ASC
+	`)
+	if err != nil {
+		log.Printf("获取联系人列表失败: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var contacts []ScheduleContact
+	for rows.Next() {
+		var c ScheduleContact
+		err := rows.Scan(&c.ID, &c.Name, &c.Phone, &c.Department, &c.Position, &c.Remark, &c.CreatedAt, &c.UpdatedAt)
+		if err != nil {
+			log.Printf("扫描联系人数据失败: %v", err)
+			continue
+		}
+		contacts = append(contacts, c)
+	}
+
+	if contacts == nil {
+		contacts = []ScheduleContact{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(contacts)
+}
+
+// HandleAddContact 添加联系人
+func HandleAddContact(w http.ResponseWriter, r *http.Request) {
+	var contact ScheduleContact
+	if err := json.NewDecoder(r.Body).Decode(&contact); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if contact.Name == "" || contact.Phone == "" {
+		http.Error(w, "姓名和电话必填", http.StatusBadRequest)
+		return
+	}
+
+	result, err := database.DB.Exec(`
+		INSERT INTO schedule_contacts (name, phone, department, position, remark)
+		VALUES (?, ?, ?, ?, ?)
+	`, contact.Name, contact.Phone, contact.Department, contact.Position, contact.Remark)
+
+	if err != nil {
+		log.Printf("添加联系人失败: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	id, _ := result.LastInsertId()
+	contact.ID = int(id)
+
+	// 记录审计日志
+	operator := r.Header.Get("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+	AddAuditLogFromRequest(r, "添加联系人", fmt.Sprintf("%d", id), operator, "",
+		fmt.Sprintf(`{"name":"%s","phone":"%s","department":"%s"}`, contact.Name, contact.Phone, contact.Department),
+		fmt.Sprintf("添加联系人: %s (%s)", contact.Name, contact.Phone))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(contact)
+}
+
+// HandleUpdateContact 更新联系人
+func HandleUpdateContact(w http.ResponseWriter, r *http.Request) {
+	// 从 URL 获取 ID
+	idStr := r.URL.Path[len("/api/schedule/contacts/"):]
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	var contact ScheduleContact
+	if err := json.NewDecoder(r.Body).Decode(&contact); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if contact.Name == "" || contact.Phone == "" {
+		http.Error(w, "姓名和电话必填", http.StatusBadRequest)
+		return
+	}
+
+	_, err = database.DB.Exec(`
+		UPDATE schedule_contacts 
+		SET name = ?, phone = ?, department = ?, position = ?, remark = ?, updated_at = NOW()
+		WHERE id = ?
+	`, contact.Name, contact.Phone, contact.Department, contact.Position, contact.Remark, id)
+
+	if err != nil {
+		log.Printf("更新联系人失败: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	contact.ID = id
+
+	// 记录审计日志
+	operator := r.Header.Get("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+	AddAuditLogFromRequest(r, "更新联系人", fmt.Sprintf("%d", id), operator, "",
+		fmt.Sprintf(`{"name":"%s","phone":"%s","department":"%s"}`, contact.Name, contact.Phone, contact.Department),
+		fmt.Sprintf("更新联系人: %s (%s)", contact.Name, contact.Phone))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(contact)
+}
+
+// HandleDeleteContact 删除联系人
+func HandleDeleteContact(w http.ResponseWriter, r *http.Request) {
+	// 从 URL 获取 ID
+	idStr := r.URL.Path[len("/api/schedule/contacts/"):]
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	_, err = database.DB.Exec(`DELETE FROM schedule_contacts WHERE id = ?`, id)
+	if err != nil {
+		log.Printf("删除联系人失败: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 记录审计日志
+	operator := r.Header.Get("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+	AddAuditLogFromRequest(r, "删除联系人", fmt.Sprintf("%d", id), operator, "", "",
+		fmt.Sprintf("删除联系人 ID: %d", id))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
