@@ -440,6 +440,7 @@ func UserHasPermission(username, role, permissionCode string) (bool, error) {
 		return true, nil
 	}
 	if username == "" {
+		fmt.Printf("[DEBUG] UserHasPermission: username为空, 返回false\n")
 		return false, nil
 	}
 
@@ -452,6 +453,7 @@ func UserHasPermission(username, role, permissionCode string) (bool, error) {
 		JOIN roles r ON r.id = ur.role_id
 		WHERE u.username = ? AND r.code IN ('super_admin', 'admin')
 	`, username).Scan(&adminRoleCount); err != nil {
+		fmt.Printf("[DEBUG] UserHasPermission: 查询admin角色出错: %v\n", err)
 		return false, err
 	}
 	if adminRoleCount > 0 {
@@ -468,8 +470,10 @@ func UserHasPermission(username, role, permissionCode string) (bool, error) {
 		WHERE u.username = ? AND p.code = ?
 	`, username, permissionCode).Scan(&count)
 	if err != nil {
+		fmt.Printf("[DEBUG] UserHasPermission: 查询权限出错: username=%s, code=%s, err=%v\n", username, permissionCode, err)
 		return false, err
 	}
+	fmt.Printf("[DEBUG] UserHasPermission: username=%s, permissionCode=%s, count=%d\n", username, permissionCode, count)
 	return count > 0, nil
 }
 

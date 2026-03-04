@@ -1,0 +1,85 @@
+---
+# PVC for SSO MySQL data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-sso-pvc
+  namespace: sso
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# Secret for SSO MySQL credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-sso-secret
+  namespace: sso
+type: Opaque
+stringData:
+  MYSQL_ROOT_PASSWORD: "SsoRoot@2026"
+  MYSQL_DATABASE: "sso"
+  MYSQL_USER: "sso_user"
+  MYSQL_PASSWORD: "Sso@2026#Secure"
+
+---
+# SSO MySQL Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-sso
+  namespace: sso
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql-sso
+  template:
+    metadata:
+      labels:
+        app: mysql-sso
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          ports:
+            - containerPort: 3306
+          envFrom:
+            - secretRef:
+                name: mysql-sso-secret
+          args:
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_unicode_ci
+          volumeMounts:
+            - mountPath: /var/lib/mysql
+              name: mysql-storage
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: mysql-storage
+          persistentVolumeClaim:
+            claimName: mysql-sso-pvc
+
+---
+# SSO MySQL Service (ClusterIP - internal only)
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-sso
+  namespace: sso
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3306
+      targetPort: 3306
+  selector:
+    app: mysql-sso

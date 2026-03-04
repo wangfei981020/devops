@@ -66,9 +66,9 @@ onMounted(async () => {
       api.get('/api/merchants').catch(() => ({ data: [] })),
       api.get('/api/users').catch(() => ({ data: [] }))
     ])
-    const domains = domainsRes.data || []
-    const merchants = merchantsRes.data || []
-    const users = usersRes.data || []
+    const domains = Array.isArray(domainsRes.data) ? domainsRes.data : []
+    const merchants = Array.isArray(merchantsRes.data) ? merchantsRes.data : []
+    const users = Array.isArray(usersRes.data) ? usersRes.data : []
     
     const now = new Date()
     const thirtyDaysLater = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)

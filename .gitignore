@@ -31,6 +31,14 @@ vendor/
 *.bak/
 opsplatform/backend.bak/
 opsplatform/frontend.bak/
+opsplatform/backup_*/
+
+# 临时 SQL/脚本
+opsplatform/test_data*.sql
+opsplatform/insert_hierarchy_data.ps1
+
+# tar 包
+*.tar
 
 # Harbor 配置
 harbor/

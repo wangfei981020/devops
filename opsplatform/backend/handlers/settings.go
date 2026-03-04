@@ -96,21 +96,75 @@ func HandleGetSettings(w http.ResponseWriter, r *http.Request) {
 
 // HandleUpdateSettings 更新系统设置
 func HandleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf("[DEBUG] HandleUpdateSettings 收到请求: Method=%s, URL=%s\n", r.Method, r.URL.Path)
+	
 	var settings map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		fmt.Printf("[DEBUG] HandleUpdateSettings JSON解码失败: %v\n", err)
 		http.Error(w, "无效的请求数据", http.StatusBadRequest)
 		return
 	}
+	
+	fmt.Printf("[DEBUG] HandleUpdateSettings 解码成功, keys: ")
+	for k := range settings {
+		fmt.Printf("%s, ", k)
+	}
+	fmt.Printf("\n")
+
+	userID, username, role := GetUserFromContext(r)
+	xOperator := r.Header.Get("X-Operator")
+	
+	// 记录权限检查详情便于调试
+	fmt.Printf("[DEBUG] HandleUpdateSettings: userID=%s, username=%s, role=%s, X-Operator=%s\n", 
+		userID, username, role, xOperator)
 
 	// 检查是否是桌台层级配置，需要特殊权限
+	isTableHierarchyConfig := false
 	for key := range settings {
 		if key == "table_hierarchy_config" {
-			// 检查权限：需要 table_hierarchy:create 或 table_hierarchy:update
-			if !HasAnyPermission(r, "table_hierarchy:create", "table_hierarchy:update") {
-				http.Error(w, "无权限保存桌台层级配置", http.StatusForbidden)
-				return
-			}
+			isTableHierarchyConfig = true
 			break
+		}
+	}
+	
+	if isTableHierarchyConfig {
+		// 桌台层级配置：有任意一个配置权限（添加/编辑/删除）就能保存
+		hasPermission := HasAnyPermission(r, "table_hierarchy:create", "table_hierarchy:update", "table_hierarchy:delete")
+		fmt.Printf("[DEBUG] 桌台层级配置权限检查: hasPermission=%v\n", hasPermission)
+		
+		if !hasPermission {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":       "无权限保存桌台层级配置",
+				"debug": map[string]string{
+					"userID":     userID,
+					"username":   username,
+					"role":       role,
+					"x_operator": xOperator,
+				},
+			})
+			return
+		}
+	} else {
+		// 其他系统设置：需要管理员权限（旧角色或 RBAC admin/super_admin 角色）
+		isAdmin := role == "admin" || role == "super_admin"
+		if !isAdmin {
+			// 检查 RBAC 角色是否是 admin/super_admin
+			var adminRoleCount int
+			if err := database.DB.QueryRow(`
+				SELECT COUNT(*)
+				FROM users u
+				JOIN user_roles ur ON ur.user_id = u.id
+				JOIN roles r ON r.id = ur.role_id
+				WHERE u.username = ? AND r.code IN ('super_admin', 'admin')
+			`, username).Scan(&adminRoleCount); err == nil && adminRoleCount > 0 {
+				isAdmin = true
+			}
+		}
+		if !isAdmin {
+			http.Error(w, "权限不足，需要管理员权限", http.StatusForbidden)
+			return
 		}
 	}
 

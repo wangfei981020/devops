@@ -118,6 +118,7 @@ export default {
       problemDesc: '问题描述',
       handler: '处理人',
       status: '处理结果',
+      solution: '解决方案',
       plannedFixTime: '计划修复时间',
       overdue: '逾期',
       firstCallTime: '首次拨打',
@@ -199,10 +200,12 @@ export default {
       plannedFixTime: '计划修复时间',
       plannedFixTimeEdited: '此字段已被编辑过，需要"编辑计划修复时间"权限才能修改',
       plannedFixTimeFirstEdit: '首次编辑，可修改一次',
+      solution: '解决方案',
+      solutionPlaceholder: '描述解决方案或处理措施',
       markOverdue: '标记为逾期',
       overdueReason: '逾期原因',
       overdueReasonPlaceholder: '说明逾期原因',
-      
+
       // 通话信息
       callInfo: '通话信息',
       firstCallTime: '首次拨打时间',
@@ -427,7 +430,7 @@ export default {
       incidents: '失误记录',
       duty: '值班记录',
       tableMaintenance: '桌台维护记录',
-      tableHierarchyConfig: '桌台层级配置',
+      tableHierarchyConfig: '桌台配置',
       assets: '资产管理',
       domains: '域名管理',
       merchants: '商户管理',
@@ -674,7 +677,8 @@ export default {
       byQcStatus: '质检状态',
       byGameType: '游戏类型',
       bySite: '现场统计',
-      byTable: '桌台统计',
+      byTableSummary: '桌台汇总',
+      byTable: '桌台明细（按项目）',
       filterProject: '项目',
       filterDuration: '维护时长',
       filterOperator: '操作人',
@@ -727,19 +731,34 @@ export default {
     selectAll: '全选/取消全选'
   },
 
-  // 桌台层级配置页面
+  // 桌台配置页面
   tableHierarchy: {
-    pageTitle: '桌台层级配置',
-    subtitle: '全局配置项目、现场和桌台的对应关系',
+    pageTitle: '桌台配置',
+    subtitle: '全局配置项目、现场、游戏类型和桌台的对应关系',
+    recordCount: '共 {count} 个桌台',
 
     stats: {
-      projects: '个项目',
-      sites: '个现场',
-      tables: '个桌台'
+      projects: '项目',
+      sites: '现场',
+      tables: '桌台'
     },
 
     search: {
-      placeholder: '搜索项目、现场、桌台...'
+      placeholder: '搜索项目、现场、桌台...',
+      searchBtn: '搜索',
+      reset: '重置'
+    },
+
+    filters: {
+      title: '筛选条件',
+      project: '项目',
+      site: '现场',
+      gameType: '游戏类型',
+      tableNo: '桌台号',
+      allProjects: '全部项目',
+      allSites: '全部现场',
+      allGameTypes: '全部游戏类型',
+      tableNoPlaceholder: '输入桌台号...'
     },
 
     add: {
@@ -752,6 +771,7 @@ export default {
       addGameType: '添加游戏类型',
       batchProject: '批量添加项目',
       batchSite: '批量添加现场',
+      batchGameType: '批量添加游戏类型',
       batchTable: '批量添加桌台'
     },
 
@@ -788,10 +808,17 @@ export default {
       editTable: '编辑桌台',
       batchAddProject: '批量添加项目',
       batchAddSite: '批量添加现场',
+      batchAddGameType: '批量添加游戏类型',
       batchAddTable: '批量添加桌台',
+      gameTypeName: '游戏类型名称',
       belongProject: '所属项目',
       belongSite: '所属现场',
       projectName: '项目名称',
+      projectNameZh: '中文名称',
+      projectNameEn: '英文名称',
+      projectNameZhPlaceholder: '如：项目A',
+      projectNameEnPlaceholder: '如：Project A',
+      projectNameZhRequired: '项目中文名称为必填项',
       siteName: '现场名称',
       siteNameZh: '中文名称',
       siteNameEn: '英文名称',
@@ -802,15 +829,17 @@ export default {
       tableNumber: '桌台编号',
       gameType: '游戏类型',
       gameTypeHint: '（可多选）',
-      batchGameTypeHint: '（可多选，批量桌台共用）',
+      batchGameTypeHint: '（每行一个，格式：中文名称|英文名称）',
       selectProject: '请选择项目',
       selectSite: '请选择现场',
       projectPlaceholder: '如：项目A',
       sitePlaceholder: '如：1号现场',
       tablePlaceholder: '如：B01',
       batchHint: '（每行一个）',
-      batchProjectPlaceholder: '项目A\n项目B\n项目C',
-      batchSitePlaceholder: '1号现场\n2号现场\nVIP现场',
+      batchGameTypeHintBatch: '（每行一个，格式：中文名称|英文名称）',
+      batchProjectPlaceholder: '项目A|Project A\n项目B|Project B\n项目C|Project C',
+      batchSitePlaceholder: '1号现场|Site 1\n2号现场|Site 2\nVIP现场|VIP Site',
+      batchGameTypePlaceholder: '百家乐|Baccarat\n龙虎|Dragon Tiger\n轮盘|Roulette',
       batchTablePlaceholder: 'A01\nA02\nA03'
     },
 
@@ -828,12 +857,45 @@ export default {
       loadFailed: '加载配置失败',
       saveSuccess: '配置保存成功',
       saveFailed: '保存失败',
+      noPermission: '无权限保存桌台配置',
       deleteSuccess: '删除成功',
       confirmDeleteProject: '确定要删除项目 "{name}" 吗？',
       confirmDeleteSite: '确定要删除现场 "{name}" 吗？',
       confirmDeleteTable: '确定要删除桌台 "{name}" 吗？',
+      confirmDeleteGameType: '确定要删除游戏类型 "{name}" 吗？',
       cascadeWarningProject: '该项目下的所有现场和桌台也将被删除',
-      cascadeWarningSite: '该现场下的所有桌台也将被删除'
+      cascadeWarningSite: '该现场下的所有桌台也将被删除',
+      hasTablesCannotDelete: '有桌台关联，无法删除'
+    },
+
+    configBtn: {
+      project: '项目配置',
+      site: '现场配置',
+      gameType: '游戏类型',
+      table: '桌台配置'
+    },
+
+    gameTypeSection: {
+      title: '游戏类型',
+      badge: '游戏',
+      empty: '暂无游戏类型，请点击上方"添加"按钮创建'
+    },
+
+    projectSection: {
+      title: '项目管理',
+      empty: '暂无项目，请点击上方"添加"按钮创建'
+    },
+
+    siteSection: {
+      title: '现场管理',
+      empty: '暂无现场，请点击上方"添加"按钮创建'
+    },
+
+    pagination: {
+      total: '共',
+      records: '个桌台',
+      perPage: '每页',
+      items: '条'
     },
 
     empty: {

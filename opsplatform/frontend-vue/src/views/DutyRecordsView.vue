@@ -253,6 +253,7 @@ function getEmptyForm() {
     event_type: 'customer_feedback',
     handler: '',
     handle_result: '',
+    solution: '',
     problem_desc: '',
     first_call_time: '',
     answer_time: '',
@@ -1081,12 +1082,14 @@ function copyRecord(record) {
 
 // 打开粘贴弹窗
 function openPasteModal() {
+  console.log('[DEBUG] openPasteModal called, copiedRecord:', copiedRecord.value)
   if (!copiedRecord.value) {
     appStore.showToast('请先复制一条记录', 'warning')
     return
   }
   pasteCount.value = 1
   showPasteModal.value = true
+  console.log('[DEBUG] showPasteModal set to:', showPasteModal.value)
 }
 
 // 粘贴记录
@@ -1276,6 +1279,7 @@ async function exportRecords() {
     { key: 'problem_desc', title: '问题描述', width: 30 },
     { key: 'handler', title: '处理人', width: 12 },
     { key: 'handle_result', title: '处理结果', width: 20 },
+    { key: 'solution', title: '解决方案', width: 30 },
     { key: 'first_call_time', title: '首次拨打时间', width: 18 },
     { key: 'answer_time', title: '接听时间', width: 18 },
     { key: 'call_count', title: '拨打次数', width: 10 },
@@ -1753,6 +1757,7 @@ async function deleteProject(project) {
             <th class="col-desc">{{ t('dutyRecords.columns.problemDesc') }}</th>
             <th class="col-handler">{{ t('dutyRecords.columns.handler') }}</th>
             <th class="col-status">{{ t('dutyRecords.columns.status') }}</th>
+            <th class="col-solution">{{ t('dutyRecords.columns.solution') }}</th>
             <th class="col-planned">{{ t('dutyRecords.columns.plannedFixTime') }}</th>
             <th class="col-overdue">{{ t('dutyRecords.columns.overdue') }}</th>
             <th class="col-time">{{ t('dutyRecords.columns.firstCallTime') }}</th>
@@ -1772,13 +1777,13 @@ async function deleteProject(project) {
         </thead>
         <tbody>
           <tr v-if="loading">
-            <td colspan="25" class="loading-cell">
+            <td colspan="26" class="loading-cell">
               <div class="loading-spinner"></div>
               加载中...
             </td>
           </tr>
           <tr v-else-if="paginatedRecords.length === 0">
-            <td colspan="25" class="empty-cell">
+            <td colspan="26" class="empty-cell">
               <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
               <p>{{ t('dutyRecords.empty.noRecords') }}</p>
             </td>
@@ -1800,6 +1805,7 @@ async function deleteProject(project) {
             <td class="col-status nowrap">
               <span class="status-badge" :style="{ backgroundColor: getStatusColor(r.status) }">{{ getStatusLabel(r.status) }}</span>
             </td>
+            <td class="col-solution">{{ r.solution || '-' }}</td>
             <td class="col-planned nowrap">
               <span>{{ formatDateTime(r.planned_fix_time) || t('common.none') }}</span>
               <button
@@ -2439,6 +2445,7 @@ async function deleteProject(project) {
               <div class="detail-row"><label>处理结果</label><span class="status-badge" :style="{ backgroundColor: getStatusColor(detailRecord.status) }">{{ getStatusLabel(detailRecord.status) }}</span></div>
               <div class="detail-row"><label>{{ t('dutyRecords.form.plannedFixTime') }}</label><span>{{ detailRecord.planned_fix_time || t('common.none') }}</span></div>
               <div class="detail-row full"><label>{{ t('dutyRecords.columns.status') }}</label><span>{{ detailRecord.handle_result || t('common.none') }}</span></div>
+              <div class="detail-row full"><label>{{ t('dutyRecords.columns.solution') }}</label><span>{{ detailRecord.solution || t('common.none') }}</span></div>
               <div class="detail-row" v-if="detailRecord.is_overdue"><label>逾期</label><span class="overdue-text">是 - {{ detailRecord.overdue_reason }}</span></div>
             </div>
             <div class="detail-section">
@@ -2578,6 +2585,10 @@ async function deleteProject(project) {
                   <input type="datetime-local" v-model="form.planned_fix_time" :disabled="!canEditPlannedFixTimeInForm" :class="{ 'disabled-field': !canEditPlannedFixTimeInForm }">
                   <span v-if="!canEditPlannedFixTimeInForm" class="helper-text warning">{{ t('dutyRecords.form.plannedFixTimeEdited') }}</span>
                   <span v-else-if="modalMode === 'edit' && !form.planned_fix_time_edited" class="helper-text info">{{ t('dutyRecords.form.plannedFixTimeFirstEdit') }}</span>
+                </div>
+                <div class="form-group full-width">
+                  <label>{{ t('dutyRecords.form.solution') }}</label>
+                  <textarea v-model="form.solution" :placeholder="t('dutyRecords.form.solutionPlaceholder')" rows="2"></textarea>
                 </div>
               </div>
               <div class="form-grid">
@@ -2845,13 +2856,13 @@ async function deleteProject(project) {
 
   <!-- 粘贴记录弹窗 -->
   <Teleport to="body">
-    <div v-if="showPasteModal" class="modal-overlay" @click.self="showPasteModal = false">
+    <div v-if="showPasteModal" class="paste-modal-overlay" @click.self="showPasteModal = false">
       <div class="paste-modal">
-        <div class="modal-header">
+        <div class="paste-modal-header">
           <h3>粘贴记录</h3>
-          <button class="close-btn" @click="showPasteModal = false">&times;</button>
+          <button class="paste-close-btn" @click="showPasteModal = false">&times;</button>
         </div>
-        <div class="modal-body">
+        <div class="paste-modal-body">
           <div class="paste-info">
             <p class="paste-hint">将复制的记录粘贴多条，日期将更新为当前时间</p>
             <div class="paste-preview" v-if="copiedRecord">
@@ -2882,7 +2893,7 @@ async function deleteProject(project) {
             <button v-for="n in [1, 5, 10, 20]" :key="n" class="quick-btn" :class="{ active: pasteCount === n }" @click="pasteCount = n">{{ n }}</button>
           </div>
         </div>
-        <div class="modal-footer">
+        <div class="paste-modal-footer">
           <button class="btn btn-secondary" @click="showPasteModal = false">取消</button>
           <button class="btn btn-primary" @click="pasteRecords">粘贴 {{ pasteCount }} 条</button>
         </div>
@@ -3192,6 +3203,7 @@ async function deleteProject(project) {
 .col-handover { width: 55px; }
 .col-handover-content { min-width: 120px; max-width: 200px; word-break: break-word; white-space: normal; }
 .col-status { width: 60px; }
+.col-solution { width: 120px; max-width: 200px; white-space: normal; word-break: break-all; }
 .col-planned { width: 70px; }
 .col-overdue { width: 40px; }
 .col-attach { width: 55px; }
@@ -3589,7 +3601,21 @@ tr.selected:hover { background: #254b75 !important; }
   cursor: not-allowed;
 }
 
-/* 粘贴弹窗样式 */
+/* 粘贴弹窗样式已移至非 scoped style 块 */
+</style>
+
+<style>
+/* 粘贴弹窗 - 非 scoped，用于 Teleport to body */
+.paste-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+  padding: 20px;
+}
 .paste-modal {
   background: var(--bg-card);
   border-radius: 16px;
@@ -3598,20 +3624,20 @@ tr.selected:hover { background: #254b75 !important; }
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
   border: 1px solid var(--border-color);
 }
-.paste-modal .modal-header {
+.paste-modal-header {
   padding: 20px 24px;
   border-bottom: 1px solid var(--border-color);
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
-.paste-modal .modal-header h3 {
+.paste-modal-header h3 {
   margin: 0;
   font-size: 1.1rem;
   font-weight: 600;
   color: var(--text-primary);
 }
-.paste-modal .close-btn {
+.paste-close-btn {
   background: none;
   border: none;
   font-size: 1.5rem;
@@ -3619,122 +3645,31 @@ tr.selected:hover { background: #254b75 !important; }
   cursor: pointer;
   line-height: 1;
 }
-.paste-modal .close-btn:hover {
+.paste-close-btn:hover {
   color: var(--text-primary);
 }
-.paste-modal .modal-body {
+.paste-modal-body {
   padding: 24px;
 }
-.paste-info {
-  margin-bottom: 20px;
-}
-.paste-hint {
-  font-size: 0.875rem;
-  color: var(--text-muted);
-  margin-bottom: 12px;
-}
-.paste-preview {
-  background: var(--bg-hover);
-  border-radius: 8px;
-  padding: 12px;
-}
-.preview-item {
-  display: flex;
-  gap: 8px;
-  font-size: 0.875rem;
-  margin-bottom: 6px;
-}
-.preview-item:last-child {
-  margin-bottom: 0;
-}
-.preview-label {
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-.preview-value {
-  color: var(--text-primary);
-  word-break: break-all;
-}
-.paste-count-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.paste-count-group label {
-  font-size: 0.875rem;
-  color: var(--text-primary);
-  font-weight: 500;
-}
-.paste-count-input {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.count-btn {
-  width: 36px;
-  height: 36px;
-  border: none;
-  background: var(--bg-hover);
-  color: var(--text-primary);
-  font-size: 1.2rem;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.count-btn:hover {
-  background: var(--bg-input);
-}
-.count-input {
-  width: 60px;
-  height: 36px;
-  border: none;
-  background: var(--bg-card);
-  color: var(--text-primary);
-  text-align: center;
-  font-size: 1rem;
-  font-weight: 600;
-  -moz-appearance: textfield;
-}
-.count-input::-webkit-outer-spin-button,
-.count-input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-.count-hint {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-.paste-quick-btns {
-  display: flex;
-  gap: 8px;
-}
-.quick-btn {
-  padding: 8px 16px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-card);
-  color: var(--text-primary);
-  border-radius: 6px;
-  font-size: 0.875rem;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.quick-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--text-muted);
-}
-.quick-btn.active {
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
-  color: white;
-  border-color: transparent;
-}
-.paste-modal .modal-footer {
-  padding: 16px 24px;
-  border-top: 1px solid var(--border-color);
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-}
+.paste-info { margin-bottom: 20px; }
+.paste-hint { font-size: 0.875rem; color: var(--text-muted); margin-bottom: 12px; }
+.paste-preview { background: var(--bg-hover); border-radius: 8px; padding: 12px; }
+.paste-preview .preview-item { display: flex; gap: 8px; font-size: 0.875rem; margin-bottom: 6px; }
+.paste-preview .preview-item:last-child { margin-bottom: 0; }
+.paste-preview .preview-label { color: var(--text-muted); flex-shrink: 0; }
+.paste-preview .preview-value { color: var(--text-primary); word-break: break-all; }
+.paste-count-group { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.paste-count-group label { font-size: 0.875rem; color: var(--text-primary); font-weight: 500; }
+.paste-count-input { display: flex; align-items: center; gap: 0; border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; }
+.paste-count-input .count-btn { width: 36px; height: 36px; border: none; background: var(--bg-hover); color: var(--text-primary); font-size: 1.2rem; cursor: pointer; transition: all 0.15s; }
+.paste-count-input .count-btn:hover { background: var(--bg-input); }
+.paste-count-input .count-input { width: 60px; height: 36px; border: none; background: var(--bg-card); color: var(--text-primary); text-align: center; font-size: 1rem; font-weight: 600; -moz-appearance: textfield; }
+.paste-count-input .count-input::-webkit-outer-spin-button,
+.paste-count-input .count-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.paste-count-group .count-hint { font-size: 0.75rem; color: var(--text-muted); }
+.paste-quick-btns { display: flex; gap: 8px; }
+.paste-quick-btns .quick-btn { padding: 8px 16px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); border-radius: 6px; font-size: 0.875rem; cursor: pointer; transition: all 0.15s; }
+.paste-quick-btns .quick-btn:hover { background: var(--bg-hover); border-color: var(--text-muted); }
+.paste-quick-btns .quick-btn.active { background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; border-color: transparent; }
+.paste-modal-footer { padding: 16px 24px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 12px; }
 </style>

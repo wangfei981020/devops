@@ -1,0 +1,142 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: opsplatform-backend-secret
+  namespace: opsplatform-prod
+type: Opaque
+stringData:
+  MYSQL_HOST: "mysql.opsplatform-prod.svc.cluster.local"
+  MYSQL_PORT: "3306"
+  MYSQL_DATABASE: "opsplatform"
+  MYSQL_USER: "opsplatform_user"
+  MYSQL_PASSWORD: "REPLACE_ME_STRONG_PASSWORD"
+  APP_ENV: "prod"
+  PORT: "8080"
+  METRICS_PORT: "8088"
+  DEV_MODE: "false"
+  DISABLE_CSRF: "false"
+  SESSION_TIMEOUT: "30"
+  COOKIE_SECURE: "true"
+  COOKIE_SAMESITE: "lax"
+  CORS_ALLOWED_ORIGIN: "https://opsplatform.example.com"
+  TZ: "Asia/Shanghai"
+  JWT_SECRET: "REPLACE_ME_JWT_SECRET"
+  WEBSITE_ENCRYPT_KEY: "REPLACE_ME_32_BYTE_KEY"
+  ADMIN_PASSWORD: "REPLACE_ME_ADMIN_PASSWORD"
+  REDIS_HOST: "redis.opsplatform-prod.svc.cluster.local"
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: "REPLACE_ME_REDIS_PASSWORD"
+  REDIS_DB: "0"
+  STORAGE_TYPE: "minio"
+  STORAGE_ENDPOINT: "minio.opsplatform-prod.svc.cluster.local:9000"
+  STORAGE_ACCESS_KEY: "REPLACE_ME_MINIO_ACCESS_KEY"
+  STORAGE_SECRET_KEY: "REPLACE_ME_MINIO_SECRET_KEY"
+  STORAGE_BUCKET: "opsplatform"
+  STORAGE_REGION: "us-east-1"
+  STORAGE_USE_SSL: "false"
+  STORAGE_LOCAL_PATH: "/app/uploads"
+  STORAGE_PUBLIC_URL: "https://minio.opsplatform.example.com/opsplatform"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsplatform-backend
+  namespace: opsplatform-prod
+  labels:
+    app: opsplatform-backend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: opsplatform-backend
+  template:
+    metadata:
+      labels:
+        app: opsplatform-backend
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: backend
+          image: marks26/opsplatform-backend:v647
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 8088
+          envFrom:
+            - secretRef:
+                name: opsplatform-backend-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsplatform-backend
+  namespace: opsplatform-prod
+  labels:
+    app: opsplatform-backend
+spec:
+  type: ClusterIP
+  selector:
+    app: opsplatform-backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: metrics
+      port: 8088
+      targetPort: metrics
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: opsplatform-backend-ingress
+  namespace: opsplatform-prod
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.opsplatform.example.com
+      secretName: opsplatform-api-tls
+  rules:
+    - host: api.opsplatform.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: opsplatform-backend
+                port:
+                  number: 8080

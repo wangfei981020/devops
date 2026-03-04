@@ -110,9 +110,10 @@ func main() {
 	protected.HandleFunc("/mfa/disable", handlers.HandleMFADisable).Methods("POST", "OPTIONS")
 	adminOnly.HandleFunc("/mfa/reset", handlers.HandleMFAReset).Methods("POST", "OPTIONS")
 
-	// 系统设置（仅管理员）
+	// 系统设置
 	protected.HandleFunc("/settings", handlers.HandleGetSettings).Methods("GET", "OPTIONS")
-	adminOnly.HandleFunc("/settings", handlers.HandleUpdateSettings).Methods("POST", "OPTIONS")
+	// 桌台层级配置使用 table_hierarchy:* 权限，其他设置仍需管理员
+	protected.HandleFunc("/settings", handlers.HandleUpdateSettings).Methods("POST", "OPTIONS")
 
 	// OIDC 配置管理（仅管理员）
 	adminOnly.HandleFunc("/oidc/admin-config", handlers.HandleGetOIDCConfigAdmin).Methods("GET", "OPTIONS")

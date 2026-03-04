@@ -6,6 +6,12 @@ import api from '@/api'
 const appStore = useAppStore()
 const authStore = useAuthStore()
 
+const isSuperAdmin = computed(() => authStore.isSuperAdmin())
+const canCreate = computed(() => isSuperAdmin.value || authStore.hasPermission('network:create'))
+const canUpdate = computed(() => isSuperAdmin.value || authStore.hasPermission('network:update'))
+const canDelete = computed(() => isSuperAdmin.value || authStore.hasPermission('network:delete'))
+const canBatch = computed(() => isSuperAdmin.value || authStore.hasPermission('network:batch'))
+
 const records = ref([])
 const loading = ref(false)
 
@@ -430,19 +436,19 @@ async function confirmBatchDelete() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
           刷新
         </button>
-        <button class="btn btn-secondary" @click="exportRecords">
+        <button v-if="canCreate" class="btn btn-secondary" @click="exportRecords">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
           导出
         </button>
-        <button class="btn btn-primary" @click="openRecordModal('add')">
+        <button v-if="canCreate" class="btn btn-primary" @click="openRecordModal('add')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           添加
         </button>
-        <button class="btn btn-secondary" @click="openBatchModal">
+        <button v-if="canBatch" class="btn btn-secondary" @click="openBatchModal">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
           批量添加
         </button>
-        <button class="btn btn-secondary" @click="openBatchCheckModal">
+        <button v-if="canBatch" class="btn btn-secondary" @click="openBatchCheckModal">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
           批量检测
         </button>
@@ -476,10 +482,10 @@ async function confirmBatchDelete() {
     <!-- 批量操作栏 -->
     <div class="batch-action-bar" v-if="selectedRecords.length > 0">
       <span class="batch-info">已选择 {{ selectedRecords.length }} 条记录</span>
-      <button class="btn btn-primary btn-sm" @click="batchUpdateStatus('active')">设为启用</button>
-      <button class="btn btn-warning btn-sm" @click="batchUpdateStatus('pending')">设为待定</button>
-      <button class="btn btn-secondary btn-sm" @click="batchUpdateStatus('inactive')">设为停用</button>
-      <button class="btn btn-danger btn-sm" @click="confirmBatchDelete">删除选中</button>
+      <button v-if="canUpdate" class="btn btn-primary btn-sm" @click="batchUpdateStatus('active')">设为启用</button>
+      <button v-if="canUpdate" class="btn btn-warning btn-sm" @click="batchUpdateStatus('pending')">设为待定</button>
+      <button v-if="canUpdate" class="btn btn-secondary btn-sm" @click="batchUpdateStatus('inactive')">设为停用</button>
+      <button v-if="canDelete" class="btn btn-danger btn-sm" @click="confirmBatchDelete">删除选中</button>
     </div>
 
     <!-- 表格 -->
@@ -520,8 +526,8 @@ async function confirmBatchDelete() {
               <td class="td-action-fixed">
                 <div class="action-btns">
                   <button class="action-btn" @click="openRecordHistory(record)" title="历史"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></button>
-                  <button class="action-btn" @click="openRecordModal('edit', record)" title="编辑"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg></button>
-                  <div class="popconfirm-wrapper">
+                  <button v-if="canUpdate" class="action-btn" @click="openRecordModal('edit', record)" title="编辑"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg></button>
+                  <div v-if="canDelete" class="popconfirm-wrapper">
                     <button class="action-btn danger" @click.stop="togglePopconfirm('record', record.id)" title="删除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
                     <div class="popconfirm" :class="{ show: activePopconfirm === 'record-' + record.id }">
                       <div class="popconfirm-content"><span class="popconfirm-icon">!</span><span class="popconfirm-message">确定要删除吗?</span></div>

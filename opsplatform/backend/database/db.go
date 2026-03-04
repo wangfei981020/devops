@@ -719,12 +719,13 @@ CREATE TABLE IF NOT EXISTS duty_records (
 			event_type VARCHAR(32) DEFAULT 'customer_feedback' COMMENT '事件类型: inspection=巡检发现, alert=监控告警, customer_feedback=客户反馈, proactive_check=值班人员主动排查',
 			handler VARCHAR(128) DEFAULT '' COMMENT '处理人',
 			handle_result TEXT COMMENT '处理结果',
+			solution TEXT COMMENT '解决方案',
 			problem_desc TEXT COMMENT '问题描述',
 
 			first_call_time DATETIME DEFAULT NULL COMMENT '首次拨打时间',
 			answer_time DATETIME DEFAULT NULL COMMENT '接听时间',
 			call_count INT DEFAULT 0 COMMENT '拨打次数',
-			is_answered TINYINT(1) DEFAULT 0 COMMENT '是否接听',
+			is_answered VARCHAR(16) DEFAULT '无' COMMENT '是否接听: 无/已接听/未接听',
 			response_time INT DEFAULT 0 COMMENT '响应时间(分钟)',
 
 			is_escalated TINYINT(1) DEFAULT 0 COMMENT '是否升级问题',
@@ -765,6 +766,12 @@ CREATE TABLE IF NOT EXISTS duty_records (
 	DB.Exec(`ALTER TABLE duty_records ADD COLUMN planned_fix_time_edited TINYINT(1) DEFAULT 0 COMMENT '计划修复时间是否被编辑过' AFTER planned_fix_time`)
 	// 将 planned_fix_time 改为 DATETIME 类型以支持时分秒
 	DB.Exec(`ALTER TABLE duty_records MODIFY COLUMN planned_fix_time DATETIME DEFAULT NULL COMMENT '计划修复时间'`)
+	// 将 is_answered 从 TINYINT 改为 VARCHAR 以支持 无/已接听/未接听
+	DB.Exec(`ALTER TABLE duty_records MODIFY COLUMN is_answered VARCHAR(16) DEFAULT '无' COMMENT '是否接听: 无/已接听/未接听'`)
+	DB.Exec(`ALTER TABLE duty_records ADD COLUMN solution TEXT COMMENT '解决方案' AFTER handle_result`)
+	// 迁移旧数据: 1->已接听, 0->无
+	DB.Exec(`UPDATE duty_records SET is_answered='已接听' WHERE is_answered='1'`)
+	DB.Exec(`UPDATE duty_records SET is_answered='无' WHERE is_answered='0' OR is_answered=''`)
 
 	// ========== 文件分享表 ==========
 	_, err = DB.Exec(`
@@ -1187,6 +1194,10 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_table_hierarchy_create", "table_hierarchy:create", "[桌台配置] 添加配置", "允许添加桌台层级配置"},
 		{"perm_btn_table_hierarchy_update", "table_hierarchy:update", "[桌台配置] 编辑配置", "允许编辑桌台层级配置"},
 		{"perm_btn_table_hierarchy_delete", "table_hierarchy:delete", "[桌台配置] 删除配置", "允许删除桌台层级配置"},
+		{"perm_btn_table_hierarchy_manage_project", "table_hierarchy:manage_project", "[桌台配置] 项目管理", "允许查看和管理项目配置"},
+		{"perm_btn_table_hierarchy_manage_site", "table_hierarchy:manage_site", "[桌台配置] 现场管理", "允许查看和管理现场配置"},
+		{"perm_btn_table_hierarchy_manage_gametype", "table_hierarchy:manage_gametype", "[桌台配置] 游戏类型管理", "允许查看和管理游戏类型配置"},
+		{"perm_btn_table_hierarchy_manage_table", "table_hierarchy:manage_table", "[桌台配置] 桌台管理", "允许查看和管理桌台配置"},
 	}
 
 	for _, perm := range buttonPermissions {

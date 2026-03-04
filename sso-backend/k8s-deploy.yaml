@@ -1,0 +1,154 @@
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sso
+
+---
+# SSO Backend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sso-backend
+  namespace: sso
+  labels:
+    app: sso-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sso-backend
+  template:
+    metadata:
+      labels:
+        app: sso-backend
+    spec:
+      containers:
+        - name: sso-backend
+          image: localhost:8070/opsplatform/sso-backend:v2
+          ports:
+            - containerPort: 9000
+          env:
+            - name: TZ
+              value: "Asia/Shanghai"
+            - name: SSO_ISSUER
+              value: "http://localhost:30900"
+            - name: SSO_INTERNAL_ISSUER
+              value: "http://sso-backend.sso.svc.cluster.local:9000"
+            - name: SSO_CLIENT_ID
+              value: "opsplatform"
+            - name: SSO_CLIENT_SECRET
+              value: "opsplatform-secret"
+            - name: SSO_DB_HOST
+              value: "mysql-sso.sso.svc.cluster.local"
+            - name: SSO_DB_PORT
+              value: "3306"
+            - name: SSO_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-sso-secret
+                  key: MYSQL_USER
+            - name: SSO_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-sso-secret
+                  key: MYSQL_PASSWORD
+            - name: SSO_DB_NAME
+              value: "sso"
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+---
+# SSO Backend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: sso-backend
+  namespace: sso
+  labels:
+    app: sso-backend
+spec:
+  type: NodePort
+  ports:
+    - port: 9000
+      targetPort: 9000
+      nodePort: 30900
+      protocol: TCP
+  selector:
+    app: sso-backend
+
+---
+# SSO Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sso-frontend
+  namespace: sso
+  labels:
+    app: sso-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sso-frontend
+  template:
+    metadata:
+      labels:
+        app: sso-frontend
+    spec:
+      containers:
+        - name: sso-frontend
+          image: localhost:8070/opsplatform/sso-frontend:v1
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "64Mi"
+              cpu: "50m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 30
+
+---
+# SSO Frontend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: sso-frontend
+  namespace: sso
+  labels:
+    app: sso-frontend
+spec:
+  type: NodePort
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30901
+      protocol: TCP
+  selector:
+    app: sso-frontend
+

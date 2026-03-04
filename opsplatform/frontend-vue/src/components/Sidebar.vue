@@ -110,7 +110,7 @@ const menuGroups = [
       { key: 'incidents', perm: 'incidents', name: '失误记录', path: '/incidents' },
       { key: 'duty', perm: 'duty', name: '值班记录', path: '/duty-records' },
       { key: 'table-maintenance', perm: 'table_maintenance', name: '桌台维护记录', path: '/table-maintenance' },
-      { key: 'table-hierarchy-config', perm: 'table_hierarchy_config', name: '桌台层级配置', path: '/table-hierarchy-config' }
+      { key: 'table-hierarchy-config', perm: 'table_hierarchy_config', name: '桌台配置', path: '/table-hierarchy-config' }
     ]
   },
   {

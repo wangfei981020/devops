@@ -263,17 +263,17 @@ func HandleGetDutyRecords(w http.ResponseWriter, r *http.Request) {
 	responseTimeMax := r.URL.Query().Get("response_time_max")
 
 	query := `SELECT dr.id, dr.duty_date, dr.duty_person, dr.project_id, COALESCE(dp.name,'') as project_name,
-		COALESCE(dr.task_desc,''), dr.feedback_type, COALESCE(dr.event_type,'customer_feedback'), COALESCE(dr.handler,''), COALESCE(dr.handle_result,''), COALESCE(dr.problem_desc,''),
+		COALESCE(dr.task_desc,''), dr.feedback_type, COALESCE(dr.event_type,'customer_feedback'), COALESCE(dr.handler,''), COALESCE(dr.handle_result,''), COALESCE(dr.solution,''), COALESCE(dr.problem_desc,''),
 		dr.first_call_time, dr.answer_time, dr.call_count, dr.is_answered, dr.response_time,
 		dr.is_escalated, COALESCE(dr.escalate_to,''),
 		dr.has_handover, COALESCE(dr.handover_person,''), COALESCE(dr.handover_content,''),
 		dr.status, dr.planned_fix_time, COALESCE(dr.planned_fix_time_edited, 0),
-		CASE 
-			WHEN dr.planned_fix_time IS NOT NULL 
-				AND CAST(dr.planned_fix_time AS CHAR) != '' 
-				AND dr.planned_fix_time < NOW() 
-				AND dr.status NOT IN ('resolved', 'normal') 
-			THEN 1 ELSE 0 
+		CASE
+			WHEN dr.planned_fix_time IS NOT NULL
+				AND CAST(dr.planned_fix_time AS CHAR) != ''
+				AND dr.planned_fix_time < NOW()
+				AND dr.status NOT IN ('resolved', 'normal')
+			THEN 1 ELSE 0
 		END as is_overdue,
 		COALESCE(dr.overdue_reason,''),
 		COALESCE(dr.attachments,'[]'),
@@ -340,7 +340,7 @@ func HandleGetDutyRecords(w http.ResponseWriter, r *http.Request) {
 		var attachmentsJSON string
 
 		err := rows.Scan(&rec.ID, &rec.DutyDate, &rec.DutyPerson, &rec.ProjectID, &rec.ProjectName,
-			&rec.TaskDesc, &rec.FeedbackType, &rec.EventType, &rec.Handler, &rec.HandleResult, &rec.ProblemDesc,
+			&rec.TaskDesc, &rec.FeedbackType, &rec.EventType, &rec.Handler, &rec.HandleResult, &rec.Solution, &rec.ProblemDesc,
 			&firstCallTime, &answerTime, &rec.CallCount, &rec.IsAnswered, &rec.ResponseTime,
 			&rec.IsEscalated, &rec.EscalateTo,
 			&rec.HasHandover, &rec.HandoverPerson, &rec.HandoverContent,
@@ -386,17 +386,17 @@ func HandleGetDutyRecord(w http.ResponseWriter, r *http.Request) {
 	var attachmentsJSON string
 
 	err := database.DB.QueryRow(`SELECT dr.id, dr.duty_date, dr.duty_person, dr.project_id, COALESCE(dp.name,'') as project_name,
-		COALESCE(dr.task_desc,''), dr.feedback_type, COALESCE(dr.event_type,'customer_feedback'), COALESCE(dr.handler,''), COALESCE(dr.handle_result,''), COALESCE(dr.problem_desc,''),
+		COALESCE(dr.task_desc,''), dr.feedback_type, COALESCE(dr.event_type,'customer_feedback'), COALESCE(dr.handler,''), COALESCE(dr.handle_result,''), COALESCE(dr.solution,''), COALESCE(dr.problem_desc,''),
 		dr.first_call_time, dr.answer_time, dr.call_count, dr.is_answered, dr.response_time,
 		dr.is_escalated, COALESCE(dr.escalate_to,''),
 		dr.has_handover, COALESCE(dr.handover_person,''), COALESCE(dr.handover_content,''),
 		dr.status, dr.planned_fix_time, COALESCE(dr.planned_fix_time_edited, 0),
-		CASE 
-			WHEN dr.planned_fix_time IS NOT NULL 
-				AND CAST(dr.planned_fix_time AS CHAR) != '' 
-				AND dr.planned_fix_time < NOW() 
-				AND dr.status NOT IN ('resolved', 'normal') 
-			THEN 1 ELSE 0 
+		CASE
+			WHEN dr.planned_fix_time IS NOT NULL
+				AND CAST(dr.planned_fix_time AS CHAR) != ''
+				AND dr.planned_fix_time < NOW()
+				AND dr.status NOT IN ('resolved', 'normal')
+			THEN 1 ELSE 0
 		END as is_overdue,
 		COALESCE(dr.overdue_reason,''),
 		COALESCE(dr.attachments,'[]'),
@@ -404,7 +404,7 @@ func HandleGetDutyRecord(w http.ResponseWriter, r *http.Request) {
 		FROM duty_records dr
 		LEFT JOIN duty_projects dp ON dr.project_id = dp.id
 		WHERE dr.id = ?`, id).Scan(&rec.ID, &rec.DutyDate, &rec.DutyPerson, &rec.ProjectID, &rec.ProjectName,
-		&rec.TaskDesc, &rec.FeedbackType, &rec.EventType, &rec.Handler, &rec.HandleResult, &rec.ProblemDesc,
+		&rec.TaskDesc, &rec.FeedbackType, &rec.EventType, &rec.Handler, &rec.HandleResult, &rec.Solution, &rec.ProblemDesc,
 		&firstCallTime, &answerTime, &rec.CallCount, &rec.IsAnswered, &rec.ResponseTime,
 		&rec.IsEscalated, &rec.EscalateTo,
 		&rec.HasHandover, &rec.HandoverPerson, &rec.HandoverContent,
@@ -447,7 +447,8 @@ func HandleCreateDutyRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	var rec models.DutyRecord
 	if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {
-		sendError(w, "请求参数无效", http.StatusBadRequest)
+		fmt.Printf("[DEBUG] HandleCreateDutyRecord JSON解码失败: %v\n", err)
+		sendError(w, "请求参数无效: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -500,13 +501,13 @@ func HandleCreateDutyRecord(w http.ResponseWriter, r *http.Request) {
 	isOverdue := calculateOverdue(rec.PlannedFixTime, rec.Status)
 
 	_, err := database.DB.Exec(`INSERT INTO duty_records (
-		id, duty_date, duty_person, project_id, task_desc, feedback_type, event_type, handler, handle_result, problem_desc,
+		id, duty_date, duty_person, project_id, task_desc, feedback_type, event_type, handler, handle_result, solution, problem_desc,
 		first_call_time, answer_time, call_count, is_answered, response_time,
 		is_escalated, escalate_to, has_handover, handover_person, handover_content,
 		status, planned_fix_time, planned_fix_time_edited, is_overdue, overdue_reason, attachments,
 		created_at, created_by, updated_at, updated_by
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.ID, dutyDate, rec.DutyPerson, rec.ProjectID, rec.TaskDesc, rec.FeedbackType, rec.EventType, rec.Handler, rec.HandleResult, rec.ProblemDesc,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.ID, dutyDate, rec.DutyPerson, rec.ProjectID, rec.TaskDesc, rec.FeedbackType, rec.EventType, rec.Handler, rec.HandleResult, rec.Solution, rec.ProblemDesc,
 		firstCallTime, answerTime, rec.CallCount, rec.IsAnswered, rec.ResponseTime,
 		rec.IsEscalated, rec.EscalateTo, rec.HasHandover, rec.HandoverPerson, rec.HandoverContent,
 		rec.Status, plannedFixTime, plannedFixTimeEdited, isOverdue, rec.OverdueReason, string(attachmentsJSON),
@@ -624,13 +625,13 @@ func HandleUpdateDutyRecord(w http.ResponseWriter, r *http.Request) {
 	isOverdue := calculateOverdue(rec.PlannedFixTime, rec.Status)
 
 	_, err = database.DB.Exec(`UPDATE duty_records SET
-		duty_date=?, duty_person=?, project_id=?, task_desc=?, feedback_type=?, event_type=?, handler=?, handle_result=?, problem_desc=?,
+		duty_date=?, duty_person=?, project_id=?, task_desc=?, feedback_type=?, event_type=?, handler=?, handle_result=?, solution=?, problem_desc=?,
 		first_call_time=?, answer_time=?, call_count=?, is_answered=?, response_time=?,
 		is_escalated=?, escalate_to=?, has_handover=?, handover_person=?, handover_content=?,
 		status=?, planned_fix_time=?, planned_fix_time_edited=?, is_overdue=?, overdue_reason=?, attachments=?,
 		updated_at=?, updated_by=?
 		WHERE id=?`,
-		dutyDate, rec.DutyPerson, rec.ProjectID, rec.TaskDesc, rec.FeedbackType, rec.EventType, rec.Handler, rec.HandleResult, rec.ProblemDesc,
+		dutyDate, rec.DutyPerson, rec.ProjectID, rec.TaskDesc, rec.FeedbackType, rec.EventType, rec.Handler, rec.HandleResult, rec.Solution, rec.ProblemDesc,
 		firstCallTime, answerTime, rec.CallCount, rec.IsAnswered, rec.ResponseTime,
 		rec.IsEscalated, rec.EscalateTo, rec.HasHandover, rec.HandoverPerson, rec.HandoverContent,
 		rec.Status, plannedFixTime, plannedFixTimeEdited, isOverdue, rec.OverdueReason, string(attachmentsJSON),
@@ -1177,8 +1178,8 @@ func HandleGetDutyStatsDetail(w http.ResponseWriter, r *http.Request) {
 	callQuery := fmt.Sprintf(`
 		SELECT COALESCE(handler, '未分配') as handler,
 			SUM(call_count) as total_calls,
-			SUM(CASE WHEN is_answered=1 THEN 1 ELSE 0 END) as answered,
-			SUM(CASE WHEN is_answered=0 THEN 1 ELSE 0 END) as not_answered,
+			SUM(CASE WHEN is_answered='已接听' THEN 1 ELSE 0 END) as answered,
+			SUM(CASE WHEN is_answered='未接听' THEN 1 ELSE 0 END) as not_answered,
 			AVG(call_count) as avg_call_count,
 			MIN(CASE WHEN response_time > 0 THEN response_time ELSE NULL END) as first_response,
 			AVG(CASE WHEN response_time > 0 THEN response_time ELSE NULL END) as avg_response,
@@ -1371,8 +1372,8 @@ func HandleGetDutyStatsDetail(w http.ResponseWriter, r *http.Request) {
 				ELSE '未拨打'
 			END as call_range,
 			COUNT(*) as count,
-			SUM(CASE WHEN is_answered=1 THEN 1 ELSE 0 END) as answered,
-			SUM(CASE WHEN is_answered=0 THEN 1 ELSE 0 END) as not_answered
+			SUM(CASE WHEN is_answered='已接听' THEN 1 ELSE 0 END) as answered,
+			SUM(CASE WHEN is_answered='未接听' THEN 1 ELSE 0 END) as not_answered
 		FROM duty_records dr
 		%s AND call_count > 0
 		GROUP BY call_range
@@ -1402,8 +1403,8 @@ func HandleGetDutyStatsDetail(w http.ResponseWriter, r *http.Request) {
 	callStatsQuery := fmt.Sprintf(`
 		SELECT 
 			AVG(CASE WHEN call_count > 0 THEN call_count ELSE NULL END),
-			SUM(CASE WHEN is_answered=1 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN is_answered=0 AND call_count > 0 THEN 1 ELSE 0 END)
+			SUM(CASE WHEN is_answered='已接听' THEN 1 ELSE 0 END),
+			SUM(CASE WHEN is_answered='未接听' AND call_count > 0 THEN 1 ELSE 0 END)
 		FROM duty_records dr %s`, whereClause)
 	database.DB.QueryRow(callStatsQuery, args...).Scan(&avgCallCount, &totalAnswered, &totalNotAnswered)
 	callStats := map[string]interface{}{}
@@ -1427,7 +1428,7 @@ func HandleExportDutyRecords(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := database.DB.Query(`
 		SELECT dr.duty_date, dr.duty_person, COALESCE(dp.name,'') as project_name,
-			COALESCE(dr.task_desc,''), dr.feedback_type, COALESCE(dr.handler,''), COALESCE(dr.handle_result,''), COALESCE(dr.problem_desc,''),
+			COALESCE(dr.task_desc,''), dr.feedback_type, COALESCE(dr.handler,''), COALESCE(dr.handle_result,''), COALESCE(dr.solution,''), COALESCE(dr.problem_desc,''),
 			COALESCE(dr.first_call_time,''), COALESCE(dr.answer_time,''), dr.call_count, dr.is_answered, dr.response_time,
 			dr.is_escalated, COALESCE(dr.escalate_to,''),
 			dr.has_handover, COALESCE(dr.handover_person,''), COALESCE(dr.handover_content,''),
@@ -1444,7 +1445,7 @@ func HandleExportDutyRecords(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=duty_records_%s.csv", time.Now().Format("20060102")))
 	w.Write([]byte("\xEF\xBB\xBF"))
-	w.Write([]byte("值班日期,值班人,项目,任务描述,反馈类型,处理人,处理结果,问题描述,首次拨打时间,接听时间,拨打次数,是否接听,响应时间(分钟),是否升级,升级给,是否交接,交接人,交接内容,状态,计划修复时间,是否逾期,逾期原因\n"))
+	w.Write([]byte("值班日期,值班人,项目,任务描述,反馈类型,处理人,处理结果,解决方案,问题描述,首次拨打时间,接听时间,拨打次数,是否接听,响应时间(分钟),是否升级,升级给,是否交接,交接人,交接内容,状态,计划修复时间,是否逾期,逾期原因\n"))
 
 	feedbackTypeMap := map[string]string{"proactive": "主动反馈", "customer": "客户反馈"}
 	statusMap := map[string]string{"resolved": "已解决", "unresolved": "未解决", "pending": "待解决", "temporary": "临时解决"}
@@ -1452,7 +1453,7 @@ func HandleExportDutyRecords(w http.ResponseWriter, r *http.Request) {
 	boolMap := map[bool]string{true: "是", false: "否"}
 
 	for rows.Next() {
-		var dutyDate, dutyPerson, projectName, taskDesc, feedbackType, handler, handleResult, problemDesc string
+		var dutyDate, dutyPerson, projectName, taskDesc, feedbackType, handler, handleResult, solution, problemDesc string
 		var firstCallTime, answerTime string
 		var callCount int
 		var isAnswered bool
@@ -1465,14 +1466,14 @@ func HandleExportDutyRecords(w http.ResponseWriter, r *http.Request) {
 		var isOverdue bool
 		var overdueReason string
 
-		rows.Scan(&dutyDate, &dutyPerson, &projectName, &taskDesc, &feedbackType, &handler, &handleResult, &problemDesc,
+		rows.Scan(&dutyDate, &dutyPerson, &projectName, &taskDesc, &feedbackType, &handler, &handleResult, &solution, &problemDesc,
 			&firstCallTime, &answerTime, &callCount, &isAnswered, &responseTime,
 			&isEscalated, &escalateTo, &hasHandover, &handoverPerson, &handoverContent,
 			&status, &plannedFixTime, &isOverdue, &overdueReason)
 
-		line := fmt.Sprintf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d,\"%s\",%d,\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"\n",
+		line := fmt.Sprintf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d,\"%s\",%d,\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"\n",
 			dutyDate, dutyPerson, projectName, taskDesc,
-			feedbackTypeMap[feedbackType], handler, handleResult, problemDesc,
+			feedbackTypeMap[feedbackType], handler, handleResult, solution, problemDesc,
 			firstCallTime, answerTime, callCount, boolMap[isAnswered], responseTime,
 			boolMap[isEscalated], escalateMap[escalateTo],
 			boolMap[hasHandover], handoverPerson, handoverContent,

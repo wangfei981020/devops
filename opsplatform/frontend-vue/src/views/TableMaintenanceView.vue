@@ -263,11 +263,17 @@ const statsAnalysis = computed(() => {
   const byGameType = Object.entries(gameTypeMap).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
   const maxGameType = Math.max(...byGameType.map(i => i.count), 1)
   
-  // 按现场统计
+  // 按现场统计（affected_sites 是多选数组）
   const siteMap = {}
   data.forEach(r => {
-    const key = r.site || '未知'
-    siteMap[key] = (siteMap[key] || 0) + 1
+    const sites = parseMultiSelect(r.affected_sites)
+    if (sites.length) {
+      sites.forEach(s => {
+        siteMap[s] = (siteMap[s] || 0) + 1
+      })
+    } else {
+      siteMap['未知'] = (siteMap['未知'] || 0) + 1
+    }
   })
   const bySite = Object.entries(siteMap).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
   const maxSite = Math.max(...bySite.map(i => i.count), 1)
@@ -338,7 +344,7 @@ const statsAnalysis = computed(() => {
     }
     return {
       date: dateStr || '-',
-      tableNo: r.table_no || '-',
+      tableNo: parseMultiSelect(r.affected_tables).join(', ') || '-',
       startDuration: r.start_duration || '-',
       closeDuration: r.close_duration || '-',
       totalDuration,
@@ -355,7 +361,7 @@ const statsAnalysis = computed(() => {
     }
     return {
       date: dateStr || '-',
-      projects: r.affected_projects || '-',
+      projects: parseMultiSelect(r.affected_projects).join(', ') || '-',
       roundIds: r.affected_round_ids || '-',
       startDuration: r.start_duration || '-',
       operator: r.operator || '-'
@@ -370,7 +376,7 @@ const statsAnalysis = computed(() => {
     }
     return {
       date: dateStr || '-',
-      projects: r.affected_projects || '-',
+      projects: parseMultiSelect(r.affected_projects).join(', ') || '-',
       roundIds: r.affected_round_ids || '-',
       startDuration: r.start_duration || '-',
       operator: r.operator || '-'
@@ -385,7 +391,7 @@ const statsAnalysis = computed(() => {
     }
     return {
       date: dateStr || '-',
-      projects: r.affected_projects || '-',
+      projects: parseMultiSelect(r.affected_projects).join(', ') || '-',
       roundIds: r.affected_round_ids || '-',
       startDuration: r.start_duration || '-',
       operator: r.operator || '-'
@@ -400,7 +406,7 @@ const statsAnalysis = computed(() => {
     }
     return {
       date: dateStr || '-',
-      projects: r.affected_projects || '-',
+      projects: parseMultiSelect(r.affected_projects).join(', ') || '-',
       roundIds: r.affected_round_ids || '-',
       startDuration: r.start_duration || '-',
       operator: r.operator || '-',
@@ -416,7 +422,7 @@ const statsAnalysis = computed(() => {
     }
     return {
       date: dateStr || '-',
-      projects: r.affected_projects || '-',
+      projects: parseMultiSelect(r.affected_projects).join(', ') || '-',
       roundIds: r.affected_round_ids || '-',
       operator: r.operator || '-',
       remark: r.remark || '-'
@@ -445,7 +451,7 @@ const statsAnalysis = computed(() => {
   const affectProjectMap = {}
   let noAffectCount = 0
   data.forEach(r => {
-    const projects = parseMultiSelectSync(r.affect_projects)
+    const projects = parseMultiSelectSync(r.affected_projects)
     if (projects.length) {
       projects.forEach(p => {
         affectProjectMap[p] = (affectProjectMap[p] || 0) + 1
@@ -465,34 +471,93 @@ const statsAnalysis = computed(() => {
     else qcPending++
   })
   
-  // 按桌台统计（包含游戏类型、现场、项目信息）
+  // 按桌台统计（使用层级配置精确归属每个桌台的项目、现场、游戏类型）
   const tableNoMap = {}
   data.forEach(r => {
-    const key = r.table_no || '未填写'
-    if (!tableNoMap[key]) {
-      tableNoMap[key] = {
-        tableNo: key,
-        gameType: r.game_type || '-',
-        site: r.site || '-',
-        projects: new Set(),
-        count: 0
+    const tables = parseMultiSelect(r.affected_tables)
+    const rProjects = parseMultiSelect(r.affected_projects)
+    const rSites = parseMultiSelect(r.affected_sites)
+    if (tables.length) {
+      tables.forEach(tName => {
+        // 从层级配置中查找此桌台的所有配置项
+        let matches = tableOptions.value.filter(t => t.name === tName)
+        if (matches.length > 0) {
+          // 用记录的项目缩小匹配
+          if (rProjects.length) {
+            const f = matches.filter(t => rProjects.includes(t.project))
+            if (f.length) matches = f
+          }
+          // 用记录的现场缩小匹配
+          if (rSites.length) {
+            const f = matches.filter(t => rSites.includes(t.site))
+            if (f.length) matches = f
+          }
+          // 对每个匹配的配置单独计数
+          matches.forEach(ti => {
+            const key = `${tName}|${ti.project || ''}|${ti.site || ''}`
+            if (!tableNoMap[key]) {
+              tableNoMap[key] = {
+                tableNo: tName,
+                project: ti.project || '-',
+                site: ti.site || '-',
+                gameType: ti.gameTypes?.join(', ') || '-',
+                count: 0
+              }
+            }
+            tableNoMap[key].count++
+          })
+        } else {
+          // 层级配置中找不到，回退到记录中的信息
+          const key = `${tName}|?|?`
+          if (!tableNoMap[key]) {
+            tableNoMap[key] = {
+              tableNo: tName,
+              project: rProjects.join(', ') || '-',
+              site: rSites.join(', ') || '-',
+              gameType: parseMultiSelect(r.game_types).join(', ') || '-',
+              count: 0
+            }
+          }
+          tableNoMap[key].count++
+        }
+      })
+    } else {
+      const key = '未填写|-|-'
+      if (!tableNoMap[key]) {
+        tableNoMap[key] = { tableNo: '未填写', project: '-', site: '-', gameType: '-', count: 0 }
       }
-    }
-    tableNoMap[key].count++
-    // 收集涉及的项目
-    if (r.affected_projects) {
-      const projects = Array.isArray(r.affected_projects) ? r.affected_projects : [r.affected_projects]
-      projects.forEach(p => tableNoMap[key].projects.add(p))
+      tableNoMap[key].count++
     }
   })
   const byTableNo = Object.values(tableNoMap).map(item => ({
     tableNo: item.tableNo,
+    project: item.project,
     gameType: item.gameType,
     site: item.site,
-    projects: Array.from(item.projects).join(', ') || '-',
     count: item.count
   })).sort((a, b) => b.count - a.count)
   const maxTableNo = Math.max(...byTableNo.map(i => i.count), 1)
+
+  // 按桌台汇总统计（不区分项目，同名桌台合并计数）
+  const tableSummaryMap = {}
+  byTableNo.forEach(item => {
+    if (!tableSummaryMap[item.tableNo]) {
+      tableSummaryMap[item.tableNo] = { tableNo: item.tableNo, projects: new Set(), sites: new Set(), gameTypes: new Set(), count: 0 }
+    }
+    const s = tableSummaryMap[item.tableNo]
+    s.count += item.count
+    if (item.project && item.project !== '-') s.projects.add(item.project)
+    if (item.site && item.site !== '-') s.sites.add(item.site)
+    if (item.gameType && item.gameType !== '-') item.gameType.split(', ').forEach(g => s.gameTypes.add(g))
+  })
+  const byTableSummary = Object.values(tableSummaryMap).map(item => ({
+    tableNo: item.tableNo,
+    projects: Array.from(item.projects).join(', ') || '-',
+    sites: Array.from(item.sites).join(', ') || '-',
+    gameTypes: Array.from(item.gameTypes).join(', ') || '-',
+    count: item.count
+  })).sort((a, b) => b.count - a.count)
+  const maxTableSummary = Math.max(...byTableSummary.map(i => i.count), 1)
   
   // 按维护类型统计各时长分布（不统计"无"）
   // 每条记录取 start_duration 和 close_duration 中的最大值
@@ -553,6 +618,7 @@ const statsAnalysis = computed(() => {
     cancelDetailList, recalcDetailList, repayoutDetailList, missedDetailList, missedScreenshotDetailList,
     byOperator, maxOperator,
     byInspector, maxInspector,
+    byTableSummary, maxTableSummary,
     byTableNo, maxTableNo,
     byMaintType, byOpType,
     byAffectProject, maxAffectProject, noAffectCount,
@@ -668,10 +734,16 @@ function exportStatsToExcel() {
   stats.bySite?.forEach(item => lines.push(`${item.name},${item.count}`))
   lines.push('')
   
-  // 桌台统计
-  lines.push('桌台维护次数统计')
-  lines.push('桌号,游戏类型,现场,涉及项目,维护次数')
-  stats.byTableNo?.forEach(item => lines.push(`${item.tableNo},${item.gameType},${item.site},"${item.projects}",${item.count}`))
+  // 桌台汇总
+  lines.push('桌台汇总')
+  lines.push('桌号,维护次数,涉及项目,涉及现场,游戏类型')
+  stats.byTableSummary?.forEach(item => lines.push(`${item.tableNo},${item.count},"${item.projects}","${item.sites}","${item.gameTypes}"`))
+  lines.push('')
+
+  // 桌台明细（按项目）
+  lines.push('桌台明细（按项目）')
+  lines.push('桌号,项目,现场,游戏类型,维护次数')
+  stats.byTableNo?.forEach(item => lines.push(`${item.tableNo},"${item.project}",${item.site},${item.gameType},${item.count}`))
   
   const csvContent = BOM + lines.join('\n')
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
@@ -780,7 +852,7 @@ const allFilteredRecords = computed(() => {
   if (searchQuery.value) {
     const q = searchQuery.value.toLowerCase()
     list = list.filter(r =>
-      r.table_no?.toLowerCase().includes(q) ||
+      parseMultiSelect(r.affected_tables).join(',').toLowerCase().includes(q) ||
       r.description?.toLowerCase().includes(q) ||
       r.handler?.toLowerCase().includes(q) ||
       r.affected_round_ids?.toLowerCase().includes(q) ||
@@ -958,7 +1030,8 @@ async function pasteRecords() {
           // 日期使用当前日期
           data[col.key] = new Date().toISOString().slice(0, 10)
         } else if (col.type === 'attachments') {
-          // 附件单独处理
+          // 附件列（截图等）也要复制
+          data[col.key] = copiedRecord.value[col.key] || []
         } else {
           data[col.key] = copiedRecord.value[col.key] || ''
         }
@@ -1007,7 +1080,7 @@ function selectAllProjects() {
   if (isAllProjectsSelected()) {
     formData.value.affected_projects = []
   } else {
-    formData.value.affected_projects = [...projectOptions.value]
+    formData.value.affected_projects = projectOptions.value.map(p => getProjectKey(p))
   }
   cleanupInvalidSelections()
 }
@@ -1246,11 +1319,25 @@ onUnmounted(() => {
 })
 
 function getProjectName(proj) {
-  return typeof proj === 'string' ? proj : proj.name
+  if (!proj) return ''
+  if (typeof proj === 'string') return proj
+  // 支持中英文名称
+  const lang = appStore.language
+  if (lang === 'en-US') {
+    return proj.name_en || proj.name_zh || proj.name || ''
+  } else {
+    return proj.name_zh || proj.name || proj.name_en || ''
+  }
+}
+
+function getProjectKey(proj) {
+  if (!proj) return ''
+  if (typeof proj === 'string') return proj
+  return proj.name_zh || proj.name || ''
 }
 
 function getProjectCode(proj) {
-  return typeof proj === 'string' ? proj.toLowerCase().replace(/\s+/g, '_') : (proj.code || proj.name)
+  return typeof proj === 'string' ? proj.toLowerCase().replace(/\s+/g, '_') : (proj.code || getProjectKey(proj))
 }
 
 function getProjectDesc(proj) {
@@ -1293,7 +1380,7 @@ function getProjectColor(idx) {
 
 function getProjectColorByName(name) {
   if (!enabledProjectOptions.value) return '#6b7280'
-  const idx = enabledProjectOptions.value.findIndex(p => getProjectName(p) === name)
+  const idx = enabledProjectOptions.value.findIndex(p => getProjectKey(p) === name || getProjectName(p) === name)
   return idx >= 0 ? projectColors[idx % projectColors.length] : '#6b7280'
 }
 
@@ -1925,7 +2012,7 @@ async function exportToExcel() {
             <label>{{ t('tableMaintenance.filters.projectLabel') }}</label>
             <select v-model="filterInput.project">
               <option value="">{{ t('tableMaintenance.filters.allProjects') }}</option>
-              <option v-for="proj in projectOptions" :key="proj" :value="proj">{{ proj }}</option>
+              <option v-for="proj in projectOptions" :key="getProjectKey(proj)" :value="getProjectKey(proj)">{{ getProjectName(proj) }}</option>
             </select>
           </div>
           <div class="filter-field">
@@ -2120,7 +2207,7 @@ async function exportToExcel() {
           <div class="filter-label">{{ t('tableMaintenance.statsPanel.filterProject') }}:</div>
           <select v-model="statsProjectInput" class="stats-select-input">
             <option value="">{{ t('common.all') }}</option>
-            <option v-for="proj in projectOptions" :key="proj" :value="proj">{{ proj }}</option>
+            <option v-for="proj in projectOptions" :key="getProjectKey(proj)" :value="getProjectKey(proj)">{{ getProjectName(proj) }}</option>
           </select>
         </div>
         <div class="filter-group">
@@ -2496,24 +2583,53 @@ async function exportToExcel() {
 
         <div class="stats-row single">
           <div class="stats-section">
+            <h4>{{ t('tableMaintenance.statsPanel.byTableSummary') }}</h4>
+            <div class="table-stats-table" v-if="statsAnalysis.byTableSummary?.length">
+              <table>
+                <thead>
+                  <tr>
+                    <th>{{ t('tableMaintenance.statsPanel.tableColumns.tableNo') }}</th>
+                    <th>{{ t('tableMaintenance.statsPanel.tableColumns.maintCount') }}</th>
+                    <th>{{ t('tableMaintenance.statsPanel.tableColumns.projects') }}</th>
+                    <th>{{ t('tableMaintenance.statsPanel.tableColumns.site') }}</th>
+                    <th>{{ t('tableMaintenance.statsPanel.tableColumns.gameType') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(item, idx) in statsAnalysis.byTableSummary" :key="idx">
+                    <td><span class="table-no-tag">{{ item.tableNo }}</span></td>
+                    <td><span class="count-badge">{{ item.count }}</span></td>
+                    <td class="projects-cell">{{ item.projects }}</td>
+                    <td>{{ item.sites }}</td>
+                    <td>{{ item.gameTypes }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else class="empty-stats">{{ t('tableMaintenance.table.empty') }}</div>
+          </div>
+        </div>
+
+        <div class="stats-row single">
+          <div class="stats-section">
             <h4>{{ t('tableMaintenance.statsPanel.byTable') }}</h4>
             <div class="table-stats-table" v-if="statsAnalysis.byTableNo?.length">
               <table>
                 <thead>
                   <tr>
                     <th>{{ t('tableMaintenance.statsPanel.tableColumns.tableNo') }}</th>
-                    <th>{{ t('tableMaintenance.statsPanel.tableColumns.gameType') }}</th>
-                    <th>{{ t('tableMaintenance.statsPanel.tableColumns.site') }}</th>
                     <th>{{ t('tableMaintenance.statsPanel.tableColumns.projects') }}</th>
+                    <th>{{ t('tableMaintenance.statsPanel.tableColumns.site') }}</th>
+                    <th>{{ t('tableMaintenance.statsPanel.tableColumns.gameType') }}</th>
                     <th>{{ t('tableMaintenance.statsPanel.tableColumns.maintCount') }}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="item in statsAnalysis.byTableNo" :key="item.tableNo">
+                  <tr v-for="(item, idx) in statsAnalysis.byTableNo" :key="idx">
                     <td><span class="table-no-tag">{{ item.tableNo }}</span></td>
-                    <td>{{ item.gameType }}</td>
+                    <td class="projects-cell">{{ item.project }}</td>
                     <td>{{ item.site }}</td>
-                    <td class="projects-cell">{{ item.projects }}</td>
+                    <td>{{ item.gameType }}</td>
                     <td><span class="count-badge">{{ item.count }}</span></td>
                   </tr>
                 </tbody>
@@ -2600,11 +2716,11 @@ async function exportToExcel() {
                           </span>
                           <span class="select-all-label">{{ t('tableMaintenance.selectAll') }}</span>
                         </div>
-                        <label v-for="(opt, idx) in projectOptions" :key="opt" class="multi-select-option" :class="{ checked: isProjectSelected(opt) }" @click.stop="toggleProjectOption(opt)">
-                          <span class="checkbox-icon" :style="isProjectSelected(opt) ? { backgroundColor: getProjectColor(idx), borderColor: getProjectColor(idx) } : {}">
-                            <svg v-if="isProjectSelected(opt)" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                        <label v-for="(opt, idx) in projectOptions" :key="getProjectKey(opt)" class="multi-select-option" :class="{ checked: isProjectSelected(getProjectKey(opt)) }" @click.stop="toggleProjectOption(getProjectKey(opt))">
+                          <span class="checkbox-icon" :style="isProjectSelected(getProjectKey(opt)) ? { backgroundColor: getProjectColor(idx), borderColor: getProjectColor(idx) } : {}">
+                            <svg v-if="isProjectSelected(getProjectKey(opt))" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
                           </span>
-                          <span class="option-label" :style="{ color: getProjectColor(idx) }">{{ opt }}</span>
+                          <span class="option-label" :style="{ color: getProjectColor(idx) }">{{ getProjectName(opt) }}</span>
                         </label>
                       </div>
                       <div v-if="!projectOptions.length" class="empty-options">

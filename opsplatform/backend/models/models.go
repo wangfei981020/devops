@@ -284,12 +284,13 @@ type DutyRecord struct {
 	EventType    string   `json:"event_type"`    // 事件类型: inspection=巡检发现, alert=监控告警, customer_feedback=客户反馈, proactive_check=值班人员主动排查
 	Handler      string   `json:"handler"`       // 处理人
 	HandleResult string   `json:"handle_result"` // 处理结果
+	Solution     string   `json:"solution"`      // 解决方案
 	ProblemDesc  string   `json:"problem_desc"`  // 问题描述
 
 	FirstCallTime string `json:"first_call_time"` // 首次拨打时间
 	AnswerTime    string `json:"answer_time"`     // 接听时间
 	CallCount     int    `json:"call_count"`      // 拨打次数
-	IsAnswered    bool   `json:"is_answered"`     // 是否接听
+	IsAnswered    string `json:"is_answered"`     // 是否接听: 无/已接听/未接听
 	ResponseTime  int    `json:"response_time"`   // 响应时间(分钟)
 
 	IsEscalated bool   `json:"is_escalated"` // 是否升级问题

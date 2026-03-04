@@ -118,6 +118,7 @@ export default {
       problemDesc: 'Problem Description',
       handler: 'Handler',
       status: 'Status',
+      solution: 'Solution',
       plannedFixTime: 'Planned Fix',
       overdue: 'Overdue',
       firstCallTime: 'First Call',
@@ -199,10 +200,12 @@ export default {
       plannedFixTime: 'Planned Fix Time',
       plannedFixTimeEdited: 'This field has been edited. "Edit Planned Fix Time" permission is required.',
       plannedFixTimeFirstEdit: 'First edit, can be modified once',
+      solution: 'Solution',
+      solutionPlaceholder: 'Describe the solution or resolution steps',
       markOverdue: 'Mark as Overdue',
       overdueReason: 'Overdue Reason',
       overdueReasonPlaceholder: 'Explain the overdue reason',
-      
+
       // Call Info
       callInfo: 'Call Information',
       firstCallTime: 'First Call Time',
@@ -427,7 +430,7 @@ export default {
       incidents: 'Incidents',
       duty: 'Duty Records',
       tableMaintenance: 'Table Maintenance',
-      tableHierarchyConfig: 'Table Hierarchy Config',
+      tableHierarchyConfig: 'Table Config',
       assets: 'Assets',
       domains: 'Domains',
       merchants: 'Merchants',
@@ -674,7 +677,8 @@ export default {
       byQcStatus: 'QC Status',
       byGameType: 'By Game Type',
       bySite: 'By Site',
-      byTable: 'By Table',
+      byTableSummary: 'Table Summary',
+      byTable: 'Table Detail (By Project)',
       filterProject: 'Project',
       filterDuration: 'Duration',
       filterOperator: 'Operator',
@@ -727,10 +731,11 @@ export default {
     selectAll: 'Select All / Deselect All'
   },
 
-  // Table Hierarchy Config Page
+  // Table Config Page
   tableHierarchy: {
-    pageTitle: 'Table Hierarchy Config',
-    subtitle: 'Configure global project, site and table relationships',
+    pageTitle: 'Table Config',
+    subtitle: 'Configure global project, site, game type and table relationships',
+    recordCount: '{count} tables',
 
     stats: {
       projects: 'projects',
@@ -739,7 +744,21 @@ export default {
     },
 
     search: {
-      placeholder: 'Search project, site, table...'
+      placeholder: 'Search project, site, table...',
+      searchBtn: 'Search',
+      reset: 'Reset'
+    },
+
+    filters: {
+      title: 'Filter',
+      project: 'Project',
+      site: 'Site',
+      gameType: 'Game Type',
+      tableNo: 'Table No.',
+      allProjects: 'All Projects',
+      allSites: 'All Sites',
+      allGameTypes: 'All Game Types',
+      tableNoPlaceholder: 'Enter table number...'
     },
 
     add: {
@@ -752,6 +771,7 @@ export default {
       addGameType: 'Add Game Type',
       batchProject: 'Batch Add Projects',
       batchSite: 'Batch Add Sites',
+      batchGameType: 'Batch Add Game Types',
       batchTable: 'Batch Add Tables'
     },
 
@@ -788,10 +808,17 @@ export default {
       editTable: 'Edit Table',
       batchAddProject: 'Batch Add Projects',
       batchAddSite: 'Batch Add Sites',
+      batchAddGameType: 'Batch Add Game Types',
       batchAddTable: 'Batch Add Tables',
+      gameTypeName: 'Game Type Name',
       belongProject: 'Project',
       belongSite: 'Site',
       projectName: 'Project Name',
+      projectNameZh: 'Chinese Name',
+      projectNameEn: 'English Name',
+      projectNameZhPlaceholder: 'e.g., 项目A',
+      projectNameEnPlaceholder: 'e.g., Project A',
+      projectNameZhRequired: 'Project Chinese name is required',
       siteName: 'Site Name',
       siteNameZh: 'Chinese Name',
       siteNameEn: 'English Name',
@@ -802,15 +829,16 @@ export default {
       tableNumber: 'Table Number',
       gameType: 'Game Type',
       gameTypeHint: '(Multiple selection)',
-      batchGameTypeHint: '(Multiple selection, shared by batch)',
+      batchGameTypeHint: '(One per line, format: Chinese|English)',
       selectProject: 'Select project',
       selectSite: 'Select site',
       projectPlaceholder: 'e.g., Project A',
       sitePlaceholder: 'e.g., Site 1',
       tablePlaceholder: 'e.g., B01',
       batchHint: '(One per line)',
-      batchProjectPlaceholder: 'Project A\nProject B\nProject C',
-      batchSitePlaceholder: 'Site 1\nSite 2\nVIP Site',
+      batchProjectPlaceholder: 'Project A|项目A\nProject B|项目B\nProject C|项目C',
+      batchSitePlaceholder: 'Site 1|1号现场\nSite 2|2号现场\nVIP Site|VIP现场',
+      batchGameTypePlaceholder: 'Baccarat|百家乐\nDragon Tiger|龙虎\nRoulette|轮盘',
       batchTablePlaceholder: 'A01\nA02\nA03'
     },
 
@@ -828,12 +856,45 @@ export default {
       loadFailed: 'Failed to load config',
       saveSuccess: 'Config saved successfully',
       saveFailed: 'Failed to save',
+      noPermission: 'No permission to save table hierarchy config',
       deleteSuccess: 'Deleted successfully',
       confirmDeleteProject: 'Are you sure you want to delete project "{name}"?',
       confirmDeleteSite: 'Are you sure you want to delete site "{name}"?',
       confirmDeleteTable: 'Are you sure you want to delete table "{name}"?',
+      confirmDeleteGameType: 'Are you sure you want to delete game type "{name}"?',
       cascadeWarningProject: 'All sites and tables under this project will also be deleted',
-      cascadeWarningSite: 'All tables under this site will also be deleted'
+      cascadeWarningSite: 'All tables under this site will also be deleted',
+      hasTablesCannotDelete: 'Has associated tables, cannot delete'
+    },
+
+    configBtn: {
+      project: 'Projects',
+      site: 'Sites',
+      gameType: 'Game Types',
+      table: 'Tables'
+    },
+
+    gameTypeSection: {
+      title: 'Game Types',
+      badge: 'Game',
+      empty: 'No game types, click "Add" button above to create'
+    },
+
+    projectSection: {
+      title: 'Project Management',
+      empty: 'No projects yet. Click "Add" button above to create.'
+    },
+
+    siteSection: {
+      title: 'Site Management',
+      empty: 'No sites yet. Click "Add" button above to create.'
+    },
+
+    pagination: {
+      total: 'Total',
+      records: 'tables',
+      perPage: 'Per page',
+      items: 'items'
     },
 
     empty: {
