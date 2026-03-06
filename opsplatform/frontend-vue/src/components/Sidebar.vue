@@ -80,8 +80,8 @@ function canShowItem(item) {
 }
 
 const expandedGroups = ref({
-  system: true,
-  resource: true,
+  system: false,
+  resource: false,
   monitor: false,
   k8s: false,
   ticket: false,
@@ -93,11 +93,26 @@ const expandedGroups = ref({
   settings: false
 })
 
+// SVG 图标映射（Lucide 风格）
+const iconSvgs = {
+  system: '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+  resource: '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
+  monitor: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+  k8s: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+  ticket: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
+  automation: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
+  aiops: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/>',
+  release: '<circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/>',
+  logs: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>',
+  security: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'
+}
+
 const menuGroups = [
   {
     key: 'system',
     name: '系统管理',
-    icon: '🏠',
+    icon: 'system',
     items: [
       { key: 'welcome', perm: 'welcome', name: '欢迎页', path: '/welcome' },
       { key: 'users', perm: 'users', name: '用户管理', path: '/users' },
@@ -116,7 +131,7 @@ const menuGroups = [
   {
     key: 'resource',
     name: '资源管理',
-    icon: '📦',
+    icon: 'resource',
     items: [
       { key: 'assets', perm: 'assets', name: '资产管理', path: '/assets' },
       { key: 'domains', perm: 'domains', name: '域名管理', path: '/domains' },
@@ -129,7 +144,7 @@ const menuGroups = [
   {
     key: 'monitor',
     name: '监控告警',
-    icon: '📊',
+    icon: 'monitor',
     items: [
       { key: 'metrics', perm: 'metrics', name: '指标监控', path: '/metrics' },
       { key: 'alerts', perm: 'alerts', name: '告警管理', path: '/alerts' },
@@ -141,7 +156,7 @@ const menuGroups = [
   {
     key: 'k8s',
     name: 'K8S运维',
-    icon: '☸️',
+    icon: 'k8s',
     items: [
       { key: 'clusters', perm: 'clusters', name: '集群管理', path: '/clusters' },
       { key: 'workloads', perm: 'workloads', name: '工作负载', path: '/workloads' },
@@ -153,7 +168,7 @@ const menuGroups = [
   {
     key: 'ticket',
     name: '工单系统',
-    icon: '🎫',
+    icon: 'ticket',
     items: [
       { key: 'tickets', perm: 'tickets', name: '工单管理', path: '/tickets' },
       { key: 'workflow', perm: 'workflow', name: '流程引擎', path: '/workflow' },
@@ -164,7 +179,7 @@ const menuGroups = [
   {
     key: 'automation',
     name: '自动化运维',
-    icon: '🤖',
+    icon: 'automation',
     items: [
       { key: 'jobs', perm: 'jobs', name: '作业平台', path: '/jobs' },
       { key: 'crontab', perm: 'crontab', name: '定时任务', path: '/crontab' },
@@ -175,7 +190,7 @@ const menuGroups = [
   {
     key: 'aiops',
     name: '智能运维',
-    icon: '🧠',
+    icon: 'aiops',
     items: [
       { key: 'anomaly', perm: 'anomaly', name: '异常检测', path: '/anomaly' },
       { key: 'rootcause', perm: 'root-cause', name: '根因分析', path: '/root-cause' },
@@ -187,7 +202,7 @@ const menuGroups = [
   {
     key: 'release',
     name: '变更发布',
-    icon: '🚀',
+    icon: 'release',
     items: [
       { key: 'deploy', perm: 'deploy', name: '发布管理', path: '/deploy' },
       { key: 'change', perm: 'change', name: '变更管理', path: '/change' },
@@ -197,7 +212,7 @@ const menuGroups = [
   {
     key: 'logs',
     name: '日志服务',
-    icon: '📝',
+    icon: 'logs',
     items: [
       { key: 'logquery', perm: 'log-query', name: '日志查询', path: '/log-query' },
       { key: 'loganalysis', perm: 'log-analysis', name: '日志分析', path: '/log-analysis' },
@@ -207,7 +222,7 @@ const menuGroups = [
   {
     key: 'security',
     name: '安全工具',
-    icon: '🔐',
+    icon: 'security',
     items: [
       { key: 'vault', perm: 'vault', name: '密码库', path: '/vault' },
       { key: 'secrets', perm: 'secrets', name: '密钥管理', path: '/secrets' },
@@ -217,7 +232,7 @@ const menuGroups = [
   {
     key: 'settings',
     name: '系统设置',
-    icon: '⚙️',
+    icon: 'settings',
     items: [
       { key: 'datasources', perm: 'datasources', name: '数据源配置', path: '/datasources' },
       { key: 'sysparams', perm: 'sys-params', name: '系统参数', path: '/sys-params' },
@@ -242,6 +257,18 @@ const filteredMenuGroups = computed(() => {
 function toggleGroup(key) {
   expandedGroups.value[key] = !expandedGroups.value[key]
 }
+
+// 根据当前路由自动展开对应菜单组
+function autoExpandCurrentGroup() {
+  const path = route.path
+  for (const group of menuGroups) {
+    if (group.items.some(item => item.path === path)) {
+      expandedGroups.value[group.key] = true
+      break
+    }
+  }
+}
+autoExpandCurrentGroup()
 
 function isActive(path) {
   return route.path === path
@@ -285,7 +312,7 @@ function navigateTo(path) {
           :class="{ expanded: expandedGroups[group.key] }"
           @click="toggleGroup(group.key)"
         >
-          <span class="nav-group-icon">{{ group.icon }}</span>
+          <span class="nav-group-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" v-html="iconSvgs[group.icon] || ''"></svg></span>
           <span class="nav-group-title">{{ getGroupName(group.key) }}</span>
           <span class="nav-group-arrow" :class="{ expanded: expandedGroups[group.key] }">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -380,10 +407,16 @@ function navigateTo(path) {
 }
 
 .nav-group-icon {
-  font-size: 15px;
   width: 20px;
-  text-align: center;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
+}
+.nav-group-icon svg {
+  width: 18px;
+  height: 18px;
 }
 
 .nav-group-title {

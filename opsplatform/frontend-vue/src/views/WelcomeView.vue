@@ -99,12 +99,12 @@ const isAdmin = computed(() => {
 
 const quickLinks = computed(() => {
   const allLinks = [
-    { path: '/domains', perm: 'domains', icon: 'globe', color: 'blue', titleKey: 'welcome.quickLinks.domains', descKey: 'welcome.quickLinks.domainsDesc' },
-    { path: '/merchants', perm: 'merchants', icon: 'store', color: 'indigo', titleKey: 'welcome.quickLinks.merchants', descKey: 'welcome.quickLinks.merchantsDesc' },
-    { path: '/network', perm: 'network', icon: 'network', color: 'cyan', titleKey: 'welcome.quickLinks.network', descKey: 'welcome.quickLinks.networkDesc' },
-    { path: '/users', perm: 'users', icon: 'users', color: 'purple', titleKey: 'welcome.quickLinks.users', descKey: 'welcome.quickLinks.usersDesc' },
-    { path: '/audit', perm: 'audit', icon: 'audit', color: 'slate', titleKey: 'welcome.quickLinks.audit', descKey: 'welcome.quickLinks.auditDesc' },
-    { path: '/duty-records', perm: 'duty', icon: 'duty', color: 'green', titleKey: 'welcome.quickLinks.duty', descKey: 'welcome.quickLinks.dutyDesc' }
+    { path: '/domains', perm: 'domains', titleKey: 'welcome.quickLinks.domains' },
+    { path: '/merchants', perm: 'merchants', titleKey: 'welcome.quickLinks.merchants' },
+    { path: '/network', perm: 'network', titleKey: 'welcome.quickLinks.network' },
+    { path: '/users', perm: 'users', titleKey: 'welcome.quickLinks.users' },
+    { path: '/audit', perm: 'audit', titleKey: 'welcome.quickLinks.audit' },
+    { path: '/duty-records', perm: 'duty', titleKey: 'welcome.quickLinks.duty' }
   ]
   if (isAdmin.value) return allLinks
   return allLinks.filter(link => hasPermission(link.perm))
@@ -129,8 +129,8 @@ const quickLinks = computed(() => {
       </div>
     </transition>
 
-    <!-- 欢迎卡片 -->
-    <div class="welcome-banner">
+    <!-- 欢迎区 -->
+    <div class="welcome-header">
       <h1 class="welcome-title">{{ t('welcome.greeting', { name: username }) }}</h1>
       <p class="welcome-date">{{ t('welcome.today', { date: currentDate }) }}</p>
     </div>
@@ -184,46 +184,9 @@ const quickLinks = computed(() => {
     </div>
 
     <!-- 快捷入口 -->
-    <div class="quick-section" v-if="quickLinks.length > 0">
-      <div class="section-header">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="3" y="3" width="7" height="7"/>
-          <rect x="14" y="3" width="7" height="7"/>
-          <rect x="14" y="14" width="7" height="7"/>
-          <rect x="3" y="14" width="7" height="7"/>
-        </svg>
-        <span>{{ t('welcome.quickEntry') }}</span>
-      </div>
-
-      <div class="quick-grid">
-        <div v-for="link in quickLinks" :key="link.path" class="quick-card" @click="navigateTo(link.path)">
-          <div class="quick-icon" :class="link.color">
-            <svg v-if="link.icon === 'globe'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-            </svg>
-            <svg v-else-if="link.icon === 'store'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
-            </svg>
-            <svg v-else-if="link.icon === 'network'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
-            </svg>
-            <svg v-else-if="link.icon === 'users'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
-            </svg>
-            <svg v-else-if="link.icon === 'audit'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
-            </svg>
-            <svg v-else-if="link.icon === 'duty'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
-              <line x1="3" y1="10" x2="21" y2="10"/><path d="M9 16l2 2 4-4"/>
-            </svg>
-          </div>
-          <div class="quick-title">{{ t(link.titleKey) }}</div>
-          <div class="quick-desc">{{ t(link.descKey) }}</div>
-        </div>
-      </div>
+    <div class="quick-links" v-if="quickLinks.length > 0">
+      <span class="quick-label">{{ t('welcome.quickEntry') }}</span>
+      <a v-for="link in quickLinks" :key="link.path" class="quick-link" @click.prevent="navigateTo(link.path)">{{ t(link.titleKey) }}</a>
     </div>
   </div>
 </template>
@@ -286,23 +249,21 @@ const quickLinks = computed(() => {
   transform: translateY(-8px);
 }
 
-.welcome-banner {
-  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
-  border-radius: 12px;
-  padding: 32px 40px;
-  color: #fff;
+.welcome-header {
+  padding: 4px 0 8px;
 }
 
 .welcome-title {
-  margin: 0 0 8px 0;
-  font-size: 26px;
+  margin: 0 0 4px 0;
+  font-size: 22px;
   font-weight: 600;
+  color: var(--text-primary);
 }
 
 .welcome-date {
   margin: 0;
-  font-size: 14px;
-  opacity: 0.85;
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 .stats-row {
@@ -374,115 +335,32 @@ const quickLinks = computed(() => {
   color: var(--text-muted);
 }
 
-.quick-section {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 24px;
-}
-
-.section-header {
+.quick-links {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 20px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
-.section-header svg {
-  width: 18px;
-  height: 18px;
+.quick-label {
+  font-size: 13px;
   color: var(--text-muted);
 }
 
-.quick-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 16px;
-}
-
-.quick-card {
-  background: var(--bg-hover);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 24px 16px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.quick-card:hover {
-  border-color: #3b82f6;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
-  transform: translateY(-2px);
-}
-
-.quick-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0 auto 14px;
-}
-
-.quick-icon svg {
-  width: 24px;
-  height: 24px;
-}
-
-.quick-icon.blue {
-  background: rgba(59, 130, 246, 0.1);
+.quick-link {
+  font-size: 13px;
   color: #3b82f6;
+  cursor: pointer;
+  text-decoration: none;
 }
 
-.quick-icon.indigo {
-  background: rgba(99, 102, 241, 0.1);
-  color: #6366f1;
-}
-
-.quick-icon.cyan {
-  background: rgba(6, 182, 212, 0.1);
-  color: #06b6d4;
-}
-
-.quick-icon.purple {
-  background: rgba(139, 92, 246, 0.1);
-  color: #8b5cf6;
-}
-
-.quick-icon.slate {
-  background: rgba(100, 116, 139, 0.1);
-  color: #64748b;
-}
-
-.quick-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
-.quick-desc {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-@media (max-width: 1200px) {
-  .quick-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
+.quick-link:hover {
+  text-decoration: underline;
 }
 
 @media (max-width: 768px) {
   .stats-row {
     grid-template-columns: 1fr;
-  }
-  .quick-grid {
-    grid-template-columns: repeat(2, 1fr);
   }
 }
 </style>

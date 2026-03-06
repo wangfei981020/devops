@@ -311,14 +311,14 @@ function formatDate(str) {
       </div>
     </div>
 
-    <div class="stats-row">
-      <div class="stat-card pink"><div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div><div class="stat-value">{{ stats.total }}</div><div class="stat-label">总用户数</div></div>
-      <div class="stat-card green"><div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div><div class="stat-value">{{ stats.active }}</div><div class="stat-label">活跃用户</div></div>
-      <div class="stat-card teal"><div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div><div class="stat-value">{{ stats.mfaEnabled }}</div><div class="stat-label">已启用 MFA</div></div>
-      <div class="stat-card orange"><div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div><div class="stat-value">{{ stats.total - stats.mfaBound }}</div><div class="stat-label">未绑定 MFA</div></div>
+    <div class="stats-inline">
+      <div class="stat-item"><span class="stat-num">{{ stats.total }}</span><span class="stat-text">用户</span></div>
+      <span class="stat-sep"></span>
+      <div class="stat-item"><span class="stat-num">{{ stats.active }}</span><span class="stat-text">活跃</span></div>
+      <span class="stat-sep"></span>
+      <div class="stat-item"><span class="stat-num">{{ stats.mfaEnabled }}</span><span class="stat-text">已启用MFA</span></div>
     </div>
 
-    <div class="main-row">
       <div class="list-panel">
         <div class="panel-header">
           <div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 用户列表</div>
@@ -336,17 +336,17 @@ function formatDate(str) {
           <thead><tr><th>用户信息</th><th>角色</th><th>状态</th><th>MFA</th><th>最后登录</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="u in filteredUsers" :key="u.id">
-              <td><div class="user-cell"><div class="avatar" :style="{ background: getAvatarColor(u.username) }">{{ (u.display_name || u.username || 'U').charAt(0).toUpperCase() }}</div><div class="user-info"><span class="name">{{ u.display_name || u.username }}<span v-if="u.auth_source === 'sso'" class="auth-badge sso" title="SSO 账号">SSO</span><span v-else class="auth-badge local" title="本地账号">本地</span></span><span class="email">{{ u.email || u.username }}</span></div></div></td>
+              <td><div class="user-info"><span class="name">{{ u.display_name || u.username }}<span v-if="u.auth_source === 'sso'" class="auth-badge sso" title="SSO 账号">SSO</span><span v-else class="auth-badge local" title="本地账号">本地</span></span><span class="email">{{ u.email || u.username }}</span></div></td>
               <td><span class="role-badge" :class="u.role === 'super_admin' || u.role === 'admin' ? 'admin' : ''">{{ getRoleName(u.role) }}</span></td>
               <td><span class="status-cell"><span class="status-dot" :class="u.status"></span>{{ u.status === 'active' ? '活跃' : '禁用' }}</span></td>
               <td><span class="mfa-badge" :class="u.mfa_bound ? 'bound' : 'unbound'"><svg v-if="u.mfa_bound" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>{{ u.mfa_bound ? '已绑定' : '未启用' }}</span></td>
               <td class="date">{{ formatDate(u.updated_at || u.created_at) }}</td>
               <td>
                 <div class="actions">
-                  <button class="act-btn" @click="openUserModal('edit', u)" title="编辑"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
-                  <button class="act-btn" @click="handleMfaAction(u)" :title="u.mfa_bound ? '重置 MFA' : '启用 MFA'"><svg v-if="u.mfa_bound" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg><svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></button>
-                  <button class="act-btn" @click="openPasswordModal(u)" title="修改密码"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></button>
-                  <button class="act-btn del" @click="deleteUser(u)" title="删除" v-if="u.role !== 'super_admin' && u.role !== 'admin'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                  <button class="act-icon" @click="openUserModal('edit', u)" title="编辑"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+                  <button class="act-icon" @click="handleMfaAction(u)" :title="u.mfa_bound ? '重置 MFA' : '启用 MFA'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></button>
+                  <button class="act-icon" @click="openPasswordModal(u)" title="修改密码"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></button>
+                  <button class="act-icon" @click="deleteUser(u)" title="删除" v-if="u.role !== 'super_admin' && u.role !== 'admin'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
                 </div>
               </td>
             </tr>
@@ -354,24 +354,6 @@ function formatDate(str) {
         </table>
         <div class="pagination"><span>每页</span><select><option>10</option><option>20</option></select><span>条，共 {{ filteredUsers.length }} 条</span><div class="page-btns"><button>首页</button><button>上一页</button><span class="page-num">1</span><button>下一页</button><button>尾页</button></div></div>
       </div>
-
-      <div class="mfa-panel">
-        <div class="mfa-header"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> MFA 安全中心</div>
-        <div class="mfa-body">
-          <div class="mfa-intro"><div class="mfa-intro-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div><div class="mfa-intro-text"><strong>多因素认证</strong><span>增强账户安全性</span></div></div>
-          <div class="mfa-stat"><span class="mfa-stat-label">MFA 启用率</span><span class="mfa-stat-value" :class="mfaRate >= 50 ? 'good' : 'low'">{{ mfaRate }}%</span></div>
-          <button class="mfa-force-btn" @click="forceEnableMFA">+ 强制所有用户启用 MFA</button>
-          <div class="mfa-quick"><div class="mfa-quick-title">快速管理</div><div class="mfa-quick-list">
-            <div class="mfa-quick-item" v-for="u in users.slice(0, 4)" :key="u.id">
-              <div class="mfa-quick-avatar" :style="{ background: getAvatarColor(u.username) }">{{ (u.display_name || u.username).charAt(0).toUpperCase() }}</div>
-              <div class="mfa-quick-info"><span class="mfa-quick-name">{{ u.display_name || u.username }}</span><span class="mfa-quick-status" :class="u.mfa_bound ? 'on' : 'off'">{{ u.mfa_bound ? '已绑定' : '未启用' }}</span></div>
-              <button v-if="u.mfa_bound" class="mfa-reset-btn" @click="confirmResetUserMFA(u.id)" title="重置 MFA"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg></button>
-              <label class="switch"><input type="checkbox" :checked="u.mfa_enabled" @change="toggleUserMFA(u)"><span class="slider"></span></label>
-            </div>
-          </div></div>
-        </div>
-      </div>
-    </div>
 
     <!-- 用户编辑弹窗 -->
     <Teleport to="body">
@@ -542,18 +524,12 @@ function formatDate(str) {
 .btn-export { background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); }
 .btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; }
 
-.stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
-.stat-card { background: var(--bg-primary); border-radius: 12px; padding: 20px; border: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 8px; }
-.stat-icon { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
-.stat-icon svg { width: 20px; height: 20px; }
-.stat-card.pink .stat-icon { background: rgba(236, 72, 153, 0.1); color: #ec4899; }
-.stat-card.green .stat-icon { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
-.stat-card.teal .stat-icon { background: rgba(20, 184, 166, 0.1); color: #14b8a6; }
-.stat-card.orange .stat-icon { background: rgba(249, 115, 22, 0.1); color: #f97316; }
-.stat-value { font-size: 2rem; font-weight: 700; }
-.stat-label { font-size: 0.875rem; color: var(--text-secondary); }
+.stats-inline { display: flex; align-items: baseline; gap: 20px; margin-bottom: 20px; padding: 12px 0; border-bottom: 1px solid var(--border-color); }
+.stat-item { display: flex; align-items: baseline; gap: 5px; }
+.stat-num { font-size: 1.25rem; font-weight: 600; color: var(--text-primary); }
+.stat-text { font-size: 0.8125rem; color: var(--text-secondary); }
+.stat-sep { width: 1px; height: 16px; background: var(--border-color); align-self: center; }
 
-.main-row { display: grid; grid-template-columns: 1fr 300px; gap: 20px; }
 .list-panel { background: var(--bg-primary); border-radius: 12px; border: 1px solid var(--border-color); padding: 20px; }
 .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 .panel-title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
@@ -570,8 +546,6 @@ function formatDate(str) {
 .user-table { width: 100%; border-collapse: collapse; }
 .user-table th, .user-table td { padding: 12px; text-align: left; border-bottom: 1px solid var(--border-color); }
 .user-table th { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; }
-.user-cell { display: flex; align-items: center; gap: 12px; }
-.avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 600; font-size: 0.875rem; }
 .user-info { display: flex; flex-direction: column; }
 .user-info .name { font-weight: 500; display: flex; align-items: center; gap: 6px; }
 .user-info .email { font-size: 0.75rem; color: var(--text-secondary); }
@@ -588,48 +562,15 @@ function formatDate(str) {
 .mfa-badge.bound { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
 .mfa-badge.unbound { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
 .date { font-size: 0.8125rem; color: var(--text-secondary); }
-.actions { display: flex; gap: 8px; }
-.act-btn { width: 32px; height: 32px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-primary); cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text-primary); }
-.act-btn:hover { background: var(--bg-secondary); }
-.act-btn.del { color: #ef4444; }
+.actions { display: flex; align-items: center; gap: 6px; }
+.act-icon { background: none; border: none; padding: 4px; cursor: pointer; color: #94a3b8; display: flex; align-items: center; justify-content: center; border-radius: 4px; }
+.act-icon:hover { color: #475569; background: var(--bg-hover, #f1f5f9); }
 .pagination { display: flex; align-items: center; gap: 8px; padding: 16px 0 0; font-size: 0.8125rem; color: var(--text-secondary); }
 .pagination select { padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border-color); }
 .page-btns { margin-left: auto; display: flex; gap: 4px; }
 .page-btns button { padding: 6px 12px; border: 1px solid var(--border-color); background: var(--bg-primary); border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
 .page-num { padding: 6px 12px; background: #3b82f6; color: #fff; border-radius: 4px; }
 
-.mfa-panel { background: var(--bg-primary); border-radius: 12px; border: 1px solid var(--border-color); }
-.mfa-header { padding: 16px 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border-color); }
-.mfa-body { padding: 20px; }
-.mfa-intro { display: flex; align-items: center; gap: 12px; padding: 16px; background: rgba(59, 130, 246, 0.05); border-radius: 8px; margin-bottom: 16px; }
-.mfa-intro-icon { width: 40px; height: 40px; background: rgba(59, 130, 246, 0.1); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #3b82f6; }
-.mfa-intro-text { display: flex; flex-direction: column; }
-.mfa-intro-text strong { font-size: 0.875rem; }
-.mfa-intro-text span { font-size: 0.75rem; color: var(--text-secondary); }
-.mfa-stat { display: flex; justify-content: space-between; margin-bottom: 16px; }
-.mfa-stat-label { font-size: 0.875rem; color: var(--text-secondary); }
-.mfa-stat-value { font-weight: 600; }
-.mfa-stat-value.good { color: #22c55e; }
-.mfa-stat-value.low { color: #ef4444; }
-.mfa-force-btn { width: 100%; padding: 10px; background: transparent; border: 1px dashed var(--border-color); border-radius: 8px; cursor: pointer; font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 20px; }
-.mfa-force-btn:hover { border-color: #3b82f6; color: #3b82f6; }
-.mfa-quick-title { font-size: 0.875rem; font-weight: 600; margin-bottom: 12px; }
-.mfa-quick-item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border-color); }
-.mfa-quick-item:last-child { border-bottom: none; }
-.mfa-quick-avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 0.75rem; }
-.mfa-quick-info { flex: 1; display: flex; flex-direction: column; }
-.mfa-quick-name { font-size: 0.875rem; }
-.mfa-quick-status { font-size: 0.75rem; }
-.mfa-quick-status.on { color: #22c55e; }
-.mfa-quick-status.off { color: #ef4444; }
-.mfa-reset-btn { width: 28px; height: 28px; border: none; border-radius: 6px; background: rgba(239, 68, 68, 0.1); color: #ef4444; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
-.mfa-reset-btn:hover { background: rgba(239, 68, 68, 0.2); }
-.switch { position: relative; width: 36px; height: 20px; }
-.switch input { opacity: 0; width: 0; height: 0; }
-.switch .slider { position: absolute; cursor: pointer; inset: 0; background: #ccc; border-radius: 20px; transition: 0.3s; }
-.switch .slider:before { content: ''; position: absolute; width: 16px; height: 16px; left: 2px; bottom: 2px; background: #fff; border-radius: 50%; transition: 0.3s; }
-.switch input:checked + .slider { background: #3b82f6; }
-.switch input:checked + .slider:before { transform: translateX(16px); }
 
 </style>
 

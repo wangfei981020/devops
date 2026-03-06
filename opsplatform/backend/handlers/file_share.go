@@ -97,8 +97,8 @@ func HandleBatchPresignedURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Paths) > 50 {
-		sendError(w, "一次最多处理50个文件", http.StatusBadRequest)
+	if len(req.Paths) > 200 {
+		sendError(w, "一次最多处理200个文件", http.StatusBadRequest)
 		return
 	}
 

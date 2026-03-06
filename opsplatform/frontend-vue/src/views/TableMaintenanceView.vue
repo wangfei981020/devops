@@ -247,38 +247,46 @@ function applyStatsFilter() {
 const statsAnalysis = computed(() => {
   const data = statsFilteredRecords.value
   if (!data.length) return {}
-  
-  // 按游戏类型统计（支持多选）
+
+  // 辅助函数：获取记录的桌台数（至少为1）
+  function getTableCount(r) {
+    const tables = parseMultiSelect(r.affected_tables)
+    return tables.length || 1
+  }
+
+  // 按游戏类型统计（支持多选，按桌台数计数）
   const gameTypeMap = {}
   data.forEach(r => {
+    const tc = getTableCount(r)
     const types = parseMultiSelect(r.game_types)
     if (types.length) {
       types.forEach(gt => {
-        gameTypeMap[gt] = (gameTypeMap[gt] || 0) + 1
+        gameTypeMap[gt] = (gameTypeMap[gt] || 0) + tc
       })
     } else {
-      gameTypeMap['未知'] = (gameTypeMap['未知'] || 0) + 1
+      gameTypeMap['未知'] = (gameTypeMap['未知'] || 0) + tc
     }
   })
   const byGameType = Object.entries(gameTypeMap).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
   const maxGameType = Math.max(...byGameType.map(i => i.count), 1)
-  
-  // 按现场统计（affected_sites 是多选数组）
+
+  // 按现场统计（affected_sites 是多选数组，按桌台数计数）
   const siteMap = {}
   data.forEach(r => {
+    const tc = getTableCount(r)
     const sites = parseMultiSelect(r.affected_sites)
     if (sites.length) {
       sites.forEach(s => {
-        siteMap[s] = (siteMap[s] || 0) + 1
+        siteMap[s] = (siteMap[s] || 0) + tc
       })
     } else {
-      siteMap['未知'] = (siteMap['未知'] || 0) + 1
+      siteMap['未知'] = (siteMap['未知'] || 0) + tc
     }
   })
   const bySite = Object.entries(siteMap).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
   const maxSite = Math.max(...bySite.map(i => i.count), 1)
-  
-  // 按操作类型统计（维护/取消/重算/重派彩）
+
+  // 按操作类型统计（维护/取消/重算/重派彩，按桌台数计数）
   // 注意：维护操作中 maintenance_type 为"无"的不计入统计
   const operationMap = { '维护': 0, '取消': 0, '重算': 0, '重派彩': 0 }
   data.forEach(r => {
@@ -288,7 +296,7 @@ const statsAnalysis = computed(() => {
       if (op === '维护' && (!r.maintenance_type || r.maintenance_type === '无')) {
         return
       }
-      operationMap[op]++
+      operationMap[op] += getTableCount(r)
     }
   })
   const byOperation = Object.entries(operationMap).map(([name, count]) => ({ name, count }))
@@ -299,34 +307,40 @@ const statsAnalysis = computed(() => {
   
   // 维护操作的数据（排除 maintenance_type 为"无"的记录，与操作类型统计一致）
   const maintData = data.filter(r => r.operation === '维护' && r.maintenance_type && r.maintenance_type !== '无')
+  // 维护操作按桌台总计
+  let maintTotalByTable = 0
+  maintData.forEach(r => { maintTotalByTable += getTableCount(r) })
   
-  // 维护-开始时长统计
+  // 维护-开始时长统计（按桌台数计数）
   const maintStartDurMap = { '两分钟内': 0, '五分钟内': 0, '十分钟内': 0, '十分钟以上': 0 }
   maintData.forEach(r => {
+    const tc = getTableCount(r)
     const key = r.start_duration || ''
-    if (maintStartDurMap.hasOwnProperty(key)) maintStartDurMap[key]++
+    if (maintStartDurMap.hasOwnProperty(key)) maintStartDurMap[key] += tc
   })
   const byMaintStartDuration = durationOrder.map(name => ({ name, count: maintStartDurMap[name] }))
-  
-  // 维护-关闭时长统计
+
+  // 维护-关闭时长统计（按桌台数计数）
   const closeDurMap = { '两分钟内': 0, '五分钟内': 0, '十分钟内': 0, '十分钟以上': 0 }
   maintData.forEach(r => {
+    const tc = getTableCount(r)
     const key = r.close_duration || ''
     if (closeDurMap.hasOwnProperty(key)) {
-      closeDurMap[key]++
+      closeDurMap[key] += tc
     }
   })
   const byCloseDuration = durationOrder.map(name => ({ name, count: closeDurMap[name] }))
-  
-  // 维护总时长统计（取开始时长和关闭时长中较大的那个）
+
+  // 维护总时长统计（取开始时长和关闭时长中较大的那个，按桌台数计数）
   const totalDurMap = { '两分钟内': 0, '五分钟内': 0, '十分钟内': 0, '十分钟以上': 0 }
   maintData.forEach(r => {
+    const tc = getTableCount(r)
     const startIdx = durationIndex[r.start_duration] ?? -1
     const closeIdx = durationIndex[r.close_duration] ?? -1
     const maxIdx = Math.max(startIdx, closeIdx)
     if (maxIdx >= 0) {
       const key = durationOrder[maxIdx]
-      totalDurMap[key]++
+      totalDurMap[key] += tc
     }
   })
   const byTotalDuration = durationOrder.map(name => ({ name, count: totalDurMap[name] }))
@@ -429,46 +443,50 @@ const statsAnalysis = computed(() => {
     }
   }).sort((a, b) => (b.date || '').localeCompare(a.date || ''))
 
-  // 操作人统计（全部）
+  // 操作人统计（按桌台数计数）
   const operatorMap = {}
   data.forEach(r => {
+    const tc = getTableCount(r)
     const key = r.operator || '未填写'
-    operatorMap[key] = (operatorMap[key] || 0) + 1
+    operatorMap[key] = (operatorMap[key] || 0) + tc
   })
   const byOperator = Object.entries(operatorMap).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
   const maxOperator = Math.max(...byOperator.map(i => i.count), 1)
-  
-  // 质检人统计（全部）
+
+  // 质检人统计（按桌台数计数）
   const inspectorMap = {}
   data.forEach(r => {
+    const tc = getTableCount(r)
     const key = r.inspector || '未填写'
-    inspectorMap[key] = (inspectorMap[key] || 0) + 1
+    inspectorMap[key] = (inspectorMap[key] || 0) + tc
   })
   const byInspector = Object.entries(inspectorMap).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
   const maxInspector = Math.max(...byInspector.map(i => i.count), 1)
   
-  // 影响项目统计（按项目分类统计）
+  // 影响项目统计（按桌台数计数）
   const affectProjectMap = {}
   let noAffectCount = 0
   data.forEach(r => {
+    const tc = getTableCount(r)
     const projects = parseMultiSelectSync(r.affected_projects)
     if (projects.length) {
       projects.forEach(p => {
-        affectProjectMap[p] = (affectProjectMap[p] || 0) + 1
+        affectProjectMap[p] = (affectProjectMap[p] || 0) + tc
       })
     } else {
-      noAffectCount++
+      noAffectCount += tc
     }
   })
   const byAffectProject = Object.entries(affectProjectMap).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
   const maxAffectProject = Math.max(...byAffectProject.map(i => i.count), 1)
-  
-  // 质检状态统计
+
+  // 质检状态统计（按桌台数计数）
   let qcNormal = 0, qcAbnormal = 0, qcPending = 0
   data.forEach(r => {
-    if (r.qc_status === '正常') qcNormal++
-    else if (r.qc_status === '异常') qcAbnormal++
-    else qcPending++
+    const tc = getTableCount(r)
+    if (r.qc_status === '正常') qcNormal += tc
+    else if (r.qc_status === '异常') qcAbnormal += tc
+    else qcPending += tc
   })
   
   // 按桌台统计（使用层级配置精确归属每个桌台的项目、现场、游戏类型）
@@ -559,26 +577,28 @@ const statsAnalysis = computed(() => {
   })).sort((a, b) => b.count - a.count)
   const maxTableSummary = Math.max(...byTableSummary.map(i => i.count), 1)
   
-  // 按维护类型统计各时长分布（不统计"无"）
+  // 按维护类型统计各时长分布（不统计"无"，按桌台数计数）
   // 每条记录取 start_duration 和 close_duration 中的最大值
   const maintTypes = ['例行维护', '临时维护', '紧急维护']
   const durationKeys = ['两分钟内', '五分钟内', '十分钟内', '十分钟以上']
   const byMaintType = maintTypes.map(mt => {
     const items = data.filter(r => r.maintenance_type === mt)
-    const total = items.length
+    let total = 0
     const durations = { '两分钟内': 0, '五分钟内': 0, '十分钟内': 0, '十分钟以上': 0 }
     items.forEach(r => {
+      const tc = getTableCount(r)
+      total += tc
       const startIdx = durationIndex[r.start_duration] ?? -1
       const closeIdx = durationIndex[r.close_duration] ?? -1
       const maxIdx = Math.max(startIdx, closeIdx)
       if (maxIdx >= 0) {
-        durations[durationOrder[maxIdx]]++
+        durations[durationOrder[maxIdx]] += tc
       }
     })
     return { name: mt, total, durations }
   })
-  
-  // 按操作类型统计（维护操作取最大时长，其他操作用开始时长）
+
+  // 按操作类型统计（维护操作取最大时长，其他操作用开始时长，按桌台数计数）
   // 注意：维护操作中 maintenance_type 为"无"的不计入统计
   const opTypes = ['维护', '取消', '重算', '重派彩']
   const byOpType = opTypes.map(op => {
@@ -587,30 +607,37 @@ const statsAnalysis = computed(() => {
     if (op === '维护') {
       items = items.filter(r => r.maintenance_type && r.maintenance_type !== '无')
     }
-    const total = items.length
+    let total = 0
     const durations = { '两分钟内': 0, '五分钟内': 0, '十分钟内': 0, '十分钟以上': 0 }
     items.forEach(r => {
+      const tc = getTableCount(r)
+      total += tc
       if (op === '维护') {
         // 维护操作：取开始和关闭时长中的最大值
         const startIdx = durationIndex[r.start_duration] ?? -1
         const closeIdx = durationIndex[r.close_duration] ?? -1
         const maxIdx = Math.max(startIdx, closeIdx)
         if (maxIdx >= 0) {
-          durations[durationOrder[maxIdx]]++
+          durations[durationOrder[maxIdx]] += tc
         }
       } else {
         // 其他操作：只统计开始时长
         const key = r.start_duration || ''
         if (durations.hasOwnProperty(key)) {
-          durations[key]++
+          durations[key] += tc
         }
       }
     })
     return { name: op, total, durations, hasDuration: true }
   })
   
+  // 总计（按桌台数）
+  let totalByTable = 0
+  data.forEach(r => { totalByTable += getTableCount(r) })
+
   return {
-    total: data.length,
+    total: totalByTable,
+    totalRecords: data.length,
     byGameType, maxGameType,
     bySite, maxSite,
     byOperation,
@@ -656,7 +683,8 @@ function exportStatsToExcel() {
     ? `${statsDateRange.value.start || '不限'} 至 ${statsDateRange.value.end || '不限'}`
     : '全部时间'
   lines.push(`统计时间范围,${dateInfo}`)
-  lines.push(`总记录数,${stats.total}`)
+  lines.push(`总记录数,${stats.totalRecords}`)
+  lines.push(`总台次,${stats.total}`)
   lines.push('')
   
   // 按维护类型统计（含时长分布）
@@ -1491,11 +1519,18 @@ async function loadStats() {
 async function loadPresignedUrls(attachments) {
   const paths = attachments.filter(a => a.path && !presignedUrlCache.value[a.path]).map(a => a.path)
   if (paths.length === 0) return
+  const BATCH_SIZE = 50
   try {
-    const res = await api.post('/api/storage/presign/batch', { paths })
-    const urls = res.data?.urls || {}
-    Object.entries(urls).forEach(([path, url]) => {
-      presignedUrlCache.value[path] = url
+    const batches = []
+    for (let i = 0; i < paths.length; i += BATCH_SIZE) {
+      batches.push(paths.slice(i, i + BATCH_SIZE))
+    }
+    const results = await Promise.all(batches.map(batch => api.post('/api/storage/presign/batch', { paths: batch })))
+    results.forEach(res => {
+      const urls = res.data?.urls || {}
+      Object.entries(urls).forEach(([path, url]) => {
+        presignedUrlCache.value[path] = url
+      })
     })
   } catch (e) {
     console.error('获取预签名URL失败', e)
@@ -2250,7 +2285,7 @@ async function exportToExcel() {
           {{ t('tableMaintenance.statsPanel.export') }}
         </button>
         <div class="filter-result">
-          {{ t('tableMaintenance.table.pagination.total') }}: <strong>{{ statsAnalysis.total || 0 }}</strong> {{ t('tableMaintenance.table.pagination.records') }}
+          {{ t('tableMaintenance.table.pagination.total') }}: <strong>{{ statsAnalysis.totalRecords || 0 }}</strong> {{ t('tableMaintenance.table.pagination.records') }}，涉及 <strong>{{ statsAnalysis.total || 0 }}</strong> 台次
         </div>
       </div>
 

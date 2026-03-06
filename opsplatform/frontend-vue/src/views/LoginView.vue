@@ -197,53 +197,14 @@ function loginWithOIDC() {
       <div class="brand-content">
         <div class="logo-container">
           <div class="logo-text">
-            <div class="logo-icon">⚡</div>
+            <div class="logo-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
             <span class="logo-title">运维平台</span>
           </div>
         </div>
 
         <p class="brand-slogan">
-          一站式智能运维解决方案<br>
-          让运维更简单、更高效、更智能
+          资源管理 · 监控告警 · 排班值班 · 工单协作
         </p>
-
-        <div class="features">
-          <div class="feature-item">
-            <div class="feature-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                <line x1="8" y1="21" x2="16" y2="21"></line>
-                <line x1="12" y1="17" x2="12" y2="21"></line>
-              </svg>
-            </div>
-            <span>统一资源管理，全面掌控基础设施</span>
-          </div>
-          <div class="feature-item">
-            <div class="feature-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21.21 15.89A10 10 0 1 1 8 2.83"></path>
-                <path d="M22 12A10 10 0 0 0 12 2v10z"></path>
-              </svg>
-            </div>
-            <span>实时监控告警，快速发现解决问题</span>
-          </div>
-          <div class="feature-item">
-            <div class="feature-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2M7.5 13A2.5 2.5 0 0 0 5 15.5 2.5 2.5 0 0 0 7.5 18a2.5 2.5 0 0 0 2.5-2.5A2.5 2.5 0 0 0 7.5 13m9 0a2.5 2.5 0 0 0-2.5 2.5 2.5 2.5 0 0 0 2.5 2.5 2.5 2.5 0 0 0 2.5-2.5 2.5 2.5 0 0 0-2.5-2.5z"/>
-              </svg>
-            </div>
-            <span>智能化运维，AI驱动故障预测</span>
-          </div>
-          <div class="feature-item">
-            <div class="feature-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
-              </svg>
-            </div>
-            <span>容器化管理，轻松驾驭K8S集群</span>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -490,7 +451,7 @@ function loginWithOIDC() {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 28px;
+  color: white;
   box-shadow: 0 8px 24px rgba(24,144,255,0.4);
 }
 
@@ -506,38 +467,6 @@ function loginWithOIDC() {
   color: rgba(255,255,255,0.7);
   margin-bottom: 48px;
   line-height: 1.6;
-}
-
-.features {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.feature-item {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  color: rgba(255,255,255,0.85);
-  font-size: 15px;
-  text-align: left;
-}
-
-.feature-icon {
-  width: 40px;
-  height: 40px;
-  background: rgba(24,144,255,0.2);
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.feature-icon svg {
-  width: 20px;
-  height: 20px;
-  color: #40a9ff;
 }
 
 /* 右侧登录区 */

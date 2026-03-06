@@ -412,12 +412,17 @@ async function getPresignedUrl(path) {
 async function batchPresignUrls(paths) {
   const uncached = paths.filter(p => p && p.startsWith('/storage/') && !presignedUrlCache.value[p])
   if (uncached.length === 0) return
-  
+
+  const BATCH_SIZE = 50
   try {
-    const res = await api.post('/api/storage/presign/batch', { paths: uncached })
-    if (res.data?.urls) {
-      Object.assign(presignedUrlCache.value, res.data.urls)
+    const batches = []
+    for (let i = 0; i < uncached.length; i += BATCH_SIZE) {
+      batches.push(uncached.slice(i, i + BATCH_SIZE))
     }
+    const results = await Promise.all(batches.map(batch => api.post('/api/storage/presign/batch', { paths: batch })))
+    results.forEach(res => {
+      if (res.data?.urls) Object.assign(presignedUrlCache.value, res.data.urls)
+    })
   } catch (e) {
     console.error('批量获取预签名URL失败', e)
   }
