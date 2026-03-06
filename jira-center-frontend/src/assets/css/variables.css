@@ -1,0 +1,77 @@
+:root {
+  /* Jira Center 设计系统 */
+  --primary: #1E40AF;
+  --primary-light: #3B82F6;
+  --primary-dark: #1E3A8A;
+  --accent: #F59E0B;
+  --accent-light: #FCD34D;
+
+  /* 状态色 */
+  --success: #10B981;
+  --warning: #F59E0B;
+  --danger: #EF4444;
+  --info: #3B82F6;
+
+  /* 字体 */
+  --font-sans: 'Fira Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Fira Code', 'Consolas', monospace;
+
+  /* 圆角 */
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow: 0 2px 8px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+
+  /* 动画 */
+  --transition: 200ms ease;
+  --transition-slow: 300ms ease;
+}
+
+/* 暗色主题（默认） */
+[data-theme="dark"] {
+  --bg-primary: #0F172A;
+  --bg-secondary: #1E293B;
+  --bg-tertiary: #334155;
+  --bg-card: #1E293B;
+  --bg-hover: #334155;
+  --bg-input: #1E293B;
+
+  --text-primary: #F1F5F9;
+  --text-secondary: #94A3B8;
+  --text-muted: #64748B;
+
+  --border: #334155;
+  --border-light: #475569;
+
+  --sidebar-bg: #0F172A;
+  --sidebar-active: rgba(59,130,246,0.15);
+  --sidebar-text: #94A3B8;
+  --sidebar-text-active: #3B82F6;
+}
+
+/* 亮色主题 */
+[data-theme="light"] {
+  --bg-primary: #F8FAFC;
+  --bg-secondary: #FFFFFF;
+  --bg-tertiary: #F1F5F9;
+  --bg-card: #FFFFFF;
+  --bg-hover: #F1F5F9;
+  --bg-input: #FFFFFF;
+
+  --text-primary: #0F172A;
+  --text-secondary: #475569;
+  --text-muted: #94A3B8;
+
+  --border: #E2E8F0;
+  --border-light: #CBD5E1;
+
+  --sidebar-bg: #FFFFFF;
+  --sidebar-active: rgba(30,64,175,0.08);
+  --sidebar-text: #64748B;
+  --sidebar-text-active: #1E40AF;
+}
