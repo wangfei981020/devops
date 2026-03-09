@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
-	"encoding/base64"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"net/url"
 	"opsplatform/database"
 	"opsplatform/models"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,8 +48,6 @@ type OIDCDiscovery struct {
 // 缓存发现的配置
 var discoveryCache *OIDCDiscovery
 var discoveryCacheTime time.Time
-
-// 不再使用内存存储 state，改用 Redis
 
 // GetOIDCConfig 获取OIDC配置
 func GetOIDCConfig() (*OIDCConfig, error) {
@@ -237,39 +238,65 @@ func getOIDCEndpoints(config *OIDCConfig) (authURL, tokenURL, userinfoURL string
 	return config.AuthURL, config.TokenURL, config.UserInfoURL, nil
 }
 
-// generateState 生成随机state并存储到Redis
+// generateState 生成 state（优先 Redis 一次性存储，后备 HMAC 签名）
 func generateState() string {
-	b := make([]byte, 32)
+	b := make([]byte, 16)
 	rand.Read(b)
-	state := base64.URLEncoding.EncodeToString(b)
+	nonce := hex.EncodeToString(b)
 
-	// 存储到 Redis，10分钟过期
-	err := database.RedisSet("oidc_state:"+state, "1", 10*time.Minute)
-	if err != nil {
-		log.Printf("[OIDC] 存储state到Redis失败: %v", err)
+	if database.RedisEnabled {
+		// Redis: 一次性 state，防重放
+		err := database.RedisSet("oidc_state:"+nonce, "1", 10*time.Minute)
+		if err == nil {
+			return nonce
+		}
+		log.Printf("[OIDC] Redis 存储 state 失败: %v，降级为 HMAC", err)
 	}
 
-	return state
+	// HMAC 后备: nonce.timestamp.signature
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	payload := nonce + "." + ts
+	return payload + "." + hmacSign(payload)
 }
 
-// validateState 验证state（从Redis）
+// validateState 验证 state（优先 Redis，后备 HMAC）
 func validateState(state string) bool {
-	key := "oidc_state:" + state
-
-	// 检查是否存在
-	exists, err := database.RedisExists(key)
-	if err != nil {
-		log.Printf("[OIDC] 检查state失败: %v", err)
+	// 尝试 Redis 验证（短 state = Redis 格式）
+	if database.RedisEnabled && !strings.Contains(state, ".") {
+		key := "oidc_state:" + state
+		exists, err := database.RedisExists(key)
+		if err == nil && exists {
+			database.RedisDelete(key) // 一次性，用完即删
+			return true
+		}
+		log.Printf("[OIDC] Redis state 无效或已使用: %s", state[:8])
 		return false
 	}
 
-	if !exists {
+	// HMAC 后备验证
+	parts := strings.SplitN(state, ".", 3)
+	if len(parts) != 3 {
+		log.Printf("[OIDC] state 格式错误")
 		return false
 	}
-
-	// 删除已使用的state
-	database.RedisDelete(key)
+	payload := parts[0] + "." + parts[1]
+	if hmacSign(payload) != parts[2] {
+		log.Printf("[OIDC] state 签名无效")
+		return false
+	}
+	ts, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || time.Now().Unix()-ts > 600 {
+		log.Printf("[OIDC] state 已过期")
+		return false
+	}
 	return true
+}
+
+func hmacSign(payload string) string {
+	secret, _ := getJWTSecret()
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(payload))
+	return hex.EncodeToString(mac.Sum(nil))[:32]
 }
 
 // HandleOIDCLogin 发起OIDC登录

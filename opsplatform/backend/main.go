@@ -88,6 +88,7 @@ func main() {
 	// 会话管理
 	protected.HandleFunc("/session/info", handlers.HandleGetSessionInfo).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/session/refresh", handlers.HandleRefreshSession).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/portal-token", handlers.HandleGetPortalToken).Methods("GET", "OPTIONS")
 
 	// ===== 仅管理员可访问的路由 =====
 	adminOnly := api.PathPrefix("").Subrouter()
@@ -330,6 +331,17 @@ func main() {
 	protected.HandleFunc("/service-configs/{id}/deps/{depId}", handlers.HandleDeleteServiceDependency).Methods("DELETE", "OPTIONS")
 	protected.HandleFunc("/service-configs/{id}/deps/{depId}/password", handlers.HandleGetServiceDepPassword).Methods("GET", "OPTIONS")
 
+	// 外部应用管理
+	protected.HandleFunc("/external-apps/my", handlers.HandleGetMyExternalApps).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/external-apps/groups", handlers.HandleGetAppGroups).Methods("GET", "OPTIONS")
+	adminOnly.HandleFunc("/external-apps/test-url", handlers.HandleTestAppURL).Methods("POST", "OPTIONS")
+	adminOnly.HandleFunc("/external-apps", handlers.HandleGetExternalApps).Methods("GET", "OPTIONS")
+	adminOnly.HandleFunc("/external-apps", handlers.HandleCreateExternalApp).Methods("POST", "OPTIONS")
+	adminOnly.HandleFunc("/external-apps/{id}", handlers.HandleUpdateExternalApp).Methods("PUT", "OPTIONS")
+	adminOnly.HandleFunc("/external-apps/{id}", handlers.HandleDeleteExternalApp).Methods("DELETE", "OPTIONS")
+	adminOnly.HandleFunc("/external-apps/{appKey}/roles", handlers.HandleGetAppRoles).Methods("GET", "OPTIONS")
+	adminOnly.HandleFunc("/external-apps/{appKey}/roles", handlers.HandleUpdateAppRoles).Methods("PUT", "OPTIONS")
+
 	// Kubernetes 管理
 	protected.HandleFunc("/k8s/namespaces", handlers.HandleGetNamespaces).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/k8s/deployments", handlers.HandleGetDeployments).Methods("GET", "OPTIONS")
@@ -440,7 +452,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		// 安全响应头
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 
 		if r.Method == "OPTIONS" {

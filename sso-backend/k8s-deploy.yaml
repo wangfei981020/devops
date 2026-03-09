@@ -26,14 +26,14 @@ spec:
     spec:
       containers:
         - name: sso-backend
-          image: localhost:8070/opsplatform/sso-backend:v2
+          image: localhost:8070/opsplatform/sso-backend:v3
           ports:
             - containerPort: 9000
           env:
             - name: TZ
               value: "Asia/Shanghai"
             - name: SSO_ISSUER
-              value: "http://localhost:30900"
+              value: "http://localhost:30901"
             - name: SSO_INTERNAL_ISSUER
               value: "http://sso-backend.sso.svc.cluster.local:9000"
             - name: SSO_CLIENT_ID
@@ -116,7 +116,7 @@ spec:
     spec:
       containers:
         - name: sso-frontend
-          image: localhost:8070/opsplatform/sso-frontend:v1
+          image: localhost:8070/opsplatform/sso-frontend:v3
           ports:
             - containerPort: 80
           resources:

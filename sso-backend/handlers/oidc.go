@@ -102,22 +102,28 @@ func HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if user already has SSO session
-	if cookie, err := r.Cookie("sso_session"); err == nil && cookie.Value != "" {
-		tokenHash := database.HashToken(cookie.Value)
-		userID, _, sessErr := database.ValidateSession(tokenHash)
-		if sessErr == nil && userID != "" {
-			// User already logged in, issue code directly
-			code := generateRandomCode()
-			database.SaveAuthCode(code, clientID, userID, redirectURI, scope, state, "", time.Now().Add(10*time.Minute))
-			callbackURL := fmt.Sprintf("%s?code=%s&state=%s", redirectURI, url.QueryEscape(code), url.QueryEscape(state))
-			log.Printf("[Authorize] Session found, issuing code for user %s", userID)
-			http.Redirect(w, r, callbackURL, http.StatusFound)
-			return
+	// 每次 OIDC 授权都要求用户重新确认身份，避免旧 session cookie 导致用户错配
+	// 如果有有效 session 且不要求强制登录，可以自动签发（prompt 参数控制）
+	prompt := r.URL.Query().Get("prompt")
+	if prompt != "login" {
+		if cookie, err := r.Cookie("sso_session"); err == nil && cookie.Value != "" {
+			tokenHash := database.HashToken(cookie.Value)
+			userID, _, sessErr := database.ValidateSession(tokenHash)
+			if sessErr == nil && userID != "" {
+				user, userErr := database.GetUserByID(userID)
+				if userErr == nil && user.Status == "active" {
+					code := generateRandomCode()
+					database.SaveAuthCode(code, clientID, userID, redirectURI, scope, state, "", time.Now().Add(10*time.Minute))
+					callbackURL := fmt.Sprintf("%s?code=%s&state=%s", redirectURI, url.QueryEscape(code), url.QueryEscape(state))
+					log.Printf("[Authorize] Session found, issuing code for user %s (%s)", user.Username, userID)
+					http.Redirect(w, r, callbackURL, http.StatusFound)
+					return
+				}
+			}
 		}
 	}
 
-	// No session, redirect to login page
+	// No valid session or prompt=login, redirect to login page
 	// Use SSO frontend login page with return params
 	loginURL := fmt.Sprintf("/sso/login?client_id=%s&redirect_uri=%s&state=%s&scope=%s",
 		url.QueryEscape(clientID),

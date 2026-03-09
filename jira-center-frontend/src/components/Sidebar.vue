@@ -39,18 +39,23 @@ defineEmits(['toggle'])
 
 const authStore = useAuthStore()
 
+// 所有可能的菜单项，通过权限码控制可见性
+const allMenuItems = [
+  { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard, permKey: 'dashboard' },
+  { path: '/projects', label: '项目列表', icon: FolderKanban, permKey: 'projects' },
+  { path: '/issues', label: '工单列表', icon: ListTodo, permKey: 'issues' },
+  { path: '/stats', label: '统计分析', icon: BarChart3, permKey: 'stats' },
+  { path: '/report', label: '项目报告', icon: FileText, permKey: 'report' },
+  { path: '/settings', label: '系统设置', icon: Settings, permKey: 'settings', adminOnly: true },
+]
+
 const menuItems = computed(() => {
-  const items = [
-    { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard },
-    { path: '/projects', label: '项目列表', icon: FolderKanban },
-    { path: '/issues', label: '工单列表', icon: ListTodo },
-    { path: '/stats', label: '统计分析', icon: BarChart3 },
-    { path: '/report', label: '项目报告', icon: FileText },
-  ]
-  if (authStore.isAdmin) {
-    items.push({ path: '/settings', label: '系统设置', icon: Settings })
-  }
-  return items
+  return allMenuItems.filter(item => {
+    // 管理员页面额外检查
+    if (item.adminOnly && !authStore.isAdmin) return false
+    // 检查菜单权限
+    return authStore.hasMenu(item.permKey)
+  })
 })
 </script>
 

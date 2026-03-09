@@ -13,17 +13,17 @@ const routes = [
     path: '/',
     component: () => import('@/components/Layout.vue'),
     children: [
-      { path: '', redirect: '/dashboard' },
-      { path: 'dashboard', name: 'Dashboard', component: () => import('@/views/DashboardView.vue'), meta: { title: '仪表盘' } },
-      { path: 'projects', name: 'Projects', component: () => import('@/views/ProjectsView.vue'), meta: { title: '项目列表' } },
-      { path: 'issues', name: 'Issues', component: () => import('@/views/IssuesView.vue'), meta: { title: '工单列表' } },
-      { path: 'issues/:key', name: 'IssueDetail', component: () => import('@/views/IssueDetailView.vue'), meta: { title: '工单详情' } },
-      { path: 'stats', name: 'Stats', component: () => import('@/views/StatsView.vue'), meta: { title: '统计分析' } },
-      { path: 'report', name: 'Report', component: () => import('@/views/ReportView.vue'), meta: { title: '项目报告' } },
-      { path: 'settings', name: 'Settings', component: () => import('@/views/SettingsView.vue'), meta: { title: '系统设置', requiresAdmin: true } },
+      { path: '', redirect: to => ({ path: '/dashboard', query: to.query }) },
+      { path: 'dashboard', name: 'Dashboard', component: () => import('@/views/DashboardView.vue'), meta: { title: '仪表盘', menuKey: 'dashboard' } },
+      { path: 'projects', name: 'Projects', component: () => import('@/views/ProjectsView.vue'), meta: { title: '项目列表', menuKey: 'projects' } },
+      { path: 'issues', name: 'Issues', component: () => import('@/views/IssuesView.vue'), meta: { title: '工单列表', menuKey: 'issues' } },
+      { path: 'issues/:key', name: 'IssueDetail', component: () => import('@/views/IssueDetailView.vue'), meta: { title: '工单详情', menuKey: 'issues' } },
+      { path: 'stats', name: 'Stats', component: () => import('@/views/StatsView.vue'), meta: { title: '统计分析', menuKey: 'stats' } },
+      { path: 'report', name: 'Report', component: () => import('@/views/ReportView.vue'), meta: { title: '项目报告', menuKey: 'report' } },
+      { path: 'settings', name: 'Settings', component: () => import('@/views/SettingsView.vue'), meta: { title: '系统设置', requiresAdmin: true, menuKey: 'settings' } },
     ]
   },
-  { path: '/:pathMatch(.*)*', redirect: '/dashboard' }
+  { path: '/:pathMatch(.*)*', redirect: to => ({ path: '/dashboard', query: to.query }) }
 ]
 
 const router = createRouter({
@@ -45,8 +45,38 @@ async function checkCookieAuth() {
   return false
 }
 
+// Portal 免登认证（运维平台 iframe 传入 token）
+async function checkPortalAuth(token) {
+  try {
+    const res = await api.post('/api/portal-auth', { token })
+    const d = res.data?.data ?? res.data
+    if (d?.token && d?.user) {
+      const authStore = useAuthStore()
+      authStore.setToken(d.token)
+      authStore.setUser(d.user)
+      // 存储从运维平台获取的权限
+      if (d.permissions) {
+        authStore.setPermissions(d.permissions)
+      }
+      return true
+    }
+  } catch (e) { /* ignore */ }
+  return false
+}
+
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
+
+  // Portal 免登（运维平台 iframe 传入 portal_token）
+  if (to.query.portal_token) {
+    const ok = await checkPortalAuth(to.query.portal_token)
+    if (ok) {
+      const q = { ...to.query }
+      delete q.portal_token
+      q.portal_login = '1'
+      return next({ path: to.path, query: q })
+    }
+  }
 
   // SSO 登录回调
   if (to.query.sso_login === '1') {
@@ -71,6 +101,11 @@ router.beforeEach(async (to, from, next) => {
 
   // 管理员页面权限检查
   if (to.meta.requiresAdmin && !authStore.isAdmin) {
+    return next('/dashboard')
+  }
+
+  // 菜单权限检查（portal 用户受运维平台权限控制）
+  if (to.meta.menuKey && !authStore.hasMenu(to.meta.menuKey)) {
     return next('/dashboard')
   }
 

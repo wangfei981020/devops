@@ -47,12 +47,16 @@ func main() {
 	api.HandleFunc("/oidc/login", handlers.HandleOIDCLogin).Methods("GET", "OPTIONS")
 	api.HandleFunc("/oidc/callback", handlers.HandleOIDCCallback).Methods("GET", "OPTIONS")
 
+	// Portal 免登认证（运维平台 iframe 接入）
+	api.HandleFunc("/portal-auth", handlers.HandlePortalAuth).Methods("POST", "OPTIONS")
+
 	// ===== 需要认证的路由 =====
 	protected := api.PathPrefix("").Subrouter()
 	protected.Use(handlers.AuthMiddleware)
 
 	// 用户
 	protected.HandleFunc("/users/me", handlers.HandleGetCurrentUser).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/my/permissions", handlers.HandleGetMyPermissions).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/session/refresh", handlers.HandleRefreshSession).Methods("POST", "OPTIONS")
 
 	// Jira 代理

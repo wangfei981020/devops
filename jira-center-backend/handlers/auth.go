@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
+	"jira-center-backend/config"
 	"jira-center-backend/database"
 	"jira-center-backend/models"
 )
@@ -431,6 +432,204 @@ func HandleGetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondSuccess(w, user)
+}
+
+// HandleGetMyPermissions 获取当前用户的 Jira 权限
+func HandleGetMyPermissions(w http.ResponseWriter, r *http.Request) {
+	_, username, _ := GetUserFromContext(r)
+	perms := getUserPermissions(username)
+	if perms == nil {
+		perms = make(map[string]bool)
+	}
+	respondSuccess(w, perms)
+}
+
+// HandlePortalAuth 运维平台 Portal 免登认证
+// 接收运维平台的 JWT token，向运维平台后端验证用户身份，自动同步用户并签发本系统 token
+func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Token == "" {
+		respondBadRequest(w, "请提供 token")
+		return
+	}
+
+	portalURL := config.PortalAPIURL
+	if portalURL == "" {
+		respondInternalError(w, "未配置 PORTAL_API_URL")
+		return
+	}
+
+	// 调用运维平台 /api/users/me 验证 token
+	verifyURL := strings.TrimRight(portalURL, "/") + "/api/users/me"
+	log.Printf("[PortalAuth] 验证 token (前20字符): %.20s... -> %s", req.Token, verifyURL)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	verifyReq, _ := http.NewRequest("GET", verifyURL, nil)
+	verifyReq.Header.Set("Authorization", "Bearer "+req.Token)
+
+	resp, err := client.Do(verifyReq)
+	if err != nil {
+		respondInternalError(w, "无法连接运维平台")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[PortalAuth] 运维平台返回 HTTP %d", resp.StatusCode)
+		respondUnauthorized(w, fmt.Sprintf("运维平台验证失败(HTTP %d)", resp.StatusCode))
+		return
+	}
+
+	// 运维平台 /api/users/me 直接返回 user 对象（非 {data: ...} 包装）
+	var portalUser struct {
+		ID          string `json:"id"`
+		Username    string `json:"username"`
+		DisplayName string `json:"display_name"`
+		Email       string `json:"email"`
+		Role        string `json:"role"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&portalUser); err != nil {
+		log.Printf("[PortalAuth] JSON 解析失败: %v", err)
+		respondUnauthorized(w, "解析用户信息失败")
+		return
+	}
+	if portalUser.Username == "" {
+		log.Printf("[PortalAuth] 用户名为空, 原始数据: %+v", portalUser)
+		respondUnauthorized(w, "解析用户信息失败")
+		return
+	}
+
+	pu := portalUser
+
+	// 同步用户到本地: 存在则更新，不存在则创建
+	var existingID string
+	database.DB.QueryRow("SELECT id FROM users WHERE username = ?", pu.Username).Scan(&existingID)
+
+	localRole := "user"
+	if pu.Role == "admin" || pu.Role == "super_admin" || pu.Role == "超级管理员" {
+		localRole = "admin"
+	}
+
+	displayName := pu.DisplayName
+	if displayName == "" {
+		displayName = pu.Username
+	}
+
+	if existingID != "" {
+		database.DB.Exec("UPDATE users SET display_name=?, email=?, role=?, auth_source='portal' WHERE id=?",
+			displayName, pu.Email, localRole, existingID)
+	} else {
+		existingID = "portal_" + uuid.New().String()[:8]
+		database.DB.Exec("INSERT INTO users (id, username, password, display_name, email, role, status, auth_source) VALUES (?, ?, '', ?, ?, ?, 'active', 'portal')",
+			existingID, pu.Username, displayName, pu.Email, localRole)
+	}
+
+	// 签发本系统 token
+	token, expiresAt, err := GenerateToken(existingID, pu.Username, localRole)
+	if err != nil {
+		respondInternalError(w, "生成令牌失败")
+		return
+	}
+
+	SetAuthCookie(w, token, expiresAt)
+	AddAuditLog(existingID, pu.Username, "portal_login", "user", existingID, "Portal 免登认证", GetClientIP(r))
+
+	// 从运维平台获取用户权限（Jira相关权限）
+	permissions := fetchPortalPermissions(portalURL, req.Token, pu.Username)
+
+	// 缓存权限到 Redis（如果可用）
+	if len(permissions) > 0 {
+		cacheUserPermissions(pu.Username, permissions)
+	}
+
+	respondSuccess(w, map[string]interface{}{
+		"token": token,
+		"user": map[string]interface{}{
+			"id":           existingID,
+			"username":     pu.Username,
+			"display_name": displayName,
+			"email":        pu.Email,
+			"role":         localRole,
+			"auth_source":  "portal",
+		},
+		"permissions": permissions,
+	})
+}
+
+// fetchPortalPermissions 从运维平台获取用户的 Jira 相关权限
+func fetchPortalPermissions(portalURL, portalToken, username string) map[string]bool {
+	permURL := strings.TrimRight(portalURL, "/") + "/api/my/permissions"
+	client := &http.Client{Timeout: 5 * time.Second}
+	permReq, _ := http.NewRequest("GET", permURL, nil)
+	permReq.Header.Set("Authorization", "Bearer "+portalToken)
+	permReq.Header.Set("X-Operator", username)
+
+	resp, err := client.Do(permReq)
+	if err != nil {
+		log.Printf("[PortalAuth] 获取权限失败: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[PortalAuth] 获取权限返回 HTTP %d", resp.StatusCode)
+		return nil
+	}
+
+	var result struct {
+		Permissions map[string]bool `json:"permissions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("[PortalAuth] 解析权限失败: %v", err)
+		return nil
+	}
+
+	// 过滤出 Jira 相关权限 (menu:jira* 和 jira:*)
+	jiraPerms := make(map[string]bool)
+	for code, granted := range result.Permissions {
+		if granted && (strings.HasPrefix(code, "menu:jira") || strings.HasPrefix(code, "jira:")) {
+			jiraPerms[code] = true
+		}
+	}
+	log.Printf("[PortalAuth] 用户 %s 的 Jira 权限: %v", username, jiraPerms)
+	return jiraPerms
+}
+
+// cacheUserPermissions 缓存用户权限到 Redis
+func cacheUserPermissions(username string, permissions map[string]bool) {
+	if !database.RedisEnabled {
+		return
+	}
+	key := "jira_perms:" + username
+	permList := make([]string, 0, len(permissions))
+	for code := range permissions {
+		permList = append(permList, code)
+	}
+	data, _ := json.Marshal(permList)
+	database.RedisSet(key, string(data), 30*time.Minute)
+}
+
+// getUserPermissions 获取用户的 Jira 权限（从 Redis 缓存）
+func getUserPermissions(username string) map[string]bool {
+	if !database.RedisEnabled {
+		return nil
+	}
+	key := "jira_perms:" + username
+	data, err := database.RedisGet(key)
+	if err != nil {
+		return nil
+	}
+	var permList []string
+	if err := json.Unmarshal([]byte(data), &permList); err != nil {
+		return nil
+	}
+	perms := make(map[string]bool)
+	for _, code := range permList {
+		perms[code] = true
+	}
+	return perms
 }
 
 // HandleRefreshSession 刷新会话

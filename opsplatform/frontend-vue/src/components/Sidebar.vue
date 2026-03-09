@@ -1,13 +1,52 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore, useAppStore } from '@/stores'
+import api from '@/api'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const appStore = useAppStore()
 const t = (key, params) => appStore.t(key, params)
+
+// 动态外部应用
+const externalApps = ref([])
+
+onMounted(async () => {
+  try {
+    const res = await api.get('/api/external-apps/my')
+    const d = res.data?.data ?? res.data
+    externalApps.value = Array.isArray(d) ? d : []
+  } catch (e) {}
+})
+
+async function openExternalApp(app) {
+  let token = localStorage.getItem('token')
+  // SSO 用户的 token 是占位符 'cookie-auth'，需要从后端获取真实 JWT
+  if (!token || token === 'cookie-auth') {
+    try {
+      const res = await api.get('/api/portal-token')
+      token = res.data?.token || ''
+    } catch (e) {
+      token = ''
+    }
+  }
+  const sep = app.url.includes('?') ? '&' : '?'
+  const url = token ? app.url + sep + 'portal_token=' + encodeURIComponent(token) : app.url
+  window.open(url, '_blank')
+}
+
+// 按 group_name 分组
+const externalGroups = computed(() => {
+  const map = {}
+  for (const app of externalApps.value) {
+    const group = app.group_name || '外部应用'
+    if (!map[group]) map[group] = []
+    map[group].push(app)
+  }
+  return Object.entries(map).map(([name, items]) => ({ name, items }))
+})
 
 function getGroupName(groupKey) {
   return t('menu.groups.' + groupKey) || groupKey
@@ -28,7 +67,8 @@ function getItemName(itemKey) {
     'loganalysis': 'logAnalysis',
     'logalert': 'logAlert',
     'sysparams': 'sysParams',
-    'sso-config': 'ssoConfig'
+    'sso-config': 'ssoConfig',
+    'apps-manage': 'appsManage'
   }
   const key = keyMap[itemKey] || itemKey
   return t('menu.items.' + key) || itemKey
@@ -64,7 +104,7 @@ function hasMenuGroup(groupCode) {
     'release': ['deploy', 'change', 'rollback'],
     'logs': ['log-query', 'log-analysis', 'log-alert'],
     'security': ['vault', 'secrets', 'certificates'],
-    'settings': ['datasources', 'sys-params', 'settings', 'sso-config']
+    'settings': ['datasources', 'sys-params', 'settings', 'sso-config', 'apps-manage']
   }
   const subMenus = menuGroupMap[groupCode] || []
   for (const sub of subMenus) {
@@ -236,7 +276,8 @@ const menuGroups = [
     items: [
       { key: 'datasources', perm: 'datasources', name: '数据源配置', path: '/datasources' },
       { key: 'sysparams', perm: 'sys-params', name: '系统参数', path: '/sys-params' },
-      { key: 'sso-config', perm: 'sso-config', name: 'SSO配置', path: '/sso-config', adminOnly: true }
+      { key: 'sso-config', perm: 'sso-config', name: 'SSO配置', path: '/sso-config', adminOnly: true },
+      { key: 'apps-manage', perm: 'apps-manage', name: '应用管理', path: '/apps-manage', adminOnly: true }
     ]
   }
 ]
@@ -307,8 +348,8 @@ function navigateTo(path) {
 
     <nav class="sidebar-nav">
       <div class="nav-group" v-for="group in filteredMenuGroups" :key="group.key">
-        <button 
-          class="nav-group-header" 
+        <button
+          class="nav-group-header"
           :class="{ expanded: expandedGroups[group.key] }"
           @click="toggleGroup(group.key)"
         >
@@ -320,16 +361,48 @@ function navigateTo(path) {
             </svg>
           </span>
         </button>
-        
+
         <div class="nav-sub-menu" v-show="expandedGroups[group.key]">
-          <button 
-            v-for="item in group.items" 
+          <button
+            v-for="item in group.items"
             :key="item.key"
-            class="nav-item sub" 
+            class="nav-item sub"
             :class="{ active: isActive(item.path) }"
             @click="navigateTo(item.path)"
           >
             {{ getItemName(item.key) }}
+          </button>
+        </div>
+      </div>
+
+      <!-- 动态外部应用分组 -->
+      <div class="nav-group" v-for="eg in externalGroups" :key="'ext_' + eg.name">
+        <button
+          class="nav-group-header"
+          :class="{ expanded: expandedGroups['ext_' + eg.name] }"
+          @click="toggleGroup('ext_' + eg.name)"
+        >
+          <span class="nav-group-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+          </span>
+          <span class="nav-group-title">{{ eg.name }}</span>
+          <span class="nav-group-arrow" :class="{ expanded: expandedGroups['ext_' + eg.name] }">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 5l7 7-7 7"/>
+            </svg>
+          </span>
+        </button>
+        <div class="nav-sub-menu" v-show="expandedGroups['ext_' + eg.name]">
+          <button
+            v-for="app in eg.items"
+            :key="app.app_key"
+            class="nav-item sub"
+            @click="openExternalApp(app)"
+          >
+            <svg v-if="app.icon_svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="ext-app-icon" v-html="app.icon_svg"></svg>
+            {{ app.name }}
           </button>
         </div>
       </div>
@@ -469,5 +542,13 @@ function navigateTo(path) {
   border-radius: 6px 0 0 6px;
   margin-right: 0;
   font-weight: 500;
+}
+
+.ext-app-icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  vertical-align: -2px;
+  flex-shrink: 0;
 }
 </style>

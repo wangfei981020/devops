@@ -202,7 +202,19 @@ func createTables() {
 			description VARCHAR(255) DEFAULT '',
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+		`CREATE TABLE IF NOT EXISTS sso_environments (
+			id VARCHAR(64) PRIMARY KEY,
+			name VARCHAR(64) NOT NULL UNIQUE,
+			label VARCHAR(64) NOT NULL,
+			color VARCHAR(32) DEFAULT '#6b7280',
+			sort_order INT DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	}
+
+	// ALTER: add environment column to sso_clients if not exists
+	DB.Exec("ALTER TABLE sso_clients ADD COLUMN environment VARCHAR(64) DEFAULT '' AFTER status")
 
 	for _, t := range tables {
 		if _, err := DB.Exec(t); err != nil {
@@ -239,10 +251,19 @@ func initDefaultData() {
 	// Default opsplatform client
 	DB.QueryRow("SELECT COUNT(*) FROM sso_clients WHERE client_id='opsplatform'").Scan(&count)
 	if count == 0 {
-		DB.Exec(`INSERT INTO sso_clients (id, client_id, client_secret, client_name, description, icon, home_url, redirect_uris, status)
-			VALUES ('client-opsplatform', 'opsplatform', 'opsplatform-secret', '运维平台', '运维管理平台', 'settings', 'http://localhost:30080', '["http://localhost:30080/api/oidc/callback"]', 'active')`)
+		DB.Exec(`INSERT INTO sso_clients (id, client_id, client_secret, client_name, description, icon, home_url, redirect_uris, status, environment)
+			VALUES ('client-opsplatform', 'opsplatform', 'opsplatform-secret', '运维平台', '运维管理平台', 'settings', 'http://localhost:30080', '["http://localhost:30080/api/oidc/callback"]', 'active', 'dev')`)
 		DB.Exec(`INSERT INTO sso_user_clients (id, user_id, client_id) VALUES ('uc-001', 'sso-admin-001', 'opsplatform')`)
 		log.Println("[DB] Default opsplatform client created")
+	}
+
+	// Default environments
+	DB.QueryRow("SELECT COUNT(*) FROM sso_environments").Scan(&count)
+	if count == 0 {
+		DB.Exec(`INSERT INTO sso_environments (id, name, label, color, sort_order) VALUES ('env-prod', 'prod', '生产环境', '#ef4444', 1)`)
+		DB.Exec(`INSERT INTO sso_environments (id, name, label, color, sort_order) VALUES ('env-uat', 'uat', 'UAT环境', '#f59e0b', 2)`)
+		DB.Exec(`INSERT INTO sso_environments (id, name, label, color, sort_order) VALUES ('env-dev', 'dev', '开发环境', '#3b82f6', 3)`)
+		log.Println("[DB] Default environments created")
 	}
 }
 
@@ -425,6 +446,7 @@ type PortalServiceRow struct {
 	Description string `json:"description"`
 	Icon        string `json:"icon"`
 	HomeURL     string `json:"home_url"`
+	Environment string `json:"environment"`
 }
 
 func GetUserPortalServices(userID string) ([]PortalServiceRow, error) {
@@ -435,12 +457,12 @@ func GetUserPortalServices(userID string) ([]PortalServiceRow, error) {
 	var err error
 
 	if isAdmin {
-		rows, err = DB.Query(`SELECT client_id, client_name, COALESCE(description,''), COALESCE(icon,''), COALESCE(home_url,'')
-			FROM sso_clients WHERE status = 'active' ORDER BY client_name`)
+		rows, err = DB.Query(`SELECT client_id, client_name, COALESCE(description,''), COALESCE(icon,''), COALESCE(home_url,''), COALESCE(environment,'')
+			FROM sso_clients WHERE status = 'active' ORDER BY environment, client_name`)
 	} else {
-		rows, err = DB.Query(`SELECT c.client_id, c.client_name, COALESCE(c.description,''), COALESCE(c.icon,''), COALESCE(c.home_url,'')
+		rows, err = DB.Query(`SELECT c.client_id, c.client_name, COALESCE(c.description,''), COALESCE(c.icon,''), COALESCE(c.home_url,''), COALESCE(c.environment,'')
 			FROM sso_user_clients uc JOIN sso_clients c ON uc.client_id = c.client_id
-			WHERE uc.user_id = ? AND c.status = 'active' ORDER BY c.client_name`, userID)
+			WHERE uc.user_id = ? AND c.status = 'active' ORDER BY c.environment, c.client_name`, userID)
 	}
 	if err != nil {
 		return nil, err
@@ -450,10 +472,292 @@ func GetUserPortalServices(userID string) ([]PortalServiceRow, error) {
 	var services []PortalServiceRow
 	for rows.Next() {
 		var s PortalServiceRow
-		rows.Scan(&s.ClientID, &s.ClientName, &s.Description, &s.Icon, &s.HomeURL)
+		rows.Scan(&s.ClientID, &s.ClientName, &s.Description, &s.Icon, &s.HomeURL, &s.Environment)
 		services = append(services, s)
 	}
 	return services, nil
+}
+
+// --- Admin: User CRUD ---
+
+type UserListRow struct {
+	ID          string  `json:"id"`
+	Username    string  `json:"username"`
+	DisplayName string  `json:"display_name"`
+	Email       string  `json:"email"`
+	Phone       string  `json:"phone"`
+	Status      string  `json:"status"`
+	AuthSource  string  `json:"auth_source"`
+	LastLoginAt *string `json:"last_login_at"`
+	CreatedAt   string  `json:"created_at"`
+}
+
+func ListAllUsers() ([]UserListRow, error) {
+	rows, err := DB.Query(`SELECT id, username, display_name, COALESCE(email,''), COALESCE(phone,''), status, auth_source,
+		DATE_FORMAT(last_login_at, '%Y-%m-%d %H:%i:%s'), DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s')
+		FROM sso_users ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []UserListRow
+	for rows.Next() {
+		var u UserListRow
+		rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Email, &u.Phone, &u.Status, &u.AuthSource, &u.LastLoginAt, &u.CreatedAt)
+		users = append(users, u)
+	}
+	if users == nil {
+		users = []UserListRow{}
+	}
+	return users, nil
+}
+
+func CreateUser(id, username, passwordHash, displayName, email, phone, status, authSource string) error {
+	_, err := DB.Exec(`INSERT INTO sso_users (id, username, password, display_name, email, phone, status, auth_source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, id, username, passwordHash, displayName, email, phone, status, authSource)
+	return err
+}
+
+func UpdateUser(id, displayName, email, phone, status, passwordHash string) error {
+	if passwordHash != "" {
+		_, err := DB.Exec(`UPDATE sso_users SET display_name=?, email=?, phone=?, status=?, password=? WHERE id=?`,
+			displayName, email, phone, status, passwordHash, id)
+		return err
+	}
+	_, err := DB.Exec(`UPDATE sso_users SET display_name=?, email=?, phone=?, status=? WHERE id=?`,
+		displayName, email, phone, status, id)
+	return err
+}
+
+func DeleteUser(id string) error {
+	DB.Exec("DELETE FROM sso_user_roles WHERE user_id = ?", id)
+	DB.Exec("DELETE FROM sso_user_clients WHERE user_id = ?", id)
+	DB.Exec("DELETE FROM sso_sessions WHERE user_id = ?", id)
+	_, err := DB.Exec("DELETE FROM sso_users WHERE id = ?", id)
+	return err
+}
+
+// --- Admin: User-Role assignment ---
+
+func GetUserRoleIDs(userID string) ([]string, error) {
+	rows, err := DB.Query("SELECT role_id FROM sso_user_roles WHERE user_id = ?", userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	if ids == nil {
+		ids = []string{}
+	}
+	return ids, nil
+}
+
+func SetUserRoles(userID string, roleIDs []string) error {
+	DB.Exec("DELETE FROM sso_user_roles WHERE user_id = ?", userID)
+	for _, rid := range roleIDs {
+		id := GenerateID("ur")
+		DB.Exec("INSERT INTO sso_user_roles (id, user_id, role_id) VALUES (?, ?, ?)", id, userID, rid)
+	}
+	return nil
+}
+
+// --- Admin: User-Client assignment ---
+
+func GetUserClientIDs(userID string) ([]string, error) {
+	rows, err := DB.Query("SELECT client_id FROM sso_user_clients WHERE user_id = ?", userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	if ids == nil {
+		ids = []string{}
+	}
+	return ids, nil
+}
+
+func SetUserClients(userID string, clientIDs []string) error {
+	DB.Exec("DELETE FROM sso_user_clients WHERE user_id = ?", userID)
+	for _, cid := range clientIDs {
+		id := GenerateID("uc")
+		DB.Exec("INSERT INTO sso_user_clients (id, user_id, client_id) VALUES (?, ?, ?)", id, userID, cid)
+	}
+	return nil
+}
+
+// --- Admin: Client CRUD ---
+
+type ClientListRow struct {
+	ID           string `json:"id"`
+	ClientID     string `json:"client_id"`
+	ClientName   string `json:"client_name"`
+	Description  string `json:"description"`
+	Icon         string `json:"icon"`
+	HomeURL      string `json:"home_url"`
+	RedirectURIs string `json:"redirect_uris"`
+	Status       string `json:"status"`
+	Environment  string `json:"environment"`
+	CreatedAt    string `json:"created_at"`
+}
+
+func ListAllClients() ([]ClientListRow, error) {
+	rows, err := DB.Query(`SELECT id, client_id, client_name, COALESCE(description,''), COALESCE(icon,''), COALESCE(home_url,''),
+		redirect_uris, status, COALESCE(environment,''), DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s')
+		FROM sso_clients ORDER BY environment, created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var clients []ClientListRow
+	for rows.Next() {
+		var c ClientListRow
+		rows.Scan(&c.ID, &c.ClientID, &c.ClientName, &c.Description, &c.Icon, &c.HomeURL, &c.RedirectURIs, &c.Status, &c.Environment, &c.CreatedAt)
+		clients = append(clients, c)
+	}
+	if clients == nil {
+		clients = []ClientListRow{}
+	}
+	return clients, nil
+}
+
+func CreateClient(id, clientID, clientSecret, clientName, description, icon, homeURL, redirectURIs, environment string) error {
+	_, err := DB.Exec(`INSERT INTO sso_clients (id, client_id, client_secret, client_name, description, icon, home_url, redirect_uris, status, environment)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`, id, clientID, clientSecret, clientName, description, icon, homeURL, redirectURIs, environment)
+	return err
+}
+
+func UpdateClient(clientID, clientName, clientSecret, description, icon, homeURL, redirectURIs, status, environment string) error {
+	if clientSecret != "" {
+		_, err := DB.Exec(`UPDATE sso_clients SET client_name=?, client_secret=?, description=?, icon=?, home_url=?, redirect_uris=?, status=?, environment=? WHERE client_id=?`,
+			clientName, clientSecret, description, icon, homeURL, redirectURIs, status, environment, clientID)
+		return err
+	}
+	_, err := DB.Exec(`UPDATE sso_clients SET client_name=?, description=?, icon=?, home_url=?, redirect_uris=?, status=?, environment=? WHERE client_id=?`,
+		clientName, description, icon, homeURL, redirectURIs, status, environment, clientID)
+	return err
+}
+
+func DeleteClient(clientID string) error {
+	DB.Exec("DELETE FROM sso_user_clients WHERE client_id = ?", clientID)
+	_, err := DB.Exec("DELETE FROM sso_clients WHERE client_id = ?", clientID)
+	return err
+}
+
+// --- Admin: Roles ---
+
+type RoleListRow struct {
+	ID          string `json:"id"`
+	Code        string `json:"code"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	IsSystem    bool   `json:"is_system"`
+	Status      string `json:"status"`
+}
+
+func ListAllRoles() ([]RoleListRow, error) {
+	rows, err := DB.Query(`SELECT id, code, name, COALESCE(description,''), is_system, status FROM sso_roles ORDER BY is_system DESC, code`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var roles []RoleListRow
+	for rows.Next() {
+		var r RoleListRow
+		rows.Scan(&r.ID, &r.Code, &r.Name, &r.Description, &r.IsSystem, &r.Status)
+		roles = append(roles, r)
+	}
+	if roles == nil {
+		roles = []RoleListRow{}
+	}
+	return roles, nil
+}
+
+// --- Admin: Audit Logs ---
+
+type AuditLogRow struct {
+	ID         string `json:"id"`
+	UserID     string `json:"user_id"`
+	Username   string `json:"username"`
+	Action     string `json:"action"`
+	TargetType string `json:"target_type"`
+	TargetID   string `json:"target_id"`
+	Detail     string `json:"detail"`
+	IP         string `json:"ip"`
+	Status     string `json:"status"`
+	CreatedAt  string `json:"created_at"`
+}
+
+func ListAuditLogs(limit int) ([]AuditLogRow, error) {
+	rows, err := DB.Query(`SELECT id, COALESCE(user_id,''), COALESCE(username,''), action, COALESCE(target_type,''), COALESCE(target_id,''),
+		COALESCE(detail,''), COALESCE(ip,''), COALESCE(status,''), DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s')
+		FROM sso_audit_logs ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var logs []AuditLogRow
+	for rows.Next() {
+		var l AuditLogRow
+		rows.Scan(&l.ID, &l.UserID, &l.Username, &l.Action, &l.TargetType, &l.TargetID, &l.Detail, &l.IP, &l.Status, &l.CreatedAt)
+		logs = append(logs, l)
+	}
+	if logs == nil {
+		logs = []AuditLogRow{}
+	}
+	return logs, nil
+}
+
+// --- Environments CRUD ---
+
+type EnvironmentRow struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Label     string `json:"label"`
+	Color     string `json:"color"`
+	SortOrder int    `json:"sort_order"`
+}
+
+func ListEnvironments() ([]EnvironmentRow, error) {
+	rows, err := DB.Query(`SELECT id, name, label, COALESCE(color,'#6b7280'), sort_order FROM sso_environments ORDER BY sort_order, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var envs []EnvironmentRow
+	for rows.Next() {
+		var e EnvironmentRow
+		rows.Scan(&e.ID, &e.Name, &e.Label, &e.Color, &e.SortOrder)
+		envs = append(envs, e)
+	}
+	if envs == nil {
+		envs = []EnvironmentRow{}
+	}
+	return envs, nil
+}
+
+func CreateEnvironment(id, name, label, color string, sortOrder int) error {
+	_, err := DB.Exec(`INSERT INTO sso_environments (id, name, label, color, sort_order) VALUES (?, ?, ?, ?, ?)`, id, name, label, color, sortOrder)
+	return err
+}
+
+func UpdateEnvironment(id, name, label, color string, sortOrder int) error {
+	_, err := DB.Exec(`UPDATE sso_environments SET name=?, label=?, color=?, sort_order=? WHERE id=?`, name, label, color, sortOrder, id)
+	return err
+}
+
+func DeleteEnvironment(id string) error {
+	_, err := DB.Exec(`DELETE FROM sso_environments WHERE id=?`, id)
+	return err
 }
 
 // --- Audit functions ---

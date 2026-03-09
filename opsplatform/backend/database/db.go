@@ -923,6 +923,41 @@ CREATE TABLE IF NOT EXISTS duty_records (
 		return err
 	}
 
+	// 创建外部应用表
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS external_apps (
+			id VARCHAR(64) PRIMARY KEY,
+			app_key VARCHAR(64) NOT NULL UNIQUE,
+			name VARCHAR(128) NOT NULL,
+			url VARCHAR(512) NOT NULL,
+			icon_svg TEXT,
+			group_name VARCHAR(64) DEFAULT '',
+			sort_order INT DEFAULT 0,
+			status VARCHAR(16) DEFAULT 'active',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	// 创建角色-外部应用关联表
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS role_external_apps (
+			id VARCHAR(64) PRIMARY KEY,
+			role_id VARCHAR(64) NOT NULL,
+			app_key VARCHAR(64) NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_rea_role (role_id),
+			INDEX idx_rea_app (app_key),
+			UNIQUE KEY uk_role_app (role_id, app_key)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
 	// 初始化默认角色和权限
 	initDefaultRolesAndPermissions()
 
@@ -1101,6 +1136,15 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_settings", "menu:settings", "系统设置", "/settings", "", "settings", 11},
 		{"perm_menu_datasources", "menu:datasources", "数据源配置", "/settings/datasources", "perm_menu_settings", "", 10},
 		{"perm_menu_sysparams", "menu:sysparams", "系统参数", "/settings/sysparams", "perm_menu_settings", "", 20},
+
+		// Jira中心（外部应用权限）
+		{"perm_menu_jira", "menu:jira", "Jira中心", "/jira", "", "jira", 12},
+		{"perm_menu_jira_dashboard", "menu:jira_dashboard", "Jira仪表盘", "/jira/dashboard", "perm_menu_jira", "", 10},
+		{"perm_menu_jira_projects", "menu:jira_projects", "Jira项目列表", "/jira/projects", "perm_menu_jira", "", 20},
+		{"perm_menu_jira_issues", "menu:jira_issues", "Jira工单列表", "/jira/issues", "perm_menu_jira", "", 30},
+		{"perm_menu_jira_stats", "menu:jira_stats", "Jira统计分析", "/jira/stats", "perm_menu_jira", "", 40},
+		{"perm_menu_jira_report", "menu:jira_report", "Jira项目报告", "/jira/report", "perm_menu_jira", "", 50},
+		{"perm_menu_jira_settings", "menu:jira_settings", "Jira系统设置", "/jira/settings", "perm_menu_jira", "", 60},
 	}
 
 	for _, perm := range menuPermissions {
@@ -1198,6 +1242,13 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_table_hierarchy_manage_site", "table_hierarchy:manage_site", "[桌台配置] 现场管理", "允许查看和管理现场配置"},
 		{"perm_btn_table_hierarchy_manage_gametype", "table_hierarchy:manage_gametype", "[桌台配置] 游戏类型管理", "允许查看和管理游戏类型配置"},
 		{"perm_btn_table_hierarchy_manage_table", "table_hierarchy:manage_table", "[桌台配置] 桌台管理", "允许查看和管理桌台配置"},
+
+		// Jira中心
+		{"perm_btn_jira_transition", "jira:transition", "[Jira中心] 工单状态流转", "允许在Jira中心执行工单状态流转"},
+		{"perm_btn_jira_config_connection", "jira:config_connection", "[Jira中心] Jira连接配置", "允许配置Jira服务器连接"},
+		{"perm_btn_jira_config_sso", "jira:config_sso", "[Jira中心] SSO配置", "允许配置Jira中心的SSO设置"},
+		{"perm_btn_jira_manage_users", "jira:manage_users", "[Jira中心] 用户管理", "允许在Jira中心管理用户"},
+		{"perm_btn_jira_view_audit", "jira:view_audit", "[Jira中心] 查看审计日志", "允许查看Jira中心审计日志"},
 	}
 
 	for _, perm := range buttonPermissions {

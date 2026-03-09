@@ -66,7 +66,9 @@ const routes = [
       { path: 'datasources', name: 'Datasources', component: () => import('@/views/PlaceholderView.vue'), meta: { title: '数据源配置' } },
       { path: 'sys-params', name: 'SysParams', component: () => import('@/views/SysParamsView.vue'), meta: { title: '系统参数' } },
       { path: 'sso-config', name: 'SSOConfig', component: () => import('@/views/SSOConfigView.vue'), meta: { title: 'SSO配置' } },
-      { path: 'settings', name: 'Settings', component: () => import('@/views/SettingsView.vue'), meta: { title: '系统设置' } }
+      { path: 'settings', name: 'Settings', component: () => import('@/views/SettingsView.vue'), meta: { title: '系统设置' } },
+      { path: 'apps-manage', name: 'AppsManage', component: () => import('@/views/AppsManageView.vue'), meta: { title: '应用管理' } },
+      { path: 'app/:appKey', name: 'AppFrame', component: () => import('@/views/AppFrameView.vue'), meta: { title: '外部应用' } }
     ]
   },
   {

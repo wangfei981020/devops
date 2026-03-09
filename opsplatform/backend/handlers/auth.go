@@ -276,6 +276,8 @@ func GenerateToken(userID, username, role string) (string, time.Time, error) {
 		return "", time.Time{}, err
 	}
 
+	log.Printf("[AUTH-DEBUG] 生成token: user=%s secret_len=%d token_last20='...%s'", username, len(secret), tokenString[max(0, len(tokenString)-20):])
+
 	// 创建会话记录
 	CreateSession(tokenString, userID, username, role, expiresAt)
 
@@ -336,21 +338,21 @@ func ClearAuthCookie(w http.ResponseWriter) {
 	})
 }
 
-// GetTokenFromRequest 从请求中获取 Token（优先 Cookie，其次 Header）
+// GetTokenFromRequest 从请求中获取 Token（优先 Header，其次 Cookie）
 func GetTokenFromRequest(r *http.Request) string {
-	// 优先从 HttpOnly Cookie 获取
-	cookie, err := r.Cookie(AuthCookieName)
-	if err == nil && cookie.Value != "" {
-		return cookie.Value
-	}
-
-	// 兼容：从 Authorization Header 获取
+	// 优先从 Authorization Header 获取（前端 axios 每次从 localStorage 读取最新 token）
 	authHeader := r.Header.Get("Authorization")
 	if authHeader != "" {
 		parts := strings.Split(authHeader, " ")
 		if len(parts) == 2 && parts[0] == "Bearer" {
 			return parts[1]
 		}
+	}
+
+	// 后备：从 HttpOnly Cookie 获取（SSO/fetch with credentials 场景）
+	cookie, err := r.Cookie(AuthCookieName)
+	if err == nil && cookie.Value != "" {
+		return cookie.Value
 	}
 
 	return ""
@@ -368,6 +370,13 @@ func AuthMiddleware(next http.Handler) http.Handler {
 
 		token := GetTokenFromRequest(r)
 		if token == "" {
+			authHeader := r.Header.Get("Authorization")
+			cookie, _ := r.Cookie(AuthCookieName)
+			cookieVal := ""
+			if cookie != nil {
+				cookieVal = cookie.Value[:min(20, len(cookie.Value))]
+			}
+			log.Printf("[AUTH-DEBUG] 401 无token: path=%s auth_header='%s' cookie='%s...'", r.URL.Path, authHeader, cookieVal)
 			http.Error(w, "未提供认证令牌", http.StatusUnauthorized)
 			return
 		}
@@ -375,6 +384,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		// 验证 JWT token（JWT 本身包含过期时间，无需内存会话）
 		claims, err := ValidateToken(token)
 		if err != nil {
+			log.Printf("[AUTH-DEBUG] 401 token无效: path=%s token_last20='...%s' err=%v", r.URL.Path, token[max(0, len(token)-20):], err)
 			ClearAuthCookie(w)
 			http.Error(w, "无效的认证令牌", http.StatusUnauthorized)
 			return
@@ -585,6 +595,17 @@ func HandleRefreshSession(w http.ResponseWriter, r *http.Request) {
 		"message":    "会话已刷新",
 		"expires_at": expiresAt.Format(time.RFC3339),
 	})
+}
+
+// HandleGetPortalToken 返回当前用户的 JWT token（供外部应用 portal 认证使用）
+func HandleGetPortalToken(w http.ResponseWriter, r *http.Request) {
+	token := GetTokenFromRequest(r)
+	if token == "" {
+		http.Error(w, "未认证", http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"token": token})
 }
 
 // ===== 登录速率限制 =====

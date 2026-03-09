@@ -27,6 +27,9 @@ var (
 	CookieSecure   = getEnv("COOKIE_SECURE", "false")
 	CookieSameSite = getEnv("COOKIE_SAMESITE", "lax")
 
+	// Portal (运维平台) 认证
+	PortalAPIURL = getEnv("PORTAL_API_URL", "http://opsplatform-backend.opsplatform.svc.cluster.local:8080")
+
 	// CORS
 	CORSAllowedOrigin = getEnv("CORS_ALLOWED_ORIGIN", "*")
 )

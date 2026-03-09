@@ -109,10 +109,16 @@ export const useAuthStore = defineStore('auth', () => {
 
   function setUser(userData) {
     user.value = userData
+    if (userData) {
+      localStorage.setItem('currentUser', JSON.stringify(userData))
+    }
   }
 
   function setToken(newToken) {
     token.value = newToken
+    if (newToken) {
+      localStorage.setItem('token', newToken)
+    }
   }
 
   async function loadMyPermissions() {

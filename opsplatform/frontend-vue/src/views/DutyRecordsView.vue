@@ -1800,17 +1800,17 @@ async function deleteProject(project) {
             <td class="col-date nowrap">{{ formatDate(r.duty_date) }}</td>
             <td class="col-person nowrap">{{ r.duty_person }}</td>
             <td class="col-project nowrap">{{ r.project_name || t('common.none') }}</td>
-            <td class="col-task">{{ r.task_desc || t('common.none') }}</td>
+            <td class="col-task" :title="r.task_desc">{{ r.task_desc || t('common.none') }}</td>
             <td class="col-feedback nowrap">
               <span class="feedback-badge" :class="r.feedback_type">{{ getFeedbackLabel(r.feedback_type) }}</span>
             </td>
             <td class="col-event nowrap">{{ getEventTypeLabel(r.event_type) }}</td>
-            <td class="col-desc">{{ r.problem_desc || t('common.none') }}</td>
+            <td class="col-desc" :title="r.problem_desc">{{ r.problem_desc || t('common.none') }}</td>
             <td class="col-handler nowrap">{{ r.handler || t('common.none') }}</td>
             <td class="col-status nowrap">
               <span class="status-badge" :style="{ backgroundColor: getStatusColor(r.status) }">{{ getStatusLabel(r.status) }}</span>
             </td>
-            <td class="col-solution">{{ r.solution || '-' }}</td>
+            <td class="col-solution" :title="r.solution">{{ r.solution || '-' }}</td>
             <td class="col-planned nowrap">
               <span>{{ formatDateTime(r.planned_fix_time) || t('common.none') }}</span>
               <button
@@ -3196,19 +3196,19 @@ async function deleteProject(project) {
 .col-date { width: 85px; }
 .col-person, .col-handler, .col-creator { width: 60px; }
 .col-project { width: 70px; }
-.col-task { min-width: 120px; max-width: 200px; word-break: break-word; }
+.col-task { min-width: 120px; max-width: 200px; word-break: break-word; max-height: 80px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 .col-feedback { width: 65px; }
 .col-event { width: 80px; }
-.col-desc { min-width: 120px; max-width: 200px; word-break: break-word; }
+.col-desc { min-width: 120px; max-width: 200px; word-break: break-word; max-height: 80px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 .col-time { width: 75px; font-size: 0.7rem; }
 .col-call { width: 55px; text-align: center; }
 .col-answered { width: 55px; }
 .col-resp { width: 45px; text-align: center; }
 .col-escalate { width: 65px; }
 .col-handover { width: 55px; }
-.col-handover-content { min-width: 120px; max-width: 200px; word-break: break-word; white-space: normal; }
+.col-handover-content { min-width: 120px; max-width: 200px; word-break: break-word; white-space: normal; max-height: 80px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 .col-status { width: 60px; }
-.col-solution { width: 120px; max-width: 200px; white-space: normal; word-break: break-all; }
+.col-solution { width: 120px; max-width: 200px; white-space: normal; word-break: break-all; max-height: 80px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 .col-planned { width: 70px; }
 .col-overdue { width: 40px; }
 .col-attach { width: 55px; }

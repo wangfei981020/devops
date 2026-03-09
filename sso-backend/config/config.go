@@ -22,6 +22,9 @@ var (
 
 	// Default admin
 	DefaultAdminPassword = getEnv("SSO_ADMIN_PASSWORD", "admin123")
+
+	// Environment label
+	EnvLabel = getEnv("SSO_ENV_LABEL", "开发")
 )
 
 func getEnv(key, defaultValue string) string {

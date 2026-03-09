@@ -11,7 +11,7 @@ const api = axios.create({
 api.interceptors.request.use(
   config => {
     const token = localStorage.getItem('token')
-    if (token) {
+    if (token && token !== 'cookie-auth') {
       config.headers.Authorization = `Bearer ${token}`
     }
     const username = JSON.parse(localStorage.getItem('currentUser') || '{}')?.username

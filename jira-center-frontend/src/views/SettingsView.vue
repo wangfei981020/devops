@@ -1,10 +1,10 @@
 <template>
   <div>
     <div class="tabs">
-      <button :class="['tab', { active: activeTab === 'jira' }]" @click="activeTab = 'jira'">Jira 连接</button>
-      <button :class="['tab', { active: activeTab === 'sso' }]" @click="activeTab = 'sso'">SSO 配置</button>
-      <button :class="['tab', { active: activeTab === 'users' }]" @click="activeTab = 'users'">用户管理</button>
-      <button :class="['tab', { active: activeTab === 'audit' }]" @click="activeTab = 'audit'">审计日志</button>
+      <button v-if="authStore.hasPermission('jira:config_connection')" :class="['tab', { active: activeTab === 'jira' }]" @click="activeTab = 'jira'">Jira 连接</button>
+      <button v-if="authStore.hasPermission('jira:config_sso')" :class="['tab', { active: activeTab === 'sso' }]" @click="activeTab = 'sso'">SSO 配置</button>
+      <button v-if="authStore.hasPermission('jira:manage_users')" :class="['tab', { active: activeTab === 'users' }]" @click="activeTab = 'users'">用户管理</button>
+      <button v-if="authStore.hasPermission('jira:view_audit')" :class="['tab', { active: activeTab === 'audit' }]" @click="activeTab = 'audit'">审计日志</button>
     </div>
 
     <!-- Jira 连接配置 -->
@@ -154,6 +154,9 @@
 <script setup>
 import { ref, onMounted, watch, inject } from 'vue'
 import api from '@/api'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
 
 const toast = inject('toast')
 const activeTab = ref('jira')

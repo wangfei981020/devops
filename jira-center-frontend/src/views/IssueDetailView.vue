@@ -16,7 +16,7 @@
             <h2 class="issue-title">{{ issue.fields?.summary }}</h2>
 
             <!-- 状态扭转按钮 -->
-            <div class="transitions" v-if="transitions.length">
+            <div class="transitions" v-if="transitions.length && authStore.hasPermission('jira:transition')">
               <span class="transitions-label">扭转状态：</span>
               <button
                 v-for="t in transitions"
@@ -114,10 +114,12 @@ import { ref, computed, onMounted, inject } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '@/api'
 import { useFieldsStore } from '@/stores/fields'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const toast = inject('toast')
 const fieldsStore = useFieldsStore()
+const authStore = useAuthStore()
 const loading = ref(true)
 const issue = ref(null)
 const comments = ref([])

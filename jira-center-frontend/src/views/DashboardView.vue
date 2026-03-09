@@ -1,5 +1,21 @@
 <template>
   <div class="dashboard">
+    <!-- Portal 登录成功提示 -->
+    <transition name="fade">
+      <div v-if="showPortalNotice" class="portal-notice">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          <polyline points="9 12 11 14 15 10"/>
+        </svg>
+        <span>SSO 登录成功，欢迎 {{ authStore.displayName }}</span>
+        <button class="notice-close" @click="showPortalNotice = false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </transition>
+
     <div v-if="loading" class="loading"><div class="spinner"></div>加载中...</div>
 
     <template v-else>
@@ -49,6 +65,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { use } from 'echarts/core'
 import { PieChart, BarChart } from 'echarts/charts'
 import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
@@ -59,15 +76,25 @@ import { useAuthStore } from '@/stores/auth'
 
 use([PieChart, BarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer])
 
+const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
 const loading = ref(true)
 const configError = ref('')
+const showPortalNotice = ref(false)
 const data = ref({
   projects_count: 0, total_issues: 0, open_issues: 0, resolved_issues: 0,
   status_distribution: [], priority_distribution: [], assignee_workload: [],
 })
 
 onMounted(async () => {
+  // Portal 登录成功提示
+  if (route.query.portal_login === '1') {
+    showPortalNotice.value = true
+    router.replace({ path: '/dashboard' })
+    setTimeout(() => { showPortalNotice.value = false }, 5000)
+  }
+
   try {
     const res = await api.get('/api/dashboard')
     data.value = res.data.data
@@ -170,4 +197,31 @@ const workloadChartOption = computed(() => {
   .stat-cards { grid-template-columns: repeat(2, 1fr); }
   .charts-grid { grid-template-columns: 1fr; }
 }
+
+.portal-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(6, 182, 212, 0.12) 100%);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: var(--radius-lg);
+  color: #10b981;
+  font-size: 14px;
+  font-weight: 500;
+}
+.portal-notice svg:first-child { flex-shrink: 0; color: #10b981; }
+.portal-notice span { flex: 1; }
+.notice-close {
+  background: none;
+  border: none;
+  color: #10b981;
+  cursor: pointer;
+  padding: 4px;
+  opacity: 0.6;
+}
+.notice-close:hover { opacity: 1; }
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>
