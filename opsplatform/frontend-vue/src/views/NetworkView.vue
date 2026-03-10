@@ -56,6 +56,10 @@ const batchCheckError = ref('')
 const batchCheckLoading = ref(false)
 const batchCheckResult = ref(null)
 
+const showBatchEditModal = ref(false)
+const batchEditForm = ref({ src_ip: '', src_port: '', dest_ip: '', dest_port: '' })
+const batchEditFields = ref({ src_ip: false, src_port: false, dest_ip: false, dest_port: false })
+
 const showHistoryModal = ref(false)
 const historyRecord = ref(null)
 const recordHistories = ref([])
@@ -403,11 +407,43 @@ async function exportRecords() {
 async function batchUpdateStatus(status) {
   if (selectedRecords.value.length === 0) return
   try {
-    for (const id of selectedRecords.value) await api.put(`/api/records/${id}`, { record: { status }, operator: authStore.user?.username })
-    appStore.showToast(`已将 ${selectedRecords.value.length} 条记录设为${getStatusText(status)}`, 'success')
+    const res = await api.post('/api/records/batch-status', { ids: selectedRecords.value, status, operator: authStore.user?.username })
+    appStore.showToast(res.data.message || `已将 ${selectedRecords.value.length} 条记录设为${getStatusText(status)}`, 'success')
     selectedRecords.value = []
     loadRecords()
   } catch (e) { appStore.showToast('批量更新失败', 'error') }
+}
+
+function openBatchEdit() {
+  if (selectedRecords.value.length === 0) return
+  batchEditForm.value = { src_ip: '', src_port: '', dest_ip: '', dest_port: '' }
+  batchEditFields.value = { src_ip: false, src_port: false, dest_ip: false, dest_port: false }
+  showBatchEditModal.value = true
+}
+
+async function submitBatchEdit() {
+  const fields = batchEditFields.value
+  const form = batchEditForm.value
+  if (!fields.src_ip && !fields.src_port && !fields.dest_ip && !fields.dest_port) {
+    appStore.showToast('请至少勾选一个要修改的字段', 'error')
+    return
+  }
+  try {
+    const selectedList = records.value.filter(r => selectedRecords.value.includes(r.id))
+    const updatedRecords = selectedList.map(r => {
+      const merged = { ...r }
+      if (fields.src_ip) merged.src_ip = form.src_ip
+      if (fields.src_port) merged.src_port = form.src_port
+      if (fields.dest_ip) merged.dest_ip = form.dest_ip
+      if (fields.dest_port) merged.dest_port = form.dest_port
+      return merged
+    })
+    const res = await api.post('/api/records/batch-update', { records: updatedRecords, operator: authStore.user?.username })
+    appStore.showToast(res.data.message || `已批量修改 ${selectedRecords.value.length} 条记录`, 'success')
+    showBatchEditModal.value = false
+    selectedRecords.value = []
+    loadRecords()
+  } catch (e) { appStore.showToast('批量修改失败', 'error') }
 }
 
 async function confirmBatchDelete() {
@@ -485,6 +521,7 @@ async function confirmBatchDelete() {
       <button v-if="canUpdate" class="btn btn-primary btn-sm" @click="batchUpdateStatus('active')">设为启用</button>
       <button v-if="canUpdate" class="btn btn-warning btn-sm" @click="batchUpdateStatus('pending')">设为待定</button>
       <button v-if="canUpdate" class="btn btn-secondary btn-sm" @click="batchUpdateStatus('inactive')">设为停用</button>
+      <button v-if="canUpdate" class="btn btn-info btn-sm" @click="openBatchEdit">批量修改</button>
       <button v-if="canDelete" class="btn btn-danger btn-sm" @click="confirmBatchDelete">删除选中</button>
     </div>
 
@@ -683,6 +720,35 @@ async function confirmBatchDelete() {
       </div>
     </Teleport>
 
+    <!-- 批量修改弹窗 -->
+    <Teleport to="body">
+      <div class="modal-overlay" :class="{ active: showBatchEditModal }">
+        <div class="modal batch-edit-modal">
+          <div class="modal-header"><h2>批量修改（{{ selectedRecords.length }} 条记录）</h2><button class="modal-close" @click="showBatchEditModal = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+          <div class="modal-body">
+            <p class="batch-edit-tip">勾选要修改的字段，未勾选的字段保持不变</p>
+            <div class="batch-edit-row">
+              <label class="batch-edit-check"><input type="checkbox" v-model="batchEditFields.src_ip" /> 源地址 IP</label>
+              <input type="text" class="form-input" v-model="batchEditForm.src_ip" :disabled="!batchEditFields.src_ip" placeholder="如 192.168.1.10" />
+            </div>
+            <div class="batch-edit-row">
+              <label class="batch-edit-check"><input type="checkbox" v-model="batchEditFields.src_port" /> 源地址端口</label>
+              <input type="text" class="form-input" v-model="batchEditForm.src_port" :disabled="!batchEditFields.src_port" placeholder="如 8080" />
+            </div>
+            <div class="batch-edit-row">
+              <label class="batch-edit-check"><input type="checkbox" v-model="batchEditFields.dest_ip" /> 目标地址 IP</label>
+              <input type="text" class="form-input" v-model="batchEditForm.dest_ip" :disabled="!batchEditFields.dest_ip" placeholder="如 10.0.0.5" />
+            </div>
+            <div class="batch-edit-row">
+              <label class="batch-edit-check"><input type="checkbox" v-model="batchEditFields.dest_port" /> 目标地址端口</label>
+              <input type="text" class="form-input" v-model="batchEditForm.dest_port" :disabled="!batchEditFields.dest_port" placeholder="如 8080" />
+            </div>
+          </div>
+          <div class="modal-footer"><button class="btn btn-secondary" @click="showBatchEditModal = false">取消</button><button class="btn btn-primary" @click="submitBatchEdit">确认修改</button></div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- 批量检测弹窗 -->
     <Teleport to="body">
       <div class="modal-overlay" :class="{ active: showBatchCheckModal }">
@@ -841,6 +907,15 @@ async function confirmBatchDelete() {
 .preview-modal { width: 600px; }
 .batch-modal { width: 900px; }
 .batch-check-modal { width: 1000px; }
+.batch-edit-modal { width: 520px; }
+.batch-edit-tip { color: var(--text-secondary); font-size: 13px; margin-bottom: 16px; }
+.batch-edit-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.batch-edit-check { display: flex; align-items: center; gap: 6px; min-width: 130px; font-size: 14px; color: var(--text-primary); cursor: pointer; white-space: nowrap; }
+.batch-edit-check input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
+.batch-edit-row .form-input { flex: 1; }
+.batch-edit-row .form-input:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-info { background: #3b82f6; color: #fff; border: none; }
+.btn-info:hover { background: #2563eb; }
 .modal-form { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 .modal-header { display: flex; align-items: center; gap: 12px; padding: 20px 24px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
 .modal-header h2 { flex: 1; font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0; }
