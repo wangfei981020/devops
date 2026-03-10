@@ -98,11 +98,11 @@ const columns = computed(() => [
   { key: 'date', title: t('tableMaintenance.columns.date'), width: 110, type: 'date' },
   { key: 'start_time', title: t('tableMaintenance.columns.startTime'), width: 150, type: 'datetime' },
   { key: 'notify_start_screenshot', title: t('tableMaintenance.columns.notifyStartScreenshot'), width: 120, type: 'attachments' },
-  { key: 'start_duration', title: t('tableMaintenance.columns.startDuration'), width: 130, type: 'duration-select', options: [t('tableMaintenance.options.duration.twoMin'), t('tableMaintenance.options.duration.fiveMin'), t('tableMaintenance.options.duration.tenMin'), t('tableMaintenance.options.duration.overTenMin')] },
+  { key: 'start_duration', title: t('tableMaintenance.columns.startDuration'), width: 130, type: 'duration-select', required: true, options: [t('tableMaintenance.options.duration.twoMin'), t('tableMaintenance.options.duration.fiveMin'), t('tableMaintenance.options.duration.tenMin'), t('tableMaintenance.options.duration.overTenMin')] },
   { key: 'end_time', title: t('tableMaintenance.columns.endTime'), width: 150, type: 'datetime' },
   { key: 'notify_end_screenshot', title: t('tableMaintenance.columns.notifyEndScreenshot'), width: 100, type: 'attachments' },
   { key: 'close_duration', title: t('tableMaintenance.columns.closeDuration'), width: 130, type: 'duration-select', options: [t('tableMaintenance.options.duration.twoMin'), t('tableMaintenance.options.duration.fiveMin'), t('tableMaintenance.options.duration.tenMin'), t('tableMaintenance.options.duration.overTenMin')] },
-  { key: 'affected_projects', title: t('tableMaintenance.columns.affectedProjects'), width: 150, type: 'multi-select-projects' },
+  { key: 'affected_projects', title: t('tableMaintenance.columns.affectedProjects'), width: 150, type: 'multi-select-projects', required: true },
   { key: 'affected_sites', title: t('tableMaintenance.columns.site'), width: 120, type: 'multi-select-sites' },
   { key: 'affected_tables', title: t('tableMaintenance.columns.table'), width: 120, type: 'multi-select-tables' },
   { key: 'game_types', title: t('tableMaintenance.columns.gameType'), width: 120, type: 'multi-select-game-types' },
@@ -110,7 +110,7 @@ const columns = computed(() => [
   { key: 'reason', title: t('tableMaintenance.columns.reason'), width: 150, type: 'textarea' },
   { key: 'affect_settlement', title: t('tableMaintenance.columns.affectSettlement'), width: 80, type: 'select', options: [t('tableMaintenance.options.yesNo.yes'), t('tableMaintenance.options.yesNo.no')], default: t('tableMaintenance.options.yesNo.no') },
   { key: 'affected_round_ids', title: t('tableMaintenance.columns.affectedRoundIds'), width: 120, type: 'text' },
-  { key: 'operation', title: t('tableMaintenance.columns.operation'), width: 100, type: 'select', options: [t('tableMaintenance.options.operation.maintenance'), t('tableMaintenance.options.operation.cancel'), t('tableMaintenance.options.operation.recalculate'), t('tableMaintenance.options.operation.repayout'), t('tableMaintenance.options.operation.missed'), t('tableMaintenance.options.operation.missedScreenshot')] },
+  { key: 'operation', title: t('tableMaintenance.columns.operation'), width: 100, type: 'select', required: true, options: [t('tableMaintenance.options.operation.maintenance'), t('tableMaintenance.options.operation.cancel'), t('tableMaintenance.options.operation.recalculate'), t('tableMaintenance.options.operation.repayout'), t('tableMaintenance.options.operation.missed'), t('tableMaintenance.options.operation.missedScreenshot')] },
   { key: 'operator', title: t('tableMaintenance.columns.operator'), width: 90, type: 'text', required: true },
   { key: 'inspector', title: t('tableMaintenance.columns.inspector'), width: 80, type: 'text' },
   { key: 'qc_status', title: t('tableMaintenance.columns.qcStatus'), width: 90, type: 'qc-status', options: [t('tableMaintenance.options.qcStatus.normal'), t('tableMaintenance.options.qcStatus.abnormal')] },
@@ -281,10 +281,9 @@ const statsAnalysis = computed(() => {
   const data = statsFilteredRecords.value
   if (!data.length) return {}
 
-  // 辅助函数：获取记录的桌台数（至少为1）
+  // 辅助函数：每条记录计为1次
   function getTableCount(r) {
-    const tables = parseMultiSelect(r.affected_tables)
-    return tables.length || 1
+    return 1
   }
 
   // 按游戏类型统计（支持多选，按桌台数计数）
@@ -616,6 +615,7 @@ const statsAnalysis = computed(() => {
     let total = 0
     const durations = {}
     durKeys.forEach(k => { durations[k] = 0 })
+    let noDurationCount = 0
     items.forEach(r => {
       const tc = getTableCount(r)
       total += tc
@@ -623,10 +623,11 @@ const statsAnalysis = computed(() => {
       const closeIdx = getDurIndex(r.close_duration)
       const maxIdx = Math.max(startIdx, closeIdx)
       if (maxIdx >= 0) durations[durKeys[maxIdx]] += tc
+      else noDurationCount += tc
     })
-    // 转换 durations 的 key 为翻译后的显示名
     const displayDurations = {}
     durKeys.forEach(k => { displayDurations[t(`tableMaintenance.options.duration.${k}`)] = durations[k] })
+    if (noDurationCount > 0) displayDurations[t('tableMaintenance.statsPanel.notFilled')] = noDurationCount
     return { name: t(`tableMaintenance.options.maintenanceType.${mtKey}`), total, durations: displayDurations }
   })
 
@@ -639,6 +640,7 @@ const statsAnalysis = computed(() => {
     let total = 0
     const durations = {}
     durKeys.forEach(k => { durations[k] = 0 })
+    let noDurationCount = 0
     items.forEach(r => {
       const tc = getTableCount(r)
       total += tc
@@ -647,17 +649,20 @@ const statsAnalysis = computed(() => {
         const closeIdx = getDurIndex(r.close_duration)
         const maxIdx = Math.max(startIdx, closeIdx)
         if (maxIdx >= 0) durations[durKeys[maxIdx]] += tc
+        else noDurationCount += tc
       } else {
         const dk = getDurKey(r.start_duration)
         if (dk) durations[dk] += tc
+        else noDurationCount += tc
       }
     })
     const displayDurations = {}
     durKeys.forEach(k => { displayDurations[t(`tableMaintenance.options.duration.${k}`)] = durations[k] })
+    if (noDurationCount > 0) displayDurations[t('tableMaintenance.statsPanel.notFilled')] = noDurationCount
     return { name: t(`tableMaintenance.options.operation.${opKey}`), key: opKey, total, durations: displayDurations, hasDuration: true }
   })
   
-  // 总计（按桌台数）
+  // 总计（按记录数）
   let totalByTable = 0
   data.forEach(r => { totalByTable += getTableCount(r) })
 
@@ -1606,7 +1611,8 @@ function openDetail(record) {
 async function saveRecord() {
   const requiredCols = columns.value.filter(c => c.required && !['checkbox', 'actions', 'attachments'].includes(c.key) && c.type !== 'attachments')
   for (const col of requiredCols) {
-    if (!formData.value[col.key]) {
+    const val = formData.value[col.key]
+    if (!val || (Array.isArray(val) && val.length === 0)) {
       appStore.showToast(`请填写${col.title}`, 'error')
       return
     }

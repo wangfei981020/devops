@@ -711,7 +711,7 @@ export default {
       detailStartDuration: '开始时长',
       detailCloseDuration: '关闭时长',
       detailTotalDuration: '总时长',
-      tableTimes: '台次',
+      tableTimes: '次',
       involves: '，涉及',
       csvDateRange: '统计时间范围',
       csvTotalRecords: '总记录数',

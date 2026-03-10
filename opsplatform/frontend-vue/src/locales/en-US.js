@@ -711,7 +711,7 @@ export default {
       detailStartDuration: 'Start Duration',
       detailCloseDuration: 'Close Duration',
       detailTotalDuration: 'Total Duration',
-      tableTimes: 'tables',
+      tableTimes: 'times',
       involves: ', involving',
       csvDateRange: 'Date Range',
       csvTotalRecords: 'Total Records',
