@@ -305,6 +305,116 @@ func HandleBatchDomains(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleBatchUpdateDomains 批量更新域名字段（回源、IP、CDN厂商、状态）
+func HandleBatchUpdateDomains(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs         []string `json:"ids"`
+		Origin      *string  `json:"origin"`
+		OriginIP    *string  `json:"origin_ip"`
+		CDNProvider *string  `json:"cdn_provider"`
+		Status      *string  `json:"status"`
+		Operator    string   `json:"operator"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "无效的请求数据", http.StatusBadRequest)
+		return
+	}
+	if len(req.IDs) == 0 {
+		http.Error(w, "请选择至少一个域名", http.StatusBadRequest)
+		return
+	}
+
+	// 构建动态 SET 子句
+	setClauses := []string{}
+	args := []interface{}{}
+	if req.Origin != nil {
+		setClauses = append(setClauses, "origin = ?")
+		args = append(args, *req.Origin)
+	}
+	if req.OriginIP != nil {
+		setClauses = append(setClauses, "origin_ip = ?")
+		args = append(args, *req.OriginIP)
+	}
+	if req.CDNProvider != nil {
+		setClauses = append(setClauses, "cdn_provider = ?")
+		args = append(args, *req.CDNProvider)
+	}
+	if req.Status != nil {
+		setClauses = append(setClauses, "status = ?")
+		args = append(args, *req.Status)
+	}
+	if len(setClauses) == 0 {
+		http.Error(w, "没有需要更新的字段", http.StatusBadRequest)
+		return
+	}
+
+	setClauses = append(setClauses, "updated_at = ?", "updated_by = ?")
+	args = append(args, time.Now().Format("2006-01-02 15:04:05"), req.Operator)
+
+	// 构建 IN 占位符
+	placeholders := make([]string, len(req.IDs))
+	for i, id := range req.IDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+
+	query := fmt.Sprintf("UPDATE domains SET %s WHERE id IN (%s)",
+		strings.Join(setClauses, ", "),
+		strings.Join(placeholders, ", "))
+
+	result, err := database.DB.Exec(query, args...)
+	if err != nil {
+		http.Error(w, "更新失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	affected, _ := result.RowsAffected()
+	AddAuditLogFromRequest(r, "batch_update", "", req.Operator, "", "", fmt.Sprintf("批量更新 %d 个域名", affected))
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("成功更新 %d 个域名", affected),
+		"count":   affected,
+	})
+}
+
+// HandleGetCDNProviders 获取自定义 CDN 厂商列表
+func HandleGetCDNProviders(w http.ResponseWriter, r *http.Request) {
+	var value string
+	err := database.DB.QueryRow("SELECT setting_value FROM system_settings WHERE setting_key = 'cdn_providers'").Scan(&value)
+	if err != nil || value == "" {
+		value = "[]"
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Write([]byte(value))
+}
+
+// HandleSaveCDNProviders 保存自定义 CDN 厂商列表
+func HandleSaveCDNProviders(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Providers []map[string]string `json:"providers"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "无效的请求数据", http.StatusBadRequest)
+		return
+	}
+
+	data, _ := json.Marshal(req.Providers)
+	_, err := database.DB.Exec(`INSERT INTO system_settings (setting_key, setting_value) VALUES ('cdn_providers', ?)
+		ON DUPLICATE KEY UPDATE setting_value = ?`, string(data), string(data))
+	if err != nil {
+		http.Error(w, "保存失败", http.StatusInternalServerError)
+		return
+	}
+
+	operator := r.Header.Get("X-Operator")
+	AddAuditLogFromRequest(r, "update", "cdn_providers", operator, "", string(data), "更新CDN厂商配置")
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
 // HandleBatchAddDomains 批量添加域名
 func HandleBatchAddDomains(w http.ResponseWriter, r *http.Request) {
 	var req struct {

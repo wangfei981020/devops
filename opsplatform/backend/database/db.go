@@ -129,6 +129,8 @@ func createTables() error {
 		return err
 	}
 
+	// 兼容旧数据库：添加 updated_at 字段
+	DB.Exec(`ALTER TABLE users ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`)
 	// 兼容旧数据库：添加 MFA 字段
 	DB.Exec(`ALTER TABLE users ADD COLUMN mfa_enabled TINYINT(1) DEFAULT 0`)
 	DB.Exec(`ALTER TABLE users ADD COLUMN mfa_secret VARCHAR(64)`)
@@ -1290,6 +1292,8 @@ func initDefaultRolesAndPermissions() {
 		"asset:create", "asset:update", "asset:import", "asset:export",
 		"domain:create", "domain:update",
 		"vault:create", "vault:update", "vault:share",
+		"menu:duty",
+		"duty:create", "duty:update", "duty:delete", "duty:export", "duty:upload",
 	}
 	for _, code := range operatorPermCodes {
 		var permID string
@@ -1298,6 +1302,34 @@ func initDefaultRolesAndPermissions() {
 			DB.Exec(`INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES (?, 'role_operator', ?)`,
 				"rp_operator_"+permID, permID)
 		}
+	}
+
+	// 为业务运维类角色分配值班记录权限
+	dutyPermCodes := []string{
+		"menu:duty",
+		"duty:create", "duty:update", "duty:delete", "duty:export", "duty:upload",
+	}
+	ywRows, _ := DB.Query("SELECT id FROM roles WHERE code LIKE '%yw%' OR name LIKE '%运维%' OR code LIKE '%duty%'")
+	if ywRows != nil {
+		var ywRoleIDs []string
+		for ywRows.Next() {
+			var rid string
+			ywRows.Scan(&rid)
+			ywRoleIDs = append(ywRoleIDs, rid)
+		}
+		ywRows.Close()
+		for _, roleID := range ywRoleIDs {
+			for _, code := range dutyPermCodes {
+				var permID string
+				DB.QueryRow("SELECT id FROM permissions WHERE code = ?", code).Scan(&permID)
+				if permID != "" {
+					rpID := fmt.Sprintf("rp_%s_%s", roleID, permID)
+					DB.Exec(`INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES (?, ?, ?)`,
+						rpID, roleID, permID)
+				}
+			}
+		}
+		log.Printf("已为 %d 个业务运维类角色分配值班记录权限", len(ywRoleIDs))
 	}
 
 	// 为只读用户分配查看权限（所有菜单权限）

@@ -59,6 +59,19 @@ const selectedDomains = ref([])
 const batchRefreshing = ref(false)
 const batchRefreshProgress = ref('')
 
+// 预览弹窗
+const showPreview = ref(false)
+const previewDomain = ref(null)
+
+function openPreview(d) {
+  previewDomain.value = d
+  showPreview.value = true
+}
+function closePreview() {
+  showPreview.value = false
+  previewDomain.value = null
+}
+
 // 批量添加域名相关
 const showBatchModal = ref(false)
 const batchDomainText = ref('')
@@ -143,6 +156,7 @@ const isAllSelected = computed(() => {
 
 onMounted(() => {
   loadDomains()
+  loadCdnProviders()
 })
 
 async function loadDomains() {
@@ -622,8 +636,8 @@ async function submitBatchDomains() {
   }
 }
 
-// CDN 选项
-const cdnOptions = [
+// CDN 选项（从后端加载 + 默认值）
+const DEFAULT_CDN_OPTIONS = [
   { value: '', label: '无' },
   { value: '阿里云CDN', label: '阿里云' },
   { value: '腾讯云CDN', label: '腾讯云' },
@@ -633,6 +647,108 @@ const cdnOptions = [
   { value: '网宿CDN', label: '网宿' },
   { value: '其他', label: '其他' }
 ]
+const customCdnProviders = ref([])
+const cdnOptions = computed(() => {
+  if (customCdnProviders.value.length > 0) {
+    return [{ value: '', label: '无' }, ...customCdnProviders.value]
+  }
+  return DEFAULT_CDN_OPTIONS
+})
+
+// CDN 管理弹窗
+const showCdnManager = ref(false)
+const cdnManagerList = ref([])
+const newCdnValue = ref('')
+const newCdnLabel = ref('')
+
+async function loadCdnProviders() {
+  try {
+    const res = await api.get('/api/domains/cdn-providers')
+    const data = res.data
+    if (Array.isArray(data) && data.length > 0) {
+      customCdnProviders.value = data
+    }
+  } catch (e) { /* use defaults */ }
+}
+
+function openCdnManager() {
+  cdnManagerList.value = cdnOptions.value.filter(o => o.value !== '').map(o => ({ ...o }))
+  newCdnValue.value = ''
+  newCdnLabel.value = ''
+  showCdnManager.value = true
+}
+
+function addCdnProvider() {
+  const val = newCdnValue.value.trim()
+  const lbl = newCdnLabel.value.trim()
+  if (!val) return
+  if (cdnManagerList.value.some(o => o.value === val)) {
+    appStore.showToast('该CDN已存在', 'warning')
+    return
+  }
+  cdnManagerList.value.push({ value: val, label: lbl || val })
+  newCdnValue.value = ''
+  newCdnLabel.value = ''
+}
+
+function removeCdnProvider(idx) {
+  cdnManagerList.value.splice(idx, 1)
+}
+
+async function saveCdnProviders() {
+  try {
+    await api.post('/api/domains/cdn-providers', { providers: cdnManagerList.value })
+    customCdnProviders.value = [...cdnManagerList.value]
+    showCdnManager.value = false
+    appStore.showToast('CDN厂商配置已保存', 'success')
+  } catch (e) {
+    appStore.showToast('保存失败', 'error')
+  }
+}
+
+// 批量修改弹窗
+const showBatchEditModal = ref(false)
+const batchEditData = ref({ origin: '', origin_ip: '', cdn_provider: '', status: '' })
+const batchEditFields = ref({ origin: false, origin_ip: false, cdn_provider: false, status: false })
+const batchEditLoading = ref(false)
+
+function openBatchEditModal() {
+  if (selectedDomains.value.length === 0) {
+    appStore.showToast('请先选择域名', 'warning')
+    return
+  }
+  batchEditData.value = { origin: '', origin_ip: '', cdn_provider: '', status: '' }
+  batchEditFields.value = { origin: false, origin_ip: false, cdn_provider: false, status: false }
+  showBatchEditModal.value = true
+}
+
+async function submitBatchEdit() {
+  const payload = { ids: selectedDomains.value, operator: authStore.user?.username || '' }
+  if (batchEditFields.value.origin) payload.origin = batchEditData.value.origin
+  if (batchEditFields.value.origin_ip) payload.origin_ip = batchEditData.value.origin_ip
+  if (batchEditFields.value.cdn_provider) payload.cdn_provider = batchEditData.value.cdn_provider
+  if (batchEditFields.value.status) payload.status = batchEditData.value.status
+
+  {
+    if (!batchEditFields.value.origin && !batchEditFields.value.origin_ip && !batchEditFields.value.cdn_provider && !batchEditFields.value.status) {
+      appStore.showToast('请至少勾选一个修改项', 'warning')
+      return
+    }
+  }
+
+  batchEditLoading.value = true
+  try {
+    const res = await api.post('/api/domains/batch-update', payload)
+    appStore.showToast(res.data.message || '批量修改成功', 'success')
+    showBatchEditModal.value = false
+    selectedDomains.value = []
+    loadDomains()
+  } catch (e) {
+    appStore.showToast('批量修改失败: ' + (e.response?.data?.error || e.message), 'error')
+  } finally {
+    batchEditLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -660,6 +776,10 @@ const cdnOptions = [
         <button v-if="canAdd" class="btn btn-primary" @click="openModal()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           添加
+        </button>
+        <button class="btn btn-default" @click="openCdnManager">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          CDN配置
         </button>
       </div>
     </div>
@@ -712,6 +832,7 @@ const cdnOptions = [
     <!-- 批量操作栏 -->
     <div class="batch-action-bar" v-if="selectedDomains.length > 0">
       <span class="batch-info">已选择 {{ selectedDomains.length }} 项</span>
+      <button class="btn btn-primary btn-sm" @click="openBatchEditModal">批量修改</button>
       <button class="btn btn-success btn-sm" @click="batchAction('enable')">批量启用</button>
       <button class="btn btn-warning btn-sm" @click="batchAction('disable')">批量停用</button>
       <button class="btn btn-danger btn-sm" @click="batchAction('delete')">批量删除</button>
@@ -725,20 +846,20 @@ const cdnOptions = [
             <th class="checkbox-col" style="width:40px;">
               <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll">
             </th>
-            <th style="width:80px;">项目</th>
-            <th style="width:60px;">环境</th>
-            <th style="min-width:100px;">模块</th>
-            <th style="min-width:180px;">域名</th>
-            <th style="min-width:180px;">回源</th>
+            <th style="width:60px;">项目</th>
+            <th style="width:50px;">环境</th>
+            <th style="width:70px;">模块</th>
+            <th style="width:160px;">域名</th>
+            <th style="width:140px;">回源</th>
             <th style="width:100px;">源站IP</th>
-            <th style="width:80px;">CDN厂商</th>
-            <th style="width:120px;">域名到期</th>
-            <th style="width:120px;">证书到期</th>
-            <th style="width:90px;">状态</th>
-            <th style="width:150px;">创建时间</th>
-            <th style="width:150px;">更新时间</th>
-            <th style="width:120px;">备注</th>
-            <th class="th-action-fixed" style="width:120px; min-width:120px;">操作</th>
+            <th style="width:70px;">CDN厂商</th>
+            <th style="width:90px;">域名到期</th>
+            <th style="width:90px;">证书到期</th>
+            <th style="width:60px;">状态</th>
+            <th style="width:130px;">创建时间</th>
+            <th style="width:130px;">更新时间</th>
+            <th style="width:80px;">备注</th>
+            <th class="th-action-fixed" style="width:160px;">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -746,17 +867,17 @@ const cdnOptions = [
             <td class="checkbox-col">
               <input type="checkbox" :checked="selectedDomains.includes(d.id)" @change="toggleSelect(d)">
             </td>
-            <td>{{ d.project || '-' }}</td>
+            <td class="cell-truncate" :title="d.project">{{ d.project || '-' }}</td>
             <td>
               <span class="env-badge" :class="getEnvClass(d.env)">{{ d.env || 'PROD' }}</span>
             </td>
-            <td class="module-cell" :title="d.module">{{ d.module || '-' }}</td>
-            <td class="domain-cell">
+            <td class="cell-truncate" :title="d.module">{{ d.module || '-' }}</td>
+            <td class="cell-truncate" :title="d.domain_name">
               <a :href="'https://' + d.domain_name" target="_blank" class="domain-link">{{ d.domain_name }}</a>
             </td>
-            <td class="origin-cell" :title="d.origin">{{ d.origin || '-' }}</td>
-            <td>{{ d.origin_ip || '-' }}</td>
-            <td>{{ d.cdn_provider || '-' }}</td>
+            <td class="cell-truncate" :title="d.origin">{{ d.origin || '-' }}</td>
+            <td class="cell-truncate" :title="d.origin_ip">{{ d.origin_ip || '-' }}</td>
+            <td class="cell-truncate" :title="d.cdn_provider">{{ d.cdn_provider || '-' }}</td>
             <td>
               <div v-if="d.expire_time" class="expiry-badge" :class="getExpiryBadgeClass(d.expire_time)">
                 <span class="expiry-date">{{ formatDate(d.expire_time) }}</span>
@@ -776,13 +897,16 @@ const cdnOptions = [
                 {{ d.status === 'active' ? '启用' : '停用' }}
               </span>
             </td>
-            <td class="time-cell">{{ formatDateTime(d.created_at) }}</td>
-            <td class="time-cell">{{ formatDateTime(d.updated_at) }}</td>
-            <td class="remark-cell" :title="d.remark">{{ d.remark || '-' }}</td>
+            <td class="cell-truncate time-cell" :title="formatDateTime(d.created_at)">{{ formatDateTime(d.created_at) }}</td>
+            <td class="cell-truncate time-cell" :title="formatDateTime(d.updated_at)">{{ formatDateTime(d.updated_at) }}</td>
+            <td class="cell-truncate" :title="d.remark">{{ d.remark || '-' }}</td>
             <td class="action-cell td-action-fixed">
               <button v-if="canRefresh" class="btn-icon refresh" @click="refreshDomainExpire(d)" title="刷新" :disabled="checkingDomain === d.id">
                 <svg v-if="checkingDomain !== d.id" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                 <svg v-else class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
+              </button>
+              <button class="btn-icon preview" @click="openPreview(d)" title="预览">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
               </button>
               <button v-if="canEdit" class="btn-icon edit" @click="openModal(d)" title="编辑">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
@@ -1143,6 +1267,231 @@ const cdnOptions = [
         </div>
       </div>
     </Teleport>
+    <!-- CDN 厂商管理弹窗 -->
+    <Teleport to="body">
+      <div class="modal-overlay" :class="{ show: showCdnManager }">
+        <div class="domain-modal cdn-manager-modal">
+          <div class="domain-modal-header">
+            <div class="domain-modal-title">
+              <svg class="domain-modal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+              CDN 厂商配置
+            </div>
+            <button class="domain-modal-close" @click="showCdnManager = false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="domain-modal-body">
+            <!-- 添加区 -->
+            <div class="cdn-add-row">
+              <input type="text" class="cdn-add-input" v-model="newCdnValue" placeholder="CDN 标识，如：cf" @keyup.enter="addCdnProvider">
+              <input type="text" class="cdn-add-input" v-model="newCdnLabel" placeholder="显示名，如：Cloudflare" @keyup.enter="addCdnProvider">
+              <button type="button" class="btn btn-primary btn-sm" @click="addCdnProvider">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                添加
+              </button>
+            </div>
+            <!-- 列表区 -->
+            <div class="cdn-list">
+              <div class="cdn-list-header">
+                <span class="cdn-col-name">显示名</span>
+                <span class="cdn-col-value">标识值</span>
+                <span class="cdn-col-action">操作</span>
+              </div>
+              <div v-for="(item, idx) in cdnManagerList" :key="idx" class="cdn-list-item">
+                <span class="cdn-col-name">{{ item.label || item.value }}</span>
+                <span class="cdn-col-value"><code>{{ item.value }}</code></span>
+                <span class="cdn-col-action">
+                  <button type="button" class="btn-icon danger" @click="removeCdnProvider(idx)" title="删除" style="width:26px;height:26px;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px;"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                  </button>
+                </span>
+              </div>
+              <div v-if="cdnManagerList.length === 0" class="cdn-list-empty">
+                暂无 CDN 厂商，请添加
+              </div>
+            </div>
+          </div>
+          <div class="domain-modal-footer">
+            <span class="cdn-count">共 {{ cdnManagerList.length }} 个厂商</span>
+            <div style="display:flex;gap:8px;">
+              <button type="button" class="btn btn-secondary" @click="showCdnManager = false">取消</button>
+              <button type="button" class="btn btn-primary" @click="saveCdnProviders">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7"/></svg>
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 批量修改弹窗 -->
+    <Teleport to="body">
+      <div class="modal-overlay" :class="{ show: showBatchEditModal }">
+        <div class="domain-modal" style="max-width:520px;">
+          <div class="domain-modal-header">
+            <div class="domain-modal-title">
+              <svg class="domain-modal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+              批量修改 ({{ selectedDomains.length }} 项)
+            </div>
+            <button class="domain-modal-close" @click="showBatchEditModal = false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="domain-modal-body">
+            <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">勾选需要修改的字段，未勾选的字段将保持原值不变。</p>
+
+            <div class="batch-edit-field">
+              <label class="batch-edit-check">
+                <input type="checkbox" v-model="batchEditFields.origin">
+                <span>回源地址</span>
+              </label>
+              <input type="text" class="domain-form-input" v-model="batchEditData.origin" placeholder="新的回源地址" :disabled="!batchEditFields.origin">
+            </div>
+
+            <div class="batch-edit-field">
+              <label class="batch-edit-check">
+                <input type="checkbox" v-model="batchEditFields.origin_ip">
+                <span>源站 IP</span>
+              </label>
+              <input type="text" class="domain-form-input" v-model="batchEditData.origin_ip" placeholder="新的源站IP" :disabled="!batchEditFields.origin_ip">
+            </div>
+
+            <div class="batch-edit-field">
+              <label class="batch-edit-check">
+                <input type="checkbox" v-model="batchEditFields.cdn_provider">
+                <span>CDN 厂商</span>
+              </label>
+              <div class="domain-cdn-grid" :class="{ disabled: !batchEditFields.cdn_provider }">
+                <div
+                  v-for="opt in cdnOptions"
+                  :key="opt.value"
+                  class="domain-cdn-option"
+                  :class="{ active: batchEditData.cdn_provider === opt.value, disabled: !batchEditFields.cdn_provider }"
+                  @click="batchEditFields.cdn_provider && (batchEditData.cdn_provider = opt.value)"
+                >{{ opt.label }}</div>
+              </div>
+            </div>
+
+            <div class="batch-edit-field">
+              <label class="batch-edit-check">
+                <input type="checkbox" v-model="batchEditFields.status">
+                <span>状态</span>
+              </label>
+              <div class="domain-cdn-grid" :class="{ disabled: !batchEditFields.status }">
+                <div class="domain-cdn-option" :class="{ active: batchEditData.status === 'active', disabled: !batchEditFields.status }" @click="batchEditFields.status && (batchEditData.status = 'active')">启用</div>
+                <div class="domain-cdn-option" :class="{ active: batchEditData.status === 'inactive', disabled: !batchEditFields.status }" @click="batchEditFields.status && (batchEditData.status = 'inactive')">停用</div>
+              </div>
+            </div>
+          </div>
+          <div class="domain-modal-footer">
+            <button type="button" class="btn btn-secondary" @click="showBatchEditModal = false">取消</button>
+            <button type="button" class="btn btn-primary" @click="submitBatchEdit" :disabled="batchEditLoading">
+              <svg v-if="batchEditLoading" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20"/></svg>
+              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7"/></svg>
+              确认修改
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 预览弹窗 -->
+    <Teleport to="body">
+      <div class="modal-overlay" :class="{ show: showPreview }" @click.self="closePreview">
+        <div v-if="previewDomain" class="preview-dialog">
+          <div class="preview-header">
+            <h3 class="preview-title">域名详情</h3>
+            <button class="domain-modal-close" @click="closePreview">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div class="preview-body">
+            <div class="preview-grid">
+              <div class="preview-item">
+                <span class="preview-label">项目</span>
+                <span class="preview-value">{{ previewDomain.project || '-' }}</span>
+              </div>
+              <div class="preview-item">
+                <span class="preview-label">环境</span>
+                <span class="preview-value"><span class="env-badge" :class="getEnvClass(previewDomain.env)">{{ previewDomain.env || 'PROD' }}</span></span>
+              </div>
+              <div class="preview-item">
+                <span class="preview-label">模块</span>
+                <span class="preview-value">{{ previewDomain.module || '-' }}</span>
+              </div>
+              <div class="preview-item">
+                <span class="preview-label">状态</span>
+                <span class="preview-value">
+                  <span class="status-badge" :class="previewDomain.status === 'active' ? 'status-active' : 'status-inactive'">
+                    {{ previewDomain.status === 'active' ? '启用' : '停用' }}
+                  </span>
+                </span>
+              </div>
+              <div class="preview-item full">
+                <span class="preview-label">域名</span>
+                <span class="preview-value mono">{{ previewDomain.domain_name || '-' }}</span>
+              </div>
+              <div class="preview-item full">
+                <span class="preview-label">回源</span>
+                <span class="preview-value mono">{{ previewDomain.origin || '-' }}</span>
+              </div>
+              <div class="preview-item">
+                <span class="preview-label">源站IP</span>
+                <span class="preview-value mono">{{ previewDomain.origin_ip || '-' }}</span>
+              </div>
+              <div class="preview-item">
+                <span class="preview-label">CDN厂商</span>
+                <span class="preview-value">{{ previewDomain.cdn_provider || '-' }}</span>
+              </div>
+              <div class="preview-item">
+                <span class="preview-label">域名到期</span>
+                <span class="preview-value">
+                  <template v-if="previewDomain.expire_time">
+                    <span class="expiry-badge" :class="getExpiryBadgeClass(previewDomain.expire_time)">
+                      {{ formatDate(previewDomain.expire_time) }}
+                      <span class="expiry-days">{{ getDaysLeft(previewDomain.expire_time) > 0 ? getDaysLeft(previewDomain.expire_time) + '天' : '已过期' }}</span>
+                    </span>
+                  </template>
+                  <template v-else>-</template>
+                </span>
+              </div>
+              <div class="preview-item">
+                <span class="preview-label">证书到期</span>
+                <span class="preview-value">
+                  <template v-if="previewDomain.cert_expire_time">
+                    <span class="expiry-badge" :class="getExpiryBadgeClass(previewDomain.cert_expire_time)">
+                      {{ formatDate(previewDomain.cert_expire_time) }}
+                      <span class="expiry-days">{{ getDaysLeft(previewDomain.cert_expire_time) > 0 ? getDaysLeft(previewDomain.cert_expire_time) + '天' : '已过期' }}</span>
+                    </span>
+                  </template>
+                  <template v-else>-</template>
+                </span>
+              </div>
+              <div class="preview-item">
+                <span class="preview-label">创建时间</span>
+                <span class="preview-value">{{ formatDateTime(previewDomain.created_at) }}</span>
+              </div>
+              <div class="preview-item">
+                <span class="preview-label">更新时间</span>
+                <span class="preview-value">{{ formatDateTime(previewDomain.updated_at) }}</span>
+              </div>
+              <div class="preview-item full">
+                <span class="preview-label">备注</span>
+                <span class="preview-value">{{ previewDomain.remark || '-' }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="preview-footer">
+            <button v-if="canEdit" class="preview-btn preview-btn-edit" @click="closePreview(); openModal(previewDomain)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+              编辑
+            </button>
+            <button class="preview-btn preview-btn-close" @click="closePreview">关闭</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -1167,7 +1516,7 @@ const cdnOptions = [
 }
 
 .page-title {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
   margin: 0;
@@ -1207,29 +1556,29 @@ const cdnOptions = [
 }
 
 .search-input {
-  padding: 8px 12px 8px 36px;
+  padding: 7px 10px 7px 34px;
   width: 200px;
   background: var(--bg-input);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .filter-select {
-  padding: 8px 12px;
+  padding: 7px 10px;
   background: var(--bg-input);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--text-primary);
-  font-size: 14px;
-  min-width: 100px;
+  font-size: 13px;
+  min-width: 90px;
 }
 
 .filter-actions { display: flex; gap: 8px; }
-.btn-search { padding: 8px 20px; border-radius: 8px; border: none; background: #3a84ff; color: #fff; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+.btn-search { padding: 7px 16px; border-radius: 6px; border: none; background: #3a84ff; color: #fff; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
 .btn-search:hover { background: #2970e6; }
-.btn-reset { padding: 8px 20px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-input); color: var(--text-primary); font-size: 14px; cursor: pointer; transition: all 0.2s; }
+.btn-reset { padding: 7px 16px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-input); color: var(--text-primary); font-size: 13px; cursor: pointer; transition: all 0.2s; }
 .btn-reset:hover { background: var(--bg-hover); }
 
 /* 批量操作栏 */
@@ -1244,7 +1593,7 @@ const cdnOptions = [
 }
 
 .batch-info {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--primary);
   font-weight: 500;
 }
@@ -1253,12 +1602,12 @@ const cdnOptions = [
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
+  gap: 5px;
+  padding: 7px 12px;
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   transition: all 0.2s;
   white-space: nowrap;
@@ -1290,8 +1639,8 @@ const cdnOptions = [
 .data-table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 2400px;
-  table-layout: auto;
+  min-width: 1400px;
+  table-layout: fixed;
 }
 
 .data-table.table-fixed-action {
@@ -1303,11 +1652,11 @@ const cdnOptions = [
 .td-action-fixed {
   position: sticky !important;
   right: 0 !important;
-  min-width: 120px;
-  width: 120px;
+  min-width: 160px;
+  width: 160px;
   text-align: center !important;
   white-space: nowrap;
-  padding: 12px 16px !important;
+  padding: 8px 10px !important;
 }
 
 /* 深色模式 - 使用实心颜色 */
@@ -1349,10 +1698,10 @@ const cdnOptions = [
 }
 
 .data-table th, .data-table td {
-  padding: 12px 14px;
+  padding: 10px 12px;
   text-align: left;
   border-bottom: 1px solid var(--border-color);
-  font-size: 13px;
+  font-size: 0.8125rem;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 200px;
@@ -1363,7 +1712,10 @@ const cdnOptions = [
 .data-table th {
   background: var(--bg-hover);
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
   white-space: nowrap;
 }
 
@@ -1379,37 +1731,58 @@ const cdnOptions = [
   white-space: nowrap;
 }
 
-.module-cell {
-  min-width: 500px;
-  max-width: 560px;
+/* 统一截断 + hover 气泡提示 */
+.cell-truncate {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  position: relative;
 }
 
-.domain-cell {
-  font-family: 'Fira Code', 'Consolas', monospace;
-  font-size: 13px;
-  min-width: 500px;
-  max-width: 560px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.cell-truncate:hover {
+  overflow: visible;
+  z-index: 200;
+}
+
+.cell-truncate:hover::after {
+  content: attr(title);
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 4px;
+  padding: 6px 10px;
+  background: #1E293B;
+  color: #F1F5F9;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-all;
+  max-width: 360px;
+  min-width: 120px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  pointer-events: none;
+  z-index: 9999;
+}
+
+.light-mode .cell-truncate:hover::after {
+  background: #FFFFFF;
+  color: #0F172A;
+  border-color: #E2E8F0;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+}
+
+/* 隐藏空 title 的气泡 */
+.cell-truncate[title=""]::after,
+.cell-truncate[title="null"]::after,
+.cell-truncate[title="undefined"]::after,
+.cell-truncate:not([title])::after {
+  display: none;
 }
 
 .domain-link { color: var(--primary); text-decoration: none; }
 .domain-link:hover { text-decoration: underline; }
-
-.origin-cell {
-  font-family: 'Fira Code', 'Consolas', monospace;
-  font-size: 12px;
-  color: var(--text-secondary);
-  min-width: 500px;
-  max-width: 560px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .time-cell {
   font-size: 12px;
@@ -1523,6 +1896,16 @@ const cdnOptions = [
   color: #2563eb;
 }
 
+/* 预览按钮 - 紫色 */
+.btn-icon.preview {
+  background: rgba(139, 92, 246, 0.15);
+  color: #8b5cf6;
+}
+.btn-icon.preview:hover {
+  background: rgba(139, 92, 246, 0.25);
+  color: #7c3aed;
+}
+
 /* 编辑按钮 - 绿色 */
 .btn-icon.edit {
   background: rgba(16, 185, 129, 0.15);
@@ -1560,6 +1943,15 @@ const cdnOptions = [
   color: #93C5FD;
 }
 
+.btn-icon.preview {
+  background: rgba(167, 139, 250, 0.15);
+  color: #A78BFA;
+}
+.btn-icon.preview:hover {
+  background: #374151;
+  color: #C4B5FD;
+}
+
 .btn-icon.edit {
   background: rgba(52, 211, 153, 0.15);
   color: #34D399;
@@ -1586,6 +1978,15 @@ const cdnOptions = [
 .light-mode .btn-icon.refresh:hover {
   background: rgba(59, 130, 246, 0.25);
   color: #2563eb;
+}
+
+.light-mode .btn-icon.preview {
+  background: rgba(139, 92, 246, 0.15);
+  color: #8b5cf6;
+}
+.light-mode .btn-icon.preview:hover {
+  background: rgba(139, 92, 246, 0.25);
+  color: #7c3aed;
 }
 
 .light-mode .btn-icon.edit {
@@ -2436,5 +2837,259 @@ const cdnOptions = [
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
+}
+
+/* 批量修改弹窗 */
+.batch-edit-field {
+  margin-bottom: 16px;
+}
+.batch-edit-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #334155;
+  cursor: pointer;
+}
+.batch-edit-check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #3B82F6;
+}
+.batch-edit-field .domain-form-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.batch-edit-field .domain-cdn-grid.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.batch-edit-field .domain-cdn-option.disabled {
+  cursor: not-allowed;
+}
+
+/* 预览弹窗 */
+.preview-dialog {
+  background: var(--bg-card, #1E293B);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 12px;
+  width: 560px;
+  max-width: 92vw;
+  max-height: 85vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.preview-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.preview-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.preview-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.preview-item.full {
+  grid-column: 1 / -1;
+}
+
+.preview-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.preview-value {
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.preview-value.mono {
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 0.75rem;
+  background: var(--bg-hover);
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+}
+
+.preview-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-color);
+}
+
+.preview-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 16px;
+  border-radius: 6px;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.preview-btn-edit {
+  background: var(--primary, #1E40AF);
+  color: #fff;
+}
+.preview-btn-edit:hover {
+  background: var(--primary-dark, #1E3A8A);
+}
+
+.preview-btn-close {
+  background: var(--bg-tertiary, #334155);
+  color: var(--text-secondary, #94A3B8);
+  border: 1px solid var(--border-color, #334155);
+}
+.preview-btn-close:hover {
+  background: var(--bg-hover, #475569);
+  color: var(--text-primary, #F1F5F9);
+}
+
+.btn-secondary {
+  padding: 7px 18px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-secondary:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* CDN 管理弹窗 */
+.cdn-manager-modal {
+  max-width: 480px;
+}
+
+.cdn-add-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.cdn-add-input {
+  flex: 1;
+  padding: 7px 10px;
+  background: var(--bg-input, #1E293B);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.cdn-add-input::placeholder {
+  color: var(--text-muted);
+}
+
+.cdn-list {
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.cdn-list-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-hover, #334155);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.cdn-list-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color, #334155);
+  transition: background 0.15s;
+}
+.cdn-list-item:last-child {
+  border-bottom: none;
+}
+.cdn-list-item:hover {
+  background: var(--bg-hover, #334155);
+}
+
+.cdn-col-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.cdn-col-value {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.cdn-col-value code {
+  background: var(--bg-hover, #334155);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+}
+
+.cdn-col-action {
+  width: 50px;
+  text-align: center;
+}
+
+.cdn-list-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 24px;
+  font-size: 13px;
+}
+
+.cdn-count {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 </style>

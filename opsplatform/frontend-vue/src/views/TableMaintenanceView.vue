@@ -379,10 +379,10 @@ const statsAnalysis = computed(() => {
 
   // 维护时长明细列表（每条记录的日期、桌号、开始时长、关闭时长、总时长）
   const maintDurationList = maintData.map(r => {
-    const startIdx = durationIndex[r.start_duration] ?? -1
-    const closeIdx = durationIndex[r.close_duration] ?? -1
+    const startIdx = getDurIndex(r.start_duration)
+    const closeIdx = getDurIndex(r.close_duration)
     const maxIdx = Math.max(startIdx, closeIdx)
-    const totalDuration = maxIdx >= 0 ? durationOrder[maxIdx] : '-'
+    const totalDuration = maxIdx >= 0 ? t(`tableMaintenance.options.duration.${durKeys[maxIdx]}`) : '-'
     // 日期：优先使用 date 字段，其次从 start_time 提取
     let dateStr = r.date
     if (!dateStr && r.start_time) {

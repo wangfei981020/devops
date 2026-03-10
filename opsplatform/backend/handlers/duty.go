@@ -568,11 +568,8 @@ func HandleUpdateDutyRecord(w http.ResponseWriter, r *http.Request) {
 	if rec.AnswerTime != "" {
 		answerTime = formatDateTimeForDB(rec.AnswerTime)
 	}
-	// 状态是"检测正常"或"已解决"时，计划修复时间应为空
-	if rec.Status == "normal" || rec.Status == "resolved" {
-		plannedFixTime = nil
-		rec.PlannedFixTime = ""
-	} else if rec.PlannedFixTime != "" {
+	// 保留计划修复时间（不因状态变化而清空，便于查看历史记录）
+	if rec.PlannedFixTime != "" {
 		plannedFixTime = formatDateTimeForDB(rec.PlannedFixTime)
 	}
 
@@ -600,8 +597,8 @@ func HandleUpdateDutyRecord(w http.ResponseWriter, r *http.Request) {
 
 	// 权限判断：
 	// 1. 如果计划修复时间没有变化，不需要额外权限
-	// 2. 如果计划修复时间已经被编辑过(planned_fix_time_edited=1)，需要 duty:edit_planned_fix_time 权限
-	// 3. 如果计划修复时间未被编辑过，且状态不是"检测正常"或"已解决"，允许任何人首次编辑
+	// 2. 如果计划修复时间已经被编辑过(planned_fix_time_edited=1)，主动修改需要 duty:edit_planned_fix_time 权限
+	// 3. 如果计划修复时间未被编辑过，允许任何人首次编辑（状态已完成的除外）
 	if plannedFixTimeChanged {
 		if oldPlannedFixTimeEdited == 1 {
 			// 已经被编辑过，需要权限

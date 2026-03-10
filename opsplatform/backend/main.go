@@ -196,6 +196,9 @@ func main() {
 	protected.HandleFunc("/domains/batch-add", handlers.HandleBatchAddDomains).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/domains/check-cert", handlers.HandleCheckCert).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/domains/batch-refresh", handlers.HandleBatchRefreshDomains).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/domains/batch-update", handlers.HandleBatchUpdateDomains).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/domains/cdn-providers", handlers.HandleGetCDNProviders).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/domains/cdn-providers", handlers.HandleSaveCDNProviders).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/domains/{id}", handlers.HandleUpdateDomain).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/domains/{id}", handlers.HandleDeleteDomain).Methods("DELETE", "OPTIONS")
 
