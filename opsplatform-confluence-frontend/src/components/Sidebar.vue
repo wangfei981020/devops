@@ -1,0 +1,151 @@
+<template>
+  <aside class="sidebar" :class="{ collapsed }">
+    <div class="sidebar-header" @click="$emit('toggle')">
+      <div class="logo" v-if="!collapsed">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+        <span class="logo-text">Confluence Center</span>
+      </div>
+      <div class="logo-icon" v-else>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <router-link
+        v-for="item in menuItems"
+        :key="item.path"
+        :to="item.path"
+        class="nav-item"
+        :class="{ active: $route.path === item.path || ($route.path.startsWith(item.path) && item.path !== '/dashboard') }"
+      >
+        <component :is="item.icon" :size="20" />
+        <span v-if="!collapsed" class="nav-label">{{ item.label }}</span>
+      </router-link>
+    </nav>
+
+    <div class="sidebar-footer" v-if="!collapsed">
+      <span class="version">v1</span>
+    </div>
+  </aside>
+</template>
+
+<script setup>
+import { computed } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+import { LayoutDashboard, BookOpen, Search, FileText, Settings, Bug } from 'lucide-vue-next'
+
+defineProps({ collapsed: Boolean })
+defineEmits(['toggle'])
+
+const authStore = useAuthStore()
+
+const allMenuItems = [
+  { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard, permKey: 'dashboard' },
+  { path: '/spaces', label: '空间列表', icon: BookOpen, permKey: 'spaces' },
+  { path: '/search', label: '搜索', icon: Search, permKey: 'search' },
+  { path: '/jira', label: 'Jira 工单', icon: Bug, permKey: 'jira' },
+  { path: '/report', label: '生成报告', icon: FileText, permKey: 'report' },
+  { path: '/settings', label: '系统设置', icon: Settings, permKey: 'settings', adminOnly: true },
+]
+
+const menuItems = computed(() => {
+  return allMenuItems.filter(item => {
+    if (item.adminOnly && !authStore.isAdmin) return false
+    return authStore.hasMenu(item.permKey)
+  })
+})
+</script>
+
+<style scoped>
+.sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 240px;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  transition: width var(--transition-slow);
+  z-index: 100;
+  overflow: hidden;
+}
+.sidebar.collapsed { width: 64px; }
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  height: 56px;
+  padding: 0 16px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--primary-light);
+}
+.logo-text {
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.logo-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  color: var(--primary-light);
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  color: var(--sidebar-text);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all var(--transition);
+  margin-bottom: 2px;
+  cursor: pointer;
+}
+.nav-item:hover {
+  background: var(--sidebar-active);
+  color: var(--sidebar-text-active);
+}
+.nav-item.active {
+  background: var(--sidebar-active);
+  color: var(--sidebar-text-active);
+}
+
+.collapsed .nav-item {
+  justify-content: center;
+  padding: 10px;
+}
+
+.nav-label { white-space: nowrap; }
+
+.sidebar-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.version {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+</style>
