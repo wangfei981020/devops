@@ -86,10 +86,8 @@
 
     <!-- 统计摘要 -->
     <div class="card summary-card" v-if="upgradeRows.length || changeRows.length || faultRows.length">
-      <p class="summary-text">
-        <span v-if="faultRows.length">共处理故障 <strong>{{ faultRows.length }}</strong> 起，故障统计：{{ faultSummaryText }}。</span>
-        本周共执行 <strong>{{ upgradeRows.length }}</strong> 次升级，<strong>{{ changeRows.length }}</strong> 次变更单处理，{{ allApproved ? '全部通过审批。' : '部分未通过审批。' }}
-      </p>
+      <p class="summary-text" v-if="faultRows.length">故障统计：{{ faultSummaryText }}，累计影响时长 {{ faultTotalDuration }} 分钟。共处理故障 <strong>{{ faultRows.length }}</strong> 起。</p>
+      <p class="summary-text">本周共执行 <strong>{{ upgradeRows.length }}</strong> 次升级，<strong>{{ changeRows.length }}</strong> 次变更单处理，{{ allApproved ? '全部通过审批。' : '部分未通过审批。' }}</p>
     </div>
 
     <!-- 故障管理 -->
@@ -102,6 +100,7 @@
         <table>
           <thead>
             <tr>
+              <th style="min-width:60px">故障项目</th>
               <th style="min-width:120px">故障标题</th>
               <th style="min-width:60px">故障级别</th>
               <th style="min-width:120px">故障影响</th>
@@ -117,6 +116,7 @@
           </thead>
           <tbody>
             <tr v-for="(row, i) in faultRows" :key="i">
+              <td><input class="cell-input" v-model="row.faultProject" /></td>
               <td><input class="cell-input" v-model="row.title" /></td>
               <td><input class="cell-input" v-model="row.level" /></td>
               <td><input class="cell-input" v-model="row.impact" /></td>
@@ -257,22 +257,26 @@
           <h2 class="preview-title">{{ reportTitle || '运维报告' }}</h2>
           <p class="preview-date">{{ startDate }} ~ {{ endDate }}</p>
 
-          <p class="summary-text" v-if="upgradeRows.length || changeRows.length || faultRows.length">
-            <span v-if="faultRows.length">共处理故障 {{ faultRows.length }} 起，故障统计：{{ faultSummaryText }}。</span>
-            本周共执行 <strong>{{ upgradeRows.length }}</strong> 次升级，<strong>{{ changeRows.length }}</strong> 次变更单处理，{{ allApproved ? '全部通过审批。' : '部分未通过审批。' }}
-          </p>
+          <h3 class="section-title">一、项目稳定性保障（目标：99.9%）</h3>
+          <h4 style="margin:8px 0;font-size:14px">1. 可用性与故障情况</h4>
+          <template v-if="faultRows.length">
+            <p class="summary-text">－ 本周整体可用性：{{ availability }}%（目标 {{ SLO_TARGET }}%）。</p>
+            <p class="summary-text">－ 故障统计：{{ faultSummaryText }}，累计影响时长 {{ faultTotalDuration }} 分钟。</p>
+            <p class="summary-text">－ 共处理故障 <strong>{{ faultRows.length }}</strong> 起，平均响应时间 {{ faultAvgResponse }}，平均恢复时间 {{ faultAvgRecovery }}，<strong :style="{ color: sloMet ? 'var(--success)' : 'var(--danger)' }">{{ sloMet ? '满足' : '未满足' }} SLO</strong>。</p>
+          </template>
+          <p v-else class="summary-text">－ 本周无故障，可用性 100%，满足 SLO。</p>
 
-          <h3 class="section-title" v-if="faultRows.length">故障管理</h3>
           <table class="preview-table" v-if="faultRows.length">
-            <thead><tr><th>故障标题</th><th>级别</th><th>故障影响</th><th>开始时间</th><th>发现时间</th><th>解决时间</th><th>时长</th><th>原因</th><th>归属</th><th>发现方式</th></tr></thead>
+            <thead><tr><th>故障项目</th><th>故障标题</th><th>级别</th><th>故障影响</th><th>开始时间</th><th>发现时间</th><th>解决时间</th><th>时长</th><th>原因</th><th>归属</th><th>发现方式</th></tr></thead>
             <tbody>
               <tr v-for="(row, i) in faultRows" :key="i">
-                <td>{{ row.title }}</td><td>{{ row.level }}</td><td>{{ row.impact }}</td><td>{{ row.startTime }}</td><td>{{ row.discoverTime }}</td><td>{{ row.resolveTime }}</td><td>{{ row.duration }}</td><td>{{ row.cause }}</td><td>{{ row.owner }}</td><td>{{ row.discoverMethod }}</td>
+                <td>{{ row.faultProject }}</td><td>{{ row.title }}</td><td>{{ row.level }}</td><td>{{ row.impact }}</td><td>{{ row.startTime }}</td><td>{{ row.discoverTime }}</td><td>{{ row.resolveTime }}</td><td>{{ row.duration }}</td><td>{{ row.cause }}</td><td>{{ row.owner }}</td><td>{{ row.discoverMethod }}</td>
               </tr>
             </tbody>
           </table>
 
-          <h3 class="section-title">升级管理</h3>
+          <h4 style="margin:16px 0 8px;font-size:14px">2. 升级上线与生产变更质量管控</h4>
+          <p class="summary-text">－ 本周共执行 <strong>{{ upgradeRows.length }}</strong> 次升级，<strong>{{ changeRows.length }}</strong> 次变更单处理，{{ allApproved ? '全部通过审批。' : '部分未通过审批。' }}</p>
           <table class="preview-table" v-if="upgradeRows.length">
             <thead><tr><th>项目</th><th>升级分类</th><th>升级内容</th><th>升级方式</th><th>升级单</th><th>升级状态</th></tr></thead>
             <tbody>
@@ -431,17 +435,77 @@ const allApproved = computed(() => {
   return all.every(r => !r.status || r.status === '成功')
 })
 
-// 故障统计摘要文字（P0 x次, P1 x次, ...）
-const faultSummaryText = computed(() => {
+// 故障统计摘要
+const faultLevelCounts = computed(() => {
   const counts = {}
   for (const r of faultRows.value) {
-    const lvl = r.level || '未知'
+    const lvl = (r.level || '未知').toLowerCase()
     counts[lvl] = (counts[lvl] || 0) + 1
   }
-  const levels = ['P0', 'P1', 'P2', 'P3']
-  const parts = levels.map(l => `${l} ${counts[l] || 0} 次`)
-  return parts.join('，')
+  return counts
 })
+
+const faultSummaryText = computed(() => {
+  const counts = faultLevelCounts.value
+  // 收集所有出现的等级并排序
+  const allLevels = Object.keys(counts).sort()
+  if (allLevels.length === 0) return ''
+  return allLevels.map(l => `${l.toUpperCase()} ${counts[l]} 次`).join('，')
+})
+
+const faultTotalDuration = computed(() => {
+  let totalMins = 0
+  for (const r of faultRows.value) {
+    const d = r.duration || ''
+    const dayMatch = d.match(/([\d.]+)d/)
+    const hourMatch = d.match(/(\d+)h/)
+    const minMatch = d.match(/(\d+)m/)
+    if (dayMatch) totalMins += parseFloat(dayMatch[1]) * 1440
+    if (hourMatch) totalMins += parseInt(hourMatch[1]) * 60
+    if (minMatch) totalMins += parseInt(minMatch[1])
+  }
+  return totalMins
+})
+
+const faultAvgRecovery = computed(() => {
+  const rows = faultRows.value.filter(r => r.duration)
+  if (rows.length === 0) return '-'
+  const total = faultTotalDuration.value
+  const avg = total / rows.length
+  if (avg >= 1440) return `${(avg / 1440).toFixed(1)} d`
+  if (avg >= 60) return `${(avg / 60).toFixed(1)} h`
+  return `${Math.round(avg)} 分钟`
+})
+
+const faultAvgResponse = computed(() => {
+  let totalMins = 0
+  let count = 0
+  for (const r of faultRows.value) {
+    if (r.startTime && r.discoverTime) {
+      const diff = new Date(r.discoverTime.replace(' ', 'T')) - new Date(r.startTime.replace(' ', 'T'))
+      if (diff >= 0) {
+        totalMins += diff / 60000
+        count++
+      }
+    }
+  }
+  if (count === 0) return '-'
+  const avg = totalMins / count
+  if (avg >= 60) return `${(avg / 60).toFixed(1)} h`
+  return `${Math.round(avg)} 分钟`
+})
+
+// 可用性计算：(总时间 - 故障时长) / 总时间
+const SLO_TARGET = 99.9
+const availability = computed(() => {
+  const days = Math.max(1, Math.round((new Date(endDate.value) - new Date(startDate.value)) / 86400000) + 1)
+  const totalMins = days * 24 * 60
+  const faultMins = faultTotalDuration.value
+  if (faultMins === 0) return 100
+  return parseFloat(((totalMins - faultMins) / totalMins * 100).toFixed(3))
+})
+
+const sloMet = computed(() => availability.value >= SLO_TARGET)
 
 // CQL 搜索根页面
 async function findRootPageId() {
@@ -612,6 +676,7 @@ async function fetchJiraFaults() {
       const faultOwner = fields.customfield_11141?.value || fields.assignee?.displayName || ''
 
       faultRows.value.push({
+        faultProject: fields.customfield_11140?.value || '',
         title: fields.customfield_10935 || fields.summary || '',
         level: level,
         impact: impact,
@@ -623,6 +688,12 @@ async function fetchJiraFaults() {
         owner: faultOwner,
         discoverMethod: fields.customfield_10937?.value || '',
       })
+    }
+    // 按项目筛选过滤（filterProject 对应 customfield_11140 故障项目）
+    if (filterProject.value) {
+      faultRows.value = faultRows.value.filter(r =>
+        !r.faultProject || r.faultProject.toLowerCase().includes(filterProject.value.toLowerCase())
+      )
     }
   } catch (e) {
     console.error('Jira fault fetch failed:', e)
@@ -936,7 +1007,7 @@ function parseHtmlTables(html, pageTitle) {
 }
 
 function addFaultRow() {
-  faultRows.value.push({ title: '', level: '', impact: '', startTime: '', discoverTime: '', resolveTime: '', duration: '', cause: '', owner: '', discoverMethod: '' })
+  faultRows.value.push({ faultProject: '', title: '', level: '', impact: '', startTime: '', discoverTime: '', resolveTime: '', duration: '', cause: '', owner: '', discoverMethod: '' })
 }
 function addUpgradeRow() {
   upgradeRows.value.push({ project: '', category: '', content: '', method: '', ticket: '', status: '' })
@@ -984,21 +1055,29 @@ async function exportWord() {
       new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 300 }, children: [new TextRun({ text: `${startDate.value} ~ ${endDate.value}`, size: 22, font: '微软雅黑', color: '666666' })] }),
     )
 
-    // 统计摘要
-    const faultPart = faultRows.value.length ? `共处理故障 ${faultRows.value.length} 起，故障统计：${faultSummaryText.value}。` : ''
-    const summaryText = `${faultPart}本周共执行 ${upgradeRows.value.length} 次升级，${changeRows.value.length} 次变更单处理，${allApproved.value ? '全部通过审批。' : '部分未通过审批。'}`
-    children.push(new Paragraph({ spacing: { before: 300, after: 200 }, children: [new TextRun({ text: summaryText, size: 22, font: '微软雅黑' })] }))
+    // 一、项目稳定性保障
+    children.push(new Paragraph({ spacing: { before: 300, after: 100 }, children: [new TextRun({ text: '一、项目稳定性保障（目标：99.9%）', size: 24, bold: true, font: '微软雅黑' })] }))
+    children.push(new Paragraph({ spacing: { before: 100, after: 50 }, children: [new TextRun({ text: '1. 可用性与故障情况', size: 22, bold: true, font: '微软雅黑' })] }))
 
-    // 故障管理
+    // 故障统计文字
     if (faultRows.value.length) {
-      children.push(new Paragraph({ spacing: { before: 300, after: 150 }, children: [new TextRun({ text: '故障管理', size: 26, bold: true, font: '微软雅黑' })] }))
-      const fH = new TableRow({ children: [cell('故障标题', { bold: true, width: 1400 }), cell('级别', { bold: true, width: 600 }), cell('故障影响', { bold: true, width: 1200 }), cell('开始时间', { bold: true, width: 1100 }), cell('发现时间', { bold: true, width: 1100 }), cell('解决时间', { bold: true, width: 1100 }), cell('时长', { bold: true, width: 600 }), cell('原因', { bold: true, width: 1200 }), cell('归属', { bold: true, width: 800 }), cell('发现方式', { bold: true, width: 800 })] })
-      const fR = faultRows.value.map(r => new TableRow({ children: [cell(r.title, { width: 1400 }), cell(r.level, { width: 600 }), cell(r.impact, { width: 1200 }), cell(r.startTime, { width: 1100 }), cell(r.discoverTime, { width: 1100 }), cell(r.resolveTime, { width: 1100 }), cell(r.duration, { width: 600 }), cell(r.cause, { width: 1200 }), cell(r.owner, { width: 800 }), cell(r.discoverMethod, { width: 800 })] }))
+      children.push(new Paragraph({ spacing: { before: 50, after: 50 }, children: [new TextRun({ text: `－ 本周整体可用性：${availability.value}%（目标 ${SLO_TARGET}%）。`, size: 22, font: '微软雅黑' })] }))
+      children.push(new Paragraph({ spacing: { before: 50, after: 50 }, children: [new TextRun({ text: `－ 故障统计：${faultSummaryText.value}，累计影响时长 ${faultTotalDuration.value} 分钟。`, size: 22, font: '微软雅黑' })] }))
+      children.push(new Paragraph({ spacing: { before: 50, after: 100 }, children: [new TextRun({ text: `－ 共处理故障 ${faultRows.value.length} 起，平均响应时间 ${faultAvgResponse.value}，平均恢复时间 ${faultAvgRecovery.value}，${sloMet.value ? '满足' : '未满足'} SLO。`, size: 22, font: '微软雅黑' })] }))
+    } else {
+      children.push(new Paragraph({ spacing: { before: 50, after: 100 }, children: [new TextRun({ text: '－ 本周无故障，可用性 100%，满足 SLO。', size: 22, font: '微软雅黑' })] }))
+    }
+
+    // 故障表格
+    if (faultRows.value.length) {
+      const fH = new TableRow({ children: [cell('故障项目', { bold: true, width: 700 }), cell('故障标题', { bold: true, width: 1200 }), cell('级别', { bold: true, width: 500 }), cell('故障影响', { bold: true, width: 1100 }), cell('开始时间', { bold: true, width: 1000 }), cell('发现时间', { bold: true, width: 1000 }), cell('解决时间', { bold: true, width: 1000 }), cell('时长', { bold: true, width: 500 }), cell('原因', { bold: true, width: 1000 }), cell('归属', { bold: true, width: 700 }), cell('发现方式', { bold: true, width: 700 })] })
+      const fR = faultRows.value.map(r => new TableRow({ children: [cell(r.faultProject, { width: 700 }), cell(r.title, { width: 1200 }), cell(r.level, { width: 500 }), cell(r.impact, { width: 1100 }), cell(r.startTime, { width: 1000 }), cell(r.discoverTime, { width: 1000 }), cell(r.resolveTime, { width: 1000 }), cell(r.duration, { width: 500 }), cell(r.cause, { width: 1000 }), cell(r.owner, { width: 700 }), cell(r.discoverMethod, { width: 700 })] }))
       children.push(new Table({ width: { size: 9800, type: WidthType.DXA }, rows: [fH, ...fR] }))
     }
 
-    // 升级管理
-    children.push(new Paragraph({ spacing: { before: 300, after: 150 }, children: [new TextRun({ text: '升级管理', size: 26, bold: true, font: '微软雅黑' })] }))
+    // 2. 升级上线与生产变更质量管控
+    children.push(new Paragraph({ spacing: { before: 300, after: 100 }, children: [new TextRun({ text: '2. 升级上线与生产变更质量管控', size: 22, bold: true, font: '微软雅黑' })] }))
+    children.push(new Paragraph({ spacing: { before: 50, after: 100 }, children: [new TextRun({ text: `－ 本周共执行 ${upgradeRows.value.length} 次升级，${changeRows.value.length} 次变更单处理，${allApproved.value ? '全部通过审批。' : '部分未通过审批。'}`, size: 22, font: '微软雅黑' })] }))
     const uH = new TableRow({ children: [cell('项目', { bold: true, width: 1200 }), cell('升级分类', { bold: true, width: 1600 }), cell('升级内容', { bold: true, width: 3200 }), cell('升级方式', { bold: true, width: 1200 }), cell('升级单', { bold: true, width: 1200 }), cell('升级状态', { bold: true, width: 1200 })] })
     const uR = upgradeRows.value.length
       ? upgradeRows.value.map(r => new TableRow({ children: [cell(r.project, { width: 1200 }), cell(r.category, { width: 1600 }), cell(r.content, { width: 3200 }), cell(r.method, { width: 1200 }), cell(r.ticket, { width: 1200 }), cell(r.status, { width: 1200 })] }))
