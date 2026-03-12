@@ -92,24 +92,29 @@ func main() {
 	// 用户搜索
 	protected.HandleFunc("/confluence/users", handlers.HandleGetConfluenceUsers).Methods("GET", "OPTIONS")
 
+	// 连接管理（权限由运维平台 confluence:manage_connections 控制）
+	protected.HandleFunc("/connections", handlers.HandleListConnections).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/connections", handlers.HandleCreateConnection).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/connections/{id}", handlers.HandleGetConnection).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/connections/{id}", handlers.HandleUpdateConnection).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/connections/{id}", handlers.HandleDeleteConnection).Methods("DELETE", "OPTIONS")
+	protected.HandleFunc("/connections/test", handlers.HandleTestConnection).Methods("POST", "OPTIONS")
+
+	// 用户管理和审计日志（权限由运维平台 confluence:manage_settings 控制）
+	protected.HandleFunc("/users", handlers.HandleListUsers).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/users", handlers.HandleCreateUser).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/audit-logs", handlers.HandleGetAuditLogs).Methods("GET", "OPTIONS")
+
+	// 系统设置（权限由运维平台 confluence:manage_settings 控制）
+	protected.HandleFunc("/settings", handlers.HandleGetSettings).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/settings", handlers.HandleUpdateSettings).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/settings/test-confluence", handlers.HandleTestConfluenceConnection).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/settings/test-jira", handlers.HandleTestJiraConnection).Methods("POST", "OPTIONS")
+
 	// ===== 管理员路由 =====
 	adminOnly := api.PathPrefix("").Subrouter()
 	adminOnly.Use(handlers.AuthMiddleware)
 	adminOnly.Use(handlers.AdminOnlyMiddleware)
-
-	// 系统设置
-	adminOnly.HandleFunc("/settings", handlers.HandleGetSettings).Methods("GET", "OPTIONS")
-	adminOnly.HandleFunc("/settings", handlers.HandleUpdateSettings).Methods("POST", "OPTIONS")
-	adminOnly.HandleFunc("/settings/test-confluence", handlers.HandleTestConfluenceConnection).Methods("POST", "OPTIONS")
-	adminOnly.HandleFunc("/settings/test-jira", handlers.HandleTestJiraConnection).Methods("POST", "OPTIONS")
-
-	// 连接管理
-	adminOnly.HandleFunc("/connections", handlers.HandleListConnections).Methods("GET", "OPTIONS")
-	adminOnly.HandleFunc("/connections", handlers.HandleCreateConnection).Methods("POST", "OPTIONS")
-	adminOnly.HandleFunc("/connections/{id}", handlers.HandleGetConnection).Methods("GET", "OPTIONS")
-	adminOnly.HandleFunc("/connections/{id}", handlers.HandleUpdateConnection).Methods("PUT", "OPTIONS")
-	adminOnly.HandleFunc("/connections/{id}", handlers.HandleDeleteConnection).Methods("DELETE", "OPTIONS")
-	adminOnly.HandleFunc("/connections/test", handlers.HandleTestConnection).Methods("POST", "OPTIONS")
 
 	// 通用 API 代理
 	adminOnly.HandleFunc("/confluence/proxy", handlers.HandleConfluenceProxy).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")

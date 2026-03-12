@@ -240,14 +240,14 @@
       <button class="btn" @click="clearAll">清空全部</button>
       <div class="action-right">
         <button class="btn" @click="showPreview = true">预览</button>
-        <button class="btn btn-primary" @click="exportWord" :disabled="exporting">
+        <button v-if="canExport" class="btn btn-primary" @click="exportWord" :disabled="exporting">
           {{ exporting ? '导出中...' : '导出 Word' }}
         </button>
       </div>
     </div>
 
     <!-- Preview Modal -->
-    <div v-if="showPreview" class="modal-overlay" @click.self="showPreview = false">
+    <div v-if="showPreview" class="modal-overlay">
       <div class="modal-content">
         <div class="modal-header">
           <h3>报告预览</h3>
@@ -308,6 +308,10 @@ import { ref, computed, inject, onMounted } from 'vue'
 import { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, WidthType, AlignmentType, BorderStyle } from 'docx'
 import { saveAs } from 'file-saver'
 import api from '@/api'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
+const canExport = computed(() => authStore.hasPermission('confluence:export_report'))
 
 const toast = inject('toast')
 const confirmDialog = inject('confirm')
@@ -453,16 +457,38 @@ const faultSummaryText = computed(() => {
   return allLevels.map(l => `${l.toUpperCase()} ${counts[l]} 次`).join('，')
 })
 
+// 影响 SLO 的等级：P0-P3，P4 不影响
+const SLO_LEVELS = ['p0', 'p1', 'p2', 'p3']
+function isSloLevel(level) {
+  return SLO_LEVELS.includes((level || '').toLowerCase())
+}
+
+function parseDurationMins(d) {
+  if (!d) return 0
+  let mins = 0
+  const dayMatch = d.match(/([\d.]+)d/)
+  const hourMatch = d.match(/(\d+)h/)
+  const minMatch = d.match(/(\d+)m/)
+  if (dayMatch) mins += parseFloat(dayMatch[1]) * 1440
+  if (hourMatch) mins += parseInt(hourMatch[1]) * 60
+  if (minMatch) mins += parseInt(minMatch[1])
+  return mins
+}
+
+// 全部故障总时长
 const faultTotalDuration = computed(() => {
   let totalMins = 0
   for (const r of faultRows.value) {
-    const d = r.duration || ''
-    const dayMatch = d.match(/([\d.]+)d/)
-    const hourMatch = d.match(/(\d+)h/)
-    const minMatch = d.match(/(\d+)m/)
-    if (dayMatch) totalMins += parseFloat(dayMatch[1]) * 1440
-    if (hourMatch) totalMins += parseInt(hourMatch[1]) * 60
-    if (minMatch) totalMins += parseInt(minMatch[1])
+    totalMins += parseDurationMins(r.duration)
+  }
+  return totalMins
+})
+
+// 影响 SLO 的故障时长（仅 P0-P3）
+const sloFaultDuration = computed(() => {
+  let totalMins = 0
+  for (const r of faultRows.value) {
+    if (isSloLevel(r.level)) totalMins += parseDurationMins(r.duration)
   }
   return totalMins
 })
@@ -495,12 +521,12 @@ const faultAvgResponse = computed(() => {
   return `${Math.round(avg)} 分钟`
 })
 
-// 可用性计算：(总时间 - 故障时长) / 总时间
+// 可用性计算：(总时间 - P0~P3故障时长) / 总时间，P4不影响SLO
 const SLO_TARGET = 99.9
 const availability = computed(() => {
   const days = Math.max(1, Math.round((new Date(endDate.value) - new Date(startDate.value)) / 86400000) + 1)
   const totalMins = days * 24 * 60
-  const faultMins = faultTotalDuration.value
+  const faultMins = sloFaultDuration.value
   if (faultMins === 0) return 100
   return parseFloat(((totalMins - faultMins) / totalMins * 100).toFixed(3))
 })
@@ -669,6 +695,9 @@ async function fetchJiraFaults() {
         else if (diffH > 0) duration = `${diffH}h${diffM}m`
         else duration = `${diffM}m`
       }
+
+      // 跳过 P4 及以下等级（不影响 SLO，不展示在报告中）
+      if (level.toLowerCase() === 'p4' || level.toLowerCase() === 'p5') continue
 
       // 故障影响范围、根本原因、归属 - 使用自定义字段
       const impact = fields.customfield_10938 || (fields.description ? fields.description.substring(0, 100) : '')

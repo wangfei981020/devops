@@ -19,9 +19,9 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
-	"opsplatform-confluence-backend/config"
-	"opsplatform-confluence-backend/database"
-	"opsplatform-confluence-backend/models"
+	"opsplatform-jira-backend/config"
+	"opsplatform-jira-backend/database"
+	"opsplatform-jira-backend/models"
 )
 
 // ===== JWT 密钥管理 =====
@@ -156,7 +156,7 @@ type Claims struct {
 }
 
 const (
-	AuthCookieName = "confluence_auth_token"
+	AuthCookieName = "auth_token"
 	CookiePath     = "/"
 )
 
@@ -177,7 +177,7 @@ func GenerateToken(userID, username, role string) (string, time.Time, error) {
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "opsplatform-confluence",
+			Issuer:    "opsplatform-jira",
 		},
 	}
 
@@ -395,6 +395,8 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	SetAuthCookie(w, token, expiresAt)
+
+	// 记录审计日志
 	AddAuditLog(user.ID, user.Username, "login", "user", user.ID, "用户登录", GetClientIP(r))
 
 	user.Password = ""
@@ -432,7 +434,18 @@ func HandleGetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	respondSuccess(w, user)
 }
 
+// HandleGetMyPermissions 获取当前用户的 Jira 权限
+func HandleGetMyPermissions(w http.ResponseWriter, r *http.Request) {
+	_, username, _ := GetUserFromContext(r)
+	perms := getUserPermissions(username)
+	if perms == nil {
+		perms = make(map[string]bool)
+	}
+	respondSuccess(w, perms)
+}
+
 // HandlePortalAuth 运维平台 Portal 免登认证
+// 接收运维平台的 JWT token，向运维平台后端验证用户身份，自动同步用户并签发本系统 token
 func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Token string `json:"token"`
@@ -448,6 +461,7 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 调用运维平台 /api/users/me 验证 token
 	verifyURL := strings.TrimRight(portalURL, "/") + "/api/users/me"
 	log.Printf("[PortalAuth] 验证 token (前20字符): %.20s... -> %s", req.Token, verifyURL)
 
@@ -468,6 +482,7 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 运维平台 /api/users/me 直接返回 user 对象（非 {data: ...} 包装）
 	var portalUser struct {
 		ID          string `json:"id"`
 		Username    string `json:"username"`
@@ -476,16 +491,19 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 		Role        string `json:"role"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&portalUser); err != nil {
+		log.Printf("[PortalAuth] JSON 解析失败: %v", err)
 		respondUnauthorized(w, "解析用户信息失败")
 		return
 	}
 	if portalUser.Username == "" {
+		log.Printf("[PortalAuth] 用户名为空, 原始数据: %+v", portalUser)
 		respondUnauthorized(w, "解析用户信息失败")
 		return
 	}
 
 	pu := portalUser
 
+	// 同步用户到本地: 存在则更新，不存在则创建
 	var existingID string
 	database.DB.QueryRow("SELECT id FROM users WHERE username = ?", pu.Username).Scan(&existingID)
 
@@ -508,6 +526,7 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 			existingID, pu.Username, displayName, pu.Email, localRole)
 	}
 
+	// 签发本系统 token
 	token, expiresAt, err := GenerateToken(existingID, pu.Username, localRole)
 	if err != nil {
 		respondInternalError(w, "生成令牌失败")
@@ -515,10 +534,15 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	SetAuthCookie(w, token, expiresAt)
-	AddAuditLog(existingID, pu.Username, "sso_login", "user", existingID, "SSO 登录", GetClientIP(r))
+	AddAuditLog(existingID, pu.Username, "portal_login", "user", existingID, "Portal 免登认证", GetClientIP(r))
 
-	// 从运维平台获取权限
-	confluencePerms := fetchPortalPermissions(portalURL, req.Token, pu.Username)
+	// 从运维平台获取用户权限（Jira相关权限）
+	permissions := fetchPortalPermissions(portalURL, req.Token, pu.Username)
+
+	// 缓存权限到 Redis（如果可用）
+	if len(permissions) > 0 {
+		cacheUserPermissions(pu.Username, permissions)
+	}
 
 	respondSuccess(w, map[string]interface{}{
 		"token": token,
@@ -530,8 +554,82 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 			"role":         localRole,
 			"auth_source":  "portal",
 		},
-		"permissions": confluencePerms,
+		"permissions": permissions,
 	})
+}
+
+// fetchPortalPermissions 从运维平台获取用户的 Jira 相关权限
+func fetchPortalPermissions(portalURL, portalToken, username string) map[string]bool {
+	permURL := strings.TrimRight(portalURL, "/") + "/api/my/permissions"
+	client := &http.Client{Timeout: 5 * time.Second}
+	permReq, _ := http.NewRequest("GET", permURL, nil)
+	permReq.Header.Set("Authorization", "Bearer "+portalToken)
+	permReq.Header.Set("X-Operator", username)
+
+	resp, err := client.Do(permReq)
+	if err != nil {
+		log.Printf("[PortalAuth] 获取权限失败: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[PortalAuth] 获取权限返回 HTTP %d", resp.StatusCode)
+		return nil
+	}
+
+	var result struct {
+		Permissions map[string]bool `json:"permissions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("[PortalAuth] 解析权限失败: %v", err)
+		return nil
+	}
+
+	// 过滤出 Jira 相关权限 (menu:jira* 和 jira:*)
+	jiraPerms := make(map[string]bool)
+	for code, granted := range result.Permissions {
+		if granted && (strings.HasPrefix(code, "menu:jira") || strings.HasPrefix(code, "jira:")) {
+			jiraPerms[code] = true
+		}
+	}
+	log.Printf("[PortalAuth] 用户 %s 的 Jira 权限: %v", username, jiraPerms)
+	return jiraPerms
+}
+
+// cacheUserPermissions 缓存用户权限到 Redis
+func cacheUserPermissions(username string, permissions map[string]bool) {
+	if !database.RedisEnabled {
+		return
+	}
+	key := "jira_perms:" + username
+	permList := make([]string, 0, len(permissions))
+	for code := range permissions {
+		permList = append(permList, code)
+	}
+	data, _ := json.Marshal(permList)
+	database.RedisSet(key, string(data), 30*time.Minute)
+}
+
+// getUserPermissions 获取用户的 Jira 权限（从 Redis 缓存）
+func getUserPermissions(username string) map[string]bool {
+	if !database.RedisEnabled {
+		return nil
+	}
+	key := "jira_perms:" + username
+	data, err := database.RedisGet(key)
+	if err != nil {
+		return nil
+	}
+	var permList []string
+	if err := json.Unmarshal([]byte(data), &permList); err != nil {
+		return nil
+	}
+	perms := make(map[string]bool)
+	for _, code := range permList {
+		perms[code] = true
+	}
+	return perms
 }
 
 // HandleRefreshSession 刷新会话
@@ -581,45 +679,6 @@ func InitDefaultAdmin() error {
 
 	log.Println("默认管理员已创建: admin / admin123")
 	return nil
-}
-
-// fetchPortalPermissions 从运维平台获取用户的 Confluence 相关权限
-func fetchPortalPermissions(portalURL, portalToken, username string) map[string]bool {
-	permURL := strings.TrimRight(portalURL, "/") + "/api/my/permissions"
-	client := &http.Client{Timeout: 5 * time.Second}
-	permReq, _ := http.NewRequest("GET", permURL, nil)
-	permReq.Header.Set("Authorization", "Bearer "+portalToken)
-	permReq.Header.Set("X-Operator", username)
-
-	resp, err := client.Do(permReq)
-	if err != nil {
-		log.Printf("[PortalAuth] 获取权限失败: %v", err)
-		return nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[PortalAuth] 获取权限返回 HTTP %d", resp.StatusCode)
-		return nil
-	}
-
-	var result struct {
-		Permissions map[string]bool `json:"permissions"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		log.Printf("[PortalAuth] 解析权限失败: %v", err)
-		return nil
-	}
-
-	// 过滤出 Confluence 相关权限 (menu:confluence* 和 confluence:*)
-	confluencePerms := make(map[string]bool)
-	for code, granted := range result.Permissions {
-		if granted && (strings.HasPrefix(code, "menu:confluence") || strings.HasPrefix(code, "confluence:")) {
-			confluencePerms[code] = true
-		}
-	}
-	log.Printf("[PortalAuth] Confluence 权限: %v", confluencePerms)
-	return confluencePerms
 }
 
 // AddAuditLog 添加审计日志

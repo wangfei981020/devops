@@ -1,0 +1,65 @@
+---
+# Permission Center Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: permission-center-frontend
+  namespace: sso
+  labels:
+    app: permission-center-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: permission-center-frontend
+  template:
+    metadata:
+      labels:
+        app: permission-center-frontend
+    spec:
+      containers:
+        - name: permission-center-frontend
+          image: localhost:8070/opsplatform/permission-center-frontend:v3
+          ports:
+            - containerPort: 80
+          env:
+            - name: TZ
+              value: "Asia/Shanghai"
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "20m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 10
+
+---
+# Permission Center Frontend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: permission-center-frontend
+  namespace: sso
+  labels:
+    app: permission-center-frontend
+spec:
+  type: NodePort
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30903
+      protocol: TCP
+  selector:
+    app: permission-center-frontend

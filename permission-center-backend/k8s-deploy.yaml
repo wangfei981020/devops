@@ -1,0 +1,94 @@
+---
+# Permission Center Backend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: permission-center-backend
+  namespace: sso
+  labels:
+    app: permission-center-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: permission-center-backend
+  template:
+    metadata:
+      labels:
+        app: permission-center-backend
+    spec:
+      containers:
+        - name: permission-center-backend
+          image: localhost:8070/opsplatform/permission-center-backend:v3
+          ports:
+            - containerPort: 9100
+          env:
+            - name: TZ
+              value: "Asia/Shanghai"
+            - name: PC_PORT
+              value: ":9100"
+            - name: PC_DB_HOST
+              value: "mysql-sso.sso.svc.cluster.local"
+            - name: PC_DB_PORT
+              value: "3306"
+            - name: PC_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-sso-secret
+                  key: MYSQL_USER
+            - name: PC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-sso-secret
+                  key: MYSQL_PASSWORD
+            - name: PC_DB_NAME
+              value: "permission_center"
+            - name: PC_SSO_USERINFO_URL
+              value: "http://sso-backend.sso.svc.cluster.local:9000/userinfo"
+            - name: PC_REDIS_HOST
+              value: "redis-pc.sso.svc.cluster.local"
+            - name: PC_REDIS_PORT
+              value: "6379"
+            - name: PC_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-pc-secret
+                  key: password
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9100
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9100
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+---
+# Permission Center Backend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: permission-center-backend
+  namespace: sso
+  labels:
+    app: permission-center-backend
+spec:
+  type: NodePort
+  ports:
+    - port: 9100
+      targetPort: 9100
+      nodePort: 30902
+      protocol: TCP
+  selector:
+    app: permission-center-backend

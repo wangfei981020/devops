@@ -1,0 +1,155 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jira-ops
+---
+# DB Secret (使用 SSO 命名空间的 MySQL)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-secret
+  namespace: jira-ops
+type: Opaque
+stringData:
+  MYSQL_USER: "jira_user"
+  MYSQL_PASSWORD: "Jira@2026#Secure"
+---
+# JWT Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jwt-secret
+  namespace: jira-ops
+type: Opaque
+stringData:
+  JWT_SECRET: "opsplatform-jira-jwt-secret-min-32-chars!!"
+---
+# Backend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsplatform-jira-backend
+  namespace: jira-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opsplatform-jira-backend
+  template:
+    metadata:
+      labels:
+        app: opsplatform-jira-backend
+    spec:
+      containers:
+        - name: backend
+          image: localhost:8070/opsplatform/opsplatform-jira-backend:v6
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: ":8080"
+            - name: DEV_MODE
+              value: "false"
+            - name: MYSQL_HOST
+              value: "mysql-sso.sso.svc.cluster.local"
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_DATABASE
+              value: "jira_center"
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: MYSQL_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: MYSQL_PASSWORD
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: jwt-secret
+                  key: JWT_SECRET
+            - name: SESSION_TIMEOUT
+              value: "180"
+            - name: COOKIE_SECURE
+              value: "false"
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsplatform-jira-backend
+  namespace: jira-ops
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+  selector:
+    app: opsplatform-jira-backend
+---
+# Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsplatform-jira-frontend
+  namespace: jira-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opsplatform-jira-frontend
+  template:
+    metadata:
+      labels:
+        app: opsplatform-jira-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: localhost:8070/opsplatform/opsplatform-jira-frontend:v8
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsplatform-jira-frontend
+  namespace: jira-ops
+spec:
+  type: NodePort
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30820
+  selector:
+    app: opsplatform-jira-frontend

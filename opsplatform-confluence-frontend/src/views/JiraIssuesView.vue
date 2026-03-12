@@ -48,6 +48,21 @@
             <option value="Lowest">Lowest</option>
           </select>
         </div>
+        <div class="filter-group">
+          <label>故障等级</label>
+          <select v-model="filterFaultLevel" class="input" @change="resetAndSearch">
+            <option value="">全部</option>
+            <option value="p0">P0</option>
+            <option value="p1">P1</option>
+            <option value="p2">P2</option>
+            <option value="p3">P3</option>
+            <option value="p4">P4</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>故障项目</label>
+          <input v-model="filterFaultProject" class="input" placeholder="如 G33" @keyup.enter="resetAndSearch" style="min-width:80px" />
+        </div>
         <div class="filter-group" style="flex:1;min-width:200px">
           <label>搜索</label>
           <div style="display:flex;gap:8px">
@@ -70,6 +85,8 @@
               <th>标题</th>
               <th style="width:100px">类型</th>
               <th style="width:90px">优先级</th>
+              <th style="width:70px">故障等级</th>
+              <th style="width:80px">故障项目</th>
               <th style="width:100px">状态</th>
               <th style="width:120px">经办人</th>
               <th style="width:110px">更新时间</th>
@@ -87,6 +104,8 @@
                   {{ issue.fields?.priority?.name || '-' }}
                 </span>
               </td>
+              <td>{{ issue.fields?.customfield_10919?.value || issue.fields?.customfield_10919 || '-' }}</td>
+              <td>{{ issue.fields?.customfield_11140?.value || '-' }}</td>
               <td>
                 <span class="badge status-badge" :class="getStatusClass(issue.fields?.status?.statusCategory?.key)">
                   {{ issue.fields?.status?.name }}
@@ -143,6 +162,8 @@ const connId = ref('')
 const filterStatus = ref('')
 const filterType = ref('')
 const filterPriority = ref('')
+const filterFaultLevel = ref('')
+const filterFaultProject = ref('')
 const searchText = ref('')
 
 const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / pageSize.value)))
@@ -152,6 +173,8 @@ function buildJQL() {
   if (filterStatus.value) parts.push(`status = "${filterStatus.value}"`)
   if (filterType.value) parts.push(`issuetype = "${filterType.value}"`)
   if (filterPriority.value) parts.push(`priority = "${filterPriority.value}"`)
+  if (filterFaultLevel.value) parts.push(`"故障等级" = "${filterFaultLevel.value}"`)
+  if (filterFaultProject.value.trim()) parts.push(`"故障项目" = "${filterFaultProject.value.trim()}"`)
   if (searchText.value.trim()) parts.push(`summary ~ "${searchText.value.trim()}"`)
   return parts.join(' AND ') + ' ORDER BY updated DESC'
 }
@@ -167,7 +190,7 @@ async function fetchIssues() {
   try {
     const jql = buildJQL()
     const startAt = (currentPage.value - 1) * pageSize.value
-    const params = { jql, startAt, maxResults: pageSize.value, fields: 'summary,status,issuetype,priority,assignee,updated,created' }
+    const params = { jql, startAt, maxResults: pageSize.value, fields: 'summary,status,issuetype,priority,assignee,updated,created,customfield_10919,customfield_11140' }
     if (connId.value) params.conn_id = connId.value
     const res = await api.get('/api/jira/search', { params })
     const data = res.data.data || {}

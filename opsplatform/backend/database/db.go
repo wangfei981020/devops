@@ -1147,6 +1147,15 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_jira_stats", "menu:jira_stats", "Jira统计分析", "/jira/stats", "perm_menu_jira", "", 40},
 		{"perm_menu_jira_report", "menu:jira_report", "Jira项目报告", "/jira/report", "perm_menu_jira", "", 50},
 		{"perm_menu_jira_settings", "menu:jira_settings", "Jira系统设置", "/jira/settings", "perm_menu_jira", "", 60},
+
+		// Confluence中心（外部应用权限）
+		{"perm_menu_confluence", "menu:confluence", "Confluence中心", "/confluence", "", "confluence", 13},
+		{"perm_menu_confluence_dashboard", "menu:confluence_dashboard", "Confluence仪表盘", "/confluence/dashboard", "perm_menu_confluence", "", 10},
+		{"perm_menu_confluence_spaces", "menu:confluence_spaces", "Confluence空间列表", "/confluence/spaces", "perm_menu_confluence", "", 20},
+		{"perm_menu_confluence_search", "menu:confluence_search", "Confluence搜索", "/confluence/search", "perm_menu_confluence", "", 30},
+		{"perm_menu_confluence_jira", "menu:confluence_jira", "Confluence Jira工单", "/confluence/jira", "perm_menu_confluence", "", 40},
+		{"perm_menu_confluence_report", "menu:confluence_report", "Confluence生成报告", "/confluence/report", "perm_menu_confluence", "", 50},
+		{"perm_menu_confluence_settings", "menu:confluence_settings", "Confluence系统设置", "/confluence/settings", "perm_menu_confluence", "", 60},
 	}
 
 	for _, perm := range menuPermissions {
@@ -1251,6 +1260,11 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_jira_config_sso", "jira:config_sso", "[Jira中心] SSO配置", "允许配置Jira中心的SSO设置"},
 		{"perm_btn_jira_manage_users", "jira:manage_users", "[Jira中心] 用户管理", "允许在Jira中心管理用户"},
 		{"perm_btn_jira_view_audit", "jira:view_audit", "[Jira中心] 查看审计日志", "允许查看Jira中心审计日志"},
+
+		// Confluence中心
+		{"perm_btn_confluence_manage_connections", "confluence:manage_connections", "[Confluence中心] 连接管理", "允许管理Confluence和Jira连接配置"},
+		{"perm_btn_confluence_export_report", "confluence:export_report", "[Confluence中心] 导出报告", "允许导出运维报告"},
+		{"perm_btn_confluence_manage_settings", "confluence:manage_settings", "[Confluence中心] 系统配置", "允许修改Confluence中心系统设置"},
 	}
 
 	for _, perm := range buttonPermissions {

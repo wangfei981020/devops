@@ -6,7 +6,7 @@
     <!-- 全局确认弹窗 -->
     <Teleport to="body">
       <Transition name="confirm-fade">
-        <div v-if="confirmState.visible" class="confirm-overlay">
+        <div v-if="confirmState.visible" class="confirm-overlay" @click.self="handleConfirmCancel">
           <Transition name="confirm-pop">
             <div v-if="confirmState.visible" class="confirm-dialog">
               <div class="confirm-icon" :class="confirmState.type">
@@ -43,11 +43,12 @@ import { ref, onMounted, provide } from 'vue'
 const theme = ref(localStorage.getItem('theme') || 'dark')
 const toast = ref({ show: false, message: '', type: 'info' })
 
+// 确认弹窗状态
 const confirmState = ref({
   visible: false,
   title: '',
   message: '',
-  type: 'info',
+  type: 'info',     // info | warning | danger
   okText: '确定',
   resolve: null
 })
@@ -66,6 +67,11 @@ function showToast(message, type = 'info', duration = 3000) {
   setTimeout(() => { toast.value.show = false }, duration)
 }
 
+/**
+ * 全局确认弹窗
+ * @param {Object} options - { title, message, type, okText }
+ * @returns {Promise<boolean>}
+ */
 function showConfirm(options = {}) {
   return new Promise((resolve) => {
     confirmState.value = {
@@ -99,6 +105,7 @@ provide('confirm', showConfirm)
 </script>
 
 <style>
+/* 确认弹窗 */
 .confirm-overlay {
   position: fixed;
   inset: 0;
@@ -130,13 +137,38 @@ provide('confirm', showConfirm)
   justify-content: center;
   margin-bottom: 16px;
 }
-.confirm-icon.info { background: rgba(76, 154, 255, 0.12); color: #4C9AFF; }
-.confirm-icon.warning { background: rgba(245, 158, 11, 0.12); color: #F59E0B; }
-.confirm-icon.danger { background: rgba(239, 68, 68, 0.12); color: #EF4444; }
+.confirm-icon.info {
+  background: rgba(59, 130, 246, 0.12);
+  color: #3B82F6;
+}
+.confirm-icon.warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: #F59E0B;
+}
+.confirm-icon.danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #EF4444;
+}
 
-.confirm-title { font-size: 17px; font-weight: 600; color: var(--text-primary, #F1F5F9); margin-bottom: 8px; }
-.confirm-message { font-size: 14px; color: var(--text-secondary, #94A3B8); line-height: 1.6; margin-bottom: 24px; }
-.confirm-actions { display: flex; gap: 12px; justify-content: center; }
+.confirm-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary, #F1F5F9);
+  margin-bottom: 8px;
+}
+
+.confirm-message {
+  font-size: 14px;
+  color: var(--text-secondary, #94A3B8);
+  line-height: 1.6;
+  margin-bottom: 24px;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
 
 .confirm-btn {
   padding: 9px 28px;
@@ -148,20 +180,64 @@ provide('confirm', showConfirm)
   transition: all 200ms ease;
   border: 1px solid transparent;
 }
-.confirm-btn-cancel { background: var(--bg-tertiary, #334155); color: var(--text-secondary, #94A3B8); border-color: var(--border, #334155); }
-.confirm-btn-cancel:hover { background: var(--bg-hover, #475569); color: var(--text-primary, #F1F5F9); }
-.confirm-btn-ok { color: #fff; }
-.confirm-btn-ok.confirm-btn-info { background: #4C9AFF; border-color: #4C9AFF; }
-.confirm-btn-ok.confirm-btn-info:hover { background: #2684FF; }
-.confirm-btn-ok.confirm-btn-warning { background: #F59E0B; border-color: #F59E0B; }
-.confirm-btn-ok.confirm-btn-warning:hover { background: #D97706; }
-.confirm-btn-ok.confirm-btn-danger { background: #EF4444; border-color: #EF4444; }
-.confirm-btn-ok.confirm-btn-danger:hover { background: #DC2626; }
 
-.confirm-fade-enter-active, .confirm-fade-leave-active { transition: opacity 200ms ease; }
-.confirm-fade-enter-from, .confirm-fade-leave-to { opacity: 0; }
-.confirm-pop-enter-active { transition: all 250ms cubic-bezier(0.34, 1.56, 0.64, 1); }
-.confirm-pop-leave-active { transition: all 150ms ease; }
-.confirm-pop-enter-from { opacity: 0; transform: scale(0.85); }
-.confirm-pop-leave-to { opacity: 0; transform: scale(0.95); }
+.confirm-btn-cancel {
+  background: var(--bg-tertiary, #334155);
+  color: var(--text-secondary, #94A3B8);
+  border-color: var(--border, #334155);
+}
+.confirm-btn-cancel:hover {
+  background: var(--bg-hover, #475569);
+  color: var(--text-primary, #F1F5F9);
+}
+
+.confirm-btn-ok {
+  color: #fff;
+}
+.confirm-btn-ok.confirm-btn-info {
+  background: #3B82F6;
+  border-color: #3B82F6;
+}
+.confirm-btn-ok.confirm-btn-info:hover {
+  background: #2563EB;
+}
+.confirm-btn-ok.confirm-btn-warning {
+  background: #F59E0B;
+  border-color: #F59E0B;
+}
+.confirm-btn-ok.confirm-btn-warning:hover {
+  background: #D97706;
+}
+.confirm-btn-ok.confirm-btn-danger {
+  background: #EF4444;
+  border-color: #EF4444;
+}
+.confirm-btn-ok.confirm-btn-danger:hover {
+  background: #DC2626;
+}
+
+/* 动画 */
+.confirm-fade-enter-active,
+.confirm-fade-leave-active {
+  transition: opacity 200ms ease;
+}
+.confirm-fade-enter-from,
+.confirm-fade-leave-to {
+  opacity: 0;
+}
+
+.confirm-pop-enter-active {
+  transition: all 250ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.confirm-pop-leave-active {
+  transition: all 150ms ease;
+}
+.confirm-pop-enter-from {
+  opacity: 0;
+  transform: scale(0.85);
+}
+.confirm-pop-leave-to {
+  opacity: 0;
+  transform: scale(0.95);
+}
 </style>

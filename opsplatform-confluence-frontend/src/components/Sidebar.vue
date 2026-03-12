@@ -45,12 +45,11 @@ const allMenuItems = [
   { path: '/search', label: '搜索', icon: Search, permKey: 'search' },
   { path: '/jira', label: 'Jira 工单', icon: Bug, permKey: 'jira' },
   { path: '/report', label: '生成报告', icon: FileText, permKey: 'report' },
-  { path: '/settings', label: '系统设置', icon: Settings, permKey: 'settings', adminOnly: true },
+  { path: '/settings', label: '系统设置', icon: Settings, permKey: 'settings' },
 ]
 
 const menuItems = computed(() => {
   return allMenuItems.filter(item => {
-    if (item.adminOnly && !authStore.isAdmin) return false
     return authStore.hasMenu(item.permKey)
   })
 })

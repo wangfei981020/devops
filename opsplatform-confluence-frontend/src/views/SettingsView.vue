@@ -16,7 +16,7 @@
             <span class="type-icon confluence">C</span>
             <h3>Confluence 连接</h3>
           </div>
-          <button class="btn btn-sm btn-primary" @click="openAddConn('confluence')">+ 添加</button>
+          <button v-if="canManageConns" class="btn btn-sm btn-primary" @click="openAddConn('confluence')">+ 添加</button>
         </div>
         <div class="conn-grid">
           <div class="conn-card" v-for="c in confluenceConns" :key="c.id" :class="{ default: c.is_default }">
@@ -32,8 +32,8 @@
             </div>
             <div class="conn-actions">
               <button class="btn btn-xs" @click="testConn(c)">{{ c._testing ? '测试中...' : '测试' }}</button>
-              <button class="btn btn-xs" @click="openEditConn(c)">编辑</button>
-              <button class="btn btn-xs danger" @click="deleteConn(c)">删除</button>
+              <button v-if="canManageConns" class="btn btn-xs" @click="openEditConn(c)">编辑</button>
+              <button v-if="canManageConns" class="btn btn-xs danger" @click="deleteConn(c)">删除</button>
             </div>
             <div v-if="c._testResult" :class="['test-msg', c._testResult.ok ? 'ok' : 'fail']">{{ c._testResult.message }}</div>
           </div>
@@ -51,7 +51,7 @@
             <span class="type-icon jira">J</span>
             <h3>Jira 连接</h3>
           </div>
-          <button class="btn btn-sm btn-primary" @click="openAddConn('jira')">+ 添加</button>
+          <button v-if="canManageConns" class="btn btn-sm btn-primary" @click="openAddConn('jira')">+ 添加</button>
         </div>
         <div class="conn-grid">
           <div class="conn-card" v-for="c in jiraConns" :key="c.id" :class="{ default: c.is_default }">
@@ -66,12 +66,12 @@
             </div>
             <div class="conn-actions">
               <button class="btn btn-xs" @click="testConn(c)">{{ c._testing ? '测试中...' : '测试' }}</button>
-              <button class="btn btn-xs" @click="openEditConn(c)">编辑</button>
-              <button class="btn btn-xs danger" @click="deleteConn(c)">删除</button>
+              <button v-if="canManageConns" class="btn btn-xs" @click="openEditConn(c)">编辑</button>
+              <button v-if="canManageConns" class="btn btn-xs danger" @click="deleteConn(c)">删除</button>
             </div>
             <div v-if="c._testResult" :class="['test-msg', c._testResult.ok ? 'ok' : 'fail']">{{ c._testResult.message }}</div>
           </div>
-          <div class="conn-card empty" v-if="!jiraConns.length" @click="openAddConn('jira')">
+          <div class="conn-card empty" v-if="!jiraConns.length && canManageConns" @click="openAddConn('jira')">
             <span class="empty-icon">+</span>
             <span>添加 Jira 连接</span>
           </div>
@@ -90,7 +90,7 @@
         </div>
       </div>
       <div class="form-actions">
-        <button class="btn btn-primary" @click="saveGeneral" :disabled="saving">保存</button>
+        <button v-if="canManageSettings" class="btn btn-primary" @click="saveGeneral" :disabled="saving">保存</button>
       </div>
     </div>
 
@@ -98,7 +98,7 @@
     <div v-if="activeTab === 'users'" class="card">
       <div class="section-header">
         <h3>用户列表</h3>
-        <button class="btn btn-primary btn-sm" @click="showAddUser = true">添加用户</button>
+        <button v-if="canManageSettings" class="btn btn-primary btn-sm" @click="showAddUser = true">添加用户</button>
       </div>
       <div class="table-wrapper">
         <table>
@@ -115,7 +115,7 @@
           </tbody>
         </table>
       </div>
-      <div v-if="showAddUser" class="modal-overlay" @click.self="showAddUser = false">
+      <div v-if="showAddUser" class="modal-overlay">
         <div class="modal card">
           <h3>添加用户</h3>
           <div class="field"><label>用户名</label><input class="input" v-model="newUser.username" /></div>
@@ -148,7 +148,7 @@
     </div>
 
     <!-- 连接编辑弹窗 -->
-    <div v-if="showConnModal" class="modal-overlay" @click.self="showConnModal = false">
+    <div v-if="showConnModal" class="modal-overlay">
       <div class="modal card conn-modal">
         <h3>{{ editingConn.id ? '编辑连接' : '添加连接' }}</h3>
         <div class="field">
@@ -216,6 +216,11 @@
 <script setup>
 import { ref, computed, onMounted, watch, inject } from 'vue'
 import api from '@/api'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
+const canManageConns = computed(() => authStore.hasPermission('confluence:manage_connections'))
+const canManageSettings = computed(() => authStore.hasPermission('confluence:manage_settings'))
 
 const toast = inject('toast')
 const confirm = inject('confirm')
@@ -247,7 +252,8 @@ watch(activeTab, () => loadTabData())
 async function loadTabData() {
   if (activeTab.value === 'connections') {
     try {
-      const res = await api.get('/api/connections')
+      const endpoint = canManageConns.value ? '/api/connections' : '/api/connections/public'
+      const res = await api.get(endpoint)
       connections.value = (res.data.data || []).map(c => {
         if (typeof c.config === 'string') {
           try { c.config = JSON.parse(c.config) } catch { c.config = {} }

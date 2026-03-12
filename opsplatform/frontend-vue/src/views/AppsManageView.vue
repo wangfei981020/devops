@@ -204,7 +204,7 @@ const presetIcons = {
 
     <!-- 创建/编辑弹窗 -->
     <Teleport to="body">
-    <div class="am-modal-overlay" v-if="showForm" @click.self="showForm = false">
+    <div class="am-modal-overlay" v-if="showForm">
       <div class="am-modal-box">
         <h3>{{ editingApp ? '编辑应用' : '注册应用' }}</h3>
         <div class="form-group">
@@ -268,7 +268,7 @@ const presetIcons = {
 
     <!-- 权限配置弹窗 -->
     <Teleport to="body">
-    <div class="am-modal-overlay" v-if="showRoleDialog" @click.self="showRoleDialog = false">
+    <div class="am-modal-overlay" v-if="showRoleDialog">
       <div class="am-modal-box am-modal-sm">
         <h3>{{ roleForm.appName }} - 角色权限</h3>
         <p class="hint">勾选的角色可以访问此应用</p>
