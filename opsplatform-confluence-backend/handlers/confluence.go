@@ -122,7 +122,7 @@ func HandleGetContent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := mux.Vars(r)["id"]
-	path := fmt.Sprintf("/rest/api/content/%s?expand=body.storage,version,ancestors,space,children.page,metadata.labels", id)
+	path := fmt.Sprintf("/rest/api/content/%s?expand=body.storage,body.view,version,ancestors,space,children.page,metadata.labels", id)
 
 	data, err := client.GetRaw(path)
 	if err != nil {
@@ -332,7 +332,7 @@ func HandleGetContentComments(w http.ResponseWriter, r *http.Request) {
 	start := r.URL.Query().Get("start")
 	limit := r.URL.Query().Get("limit")
 
-	path := fmt.Sprintf("/rest/api/content/%s/child/comment?expand=body.storage,version", id)
+	path := fmt.Sprintf("/rest/api/content/%s/child/comment?expand=body.storage,body.view,version", id)
 	if start != "" {
 		path += "&start=" + start
 	}

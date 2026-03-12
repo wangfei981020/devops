@@ -25,6 +25,16 @@ type: Opaque
 stringData:
   JWT_SECRET: "opsplatform-confluence-jwt-secret-min-32-chars!!"
 ---
+# Portal Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: portal-secret
+  namespace: confluence-ops
+type: Opaque
+stringData:
+  PORTAL_API_URL: "http://opsplatform-backend.opsplatform.svc.cluster.local:8080"
+---
 # Backend Deployment
 apiVersion: apps/v1
 kind: Deployment
@@ -47,7 +57,7 @@ spec:
             - "host.docker.internal"
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/opsplatform-confluence-backend:v1
+          image: localhost:8070/opsplatform/confluence-backend:v26
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
@@ -77,6 +87,11 @@ spec:
                 secretKeyRef:
                   name: jwt-secret
                   key: JWT_SECRET
+            - name: PORTAL_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: portal-secret
+                  key: PORTAL_API_URL
             - name: SESSION_TIMEOUT
               value: "180"
             - name: COOKIE_SECURE
@@ -90,14 +105,14 @@ spec:
               cpu: "500m"
           livenessProbe:
             httpGet:
-              path: /api/health
-              port: 8080
+              path: /health
+              port: 8088
             initialDelaySeconds: 10
             periodSeconds: 30
           readinessProbe:
             httpGet:
-              path: /api/health
-              port: 8080
+              path: /health
+              port: 8088
             initialDelaySeconds: 5
             periodSeconds: 10
 ---
@@ -132,7 +147,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: localhost:8070/opsplatform/opsplatform-confluence-frontend:v1
+          image: localhost:8070/opsplatform/confluence-frontend:v40
           imagePullPolicy: Always
           ports:
             - containerPort: 80

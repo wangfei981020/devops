@@ -29,7 +29,7 @@
       </div>
 
       <!-- 页面内容 -->
-      <div class="card content-body" v-html="content.body?.storage?.value || '<p>暂无内容</p>'"></div>
+      <div class="card content-body" v-html="renderContent(content.body?.storage?.value || content.body?.view?.value)"></div>
 
       <!-- 子页面 -->
       <div class="card" v-if="children.length">
@@ -49,7 +49,7 @@
             <span class="comment-author">{{ c.version?.by?.displayName || '匿名' }}</span>
             <span class="comment-date">{{ c.version?.when || '' }}</span>
           </div>
-          <div class="comment-body" v-html="c.body?.storage?.value || ''"></div>
+          <div class="comment-body" v-html="renderContent(c.body?.storage?.value || c.body?.view?.value)"></div>
         </div>
       </div>
     </template>
@@ -75,6 +75,43 @@ function goBack() {
   } else {
     router.back()
   }
+}
+
+// 将 Confluence storage 格式转换为可渲染的 HTML
+function renderContent(html) {
+  if (!html) return '<p>暂无内容</p>'
+
+  let result = html
+
+  // task-list：<ac:task-list> → <ul class="task-list">
+  result = result.replace(/<ac:task-list>/gi, '<ul class="task-list">')
+  result = result.replace(/<\/ac:task-list>/gi, '</ul>')
+
+  // 单个 task：提取 status 和 body，生成 <li> with checkbox
+  result = result.replace(
+    /<ac:task>\s*<ac:task-id>[^<]*<\/ac:task-id>\s*<ac:task-status>(complete|incomplete)<\/ac:task-status>\s*<ac:task-body>([\s\S]*?)<\/ac:task-body>\s*<\/ac:task>/gi,
+    (_, status, body) => {
+      const checked = status.toLowerCase() === 'complete' ? ' checked' : ''
+      return `<li><input type="checkbox"${checked} disabled> ${body.trim()}</li>`
+    }
+  )
+
+  // 处理没有 task-id 的格式（部分版本）
+  result = result.replace(
+    /<ac:task>\s*<ac:task-status>(complete|incomplete)<\/ac:task-status>\s*<ac:task-body>([\s\S]*?)<\/ac:task-body>\s*<\/ac:task>/gi,
+    (_, status, body) => {
+      const checked = status.toLowerCase() === 'complete' ? ' checked' : ''
+      return `<li><input type="checkbox"${checked} disabled> ${body.trim()}</li>`
+    }
+  )
+
+  // 清理其他残留的 ac: 标签（保留内容）
+  result = result.replace(/<ac:[^>]+>/gi, '')
+  result = result.replace(/<\/ac:[^>]+>/gi, '')
+  result = result.replace(/<ri:[^>]+>/gi, '')
+  result = result.replace(/<\/ri:[^>]+>/gi, '')
+
+  return result
 }
 
 onMounted(async () => {
@@ -152,6 +189,12 @@ onMounted(async () => {
 .content-body :deep(pre) { background: var(--bg-tertiary); padding: 16px; border-radius: var(--radius); overflow-x: auto; }
 .content-body :deep(table) { width: 100%; border-collapse: collapse; }
 .content-body :deep(td), .content-body :deep(th) { border: 1px solid var(--border); padding: 8px 12px; }
+.content-body :deep(th) { background: var(--bg-tertiary); font-weight: 600; text-align: left; }
+.content-body :deep(tr:hover td) { background: var(--bg-hover); }
+/* task list */
+.content-body :deep(.task-list) { list-style: none; padding-left: 4px; margin: 4px 0; }
+.content-body :deep(.task-list li) { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 14px; }
+.content-body :deep(.task-list input[type="checkbox"]) { width: 15px; height: 15px; accent-color: var(--primary); flex-shrink: 0; cursor: default; }
 
 h3 {
   font-size: 14px;
