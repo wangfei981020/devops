@@ -123,6 +123,23 @@ func HandleGetJiraIssueTypes(w http.ResponseWriter, r *http.Request) {
 	respondSuccess(w, json.RawMessage(data))
 }
 
+// HandleGetJiraFields 获取 Jira 所有字段定义（用于自定义字段映射）
+func HandleGetJiraFields(w http.ResponseWriter, r *http.Request) {
+	client, err := getJiraClientFromRequest(r)
+	if err != nil {
+		respondBadRequest(w, err.Error())
+		return
+	}
+
+	data, err := client.GetRaw("/rest/api/2/field")
+	if err != nil {
+		respondError(w, http.StatusBadGateway, "获取字段定义失败: "+err.Error())
+		return
+	}
+
+	respondSuccess(w, json.RawMessage(data))
+}
+
 // HandleTestJiraConnection 测试 Jira 连接
 func HandleTestJiraConnection(w http.ResponseWriter, r *http.Request) {
 	var req struct {

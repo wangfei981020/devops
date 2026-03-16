@@ -62,7 +62,8 @@
             <div class="conn-url">{{ c.url }}</div>
             <div class="conn-meta">
               <span v-if="c.username">{{ c.username }}</span>
-              <span v-if="c.config?.fault_issuetype" class="meta-tag">故障类型: {{ c.config.fault_issuetype }}</span>
+              <span v-if="c.config?.fault_projects" class="meta-tag">故障: {{ c.config.fault_projects }}</span>
+              <span v-if="c.config?.change_projects" class="meta-tag">变更: {{ c.config.change_projects }}</span>
             </div>
             <div class="conn-actions">
               <button class="btn btn-xs" @click="testConn(c)">{{ c._testing ? '测试中...' : '测试' }}</button>
@@ -74,6 +75,39 @@
           <div class="conn-card empty" v-if="!jiraConns.length && canManageConns" @click="openAddConn('jira')">
             <span class="empty-icon">+</span>
             <span>添加 Jira 连接</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Grafana 连接 -->
+      <div class="conn-section">
+        <div class="section-header">
+          <div class="section-label">
+            <span class="type-icon grafana">G</span>
+            <h3>Grafana 连接</h3>
+          </div>
+          <button v-if="canManageConns" class="btn btn-sm btn-primary" @click="openAddConn('grafana')">+ 添加</button>
+        </div>
+        <div class="conn-grid">
+          <div class="conn-card" v-for="c in grafanaConns" :key="c.id" :class="{ default: c.is_default }">
+            <div class="conn-card-header">
+              <div class="conn-name">{{ c.name }}</div>
+              <span v-if="c.is_default" class="default-badge">默认</span>
+            </div>
+            <div class="conn-url">{{ c.url }}</div>
+            <div class="conn-meta">
+              <span class="meta-tag">API Token: ****</span>
+            </div>
+            <div class="conn-actions">
+              <button class="btn btn-xs" @click="testConn(c)">{{ c._testing ? '测试中...' : '测试' }}</button>
+              <button v-if="canManageConns" class="btn btn-xs" @click="openEditConn(c)">编辑</button>
+              <button v-if="canManageConns" class="btn btn-xs danger" @click="deleteConn(c)">删除</button>
+            </div>
+            <div v-if="c._testResult" :class="['test-msg', c._testResult.ok ? 'ok' : 'fail']">{{ c._testResult.message }}</div>
+          </div>
+          <div class="conn-card empty" v-if="!grafanaConns.length && canManageConns" @click="openAddConn('grafana')">
+            <span class="empty-icon">+</span>
+            <span>添加 Grafana 连接</span>
           </div>
         </div>
       </div>
@@ -153,22 +187,35 @@
         <h3>{{ editingConn.id ? '编辑连接' : '添加连接' }}</h3>
         <div class="field">
           <label>连接名称</label>
-          <input class="input" v-model="editingConn.name" :placeholder="editingConn.type === 'confluence' ? 'Confluence 生产' : 'Jira 生产'" />
+          <input class="input" v-model="editingConn.name" :placeholder="editingConn.type === 'grafana' ? 'Grafana 生产' : editingConn.type === 'confluence' ? 'Confluence 生产' : 'Jira 生产'" />
         </div>
-        <div class="form-grid">
+        <template v-if="editingConn.type === 'grafana'">
           <div class="field">
-            <label>{{ editingConn.type === 'confluence' ? 'Confluence' : 'Jira' }} URL</label>
-            <input class="input" v-model="editingConn.url" placeholder="http://localhost:8091" />
+            <label>Grafana URL</label>
+            <input class="input" v-model="editingConn.url" placeholder="http://grafana.example.com" />
           </div>
           <div class="field">
-            <label>用户名</label>
-            <input class="input" v-model="editingConn.username" placeholder="admin" />
+            <label>Service Account API Token</label>
+            <input class="input" type="password" v-model="editingConn.password" placeholder="glsa_xxxx（在 Grafana → Administration → Service Accounts 中创建）" />
           </div>
-        </div>
-        <div class="field">
-          <label>密码 / 令牌</label>
-          <input class="input" type="password" v-model="editingConn.password" placeholder="密码或 Personal Access Token" />
-        </div>
+          <p class="field-desc">Grafana 使用 OIDC 登录时，需要创建 Service Account 并生成 API Token。进入 Grafana → Administration → Service accounts → 创建 → 添加 Token。</p>
+        </template>
+        <template v-else>
+          <div class="form-grid">
+            <div class="field">
+              <label>{{ editingConn.type === 'confluence' ? 'Confluence' : 'Jira' }} URL</label>
+              <input class="input" v-model="editingConn.url" placeholder="http://localhost:8091" />
+            </div>
+            <div class="field">
+              <label>用户名</label>
+              <input class="input" v-model="editingConn.username" placeholder="admin" />
+            </div>
+          </div>
+          <div class="field">
+            <label>密码 / 令牌</label>
+            <input class="input" type="password" v-model="editingConn.password" placeholder="密码或 Personal Access Token" />
+          </div>
+        </template>
 
         <!-- Confluence 额外配置 -->
         <template v-if="editingConn.type === 'confluence'">
@@ -190,12 +237,20 @@
           <div class="divider"></div>
           <div class="form-grid">
             <div class="field">
-              <label>Jira 项目 Key</label>
-              <input class="input" v-model="editingConn.config.projects" placeholder="YX,OPS（逗号分隔）" />
+              <label>故障项目 Key</label>
+              <input class="input" v-model="editingConn.config.fault_projects" placeholder="FLT（逗号分隔）" />
             </div>
             <div class="field">
               <label>故障工单类型</label>
               <input class="input" v-model="editingConn.config.fault_issuetype" placeholder="故障" />
+            </div>
+            <div class="field">
+              <label>变更项目 Key</label>
+              <input class="input" v-model="editingConn.config.change_projects" placeholder="CHG（逗号分隔，留空则不拉取变更单）" />
+            </div>
+            <div class="field">
+              <label>变更工单类型</label>
+              <input class="input" v-model="editingConn.config.change_issuetype" placeholder="任务" />
             </div>
           </div>
         </template>
@@ -232,6 +287,7 @@ const savingConn = ref(false)
 const connections = ref([])
 const confluenceConns = computed(() => connections.value.filter(c => c.type === 'confluence'))
 const jiraConns = computed(() => connections.value.filter(c => c.type === 'jira'))
+const grafanaConns = computed(() => connections.value.filter(c => c.type === 'grafana'))
 
 // 连接编辑弹窗
 const showConnModal = ref(false)
@@ -281,7 +337,7 @@ function openAddConn(type) {
     url: '',
     username: '',
     password: '',
-    config: type === 'confluence' ? { space_key: '', root_page: '' } : { projects: '', fault_issuetype: '故障' },
+    config: type === 'confluence' ? { space_key: '', root_page: '' } : type === 'grafana' ? {} : { fault_projects: '', fault_issuetype: '故障', change_projects: '', change_issuetype: '' },
     is_default: connections.value.filter(c => c.type === type).length === 0, // 第一个自动设为默认
   }
   showConnModal.value = true
@@ -403,6 +459,7 @@ h3 { font-size: 16px; margin-bottom: 16px; }
 }
 .type-icon.confluence { background: linear-gradient(135deg, #0052CC, #2684FF); }
 .type-icon.jira { background: linear-gradient(135deg, #0065FF, #2684FF); }
+.type-icon.grafana { background: linear-gradient(135deg, #F46800, #FFB357); }
 
 .conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
 

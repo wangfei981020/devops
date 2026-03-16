@@ -81,6 +81,14 @@ func main() {
 	protected.HandleFunc("/jira/search", handlers.HandleJiraSearch).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/jira/issue", handlers.HandleGetJiraIssue).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/jira/issuetypes", handlers.HandleGetJiraIssueTypes).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/jira/fields", handlers.HandleGetJiraFields).Methods("GET", "OPTIONS")
+
+	// Grafana API
+	protected.HandleFunc("/grafana/folders", handlers.HandleGetGrafanaFolders).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/grafana/dashboards", handlers.HandleGetGrafanaDashboards).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/grafana/dashboard", handlers.HandleGetGrafanaDashboard).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/grafana/render", handlers.HandleGrafanaRenderPanel).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/grafana/test", handlers.HandleTestGrafanaConnection).Methods("POST", "OPTIONS")
 
 	// 标签 (Labels)
 	protected.HandleFunc("/confluence/content/{id}/labels", handlers.HandleGetContentLabels).Methods("GET", "OPTIONS")

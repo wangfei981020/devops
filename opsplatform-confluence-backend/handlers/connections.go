@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"opsplatform-confluence-backend/confluence"
 	"opsplatform-confluence-backend/database"
@@ -262,6 +263,24 @@ func HandleTestConnection(w http.ResponseWriter, r *http.Request) {
 		respondSuccess(w, map[string]interface{}{
 			"message": "连接成功",
 			"user":    userInfo["displayName"],
+		})
+	case "grafana":
+		baseURL := strings.TrimRight(req.URL, "/")
+		apiToken := req.Password
+		data, status, err := grafanaRequest(baseURL, apiToken, "/api/org")
+		if err != nil {
+			respondError(w, http.StatusBadGateway, "连接失败: "+err.Error())
+			return
+		}
+		if status != 200 {
+			respondError(w, http.StatusBadGateway, fmt.Sprintf("连接失败，Grafana 返回 %d", status))
+			return
+		}
+		var orgInfo map[string]interface{}
+		json.Unmarshal(data, &orgInfo)
+		respondSuccess(w, map[string]interface{}{
+			"message": "连接成功",
+			"user":    orgInfo["name"],
 		})
 	default:
 		respondBadRequest(w, "不支持的连接类型: "+req.Type)

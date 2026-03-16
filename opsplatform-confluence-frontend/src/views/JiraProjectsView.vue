@@ -97,8 +97,9 @@ function onConnChange(conn) {
   // 从连接的 config 中读取 projects 过滤
   if (conn && conn.config) {
     const cfg = typeof conn.config === 'string' ? JSON.parse(conn.config) : conn.config
-    const raw = cfg.projects || ''
-    allowedProjects.value = raw.split(',').map(s => s.trim()).filter(Boolean)
+    // 合并故障项目 + 变更项目（兼容旧字段 projects）
+    const all = [cfg.fault_projects, cfg.change_projects, cfg.projects].filter(Boolean).join(',')
+    allowedProjects.value = [...new Set(all.split(',').map(s => s.trim()).filter(Boolean))]
   } else {
     allowedProjects.value = []
   }

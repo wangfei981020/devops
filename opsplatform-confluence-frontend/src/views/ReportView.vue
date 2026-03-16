@@ -26,11 +26,18 @@
               <option v-for="p in projectList" :key="p" :value="p">{{ p }}</option>
             </select>
           </div>
-          <div class="date-field" style="max-width:180px" v-if="jiraConnections.length">
-            <label>Jira 项目</label>
+          <div class="date-field" style="max-width:180px" v-if="jiraFaultProjectList.length">
+            <label>Jira 故障项目</label>
             <select class="input" v-model="filterJiraProject">
               <option value="">不查询故障</option>
-              <option v-for="p in jiraProjectList" :key="p" :value="p">{{ p }}</option>
+              <option v-for="p in jiraFaultProjectList" :key="p" :value="p">{{ p }}</option>
+            </select>
+          </div>
+          <div class="date-field" style="max-width:180px" v-if="jiraChangeProjectList.length">
+            <label>Jira 变更项目</label>
+            <select class="input" v-model="filterJiraChangeProject">
+              <option value="">不查询变更单</option>
+              <option v-for="p in jiraChangeProjectList" :key="p" :value="p">{{ p }}</option>
             </select>
           </div>
           <div class="quick-dates" style="align-self:flex-end">
@@ -319,8 +326,10 @@ const confirmDialog = inject('confirm')
 const SPACE_KEY = ref('')
 const ROOT_PAGE_TITLE = ref('发布说明')
 const projectList = ref([])
-const jiraProjectList = ref([])
+const jiraFaultProjectList = ref([])
+const jiraChangeProjectList = ref([])
 const jiraFaultType = ref('故障')
+const jiraChangeType = ref('')
 
 // 多连接支持
 const confluenceConnections = ref([])
@@ -351,11 +360,16 @@ onMounted(async () => {
     if (defJira) {
       selectedJiraConn.value = String(defJira.id)
       const cfg = typeof defJira.config === 'string' ? JSON.parse(defJira.config || '{}') : (defJira.config || {})
-      // Jira 项目列表从连接配置中获取
-      const jiraProjects = (cfg.projects || '').split(',').map(s => s.trim()).filter(Boolean)
-      jiraProjectList.value = jiraProjects
-      if (jiraProjects.length) filterJiraProject.value = jiraProjects[0]
+      // 故障项目列表（兼容旧字段 projects）
+      const faultProjects = (cfg.fault_projects || cfg.projects || '').split(',').map(s => s.trim()).filter(Boolean)
+      jiraFaultProjectList.value = faultProjects
+      if (faultProjects.length) filterJiraProject.value = faultProjects[0]
+      // 变更项目列表
+      const changeProjects = (cfg.change_projects || '').split(',').map(s => s.trim()).filter(Boolean)
+      jiraChangeProjectList.value = changeProjects
+      if (changeProjects.length) filterJiraChangeProject.value = changeProjects[0]
       if (cfg.fault_issuetype) jiraFaultType.value = cfg.fault_issuetype
+      if (cfg.change_issuetype) jiraChangeType.value = cfg.change_issuetype
     }
 
     // 公共配置
@@ -410,6 +424,7 @@ function applyQuickDate(q) {
 // Data
 const filterProject = ref('')
 const filterJiraProject = ref('')
+const filterJiraChangeProject = ref('')
 
 function onConfluenceConnChange() {
   const conn = confluenceConnections.value.find(c => String(c.id) === selectedConfluenceConn.value)
@@ -649,6 +664,12 @@ async function fetchAndParse() {
       await fetchJiraFaults()
     }
 
+    // Step 6: 从 Jira 获取变更单
+    if (filterJiraChangeProject.value && jiraChangeType.value) {
+      fetchStatus.value = '从 Jira 获取变更单...'
+      await fetchJiraChanges()
+    }
+
     fetchDone.value = true
   } catch (e) {
     console.error('Fetch failed:', e)
@@ -727,6 +748,97 @@ async function fetchJiraFaults() {
   } catch (e) {
     console.error('Jira fault fetch failed:', e)
     toast('Jira 故障查询失败: ' + (e.response?.data?.error || e.message), 'error')
+  }
+}
+
+// 从 Jira 获取变更单并合并到 changeRows
+async function fetchJiraChanges() {
+  try {
+    const project = filterJiraChangeProject.value
+    const issueType = jiraChangeType.value
+
+    // Step 1: 获取字段定义，建立 description/name → customfield_id 映射
+    let fieldMap = {}
+    try {
+      const fieldsRes = await api.get('/api/jira/fields')
+      const allFields = fieldsRes.data.data || []
+      for (const f of allFields) {
+        // 用 schema.customId 或 description 或 name 做 key
+        if (f.id?.startsWith('customfield_')) {
+          const desc = (f.description || '').toLowerCase().trim()
+          const name = (f.name || '').toLowerCase().trim()
+          fieldMap[desc] = f.id
+          fieldMap[name] = f.id
+        }
+      }
+    } catch (e) {
+      console.warn('获取 Jira 字段定义失败，使用默认映射:', e.message)
+    }
+
+    // 自定义字段映射：通过 description/name 查找 customfield ID
+    const cfProject = fieldMap['业务运维项目'] || fieldMap['business_project'] || ''
+    const cfChangeType = fieldMap['变更类型'] || fieldMap['change_type'] || ''
+    const cfChangePurpose = fieldMap['变更目的'] || fieldMap['change_purpose'] || ''
+    const cfChangeMethod = fieldMap['变更方式'] || fieldMap['change_method'] || ''
+
+    // Step 2: 查询变更单
+    const jql = `project = "${project}" AND issuetype = "${issueType}" AND created >= "${startDate.value}" AND created <= "${endDate.value} 23:59" ORDER BY created DESC`
+    const res = await api.get(`/api/jira/search?jql=${encodeURIComponent(jql)}&maxResults=200`)
+    const issues = res.data.data?.issues || []
+
+    for (const issue of issues) {
+      const f = issue.fields || {}
+      const statusName = f.status?.name || ''
+
+      // 状态映射
+      let status = '成功'
+      const statusLower = statusName.toLowerCase()
+      if (['进行中', 'in progress', '处理中'].some(s => statusLower.includes(s.toLowerCase()))) status = '进行中'
+      else if (['待处理', 'to do', 'open', '待执行'].some(s => statusLower.includes(s.toLowerCase()))) status = '待执行'
+      else if (['变更运维审批', '变更审批'].some(s => statusLower.includes(s.toLowerCase()))) status = '待执行'
+      else if (['已取消', 'cancelled'].some(s => statusLower.includes(s.toLowerCase()))) status = '失败'
+
+      // 提取自定义字段值
+      const getFieldValue = (fieldId) => {
+        if (!fieldId || !f[fieldId]) return ''
+        const val = f[fieldId]
+        if (typeof val === 'string') return val
+        if (val.value) return val.value  // select 类型
+        if (val.name) return val.name
+        return String(val)
+      }
+
+      // 业务运维项目
+      const bizProject = getFieldValue(cfProject) || f.project?.key || project
+
+      // 变更类型
+      const changeType = getFieldValue(cfChangeType) || f.issuetype?.name || issueType
+
+      // 变更目的
+      const changePurpose = getFieldValue(cfChangePurpose)
+        || (f.description ? String(f.description).replace(/<[^>]*>/g, '').substring(0, 100) : '')
+
+      // 变更方式
+      const changeMethod = getFieldValue(cfChangeMethod) || '-'
+
+      // 按项目筛选过滤
+      if (filterProject.value && bizProject && !bizProject.toLowerCase().includes(filterProject.value.toLowerCase())) {
+        continue
+      }
+
+      changeRows.value.push({
+        project: bizProject,
+        type: changeType,
+        summary: f.summary || '',
+        purpose: changePurpose,
+        ticket: issue.key || '',
+        method: changeMethod,
+        status,
+      })
+    }
+  } catch (e) {
+    console.error('Jira change fetch failed:', e)
+    toast('Jira 变更单查询失败: ' + (e.response?.data?.error || e.message), 'error')
   }
 }
 
