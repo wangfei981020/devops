@@ -167,12 +167,33 @@ async function updateShift(employeeId, dateStr, shiftType) {
 
 function openShiftPicker(emp, dateStr, event) {
   const rect = event.target.getBoundingClientRect()
+  const pickerWidth = 320
+  const pickerHeight = 360
+  const margin = 8
+
+  let x = rect.left
+  let y = rect.bottom + 4
+
+  // 右边界检测：弹窗超出视口右侧时向左偏移
+  if (x + pickerWidth > window.innerWidth - margin) {
+    x = window.innerWidth - pickerWidth - margin
+  }
+  // 左边界保护
+  if (x < margin) x = margin
+
+  // 下边界检测：弹窗超出视口底部时改为向上弹出
+  if (y + pickerHeight > window.innerHeight - margin) {
+    y = rect.top - pickerHeight - 4
+  }
+  // 上边界保护
+  if (y < margin) y = margin
+
   shiftPickerTarget.value = {
     empId: emp.id,
     dateStr: dateStr,
     currentShift: emp.shifts?.[dateStr] || '',
-    x: rect.left,
-    y: rect.bottom + 4
+    x,
+    y
   }
   showShiftPicker.value = true
 }
