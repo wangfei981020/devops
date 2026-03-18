@@ -31,6 +31,10 @@ func main() {
 	// 迁移旧配置到连接表
 	handlers.MigrateSettingsToConnections()
 
+	// 启动截图定时任务
+	handlers.InitScreenshotCron()
+	defer handlers.StopScreenshotCron()
+
 	r := mux.NewRouter()
 
 	// 全局中间件
@@ -45,6 +49,8 @@ func main() {
 	api.HandleFunc("/logout", handlers.HandleLogout).Methods("POST", "OPTIONS")
 	// Portal 免登认证（运维平台 iframe 接入）
 	api.HandleFunc("/portal-auth", handlers.HandlePortalAuth).Methods("POST", "OPTIONS")
+	// 截图图片公开访问（飞书消息中的图片链接）
+	api.HandleFunc("/screenshot-images/{key}", handlers.HandleGetScreenshotImage).Methods("GET")
 
 	// ===== 需要认证的路由 =====
 	protected := api.PathPrefix("").Subrouter()
@@ -89,6 +95,19 @@ func main() {
 	protected.HandleFunc("/grafana/dashboard", handlers.HandleGetGrafanaDashboard).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/grafana/render", handlers.HandleGrafanaRenderPanel).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/grafana/test", handlers.HandleTestGrafanaConnection).Methods("POST", "OPTIONS")
+
+	// 截图任务
+	protected.HandleFunc("/screenshot-tasks", handlers.HandleListScreenshotTasks).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/screenshot-tasks", handlers.HandleCreateScreenshotTask).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/screenshot-tasks/{id}", handlers.HandleUpdateScreenshotTask).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/screenshot-tasks/{id}", handlers.HandleDeleteScreenshotTask).Methods("DELETE", "OPTIONS")
+	protected.HandleFunc("/screenshot-tasks/{id}/run", handlers.HandleRunScreenshotTask).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/screenshot-tasks/{id}/preview", handlers.HandlePreviewScreenshotTask).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/screenshot-tasks/{id}/test-send", handlers.HandleTestSendScreenshotTask).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/screenshot-tasks/{id}/toggle", handlers.HandleToggleScreenshotTask).Methods("PUT", "OPTIONS")
+
+	// Lark 测试
+	protected.HandleFunc("/lark/test", handlers.HandleTestLarkConnection).Methods("POST", "OPTIONS")
 
 	// 标签 (Labels)
 	protected.HandleFunc("/confluence/content/{id}/labels", handlers.HandleGetContentLabels).Methods("GET", "OPTIONS")

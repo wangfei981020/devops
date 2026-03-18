@@ -282,6 +282,14 @@ func HandleTestConnection(w http.ResponseWriter, r *http.Request) {
 			"message": "连接成功",
 			"user":    orgInfo["name"],
 		})
+	case "lark":
+		if err := TestLarkWebhook(req.URL); err != nil {
+			respondError(w, http.StatusBadGateway, "连接失败: "+err.Error())
+			return
+		}
+		respondSuccess(w, map[string]interface{}{
+			"message": "连接成功，测试消息已发送到飞书群",
+		})
 	default:
 		respondBadRequest(w, "不支持的连接类型: "+req.Type)
 	}

@@ -1,0 +1,27 @@
+# Grafana Image Renderer Helm values
+replicas: 1
+
+image:
+  repository: grafana/grafana-image-renderer
+  tag: latest
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+  port: 8081
+
+env:
+  RENDERING_MODE: clustered
+  RENDERING_CLUSTERING_MAX_CONCURRENCY: "3"
+  RENDERING_CLUSTERING_TIMEOUT: "120"
+  ENABLE_METRICS: "true"
+  TZ: Asia/Shanghai
+  BROWSER_TZ: Asia/Shanghai
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi

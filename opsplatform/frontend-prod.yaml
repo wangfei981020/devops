@@ -33,7 +33,7 @@ spec:
         - name: regcred
       containers:
         - name: frontend
-          image: marks26/opsplatform-frontend-vue:v274
+          image: marks26/opsplatform-frontend-vue:v515
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

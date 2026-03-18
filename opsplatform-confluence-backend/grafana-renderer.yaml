@@ -1,0 +1,67 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana-renderer
+  namespace: opsplatform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana-renderer
+  template:
+    metadata:
+      labels:
+        app: grafana-renderer
+    spec:
+      containers:
+        - name: renderer
+          image: grafana/grafana-image-renderer:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+          env:
+            - name: ENABLE_METRICS
+              value: "true"
+            - name: RENDERING_MODE
+              value: clustered
+            - name: RENDERING_CLUSTERING_MAX_CONCURRENCY
+              value: "3"
+            - name: RENDERING_CLUSTERING_TIMEOUT
+              value: "120"
+            - name: TZ
+              value: "Asia/Shanghai"
+            - name: BROWSER_TZ
+              value: "Asia/Shanghai"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-renderer
+  namespace: opsplatform
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8081
+      targetPort: 8081
+  selector:
+    app: grafana-renderer

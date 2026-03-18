@@ -61,7 +61,7 @@ func HandleGetPublicSettings(w http.ResponseWriter, r *http.Request) {
 func HandleGetSettings(w http.ResponseWriter, r *http.Request) {
 	settings := make(map[string]string)
 
-	rows, err := database.DB.Query(`SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE 'confluence_%' OR setting_key LIKE 'jira_%'`)
+	rows, err := database.DB.Query(`SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE 'confluence_%' OR setting_key LIKE 'jira_%' OR setting_key LIKE 'lark_%'`)
 	if err != nil {
 		respondInternalError(w, "获取设置失败")
 		return
@@ -71,7 +71,7 @@ func HandleGetSettings(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var k, v string
 		if err := rows.Scan(&k, &v); err == nil {
-			if k == "confluence_password" || k == "jira_password" {
+			if k == "confluence_password" || k == "jira_password" || k == "lark_app_secret" {
 				if v != "" {
 					settings[k] = "********"
 				} else {
@@ -95,7 +95,7 @@ func HandleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for key, value := range settings {
-		if (key == "confluence_password" || key == "jira_password") && value == "********" {
+		if (key == "confluence_password" || key == "jira_password" || key == "lark_app_secret") && value == "********" {
 			continue
 		}
 		database.DB.Exec(`

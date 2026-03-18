@@ -134,6 +134,30 @@ func createTables() error {
 	}
 
 	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS grafana_screenshot_tasks (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			name VARCHAR(128) NOT NULL DEFAULT '',
+			grafana_conn_id INT NOT NULL DEFAULT 0,
+			dashboards JSON COMMENT '[{"uid":"xxx","title":"xxx","panels":[1,2]}]',
+			variables JSON COMMENT '{"project":"xxx"}',
+			lark_conn_ids JSON COMMENT '[1,2,3]',
+			cron_expr VARCHAR(64) NOT NULL DEFAULT '0 * * * *',
+			time_range VARCHAR(32) NOT NULL DEFAULT '1h',
+			width INT NOT NULL DEFAULT 1000,
+			height INT NOT NULL DEFAULT 500,
+			theme VARCHAR(16) NOT NULL DEFAULT 'light',
+			enabled TINYINT(1) DEFAULT 1,
+			last_run_at DATETIME DEFAULT NULL,
+			last_status VARCHAR(32) DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS audit_logs (
 			id VARCHAR(64) PRIMARY KEY,
 			user_id VARCHAR(64) DEFAULT '',

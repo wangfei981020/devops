@@ -57,7 +57,7 @@ spec:
             - "host.docker.internal"
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/confluence-backend:v26
+          image: localhost:8070/opsplatform/confluence-backend:v38
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
@@ -92,6 +92,8 @@ spec:
                 secretKeyRef:
                   name: portal-secret
                   key: PORTAL_API_URL
+            - name: TZ
+              value: "Asia/Shanghai"
             - name: SESSION_TIMEOUT
               value: "180"
             - name: COOKIE_SECURE
@@ -147,7 +149,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: localhost:8070/opsplatform/confluence-frontend:v40
+          image: localhost:8070/opsplatform/confluence-frontend:v56
           imagePullPolicy: Always
           ports:
             - containerPort: 80
