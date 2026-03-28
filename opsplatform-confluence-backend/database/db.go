@@ -146,6 +146,7 @@ func createTables() error {
 			width INT NOT NULL DEFAULT 1000,
 			height INT NOT NULL DEFAULT 500,
 			theme VARCHAR(16) NOT NULL DEFAULT 'light',
+			sort_order INT NOT NULL DEFAULT 0,
 			enabled TINYINT(1) DEFAULT 1,
 			last_run_at DATETIME DEFAULT NULL,
 			last_status VARCHAR(32) DEFAULT '',
@@ -172,7 +173,14 @@ func createTables() error {
 			INDEX idx_created (created_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 迁移: 给 grafana_screenshot_tasks 添加 sort_order 字段（兼容已有数据库）
+	DB.Exec(`ALTER TABLE grafana_screenshot_tasks ADD COLUMN sort_order INT NOT NULL DEFAULT 0 AFTER theme`)
+
+	return nil
 }
 
 func getEnv(key, defaultValue string) string {

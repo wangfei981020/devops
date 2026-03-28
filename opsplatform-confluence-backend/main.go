@@ -103,6 +103,8 @@ func main() {
 	protected.HandleFunc("/screenshot-tasks/{id}", handlers.HandleDeleteScreenshotTask).Methods("DELETE", "OPTIONS")
 	protected.HandleFunc("/screenshot-tasks/{id}/run", handlers.HandleRunScreenshotTask).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/screenshot-tasks/{id}/preview", handlers.HandlePreviewScreenshotTask).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/screenshot-tasks/{id}/panels", handlers.HandleGetDashboardPanels).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/screenshot-tasks/{id}/render-panel", handlers.HandleRenderSinglePanel).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/screenshot-tasks/{id}/test-send", handlers.HandleTestSendScreenshotTask).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/screenshot-tasks/{id}/toggle", handlers.HandleToggleScreenshotTask).Methods("PUT", "OPTIONS")
 

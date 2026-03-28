@@ -89,6 +89,17 @@
           <input type="text" class="input" v-model="reportTitle" placeholder="自动生成，可修改" />
         </div>
       </div>
+      <div class="meta-row" v-if="screenshotTasks.length" style="margin-top:12px">
+        <div class="meta-field">
+          <label>Grafana 监控截图（导出到 Word）</label>
+          <div class="screenshot-task-list">
+            <label v-for="t in screenshotTasks" :key="t.id" class="screenshot-task-check">
+              <input type="checkbox" :value="t.id" v-model="selectedTaskIds" />
+              <span>{{ t.name }}</span>
+            </label>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 统计摘要 -->
@@ -246,9 +257,9 @@
     <div class="action-bar">
       <button class="btn" @click="clearAll">清空全部</button>
       <div class="action-right">
-        <button class="btn" @click="showPreview = true">预览</button>
+        <button class="btn" @click="openPreview">预览</button>
         <button v-if="canExport" class="btn btn-primary" @click="exportWord" :disabled="exporting">
-          {{ exporting ? '导出中...' : '导出 Word' }}
+          {{ exporting ? (screenshotLoading ? `截图中 ${screenshotProgress.total ? Math.round(screenshotProgress.current / screenshotProgress.total * 100) : 0}% (${screenshotProgress.current}/${screenshotProgress.total})` : '导出中...') : '导出 Word' }}
         </button>
       </div>
     </div>
@@ -304,6 +315,41 @@
             </tbody>
           </table>
           <p v-else class="no-data">无变更记录</p>
+
+          <!-- Grafana 监控截图 -->
+          <template v-if="selectedTaskIds.length">
+            <h3 class="section-title">三、项目巡检</h3>
+            <div v-if="previewScreenshotLoading" class="screenshot-progress-card">
+              <div class="progress-header">
+                <span class="progress-percent">{{ screenshotProgress.total ? Math.round(screenshotProgress.current / screenshotProgress.total * 100) : 0 }}%</span>
+                <span class="progress-count">{{ screenshotProgress.current }}/{{ screenshotProgress.total }}</span>
+              </div>
+              <div class="progress-bar-wrap">
+                <div class="progress-bar-fill" :style="{ width: screenshotProgress.total ? (screenshotProgress.current / screenshotProgress.total * 100) + '%' : '0%' }"></div>
+              </div>
+              <div class="progress-detail">
+                <span v-if="screenshotProgress.taskName">{{ screenshotProgress.taskName }}</span>
+                <span v-if="screenshotProgress.panelName" style="color:var(--text-muted)"> · {{ screenshotProgress.panelName }}</span>
+              </div>
+              <div class="progress-time">
+                <span>已用时: {{ screenshotProgress.elapsed }}</span>
+                <span>预计剩余: {{ screenshotProgress.eta }}</span>
+              </div>
+            </div>
+            <template v-else-if="previewScreenshots.length">
+              <div v-for="(task, ti) in previewScreenshots" :key="ti" style="margin-bottom:20px">
+                <h4 style="margin:12px 0 8px;font-size:14px">{{ task.taskName }}</h4>
+                <p v-if="task.error" style="color:var(--danger)">截图失败: {{ task.error }}</p>
+                <template v-for="(dash, di) in task.dashboards" :key="di">
+                  <p v-if="dash.error" style="color:var(--danger)">{{ dash.title || dash.uid }}: {{ dash.error }}</p>
+                  <div v-for="(panel, pi) in (dash.panels || [])" :key="pi" style="margin:8px 0">
+                    <p style="font-size:12px;color:var(--text-muted);margin-bottom:4px">{{ dash.title }}{{ panel.title && panel.title !== dash.title ? ' - ' + panel.title : '' }}</p>
+                    <img v-if="panel.base64" :src="panel.base64" style="max-width:100%;border-radius:6px;border:1px solid rgba(255,255,255,0.08)" />
+                  </div>
+                </template>
+              </div>
+            </template>
+          </template>
         </div>
       </div>
     </div>
@@ -311,8 +357,8 @@
 </template>
 
 <script setup>
-import { ref, computed, inject, onMounted } from 'vue'
-import { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, WidthType, AlignmentType, BorderStyle } from 'docx'
+import { ref, computed, inject, onMounted, watch } from 'vue'
+import { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, ImageRun, WidthType, AlignmentType, BorderStyle } from 'docx'
 import { saveAs } from 'file-saver'
 import api from '@/api'
 import { useAuthStore } from '@/stores/auth'
@@ -385,6 +431,8 @@ onMounted(async () => {
       const rootPage = (config.confluence_root_page || '').trim()
       if (rootPage) ROOT_PAGE_TITLE.value = rootPage.split(',')[0].trim()
     }
+    // 加载截图任务列表
+    loadScreenshotTasks()
   } catch (e) { /* ignore */ }
 })
 
@@ -439,6 +487,241 @@ const faultRows = ref([])
 const reportTitle = ref('')
 const showPreview = ref(false)
 const exporting = ref(false)
+
+// 截图任务
+const screenshotTasks = ref([])
+const selectedTaskIds = ref([])
+const screenshotLoading = ref(false)
+const previewScreenshots = ref([])
+const previewScreenshotLoading = ref(false)
+const screenshotProgress = ref({ current: 0, total: 0, taskName: '', panelName: '', startTime: 0, elapsed: '', eta: '' })
+
+// 更新耗时和预估
+function updateProgressTime() {
+  const p = screenshotProgress.value
+  if (!p.startTime || p.total === 0) return
+  const elapsed = (Date.now() - p.startTime) / 1000
+  const mins = Math.floor(elapsed / 60)
+  const secs = Math.floor(elapsed % 60)
+  p.elapsed = mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`
+  if (p.current > 0) {
+    const avgPerItem = elapsed / p.current
+    const remaining = (p.total - p.current) * avgPerItem
+    const remMins = Math.floor(remaining / 60)
+    const remSecs = Math.floor(remaining % 60)
+    p.eta = remMins > 0 ? `约${remMins}分${remSecs}秒` : `约${remSecs}秒`
+  } else {
+    p.eta = '计算中...'
+  }
+}
+let progressTimer = null
+
+async function openPreview() {
+  showPreview.value = true
+  if (selectedTaskIds.value.length) {
+    previewScreenshotLoading.value = true
+    previewScreenshots.value = []
+    screenshotProgress.value = { current: 0, total: selectedTaskIds.value.length, taskName: '' }
+    try {
+      previewScreenshots.value = await captureSelectedTaskScreenshots()
+    } finally {
+      previewScreenshotLoading.value = false
+    }
+  }
+}
+
+async function loadScreenshotTasks() {
+  try {
+    const res = await api.get('/api/screenshot-tasks')
+    screenshotTasks.value = (res.data.data || []).filter(t => t.enabled)
+  } catch { screenshotTasks.value = [] }
+}
+
+// 项目筛选变化时，自动选中匹配的截图任务（如 G01 → G01 PROD）
+watch(filterProject, (proj) => {
+  if (!proj || !screenshotTasks.value.length) {
+    selectedTaskIds.value = []
+    return
+  }
+  const matched = screenshotTasks.value.filter(t =>
+    t.name.toUpperCase().startsWith(proj.toUpperCase())
+  )
+  selectedTaskIds.value = matched.map(t => t.id)
+})
+
+// 将多个面板图片按 gridPos 拼成一张完整 Dashboard 图
+async function stitchPanelsToImage(panels, panelInfos, dashWidth = 1920) {
+  const gridUnitH = 30 // Grafana 每个网格单元约30px高
+  // 计算画布总高度
+  let maxBottom = 0
+  for (const info of panelInfos) {
+    const bottom = (info.y + info.h) * gridUnitH
+    if (bottom > maxBottom) maxBottom = bottom
+  }
+  if (maxBottom === 0) return null
+
+  const canvas = document.createElement('canvas')
+  canvas.width = dashWidth
+  canvas.height = maxBottom
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#181b1f' // Grafana dark theme 背景色
+  ctx.fillRect(0, 0, dashWidth, maxBottom)
+
+  // 逐面板绘制
+  for (let i = 0; i < panels.length; i++) {
+    const panel = panels[i]
+    const info = panelInfos[i]
+    if (!panel || !panel.base64 || !info) continue
+    try {
+      const img = await loadImage(panel.base64)
+      const x = Math.round(dashWidth * info.x / 24)
+      const y = info.y * gridUnitH
+      const w = Math.round(dashWidth * info.w / 24)
+      const h = info.h * gridUnitH
+      ctx.drawImage(img, x, y, w, h)
+    } catch { /* skip failed panels */ }
+  }
+  return canvas.toDataURL('image/png')
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = reject
+    img.src = src
+  })
+}
+
+function isLongRange() {
+  if (!startDate.value || !endDate.value) return false
+  const diff = (new Date(endDate.value) - new Date(startDate.value)) / (1000 * 86400)
+  return diff > 8
+}
+
+async function captureSelectedTaskScreenshots() {
+  if (!selectedTaskIds.value.length) return []
+
+  // 启动计时器
+  screenshotProgress.value = { current: 0, total: 0, taskName: '', panelName: '', startTime: Date.now(), elapsed: '0秒', eta: '计算中...' }
+  progressTimer = setInterval(updateProgressTime, 1000)
+
+  try {
+    return await captureByFullPage()
+  } finally {
+    clearInterval(progressTimer)
+    progressTimer = null
+  }
+}
+
+// 短时间范围：整页截图
+async function captureByFullPage() {
+  const total = selectedTaskIds.value.length
+  screenshotProgress.value.total = total
+  const results = []
+  for (let i = 0; i < total; i++) {
+    const taskId = selectedTaskIds.value[i]
+    const task = screenshotTasks.value.find(t => t.id === taskId)
+    const taskName = task?.name || `任务${taskId}`
+    screenshotProgress.value.current = i
+    screenshotProgress.value.taskName = taskName
+    screenshotProgress.value.panelName = ''
+    try {
+      const params = {}
+      if (startDate.value) params.from = startDate.value
+      if (endDate.value) params.to = endDate.value
+      const res = await api.get(`/api/screenshot-tasks/${taskId}/preview`, { params, timeout: 600000 })
+      results.push({ taskName, dashboards: res.data.data || [] })
+    } catch (e) {
+      results.push({ taskName, dashboards: [], error: e.message })
+    }
+    screenshotProgress.value.current = i + 1
+  }
+  return results
+}
+
+// 长时间范围：逐面板截图
+async function captureByPanels() {
+  const results = []
+  // 先获取所有任务的面板列表，计算总面板数
+  const taskPanelsList = []
+  let totalPanels = 0
+  for (const taskId of selectedTaskIds.value) {
+    const task = screenshotTasks.value.find(t => t.id === taskId)
+    const taskName = task?.name || `任务${taskId}`
+    try {
+      const res = await api.get(`/api/screenshot-tasks/${taskId}/panels`)
+      const dashboards = res.data.data || []
+      let panelCount = 0
+      for (const d of dashboards) panelCount += (d.panels || []).length
+      taskPanelsList.push({ taskId, taskName, dashboards, panelCount })
+      totalPanels += panelCount
+    } catch (e) {
+      taskPanelsList.push({ taskId, taskName, dashboards: [], panelCount: 0, error: e.message })
+    }
+  }
+
+  screenshotProgress.value.total = totalPanels
+  screenshotProgress.value.current = 0
+
+  // 使用 Asia/Shanghai 时区计算时间戳（和后端一致）
+  const fromMs = new Date(startDate.value + 'T00:00:00+08:00').getTime()
+  const toMs = new Date(endDate.value + 'T23:59:59+08:00').getTime()
+
+  for (const tp of taskPanelsList) {
+    screenshotProgress.value.taskName = tp.taskName
+    if (tp.error) {
+      results.push({ taskName: tp.taskName, dashboards: [], error: tp.error })
+      continue
+    }
+
+    const CONCURRENCY = 5
+    const taskDashboards = []
+    for (const dash of tp.dashboards) {
+      const panels = dash.panels || []
+      const dashResult = { uid: dash.uid, title: dash.title, panels: new Array(panels.length).fill(null) }
+
+      for (let i = 0; i < panels.length; i += CONCURRENCY) {
+        const batch = panels.slice(i, i + CONCURRENCY)
+        screenshotProgress.value.panelName = batch.map(p => p.title || `Panel ${p.id}`).join(', ')
+
+        const renderPanel = async (panel, idx) => {
+          const pw = Math.round(1920 * panel.w / 24)
+          const ph = Math.max(panel.h * 30, 200)
+          const params = { panelId: panel.id, dashUid: dash.uid, from: fromMs, to: toMs, width: pw, height: ph }
+          for (let retry = 0; retry < 3; retry++) {
+            try {
+              const res = await api.get(`/api/screenshot-tasks/${tp.taskId}/render-panel`, { params, timeout: 600000 })
+              dashResult.panels[idx] = { panel_id: panel.id, title: panel.title, base64: res.data.data?.base64 || '' }
+              return
+            } catch (e) {
+              if (e.response?.status === 429 && retry < 2) {
+                await new Promise(r => setTimeout(r, 3000 * (retry + 1)))
+                continue
+              }
+              dashResult.panels[idx] = { panel_id: panel.id, title: panel.title, base64: '', error: e.message }
+            }
+          }
+        }
+        const promises = batch.map((panel, bi) => renderPanel(panel, i + bi))
+        await Promise.all(promises)
+        screenshotProgress.value.current += batch.length
+      }
+      // 过滤掉可能的 null
+      dashResult.panels = dashResult.panels.filter(Boolean)
+
+      // 拼成一张完整 Dashboard 布局图
+      const panelInfos = panels.map(p => ({ x: p.x, y: p.y, w: p.w, h: p.h }))
+      const stitchedBase64 = await stitchPanelsToImage(dashResult.panels, panelInfos)
+      if (stitchedBase64) {
+        dashResult.panels = [{ panel_id: 0, title: dash.title, base64: stitchedBase64 }]
+      }
+      taskDashboards.push(dashResult)
+    }
+    results.push({ taskName: tp.taskName, dashboards: taskDashboards })
+  }
+  return results
+}
 const fetching = ref(false)
 const fetchDone = ref(false)
 const fetchStatus = ref('')
@@ -1233,6 +1516,43 @@ async function exportWord() {
       : [new TableRow({ children: [cell(''), cell(''), cell(''), cell(''), cell(''), cell(''), cell('')] })]
     children.push(new Table({ width: { size: 9800, type: WidthType.DXA }, rows: [cH, ...cR] }))
 
+    // 监控截图
+    if (selectedTaskIds.value.length) {
+      children.push(new Paragraph({ spacing: { before: 400, after: 150 }, children: [new TextRun({ text: '三、项目巡检', size: 26, bold: true, font: '微软雅黑' })] }))
+      screenshotLoading.value = true
+      try {
+        const screenshotResults = await captureSelectedTaskScreenshots()
+        for (const taskResult of screenshotResults) {
+          children.push(new Paragraph({ spacing: { before: 200, after: 100 }, children: [new TextRun({ text: taskResult.taskName, size: 22, bold: true, font: '微软雅黑' })] }))
+          if (taskResult.error) {
+            children.push(new Paragraph({ children: [new TextRun({ text: `截图失败: ${taskResult.error}`, size: 20, font: '微软雅黑', color: 'FF0000' })] }))
+            continue
+          }
+          for (const dash of taskResult.dashboards) {
+            if (dash.error) {
+              children.push(new Paragraph({ children: [new TextRun({ text: `${dash.title || dash.uid}: ${dash.error}`, size: 20, font: '微软雅黑', color: 'FF0000' })] }))
+              continue
+            }
+            for (const panel of (dash.panels || [])) {
+              if (!panel.base64) continue
+              try {
+                const base64Data = panel.base64.replace(/^data:image\/\w+;base64,/, '')
+                const binaryStr = atob(base64Data)
+                const bytes = new Uint8Array(binaryStr.length)
+                for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i)
+                children.push(new Paragraph({ spacing: { before: 100, after: 50 }, children: [new TextRun({ text: dash.title + (panel.title && panel.title !== dash.title ? ` - ${panel.title}` : ''), size: 20, font: '微软雅黑', color: '666666' })] }))
+                children.push(new Paragraph({ children: [new ImageRun({ data: bytes, transformation: { width: 680, height: 400 }, type: 'png' })] }))
+              } catch (imgErr) {
+                children.push(new Paragraph({ children: [new TextRun({ text: `图片处理失败: ${imgErr.message}`, size: 20, font: '微软雅黑', color: 'FF0000' })] }))
+              }
+            }
+          }
+        }
+      } finally {
+        screenshotLoading.value = false
+      }
+    }
+
     const doc = new Document({ sections: [{ properties: {}, children }] })
     const blob = await Packer.toBlob(doc)
     saveAs(blob, `${title}.docx`)
@@ -1277,6 +1597,18 @@ async function exportWord() {
 .meta-row { display: flex; gap: 16px; }
 .meta-field { flex: 1; }
 .meta-field label { display: block; font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
+.screenshot-task-list { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+.screenshot-task-check { display: flex; align-items: center; gap: 5px; font-size: 13px; color: var(--text-primary); cursor: pointer; padding: 4px 10px; border-radius: 6px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); }
+.screenshot-task-check:hover { background: rgba(76,154,255,0.08); }
+.screenshot-task-check input[type="checkbox"] { accent-color: var(--primary); }
+.screenshot-progress-card { margin: 20px 0; padding: 16px 20px; background: rgba(59,130,246,0.06); border: 1px solid rgba(59,130,246,0.15); border-radius: 8px; }
+.progress-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.progress-percent { font-size: 24px; font-weight: 700; color: var(--primary-light); }
+.progress-count { font-size: 13px; color: var(--text-muted); }
+.progress-bar-wrap { width: 100%; height: 8px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
+.progress-bar-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #60a5fa); border-radius: 4px; transition: width 0.4s ease; }
+.progress-detail { font-size: 13px; color: var(--text-primary); margin-bottom: 6px; }
+.progress-time { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); }
 
 .table-card { margin-bottom: 16px; }
 .summary-card { padding: 16px 20px; margin-bottom: 16px; }

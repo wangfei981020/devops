@@ -33,13 +33,17 @@ spec:
               value: "Asia/Shanghai"
             - name: BROWSER_TZ
               value: "Asia/Shanghai"
+            - name: BROWSER_READINESS_TIMEOUT
+              value: "600s"
+            - name: RATE_LIMIT_DISABLED
+              value: "true"
           resources:
             requests:
               cpu: 100m
               memory: 256Mi
             limits:
-              cpu: 500m
-              memory: 1Gi
+              cpu: "8"
+              memory: 6Gi
           livenessProbe:
             httpGet:
               path: /

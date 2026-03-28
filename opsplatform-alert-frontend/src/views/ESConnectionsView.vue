@@ -94,6 +94,13 @@
             </div>
           </div>
           <div class="form-group">
+            <label class="form-label">
+              <input type="checkbox" v-model="form.skip_tls_verify" style="margin-right: 6px;" />
+              跳过 TLS 证书验证
+            </label>
+            <div class="form-hint">ES 使用自签证书时勾选此项</div>
+          </div>
+          <div class="form-group">
             <label class="form-label">描述</label>
             <input v-model="form.description" class="form-input" />
           </div>
@@ -128,11 +135,11 @@ const editId = ref(null)
 const submitting = ref(false)
 const testing = ref(false)
 
-const form = ref({ name: '', url: '', version: '7', username: '', password: '', api_key: '', description: '' })
+const form = ref({ name: '', url: '', version: '7', username: '', password: '', api_key: '', skip_tls_verify: false, description: '' })
 
 function resetForm() {
   editId.value = null
-  form.value = { name: '', url: '', version: '7', username: '', password: '', api_key: '', description: '' }
+  form.value = { name: '', url: '', version: '7', username: '', password: '', api_key: '', skip_tls_verify: false, description: '' }
 }
 
 async function loadList() {
@@ -146,7 +153,7 @@ async function loadList() {
 
 function editItem(item) {
   editId.value = item.id
-  form.value = { name: item.name, url: item.url, version: item.version, username: item.username, password: '', api_key: '', description: item.description }
+  form.value = { name: item.name, url: item.url, version: item.version, username: item.username, password: '', api_key: '', skip_tls_verify: !!item.skip_tls_verify, description: item.description }
   showModal.value = true
 }
 

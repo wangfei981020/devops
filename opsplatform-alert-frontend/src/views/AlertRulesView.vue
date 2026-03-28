@@ -50,7 +50,10 @@
               </td>
               <td>
                 <div style="font-weight: 500;">{{ rule.name }}</div>
-                <div class="text-sm text-secondary">{{ rule.es_index }}</div>
+                <div class="text-sm text-secondary">
+                  {{ rule.es_index }}
+                  <span v-if="rule.alert_mode === 'not_found'" class="badge badge-warning" style="margin-left: 4px; font-size: 10px;">反向</span>
+                </div>
               </td>
               <td>
                 <span class="truncate" :title="rule.keyword">{{ rule.keyword || '-' }}</span>

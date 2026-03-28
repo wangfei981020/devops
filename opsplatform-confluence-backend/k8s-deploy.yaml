@@ -57,7 +57,7 @@ spec:
             - "host.docker.internal"
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/confluence-backend:v38
+          image: localhost:8070/opsplatform/confluence-backend:v58
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
@@ -149,7 +149,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: localhost:8070/opsplatform/confluence-frontend:v56
+          image: localhost:8070/opsplatform/confluence-frontend:v69
           imagePullPolicy: Always
           ports:
             - containerPort: 80

@@ -26,6 +26,35 @@
 
         <div class="form-row">
           <div class="form-group">
+            <label class="form-label">告警模式</label>
+            <select v-model="form.alert_mode" class="form-select">
+              <option value="found">搜到关键词 → 告警</option>
+              <option value="not_found">搜不到关键词 → 告警</option>
+            </select>
+            <div class="form-hint">
+              <template v-if="form.alert_mode === 'found'">ES 搜到匹配日志时触发告警（默认）</template>
+              <template v-else>指定时间内搜不到匹配日志时触发告警，搜到后发送恢复通知</template>
+            </div>
+          </div>
+          <div class="form-group" v-if="form.alert_mode === 'not_found'">
+            <label class="form-label">
+              <input type="checkbox" v-model="recoveryChecked" style="margin-right: 6px;" />
+              启用恢复通知
+            </label>
+            <div class="form-hint">恢复后发送绿色通知卡片</div>
+          </div>
+        </div>
+
+        <!-- 数据源 + 连接 -->
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">数据源类型</label>
+            <select v-model="form.data_source_type" class="form-select">
+              <option value="es">Elasticsearch</option>
+              <option value="loki">Loki</option>
+            </select>
+          </div>
+          <div class="form-group" v-if="form.data_source_type === 'es'">
             <label class="form-label">ES 连接 *</label>
             <select v-model="form.es_connection_id" class="form-select" required>
               <option :value="0" disabled>请选择 ES 连接</option>
@@ -34,6 +63,16 @@
               </option>
             </select>
           </div>
+          <div class="form-group" v-else>
+            <label class="form-label">Loki 连接 *</label>
+            <select v-model="form.loki_connection_id" class="form-select" required>
+              <option :value="0" disabled>请选择 Loki 连接</option>
+              <option v-for="c in lokiConnections" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
           <div class="form-group">
             <label class="form-label">Lark 配置 *</label>
             <select v-model="form.lark_config_id" class="form-select" required>
@@ -47,24 +86,37 @@
 
         <!-- 搜索配置 -->
         <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">搜索配置</h3>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">ES 索引</label>
-            <input v-model="form.es_index" class="form-input" placeholder="如: app-logs-* 或 filebeat-*" />
-            <div class="form-hint">支持通配符，多个用逗号分隔</div>
+
+        <!-- ES 搜索配置 -->
+        <template v-if="form.data_source_type === 'es'">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">ES 索引</label>
+              <input v-model="form.es_index" class="form-input" placeholder="如: app-logs-* 或 filebeat-*" />
+              <div class="form-hint">支持通配符，多个用逗号分隔</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">搜索关键词</label>
+              <input v-model="form.keyword" class="form-input" placeholder='如: "搜不到指定格式日志" OR "跳局"' />
+              <div class="form-hint">支持 Lucene 语法，AND/OR/NOT</div>
+            </div>
           </div>
+        </template>
+
+        <!-- Loki 搜索配置 -->
+        <template v-else>
           <div class="form-group">
-            <label class="form-label">搜索关键词</label>
-            <input v-model="form.keyword" class="form-input" placeholder='如: "搜不到指定格式日志" OR "跳局"' />
-            <div class="form-hint">支持 Lucene 语法，AND/OR/NOT</div>
+            <label class="form-label">LogQL 查询 *</label>
+            <input v-model="form.logql" class="form-input" placeholder='{namespace="default", container="app"} |~ "error"' />
+            <div class="form-hint">Loki LogQL 查询语句，可在日志查询页调试后复制过来</div>
           </div>
-        </div>
+        </template>
 
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">执行周期 (Cron)</label>
             <input v-model="form.schedule" class="form-input" placeholder="*/5 * * * *" />
-            <div class="form-hint">Cron 表达式，如 */5 * * * * 每5分钟</div>
+            <div class="form-hint">{{ cronHint || 'Cron 表达式，如 */5 * * * * 每5分钟' }}</div>
           </div>
           <div class="form-group">
             <label class="form-label">搜索时间范围</label>
@@ -111,6 +163,20 @@
           <div class="form-hint">支持 Go template 语法，如 &#123;&#123;.field&#125;&#125;，变量来自字段提取或 ES _source 原始字段</div>
         </div>
 
+        <!-- 恢复通知模板 (仅 not_found 模式) -->
+        <template v-if="form.alert_mode === 'not_found' && recoveryChecked">
+          <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">恢复通知配置</h3>
+          <div class="form-group">
+            <label class="form-label">恢复通知标题</label>
+            <input v-model="form.recovery_title" class="form-input" placeholder="留空则自动用: 告警标题 - 已恢复" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">恢复通知模板</label>
+            <textarea v-model="form.recovery_template" class="form-textarea" rows="4"
+              placeholder="留空则使用告警消息模板，恢复时变量来自第一条搜到的日志"></textarea>
+          </div>
+        </template>
+
         <!-- @用户 -->
         <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">通知配置</h3>
         <div class="form-group">
@@ -124,6 +190,14 @@
             <input type="checkbox" v-model="atAllChecked" style="margin-right: 6px;" />
             @所有人
           </label>
+        </div>
+
+        <!-- 分组配置 -->
+        <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">分组配置</h3>
+        <div class="form-group">
+          <label class="form-label">分组字段</label>
+          <input v-model="form.group_by" class="form-input" placeholder="如: kubernetes.container_name" />
+          <div class="form-hint">按此字段分组，每组独立告警/恢复。留空则不分组。支持嵌套字段如 kubernetes.namespace</div>
         </div>
 
         <!-- 去重配置 -->
@@ -176,12 +250,81 @@
 
         <!-- Submit -->
         <div class="modal-footer" style="border-top: none; padding-top: 24px;">
+          <button type="button" class="btn btn-outline" @click="handlePreview" :disabled="previewing">
+            {{ previewing ? '查询中...' : '预览告警结果' }}
+          </button>
           <router-link to="/alert-rules" class="btn btn-outline">取消</router-link>
           <button type="submit" class="btn btn-primary" :disabled="submitting">
             {{ submitting ? '保存中...' : (isEdit ? '更新规则' : '创建规则') }}
           </button>
         </div>
       </form>
+    </div>
+
+    <!-- Preview Modal -->
+    <div v-if="previewData" class="modal-overlay" @click.self="previewData = null">
+      <div class="modal" style="min-width: 800px; max-width: 95vw;">
+        <div class="modal-header">
+          <div class="modal-title">告警预览结果</div>
+          <button class="btn-icon" @click="previewData = null"><X :size="18" /></button>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+          <div class="stat-card" style="padding: 12px;">
+            <div class="label">数据源</div>
+            <div style="font-weight: 600;">{{ previewData.source_name }}</div>
+          </div>
+          <div class="stat-card" style="padding: 12px;">
+            <div class="label">详情</div>
+            <div style="font-weight: 600;">{{ previewData.source_detail }}</div>
+          </div>
+          <div class="stat-card" style="padding: 12px;">
+            <div class="label">命中数</div>
+            <div style="font-weight: 600; font-size: 20px;" :style="{ color: previewData.hit_count > 0 ? 'var(--warning)' : 'var(--success)' }">
+              {{ previewData.hit_count }} / {{ previewData.total }}
+            </div>
+          </div>
+        </div>
+
+        <!-- Alert mode hint -->
+        <div v-if="form.alert_mode === 'not_found'" class="card" style="padding: 12px; margin-bottom: 12px;"
+          :style="{ background: previewData.hit_count === 0 ? '#fef2f2' : '#ecfdf5', borderColor: previewData.hit_count === 0 ? '#fecaca' : '#a7f3d0' }">
+          <strong>{{ previewData.hit_count === 0 ? '将触发告警' : '正常（不会告警）' }}</strong>
+          — 反向模式: {{ previewData.hit_count === 0 ? '在指定时间范围内未搜到匹配日志' : '搜到匹配日志，不会触发告警' }}
+        </div>
+        <div v-else-if="previewData.hit_count > 0" class="card" style="padding: 12px; margin-bottom: 12px; background: #fffbeb; border-color: #fde68a;">
+          <strong>将触发 {{ previewData.hit_count }} 条告警</strong>
+        </div>
+        <div v-else class="card" style="padding: 12px; margin-bottom: 12px; background: #ecfdf5; border-color: #a7f3d0;">
+          <strong>正常（无命中，不会告警）</strong>
+        </div>
+
+        <!-- Rendered messages -->
+        <div v-if="previewData.hits && previewData.hits.length > 0">
+          <h4 style="margin-bottom: 8px;">渲染后的告警消息</h4>
+          <div v-for="(hit, idx) in previewData.hits" :key="idx" class="card" style="margin-bottom: 8px; padding: 12px;">
+            <div class="flex justify-between items-center" style="margin-bottom: 8px;">
+              <span class="badge badge-info">命中 #{{ idx + 1 }}</span>
+              <button class="btn btn-sm btn-outline" @click="hit._showRaw = !hit._showRaw">
+                {{ hit._showRaw ? '隐藏原始数据' : '查看原始数据' }}
+              </button>
+            </div>
+            <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 13px; white-space: pre-wrap; max-height: 200px; overflow-y: auto;">{{ hit.rendered }}</pre>
+            <div v-if="hit._showRaw" style="margin-top: 8px;">
+              <div class="text-sm text-secondary" style="margin-bottom: 4px;">提取变量:</div>
+              <pre style="background: #f8fafc; padding: 8px; border-radius: 4px; font-size: 12px; max-height: 150px; overflow-y: auto;">{{ formatVars(hit.vars) }}</pre>
+              <div class="text-sm text-secondary" style="margin: 4px 0;">ES 原始数据:</div>
+              <pre style="background: #f8fafc; padding: 8px; border-radius: 4px; font-size: 12px; max-height: 200px; overflow-y: auto;">{{ formatJSON(hit.raw) }}</pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- ES Query -->
+        <details style="margin-top: 12px;">
+          <summary class="text-sm text-secondary" style="cursor: pointer;">查看查询语句</summary>
+          <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 12px; margin-top: 8px; max-height: 200px; overflow-y: auto;">{{ previewData.query }}</pre>
+        </details>
+      </div>
     </div>
   </div>
 </template>
@@ -191,8 +334,11 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import { useToast } from '../stores/ui'
+import { X } from 'lucide-vue-next'
 
 const toast = useToast()
+const previewing = ref(false)
+const previewData = ref(null)
 
 const route = useRoute()
 const router = useRouter()
@@ -200,9 +346,13 @@ const isEdit = computed(() => !!route.params.id)
 const submitting = ref(false)
 
 const esConnections = ref([])
+const lokiConnections = ref([])
 const larkConfigs = ref([])
 
 const form = ref({
+  data_source_type: 'es',
+  loki_connection_id: 0,
+  logql: '',
   name: '',
   es_connection_id: 0,
   lark_config_id: 0,
@@ -217,11 +367,21 @@ const form = ref({
   message_template: '',
   at_users: '',
   at_all: 0,
+  alert_mode: 'found',
+  recovery_enabled: 0,
+  recovery_title: '',
+  recovery_template: '',
   severity: 'warning',
+  group_by: '',
   dedup_field: '',
   dedup_ttl: 3600,
   max_alerts: 10,
   prometheus_config: ''
+})
+
+const recoveryChecked = computed({
+  get: () => form.value.recovery_enabled === 1,
+  set: (v) => { form.value.recovery_enabled = v ? 1 : 0 }
 })
 
 // Prometheus config helpers
@@ -276,14 +436,30 @@ const templatePlaceholder = `**Namespace:** {{.namespace}}
 **Message:** {{.message}}
 **Time:** {{.time}}`
 
+// Cron 表达式可读化
+function cronToHuman(cron) {
+  if (!cron) return ''
+  const parts = cron.trim().split(/\s+/)
+  if (parts.length !== 5) return cron
+  const [min, hour, dom, mon, dow] = parts
+  if (min.startsWith('*/') && hour === '*') return `每 ${min.slice(2)} 分钟执行`
+  if (min !== '*' && hour.startsWith('*/')) return `每 ${hour.slice(2)} 小时的第 ${min} 分钟执行`
+  if (min !== '*' && hour !== '*' && dom === '*') return `每天 ${hour}:${min.padStart(2,'0')} 执行`
+  return cron
+}
+
+const cronHint = computed(() => cronToHuman(form.value.schedule))
+
 async function loadOptions() {
   try {
-    const [esRes, larkRes] = await Promise.all([
+    const [esRes, lokiRes, larkRes] = await Promise.all([
       api.get('/es-connections'),
+      api.get('/loki-connections'),
       api.get('/lark-configs')
     ])
-    if (esRes.code === 0) esConnections.value = esRes.data.filter(c => c.status === 1)
-    if (larkRes.code === 0) larkConfigs.value = larkRes.data.filter(c => c.status === 1)
+    if (esRes.code === 0) esConnections.value = esRes.data
+    if (lokiRes.code === 0) lokiConnections.value = lokiRes.data
+    if (larkRes.code === 0) larkConfigs.value = larkRes.data
   } catch (e) { /* ignore */ }
 }
 
@@ -294,21 +470,29 @@ async function loadRule() {
     if (res.code === 0) {
       const d = res.data
       form.value = {
+        data_source_type: d.data_source_type || 'es',
         name: d.name,
         es_connection_id: d.es_connection_id,
+        loki_connection_id: d.loki_connection_id || 0,
         lark_config_id: d.lark_config_id,
         es_index: d.es_index,
         schedule: d.schedule,
         time_range: d.time_range,
         query_dsl: d.query_dsl || '',
         keyword: d.keyword,
+        logql: d.logql || '',
         filter_fields: d.filter_fields || '',
         extract_fields: d.extract_fields || '',
         message_title: d.message_title,
         message_template: d.message_template || '',
         at_users: d.at_users || '',
         at_all: d.at_all,
+        alert_mode: d.alert_mode || 'found',
+        recovery_enabled: d.recovery_enabled || 0,
+        recovery_title: d.recovery_title || '',
+        recovery_template: d.recovery_template || '',
         severity: d.severity,
+        group_by: d.group_by || '',
         dedup_field: d.dedup_field,
         dedup_ttl: d.dedup_ttl,
         max_alerts: d.max_alerts,
@@ -341,8 +525,54 @@ async function handleSubmit() {
   submitting.value = false
 }
 
-onMounted(() => {
-  loadOptions()
-  loadRule()
+async function handlePreview() {
+  if (!form.value.es_connection_id) {
+    toast.error('请先选择 ES 连接')
+    return
+  }
+  previewing.value = true
+  try {
+    const res = await api.post('/alert-rules/preview', form.value)
+    if (res.code === 0) {
+      // Add _showRaw toggle to each hit
+      if (res.data.hits) {
+        res.data.hits.forEach(h => { h._showRaw = false })
+      }
+      previewData.value = res.data
+    } else {
+      toast.error(res.message || '预览失败')
+    }
+  } catch (e) {
+    toast.error('预览失败: ' + (e.response?.data?.message || e.message))
+  }
+  previewing.value = false
+}
+
+function formatVars(vars) {
+  if (!vars) return ''
+  const filtered = {}
+  for (const [k, v] of Object.entries(vars)) {
+    if (k !== '_id' && k !== '_index' && typeof v !== 'object') filtered[k] = v
+  }
+  return JSON.stringify(filtered, null, 2)
+}
+
+function formatJSON(obj) {
+  try { return JSON.stringify(obj, null, 2) } catch { return String(obj) }
+}
+
+onMounted(async () => {
+  await loadOptions()
+  await loadRule()
+
+  // Pre-fill from query params (from ES Explore page)
+  const q = route.query
+  if (!isEdit.value && q.es_connection_id) {
+    form.value.es_connection_id = parseInt(q.es_connection_id) || 0
+    if (q.es_index) form.value.es_index = q.es_index
+    if (q.keyword) form.value.keyword = q.keyword
+    if (q.filter_fields) form.value.filter_fields = q.filter_fields
+    if (q.time_range) form.value.time_range = q.time_range
+  }
 })
 </script>

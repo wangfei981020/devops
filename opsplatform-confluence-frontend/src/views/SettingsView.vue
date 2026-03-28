@@ -179,7 +179,7 @@
         <div class="task-card" v-for="t in screenshotTasks" :key="t.id">
           <div class="task-card-header">
             <div>
-              <div class="task-name">{{ t.name }}</div>
+              <div class="task-name"><span class="sort-order-badge" v-if="t.sort_order != null">{{ t.sort_order }}</span>{{ t.name }}</div>
               <div class="task-meta">
                 <span>Cron: <code>{{ t.cron_expr }}</code></span>
                 <span>时间范围: {{ formatTimeRange(t.time_range) }}</span>
@@ -238,6 +238,11 @@
             <label>Cron 表达式</label>
             <input class="input" v-model="editingTask.cron_expr" placeholder="0 * * * * (每小时)" />
             <span class="field-desc">分 时 日 月 周（如 0 * * * * = 每小时整点）</span>
+          </div>
+          <div class="field">
+            <label>发送排序</label>
+            <input class="input" type="number" v-model.number="editingTask.sort_order" placeholder="0" style="width:100px" />
+            <span class="field-desc">数值越小越先发送，相同cron的任务按此顺序串行执行</span>
           </div>
           <div class="field">
             <label>截图时间范围</label>
@@ -594,7 +599,7 @@ const fullImg = ref(null)
 const editingTask = ref({
   name: '', grafana_conn_id: 0, dashboards: [{ uid: '', title: '', panels: [] }],
   variables: {}, lark_conn_ids: [], cron_expr: '0 * * * *', time_range: '1h',
-  width: 1000, height: 500, theme: 'light', enabled: true
+  width: 1000, height: 500, theme: 'light', sort_order: 0, enabled: true
 })
 
 // 自定义时间范围
@@ -798,7 +803,7 @@ function openAddTask() {
     dashboards: [{ uid: '', title: '', panels: [] }],
     variables: {}, lark_conn_ids: larkConns.value.map(c => c.id),
     cron_expr: '0 * * * *', time_range: '1h',
-    width: 1000, height: 500, theme: 'light', enabled: true
+    width: 1000, height: 500, theme: 'light', sort_order: 0, enabled: true
   }
   timeRangeType.value = '1h'
   customTimeFrom.value = '09:00'
@@ -820,6 +825,7 @@ function openEditTask(t) {
     width: t.width,
     height: t.height,
     theme: t.theme,
+    sort_order: t.sort_order || 0,
     enabled: t.enabled
   }
   // 解析自定义时间范围
@@ -1039,7 +1045,8 @@ h3 { font-size: 16px; margin-bottom: 16px; }
 }
 .task-card:hover { border-color: var(--primary-light); }
 .task-card-header { display: flex; justify-content: space-between; align-items: flex-start; }
-.task-name { font-weight: 600; font-size: 15px; color: var(--text-primary); margin-bottom: 6px; }
+.task-name { font-weight: 600; font-size: 15px; color: var(--text-primary); margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+.sort-order-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 4px; background: rgba(59,130,246,0.2); color: #60a5fa; font-size: 12px; font-weight: 700; }
 .task-meta { display: flex; gap: 12px; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
 .task-meta code { background: rgba(255,255,255,0.06); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
 .task-dashboards { margin: 10px 0 6px; display: flex; gap: 6px; flex-wrap: wrap; }

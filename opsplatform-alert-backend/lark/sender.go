@@ -90,6 +90,9 @@ func (s *Sender) SendCard(title, content string, severity string, atUsers []mode
 	case "critical":
 		headerTemplate = "red"
 		titlePrefix = "🚨🚨🚨"
+	case "recovery":
+		headerTemplate = "green"
+		titlePrefix = "✅"
 	}
 
 	card := map[string]interface{}{

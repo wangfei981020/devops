@@ -86,6 +86,16 @@ func main() {
 	protected.HandleFunc("/lark-configs/{id}/toggle", handlers.HandleToggleLarkConfig).Methods("PUT")
 	protected.HandleFunc("/lark-configs/test", handlers.HandleTestLarkConfig).Methods("POST")
 
+	// Loki Connections
+	protected.HandleFunc("/loki-connections", handlers.HandleListLokiConnections).Methods("GET")
+	protected.HandleFunc("/loki-connections", handlers.HandleCreateLokiConnection).Methods("POST")
+	protected.HandleFunc("/loki-connections/{id}", handlers.HandleUpdateLokiConnection).Methods("PUT")
+	protected.HandleFunc("/loki-connections/{id}", handlers.HandleDeleteLokiConnection).Methods("DELETE")
+	protected.HandleFunc("/loki-connections/{id}/toggle", handlers.HandleToggleLokiConnection).Methods("PUT")
+	protected.HandleFunc("/loki-connections/test", handlers.HandleTestLokiConnection).Methods("POST")
+	protected.HandleFunc("/loki-labels", handlers.HandleLokiLabels).Methods("GET")
+	protected.HandleFunc("/loki-label-values", handlers.HandleLokiLabelValues).Methods("GET")
+
 	// Alert Rules
 	protected.HandleFunc("/alert-rules", handlers.HandleListAlertRules).Methods("GET")
 	protected.HandleFunc("/alert-rules", handlers.HandleCreateAlertRule).Methods("POST")
@@ -94,6 +104,22 @@ func main() {
 	protected.HandleFunc("/alert-rules/{id}", handlers.HandleDeleteAlertRule).Methods("DELETE")
 	protected.HandleFunc("/alert-rules/{id}/toggle", handlers.HandleToggleAlertRule).Methods("PUT")
 	protected.HandleFunc("/alert-rules/{id}/run", handlers.HandleRunAlertRule).Methods("POST")
+	protected.HandleFunc("/alert-rules/preview", handlers.HandlePreviewAlertRule).Methods("POST")
+
+	// ES Explore
+	protected.HandleFunc("/es-explore", handlers.HandleESExplore).Methods("POST")
+	protected.HandleFunc("/es-explore/indices", handlers.HandleESIndices).Methods("GET")
+	protected.HandleFunc("/loki-explore", handlers.HandleLokiExplore).Methods("POST")
+
+	// Users (admin only)
+	admin := protected.PathPrefix("").Subrouter()
+	admin.Use(handlers.AdminMiddleware)
+	admin.HandleFunc("/users", handlers.HandleListUsers).Methods("GET")
+	admin.HandleFunc("/users", handlers.HandleCreateUser).Methods("POST")
+	admin.HandleFunc("/users/{id}", handlers.HandleUpdateUser).Methods("PUT")
+	admin.HandleFunc("/users/{id}/toggle", handlers.HandleToggleUser).Methods("PUT")
+	admin.HandleFunc("/users/{id}/reset-password", handlers.HandleResetPassword).Methods("POST")
+	admin.HandleFunc("/users/{id}", handlers.HandleDeleteUser).Methods("DELETE")
 
 	// Alert Logs
 	protected.HandleFunc("/alert-logs", handlers.HandleListAlertLogs).Methods("GET")

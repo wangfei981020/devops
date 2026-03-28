@@ -3,6 +3,7 @@ package es
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,13 +33,18 @@ func NewClient(conn models.ESConnection) (*Client, error) {
 
 	c := &Client{config: conn}
 
+	transport := &http.Transport{
+		MaxIdleConnsPerHost: 10,
+	}
+	if conn.SkipTLSVerify {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+
 	switch conn.Version {
 	case "7":
 		cfg := es7.Config{
 			Addresses: urls,
-			Transport: &http.Transport{
-				MaxIdleConnsPerHost: 10,
-			},
+			Transport: transport,
 		}
 		if conn.Username != "" {
 			cfg.Username = conn.Username
@@ -53,9 +59,7 @@ func NewClient(conn models.ESConnection) (*Client, error) {
 	case "8":
 		cfg := es8.Config{
 			Addresses: urls,
-			Transport: &http.Transport{
-				MaxIdleConnsPerHost: 10,
-			},
+			Transport: transport,
 		}
 		if conn.APIKey != "" {
 			cfg.APIKey = conn.APIKey
@@ -101,6 +105,80 @@ func (c *Client) Ping(ctx context.Context) error {
 		return nil
 	}
 	return fmt.Errorf("no ES client initialized")
+}
+
+// ListIndices returns available index names
+func (c *Client) ListIndices(ctx context.Context) ([]string, error) {
+	var respBody []byte
+
+	if c.v7 != nil {
+		res, err := c.v7.Cat.Indices(c.v7.Cat.Indices.WithContext(ctx), c.v7.Cat.Indices.WithFormat("json"), c.v7.Cat.Indices.WithH("index"))
+		if err != nil {
+			return nil, err
+		}
+		defer res.Body.Close()
+		respBody, _ = io.ReadAll(res.Body)
+	} else if c.v8 != nil {
+		res, err := c.v8.Cat.Indices(c.v8.Cat.Indices.WithContext(ctx), c.v8.Cat.Indices.WithFormat("json"), c.v8.Cat.Indices.WithH("index"))
+		if err != nil {
+			return nil, err
+		}
+		defer res.Body.Close()
+		respBody, _ = io.ReadAll(res.Body)
+	}
+
+	var items []map[string]interface{}
+	json.Unmarshal(respBody, &items)
+
+	var indices []string
+	for _, item := range items {
+		if idx, ok := item["index"].(string); ok && !strings.HasPrefix(idx, ".") {
+			indices = append(indices, idx)
+		}
+	}
+	return indices, nil
+}
+
+// SearchRaw executes a search and returns raw response bytes (for aggregations etc.)
+func (c *Client) SearchRaw(ctx context.Context, index string, query map[string]interface{}) ([]byte, error) {
+	body, err := json.Marshal(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal query: %w", err)
+	}
+
+	if c.v7 != nil {
+		res, err := c.v7.Search(
+			c.v7.Search.WithContext(ctx),
+			c.v7.Search.WithIndex(index),
+			c.v7.Search.WithBody(bytes.NewReader(body)),
+		)
+		if err != nil {
+			return nil, err
+		}
+		defer res.Body.Close()
+		if res.IsError() {
+			b, _ := io.ReadAll(res.Body)
+			return nil, fmt.Errorf("ES7 error: %s body=%s", res.Status(), string(b))
+		}
+		return io.ReadAll(res.Body)
+	}
+	if c.v8 != nil {
+		res, err := c.v8.Search(
+			c.v8.Search.WithContext(ctx),
+			c.v8.Search.WithIndex(index),
+			c.v8.Search.WithBody(bytes.NewReader(body)),
+		)
+		if err != nil {
+			return nil, err
+		}
+		defer res.Body.Close()
+		if res.IsError() {
+			b, _ := io.ReadAll(res.Body)
+			return nil, fmt.Errorf("ES8 error: %s body=%s", res.Status(), string(b))
+		}
+		return io.ReadAll(res.Body)
+	}
+	return nil, fmt.Errorf("no ES client initialized")
 }
 
 // SearchResult represents parsed ES search result

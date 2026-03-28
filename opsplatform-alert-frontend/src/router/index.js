@@ -12,9 +12,12 @@ const routes = [
       { path: 'alert-rules', name: 'AlertRules', component: () => import('../views/AlertRulesView.vue') },
       { path: 'alert-rules/create', name: 'CreateAlertRule', component: () => import('../views/AlertRuleFormView.vue') },
       { path: 'alert-rules/:id/edit', name: 'EditAlertRule', component: () => import('../views/AlertRuleFormView.vue') },
+      { path: 'es-explore', name: 'ESExplore', component: () => import('../views/ESExploreView.vue') },
       { path: 'es-connections', name: 'ESConnections', component: () => import('../views/ESConnectionsView.vue') },
+      { path: 'loki-connections', name: 'LokiConnections', component: () => import('../views/LokiConnectionsView.vue') },
       { path: 'lark-configs', name: 'LarkConfigs', component: () => import('../views/LarkConfigsView.vue') },
       { path: 'alert-logs', name: 'AlertLogs', component: () => import('../views/AlertLogsView.vue') },
+      { path: 'users', name: 'Users', component: () => import('../views/UsersView.vue') },
     ]
   }
 ]

@@ -5,6 +5,31 @@ import (
 	"time"
 )
 
+// LokiConnection Loki连接配置
+type LokiConnection struct {
+	ID            int       `json:"id"`
+	Name          string    `json:"name"`
+	URL           string    `json:"url"`
+	Username      string    `json:"username"`
+	Password      string    `json:"password,omitempty"`
+	OrgID         string    `json:"org_id"`
+	SkipTLSVerify bool      `json:"skip_tls_verify"`
+	Description   string    `json:"description"`
+	Status        int       `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type CreateLokiConnectionReq struct {
+	Name          string `json:"name"`
+	URL           string `json:"url"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	OrgID         string `json:"org_id"`
+	SkipTLSVerify bool   `json:"skip_tls_verify"`
+	Description   string `json:"description"`
+}
+
 // ESConnection ES集群连接配置
 type ESConnection struct {
 	ID          int       `json:"id"`
@@ -13,8 +38,9 @@ type ESConnection struct {
 	Version     string    `json:"version"`      // "7" or "8"
 	Username    string    `json:"username"`
 	Password    string    `json:"password,omitempty"`
-	APIKey      string    `json:"api_key,omitempty"` // ES 8.x
-	Description string    `json:"description"`
+	APIKey        string    `json:"api_key,omitempty"` // ES 8.x
+	SkipTLSVerify bool      `json:"skip_tls_verify"`   // 跳过TLS证书验证
+	Description   string    `json:"description"`
 	Status      int       `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -57,20 +83,28 @@ type AtUser struct {
 type AlertRule struct {
 	ID              int            `json:"id"`
 	Name            string         `json:"name"`
+	DataSourceType  string         `json:"data_source_type"`   // es or loki
 	ESConnectionID  int            `json:"es_connection_id"`
+	LokiConnectionID int           `json:"loki_connection_id"`
 	LarkConfigID    int            `json:"lark_config_id"`
 	ESIndex         string         `json:"es_index"`
 	Schedule        string         `json:"schedule"`
 	TimeRange       string         `json:"time_range"`
 	QueryDSL        string         `json:"query_dsl"`         // 自定义ES查询JSON
 	Keyword         string         `json:"keyword"`           // 简单关键词搜索
+	LogQL           string         `json:"logql"`             // LogQL查询(Loki)
 	FilterFields    string         `json:"filter_fields"`     // JSON string of []FilterField
 	ExtractFields   string         `json:"extract_fields"`    // JSON string of []ExtractField
 	MessageTitle    string         `json:"message_title"`
 	MessageTemplate string         `json:"message_template"`
 	AtUsers         string         `json:"at_users"`          // JSON string of []AtUser
-	AtAll           int            `json:"at_all"`
-	Severity        string         `json:"severity"`
+	AtAll            int            `json:"at_all"`
+	AlertMode        string         `json:"alert_mode"`        // found or not_found
+	RecoveryEnabled  int            `json:"recovery_enabled"`
+	RecoveryTitle    string         `json:"recovery_title"`
+	RecoveryTemplate string         `json:"recovery_template"`
+	Severity         string         `json:"severity"`
+	GroupBy          string         `json:"group_by"`
 	DedupField       string         `json:"dedup_field"`
 	DedupTTL         int            `json:"dedup_ttl"`
 	MaxAlerts        int            `json:"max_alerts"`
@@ -124,13 +158,14 @@ type AlertRuleListItem struct {
 // API Request/Response types
 
 type CreateESConnectionReq struct {
-	Name        string `json:"name"`
-	URL         string `json:"url"`
-	Version     string `json:"version"`
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	APIKey      string `json:"api_key"`
-	Description string `json:"description"`
+	Name          string `json:"name"`
+	URL           string `json:"url"`
+	Version       string `json:"version"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	APIKey        string `json:"api_key"`
+	SkipTLSVerify bool   `json:"skip_tls_verify"`
+	Description   string `json:"description"`
 }
 
 type CreateLarkConfigReq struct {
@@ -142,21 +177,29 @@ type CreateLarkConfigReq struct {
 }
 
 type CreateAlertRuleReq struct {
-	Name            string `json:"name"`
-	ESConnectionID  int    `json:"es_connection_id"`
-	LarkConfigID    int    `json:"lark_config_id"`
-	ESIndex         string `json:"es_index"`
-	Schedule        string `json:"schedule"`
-	TimeRange       string `json:"time_range"`
-	QueryDSL        string `json:"query_dsl"`
-	Keyword         string `json:"keyword"`
+	Name             string `json:"name"`
+	DataSourceType   string `json:"data_source_type"`
+	ESConnectionID   int    `json:"es_connection_id"`
+	LokiConnectionID int    `json:"loki_connection_id"`
+	LarkConfigID     int    `json:"lark_config_id"`
+	ESIndex          string `json:"es_index"`
+	Schedule         string `json:"schedule"`
+	TimeRange        string `json:"time_range"`
+	QueryDSL         string `json:"query_dsl"`
+	Keyword          string `json:"keyword"`
+	LogQL            string `json:"logql"`
 	FilterFields    string `json:"filter_fields"`
 	ExtractFields   string `json:"extract_fields"`
 	MessageTitle    string `json:"message_title"`
 	MessageTemplate string `json:"message_template"`
 	AtUsers         string `json:"at_users"`
-	AtAll           int    `json:"at_all"`
-	Severity        string `json:"severity"`
+	AtAll            int    `json:"at_all"`
+	AlertMode        string `json:"alert_mode"`
+	RecoveryEnabled  int    `json:"recovery_enabled"`
+	RecoveryTitle    string `json:"recovery_title"`
+	RecoveryTemplate string `json:"recovery_template"`
+	Severity         string `json:"severity"`
+	GroupBy          string `json:"group_by"`
 	DedupField       string `json:"dedup_field"`
 	DedupTTL         int    `json:"dedup_ttl"`
 	MaxAlerts        int    `json:"max_alerts"`

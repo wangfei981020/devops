@@ -24,7 +24,7 @@ func SetAlertEngine(e interface {
 }
 
 func HandleListESConnections(w http.ResponseWriter, r *http.Request) {
-	rows, err := database.DB.Query("SELECT id, name, url, version, username, description, status, created_at, updated_at FROM es_connections ORDER BY id DESC")
+	rows, err := database.DB.Query("SELECT id, name, url, version, username, skip_tls_verify, description, status, created_at, updated_at FROM es_connections ORDER BY id DESC")
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "查询失败")
 		return
@@ -34,7 +34,7 @@ func HandleListESConnections(w http.ResponseWriter, r *http.Request) {
 	var list []models.ESConnection
 	for rows.Next() {
 		var c models.ESConnection
-		rows.Scan(&c.ID, &c.Name, &c.URL, &c.Version, &c.Username, &c.Description, &c.Status, &c.CreatedAt, &c.UpdatedAt)
+		rows.Scan(&c.ID, &c.Name, &c.URL, &c.Version, &c.Username, &c.SkipTLSVerify, &c.Description, &c.Status, &c.CreatedAt, &c.UpdatedAt)
 		list = append(list, c)
 	}
 	if list == nil {
@@ -57,8 +57,8 @@ func HandleCreateESConnection(w http.ResponseWriter, r *http.Request) {
 		req.Version = "7"
 	}
 
-	result, err := database.DB.Exec(`INSERT INTO es_connections (name, url, version, username, password, api_key, description)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, req.Name, req.URL, req.Version, req.Username, req.Password, req.APIKey, req.Description)
+	result, err := database.DB.Exec(`INSERT INTO es_connections (name, url, version, username, password, api_key, skip_tls_verify, description)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, req.Name, req.URL, req.Version, req.Username, req.Password, req.APIKey, req.SkipTLSVerify, req.Description)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "创建失败: "+err.Error())
 		return
@@ -75,8 +75,8 @@ func HandleUpdateESConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := database.DB.Exec(`UPDATE es_connections SET name=?, url=?, version=?, username=?, password=?, api_key=?, description=? WHERE id=?`,
-		req.Name, req.URL, req.Version, req.Username, req.Password, req.APIKey, req.Description, id)
+	_, err := database.DB.Exec(`UPDATE es_connections SET name=?, url=?, version=?, username=?, password=?, api_key=?, skip_tls_verify=?, description=? WHERE id=?`,
+		req.Name, req.URL, req.Version, req.Username, req.Password, req.APIKey, req.SkipTLSVerify, req.Description, id)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "更新失败")
 		return
@@ -125,11 +125,12 @@ func HandleTestESConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conn := models.ESConnection{
-		URL:      req.URL,
-		Version:  req.Version,
-		Username: req.Username,
-		Password: req.Password,
-		APIKey:   req.APIKey,
+		URL:           req.URL,
+		Version:       req.Version,
+		Username:      req.Username,
+		Password:      req.Password,
+		APIKey:        req.APIKey,
+		SkipTLSVerify: req.SkipTLSVerify,
 	}
 
 	client, err := es.NewClient(conn)
