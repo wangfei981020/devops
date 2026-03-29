@@ -2,7 +2,7 @@
   <div class="app-layout">
     <aside class="sidebar">
       <div class="sidebar-header">
-        <h2>ES Alert</h2>
+        <h2>Log Alert</h2>
         <div class="subtitle">告警管理平台</div>
       </div>
       <nav class="sidebar-nav">
@@ -76,7 +76,7 @@ const pageTitle = computed(() => {
   for (const [path, title] of Object.entries(map)) {
     if (route.path.startsWith(path)) return title
   }
-  return 'ES 告警平台'
+  return 'Log Alert 告警平台'
 })
 
 async function handleLogout() {

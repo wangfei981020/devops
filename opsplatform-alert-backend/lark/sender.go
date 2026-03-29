@@ -81,13 +81,13 @@ func (s *Sender) SendCard(title, content string, severity string, atUsers []mode
 	headerTemplate := "red"
 	titlePrefix := "🚨🚨🚨"
 	switch severity {
-	case "info":
-		headerTemplate = "blue"
-		titlePrefix = "ℹ️"
-	case "warning":
+	case "S3", "info":
 		headerTemplate = "orange"
-		titlePrefix = "⚠️⚠️⚠️"
-	case "critical":
+		titlePrefix = "⚠️"
+	case "S2", "warning":
+		headerTemplate = "red"
+		titlePrefix = "🔴🔴"
+	case "S1", "critical":
 		headerTemplate = "red"
 		titlePrefix = "🚨🚨🚨"
 	case "recovery":

@@ -21,20 +21,54 @@ import (
 	"opsplatform-alert-backend/models"
 )
 
+// GlobalQuerySemaphore limits total concurrent queries across all rules
+var GlobalQuerySemaphore chan struct{}
+
+// InitGlobalSemaphore sets the global concurrency limit
+func InitGlobalSemaphore(maxConcurrency int) {
+	if maxConcurrency <= 0 {
+		maxConcurrency = 20
+	}
+	GlobalQuerySemaphore = make(chan struct{}, maxConcurrency)
+	log.Printf("[Engine] Global query concurrency limit: %d", maxConcurrency)
+}
+
+// acquireGlobal acquires a slot from the global semaphore with context timeout
+func acquireGlobalCtx(ctx context.Context) bool {
+	if GlobalQuerySemaphore == nil {
+		return true
+	}
+	select {
+	case GlobalQuerySemaphore <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// releaseGlobal releases a slot back to the global semaphore
+func releaseGlobal() {
+	if GlobalQuerySemaphore != nil {
+		<-GlobalQuerySemaphore
+	}
+}
+
 // Engine manages all alert rules and their schedules
 type Engine struct {
-	mu       sync.RWMutex
-	cron     *cron.Cron
-	jobs     map[int]cron.EntryID // ruleID -> cronEntryID
-	clients  map[int]*es.Client   // esConnectionID -> client
-	stopping bool
+	mu          sync.RWMutex
+	cron        *cron.Cron
+	jobs        map[int]cron.EntryID          // ruleID -> cronEntryID
+	clients     map[int]*es.Client            // esConnectionID -> ES client
+	lokiClients map[int]*lokiclient.Client    // lokiConnectionID -> Loki client
+	stopping    bool
 }
 
 func NewEngine() *Engine {
 	return &Engine{
-		cron:    cron.New(cron.WithSeconds()),
-		jobs:    make(map[int]cron.EntryID),
-		clients: make(map[int]*es.Client),
+		cron:        cron.New(cron.WithSeconds()),
+		jobs:        make(map[int]cron.EntryID),
+		clients:     make(map[int]*es.Client),
+		lokiClients: make(map[int]*lokiclient.Client),
 	}
 }
 
@@ -101,6 +135,25 @@ func (e *Engine) RemoveRule(ruleID int) {
 	}
 }
 
+// CleanupRuleRedisKeys removes all Redis keys for a deleted rule
+func (e *Engine) CleanupRuleRedisKeys(ruleID int) {
+	ctx := context.Background()
+	patterns := []string{
+		fmt.Sprintf("alert:state:%d:*", ruleID),
+		fmt.Sprintf("alert:last_hit:%d:*", ruleID),
+		fmt.Sprintf("alert:dedup:%d:*", ruleID),
+	}
+	for _, pattern := range patterns {
+		iter := database.RDB.Scan(ctx, 0, pattern, 100).Iterator()
+		for iter.Next(ctx) {
+			database.RDB.Del(ctx, iter.Val())
+		}
+	}
+	// Also clean non-grouped state key
+	database.RDB.Del(ctx, fmt.Sprintf("alert:state:%d", ruleID))
+	log.Printf("[Engine] Cleaned Redis keys for rule %d", ruleID)
+}
+
 // RefreshESClient refreshes or removes an ES client
 func (e *Engine) RefreshESClient(connID int) {
 	e.mu.Lock()
@@ -116,7 +169,7 @@ func (e *Engine) loadAllRules() error {
 		message_title, COALESCE(message_template,''),
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
-		severity, COALESCE(group_by,''), dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), status
+		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), status
 		FROM alert_rules WHERE status = 1`)
 	if err != nil {
 		return err
@@ -132,7 +185,7 @@ func (e *Engine) loadAllRules() error {
 			&rule.Keyword, &rule.LogQL, &rule.FilterFields, &rule.ExtractFields,
 			&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 			&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
-			&rule.Severity, &rule.GroupBy, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
+			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
 			&rule.PrometheusConfig, &rule.Status)
 		if err != nil {
 			log.Printf("[Engine] Failed to scan rule: %v", err)
@@ -286,7 +339,7 @@ func (e *Engine) executeRule(ruleID int) {
 
 			// Transition: normal → alerting
 			log.Printf("[Engine] Rule %d: no hits in %s, triggering alert", rule.ID, rule.TimeRange)
-			database.RDB.Set(ctx, stateKey, "alerting", 0)
+			database.RDB.Set(ctx, stateKey, "alerting", 7*24*time.Hour)
 
 			// Search wider range for the last known log
 			lastHitMsg := "在指定时间范围内未搜到匹配日志"
@@ -339,7 +392,7 @@ func (e *Engine) executeRule(ruleID int) {
 			if prevState == "alerting" && rule.RecoveryEnabled == 1 {
 				// Transition: alerting → normal, send recovery
 				log.Printf("[Engine] Rule %d: recovered, sending recovery notification", rule.ID)
-				database.RDB.Set(ctx, stateKey, "normal", 0)
+				database.RDB.Set(ctx, stateKey, "normal", 7*24*time.Hour)
 
 				firstHit := result.Hits[0]
 				vars := extractFields(firstHit, rule.ExtractFields)
@@ -365,7 +418,7 @@ func (e *Engine) executeRule(ruleID int) {
 				}
 			} else if prevState == "alerting" {
 				// Recovery not enabled, just clear state
-				database.RDB.Set(ctx, stateKey, "normal", 0)
+				database.RDB.Set(ctx, stateKey, "normal", 7*24*time.Hour)
 				log.Printf("[Engine] Rule %d: recovered (no recovery notification)", rule.ID)
 			} else {
 				log.Printf("[Engine] Rule %d: normal (hits found)", rule.ID)
@@ -550,7 +603,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		message_title, COALESCE(message_template,''),
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
-		severity, COALESCE(group_by,''), dedup_field, dedup_ttl, max_alerts,
+		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), dedup_field, dedup_ttl, max_alerts,
 		COALESCE(prometheus_config,''), status
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType,
@@ -559,7 +612,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		&rule.Keyword, &rule.LogQL, &rule.FilterFields, &rule.ExtractFields,
 		&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 		&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
-		&rule.Severity, &rule.GroupBy, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
+		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
 		&rule.PrometheusConfig, &rule.Status)
 	return &rule, err
 }
@@ -583,6 +636,9 @@ func (e *Engine) queryES(ctx context.Context, rule *models.AlertRule) ([]map[str
 	if maxAlerts <= 0 {
 		maxAlerts = 10
 	}
+	if rule.GroupBy != "" && maxAlerts < 500 {
+		maxAlerts = 500
+	}
 	query, err := es.BuildQuery(rule.Keyword, rule.FilterFields, rule.TimeRange, rule.QueryDSL, maxAlerts)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query build error: %w", err)
@@ -605,15 +661,10 @@ func (e *Engine) queryLoki(ctx context.Context, rule *models.AlertRule) ([]map[s
 	}
 
 	// Get Loki connection
-	var conn models.LokiConnection
-	err := database.DB.QueryRow(`SELECT id, name, url, username, password, org_id, skip_tls_verify
-		FROM loki_connections WHERE id = ? AND status = 1`, rule.LokiConnectionID).Scan(
-		&conn.ID, &conn.Name, &conn.URL, &conn.Username, &conn.Password, &conn.OrgID, &conn.SkipTLSVerify)
+	client, err := e.getLokiClient(rule.LokiConnectionID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("Loki connection %d not found: %w", rule.LokiConnectionID, err)
+		return nil, 0, err
 	}
-
-	client := lokiclient.NewClient(conn)
 
 	// Parse time range
 	now := time.Now()
@@ -633,6 +684,10 @@ func (e *Engine) queryLoki(ctx context.Context, rule *models.AlertRule) ([]map[s
 	if maxAlerts <= 0 {
 		maxAlerts = 10
 	}
+	// Grouped mode needs more hits to cover all containers
+	if rule.GroupBy != "" && maxAlerts < 500 {
+		maxAlerts = 500
+	}
 
 	result, err := client.QueryRange(ctx, rule.LogQL, start, now, maxAlerts)
 	if err != nil {
@@ -645,15 +700,11 @@ func (e *Engine) queryLoki(ctx context.Context, rule *models.AlertRule) ([]map[s
 
 // queryLokiWider queries Loki with a wider time range (for not_found mode)
 func (e *Engine) queryLokiWider(ctx context.Context, rule *models.AlertRule, timeRange string, limit int) ([]map[string]interface{}, error) {
-	var conn models.LokiConnection
-	err := database.DB.QueryRow(`SELECT id, name, url, username, password, org_id, skip_tls_verify
-		FROM loki_connections WHERE id = ?`, rule.LokiConnectionID).Scan(
-		&conn.ID, &conn.Name, &conn.URL, &conn.Username, &conn.Password, &conn.OrgID, &conn.SkipTLSVerify)
+	client, err := e.getLokiClient(rule.LokiConnectionID)
 	if err != nil {
 		return nil, err
 	}
 
-	client := lokiclient.NewClient(conn)
 	now := time.Now()
 	start := now.Add(-24 * time.Hour)
 	if timeRange != "" {
@@ -667,6 +718,39 @@ func (e *Engine) queryLokiWider(ctx context.Context, rule *models.AlertRule, tim
 		return nil, err
 	}
 	return result.ToHits(), nil
+}
+
+func (e *Engine) getLokiClient(connID int) (*lokiclient.Client, error) {
+	e.mu.RLock()
+	client, ok := e.lokiClients[connID]
+	e.mu.RUnlock()
+
+	if ok {
+		return client, nil
+	}
+
+	var conn models.LokiConnection
+	err := database.DB.QueryRow(`SELECT id, name, url, username, password, org_id, skip_tls_verify
+		FROM loki_connections WHERE id = ? AND status = 1`, connID).Scan(
+		&conn.ID, &conn.Name, &conn.URL, &conn.Username, &conn.Password, &conn.OrgID, &conn.SkipTLSVerify)
+	if err != nil {
+		return nil, fmt.Errorf("Loki connection %d not found: %w", connID, err)
+	}
+
+	client = lokiclient.NewClient(conn)
+
+	e.mu.Lock()
+	e.lokiClients[connID] = client
+	e.mu.Unlock()
+
+	return client, nil
+}
+
+// RefreshLokiClient refreshes or removes a cached Loki client
+func (e *Engine) RefreshLokiClient(connID int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.lokiClients, connID)
 }
 
 func (e *Engine) getESClient(connID int) (*es.Client, error) {
@@ -796,91 +880,106 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 	sender *lark.Sender, atUsers []models.AtUser, atAll bool, ruleIDStr string,
 	currentGroups map[string][]map[string]interface{}, groupField, dataSourceType string) {
 
-	// Get known groups from wider range (24h)
-	var knownGroups []string
+	// Step 1: Get target groups (from expected_groups or auto-discover from 24h)
+	var targetGroups []string
 
-	if dataSourceType == "loki" {
-		// Loki: query wider range and extract unique group values from hits
-		widerHits, wErr := e.queryLokiWider(ctx, rule, "24h", 500)
-		if wErr != nil {
-			log.Printf("[Engine] Rule %d: Loki wider query error: %v", rule.ID, wErr)
-			return
-		}
-		seen := map[string]bool{}
-		for _, hit := range widerHits {
-			val := es.GetNestedField(hit, groupField)
-			if val != nil {
-				key := fmt.Sprintf("%v", val)
-				if !seen[key] {
-					seen[key] = true
-					knownGroups = append(knownGroups, key)
-				}
-			}
-		}
+	if rule.ExpectedGroups != "" {
+		// Use manually specified groups
+		json.Unmarshal([]byte(rule.ExpectedGroups), &targetGroups)
+		log.Printf("[Engine] Rule %d: using %d expected groups", rule.ID, len(targetGroups))
 	} else {
-		// ES: use terms aggregation
-		widerQuery, _ := es.BuildQuery(rule.Keyword, rule.FilterFields, "24h", "", 0)
-		widerQuery["size"] = 0
-		widerQuery["aggs"] = map[string]interface{}{
-			"groups": map[string]interface{}{
-				"terms": map[string]interface{}{
-					"field": groupField + ".keyword",
-					"size":  200,
-				},
-			},
-		}
+		// Auto-discover from 24h
+		targetGroups = e.discoverGroups(ctx, rule, groupField, dataSourceType)
+		log.Printf("[Engine] Rule %d: discovered %d groups from 24h", rule.ID, len(targetGroups))
+	}
 
-		esClient, cErr := e.getESClient(rule.ESConnectionID)
-		if cErr != nil {
-			log.Printf("[Engine] Rule %d: ES client error: %v", rule.ID, cErr)
-			return
-		}
+	if len(targetGroups) == 0 {
+		log.Printf("[Engine] Rule %d: no target groups found", rule.ID)
+		return
+	}
 
-		widerResult, err := esClient.SearchRaw(ctx, rule.ESIndex, widerQuery)
-		if err != nil {
-			log.Printf("[Engine] Rule %d: wider search error: %v", rule.ID, err)
-			// Fallback: try without .keyword suffix
-			widerQuery["aggs"] = map[string]interface{}{
-				"groups": map[string]interface{}{
-					"terms": map[string]interface{}{
-						"field": groupField,
-						"size":  200,
-					},
-				},
-			}
-			widerResult, err = esClient.SearchRaw(ctx, rule.ESIndex, widerQuery)
-			if err != nil {
-				log.Printf("[Engine] Rule %d: wider search fallback error: %v", rule.ID, err)
+	// Step 2: Concurrently check each group (limit=1 per group)
+	type checkResult struct {
+		GroupKey string
+		HasHits  bool
+		FirstHit map[string]interface{}
+	}
+
+	resultCh := make(chan checkResult, len(targetGroups))
+	concurrency := rule.QueryConcurrency
+	if concurrency <= 0 {
+		concurrency = 5
+	}
+	semaphore := make(chan struct{}, concurrency) // per-rule concurrency
+
+	for _, groupKey := range targetGroups {
+		semaphore <- struct{}{} // acquire per-rule slot
+		go func(gk string) {
+			defer func() { <-semaphore }() // release per-rule slot
+
+			// Check if already in currentGroups (from the initial batch query)
+			if hits, ok := currentGroups[gk]; ok && len(hits) > 0 {
+				// Cache the last hit in Redis
+				cacheLastHit(rule.ID, gk, hits[0])
+				resultCh <- checkResult{GroupKey: gk, HasHits: true, FirstHit: hits[0]}
 				return
 			}
-		}
-		knownGroups = parseAggBuckets(widerResult, "groups")
-	}
-	log.Printf("[Engine] Rule %d: %d known groups from 24h, %d active in %s",
-		rule.ID, len(knownGroups), len(currentGroups), rule.TimeRange)
 
-	// Check each known group
-	for _, groupKey := range knownGroups {
+			// Acquire global semaphore before querying (with context timeout)
+			if !acquireGlobalCtx(ctx) {
+				log.Printf("[Engine] Rule %d: global semaphore timeout for group '%s'", rule.ID, gk)
+				resultCh <- checkResult{GroupKey: gk, HasHits: false}
+				return
+			}
+			hasHits, firstHit := e.checkGroupHit(ctx, rule, groupField, gk, dataSourceType)
+			releaseGlobal()
+
+			if hasHits && firstHit != nil {
+				cacheLastHit(rule.ID, gk, firstHit)
+			}
+			resultCh <- checkResult{GroupKey: gk, HasHits: hasHits, FirstHit: firstHit}
+		}(groupKey)
+	}
+
+	// Collect results
+	results := make(map[string]checkResult)
+	for i := 0; i < len(targetGroups); i++ {
+		r := <-resultCh
+		results[r.GroupKey] = r
+	}
+
+	log.Printf("[Engine] Rule %d: checked %d groups", rule.ID, len(results))
+
+	// Step 3: Process each group
+	for _, groupKey := range targetGroups {
+		r := results[groupKey]
 		stateKey := fmt.Sprintf("alert:state:%d:%s", rule.ID, groupKey)
 		prevState, _ := database.RDB.Get(ctx, stateKey).Result()
 
-		_, hasHits := currentGroups[groupKey]
-
-		if !hasHits {
-			// Group missing → should be alerting
+		if !r.HasHits {
+			// Not found → should be alerting
 			if prevState == "alerting" {
-				continue // Already alerting, skip
+				continue // Already alerting
 			}
 
-			log.Printf("[Engine] Rule %d: group '%s' not found, triggering alert", rule.ID, groupKey)
-			database.RDB.Set(ctx, stateKey, "alerting", 0)
+			log.Printf("[Engine] Rule %d: group '%s' not found in %s, triggering alert", rule.ID, groupKey, rule.TimeRange)
+			database.RDB.Set(ctx, stateKey, "alerting", 7*24*time.Hour)
 
+			// Try to get last cached hit from Redis (avoid 24h query)
 			vars := map[string]interface{}{
-				"alert_reason":  "not_found",
-				"time_range":    rule.TimeRange,
-				"_group_key":    groupKey,
-				"_group_field":  groupField,
-				groupField:      groupKey,
+				"alert_reason": "not_found",
+				"time_range":   rule.TimeRange,
+				"_group_key":   groupKey,
+				"_group_field": groupField,
+				groupField:     groupKey,
+			}
+			if lastHit := getLastHit(rule.ID, groupKey); lastHit != nil {
+				vars = extractFields(lastHit, rule.ExtractFields)
+				vars["alert_reason"] = "not_found"
+				vars["time_range"] = rule.TimeRange
+				vars["_group_key"] = groupKey
+				vars["_group_field"] = groupField
+				log.Printf("[Engine] Rule %d: using cached last hit for group '%s'", rule.ID, groupKey)
 			}
 			message := renderTemplate(rule.MessageTemplate, vars)
 			title := fmt.Sprintf("%s [%s]", rule.MessageTitle, groupKey)
@@ -901,17 +1000,16 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 				log.Printf("[Engine] Rule %d: group '%s' not_found alert sent, resp=%s", rule.ID, groupKey, resp)
 			}
 		} else {
-			// Group has hits → should be normal
+			// Has hits → should be normal
 			if prevState == "alerting" && rule.RecoveryEnabled == 1 {
 				log.Printf("[Engine] Rule %d: group '%s' recovered", rule.ID, groupKey)
-				database.RDB.Set(ctx, stateKey, "normal", 0)
+				database.RDB.Set(ctx, stateKey, "normal", 7*24*time.Hour)
 
-				firstHit := currentGroups[groupKey][0]
-				vars := extractFields(firstHit, rule.ExtractFields)
+				vars := extractFields(r.FirstHit, rule.ExtractFields)
 				vars["alert_reason"] = "recovered"
 				vars["_group_key"] = groupKey
 				vars["_group_field"] = groupField
-				rawJSON, _ := json.Marshal(firstHit)
+				rawJSON, _ := json.Marshal(r.FirstHit)
 
 				title := rule.RecoveryTitle
 				if title == "" {
@@ -932,7 +1030,7 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 					log.Printf("[Engine] Rule %d: group '%s' recovery sent, resp=%s", rule.ID, groupKey, resp)
 				}
 			} else if prevState == "alerting" {
-				database.RDB.Set(ctx, stateKey, "normal", 0)
+				database.RDB.Set(ctx, stateKey, "normal", 7*24*time.Hour)
 			}
 		}
 	}
@@ -940,7 +1038,167 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 	database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
 }
 
+// discoverGroups auto-discovers groups from 24h data
+func (e *Engine) discoverGroups(ctx context.Context, rule *models.AlertRule, groupField, dataSourceType string) []string {
+	if dataSourceType == "loki" {
+		widerHits, err := e.queryLokiWider(ctx, rule, "24h", 1000)
+		if err != nil {
+			log.Printf("[Engine] Rule %d: discover groups error: %v", rule.ID, err)
+			return nil
+		}
+		seen := map[string]bool{}
+		var groups []string
+		for _, hit := range widerHits {
+			val := es.GetNestedField(hit, groupField)
+			if val != nil {
+				key := fmt.Sprintf("%v", val)
+				if !seen[key] {
+					seen[key] = true
+					groups = append(groups, key)
+				}
+			}
+		}
+		return groups
+	}
+
+	// ES: use terms aggregation
+	widerQuery, _ := es.BuildQuery(rule.Keyword, rule.FilterFields, "24h", "", 0)
+	widerQuery["size"] = 0
+	widerQuery["aggs"] = map[string]interface{}{
+		"groups": map[string]interface{}{
+			"terms": map[string]interface{}{
+				"field": groupField + ".keyword",
+				"size":  200,
+			},
+		},
+	}
+	esClient, err := e.getESClient(rule.ESConnectionID)
+	if err != nil {
+		return nil
+	}
+	widerResult, err := esClient.SearchRaw(ctx, rule.ESIndex, widerQuery)
+	if err != nil {
+		widerQuery["aggs"] = map[string]interface{}{
+			"groups": map[string]interface{}{
+				"terms": map[string]interface{}{
+					"field": groupField,
+					"size":  200,
+				},
+			},
+		}
+		widerResult, err = esClient.SearchRaw(ctx, rule.ESIndex, widerQuery)
+		if err != nil {
+			return nil
+		}
+	}
+	return parseAggBuckets(widerResult, "groups")
+}
+
+// checkGroupHit checks if a specific group has any hits in the current time range
+func (e *Engine) checkGroupHit(ctx context.Context, rule *models.AlertRule, groupField, groupKey, dataSourceType string) (bool, map[string]interface{}) {
+	if dataSourceType == "loki" {
+		// Build LogQL: inject group filter into original label selectors
+		logql := rule.LogQL
+		// Sanitize groupKey: escape quotes
+		safeGroupKey := strings.ReplaceAll(groupKey, `"`, `\"`)
+
+		var specificLogQL string
+		if idx := strings.Index(logql, "}"); idx >= 0 {
+			// Insert group filter before the closing }
+			// Original: {namespace="prod", container=~".*-backend"} |~ "Link"
+			// Result:   {namespace="prod", container=~".*-backend", container="roulette-resource-backend"} |~ "Link"
+			// Loki will use the exact match to narrow down
+			existingLabels := strings.TrimSpace(logql[1:idx])
+			pipeline := strings.TrimSpace(logql[idx+1:])
+			if existingLabels != "" {
+				specificLogQL = fmt.Sprintf(`{%s, %s="%s"}`, existingLabels, groupField, safeGroupKey)
+			} else {
+				specificLogQL = fmt.Sprintf(`{%s="%s"}`, groupField, safeGroupKey)
+			}
+			if pipeline != "" {
+				specificLogQL += " " + pipeline
+			}
+		} else {
+			specificLogQL = fmt.Sprintf(`{%s="%s"}`, groupField, safeGroupKey)
+		}
+
+		client, cErr := e.getLokiClient(rule.LokiConnectionID)
+		if cErr != nil {
+			log.Printf("[Engine] Rule %d: getLokiClient error: %v", rule.ID, cErr)
+			return false, nil
+		}
+
+		now := time.Now()
+		duration := 5 * time.Minute
+		if rule.TimeRange != "" {
+			if strings.HasSuffix(rule.TimeRange, "d") {
+				days := 1
+				fmt.Sscanf(rule.TimeRange, "%dd", &days)
+				duration = time.Duration(days) * 24 * time.Hour
+			} else if d, err := time.ParseDuration(rule.TimeRange); err == nil {
+				duration = d
+			}
+		}
+
+		result, err := client.QueryRange(ctx, specificLogQL, now.Add(-duration), now, 1)
+		if err != nil {
+			log.Printf("[Engine] Rule %d: check group '%s' error: %v", rule.ID, groupKey, err)
+			return false, nil
+		}
+
+		hits := result.ToHits()
+		if len(hits) > 0 {
+			return true, hits[0]
+		}
+		return false, nil
+	}
+
+	// ES: query with additional filter for the group
+	filterJSON := rule.FilterFields
+	var filters []models.FilterField
+	if filterJSON != "" {
+		json.Unmarshal([]byte(filterJSON), &filters)
+	}
+	filters = append(filters, models.FilterField{Field: groupField, Value: groupKey, Op: "term"})
+	newFilterJSON, _ := json.Marshal(filters)
+
+	query, _ := es.BuildQuery(rule.Keyword, string(newFilterJSON), rule.TimeRange, "", 1)
+	esClient, err := e.getESClient(rule.ESConnectionID)
+	if err != nil {
+		return false, nil
+	}
+	result, err := esClient.Search(ctx, rule.ESIndex, query)
+	if err != nil || len(result.Hits) == 0 {
+		return false, nil
+	}
+	return true, result.Hits[0]
+}
+
 // parseAggBuckets extracts bucket keys from ES aggregation result
+// cacheLastHit stores the last hit for a group in Redis (expires in 48h)
+func cacheLastHit(ruleID int, groupKey string, hit map[string]interface{}) {
+	key := fmt.Sprintf("alert:last_hit:%d:%s", ruleID, groupKey)
+	data, err := json.Marshal(hit)
+	if err != nil {
+		return
+	}
+	database.RDB.Set(context.Background(), key, string(data), 48*time.Hour)
+}
+
+// getLastHit retrieves the cached last hit for a group from Redis
+func getLastHit(ruleID int, groupKey string) map[string]interface{} {
+	key := fmt.Sprintf("alert:last_hit:%d:%s", ruleID, groupKey)
+	val, err := database.RDB.Get(context.Background(), key).Result()
+	if err != nil || val == "" {
+		return nil
+	}
+	var hit map[string]interface{}
+	if err := json.Unmarshal([]byte(val), &hit); err != nil {
+		return nil
+	}
+	return hit
+}
+
 func parseAggBuckets(raw []byte, aggName string) []string {
 	var resp map[string]interface{}
 	if err := json.Unmarshal(raw, &resp); err != nil {

@@ -1,7 +1,7 @@
 <template>
   <div class="login-page">
     <div class="login-card">
-      <h1>ES Alert</h1>
+      <h1>Log Alert</h1>
       <p class="subtitle">告警管理平台</p>
       <form @submit.prevent="handleLogin">
         <div class="form-group">

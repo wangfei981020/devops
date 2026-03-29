@@ -10,9 +10,9 @@
           </select>
           <select v-model="filters.severity" class="form-select" style="width: 120px;" @change="page = 1; loadLogs()">
             <option value="">全部级别</option>
-            <option value="info">信息</option>
-            <option value="warning">警告</option>
-            <option value="critical">严重</option>
+            <option value="S1">S1 灾难</option>
+            <option value="S2">S2 严重</option>
+            <option value="S3">S3 警告</option>
           </select>
           <div class="flex items-center gap-2">
             <input type="date" v-model="filters.start_date" class="form-input" style="width: 150px;" @change="page = 1; loadLogs()" />
@@ -192,10 +192,10 @@ async function cleanLogs() {
 }
 
 function severityClass(s) {
-  return { info: 'badge-info', warning: 'badge-warning', critical: 'badge-danger' }[s] || 'badge-gray'
+  return { S1: 'badge-danger', S2: 'badge-warning', S3: 'badge-info', info: 'badge-info', warning: 'badge-warning', critical: 'badge-danger' }[s] || 'badge-gray'
 }
 function severityLabel(s) {
-  return { info: '信息', warning: '警告', critical: '严重' }[s] || s
+  return { S1: 'S1 灾难', S2: 'S2 严重', S3: 'S3 警告', info: '信息', warning: '警告', critical: '严重' }[s] || s
 }
 function formatTime(t) {
   if (!t) return '-'

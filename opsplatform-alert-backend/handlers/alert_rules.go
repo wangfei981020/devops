@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/gorilla/mux"
 	"opsplatform-alert-backend/database"
 	"opsplatform-alert-backend/es"
+	"opsplatform-alert-backend/lark"
 	lokiclient "opsplatform-alert-backend/loki"
 	"opsplatform-alert-backend/models"
 )
@@ -72,11 +74,13 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 		r.message_title, COALESCE(r.message_template,''),
 		COALESCE(r.at_users,''), r.at_all, COALESCE(r.alert_mode,'found'),
 		r.recovery_enabled, COALESCE(r.recovery_title,''), COALESCE(r.recovery_template,''),
-		r.severity, COALESCE(r.group_by,''), r.dedup_field, r.dedup_ttl, r.max_alerts, COALESCE(r.prometheus_config,''), r.status,
+		r.severity, COALESCE(r.group_by,''), COALESCE(r.expected_groups,''), COALESCE(r.query_concurrency,5), r.dedup_field, r.dedup_ttl, r.max_alerts, COALESCE(r.prometheus_config,''), r.status,
 		r.last_run_at, r.last_error, r.created_at, r.updated_at,
-		COALESCE(e.name,'(已删除)') as es_name, COALESCE(l.name,'(已删除)') as lark_name
+		COALESCE(e.name,'(已删除)') as es_name, COALESCE(lk.name,'') as loki_name,
+		COALESCE(l.name,'(已删除)') as lark_name
 		FROM alert_rules r
 		LEFT JOIN es_connections e ON r.es_connection_id = e.id
+		LEFT JOIN loki_connections lk ON r.loki_connection_id = lk.id
 		LEFT JOIN lark_configs l ON r.lark_config_id = l.id
 		WHERE 1=1`
 
@@ -104,16 +108,16 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 	var list []map[string]interface{}
 	for rows.Next() {
 		var rule models.AlertRule
-		var esName, larkName string
+		var esName, lokiName, larkName string
 		err := rows.Scan(&rule.ID, &rule.Name, &rule.DataSourceType, &rule.ESConnectionID,
 			&rule.LokiConnectionID, &rule.LarkConfigID, &rule.ESIndex,
 			&rule.Schedule, &rule.TimeRange, &rule.QueryDSL,
 			&rule.Keyword, &rule.LogQL, &rule.FilterFields, &rule.ExtractFields,
 			&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 			&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
-			&rule.Severity, &rule.GroupBy, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
+			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
 			&rule.PrometheusConfig, &rule.Status, &rule.LastRunAt, &rule.LastError,
-			&rule.CreatedAt, &rule.UpdatedAt, &esName, &larkName)
+			&rule.CreatedAt, &rule.UpdatedAt, &esName, &lokiName, &larkName)
 		if err != nil {
 			continue
 		}
@@ -142,7 +146,9 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			"recovery_title":     rule.RecoveryTitle,
 			"recovery_template":  rule.RecoveryTemplate,
 			"severity":           rule.Severity,
-			"group_by":          rule.GroupBy,
+			"group_by":           rule.GroupBy,
+			"expected_groups":    rule.ExpectedGroups,
+			"query_concurrency":  rule.QueryConcurrency,
 			"dedup_field":       rule.DedupField,
 			"dedup_ttl":         rule.DedupTTL,
 			"max_alerts":         rule.MaxAlerts,
@@ -150,7 +156,8 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			"status":             rule.Status,
 			"created_at":        rule.CreatedAt,
 			"updated_at":        rule.UpdatedAt,
-			"es_connection_name": esName,
+			"es_connection_name":   esName,
+			"loki_connection_name": lokiName,
 			"lark_config_name":  larkName,
 		}
 
@@ -181,7 +188,7 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		message_title, COALESCE(message_template,''),
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
-		severity, COALESCE(group_by,''), dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''),
+		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''),
 		status, last_run_at, last_error, created_at, updated_at
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType, &rule.ESConnectionID,
@@ -190,7 +197,7 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		&rule.Keyword, &rule.LogQL, &rule.FilterFields, &rule.ExtractFields,
 		&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 		&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
-		&rule.Severity, &rule.GroupBy, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
+		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
 		&rule.PrometheusConfig, &rule.Status, &rule.LastRunAt, &rule.LastError,
 		&rule.CreatedAt, &rule.UpdatedAt)
 	if err != nil {
@@ -211,8 +218,20 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "规则名称不能为空")
 		return
 	}
-	if req.ESConnectionID == 0 {
+	dsType := req.DataSourceType
+	if dsType == "" {
+		dsType = "es"
+	}
+	if dsType == "es" && req.ESConnectionID == 0 {
 		jsonError(w, http.StatusBadRequest, "请选择ES连接")
+		return
+	}
+	if dsType == "loki" && req.LokiConnectionID == 0 {
+		jsonError(w, http.StatusBadRequest, "请选择Loki连接")
+		return
+	}
+	if dsType == "loki" && req.LogQL == "" {
+		jsonError(w, http.StatusBadRequest, "LogQL查询不能为空")
 		return
 	}
 	if req.LarkConfigID == 0 {
@@ -246,14 +265,14 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 		query_dsl, keyword, logql, filter_fields, extract_fields,
 		message_title, message_template, at_users, at_all,
 		alert_mode, recovery_enabled, recovery_title, recovery_template,
-		severity, group_by, dedup_field, dedup_ttl, max_alerts, prometheus_config, status)
+		severity, group_by, expected_groups, query_concurrency, dedup_field, dedup_ttl, max_alerts, prometheus_config, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, req.LarkConfigID,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
 		req.FilterFields, req.ExtractFields, req.MessageTitle,
 		req.MessageTemplate, req.AtUsers, req.AtAll,
 		req.AlertMode, req.RecoveryEnabled, req.RecoveryTitle, req.RecoveryTemplate,
-		req.Severity, req.GroupBy, req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig)
+		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "创建失败: "+err.Error())
 		return
@@ -284,14 +303,15 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		filter_fields=?, extract_fields=?, message_title=?,
 		message_template=?, at_users=?, at_all=?,
 		alert_mode=?, recovery_enabled=?, recovery_title=?, recovery_template=?,
-		severity=?, group_by=?, dedup_field=?, dedup_ttl=?, max_alerts=?, prometheus_config=?
+		severity=?, group_by=?, expected_groups=?, query_concurrency=?, dedup_field=?, dedup_ttl=?, max_alerts=?, prometheus_config=?
 		WHERE id=?`,
 		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, req.LarkConfigID,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
 		req.FilterFields, req.ExtractFields, req.MessageTitle,
 		req.MessageTemplate, req.AtUsers, req.AtAll,
 		req.AlertMode, req.RecoveryEnabled, req.RecoveryTitle, req.RecoveryTemplate,
-		req.Severity, req.GroupBy, req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, id)
+		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency,
+		req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, id)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "更新失败: "+err.Error())
 		return
@@ -308,9 +328,12 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 func HandleDeleteAlertRule(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
 
-	// Remove from engine first
+	// Remove from engine and clean Redis keys
 	if ruleEngine != nil {
 		ruleEngine.RemoveRule(id)
+		if engine, ok := ruleEngine.(interface{ CleanupRuleRedisKeys(int) }); ok {
+			engine.CleanupRuleRedisKeys(id)
+		}
 	}
 
 	database.DB.Exec("DELETE FROM alert_rules WHERE id = ?", id)
@@ -474,6 +497,31 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 		sourceDetail = fmt.Sprintf("ES %s.x | %s", conn.Version, esIndex)
 	}
 
+	// If group_by is set, group hits and keep only first per group
+	groupBy := req.GroupBy
+	if groupBy != "" {
+		grouped := make(map[string]map[string]interface{})
+		var order []string
+		for _, hit := range rawHits {
+			val := es.GetNestedField(hit, groupBy)
+			key := "(unknown)"
+			if val != nil {
+				key = fmt.Sprintf("%v", val)
+			}
+			if _, exists := grouped[key]; !exists {
+				grouped[key] = hit
+				order = append(order, key)
+			}
+		}
+		rawHits = nil
+		for _, key := range order {
+			hit := grouped[key]
+			hit["_group_key"] = key
+			hit["_group_field"] = groupBy
+			rawHits = append(rawHits, hit)
+		}
+	}
+
 	// Process hits
 	var hits []PreviewHit
 	for _, hit := range rawHits {
@@ -482,7 +530,7 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 		hits = append(hits, PreviewHit{Raw: hit, Vars: vars, Rendered: rendered})
 	}
 
-	jsonSuccess(w, map[string]interface{}{
+	resp := map[string]interface{}{
 		"total":         total,
 		"hit_count":     len(rawHits),
 		"hits":          hits,
@@ -490,6 +538,225 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 		"source_name":   sourceName,
 		"source_detail": sourceDetail,
 		"data_source":   dsType,
+	}
+	if groupBy != "" {
+		resp["group_by"] = groupBy
+		resp["group_count"] = len(rawHits)
+	}
+	jsonSuccess(w, resp)
+}
+
+// HandleTestSendAlertRule queries data source and sends one real alert to Lark
+func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
+	var req models.CreateAlertRuleReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "无效的请求")
+		return
+	}
+	if req.LarkConfigID == 0 {
+		jsonError(w, http.StatusBadRequest, "请选择 Lark 配置")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	// Get Lark config
+	var larkCfg models.LarkConfig
+	err := database.DB.QueryRow(`SELECT id, name, webhook_url, secret, lark_type FROM lark_configs WHERE id = ?`,
+		req.LarkConfigID).Scan(&larkCfg.ID, &larkCfg.Name, &larkCfg.WebhookURL, &larkCfg.Secret, &larkCfg.LarkType)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "Lark 配置不存在")
+		return
+	}
+
+	// Query data source
+	timeRange := req.TimeRange
+	if timeRange == "" {
+		timeRange = "5m"
+	}
+	maxAlerts := req.MaxAlerts
+	if maxAlerts <= 0 {
+		maxAlerts = 500 // test-send needs enough hits to cover all containers
+	}
+	if req.GroupBy != "" && maxAlerts < 500 {
+		maxAlerts = 500 // grouped mode needs more hits
+	}
+	dsType := req.DataSourceType
+	if dsType == "" {
+		dsType = "es"
+	}
+
+	var rawHits []map[string]interface{}
+
+	if dsType == "loki" {
+		if req.LokiConnectionID == 0 || req.LogQL == "" {
+			jsonError(w, http.StatusBadRequest, "请配置 Loki 连接和 LogQL")
+			return
+		}
+		conn := getLokiConn(req.LokiConnectionID)
+		if conn == nil {
+			jsonError(w, http.StatusBadRequest, "Loki 连接不存在")
+			return
+		}
+		client := lokiclient.NewClient(*conn)
+		now := time.Now()
+		duration := parsePreviewTimeRange(timeRange)
+		start := now.Add(-duration)
+		log.Printf("[TestSend] Loki query: logql=%s start=%s end=%s limit=%d", req.LogQL, start.Format(time.RFC3339), now.Format(time.RFC3339), maxAlerts)
+		result, qErr := client.QueryRange(ctx, req.LogQL, start, now, maxAlerts)
+		if qErr != nil {
+			jsonError(w, http.StatusBadRequest, "Loki 查询失败: "+qErr.Error())
+			return
+		}
+		rawHits = result.ToHits()
+		log.Printf("[TestSend] Loki result: streams=%d total=%d hits=%d", len(result.Streams), result.Total, len(rawHits))
+	} else {
+		if req.ESConnectionID == 0 {
+			jsonError(w, http.StatusBadRequest, "请选择 ES 连接")
+			return
+		}
+		var conn models.ESConnection
+		database.DB.QueryRow(`SELECT id, name, url, version, username, password, api_key, skip_tls_verify
+			FROM es_connections WHERE id = ?`, req.ESConnectionID).Scan(
+			&conn.ID, &conn.Name, &conn.URL, &conn.Version, &conn.Username, &conn.Password, &conn.APIKey, &conn.SkipTLSVerify)
+		client, cErr := es.NewClient(conn)
+		if cErr != nil {
+			jsonError(w, http.StatusBadRequest, "ES 客户端创建失败: "+cErr.Error())
+			return
+		}
+		esIndex := req.ESIndex
+		if esIndex == "" {
+			esIndex = "*"
+		}
+		query, _ := es.BuildQuery(req.Keyword, req.FilterFields, timeRange, req.QueryDSL, maxAlerts)
+		result, qErr := client.Search(ctx, esIndex, query)
+		if qErr != nil {
+			jsonError(w, http.StatusBadRequest, "ES 查询失败: "+qErr.Error())
+			return
+		}
+		rawHits = result.Hits
+	}
+
+	// Check alert mode
+	alertMode := req.AlertMode
+	if alertMode == "" {
+		alertMode = "found"
+	}
+	groupBy := req.GroupBy
+
+	// Group hits if group_by is set
+	type groupInfo struct {
+		Key  string
+		Hits []map[string]interface{}
+	}
+	var groups []groupInfo
+
+	if groupBy != "" && len(rawHits) > 0 {
+		seen := map[string]*groupInfo{}
+		for _, hit := range rawHits {
+			val := es.GetNestedField(hit, groupBy)
+			key := "(unknown)"
+			if val != nil {
+				key = fmt.Sprintf("%v", val)
+			}
+			if g, ok := seen[key]; ok {
+				g.Hits = append(g.Hits, hit)
+			} else {
+				g := &groupInfo{Key: key, Hits: []map[string]interface{}{hit}}
+				seen[key] = g
+				groups = append(groups, *g)
+			}
+		}
+	}
+
+	// For not_found with group_by: check which groups are present
+	if alertMode == "not_found" && groupBy != "" {
+		if len(rawHits) == 0 {
+			// No hits at all → all containers missing
+			jsonSuccess(w, map[string]interface{}{
+				"message":     fmt.Sprintf("当前 %s 内未搜到任何日志，所有容器都会触发告警", timeRange),
+				"hit_count":   0,
+				"would_alert": true,
+				"groups":      []string{},
+			})
+			return
+		}
+		// Some groups found → show which containers are OK
+		var foundGroups []string
+		for _, g := range groups {
+			foundGroups = append(foundGroups, g.Key)
+		}
+		jsonSuccess(w, map[string]interface{}{
+			"message":      fmt.Sprintf("正常容器: %d 个（%s 内有日志）\n缺失容器需与 24h 内已知容器对比，实际执行时自动判断", len(foundGroups), timeRange),
+			"hit_count":    len(rawHits),
+			"would_alert":  false,
+			"found_groups": foundGroups,
+			"group_count":  len(foundGroups),
+		})
+		return
+	}
+
+	if alertMode == "not_found" && len(rawHits) > 0 {
+		jsonSuccess(w, map[string]interface{}{
+			"message":   fmt.Sprintf("当前 %s 内搜到 %d 条日志，not_found 模式下不会触发告警", timeRange, len(rawHits)),
+			"hit_count": len(rawHits),
+			"would_alert": false,
+		})
+		return
+	}
+
+	if alertMode == "found" && len(rawHits) == 0 {
+		jsonSuccess(w, map[string]interface{}{
+			"message":     fmt.Sprintf("当前 %s 内未搜到匹配日志，found 模式下不会触发告警", timeRange),
+			"hit_count":   0,
+			"would_alert": false,
+		})
+		return
+	}
+
+	// Render message
+	title := req.MessageTitle
+	if title == "" {
+		title = req.Name + " - 测试"
+	} else {
+		title = title + " [测试]"
+	}
+
+	var message string
+	if alertMode == "not_found" {
+		message = "**搜不到告警 (测试)**\n\n在 " + timeRange + " 内未搜到匹配日志。"
+		if req.MessageTemplate != "" {
+			vars := map[string]interface{}{"alert_reason": "not_found", "time_range": timeRange}
+			message = previewRenderTemplate(req.MessageTemplate, vars)
+		}
+	} else if len(rawHits) > 0 {
+		vars := previewExtractFields(rawHits[0], req.ExtractFields)
+		message = previewRenderTemplate(req.MessageTemplate, vars)
+	}
+
+	// Parse at_users
+	var atUsers []models.AtUser
+	if req.AtUsers != "" {
+		json.Unmarshal([]byte(req.AtUsers), &atUsers)
+	}
+
+	// Send to Lark
+	sender := lark.NewSender(larkCfg)
+	severity := req.Severity
+	if severity == "" {
+		severity = "info"
+	}
+	resp, sErr := sender.SendCard(title, message, severity, atUsers, req.AtAll == 1)
+	if sErr != nil {
+		jsonError(w, http.StatusBadRequest, "发送失败: "+sErr.Error())
+		return
+	}
+
+	jsonSuccess(w, map[string]interface{}{
+		"message":  "测试告警已发送到 Lark",
+		"response": resp,
+		"hit_count": len(rawHits),
 	})
 }
 

@@ -36,6 +36,9 @@ func main() {
 	// Init Prometheus metrics
 	alert.InitMetrics()
 
+	// Init global query concurrency limiter
+	alert.InitGlobalSemaphore(cfg.GlobalMaxConcurrency)
+
 	// Init alert engine
 	engine := alert.NewEngine()
 	handlers.SetAlertEngine(engine)
@@ -105,6 +108,7 @@ func main() {
 	protected.HandleFunc("/alert-rules/{id}/toggle", handlers.HandleToggleAlertRule).Methods("PUT")
 	protected.HandleFunc("/alert-rules/{id}/run", handlers.HandleRunAlertRule).Methods("POST")
 	protected.HandleFunc("/alert-rules/preview", handlers.HandlePreviewAlertRule).Methods("POST")
+	protected.HandleFunc("/alert-rules/test-send", handlers.HandleTestSendAlertRule).Methods("POST")
 
 	// ES Explore
 	protected.HandleFunc("/es-explore", handlers.HandleESExplore).Methods("POST")

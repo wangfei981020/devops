@@ -31,8 +31,8 @@
             <tr>
               <th>状态</th>
               <th>规则名称</th>
-              <th>关键词</th>
-              <th>ES 连接</th>
+              <th>关键词 / LogQL</th>
+              <th>数据源</th>
               <th>Lark 配置</th>
               <th>执行周期</th>
               <th>级别</th>
@@ -56,10 +56,11 @@
                 </div>
               </td>
               <td>
-                <span class="truncate" :title="rule.keyword">{{ rule.keyword || '-' }}</span>
+                <span class="truncate" :title="rule.keyword || rule.logql">{{ rule.keyword || rule.logql || '-' }}</span>
               </td>
               <td>
-                <span class="badge badge-info">{{ rule.es_connection_name }}</span>
+                <span v-if="(rule.data_source_type || 'es') === 'loki'" class="badge badge-warning">Loki</span>
+                <span v-else class="badge badge-info">ES: {{ rule.es_connection_name }}</span>
               </td>
               <td>
                 <span class="badge badge-success">{{ rule.lark_config_name }}</span>
@@ -183,11 +184,11 @@ function viewLogs(rule) {
 }
 
 function severityClass(s) {
-  return { info: 'badge-info', warning: 'badge-warning', critical: 'badge-danger' }[s] || 'badge-gray'
+  return { S1: 'badge-danger', S2: 'badge-warning', S3: 'badge-info', info: 'badge-info', warning: 'badge-warning', critical: 'badge-danger' }[s] || 'badge-gray'
 }
 
 function severityLabel(s) {
-  return { info: '信息', warning: '警告', critical: '严重' }[s] || s
+  return { S1: 'S1 灾难', S2: 'S2 严重', S3: 'S3 警告', info: '信息', warning: '警告', critical: '严重' }[s] || s
 }
 
 function formatTime(t) {

@@ -105,6 +105,8 @@ type AlertRule struct {
 	RecoveryTemplate string         `json:"recovery_template"`
 	Severity         string         `json:"severity"`
 	GroupBy          string         `json:"group_by"`
+	ExpectedGroups   string         `json:"expected_groups"`  // JSON array of expected group names
+	QueryConcurrency int            `json:"query_concurrency"` // per-rule concurrency for group checks
 	DedupField       string         `json:"dedup_field"`
 	DedupTTL         int            `json:"dedup_ttl"`
 	MaxAlerts        int            `json:"max_alerts"`
@@ -200,6 +202,8 @@ type CreateAlertRuleReq struct {
 	RecoveryTemplate string `json:"recovery_template"`
 	Severity         string `json:"severity"`
 	GroupBy          string `json:"group_by"`
+	ExpectedGroups   string `json:"expected_groups"`
+	QueryConcurrency int    `json:"query_concurrency"`
 	DedupField       string `json:"dedup_field"`
 	DedupTTL         int    `json:"dedup_ttl"`
 	MaxAlerts        int    `json:"max_alerts"`

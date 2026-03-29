@@ -197,6 +197,8 @@ func autoMigrate() {
 		{"alert_rules", "recovery_template", "TEXT COMMENT '恢复通知模板'"},
 		{"alert_rules", "prometheus_config", "TEXT COMMENT 'Prometheus指标配置JSON'"},
 		{"alert_rules", "group_by", "VARCHAR(200) DEFAULT '' COMMENT '分组字段'"},
+		{"alert_rules", "expected_groups", "TEXT COMMENT '期望的分组列表JSON'"},
+		{"alert_rules", "query_concurrency", "INT DEFAULT 5 COMMENT '单规则查询并发数'"},
 		{"alert_rules", "data_source_type", "VARCHAR(20) DEFAULT 'es' COMMENT '数据源类型: es/loki'"},
 		{"alert_rules", "loki_connection_id", "INT DEFAULT 0 COMMENT 'Loki连接ID'"},
 		{"alert_rules", "logql", "TEXT COMMENT 'LogQL查询语句(Loki)'"},

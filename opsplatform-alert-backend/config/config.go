@@ -32,6 +32,9 @@ type Config struct {
 	// Portal
 	PortalAPIURL string
 
+	// Query
+	GlobalMaxConcurrency int // global max concurrent queries to Loki/ES
+
 	// Cookie
 	CookieSecure   bool
 	CookieSameSite string
@@ -62,6 +65,12 @@ func Load() *Config {
 		SessionTimeout: sessionTimeout,
 
 		PortalAPIURL: getEnv("PORTAL_API_URL", ""),
+
+		GlobalMaxConcurrency: func() int {
+			v, _ := strconv.Atoi(getEnv("GLOBAL_MAX_CONCURRENCY", "20"))
+			if v <= 0 { v = 20 }
+			return v
+		}(),
 
 		CookieSecure:   getEnv("COOKIE_SECURE", "false") == "true",
 		CookieSameSite: getEnv("COOKIE_SAMESITE", "lax"),

@@ -17,9 +17,9 @@
           <div class="form-group">
             <label class="form-label">告警级别</label>
             <select v-model="form.severity" class="form-select">
-              <option value="info">信息 (蓝色)</option>
-              <option value="warning">警告 (橙色)</option>
-              <option value="critical">严重 (红色)</option>
+              <option value="S1">S1 灾难</option>
+              <option value="S2">S2 严重</option>
+              <option value="S3">S3 警告</option>
             </select>
           </div>
         </div>
@@ -196,8 +196,51 @@
         <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">分组配置</h3>
         <div class="form-group">
           <label class="form-label">分组字段</label>
-          <input v-model="form.group_by" class="form-input" placeholder="如: kubernetes.container_name" />
-          <div class="form-hint">按此字段分组，每组独立告警/恢复。留空则不分组。支持嵌套字段如 kubernetes.namespace</div>
+          <div class="flex gap-2">
+            <input v-model="form.group_by" class="form-input" placeholder="如: container" style="flex: 1;" />
+            <select class="form-select" style="width: 220px;" @change="selectGroupBy($event)">
+              <option value="">快捷选择...</option>
+              <optgroup label="Loki Labels" v-if="(form.data_source_type || 'es') === 'loki'">
+                <option value="container">container</option>
+                <option value="namespace">namespace</option>
+                <option value="pod">pod</option>
+                <option value="job">job</option>
+                <option value="instance">instance</option>
+                <option value="service_name">service_name</option>
+                <option value="node_name">node_name</option>
+                <option value="stream">stream</option>
+              </optgroup>
+              <optgroup label="ES 常用字段" v-else>
+                <option value="kubernetes.container_name">kubernetes.container_name</option>
+                <option value="kubernetes.namespace">kubernetes.namespace</option>
+                <option value="kubernetes.pod_name">kubernetes.pod_name</option>
+                <option value="kubernetes.node_name">kubernetes.node_name</option>
+                <option value="kubernetes.labels.app">kubernetes.labels.app</option>
+                <option value="host.name">host.name</option>
+                <option value="service.name">service.name</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="form-hint">按此字段分组，每组独立告警/恢复。留空则不分组</div>
+        </div>
+
+        <div v-if="form.group_by" class="form-group">
+          <label class="form-label">期望容器列表 (可选)</label>
+          <textarea v-model="form.expected_groups" class="form-textarea" rows="3"
+            placeholder='["roulette-resource-backend","baccarat-resource-backend","dragon-tiger-resource-backend"]'></textarea>
+          <div class="form-hint">JSON 数组，指定需要监控的容器。填写后按此列表检查，容器挂了也能发现。留空则自动从 24h 日志发现</div>
+        </div>
+
+        <div v-if="form.group_by" class="form-group">
+          <label class="form-label">查询并发数</label>
+          <select v-model.number="form.query_concurrency" class="form-select" style="width: 200px;">
+            <option :value="1">1 (串行)</option>
+            <option :value="3">3</option>
+            <option :value="5">5 (默认)</option>
+            <option :value="10">10</option>
+            <option :value="20">20</option>
+          </select>
+          <div class="form-hint">单规则检查分组时的并发数。规则多时建议降低，避免给 Loki/ES 过大压力</div>
         </div>
 
         <!-- 去重配置 -->
@@ -253,6 +296,9 @@
           <button type="button" class="btn btn-outline" @click="handlePreview" :disabled="previewing">
             {{ previewing ? '查询中...' : '预览告警结果' }}
           </button>
+          <button type="button" class="btn btn-warning" @click="handleTestSend" :disabled="testSending">
+            {{ testSending ? '发送中...' : '测试发送到 Lark' }}
+          </button>
           <router-link to="/alert-rules" class="btn btn-outline">取消</router-link>
           <button type="submit" class="btn btn-primary" :disabled="submitting">
             {{ submitting ? '保存中...' : (isEdit ? '更新规则' : '创建规则') }}
@@ -263,12 +309,13 @@
 
     <!-- Preview Modal -->
     <div v-if="previewData" class="modal-overlay" @click.self="previewData = null">
-      <div class="modal" style="min-width: 800px; max-width: 95vw;">
-        <div class="modal-header">
+      <div class="modal" style="min-width: 800px; max-width: 95vw; max-height: 90vh; display: flex; flex-direction: column;">
+        <div class="modal-header" style="position: sticky; top: 0; background: var(--bg-card, #fff); z-index: 10; flex-shrink: 0;">
           <div class="modal-title">告警预览结果</div>
           <button class="btn-icon" @click="previewData = null"><X :size="18" /></button>
         </div>
 
+        <div style="overflow-y: auto; flex: 1; padding: 0 4px;">
         <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px;">
           <div class="stat-card" style="padding: 12px;">
             <div class="label">数据源</div>
@@ -279,9 +326,9 @@
             <div style="font-weight: 600;">{{ previewData.source_detail }}</div>
           </div>
           <div class="stat-card" style="padding: 12px;">
-            <div class="label">命中数</div>
+            <div class="label">{{ previewData.group_by ? '分组数 / 总日志' : '命中数' }}</div>
             <div style="font-weight: 600; font-size: 20px;" :style="{ color: previewData.hit_count > 0 ? 'var(--warning)' : 'var(--success)' }">
-              {{ previewData.hit_count }} / {{ previewData.total }}
+              {{ previewData.group_by ? previewData.group_count + ' 组' : previewData.hit_count }} / {{ previewData.total }}
             </div>
           </div>
         </div>
@@ -304,7 +351,7 @@
           <h4 style="margin-bottom: 8px;">渲染后的告警消息</h4>
           <div v-for="(hit, idx) in previewData.hits" :key="idx" class="card" style="margin-bottom: 8px; padding: 12px;">
             <div class="flex justify-between items-center" style="margin-bottom: 8px;">
-              <span class="badge badge-info">命中 #{{ idx + 1 }}</span>
+              <span class="badge badge-info">{{ hit.vars?._group_key ? hit.vars._group_key : '命中 #' + (idx + 1) }}</span>
               <button class="btn btn-sm btn-outline" @click="hit._showRaw = !hit._showRaw">
                 {{ hit._showRaw ? '隐藏原始数据' : '查看原始数据' }}
               </button>
@@ -324,6 +371,7 @@
           <summary class="text-sm text-secondary" style="cursor: pointer;">查看查询语句</summary>
           <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 12px; margin-top: 8px; max-height: 200px; overflow-y: auto;">{{ previewData.query }}</pre>
         </details>
+        </div>
       </div>
     </div>
   </div>
@@ -333,12 +381,14 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
-import { useToast } from '../stores/ui'
+import { useToast, useConfirm } from '../stores/ui'
 import { X } from 'lucide-vue-next'
 
 const toast = useToast()
+const dialog = useConfirm()
 const previewing = ref(false)
 const previewData = ref(null)
+const testSending = ref(false)
 
 const route = useRoute()
 const router = useRouter()
@@ -371,8 +421,10 @@ const form = ref({
   recovery_enabled: 0,
   recovery_title: '',
   recovery_template: '',
-  severity: 'warning',
+  severity: 'S2',
   group_by: '',
+  expected_groups: '',
+  query_concurrency: 5,
   dedup_field: '',
   dedup_ttl: 3600,
   max_alerts: 10,
@@ -417,6 +469,13 @@ function loadPromConfig(configStr) {
     promLabelsStr.value = JSON.stringify(cfg.labels || {})
     promCustomMetricsStr.value = cfg.custom_metrics?.length ? JSON.stringify(cfg.custom_metrics, null, 2) : ''
   } catch { /* ignore */ }
+}
+
+function selectGroupBy(e) {
+  if (e.target.value) {
+    form.value.group_by = e.target.value
+    e.target.value = ''
+  }
 }
 
 const atAllChecked = computed({
@@ -493,6 +552,8 @@ async function loadRule() {
         recovery_template: d.recovery_template || '',
         severity: d.severity,
         group_by: d.group_by || '',
+        expected_groups: d.expected_groups || '',
+        query_concurrency: d.query_concurrency || 5,
         dedup_field: d.dedup_field,
         dedup_ttl: d.dedup_ttl,
         max_alerts: d.max_alerts,
@@ -525,8 +586,40 @@ async function handleSubmit() {
   submitting.value = false
 }
 
+async function handleTestSend() {
+  const ds = form.value.data_source_type || 'es'
+  if (ds === 'es' && !form.value.es_connection_id) { toast.error('请先选择 ES 连接'); return }
+  if (ds === 'loki' && !form.value.loki_connection_id) { toast.error('请先选择 Loki 连接'); return }
+  if (!form.value.lark_config_id) { toast.error('请先选择 Lark 配置'); return }
+
+  const ok = await dialog.confirm({ title: '测试发送', message: '将查询数据源并真实发送一条告警到 Lark，确认？' })
+  if (!ok) return
+
+  testSending.value = true
+  try {
+    const res = await api.post('/alert-rules/test-send', form.value)
+    if (res.code === 0) {
+      if (res.data.would_alert === false) {
+        let msg = res.data.message
+        if (res.data.found_groups) {
+          msg += '\n\n正常容器: ' + res.data.found_groups.join(', ')
+        }
+        toast.info(msg)
+      } else {
+        toast.success(res.data.response ? `测试发送成功！命中 ${res.data.hit_count} 条` : res.data.message)
+      }
+    } else {
+      toast.error(res.message)
+    }
+  } catch (e) {
+    toast.error('测试发送失败: ' + (e.response?.data?.message || e.message))
+  }
+  testSending.value = false
+}
+
 async function handlePreview() {
-  if (!form.value.es_connection_id) {
+  const ds = form.value.data_source_type || 'es'
+  if (ds === 'es' && !form.value.es_connection_id) {
     toast.error('请先选择 ES 连接')
     return
   }
