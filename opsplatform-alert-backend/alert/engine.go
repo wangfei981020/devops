@@ -1105,6 +1105,8 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 			titleRendered := renderTemplate(titleTemplate, vars)
 			title := fmt.Sprintf("%s [%s]", titleRendered, groupKey)
 
+			// Rate limit: 200ms between sends to avoid Lark frequency limiting
+			time.Sleep(200 * time.Millisecond)
 			resp, sErr := sender.SendCard(title, message, rule.Severity, atUsers, atAll)
 			if sErr != nil {
 				saveAlertLog(rule, message, "", "failed", fmt.Sprintf("[%s] %v", groupKey, sErr))
@@ -1150,6 +1152,7 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 				}
 				message := renderTemplate(tmpl, vars)
 
+				time.Sleep(200 * time.Millisecond)
 				resp, sErr := sender.SendCard(title, message, "recovery", atUsers, atAll)
 				if sErr != nil {
 					saveAlertLog(rule, message, string(rawJSON), "failed", fmt.Sprintf("[%s] recovery: %v", groupKey, sErr))

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"opsplatform-alert-backend/models"
@@ -161,6 +162,38 @@ func (s *Sender) send(payload interface{}) (string, error) {
 		return "", fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
+	// Retry with exponential backoff: 0s, 2s, 4s, 8s
+	maxRetries := 3
+	retryDelays := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
+
+	var lastErr error
+	var lastResp string
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("[Lark] 重试第%d次 (等待%v)...", attempt, retryDelays[attempt-1])
+			time.Sleep(retryDelays[attempt-1])
+		}
+
+		respStr, err := s.doSend(body)
+		if err == nil {
+			return respStr, nil
+		}
+
+		lastErr = err
+		lastResp = respStr
+
+		// Only retry on rate limit errors
+		if !isRateLimitError(err) {
+			return respStr, err
+		}
+		log.Printf("[Lark] 限流错误: %v", err)
+	}
+
+	return lastResp, fmt.Errorf("lark发送失败(重试%d次): %w", maxRetries, lastErr)
+}
+
+func (s *Sender) doSend(body []byte) (string, error) {
 	log.Printf("[Lark] Sending to %s, type=%s", s.config.LarkType, s.config.Name)
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -201,6 +234,15 @@ func (s *Sender) send(payload interface{}) (string, error) {
 	}
 
 	return respStr, nil
+}
+
+// isRateLimitError checks if the error is a rate limit error
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "frequency limited") || strings.Contains(errStr, "11232")
 }
 
 // TestWebhook sends a test message to verify webhook configuration
