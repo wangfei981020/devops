@@ -229,6 +229,7 @@ func autoMigrate() {
 		{"alert_rules", "data_source_type", "VARCHAR(20) DEFAULT 'es' COMMENT '数据源类型: es/loki'"},
 		{"alert_rules", "loki_connection_id", "INT DEFAULT 0 COMMENT 'Loki连接ID'"},
 		{"alert_rules", "logql", "TEXT COMMENT 'LogQL查询语句(Loki)'"},
+		{"alert_rules", "route_config", "TEXT COMMENT '字段值路由配置JSON'"},
 		{"users", "auth_source", "VARCHAR(20) DEFAULT 'local' COMMENT '认证来源: local/portal'"},
 		{"users", "portal_token", "TEXT COMMENT '运维平台Portal Token(用于刷新权限)'"},
 	}

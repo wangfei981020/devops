@@ -21,6 +21,54 @@ import (
 	"opsplatform-alert-backend/models"
 )
 
+// RouteConfig defines field-value based routing for found mode alerts
+type RouteConfig struct {
+	RouteField   string        `json:"route_field"`   // field name to extract value from (e.g. "code")
+	IgnoreValues []string      `json:"ignore_values"` // values to ignore (no alert)
+	Routes       []RouteRule   `json:"routes"`        // routing rules
+	DefaultLarkID int          `json:"default_lark_id"` // fallback lark config ID (0 = use rule's default)
+}
+
+type RouteRule struct {
+	Values []string `json:"values"` // field values to match
+	LarkID int      `json:"lark_id"` // lark config ID to send to
+	Name   string   `json:"name"`   // description (e.g. "严重错误群")
+}
+
+func parseRouteConfig(configJSON string) *RouteConfig {
+	if configJSON == "" {
+		return nil
+	}
+	var cfg RouteConfig
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		return nil
+	}
+	if cfg.RouteField == "" {
+		return nil
+	}
+	return &cfg
+}
+
+// matchRoute returns the lark_config_id for the given field value, or -1 to ignore
+func (rc *RouteConfig) matchRoute(fieldValue string) int {
+	// Check ignore list
+	for _, v := range rc.IgnoreValues {
+		if v == fieldValue {
+			return -1 // ignore
+		}
+	}
+	// Check routes
+	for _, route := range rc.Routes {
+		for _, v := range route.Values {
+			if v == fieldValue {
+				return route.LarkID
+			}
+		}
+	}
+	// Default
+	return rc.DefaultLarkID
+}
+
 // GlobalQuerySemaphore limits total concurrent queries across all rules
 var GlobalQuerySemaphore chan struct{}
 
@@ -169,7 +217,7 @@ func (e *Engine) loadAllRules() error {
 		message_title, COALESCE(message_template,''),
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
-		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''), dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), status
+		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''), dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), COALESCE(route_config,''), status
 		FROM alert_rules WHERE status = 1`)
 	if err != nil {
 		return err
@@ -186,7 +234,7 @@ func (e *Engine) loadAllRules() error {
 			&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 			&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
 			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
-			&rule.PrometheusConfig, &rule.Status)
+			&rule.PrometheusConfig, &rule.RouteConfig, &rule.Status)
 		if err != nil {
 			log.Printf("[Engine] Failed to scan rule: %v", err)
 			continue
@@ -472,9 +520,38 @@ func (e *Engine) executeRule(ruleID int) {
 		return
 	}
 
+	// Parse route config for found mode
+	routeCfg := parseRouteConfig(rule.RouteConfig)
+	// Cache of senders for different lark configs (for routing)
+	senderCache := map[int]*lark.Sender{rule.LarkConfigID: sender}
+
 	sentCount := 0
 	for _, hit := range result.Hits {
 		vars := extractFields(hit, rule.ExtractFields)
+
+		// Route: check if this hit should be ignored or sent to a different group
+		activeSender := sender
+		if routeCfg != nil {
+			fieldVal := fmt.Sprintf("%v", vars[routeCfg.RouteField])
+			larkID := routeCfg.matchRoute(fieldVal)
+			if larkID == -1 {
+				log.Printf("[Engine] Rule %d: ignoring hit with %s=%s", rule.ID, routeCfg.RouteField, fieldVal)
+				continue
+			}
+			if larkID > 0 && larkID != rule.LarkConfigID {
+				if cached, ok := senderCache[larkID]; ok {
+					activeSender = cached
+				} else {
+					routeLarkCfg, err := getLarkConfigByID(larkID)
+					if err == nil {
+						activeSender = lark.NewSender(*routeLarkCfg)
+						senderCache[larkID] = activeSender
+					} else {
+						log.Printf("[Engine] Rule %d: route lark_id=%d not found, using default", rule.ID, larkID)
+					}
+				}
+			}
+		}
 
 		// Dedup check
 		if rule.DedupField != "" {
@@ -496,7 +573,8 @@ func (e *Engine) executeRule(ruleID int) {
 		message := renderTemplate(rule.MessageTemplate, vars)
 		rawJSON, _ := json.Marshal(hit)
 
-		resp, err := sender.SendCard(rule.MessageTitle, message, rule.Severity, atUsers, atAll)
+		time.Sleep(200 * time.Millisecond)
+		resp, err := activeSender.SendCard(rule.MessageTitle, message, rule.Severity, atUsers, atAll)
 		if err != nil {
 			errMsg := fmt.Sprintf("Lark send error: %v", err)
 			log.Printf("[Engine] Rule %d: %s", rule.ID, errMsg)
@@ -643,7 +721,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
 		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''), dedup_field, dedup_ttl, max_alerts,
-		COALESCE(prometheus_config,''), status
+		COALESCE(prometheus_config,''), COALESCE(route_config,''), status
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType,
 		&rule.ESConnectionID, &rule.LokiConnectionID, &rule.LarkConfigID, &rule.ESIndex,
@@ -652,7 +730,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 		&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
 		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
-		&rule.PrometheusConfig, &rule.Status)
+		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Status)
 	return &rule, err
 }
 

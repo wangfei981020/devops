@@ -310,6 +310,44 @@
           <input v-model.number="form.max_alerts" type="number" class="form-input" style="width: 200px;" placeholder="10" />
         </div>
 
+        <!-- 字段值路由 (found 模式) -->
+        <template v-if="form.alert_mode === 'found'">
+          <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">字段值路由</h3>
+          <div class="form-group">
+            <label class="form-label">路由字段</label>
+            <input v-model="routeConfig.route_field" class="form-input" style="width: 200px;" placeholder="如: code, level, service" />
+            <div class="form-hint">从日志提取的字段名，根据该字段值决定发到哪个群或忽略</div>
+          </div>
+          <template v-if="routeConfig.route_field">
+            <div class="form-group">
+              <label class="form-label">忽略的值（不告警）</label>
+              <input v-model="routeIgnoreStr" class="form-input" placeholder="如: 9010, 9011, 9015（逗号分隔）" />
+              <div class="form-hint">这些值的日志不发送告警</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">路由规则</label>
+              <div v-for="(route, idx) in routeConfig.routes" :key="idx" class="flex gap-2 items-center" style="margin-bottom: 8px;">
+                <input v-model="route.valuesStr" class="form-input" style="width: 200px;" placeholder="值（逗号分隔）" />
+                <span>→</span>
+                <select v-model.number="route.lark_id" class="form-select" style="width: 200px;">
+                  <option value="0">-- 选择 Lark 群 --</option>
+                  <option v-for="lc in larkConfigs" :key="lc.id" :value="lc.id">{{ lc.name }}</option>
+                </select>
+                <input v-model="route.name" class="form-input" style="width: 120px;" placeholder="备注" />
+                <button type="button" class="btn btn-sm btn-outline" style="color: var(--danger);" @click="routeConfig.routes.splice(idx, 1)">&times;</button>
+              </div>
+              <button type="button" class="btn btn-sm btn-outline" @click="routeConfig.routes.push({valuesStr: '', lark_id: 0, name: ''})">+ 添加路由</button>
+            </div>
+            <div class="form-group">
+              <label class="form-label">其他值发送到</label>
+              <select v-model.number="routeConfig.default_lark_id" class="form-select" style="width: 300px;">
+                <option value="0">使用规则默认 Lark 配置</option>
+                <option v-for="lc in larkConfigs" :key="lc.id" :value="lc.id">{{ lc.name }}</option>
+              </select>
+            </div>
+          </template>
+        </template>
+
         <!-- Prometheus 配置 -->
         <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">Prometheus 指标配置</h3>
         <div class="form-group">
@@ -541,8 +579,45 @@ const form = ref({
   dedup_field: '',
   dedup_ttl: 3600,
   max_alerts: 10,
-  prometheus_config: ''
+  prometheus_config: '',
+  route_config: ''
 })
+
+// Route config helpers
+const routeConfig = ref({ route_field: '', ignore_values: [], routes: [], default_lark_id: 0 })
+const routeIgnoreStr = ref('')
+
+function syncRouteConfig() {
+  if (!routeConfig.value.route_field) {
+    form.value.route_config = ''
+    return
+  }
+  const cfg = {
+    route_field: routeConfig.value.route_field,
+    ignore_values: routeIgnoreStr.value ? routeIgnoreStr.value.split(',').map(s => s.trim()).filter(Boolean) : [],
+    routes: routeConfig.value.routes.map(r => ({
+      values: r.valuesStr ? r.valuesStr.split(',').map(s => s.trim()).filter(Boolean) : [],
+      lark_id: r.lark_id,
+      name: r.name
+    })).filter(r => r.values.length > 0 && r.lark_id > 0),
+    default_lark_id: routeConfig.value.default_lark_id || 0
+  }
+  form.value.route_config = JSON.stringify(cfg)
+}
+
+function loadRouteConfig(configStr) {
+  if (!configStr) return
+  try {
+    const cfg = JSON.parse(configStr)
+    routeConfig.value = {
+      route_field: cfg.route_field || '',
+      ignore_values: cfg.ignore_values || [],
+      routes: (cfg.routes || []).map(r => ({ valuesStr: (r.values || []).join(', '), lark_id: r.lark_id, name: r.name || '' })),
+      default_lark_id: cfg.default_lark_id || 0
+    }
+    routeIgnoreStr.value = (cfg.ignore_values || []).join(', ')
+  } catch (e) {}
+}
 
 const recoveryChecked = computed({
   get: () => form.value.recovery_enabled === 1,
@@ -672,15 +747,18 @@ async function loadRule() {
         dedup_field: d.dedup_field,
         dedup_ttl: d.dedup_ttl,
         max_alerts: d.max_alerts,
-        prometheus_config: d.prometheus_config || ''
+        prometheus_config: d.prometheus_config || '',
+        route_config: d.route_config || ''
       }
       loadPromConfig(d.prometheus_config)
+      loadRouteConfig(d.route_config)
     }
   } catch (e) { /* ignore */ }
 }
 
 async function handleSubmit() {
   syncPromConfig()
+  syncRouteConfig()
   submitting.value = true
   try {
     const data = { ...form.value }

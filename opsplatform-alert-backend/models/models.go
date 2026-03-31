@@ -112,6 +112,7 @@ type AlertRule struct {
 	DedupTTL         int            `json:"dedup_ttl"`
 	MaxAlerts        int            `json:"max_alerts"`
 	PrometheusConfig string         `json:"prometheus_config"`
+	RouteConfig      string         `json:"route_config"`       // JSON: field value routing config
 	Status          int            `json:"status"`
 	LastRunAt       sql.NullTime   `json:"last_run_at"`
 	LastError       sql.NullString `json:"last_error"`
@@ -210,6 +211,7 @@ type CreateAlertRuleReq struct {
 	DedupTTL         int    `json:"dedup_ttl"`
 	MaxAlerts        int    `json:"max_alerts"`
 	PrometheusConfig string `json:"prometheus_config"`
+	RouteConfig      string `json:"route_config"`
 }
 
 type APIResponse struct {
