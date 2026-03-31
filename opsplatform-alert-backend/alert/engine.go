@@ -1025,6 +1025,24 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 		stateKey := fmt.Sprintf("alert:state:%d:%s", rule.ID, groupKey)
 		lastAlertKey := fmt.Sprintf("alert:last_alert_time:%d:%s", rule.ID, groupKey)
 
+		// Record container-level Prometheus metrics first
+		if Metrics != nil {
+			var staticLabels map[string]string
+			if promCfg != nil {
+				staticLabels = promCfg.GetStaticLabels()
+			}
+			muted := isMuted(rule.ID, groupKey)
+			var metricStatus float64
+			if muted {
+				metricStatus = -1
+			} else if r.HasHits {
+				metricStatus = 1
+			} else {
+				metricStatus = 0
+			}
+			Metrics.RecordContainerStatus(ruleIDStr, rule.Name, namespace, groupKey, metricStatus, staticLabels)
+		}
+
 		if !r.HasHits {
 			// Check if muted
 			if isMuted(rule.ID, groupKey) {
@@ -1145,14 +1163,6 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 			}
 		}
 
-		// Record container-level Prometheus metrics
-		if Metrics != nil {
-			var staticLabels map[string]string
-			if promCfg != nil {
-				staticLabels = promCfg.GetStaticLabels()
-			}
-			Metrics.RecordContainerStatus(ruleIDStr, rule.Name, namespace, groupKey, r.HasHits, staticLabels)
-		}
 	}
 
 	database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)

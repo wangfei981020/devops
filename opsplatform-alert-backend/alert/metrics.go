@@ -132,8 +132,8 @@ func (m *MetricsManager) SetRuleStatus(ruleID, ruleName, severity string, enable
 }
 
 // RecordContainerStatus records per-container alert status with custom static labels
-// status: 1=normal, 0=alerting
-func (m *MetricsManager) RecordContainerStatus(ruleID, ruleName, namespace, container string, ok bool, staticLabels map[string]string) {
+// status: 1=normal, 0=alerting, -1=muted
+func (m *MetricsManager) RecordContainerStatus(ruleID, ruleName, namespace, container string, status float64, staticLabels map[string]string) {
 	// Build label names (need to register gauge with all label names on first call)
 	m.mu.Lock()
 	if !m.containerStatusRegistered {
@@ -148,7 +148,7 @@ func (m *MetricsManager) RecordContainerStatus(ruleID, ruleName, namespace, cont
 
 		m.containerStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "alert_container_status",
-			Help: "Container alert status: 1=normal 0=alerting",
+			Help: "Container alert status: 1=normal 0=alerting -1=muted",
 		}, labelNames)
 
 		if err := prometheus.Register(m.containerStatus); err != nil {
@@ -173,11 +173,7 @@ func (m *MetricsManager) RecordContainerStatus(ruleID, ruleName, namespace, cont
 		labels[k] = v
 	}
 
-	if ok {
-		m.containerStatus.With(labels).Set(1)
-	} else {
-		m.containerStatus.With(labels).Set(0)
-	}
+	m.containerStatus.With(labels).Set(status)
 }
 
 // RegisterCustomMetrics kept for backward compatibility (no-op)
