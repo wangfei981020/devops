@@ -606,7 +606,8 @@ async function saveContact() {
 
 // 删除联系人
 async function deleteContact(contact) {
-  if (!confirm(`确定要删除联系人 "${contact.name}" 吗？`)) return
+  const confirmed = await appStore.showConfirm({ type: 'danger', title: '删除联系人', message: `确定要删除联系人 "${contact.name}" 吗？`, okText: '删除', cancelText: '取消' })
+  if (!confirmed) return
   try {
     await api.delete(`/api/schedule/contacts/${contact.id}`)
     appStore.showToast('联系人已删除', 'success')

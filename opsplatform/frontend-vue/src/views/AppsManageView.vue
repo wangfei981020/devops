@@ -1,6 +1,9 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import api from '@/api'
+import { useAppStore } from '@/stores'
+
+const appStore = useAppStore()
 
 const apps = ref([])
 const roles = ref([])
@@ -13,6 +16,7 @@ const form = ref({
   app_key: '',
   name: '',
   url: '',
+  perm_code: '',
   icon_svg: '',
   group_name: '',
   sort_order: 0,
@@ -55,7 +59,7 @@ async function loadRoles() {
 
 function openCreate() {
   editingApp.value = null
-  form.value = { app_key: '', name: '', url: '', icon_svg: '', group_name: '', sort_order: 0, status: 'active' }
+  form.value = { app_key: '', name: '', url: '', perm_code: '', icon_svg: '', group_name: '', sort_order: 0, status: 'active' }
   showForm.value = true
 }
 
@@ -75,17 +79,25 @@ async function saveApp() {
     showForm.value = false
     loadApps()
   } catch (e) {
-    alert('保存失败: ' + (e.response?.data?.error || e.message))
+    appStore.showToast('保存失败: ' + (e.response?.data?.error || e.message), 'error')
   }
 }
 
 async function deleteApp(app) {
-  if (!confirm('确定删除应用 "' + app.name + '"？')) return
+  const confirmed = await appStore.showConfirm({
+    type: 'danger',
+    title: '删除应用',
+    message: `确定删除应用 "${app.name}"？`,
+    okText: '删除',
+    cancelText: '取消'
+  })
+  if (!confirmed) return
   try {
     await api.delete('/api/external-apps/' + app.id)
+    appStore.showToast('已删除', 'success')
     loadApps()
   } catch (e) {
-    alert('删除失败')
+    appStore.showToast('删除失败', 'error')
   }
 }
 
@@ -115,7 +127,7 @@ async function saveRoles() {
     })
     showRoleDialog.value = false
   } catch (e) {
-    alert('保存失败')
+    appStore.showToast('保存失败', 'error')
   }
 }
 
@@ -164,6 +176,7 @@ const presetIcons = {
             <th>名称</th>
             <th>分组</th>
             <th>URL</th>
+            <th>权限码</th>
             <th>图标</th>
             <th>排序</th>
             <th>状态</th>
@@ -172,16 +185,17 @@ const presetIcons = {
         </thead>
         <tbody>
           <tr v-if="loading">
-            <td colspan="8" class="empty-cell">加载中...</td>
+            <td colspan="9" class="empty-cell">加载中...</td>
           </tr>
           <tr v-else-if="apps.length === 0">
-            <td colspan="8" class="empty-cell">暂无注册应用</td>
+            <td colspan="9" class="empty-cell">暂无注册应用</td>
           </tr>
           <tr v-for="app in apps" :key="app.id">
             <td><code>{{ app.app_key }}</code></td>
             <td>{{ app.name }}</td>
             <td>{{ app.group_name || '-' }}</td>
             <td class="url-cell" :title="app.url">{{ app.url }}</td>
+            <td><code v-if="app.perm_code">{{ app.perm_code }}</code><span v-else>-</span></td>
             <td>
               <svg v-if="app.icon_svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="app-icon-preview" v-html="app.icon_svg"></svg>
               <span v-else class="no-icon">-</span>
@@ -226,6 +240,11 @@ const presetIcons = {
           <div v-if="testResult" class="test-result" :class="testResult.reachable ? 'success' : 'fail'">
             {{ testResult.message }}
           </div>
+        </div>
+        <div class="form-group">
+          <label>权限码</label>
+          <input v-model="form.perm_code" placeholder="如 alert, confluence（对应 menu:alert 权限）">
+          <div class="form-hint">关联角色菜单权限的 code 前缀，留空则不做权限过滤</div>
         </div>
         <div class="form-group">
           <label>分组名称</label>

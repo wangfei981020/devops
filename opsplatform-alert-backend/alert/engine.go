@@ -169,7 +169,7 @@ func (e *Engine) loadAllRules() error {
 		message_title, COALESCE(message_template,''),
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
-		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), status
+		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''), dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), status
 		FROM alert_rules WHERE status = 1`)
 	if err != nil {
 		return err
@@ -185,7 +185,7 @@ func (e *Engine) loadAllRules() error {
 			&rule.Keyword, &rule.LogQL, &rule.FilterFields, &rule.ExtractFields,
 			&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 			&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
-			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
+			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
 			&rule.PrometheusConfig, &rule.Status)
 		if err != nil {
 			log.Printf("[Engine] Failed to scan rule: %v", err)
@@ -261,14 +261,49 @@ func (e *Engine) executeRule(ruleID int) {
 	// Update last_run_at
 	database.DB.Exec("UPDATE alert_rules SET last_run_at = NOW(), last_error = NULL WHERE id = ?", rule.ID)
 
-	// Query data source (ES or Loki)
-	var hits []map[string]interface{}
-	var totalHits int64
-
 	dataSourceType := rule.DataSourceType
 	if dataSourceType == "" {
 		dataSourceType = "es"
 	}
+
+	// Determine alert mode
+	alertMode := rule.AlertMode
+	if alertMode == "" {
+		alertMode = "found"
+	}
+
+	// Get Lark config
+	larkConfig, err := getLarkConfigByID(rule.LarkConfigID)
+	if err != nil {
+		errMsg := fmt.Sprintf("Lark config error: %v", err)
+		log.Printf("[Engine] Rule %d: %s", rule.ID, errMsg)
+		database.DB.Exec("UPDATE alert_rules SET last_error = ? WHERE id = ?", errMsg, rule.ID)
+		return
+	}
+
+	sender := lark.NewSender(*larkConfig)
+
+	// Parse at_users (supports ["name1","name2"] or [{"name":"x","user_id":"y"}])
+	atUsers := resolveAtUsers(rule.AtUsers)
+	atAll := rule.AtAll == 1
+	ruleIDStr := fmt.Sprintf("%d", rule.ID)
+
+	// ========== Grouped not_found with expected_groups: skip batch query, query per container ==========
+	if rule.GroupBy != "" && alertMode == "not_found" && rule.ExpectedGroups != "" {
+		log.Printf("[Engine] Rule %d: grouped not_found with expected_groups, skipping batch query", rule.ID)
+		emptyGroups := make(map[string][]map[string]interface{})
+		e.executeGroupedNotFound(ctx, rule, sender, atUsers, atAll, ruleIDStr, emptyGroups, strings.TrimSpace(rule.GroupBy), dataSourceType)
+
+		if Metrics != nil {
+			duration := time.Since(startTime).Seconds()
+			Metrics.RecordRuleRun(ruleIDStr, rule.Name, rule.Severity, 0, duration)
+		}
+		return
+	}
+
+	// Query data source (ES or Loki)
+	var hits []map[string]interface{}
+	var totalHits int64
 
 	if dataSourceType == "loki" {
 		hits, totalHits, err = e.queryLoki(ctx, rule)
@@ -288,31 +323,6 @@ func (e *Engine) executeRule(ruleID int) {
 
 	log.Printf("[Engine] Rule %d: found %d hits (total=%d) [%s]", rule.ID, len(result.Hits), result.Total, dataSourceType)
 
-	// Determine alert mode
-	alertMode := rule.AlertMode
-	if alertMode == "" {
-		alertMode = "found"
-	}
-
-	// Get Lark config
-	larkConfig, err := getLarkConfigByID(rule.LarkConfigID)
-	if err != nil {
-		errMsg := fmt.Sprintf("Lark config error: %v", err)
-		log.Printf("[Engine] Rule %d: %s", rule.ID, errMsg)
-		database.DB.Exec("UPDATE alert_rules SET last_error = ? WHERE id = ?", errMsg, rule.ID)
-		return
-	}
-
-	sender := lark.NewSender(*larkConfig)
-
-	// Parse at_users
-	var atUsers []models.AtUser
-	if rule.AtUsers != "" {
-		json.Unmarshal([]byte(rule.AtUsers), &atUsers)
-	}
-	atAll := rule.AtAll == 1
-	ruleIDStr := fmt.Sprintf("%d", rule.ID)
-
 	// ========== Group By support ==========
 	if rule.GroupBy != "" {
 		e.executeGroupedRule(ctx, rule, result, sender, atUsers, atAll, ruleIDStr, alertMode, dataSourceType)
@@ -328,26 +338,51 @@ func (e *Engine) executeRule(ruleID int) {
 	// ========== not_found mode: alert when NO hits ==========
 	if alertMode == "not_found" {
 		stateKey := fmt.Sprintf("alert:state:%d", rule.ID)
+		lastAlertKey := fmt.Sprintf("alert:last_alert_time:%d", rule.ID)
 		prevState, _ := database.RDB.Get(ctx, stateKey).Result() // "alerting" or "" (normal)
 
 		if len(result.Hits) == 0 {
 			// No hits → should be alerting
 			if prevState == "alerting" {
-				log.Printf("[Engine] Rule %d: still alerting (no hits), skip duplicate", rule.ID)
-				return
+				// Already alerting, check alert_interval for repeat notification
+				alertInterval := time.Duration(0)
+				if rule.AlertInterval != "" {
+					if strings.HasSuffix(rule.AlertInterval, "d") {
+						days := 1
+						fmt.Sscanf(rule.AlertInterval, "%dd", &days)
+						alertInterval = time.Duration(days) * 24 * time.Hour
+					} else if d, err := time.ParseDuration(rule.AlertInterval); err == nil {
+						alertInterval = d
+					}
+				}
+				if alertInterval > 0 {
+					lastAlertStr, _ := database.RDB.Get(ctx, lastAlertKey).Result()
+					if lastAlertStr != "" {
+						if lastAlert, err := time.Parse(time.RFC3339, lastAlertStr); err == nil {
+							if time.Since(lastAlert) < alertInterval {
+								log.Printf("[Engine] Rule %d: still alerting, interval not reached, skip", rule.ID)
+								return
+							}
+						}
+					}
+					log.Printf("[Engine] Rule %d: still alerting, interval reached, re-alerting", rule.ID)
+				} else {
+					// No interval set, alert every time
+					log.Printf("[Engine] Rule %d: still alerting (no interval), re-alerting", rule.ID)
+				}
+			} else {
+				// Transition: normal → alerting
+				log.Printf("[Engine] Rule %d: no hits in %s, triggering alert", rule.ID, rule.TimeRange)
+				database.RDB.Set(ctx, stateKey, "alerting", 7*24*time.Hour)
 			}
 
-			// Transition: normal → alerting
-			log.Printf("[Engine] Rule %d: no hits in %s, triggering alert", rule.ID, rule.TimeRange)
-			database.RDB.Set(ctx, stateKey, "alerting", 7*24*time.Hour)
-
-			// Search wider range for the last known log
+			// Search wider range for the last known log (max 3h to avoid Loki OOM)
 			lastHitMsg := "在指定时间范围内未搜到匹配日志"
 			var widerHits []map[string]interface{}
 			if dataSourceType == "loki" {
-				widerHits, _ = e.queryLokiWider(ctx, rule, "24h", 1)
+				widerHits, _ = e.queryLokiWider(ctx, rule, "3h", 1)
 			} else {
-				widerQuery, _ := es.BuildQuery(rule.Keyword, rule.FilterFields, "24h", "", 1)
+				widerQuery, _ := es.BuildQuery(rule.Keyword, rule.FilterFields, "3h", "", 1)
 				esClient, cErr := e.getESClient(rule.ESConnectionID)
 				if cErr == nil {
 					widerResult, wErr := esClient.Search(ctx, rule.ESIndex, widerQuery)
@@ -380,6 +415,7 @@ func (e *Engine) executeRule(ruleID int) {
 				}
 			} else {
 				database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
+				database.RDB.Set(ctx, lastAlertKey, time.Now().Format(time.RFC3339), 7*24*time.Hour)
 				saveAlertLog(rule, lastHitMsg, string(rawJSON), "success", "")
 				if Metrics != nil {
 					Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
@@ -393,11 +429,13 @@ func (e *Engine) executeRule(ruleID int) {
 				// Transition: alerting → normal, send recovery
 				log.Printf("[Engine] Rule %d: recovered, sending recovery notification", rule.ID)
 				database.RDB.Set(ctx, stateKey, "normal", 7*24*time.Hour)
+				database.RDB.Del(ctx, lastAlertKey) // clear last alert time
 
-				firstHit := result.Hits[0]
-				vars := extractFields(firstHit, rule.ExtractFields)
+				// Use the earliest hit (last element, since results are sorted desc by time)
+				earliestHit := result.Hits[len(result.Hits)-1]
+				vars := extractFields(earliestHit, rule.ExtractFields)
 				vars["alert_reason"] = "recovered"
-				rawJSON, _ := json.Marshal(firstHit)
+				rawJSON, _ := json.Marshal(earliestHit)
 
 				title := rule.RecoveryTitle
 				if title == "" {
@@ -419,6 +457,7 @@ func (e *Engine) executeRule(ruleID int) {
 			} else if prevState == "alerting" {
 				// Recovery not enabled, just clear state
 				database.RDB.Set(ctx, stateKey, "normal", 7*24*time.Hour)
+				database.RDB.Del(ctx, lastAlertKey)
 				log.Printf("[Engine] Rule %d: recovered (no recovery notification)", rule.ID)
 			} else {
 				log.Printf("[Engine] Rule %d: normal (hits found)", rule.ID)
@@ -603,7 +642,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		message_title, COALESCE(message_template,''),
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
-		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), dedup_field, dedup_ttl, max_alerts,
+		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''), dedup_field, dedup_ttl, max_alerts,
 		COALESCE(prometheus_config,''), status
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType,
@@ -612,7 +651,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		&rule.Keyword, &rule.LogQL, &rule.FilterFields, &rule.ExtractFields,
 		&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 		&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
-		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
+		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
 		&rule.PrometheusConfig, &rule.Status)
 	return &rule, err
 }
@@ -814,6 +853,10 @@ func (e *Engine) executeGroupedRule(ctx context.Context, rule *models.AlertRule,
 	log.Printf("[Engine] Rule %d: %d groups found", rule.ID, len(groups))
 
 	if alertMode == "not_found" {
+		// When expected_groups is set, skip batch grouping — each container will be checked independently
+		if rule.ExpectedGroups != "" {
+			groups = make(map[string][]map[string]interface{})
+		}
 		e.executeGroupedNotFound(ctx, rule, sender, atUsers, atAll, ruleIDStr, groups, groupField, dataSourceType)
 		return
 	}
@@ -880,7 +923,7 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 	sender *lark.Sender, atUsers []models.AtUser, atAll bool, ruleIDStr string,
 	currentGroups map[string][]map[string]interface{}, groupField, dataSourceType string) {
 
-	// Step 1: Get target groups (from expected_groups or auto-discover from 24h)
+	// Step 1: Get target groups (from expected_groups or auto-discover from 3h)
 	var targetGroups []string
 
 	if rule.ExpectedGroups != "" {
@@ -888,9 +931,9 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 		json.Unmarshal([]byte(rule.ExpectedGroups), &targetGroups)
 		log.Printf("[Engine] Rule %d: using %d expected groups", rule.ID, len(targetGroups))
 	} else {
-		// Auto-discover from 24h
+		// Auto-discover from 3h
 		targetGroups = e.discoverGroups(ctx, rule, groupField, dataSourceType)
-		log.Printf("[Engine] Rule %d: discovered %d groups from 24h", rule.ID, len(targetGroups))
+		log.Printf("[Engine] Rule %d: discovered %d groups from 3h", rule.ID, len(targetGroups))
 	}
 
 	if len(targetGroups) == 0 {
@@ -950,39 +993,99 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 
 	log.Printf("[Engine] Rule %d: checked %d groups", rule.ID, len(results))
 
+	// Parse alert interval
+	alertInterval := time.Duration(0) // 0 means alert every time
+	if rule.AlertInterval != "" {
+		if strings.HasSuffix(rule.AlertInterval, "d") {
+			days := 1
+			fmt.Sscanf(rule.AlertInterval, "%dd", &days)
+			alertInterval = time.Duration(days) * 24 * time.Hour
+		} else if d, err := time.ParseDuration(rule.AlertInterval); err == nil {
+			alertInterval = d
+		}
+	}
+
+	// Parse prometheus config for container metrics
+	promCfg := ParsePrometheusConfig(rule.PrometheusConfig)
+
+	// Extract namespace from LogQL or first available hit
+	namespace := ""
+	for _, hits := range currentGroups {
+		if len(hits) > 0 {
+			if ns, ok := hits[0]["namespace"]; ok {
+				namespace = fmt.Sprintf("%v", ns)
+				break
+			}
+		}
+	}
+
 	// Step 3: Process each group
 	for _, groupKey := range targetGroups {
 		r := results[groupKey]
 		stateKey := fmt.Sprintf("alert:state:%d:%s", rule.ID, groupKey)
-		prevState, _ := database.RDB.Get(ctx, stateKey).Result()
+		lastAlertKey := fmt.Sprintf("alert:last_alert_time:%d:%s", rule.ID, groupKey)
 
 		if !r.HasHits {
-			// Not found → should be alerting
-			if prevState == "alerting" {
-				continue // Already alerting
+			// Check if muted
+			if isMuted(rule.ID, groupKey) {
+				log.Printf("[Engine] Rule %d: group '%s' is muted, skipping", rule.ID, groupKey)
+				continue
+			}
+
+			// Check alert interval (should we send again?)
+			if alertInterval > 0 {
+				lastAlertStr, _ := database.RDB.Get(ctx, lastAlertKey).Result()
+				if lastAlertStr != "" {
+					if lastAlert, err := time.Parse(time.RFC3339, lastAlertStr); err == nil {
+						if time.Since(lastAlert) < alertInterval {
+							log.Printf("[Engine] Rule %d: group '%s' alert interval not reached, skipping", rule.ID, groupKey)
+							continue
+						}
+					}
+				}
 			}
 
 			log.Printf("[Engine] Rule %d: group '%s' not found in %s, triggering alert", rule.ID, groupKey, rule.TimeRange)
 			database.RDB.Set(ctx, stateKey, "alerting", 7*24*time.Hour)
+			database.RDB.Set(ctx, lastAlertKey, time.Now().Format(time.RFC3339), 7*24*time.Hour)
 
-			// Try to get last cached hit from Redis (avoid 24h query)
+			// Try to get last cached hit from Redis (avoid wider query)
 			vars := map[string]interface{}{
 				"alert_reason": "not_found",
 				"time_range":   rule.TimeRange,
 				"_group_key":   groupKey,
 				"_group_field": groupField,
 				groupField:     groupKey,
+				"container":    groupKey,
+				"namespace":    "",
 			}
-			if lastHit := getLastHit(rule.ID, groupKey); lastHit != nil {
+			lastHit := getLastHit(rule.ID, groupKey)
+			if lastHit == nil {
+				// No cache, try wider query (uses rule.TimeRange)
+				if !acquireGlobalCtx(ctx) {
+					log.Printf("[Engine] Rule %d: global semaphore timeout for last hit query '%s'", rule.ID, groupKey)
+				} else {
+					_, lastHit = e.checkGroupHit(ctx, rule, groupField, groupKey, dataSourceType)
+					releaseGlobal()
+					if lastHit != nil {
+						cacheLastHit(rule.ID, groupKey, lastHit)
+					}
+				}
+			}
+			if lastHit != nil {
 				vars = extractFields(lastHit, rule.ExtractFields)
 				vars["alert_reason"] = "not_found"
 				vars["time_range"] = rule.TimeRange
 				vars["_group_key"] = groupKey
 				vars["_group_field"] = groupField
-				log.Printf("[Engine] Rule %d: using cached last hit for group '%s'", rule.ID, groupKey)
+				vars["container"] = groupKey
+				log.Printf("[Engine] Rule %d: using last hit for group '%s'", rule.ID, groupKey)
 			}
 			message := renderTemplate(rule.MessageTemplate, vars)
-			title := fmt.Sprintf("%s [%s]", rule.MessageTitle, groupKey)
+			// Render title template too
+			titleTemplate := rule.MessageTitle
+			titleRendered := renderTemplate(titleTemplate, vars)
+			title := fmt.Sprintf("%s [%s]", titleRendered, groupKey)
 
 			resp, sErr := sender.SendCard(title, message, rule.Severity, atUsers, atAll)
 			if sErr != nil {
@@ -1000,16 +1103,23 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 				log.Printf("[Engine] Rule %d: group '%s' not_found alert sent, resp=%s", rule.ID, groupKey, resp)
 			}
 		} else {
-			// Has hits → should be normal
-			if prevState == "alerting" && rule.RecoveryEnabled == 1 {
+			// Has hits → should be normal, check if was alerting before
+			curState, _ := database.RDB.Get(ctx, stateKey).Result()
+			if curState == "alerting" && rule.RecoveryEnabled == 1 {
 				log.Printf("[Engine] Rule %d: group '%s' recovered", rule.ID, groupKey)
 				database.RDB.Set(ctx, stateKey, "normal", 7*24*time.Hour)
+				database.RDB.Del(ctx, lastAlertKey) // clear last alert time
 
-				vars := extractFields(r.FirstHit, rule.ExtractFields)
+				// Use the earliest hit for recovery (last element since results are desc sorted)
+				recoveryHit := r.FirstHit
+				if hits, ok := currentGroups[groupKey]; ok && len(hits) > 0 {
+					recoveryHit = hits[len(hits)-1]
+				}
+				vars := extractFields(recoveryHit, rule.ExtractFields)
 				vars["alert_reason"] = "recovered"
 				vars["_group_key"] = groupKey
 				vars["_group_field"] = groupField
-				rawJSON, _ := json.Marshal(r.FirstHit)
+				rawJSON, _ := json.Marshal(recoveryHit)
 
 				title := rule.RecoveryTitle
 				if title == "" {
@@ -1029,19 +1139,29 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 					saveAlertLog(rule, message, string(rawJSON), "success", "")
 					log.Printf("[Engine] Rule %d: group '%s' recovery sent, resp=%s", rule.ID, groupKey, resp)
 				}
-			} else if prevState == "alerting" {
+			} else if curState == "alerting" {
 				database.RDB.Set(ctx, stateKey, "normal", 7*24*time.Hour)
+				database.RDB.Del(ctx, lastAlertKey)
 			}
+		}
+
+		// Record container-level Prometheus metrics
+		if Metrics != nil {
+			var staticLabels map[string]string
+			if promCfg != nil {
+				staticLabels = promCfg.GetStaticLabels()
+			}
+			Metrics.RecordContainerStatus(ruleIDStr, rule.Name, namespace, groupKey, r.HasHits, staticLabels)
 		}
 	}
 
 	database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
 }
 
-// discoverGroups auto-discovers groups from 24h data
+// discoverGroups auto-discovers groups from 3h data (reduced from 24h to avoid Loki OOM)
 func (e *Engine) discoverGroups(ctx context.Context, rule *models.AlertRule, groupField, dataSourceType string) []string {
 	if dataSourceType == "loki" {
-		widerHits, err := e.queryLokiWider(ctx, rule, "24h", 1000)
+		widerHits, err := e.queryLokiWider(ctx, rule, "3h", 1000)
 		if err != nil {
 			log.Printf("[Engine] Rule %d: discover groups error: %v", rule.ID, err)
 			return nil
@@ -1062,7 +1182,7 @@ func (e *Engine) discoverGroups(ctx context.Context, rule *models.AlertRule, gro
 	}
 
 	// ES: use terms aggregation
-	widerQuery, _ := es.BuildQuery(rule.Keyword, rule.FilterFields, "24h", "", 0)
+	widerQuery, _ := es.BuildQuery(rule.Keyword, rule.FilterFields, "3h", "", 0)
 	widerQuery["size"] = 0
 	widerQuery["aggs"] = map[string]interface{}{
 		"groups": map[string]interface{}{
@@ -1104,17 +1224,26 @@ func (e *Engine) checkGroupHit(ctx context.Context, rule *models.AlertRule, grou
 
 		var specificLogQL string
 		if idx := strings.Index(logql, "}"); idx >= 0 {
-			// Insert group filter before the closing }
-			// Original: {namespace="prod", container=~".*-backend"} |~ "Link"
-			// Result:   {namespace="prod", container=~".*-backend", container="roulette-resource-backend"} |~ "Link"
-			// Loki will use the exact match to narrow down
+			// Replace group field with exact match (remove original regex/wildcard)
 			existingLabels := strings.TrimSpace(logql[1:idx])
 			pipeline := strings.TrimSpace(logql[idx+1:])
-			if existingLabels != "" {
-				specificLogQL = fmt.Sprintf(`{%s, %s="%s"}`, existingLabels, groupField, safeGroupKey)
-			} else {
-				specificLogQL = fmt.Sprintf(`{%s="%s"}`, groupField, safeGroupKey)
+			var parts []string
+			for _, part := range strings.Split(existingLabels, ",") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				fieldName := strings.Split(part, "=")[0]
+				fieldName = strings.Split(fieldName, "!")[0]
+				fieldName = strings.Split(fieldName, "~")[0]
+				fieldName = strings.TrimSpace(fieldName)
+				if fieldName == groupField {
+					continue
+				}
+				parts = append(parts, part)
 			}
+			parts = append(parts, fmt.Sprintf(`%s="%s"`, groupField, safeGroupKey))
+			specificLogQL = "{" + strings.Join(parts, ", ") + "}"
 			if pipeline != "" {
 				specificLogQL += " " + pipeline
 			}
@@ -1197,6 +1326,42 @@ func getLastHit(ruleID int, groupKey string) map[string]interface{} {
 		return nil
 	}
 	return hit
+}
+
+// resolveAtUsers parses at_users JSON and resolves names to lark_ids from alert_contacts table
+func resolveAtUsers(atUsersJSON string) []models.AtUser {
+	if atUsersJSON == "" {
+		return nil
+	}
+
+	// Try parsing as name array: ["Bruce","Cesar"]
+	var names []string
+	if err := json.Unmarshal([]byte(atUsersJSON), &names); err == nil && len(names) > 0 {
+		var result []models.AtUser
+		for _, name := range names {
+			var larkID string
+			err := database.DB.QueryRow("SELECT lark_id FROM alert_contacts WHERE name = ? AND status = 1", name).Scan(&larkID)
+			if err == nil && larkID != "" {
+				result = append(result, models.AtUser{Name: name, UserID: larkID})
+			} else {
+				log.Printf("[Engine] Contact '%s' not found in alert_contacts", name)
+			}
+		}
+		return result
+	}
+
+	// Fallback: old format [{"name":"Bruce","user_id":"ou_xxx"}]
+	var users []models.AtUser
+	json.Unmarshal([]byte(atUsersJSON), &users)
+	return users
+}
+
+// isMuted checks if a group is currently muted for a rule
+func isMuted(ruleID int, groupKey string) bool {
+	var count int
+	database.DB.QueryRow("SELECT COUNT(*) FROM alert_mutes WHERE rule_id = ? AND group_key = ? AND mute_until > NOW()",
+		ruleID, groupKey).Scan(&count)
+	return count > 0
 }
 
 func parseAggBuckets(raw []byte, aggName string) []string {

@@ -180,10 +180,10 @@
         <!-- @用户 -->
         <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">通知配置</h3>
         <div class="form-group">
-          <label class="form-label">@用户 (JSON)</label>
-          <textarea v-model="form.at_users" class="form-textarea" rows="3"
-            placeholder='[{"name":"Bruce","user_id":"ou_xxxxx"},{"name":"Cesar","user_id":"ou_yyyyy"}]'></textarea>
-          <div class="form-hint">user_id 为 Lark 的 open_id，可在飞书管理后台获取</div>
+          <label class="form-label">@通知人</label>
+          <textarea v-model="form.at_users" class="form-textarea" rows="2"
+            placeholder='["Bruce","Cesar"]'></textarea>
+          <div class="form-hint">填写姓名数组，如 ["Bruce","Cesar"]。姓名需在"通知人管理"页面先添加对应的 Lark ID</div>
         </div>
         <div class="form-group">
           <label class="form-label">
@@ -243,6 +243,54 @@
           <div class="form-hint">单规则检查分组时的并发数。规则多时建议降低，避免给 Loki/ES 过大压力</div>
         </div>
 
+        <div v-if="form.alert_mode === 'not_found'" class="form-group">
+          <label class="form-label">告警间隔</label>
+          <select v-model="form.alert_interval" class="form-select" style="width: 250px;">
+            <option value="">每次执行都发（默认）</option>
+            <option value="5m">每 5 分钟</option>
+            <option value="10m">每 10 分钟</option>
+            <option value="30m">每 30 分钟</option>
+            <option value="1h">每 1 小时</option>
+            <option value="2h">每 2 小时</option>
+            <option value="6h">每 6 小时</option>
+            <option value="12h">每 12 小时</option>
+            <option value="24h">每 24 小时</option>
+          </select>
+          <div class="form-hint">持续搜不到日志时，多久发送一次告警。留空则跟随执行周期每次都发</div>
+        </div>
+
+        <!-- 屏蔽管理 -->
+        <div v-if="isEdit && form.group_by" class="form-group">
+          <label class="form-label">屏蔽管理</label>
+          <div v-if="mutes.length === 0" class="text-sm text-secondary" style="padding: 8px; background: #f8fafc; border-radius: 6px;">
+            暂无屏蔽的容器
+          </div>
+          <div v-else>
+            <div v-for="mute in mutes" :key="mute.id" class="flex justify-between items-center" style="padding: 6px 10px; background: #fffbeb; border-radius: 6px; margin-bottom: 4px; border: 1px solid #fde68a;">
+              <div>
+                <span class="badge badge-warning" style="margin-right: 8px;">{{ mute.group_key }}</span>
+                <span class="text-sm text-secondary">截止: {{ mute.mute_until }}</span>
+                <span v-if="mute.reason" class="text-sm text-secondary"> | {{ mute.reason }}</span>
+              </div>
+              <button type="button" class="btn btn-sm btn-outline" style="color: var(--danger);" @click="removeMute(mute.id)">取消屏蔽</button>
+            </div>
+          </div>
+          <div class="flex gap-2 items-center" style="margin-top: 8px;">
+            <input v-model="newMuteGroup" class="form-input" style="width: 200px;" placeholder="容器名" />
+            <select v-model="newMuteDuration" class="form-select" style="width: 120px;">
+              <option value="1h">1 小时</option>
+              <option value="3h">3 小时</option>
+              <option value="6h">6 小时</option>
+              <option value="12h">12 小时</option>
+              <option value="24h">24 小时</option>
+              <option value="7d">7 天</option>
+              <option value="30d">30 天</option>
+              <option value="forever">1 年</option>
+            </select>
+            <button type="button" class="btn btn-sm btn-outline" @click="addMute">添加屏蔽</button>
+          </div>
+        </div>
+
         <!-- 去重配置 -->
         <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">去重配置</h3>
         <div class="form-row">
@@ -272,22 +320,18 @@
           <div class="form-hint">启用后，每次规则执行会输出自定义指标到 /metrics 端点（内置指标始终输出）</div>
         </div>
         <template v-if="promEnabled">
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">指标名称前缀</label>
-              <input v-model="promConfig.metric_name" class="form-input" placeholder="如: g32_resource" />
-              <div class="form-hint">Prometheus 指标名前缀，只允许字母数字下划线</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">静态 Labels (JSON)</label>
-              <input v-model="promLabelsStr" class="form-input" placeholder='{"namespace":"g32-uat","env":"prod"}' />
-            </div>
-          </div>
           <div class="form-group">
-            <label class="form-label">自定义指标 (JSON)</label>
-            <textarea v-model="promCustomMetricsStr" class="form-textarea" rows="4"
-              :placeholder="promMetricsPlaceholder"></textarea>
-            <div class="form-hint">name=指标后缀, help=描述, type=gauge/counter, value_from=从提取字段获取数值</div>
+            <label class="form-label">自定义 Labels (JSON)</label>
+            <input v-model="promLabelsStr" class="form-input" placeholder='{"project":"g32","env":"uat","team":"backend"}' />
+            <div class="form-hint">附加到 alert_container_status 指标上的标签，用于 Grafana 筛选分组</div>
+          </div>
+          <div class="card" style="padding: 12px; background: #f8fafc; font-size: 12px; margin-top: 8px;">
+            <div><strong>指标输出示例：</strong></div>
+            <div style="margin-top: 6px; font-family: monospace; color: #6366f1; line-height: 1.8;">
+              alert_container_status{rule_id="2", rule_name="...", namespace="g32-uat", container="max-24d-resource-backend"{{ promPreviewLabels }}} <strong>1</strong><br>
+              alert_container_status{rule_id="2", rule_name="...", namespace="g32-uat", container="baccarat-resource-backend"{{ promPreviewLabels }}} <strong>0</strong>
+            </div>
+            <div style="margin-top: 6px; color: #64748b;">1=正常（搜到日志） 0=告警（搜不到日志）</div>
           </div>
         </template>
 
@@ -316,6 +360,8 @@
         </div>
 
         <div style="overflow-y: auto; flex: 1; padding: 0 4px;">
+
+        <!-- Stats -->
         <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px;">
           <div class="stat-card" style="padding: 12px;">
             <div class="label">数据源</div>
@@ -324,8 +370,18 @@
           <div class="stat-card" style="padding: 12px;">
             <div class="label">详情</div>
             <div style="font-weight: 600;">{{ previewData.source_detail }}</div>
+            <div v-if="previewData.time_range" class="text-sm text-secondary" style="margin-top: 2px;">搜索范围: {{ previewData.time_range }}</div>
           </div>
-          <div class="stat-card" style="padding: 12px;">
+          <div v-if="previewData.total_groups" class="stat-card" style="padding: 12px;">
+            <div class="label">容器总数</div>
+            <div style="font-weight: 600; font-size: 20px;">
+              <span style="color: var(--success);">{{ previewData.ok_count || 0 }}</span>
+              <span class="text-secondary" style="font-size: 14px;"> 正常 / </span>
+              <span style="color: var(--danger);">{{ previewData.alert_count || 0 }}</span>
+              <span class="text-secondary" style="font-size: 14px;"> 告警</span>
+            </div>
+          </div>
+          <div v-else class="stat-card" style="padding: 12px;">
             <div class="label">{{ previewData.group_by ? '分组数 / 总日志' : '命中数' }}</div>
             <div style="font-weight: 600; font-size: 20px;" :style="{ color: previewData.hit_count > 0 ? 'var(--warning)' : 'var(--success)' }">
               {{ previewData.group_by ? previewData.group_count + ' 组' : previewData.hit_count }} / {{ previewData.total }}
@@ -333,41 +389,92 @@
           </div>
         </div>
 
-        <!-- Alert mode hint -->
-        <div v-if="form.alert_mode === 'not_found'" class="card" style="padding: 12px; margin-bottom: 12px;"
-          :style="{ background: previewData.hit_count === 0 ? '#fef2f2' : '#ecfdf5', borderColor: previewData.hit_count === 0 ? '#fecaca' : '#a7f3d0' }">
-          <strong>{{ previewData.hit_count === 0 ? '将触发告警' : '正常（不会告警）' }}</strong>
-          — 反向模式: {{ previewData.hit_count === 0 ? '在指定时间范围内未搜到匹配日志' : '搜到匹配日志，不会触发告警' }}
-        </div>
-        <div v-else-if="previewData.hit_count > 0" class="card" style="padding: 12px; margin-bottom: 12px; background: #fffbeb; border-color: #fde68a;">
-          <strong>将触发 {{ previewData.hit_count }} 条告警</strong>
-        </div>
-        <div v-else class="card" style="padding: 12px; margin-bottom: 12px; background: #ecfdf5; border-color: #a7f3d0;">
-          <strong>正常（无命中，不会告警）</strong>
+        <!-- @人信息 -->
+        <div v-if="form.at_users" class="card" style="padding: 8px 12px; margin-bottom: 12px; background: #eff6ff; border-color: #bfdbfe;">
+          <span class="text-sm" style="color: #1e40af;">
+            通知: {{ parseAtNames(form.at_users) }}
+            <span v-if="form.at_all === 1" style="margin-left: 8px;">+ @所有人</span>
+          </span>
         </div>
 
-        <!-- Rendered messages -->
-        <div v-if="previewData.hits && previewData.hits.length > 0">
-          <h4 style="margin-bottom: 8px;">渲染后的告警消息</h4>
-          <div v-for="(hit, idx) in previewData.hits" :key="idx" class="card" style="margin-bottom: 8px; padding: 12px;">
-            <div class="flex justify-between items-center" style="margin-bottom: 8px;">
-              <span class="badge badge-info">{{ hit.vars?._group_key ? hit.vars._group_key : '命中 #' + (idx + 1) }}</span>
-              <button class="btn btn-sm btn-outline" @click="hit._showRaw = !hit._showRaw">
-                {{ hit._showRaw ? '隐藏原始数据' : '查看原始数据' }}
-              </button>
-            </div>
-            <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 13px; white-space: pre-wrap; max-height: 200px; overflow-y: auto;">{{ hit.rendered }}</pre>
-            <div v-if="hit._showRaw" style="margin-top: 8px;">
-              <div class="text-sm text-secondary" style="margin-bottom: 4px;">提取变量:</div>
-              <pre style="background: #f8fafc; padding: 8px; border-radius: 4px; font-size: 12px; max-height: 150px; overflow-y: auto;">{{ formatVars(hit.vars) }}</pre>
-              <div class="text-sm text-secondary" style="margin: 4px 0;">ES 原始数据:</div>
-              <pre style="background: #f8fafc; padding: 8px; border-radius: 4px; font-size: 12px; max-height: 200px; overflow-y: auto;">{{ formatJSON(hit.raw) }}</pre>
+        <!-- ========== not_found grouped preview ========== -->
+        <template v-if="previewData.ok_list || previewData.alert_list">
+
+          <!-- Alert containers -->
+          <div v-if="previewData.alert_list && previewData.alert_list.length > 0">
+            <h4 style="margin-bottom: 8px; color: var(--danger);">告警容器 ({{ previewData.alert_list.length }})</h4>
+            <div v-for="item in previewData.alert_list" :key="item.name" class="card" style="margin-bottom: 8px; padding: 12px; border-left: 4px solid var(--danger);">
+              <div class="flex justify-between items-center" style="margin-bottom: 6px;">
+                <span class="badge badge-danger">{{ item.name }}</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-sm text-secondary">
+                    来源: {{ {current: '当前范围', redis: 'Redis缓存', '24h': '24h查询', '3d': '3天查询', no_history: '无历史日志', '30m': '30m查询'}[item.source] || item.source }}
+                  </span>
+                  <select class="form-select" style="width: 120px; padding: 2px 6px; font-size: 12px;"
+                    @change="muteContainer(item.name, $event)">
+                    <option value="">屏蔽...</option>
+                    <option value="1h">1 小时</option>
+                    <option value="3h">3 小时</option>
+                    <option value="6h">6 小时</option>
+                    <option value="12h">12 小时</option>
+                    <option value="24h">24 小时</option>
+                    <option value="7d">7 天</option>
+                    <option value="30d">30 天</option>
+                    <option value="forever">1 年</option>
+                  </select>
+                </div>
+              </div>
+              <pre v-if="item.rendered" style="background: #fef2f2; padding: 10px; border-radius: 6px; font-size: 13px; white-space: pre-wrap; max-height: 150px; overflow-y: auto;">{{ formatRendered(item.rendered) }}</pre>
+              <div v-else class="text-sm text-secondary" style="padding: 8px; background: #f8fafc; border-radius: 6px;">无历史日志记录</div>
             </div>
           </div>
-        </div>
 
-        <!-- ES Query -->
-        <details style="margin-top: 12px;">
+          <!-- OK containers -->
+          <div v-if="previewData.ok_list && previewData.ok_list.length > 0" style="margin-top: 12px;">
+            <h4 style="margin-bottom: 8px; color: var(--success);">正常容器 ({{ previewData.ok_list.length }})</h4>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+              <span v-for="item in previewData.ok_list" :key="item.name" class="badge badge-success" style="padding: 4px 10px;">
+                {{ item.name }}
+              </span>
+            </div>
+          </div>
+        </template>
+
+        <!-- ========== Default preview (found mode / no grouping) ========== -->
+        <template v-else>
+          <!-- Alert mode hint -->
+          <div v-if="form.alert_mode === 'not_found'" class="card" style="padding: 12px; margin-bottom: 12px;"
+            :style="{ background: previewData.hit_count === 0 ? '#fef2f2' : '#ecfdf5', borderColor: previewData.hit_count === 0 ? '#fecaca' : '#a7f3d0' }">
+            <strong>{{ previewData.hit_count === 0 ? '将触发告警' : '正常（不会告警）' }}</strong>
+            — 反向模式: {{ previewData.hit_count === 0 ? '在指定时间范围内未搜到匹配日志' : '搜到匹配日志，不会触发告警' }}
+          </div>
+          <div v-else-if="previewData.hit_count > 0" class="card" style="padding: 12px; margin-bottom: 12px; background: #fffbeb; border-color: #fde68a;">
+            <strong>将触发 {{ previewData.hit_count }} 条告警</strong>
+          </div>
+          <div v-else class="card" style="padding: 12px; margin-bottom: 12px; background: #ecfdf5; border-color: #a7f3d0;">
+            <strong>正常（无命中，不会告警）</strong>
+          </div>
+
+          <!-- Rendered messages -->
+          <div v-if="previewData.hits && previewData.hits.length > 0">
+            <h4 style="margin-bottom: 8px;">渲染后的告警消息</h4>
+            <div v-for="(hit, idx) in previewData.hits" :key="idx" class="card" style="margin-bottom: 8px; padding: 12px;">
+              <div class="flex justify-between items-center" style="margin-bottom: 8px;">
+                <span class="badge badge-info">{{ hit.vars?._group_key ? hit.vars._group_key : '命中 #' + (idx + 1) }}</span>
+                <button class="btn btn-sm btn-outline" @click="hit._showRaw = !hit._showRaw">
+                  {{ hit._showRaw ? '隐藏原始数据' : '查看原始数据' }}
+                </button>
+              </div>
+              <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 13px; white-space: pre-wrap; max-height: 200px; overflow-y: auto;">{{ formatRendered(hit.rendered) }}</pre>
+              <div v-if="hit._showRaw" style="margin-top: 8px;">
+                <pre style="background: #f8fafc; padding: 8px; border-radius: 4px; font-size: 12px; max-height: 200px; overflow-y: auto;">{{ formatJSON(hit.raw) }}</pre>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Query -->
+        <details v-if="previewData.query" style="margin-top: 12px;">
           <summary class="text-sm text-secondary" style="cursor: pointer;">查看查询语句</summary>
           <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 12px; margin-top: 8px; max-height: 200px; overflow-y: auto;">{{ previewData.query }}</pre>
         </details>
@@ -389,6 +496,11 @@ const dialog = useConfirm()
 const previewing = ref(false)
 const previewData = ref(null)
 const testSending = ref(false)
+
+// Mutes
+const mutes = ref([])
+const newMuteGroup = ref('')
+const newMuteDuration = ref('1h')
 
 const route = useRoute()
 const router = useRouter()
@@ -425,6 +537,7 @@ const form = ref({
   group_by: '',
   expected_groups: '',
   query_concurrency: 5,
+  alert_interval: '',
   dedup_field: '',
   dedup_ttl: 3600,
   max_alerts: 10,
@@ -438,14 +551,16 @@ const recoveryChecked = computed({
 
 // Prometheus config helpers
 const promEnabled = ref(false)
-const promConfig = ref({ metric_name: '', labels: {}, custom_metrics: [] })
+const promConfig = ref({ static_labels: {} })
 const promLabelsStr = ref('')
-const promCustomMetricsStr = ref('')
 
-const promMetricsPlaceholder = `[
-  {"name":"hit_count","help":"ES搜索命中数","type":"gauge","value_from":""},
-  {"name":"error_count","help":"错误日志数","type":"counter","value_from":"error_count"}
-]`
+const promPreviewLabels = computed(() => {
+  try {
+    const labels = JSON.parse(promLabelsStr.value || '{}')
+    const parts = Object.entries(labels).map(([k, v]) => `${k}="${v}"`)
+    return parts.length > 0 ? ', ' + parts.join(', ') : ''
+  } catch { return '' }
+})
 
 // Sync prometheus config to form.prometheus_config before submit
 function syncPromConfig() {
@@ -453,8 +568,7 @@ function syncPromConfig() {
     form.value.prometheus_config = ''
     return
   }
-  try { promConfig.value.labels = JSON.parse(promLabelsStr.value || '{}') } catch { promConfig.value.labels = {} }
-  try { promConfig.value.custom_metrics = JSON.parse(promCustomMetricsStr.value || '[]') } catch { promConfig.value.custom_metrics = [] }
+  try { promConfig.value.static_labels = JSON.parse(promLabelsStr.value || '{}') } catch { promConfig.value.static_labels = {} }
   promConfig.value.enabled = true
   form.value.prometheus_config = JSON.stringify(promConfig.value)
 }
@@ -465,9 +579,9 @@ function loadPromConfig(configStr) {
   try {
     const cfg = JSON.parse(configStr)
     promEnabled.value = cfg.enabled || false
-    promConfig.value = { metric_name: cfg.metric_name || '', labels: cfg.labels || {}, custom_metrics: cfg.custom_metrics || [] }
-    promLabelsStr.value = JSON.stringify(cfg.labels || {})
-    promCustomMetricsStr.value = cfg.custom_metrics?.length ? JSON.stringify(cfg.custom_metrics, null, 2) : ''
+    const staticLabels = cfg.static_labels || cfg.labels || {}
+    promConfig.value = { static_labels: staticLabels }
+    promLabelsStr.value = Object.keys(staticLabels).length > 0 ? JSON.stringify(staticLabels) : ''
   } catch { /* ignore */ }
 }
 
@@ -554,6 +668,7 @@ async function loadRule() {
         group_by: d.group_by || '',
         expected_groups: d.expected_groups || '',
         query_concurrency: d.query_concurrency || 5,
+        alert_interval: d.alert_interval || '',
         dedup_field: d.dedup_field,
         dedup_ttl: d.dedup_ttl,
         max_alerts: d.max_alerts,
@@ -584,6 +699,70 @@ async function handleSubmit() {
     toast.error('保存失败: ' + (e.response?.data?.message || e.message))
   }
   submitting.value = false
+}
+
+async function loadMutes() {
+  if (!route.params.id) return
+  try {
+    const res = await api.get('/alert-mutes', { params: { rule_id: route.params.id } })
+    if (res.code === 0) mutes.value = res.data
+  } catch (e) { /* ignore */ }
+}
+
+async function addMute() {
+  if (!newMuteGroup.value) { toast.error('请输入容器名'); return }
+  if (!route.params.id) { toast.warning('请先保存规则'); return }
+  try {
+    const res = await api.post('/alert-mutes', {
+      rule_id: parseInt(route.params.id),
+      group_key: newMuteGroup.value,
+      duration: newMuteDuration.value,
+      reason: '规则编辑页手动屏蔽'
+    })
+    if (res.code === 0) {
+      toast.success(`${newMuteGroup.value} 已屏蔽 ${newMuteDuration.value}`)
+      newMuteGroup.value = ''
+      loadMutes()
+    } else {
+      toast.error(res.message)
+    }
+  } catch (e) { toast.error('屏蔽失败') }
+}
+
+async function removeMute(muteId) {
+  try {
+    await api.delete(`/alert-mutes/${muteId}`)
+    toast.success('已取消屏蔽')
+    loadMutes()
+  } catch (e) { toast.error('取消失败') }
+}
+
+async function muteContainer(containerName, event) {
+  const duration = event.target.value
+  event.target.value = '' // reset select
+  if (!duration) return
+
+  const ruleId = route.params.id
+  if (!ruleId) {
+    toast.warning('请先保存规则后再屏蔽')
+    return
+  }
+
+  try {
+    const res = await api.post('/alert-mutes', {
+      rule_id: parseInt(ruleId),
+      group_key: containerName,
+      duration: duration,
+      reason: '预览页手动屏蔽'
+    })
+    if (res.code === 0) {
+      toast.success(`${containerName} 已屏蔽 ${duration}`)
+    } else {
+      toast.error(res.message)
+    }
+  } catch (e) {
+    toast.error('屏蔽失败: ' + (e.response?.data?.message || e.message))
+  }
 }
 
 async function handleTestSend() {
@@ -641,6 +820,32 @@ async function handlePreview() {
   previewing.value = false
 }
 
+function parseAtNames(atUsersStr) {
+  if (!atUsersStr) return ''
+  try {
+    const parsed = JSON.parse(atUsersStr)
+    if (Array.isArray(parsed)) {
+      return parsed.map(item => typeof item === 'string' ? '@' + item : '@' + (item.name || '')).join(' ')
+    }
+  } catch { /* ignore */ }
+  return atUsersStr
+}
+
+// Convert nanosecond timestamps to readable time (UTC+8)
+function formatRendered(text) {
+  if (!text) return text
+  return text.replace(/(?<!\d)(\d{16,19})(?!\d)/g, (match) => {
+    // Nanosecond timestamp: take first 13 digits as milliseconds
+    if (match.length >= 16) {
+      const ms = Number(match.substring(0, 13))
+      if (ms > 1700000000000 && ms < 1900000000000) {
+        return new Date(ms).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+      }
+    }
+    return match
+  })
+}
+
 function formatVars(vars) {
   if (!vars) return ''
   const filtered = {}
@@ -657,6 +862,7 @@ function formatJSON(obj) {
 onMounted(async () => {
   await loadOptions()
   await loadRule()
+  loadMutes()
 
   // Pre-fill from query params (from ES Explore page)
   const q = route.query

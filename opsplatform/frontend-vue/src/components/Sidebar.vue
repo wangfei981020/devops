@@ -38,9 +38,18 @@ async function openExternalApp(app) {
 }
 
 // 按 group_name 分组
+// Filter external apps by perm_code field (e.g. perm_code='alert' → checks 'menu:alert')
+const filteredExternalApps = computed(() => {
+  if (isAdmin.value) return externalApps.value
+  return externalApps.value.filter(app => {
+    if (!app.perm_code) return true  // no perm_code configured = always show
+    return permissions.value['menu:' + app.perm_code] === true
+  })
+})
+
 const externalGroups = computed(() => {
   const map = {}
-  for (const app of externalApps.value) {
+  for (const app of filteredExternalApps.value) {
     const group = app.group_name || '外部应用'
     if (!map[group]) map[group] = []
     map[group].push(app)

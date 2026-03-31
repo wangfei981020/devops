@@ -2,51 +2,52 @@ package alert
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
+	"sort"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// MetricsManager manages per-rule Prometheus metrics
+// MetricsManager manages Prometheus metrics
 type MetricsManager struct {
 	mu sync.RWMutex
 
-	// Built-in metrics (auto for every rule)
-	alertTotal   *prometheus.CounterVec // total alerts fired
-	alertSuccess *prometheus.CounterVec // successful sends
-	alertFailed  *prometheus.CounterVec // failed sends
-	alertHits    *prometheus.GaugeVec   // hits found in last run
-	lastRunTime  *prometheus.GaugeVec   // last run timestamp
-	lastRunDur   *prometheus.GaugeVec   // last run duration seconds
-	ruleStatus   *prometheus.GaugeVec   // rule enabled/disabled
+	// Built-in rule-level metrics
+	alertTotal   *prometheus.CounterVec
+	alertSuccess *prometheus.CounterVec
+	alertFailed  *prometheus.CounterVec
+	alertHits    *prometheus.GaugeVec
+	lastRunTime  *prometheus.GaugeVec
+	lastRunDur   *prometheus.GaugeVec
+	ruleStatus   *prometheus.GaugeVec
 
-	// Custom gauges per rule (user-defined)
-	customGauges map[string]*prometheus.GaugeVec // key: metric_name
+	// Container-level metric (dynamic labels)
+	containerStatusRegistered bool
+	containerStatus           *prometheus.GaugeVec
+	containerStatusLabels     []string // sorted label names
 }
 
 // PrometheusConfig user-defined prometheus config per rule
 type PrometheusConfig struct {
-	Enabled    bool           `json:"enabled"`
-	MetricName string         `json:"metric_name"` // custom metric name prefix
-	Labels     map[string]string `json:"labels"`   // static labels to add
-	CustomMetrics []CustomMetric `json:"custom_metrics"` // additional custom metrics
+	Enabled      bool              `json:"enabled"`
+	StaticLabels map[string]string `json:"static_labels"` // custom labels added to alert_container_status
+	Labels       map[string]string `json:"labels"`        // backward compat alias
 }
 
-// CustomMetric a user-defined metric extracted from alert data
-type CustomMetric struct {
-	Name      string `json:"name"`       // metric name (will be prefixed)
-	Help      string `json:"help"`       // metric description
-	Type      string `json:"type"`       // gauge or counter
-	ValueFrom string `json:"value_from"` // field name to extract value from
+// GetStaticLabels returns static labels (supports both fields)
+func (c *PrometheusConfig) GetStaticLabels() map[string]string {
+	if len(c.StaticLabels) > 0 {
+		return c.StaticLabels
+	}
+	return c.Labels
 }
 
 var Metrics *MetricsManager
 
 func InitMetrics() {
-	Metrics = &MetricsManager{
-		customGauges: make(map[string]*prometheus.GaugeVec),
-	}
+	Metrics = &MetricsManager{}
 
 	labels := []string{"rule_id", "rule_name", "severity"}
 
@@ -67,7 +68,7 @@ func InitMetrics() {
 
 	Metrics.alertHits = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "alert_es_hits",
-		Help: "Number of ES hits found in last run",
+		Help: "Number of hits found in last run",
 	}, labels)
 
 	Metrics.lastRunTime = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -106,25 +107,21 @@ func (m *MetricsManager) RecordRuleRun(ruleID, ruleName, severity string, hits i
 	m.lastRunDur.With(l).Set(duration)
 }
 
-// RecordAlertFired increments the fired counter
 func (m *MetricsManager) RecordAlertFired(ruleID, ruleName, severity string) {
 	l := prometheus.Labels{"rule_id": ruleID, "rule_name": ruleName, "severity": severity}
 	m.alertTotal.With(l).Inc()
 }
 
-// RecordSendSuccess increments success counter
 func (m *MetricsManager) RecordSendSuccess(ruleID, ruleName, severity string) {
 	l := prometheus.Labels{"rule_id": ruleID, "rule_name": ruleName, "severity": severity}
 	m.alertSuccess.With(l).Inc()
 }
 
-// RecordSendFailed increments failed counter
 func (m *MetricsManager) RecordSendFailed(ruleID, ruleName, severity string) {
 	l := prometheus.Labels{"rule_id": ruleID, "rule_name": ruleName, "severity": severity}
 	m.alertFailed.With(l).Inc()
 }
 
-// SetRuleStatus sets the rule enabled status
 func (m *MetricsManager) SetRuleStatus(ruleID, ruleName, severity string, enabled bool) {
 	l := prometheus.Labels{"rule_id": ruleID, "rule_name": ruleName, "severity": severity}
 	if enabled {
@@ -134,58 +131,57 @@ func (m *MetricsManager) SetRuleStatus(ruleID, ruleName, severity string, enable
 	}
 }
 
-// SetCustomGauge sets a custom gauge metric value
-func (m *MetricsManager) SetCustomGauge(metricName string, labels prometheus.Labels, value float64) {
-	m.mu.RLock()
-	g, ok := m.customGauges[metricName]
-	m.mu.RUnlock()
-
-	if ok {
-		g.With(labels).Set(value)
-	}
-}
-
-// RegisterCustomMetrics registers custom metrics for a rule based on its PrometheusConfig
-func (m *MetricsManager) RegisterCustomMetrics(configJSON string) {
-	if configJSON == "" {
-		return
-	}
-	var cfg PrometheusConfig
-	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-		return
-	}
-	if !cfg.Enabled || len(cfg.CustomMetrics) == 0 {
-		return
-	}
-
+// RecordContainerStatus records per-container alert status with custom static labels
+// status: 1=normal, 0=alerting
+func (m *MetricsManager) RecordContainerStatus(ruleID, ruleName, namespace, container string, ok bool, staticLabels map[string]string) {
+	// Build label names (need to register gauge with all label names on first call)
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for _, cm := range cfg.CustomMetrics {
-		fullName := cfg.MetricName + "_" + cm.Name
-		if _, exists := m.customGauges[fullName]; exists {
-			continue
+	if !m.containerStatusRegistered {
+		// Collect all static label keys
+		labelNames := []string{"rule_id", "rule_name", "namespace", "container"}
+		var keys []string
+		for k := range staticLabels {
+			keys = append(keys, k)
 		}
+		sort.Strings(keys)
+		labelNames = append(labelNames, keys...)
 
-		// Build label names from static labels config
-		labelNames := []string{"rule_id", "rule_name"}
-		for k := range cfg.Labels {
-			labelNames = append(labelNames, k)
-		}
-
-		g := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: fullName,
-			Help: cm.Help,
+		m.containerStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "alert_container_status",
+			Help: "Container alert status: 1=normal 0=alerting",
 		}, labelNames)
 
-		if err := prometheus.Register(g); err != nil {
-			log.Printf("[Metrics] Failed to register custom metric %s: %v", fullName, err)
-			continue
+		if err := prometheus.Register(m.containerStatus); err != nil {
+			log.Printf("[Metrics] 注册 alert_container_status 失败: %v", err)
+			m.mu.Unlock()
+			return
 		}
-		m.customGauges[fullName] = g
-		log.Printf("[Metrics] Registered custom metric: %s", fullName)
+		m.containerStatusLabels = labelNames
+		m.containerStatusRegistered = true
+		log.Printf("[Metrics] 注册 alert_container_status, labels: %v", labelNames)
+	}
+	m.mu.Unlock()
+
+	// Build labels
+	labels := prometheus.Labels{
+		"rule_id":   ruleID,
+		"rule_name": ruleName,
+		"namespace": namespace,
+		"container": container,
+	}
+	for k, v := range staticLabels {
+		labels[k] = v
+	}
+
+	if ok {
+		m.containerStatus.With(labels).Set(1)
+	} else {
+		m.containerStatus.With(labels).Set(0)
 	}
 }
+
+// RegisterCustomMetrics kept for backward compatibility (no-op)
+func (m *MetricsManager) RegisterCustomMetrics(configJSON string) {}
 
 // ParsePrometheusConfig parses the JSON config
 func ParsePrometheusConfig(configJSON string) *PrometheusConfig {
@@ -200,4 +196,28 @@ func ParsePrometheusConfig(configJSON string) *PrometheusConfig {
 		return nil
 	}
 	return &cfg
+}
+
+// SetCustomGauge legacy method (no-op)
+func (m *MetricsManager) SetCustomGauge(metricName string, labels prometheus.Labels, value float64) {}
+
+// toFloat64 converts interface{} to float64
+func toFloat64(v interface{}) float64 {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case float64:
+		return val
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case string:
+		var f float64
+		fmt.Sscanf(val, "%f", &f)
+		return f
+	default:
+		return 0
+	}
 }

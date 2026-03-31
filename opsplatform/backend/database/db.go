@@ -944,6 +944,14 @@ CREATE TABLE IF NOT EXISTS duty_records (
 		return err
 	}
 
+	// Auto-migrate: add perm_code column if not exists
+	var permCodeCount int
+	DB.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'external_apps' AND COLUMN_NAME = 'perm_code'`).Scan(&permCodeCount)
+	if permCodeCount == 0 {
+		DB.Exec("ALTER TABLE external_apps ADD COLUMN perm_code VARCHAR(64) DEFAULT '' COMMENT '权限码前缀(如 alert, confluence)' AFTER url")
+		log.Println("[Migration] Added column external_apps.perm_code")
+	}
+
 	// 创建角色-外部应用关联表
 	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS role_external_apps (
@@ -1156,6 +1164,17 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_confluence_jira", "menu:confluence_jira", "Confluence Jira工单", "/confluence/jira", "perm_menu_confluence", "", 40},
 		{"perm_menu_confluence_report", "menu:confluence_report", "Confluence生成报告", "/confluence/report", "perm_menu_confluence", "", 50},
 		{"perm_menu_confluence_settings", "menu:confluence_settings", "Confluence系统设置", "/confluence/settings", "perm_menu_confluence", "", 60},
+
+		// 告警平台（外部应用权限）
+		{"perm_menu_alert", "menu:alert", "告警平台", "/alert", "", "alert", 14},
+		{"perm_menu_alert_dashboard", "menu:alert_dashboard", "告警仪表盘", "/alert/dashboard", "perm_menu_alert", "", 10},
+		{"perm_menu_alert_rules", "menu:alert_rules", "告警规则", "/alert/rules", "perm_menu_alert", "", 20},
+		{"perm_menu_alert_explore", "menu:alert_explore", "日志查询", "/alert/explore", "perm_menu_alert", "", 30},
+		{"perm_menu_alert_connections", "menu:alert_connections", "连接管理", "/alert/connections", "perm_menu_alert", "", 40},
+		{"perm_menu_alert_lark", "menu:alert_lark", "Lark配置", "/alert/lark", "perm_menu_alert", "", 50},
+		{"perm_menu_alert_logs", "menu:alert_logs", "告警日志", "/alert/logs", "perm_menu_alert", "", 60},
+		{"perm_menu_alert_contacts", "menu:alert_contacts", "通知人管理", "/alert/contacts", "perm_menu_alert", "", 70},
+		{"perm_menu_alert_users", "menu:alert_users", "告警账号管理", "/alert/users", "perm_menu_alert", "", 80},
 	}
 
 	for _, perm := range menuPermissions {
@@ -1265,6 +1284,17 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_confluence_manage_connections", "confluence:manage_connections", "[Confluence中心] 连接管理", "允许管理Confluence和Jira连接配置"},
 		{"perm_btn_confluence_export_report", "confluence:export_report", "[Confluence中心] 导出报告", "允许导出运维报告"},
 		{"perm_btn_confluence_manage_settings", "confluence:manage_settings", "[Confluence中心] 系统配置", "允许修改Confluence中心系统设置"},
+
+		// 告警平台
+		{"perm_btn_alert_create_rule", "alert:create_rule", "[告警平台] 创建规则", "允许创建告警规则"},
+		{"perm_btn_alert_edit_rule", "alert:edit_rule", "[告警平台] 编辑规则", "允许编辑告警规则"},
+		{"perm_btn_alert_delete_rule", "alert:delete_rule", "[告警平台] 删除规则", "允许删除告警规则"},
+		{"perm_btn_alert_toggle_rule", "alert:toggle_rule", "[告警平台] 启停规则", "允许启用/禁用告警规则"},
+		{"perm_btn_alert_test_send", "alert:test_send", "[告警平台] 测试发送", "允许测试发送告警到Lark"},
+		{"perm_btn_alert_mute", "alert:mute", "[告警平台] 屏蔽管理", "允许添加/取消告警屏蔽"},
+		{"perm_btn_alert_manage_connections", "alert:manage_connections", "[告警平台] 连接管理", "允许管理ES/Loki连接"},
+		{"perm_btn_alert_manage_contacts", "alert:manage_contacts", "[告警平台] 通知人管理", "允许管理通知人"},
+		{"perm_btn_alert_manage_lark", "alert:manage_lark", "[告警平台] Lark配置", "允许管理Lark配置"},
 	}
 
 	for _, perm := range buttonPermissions {

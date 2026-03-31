@@ -8,16 +8,18 @@ const routes = [
     component: () => import('../components/Layout.vue'),
     children: [
       { path: '', redirect: '/dashboard' },
-      { path: 'dashboard', name: 'Dashboard', component: () => import('../views/DashboardView.vue') },
-      { path: 'alert-rules', name: 'AlertRules', component: () => import('../views/AlertRulesView.vue') },
-      { path: 'alert-rules/create', name: 'CreateAlertRule', component: () => import('../views/AlertRuleFormView.vue') },
-      { path: 'alert-rules/:id/edit', name: 'EditAlertRule', component: () => import('../views/AlertRuleFormView.vue') },
-      { path: 'es-explore', name: 'ESExplore', component: () => import('../views/ESExploreView.vue') },
-      { path: 'es-connections', name: 'ESConnections', component: () => import('../views/ESConnectionsView.vue') },
-      { path: 'loki-connections', name: 'LokiConnections', component: () => import('../views/LokiConnectionsView.vue') },
-      { path: 'lark-configs', name: 'LarkConfigs', component: () => import('../views/LarkConfigsView.vue') },
-      { path: 'alert-logs', name: 'AlertLogs', component: () => import('../views/AlertLogsView.vue') },
-      { path: 'users', name: 'Users', component: () => import('../views/UsersView.vue') },
+      { path: 'dashboard', name: 'Dashboard', component: () => import('../views/DashboardView.vue'), meta: { menuKey: 'dashboard' } },
+      { path: 'alert-rules', name: 'AlertRules', component: () => import('../views/AlertRulesView.vue'), meta: { menuKey: 'rules' } },
+      { path: 'alert-rules/create', name: 'CreateAlertRule', component: () => import('../views/AlertRuleFormView.vue'), meta: { menuKey: 'rules' } },
+      { path: 'alert-rules/:id/edit', name: 'EditAlertRule', component: () => import('../views/AlertRuleFormView.vue'), meta: { menuKey: 'rules' } },
+      { path: 'es-explore', name: 'ESExplore', component: () => import('../views/ESExploreView.vue'), meta: { menuKey: 'explore' } },
+      { path: 'es-connections', name: 'ESConnections', component: () => import('../views/ESConnectionsView.vue'), meta: { menuKey: 'connections' } },
+      { path: 'loki-connections', name: 'LokiConnections', component: () => import('../views/LokiConnectionsView.vue'), meta: { menuKey: 'connections' } },
+      { path: 'lark-configs', name: 'LarkConfigs', component: () => import('../views/LarkConfigsView.vue'), meta: { menuKey: 'lark' } },
+      { path: 'alert-logs', name: 'AlertLogs', component: () => import('../views/AlertLogsView.vue'), meta: { menuKey: 'logs' } },
+      { path: 'contacts', name: 'Contacts', component: () => import('../views/ContactsView.vue'), meta: { menuKey: 'contacts' } },
+      { path: 'audit-logs', name: 'AuditLogs', component: () => import('../views/AuditLogsView.vue'), meta: { menuKey: 'audit' } },
+      { path: 'users', name: 'Users', component: () => import('../views/UsersView.vue'), meta: { menuKey: 'users' } },
     ]
   }
 ]
@@ -44,6 +46,12 @@ router.beforeEach((to, from, next) => {
 
   const auth = useAuthStore()
   if (!auth.isLoggedIn) return next('/login')
+
+  // Menu permission check
+  if (to.meta.menuKey && !auth.hasMenu(to.meta.menuKey)) {
+    return next('/dashboard')
+  }
+
   next()
 })
 

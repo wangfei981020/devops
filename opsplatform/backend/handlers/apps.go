@@ -17,6 +17,7 @@ type ExternalApp struct {
 	AppKey    string `json:"app_key"`
 	Name      string `json:"name"`
 	URL       string `json:"url"`
+	PermCode  string `json:"perm_code"`
 	IconSVG   string `json:"icon_svg"`
 	GroupName string `json:"group_name"`
 	SortOrder int    `json:"sort_order"`
@@ -27,7 +28,7 @@ type ExternalApp struct {
 
 // HandleGetExternalApps 获取外部应用列表
 func HandleGetExternalApps(w http.ResponseWriter, r *http.Request) {
-	rows, err := database.DB.Query(`SELECT id, app_key, name, url, COALESCE(icon_svg,''), COALESCE(group_name,''), sort_order, status, created_at, updated_at FROM external_apps ORDER BY group_name, sort_order`)
+	rows, err := database.DB.Query(`SELECT id, app_key, name, url, COALESCE(perm_code,''), COALESCE(icon_svg,''), COALESCE(group_name,''), sort_order, status, created_at, updated_at FROM external_apps ORDER BY group_name, sort_order`)
 	if err != nil {
 		respondInternalError(w, "查询失败")
 		return
@@ -37,7 +38,7 @@ func HandleGetExternalApps(w http.ResponseWriter, r *http.Request) {
 	apps := []ExternalApp{}
 	for rows.Next() {
 		var a ExternalApp
-		rows.Scan(&a.ID, &a.AppKey, &a.Name, &a.URL, &a.IconSVG, &a.GroupName, &a.SortOrder, &a.Status, &a.CreatedAt, &a.UpdatedAt)
+		rows.Scan(&a.ID, &a.AppKey, &a.Name, &a.URL, &a.PermCode, &a.IconSVG, &a.GroupName, &a.SortOrder, &a.Status, &a.CreatedAt, &a.UpdatedAt)
 		apps = append(apps, a)
 	}
 	respondSuccess(w, apps)
@@ -50,7 +51,7 @@ func HandleGetMyExternalApps(w http.ResponseWriter, r *http.Request) {
 
 	// 管理员看到所有启用的应用
 	if role == "admin" || role == "super_admin" || role == "超级管理员" {
-		rows, err := database.DB.Query(`SELECT id, app_key, name, url, COALESCE(icon_svg,''), COALESCE(group_name,''), sort_order FROM external_apps WHERE status = 'active' ORDER BY group_name, sort_order`)
+		rows, err := database.DB.Query(`SELECT id, app_key, name, url, COALESCE(perm_code,''), COALESCE(icon_svg,''), COALESCE(group_name,''), sort_order FROM external_apps WHERE status = 'active' ORDER BY group_name, sort_order`)
 		if err != nil {
 			log.Printf("[外部应用调试] 管理员查询失败: %v", err)
 			respondInternalError(w, "查询失败")
@@ -60,7 +61,7 @@ func HandleGetMyExternalApps(w http.ResponseWriter, r *http.Request) {
 		apps := []ExternalApp{}
 		for rows.Next() {
 			var a ExternalApp
-			rows.Scan(&a.ID, &a.AppKey, &a.Name, &a.URL, &a.IconSVG, &a.GroupName, &a.SortOrder)
+			rows.Scan(&a.ID, &a.AppKey, &a.Name, &a.URL, &a.PermCode, &a.IconSVG, &a.GroupName, &a.SortOrder)
 			apps = append(apps, a)
 		}
 		log.Printf("[外部应用调试] 管理员返回 %d 个应用", len(apps))
@@ -82,7 +83,7 @@ func HandleGetMyExternalApps(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[外部应用调试] 用户ID: %s", userID)
 
 	rows, err := database.DB.Query(`
-		SELECT DISTINCT a.id, a.app_key, a.name, a.url, COALESCE(a.icon_svg,''), COALESCE(a.group_name,''), a.sort_order
+		SELECT DISTINCT a.id, a.app_key, a.name, a.url, COALESCE(a.perm_code,''), COALESCE(a.icon_svg,''), COALESCE(a.group_name,''), a.sort_order
 		FROM external_apps a
 		INNER JOIN role_external_apps ra ON ra.app_key = a.app_key
 		INNER JOIN user_roles ur ON ur.role_id = ra.role_id
@@ -99,7 +100,7 @@ func HandleGetMyExternalApps(w http.ResponseWriter, r *http.Request) {
 	apps := []ExternalApp{}
 	for rows.Next() {
 		var a ExternalApp
-		rows.Scan(&a.ID, &a.AppKey, &a.Name, &a.URL, &a.IconSVG, &a.GroupName, &a.SortOrder)
+		rows.Scan(&a.ID, &a.AppKey, &a.Name, &a.URL, &a.PermCode, &a.IconSVG, &a.GroupName, &a.SortOrder)
 		apps = append(apps, a)
 	}
 	log.Printf("[外部应用调试] 非管理员 %s 返回 %d 个应用", username, len(apps))
@@ -123,8 +124,8 @@ func HandleCreateExternalApp(w http.ResponseWriter, r *http.Request) {
 		app.Status = "active"
 	}
 
-	_, err := database.DB.Exec(`INSERT INTO external_apps (id, app_key, name, url, icon_svg, group_name, sort_order, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		app.ID, app.AppKey, app.Name, app.URL, app.IconSVG, app.GroupName, app.SortOrder, app.Status)
+	_, err := database.DB.Exec(`INSERT INTO external_apps (id, app_key, name, url, perm_code, icon_svg, group_name, sort_order, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		app.ID, app.AppKey, app.Name, app.URL, app.PermCode, app.IconSVG, app.GroupName, app.SortOrder, app.Status)
 	if err != nil {
 		if strings.Contains(err.Error(), "Duplicate") {
 			respondBadRequest(w, "app_key 已存在")
@@ -149,8 +150,8 @@ func HandleUpdateExternalApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := database.DB.Exec(`UPDATE external_apps SET name=?, url=?, icon_svg=?, group_name=?, sort_order=?, status=? WHERE id=?`,
-		app.Name, app.URL, app.IconSVG, app.GroupName, app.SortOrder, app.Status, id)
+	_, err := database.DB.Exec(`UPDATE external_apps SET name=?, url=?, perm_code=?, icon_svg=?, group_name=?, sort_order=?, status=? WHERE id=?`,
+		app.Name, app.URL, app.PermCode, app.IconSVG, app.GroupName, app.SortOrder, app.Status, id)
 	if err != nil {
 		respondInternalError(w, "更新失败")
 		return

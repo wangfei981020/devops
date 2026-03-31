@@ -67,7 +67,19 @@
                 <div v-if="log.error_msg" class="text-sm" style="color: var(--danger);">{{ log.error_msg }}</div>
               </td>
               <td>
-                <button class="btn btn-sm btn-outline" @click="showDetail(log)">详情</button>
+                <div class="actions">
+                  <button class="btn btn-sm btn-outline" @click="showDetail(log)">详情</button>
+                  <select class="form-select" style="width: 90px; padding: 2px 4px; font-size: 11px;"
+                    @change="muteFromLog(log, $event)">
+                    <option value="">屏蔽</option>
+                    <option value="1h">1h</option>
+                    <option value="3h">3h</option>
+                    <option value="6h">6h</option>
+                    <option value="24h">24h</option>
+                    <option value="7d">7天</option>
+                    <option value="forever">1年</option>
+                  </select>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -146,6 +158,47 @@ const filters = ref({
   start_date: '',
   end_date: ''
 })
+
+async function muteFromLog(log, event) {
+  const duration = event.target.value
+  event.target.value = ''
+  if (!duration || !log.rule_id) return
+
+  // Extract group_key: try rule_name [xxx], then message **Container**: xxx
+  let groupKey = ''
+  const match = log.rule_name?.match(/\[(.+?)\]/)
+  if (match) {
+    groupKey = match[1]
+  }
+  if (!groupKey) {
+    const containerMatch = log.message?.match(/\*\*Container\*\*:\s*(\S+)/)
+    if (containerMatch) groupKey = containerMatch[1]
+  }
+  if (!groupKey) {
+    const msgMatch = log.message?.match(/\*\*_group_key:\*\*\s*(\S+)/)
+    if (msgMatch) groupKey = msgMatch[1]
+  }
+  if (!groupKey) {
+    toast.error('无法识别容器名，请在规则编辑页屏蔽')
+    return
+  }
+
+  try {
+    const res = await api.post('/alert-mutes', {
+      rule_id: log.rule_id,
+      group_key: groupKey,
+      duration: duration,
+      reason: '告警日志页屏蔽'
+    })
+    if (res.code === 0) {
+      toast.success(`${groupKey} 已屏蔽 ${duration}`)
+    } else {
+      toast.error(res.message)
+    }
+  } catch (e) {
+    toast.error('屏蔽失败')
+  }
+}
 
 const hasFilters = computed(() => {
   return filters.value.status || filters.value.severity || filters.value.rule_id || filters.value.start_date || filters.value.end_date

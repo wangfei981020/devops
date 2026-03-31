@@ -115,6 +115,9 @@ func main() {
 	protected.HandleFunc("/es-explore/indices", handlers.HandleESIndices).Methods("GET")
 	protected.HandleFunc("/loki-explore", handlers.HandleLokiExplore).Methods("POST")
 
+	// Permission refresh
+	protected.HandleFunc("/refresh-permissions", handlers.HandleRefreshPermissions).Methods("GET")
+
 	// Users (admin only)
 	admin := protected.PathPrefix("").Subrouter()
 	admin.Use(handlers.AdminMiddleware)
@@ -124,6 +127,21 @@ func main() {
 	admin.HandleFunc("/users/{id}/toggle", handlers.HandleToggleUser).Methods("PUT")
 	admin.HandleFunc("/users/{id}/reset-password", handlers.HandleResetPassword).Methods("POST")
 	admin.HandleFunc("/users/{id}", handlers.HandleDeleteUser).Methods("DELETE")
+
+	// Alert Contacts
+	protected.HandleFunc("/alert-contacts", handlers.HandleListContacts).Methods("GET")
+	protected.HandleFunc("/alert-contacts", handlers.HandleCreateContact).Methods("POST")
+	protected.HandleFunc("/alert-contacts/batch", handlers.HandleBatchCreateContacts).Methods("POST")
+	protected.HandleFunc("/alert-contacts/{id}", handlers.HandleUpdateContact).Methods("PUT")
+	protected.HandleFunc("/alert-contacts/{id}", handlers.HandleDeleteContact).Methods("DELETE")
+
+	// Alert Mutes
+	protected.HandleFunc("/alert-mutes", handlers.HandleListMutes).Methods("GET")
+	protected.HandleFunc("/alert-mutes", handlers.HandleCreateMute).Methods("POST")
+	protected.HandleFunc("/alert-mutes/{id}", handlers.HandleDeleteMute).Methods("DELETE")
+
+	// Audit Logs
+	protected.HandleFunc("/audit-logs", handlers.HandleListAuditLogs).Methods("GET")
 
 	// Alert Logs
 	protected.HandleFunc("/alert-logs", handlers.HandleListAlertLogs).Methods("GET")

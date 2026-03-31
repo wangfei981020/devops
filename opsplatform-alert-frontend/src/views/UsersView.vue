@@ -16,6 +16,7 @@
             <tr>
               <th>用户名</th>
               <th>显示名</th>
+              <th>来源</th>
               <th>角色</th>
               <th>状态</th>
               <th>创建时间</th>
@@ -24,8 +25,13 @@
           </thead>
           <tbody>
             <tr v-for="user in users" :key="user.id">
-              <td style="font-weight: 500;">{{ user.username }}</td>
+              <td style="font-weight: 500;">{{ user.username || '-' }}</td>
               <td>{{ user.display_name || '-' }}</td>
+              <td>
+                <span class="badge" :class="user.auth_source === 'portal' ? 'badge-success' : 'badge-info'">
+                  {{ user.auth_source === 'portal' ? 'SSO' : '本地' }}
+                </span>
+              </td>
               <td>
                 <span class="badge" :class="user.role === 'admin' ? 'badge-warning' : 'badge-info'">
                   {{ user.role === 'admin' ? '管理员' : '普通用户' }}

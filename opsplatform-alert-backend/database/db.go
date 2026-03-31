@@ -125,6 +125,32 @@ func createTables() error {
 			INDEX idx_lark_config (lark_config_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
+		// 通知人管理
+		`CREATE TABLE IF NOT EXISTS alert_contacts (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			name VARCHAR(100) NOT NULL UNIQUE COMMENT '姓名',
+			lark_id VARCHAR(200) NOT NULL COMMENT 'Lark open_id/user_id',
+			phone VARCHAR(50) DEFAULT '' COMMENT '手机号',
+			email VARCHAR(200) DEFAULT '' COMMENT '邮箱',
+			description VARCHAR(500) DEFAULT '' COMMENT '备注',
+			status TINYINT DEFAULT 1 COMMENT '1=启用 0=禁用',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+		// 告警屏蔽
+		`CREATE TABLE IF NOT EXISTS alert_mutes (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			rule_id INT NOT NULL COMMENT '规则ID',
+			group_key VARCHAR(200) NOT NULL COMMENT '屏蔽的容器/分组名',
+			mute_until TIMESTAMP NOT NULL COMMENT '屏蔽截止时间',
+			reason VARCHAR(500) DEFAULT '' COMMENT '屏蔽原因',
+			created_by VARCHAR(100) DEFAULT '' COMMENT '操作人',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_rule_group (rule_id, group_key),
+			INDEX idx_mute_until (mute_until)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
 		// 告警日志
 		`CREATE TABLE IF NOT EXISTS alert_logs (
 			id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -199,10 +225,33 @@ func autoMigrate() {
 		{"alert_rules", "group_by", "VARCHAR(200) DEFAULT '' COMMENT '分组字段'"},
 		{"alert_rules", "expected_groups", "TEXT COMMENT '期望的分组列表JSON'"},
 		{"alert_rules", "query_concurrency", "INT DEFAULT 5 COMMENT '单规则查询并发数'"},
+		{"alert_rules", "alert_interval", "VARCHAR(20) DEFAULT '' COMMENT '告警间隔: 5m/10m/30m/1h，空则每次都发'"},
 		{"alert_rules", "data_source_type", "VARCHAR(20) DEFAULT 'es' COMMENT '数据源类型: es/loki'"},
 		{"alert_rules", "loki_connection_id", "INT DEFAULT 0 COMMENT 'Loki连接ID'"},
 		{"alert_rules", "logql", "TEXT COMMENT 'LogQL查询语句(Loki)'"},
+		{"users", "auth_source", "VARCHAR(20) DEFAULT 'local' COMMENT '认证来源: local/portal'"},
+		{"users", "portal_token", "TEXT COMMENT '运维平台Portal Token(用于刷新权限)'"},
 	}
+
+	// Ensure audit_logs table exists
+	DB.Exec(`CREATE TABLE IF NOT EXISTS audit_logs (
+		id BIGINT AUTO_INCREMENT PRIMARY KEY,
+		username VARCHAR(100) NOT NULL COMMENT '操作人',
+		auth_source VARCHAR(20) DEFAULT 'local' COMMENT '来源: local/portal',
+		action VARCHAR(50) NOT NULL COMMENT '操作类型',
+		target_type VARCHAR(50) DEFAULT '' COMMENT '目标类型: rule/connection/user/contact/mute',
+		target_name VARCHAR(200) DEFAULT '' COMMENT '目标名称',
+		detail TEXT COMMENT '操作详情',
+		ip VARCHAR(50) DEFAULT '' COMMENT '客户端IP',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		INDEX idx_username (username),
+		INDEX idx_action (action),
+		INDEX idx_created_at (created_at)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`)
+
+	// Drop unique constraint on username if exists (allow same username for local and portal)
+	DB.Exec("ALTER TABLE users DROP INDEX username")
+	DB.Exec("CREATE UNIQUE INDEX uk_username_source ON users(username, auth_source)")
 
 	for _, m := range migrations {
 		var count int
@@ -222,11 +271,14 @@ func autoMigrate() {
 
 func ensureDefaultAdmin() {
 	var count int
-	DB.QueryRow("SELECT COUNT(*) FROM users WHERE username = 'admin'").Scan(&count)
+	DB.QueryRow("SELECT COUNT(*) FROM users WHERE username = 'admin' AND auth_source = 'local'").Scan(&count)
 	if count == 0 {
 		// Default password: admin123 (bcrypt hash)
-		DB.Exec(`INSERT INTO users (username, password_hash, display_name, role)
-			VALUES ('admin', '$2a$10$vXhq5Vju4qCuhXhbGNjvyOqrEkXxTkkzyOokD0jKV5d8bjMOpgNQ6', 'Admin', 'admin')`)
+		DB.Exec(`INSERT INTO users (username, password_hash, display_name, role, auth_source)
+			VALUES ('admin', '$2a$10$vXhq5Vju4qCuhXhbGNjvyOqrEkXxTkkzyOokD0jKV5d8bjMOpgNQ6', 'Admin', 'admin', 'local')`)
 		log.Println("Default admin user created (admin/admin123)")
 	}
+
+	// Fix any local admin that was wrongly set to portal
+	DB.Exec("UPDATE users SET auth_source = 'local' WHERE username = 'admin' AND password_hash != '' AND auth_source = 'portal'")
 }

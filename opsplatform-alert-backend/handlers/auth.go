@@ -2,12 +2,17 @@ package handlers
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,7 +57,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	var id int
 	var username, passwordHash, role string
-	err := database.DB.QueryRow("SELECT id, username, password_hash, role FROM users WHERE username = ? AND status = 1",
+	err := database.DB.QueryRow("SELECT id, username, password_hash, role FROM users WHERE username = ? AND auth_source = 'local' AND status = 1",
 		req.Username).Scan(&id, &username, &passwordHash, &role)
 	if err != nil {
 		jsonError(w, http.StatusUnauthorized, "用户名或密码错误")
@@ -87,6 +92,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		SameSite: parseSameSite(cfg.CookieSameSite),
 	})
 
+	SaveAuditLog(r, "login", "user", username, "本地登录")
 	jsonSuccess(w, map[string]interface{}{
 		"token": token,
 		"user": map[string]interface{}{
@@ -129,10 +135,36 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Try to decrypt token if APP_PORTAL_SECRET is set
+	portalToken := req.Token
+	secret := os.Getenv("APP_PORTAL_SECRET")
+	if secret != "" {
+		decrypted, err := aesDecrypt(req.Token, secret)
+		if err != nil {
+			log.Printf("[PortalAuth] 解密失败: %v", err)
+			jsonError(w, http.StatusUnauthorized, "Token解密失败")
+			return
+		}
+		// Parse: token|timestamp
+		parts := strings.SplitN(decrypted, "|", 2)
+		if len(parts) != 2 {
+			jsonError(w, http.StatusUnauthorized, "Token格式无效")
+			return
+		}
+		portalToken = parts[0]
+		ts, _ := strconv.ParseInt(parts[1], 10, 64)
+		if time.Since(time.Unix(ts, 0)) > 30*time.Second {
+			log.Printf("[PortalAuth] Token已过期: %ds ago", time.Now().Unix()-ts)
+			jsonError(w, http.StatusUnauthorized, "Token已过期，请重新登录")
+			return
+		}
+		log.Printf("[PortalAuth] Token解密成功，时效OK")
+	}
+
 	// Verify with portal
 	client := &http.Client{Timeout: 10 * time.Second}
 	portalReq, _ := http.NewRequest("GET", cfg.PortalAPIURL+"/api/users/me", nil)
-	portalReq.Header.Set("Authorization", "Bearer "+req.Token)
+	portalReq.Header.Set("Authorization", "Bearer "+portalToken)
 	resp, err := client.Do(portalReq)
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, "Portal验证失败")
@@ -141,30 +173,49 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	var portalResp struct {
+
+	// Parse portal response - supports both {code,data} wrapper and direct user object
+	var username, role string
+	var portalWrapped struct {
 		Code int `json:"code"`
 		Data struct {
-			ID       int    `json:"id"`
 			Username string `json:"username"`
 			Role     string `json:"role"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(body, &portalResp); err != nil || portalResp.Code != 0 {
+	var portalDirect struct {
+		Username string `json:"username"`
+		Role     string `json:"role"`
+	}
+
+	if err := json.Unmarshal(body, &portalWrapped); err == nil && portalWrapped.Data.Username != "" {
+		username = portalWrapped.Data.Username
+		role = portalWrapped.Data.Role
+	} else if err := json.Unmarshal(body, &portalDirect); err == nil && portalDirect.Username != "" {
+		username = portalDirect.Username
+		role = portalDirect.Role
+	} else {
+		log.Printf("[PortalAuth] 无法解析Portal响应: %s", string(body))
 		jsonError(w, http.StatusUnauthorized, "Portal认证失败")
 		return
 	}
 
-	// Create or update local user
-	username := portalResp.Data.Username
-	role := portalResp.Data.Role
+	log.Printf("[PortalAuth] 用户: %s, 角色: %s", username, role)
 	if role == "" {
 		role = "user"
 	}
 
+	// Normalize role
+	if role == "admin" || role == "super_admin" || role == "超级管理员" {
+		role = "admin"
+	}
+
+	// Find or create portal user (separate from local users)
 	var userID int
-	err = database.DB.QueryRow("SELECT id FROM users WHERE username = ?", username).Scan(&userID)
+	err = database.DB.QueryRow("SELECT id FROM users WHERE username = ? AND auth_source = 'portal'", username).Scan(&userID)
 	if err != nil {
-		result, err := database.DB.Exec("INSERT INTO users (username, display_name, role, status) VALUES (?, ?, ?, 1)",
+		// Create new portal user
+		result, err := database.DB.Exec("INSERT INTO users (username, display_name, role, auth_source, status) VALUES (?, ?, ?, 'portal', 1)",
 			username, username, role)
 		if err != nil {
 			jsonError(w, http.StatusInternalServerError, "创建用户失败")
@@ -172,6 +223,22 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 		}
 		id, _ := result.LastInsertId()
 		userID = int(id)
+	} else {
+		// Update existing portal user's role
+		database.DB.Exec("UPDATE users SET role = ? WHERE id = ?", role, userID)
+	}
+
+	// Save portal token for permission refresh
+	database.DB.Exec("UPDATE users SET portal_token = ? WHERE id = ?", portalToken, userID)
+
+	// Fetch permissions from portal
+	permissions := fetchPortalPermissions(cfg.PortalAPIURL, portalToken, username)
+
+	// Check if user has access to alert platform (admin bypass)
+	if role != "admin" && permissions != nil && !permissions["menu:alert"] {
+		log.Printf("[PortalAuth] 用户 %s 无告警平台访问权限", username)
+		jsonError(w, http.StatusForbidden, "您没有告警平台的访问权限，请联系管理员")
+		return
 	}
 
 	token, _ := generateToken(userID, username, role)
@@ -191,14 +258,56 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 		SameSite: parseSameSite(cfg.CookieSameSite),
 	})
 
+	SaveAuditLog(r, "portal_login", "user", username, "SSO登录")
 	jsonSuccess(w, map[string]interface{}{
 		"token": token,
 		"user": map[string]interface{}{
-			"id":       userID,
-			"username": username,
-			"role":     role,
+			"id":          userID,
+			"username":    username,
+			"role":        role,
+			"auth_source": "portal",
 		},
+		"permissions": permissions,
 	})
+}
+
+// fetchPortalPermissions fetches alert-related permissions from portal
+func fetchPortalPermissions(portalURL, portalToken, username string) map[string]bool {
+	permURL := strings.TrimRight(portalURL, "/") + "/api/my/permissions"
+	client := &http.Client{Timeout: 5 * time.Second}
+	permReq, _ := http.NewRequest("GET", permURL, nil)
+	permReq.Header.Set("Authorization", "Bearer "+portalToken)
+	permReq.Header.Set("X-Operator", username)
+
+	resp, err := client.Do(permReq)
+	if err != nil {
+		log.Printf("[PortalAuth] 获取权限失败: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[PortalAuth] 获取权限返回 HTTP %d", resp.StatusCode)
+		return nil
+	}
+
+	var result struct {
+		Permissions map[string]bool `json:"permissions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("[PortalAuth] 解析权限失败: %v", err)
+		return nil
+	}
+
+	// Filter alert-related permissions (menu:alert, menu:alert_* and alert:*)
+	alertPerms := make(map[string]bool)
+	for code, granted := range result.Permissions {
+		if granted && (code == "menu:alert" || strings.HasPrefix(code, "menu:alert_") || strings.HasPrefix(code, "alert:")) {
+			alertPerms[code] = true
+		}
+	}
+	log.Printf("[PortalAuth] Alert permissions for %s: %v", username, alertPerms)
+	return alertPerms
 }
 
 func HandleGetCurrentUser(w http.ResponseWriter, r *http.Request) {
@@ -211,6 +320,75 @@ func HandleGetCurrentUser(w http.ResponseWriter, r *http.Request) {
 		"username": username,
 		"role":     role,
 	})
+}
+
+// HandleRefreshPermissions re-fetches permissions from portal for the current user
+func HandleRefreshPermissions(w http.ResponseWriter, r *http.Request) {
+	if cfg.PortalAPIURL == "" {
+		jsonSuccess(w, map[string]interface{}{"permissions": map[string]bool{}})
+		return
+	}
+
+	userID := r.Context().Value(contextUserID).(int)
+	username := r.Context().Value(contextUsername).(string)
+	role := r.Context().Value(contextUserRole).(string)
+
+	var authSource string
+	database.DB.QueryRow("SELECT COALESCE(auth_source,'local') FROM users WHERE id = ?",
+		userID).Scan(&authSource)
+
+	if authSource != "portal" {
+		jsonSuccess(w, map[string]interface{}{"permissions": map[string]bool{}, "role": role, "auth_source": authSource})
+		return
+	}
+
+	// Call portal /api/my/permissions directly (internal service call, use X-Operator for user identification)
+	permissions := fetchPortalPermissionsInternal(cfg.PortalAPIURL, username)
+
+	jsonSuccess(w, map[string]interface{}{
+		"permissions": permissions,
+		"role":        role,
+		"auth_source": authSource,
+	})
+}
+
+// fetchPortalPermissionsInternal calls portal permissions endpoint without auth token (internal service-to-service)
+func fetchPortalPermissionsInternal(portalURL, username string) map[string]bool {
+	// Use /my/permissions with a service-level call
+	// The opsplatform /api/my/permissions is protected, so we use X-Operator header
+	// and rely on internal network trust (k8s service-to-service)
+	permURL := strings.TrimRight(portalURL, "/") + "/my/permissions"
+	client := &http.Client{Timeout: 5 * time.Second}
+	permReq, _ := http.NewRequest("GET", permURL, nil)
+	permReq.Header.Set("X-Operator", username)
+
+	resp, err := client.Do(permReq)
+	if err != nil {
+		log.Printf("[RefreshPerms] 获取权限失败: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[RefreshPerms] HTTP %d for %s", resp.StatusCode, username)
+		return nil
+	}
+
+	var result struct {
+		Permissions map[string]bool `json:"permissions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
+	}
+
+	alertPerms := make(map[string]bool)
+	for code, granted := range result.Permissions {
+		if granted && (code == "menu:alert" || strings.HasPrefix(code, "menu:alert_") || strings.HasPrefix(code, "alert:")) {
+			alertPerms[code] = true
+		}
+	}
+	log.Printf("[RefreshPerms] %s permissions: %v", username, alertPerms)
+	return alertPerms
 }
 
 // AuthMiddleware validates JWT tokens
@@ -329,4 +507,35 @@ func init() {
 			}
 		}
 	}()
+}
+
+// aesDecrypt decrypts AES-256-GCM encrypted base64 string
+func aesDecrypt(encrypted, secret string) (string, error) {
+	key := sha256.Sum256([]byte(secret))
+
+	data, err := base64.URLEncoding.DecodeString(encrypted)
+	if err != nil {
+		return "", fmt.Errorf("base64 decode: %w", err)
+	}
+
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+
+	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", fmt.Errorf("decrypt: %w", err)
+	}
+	return string(plaintext), nil
 }

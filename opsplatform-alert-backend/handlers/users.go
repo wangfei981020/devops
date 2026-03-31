@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -11,7 +12,7 @@ import (
 )
 
 func HandleListUsers(w http.ResponseWriter, r *http.Request) {
-	rows, err := database.DB.Query(`SELECT id, username, display_name, role, status, created_at, updated_at
+	rows, err := database.DB.Query(`SELECT id, username, display_name, role, status, COALESCE(auth_source,'local'), created_at, updated_at
 		FROM users ORDER BY id DESC`)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "查询失败")
@@ -22,14 +23,15 @@ func HandleListUsers(w http.ResponseWriter, r *http.Request) {
 	var list []map[string]interface{}
 	for rows.Next() {
 		var id, status int
-		var username, displayName, role, createdAt, updatedAt string
-		rows.Scan(&id, &username, &displayName, &role, &status, &createdAt, &updatedAt)
+		var username, displayName, role, authSource, createdAt, updatedAt string
+		rows.Scan(&id, &username, &displayName, &role, &status, &authSource, &createdAt, &updatedAt)
 		list = append(list, map[string]interface{}{
 			"id":           id,
 			"username":     username,
 			"display_name": displayName,
 			"role":         role,
 			"status":       status,
+			"auth_source":  authSource,
 			"created_at":   createdAt,
 			"updated_at":   updatedAt,
 		})
@@ -62,9 +64,9 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		req.DisplayName = req.Username
 	}
 
-	// Check duplicate
+	// Check duplicate (only check local users)
 	var count int
-	database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", req.Username).Scan(&count)
+	database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username = ? AND auth_source = 'local'", req.Username).Scan(&count)
 	if count > 0 {
 		jsonError(w, http.StatusBadRequest, "用户名已存在")
 		return
@@ -76,13 +78,14 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := database.DB.Exec(`INSERT INTO users (username, password_hash, display_name, role, status)
-		VALUES (?, ?, ?, ?, 1)`, req.Username, string(hash), req.DisplayName, req.Role)
+	result, err := database.DB.Exec(`INSERT INTO users (username, password_hash, display_name, role, auth_source, status)
+		VALUES (?, ?, ?, ?, 'local', 1)`, req.Username, string(hash), req.DisplayName, req.Role)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "创建失败: "+err.Error())
 		return
 	}
 	id, _ := result.LastInsertId()
+	SaveAuditLog(r, "create_user", "user", req.Username, fmt.Sprintf("创建用户 ID=%d 角色=%s", id, req.Role))
 	jsonSuccess(w, map[string]interface{}{"id": id, "message": "用户已创建"})
 }
 
@@ -103,6 +106,7 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "更新失败")
 		return
 	}
+	SaveAuditLog(r, "update_user", "user", fmt.Sprintf("ID=%d", id), fmt.Sprintf("更新用户 角色=%s", req.Role))
 	jsonSuccess(w, nil)
 }
 
@@ -123,6 +127,7 @@ func HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	database.DB.Exec("UPDATE users SET password_hash = ? WHERE id = ?", string(hash), id)
+	SaveAuditLog(r, "reset_password", "user", fmt.Sprintf("ID=%d", id), "重置用户密码")
 	jsonSuccess(w, map[string]string{"message": "密码已重置"})
 }
 
@@ -140,6 +145,7 @@ func HandleToggleUser(w http.ResponseWriter, r *http.Request) {
 
 	var status int
 	database.DB.QueryRow("SELECT status FROM users WHERE id = ?", id).Scan(&status)
+	SaveAuditLog(r, "toggle_user", "user", fmt.Sprintf("ID=%d", id), fmt.Sprintf("用户状态变更为 %d", status))
 	jsonSuccess(w, map[string]interface{}{"status": status})
 }
 
@@ -166,5 +172,6 @@ func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	database.DB.Exec("DELETE FROM sessions WHERE user_id = ?", id)
 	database.DB.Exec("DELETE FROM users WHERE id = ?", id)
+	SaveAuditLog(r, "delete_user", "user", fmt.Sprintf("ID=%d", id), "删除用户")
 	jsonSuccess(w, nil)
 }

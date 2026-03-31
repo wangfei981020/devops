@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -51,6 +52,7 @@ func HandleCreateLokiConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := result.LastInsertId()
+	SaveAuditLog(r, "create_loki_conn", "connection", req.Name, fmt.Sprintf("创建Loki连接 ID=%d", id))
 	jsonSuccess(w, map[string]interface{}{"id": id})
 }
 
@@ -68,6 +70,7 @@ func HandleUpdateLokiConnection(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "更新失败")
 		return
 	}
+	SaveAuditLog(r, "update_loki_conn", "connection", req.Name, fmt.Sprintf("更新Loki连接 ID=%d", id))
 	jsonSuccess(w, nil)
 }
 
@@ -82,12 +85,14 @@ func HandleDeleteLokiConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	database.DB.Exec("DELETE FROM loki_connections WHERE id = ?", id)
+	SaveAuditLog(r, "delete_loki_conn", "connection", fmt.Sprintf("ID=%d", id), "删除Loki连接")
 	jsonSuccess(w, nil)
 }
 
 func HandleToggleLokiConnection(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
 	database.DB.Exec("UPDATE loki_connections SET status = IF(status=1, 0, 1) WHERE id = ?", id)
+	SaveAuditLog(r, "toggle_loki_conn", "connection", fmt.Sprintf("ID=%d", id), "切换Loki连接状态")
 	jsonSuccess(w, nil)
 }
 

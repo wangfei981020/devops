@@ -31,7 +31,6 @@
             <tr>
               <th>状态</th>
               <th>规则名称</th>
-              <th>关键词 / LogQL</th>
               <th>数据源</th>
               <th>Lark 配置</th>
               <th>执行周期</th>
@@ -48,15 +47,9 @@
                   <span class="slider"></span>
                 </label>
               </td>
-              <td>
-                <div style="font-weight: 500;">{{ rule.name }}</div>
-                <div class="text-sm text-secondary">
-                  {{ rule.es_index }}
-                  <span v-if="rule.alert_mode === 'not_found'" class="badge badge-warning" style="margin-left: 4px; font-size: 10px;">反向</span>
-                </div>
-              </td>
-              <td>
-                <span class="truncate" :title="rule.keyword || rule.logql">{{ rule.keyword || rule.logql || '-' }}</span>
+              <td style="white-space: nowrap;">
+                <span style="font-weight: 500;">{{ rule.name }}</span>
+                <span v-if="rule.alert_mode === 'not_found'" class="badge badge-warning" style="margin-left: 4px; font-size: 10px;">反向</span>
               </td>
               <td>
                 <span v-if="(rule.data_source_type || 'es') === 'loki'" class="badge badge-warning">Loki</span>

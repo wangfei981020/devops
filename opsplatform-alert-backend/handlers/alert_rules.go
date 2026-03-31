@@ -74,7 +74,7 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 		r.message_title, COALESCE(r.message_template,''),
 		COALESCE(r.at_users,''), r.at_all, COALESCE(r.alert_mode,'found'),
 		r.recovery_enabled, COALESCE(r.recovery_title,''), COALESCE(r.recovery_template,''),
-		r.severity, COALESCE(r.group_by,''), COALESCE(r.expected_groups,''), COALESCE(r.query_concurrency,5), r.dedup_field, r.dedup_ttl, r.max_alerts, COALESCE(r.prometheus_config,''), r.status,
+		r.severity, COALESCE(r.group_by,''), COALESCE(r.expected_groups,''), COALESCE(r.query_concurrency,5), COALESCE(r.alert_interval,''), r.dedup_field, r.dedup_ttl, r.max_alerts, COALESCE(r.prometheus_config,''), r.status,
 		r.last_run_at, r.last_error, r.created_at, r.updated_at,
 		COALESCE(e.name,'(已删除)') as es_name, COALESCE(lk.name,'') as loki_name,
 		COALESCE(l.name,'(已删除)') as lark_name
@@ -115,7 +115,7 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			&rule.Keyword, &rule.LogQL, &rule.FilterFields, &rule.ExtractFields,
 			&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 			&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
-			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
+			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
 			&rule.PrometheusConfig, &rule.Status, &rule.LastRunAt, &rule.LastError,
 			&rule.CreatedAt, &rule.UpdatedAt, &esName, &lokiName, &larkName)
 		if err != nil {
@@ -149,6 +149,7 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			"group_by":           rule.GroupBy,
 			"expected_groups":    rule.ExpectedGroups,
 			"query_concurrency":  rule.QueryConcurrency,
+			"alert_interval":     rule.AlertInterval,
 			"dedup_field":       rule.DedupField,
 			"dedup_ttl":         rule.DedupTTL,
 			"max_alerts":         rule.MaxAlerts,
@@ -188,7 +189,8 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		message_title, COALESCE(message_template,''),
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
-		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''),
+		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''),
+		dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''),
 		status, last_run_at, last_error, created_at, updated_at
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType, &rule.ESConnectionID,
@@ -197,7 +199,7 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		&rule.Keyword, &rule.LogQL, &rule.FilterFields, &rule.ExtractFields,
 		&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 		&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
-		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
+		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
 		&rule.PrometheusConfig, &rule.Status, &rule.LastRunAt, &rule.LastError,
 		&rule.CreatedAt, &rule.UpdatedAt)
 	if err != nil {
@@ -265,14 +267,14 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 		query_dsl, keyword, logql, filter_fields, extract_fields,
 		message_title, message_template, at_users, at_all,
 		alert_mode, recovery_enabled, recovery_title, recovery_template,
-		severity, group_by, expected_groups, query_concurrency, dedup_field, dedup_ttl, max_alerts, prometheus_config, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, req.LarkConfigID,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
 		req.FilterFields, req.ExtractFields, req.MessageTitle,
 		req.MessageTemplate, req.AtUsers, req.AtAll,
 		req.AlertMode, req.RecoveryEnabled, req.RecoveryTitle, req.RecoveryTemplate,
-		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig)
+		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.AlertInterval, req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "创建失败: "+err.Error())
 		return
@@ -285,6 +287,7 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 		ruleEngine.ReloadRule(int(id))
 	}
 
+	SaveAuditLog(r, "create_rule", "rule", req.Name, fmt.Sprintf("创建告警规则 ID=%d", id))
 	jsonSuccess(w, map[string]interface{}{"id": id})
 }
 
@@ -303,14 +306,14 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		filter_fields=?, extract_fields=?, message_title=?,
 		message_template=?, at_users=?, at_all=?,
 		alert_mode=?, recovery_enabled=?, recovery_title=?, recovery_template=?,
-		severity=?, group_by=?, expected_groups=?, query_concurrency=?, dedup_field=?, dedup_ttl=?, max_alerts=?, prometheus_config=?
+		severity=?, group_by=?, expected_groups=?, query_concurrency=?, alert_interval=?, dedup_field=?, dedup_ttl=?, max_alerts=?, prometheus_config=?
 		WHERE id=?`,
 		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, req.LarkConfigID,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
 		req.FilterFields, req.ExtractFields, req.MessageTitle,
 		req.MessageTemplate, req.AtUsers, req.AtAll,
 		req.AlertMode, req.RecoveryEnabled, req.RecoveryTitle, req.RecoveryTemplate,
-		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency,
+		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.AlertInterval,
 		req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, id)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "更新失败: "+err.Error())
@@ -322,6 +325,7 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		ruleEngine.ReloadRule(id)
 	}
 
+	SaveAuditLog(r, "update_rule", "rule", req.Name, fmt.Sprintf("更新告警规则 ID=%d", id))
 	jsonSuccess(w, nil)
 }
 
@@ -337,6 +341,7 @@ func HandleDeleteAlertRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	database.DB.Exec("DELETE FROM alert_rules WHERE id = ?", id)
+	SaveAuditLog(r, "delete_rule", "rule", fmt.Sprintf("ID=%d", id), "删除告警规则")
 	jsonSuccess(w, nil)
 }
 
@@ -353,6 +358,11 @@ func HandleToggleAlertRule(w http.ResponseWriter, r *http.Request) {
 	// Return new status
 	var status int
 	database.DB.QueryRow("SELECT status FROM alert_rules WHERE id = ?", id).Scan(&status)
+	action := "enable_rule"
+	if status == 0 {
+		action = "disable_rule"
+	}
+	SaveAuditLog(r, action, "rule", fmt.Sprintf("ID=%d", id), fmt.Sprintf("规则状态变更为 %d", status))
 	jsonSuccess(w, map[string]interface{}{"status": status})
 }
 
@@ -497,8 +507,110 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 		sourceDetail = fmt.Sprintf("ES %s.x | %s", conn.Version, esIndex)
 	}
 
-	// If group_by is set, group hits and keep only first per group
+	// Determine alert mode and group settings
 	groupBy := req.GroupBy
+	alertMode := req.AlertMode
+	if alertMode == "" {
+		alertMode = "found"
+	}
+
+	// ========== not_found + grouped + expected_groups: per-container check ==========
+	if alertMode == "not_found" && groupBy != "" && req.ExpectedGroups != "" {
+		var expectedList []string
+		json.Unmarshal([]byte(req.ExpectedGroups), &expectedList)
+
+		type ContainerResult struct {
+			Name     string                 `json:"name"`
+			Status   string                 `json:"status"`   // "ok" or "alert"
+			Source   string                 `json:"source"`    // "30m" / "24h" / "3d" / "no_history"
+			Hit      map[string]interface{} `json:"hit,omitempty"`
+			Rendered string                 `json:"rendered,omitempty"`
+		}
+
+		var okList []ContainerResult
+		var alertList []ContainerResult
+
+		for _, containerName := range expectedList {
+			log.Printf("[Preview] Checking container: %s", containerName)
+
+			// Step 1: 直接查这个容器的 timeRange（如 30m）
+			hit := queryContainerLastHit(ctx, dsType, req, groupBy, containerName, timeRange)
+			if hit != nil {
+				// 30m 内搜到 → 正常
+				vars := previewExtractFields(hit, req.ExtractFields)
+				vars["_group_key"] = containerName
+				vars["_group_field"] = groupBy
+				okList = append(okList, ContainerResult{
+					Name: containerName, Status: "ok", Source: timeRange,
+					Rendered: previewRenderTemplate(req.MessageTemplate, vars),
+				})
+				continue
+			}
+
+			// Step 2: 30m 搜不到 → 需要告警，找最后一条日志
+			log.Printf("[Preview] Container %s not found in %s, searching wider", containerName, timeRange)
+
+			// 2a: Check no_history marker
+			noHistKey := fmt.Sprintf("alert:no_history:preview:%s:%s", groupBy, containerName)
+			noHist, _ := database.RDB.Get(ctx, noHistKey).Result()
+			if noHist == "1" {
+				alertList = append(alertList, ContainerResult{
+					Name: containerName, Status: "alert", Source: "no_history",
+				})
+				continue
+			}
+
+			// 2b: Query 3h → 6h fallback
+			var lastHit map[string]interface{}
+			hitSource := "no_history"
+			lastHit = queryContainerLastHit(ctx, dsType, req, groupBy, containerName, "3h")
+			if lastHit != nil {
+				hitSource = "3h"
+			} else {
+				lastHit = queryContainerLastHit(ctx, dsType, req, groupBy, containerName, "6h")
+				if lastHit != nil {
+					hitSource = "6h"
+				} else {
+					database.RDB.Set(ctx, noHistKey, "1", 24*time.Hour)
+					hitSource = "no_history"
+				}
+			}
+
+			if lastHit != nil {
+				vars := previewExtractFields(lastHit, req.ExtractFields)
+				vars["_group_key"] = containerName
+				vars["_group_field"] = groupBy
+				vars["alert_reason"] = "not_found"
+				vars["time_range"] = timeRange
+				alertList = append(alertList, ContainerResult{
+					Name: containerName, Status: "alert", Source: hitSource,
+					Hit: lastHit, Rendered: previewRenderTemplate(req.MessageTemplate, vars),
+				})
+			} else {
+				alertList = append(alertList, ContainerResult{
+					Name: containerName, Status: "alert", Source: "no_history",
+				})
+			}
+		}
+
+		jsonSuccess(w, map[string]interface{}{
+			"total":         total,
+			"source_name":   sourceName,
+			"source_detail": sourceDetail,
+			"data_source":   dsType,
+			"group_by":      groupBy,
+			"alert_mode":    "not_found",
+			"time_range":    timeRange,
+			"ok_list":       okList,
+			"alert_list":    alertList,
+			"ok_count":      len(okList),
+			"alert_count":   len(alertList),
+			"total_groups":  len(expectedList),
+		})
+		return
+	}
+
+	// ========== Default: simple group or no group ==========
 	if groupBy != "" {
 		grouped := make(map[string]map[string]interface{})
 		var order []string
@@ -522,7 +634,6 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Process hits
 	var hits []PreviewHit
 	for _, hit := range rawHits {
 		vars := previewExtractFields(hit, req.ExtractFields)
@@ -538,6 +649,7 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 		"source_name":   sourceName,
 		"source_detail": sourceDetail,
 		"data_source":   dsType,
+		"time_range":    timeRange,
 	}
 	if groupBy != "" {
 		resp["group_by"] = groupBy
@@ -670,29 +782,93 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// For not_found with group_by: check which groups are present
-	if alertMode == "not_found" && groupBy != "" {
-		if len(rawHits) == 0 {
-			// No hits at all → all containers missing
-			jsonSuccess(w, map[string]interface{}{
-				"message":     fmt.Sprintf("当前 %s 内未搜到任何日志，所有容器都会触发告警", timeRange),
-				"hit_count":   0,
-				"would_alert": true,
-				"groups":      []string{},
-			})
-			return
+	// For not_found with group_by + expected_groups: per-container check and send
+	if alertMode == "not_found" && groupBy != "" && req.ExpectedGroups != "" {
+		var expectedList []string
+		json.Unmarshal([]byte(req.ExpectedGroups), &expectedList)
+
+		var okGroups []string
+		var alertGroups []string
+		sentCount := 0
+
+		// Parse at_users
+		var atUsers []models.AtUser
+		if req.AtUsers != "" {
+			json.Unmarshal([]byte(req.AtUsers), &atUsers)
 		}
-		// Some groups found → show which containers are OK
+		senderObj := lark.NewSender(larkCfg)
+
+		for _, containerName := range expectedList {
+			// Check this container in timeRange
+			hit := queryContainerLastHit(ctx, dsType, req, groupBy, containerName, timeRange)
+			if hit != nil {
+				okGroups = append(okGroups, containerName)
+				continue
+			}
+
+			// Not found → send alert
+			alertGroups = append(alertGroups, containerName)
+
+			// Find last log for alert content (3h → 6h fallback)
+			lastHit := queryContainerLastHit(ctx, dsType, req, groupBy, containerName, "3h")
+			if lastHit == nil {
+				lastHit = queryContainerLastHit(ctx, dsType, req, groupBy, containerName, "6h")
+			}
+			vars := map[string]interface{}{
+				"alert_reason": "not_found",
+				"time_range":   timeRange,
+				"_group_key":   containerName,
+				"_group_field": groupBy,
+				groupBy:        containerName,
+			}
+			vars["container"] = containerName
+			if lastHit != nil {
+				vars = previewExtractFields(lastHit, req.ExtractFields)
+				vars["alert_reason"] = "not_found"
+				vars["time_range"] = timeRange
+				vars["_group_key"] = containerName
+				vars["_group_field"] = groupBy
+				vars["container"] = containerName
+			}
+
+			titleRendered := previewRenderTemplate(req.MessageTitle, vars)
+			title := fmt.Sprintf("%s [%s] [测试]", titleRendered, containerName)
+			message := previewRenderTemplate(req.MessageTemplate, vars)
+
+			severity := req.Severity
+			if severity == "" {
+				severity = "S2"
+			}
+			_, sErr := senderObj.SendCard(title, message, severity, atUsers, req.AtAll == 1)
+			if sErr != nil {
+				log.Printf("[TestSend] Failed to send for %s: %v", containerName, sErr)
+			} else {
+				sentCount++
+			}
+		}
+
+		jsonSuccess(w, map[string]interface{}{
+			"message":      fmt.Sprintf("正常: %d 个，告警: %d 个，已发送 %d 条告警到 Lark", len(okGroups), len(alertGroups), sentCount),
+			"would_alert":  len(alertGroups) > 0,
+			"ok_groups":    okGroups,
+			"alert_groups": alertGroups,
+			"sent_count":   sentCount,
+			"hit_count":    len(alertGroups),
+		})
+		return
+	}
+
+	// For not_found without expected_groups: simple check
+	if alertMode == "not_found" && groupBy != "" {
 		var foundGroups []string
 		for _, g := range groups {
 			foundGroups = append(foundGroups, g.Key)
 		}
 		jsonSuccess(w, map[string]interface{}{
-			"message":      fmt.Sprintf("正常容器: %d 个（%s 内有日志）\n缺失容器需与 24h 内已知容器对比，实际执行时自动判断", len(foundGroups), timeRange),
+			"message":      fmt.Sprintf("正常容器: %d 个（%s 内有日志），请配置期望容器列表以启用逐容器检查", len(foundGroups), timeRange),
 			"hit_count":    len(rawHits),
 			"would_alert":  false,
 			"found_groups": foundGroups,
-			"group_count":  len(foundGroups),
 		})
 		return
 	}
@@ -771,6 +947,102 @@ func parsePreviewTimeRange(s string) time.Duration {
 		return 5 * time.Minute
 	}
 	return d
+}
+
+// queryContainerLastHit queries a specific container for 1 log within a time range
+func queryContainerLastHit(ctx context.Context, dsType string, req models.CreateAlertRuleReq, groupField, containerName, searchRange string) map[string]interface{} {
+	if dsType == "loki" {
+		if req.LokiConnectionID == 0 || req.LogQL == "" {
+			return nil
+		}
+		conn := getLokiConn(req.LokiConnectionID)
+		if conn == nil {
+			return nil
+		}
+		client := lokiclient.NewClient(*conn)
+
+		// Build specific LogQL: replace group field with exact match
+		logql := req.LogQL
+		safeKey := strings.ReplaceAll(containerName, `"`, `\"`)
+		var specificLogQL string
+		if idx := strings.Index(logql, "}"); idx >= 0 {
+			existingLabels := strings.TrimSpace(logql[1:idx])
+			pipeline := strings.TrimSpace(logql[idx+1:])
+
+			// Remove existing group field selectors, add exact match
+			var parts []string
+			for _, part := range strings.Split(existingLabels, ",") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				// Check if this part is for the group field
+				fieldName := strings.Split(part, "=")[0]
+				fieldName = strings.Split(fieldName, "!")[0]
+				fieldName = strings.Split(fieldName, "~")[0]
+				fieldName = strings.TrimSpace(fieldName)
+				if fieldName == groupField {
+					continue // Skip, will be replaced
+				}
+				parts = append(parts, part)
+			}
+			parts = append(parts, fmt.Sprintf(`%s="%s"`, groupField, safeKey))
+			specificLogQL = "{" + strings.Join(parts, ", ") + "}"
+			if pipeline != "" {
+				specificLogQL += " " + pipeline
+			}
+		} else {
+			specificLogQL = fmt.Sprintf(`{%s="%s"}`, groupField, safeKey)
+		}
+		log.Printf("[Preview] Container %s query: %s range=%s", containerName, specificLogQL, searchRange)
+
+		now := time.Now()
+		d := parsePreviewTimeRange(searchRange)
+		result, err := client.QueryRange(ctx, specificLogQL, now.Add(-d), now, 1)
+		if err != nil {
+			log.Printf("[Preview] Loki query error for %s/%s: %v", containerName, searchRange, err)
+			return nil
+		}
+		hits := result.ToHits()
+		if len(hits) > 0 {
+			return hits[0]
+		}
+		return nil
+	}
+
+	// ES
+	if req.ESConnectionID == 0 {
+		return nil
+	}
+	var conn models.ESConnection
+	err := database.DB.QueryRow(`SELECT id, name, url, version, username, password, api_key, skip_tls_verify
+		FROM es_connections WHERE id = ?`, req.ESConnectionID).Scan(
+		&conn.ID, &conn.Name, &conn.URL, &conn.Version, &conn.Username, &conn.Password, &conn.APIKey, &conn.SkipTLSVerify)
+	if err != nil {
+		return nil
+	}
+	client, err := es.NewClient(conn)
+	if err != nil {
+		return nil
+	}
+
+	var filters []models.FilterField
+	if req.FilterFields != "" {
+		json.Unmarshal([]byte(req.FilterFields), &filters)
+	}
+	filters = append(filters, models.FilterField{Field: groupField, Value: containerName, Op: "term"})
+	filterJSON, _ := json.Marshal(filters)
+
+	esIndex := req.ESIndex
+	if esIndex == "" {
+		esIndex = "*"
+	}
+	query, _ := es.BuildQuery(req.Keyword, string(filterJSON), searchRange, "", 1)
+	result, err := client.Search(ctx, esIndex, query)
+	if err != nil || len(result.Hits) == 0 {
+		return nil
+	}
+	return result.Hits[0]
 }
 
 func previewExtractFields(hit map[string]interface{}, extractFieldsJSON string) map[string]interface{} {

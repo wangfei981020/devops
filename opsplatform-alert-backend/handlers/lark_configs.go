@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -52,6 +53,7 @@ func HandleCreateLarkConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := result.LastInsertId()
+	SaveAuditLog(r, "create_lark", "lark", req.Name, fmt.Sprintf("创建Lark配置 ID=%d", id))
 	jsonSuccess(w, map[string]interface{}{"id": id})
 }
 
@@ -69,6 +71,7 @@ func HandleUpdateLarkConfig(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "更新失败")
 		return
 	}
+	SaveAuditLog(r, "update_lark", "lark", req.Name, fmt.Sprintf("更新Lark配置 ID=%d", id))
 	jsonSuccess(w, nil)
 }
 
@@ -83,12 +86,14 @@ func HandleDeleteLarkConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	database.DB.Exec("DELETE FROM lark_configs WHERE id = ?", id)
+	SaveAuditLog(r, "delete_lark", "lark", fmt.Sprintf("ID=%d", id), "删除Lark配置")
 	jsonSuccess(w, nil)
 }
 
 func HandleToggleLarkConfig(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
 	database.DB.Exec("UPDATE lark_configs SET status = IF(status=1, 0, 1) WHERE id = ?", id)
+	SaveAuditLog(r, "toggle_lark", "lark", fmt.Sprintf("ID=%d", id), "切换Lark配置状态")
 	jsonSuccess(w, nil)
 }
 

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -64,6 +65,7 @@ func HandleCreateESConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := result.LastInsertId()
+	SaveAuditLog(r, "create_es_conn", "connection", req.Name, fmt.Sprintf("创建ES连接 ID=%d", id))
 	jsonSuccess(w, map[string]interface{}{"id": id})
 }
 
@@ -87,6 +89,7 @@ func HandleUpdateESConnection(w http.ResponseWriter, r *http.Request) {
 		alertEngine.RefreshESClient(id)
 	}
 
+	SaveAuditLog(r, "update_es_conn", "connection", req.Name, fmt.Sprintf("更新ES连接 ID=%d", id))
 	jsonSuccess(w, nil)
 }
 
@@ -105,6 +108,7 @@ func HandleDeleteESConnection(w http.ResponseWriter, r *http.Request) {
 	if alertEngine != nil {
 		alertEngine.RefreshESClient(id)
 	}
+	SaveAuditLog(r, "delete_es_conn", "connection", fmt.Sprintf("ID=%d", id), "删除ES连接")
 	jsonSuccess(w, nil)
 }
 
@@ -114,6 +118,7 @@ func HandleToggleESConnection(w http.ResponseWriter, r *http.Request) {
 	if alertEngine != nil {
 		alertEngine.RefreshESClient(id)
 	}
+	SaveAuditLog(r, "toggle_es_conn", "connection", fmt.Sprintf("ID=%d", id), "切换ES连接状态")
 	jsonSuccess(w, nil)
 }
 

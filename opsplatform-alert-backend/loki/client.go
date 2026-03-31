@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"opsplatform-alert-backend/models"
@@ -232,9 +233,15 @@ func (r *QueryResult) ToHits() []map[string]interface{} {
 			if line, ok := entry["line"]; ok {
 				hit["message"] = line
 			}
-			// Parse timestamp
+			// Parse timestamp: convert nanosecond string to readable time
 			if ts, ok := entry["timestamp"].(string); ok {
-				hit["@timestamp"] = ts
+				if nsec, err := strconv.ParseInt(ts, 10, 64); err == nil {
+					formatted := time.Unix(0, nsec).Format("2006/01/02 15:04:05")
+					hit["@timestamp"] = formatted
+					hit["timestamp"] = formatted
+				} else {
+					hit["@timestamp"] = ts
+				}
 			}
 			hits = append(hits, hit)
 		}
