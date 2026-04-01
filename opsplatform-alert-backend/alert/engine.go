@@ -446,6 +446,25 @@ func (e *Engine) executeRule(ruleID int) {
 				vars["alert_reason"] = "not_found"
 				vars["time_range"] = rule.TimeRange
 				rawJSON, _ = json.Marshal(widerHits[0])
+
+				// If any extracted field is empty, query more hits to find non-empty values
+				if hasEmptyExtractFields(vars, rule.ExtractFields) {
+					var moreHits []map[string]interface{}
+					if dataSourceType == "loki" {
+						moreHits, _ = e.queryLokiWider(ctx, rule, "3h", 10)
+					} else {
+						moreQuery, _ := es.BuildQuery(rule.Keyword, rule.FilterFields, "3h", "", 10)
+						esClient, cErr := e.getESClient(rule.ESConnectionID)
+						if cErr == nil {
+							moreResult, wErr := esClient.Search(ctx, rule.ESIndex, moreQuery)
+							if wErr == nil {
+								moreHits = moreResult.Hits
+							}
+						}
+					}
+					fillEmptyFields(vars, moreHits, rule.ExtractFields)
+				}
+
 				lastHitMsg = renderTemplate(rule.MessageTemplate, vars)
 			} else if rule.MessageTemplate != "" {
 				lastHitMsg = renderTemplate(rule.MessageTemplate, vars)
@@ -661,6 +680,57 @@ func extractFields(hit map[string]interface{}, extractFieldsJSON string) map[str
 	}
 
 	return vars
+}
+
+// hasEmptyExtractFields checks if any extracted field has an empty value
+func hasEmptyExtractFields(vars map[string]interface{}, extractFieldsJSON string) bool {
+	if extractFieldsJSON == "" {
+		return false
+	}
+	var fields []models.ExtractField
+	if err := json.Unmarshal([]byte(extractFieldsJSON), &fields); err != nil {
+		return false
+	}
+	for _, f := range fields {
+		val := vars[f.Name]
+		if val == nil {
+			return true
+		}
+		s := fmt.Sprintf("%v", val)
+		if s == "" || s == "<nil>" {
+			return true
+		}
+	}
+	return false
+}
+
+// fillEmptyFields fills empty extracted fields from subsequent hits
+func fillEmptyFields(vars map[string]interface{}, hits []map[string]interface{}, extractFieldsJSON string) {
+	if extractFieldsJSON == "" || len(hits) == 0 {
+		return
+	}
+	var fields []models.ExtractField
+	if err := json.Unmarshal([]byte(extractFieldsJSON), &fields); err != nil {
+		return
+	}
+	for _, f := range fields {
+		val := vars[f.Name]
+		s := fmt.Sprintf("%v", val)
+		if s != "" && s != "<nil>" && val != nil {
+			continue // already has value
+		}
+		// Search through hits for a non-empty value
+		for _, hit := range hits {
+			hitVars := extractFields(hit, extractFieldsJSON)
+			hitVal := hitVars[f.Name]
+			hitStr := fmt.Sprintf("%v", hitVal)
+			if hitVal != nil && hitStr != "" && hitStr != "<nil>" {
+				vars[f.Name] = hitVal
+				log.Printf("[Engine] Filled empty field '%s' with value '%s' from earlier hit", f.Name, hitStr)
+				break
+			}
+		}
+	}
 }
 
 // renderTemplate renders a Go template with variables
@@ -1175,6 +1245,18 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 				vars["_group_key"] = groupKey
 				vars["_group_field"] = groupField
 				vars["container"] = groupKey
+
+				// If any extracted field is empty, query more hits to fill
+				if hasEmptyExtractFields(vars, rule.ExtractFields) {
+					if !acquireGlobalCtx(ctx) {
+						log.Printf("[Engine] Rule %d: global semaphore timeout for fill query '%s'", rule.ID, groupKey)
+					} else {
+						moreHits := e.checkGroupHits(ctx, rule, groupField, groupKey, dataSourceType, 10)
+						releaseGlobal()
+						fillEmptyFields(vars, moreHits, rule.ExtractFields)
+					}
+				}
+
 				log.Printf("[Engine] Rule %d: using last hit for group '%s'", rule.ID, groupKey)
 			}
 			message := renderTemplate(rule.MessageTemplate, vars)
@@ -1392,6 +1474,81 @@ func (e *Engine) checkGroupHit(ctx context.Context, rule *models.AlertRule, grou
 		return false, nil
 	}
 	return true, result.Hits[0]
+}
+
+// checkGroupHits queries multiple hits for a specific group (for field value fallback)
+func (e *Engine) checkGroupHits(ctx context.Context, rule *models.AlertRule, groupField, groupKey, dataSourceType string, limit int) []map[string]interface{} {
+	if dataSourceType == "loki" {
+		logql := rule.LogQL
+		safeGroupKey := strings.ReplaceAll(groupKey, `"`, `\"`)
+		var specificLogQL string
+		if idx := strings.Index(logql, "}"); idx >= 0 {
+			existingLabels := strings.TrimSpace(logql[1:idx])
+			pipeline := strings.TrimSpace(logql[idx+1:])
+			var parts []string
+			for _, part := range strings.Split(existingLabels, ",") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				fieldName := strings.Split(part, "=")[0]
+				fieldName = strings.Split(fieldName, "!")[0]
+				fieldName = strings.Split(fieldName, "~")[0]
+				fieldName = strings.TrimSpace(fieldName)
+				if fieldName == groupField {
+					continue
+				}
+				parts = append(parts, part)
+			}
+			parts = append(parts, fmt.Sprintf(`%s="%s"`, groupField, safeGroupKey))
+			specificLogQL = "{" + strings.Join(parts, ", ") + "}"
+			if pipeline != "" {
+				specificLogQL += " " + pipeline
+			}
+		} else {
+			specificLogQL = fmt.Sprintf(`{%s="%s"}`, groupField, safeGroupKey)
+		}
+
+		client, cErr := e.getLokiClient(rule.LokiConnectionID)
+		if cErr != nil {
+			return nil
+		}
+		now := time.Now()
+		duration := 5 * time.Minute
+		if rule.TimeRange != "" {
+			if strings.HasSuffix(rule.TimeRange, "d") {
+				days := 1
+				fmt.Sscanf(rule.TimeRange, "%dd", &days)
+				duration = time.Duration(days) * 24 * time.Hour
+			} else if d, err := time.ParseDuration(rule.TimeRange); err == nil {
+				duration = d
+			}
+		}
+		result, err := client.QueryRange(ctx, specificLogQL, now.Add(-duration), now, limit)
+		if err != nil {
+			return nil
+		}
+		return result.ToHits()
+	}
+
+	// ES
+	filterJSON := rule.FilterFields
+	var filters []models.FilterField
+	if filterJSON != "" {
+		json.Unmarshal([]byte(filterJSON), &filters)
+	}
+	filters = append(filters, models.FilterField{Field: groupField, Value: groupKey, Op: "term"})
+	newFilterJSON, _ := json.Marshal(filters)
+	query, _ := es.BuildQuery(rule.Keyword, string(newFilterJSON), rule.TimeRange, "", limit)
+	esClient, err := e.getESClient(rule.ESConnectionID)
+	if err != nil {
+		return nil
+	}
+	result, err := esClient.Search(ctx, rule.ESIndex, query)
+	if err != nil {
+		return nil
+	}
+	return result.Hits
 }
 
 // parseAggBuckets extracts bucket keys from ES aggregation result
