@@ -64,11 +64,47 @@
               <td class="text-sm">{{ m.created_by || '-' }}</td>
               <td class="text-sm text-secondary">{{ m.reason || '-' }}</td>
               <td>
-                <button class="btn btn-sm btn-outline" style="color: var(--danger);" @click="removeMute(m)">取消屏蔽</button>
+                <div class="actions">
+                  <button class="btn btn-sm btn-outline" @click="openEditMute(m)">修改时长</button>
+                  <button class="btn btn-sm btn-outline" style="color: var(--danger);" @click="removeMute(m)">取消屏蔽</button>
+                </div>
               </td>
             </tr>
           </tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- Edit Mute Modal -->
+    <div v-if="editMute" class="modal-overlay" @click.self="editMute = null">
+      <div class="modal" style="min-width: 380px;">
+        <div class="modal-header">
+          <div class="modal-title">修改屏蔽时长</div>
+          <button class="btn-icon" @click="editMute = null">&times;</button>
+        </div>
+        <div style="padding: 0 24px;">
+          <div class="text-sm" style="margin-bottom: 12px;">
+            容器: <strong>{{ editMute.group_key }}</strong><br>
+            规则: {{ editMute.rule_name }}
+          </div>
+          <div class="form-group">
+            <label class="form-label">新的屏蔽时长</label>
+            <select v-model="editDuration" class="form-select">
+              <option value="1h">1 小时</option>
+              <option value="3h">3 小时</option>
+              <option value="6h">6 小时</option>
+              <option value="12h">12 小时</option>
+              <option value="24h">24 小时</option>
+              <option value="7d">7 天</option>
+              <option value="30d">30 天</option>
+              <option value="forever">1 年</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" @click="editMute = null">取消</button>
+          <button class="btn btn-primary" @click="saveEditMute">确认修改</button>
+        </div>
       </div>
     </div>
   </div>
@@ -143,6 +179,35 @@ async function addMute() {
     }
   } catch (e) {
     toast.error('屏蔽失败')
+  }
+}
+
+const editMute = ref(null)
+const editDuration = ref('1h')
+
+function openEditMute(m) {
+  editMute.value = m
+  editDuration.value = '1h'
+}
+
+async function saveEditMute() {
+  if (!editMute.value) return
+  try {
+    const res = await api.post('/alert-mutes', {
+      rule_id: editMute.value.rule_id,
+      group_key: editMute.value.group_key,
+      duration: editDuration.value,
+      reason: '屏蔽管理页修改时长'
+    })
+    if (res.code === 0) {
+      toast.success(`${editMute.value.group_key} 屏蔽时长已修改`)
+      editMute.value = null
+      loadMutes()
+    } else {
+      toast.error(res.message)
+    }
+  } catch (e) {
+    toast.error('修改失败')
   }
 }
 
