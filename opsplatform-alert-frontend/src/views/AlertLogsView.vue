@@ -112,7 +112,7 @@
           </div>
 
           <div v-if="detailLog.es_raw" class="form-group">
-            <label class="form-label">ES 原始数据</label>
+            <label class="form-label">原始数据</label>
             <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; max-height: 300px; overflow-y: auto;">{{ formatJSON(detailLog.es_raw) }}</pre>
           </div>
 
