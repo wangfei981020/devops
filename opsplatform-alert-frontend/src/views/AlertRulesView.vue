@@ -37,8 +37,11 @@
           </div>
           <!-- Children -->
           <template v-if="expanded[p.id]">
-            <div v-for="child in getChildren(p.id)" :key="child.id"
+            <div v-for="(child, idx) in getChildren(p.id)" :key="child.id"
               class="project-item child" :class="{ active: selectedProjectId === child.id }">
+              <span class="tree-line">
+                <span :class="idx === getChildren(p.id).length - 1 ? 'tree-last' : 'tree-mid'"></span>
+              </span>
               <span class="project-name" @click="selectProject(child.id)">{{ child.name }}</span>
               <button class="btn-icon-sm" @click.stop="editProject(child)" title="编辑">
                 <Pencil :size="12" />
@@ -418,7 +421,63 @@ onMounted(() => {
   font-weight: 500;
 }
 
-.project-item.child { padding-left: 44px; }
+.project-item.child { padding-left: 28px; }
+
+.tree-line {
+  display: inline-flex;
+  width: 20px;
+  height: 100%;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.tree-mid,
+.tree-last {
+  position: relative;
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+}
+
+.tree-mid::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: -8px;
+  width: 1px;
+  height: 28px;
+  background: var(--border, #cbd5e1);
+}
+
+.tree-mid::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 10px;
+  width: 10px;
+  height: 1px;
+  background: var(--border, #cbd5e1);
+}
+
+.tree-last::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: -8px;
+  width: 1px;
+  height: 18px;
+  background: var(--border, #cbd5e1);
+}
+
+.tree-last::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 10px;
+  width: 10px;
+  height: 1px;
+  background: var(--border, #cbd5e1);
+}
 
 .project-name {
   flex: 1;

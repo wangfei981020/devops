@@ -287,11 +287,11 @@
           <div class="flex gap-2 items-center" style="margin-top: 8px;">
             <input v-model="newMuteGroup" class="form-input" style="width: 200px;" placeholder="容器名" />
             <select v-model="newMuteDuration" class="form-select" style="width: 120px;">
+              <option value="10m">10 分钟</option>
+              <option value="30m">30 分钟</option>
               <option value="1h">1 小时</option>
-              <option value="3h">3 小时</option>
               <option value="6h">6 小时</option>
-              <option value="12h">12 小时</option>
-              <option value="24h">24 小时</option>
+              <option value="1d">1 天</option>
               <option value="7d">7 天</option>
               <option value="30d">30 天</option>
               <option value="forever">1 年</option>
