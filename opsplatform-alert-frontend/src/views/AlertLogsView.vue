@@ -69,16 +69,6 @@
               <td>
                 <div class="actions">
                   <button class="btn btn-sm btn-outline" @click="showDetail(log)">详情</button>
-                  <select class="form-select" style="width: 90px; padding: 2px 4px; font-size: 11px;"
-                    @change="muteFromLog(log, $event)">
-                    <option value="">屏蔽</option>
-                    <option value="1h">1h</option>
-                    <option value="3h">3h</option>
-                    <option value="6h">6h</option>
-                    <option value="24h">24h</option>
-                    <option value="7d">7天</option>
-                    <option value="forever">1年</option>
-                  </select>
                 </div>
               </td>
             </tr>

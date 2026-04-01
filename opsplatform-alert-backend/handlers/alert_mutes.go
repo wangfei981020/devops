@@ -15,16 +15,26 @@ import (
 func HandleListMutes(w http.ResponseWriter, r *http.Request) {
 	ruleID := r.URL.Query().Get("rule_id")
 
-	query := `SELECT id, rule_id, group_key, mute_until, reason, created_by, created_at
-		FROM alert_mutes WHERE mute_until > NOW()`
+	query := `SELECT m.id, m.rule_id, COALESCE(r.name,'(已删除)'), m.group_key, m.mute_until, m.reason, m.created_by, m.created_at
+		FROM alert_mutes m LEFT JOIN alert_rules r ON m.rule_id = r.id WHERE m.mute_until > NOW()`
 	args := []interface{}{}
 
 	if ruleID != "" {
-		query += " AND rule_id = ?"
+		query += " AND m.rule_id = ?"
 		rid, _ := strconv.Atoi(ruleID)
 		args = append(args, rid)
 	}
-	query += " ORDER BY created_at DESC"
+
+	projectID := r.URL.Query().Get("project_id")
+	if projectID != "" {
+		pid, _ := strconv.Atoi(projectID)
+		if pid > 0 {
+			query += " AND r.project_id IN (SELECT id FROM alert_projects WHERE id = ? OR parent_id = ?)"
+			args = append(args, pid, pid)
+		}
+	}
+
+	query += " ORDER BY m.created_at DESC"
 
 	rows, err := database.DB.Query(query, args...)
 	if err != nil {
@@ -36,11 +46,12 @@ func HandleListMutes(w http.ResponseWriter, r *http.Request) {
 	var list []map[string]interface{}
 	for rows.Next() {
 		var id, rid int
-		var groupKey, reason, createdBy, muteUntil, createdAt string
-		rows.Scan(&id, &rid, &groupKey, &muteUntil, &reason, &createdBy, &createdAt)
+		var ruleName, groupKey, reason, createdBy, muteUntil, createdAt string
+		rows.Scan(&id, &rid, &ruleName, &groupKey, &muteUntil, &reason, &createdBy, &createdAt)
 		list = append(list, map[string]interface{}{
 			"id":         id,
 			"rule_id":    rid,
+			"rule_name":  ruleName,
 			"group_key":  groupKey,
 			"mute_until": muteUntil,
 			"reason":     reason,

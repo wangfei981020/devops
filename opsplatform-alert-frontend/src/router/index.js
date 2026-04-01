@@ -17,6 +17,7 @@ const routes = [
       { path: 'loki-connections', name: 'LokiConnections', component: () => import('../views/LokiConnectionsView.vue'), meta: { menuKey: 'connections' } },
       { path: 'lark-configs', name: 'LarkConfigs', component: () => import('../views/LarkConfigsView.vue'), meta: { menuKey: 'lark' } },
       { path: 'alert-logs', name: 'AlertLogs', component: () => import('../views/AlertLogsView.vue'), meta: { menuKey: 'logs' } },
+      { path: 'mutes', name: 'Mutes', component: () => import('../views/MutesView.vue'), meta: { menuKey: 'rules' } },
       { path: 'contacts', name: 'Contacts', component: () => import('../views/ContactsView.vue'), meta: { menuKey: 'contacts' } },
       { path: 'audit-logs', name: 'AuditLogs', component: () => import('../views/AuditLogsView.vue'), meta: { menuKey: 'audit' } },
       { path: 'users', name: 'Users', component: () => import('../views/UsersView.vue'), meta: { menuKey: 'users' } },

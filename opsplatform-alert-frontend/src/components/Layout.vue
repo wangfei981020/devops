@@ -27,6 +27,9 @@
         <router-link v-if="auth.hasMenu('logs')" to="/alert-logs" class="nav-item" :class="{ active: $route.path === '/alert-logs' }">
           <FileText :size="18" /> 告警日志
         </router-link>
+        <router-link v-if="auth.hasMenu('rules')" to="/mutes" class="nav-item" :class="{ active: $route.path === '/mutes' }">
+          <ShieldOff :size="18" /> 屏蔽管理
+        </router-link>
         <router-link v-if="auth.hasMenu('contacts')" to="/contacts" class="nav-item" :class="{ active: $route.path === '/contacts' }">
           <UserPlus :size="18" /> 通知人管理
         </router-link>
@@ -63,7 +66,7 @@
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import { LayoutDashboard, Bell, Search, Database, Send, FileText, UserPlus, Users, ClipboardList, LogOut } from 'lucide-vue-next'
+import { LayoutDashboard, Bell, Search, Database, Send, FileText, UserPlus, Users, ClipboardList, ShieldOff, LogOut } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
@@ -78,6 +81,7 @@ const pageTitle = computed(() => {
     '/loki-connections': 'Loki 连接管理',
     '/lark-configs': 'Lark 配置',
     '/alert-logs': '告警日志',
+    '/mutes': '屏蔽管理',
     '/contacts': '通知人管理',
     '/audit-logs': '操作日志',
     '/users': '账号管理'

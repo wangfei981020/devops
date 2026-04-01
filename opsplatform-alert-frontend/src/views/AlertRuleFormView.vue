@@ -15,6 +15,15 @@
             <input v-model="form.name" class="form-input" placeholder="如: G32 resource alarm" required />
           </div>
           <div class="form-group">
+            <label class="form-label">所属项目</label>
+            <select v-model.number="form.project_id" class="form-select">
+              <option :value="0">未分类</option>
+              <option v-for="p in allProjects" :key="p.id" :value="p.id">
+                {{ p.parent_id > 0 ? '  └ ' : '' }}{{ p.name }}
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
             <label class="form-label">告警级别</label>
             <select v-model="form.severity" class="form-select">
               <option value="S1">S1 灾难</option>
@@ -548,6 +557,7 @@ const submitting = ref(false)
 const esConnections = ref([])
 const lokiConnections = ref([])
 const larkConfigs = ref([])
+const allProjects = ref([])
 
 const form = ref({
   data_source_type: 'es',
@@ -580,7 +590,8 @@ const form = ref({
   dedup_ttl: 3600,
   max_alerts: 10,
   prometheus_config: '',
-  route_config: ''
+  route_config: '',
+  project_id: 0
 })
 
 // Route config helpers
@@ -700,14 +711,16 @@ const cronHint = computed(() => cronToHuman(form.value.schedule))
 
 async function loadOptions() {
   try {
-    const [esRes, lokiRes, larkRes] = await Promise.all([
+    const [esRes, lokiRes, larkRes, projRes] = await Promise.all([
       api.get('/es-connections'),
       api.get('/loki-connections'),
-      api.get('/lark-configs')
+      api.get('/lark-configs'),
+      api.get('/projects')
     ])
     if (esRes.code === 0) esConnections.value = esRes.data
     if (lokiRes.code === 0) lokiConnections.value = lokiRes.data
     if (larkRes.code === 0) larkConfigs.value = larkRes.data
+    if (projRes.code === 0) allProjects.value = projRes.data
   } catch (e) { /* ignore */ }
 }
 
@@ -748,7 +761,8 @@ async function loadRule() {
         dedup_ttl: d.dedup_ttl,
         max_alerts: d.max_alerts,
         prometheus_config: d.prometheus_config || '',
-        route_config: d.route_config || ''
+        route_config: d.route_config || '',
+        project_id: d.project_id || 0
       }
       loadPromConfig(d.prometheus_config)
       loadRouteConfig(d.route_config)
@@ -942,14 +956,17 @@ onMounted(async () => {
   await loadRule()
   loadMutes()
 
-  // Pre-fill from query params (from ES Explore page)
+  // Pre-fill from query params
   const q = route.query
-  if (!isEdit.value && q.es_connection_id) {
-    form.value.es_connection_id = parseInt(q.es_connection_id) || 0
-    if (q.es_index) form.value.es_index = q.es_index
-    if (q.keyword) form.value.keyword = q.keyword
-    if (q.filter_fields) form.value.filter_fields = q.filter_fields
-    if (q.time_range) form.value.time_range = q.time_range
+  if (!isEdit.value) {
+    if (q.project_id) form.value.project_id = parseInt(q.project_id) || 0
+    if (q.es_connection_id) {
+      form.value.es_connection_id = parseInt(q.es_connection_id) || 0
+      if (q.es_index) form.value.es_index = q.es_index
+      if (q.keyword) form.value.keyword = q.keyword
+      if (q.filter_fields) form.value.filter_fields = q.filter_fields
+      if (q.time_range) form.value.time_range = q.time_range
+    }
   }
 })
 </script>
