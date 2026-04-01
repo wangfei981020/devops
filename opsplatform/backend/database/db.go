@@ -1174,6 +1174,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_alert_lark", "menu:alert_lark", "Lark配置", "/alert/lark", "perm_menu_alert", "", 50},
 		{"perm_menu_alert_logs", "menu:alert_logs", "告警日志", "/alert/logs", "perm_menu_alert", "", 60},
 		{"perm_menu_alert_contacts", "menu:alert_contacts", "通知人管理", "/alert/contacts", "perm_menu_alert", "", 70},
+		{"perm_menu_alert_mutes", "menu:alert_mutes", "屏蔽管理", "/alert/mutes", "perm_menu_alert", "", 75},
 		{"perm_menu_alert_users", "menu:alert_users", "告警账号管理", "/alert/users", "perm_menu_alert", "", 80},
 	}
 

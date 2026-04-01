@@ -27,7 +27,7 @@
         <router-link v-if="auth.hasMenu('logs')" to="/alert-logs" class="nav-item" :class="{ active: $route.path === '/alert-logs' }">
           <FileText :size="18" /> 告警日志
         </router-link>
-        <router-link v-if="auth.hasMenu('rules')" to="/mutes" class="nav-item" :class="{ active: $route.path === '/mutes' }">
+        <router-link v-if="auth.hasMenu('mutes')" to="/mutes" class="nav-item" :class="{ active: $route.path === '/mutes' }">
           <ShieldOff :size="18" /> 屏蔽管理
         </router-link>
         <router-link v-if="auth.hasMenu('contacts')" to="/contacts" class="nav-item" :class="{ active: $route.path === '/contacts' }">
