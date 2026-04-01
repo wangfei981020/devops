@@ -90,11 +90,11 @@
           <div class="form-group">
             <label class="form-label">新的屏蔽时长</label>
             <select v-model="editDuration" class="form-select">
+              <option value="10m">10 分钟</option>
+              <option value="30m">30 分钟</option>
               <option value="1h">1 小时</option>
-              <option value="3h">3 小时</option>
               <option value="6h">6 小时</option>
-              <option value="12h">12 小时</option>
-              <option value="24h">24 小时</option>
+              <option value="1d">1 天</option>
               <option value="7d">7 天</option>
               <option value="30d">30 天</option>
               <option value="forever">1 年</option>
