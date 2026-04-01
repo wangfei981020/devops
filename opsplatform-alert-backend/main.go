@@ -115,6 +115,12 @@ func main() {
 	protected.HandleFunc("/es-explore/indices", handlers.HandleESIndices).Methods("GET")
 	protected.HandleFunc("/loki-explore", handlers.HandleLokiExplore).Methods("POST")
 
+	// Projects
+	protected.HandleFunc("/projects", handlers.HandleListProjects).Methods("GET")
+	protected.HandleFunc("/projects", handlers.HandleCreateProject).Methods("POST")
+	protected.HandleFunc("/projects/{id}", handlers.HandleUpdateProject).Methods("PUT")
+	protected.HandleFunc("/projects/{id}", handlers.HandleDeleteProject).Methods("DELETE")
+
 	// Permission refresh
 	protected.HandleFunc("/refresh-permissions", handlers.HandleRefreshPermissions).Methods("GET")
 

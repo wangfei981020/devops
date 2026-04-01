@@ -113,6 +113,7 @@ type AlertRule struct {
 	MaxAlerts        int            `json:"max_alerts"`
 	PrometheusConfig string         `json:"prometheus_config"`
 	RouteConfig      string         `json:"route_config"`       // JSON: field value routing config
+	ProjectID        int            `json:"project_id"`
 	Status          int            `json:"status"`
 	LastRunAt       sql.NullTime   `json:"last_run_at"`
 	LastError       sql.NullString `json:"last_error"`
@@ -212,6 +213,7 @@ type CreateAlertRuleReq struct {
 	MaxAlerts        int    `json:"max_alerts"`
 	PrometheusConfig string `json:"prometheus_config"`
 	RouteConfig      string `json:"route_config"`
+	ProjectID        int    `json:"project_id"`
 }
 
 type APIResponse struct {

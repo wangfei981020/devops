@@ -230,9 +230,21 @@ func autoMigrate() {
 		{"alert_rules", "loki_connection_id", "INT DEFAULT 0 COMMENT 'Loki连接ID'"},
 		{"alert_rules", "logql", "TEXT COMMENT 'LogQL查询语句(Loki)'"},
 		{"alert_rules", "route_config", "TEXT COMMENT '字段值路由配置JSON'"},
+		{"alert_rules", "project_id", "INT DEFAULT 0 COMMENT '所属项目ID'"},
 		{"users", "auth_source", "VARCHAR(20) DEFAULT 'local' COMMENT '认证来源: local/portal'"},
 		{"users", "portal_token", "TEXT COMMENT '运维平台Portal Token(用于刷新权限)'"},
 	}
+
+	// Ensure alert_projects table exists
+	DB.Exec(`CREATE TABLE IF NOT EXISTS alert_projects (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		name VARCHAR(100) NOT NULL COMMENT '项目名称',
+		parent_id INT DEFAULT 0 COMMENT '父项目ID, 0=顶级',
+		sort_order INT DEFAULT 0 COMMENT '排序',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		INDEX idx_parent (parent_id)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`)
 
 	// Ensure audit_logs table exists
 	DB.Exec(`CREATE TABLE IF NOT EXISTS audit_logs (
