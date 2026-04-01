@@ -65,9 +65,9 @@ export default {
       temporary: 'Temporary',
       overdue: 'Overdue',
       thisMonth: 'This Month',
-      pendingHandover: 'Pending Handover Records',
+      pendingHandover: 'Pending Records',
       pendingCount: '{count} pending',
-      noHandover: 'No pending handover records'
+      noHandover: 'No pending records'
     },
     
     // Handover Records

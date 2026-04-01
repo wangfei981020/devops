@@ -182,10 +182,10 @@ const paginatedRecords = computed(() => {
   return records.value.slice(start, start + pageSize.value)
 })
 
-// 待处理的交接记录（排除已解决和检测正常，按更新时间倒序）
+// 待处理记录（排除已解决和检测正常，按更新时间倒序）
 const recentHandovers = computed(() => {
   return records.value
-    .filter(r => r.has_handover && r.handover_content && !['resolved', 'normal'].includes(r.status))
+    .filter(r => !['resolved', 'normal'].includes(r.status))
     .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
 })
 
@@ -238,6 +238,7 @@ const projectModalMode = ref('add')
 
 const showDetailModal = ref(false)
 const detailRecord = ref(null)
+const detailPendingStatus = ref(null)
 
 function getEmptyForm() {
   const now = new Date()
@@ -1019,6 +1020,7 @@ async function savePlannedFixTime() {
 
 function viewDetail(record) {
   detailRecord.value = record
+  detailPendingStatus.value = record.status
   showDetailModal.value = true
 }
 
@@ -1052,6 +1054,26 @@ async function saveRecord() {
     console.error('保存失败', e)
     const errMsg = typeof e.response?.data === 'object' ? (e.response.data.error || JSON.stringify(e.response.data)) : (e.response?.data || e.message)
     appStore.showToast(t('dutyRecords.actions.saveFailed') + ': ' + errMsg, 'error')
+  }
+}
+
+async function quickUpdateStatus(record, newStatus) {
+  try {
+    const payload = { ...record, status: newStatus }
+    if (Array.isArray(payload.escalate_to)) {
+      payload.escalate_to = payload.escalate_to.join(',')
+    }
+    await api.put(`/api/duty-records/${record.id}`, payload)
+    record.status = newStatus
+    detailPendingStatus.value = newStatus
+    appStore.showToast('状态更新成功', 'success')
+    showDetailModal.value = false
+    loadRecords()
+    loadStats()
+  } catch (e) {
+    console.error('状态更新失败', e)
+    detailPendingStatus.value = record.status
+    appStore.showToast('状态更新失败', 'error')
   }
 }
 
@@ -1622,7 +1644,7 @@ async function deleteProject(project) {
             <span class="count">{{ t('dutyRecords.stats.pendingCount', { count: recentHandovers.length }) }}</span>
           </h4>
           <div class="handover-list" v-if="recentHandovers.length">
-            <div v-for="h in recentHandovers" :key="h.id" class="handover-item">
+            <div v-for="h in recentHandovers" :key="h.id" class="handover-item" @click="viewDetail(h)" style="cursor: pointer;">
               <!-- 顶部标签行：项目、反馈类型、事件类型、交接人、状态 -->
               <div class="handover-tags-row">
                 <span class="tag-inline project"><b>{{ t('dutyRecords.handover.project') }}:</b> {{ h.project_name || t('dutyRecords.handover.unknownProject') }}</span>
@@ -2447,7 +2469,7 @@ async function deleteProject(project) {
             <div class="detail-section">
               <h4>处理信息</h4>
               <div class="detail-row"><label>{{ t('dutyRecords.form.handler') }}</label><span>{{ detailRecord.handler || t('common.none') }}</span></div>
-              <div class="detail-row"><label>处理结果</label><span class="status-badge" :style="{ backgroundColor: getStatusColor(detailRecord.status) }">{{ getStatusLabel(detailRecord.status) }}</span></div>
+              <div class="detail-row"><label>处理结果</label><select class="status-select" v-model="detailPendingStatus" :style="{ backgroundColor: '#fff', color: getStatusColor(detailPendingStatus), border: '1px solid ' + getStatusColor(detailPendingStatus), borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontWeight: 600 }"><option v-for="opt in statusOptions" :key="opt.value" :value="opt.value" :style="{ color: opt.color }">{{ opt.label }}</option></select></div>
               <div class="detail-row"><label>{{ t('dutyRecords.form.plannedFixTime') }}</label><span>{{ detailRecord.planned_fix_time || t('common.none') }}</span></div>
               <div class="detail-row full"><label>{{ t('dutyRecords.columns.status') }}</label><span>{{ detailRecord.handle_result || t('common.none') }}</span></div>
               <div class="detail-row full"><label>{{ t('dutyRecords.columns.solution') }}</label><span>{{ detailRecord.solution || t('common.none') }}</span></div>
@@ -2486,6 +2508,7 @@ async function deleteProject(project) {
           <button class="btn btn-default" @click="showDetailModal = false">关闭</button>
           <button v-if="canEditPlannedFixTime" class="btn btn-warning" @click="showDetailModal = false; openPlannedFixModal(detailRecord)">编辑计划修复时间</button>
           <button v-if="canUpdate" class="btn btn-primary" @click="showDetailModal = false; openModal('edit', detailRecord)">编辑</button>
+          <button v-if="detailPendingStatus !== detailRecord.status" class="btn btn-success" @click="quickUpdateStatus(detailRecord, detailPendingStatus)">保存</button>
         </div>
       </div>
     </div>

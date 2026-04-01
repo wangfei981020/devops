@@ -65,9 +65,9 @@ export default {
       temporary: '临时解决',
       overdue: '逾期',
       thisMonth: '本月记录',
-      pendingHandover: '待处理交接记录',
+      pendingHandover: '待处理记录',
       pendingCount: '共 {count} 条待处理',
-      noHandover: '暂无待处理的交接记录'
+      noHandover: '暂无待处理记录'
     },
     
     // 交接记录
