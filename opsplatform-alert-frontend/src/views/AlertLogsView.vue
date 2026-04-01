@@ -87,37 +87,39 @@
     </div>
 
     <!-- Detail Modal -->
-    <div v-if="detailLog" class="modal-overlay" @click.self="detailLog = null">
-      <div class="modal" style="min-width: 700px;">
-        <div class="modal-header">
+    <div v-if="detailLog" class="modal-overlay">
+      <div class="modal" style="min-width: 700px; max-height: 90vh; display: flex; flex-direction: column;">
+        <div class="modal-header" style="position: sticky; top: 0; background: var(--bg-card, #fff); z-index: 10; flex-shrink: 0; border-bottom: 1px solid var(--border, #e2e8f0);">
           <div class="modal-title">告警详情 #{{ detailLog.id }}</div>
           <button class="btn-icon" @click="detailLog = null"><X :size="18" /></button>
         </div>
-        <div style="display: grid; grid-template-columns: 100px 1fr; gap: 8px; font-size: 14px;">
-          <div class="text-secondary">规则:</div><div>{{ detailLog.rule_name }} (ID: {{ detailLog.rule_id }})</div>
-          <div class="text-secondary">级别:</div><div><span class="badge" :class="severityClass(detailLog.severity)">{{ severityLabel(detailLog.severity) }}</span></div>
-          <div class="text-secondary">状态:</div><div><span class="badge" :class="detailLog.status === 'success' ? 'badge-success' : 'badge-danger'">{{ detailLog.status }}</span></div>
-          <div class="text-secondary">时间:</div><div>{{ detailLog.created_at }}</div>
-        </div>
+        <div style="overflow-y: auto; flex: 1; padding: 16px 24px;">
+          <div style="display: grid; grid-template-columns: 100px 1fr; gap: 8px; font-size: 14px;">
+            <div class="text-secondary">规则:</div><div>{{ detailLog.rule_name }} (ID: {{ detailLog.rule_id }})</div>
+            <div class="text-secondary">级别:</div><div><span class="badge" :class="severityClass(detailLog.severity)">{{ severityLabel(detailLog.severity) }}</span></div>
+            <div class="text-secondary">状态:</div><div><span class="badge" :class="detailLog.status === 'success' ? 'badge-success' : 'badge-danger'">{{ detailLog.status }}</span></div>
+            <div class="text-secondary">时间:</div><div>{{ detailLog.created_at }}</div>
+          </div>
 
-        <div class="form-group mt-4">
-          <label class="form-label">消息内容</label>
-          <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 13px; white-space: pre-wrap; max-height: 200px; overflow-y: auto;">{{ detailLog.message }}</pre>
-        </div>
+          <div class="form-group mt-4">
+            <label class="form-label">消息内容</label>
+            <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 13px; white-space: pre-wrap; max-height: 200px; overflow-y: auto;">{{ detailLog.message }}</pre>
+          </div>
 
-        <div v-if="detailLog.error_msg" class="form-group">
-          <label class="form-label" style="color: var(--danger);">错误信息</label>
-          <pre style="background: #fef2f2; padding: 12px; border-radius: 6px; font-size: 13px; white-space: pre-wrap;">{{ detailLog.error_msg }}</pre>
-        </div>
+          <div v-if="detailLog.error_msg" class="form-group">
+            <label class="form-label" style="color: var(--danger);">错误信息</label>
+            <pre style="background: #fef2f2; padding: 12px; border-radius: 6px; font-size: 13px; white-space: pre-wrap;">{{ detailLog.error_msg }}</pre>
+          </div>
 
-        <div v-if="detailLog.es_raw" class="form-group">
-          <label class="form-label">ES 原始数据</label>
-          <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; max-height: 300px; overflow-y: auto;">{{ formatJSON(detailLog.es_raw) }}</pre>
-        </div>
+          <div v-if="detailLog.es_raw" class="form-group">
+            <label class="form-label">ES 原始数据</label>
+            <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; max-height: 300px; overflow-y: auto;">{{ formatJSON(detailLog.es_raw) }}</pre>
+          </div>
 
-        <div v-if="detailLog.lark_response" class="form-group">
-          <label class="form-label">Lark 响应</label>
-          <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap;">{{ detailLog.lark_response }}</pre>
+          <div v-if="detailLog.lark_response" class="form-group">
+            <label class="form-label">Lark 响应</label>
+            <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap;">{{ detailLog.lark_response }}</pre>
+          </div>
         </div>
       </div>
     </div>
