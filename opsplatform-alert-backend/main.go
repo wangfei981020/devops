@@ -151,7 +151,7 @@ func main() {
 
 	// Alert Logs
 	protected.HandleFunc("/alert-logs", handlers.HandleListAlertLogs).Methods("GET")
-	protected.HandleFunc("/alert-logs/clean", handlers.HandleCleanAlertLogs).Methods("DELETE")
+	protected.HandleFunc("/alert-logs/clean", handlers.HandleCleanAlertLogs).Methods("POST", "DELETE")
 
 	// Health check + Prometheus metrics server (separate port)
 	go func() {

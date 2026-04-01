@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -161,20 +163,61 @@ func HandleGetAlertStats(w http.ResponseWriter, r *http.Request) {
 
 // HandleCleanAlertLogs cleans old logs
 func HandleCleanAlertLogs(w http.ResponseWriter, r *http.Request) {
-	days := r.URL.Query().Get("days")
-	if days == "" {
-		days = "30"
+	var req struct {
+		ProjectID int    `json:"project_id"`
+		RuleID    int    `json:"rule_id"`
+		StartDate string `json:"start_date"`
+		EndDate   string `json:"end_date"`
+		Status    string `json:"status"`
+		Preview   bool   `json:"preview"`
 	}
-	d, _ := strconv.Atoi(days)
-	if d < 1 {
-		d = 30
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "无效的请求")
+		return
 	}
 
-	result, _ := database.DB.Exec("DELETE FROM alert_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY)", d)
+	// Build WHERE clause
+	where := "1=1"
+	args := []interface{}{}
+
+	if req.ProjectID > 0 {
+		where += " AND rule_id IN (SELECT id FROM alert_rules WHERE project_id IN (SELECT id FROM alert_projects WHERE id = ? OR parent_id = ?))"
+		args = append(args, req.ProjectID, req.ProjectID)
+	}
+	if req.RuleID > 0 {
+		where += " AND rule_id = ?"
+		args = append(args, req.RuleID)
+	}
+	if req.StartDate != "" {
+		where += " AND created_at >= ?"
+		args = append(args, req.StartDate+" 00:00:00")
+	}
+	if req.EndDate != "" {
+		where += " AND created_at <= ?"
+		args = append(args, req.EndDate+" 23:59:59")
+	}
+	if req.Status != "" {
+		where += " AND status = ?"
+		args = append(args, req.Status)
+	}
+
+	// Preview mode: only count
+	if req.Preview {
+		var count int64
+		database.DB.QueryRow("SELECT COUNT(*) FROM alert_logs WHERE "+where, args...).Scan(&count)
+		jsonSuccess(w, map[string]interface{}{"count": count})
+		return
+	}
+
+	// Delete
+	result, _ := database.DB.Exec("DELETE FROM alert_logs WHERE "+where, args...)
 	count, _ := result.RowsAffected()
+
+	SaveAuditLog(r, "clean_logs", "alert_log", fmt.Sprintf("清理%d条", count),
+		fmt.Sprintf("project_id=%d rule_id=%d date=%s~%s status=%s", req.ProjectID, req.RuleID, req.StartDate, req.EndDate, req.Status))
 
 	jsonSuccess(w, map[string]interface{}{
 		"deleted": count,
-		"message": "已清理" + strconv.FormatInt(count, 10) + "条日志",
+		"message": fmt.Sprintf("已清理 %d 条日志", count),
 	})
 }

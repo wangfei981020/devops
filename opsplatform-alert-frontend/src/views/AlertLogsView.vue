@@ -25,7 +25,7 @@
           </span>
           <button v-if="hasFilters" class="btn btn-sm btn-outline" @click="clearFilters">清除筛选</button>
         </div>
-        <button class="btn btn-danger btn-sm" @click="cleanLogs">清理旧日志</button>
+        <button class="btn btn-danger btn-sm" @click="showCleanModal = true; cleanPreviewCount = null">清理日志</button>
       </div>
 
       <div v-if="loading" class="loading"><div class="spinner"></div></div>
@@ -120,6 +120,62 @@
             <label class="form-label">Lark 响应</label>
             <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap;">{{ detailLog.lark_response }}</pre>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Clean Logs Modal -->
+    <div v-if="showCleanModal" class="modal-overlay">
+      <div class="modal" style="min-width: 500px;">
+        <div class="modal-header">
+          <div class="modal-title">清理告警日志</div>
+          <button class="btn-icon" @click="showCleanModal = false"><X :size="18" /></button>
+        </div>
+        <div style="padding: 0 24px;">
+          <div class="form-group">
+            <label class="form-label">项目</label>
+            <select v-model.number="cleanForm.project_id" class="form-select" @change="cleanForm.rule_id = 0; cleanPreviewCount = null">
+              <option :value="0">全部项目</option>
+              <option v-for="p in cleanProjects" :key="p.id" :value="p.id">
+                {{ p.parent_id > 0 ? '  └ ' : '' }}{{ p.name }}
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">规则</label>
+            <select v-model.number="cleanForm.rule_id" class="form-select" @change="cleanPreviewCount = null">
+              <option :value="0">全部规则</option>
+              <option v-for="r in cleanRuleOptions" :key="r.id" :value="r.id">{{ r.name }}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">开始日期</label>
+              <input v-model="cleanForm.start_date" type="date" class="form-input" @change="cleanPreviewCount = null" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">结束日期</label>
+              <input v-model="cleanForm.end_date" type="date" class="form-input" @change="cleanPreviewCount = null" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">状态</label>
+            <select v-model="cleanForm.status" class="form-select" @change="cleanPreviewCount = null">
+              <option value="">全部</option>
+              <option value="success">成功</option>
+              <option value="failed">失败</option>
+            </select>
+          </div>
+          <div v-if="cleanPreviewCount !== null" style="padding: 8px 0; font-size: 14px;">
+            预计清理: <strong style="color: var(--danger);">{{ cleanPreviewCount }}</strong> 条日志
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" @click="previewClean" :disabled="cleanLoading">预览数量</button>
+          <button class="btn btn-outline" @click="showCleanModal = false">取消</button>
+          <button class="btn btn-danger" @click="confirmClean" :disabled="cleanLoading || cleanPreviewCount === null || cleanPreviewCount === 0">
+            {{ cleanLoading ? '清理中...' : '确认清理' }}
+          </button>
         </div>
       </div>
     </div>
@@ -224,16 +280,52 @@ function showDetail(log) {
   detailLog.value = log
 }
 
-async function cleanLogs() {
-  const days = await dialog.prompt({ title: '清理旧日志', message: '清理多少天前的日志？', defaultValue: '30', placeholder: '天数' })
-  if (days === null) return
+// Clean logs
+const showCleanModal = ref(false)
+const cleanLoading = ref(false)
+const cleanPreviewCount = ref(null)
+const cleanProjects = ref([])
+const cleanRules = ref([])
+const cleanForm = ref({ project_id: 0, rule_id: 0, start_date: '', end_date: '', status: '' })
+
+const cleanRuleOptions = computed(() => {
+  if (!cleanForm.value.project_id) return cleanRules.value
+  return cleanRules.value.filter(r => r.project_id === cleanForm.value.project_id)
+})
+
+async function loadCleanOptions() {
   try {
-    const res = await api.delete('/alert-logs/clean', { params: { days } })
+    const [projRes, ruleRes] = await Promise.all([
+      api.get('/projects'),
+      api.get('/alert-rules', { params: { limit: 500 } })
+    ])
+    if (projRes.code === 0) cleanProjects.value = projRes.data
+    if (ruleRes.code === 0) cleanRules.value = ruleRes.data.map(r => ({ id: r.id, name: r.name, project_id: r.project_id }))
+  } catch (e) { /* ignore */ }
+}
+
+async function previewClean() {
+  cleanLoading.value = true
+  try {
+    const res = await api.post('/alert-logs/clean', { ...cleanForm.value, preview: true })
+    if (res.code === 0) cleanPreviewCount.value = res.data.count
+  } catch (e) { /* ignore */ }
+  cleanLoading.value = false
+}
+
+async function confirmClean() {
+  const ok = await dialog.danger({ title: '确认清理', message: `确认清理 ${cleanPreviewCount.value} 条日志？此操作不可恢复。` })
+  if (!ok) return
+  cleanLoading.value = true
+  try {
+    const res = await api.post('/alert-logs/clean', { ...cleanForm.value, preview: false })
     if (res.code === 0) {
       toast.success(res.data.message)
+      showCleanModal.value = false
       loadLogs()
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) { toast.error('清理失败') }
+  cleanLoading.value = false
 }
 
 function severityClass(s) {
@@ -250,5 +342,8 @@ function formatJSON(s) {
   try { return JSON.stringify(JSON.parse(s), null, 2) } catch { return s }
 }
 
-onMounted(loadLogs)
+onMounted(() => {
+  loadLogs()
+  loadCleanOptions()
+})
 </script>
