@@ -4,39 +4,47 @@
     <aside class="project-sidebar">
       <div class="sidebar-header">
         <span class="sidebar-title">项目</span>
-        <button class="btn-icon" @click="showProjectModal = true; projectForm = { name: '', parent_id: 0 }; editProjectId = null" title="添加项目">
+        <button class="btn-icon" @click="openCreateProject(0)" title="添加项目">
           <Plus :size="16" />
         </button>
       </div>
 
       <div class="project-list">
         <div class="project-item" :class="{ active: selectedProjectId === null }" @click="selectProject(null)">
-          全部规则 <span class="count">{{ total }}</span>
+          全部规则 <span class="count">{{ allTotal }}</span>
         </div>
         <div class="project-item" :class="{ active: selectedProjectId === -1 }" @click="selectProject(-1)">
           未分类 <span class="count">{{ unassignedCount }}</span>
         </div>
 
         <template v-for="p in topProjects" :key="p.id">
-          <div class="project-item" :class="{ active: selectedProjectId === p.id }"
-            @click="selectProject(p.id)" @contextmenu.prevent="openProjectMenu($event, p)">
-            <FolderOpen v-if="selectedProjectId === p.id" :size="14" />
-            <Folder v-else :size="14" />
-            {{ p.name }}
-            <span class="count">{{ projectRuleCount(p.id) }}</span>
-            <button class="btn-icon-sm" @click.stop="editProject(p)" title="编辑">
-              <Pencil :size="12" />
+          <!-- Parent -->
+          <div class="project-item parent" :class="{ active: selectedProjectId === p.id }">
+            <button class="expand-btn" @click.stop="toggleExpand(p.id)" v-if="getChildren(p.id).length > 0">
+              <ChevronRight :size="14" :class="{ rotated: expanded[p.id] }" />
             </button>
+            <span class="expand-btn" v-else></span>
+            <Folder :size="14" />
+            <span class="project-name" @click="selectProject(p.id)">{{ p.name }}</span>
+            <div class="project-actions">
+              <button class="btn-icon-sm" @click.stop="openCreateProject(p.id)" title="添加子项目">
+                <Plus :size="12" />
+              </button>
+              <button class="btn-icon-sm" @click.stop="editProject(p)" title="编辑">
+                <Pencil :size="12" />
+              </button>
+            </div>
           </div>
-          <div v-for="child in getChildren(p.id)" :key="child.id"
-            class="project-item sub" :class="{ active: selectedProjectId === child.id }"
-            @click="selectProject(child.id)">
-            {{ child.name }}
-            <span class="count">{{ projectRuleCount(child.id) }}</span>
-            <button class="btn-icon-sm" @click.stop="editProject(child)" title="编辑">
-              <Pencil :size="12" />
-            </button>
-          </div>
+          <!-- Children -->
+          <template v-if="expanded[p.id]">
+            <div v-for="child in getChildren(p.id)" :key="child.id"
+              class="project-item child" :class="{ active: selectedProjectId === child.id }">
+              <span class="project-name" @click="selectProject(child.id)">{{ child.name }}</span>
+              <button class="btn-icon-sm" @click.stop="editProject(child)" title="编辑">
+                <Pencil :size="12" />
+              </button>
+            </div>
+          </template>
         </template>
       </div>
     </aside>
@@ -163,11 +171,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import { useToast, useConfirm } from '../stores/ui'
-import { Plus, Bell, Play, Pencil, FileText, Trash2, Folder, FolderOpen, X } from 'lucide-vue-next'
+import { Plus, Bell, Play, Pencil, FileText, Trash2, Folder, ChevronRight, X } from 'lucide-vue-next'
 
 const toast = useToast()
 const dialog = useConfirm()
@@ -179,20 +187,21 @@ const selectedProjectId = ref(null)
 const showProjectModal = ref(false)
 const editProjectId = ref(null)
 const projectForm = ref({ name: '', parent_id: 0 })
+const allTotal = ref(0)
 const unassignedCount = ref(0)
+const expanded = reactive({})
 
 const topProjects = computed(() => projects.value.filter(p => p.parent_id === 0))
 const getChildren = (parentId) => projects.value.filter(p => p.parent_id === parentId)
+
+function toggleExpand(pid) {
+  expanded[pid] = !expanded[pid]
+}
 
 function getProjectName(pid) {
   if (!pid) return '-'
   const p = projects.value.find(x => x.id === pid)
   return p ? p.name : '-'
-}
-
-function projectRuleCount(pid) {
-  // Simple count from loaded rules (approximate)
-  return ''
 }
 
 const createRuleLink = computed(() => {
@@ -205,7 +214,13 @@ const createRuleLink = computed(() => {
 async function loadProjects() {
   try {
     const res = await api.get('/projects')
-    if (res.code === 0) projects.value = res.data
+    if (res.code === 0) {
+      projects.value = res.data
+      // Auto expand all top-level projects
+      for (const p of res.data.filter(x => x.parent_id === 0)) {
+        if (expanded[p.id] === undefined) expanded[p.id] = true
+      }
+    }
   } catch (e) { /* ignore */ }
 }
 
@@ -213,6 +228,12 @@ function selectProject(pid) {
   selectedProjectId.value = pid
   page.value = 1
   loadRules()
+}
+
+function openCreateProject(parentId) {
+  editProjectId.value = null
+  projectForm.value = { name: '', parent_id: parentId }
+  showProjectModal.value = true
 }
 
 function editProject(p) {
@@ -289,10 +310,14 @@ async function loadRules() {
   loading.value = false
 }
 
-async function loadUnassignedCount() {
+async function loadCounts() {
   try {
-    const res = await api.get('/alert-rules', { params: { project_id: -1, limit: 1 } })
-    if (res.code === 0) unassignedCount.value = res.total
+    const [allRes, unRes] = await Promise.all([
+      api.get('/alert-rules', { params: { limit: 1 } }),
+      api.get('/alert-rules', { params: { project_id: -1, limit: 1 } })
+    ])
+    if (allRes.code === 0) allTotal.value = allRes.total
+    if (unRes.code === 0) unassignedCount.value = unRes.total
   } catch (e) { /* ignore */ }
 }
 
@@ -320,6 +345,7 @@ async function deleteRule(rule) {
   try {
     await api.delete(`/alert-rules/${rule.id}`)
     loadRules()
+    loadCounts()
   } catch (e) { /* ignore */ }
 }
 
@@ -330,11 +356,9 @@ function viewLogs(rule) {
 function severityClass(s) {
   return { S1: 'badge-danger', S2: 'badge-warning', S3: 'badge-info' }[s] || 'badge-gray'
 }
-
 function severityLabel(s) {
   return { S1: 'S1 灾难', S2: 'S2 严重', S3: 'S3 警告' }[s] || s
 }
-
 function formatTime(t) {
   if (!t) return '-'
   return new Date(t).toLocaleString('zh-CN')
@@ -343,7 +367,7 @@ function formatTime(t) {
 onMounted(() => {
   loadProjects()
   loadRules()
-  loadUnassignedCount()
+  loadCounts()
 })
 </script>
 
@@ -355,7 +379,7 @@ onMounted(() => {
 }
 
 .project-sidebar {
-  width: 220px;
+  width: 240px;
   flex-shrink: 0;
   background: var(--bg-card, #fff);
   border-radius: 8px;
@@ -371,28 +395,22 @@ onMounted(() => {
   border-bottom: 1px solid var(--border, #e2e8f0);
 }
 
-.sidebar-title {
-  font-weight: 600;
-  font-size: 14px;
-}
+.sidebar-title { font-weight: 600; font-size: 14px; }
 
-.project-list {
-  padding: 4px 0;
-}
+.project-list { padding: 4px 0; }
 
 .project-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
+  gap: 4px;
+  padding: 7px 12px;
   cursor: pointer;
   font-size: 13px;
   transition: background 0.15s;
+  position: relative;
 }
 
-.project-item:hover {
-  background: var(--bg-hover, #f1f5f9);
-}
+.project-item:hover { background: var(--bg-hover, #f1f5f9); }
 
 .project-item.active {
   background: var(--primary-light, #eff6ff);
@@ -400,36 +418,57 @@ onMounted(() => {
   font-weight: 500;
 }
 
-.project-item.sub {
-  padding-left: 32px;
+.project-item.child { padding-left: 44px; }
+
+.project-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-item .count {
   margin-left: auto;
   font-size: 11px;
   color: var(--text-secondary, #94a3b8);
+  flex-shrink: 0;
 }
+
+.expand-btn {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.expand-btn .rotated { transform: rotate(90deg); }
+
+.project-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.project-item:hover .project-actions { opacity: 1; }
 
 .btn-icon-sm {
   background: none;
   border: none;
   cursor: pointer;
   padding: 2px;
-  opacity: 0;
   color: var(--text-secondary);
-  transition: opacity 0.15s;
 }
+.btn-icon-sm:hover { color: var(--primary, #3b82f6); }
 
-.project-item:hover .btn-icon-sm {
-  opacity: 0.6;
-}
-
-.btn-icon-sm:hover {
-  opacity: 1 !important;
-}
-
-.rules-main {
-  flex: 1;
-  min-width: 0;
-}
+.rules-main { flex: 1; min-width: 0; }
 </style>
