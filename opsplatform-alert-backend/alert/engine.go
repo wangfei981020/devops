@@ -150,7 +150,85 @@ func (e *Engine) Start() error {
 
 	e.cron.Start()
 	log.Println("[Engine] Alert engine started")
+
+	// Restore container metrics from Redis cache on startup (avoid gap after restart)
+	go e.restoreMetricsFromRedis()
+
 	return nil
+}
+
+func (e *Engine) restoreMetricsFromRedis() {
+	ctx := context.Background()
+
+	// Get all enabled rules
+	rows, err := database.DB.Query(`SELECT id, name, alert_mode, COALESCE(prometheus_config,''), COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(namespaces,''), project_id
+		FROM alert_rules WHERE status = 1`)
+	if err != nil {
+		log.Printf("[Metrics] 恢复指标失败: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	restored := 0
+	for rows.Next() {
+		var ruleID, projectID int
+		var name, alertMode, promConfig, groupBy, expectedGroups, namespaces string
+		rows.Scan(&ruleID, &name, &alertMode, &promConfig, &groupBy, &expectedGroups, &namespaces, &projectID)
+
+		ruleIDStr := fmt.Sprintf("%d", ruleID)
+		promCfg := ParsePrometheusConfig(promConfig)
+		projectLabels := getProjectLabels(projectID)
+
+		var staticLabels map[string]string
+		mergedLabels := map[string]string{}
+		for k, v := range projectLabels {
+			mergedLabels[k] = v
+		}
+		if promCfg != nil {
+			for k, v := range promCfg.GetStaticLabels() {
+				mergedLabels[k] = v
+			}
+		}
+		staticLabels = mergedLabels
+
+		mode := alertMode
+		if mode == "" {
+			mode = "found"
+		}
+
+		if mode == "not_found" && expectedGroups != "" {
+			// Restore not_found mode from Redis state keys
+			var groups []string
+			json.Unmarshal([]byte(expectedGroups), &groups)
+			for _, gk := range groups {
+				stateKey := fmt.Sprintf("alert:state:%d:%s", ruleID, gk)
+				state, _ := database.RDB.Get(ctx, stateKey).Result()
+				muted := isMuted(ruleID, gk)
+				var status float64
+				if muted {
+					status = -1
+				} else if state == "alerting" {
+					status = 0
+				} else {
+					status = 1
+				}
+				if Metrics != nil {
+					Metrics.RecordContainerStatus(ruleIDStr, name, "", gk, mode, status, staticLabels)
+					restored++
+				}
+			}
+		}
+
+		// Restore alerting_count
+		countKey := fmt.Sprintf("alert:alerting_count:%d", ruleID)
+		if _, err := database.RDB.Get(ctx, countKey).Result(); err != nil {
+			database.RDB.Set(ctx, countKey, 0, 10*time.Minute)
+		}
+	}
+
+	if restored > 0 {
+		log.Printf("[Metrics] 从 Redis 恢复了 %d 条容器指标", restored)
+	}
 }
 
 // Stop gracefully stops the engine
