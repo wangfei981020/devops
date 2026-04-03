@@ -219,6 +219,32 @@ func (e *Engine) restoreMetricsFromRedis() {
 			}
 		}
 
+		// Restore found mode from Redis container_status keys
+		if mode == "found" && namespaces != "" {
+			var nsList []string
+			json.Unmarshal([]byte(namespaces), &nsList)
+			for _, ns := range nsList {
+				pattern := fmt.Sprintf("alert:container_status:%d:%s:*", ruleID, ns)
+				keys, _ := database.RDB.Keys(ctx, pattern).Result()
+				for _, key := range keys {
+					// key format: alert:container_status:{ruleID}:{ns}:{container}
+					parts := strings.SplitN(key, ":", 5)
+					if len(parts) < 5 {
+						continue
+					}
+					container := parts[4]
+					val, err := database.RDB.Get(ctx, key).Int()
+					if err != nil {
+						continue
+					}
+					if Metrics != nil {
+						Metrics.RecordContainerStatus(ruleIDStr, name, ns, container, mode, float64(val), staticLabels)
+						restored++
+					}
+				}
+			}
+		}
+
 		// Restore alerting_count
 		countKey := fmt.Sprintf("alert:alerting_count:%d", ruleID)
 		if _, err := database.RDB.Get(ctx, countKey).Result(); err != nil {
@@ -2112,6 +2138,9 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 					status = 1 // normal
 				}
 				Metrics.RecordContainerStatus(ruleIDStr, rule.Name, ns, c, "found", status, mergedLabels)
+				// Cache container status in Redis for restart recovery
+				statusKey := fmt.Sprintf("alert:container_status:%d:%s:%s", rule.ID, ns, c)
+				database.RDB.Set(ctx, statusKey, int(status), 10*time.Minute)
 			}
 		}
 		database.RDB.Set(ctx, fmt.Sprintf("alert:alerting_count:%d", rule.ID), alertingTotal, 10*time.Minute)
