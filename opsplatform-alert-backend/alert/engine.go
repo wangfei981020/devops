@@ -49,18 +49,38 @@ func parseRouteConfig(configJSON string) *RouteConfig {
 	return &cfg
 }
 
-// matchRoute returns the lark_config_id for the given field value, or -1 to ignore
+// extractCodeFromJSON tries to extract "code" value from JSON string like {"code":"9018","msg":"xxx"}
+func extractCodeFromJSON(fieldValue string) string {
+	fieldValue = strings.TrimSpace(fieldValue)
+	if strings.HasPrefix(fieldValue, "{") {
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(fieldValue), &obj); err == nil {
+			if code, ok := obj["code"]; ok {
+				return fmt.Sprintf("%v", code)
+			}
+		}
+	}
+	return fieldValue
+}
+
+// matchRoute returns the lark_config_id for the given field value, or -1 to ignore.
+// Supports JSON format: if fieldValue is {"code":"9018","msg":"xxx"}, extracts "9018" for matching.
 func (rc *RouteConfig) matchRoute(fieldValue string) int {
-	// Check ignore list
+	// Extract code from JSON if applicable
+	codeValue := extractCodeFromJSON(fieldValue)
+
+	// Check ignore list (match against both raw value and extracted code)
 	for _, v := range rc.IgnoreValues {
-		if v == fieldValue {
+		v = strings.TrimSpace(v)
+		if v == fieldValue || v == codeValue {
 			return -1 // ignore
 		}
 	}
 	// Check routes
 	for _, route := range rc.Routes {
 		for _, v := range route.Values {
-			if v == fieldValue {
+			v = strings.TrimSpace(v)
+			if v == fieldValue || v == codeValue {
 				return route.LarkID
 			}
 		}
@@ -335,6 +355,20 @@ func (e *Engine) executeRule(ruleID int) {
 	atUsers := resolveAtUsers(rule.AtUsers)
 	atAll := rule.AtAll == 1
 	ruleIDStr := fmt.Sprintf("%d", rule.ID)
+
+	// ========== Multi-namespace mode: loop through namespaces with concurrency control ==========
+	if dataSourceType == "loki" && rule.Namespaces != "" {
+		var namespaces []string
+		if err := json.Unmarshal([]byte(rule.Namespaces), &namespaces); err == nil && len(namespaces) > 0 {
+			log.Printf("[Engine] Rule %d: multi-namespace mode, %d namespaces", rule.ID, len(namespaces))
+			e.executeNamespacedRule(ctx, rule, namespaces, sender, atUsers, atAll, ruleIDStr, alertMode)
+			if Metrics != nil {
+				duration := time.Since(startTime).Seconds()
+				Metrics.RecordRuleRun(ruleIDStr, rule.Name, rule.Severity, 0, duration)
+			}
+			return
+		}
+	}
 
 	// ========== Grouped not_found with expected_groups: skip batch query, query per container ==========
 	if rule.GroupBy != "" && alertMode == "not_found" && rule.ExpectedGroups != "" {
@@ -791,7 +825,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
 		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''), dedup_field, dedup_ttl, max_alerts,
-		COALESCE(prometheus_config,''), COALESCE(route_config,''), status
+		COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), status
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType,
 		&rule.ESConnectionID, &rule.LokiConnectionID, &rule.LarkConfigID, &rule.ESIndex,
@@ -800,7 +834,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 		&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
 		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
-		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Status)
+		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.Status)
 	return &rule, err
 }
 
@@ -1175,9 +1209,16 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 
 		// Record container-level Prometheus metrics first
 		if Metrics != nil {
-			var staticLabels map[string]string
+			// Merge labels: project labels + static labels
+			mergedLabels := map[string]string{}
+			nfProjectLabels := getProjectLabels(rule.ProjectID)
+			for k, v := range nfProjectLabels {
+				mergedLabels[k] = v
+			}
 			if promCfg != nil {
-				staticLabels = promCfg.GetStaticLabels()
+				for k, v := range promCfg.GetStaticLabels() {
+					mergedLabels[k] = v
+				}
 			}
 			muted := isMuted(rule.ID, groupKey)
 			var metricStatus float64
@@ -1188,7 +1229,7 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 			} else {
 				metricStatus = 0
 			}
-			Metrics.RecordContainerStatus(ruleIDStr, rule.Name, namespace, groupKey, metricStatus, staticLabels)
+			Metrics.RecordContainerStatus(ruleIDStr, rule.Name, namespace, groupKey, "not_found", metricStatus, mergedLabels)
 		}
 
 		if !r.HasHits {
@@ -1329,6 +1370,16 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 	}
 
 	database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
+
+	// Write alerting count to Redis for rule list display
+	alertingCount := 0
+	for _, gk := range targetGroups {
+		r := results[gk]
+		if !r.HasHits && !isMuted(rule.ID, gk) {
+			alertingCount++
+		}
+	}
+	database.RDB.Set(ctx, fmt.Sprintf("alert:alerting_count:%d", rule.ID), alertingCount, 10*time.Minute)
 }
 
 // discoverGroups auto-discovers groups from 3h data (reduced from 24h to avoid Loki OOM)
@@ -1604,11 +1655,50 @@ func resolveAtUsers(atUsersJSON string) []models.AtUser {
 	return users
 }
 
+// getProjectLabels returns project hierarchy labels for a rule's project_id.
+// Returns {"project": "G32", "sub_project": "G32 UAT"} for a child project,
+// or {"project": "G32"} for a top-level project.
+func getProjectLabels(projectID int) map[string]string {
+	if projectID <= 0 {
+		return nil
+	}
+	var name string
+	var parentID int
+	err := database.DB.QueryRow("SELECT name, parent_id FROM alert_projects WHERE id = ?", projectID).Scan(&name, &parentID)
+	if err != nil {
+		return nil
+	}
+	if parentID == 0 {
+		// Top-level project
+		return map[string]string{"project": name}
+	}
+	// Child project: get parent name
+	var parentName string
+	err = database.DB.QueryRow("SELECT name FROM alert_projects WHERE id = ?", parentID).Scan(&parentName)
+	if err != nil {
+		return map[string]string{"project": name}
+	}
+	return map[string]string{"project": parentName, "sub_project": name}
+}
+
 // isMuted checks if a group is currently muted for a rule
 func isMuted(ruleID int, groupKey string) bool {
+	// Debug: check without time condition first
+	var totalCount int
+	database.DB.QueryRow("SELECT COUNT(*) FROM alert_mutes WHERE rule_id = ? AND group_key = ?",
+		ruleID, groupKey).Scan(&totalCount)
+
 	var count int
-	database.DB.QueryRow("SELECT COUNT(*) FROM alert_mutes WHERE rule_id = ? AND group_key = ? AND mute_until > NOW()",
+	err := database.DB.QueryRow("SELECT COUNT(*) FROM alert_mutes WHERE rule_id = ? AND group_key = ? AND mute_until > NOW()",
 		ruleID, groupKey).Scan(&count)
+	if err != nil {
+		log.Printf("[Mute] Error checking mute for rule=%d group='%s': %v", ruleID, groupKey, err)
+	}
+
+	var dbNow string
+	database.DB.QueryRow("SELECT NOW()").Scan(&dbNow)
+
+	log.Printf("[Mute] rule_id=%d group_key='%s' total_rows=%d active_rows=%d muted=%v db_now=%s", ruleID, groupKey, totalCount, count, count > 0, dbNow)
 	return count > 0
 }
 
@@ -1640,4 +1730,371 @@ func parseAggBuckets(raw []byte, aggName string) []string {
 		}
 	}
 	return keys
+}
+
+// executeNamespacedRule loops through namespaces with concurrency control,
+// queries Loki per namespace, groups hits by container, and sends aggregated alerts.
+// ==================== Namespace 模式公共逻辑 ====================
+
+// NamespacedContainerResult represents one container's aggregated result
+type NamespacedContainerResult struct {
+	Namespace string                   `json:"namespace"`
+	Container string                   `json:"container"`
+	Hits      []map[string]interface{} `json:"hits"`
+	HitCount  int                      `json:"hit_count"`
+	Message   string                   `json:"message"`   // 渲染好的样式1消息
+}
+
+// QueryNamespacedLoki is the shared function for all 4 paths (preview, test-send, manual run, cron).
+// It queries Loki per namespace, groups by container, builds aggregated messages.
+// Exported so handlers package can call it.
+func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []string, pipeline, timeRange, extractFieldsJSON, severity, messageTemplate, routeConfigJSON string, maxAlerts, concurrency int, getLokiClient func(int) (*lokiclient.Client, error)) ([]NamespacedContainerResult, error) {
+	if concurrency <= 0 {
+		concurrency = 3
+	}
+
+	duration := 5 * time.Minute
+	if timeRange != "" {
+		if strings.HasSuffix(timeRange, "d") {
+			days := 1
+			fmt.Sscanf(timeRange, "%dd", &days)
+			duration = time.Duration(days) * 24 * time.Hour
+		} else if d, err := time.ParseDuration(timeRange); err == nil {
+			duration = d
+		}
+	}
+
+	if maxAlerts <= 0 {
+		maxAlerts = 500
+	}
+
+	client, err := getLokiClient(lokiConnID)
+	if err != nil {
+		return nil, fmt.Errorf("Loki client error: %w", err)
+	}
+
+	sem := make(chan struct{}, concurrency)
+	var mu sync.Mutex
+	var allResults []NamespacedContainerResult
+	var lastErr error
+
+	pipelineTrimmed := strings.TrimSpace(pipeline)
+
+	for _, ns := range namespaces {
+		select {
+		case <-ctx.Done():
+			return allResults, ctx.Err()
+		case sem <- struct{}{}:
+		}
+
+		go func(namespace string) {
+			defer func() { <-sem }()
+
+			logql := fmt.Sprintf(`{namespace="%s"} %s`, namespace, pipelineTrimmed)
+			now := time.Now()
+			start := now.Add(-duration)
+
+			result, err := client.QueryRange(ctx, logql, start, now, maxAlerts)
+			if err != nil {
+				log.Printf("[Namespaced] namespace '%s' query error: %v", namespace, err)
+				mu.Lock()
+				lastErr = fmt.Errorf("namespace %s: %w", namespace, err)
+				mu.Unlock()
+				return
+			}
+
+			hits := result.ToHits()
+			if len(hits) == 0 {
+				log.Printf("[Namespaced] namespace '%s' no hits", namespace)
+				return
+			}
+
+			log.Printf("[Namespaced] namespace '%s' found %d hits", namespace, len(hits))
+
+			// Filter hits by route config (ignore specified code values)
+			routeCfg := parseRouteConfig(routeConfigJSON)
+			if routeCfg != nil {
+				var filtered []map[string]interface{}
+				for _, hit := range hits {
+					vars := extractFields(hit, extractFieldsJSON)
+					fieldVal := ""
+					if v, ok := vars[routeCfg.RouteField]; ok {
+						fieldVal = fmt.Sprintf("%v", v)
+					}
+					if fieldVal != "" && routeCfg.matchRoute(fieldVal) == -1 {
+						log.Printf("[Namespaced] ignoring hit with %s=%s", routeCfg.RouteField, fieldVal)
+						continue // ignored
+					}
+					filtered = append(filtered, hit)
+				}
+				log.Printf("[Namespaced] namespace '%s' after route filter: %d hits (filtered %d)", namespace, len(filtered), len(hits)-len(filtered))
+				hits = filtered
+				if len(hits) == 0 {
+					return
+				}
+			}
+
+			// Group by container
+			containerGroups := make(map[string][]map[string]interface{})
+			for _, hit := range hits {
+				container := getContainerName(hit)
+				containerGroups[container] = append(containerGroups[container], hit)
+			}
+
+			mu.Lock()
+			for container, containerHits := range containerGroups {
+				msg := BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJSON, messageTemplate, containerHits)
+				allResults = append(allResults, NamespacedContainerResult{
+					Namespace: namespace,
+					Container: container,
+					Hits:      containerHits,
+					HitCount:  len(containerHits),
+					Message:   msg,
+				})
+			}
+			mu.Unlock()
+		}(ns)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < concurrency; i++ {
+		sem <- struct{}{}
+	}
+
+	if lastErr != nil && len(allResults) == 0 {
+		return nil, lastErr
+	}
+	return allResults, nil
+}
+
+// GetLokiClientFunc returns a closure that handlers can use to get Loki clients via the engine
+func (e *Engine) GetLokiClientFunc() func(int) (*lokiclient.Client, error) {
+	return func(id int) (*lokiclient.Client, error) {
+		return e.getLokiClient(id)
+	}
+}
+
+func getContainerName(hit map[string]interface{}) string {
+	if v := es.GetNestedField(hit, "container"); v != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	if v := es.GetNestedField(hit, "container_name"); v != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	if v := es.GetNestedField(hit, "kubernetes.container_name"); v != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return "(unknown)"
+}
+
+// executeNamespacedRule is the engine entry point for cron/manual execution.
+// It calls the shared QueryNamespacedLoki, then sends alerts with dedup/interval control.
+func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRule,
+	namespaces []string, sender *lark.Sender, atUsers []models.AtUser, atAll bool,
+	ruleIDStr, alertMode string) {
+
+	results, err := QueryNamespacedLoki(ctx, rule.LokiConnectionID, namespaces,
+		rule.LogQL, rule.TimeRange, rule.ExtractFields, rule.Severity, rule.MessageTemplate, rule.RouteConfig,
+		rule.MaxAlerts, rule.NamespaceConcurrency, e.GetLokiClientFunc())
+	if err != nil {
+		errMsg := fmt.Sprintf("Namespaced query error: %v", err)
+		log.Printf("[Engine] Rule %d: %s", rule.ID, errMsg)
+		database.DB.Exec("UPDATE alert_rules SET last_error = ? WHERE id = ?", errMsg, rule.ID)
+		return
+	}
+
+	if len(results) == 0 {
+		log.Printf("[Engine] Rule %d: namespaced execution, no results", rule.ID)
+		database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
+		return
+	}
+
+	var totalSent int
+	var lastErr string
+
+	// Parse prometheus config for container metrics
+	promCfg := ParsePrometheusConfig(rule.PrometheusConfig)
+	projectLabels := getProjectLabels(rule.ProjectID)
+
+	for _, r := range results {
+		// Record container-level Prometheus metrics
+		if Metrics != nil {
+			// Merge labels: project labels + static labels
+			mergedLabels := map[string]string{}
+			for k, v := range projectLabels {
+				mergedLabels[k] = v
+			}
+			if promCfg != nil {
+				for k, v := range promCfg.GetStaticLabels() {
+					mergedLabels[k] = v
+				}
+			}
+			muted := isMuted(rule.ID, r.Container)
+			var metricStatus float64
+			if muted {
+				metricStatus = -1
+			} else {
+				metricStatus = 0 // found mode: has hits = alerting
+			}
+			Metrics.RecordContainerStatus(ruleIDStr, rule.Name, r.Namespace, r.Container, "found", metricStatus, mergedLabels)
+		}
+
+		// Dedup: namespace + container
+		if rule.DedupField != "" {
+			dedupParts := []string{fmt.Sprintf("alert:dedup:%d", rule.ID), r.Namespace, r.Container}
+			h := sha256.Sum256([]byte(strings.Join(dedupParts, ":")))
+			dedupKey := fmt.Sprintf("alert:dedup:%x", h[:8])
+			ttl := time.Duration(rule.DedupTTL) * time.Second
+			if ttl <= 0 {
+				ttl = time.Hour
+			}
+			isDup, _ := database.CheckDedup(ctx, dedupKey, ttl)
+			if isDup {
+				log.Printf("[Engine] Rule %d: [%s/%s] dedup skipped", rule.ID, r.Namespace, r.Container)
+				continue
+			}
+		}
+
+		// Mute check
+		if isMuted(rule.ID, r.Container) {
+			log.Printf("[Engine] Rule %d: [%s/%s] is muted, skipping", rule.ID, r.Namespace, r.Container)
+			continue
+		}
+
+		// Alert interval check
+		if rule.AlertInterval != "" {
+			intervalKey := fmt.Sprintf("alert:last_alert_time:%d:%s:%s", rule.ID, r.Namespace, r.Container)
+			if shouldSkip := checkAlertInterval(ctx, intervalKey, rule.AlertInterval); shouldSkip {
+				log.Printf("[Engine] Rule %d: [%s/%s] interval skipped", rule.ID, r.Namespace, r.Container)
+				continue
+			}
+		}
+
+		title := rule.MessageTitle
+		if title == "" {
+			title = rule.Name
+		}
+
+		resp, err := sender.SendCard(title, r.Message, rule.Severity, atUsers, atAll)
+		if err != nil {
+			lastErr = fmt.Sprintf("[%s/%s] send error: %v", r.Namespace, r.Container, err)
+			saveAlertLog(rule, r.Message, "", "failed", lastErr)
+			if Metrics != nil {
+				Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
+				Metrics.RecordSendFailed(ruleIDStr, rule.Name, rule.Severity)
+			}
+		} else {
+			totalSent++
+			saveAlertLog(rule, r.Message, "", "success", "")
+			if Metrics != nil {
+				Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
+				Metrics.RecordSendSuccess(ruleIDStr, rule.Name, rule.Severity)
+			}
+			log.Printf("[Engine] Rule %d: [%s/%s] alert sent, resp=%s", rule.ID, r.Namespace, r.Container, resp)
+		}
+	}
+
+	if lastErr != "" {
+		database.DB.Exec("UPDATE alert_rules SET last_error = ? WHERE id = ?", lastErr, rule.ID)
+	} else {
+		database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
+	}
+	log.Printf("[Engine] Rule %d: namespaced execution done, sent %d alerts", rule.ID, totalSent)
+
+	// Write alerting count to Redis (found mode: totalSent = alerting containers)
+	database.RDB.Set(ctx, fmt.Sprintf("alert:alerting_count:%d", rule.ID), totalSent, 10*time.Minute)
+}
+
+// BuildNamespacedAlertMessage builds the aggregated alert message.
+// If messageTemplate is set, renders each hit with the user's template.
+// Otherwise uses default 样式1 format.
+// Exported so handlers can use it for preview.
+func BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJSON, messageTemplate string, hits []map[string]interface{}) string {
+	var b strings.Builder
+
+	b.WriteString(fmt.Sprintf("**Namespace:** %s\n", namespace))
+	b.WriteString(fmt.Sprintf("**Container:** %s\n", container))
+	b.WriteString(fmt.Sprintf("**级别:** %s | **命中:** %d 条\n", severity, len(hits)))
+
+	showCount := 3
+	if len(hits) < showCount {
+		showCount = len(hits)
+	}
+
+	for i := 0; i < showCount; i++ {
+		hit := hits[i]
+		b.WriteString(fmt.Sprintf("\n─── %d/%d ───\n", i+1, showCount))
+
+		if messageTemplate != "" {
+			// Use user's template
+			vars := extractFields(hit, extractFieldsJSON)
+			// Also add all raw fields as template vars
+			for k, v := range hit {
+				if _, exists := vars[k]; !exists {
+					vars[k] = v
+				}
+			}
+			rendered := renderTemplate(messageTemplate, vars)
+			b.WriteString(rendered)
+			b.WriteString("\n")
+		} else {
+			// Default style1
+			if extractFieldsJSON != "" {
+				vars := extractFields(hit, extractFieldsJSON)
+				for name, val := range vars {
+					if name == "" || name[0] == '_' {
+						continue
+					}
+					b.WriteString(fmt.Sprintf("**%s:** %v\n", name, val))
+				}
+			}
+
+			podName := ""
+			if v := es.GetNestedField(hit, "pod"); v != nil {
+				podName = fmt.Sprintf("%v", v)
+			} else if v := es.GetNestedField(hit, "pod_name"); v != nil {
+				podName = fmt.Sprintf("%v", v)
+			} else if v := es.GetNestedField(hit, "kubernetes.pod_name"); v != nil {
+				podName = fmt.Sprintf("%v", v)
+			}
+			if podName != "" {
+				b.WriteString(fmt.Sprintf("**Pod:** %s\n", podName))
+			}
+
+			if msg := es.GetNestedField(hit, "message"); msg != nil {
+				logLine := fmt.Sprintf("%v", msg)
+				if len(logLine) > 500 {
+					logLine = logLine[:500] + "..."
+				}
+				b.WriteString(fmt.Sprintf("**日志:** %s\n", logLine))
+			}
+		}
+	}
+
+	if len(hits) > showCount {
+		b.WriteString(fmt.Sprintf("\n⏰ 共 %d 条，显示前 %d 条", len(hits), showCount))
+	}
+
+	return b.String()
+}
+
+// checkAlertInterval checks if enough time has passed since last alert
+func checkAlertInterval(ctx context.Context, key, interval string) bool {
+	d, err := time.ParseDuration(interval)
+	if err != nil {
+		return false
+	}
+	lastTime, err := database.RDB.Get(ctx, key).Result()
+	if err != nil {
+		// No previous alert, allow
+		database.RDB.Set(ctx, key, time.Now().Unix(), d)
+		return false
+	}
+	var ts int64
+	fmt.Sscanf(lastTime, "%d", &ts)
+	if time.Since(time.Unix(ts, 0)) < d {
+		return true // skip, too soon
+	}
+	database.RDB.Set(ctx, key, time.Now().Unix(), d)
+	return false
 }

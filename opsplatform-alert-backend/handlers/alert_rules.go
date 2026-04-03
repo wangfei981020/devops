@@ -15,12 +15,24 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"opsplatform-alert-backend/alert"
 	"opsplatform-alert-backend/database"
 	"opsplatform-alert-backend/es"
 	"opsplatform-alert-backend/lark"
 	lokiclient "opsplatform-alert-backend/loki"
 	"opsplatform-alert-backend/models"
 )
+
+// handlerLokiClientFunc creates a getLokiClient closure for use with QueryNamespacedLoki
+func handlerLokiClientFunc() func(int) (*lokiclient.Client, error) {
+	return func(id int) (*lokiclient.Client, error) {
+		conn := getLokiConn(id)
+		if conn == nil {
+			return nil, fmt.Errorf("Loki connection %d not found", id)
+		}
+		return lokiclient.NewClient(*conn), nil
+	}
+}
 
 // Engine interface for rule management
 var ruleEngine interface {
@@ -86,7 +98,7 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 		r.message_title, COALESCE(r.message_template,''),
 		COALESCE(r.at_users,''), r.at_all, COALESCE(r.alert_mode,'found'),
 		r.recovery_enabled, COALESCE(r.recovery_title,''), COALESCE(r.recovery_template,''),
-		r.severity, COALESCE(r.group_by,''), COALESCE(r.expected_groups,''), COALESCE(r.query_concurrency,5), COALESCE(r.alert_interval,''), r.dedup_field, r.dedup_ttl, r.max_alerts, COALESCE(r.prometheus_config,''), COALESCE(r.route_config,''), COALESCE(r.project_id,0), r.status,
+		r.severity, COALESCE(r.group_by,''), COALESCE(r.expected_groups,''), COALESCE(r.query_concurrency,5), COALESCE(r.alert_interval,''), r.dedup_field, r.dedup_ttl, r.max_alerts, COALESCE(r.prometheus_config,''), COALESCE(r.route_config,''), COALESCE(r.namespaces,''), COALESCE(r.namespace_concurrency,3), COALESCE(r.project_id,0), r.status,
 		r.last_run_at, r.last_error, r.created_at, r.updated_at,
 		COALESCE(e.name,'(已删除)') as es_name, COALESCE(lk.name,'') as loki_name,
 		COALESCE(l.name,'(已删除)') as lark_name
@@ -137,7 +149,7 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 			&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
 			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
-			&rule.PrometheusConfig, &rule.RouteConfig, &rule.ProjectID, &rule.Status, &rule.LastRunAt, &rule.LastError,
+			&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.ProjectID, &rule.Status, &rule.LastRunAt, &rule.LastError,
 			&rule.CreatedAt, &rule.UpdatedAt, &esName, &lokiName, &larkName)
 		if err != nil {
 			continue
@@ -175,8 +187,10 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			"dedup_ttl":         rule.DedupTTL,
 			"max_alerts":         rule.MaxAlerts,
 			"prometheus_config":  rule.PrometheusConfig,
-			"route_config":      rule.RouteConfig,
-			"project_id":        rule.ProjectID,
+			"route_config":            rule.RouteConfig,
+			"namespaces":              rule.Namespaces,
+			"namespace_concurrency":   rule.NamespaceConcurrency,
+			"project_id":              rule.ProjectID,
 			"status":             rule.Status,
 			"created_at":        rule.CreatedAt,
 			"updated_at":        rule.UpdatedAt,
@@ -198,6 +212,19 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 		list = []map[string]interface{}{}
 	}
 
+	// Batch fetch alerting counts from Redis
+	ctx := r.Context()
+	for _, item := range list {
+		ruleID := item["id"]
+		key := fmt.Sprintf("alert:alerting_count:%v", ruleID)
+		val, err := database.RDB.Get(ctx, key).Int()
+		if err == nil {
+			item["alerting_count"] = val
+		} else {
+			item["alerting_count"] = 0
+		}
+	}
+
 	jsonPaginated(w, list, total, page, limit)
 }
 
@@ -213,7 +240,7 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
 		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''),
-		dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(project_id,0),
+		dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), COALESCE(project_id,0),
 		status, last_run_at, last_error, created_at, updated_at
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType, &rule.ESConnectionID,
@@ -223,13 +250,14 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 		&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
 		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
-		&rule.PrometheusConfig, &rule.RouteConfig, &rule.ProjectID, &rule.Status, &rule.LastRunAt, &rule.LastError,
+		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.ProjectID, &rule.Status, &rule.LastRunAt, &rule.LastError,
 		&rule.CreatedAt, &rule.UpdatedAt)
 	if err != nil {
-		jsonError(w, http.StatusNotFound, "规则不存在")
+		jsonError(w, http.StatusNotFound, "规则不存在: "+err.Error())
 		return
 	}
 
+	log.Printf("[GetRule] id=%d namespaces='%s' namespace_concurrency=%d", rule.ID, rule.Namespaces, rule.NamespaceConcurrency)
 	jsonSuccess(w, rule)
 }
 
@@ -290,14 +318,14 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 		query_dsl, keyword, logql, filter_fields, extract_fields,
 		message_title, message_template, at_users, at_all,
 		alert_mode, recovery_enabled, recovery_title, recovery_template,
-		severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, route_config, project_id, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, route_config, namespaces, namespace_concurrency, project_id, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, req.LarkConfigID,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
 		req.FilterFields, req.ExtractFields, req.MessageTitle,
 		req.MessageTemplate, req.AtUsers, req.AtAll,
 		req.AlertMode, req.RecoveryEnabled, req.RecoveryTitle, req.RecoveryTemplate,
-		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.AlertInterval, req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.ProjectID)
+		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.AlertInterval, req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.Namespaces, req.NamespaceConcurrency, req.ProjectID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "创建失败: "+err.Error())
 		return
@@ -323,13 +351,15 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[UpdateRule] id=%d namespaces='%s' namespace_concurrency=%d logql='%s'", id, req.Namespaces, req.NamespaceConcurrency, req.LogQL)
+
 	_, err := database.DB.Exec(`UPDATE alert_rules SET
 		name=?, data_source_type=?, es_connection_id=?, loki_connection_id=?, lark_config_id=?,
 		es_index=?, schedule=?, time_range=?, query_dsl=?, keyword=?, logql=?,
 		filter_fields=?, extract_fields=?, message_title=?,
 		message_template=?, at_users=?, at_all=?,
 		alert_mode=?, recovery_enabled=?, recovery_title=?, recovery_template=?,
-		severity=?, group_by=?, expected_groups=?, query_concurrency=?, alert_interval=?, dedup_field=?, dedup_ttl=?, max_alerts=?, prometheus_config=?, route_config=?, project_id=?
+		severity=?, group_by=?, expected_groups=?, query_concurrency=?, alert_interval=?, dedup_field=?, dedup_ttl=?, max_alerts=?, prometheus_config=?, route_config=?, namespaces=?, namespace_concurrency=?, project_id=?
 		WHERE id=?`,
 		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, req.LarkConfigID,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
@@ -337,7 +367,7 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		req.MessageTemplate, req.AtUsers, req.AtAll,
 		req.AlertMode, req.RecoveryEnabled, req.RecoveryTitle, req.RecoveryTemplate,
 		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.AlertInterval,
-		req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.ProjectID, id)
+		req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.Namespaces, req.NamespaceConcurrency, req.ProjectID, id)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "更新失败: "+err.Error())
 		return
@@ -465,24 +495,50 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, "Loki 连接不存在")
 			return
 		}
-
-		client := lokiclient.NewClient(*conn)
-
-		now := time.Now()
-		duration := parsePreviewTimeRange(timeRange)
-		start := now.Add(-duration)
-
-		result, err := client.QueryRange(ctx, req.LogQL, start, now, maxAlerts)
-		if err != nil {
-			jsonError(w, http.StatusBadRequest, "Loki 查询失败: "+err.Error())
-			return
-		}
-
-		rawHits = result.ToHits()
-		total = int64(result.Total)
-		queryStr = req.LogQL
 		sourceName = conn.Name
 		sourceDetail = "Loki"
+
+		// Check if namespace mode
+		var namespaces []string
+		if req.Namespaces != "" {
+			json.Unmarshal([]byte(req.Namespaces), &namespaces)
+		}
+
+		if len(namespaces) > 0 {
+			// Namespace mode: use shared function to query, then flatten to old format
+			results, err := alert.QueryNamespacedLoki(ctx, req.LokiConnectionID, namespaces,
+				req.LogQL, timeRange, req.ExtractFields, req.Severity, req.MessageTemplate, req.RouteConfig,
+				maxAlerts, req.NamespaceConcurrency, handlerLokiClientFunc())
+			if err != nil {
+				jsonError(w, http.StatusBadRequest, "Loki 查询失败: "+err.Error())
+				return
+			}
+
+			// Flatten all hits into old-format compatible list
+			for _, r := range results {
+				rawHits = append(rawHits, r.Hits...)
+			}
+			total = int64(len(rawHits))
+			queryStr = req.LogQL
+			sourceDetail = "Loki (多命名空间)"
+			// Fall through to normal hit rendering below
+		} else {
+			// Single query mode (no namespaces)
+			client := lokiclient.NewClient(*conn)
+			now := time.Now()
+			duration := parsePreviewTimeRange(timeRange)
+			start := now.Add(-duration)
+
+			result, err := client.QueryRange(ctx, req.LogQL, start, now, maxAlerts)
+			if err != nil {
+				jsonError(w, http.StatusBadRequest, "Loki 查询失败: "+err.Error())
+				return
+			}
+
+			rawHits = result.ToHits()
+			total = int64(result.Total)
+			queryStr = req.LogQL
+		}
 	} else {
 		// ES preview
 		if req.ESConnectionID == 0 {
@@ -729,6 +785,70 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, "请配置 Loki 连接和 LogQL")
 			return
 		}
+
+		// Check namespace mode
+		var namespaces []string
+		if req.Namespaces != "" {
+			json.Unmarshal([]byte(req.Namespaces), &namespaces)
+		}
+
+		if len(namespaces) > 0 {
+			// Namespace mode: use shared function, send all aggregated alerts
+			results, qErr := alert.QueryNamespacedLoki(ctx, req.LokiConnectionID, namespaces,
+				req.LogQL, timeRange, req.ExtractFields, req.Severity, req.MessageTemplate, req.RouteConfig,
+				maxAlerts, req.NamespaceConcurrency, handlerLokiClientFunc())
+			if qErr != nil {
+				jsonError(w, http.StatusBadRequest, "Loki 查询失败: "+qErr.Error())
+				return
+			}
+			if len(results) == 0 {
+				jsonSuccess(w, map[string]interface{}{
+					"message":     fmt.Sprintf("当前 %s 内未搜到匹配日志", timeRange),
+					"hit_count":   0,
+					"would_alert": false,
+				})
+				return
+			}
+
+			// Send all container alerts
+			var atUsers []models.AtUser
+			if req.AtUsers != "" {
+				json.Unmarshal([]byte(req.AtUsers), &atUsers)
+			}
+			senderObj := lark.NewSender(larkCfg)
+			severity := req.Severity
+			if severity == "" {
+				severity = "S2"
+			}
+
+			sentCount := 0
+			totalHits := 0
+			for _, r := range results {
+				totalHits += r.HitCount
+				title := req.MessageTitle
+				if title == "" {
+					title = req.Name
+				}
+				title = fmt.Sprintf("%s [测试]", title)
+
+				_, sErr := senderObj.SendCard(title, r.Message, severity, atUsers, req.AtAll == 1)
+				if sErr != nil {
+					log.Printf("[TestSend] Failed to send [%s/%s]: %v", r.Namespace, r.Container, sErr)
+				} else {
+					sentCount++
+				}
+			}
+
+			jsonSuccess(w, map[string]interface{}{
+				"message":   fmt.Sprintf("测试发送成功！命中 %d 条，按容器聚合为 %d 条告警，已发送 %d 条", totalHits, len(results), sentCount),
+				"hit_count": totalHits,
+				"alert_count": len(results),
+				"sent_count": sentCount,
+			})
+			return
+		}
+
+		// Single query mode (no namespaces)
 		conn := getLokiConn(req.LokiConnectionID)
 		if conn == nil {
 			jsonError(w, http.StatusBadRequest, "Loki 连接不存在")
@@ -957,6 +1077,22 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 		"response": resp,
 		"hit_count": len(rawHits),
 	})
+}
+
+// buildLogQLWithNamespace builds full LogQL for namespace mode.
+// If namespaces is set, uses first namespace and prepends {namespace="X"} to pipeline.
+// If namespaces is empty, returns logql as-is.
+func buildLogQLWithNamespace(logql, namespacesJSON string) string {
+	if namespacesJSON == "" {
+		return logql
+	}
+	var namespaces []string
+	if err := json.Unmarshal([]byte(namespacesJSON), &namespaces); err != nil || len(namespaces) == 0 {
+		return logql
+	}
+	// For preview/test-send, use the first namespace
+	pipeline := strings.TrimSpace(logql)
+	return fmt.Sprintf(`{namespace="%s"} %s`, namespaces[0], pipeline)
 }
 
 func parsePreviewTimeRange(s string) time.Duration {

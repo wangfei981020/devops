@@ -113,6 +113,8 @@ type AlertRule struct {
 	MaxAlerts        int            `json:"max_alerts"`
 	PrometheusConfig string         `json:"prometheus_config"`
 	RouteConfig      string         `json:"route_config"`       // JSON: field value routing config
+	Namespaces       string         `json:"namespaces"`         // JSON array: ["ns1","ns2"] for multi-namespace Loki queries
+	NamespaceConcurrency int        `json:"namespace_concurrency"` // max concurrent namespace queries (default 3)
 	ProjectID        int            `json:"project_id"`
 	Status          int            `json:"status"`
 	LastRunAt       sql.NullTime   `json:"last_run_at"`
@@ -212,8 +214,10 @@ type CreateAlertRuleReq struct {
 	DedupTTL         int    `json:"dedup_ttl"`
 	MaxAlerts        int    `json:"max_alerts"`
 	PrometheusConfig string `json:"prometheus_config"`
-	RouteConfig      string `json:"route_config"`
-	ProjectID        int    `json:"project_id"`
+	RouteConfig          string `json:"route_config"`
+	Namespaces           string `json:"namespaces"`
+	NamespaceConcurrency int    `json:"namespace_concurrency"`
+	ProjectID            int    `json:"project_id"`
 }
 
 type APIResponse struct {

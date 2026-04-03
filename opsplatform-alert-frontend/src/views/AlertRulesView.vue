@@ -83,7 +83,7 @@
               <thead>
                 <tr>
                   <th class="col-id">ID</th>
-                  <th class="col-status">状态</th>
+                  <th class="col-alert">告警</th>
                   <th class="col-name">规则名称</th>
                   <th class="col-project">项目</th>
                   <th class="col-ds">数据源</th>
@@ -96,11 +96,12 @@
               <tbody>
                 <tr v-for="rule in rules" :key="rule.id">
                   <td class="col-id">{{ rule.id }}</td>
-                  <td class="col-status">
-                    <label class="switch">
-                      <input type="checkbox" :checked="rule.status === 1" @change="toggleRule(rule)">
-                      <span class="slider"></span>
-                    </label>
+                  <td class="col-alert">
+                    <span v-if="rule.status !== 1" class="text-secondary">-</span>
+                    <span v-else-if="rule.alerting_count > 0" class="alert-fire" :title="`${rule.alerting_count} 个容器告警中`">
+                      <Flame :size="16" />{{ rule.alerting_count }}
+                    </span>
+                    <span v-else class="alert-ok">●</span>
                   </td>
                   <td class="col-name">
                     <span style="font-weight: 500;">{{ rule.name }}</span>
@@ -125,12 +126,18 @@
               </tbody>
             </table>
           </div>
-          <!-- Fixed actions column -->
+          <!-- Fixed: status + actions -->
           <div class="scroll-table-fixed">
             <table class="rules-table">
-              <thead><tr><th class="col-actions">操作</th></tr></thead>
+              <thead><tr><th class="col-switch">状态</th><th class="col-actions">操作</th></tr></thead>
               <tbody>
                 <tr v-for="rule in rules" :key="'a'+rule.id">
+                  <td class="col-switch">
+                    <label class="switch">
+                      <input type="checkbox" :checked="rule.status === 1" @change="toggleRule(rule)">
+                      <span class="slider"></span>
+                    </label>
+                  </td>
                   <td class="col-actions">
                     <div class="actions">
                       <button class="btn btn-sm btn-outline" @click="runRule(rule)" title="立即执行"><Play :size="14" /></button>
@@ -155,7 +162,7 @@
               <option :value="100">100条/页</option>
             </select>
           </div>
-          <div class="pagination-btns" v-if="total > limit">
+          <div class="pagination-btns">
             <button class="btn btn-sm btn-outline" :disabled="page <= 1" @click="page--; loadRules()">上一页</button>
             <span style="padding: 4px 12px;">{{ page }} / {{ Math.ceil(total / limit) }}</span>
             <button class="btn btn-sm btn-outline" :disabled="page >= Math.ceil(total / limit)" @click="page++; loadRules()">下一页</button>
@@ -199,7 +206,7 @@ import { ref, computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import { useToast, useConfirm } from '../stores/ui'
-import { Plus, Bell, Play, Pencil, FileText, Trash2, Folder, ChevronRight, X } from 'lucide-vue-next'
+import { Plus, Bell, Play, Pencil, FileText, Trash2, Folder, ChevronRight, X, Flame } from 'lucide-vue-next'
 
 const toast = useToast()
 const dialog = useConfirm()
@@ -309,7 +316,7 @@ const loading = ref(false)
 const search = ref('')
 const statusFilter = ref('')
 const page = ref(1)
-const limit = ref(20)
+const limit = ref(10)
 const total = ref(0)
 
 let debounceTimer = null
@@ -595,7 +602,8 @@ onMounted(() => {
 }
 
 .col-id { width: 50px; color: var(--text-secondary); font-size: 12px; }
-.col-status { width: 60px; }
+.col-alert { width: 60px; text-align: center; }
+.col-switch { width: 60px; }
 .col-name { min-width: 180px; }
 .col-project { min-width: 80px; }
 .col-ds { min-width: 60px; }
@@ -604,6 +612,26 @@ onMounted(() => {
 .col-severity { min-width: 70px; }
 .col-lastrun { min-width: 130px; }
 .col-actions { width: 160px; }
+
+.alert-fire {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: #ef4444;
+  font-weight: 600;
+  font-size: 13px;
+  animation: fire-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes fire-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.alert-ok {
+  color: #10b981;
+  font-size: 10px;
+}
 
 .pagination {
   display: flex;

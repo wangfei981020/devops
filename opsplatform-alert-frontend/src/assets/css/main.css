@@ -534,3 +534,19 @@ tr:hover td {
   display: flex;
   gap: 4px;
 }
+
+/* Namespace tags */
+.namespace-tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ns-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 10px; font-size: 13px; border-radius: 4px;
+  background: rgba(59,130,246,0.12); color: var(--primary-light);
+  border: 1px solid rgba(59,130,246,0.2);
+}
+.ns-tag-remove {
+  border: none; background: none; color: var(--text-muted); cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 0 2px;
+}
+.ns-tag-remove:hover { color: var(--danger); }
+.ns-input-wrap { display: flex; align-items: center; }
+.ns-input { width: 200px; }

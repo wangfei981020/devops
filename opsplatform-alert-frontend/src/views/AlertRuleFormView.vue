@@ -116,8 +116,30 @@
         <template v-else>
           <div class="form-group">
             <label class="form-label">LogQL 查询 *</label>
-            <input v-model="form.logql" class="form-input" placeholder='{namespace="default", container="app"} |~ "error"' />
-            <div class="form-hint">Loki LogQL 查询语句，可在日志查询页调试后复制过来</div>
+            <input v-model="form.logql" class="form-input" :placeholder="nsPlaceholder" />
+            <div class="form-hint">{{ namespacesArray.length ? '多命名空间模式：只填写管道部分（|= ... |~ ...），系统自动拼接 {namespace="X"}' : 'Loki LogQL 查询语句，可在日志查询页调试后复制过来' }}</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">多命名空间（可选）</label>
+            <div class="namespace-tags">
+              <span v-for="(ns, i) in namespacesArray" :key="i" class="ns-tag">
+                {{ ns }}
+                <button class="ns-tag-remove" @click="removeNamespace(i)">&times;</button>
+              </span>
+              <div class="ns-input-wrap">
+                <input v-model="nsInput" class="form-input ns-input" placeholder="输入命名空间回车添加"
+                  @keydown.enter.prevent="addNamespace" />
+                <button v-if="nsInput" class="btn btn-sm btn-primary" @click="addNamespace" style="margin-left:6px">添加</button>
+              </div>
+            </div>
+            <div class="form-hint">配置后系统会逐个命名空间查询，按容器聚合告警，降低 Loki 压力</div>
+          </div>
+          <div class="form-row" v-if="namespacesArray.length">
+            <div class="form-group">
+              <label class="form-label">命名空间并发数</label>
+              <input v-model.number="form.namespace_concurrency" type="number" class="form-input" min="1" max="10" />
+              <div class="form-hint">同时查询的命名空间数量（默认3，越大越快但 Loki 压力越大）</div>
+            </div>
           </div>
         </template>
 
@@ -591,8 +613,37 @@ const form = ref({
   max_alerts: 10,
   prometheus_config: '',
   route_config: '',
+  namespaces: '',
+  namespace_concurrency: 3,
   project_id: 0
 })
+
+// Namespace 多选相关
+const nsInput = ref('')
+const namespacesArray = computed(() => {
+  if (!form.value.namespaces) return []
+  try { return JSON.parse(form.value.namespaces) } catch { return [] }
+})
+const nsPlaceholder = computed(() =>
+  namespacesArray.value.length
+    ? '|= "ERROR" |~ `"code":"[0-9]+"`'
+    : '{namespace="default"} |= "ERROR"'
+)
+function setNamespaces(arr) {
+  form.value.namespaces = arr.length ? JSON.stringify(arr) : ''
+}
+function addNamespace() {
+  const ns = nsInput.value.trim()
+  if (!ns) return
+  const arr = [...namespacesArray.value]
+  if (!arr.includes(ns)) { arr.push(ns); setNamespaces(arr) }
+  nsInput.value = ''
+}
+function removeNamespace(i) {
+  const arr = [...namespacesArray.value]
+  arr.splice(i, 1)
+  setNamespaces(arr)
+}
 
 // Route config helpers
 const routeConfig = ref({ route_field: '', ignore_values: [], routes: [], default_lark_id: 0 })
@@ -762,6 +813,8 @@ async function loadRule() {
         max_alerts: d.max_alerts,
         prometheus_config: d.prometheus_config || '',
         route_config: d.route_config || '',
+        namespaces: d.namespaces || '',
+        namespace_concurrency: d.namespace_concurrency || 3,
         project_id: d.project_id || 0
       }
       loadPromConfig(d.prometheus_config)

@@ -230,6 +230,8 @@ func autoMigrate() {
 		{"alert_rules", "loki_connection_id", "INT DEFAULT 0 COMMENT 'Loki连接ID'"},
 		{"alert_rules", "logql", "TEXT COMMENT 'LogQL查询语句(Loki)'"},
 		{"alert_rules", "route_config", "TEXT COMMENT '字段值路由配置JSON'"},
+		{"alert_rules", "namespaces", "TEXT COMMENT '命名空间列表JSON: [\"ns1\",\"ns2\"]'"},
+		{"alert_rules", "namespace_concurrency", "INT DEFAULT 3 COMMENT '命名空间并发查询数'"},
 		{"alert_rules", "project_id", "INT DEFAULT 0 COMMENT '所属项目ID'"},
 		{"users", "auth_source", "VARCHAR(20) DEFAULT 'local' COMMENT '认证来源: local/portal'"},
 		{"users", "portal_token", "TEXT COMMENT '运维平台Portal Token(用于刷新权限)'"},
