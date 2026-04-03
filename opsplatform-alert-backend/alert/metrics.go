@@ -162,7 +162,7 @@ func (m *MetricsManager) RecordContainerStatus(ruleID, ruleName, namespace, cont
 	}
 	m.mu.Unlock()
 
-	// Build labels
+	// Build labels - must match all registered label names
 	labels := prometheus.Labels{
 		"rule_id":   ruleID,
 		"rule_name": ruleName,
@@ -170,8 +170,15 @@ func (m *MetricsManager) RecordContainerStatus(ruleID, ruleName, namespace, cont
 		"mode":      mode,
 		"container": container,
 	}
-	for k, v := range staticLabels {
-		labels[k] = v
+	// Fill all registered static label keys (missing ones get empty string)
+	for _, lname := range m.containerStatusLabels {
+		if _, exists := labels[lname]; !exists {
+			if v, ok := staticLabels[lname]; ok {
+				labels[lname] = v
+			} else {
+				labels[lname] = ""
+			}
+		}
 	}
 
 	m.containerStatus.With(labels).Set(status)
