@@ -101,7 +101,7 @@
                     <span v-else-if="rule.alerting_count > 0" class="alert-fire" :title="`${rule.alerting_count} 个容器告警中`">
                       <Flame :size="16" />{{ rule.alerting_count }}
                     </span>
-                    <span v-else class="alert-ok">●</span>
+                    <span v-else class="alert-ok"><CheckCircle :size="16" /></span>
                   </td>
                   <td class="col-name">
                     <span style="font-weight: 500;">{{ rule.name }}</span>
@@ -206,7 +206,7 @@ import { ref, computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import { useToast, useConfirm } from '../stores/ui'
-import { Plus, Bell, Play, Pencil, FileText, Trash2, Folder, ChevronRight, X, Flame } from 'lucide-vue-next'
+import { Plus, Bell, Play, Pencil, FileText, Trash2, Folder, ChevronRight, X, Flame, CheckCircle } from 'lucide-vue-next'
 
 const toast = useToast()
 const dialog = useConfirm()
