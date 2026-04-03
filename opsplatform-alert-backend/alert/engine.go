@@ -1916,28 +1916,34 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 	promCfg := ParsePrometheusConfig(rule.PrometheusConfig)
 	projectLabels := getProjectLabels(rule.ProjectID)
 
+	// Get all containers from Loki for each namespace (for found mode metrics)
+	alertingContainers := map[string]map[string]bool{} // namespace -> set of alerting containers
+	allContainers := map[string][]string{}              // namespace -> all containers
 	for _, r := range results {
-		// Record container-level Prometheus metrics
-		if Metrics != nil {
-			// Merge labels: project labels + static labels
-			mergedLabels := map[string]string{}
-			for k, v := range projectLabels {
-				mergedLabels[k] = v
-			}
-			if promCfg != nil {
-				for k, v := range promCfg.GetStaticLabels() {
-					mergedLabels[k] = v
-				}
-			}
-			muted := isMuted(rule.ID, r.Container)
-			var metricStatus float64
-			if muted {
-				metricStatus = -1
-			} else {
-				metricStatus = 0 // found mode: has hits = alerting
-			}
-			Metrics.RecordContainerStatus(ruleIDStr, rule.Name, r.Namespace, r.Container, "found", metricStatus, mergedLabels)
+		if alertingContainers[r.Namespace] == nil {
+			alertingContainers[r.Namespace] = map[string]bool{}
 		}
+		alertingContainers[r.Namespace][r.Container] = true
+	}
+	if Metrics != nil {
+		// Query all container names per namespace from Loki
+		var nsList []string
+		json.Unmarshal([]byte(rule.Namespaces), &nsList)
+		for _, ns := range nsList {
+			client, err := e.getLokiClient(rule.LokiConnectionID)
+			if err != nil {
+				continue
+			}
+			containers, err := client.LabelValuesWithQuery(ctx, "container", fmt.Sprintf(`{namespace="%s"}`, ns))
+			if err != nil {
+				log.Printf("[Engine] Rule %d: get containers for ns %s error: %v", rule.ID, ns, err)
+				continue
+			}
+			allContainers[ns] = containers
+		}
+	}
+
+	for _, r := range results {
 
 		// Dedup: namespace + container
 		if rule.DedupField != "" {
@@ -2001,8 +2007,37 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 	}
 	log.Printf("[Engine] Rule %d: namespaced execution done, sent %d alerts", rule.ID, totalSent)
 
-	// Write alerting count to Redis (found mode: totalSent = alerting containers)
-	database.RDB.Set(ctx, fmt.Sprintf("alert:alerting_count:%d", rule.ID), totalSent, 10*time.Minute)
+	// Record Prometheus metrics for all containers (found mode)
+	if Metrics != nil {
+		mergedLabels := map[string]string{}
+		for k, v := range projectLabels {
+			mergedLabels[k] = v
+		}
+		if promCfg != nil {
+			for k, v := range promCfg.GetStaticLabels() {
+				mergedLabels[k] = v
+			}
+		}
+
+		alertingTotal := 0
+		for ns, containers := range allContainers {
+			alertSet := alertingContainers[ns]
+			for _, c := range containers {
+				muted := isMuted(rule.ID, c)
+				var status float64
+				if muted {
+					status = -1
+				} else if alertSet != nil && alertSet[c] {
+					status = 0 // alerting
+					alertingTotal++
+				} else {
+					status = 1 // normal
+				}
+				Metrics.RecordContainerStatus(ruleIDStr, rule.Name, ns, c, "found", status, mergedLabels)
+			}
+		}
+		database.RDB.Set(ctx, fmt.Sprintf("alert:alerting_count:%d", rule.ID), alertingTotal, 10*time.Minute)
+	}
 }
 
 // BuildNamespacedAlertMessage builds the aggregated alert message.

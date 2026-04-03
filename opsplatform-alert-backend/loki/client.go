@@ -138,10 +138,20 @@ func (c *Client) Labels(ctx context.Context) ([]string, error) {
 
 // LabelValues returns values for a label
 func (c *Client) LabelValues(ctx context.Context, label string) ([]string, error) {
+	return c.LabelValuesWithQuery(ctx, label, "")
+}
+
+// LabelValuesWithQuery returns label values filtered by a LogQL selector
+func (c *Client) LabelValuesWithQuery(ctx context.Context, label, query string) ([]string, error) {
 	reqURL := fmt.Sprintf("%s/loki/api/v1/label/%s/values", c.baseURL, url.PathEscape(label))
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, err
+	}
+	if query != "" {
+		q := req.URL.Query()
+		q.Set("query", query)
+		req.URL.RawQuery = q.Encode()
 	}
 	c.setHeaders(req)
 
