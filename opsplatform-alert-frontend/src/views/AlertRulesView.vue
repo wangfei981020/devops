@@ -77,64 +77,85 @@
           <router-link :to="createRuleLink" class="btn btn-primary mt-4">创建第一个规则</router-link>
         </div>
 
-        <div v-else class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>状态</th>
-                <th>规则名称</th>
-                <th>项目</th>
-                <th>数据源</th>
-                <th>Lark 配置</th>
-                <th>执行周期</th>
-                <th>级别</th>
-                <th>上次执行</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="rule in rules" :key="rule.id">
-                <td>
-                  <label class="switch">
-                    <input type="checkbox" :checked="rule.status === 1" @change="toggleRule(rule)">
-                    <span class="slider"></span>
-                  </label>
-                </td>
-                <td style="white-space: nowrap;">
-                  <span style="font-weight: 500;">{{ rule.name }}</span>
-                  <span v-if="rule.alert_mode === 'not_found'" class="badge badge-warning" style="margin-left: 4px; font-size: 10px;">反向</span>
-                </td>
-                <td class="text-sm text-secondary">{{ getProjectName(rule.project_id) }}</td>
-                <td>
-                  <span v-if="(rule.data_source_type || 'es') === 'loki'" class="badge badge-warning">Loki</span>
-                  <span v-else class="badge badge-info">ES: {{ rule.es_connection_name }}</span>
-                </td>
-                <td><span class="badge badge-success">{{ rule.lark_config_name }}</span></td>
-                <td class="text-sm">{{ rule.schedule }}</td>
-                <td><span class="badge" :class="severityClass(rule.severity)">{{ severityLabel(rule.severity) }}</span></td>
-                <td class="text-sm">
-                  <template v-if="rule.last_run_at">
-                    {{ formatTime(rule.last_run_at) }}
-                    <div v-if="rule.last_error" class="text-sm" style="color: var(--danger);" :title="rule.last_error">Error</div>
-                  </template>
-                  <span v-else class="text-secondary">-</span>
-                </td>
-                <td>
-                  <div class="actions">
-                    <button class="btn btn-sm btn-outline" @click="runRule(rule)" title="立即执行"><Play :size="14" /></button>
-                    <router-link :to="`/alert-rules/${rule.id}/edit`" class="btn btn-sm btn-outline" title="编辑"><Pencil :size="14" /></router-link>
-                    <button class="btn btn-sm btn-outline" @click="viewLogs(rule)" title="查看日志"><FileText :size="14" /></button>
-                    <button class="btn btn-sm btn-outline" style="color: var(--danger);" @click="deleteRule(rule)" title="删除"><Trash2 :size="14" /></button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-else class="scroll-table-container">
+          <div class="scroll-table-body">
+            <table class="rules-table">
+              <thead>
+                <tr>
+                  <th class="col-id">ID</th>
+                  <th class="col-status">状态</th>
+                  <th class="col-name">规则名称</th>
+                  <th class="col-project">项目</th>
+                  <th class="col-ds">数据源</th>
+                  <th class="col-lark">Lark 配置</th>
+                  <th class="col-schedule">执行周期</th>
+                  <th class="col-severity">级别</th>
+                  <th class="col-lastrun">上次执行</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="rule in rules" :key="rule.id">
+                  <td class="col-id">{{ rule.id }}</td>
+                  <td class="col-status">
+                    <label class="switch">
+                      <input type="checkbox" :checked="rule.status === 1" @change="toggleRule(rule)">
+                      <span class="slider"></span>
+                    </label>
+                  </td>
+                  <td class="col-name">
+                    <span style="font-weight: 500;">{{ rule.name }}</span>
+                    <span v-if="rule.alert_mode === 'not_found'" class="badge badge-warning" style="margin-left: 4px; font-size: 10px;">反向</span>
+                  </td>
+                  <td class="col-project">{{ getProjectName(rule.project_id) }}</td>
+                  <td class="col-ds">
+                    <span v-if="(rule.data_source_type || 'es') === 'loki'" class="badge badge-warning">Loki</span>
+                    <span v-else class="badge badge-info">ES</span>
+                  </td>
+                  <td class="col-lark">{{ rule.lark_config_name }}</td>
+                  <td class="col-schedule">{{ rule.schedule }}</td>
+                  <td class="col-severity"><span class="badge" :class="severityClass(rule.severity)">{{ severityLabel(rule.severity) }}</span></td>
+                  <td class="col-lastrun">
+                    <template v-if="rule.last_run_at">
+                      {{ formatTime(rule.last_run_at) }}
+                      <span v-if="rule.last_error" style="color: var(--danger);" :title="rule.last_error"> !</span>
+                    </template>
+                    <span v-else class="text-secondary">-</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <!-- Fixed actions column -->
+          <div class="scroll-table-fixed">
+            <table class="rules-table">
+              <thead><tr><th class="col-actions">操作</th></tr></thead>
+              <tbody>
+                <tr v-for="rule in rules" :key="'a'+rule.id">
+                  <td class="col-actions">
+                    <div class="actions">
+                      <button class="btn btn-sm btn-outline" @click="runRule(rule)" title="立即执行"><Play :size="14" /></button>
+                      <router-link :to="`/alert-rules/${rule.id}/edit`" class="btn btn-sm btn-outline" title="编辑"><Pencil :size="14" /></router-link>
+                      <button class="btn btn-sm btn-outline" @click="viewLogs(rule)" title="查看日志"><FileText :size="14" /></button>
+                      <button class="btn btn-sm btn-outline" style="color: var(--danger);" @click="deleteRule(rule)" title="删除"><Trash2 :size="14" /></button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
-        <div v-if="total > limit" class="pagination">
-          <span>共 {{ total }} 条</span>
-          <div class="pagination-btns">
+        <div class="pagination">
+          <div class="flex items-center gap-2">
+            <span>共 {{ total }} 条</span>
+            <select v-model.number="limit" class="form-select" style="width: 90px; padding: 2px 6px; font-size: 12px;" @change="page = 1; loadRules()">
+              <option :value="10">10条/页</option>
+              <option :value="20">20条/页</option>
+              <option :value="50">50条/页</option>
+              <option :value="100">100条/页</option>
+            </select>
+          </div>
+          <div class="pagination-btns" v-if="total > limit">
             <button class="btn btn-sm btn-outline" :disabled="page <= 1" @click="page--; loadRules()">上一页</button>
             <span style="padding: 4px 12px;">{{ page }} / {{ Math.ceil(total / limit) }}</span>
             <button class="btn btn-sm btn-outline" :disabled="page >= Math.ceil(total / limit)" @click="page++; loadRules()">下一页</button>
@@ -530,4 +551,71 @@ onMounted(() => {
 .btn-icon-sm:hover { color: var(--primary, #3b82f6); }
 
 .rules-main { flex: 1; min-width: 0; }
+
+/* Scroll table with fixed actions */
+.scroll-table-container {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 6px;
+}
+
+.scroll-table-body {
+  flex: 1;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.scroll-table-fixed {
+  flex-shrink: 0;
+  border-left: 1px solid var(--border, #e2e8f0);
+  background: var(--bg-card, #fff);
+  box-shadow: -2px 0 4px rgba(0,0,0,0.05);
+}
+
+.rules-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.rules-table th,
+.rules-table td {
+  padding: 8px 10px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  text-align: left;
+}
+
+.rules-table thead th {
+  background: var(--bg-hover, #f8fafc);
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.col-id { width: 50px; color: var(--text-secondary); font-size: 12px; }
+.col-status { width: 60px; }
+.col-name { min-width: 180px; }
+.col-project { min-width: 80px; }
+.col-ds { min-width: 60px; }
+.col-lark { min-width: 100px; }
+.col-schedule { min-width: 90px; }
+.col-severity { min-width: 70px; }
+.col-lastrun { min-width: 130px; }
+.col-actions { width: 160px; }
+
+.pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  font-size: 13px;
+}
+
+.pagination-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 </style>
