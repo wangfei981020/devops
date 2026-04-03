@@ -99,7 +99,7 @@
                   <td class="col-alert">
                     <span v-if="rule.status !== 1" class="text-secondary">-</span>
                     <span v-else-if="rule.alerting_count > 0" class="alert-fire" :title="`${rule.alerting_count} 个容器告警中`">
-                      <Flame :size="16" />{{ rule.alerting_count }}
+                      <Flame :size="16" />
                     </span>
                     <span v-else class="alert-ok"><CheckCircle :size="16" /></span>
                   </td>
