@@ -27,6 +27,10 @@ type MetricsManager struct {
 	containerStatusRegistered bool
 	containerStatus           *prometheus.GaugeVec
 	containerStatusLabels     []string // sorted label names
+
+	// Error code metric (found mode, reset each run)
+	errorCode           *prometheus.GaugeVec
+	errorCodeRegistered bool
 }
 
 // PrometheusConfig user-defined prometheus config per rule
@@ -95,6 +99,14 @@ func InitMetrics() {
 		Metrics.lastRunDur,
 		Metrics.ruleStatus,
 	)
+
+	// Error code metric (labels determined at first use)
+	Metrics.errorCode = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "alert_error_code",
+		Help: "Error code occurrences per container (found mode, reset each run)",
+	}, []string{"rule_id", "rule_name", "namespace", "container", "code", "msg"})
+	prometheus.MustRegister(Metrics.errorCode)
+	Metrics.errorCodeRegistered = true
 
 	log.Println("[Metrics] Prometheus metrics initialized")
 }
@@ -182,6 +194,28 @@ func (m *MetricsManager) RecordContainerStatus(ruleID, ruleName, namespace, cont
 	}
 
 	m.containerStatus.With(labels).Set(status)
+}
+
+// ResetErrorCodes clears all error code metrics (call before each found mode run)
+func (m *MetricsManager) ResetErrorCodes() {
+	if m.errorCode != nil {
+		m.errorCode.Reset()
+	}
+}
+
+// RecordErrorCode records an error code occurrence for a container
+func (m *MetricsManager) RecordErrorCode(ruleID, ruleName, namespace, container, code, msg string, count float64) {
+	if m.errorCode == nil {
+		return
+	}
+	m.errorCode.With(prometheus.Labels{
+		"rule_id":   ruleID,
+		"rule_name": ruleName,
+		"namespace": namespace,
+		"container": container,
+		"code":      code,
+		"msg":       msg,
+	}).Set(count)
 }
 
 // RegisterCustomMetrics kept for backward compatibility (no-op)

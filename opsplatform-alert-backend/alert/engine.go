@@ -2020,14 +2020,47 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 	promCfg := ParsePrometheusConfig(rule.PrometheusConfig)
 	projectLabels := getProjectLabels(rule.ProjectID)
 
+	// Reset error code metrics before this run
+	if Metrics != nil {
+		Metrics.ResetErrorCodes()
+	}
+
 	// Get all containers from Loki for each namespace (for found mode metrics)
 	alertingContainers := map[string]map[string]bool{} // namespace -> set of alerting containers
 	allContainers := map[string][]string{}              // namespace -> all containers
+	// Collect error codes per container: {ns+container} -> {code -> {msg, count}}
+	type codeInfo struct {
+		Msg   string
+		Count float64
+	}
+	errorCodes := map[string]map[string]*codeInfo{} // "ns:container" -> code -> info
+
 	for _, r := range results {
 		if alertingContainers[r.Namespace] == nil {
 			alertingContainers[r.Namespace] = map[string]bool{}
 		}
 		alertingContainers[r.Namespace][r.Container] = true
+
+		// Extract error codes from hits
+		key := r.Namespace + ":" + r.Container
+		if errorCodes[key] == nil {
+			errorCodes[key] = map[string]*codeInfo{}
+		}
+		for _, hit := range r.Hits {
+			vars := extractFields(hit, rule.ExtractFields)
+			code := fmt.Sprintf("%v", vars["Code"])
+			msg := fmt.Sprintf("%v", vars["Msg"])
+			if code == "" || code == "<nil>" {
+				continue
+			}
+			if msg == "<nil>" {
+				msg = ""
+			}
+			if errorCodes[key][code] == nil {
+				errorCodes[key][code] = &codeInfo{Msg: msg, Count: 0}
+			}
+			errorCodes[key][code].Count++
+		}
 	}
 	if Metrics != nil {
 		// Query all container names per namespace from Loki
@@ -2144,6 +2177,18 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 			}
 		}
 		database.RDB.Set(ctx, fmt.Sprintf("alert:alerting_count:%d", rule.ID), alertingTotal, 10*time.Minute)
+
+		// Record error code metrics
+		for key, codes := range errorCodes {
+			parts := strings.SplitN(key, ":", 2)
+			if len(parts) < 2 {
+				continue
+			}
+			ns, container := parts[0], parts[1]
+			for code, info := range codes {
+				Metrics.RecordErrorCode(ruleIDStr, rule.Name, ns, container, code, info.Msg, info.Count)
+			}
+		}
 	}
 }
 
