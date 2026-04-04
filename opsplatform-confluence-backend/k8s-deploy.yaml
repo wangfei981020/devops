@@ -149,7 +149,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: localhost:8070/opsplatform/confluence-frontend:v69
+          image: localhost:8070/opsplatform/confluence-frontend:v71
           imagePullPolicy: Always
           ports:
             - containerPort: 80

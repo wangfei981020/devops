@@ -253,6 +253,111 @@
       </div>
     </div>
 
+    <!-- 二、业务和知识库持续建设 -->
+    <div class="card table-card">
+      <div class="card-top">
+        <h3>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+          二、业务和知识库持续建设
+        </h3>
+      </div>
+      <div class="sub-section">
+        <div class="card-top" style="margin-bottom:8px">
+          <label class="sub-title" style="margin:0">1. 故障问题处理方案</label>
+          <button class="btn btn-sm btn-primary" @click="faultPlanRows.push({ content: '' })">+ 添加行</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>内容</th><th style="width:50px"></th></tr></thead>
+            <tbody>
+              <tr v-for="(row, i) in faultPlanRows" :key="i">
+                <td><input class="cell-input" v-model="row.content" placeholder="填写故障问题处理方案..." /></td>
+                <td class="action-cell"><button class="btn-icon danger" @click="faultPlanRows.splice(i, 1)" title="删除">&times;</button></td>
+              </tr>
+              <tr v-if="!faultPlanRows.length"><td colspan="2" class="empty-row">暂无数据</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="sub-section" style="margin-top:16px">
+        <div class="card-top" style="margin-bottom:8px">
+          <label class="sub-title" style="margin:0">2. 故障经验分享</label>
+          <button class="btn btn-sm btn-primary" @click="faultShareRows.push({ content: '' })">+ 添加行</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>内容</th><th style="width:50px"></th></tr></thead>
+            <tbody>
+              <tr v-for="(row, i) in faultShareRows" :key="i">
+                <td><input class="cell-input" v-model="row.content" placeholder="填写故障经验分享..." /></td>
+                <td class="action-cell"><button class="btn-icon danger" @click="faultShareRows.splice(i, 1)" title="删除">&times;</button></td>
+              </tr>
+              <tr v-if="!faultShareRows.length"><td colspan="2" class="empty-row">暂无数据</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="sub-section" style="margin-top:16px">
+        <div class="card-top" style="margin-bottom:8px">
+          <label class="sub-title" style="margin:0">3. 优化工作</label>
+          <button class="btn btn-sm btn-primary" @click="optimizationRows.push({ content: '' })">+ 添加行</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>内容</th><th style="width:50px"></th></tr></thead>
+            <tbody>
+              <tr v-for="(row, i) in optimizationRows" :key="i">
+                <td><input class="cell-input" v-model="row.content" placeholder="填写优化工作内容..." /></td>
+                <td class="action-cell"><button class="btn-icon danger" @click="optimizationRows.splice(i, 1)" title="删除">&times;</button></td>
+              </tr>
+              <tr v-if="!optimizationRows.length"><td colspan="2" class="empty-row">暂无数据</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 三、问题处理 -->
+    <div class="card table-card" v-if="Object.keys(issueRows).length">
+      <div class="card-top">
+        <h3>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="m9 12 2 2 4-4"/></svg>
+          四、问题处理（目标：100%）
+        </h3>
+      </div>
+      <div v-for="(rows, project) in issueRows" :key="project" class="project-group">
+        <div class="project-label">- {{ project }}：</div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th style="min-width:260px">本周进展</th>
+                <th style="min-width:120px">完成度</th>
+                <th style="min-width:260px">备注</th>
+                <th style="width:50px"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, i) in rows" :key="i">
+                <td><input class="cell-input" v-model="row.progress" /></td>
+                <td><input class="cell-input" v-model="row.completion" /></td>
+                <td><input class="cell-input" v-model="row.remark" /></td>
+                <td class="action-cell">
+                  <button class="btn-icon danger" @click="removeIssueRow(project, i)" title="删除">&times;</button>
+                </td>
+              </tr>
+              <tr v-if="!rows.length">
+                <td colspan="4" class="empty-row">暂无数据</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="padding:8px 0 16px">
+          <button class="btn btn-sm btn-primary" @click="addIssueRow(project)">+ 添加行</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Actions -->
     <div class="action-bar">
       <button class="btn" @click="clearAll">清空全部</button>
@@ -316,6 +421,23 @@
           </table>
           <p v-else class="no-data">无变更记录</p>
 
+          <h3 class="section-title">二、业务和知识库持续建设</h3>
+          <h4 style="margin:8px 0;font-size:14px">1. 故障问题处理方案</h4>
+          <template v-if="faultPlanRows.length">
+            <p v-for="(row, i) in faultPlanRows" :key="'fp-' + i" class="summary-text">- {{ row.content || '无' }}</p>
+          </template>
+          <p v-else class="summary-text">- 无</p>
+          <h4 style="margin:12px 0 8px;font-size:14px">2. 故障经验分享</h4>
+          <template v-if="faultShareRows.length">
+            <p v-for="(row, i) in faultShareRows" :key="'fs-' + i" class="summary-text">- {{ row.content || '无' }}</p>
+          </template>
+          <p v-else class="summary-text">- 无</p>
+          <h4 style="margin:12px 0 8px;font-size:14px">3. 优化工作</h4>
+          <template v-if="optimizationRows.length">
+            <p v-for="(row, i) in optimizationRows" :key="'opt-' + i" class="summary-text">- {{ row.content || '无' }}</p>
+          </template>
+          <p v-else class="summary-text">- 无</p>
+
           <!-- Grafana 监控截图 -->
           <template v-if="selectedTaskIds.length">
             <h3 class="section-title">三、项目巡检</h3>
@@ -349,6 +471,20 @@
                 </template>
               </div>
             </template>
+          </template>
+
+          <h3 class="section-title">四、问题处理（目标：100%）</h3>
+          <template v-for="(rows, project) in issueRows" :key="'preview-' + project">
+            <h4 style="margin:10px 0 6px;font-size:14px">- {{ project }}：</h4>
+            <table class="preview-table" v-if="rows.length">
+              <thead><tr><th>本周进展</th><th>完成度</th><th>备注</th></tr></thead>
+              <tbody>
+                <tr v-for="(row, i) in rows" :key="i">
+                  <td>{{ row.progress || '无' }}</td><td>{{ row.completion || '无' }}</td><td>{{ row.remark || '无' }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-else class="no-data">暂无数据</p>
           </template>
         </div>
       </div>
@@ -485,6 +621,32 @@ function onConfluenceConnChange() {
 }
 const faultRows = ref([])
 const reportTitle = ref('')
+
+// 新增章节数据
+const optimizationRows = ref([])
+const faultPlanRows = ref([])
+const faultShareRows = ref([])
+const issueRows = ref({})  // { projectName: [{ progress, completion, remark }] }
+
+// 初始化问题处理行（按选中的项目）
+function initIssueRows() {
+  const selected = filterProject.value
+  const projects = selected ? [selected] : projectList.value
+  if (!projects.length) { issueRows.value = {}; return }
+  const current = issueRows.value
+  const newRows = {}
+  for (const p of projects) {
+    newRows[p] = current[p] || [{ progress: '', completion: '', remark: '' }]
+  }
+  issueRows.value = newRows
+}
+function addIssueRow(project) {
+  if (!issueRows.value[project]) issueRows.value[project] = []
+  issueRows.value[project].push({ progress: '', completion: '', remark: '' })
+}
+function removeIssueRow(project, index) {
+  issueRows.value[project].splice(index, 1)
+}
 const showPreview = ref(false)
 const exporting = ref(false)
 
@@ -548,6 +710,9 @@ watch(filterProject, (proj) => {
   )
   selectedTaskIds.value = matched.map(t => t.id)
 })
+
+// 项目筛选变化时初始化问题处理行
+watch([filterProject, projectList], () => initIssueRows())
 
 // 将多个面板图片按 gridPos 拼成一张完整 Dashboard 图
 async function stitchPanelsToImage(panels, panelInfos, dashWidth = 1920) {
@@ -1342,7 +1507,18 @@ function parseHtmlTables(html, pageTitle) {
 
     const content = `${systemName} ${background}`.trim() || pageTitle
 
-    // 只有勾选了"配置变更"→ 变更管理，其他全部 → 升级管理
+    // 升级类型和变更类型独立判断，可同时出现在两个表中
+    const upgradeTypes = checkedTypes.filter(t => t !== '配置变更')
+    if (upgradeTypes.length > 0) {
+      upgrades.push({
+        project: projectName,
+        category: upgradeTypes.filter(t => ['功能升级', '版本升级', '架构调整', '安全修复'].includes(t)).join('/') || '业务上线需求',
+        content: content,
+        method: method,
+        ticket: jiraTicket,
+        status: upgradeResult || '成功',
+      })
+    }
     if (hasConfigChange) {
       changes.push({
         project: projectName,
@@ -1351,15 +1527,6 @@ function parseHtmlTables(html, pageTitle) {
         purpose: background || content,
         ticket: jiraTicket,
         method: method === '滚动升级' ? '重启' : method,
-        status: upgradeResult || '成功',
-      })
-    } else {
-      upgrades.push({
-        project: projectName,
-        category: checkedTypes.filter(t => ['功能升级', '版本升级'].includes(t)).join('/') || '业务上线需求',
-        content: content,
-        method: method,
-        ticket: jiraTicket,
         status: upgradeResult || '成功',
       })
     }
@@ -1448,6 +1615,10 @@ async function clearAll() {
   matchedPages.value = []
   reportTitle.value = ''
   fetchDone.value = false
+  optimizationRows.value = []
+  faultPlanRows.value = []
+  faultShareRows.value = []
+  initIssueRows()
 }
 
 function statusClass(s) {
@@ -1516,9 +1687,36 @@ async function exportWord() {
       : [new TableRow({ children: [cell(''), cell(''), cell(''), cell(''), cell(''), cell(''), cell('')] })]
     children.push(new Table({ width: { size: 9800, type: WidthType.DXA }, rows: [cH, ...cR] }))
 
-    // 监控截图
+    // 二、业务和知识库持续建设
+    children.push(new Paragraph({ spacing: { before: 400, after: 100 }, children: [new TextRun({ text: '二、业务和知识库持续建设', size: 24, bold: true, font: '微软雅黑' })] }))
+    children.push(new Paragraph({ spacing: { before: 100, after: 50 }, children: [new TextRun({ text: '1. 故障问题处理方案', size: 22, bold: true, font: '微软雅黑' })] }))
+    if (faultPlanRows.value.length) {
+      for (const row of faultPlanRows.value) {
+        children.push(new Paragraph({ spacing: { before: 50, after: 50 }, children: [new TextRun({ text: '- ' + (row.content || '无'), size: 22, font: '微软雅黑' })] }))
+      }
+    } else {
+      children.push(new Paragraph({ spacing: { before: 50, after: 100 }, children: [new TextRun({ text: '- 无', size: 22, font: '微软雅黑' })] }))
+    }
+    children.push(new Paragraph({ spacing: { before: 100, after: 50 }, children: [new TextRun({ text: '2. 故障经验分享', size: 22, bold: true, font: '微软雅黑' })] }))
+    if (faultShareRows.value.length) {
+      for (const row of faultShareRows.value) {
+        children.push(new Paragraph({ spacing: { before: 50, after: 50 }, children: [new TextRun({ text: '- ' + (row.content || '无'), size: 22, font: '微软雅黑' })] }))
+      }
+    } else {
+      children.push(new Paragraph({ spacing: { before: 50, after: 100 }, children: [new TextRun({ text: '- 无', size: 22, font: '微软雅黑' })] }))
+    }
+    children.push(new Paragraph({ spacing: { before: 100, after: 50 }, children: [new TextRun({ text: '3. 优化工作', size: 22, bold: true, font: '微软雅黑' })] }))
+    if (optimizationRows.value.length) {
+      for (const row of optimizationRows.value) {
+        children.push(new Paragraph({ spacing: { before: 50, after: 50 }, children: [new TextRun({ text: '- ' + (row.content || '无'), size: 22, font: '微软雅黑' })] }))
+      }
+    } else {
+      children.push(new Paragraph({ spacing: { before: 50, after: 100 }, children: [new TextRun({ text: '- 无', size: 22, font: '微软雅黑' })] }))
+    }
+
+    // 三、项目巡检（监控截图）
     if (selectedTaskIds.value.length) {
-      children.push(new Paragraph({ spacing: { before: 400, after: 150 }, children: [new TextRun({ text: '三、项目巡检', size: 26, bold: true, font: '微软雅黑' })] }))
+      children.push(new Paragraph({ spacing: { before: 400, after: 150 }, children: [new TextRun({ text: '三、项目巡检', size: 24, bold: true, font: '微软雅黑' })] }))
       screenshotLoading.value = true
       try {
         const screenshotResults = await captureSelectedTaskScreenshots()
@@ -1551,6 +1749,17 @@ async function exportWord() {
       } finally {
         screenshotLoading.value = false
       }
+    }
+
+    // 四、问题处理（目标：100%）
+    children.push(new Paragraph({ spacing: { before: 400, after: 100 }, children: [new TextRun({ text: '四、问题处理（目标：100%）', size: 24, bold: true, font: '微软雅黑' })] }))
+    for (const [project, rows] of Object.entries(issueRows.value)) {
+      children.push(new Paragraph({ spacing: { before: 150, after: 80 }, children: [new TextRun({ text: `- ${project}：`, size: 22, bold: true, font: '微软雅黑' })] }))
+      const iH = new TableRow({ children: [cell('本周进展', { bold: true, width: 4000 }), cell('完成度', { bold: true, width: 1800 }), cell('备注', { bold: true, width: 4000 })] })
+      const iR = rows.length
+        ? rows.map(r => new TableRow({ children: [cell(r.progress || '无', { width: 4000 }), cell(r.completion || '无', { width: 1800 }), cell(r.remark || '无', { width: 4000 })] }))
+        : [new TableRow({ children: [cell('无'), cell('无'), cell('无')] })]
+      children.push(new Table({ width: { size: 9800, type: WidthType.DXA }, rows: [iH, ...iR] }))
     }
 
     const doc = new Document({ sections: [{ properties: {}, children }] })
@@ -1663,4 +1872,25 @@ select.cell-input {
 .preview-table th { background: #f5f5f5; font-weight: 600; color: #222; text-transform: none; letter-spacing: 0; font-size: 13px; }
 .preview-table tr:hover td { background: #fff; }
 .no-data { color: #999; font-size: 13px; padding: 12px 0; }
+
+.report-textarea {
+  width: 100%; padding: 10px 14px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text-primary);
+  font-size: 13px; font-family: var(--font-sans);
+  resize: vertical; outline: none; transition: border-color 200ms; line-height: 1.6;
+}
+.report-textarea:focus { border-color: var(--primary-light); background: var(--bg-secondary); }
+.report-textarea::placeholder { color: var(--text-muted); }
+
+.sub-section label.sub-title { display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary); margin-bottom: 8px; }
+
+.project-group { margin-bottom: 16px; }
+.project-group:last-child { margin-bottom: 0; }
+.project-label { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 10px; }
+
+/* 报告页表格加边框 */
+.table-card table { border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; overflow: hidden; }
+.table-card table th { border: 1px solid rgba(255,255,255,0.1); }
+.table-card table td { border: 1px solid rgba(255,255,255,0.06); }
 </style>
