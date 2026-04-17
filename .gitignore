@@ -49,6 +49,8 @@ dist/
 
 # 编译二进制（Go build 产物）
 opsplatform-confluence-backend/confluence-backend
+opsplatform-confluence-backend/opsplatform-confluence-backend
+opsplatform-probe-backend/probe-backend
 sso-backend/sso-backend
 sso-backend/storage/
 
