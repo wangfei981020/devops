@@ -23,6 +23,8 @@ const routes = [
       { path: 'jira/project/:key', name: 'JiraIssues', component: () => import('@/views/JiraIssuesView.vue'), meta: { title: '项目工单', menuKey: 'jira' } },
       { path: 'jira/issue/:key', name: 'JiraIssueDetail', component: () => import('@/views/JiraIssueDetailView.vue'), meta: { title: '工单详情', menuKey: 'jira' } },
       { path: 'report', name: 'Report', component: () => import('@/views/ReportView.vue'), meta: { title: '生成报告', menuKey: 'report' } },
+      { path: 'alert-stats', name: 'AlertStats', component: () => import('@/views/AlertStatsView.vue'), meta: { title: '告警统计', menuKey: 'alert-stats' } },
+      { path: 'maintenance-windows', name: 'MaintenanceWindows', component: () => import('@/views/MaintenanceWindowsView.vue'), meta: { title: '维护窗口', menuKey: 'alert-stats' } },
       { path: 'settings', name: 'Settings', component: () => import('@/views/SettingsView.vue'), meta: { title: '系统设置', menuKey: 'settings' } },
     ]
   },

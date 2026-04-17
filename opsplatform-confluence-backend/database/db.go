@@ -177,8 +177,42 @@ func createTables() error {
 		return err
 	}
 
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS maintenance_windows (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			project VARCHAR(128) NOT NULL DEFAULT '' COMMENT '项目名称',
+			environment VARCHAR(32) NOT NULL DEFAULT 'PROD' COMMENT '环境: PROD/UAT',
+			repeat_mode VARCHAR(16) NOT NULL DEFAULT 'once' COMMENT '重复模式: once/weekly',
+			maintenance_type VARCHAR(32) NOT NULL DEFAULT '例行维护' COMMENT '维护类型',
+			weekday INT NOT NULL DEFAULT 0 COMMENT '星期几(1=周一..7=周日), 0=不重复',
+			time_start VARCHAR(8) NOT NULL DEFAULT '' COMMENT '每周重复开始时间 HH:MM',
+			time_end VARCHAR(8) NOT NULL DEFAULT '' COMMENT '每周重复结束时间 HH:MM',
+			start_time DATETIME DEFAULT NULL COMMENT '单次维护开始时间',
+			end_time DATETIME DEFAULT NULL COMMENT '单次维护结束时间',
+			match_rules VARCHAR(512) NOT NULL DEFAULT '' COMMENT '匹配规则名，逗号分隔',
+			operations JSON COMMENT '维护操作记录',
+			note TEXT COMMENT '备注',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			INDEX idx_project (project)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
 	// 迁移: 给 grafana_screenshot_tasks 添加 sort_order 字段（兼容已有数据库）
 	DB.Exec(`ALTER TABLE grafana_screenshot_tasks ADD COLUMN sort_order INT NOT NULL DEFAULT 0 AFTER theme`)
+	// 迁移: 给 maintenance_windows 添加新字段
+	DB.Exec(`ALTER TABLE maintenance_windows ADD COLUMN environment VARCHAR(32) NOT NULL DEFAULT 'PROD' AFTER project`)
+	DB.Exec(`ALTER TABLE maintenance_windows ADD COLUMN repeat_mode VARCHAR(16) NOT NULL DEFAULT 'once' AFTER environment`)
+	DB.Exec(`ALTER TABLE maintenance_windows ADD COLUMN weekday INT NOT NULL DEFAULT 0 AFTER maintenance_type`)
+	DB.Exec(`ALTER TABLE maintenance_windows ADD COLUMN time_start VARCHAR(8) NOT NULL DEFAULT '' AFTER weekday`)
+	DB.Exec(`ALTER TABLE maintenance_windows ADD COLUMN time_end VARCHAR(8) NOT NULL DEFAULT '' AFTER time_start`)
+	DB.Exec(`ALTER TABLE maintenance_windows ADD COLUMN match_rules VARCHAR(512) NOT NULL DEFAULT '' AFTER end_time`)
+	DB.Exec(`ALTER TABLE maintenance_windows ADD COLUMN operations JSON AFTER match_rules`)
+	DB.Exec(`ALTER TABLE maintenance_windows MODIFY COLUMN start_time DATETIME DEFAULT NULL`)
+	DB.Exec(`ALTER TABLE maintenance_windows MODIFY COLUMN end_time DATETIME DEFAULT NULL`)
 
 	return nil
 }

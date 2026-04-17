@@ -28,9 +28,10 @@ type MetricsManager struct {
 	containerStatus           *prometheus.GaugeVec
 	containerStatusLabels     []string // sorted label names
 
-	// Error code metric (found mode, reset each run)
+	// Error code metric (found mode, reset each run) - dynamic labels
 	errorCode           *prometheus.GaugeVec
 	errorCodeRegistered bool
+	errorCodeLabels     []string // sorted label names
 }
 
 // PrometheusConfig user-defined prometheus config per rule
@@ -99,14 +100,6 @@ func InitMetrics() {
 		Metrics.lastRunDur,
 		Metrics.ruleStatus,
 	)
-
-	// Error code metric (labels determined at first use)
-	Metrics.errorCode = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "alert_error_code",
-		Help: "Error code occurrences per container (found mode, reset each run)",
-	}, []string{"rule_id", "rule_name", "namespace", "container", "code", "msg"})
-	prometheus.MustRegister(Metrics.errorCode)
-	Metrics.errorCodeRegistered = true
 
 	log.Println("[Metrics] Prometheus metrics initialized")
 }
@@ -196,26 +189,90 @@ func (m *MetricsManager) RecordContainerStatus(ruleID, ruleName, namespace, cont
 	m.containerStatus.With(labels).Set(status)
 }
 
-// ResetErrorCodes clears all error code metrics (call before each found mode run)
-func (m *MetricsManager) ResetErrorCodes() {
+// ResetErrorCodesByRule clears error code metrics for a specific rule only
+func (m *MetricsManager) ResetErrorCodesByRule(ruleID string) {
 	if m.errorCode != nil {
-		m.errorCode.Reset()
+		m.errorCode.DeletePartialMatch(prometheus.Labels{"rule_id": ruleID})
 	}
 }
 
-// RecordErrorCode records an error code occurrence for a container
-func (m *MetricsManager) RecordErrorCode(ruleID, ruleName, namespace, container, code, msg string, count float64) {
-	if m.errorCode == nil {
-		return
+// RecordErrorCode records an error code occurrence for a container with custom static labels.
+// Label schema auto-expands: if staticLabels brings a new key not in the current schema,
+// the gauge is unregistered and re-registered with the union of all seen labels.
+func (m *MetricsManager) RecordErrorCode(ruleID, ruleName, namespace, container, code, msg string, count float64, staticLabels map[string]string) {
+	base := []string{"rule_id", "rule_name", "namespace", "container", "code", "msg"}
+
+	m.mu.Lock()
+	// Check whether staticLabels introduces any new key
+	existing := map[string]struct{}{}
+	for _, k := range m.errorCodeLabels {
+		existing[k] = struct{}{}
 	}
-	m.errorCode.With(prometheus.Labels{
+	needReregister := !m.errorCodeRegistered
+	for k := range staticLabels {
+		if _, ok := existing[k]; !ok {
+			needReregister = true
+			break
+		}
+	}
+
+	if needReregister {
+		// Build union: base + (existing extras ∪ new extras), sorted
+		extraSet := map[string]struct{}{}
+		for _, k := range m.errorCodeLabels {
+			extraSet[k] = struct{}{}
+		}
+		for k := range staticLabels {
+			extraSet[k] = struct{}{}
+		}
+		for _, k := range base {
+			delete(extraSet, k)
+		}
+		extras := make([]string, 0, len(extraSet))
+		for k := range extraSet {
+			extras = append(extras, k)
+		}
+		sort.Strings(extras)
+		labelNames := append([]string{}, base...)
+		labelNames = append(labelNames, extras...)
+
+		if m.errorCode != nil {
+			prometheus.Unregister(m.errorCode)
+		}
+		m.errorCode = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "alert_error_code",
+			Help: "Error code occurrences per container (found mode, reset each run)",
+		}, labelNames)
+		if err := prometheus.Register(m.errorCode); err != nil {
+			log.Printf("[Metrics] 注册 alert_error_code 失败: %v", err)
+			m.mu.Unlock()
+			return
+		}
+		m.errorCodeLabels = labelNames
+		m.errorCodeRegistered = true
+		log.Printf("[Metrics] (重新)注册 alert_error_code, labels: %v", labelNames)
+	}
+	m.mu.Unlock()
+
+	labels := prometheus.Labels{
 		"rule_id":   ruleID,
 		"rule_name": ruleName,
 		"namespace": namespace,
 		"container": container,
 		"code":      code,
 		"msg":       msg,
-	}).Set(count)
+	}
+	for _, lname := range m.errorCodeLabels {
+		if _, exists := labels[lname]; !exists {
+			if v, ok := staticLabels[lname]; ok {
+				labels[lname] = v
+			} else {
+				labels[lname] = ""
+			}
+		}
+	}
+
+	m.errorCode.With(labels).Set(count)
 }
 
 // RegisterCustomMetrics kept for backward compatibility (no-op)

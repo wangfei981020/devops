@@ -98,8 +98,9 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 		r.message_title, COALESCE(r.message_template,''),
 		COALESCE(r.at_users,''), r.at_all, COALESCE(r.alert_mode,'found'),
 		r.recovery_enabled, COALESCE(r.recovery_title,''), COALESCE(r.recovery_template,''),
-		r.severity, COALESCE(r.group_by,''), COALESCE(r.expected_groups,''), COALESCE(r.query_concurrency,5), COALESCE(r.alert_interval,''), r.dedup_field, r.dedup_ttl, r.max_alerts, COALESCE(r.prometheus_config,''), COALESCE(r.route_config,''), COALESCE(r.namespaces,''), COALESCE(r.namespace_concurrency,3), COALESCE(r.project_id,0), r.status,
-		r.last_run_at, r.last_error, r.created_at, r.updated_at,
+		r.severity, COALESCE(r.group_by,''), COALESCE(r.expected_groups,''), COALESCE(r.query_concurrency,5), COALESCE(r.alert_interval,''), r.dedup_field, r.dedup_ttl, r.max_alerts, COALESCE(r.prometheus_config,''), COALESCE(r.route_config,''), COALESCE(r.namespaces,''), COALESCE(r.namespace_concurrency,3), COALESCE(r.project_id,0),
+		COALESCE(r.realtime_enabled,0), COALESCE(r.threshold_ms,0), COALESCE(r.report_enabled,0), COALESCE(r.report_schedule,''), COALESCE(r.report_mode,'separate'), COALESCE(r.report_title,''), COALESCE(r.report_template,''),
+		r.status, r.last_run_at, r.last_error, r.created_at, r.updated_at,
 		COALESCE(e.name,'(已删除)') as es_name, COALESCE(lk.name,'') as loki_name,
 		COALESCE(l.name,'(已删除)') as lark_name
 		FROM alert_rules r
@@ -149,7 +150,9 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 			&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
 			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
-			&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.ProjectID, &rule.Status, &rule.LastRunAt, &rule.LastError,
+			&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.ProjectID,
+			&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
+			&rule.Status, &rule.LastRunAt, &rule.LastError,
 			&rule.CreatedAt, &rule.UpdatedAt, &esName, &lokiName, &larkName)
 		if err != nil {
 			continue
@@ -191,6 +194,13 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			"namespaces":              rule.Namespaces,
 			"namespace_concurrency":   rule.NamespaceConcurrency,
 			"project_id":              rule.ProjectID,
+			"realtime_enabled":   rule.RealtimeEnabled,
+			"threshold_ms":       rule.ThresholdMs,
+			"report_enabled":     rule.ReportEnabled,
+			"report_schedule":    rule.ReportSchedule,
+			"report_mode":        rule.ReportMode,
+			"report_title":       rule.ReportTitle,
+			"report_template":    rule.ReportTemplate,
 			"status":             rule.Status,
 			"created_at":        rule.CreatedAt,
 			"updated_at":        rule.UpdatedAt,
@@ -241,6 +251,7 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
 		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''),
 		dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), COALESCE(project_id,0),
+		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
 		status, last_run_at, last_error, created_at, updated_at
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType, &rule.ESConnectionID,
@@ -250,7 +261,9 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 		&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
 		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
-		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.ProjectID, &rule.Status, &rule.LastRunAt, &rule.LastError,
+		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.ProjectID,
+		&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
+		&rule.Status, &rule.LastRunAt, &rule.LastError,
 		&rule.CreatedAt, &rule.UpdatedAt)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, "规则不存在: "+err.Error())
@@ -311,6 +324,12 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 	if req.MaxAlerts == 0 {
 		req.MaxAlerts = 10
 	}
+	if req.ReportSchedule == "" {
+		req.ReportSchedule = "0 1 0 * * *"
+	}
+	if req.ReportMode == "" {
+		req.ReportMode = "separate"
+	}
 
 	result, err := database.DB.Exec(`INSERT INTO alert_rules
 		(name, data_source_type, es_connection_id, loki_connection_id, lark_config_id,
@@ -318,14 +337,16 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 		query_dsl, keyword, logql, filter_fields, extract_fields,
 		message_title, message_template, at_users, at_all,
 		alert_mode, recovery_enabled, recovery_title, recovery_template,
-		severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, route_config, namespaces, namespace_concurrency, project_id, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, route_config, namespaces, namespace_concurrency, project_id,
+		realtime_enabled, threshold_ms, report_enabled, report_schedule, report_mode, report_title, report_template, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, req.LarkConfigID,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
 		req.FilterFields, req.ExtractFields, req.MessageTitle,
 		req.MessageTemplate, req.AtUsers, req.AtAll,
 		req.AlertMode, req.RecoveryEnabled, req.RecoveryTitle, req.RecoveryTemplate,
-		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.AlertInterval, req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.Namespaces, req.NamespaceConcurrency, req.ProjectID)
+		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.AlertInterval, req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.Namespaces, req.NamespaceConcurrency, req.ProjectID,
+		req.RealtimeEnabled, req.ThresholdMs, req.ReportEnabled, req.ReportSchedule, req.ReportMode, req.ReportTitle, req.ReportTemplate)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "创建失败: "+err.Error())
 		return
@@ -353,13 +374,21 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[UpdateRule] id=%d namespaces='%s' namespace_concurrency=%d logql='%s'", id, req.Namespaces, req.NamespaceConcurrency, req.LogQL)
 
+	if req.ReportSchedule == "" {
+		req.ReportSchedule = "0 1 0 * * *"
+	}
+	if req.ReportMode == "" {
+		req.ReportMode = "separate"
+	}
+
 	_, err := database.DB.Exec(`UPDATE alert_rules SET
 		name=?, data_source_type=?, es_connection_id=?, loki_connection_id=?, lark_config_id=?,
 		es_index=?, schedule=?, time_range=?, query_dsl=?, keyword=?, logql=?,
 		filter_fields=?, extract_fields=?, message_title=?,
 		message_template=?, at_users=?, at_all=?,
 		alert_mode=?, recovery_enabled=?, recovery_title=?, recovery_template=?,
-		severity=?, group_by=?, expected_groups=?, query_concurrency=?, alert_interval=?, dedup_field=?, dedup_ttl=?, max_alerts=?, prometheus_config=?, route_config=?, namespaces=?, namespace_concurrency=?, project_id=?
+		severity=?, group_by=?, expected_groups=?, query_concurrency=?, alert_interval=?, dedup_field=?, dedup_ttl=?, max_alerts=?, prometheus_config=?, route_config=?, namespaces=?, namespace_concurrency=?, project_id=?,
+		realtime_enabled=?, threshold_ms=?, report_enabled=?, report_schedule=?, report_mode=?, report_title=?, report_template=?
 		WHERE id=?`,
 		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, req.LarkConfigID,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
@@ -367,7 +396,9 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		req.MessageTemplate, req.AtUsers, req.AtAll,
 		req.AlertMode, req.RecoveryEnabled, req.RecoveryTitle, req.RecoveryTemplate,
 		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.AlertInterval,
-		req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.Namespaces, req.NamespaceConcurrency, req.ProjectID, id)
+		req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.Namespaces, req.NamespaceConcurrency, req.ProjectID,
+		req.RealtimeEnabled, req.ThresholdMs, req.ReportEnabled, req.ReportSchedule, req.ReportMode, req.ReportTitle, req.ReportTemplate,
+		id)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "更新失败: "+err.Error())
 		return
@@ -1265,4 +1296,141 @@ func previewRenderTemplate(tmplStr string, vars map[string]interface{}) string {
 		return fmt.Sprintf("模板渲染错误: %v", err)
 	}
 	return buf.String()
+}
+
+// HandleExportAlertRules exports selected rules as JSON (batch)
+func HandleExportAlertRules(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []int `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.IDs) == 0 {
+		jsonError(w, http.StatusBadRequest, "请选择要导出的规则")
+		return
+	}
+
+	// Build IN clause
+	placeholders := make([]string, len(req.IDs))
+	args := make([]interface{}, len(req.IDs))
+	for i, id := range req.IDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(`SELECT id, name, COALESCE(data_source_type,'es'), es_connection_id,
+		COALESCE(loki_connection_id,0), lark_config_id, es_index,
+		schedule, time_range, COALESCE(query_dsl,''), keyword, COALESCE(logql,''),
+		COALESCE(filter_fields,''), COALESCE(extract_fields,''),
+		message_title, COALESCE(message_template,''),
+		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
+		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
+		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''),
+		dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), COALESCE(project_id,0),
+		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,'')
+		FROM alert_rules WHERE id IN (%s)`, strings.Join(placeholders, ","))
+
+	rows, err := database.DB.Query(query, args...)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	defer rows.Close()
+
+	var exported []models.CreateAlertRuleReq
+	for rows.Next() {
+		var rule models.CreateAlertRuleReq
+		var id int
+		rows.Scan(&id, &rule.Name, &rule.DataSourceType, &rule.ESConnectionID,
+			&rule.LokiConnectionID, &rule.LarkConfigID, &rule.ESIndex,
+			&rule.Schedule, &rule.TimeRange, &rule.QueryDSL,
+			&rule.Keyword, &rule.LogQL, &rule.FilterFields, &rule.ExtractFields,
+			&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
+			&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
+			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval,
+			&rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts, &rule.PrometheusConfig, &rule.RouteConfig,
+			&rule.Namespaces, &rule.NamespaceConcurrency, &rule.ProjectID,
+			&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate)
+		exported = append(exported, rule)
+	}
+
+	SaveAuditLog(r, "export_rules", "rule", "", fmt.Sprintf("导出 %d 条规则", len(exported)))
+	jsonSuccess(w, exported)
+}
+
+// HandleImportAlertRules imports rules from JSON (batch)
+func HandleImportAlertRules(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Rules []models.CreateAlertRuleReq `json:"rules"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Rules) == 0 {
+		jsonError(w, http.StatusBadRequest, "无效的导入数据")
+		return
+	}
+
+	var created []int64
+	var errors []string
+	for i, rule := range req.Rules {
+		if rule.Name == "" {
+			errors = append(errors, fmt.Sprintf("第%d条: 名称不能为空", i+1))
+			continue
+		}
+		if rule.DataSourceType == "" {
+			rule.DataSourceType = "es"
+		}
+		if rule.Schedule == "" {
+			rule.Schedule = "*/5 * * * *"
+		}
+		if rule.TimeRange == "" {
+			rule.TimeRange = "5m"
+		}
+		if rule.ESIndex == "" {
+			rule.ESIndex = "*"
+		}
+		if rule.Severity == "" {
+			rule.Severity = "warning"
+		}
+		if rule.DedupTTL == 0 {
+			rule.DedupTTL = 3600
+		}
+		if rule.MaxAlerts == 0 {
+			rule.MaxAlerts = 10
+		}
+
+		if rule.ReportSchedule == "" {
+			rule.ReportSchedule = "0 1 0 * * *"
+		}
+		if rule.ReportMode == "" {
+			rule.ReportMode = "separate"
+		}
+
+		result, err := database.DB.Exec(`INSERT INTO alert_rules
+			(name, data_source_type, es_connection_id, loki_connection_id, lark_config_id,
+			es_index, schedule, time_range,
+			query_dsl, keyword, logql, filter_fields, extract_fields,
+			message_title, message_template, at_users, at_all,
+			alert_mode, recovery_enabled, recovery_title, recovery_template,
+			severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, route_config, namespaces, namespace_concurrency, project_id,
+			realtime_enabled, threshold_ms, report_enabled, report_schedule, report_mode, report_title, report_template, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+			rule.Name, rule.DataSourceType, rule.ESConnectionID, rule.LokiConnectionID, rule.LarkConfigID,
+			rule.ESIndex, rule.Schedule, rule.TimeRange, rule.QueryDSL, rule.Keyword, rule.LogQL,
+			rule.FilterFields, rule.ExtractFields, rule.MessageTitle,
+			rule.MessageTemplate, rule.AtUsers, rule.AtAll,
+			rule.AlertMode, rule.RecoveryEnabled, rule.RecoveryTitle, rule.RecoveryTemplate,
+			rule.Severity, rule.GroupBy, rule.ExpectedGroups, rule.QueryConcurrency, rule.AlertInterval, rule.DedupField, rule.DedupTTL, rule.MaxAlerts, rule.PrometheusConfig, rule.RouteConfig, rule.Namespaces, rule.NamespaceConcurrency, rule.ProjectID,
+			rule.RealtimeEnabled, rule.ThresholdMs, rule.ReportEnabled, rule.ReportSchedule, rule.ReportMode, rule.ReportTitle, rule.ReportTemplate)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("第%d条 '%s': %v", i+1, rule.Name, err))
+			continue
+		}
+		id, _ := result.LastInsertId()
+		created = append(created, id)
+	}
+
+	SaveAuditLog(r, "import_rules", "rule", "", fmt.Sprintf("导入 %d 条规则, 成功 %d, 失败 %d", len(req.Rules), len(created), len(errors)))
+	jsonSuccess(w, map[string]interface{}{
+		"created": created,
+		"errors":  errors,
+		"total":   len(req.Rules),
+		"success": len(created),
+	})
 }

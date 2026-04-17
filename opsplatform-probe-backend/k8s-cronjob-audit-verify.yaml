@@ -1,0 +1,54 @@
+# 每天 03:00 校验审计日志哈希链完整性 (fix #Q)
+# 链断了 → 退出码非 0 → 配合监控告警
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: probe-audit-verify
+  namespace: probe-ops
+spec:
+  schedule: "0 3 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: verify
+              image: curlimages/curl:8.5.0
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  # 用 admin token 调 verify 接口. token 通过 secret 注入,
+                  # secret 由运维 kubectl create secret 创建, 不入 git.
+                  # 创建命令示例:
+                  #   ADMIN_TOKEN=$(curl -s -X POST http://probe-backend.probe-ops:8080/api/login \
+                  #     -d '{"username":"admin","password":"..."}'  | jq -r .data.token)
+                  #   kubectl -n probe-ops create secret generic probe-audit-verify-token \
+                  #     --from-literal=ADMIN_TOKEN="$ADMIN_TOKEN"
+                  RESP=$(curl -s -w '\n%{http_code}' \
+                    -H "Authorization: Bearer $ADMIN_TOKEN" \
+                    http://probe-backend.probe-ops.svc.cluster.local:8080/api/audit-logs/verify)
+                  CODE=$(echo "$RESP" | tail -1)
+                  BODY=$(echo "$RESP" | head -n -1)
+                  echo "HTTP $CODE: $BODY"
+                  if [ "$CODE" != "200" ]; then exit 1; fi
+                  if echo "$BODY" | grep -q '"ok":false'; then
+                    echo "AUDIT CHAIN TAMPERED"; exit 2
+                  fi
+                  echo "audit chain OK"
+              env:
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: probe-audit-verify-token
+                      key: ADMIN_TOKEN
+                      optional: true
+              resources:
+                requests: { memory: "16Mi", cpu: "10m" }
+                limits:   { memory: "64Mi", cpu: "100m" }

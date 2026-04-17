@@ -116,6 +116,14 @@ type AlertRule struct {
 	Namespaces       string         `json:"namespaces"`         // JSON array: ["ns1","ns2"] for multi-namespace Loki queries
 	NamespaceConcurrency int        `json:"namespace_concurrency"` // max concurrent namespace queries (default 3)
 	ProjectID        int            `json:"project_id"`
+	// Performance alert (Loki only): realtime threshold + daily report
+	RealtimeEnabled int    `json:"realtime_enabled"`
+	ThresholdMs     int    `json:"threshold_ms"`
+	ReportEnabled   int    `json:"report_enabled"`
+	ReportSchedule  string `json:"report_schedule"`
+	ReportMode      string `json:"report_mode"`
+	ReportTitle     string `json:"report_title"`
+	ReportTemplate  string `json:"report_template"`
 	Status          int            `json:"status"`
 	LastRunAt       sql.NullTime   `json:"last_run_at"`
 	LastError       sql.NullString `json:"last_error"`
@@ -218,6 +226,13 @@ type CreateAlertRuleReq struct {
 	Namespaces           string `json:"namespaces"`
 	NamespaceConcurrency int    `json:"namespace_concurrency"`
 	ProjectID            int    `json:"project_id"`
+	RealtimeEnabled      int    `json:"realtime_enabled"`
+	ThresholdMs          int    `json:"threshold_ms"`
+	ReportEnabled        int    `json:"report_enabled"`
+	ReportSchedule       string `json:"report_schedule"`
+	ReportMode           string `json:"report_mode"`
+	ReportTitle          string `json:"report_title"`
+	ReportTemplate       string `json:"report_template"`
 }
 
 type APIResponse struct {

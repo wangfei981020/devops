@@ -1,0 +1,55 @@
+# NetworkPolicy: 限制谁可以访问 probe-backend (fix #14)
+# 默认 K8s 集群没有 NetworkPolicy = 任何 Pod 都能访问。
+# 这里限制只有:
+#   1. probe-frontend (同 namespace)
+#   2. probe-dist-nginx (同 namespace)
+#   3. 同 namespace 内的所有 Pod (Agent DaemonSet 也在这里)
+#   4. K8s 节点本身 (DaemonSet hostNetwork 模式从节点 IP 出来)
+# 集群外部 Agent 通过 Ingress / NodePort 访问, 无法被 NetworkPolicy 直接管.
+#
+# 启用前提: 集群 CNI 必须支持 NetworkPolicy (Calico/Cilium/Weave 等, docker-desktop kindnet 不支持)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: probe-backend-allow
+  namespace: probe-ops
+spec:
+  podSelector:
+    matchLabels:
+      app: probe-backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}                       # 同 ns 任何 pod
+        - namespaceSelector:                     # 允许 ingress-nginx ns 进来 (经 Ingress 转发)
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8088
+
+---
+# 限制 dist-nginx 只能被 ingress 或同 ns Pod 访问
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: probe-dist-nginx-allow
+  namespace: probe-ops
+spec:
+  podSelector:
+    matchLabels:
+      app: probe-dist-nginx
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 80

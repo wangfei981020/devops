@@ -112,6 +112,38 @@
           </div>
         </div>
       </div>
+      <!-- N9E 夜莺连接 -->
+      <div class="conn-section">
+        <div class="section-header">
+          <div class="section-label">
+            <span class="type-icon n9e">N</span>
+            <h3>夜莺 N9E 连接</h3>
+          </div>
+          <button v-if="canManageConns" class="btn btn-sm btn-primary" @click="openAddConn('n9e')">+ 添加</button>
+        </div>
+        <div class="conn-grid">
+          <div class="conn-card" v-for="c in n9eConns" :key="c.id" :class="{ default: c.is_default }">
+            <div class="conn-card-header">
+              <div class="conn-name">{{ c.name }}</div>
+              <span v-if="c.is_default" class="default-badge">默认</span>
+            </div>
+            <div class="conn-url">{{ c.url }}</div>
+            <div class="conn-meta">
+              <span class="meta-tag">X-User-Token: ****</span>
+            </div>
+            <div class="conn-actions">
+              <button class="btn btn-xs" @click="testConn(c)">{{ c._testing ? '测试中...' : '测试' }}</button>
+              <button v-if="canManageConns" class="btn btn-xs" @click="openEditConn(c)">编辑</button>
+              <button v-if="canManageConns" class="btn btn-xs danger" @click="deleteConn(c)">删除</button>
+            </div>
+            <div v-if="c._testResult" :class="['test-msg', c._testResult.ok ? 'ok' : 'fail']">{{ c._testResult.message }}</div>
+          </div>
+          <div class="conn-card empty" v-if="!n9eConns.length && canManageConns" @click="openAddConn('n9e')">
+            <span class="empty-icon">+</span>
+            <span>添加 N9E 连接</span>
+          </div>
+        </div>
+      </div>
       <!-- Lark 飞书连接 -->
       <div class="conn-section">
         <div class="section-header">
@@ -447,6 +479,17 @@
           </div>
           <p class="field-desc">在飞书群 → 设置 → 群机器人 → 添加自定义机器人，复制 Webhook 地址。</p>
         </template>
+        <template v-else-if="editingConn.type === 'n9e'">
+          <div class="field">
+            <label>N9E URL</label>
+            <input class="input" v-model="editingConn.url" placeholder="http://n9e-extra.sl-devops.com" />
+          </div>
+          <div class="field">
+            <label>User Token</label>
+            <input class="input" type="password" v-model="editingConn.password" placeholder="在夜莺个人中心 → Token管理 中创建" />
+          </div>
+          <p class="field-desc">夜莺 v8 使用 X-User-Token 认证，Token 权限与创建者一致。需要历史告警查看权限。</p>
+        </template>
         <template v-else-if="editingConn.type === 'grafana'">
           <div class="field">
             <label>Grafana URL</label>
@@ -547,6 +590,7 @@ const confluenceConns = computed(() => connections.value.filter(c => c.type === 
 const jiraConns = computed(() => connections.value.filter(c => c.type === 'jira'))
 const grafanaConns = computed(() => connections.value.filter(c => c.type === 'grafana'))
 const larkConns = computed(() => connections.value.filter(c => c.type === 'lark'))
+const n9eConns = computed(() => connections.value.filter(c => c.type === 'n9e'))
 
 // 飞书应用配置
 const larkAppId = ref('')
@@ -687,7 +731,7 @@ function openAddConn(type) {
     url: '',
     username: '',
     password: '',
-    config: type === 'confluence' ? { space_key: '', root_page: '' } : type === 'grafana' ? {} : type === 'lark' ? {} : { fault_projects: '', fault_issuetype: '故障', change_projects: '', change_issuetype: '' },
+    config: type === 'confluence' ? { space_key: '', root_page: '' } : type === 'grafana' ? {} : type === 'lark' ? {} : type === 'n9e' ? {} : { fault_projects: '', fault_issuetype: '故障', change_projects: '', change_issuetype: '' },
     is_default: connections.value.filter(c => c.type === type).length === 0, // 第一个自动设为默认
   }
   showConnModal.value = true
@@ -979,6 +1023,7 @@ h3 { font-size: 16px; margin-bottom: 16px; }
 .type-icon.confluence { background: linear-gradient(135deg, #0052CC, #2684FF); }
 .type-icon.jira { background: linear-gradient(135deg, #0065FF, #2684FF); }
 .type-icon.grafana { background: linear-gradient(135deg, #F46800, #FFB357); }
+.type-icon.n9e { background: linear-gradient(135deg, #7C3AED, #A78BFA); }
 
 .conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
 

@@ -11,6 +11,7 @@ import (
 	"opsplatform-confluence-backend/confluence"
 	"opsplatform-confluence-backend/database"
 	"opsplatform-confluence-backend/jira"
+	"opsplatform-confluence-backend/n9e"
 
 	"github.com/gorilla/mux"
 )
@@ -289,6 +290,16 @@ func HandleTestConnection(w http.ResponseWriter, r *http.Request) {
 		}
 		respondSuccess(w, map[string]interface{}{
 			"message": "连接成功，测试消息已发送到飞书群",
+		})
+	case "n9e":
+		client := n9e.NewClientFromParams(req.URL, req.Password)
+		if err := client.TestConnection(); err != nil {
+			respondError(w, http.StatusBadGateway, "连接失败: "+err.Error())
+			return
+		}
+		respondSuccess(w, map[string]interface{}{
+			"message": "连接成功",
+			"user":    "n9e-api",
 		})
 	default:
 		respondBadRequest(w, "不支持的连接类型: "+req.Type)

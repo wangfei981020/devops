@@ -1,0 +1,164 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: probe-ops
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: probe-db-secret
+  namespace: probe-ops
+type: Opaque
+stringData:
+  MYSQL_USER: "probe_user"
+  MYSQL_PASSWORD: "Probe@2026#Secure"
+  MYSQL_DATABASE: "opsplatform_probe"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: probe-jwt-secret
+  namespace: probe-ops
+type: Opaque
+stringData:
+  # 生产必须替换为强随机 32+ 字节, 可用 openssl rand -base64 48 生成
+  JWT_SECRET: "ProbePlatform@2026#JWTSecretKey!!ReplaceInProd"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: probe-minio-secret
+  namespace: probe-ops
+type: Opaque
+stringData:
+  # 生产必须替换为独立的 access key, 只赋予 opsplatform-probe-agent bucket 权限
+  MINIO_ACCESS_KEY: "minioadmin"
+  MINIO_SECRET_KEY: "minioadmin123"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: probe-backend
+  namespace: probe-ops
+  labels:
+    app: probe-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: probe-backend
+  template:
+    metadata:
+      labels:
+        app: probe-backend
+    spec:
+      containers:
+        - name: probe-backend
+          image: marks26/opsplatform-probe-backend:v5
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8088
+              name: health
+          env:
+            - name: PORT
+              value: ":8080"
+            - name: HEALTH_PORT
+              value: ":8088"
+            - name: TZ
+              value: "Asia/Shanghai"
+            - name: MYSQL_HOST
+              value: "mysql-sso.sso.svc.cluster.local"
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_USER
+              valueFrom: { secretKeyRef: { name: probe-db-secret, key: MYSQL_USER } }
+            - name: MYSQL_PASSWORD
+              valueFrom: { secretKeyRef: { name: probe-db-secret, key: MYSQL_PASSWORD } }
+            - name: MYSQL_DATABASE
+              valueFrom: { secretKeyRef: { name: probe-db-secret, key: MYSQL_DATABASE } }
+            - name: JWT_SECRET
+              valueFrom: { secretKeyRef: { name: probe-jwt-secret, key: JWT_SECRET } }
+            - name: SESSION_TIMEOUT
+              value: "180"
+            - name: PORTAL_API_URL
+              value: "http://opsplatform-backend.opsplatform.svc.cluster.local:8080"
+            - name: COOKIE_SECURE
+              value: "false"
+            - name: COOKIE_SAMESITE
+              value: "lax"
+            - name: CORS_ALLOWED_ORIGIN
+              value: ""  # 同源请求, 无需 CORS. 生产如需跨域改成具体域名 (逗号分隔)
+            - name: MINIO_ENDPOINT
+              value: "http://minio.opsplatform.svc.cluster.local:9000"
+            - name: MINIO_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: probe-minio-secret, key: MINIO_ACCESS_KEY } }
+            - name: MINIO_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: probe-minio-secret, key: MINIO_SECRET_KEY } }
+            - name: MINIO_BUCKET
+              value: "opsplatform-probe-agent"
+            - name: MINIO_USE_SSL
+              value: "false"
+            - name: MINIO_REGION
+              value: "us-east-1"
+            - name: AGENT_HEARTBEAT_TIMEOUT
+              value: "30"
+            - name: AGENT_APPROVAL_REQUIRED
+              value: "true"
+            - name: AGENT_TOKEN_EXPIRE_DAYS
+              value: "0"   # 0=永不, 生产建议 90
+            - name: REQUIRE_SIGNED_UPLOADS
+              value: "false"  # 生产建议 true, 强制 Agent 二进制必须由私钥签名
+            - name: AGENT_PUBLIC_KEY_PEM
+              value: ""  # 生产填入 ed25519 公钥 PEM 内容 (probe-sign keygen 生成), 与 Agent 编译时嵌入的公钥保持一致
+            - name: RATE_LIMIT_REGISTER_PER_MIN
+              value: "10"
+            - name: RATE_LIMIT_REPORT_PER_SEC
+              value: "50"
+            - name: DISABLE_DEFAULT_ADMIN
+              value: "true"  # 安全默认: 不创建默认 admin. 首次部署时通过 SQL 或 DEFAULT_ADMIN_PASSWORD 创建
+            - name: DEFAULT_ADMIN_PASSWORD
+              value: ""  # 若非空, 首次启动会用此密码创建 admin
+            - name: IMAGE_BINARY_PATH
+              value: "app/probe-agent"
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: probe-backend
+  namespace: probe-ops
+spec:
+  selector:
+    app: probe-backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: health
+      port: 8088
+      targetPort: 8088

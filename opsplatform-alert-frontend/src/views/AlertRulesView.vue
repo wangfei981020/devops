@@ -64,9 +64,17 @@
               <option value="0">已禁用</option>
             </select>
           </div>
-          <router-link :to="createRuleLink" class="btn btn-primary">
-            <Plus :size="16" /> 新建规则
-          </router-link>
+          <div class="flex items-center gap-2">
+            <button v-if="selectedIds.length > 0" class="btn btn-outline" @click="exportRules">
+              <Download :size="16" /> 导出 ({{ selectedIds.length }})
+            </button>
+            <button class="btn btn-outline" @click="showImportModal = true">
+              <Upload :size="16" /> 导入
+            </button>
+            <router-link :to="createRuleLink" class="btn btn-primary">
+              <Plus :size="16" /> 新建规则
+            </router-link>
+          </div>
         </div>
 
         <div v-if="loading" class="loading"><div class="spinner"></div></div>
@@ -82,6 +90,7 @@
             <table class="rules-table">
               <thead>
                 <tr>
+                  <th class="col-check"><input type="checkbox" @change="toggleSelectAll" :checked="isAllSelected" /></th>
                   <th class="col-id">ID</th>
                   <th class="col-alert">告警</th>
                   <th class="col-name">规则名称</th>
@@ -95,6 +104,7 @@
               </thead>
               <tbody>
                 <tr v-for="rule in rules" :key="rule.id">
+                  <td class="col-check"><input type="checkbox" :value="rule.id" v-model="selectedIds" /></td>
                   <td class="col-id">{{ rule.id }}</td>
                   <td class="col-alert">
                     <span v-if="rule.status !== 1" class="text-secondary">-</span>
@@ -198,6 +208,83 @@
         </form>
       </div>
     </div>
+    <!-- Import Modal -->
+    <div v-if="showImportModal" class="modal-overlay" @click.self="showImportModal = false">
+      <div class="modal" style="min-width: 700px; max-width: 900px;">
+        <div class="modal-header">
+          <div class="modal-title">导入规则</div>
+          <button class="btn-icon" @click="showImportModal = false"><X :size="18" /></button>
+        </div>
+
+        <!-- Step 1: Paste JSON -->
+        <div v-if="importStep === 1">
+          <div class="form-group" style="padding: 16px;">
+            <label class="form-label">粘贴规则 JSON</label>
+            <textarea v-model="importJSON" class="form-input" rows="10" placeholder='粘贴导出的 JSON 数组...' style="font-family: monospace; font-size: 12px;"></textarea>
+          </div>
+          <div class="form-group" style="padding: 0 16px;">
+            <label class="form-label">环境替换（可选）</label>
+            <div class="flex items-center gap-2" style="margin-bottom: 8px;">
+              <input v-model="replaceFrom" class="form-input" style="width: 150px;" placeholder="查找文本，如 uat" />
+              <span>→</span>
+              <input v-model="replaceTo" class="form-input" style="width: 150px;" placeholder="替换为，如 prod" />
+            </div>
+            <div class="flex items-center gap-2" style="margin-bottom: 8px;">
+              <label class="form-label" style="margin: 0; white-space: nowrap;">目标项目</label>
+              <select v-model.number="importProjectId" class="form-select" style="width: 200px;">
+                <option :value="0">不修改</option>
+                <option v-for="p in allProjectOptions" :key="p.id" :value="p.id">{{ p.name }}</option>
+              </select>
+            </div>
+            <div class="flex items-center gap-2" style="margin-bottom: 8px;">
+              <label class="form-label" style="margin: 0; white-space: nowrap;">目标 Lark</label>
+              <select v-model.number="importLarkId" class="form-select" style="width: 200px;">
+                <option :value="0">不修改</option>
+                <option v-for="lk in larkConfigs" :key="lk.id" :value="lk.id">{{ lk.name }}</option>
+              </select>
+            </div>
+            <div class="flex items-center gap-2" style="margin-bottom: 8px;">
+              <label class="form-label" style="margin: 0; white-space: nowrap;">目标 Loki</label>
+              <select v-model.number="importLokiId" class="form-select" style="width: 200px;">
+                <option :value="0">不修改</option>
+                <option v-for="lk in lokiConnections" :key="lk.id" :value="lk.id">{{ lk.name }}</option>
+              </select>
+            </div>
+            <div class="flex items-center gap-2" style="margin-bottom: 8px;">
+              <label class="form-label" style="margin: 0; white-space: nowrap;">消息标题</label>
+              <input v-model="importMessageTitle" class="form-input" style="width: 200px;" placeholder="留空则用原标题" />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-outline" @click="showImportModal = false">取消</button>
+            <button class="btn btn-primary" @click="parseImport">解析并预览</button>
+          </div>
+        </div>
+
+        <!-- Step 2: Preview -->
+        <div v-if="importStep === 2" style="padding: 16px;">
+          <p style="margin-bottom: 12px;">将导入 <strong>{{ importRules.length }}</strong> 条规则（导入后默认<strong>禁用</strong>，需手动启用）</p>
+          <div style="max-height: 400px; overflow-y: auto;">
+            <table class="rules-table" style="font-size: 13px;">
+              <thead><tr><th>名称</th><th>数据源</th><th>项目</th><th>Namespace</th><th>级别</th></tr></thead>
+              <tbody>
+                <tr v-for="(rule, i) in importRules" :key="i">
+                  <td>{{ rule.name }}</td>
+                  <td><span class="badge" :class="rule.data_source_type === 'loki' ? 'badge-warning' : 'badge-info'">{{ rule.data_source_type || 'es' }}</span></td>
+                  <td>{{ getProjectName(rule.project_id) || '-' }}</td>
+                  <td>{{ rule.namespaces || '-' }}</td>
+                  <td><span class="badge" :class="severityClass(rule.severity)">{{ severityLabel(rule.severity) }}</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-outline" @click="importStep = 1">返回修改</button>
+            <button class="btn btn-primary" @click="doImport" :disabled="importing">{{ importing ? '导入中...' : '确认导入' }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -206,7 +293,7 @@ import { ref, computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import { useToast, useConfirm } from '../stores/ui'
-import { Plus, Bell, Play, Pencil, FileText, Trash2, Folder, ChevronRight, X, Flame, CheckCircle } from 'lucide-vue-next'
+import { Plus, Bell, Play, Pencil, FileText, Trash2, Folder, ChevronRight, X, Flame, CheckCircle, Download, Upload } from 'lucide-vue-next'
 
 const toast = useToast()
 const dialog = useConfirm()
@@ -310,6 +397,125 @@ async function deleteProject() {
   }
 }
 
+// Export/Import
+const selectedIds = ref([])
+const showImportModal = ref(false)
+const importStep = ref(1)
+const importJSON = ref('')
+const importRules = ref([])
+const importing = ref(false)
+const replaceFrom = ref('')
+const replaceTo = ref('')
+const importProjectId = ref(0)
+const importLarkId = ref(0)
+const importLokiId = ref(0)
+const importMessageTitle = ref('')
+const larkConfigs = ref([])
+const lokiConnections = ref([])
+
+const isAllSelected = computed(() => rules.value.length > 0 && selectedIds.value.length === rules.value.length)
+const allProjectOptions = computed(() => {
+  const list = []
+  for (const p of topProjects.value) {
+    list.push(p)
+    for (const c of getChildren(p.id)) {
+      list.push({ ...c, name: `  └ ${c.name}` })
+    }
+  }
+  return list
+})
+
+function toggleSelectAll(e) {
+  if (e.target.checked) {
+    selectedIds.value = rules.value.map(r => r.id)
+  } else {
+    selectedIds.value = []
+  }
+}
+
+async function exportRules() {
+  try {
+    const res = await api.post('/alert-rules/export', { ids: selectedIds.value })
+    if (res.code === 0) {
+      const json = JSON.stringify(res.data, null, 2)
+      await navigator.clipboard.writeText(json)
+      toast.success(`已复制 ${res.data.length} 条规则到剪贴板`)
+    }
+  } catch (e) {
+    toast.error('导出失败: ' + (e.response?.data?.message || e.message))
+  }
+}
+
+async function loadLarkConfigs() {
+  try {
+    const res = await api.get('/lark-configs', { params: { limit: 500 } })
+    if (res.code === 0) larkConfigs.value = res.data || []
+  } catch (e) { /* ignore */ }
+}
+
+async function loadLokiConnections() {
+  try {
+    const res = await api.get('/loki-connections')
+    if (res.code === 0) lokiConnections.value = res.data || []
+  } catch (e) { /* ignore */ }
+}
+
+function parseImport() {
+  try {
+    let parsed = JSON.parse(importJSON.value)
+    if (!Array.isArray(parsed)) parsed = [parsed]
+
+    // Apply text replacement
+    if (replaceFrom.value && replaceTo.value) {
+      const from = replaceFrom.value
+      const to = replaceTo.value
+      let jsonStr = JSON.stringify(parsed)
+      jsonStr = jsonStr.split(from).join(to)
+      parsed = JSON.parse(jsonStr)
+    }
+
+    // Apply overrides
+    for (const rule of parsed) {
+      if (importProjectId.value > 0) rule.project_id = importProjectId.value
+      if (importLarkId.value > 0) rule.lark_config_id = importLarkId.value
+      if (importLokiId.value > 0) rule.loki_connection_id = importLokiId.value
+      if (importMessageTitle.value) rule.message_title = importMessageTitle.value
+      // Add suffix to name to avoid conflict
+      if (!rule.name.includes('(导入)')) rule.name = rule.name + ' (导入)'
+    }
+
+    importRules.value = parsed
+    importStep.value = 2
+  } catch (e) {
+    toast.error('JSON 解析失败: ' + e.message)
+  }
+}
+
+async function doImport() {
+  importing.value = true
+  try {
+    const res = await api.post('/alert-rules/import', { rules: importRules.value })
+    if (res.code === 0) {
+      toast.success(`导入完成: 成功 ${res.data.success} 条${res.data.errors?.length ? ', 失败 ' + res.data.errors.length + ' 条' : ''}`)
+      showImportModal.value = false
+      importStep.value = 1
+      importJSON.value = ''
+      importRules.value = []
+      replaceFrom.value = ''
+      replaceTo.value = ''
+      importProjectId.value = 0
+      importLarkId.value = 0
+      importLokiId.value = 0
+      importMessageTitle.value = ''
+      loadRules()
+      loadCounts()
+    }
+  } catch (e) {
+    toast.error('导入失败: ' + (e.response?.data?.message || e.message))
+  }
+  importing.value = false
+}
+
 // Rules
 const rules = ref([])
 const loading = ref(false)
@@ -399,6 +605,8 @@ onMounted(() => {
   loadProjects()
   loadRules()
   loadCounts()
+  loadLarkConfigs()
+  loadLokiConnections()
 })
 </script>
 
@@ -427,6 +635,9 @@ onMounted(() => {
 }
 
 .sidebar-title { font-weight: 600; font-size: 14px; }
+
+.col-check { width: 36px; text-align: center; }
+.col-check input[type="checkbox"] { cursor: pointer; }
 
 .project-list { padding: 4px 0; }
 

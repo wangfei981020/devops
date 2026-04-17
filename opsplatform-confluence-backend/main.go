@@ -111,6 +111,21 @@ func main() {
 	// Lark 测试
 	protected.HandleFunc("/lark/test", handlers.HandleTestLarkConnection).Methods("POST", "OPTIONS")
 
+	// N9E 夜莺告警统计
+	protected.HandleFunc("/n9e/connections", handlers.HandleListN9EConnections).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/n9e/alert-stats", handlers.HandleN9EAlertStats).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/n9e/alert-events", handlers.HandleN9EAlertEvents).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/n9e/process-alerts", handlers.HandleN9EProcessAlerts).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/n9e/busi-groups", handlers.HandleN9EBusiGroups).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/n9e/test", handlers.HandleN9ETestConnection).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/n9e/mark-maintenance", handlers.HandleN9EMarkMaintenance).Methods("POST", "OPTIONS")
+
+	// 维护窗口管理
+	protected.HandleFunc("/maintenance-windows", handlers.HandleListMaintenanceWindows).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/maintenance-windows", handlers.HandleCreateMaintenanceWindow).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/maintenance-windows/{id}", handlers.HandleUpdateMaintenanceWindow).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/maintenance-windows/{id}", handlers.HandleDeleteMaintenanceWindow).Methods("DELETE", "OPTIONS")
+
 	// 标签 (Labels)
 	protected.HandleFunc("/confluence/content/{id}/labels", handlers.HandleGetContentLabels).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/confluence/content/{id}/labels", handlers.HandleAddContentLabel).Methods("POST", "OPTIONS")

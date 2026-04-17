@@ -124,12 +124,12 @@
             <div class="namespace-tags">
               <span v-for="(ns, i) in namespacesArray" :key="i" class="ns-tag">
                 {{ ns }}
-                <button class="ns-tag-remove" @click="removeNamespace(i)">&times;</button>
+                <button type="button" class="ns-tag-remove" @click="removeNamespace(i)">&times;</button>
               </span>
               <div class="ns-input-wrap">
                 <input v-model="nsInput" class="form-input ns-input" placeholder="输入命名空间回车添加"
                   @keydown.enter.prevent="addNamespace" />
-                <button v-if="nsInput" class="btn btn-sm btn-primary" @click="addNamespace" style="margin-left:6px">添加</button>
+                <button v-if="nsInput" type="button" class="btn btn-sm btn-primary" @click="addNamespace" style="margin-left:6px">添加</button>
               </div>
             </div>
             <div class="form-hint">配置后系统会逐个命名空间查询，按容器聚合告警，降低 Loki 压力</div>
@@ -379,6 +379,62 @@
           </template>
         </template>
 
+        <!-- 性能告警 (Loki 性能监控：实时阈值 + 每日报告) -->
+        <template v-if="form.data_source_type === 'loki'">
+          <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">性能告警 (Loki)</h3>
+          <div class="form-hint" style="margin-bottom: 10px;">
+            适用于性能类告警：按关键词查询 Loki，从日志行正则提取 <code>tid/domain/cost_ms</code> 等字段（配置在"字段提取"中），按阈值实时告警并按域名累计日报。
+            <br>⚠️ 一条日志只允许有 1 个 <code>http(s)://</code> URL，多/少都会记录错误日志跳过。
+          </div>
+          <div class="form-group">
+            <label class="form-label">
+              <input type="checkbox" :checked="form.realtime_enabled === 1" @change="form.realtime_enabled = $event.target.checked ? 1 : 0" style="margin-right: 6px;" />
+              启用实时告警
+            </label>
+            <div class="form-hint">开启后，当日志耗时超过下方阈值才推送 Lark 卡片；同 tid 一天只告警一次</div>
+          </div>
+          <div class="form-row" v-if="form.realtime_enabled === 1">
+            <div class="form-group">
+              <label class="form-label">告警阈值 (毫秒)</label>
+              <input v-model.number="form.threshold_ms" type="number" class="form-input" placeholder="如: 3000 / 5000 / 6000" style="width: 200px;" />
+              <div class="form-hint">cost_ms &gt; 此值才推送</div>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top: 16px;">
+            <label class="form-label">
+              <input type="checkbox" :checked="form.report_enabled === 1" @change="form.report_enabled = $event.target.checked ? 1 : 0" style="margin-right: 6px;" />
+              启用每日报告
+            </label>
+            <div class="form-hint">每次查询都会静默累计每个域名的 tid→cost 到 Redis，到点发送统计报告（最快/平均/最慢）</div>
+          </div>
+          <template v-if="form.report_enabled === 1">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">日报 cron (6 段: 秒 分 时 日 月 周)</label>
+                <input v-model="form.report_schedule" class="form-input" placeholder="0 1 0 * * *" style="width: 220px;" />
+                <div class="form-hint">默认 <code>0 1 0 * * *</code> = 每天 00:01:00 触发</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">日报模式</label>
+                <select v-model="form.report_mode" class="form-select" style="width: 220px;">
+                  <option value="separate">分开发送 (每域名一张卡片)</option>
+                  <option value="merged">合并发送 (所有域名一张卡片)</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">日报标题 (可选)</label>
+              <input v-model="form.report_title" class="form-input" placeholder="如: 📊 每日性能报告" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">日报模板 (可选, Go template)</label>
+              <textarea v-model="form.report_template" class="form-textarea" rows="5"
+                placeholder="留空则使用默认模板。可用变量 (separate): {{.domain}} {{.count}} {{.min_ms}} {{.avg_ms}} {{.max_ms}} {{.date}} {{.send_time}}&#10;可用变量 (merged): {{.date}} {{.send_time}} {{range .stats}} .domain .count .min_ms .avg_ms .max_ms {{end}}"></textarea>
+            </div>
+          </template>
+        </template>
+
         <!-- Prometheus 配置 -->
         <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">Prometheus 指标配置</h3>
         <div class="form-group">
@@ -615,7 +671,14 @@ const form = ref({
   route_config: '',
   namespaces: '',
   namespace_concurrency: 3,
-  project_id: 0
+  project_id: 0,
+  realtime_enabled: 0,
+  threshold_ms: 0,
+  report_enabled: 0,
+  report_schedule: '0 1 0 * * *',
+  report_mode: 'separate',
+  report_title: '',
+  report_template: ''
 })
 
 // Namespace 多选相关
@@ -815,7 +878,14 @@ async function loadRule() {
         route_config: d.route_config || '',
         namespaces: d.namespaces || '',
         namespace_concurrency: d.namespace_concurrency || 3,
-        project_id: d.project_id || 0
+        project_id: d.project_id || 0,
+        realtime_enabled: d.realtime_enabled || 0,
+        threshold_ms: d.threshold_ms || 0,
+        report_enabled: d.report_enabled || 0,
+        report_schedule: d.report_schedule || '0 1 0 * * *',
+        report_mode: d.report_mode || 'separate',
+        report_title: d.report_title || '',
+        report_template: d.report_template || ''
       }
       loadPromConfig(d.prometheus_config)
       loadRouteConfig(d.route_config)

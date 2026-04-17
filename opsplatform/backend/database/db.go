@@ -1164,6 +1164,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_confluence_jira", "menu:confluence_jira", "Confluence Jira工单", "/confluence/jira", "perm_menu_confluence", "", 40},
 		{"perm_menu_confluence_report", "menu:confluence_report", "Confluence生成报告", "/confluence/report", "perm_menu_confluence", "", 50},
 		{"perm_menu_confluence_settings", "menu:confluence_settings", "Confluence系统设置", "/confluence/settings", "perm_menu_confluence", "", 60},
+		{"perm_menu_confluence_alert_stats", "menu:confluence_alert-stats", "Confluence告警统计", "/confluence/alert-stats", "perm_menu_confluence", "", 55},
 
 		// 告警平台（外部应用权限）
 		{"perm_menu_alert", "menu:alert", "告警平台", "/alert", "", "alert", 14},
@@ -1176,11 +1177,43 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_alert_contacts", "menu:alert_contacts", "通知人管理", "/alert/contacts", "perm_menu_alert", "", 70},
 		{"perm_menu_alert_mutes", "menu:alert_mutes", "屏蔽管理", "/alert/mutes", "perm_menu_alert", "", 75},
 		{"perm_menu_alert_users", "menu:alert_users", "告警账号管理", "/alert/users", "perm_menu_alert", "", 80},
+
+		// 探测平台（外部应用权限）
+		{"perm_menu_probe", "menu:probe", "探测平台", "/probe", "", "probe", 16},
+		{"perm_menu_probe_dashboard", "menu:probe_dashboard", "探测概览", "/probe/dashboard", "perm_menu_probe", "", 10},
+		{"perm_menu_probe_agents", "menu:probe_agents", "Agent 管理", "/probe/agents", "perm_menu_probe", "", 20},
+		{"perm_menu_probe_groups", "menu:probe_groups", "Agent 分组", "/probe/agent-groups", "perm_menu_probe", "", 30},
+		{"perm_menu_probe_targets", "menu:probe_targets", "探测目标", "/probe/targets", "perm_menu_probe", "", 40},
+		{"perm_menu_probe_manual", "menu:probe_manual", "手动探测", "/probe/probe", "perm_menu_probe", "", 50},
+		{"perm_menu_probe_results", "menu:probe_results", "探测结果", "/probe/results", "perm_menu_probe", "", 60},
+		{"perm_menu_probe_versions", "menu:probe_versions", "版本管理", "/probe/versions", "perm_menu_probe", "", 70},
+		{"perm_menu_probe_upgrades", "menu:probe_upgrades", "升级任务", "/probe/upgrades", "perm_menu_probe", "", 80},
+		{"perm_menu_probe_audit", "menu:probe_audit", "审计日志", "/probe/audit", "perm_menu_probe", "", 90},
+		{"perm_menu_probe_users", "menu:probe_users", "用户管理", "/probe/users", "perm_menu_probe", "", 100},
 	}
 
 	for _, perm := range menuPermissions {
 		DB.Exec(`INSERT IGNORE INTO permissions (id, code, name, type, resource, parent_id, icon, sort_order) VALUES (?, ?, ?, 'menu', ?, ?, ?, ?)`,
 			perm.ID, perm.Code, perm.Name, perm.Resource, perm.ParentID, perm.Icon, perm.Sort)
+	}
+
+	// 默认外部应用（INSERT IGNORE，已存在则不覆盖，保留管理员在 UI 里的修改）
+	// URL 是默认本地值，生产环境请在 UI 里改成实际域名
+	defaultExternalApps := []struct {
+		ID        string
+		AppKey    string
+		Name      string
+		URL       string
+		PermCode  string
+		GroupName string
+		SortOrder int
+	}{
+		{"app_probe_platform", "probe", "探测平台", "http://localhost:30827", "probe", "运维工具", 16},
+	}
+	for _, a := range defaultExternalApps {
+		DB.Exec(`INSERT IGNORE INTO external_apps (id, app_key, name, url, perm_code, group_name, sort_order, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`,
+			a.ID, a.AppKey, a.Name, a.URL, a.PermCode, a.GroupName, a.SortOrder)
 	}
 
 	// 默认权限 - 按钮/操作权限

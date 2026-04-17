@@ -109,6 +109,8 @@ func main() {
 	protected.HandleFunc("/alert-rules/{id}/run", handlers.HandleRunAlertRule).Methods("POST")
 	protected.HandleFunc("/alert-rules/preview", handlers.HandlePreviewAlertRule).Methods("POST")
 	protected.HandleFunc("/alert-rules/test-send", handlers.HandleTestSendAlertRule).Methods("POST")
+	protected.HandleFunc("/alert-rules/export", handlers.HandleExportAlertRules).Methods("POST")
+	protected.HandleFunc("/alert-rules/import", handlers.HandleImportAlertRules).Methods("POST")
 
 	// ES Explore
 	protected.HandleFunc("/es-explore", handlers.HandleESExplore).Methods("POST")

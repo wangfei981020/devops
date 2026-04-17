@@ -233,6 +233,13 @@ func autoMigrate() {
 		{"alert_rules", "namespaces", "TEXT COMMENT '命名空间列表JSON: [\"ns1\",\"ns2\"]'"},
 		{"alert_rules", "namespace_concurrency", "INT DEFAULT 3 COMMENT '命名空间并发查询数'"},
 		{"alert_rules", "project_id", "INT DEFAULT 0 COMMENT '所属项目ID'"},
+		{"alert_rules", "realtime_enabled", "TINYINT DEFAULT 0 COMMENT '性能告警:实时告警开关'"},
+		{"alert_rules", "threshold_ms", "INT DEFAULT 0 COMMENT '性能告警:实时阈值(毫秒)'"},
+		{"alert_rules", "report_enabled", "TINYINT DEFAULT 0 COMMENT '性能告警:日报开关'"},
+		{"alert_rules", "report_schedule", "VARCHAR(64) DEFAULT '0 1 0 * * *' COMMENT '性能告警:日报cron(6段)'"},
+		{"alert_rules", "report_mode", "VARCHAR(16) DEFAULT 'separate' COMMENT '性能告警:日报模式 separate/merged'"},
+		{"alert_rules", "report_title", "VARCHAR(255) DEFAULT '' COMMENT '性能告警:日报标题'"},
+		{"alert_rules", "report_template", "TEXT COMMENT '性能告警:日报模板'"},
 		{"users", "auth_source", "VARCHAR(20) DEFAULT 'local' COMMENT '认证来源: local/portal'"},
 		{"users", "portal_token", "TEXT COMMENT '运维平台Portal Token(用于刷新权限)'"},
 	}

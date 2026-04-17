@@ -70,6 +70,11 @@
         <div class="spinner"></div>
         <span>{{ fetchStatus }}</span>
       </div>
+      <!-- 告警进度条 -->
+      <div v-if="alertLoading" class="fetch-status" style="flex-direction:column;align-items:stretch;gap:6px">
+        <div class="progress-bar-wrap"><div class="progress-bar" :style="{ width: alertProgress + '%' }"></div></div>
+        <span class="progress-text">{{ alertStatusText }}</span>
+      </div>
       <div v-else-if="fetchDone" class="fetch-result">
         <span v-if="matchedPages.length" class="result-ok">
           匹配 {{ matchedPages.length }} 个页面{{ skippedCount ? `（跳过 ${skippedCount} 个非生产/不匹配项目）` : '' }}，解析出升级 {{ upgradeRows.length }} 条、变更 {{ changeRows.length }} 条{{ faultRows.length ? `、故障 ${faultRows.length} 条` : '' }}
@@ -87,6 +92,26 @@
         <div class="meta-field">
           <label>报告标题</label>
           <input type="text" class="input" v-model="reportTitle" placeholder="自动生成，可修改" />
+        </div>
+      </div>
+      <div class="meta-row" style="margin-top:12px">
+        <div class="meta-field">
+          <label>附加数据</label>
+          <label class="screenshot-task-check">
+            <input type="checkbox" v-model="includeAlerts" />
+            <span>统计夜莺监控告警</span>
+          </label>
+        </div>
+      </div>
+      <div class="meta-row" v-if="includeAlerts && visibleBusiGroups.length" style="margin-top:12px">
+        <div class="meta-field">
+          <label>夜莺业务组（自动按项目匹配，可手动调整）</label>
+          <div class="screenshot-task-list">
+            <label v-for="g in visibleBusiGroups" :key="g.id" class="screenshot-task-check">
+              <input type="checkbox" :value="g.id" v-model="selectedBusiGroups" />
+              <span>{{ g.name }}</span>
+            </label>
+          </div>
         </div>
       </div>
       <div class="meta-row" v-if="screenshotTasks.length" style="margin-top:12px">
@@ -247,6 +272,101 @@
             </tr>
             <tr v-if="!changeRows.length">
               <td colspan="8" class="empty-row">暂无数据</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 监控告警处理 -->
+    <div v-if="includeAlerts" class="card table-card">
+      <div class="card-top">
+        <h3>监控告警处理 <span class="row-count" v-if="alertRows.length">({{ alertRows.length }})</span></h3>
+        <button class="btn btn-sm btn-primary" @click="addTempMW">+ 添加临时维护</button>
+      </div>
+
+      <p v-if="alertSummary" class="summary-text" style="padding:8px 0">
+        本周告警 <strong>{{ alertSummary.total }}</strong> 条，有效告警 <strong>{{ alertRows.length }}</strong> 条，处理完成率
+        <strong>{{ alertCompletionRate }}%</strong>
+      </p>
+
+      <!-- 临时维护窗口（一次性，刷新后消失） -->
+      <div v-if="tempMWs.length" class="sub-section">
+        <label class="sub-title">临时维护窗口（仅本次报告有效）</label>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:80px">项目</th>
+                <th style="width:80px">环境</th>
+                <th style="width:100px">维护类型</th>
+                <th style="width:170px">开始时间</th>
+                <th style="width:170px">结束时间</th>
+                <th>匹配规则</th>
+                <th style="width:50px"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(mw, i) in tempMWs" :key="i">
+                <td><input class="cell-input" v-model="mw.project" placeholder="G01" /></td>
+                <td>
+                  <select class="cell-input" v-model="mw.environment">
+                    <option>PROD</option>
+                    <option>UAT</option>
+                  </select>
+                </td>
+                <td>
+                  <select class="cell-input" v-model="mw.maintenance_type">
+                    <option>临时维护</option>
+                    <option>紧急维护</option>
+                  </select>
+                </td>
+                <td><input type="datetime-local" class="cell-input" v-model="mw.start_time" @change="recalcAlerts" /></td>
+                <td><input type="datetime-local" class="cell-input" v-model="mw.end_time" @change="recalcAlerts" /></td>
+                <td><input class="cell-input" v-model="mw.match_rules" placeholder="TcpPortDown,ApplicationInstanceDown" @change="recalcAlerts" /></td>
+                <td class="action-cell">
+                  <button class="btn-icon danger" @click="tempMWs.splice(i, 1); recalcAlerts()" title="删除">&times;</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th style="min-width:200px">告警</th>
+              <th style="min-width:100px">影响</th>
+              <th style="min-width:100px">处理人</th>
+              <th style="width:90px">处理状态</th>
+              <th style="min-width:140px">备注</th>
+              <th style="width:50px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, i) in alertRows" :key="i">
+              <td>
+                <div class="alert-name">{{ row.rule_name }}</div>
+                <div class="alert-meta" v-if="row.instance">{{ row.instance }}</div>
+              </td>
+              <td><input class="cell-input" v-model="row.impact" /></td>
+              <td><input class="cell-input" v-model="row.handler" /></td>
+              <td>
+                <select class="cell-input" v-model="row.status">
+                  <option value="">请选择</option>
+                  <option>已处理</option>
+                  <option>处理中</option>
+                </select>
+              </td>
+              <td><input class="cell-input" v-model="row.note" /></td>
+              <td class="action-cell">
+                <button class="btn-icon danger" @click="alertRows.splice(i, 1)" title="删除">&times;</button>
+              </td>
+            </tr>
+            <tr v-if="!alertRows.length">
+              <td colspan="6" class="empty-row">暂无告警数据（请先点击顶部"获取数据"）</td>
             </tr>
           </tbody>
         </table>
@@ -421,6 +541,20 @@
           </table>
           <p v-else class="no-data">无变更记录</p>
 
+          <template v-if="includeAlerts">
+          <h3 class="section-title">监控告警处理</h3>
+          <p class="summary-text">- 本周告警 <strong>{{ alertSummary?.total || 0 }}</strong> 条，有效告警 <strong>{{ alertRows.length }}</strong> 条，处理完成率 <strong>{{ alertCompletionRate }}%</strong>。</p>
+          <table class="preview-table" v-if="alertRows.length">
+            <thead><tr><th>告警</th><th>影响</th><th>处理人</th><th>处理状态</th><th>备注</th></tr></thead>
+            <tbody>
+              <tr v-for="(a, i) in alertRows" :key="'a'+i">
+                <td>{{ a.rule_name }}</td><td>{{ a.impact || '无影响' }}</td><td>{{ a.handler || '' }}</td><td>{{ a.status || '已处理' }}</td><td>{{ a.note || '' }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="no-data">无告警数据</p>
+          </template>
+
           <h3 class="section-title">二、业务和知识库持续建设</h3>
           <h4 style="margin:8px 0;font-size:14px">1. 故障问题处理方案</h4>
           <template v-if="faultPlanRows.length">
@@ -498,6 +632,7 @@ import { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, Image
 import { saveAs } from 'file-saver'
 import api from '@/api'
 import { useAuthStore } from '@/stores/auth'
+import { processAlertsLocal, fetchAndProcessAlerts, loadMaintenanceWindows } from '@/composables/useAlertStats'
 
 const authStore = useAuthStore()
 const canExport = computed(() => authStore.hasPermission('confluence:export_report'))
@@ -520,6 +655,8 @@ const selectedConfluenceConn = ref('')
 const selectedJiraConn = ref('')
 
 onMounted(async () => {
+  // 加载夜莺业务组
+  loadN9eBusiGroups()
   try {
     // 加载连接列表
     const connRes = await api.get('/api/connections/public')
@@ -650,6 +787,132 @@ function removeIssueRow(project, index) {
 const showPreview = ref(false)
 const exporting = ref(false)
 
+// ============ 监控告警处理 ============
+const alertRows = ref([])
+const alertSummary = ref(null)
+const alertLoading = ref(false)
+const alertProgress = ref(0)
+const alertStatusText = ref('')
+const cachedAlertEvents = ref([])
+const cachedDBMWs = ref([])   // 从数据库加载的维护窗口（例行维护等，持久化）
+const tempMWs = ref([])        // 临时维护窗口（一次性，刷新消失）
+const includeAlerts = ref(true) // 是否统计夜莺告警，默认勾选
+const n9eBusiGroups = ref([])  // 所有夜莺业务组
+const selectedBusiGroups = ref([])  // 选中的业务组 ID 列表
+
+// 只显示"业务运维组-PROD"系列的业务组
+const visibleBusiGroups = computed(() => {
+  return n9eBusiGroups.value.filter(g => {
+    const name = g.name || ''
+    return name.includes('业务运维组') && name.includes('PROD')
+  })
+})
+
+// 根据项目筛选自动匹配业务组
+async function loadN9eBusiGroups() {
+  try {
+    const res = await api.get('/api/n9e/busi-groups')
+    n9eBusiGroups.value = res.data?.data || []
+    autoSelectBusiGroups()
+  } catch (e) { /* ignore */ }
+}
+
+function autoSelectBusiGroups() {
+  if (!filterProject.value) {
+    selectedBusiGroups.value = []
+    return
+  }
+  const upper = filterProject.value.toUpperCase()
+  // 只在"业务运维组-PROD"系列中匹配
+  const matched = visibleBusiGroups.value.filter(g => {
+    const name = (g.name || '').toUpperCase()
+    const re = new RegExp(`[-/_ ]${upper}(?:[-/_ ]|$)`)
+    return re.test(name)
+  })
+  selectedBusiGroups.value = matched.map(g => g.id)
+}
+
+const alertCompletionRate = computed(() => {
+  if (!alertRows.value.length) return 0
+  const handled = alertRows.value.filter(a => a.status === '已处理').length
+  return Math.round((handled / alertRows.value.length) * 100)
+})
+
+// 在主"获取数据"流程中调用，拉 n9e 告警（支持多业务组）
+async function loadAlertData() {
+  if (!startDate.value || !endDate.value) return
+  alertLoading.value = true
+  alertProgress.value = 0
+  alertStatusText.value = '正在准备业务组...'
+
+  try {
+    // 如果业务组列表空，先加载
+    if (n9eBusiGroups.value.length === 0) {
+      await loadN9eBusiGroups()
+    }
+
+    const bgids = selectedBusiGroups.value.length ? selectedBusiGroups.value : ['']
+
+    const stime = Math.floor(new Date(startDate.value).getTime() / 1000)
+    const etime = Math.floor(new Date(endDate.value + 'T23:59:59').getTime() / 1000)
+
+    let allEvents = []
+    let totalAll = 0
+    for (let i = 0; i < bgids.length; i++) {
+      const bgid = bgids[i]
+      alertStatusText.value = `业务组 ${i + 1}/${bgids.length}...`
+      const { events, total } = await fetchAndProcessAlerts({
+        stime, etime, bgid, severities: [1, 2],
+        onProgress: (cur, tot) => {
+          alertProgress.value = Math.min(Math.round((cur / tot) * 100), 100)
+          alertStatusText.value = `业务组 ${i + 1}/${bgids.length}: ${cur} / ${tot}`
+        },
+      })
+      allEvents = allEvents.concat(events)
+      totalAll += total
+    }
+
+    cachedAlertEvents.value = allEvents
+    alertSummary.value = { total: totalAll }
+    cachedDBMWs.value = await loadMaintenanceWindows()
+    tempMWs.value = []
+    recalcAlerts()
+  } catch (e) {
+    toast?.error?.('获取告警失败: ' + (e.response?.data?.error || e.message))
+  } finally {
+    alertLoading.value = false
+  }
+}
+
+// 用缓存的事件 + DB维护窗口 + 临时维护窗口 重新计算
+function recalcAlerts() {
+  if (!cachedAlertEvents.value.length) { alertRows.value = []; return }
+  // 临时 MW 转换为和 DB MW 一样的格式
+  const normalizedTempMWs = tempMWs.value.map(mw => ({
+    project: mw.project,
+    environment: mw.environment || 'PROD',
+    maintenance_type: mw.maintenance_type || '临时维护',
+    repeat_mode: 'once',
+    start_time: mw.start_time ? mw.start_time.replace('T', ' ') + ':00' : '',
+    end_time: mw.end_time ? mw.end_time.replace('T', ' ') + ':00' : '',
+    match_rules: mw.match_rules || '',
+    operations: [],
+  })).filter(mw => mw.project && mw.start_time && mw.end_time)
+
+  alertRows.value = processAlertsLocal(cachedAlertEvents.value, [...cachedDBMWs.value, ...normalizedTempMWs])
+}
+
+function addTempMW() {
+  tempMWs.value.push({
+    project: filterProject.value || '',
+    environment: 'PROD',
+    maintenance_type: '临时维护',
+    start_time: '',
+    end_time: '',
+    match_rules: '',
+  })
+}
+
 // 截图任务
 const screenshotTasks = ref([])
 const selectedTaskIds = ref([])
@@ -713,6 +976,9 @@ watch(filterProject, (proj) => {
 
 // 项目筛选变化时初始化问题处理行
 watch([filterProject, projectList], () => initIssueRows())
+
+// 项目筛选变化时自动匹配业务组
+watch(filterProject, () => autoSelectBusiGroups())
 
 // 将多个面板图片按 gridPos 拼成一张完整 Dashboard 图
 async function stitchPanelsToImage(panels, panelInfos, dashWidth = 1920) {
@@ -1062,6 +1328,19 @@ async function fetchAndParse() {
     const filtered = filterByDateRange(descendants)
 
     if (!filtered.length) {
+      // 没有 Confluence 页面也继续，可能只需要 Jira/夜莺数据
+      if (filterJiraProject.value) {
+        fetchStatus.value = '从 Jira 获取故障工单...'
+        await fetchJiraFaults()
+      }
+      if (filterJiraChangeProject.value && jiraChangeType.value) {
+        fetchStatus.value = '从 Jira 获取变更单...'
+        await fetchJiraChanges()
+      }
+      if (includeAlerts.value) {
+        fetchStatus.value = '从夜莺获取告警数据...'
+        await loadAlertData()
+      }
       fetchDone.value = true
       fetching.value = false
       return
@@ -1116,6 +1395,12 @@ async function fetchAndParse() {
     if (filterJiraChangeProject.value && jiraChangeType.value) {
       fetchStatus.value = '从 Jira 获取变更单...'
       await fetchJiraChanges()
+    }
+
+    // Step 7: 从夜莺获取告警数据（如果勾选）
+    if (includeAlerts.value) {
+      fetchStatus.value = '从夜莺获取告警数据...'
+      await loadAlertData()
     }
 
     fetchDone.value = true
@@ -1618,6 +1903,11 @@ async function clearAll() {
   optimizationRows.value = []
   faultPlanRows.value = []
   faultShareRows.value = []
+  alertRows.value = []
+  alertSummary.value = null
+  cachedAlertEvents.value = []
+  cachedDBMWs.value = []
+  tempMWs.value = []
   initIssueRows()
 }
 
@@ -1686,6 +1976,18 @@ async function exportWord() {
       ? changeRows.value.map(r => new TableRow({ children: [cell(r.project, { width: 1000 }), cell(r.type, { width: 1200 }), cell(r.summary, { width: 1800 }), cell(r.purpose, { width: 1800 }), cell(r.ticket, { width: 1000 }), cell(r.method, { width: 1000 }), cell(r.status, { width: 1000 })] }))
       : [new TableRow({ children: [cell(''), cell(''), cell(''), cell(''), cell(''), cell(''), cell('')] })]
     children.push(new Table({ width: { size: 9800, type: WidthType.DXA }, rows: [cH, ...cR] }))
+
+    // 监控告警处理
+    if (includeAlerts.value && (alertRows.value.length || alertSummary.value)) {
+      children.push(new Paragraph({ spacing: { before: 400, after: 150 }, children: [new TextRun({ text: '监控告警处理', size: 26, bold: true, font: '微软雅黑' })] }))
+      const totalAlerts = alertSummary.value?.total || 0
+      children.push(new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: `- 本周告警 ${totalAlerts} 条，有效告警 ${alertRows.value.length} 条，处理完成率 ${alertCompletionRate.value}%。`, size: 22, font: '微软雅黑' })] }))
+      const aH = new TableRow({ children: [cell('告警', { bold: true, width: 2800 }), cell('影响', { bold: true, width: 1500 }), cell('处理人', { bold: true, width: 1200 }), cell('处理状态', { bold: true, width: 1200 }), cell('备注', { bold: true, width: 3100 })] })
+      const aR = alertRows.value.length
+        ? alertRows.value.map(a => new TableRow({ children: [cell(a.rule_name, { width: 2800 }), cell(a.impact || '无影响', { width: 1500 }), cell(a.handler || '', { width: 1200 }), cell(a.status || '已处理', { width: 1200 }), cell(a.note || '', { width: 3100 })] }))
+        : [new TableRow({ children: [cell('无告警'), cell(''), cell(''), cell(''), cell('')] })]
+      children.push(new Table({ width: { size: 9800, type: WidthType.DXA }, rows: [aH, ...aR] }))
+    }
 
     // 二、业务和知识库持续建设
     children.push(new Paragraph({ spacing: { before: 400, after: 100 }, children: [new TextRun({ text: '二、业务和知识库持续建设', size: 24, bold: true, font: '微软雅黑' })] }))

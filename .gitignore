@@ -43,3 +43,26 @@ opsplatform/insert_hierarchy_data.ps1
 # Harbor 配置
 harbor/
 
+# Node.js
+node_modules/
+dist/
+
+# 编译二进制（Go build 产物）
+opsplatform-confluence-backend/confluence-backend
+sso-backend/sso-backend
+sso-backend/storage/
+
+# Claude Code 本地配置
+.claude/
+
+# 根目录临时文件
+STARTUP.md
+design-preview/
+hierarchy_tmp.txt
+*.sql
+mysql-query.sh
+
+# 非 backend/frontend 子系统
+opsplatform-probe-agent/
+opsplatform-probe-dist-nginx/
+opsplatform-jira-confluence-lock-backend/

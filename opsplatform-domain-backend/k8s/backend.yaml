@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsplatform-domain-backend
+  namespace: domain-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: opsplatform-domain-backend
+  template:
+    metadata:
+      labels:
+        app: opsplatform-domain-backend
+    spec:
+      containers:
+        - name: opsplatform-domain-backend
+          image: localhost:8070/opsplatform/opsplatform-domain-backend:v4
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 8088
+          env:
+            - name: PORT
+              value: "8080"
+            - name: METRICS_PORT
+              value: "8088"
+            - name: DEV_MODE
+              value: "true"
+            - name: JWT_SECRET
+              value: "domain-platform-jwt-secret-2024"
+            - name: MYSQL_HOST
+              value: "mysql.opsplatform.svc.cluster.local"
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_DATABASE
+              value: "domain_platform"
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 10
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsplatform-domain-backend
+  namespace: domain-platform
+spec:
+  type: ClusterIP
+  selector:
+    app: opsplatform-domain-backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: metrics
+      port: 8088
+      targetPort: 8088

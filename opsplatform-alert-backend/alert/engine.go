@@ -126,6 +126,7 @@ type Engine struct {
 	mu          sync.RWMutex
 	cron        *cron.Cron
 	jobs        map[int]cron.EntryID          // ruleID -> cronEntryID
+	reportJobs  map[int]cron.EntryID          // ruleID -> daily report cronEntryID (performance alert)
 	clients     map[int]*es.Client            // esConnectionID -> ES client
 	lokiClients map[int]*lokiclient.Client    // lokiConnectionID -> Loki client
 	stopping    bool
@@ -135,6 +136,7 @@ func NewEngine() *Engine {
 	return &Engine{
 		cron:        cron.New(cron.WithSeconds()),
 		jobs:        make(map[int]cron.EntryID),
+		reportJobs:  make(map[int]cron.EntryID),
 		clients:     make(map[int]*es.Client),
 		lokiClients: make(map[int]*lokiclient.Client),
 	}
@@ -245,6 +247,41 @@ func (e *Engine) restoreMetricsFromRedis() {
 			}
 		}
 
+		// Restore error code metrics from Redis
+		if mode == "found" && namespaces != "" {
+			var nsList []string
+			json.Unmarshal([]byte(namespaces), &nsList)
+			for _, ns := range nsList {
+				pattern := fmt.Sprintf("alert:error_code:%d:%s:*", ruleID, ns)
+				keys, _ := database.RDB.Keys(ctx, pattern).Result()
+				for _, key := range keys {
+					// key format: alert:error_code:{ruleID}:{ns}:{container}:{code}
+					parts := strings.SplitN(key, ":", 6)
+					if len(parts) < 6 {
+						continue
+					}
+					container := parts[4]
+					code := parts[5]
+					val, err := database.RDB.Get(ctx, key).Result()
+					if err != nil {
+						continue
+					}
+					// Parse cached JSON {"msg":"xxx","value":123}
+					var cached struct {
+						Msg   string  `json:"msg"`
+						Value float64 `json:"value"`
+					}
+					if json.Unmarshal([]byte(val), &cached) != nil {
+						continue
+					}
+					if Metrics != nil {
+						Metrics.RecordErrorCode(ruleIDStr, name, ns, container, code, cached.Msg, cached.Value, staticLabels)
+						restored++
+					}
+				}
+			}
+		}
+
 		// Restore alerting_count
 		countKey := fmt.Sprintf("alert:alerting_count:%d", ruleID)
 		if _, err := database.RDB.Get(ctx, countKey).Result(); err != nil {
@@ -253,7 +290,7 @@ func (e *Engine) restoreMetricsFromRedis() {
 	}
 
 	if restored > 0 {
-		log.Printf("[Metrics] 从 Redis 恢复了 %d 条容器指标", restored)
+		log.Printf("[Metrics] 从 Redis 恢复了 %d 条指标(容器状态+错误码)", restored)
 	}
 }
 
@@ -273,11 +310,17 @@ func (e *Engine) ReloadRule(ruleID int) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Remove existing job if present
+	// Remove existing main job if present
 	if entryID, ok := e.jobs[ruleID]; ok {
 		e.cron.Remove(entryID)
 		delete(e.jobs, ruleID)
 		log.Printf("[Engine] Removed job for rule %d", ruleID)
+	}
+	// Remove existing report job if present
+	if entryID, ok := e.reportJobs[ruleID]; ok {
+		e.cron.Remove(entryID)
+		delete(e.reportJobs, ruleID)
+		log.Printf("[Engine] Removed report job for rule %d", ruleID)
 	}
 
 	// Fetch rule from DB
@@ -292,7 +335,15 @@ func (e *Engine) ReloadRule(ruleID int) error {
 		return nil
 	}
 
-	return e.addJob(rule)
+	if err := e.addJob(rule); err != nil {
+		return err
+	}
+	if rule.ReportEnabled == 1 {
+		if err := e.addReportJob(rule); err != nil {
+			log.Printf("[Engine] Failed to add report job for rule %d: %v", rule.ID, err)
+		}
+	}
+	return nil
 }
 
 // RemoveRule removes a rule's job
@@ -305,6 +356,11 @@ func (e *Engine) RemoveRule(ruleID int) {
 		delete(e.jobs, ruleID)
 		log.Printf("[Engine] Removed job for rule %d", ruleID)
 	}
+	if entryID, ok := e.reportJobs[ruleID]; ok {
+		e.cron.Remove(entryID)
+		delete(e.reportJobs, ruleID)
+		log.Printf("[Engine] Removed report job for rule %d", ruleID)
+	}
 }
 
 // CleanupRuleRedisKeys removes all Redis keys for a deleted rule
@@ -314,6 +370,9 @@ func (e *Engine) CleanupRuleRedisKeys(ruleID int) {
 		fmt.Sprintf("alert:state:%d:*", ruleID),
 		fmt.Sprintf("alert:last_hit:%d:*", ruleID),
 		fmt.Sprintf("alert:dedup:%d:*", ruleID),
+		fmt.Sprintf("alert:daily_stats:%d:*", ruleID),
+		fmt.Sprintf("alert:daily_stats_domains:%d:*", ruleID),
+		fmt.Sprintf("alert:sent_tids:%d:*", ruleID),
 	}
 	for _, pattern := range patterns {
 		iter := database.RDB.Scan(ctx, 0, pattern, 100).Iterator()
@@ -341,7 +400,9 @@ func (e *Engine) loadAllRules() error {
 		message_title, COALESCE(message_template,''),
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
-		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''), dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), COALESCE(route_config,''), status
+		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''), dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), COALESCE(route_config,''),
+		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
+		status
 		FROM alert_rules WHERE status = 1`)
 	if err != nil {
 		return err
@@ -358,7 +419,9 @@ func (e *Engine) loadAllRules() error {
 			&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 			&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
 			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
-			&rule.PrometheusConfig, &rule.RouteConfig, &rule.Status)
+			&rule.PrometheusConfig, &rule.RouteConfig,
+			&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
+			&rule.Status)
 		if err != nil {
 			log.Printf("[Engine] Failed to scan rule: %v", err)
 			continue
@@ -367,6 +430,12 @@ func (e *Engine) loadAllRules() error {
 		if err := e.addJob(&rule); err != nil {
 			log.Printf("[Engine] Failed to add job for rule %d: %v", rule.ID, err)
 			continue
+		}
+		// Register daily report cron if enabled
+		if rule.ReportEnabled == 1 {
+			if err := e.addReportJob(&rule); err != nil {
+				log.Printf("[Engine] Failed to add report job for rule %d: %v", rule.ID, err)
+			}
 		}
 		// Register Prometheus metrics
 		if Metrics != nil {
@@ -398,6 +467,29 @@ func (e *Engine) addJob(rule *models.AlertRule) error {
 
 	e.jobs[rule.ID] = entryID
 	log.Printf("[Engine] Added job for rule %d '%s' schedule=%s", rule.ID, rule.Name, schedule)
+	return nil
+}
+
+// addReportJob registers a daily-report cron entry for a performance-alert rule.
+// Caller must hold e.mu (or be in a single-threaded init path like loadAllRules).
+func (e *Engine) addReportJob(rule *models.AlertRule) error {
+	schedule := rule.ReportSchedule
+	if schedule == "" {
+		schedule = "0 1 0 * * *"
+	}
+	fields := strings.Fields(schedule)
+	if len(fields) == 5 {
+		schedule = "0 " + schedule
+	}
+	ruleID := rule.ID
+	entryID, err := e.cron.AddFunc(schedule, func() {
+		sendDailyReport(ruleID)
+	})
+	if err != nil {
+		return fmt.Errorf("invalid report schedule '%s': %w", schedule, err)
+	}
+	e.reportJobs[rule.ID] = entryID
+	log.Printf("[Engine] Added report job for rule %d '%s' schedule=%s", rule.ID, rule.Name, schedule)
 	return nil
 }
 
@@ -686,6 +778,14 @@ func (e *Engine) executeRule(ruleID int) {
 	for _, hit := range result.Hits {
 		vars := extractFields(hit, rule.ExtractFields)
 
+		// ===== Performance alert: URL count check + daily stats + threshold filter =====
+		if rule.RealtimeEnabled == 1 || rule.ReportEnabled == 1 {
+			if !processPerformanceHit(ctx, rule, hit, vars) {
+				continue
+			}
+		}
+		// ===== end performance alert =====
+
 		// Route: check if this hit should be ignored or sent to a different group
 		activeSender := sender
 		if routeCfg != nil {
@@ -929,7 +1029,9 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
 		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''), dedup_field, dedup_ttl, max_alerts,
-		COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), status
+		COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3),
+		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
+		status
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType,
 		&rule.ESConnectionID, &rule.LokiConnectionID, &rule.LarkConfigID, &rule.ESIndex,
@@ -938,7 +1040,9 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 		&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
 		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
-		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.Status)
+		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency,
+		&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
+		&rule.Status)
 	return &rule, err
 }
 
@@ -1842,11 +1946,12 @@ func parseAggBuckets(raw []byte, aggName string) []string {
 
 // NamespacedContainerResult represents one container's aggregated result
 type NamespacedContainerResult struct {
-	Namespace string                   `json:"namespace"`
-	Container string                   `json:"container"`
-	Hits      []map[string]interface{} `json:"hits"`
-	HitCount  int                      `json:"hit_count"`
-	Message   string                   `json:"message"`   // 渲染好的样式1消息
+	Namespace   string                   `json:"namespace"`
+	Container   string                   `json:"container"`
+	Hits        []map[string]interface{} `json:"hits"`
+	IgnoredHits []map[string]interface{} `json:"-"` // hits filtered by ignore list (for metrics only)
+	HitCount    int                      `json:"hit_count"`
+	Message     string                   `json:"message"` // 渲染好的样式1消息
 }
 
 // QueryNamespacedLoki is the shared function for all 4 paths (preview, test-send, manual run, cron).
@@ -1917,8 +2022,9 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 
 			// Filter hits by route config (ignore specified code values)
 			routeCfg := parseRouteConfig(routeConfigJSON)
+			var filtered []map[string]interface{}
+			ignoredGroups := make(map[string][]map[string]interface{}) // container -> ignored hits
 			if routeCfg != nil {
-				var filtered []map[string]interface{}
 				for _, hit := range hits {
 					vars := extractFields(hit, extractFieldsJSON)
 					fieldVal := ""
@@ -1926,16 +2032,14 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 						fieldVal = fmt.Sprintf("%v", v)
 					}
 					if fieldVal != "" && routeCfg.matchRoute(fieldVal) == -1 {
-						log.Printf("[Namespaced] ignoring hit with %s=%s", routeCfg.RouteField, fieldVal)
+						container := getContainerName(hit)
+						ignoredGroups[container] = append(ignoredGroups[container], hit)
 						continue // ignored
 					}
 					filtered = append(filtered, hit)
 				}
 				log.Printf("[Namespaced] namespace '%s' after route filter: %d hits (filtered %d)", namespace, len(filtered), len(hits)-len(filtered))
 				hits = filtered
-				if len(hits) == 0 {
-					return
-				}
 			}
 
 			// Group by container
@@ -1946,14 +2050,28 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 			}
 
 			mu.Lock()
-			for container, containerHits := range containerGroups {
-				msg := BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJSON, messageTemplate, containerHits)
+			// Collect all containers that have hits (alerting or ignored)
+			allContainerSet := map[string]bool{}
+			for c := range containerGroups {
+				allContainerSet[c] = true
+			}
+			for c := range ignoredGroups {
+				allContainerSet[c] = true
+			}
+			for container := range allContainerSet {
+				alertHits := containerGroups[container]
+				ignoredHits := ignoredGroups[container]
+				msg := ""
+				if len(alertHits) > 0 {
+					msg = BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJSON, messageTemplate, alertHits)
+				}
 				allResults = append(allResults, NamespacedContainerResult{
-					Namespace: namespace,
-					Container: container,
-					Hits:      containerHits,
-					HitCount:  len(containerHits),
-					Message:   msg,
+					Namespace:   namespace,
+					Container:   container,
+					Hits:        alertHits,
+					IgnoredHits: ignoredHits,
+					HitCount:    len(alertHits),
+					Message:     msg,
 				})
 			}
 			mu.Unlock()
@@ -2007,12 +2125,6 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 		return
 	}
 
-	if len(results) == 0 {
-		log.Printf("[Engine] Rule %d: namespaced execution, no results", rule.ID)
-		database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
-		return
-	}
-
 	var totalSent int
 	var lastErr string
 
@@ -2022,30 +2134,34 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 
 	// Reset error code metrics before this run
 	if Metrics != nil {
-		Metrics.ResetErrorCodes()
+		Metrics.ResetErrorCodesByRule(ruleIDStr)
 	}
 
 	// Get all containers from Loki for each namespace (for found mode metrics)
 	alertingContainers := map[string]map[string]bool{} // namespace -> set of alerting containers
 	allContainers := map[string][]string{}              // namespace -> all containers
-	// Collect error codes per container: {ns+container} -> {code -> {msg, count}}
+	// Collect error codes per container: {ns+container} -> {code -> {msg, count, ignored}}
 	type codeInfo struct {
-		Msg   string
-		Count float64
+		Msg     string
+		Count   float64
+		Ignored bool // true if this code is in ignore list
 	}
 	errorCodes := map[string]map[string]*codeInfo{} // "ns:container" -> code -> info
 
 	for _, r := range results {
-		if alertingContainers[r.Namespace] == nil {
-			alertingContainers[r.Namespace] = map[string]bool{}
+		if len(r.Hits) > 0 {
+			if alertingContainers[r.Namespace] == nil {
+				alertingContainers[r.Namespace] = map[string]bool{}
+			}
+			alertingContainers[r.Namespace][r.Container] = true
 		}
-		alertingContainers[r.Namespace][r.Container] = true
 
-		// Extract error codes from hits
 		key := r.Namespace + ":" + r.Container
 		if errorCodes[key] == nil {
 			errorCodes[key] = map[string]*codeInfo{}
 		}
+
+		// Extract error codes from alerting hits
 		for _, hit := range r.Hits {
 			vars := extractFields(hit, rule.ExtractFields)
 			code := fmt.Sprintf("%v", vars["Code"])
@@ -2057,10 +2173,32 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 				msg = ""
 			}
 			if errorCodes[key][code] == nil {
-				errorCodes[key][code] = &codeInfo{Msg: msg, Count: 0}
+				errorCodes[key][code] = &codeInfo{Msg: msg, Count: 0, Ignored: false}
 			}
 			errorCodes[key][code].Count++
 		}
+
+		// Extract error codes from ignored hits (for metrics only)
+		for _, hit := range r.IgnoredHits {
+			vars := extractFields(hit, rule.ExtractFields)
+			code := fmt.Sprintf("%v", vars["Code"])
+			msg := fmt.Sprintf("%v", vars["Msg"])
+			if code == "" || code == "<nil>" {
+				continue
+			}
+			if msg == "<nil>" {
+				msg = ""
+			}
+			if errorCodes[key][code] == nil {
+				errorCodes[key][code] = &codeInfo{Msg: msg, Count: 0, Ignored: true}
+			}
+			errorCodes[key][code].Count++
+		}
+	}
+
+	if len(results) == 0 {
+		log.Printf("[Engine] Rule %d: namespaced execution, no results", rule.ID)
+		database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
 	}
 	if Metrics != nil {
 		// Query all container names per namespace from Loki
@@ -2081,6 +2219,10 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 	}
 
 	for _, r := range results {
+		// Skip results that only have ignored hits (no alerting hits)
+		if len(r.Hits) == 0 {
+			continue
+		}
 
 		// Dedup: namespace + container
 		if rule.DedupField != "" {
@@ -2178,16 +2320,58 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 		}
 		database.RDB.Set(ctx, fmt.Sprintf("alert:alerting_count:%d", rule.ID), alertingTotal, 10*time.Minute)
 
-		// Record error code metrics
+		// Record error code metrics with status:
+		// count > 0 = alerting, -1 = muted container, -2 = ignored code
+		// Also cache to Redis for restart recovery
+		errorCodeContainers := map[string]bool{} // track containers that have error codes
 		for key, codes := range errorCodes {
 			parts := strings.SplitN(key, ":", 2)
 			if len(parts) < 2 {
 				continue
 			}
 			ns, container := parts[0], parts[1]
+			errorCodeContainers[key] = true
+			muted := isMuted(rule.ID, container)
 			for code, info := range codes {
-				Metrics.RecordErrorCode(ruleIDStr, rule.Name, ns, container, code, info.Msg, info.Count)
+				var value float64
+				if muted {
+					value = -1
+				} else if info.Ignored {
+					value = -2
+				} else {
+					value = info.Count
+				}
+				Metrics.RecordErrorCode(ruleIDStr, rule.Name, ns, container, code, info.Msg, value, mergedLabels)
+				// Cache to Redis: key = alert:error_code:{ruleID}:{ns}:{container}:{code}
+				// value = JSON with msg and value
+				redisKey := fmt.Sprintf("alert:error_code:%d:%s:%s:%s", rule.ID, ns, container, code)
+				cacheVal := fmt.Sprintf(`{"msg":%q,"value":%v}`, info.Msg, value)
+				database.RDB.Set(ctx, redisKey, cacheVal, 10*time.Minute)
 			}
+		}
+
+		// Check if any active alerting code exists (value >= 1)
+		hasActiveAlert := false
+		for key, codes := range errorCodes {
+			parts := strings.SplitN(key, ":", 2)
+			container := ""
+			if len(parts) >= 2 {
+				container = parts[1]
+			}
+			muted := isMuted(rule.ID, container)
+			for _, info := range codes {
+				if !info.Ignored && !muted && info.Count >= 1 {
+					hasActiveAlert = true
+					break
+				}
+			}
+			if hasActiveAlert {
+				break
+			}
+		}
+		// No active alerts → write a single =0 indicator
+		if !hasActiveAlert {
+			Metrics.RecordErrorCode(ruleIDStr, rule.Name, "", "", "", "", 0, mergedLabels)
 		}
 	}
 }

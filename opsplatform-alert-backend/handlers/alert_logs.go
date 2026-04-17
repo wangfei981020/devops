@@ -57,7 +57,7 @@ func HandleListAlertLogs(w http.ResponseWriter, r *http.Request) {
 
 	// Query
 	query := `SELECT id, rule_id, rule_name, severity, message, COALESCE(es_raw,''),
-		COALESCE(lark_response,''), status, COALESCE(error_msg,''), created_at
+		COALESCE(lark_response,''), status, COALESCE(error_msg,''), CONVERT_TZ(created_at, '+00:00', '+08:00')
 		FROM alert_logs WHERE 1=1`
 
 	queryArgs := []interface{}{}

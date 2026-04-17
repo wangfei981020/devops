@@ -32,7 +32,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { LayoutDashboard, BookOpen, Search, FileText, Settings, Bug } from 'lucide-vue-next'
+import { LayoutDashboard, BookOpen, Search, FileText, Settings, Bug, Bell, Wrench } from 'lucide-vue-next'
 
 defineProps({ collapsed: Boolean })
 defineEmits(['toggle'])
@@ -45,6 +45,8 @@ const allMenuItems = [
   { path: '/search', label: '搜索', icon: Search, permKey: 'search' },
   { path: '/jira', label: 'Jira 工单', icon: Bug, permKey: 'jira' },
   { path: '/report', label: '生成报告', icon: FileText, permKey: 'report' },
+  { path: '/alert-stats', label: '告警统计', icon: Bell, permKey: 'alert-stats' },
+  { path: '/maintenance-windows', label: '维护窗口', icon: Wrench, permKey: 'alert-stats' },
   { path: '/settings', label: '系统设置', icon: Settings, permKey: 'settings' },
 ]
 
