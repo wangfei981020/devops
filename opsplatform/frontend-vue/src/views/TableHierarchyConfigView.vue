@@ -129,7 +129,7 @@ const formData = ref({ name: '', name_zh: '', name_en: '', project: '', site: ''
 // 批量添加弹窗
 const showBatchModal = ref(false)
 const batchMode = ref('project')
-const batchData = ref({ names: '', project: '', site: '', gameTypes: [] })
+const batchData = ref({ names: '', project: '', site: '', gameTypes: [], status: 'enabled' })
 
 // 添加菜单下拉
 const showAddMenu = ref(false)
@@ -456,11 +456,12 @@ function openBatchModal(mode) {
   showAddMenu.value = false
   batchMode.value = mode
   const firstProjectKey = tempProjects.value[0] ? getProjectKey(tempProjects.value[0]) : ''
-  batchData.value = { 
-    names: '', 
+  batchData.value = {
+    names: '',
     project: firstProjectKey,
     site: tempSites.value[0] ? getSiteKey(tempSites.value[0]) : '',
-    gameTypes: []
+    gameTypes: [],
+    status: 'enabled'
   }
   showBatchModal.value = true
 }
@@ -738,7 +739,7 @@ async function saveBatch() {
     for (const name of nameList) {
       const exists = newTables.some(t => t.name === name && t.site === site && t.project === project)
       if (!exists) {
-        newTables.push({ name, site, project, gameTypes: [...gameTypes], status: 'enabled' })
+        newTables.push({ name, site, project, gameTypes: [...gameTypes], status: batchData.value.status || 'enabled' })
         addedCount++
       } else {
         skippedCount++
@@ -1431,6 +1432,15 @@ const batchPlaceholder = computed(() => {
                   <span>{{ gt.label }}</span>
                 </label>
               </div>
+            </div>
+            <div class="form-group" v-if="batchMode === 'table'">
+              <label class="form-label">{{ t('tableHierarchy.form.tableStatus') }}</label>
+              <label class="status-toggle" @click.prevent="batchData.status = batchData.status === 'enabled' ? 'disabled' : 'enabled'">
+                <span class="status-checkbox" :class="{ checked: batchData.status === 'enabled' }">
+                  <svg v-if="batchData.status === 'enabled'" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </span>
+                <span :class="batchData.status === 'enabled' ? 'status-enabled' : 'status-disabled'">{{ batchData.status === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled') }}</span>
+              </label>
             </div>
             <div class="form-group">
               <label class="form-label required">
