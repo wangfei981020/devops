@@ -541,6 +541,8 @@ export default {
       dateRangeLabel: 'Date Range',
       dateTo: 'to',
       allOperations: 'All Operations',
+      tableStatusLabel: 'Table Status',
+      allTableStatus: 'All Status',
       allQcStatus: 'All QC Status',
       allProjects: 'All Projects',
       allDurations: 'All Durations',
@@ -564,6 +566,7 @@ export default {
       affectedProjects: 'Affected Projects',
       site: 'Site',
       table: 'Table',
+      tableStatus: 'Table Status',
       gameType: 'Game Type',
       maintenanceType: 'Maintenance Type',
       reason: 'Reason',
@@ -700,7 +703,8 @@ export default {
         gameType: 'Game Type',
         site: 'Site',
         projects: 'Projects',
-        maintCount: 'Maint. Count'
+        maintCount: 'Maint. Count',
+        status: 'Status'
       },
       byAffectedProject: 'By Affected Project',
       notFilled: 'Not Filled',
@@ -750,6 +754,7 @@ export default {
       csvProjects: 'Projects',
       csvSites: 'Sites',
       csvGameTypes: 'Game Types',
+      csvStatus: 'Status',
       csvTableDetail: 'Table Detail (By Project)',
       csvFileName: 'Table_Maintenance_Stats'
     },
@@ -828,9 +833,15 @@ export default {
       site: 'Site',
       table: 'Table',
       gameType: 'Game Type',
+      status: 'Status',
       siteCount: 'Sites',
       tableCount: 'Tables',
       actions: 'Actions'
+    },
+
+    status: {
+      enabled: 'Enabled',
+      disabled: 'Disabled'
     },
 
     types: {
@@ -882,6 +893,7 @@ export default {
       projectPlaceholder: 'e.g., Project A',
       sitePlaceholder: 'e.g., Site 1',
       tablePlaceholder: 'e.g., B01',
+      tableStatus: 'Table Status',
       batchHint: '(One per line)',
       batchProjectPlaceholder: 'Project A|项目A\nProject B|项目B\nProject C|项目C',
       batchSitePlaceholder: 'Site 1|1号现场\nSite 2|2号现场\nVIP Site|VIP现场',

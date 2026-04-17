@@ -105,6 +105,7 @@ const columns = computed(() => [
   { key: 'affected_projects', title: t('tableMaintenance.columns.affectedProjects'), width: 150, type: 'multi-select-projects', required: true },
   { key: 'affected_sites', title: t('tableMaintenance.columns.site'), width: 120, type: 'multi-select-sites' },
   { key: 'affected_tables', title: t('tableMaintenance.columns.table'), width: 120, type: 'multi-select-tables' },
+  { key: 'table_status', title: t('tableMaintenance.columns.tableStatus'), width: 100, type: 'table-status-display' },
   { key: 'game_types', title: t('tableMaintenance.columns.gameType'), width: 120, type: 'multi-select-game-types' },
   { key: 'maintenance_type', title: t('tableMaintenance.columns.maintenanceType'), width: 90, type: 'maint-type-select' },
   { key: 'reason', title: t('tableMaintenance.columns.reason'), width: 150, type: 'textarea' },
@@ -177,7 +178,7 @@ function onPageSizeChange(newSize) {
 }
 
 // 搜索输入（用户输入但未应用）
-const filterInput = ref({ search: '', status: '', dateStart: '', dateEnd: '', project: '', duration: '', operator: '', operation: '' })
+const filterInput = ref({ search: '', status: '', dateStart: '', dateEnd: '', project: '', duration: '', operator: '', operation: '', tableStatus: '' })
 // 已应用的搜索条件（点击搜索按钮后生效）
 const searchQuery = ref('')
 const selectedStatus = ref('')
@@ -186,6 +187,7 @@ const selectedProject = ref('')
 const selectedDuration = ref('')
 const selectedOperator = ref('')
 const selectedOperation = ref('')
+const selectedTableStatus = ref('')
 
 const selectedIds = ref([])
 
@@ -578,13 +580,17 @@ const statsAnalysis = computed(() => {
       tableNoMap[key].count++
     }
   })
-  const byTableNo = Object.values(tableNoMap).map(item => ({
-    tableNo: item.tableNo,
-    project: item.project,
-    gameType: item.gameType,
-    site: item.site,
-    count: item.count
-  })).sort((a, b) => b.count - a.count)
+  const byTableNo = Object.values(tableNoMap).map(item => {
+    const tableConfig = tableOptions.value.find(t => t.name === item.tableNo)
+    return {
+      tableNo: item.tableNo,
+      project: item.project,
+      gameType: item.gameType,
+      site: item.site,
+      status: tableConfig?.status || 'enabled',
+      count: item.count
+    }
+  }).sort((a, b) => b.count - a.count)
   const maxTableNo = Math.max(...byTableNo.map(i => i.count), 1)
 
   // 按桌台汇总统计（不区分项目，同名桌台合并计数）
@@ -599,13 +605,17 @@ const statsAnalysis = computed(() => {
     if (item.site && item.site !== '-') s.sites.add(item.site)
     if (item.gameType && item.gameType !== '-') item.gameType.split(', ').forEach(g => s.gameTypes.add(g))
   })
-  const byTableSummary = Object.values(tableSummaryMap).map(item => ({
-    tableNo: item.tableNo,
-    projects: Array.from(item.projects).join(', ') || '-',
-    sites: Array.from(item.sites).join(', ') || '-',
-    gameTypes: Array.from(item.gameTypes).join(', ') || '-',
-    count: item.count
-  })).sort((a, b) => b.count - a.count)
+  const byTableSummary = Object.values(tableSummaryMap).map(item => {
+    const tableConfig = tableOptions.value.find(t => t.name === item.tableNo)
+    return {
+      tableNo: item.tableNo,
+      projects: Array.from(item.projects).join(', ') || '-',
+      sites: Array.from(item.sites).join(', ') || '-',
+      gameTypes: Array.from(item.gameTypes).join(', ') || '-',
+      status: tableConfig?.status || 'enabled',
+      count: item.count
+    }
+  }).sort((a, b) => b.count - a.count)
   const maxTableSummary = Math.max(...byTableSummary.map(i => i.count), 1)
   
   // 按维护类型统计各时长分布（不统计"无"，按桌台数计数）
@@ -801,8 +811,8 @@ function exportStatsToExcel() {
 
   // 桌台汇总
   lines.push(t('tableMaintenance.statsPanel.csvTableSummary'))
-  lines.push(`${t('tableMaintenance.statsPanel.csvTableNo')},${t('tableMaintenance.statsPanel.csvMaintCount')},${t('tableMaintenance.statsPanel.csvProjects')},${t('tableMaintenance.statsPanel.csvSites')},${t('tableMaintenance.statsPanel.csvGameTypes')}`)
-  stats.byTableSummary?.forEach(item => lines.push(`${item.tableNo},${item.count},"${item.projects}","${item.sites}","${item.gameTypes}"`))
+  lines.push(`${t('tableMaintenance.statsPanel.csvTableNo')},${t('tableMaintenance.statsPanel.csvMaintCount')},${t('tableMaintenance.statsPanel.csvProjects')},${t('tableMaintenance.statsPanel.csvSites')},${t('tableMaintenance.statsPanel.csvGameTypes')},${t('tableMaintenance.statsPanel.csvStatus')}`)
+  stats.byTableSummary?.forEach(item => lines.push(`${item.tableNo},${item.count},"${item.projects}","${item.sites}","${item.gameTypes}",${item.status === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled')}`))
   lines.push('')
 
   // 桌台明细（按项目）
@@ -830,7 +840,7 @@ const issueTypeOptions = ['设备故障', '清洁问题', '物品损坏', '桌�
 
 const formColumns = computed(() => {
   return columns.value.filter(c => {
-    if (['checkbox', 'actions', 'readonly', 'datetime-readonly'].includes(c.type)) return false
+    if (['checkbox', 'actions', 'readonly', 'datetime-readonly', 'table-status-display'].includes(c.type)) return false
     if (['checkbox', 'actions', 'created_by', 'created_at', 'updated_at'].includes(c.key)) return false
     if (c.visible === false) return false
     // 只有"维护"操作才显示结束时间、结束截图、关闭维护时长
@@ -848,7 +858,7 @@ const attachmentColumns = computed(() => {
 // 详情页面的列（根据当前记录的operation动态显示）
 const detailColumns = computed(() => {
   return columns.value.filter(c => {
-    if (['checkbox', 'actions', 'readonly', 'datetime-readonly'].includes(c.type)) return false
+    if (['checkbox', 'actions', 'readonly', 'datetime-readonly', 'table-status-display'].includes(c.type)) return false
     if (['checkbox', 'actions', 'created_by', 'created_at', 'updated_at'].includes(c.key)) return false
     if (c.visible === false) return false
     // 只有"维护"操作才显示结束时间、结束截图、关闭维护时长
@@ -961,6 +971,13 @@ const allFilteredRecords = computed(() => {
   // 按操作类型筛选
   if (selectedOperation.value) {
     list = list.filter(r => r.operation === selectedOperation.value)
+  }
+  // 按桌台状态筛选
+  if (selectedTableStatus.value) {
+    list = list.filter(r => {
+      const tables = parseMultiSelect(r.affected_tables)
+      return tables.some(t => getTableStatus(t) === selectedTableStatus.value)
+    })
   }
   return list
 })
@@ -1298,6 +1315,12 @@ function getSearchFilteredTables() {
   const query = tableSearchQuery.value.trim().toLowerCase()
   if (!query) return tables
   return tables.filter(t => t.toLowerCase().includes(query))
+}
+
+// 获取桌台状态
+function getTableStatus(tableName) {
+  const table = tableOptions.value.find(t => t.name === tableName)
+  return table?.status || 'enabled'
 }
 
 // 清除桌台搜索
@@ -1904,11 +1927,12 @@ function applyFilters() {
   selectedDuration.value = filterInput.value.duration
   selectedOperator.value = filterInput.value.operator
   selectedOperation.value = filterInput.value.operation
+  selectedTableStatus.value = filterInput.value.tableStatus
   currentPage.value = 1
 }
 
 function resetFilters() {
-  filterInput.value = { search: '', status: '', dateStart: '', dateEnd: '', project: '', duration: '', operator: '', operation: '' }
+  filterInput.value = { search: '', status: '', dateStart: '', dateEnd: '', project: '', duration: '', operator: '', operation: '', tableStatus: '' }
   searchQuery.value = ''
   selectedStatus.value = ''
   dateRange.value = { start: '', end: '' }
@@ -1916,6 +1940,7 @@ function resetFilters() {
   selectedDuration.value = ''
   selectedOperator.value = ''
   selectedOperation.value = ''
+  selectedTableStatus.value = ''
   currentPage.value = 1
 }
 
@@ -2108,6 +2133,14 @@ async function exportToExcel() {
               <option v-for="op in operationOptions" :key="op" :value="op">{{ op }}</option>
             </select>
           </div>
+          <div class="filter-field">
+            <label>{{ t('tableMaintenance.filters.tableStatusLabel') }}</label>
+            <select v-model="filterInput.tableStatus">
+              <option value="">{{ t('tableMaintenance.filters.allTableStatus') }}</option>
+              <option value="enabled">{{ t('tableHierarchy.status.enabled') }}</option>
+              <option value="disabled">{{ t('tableHierarchy.status.disabled') }}</option>
+            </select>
+          </div>
           <div class="filter-field date-field">
             <label>{{ t('tableMaintenance.filters.dateRangeLabel') }}</label>
             <div class="date-inputs">
@@ -2165,9 +2198,21 @@ async function exportToExcel() {
                 <td v-else-if="col.type === 'yes-no'">
                   <span class="yes-no-tag" :class="r[col.key] === '是' ? 'tag-yes' : 'tag-no'">{{ r[col.key] || '-' }}</span>
                 </td>
-                <td v-else-if="col.type === 'multi-select-projects' || col.type === 'multi-select-tables'">
+                <td v-else-if="col.type === 'multi-select-projects'">
                   <div class="multi-select-tags" v-if="parseMultiSelect(r[col.key])?.length">
                     <span v-for="(item, idx) in parseMultiSelect(r[col.key])" :key="idx" class="multi-tag" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}</span>
+                  </div>
+                  <span v-else class="cell-muted">-</span>
+                </td>
+                <td v-else-if="col.type === 'multi-select-tables'">
+                  <div class="multi-select-tags" v-if="parseMultiSelect(r[col.key])?.length">
+                    <span v-for="(item, idx) in parseMultiSelect(r[col.key])" :key="idx" class="multi-tag" :class="{ 'table-disabled': getTableStatus(item) === 'disabled' }" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}<span v-if="getTableStatus(item) === 'disabled'" class="status-tag-disabled-inline">{{ t('tableHierarchy.status.disabled') }}</span></span>
+                  </div>
+                  <span v-else class="cell-muted">-</span>
+                </td>
+                <td v-else-if="col.type === 'table-status-display'">
+                  <div class="multi-select-tags" v-if="parseMultiSelect(r.affected_tables)?.length">
+                    <span v-for="(item, idx) in parseMultiSelect(r.affected_tables)" :key="idx" :class="getTableStatus(item) === 'enabled' ? 'status-tag-enabled' : 'status-tag-disabled'">{{ item }}: {{ getTableStatus(item) === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled') }}</span>
                   </div>
                   <span v-else class="cell-muted">-</span>
                 </td>
@@ -2662,6 +2707,7 @@ async function exportToExcel() {
                     <th>{{ t('tableMaintenance.statsPanel.tableColumns.projects') }}</th>
                     <th>{{ t('tableMaintenance.statsPanel.tableColumns.site') }}</th>
                     <th>{{ t('tableMaintenance.statsPanel.tableColumns.gameType') }}</th>
+                    <th>{{ t('tableMaintenance.statsPanel.tableColumns.status') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2671,6 +2717,7 @@ async function exportToExcel() {
                     <td class="projects-cell">{{ item.projects }}</td>
                     <td>{{ item.sites }}</td>
                     <td>{{ item.gameTypes }}</td>
+                    <td><span :class="item.status === 'enabled' ? 'status-tag-enabled' : 'status-tag-disabled'">{{ item.status === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled') }}</span></td>
                   </tr>
                 </tbody>
               </table>
@@ -2690,6 +2737,7 @@ async function exportToExcel() {
                     <th>{{ t('tableMaintenance.statsPanel.tableColumns.projects') }}</th>
                     <th>{{ t('tableMaintenance.statsPanel.tableColumns.site') }}</th>
                     <th>{{ t('tableMaintenance.statsPanel.tableColumns.gameType') }}</th>
+                    <th>{{ t('tableMaintenance.statsPanel.tableColumns.status') }}</th>
                     <th>{{ t('tableMaintenance.statsPanel.tableColumns.maintCount') }}</th>
                   </tr>
                 </thead>
@@ -2699,6 +2747,7 @@ async function exportToExcel() {
                     <td class="projects-cell">{{ item.project }}</td>
                     <td>{{ item.site }}</td>
                     <td>{{ item.gameType }}</td>
+                    <td><span :class="item.status === 'enabled' ? 'status-tag-enabled' : 'status-tag-disabled'">{{ item.status === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled') }}</span></td>
                     <td><span class="count-badge">{{ item.count }}</span></td>
                   </tr>
                 </tbody>
@@ -2854,6 +2903,7 @@ async function exportToExcel() {
                               <svg v-if="isTableSelected(opt)" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
                             </span>
                             <span class="option-label" :style="{ color: getProjectColor(idx) }">{{ opt }}</span>
+                            <span v-if="getTableStatus(opt) === 'disabled'" class="status-tag-disabled-sm">{{ t('tableHierarchy.status.disabled') }}</span>
                           </label>
                           <div v-if="tableSearchQuery && !getSearchFilteredTables().length" class="no-match">
                             <span>没有找到匹配的桌台</span>
@@ -2951,8 +3001,12 @@ async function exportToExcel() {
                   <span v-else-if="col.type === 'status'" class="status-tag" :class="'status-' + getStatusClass(detailRecord[col.key])">{{ detailRecord[col.key] || '-' }}</span>
                   <span v-else-if="col.type === 'duration-select'" class="duration-tag" :class="getDurationClass(detailRecord[col.key])">{{ detailRecord[col.key] || '-' }}</span>
                   <span v-else-if="col.type === 'yes-no'" class="yes-no-tag" :class="detailRecord[col.key] === '是' ? 'tag-yes' : 'tag-no'">{{ detailRecord[col.key] || '-' }}</span>
-                  <div v-else-if="col.type === 'multi-select-projects' || col.type === 'multi-select-tables'" class="multi-select-tags">
+                  <div v-else-if="col.type === 'multi-select-projects'" class="multi-select-tags">
                     <span v-for="(item, idx) in parseMultiSelect(detailRecord[col.key])" :key="idx" class="multi-tag" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}</span>
+                    <span v-if="!parseMultiSelect(detailRecord[col.key])?.length" class="cell-muted">-</span>
+                  </div>
+                  <div v-else-if="col.type === 'multi-select-tables'" class="multi-select-tags">
+                    <span v-for="(item, idx) in parseMultiSelect(detailRecord[col.key])" :key="idx" class="multi-tag" :class="{ 'table-disabled': getTableStatus(item) === 'disabled' }" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}<span v-if="getTableStatus(item) === 'disabled'" class="status-tag-disabled-inline">{{ t('tableHierarchy.status.disabled') }}</span></span>
                     <span v-if="!parseMultiSelect(detailRecord[col.key])?.length" class="cell-muted">-</span>
                   </div>
                   <div v-else-if="col.type === 'multi-select-sites'" class="multi-select-tags">
@@ -4115,6 +4169,13 @@ body.light-mode .data-table tr:hover td.sticky-col {
 .btn-link:hover { text-decoration: underline; }
 
 .btn-sm { padding: 8px 16px; font-size: 13px; }
+
+/* 桌台状态标签 */
+.status-tag-enabled { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(16, 185, 129, 0.12); color: #10b981; }
+.status-tag-disabled { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(156, 163, 175, 0.15); color: #9ca3af; }
+.status-tag-disabled-sm { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; font-weight: 500; background: rgba(156, 163, 175, 0.15); color: #9ca3af; margin-left: 4px; }
+.status-tag-disabled-inline { font-size: 10px; margin-left: 3px; opacity: 0.7; }
+.multi-tag.table-disabled { opacity: 0.6; }
 </style>
 
 <style>

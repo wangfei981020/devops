@@ -541,6 +541,8 @@ export default {
       dateRangeLabel: '日期范围',
       dateTo: '至',
       allOperations: '全部操作',
+      tableStatusLabel: '桌台状态',
+      allTableStatus: '全部状态',
       allQcStatus: '全部质检状态',
       allProjects: '全部项目',
       allDurations: '全部时长',
@@ -564,6 +566,7 @@ export default {
       affectedProjects: '受影响项目',
       site: '现场',
       table: '桌台',
+      tableStatus: '桌台状态',
       gameType: '游戏类型',
       maintenanceType: '维护类型',
       reason: '原因',
@@ -700,7 +703,8 @@ export default {
         gameType: '游戏类型',
         site: '现场',
         projects: '涉及项目',
-        maintCount: '维护次数'
+        maintCount: '维护次数',
+        status: '状态'
       },
       byAffectedProject: '受影响项目',
       notFilled: '未填写',
@@ -750,6 +754,7 @@ export default {
       csvProjects: '涉及项目',
       csvSites: '涉及现场',
       csvGameTypes: '游戏类型',
+      csvStatus: '状态',
       csvTableDetail: '桌台明细（按项目）',
       csvFileName: '桌台维护统计'
     },
@@ -828,9 +833,15 @@ export default {
       site: '现场',
       table: '桌台',
       gameType: '游戏类型',
+      status: '状态',
       siteCount: '现场数',
       tableCount: '桌台数',
       actions: '操作'
+    },
+
+    status: {
+      enabled: '启用',
+      disabled: '关闭'
     },
 
     types: {
@@ -882,6 +893,7 @@ export default {
       projectPlaceholder: '如：项目A',
       sitePlaceholder: '如：1号现场',
       tablePlaceholder: '如：B01',
+      tableStatus: '桌台状态',
       batchHint: '（每行一个）',
       batchGameTypeHintBatch: '（每行一个，格式：中文名称|英文名称）',
       batchProjectPlaceholder: '项目A|Project A\n项目B|Project B\n项目C|Project C',

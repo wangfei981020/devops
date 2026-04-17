@@ -124,7 +124,7 @@ const showFormModal = ref(false)
 const formMode = ref('project')
 const editingIdx = ref(-1)
 // 支持多语言名称：name_zh, name_en
-const formData = ref({ name: '', name_zh: '', name_en: '', project: '', site: '', gameTypes: [] })
+const formData = ref({ name: '', name_zh: '', name_en: '', project: '', site: '', gameTypes: [], status: 'enabled' })
 
 // 批量添加弹窗
 const showBatchModal = ref(false)
@@ -360,6 +360,7 @@ const flatTableList = computed(() => {
     const siteObj = tempSites.value.find(s => getSiteKey(s) === table.site && s.project === table.project)
     return {
       ...table,
+      status: table.status || 'enabled', // 兼容旧数据，默认启用
       projectName: projObj ? getProjectName(projObj) : table.project || '-',
       projectKey: table.project || '',
       siteName: siteObj ? getSiteName(siteObj) : table.site || '-',
@@ -438,13 +439,14 @@ function openAddModal(mode, parentProject = '', parentSite = '') {
   formMode.value = mode
   editingIdx.value = -1
   const firstProjectKey = tempProjects.value[0] ? getProjectKey(tempProjects.value[0]) : ''
-  formData.value = { 
-    name: '', 
+  formData.value = {
+    name: '',
     name_zh: '',
     name_en: '',
     project: parentProject || firstProjectKey,
     site: parentSite || (tempSites.value[0] ? getSiteKey(tempSites.value[0]) : ''),
-    gameTypes: []
+    gameTypes: [],
+    status: 'enabled'
   }
   showFormModal.value = true
 }
@@ -483,7 +485,7 @@ function openEditModal(mode, idx, item) {
       gameTypes: [] 
     }
   } else if (mode === 'table') {
-    formData.value = { name: item.name, name_zh: '', name_en: '', project: item.project || '', site: item.site, gameTypes: item.gameTypes || [] }
+    formData.value = { name: item.name, name_zh: '', name_en: '', project: item.project || '', site: item.site, gameTypes: item.gameTypes || [], status: item.status || 'enabled' }
   }
   showFormModal.value = true
 }
@@ -626,7 +628,8 @@ async function saveForm() {
       return
     }
     const gameTypes = formData.value.gameTypes || []
-    const newItem = { name: name.trim(), site, project, gameTypes }
+    const status = formData.value.status || 'enabled'
+    const newItem = { name: name.trim(), site, project, gameTypes, status }
     if (editingIdx.value >= 0) {
       newTables[editingIdx.value] = newItem
     } else {
@@ -735,7 +738,7 @@ async function saveBatch() {
     for (const name of nameList) {
       const exists = newTables.some(t => t.name === name && t.site === site && t.project === project)
       if (!exists) {
-        newTables.push({ name, site, project, gameTypes: [...gameTypes] })
+        newTables.push({ name, site, project, gameTypes: [...gameTypes], status: 'enabled' })
         addedCount++
       } else {
         skippedCount++
@@ -1029,6 +1032,7 @@ const batchPlaceholder = computed(() => {
               <th style="width: 150px;">{{ t('tableHierarchy.columns.site') }}</th>
               <th style="width: 120px;">{{ t('tableHierarchy.columns.table') }}</th>
               <th style="width: 200px;">{{ t('tableHierarchy.columns.gameType') }}</th>
+              <th style="width: 100px;">{{ t('tableHierarchy.columns.status') }}</th>
               <th style="width: 120px;" class="sticky-col">{{ t('tableHierarchy.columns.actions') }}</th>
             </tr>
           </thead>
@@ -1045,6 +1049,9 @@ const batchPlaceholder = computed(() => {
                   </div>
                   <span v-else class="cell-muted">-</span>
                 </td>
+                <td>
+                  <span :class="row.status === 'enabled' ? 'status-tag-on' : 'status-tag-off'">{{ row.status === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled') }}</span>
+                </td>
                 <td class="sticky-col">
                   <div class="action-btns">
                     <button v-if="canUpdate" class="action-btn" @click="openEditModal('table', getTableIndex(row), row)" :title="t('tableHierarchy.actions.edit')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
@@ -1054,7 +1061,7 @@ const batchPlaceholder = computed(() => {
               </tr>
             </template>
             <tr v-else>
-              <td colspan="6" class="empty-cell">
+              <td colspan="7" class="empty-cell">
                 <div class="empty-state">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10"/><path d="M9 16v4"/><path d="M15 16v4"/></svg>
                   <p>{{ searchQuery ? t('tableHierarchy.empty.noMatch') : t('tableHierarchy.empty.noData') }}</p>
@@ -1368,6 +1375,15 @@ const batchPlaceholder = computed(() => {
                 </label>
               </div>
             </div>
+            <div class="form-group" v-if="formMode === 'table'">
+              <label class="form-label">{{ t('tableHierarchy.form.tableStatus') }}</label>
+              <label class="status-toggle" @click.prevent="formData.status = formData.status === 'enabled' ? 'disabled' : 'enabled'">
+                <span class="status-checkbox" :class="{ checked: formData.status === 'enabled' }">
+                  <svg v-if="formData.status === 'enabled'" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </span>
+                <span :class="formData.status === 'enabled' ? 'status-enabled' : 'status-disabled'">{{ formData.status === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled') }}</span>
+              </label>
+            </div>
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" @click="showFormModal = false">{{ t('tableHierarchy.actions.cancel') }}</button>
@@ -1673,6 +1689,20 @@ thead .sticky-col { background: var(--bg-secondary); z-index: 2; }
 .form-textarea { width: 100%; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: 10px; font-size: 14px; font-family: inherit; background: var(--bg-secondary); color: var(--text-primary); transition: all 0.2s; box-sizing: border-box; resize: vertical; min-height: 120px; }
 .form-textarea:focus { outline: none; border-color: #3a84ff; box-shadow: 0 0 0 3px rgba(58, 132, 255, 0.12); }
 .form-textarea::placeholder { color: var(--text-muted); }
+
+/* 状态标签（列表展示） */
+.status-tag-on { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(16, 185, 129, 0.12); color: #10b981; }
+.status-tag-on::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
+.status-tag-off { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(156, 163, 175, 0.15); color: #9ca3af; }
+.status-tag-off::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #9ca3af; }
+
+/* 状态切换（编辑弹窗） */
+.status-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.status-checkbox { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 4px; border: 2px solid #d1d5db; background: white; transition: all 0.2s; flex-shrink: 0; }
+.status-checkbox svg { width: 14px; height: 14px; }
+.status-checkbox.checked { background: #10b981; border-color: #10b981; }
+.status-enabled { color: #10b981; font-size: 13px; font-weight: 500; }
+.status-disabled { color: #9ca3af; font-size: 13px; font-weight: 500; }
 
 @media (max-width: 900px) {
   .filters-grid { grid-template-columns: repeat(2, 1fr); }
