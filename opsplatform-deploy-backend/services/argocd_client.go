@@ -1,0 +1,144 @@
+package services
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+)
+
+type ArgocdClient struct {
+	BaseURL string
+	Token   string
+	HTTP    *http.Client
+}
+
+func NewArgocdClient(baseURL, token string) *ArgocdClient {
+	return &ArgocdClient{
+		BaseURL: baseURL,
+		Token:   token,
+		HTTP: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // argocd 常用自签证书
+			},
+		},
+	}
+}
+
+func (c *ArgocdClient) do(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
+	var reqBody io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, 0, err
+		}
+		reqBody = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reqBody)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return raw, resp.StatusCode, fmt.Errorf("argocd %s %s -> %d: %s", method, path, resp.StatusCode, string(raw))
+	}
+	return raw, resp.StatusCode, nil
+}
+
+// Ping 测试连通，返回 argocd 版本
+func (c *ArgocdClient) Ping(ctx context.Context) (string, error) {
+	raw, _, err := c.do(ctx, "GET", "/api/version", nil)
+	if err != nil {
+		return "", err
+	}
+	var v struct {
+		Version string `json:"Version"`
+	}
+	_ = json.Unmarshal(raw, &v)
+	return v.Version, nil
+}
+
+type AppStatus struct {
+	Name       string `json:"name"`
+	SyncStatus string `json:"sync_status"` // Synced / OutOfSync / Unknown
+	Health     string `json:"health"`      // Healthy / Progressing / Degraded / Missing / Suspended
+	Message    string `json:"message"`
+}
+
+// GetAppStatus 读取 application 的 sync 和 health
+func (c *ArgocdClient) GetAppStatus(ctx context.Context, name string) (*AppStatus, error) {
+	raw, _, err := c.do(ctx, "GET", "/api/v1/applications/"+name, nil)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Status struct {
+			Sync struct {
+				Status string `json:"status"`
+			} `json:"sync"`
+			Health struct {
+				Status  string `json:"status"`
+				Message string `json:"message"`
+			} `json:"health"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("parse argocd app: %w", err)
+	}
+	return &AppStatus{
+		Name:       name,
+		SyncStatus: resp.Status.Sync.Status,
+		Health:     resp.Status.Health.Status,
+		Message:    resp.Status.Health.Message,
+	}, nil
+}
+
+// Sync 触发应用同步
+func (c *ArgocdClient) Sync(ctx context.Context, name string) error {
+	body := map[string]interface{}{
+		"revision": "HEAD",
+		"prune":    false,
+		"dryRun":   false,
+		"strategy": map[string]interface{}{"hook": map[string]interface{}{}},
+	}
+	_, _, err := c.do(ctx, "POST", "/api/v1/applications/"+name+"/sync", body)
+	return err
+}
+
+// RestartDeployment 调用 argocd application resource action = restart
+// 对 Deployment 做一次 rollout 重启
+func (c *ArgocdClient) RestartDeployment(ctx context.Context, appName, namespace, deploymentName string) error {
+	path := fmt.Sprintf(
+		"/api/v1/applications/%s/resource/actions?resourceName=%s&namespace=%s&group=apps&version=v1&kind=Deployment",
+		appName, deploymentName, namespace,
+	)
+	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+path, bytes.NewReader([]byte(`"restart"`)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("restart %s/%s: %d %s", namespace, deploymentName, resp.StatusCode, string(raw))
+	}
+	return nil
+}
