@@ -1,7 +1,11 @@
 # binaries
 opsplatform-deploy-backend
 opsplatform-deploy-backend.exe
+deploy-backend.exe
 *.exe
+
+# 重新允许 migration SQL（根 .gitignore 忽略了所有 *.sql）
+!database/migrations/*.sql
 # local git cache
 git-cache/
 # local env
