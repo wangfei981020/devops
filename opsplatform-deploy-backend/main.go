@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"opsplatform-deploy-backend/config"
+	"opsplatform-deploy-backend/database"
 )
 
 func main() {
@@ -13,6 +14,11 @@ func main() {
 
 	cfg := config.Load()
 	log.Printf("config: Port=%s HealthPort=%s GitCacheDir=%s", cfg.Port, cfg.HealthPort, cfg.GitCacheDir)
+
+	if err := database.InitMySQL(cfg); err != nil {
+		log.Fatalf("init mysql: %v", err)
+	}
+	defer database.Close()
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
