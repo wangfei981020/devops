@@ -41,7 +41,10 @@ func main() {
 	r.Use(handlers.RecoverMiddleware)
 	r.Use(handlers.LoggingMiddleware)
 	api := r.PathPrefix("/api").Subrouter()
-	_ = api // handlers 在后续 Task 注册
+
+	api.HandleFunc("/global-config", handlers.HandleGetGlobalConfig).Methods("GET", "OPTIONS")
+	api.HandleFunc("/global-config", handlers.HandleUpdateGlobalConfig).Methods("PUT", "OPTIONS")
+	api.HandleFunc("/global-config/test-gitlab", handlers.HandleTestGlobalGitlab).Methods("POST", "OPTIONS")
 
 	log.Printf("API listening on %s", cfg.Port)
 	server := &http.Server{Addr: cfg.Port, Handler: r}
