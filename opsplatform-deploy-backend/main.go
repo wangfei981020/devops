@@ -12,6 +12,7 @@ import (
 	"opsplatform-deploy-backend/crypto"
 	"opsplatform-deploy-backend/database"
 	"opsplatform-deploy-backend/database/migrations"
+	"opsplatform-deploy-backend/handlers"
 )
 
 func main() {
@@ -33,7 +34,12 @@ func main() {
 
 	go startHealthServer(cfg.HealthPort)
 
+	handlers.SetConfig(cfg)
+
 	r := mux.NewRouter()
+	r.Use(handlers.CORSMiddleware(cfg.CORSOrigin))
+	r.Use(handlers.RecoverMiddleware)
+	r.Use(handlers.LoggingMiddleware)
 	api := r.PathPrefix("/api").Subrouter()
 	_ = api // handlers 在后续 Task 注册
 
