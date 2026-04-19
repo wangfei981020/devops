@@ -123,3 +123,70 @@ func GitCtx(parent context.Context, seconds int) (context.Context, context.Cance
 	}
 	return context.WithTimeout(parent, time.Duration(seconds)*time.Second)
 }
+
+// WriteFile 在 clone 目录里写一个相对路径的文件
+func (g *GitService) WriteFile(projectEnvName, relPath string, content []byte) error {
+	full := filepath.Join(g.RepoPath(projectEnvName), relPath)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(full, content, 0o644)
+}
+
+// ReadFile 读一个相对路径
+func (g *GitService) ReadFile(projectEnvName, relPath string) ([]byte, error) {
+	full := filepath.Join(g.RepoPath(projectEnvName), relPath)
+	return os.ReadFile(full)
+}
+
+// CommitAll 在 clone 目录下 git add -A + commit
+// 返回新 commit hash (short)。没有 staged changes 时返回 ("", nil) 代表 no-op。
+func (g *GitService) CommitAll(ctx context.Context, projectEnvName, message string) (string, error) {
+	path := g.RepoPath(projectEnvName)
+	if out, err := exec.CommandContext(ctx, "git", "-C", path, "add", "-A").CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git add: %w\n%s", err, out)
+	}
+	out, _ := exec.CommandContext(ctx, "git", "-C", path, "diff", "--cached", "--name-only").CombinedOutput()
+	if strings.TrimSpace(string(out)) == "" {
+		return "", nil
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "commit", "-m", message)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git commit: %w\n%s", err, out)
+	}
+	shaOut, err := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--short", "HEAD").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse: %w", err)
+	}
+	return strings.TrimSpace(string(shaOut)), nil
+}
+
+// Push 推当前分支；冲突自动 pull --rebase 重试 retries 次
+func (g *GitService) Push(ctx context.Context, projectEnvName, branch string, retries int) error {
+	if retries <= 0 {
+		retries = 3
+	}
+	path := g.RepoPath(projectEnvName)
+	for attempt := 1; attempt <= retries; attempt++ {
+		cmd := exec.CommandContext(ctx, "git", "-C", path, "push", "origin", branch)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		lower := strings.ToLower(string(out))
+		if !strings.Contains(lower, "rejected") && !strings.Contains(lower, "non-fast-forward") {
+			return fmt.Errorf("git push: %w\n%s", err, out)
+		}
+		if rerr := g.PullRebase(ctx, projectEnvName, branch); rerr != nil {
+			return fmt.Errorf("push conflict, rebase failed: %w", rerr)
+		}
+	}
+	return fmt.Errorf("git push: exceeded %d retries", retries)
+}
+
+// CommitURL 拼 gitlab commit 页面 url
+// http://gitlab.xx/group/proj.git → http://gitlab.xx/group/proj/-/commit/<sha>
+func CommitURL(repoURL, sha string) string {
+	base := strings.TrimSuffix(repoURL, ".git")
+	return base + "/-/commit/" + sha
+}
