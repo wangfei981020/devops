@@ -9,6 +9,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"opsplatform-deploy-backend/config"
+	"opsplatform-deploy-backend/crypto"
 	"opsplatform-deploy-backend/database"
 	"opsplatform-deploy-backend/database/migrations"
 )
@@ -19,6 +20,7 @@ func main() {
 
 	cfg := config.Load()
 	log.Printf("config: Port=%s HealthPort=%s GitCacheDir=%s", cfg.Port, cfg.HealthPort, cfg.GitCacheDir)
+	crypto.Init(cfg.AESKey)
 
 	if err := database.InitMySQL(cfg); err != nil {
 		log.Fatalf("init mysql: %v", err)
