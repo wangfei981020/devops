@@ -1,0 +1,16 @@
+# binaries
+opsplatform-deploy-backend
+opsplatform-deploy-backend.exe
+*.exe
+# local git cache
+git-cache/
+# local env
+.env
+.env.local
+# IDE
+.idea/
+.vscode/
+# logs
+*.log
+# coverage
+coverage.out
