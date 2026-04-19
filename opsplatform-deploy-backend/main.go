@@ -6,6 +6,7 @@ import (
 
 	"opsplatform-deploy-backend/config"
 	"opsplatform-deploy-backend/database"
+	"opsplatform-deploy-backend/database/migrations"
 )
 
 func main() {
@@ -19,6 +20,10 @@ func main() {
 		log.Fatalf("init mysql: %v", err)
 	}
 	defer database.Close()
+
+	if err := migrations.Run(database.DB); err != nil {
+		log.Fatalf("run migrations: %v", err)
+	}
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
