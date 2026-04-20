@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: opsplatform-deploy-secret
+  namespace: opsplatform
+type: Opaque
+stringData:
+  # 生产环境部署前请替换成 `openssl rand -base64 32` 生成的真实 key
+  AES_KEY: "REPLACE_ME_WITH_openssl_rand_base64_32"
+  # mysql-deploy 容器对外暴露 13307，集群内通过 host.docker.internal 访问（Docker Desktop 特殊 DNS）
+  MYSQL_DSN: "deploy_user:123123@tcp(host.docker.internal:13307)/deploy_center?parseTime=true&charset=utf8mb4&loc=Local"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: opsplatform-deploy-cache
+  namespace: opsplatform
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsplatform-deploy-backend
+  namespace: opsplatform
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # 单副本，避免 git 锁撞车
+  selector:
+    matchLabels: { app: opsplatform-deploy-backend }
+  template:
+    metadata:
+      labels: { app: opsplatform-deploy-backend }
+    spec:
+      containers:
+        - name: backend
+          image: localhost:8070/opsplatform/opsplatform-deploy-backend:v30
+          imagePullPolicy: Always
+          ports:
+            - { name: http,   containerPort: 8080 }
+            - { name: health, containerPort: 8081 }
+          env:
+            - name: AES_KEY
+              valueFrom: { secretKeyRef: { name: opsplatform-deploy-secret, key: AES_KEY } }
+            - name: MYSQL_DSN
+              valueFrom: { secretKeyRef: { name: opsplatform-deploy-secret, key: MYSQL_DSN } }
+            - name: GIT_CACHE_DIR
+              value: /app/git-cache
+            - name: CORS_ORIGIN
+              value: "*"
+          volumeMounts:
+            - { name: cache, mountPath: /app/git-cache }
+          resources:
+            requests: { cpu: 500m, memory: 512Mi }
+            limits:   { cpu: "1",  memory: 1Gi }
+          livenessProbe:
+            httpGet: { path: /health, port: health }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /ready, port: health }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: cache
+          persistentVolumeClaim: { claimName: opsplatform-deploy-cache }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsplatform-deploy-backend
+  namespace: opsplatform
+spec:
+  selector: { app: opsplatform-deploy-backend }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
