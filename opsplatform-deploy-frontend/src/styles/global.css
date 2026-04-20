@@ -1,0 +1,28 @@
+:root {
+  --sidebar-bg: #1f2937;
+  --sidebar-hover: #374151;
+  --sidebar-active: #1890ff;
+  --sidebar-text: #cbd5e1;
+  --main-bg: #f5f7fa;
+  --card-bg: #ffffff;
+  --border: #e5e7eb;
+  --border-soft: #f1f3f5;
+  --text: #1f2937;
+  --text-2: #6b7280;
+  --text-3: #9ca3af;
+  --primary: #1890ff;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --mono: 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+  --body: 'Inter', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { margin: 0; padding: 0; height: 100%; font-family: var(--body); color: var(--text); font-size: 13px; background: var(--main-bg); }
+
+.env-chip { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; font-family: var(--mono); text-transform: uppercase; letter-spacing: .5px; }
+.env-chip.uat { background: #ecfdf5; color: #059669; }
+.env-chip.prod { background: #fef2f2; color: #dc2626; }
+
+.mono { font-family: var(--mono); }
