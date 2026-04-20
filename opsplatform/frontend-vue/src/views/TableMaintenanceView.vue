@@ -838,6 +838,11 @@ function getBarWidth(count, max) {
 const statusOptions = ['待处理', '处理中', '已解决']
 const issueTypeOptions = ['设备故障', '清洁问题', '物品损坏', '桌面磨损', '配件缺失', '其他']
 
+// 根据 key 获取列定义
+function getCol(key) {
+  return columns.value.find(c => c.key === key)
+}
+
 const formColumns = computed(() => {
   return columns.value.filter(c => {
     if (['checkbox', 'actions', 'readonly', 'datetime-readonly', 'table-status-display'].includes(c.type)) return false
@@ -882,13 +887,22 @@ function getEmptyForm() {
     } else if (col.type === 'date') {
       form[col.key] = new Date().toISOString().slice(0, 10)
     } else if (col.type === 'datetime') {
-      form[col.key] = ''
+      // 开始时间自动填充当前时间
+      if (col.key === 'start_time') {
+        const now = new Date()
+        const pad = n => String(n).padStart(2, '0')
+        form[col.key] = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
+      } else {
+        form[col.key] = ''
+      }
     } else if (col.type === 'status') {
       form[col.key] = statusOptions[0] || ''
     } else if (col.type === 'select' || col.type === 'tag-type') {
       form[col.key] = col.default || col.options?.[0] || ''
     } else if (col.type === 'maint-type-select') {
       form[col.key] = t('tableMaintenance.options.maintenanceType.none')
+    } else if (col.key === 'operator') {
+      form[col.key] = authStore.user?.username || ''
     } else {
       form[col.key] = ''
     }
@@ -1237,6 +1251,29 @@ function toggleTableOption(optionName) {
   } else {
     formData.value.affected_tables.push(optionName)
   }
+  syncSitesAndGameTypes()
+}
+
+// 根据选中的桌台自动勾选现场和游戏类型
+function syncSitesAndGameTypes() {
+  const selectedTables = formData.value.affected_tables || []
+  if (selectedTables.length === 0) {
+    formData.value.affected_sites = []
+    formData.value.game_types = []
+    return
+  }
+  const sitesSet = new Set()
+  const gameTypesSet = new Set()
+  tableOptions.value.forEach(t => {
+    if (selectedTables.includes(t.name)) {
+      if (t.site) sitesSet.add(t.site)
+      if (t.gameTypes?.length) {
+        t.gameTypes.forEach(gt => gameTypesSet.add(gt))
+      }
+    }
+  })
+  formData.value.affected_sites = [...sitesSet]
+  formData.value.game_types = [...gameTypesSet]
 }
 
 function isTableSelected(optionName) {
@@ -1251,6 +1288,7 @@ function selectAllTables() {
   } else {
     formData.value.affected_tables = [...tables]
   }
+  syncSitesAndGameTypes()
 }
 
 function isAllTablesSelected() {
@@ -1288,23 +1326,17 @@ function getSiteDisplayName(key) {
   return site ? getSiteName(site) : key
 }
 
-// 获取桌台列表 - 根据选择的受影响项目和现场过滤（不含搜索）
+// 获取桌台列表 - 只根据选择的项目过滤（现场和游戏类型由桌台自动联动）
 function getFilteredTables() {
   const selectedProjects = formData.value.affected_projects || []
-  const selectedSites = formData.value.affected_sites || []
-  
+
   let filteredTables = tableOptions.value
-  
+
   // 根据选中的项目过滤
   if (selectedProjects.length > 0) {
     filteredTables = filteredTables.filter(t => selectedProjects.includes(t.project))
   }
-  
-  // 根据选中的现场过滤
-  if (selectedSites.length > 0) {
-    filteredTables = filteredTables.filter(t => selectedSites.includes(t.site))
-  }
-  
+
   const names = filteredTables.map(t => t.name)
   return [...new Set(names)]
 }
@@ -1650,6 +1682,14 @@ async function saveRecord() {
     appStore.showToast(t('tableMaintenance.placeholders.remarkRequired'), 'error')
     return
   }
+  // 操作为维护时，维护类型必填且不能为「无」
+  if (isOp(formData.value.operation, 'maintenance')) {
+    const mt = formData.value.maintenance_type
+    if (!mt || isMaintType(mt, 'none')) {
+      appStore.showToast(t('tableMaintenance.form.maintTypeRequired'), 'error')
+      return
+    }
+  }
   const data = {}
   columns.value.forEach(col => {
     if (['checkbox', 'actions', 'created_by'].includes(col.key)) return
@@ -1752,9 +1792,17 @@ function handleDrop(e) {
 
 async function uploadFiles(files) {
   if (!files.length) return
+  const validFiles = files.filter(file => {
+    if (file.size === 0) {
+      appStore.showToast(t('tableMaintenance.upload.empty', { name: file.name || '' }), 'error')
+      return false
+    }
+    return true
+  })
+  if (!validFiles.length) return
   uploading.value = true
   const fd = new FormData()
-  files.forEach(file => fd.append('files', file))
+  validFiles.forEach(file => fd.append('files', file))
   try {
     const res = await api.post('/api/storage/upload', fd, {
       headers: { 'Content-Type': 'multipart/form-data' }
@@ -1821,6 +1869,10 @@ async function uploadAttachmentsForKey(files, key) {
   uploading.value = true
   try {
     for (const file of files) {
+      if (file.size === 0) {
+        appStore.showToast(t('tableMaintenance.upload.empty', { name: file.name || '' }), 'error')
+        continue
+      }
       const fd = new FormData()
       fd.append('file', file)
       const res = await api.post('/api/storage/upload', fd, {
@@ -2771,199 +2823,223 @@ async function exportToExcel() {
             <button class="modal-close" @click="showModal = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
           </div>
           <div class="modal-body">
+            <!-- ▎操作信息 -->
             <div class="form-section">
-              <div class="section-title">{{ t('tableMaintenance.detail.basicInfo') }}</div>
+              <div class="section-title">{{ t('tableMaintenance.form.sectionOperation') }}</div>
               <div class="dynamic-form-grid">
-                <template v-for="col in formColumns" :key="col.key">
-<div v-if="col.type === 'attachments'" class="form-group full-width attachment-field">
-                    <label>{{ col.title }}</label>
-                    <div class="upload-zone"
-                         @dragover.prevent="e => e.currentTarget.classList.add('drag-over')"
-                         @dragleave.prevent="e => e.currentTarget.classList.remove('drag-over')"
-                         @drop.prevent="e => handleAttachmentDrop(e, col.key)"
-                         @paste="e => handleAttachmentPaste(e, col.key)"
-                         tabindex="0">
-                      <input :ref="el => attachmentInputRefs[col.key] = el" type="file" multiple hidden @change="e => handleAttachmentSelect(e, col.key)" accept="image/*">
-                      <div class="upload-content">
-                        <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-                        <p v-if="uploading" class="upload-text">{{ t('common.loading') }}</p>
-                        <p v-else class="upload-text">
-                          <span class="primary-action" @click.stop="triggerAttachmentInput(col.key)">{{ t('tableMaintenance.upload.click') }}</span>
-                        </p>
-                        <p class="upload-hint">{{ t('tableMaintenance.upload.hint') }}</p>
+                <!-- 日期 -->
+                <div class="form-group">
+                  <label>{{ getCol('date')?.title }}</label>
+                  <input type="date" v-model="formData.date">
+                </div>
+                <!-- 受影响项目 -->
+                <div class="form-group">
+                  <label>{{ getCol('affected_projects')?.title }} <span class="required">*</span></label>
+                  <div class="multi-select-dropdown-wrapper project-select-wrapper">
+                    <div class="multi-select-trigger" @click.stop="projectSelectOpen = !projectSelectOpen" v-if="projectOptions.length">
+                      <div class="multi-select-selected">
+                        <span v-if="!formData.affected_projects?.length" class="placeholder">{{ t('tableMaintenance.placeholders.select', { field: getCol('affected_projects')?.title }) }}</span>
+                        <span v-for="(item, idx) in (formData.affected_projects || []).slice(0, 3)" :key="idx" class="selected-tag" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}</span>
+                        <span v-if="(formData.affected_projects?.length || 0) > 3" class="more-tag">+{{ formData.affected_projects.length - 3 }}</span>
                       </div>
+                      <svg class="dropdown-arrow" :class="{ open: projectSelectOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
                     </div>
-                    <div class="mini-uploaded-files" v-if="formAttachments[col.key]?.length">
-                      <div v-for="(att, idx) in formAttachments[col.key]" :key="idx" class="mini-file-item">
-                        <img v-if="isImageFile(att.name)" 
-                             :src="getPresignedUrl(att.path) || att.preview" 
-                             class="mini-thumb clickable"
-                             @click="previewFormImage(col.key, idx)"
-                             title="点击预览">
-                        <span v-else class="mini-file-icon">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
-                        </span>
-                        <span class="mini-file-name">{{ att.name }}</span>
-                        <button class="mini-remove-btn" @click="removeFormAttachment(col.key, idx)">&times;</button>
+                    <div class="multi-select-panel" v-if="projectSelectOpen && projectOptions.length">
+                      <div class="select-all-row" @click.stop="selectAllProjects()">
+                        <span class="checkbox-icon select-all-checkbox" :class="{ checked: isAllProjectsSelected() }"><svg v-if="isAllProjectsSelected()" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>
+                        <span class="select-all-label">{{ t('tableMaintenance.selectAll') }}</span>
                       </div>
-                    </div>
-                  </div>
-                  <div v-else class="form-group" :class="{ 'full-width': col.type === 'textarea' }">
-                    <label>{{ col.title }} <span v-if="col.required || (col.key === 'remark' && (isQc(formData.qc_status, 'abnormal')))" class="required">*</span></label>
-                    <input v-if="col.type === 'date'" type="date" v-model="formData[col.key]">
-                    <input v-else-if="col.type === 'datetime'" type="datetime-local" v-model="formData[col.key]">
-                    <input v-else-if="col.type === 'number'" type="number" v-model="formData[col.key]" :placeholder="col.title">
-                    <textarea v-else-if="col.type === 'textarea'" v-model="formData[col.key]" rows="3" :placeholder="col.key === 'remark' && (isQc(formData.qc_status, 'abnormal')) ? t('tableMaintenance.placeholders.remarkRequired') : col.title" :class="{ 'required-field': col.key === 'remark' && (isQc(formData.qc_status, 'abnormal')) }"></textarea>
-                    <select v-else-if="col.type === 'duration-select'" v-model="formData[col.key]" class="form-select duration-dropdown">
-                      <option value="">{{ t('tableMaintenance.placeholders.select', { field: col.title }) }}</option>
-                      <option v-for="opt in col.options" :key="opt" :value="opt">{{ opt }}</option>
-                    </select>
-                    <div v-else-if="col.type === 'multi-select-projects'" class="multi-select-dropdown-wrapper project-select-wrapper">
-                      <div class="multi-select-trigger" @click.stop="projectSelectOpen = !projectSelectOpen" v-if="projectOptions.length">
-                        <div class="multi-select-selected">
-                          <span v-if="!formData[col.key]?.length" class="placeholder">{{ t('tableMaintenance.placeholders.select', { field: col.title }) }}</span>
-                          <span v-for="(item, idx) in (formData[col.key] || []).slice(0, 3)" :key="idx" class="selected-tag" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}</span>
-                          <span v-if="(formData[col.key]?.length || 0) > 3" class="more-tag">+{{ formData[col.key].length - 3 }}</span>
-                        </div>
-                        <svg class="dropdown-arrow" :class="{ open: projectSelectOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                      </div>
-                      <div class="multi-select-panel" v-if="projectSelectOpen && projectOptions.length">
-                        <div class="select-all-row" @click.stop="selectAllProjects()">
-                          <span class="checkbox-icon select-all-checkbox" :class="{ checked: isAllProjectsSelected() }">
-                            <svg v-if="isAllProjectsSelected()" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                          </span>
-                          <span class="select-all-label">{{ t('tableMaintenance.selectAll') }}</span>
-                        </div>
-                        <label v-for="(opt, idx) in projectOptions" :key="getProjectKey(opt)" class="multi-select-option" :class="{ checked: isProjectSelected(getProjectKey(opt)) }" @click.stop="toggleProjectOption(getProjectKey(opt))">
-                          <span class="checkbox-icon" :style="isProjectSelected(getProjectKey(opt)) ? { backgroundColor: getProjectColor(idx), borderColor: getProjectColor(idx) } : {}">
-                            <svg v-if="isProjectSelected(getProjectKey(opt))" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                          </span>
-                          <span class="option-label" :style="{ color: getProjectColor(idx) }">{{ getProjectName(opt) }}</span>
-                        </label>
-                      </div>
-                      <div v-if="!projectOptions.length" class="empty-options">
-                        <span>暂无配置的项目</span>
-                        <button v-if="isSuperAdmin" class="btn-link" @click="$router.push('/table-hierarchy-config')">去配置</button>
-                      </div>
-                    </div>
-                    <div v-else-if="col.type === 'multi-select-sites'" class="multi-select-dropdown-wrapper site-select-wrapper">
-                      <div class="multi-select-trigger" @click.stop="siteSelectOpen = !siteSelectOpen" v-if="getFilteredSitesWithLabels().length">
-                        <div class="multi-select-selected">
-                          <span v-if="!formData[col.key]?.length" class="placeholder">{{ t('tableMaintenance.placeholders.select', { field: col.title }) }}</span>
-                          <span v-for="(item, idx) in (formData[col.key] || []).slice(0, 3)" :key="idx" class="selected-tag" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ getSiteDisplayName(item) }}</span>
-                          <span v-if="(formData[col.key]?.length || 0) > 3" class="more-tag">+{{ formData[col.key].length - 3 }}</span>
-                        </div>
-                        <svg class="dropdown-arrow" :class="{ open: siteSelectOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                      </div>
-                      <div class="multi-select-panel" v-if="siteSelectOpen && getFilteredSitesWithLabels().length">
-                        <div class="select-all-row" @click.stop="selectAllSites()">
-                          <span class="checkbox-icon select-all-checkbox" :class="{ checked: isAllSitesSelected() }">
-                            <svg v-if="isAllSitesSelected()" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                          </span>
-                          <span class="select-all-label">{{ t('tableMaintenance.selectAll') }}</span>
-                        </div>
-                        <label v-for="(opt, idx) in getFilteredSitesWithLabels()" :key="opt.key" class="multi-select-option" :class="{ checked: isSiteSelected(opt.key) }" @click.stop="toggleSiteOption(opt.key)">
-                          <span class="checkbox-icon" :style="isSiteSelected(opt.key) ? { backgroundColor: getProjectColor(idx), borderColor: getProjectColor(idx) } : {}">
-                            <svg v-if="isSiteSelected(opt.key)" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                          </span>
-                          <span class="option-label" :style="{ color: getProjectColor(idx) }">{{ opt.label }}</span>
-                        </label>
-                      </div>
-                      <div v-if="!getFilteredSitesWithLabels().length" class="empty-options">
-                        <span>{{ t('tableMaintenance.hints.noSitesConfigured') }}</span>
-                        <button v-if="isSuperAdmin" class="btn-link" @click="$router.push('/table-hierarchy-config')">{{ t('tableMaintenance.hints.goConfigure') }}</button>
-                      </div>
-                    </div>
-                    <div v-else-if="col.type === 'multi-select-tables'" class="multi-select-dropdown-wrapper table-select-wrapper">
-                      <div class="multi-select-trigger" @click.stop="tableSelectOpen = !tableSelectOpen; if(tableSelectOpen) tableSearchQuery = ''" v-if="getFilteredTables().length">
-                        <div class="multi-select-selected">
-                          <span v-if="!formData[col.key]?.length" class="placeholder">{{ t('tableMaintenance.placeholders.select', { field: col.title }) }}</span>
-                          <span v-for="(item, idx) in (formData[col.key] || []).slice(0, 3)" :key="idx" class="selected-tag" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}</span>
-                          <span v-if="(formData[col.key]?.length || 0) > 3" class="more-tag">+{{ formData[col.key].length - 3 }}</span>
-                        </div>
-                        <svg class="dropdown-arrow" :class="{ open: tableSelectOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                      </div>
-                      <div class="multi-select-panel with-search" v-if="tableSelectOpen && getFilteredTables().length">
-                        <div class="select-all-row" @click.stop="selectAllTables()">
-                          <span class="checkbox-icon select-all-checkbox" :class="{ checked: isAllTablesSelected() }">
-                            <svg v-if="isAllTablesSelected()" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                          </span>
-                          <span class="select-all-label">{{ isAllTablesSelected() ? '取消全选' : '全选' }} ({{ getFilteredTables().length }})</span>
-                        </div>
-                        <div class="panel-search-box" @click.stop>
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-                          <input type="text" v-model="tableSearchQuery" placeholder="搜索桌台..." class="panel-search-input" @keyup.enter.stop="getSearchFilteredTables().length === 1 && toggleTableOption(getSearchFilteredTables()[0])">
-                          <button v-if="tableSearchQuery" class="search-clear" @click.stop="tableSearchQuery = ''">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                          </button>
-                        </div>
-                        <div class="panel-options-list">
-                          <label v-for="(opt, idx) in getSearchFilteredTables()" :key="opt" class="multi-select-option" :class="{ checked: isTableSelected(opt) }" @click.stop="toggleTableOption(opt)">
-                            <span class="checkbox-icon" :style="isTableSelected(opt) ? { backgroundColor: getProjectColor(idx), borderColor: getProjectColor(idx) } : {}">
-                              <svg v-if="isTableSelected(opt)" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                            </span>
-                            <span class="option-label" :style="{ color: getProjectColor(idx) }">{{ opt }}</span>
-                            <span v-if="getTableStatus(opt) === 'disabled'" class="status-tag-disabled-sm">{{ t('tableHierarchy.status.disabled') }}</span>
-                          </label>
-                          <div v-if="tableSearchQuery && !getSearchFilteredTables().length" class="no-match">
-                            <span>没有找到匹配的桌台</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div v-if="!getFilteredTables().length" class="empty-options">
-                        <span>暂无配置的桌台</span>
-                        <button v-if="isSuperAdmin" class="btn-link" @click="$router.push('/table-hierarchy-config')">去配置</button>
-                      </div>
-                    </div>
-                    <div v-else-if="col.type === 'multi-select-game-types'" class="multi-select-dropdown-wrapper game-type-select-wrapper">
-                      <div class="multi-select-trigger" @click.stop="gameTypeSelectOpen = !gameTypeSelectOpen" v-if="getFilteredGameTypes().length">
-                        <div class="multi-select-selected">
-                          <span v-if="!formData[col.key]?.length" class="placeholder">{{ t('tableMaintenance.placeholders.select', { field: col.title }) }}</span>
-                          <span v-for="(item, idx) in (formData[col.key] || []).slice(0, 3)" :key="idx" class="selected-tag game-type-tag-selected">{{ translateGameType(item) }}</span>
-                          <span v-if="(formData[col.key]?.length || 0) > 3" class="more-tag">+{{ formData[col.key].length - 3 }}</span>
-                        </div>
-                        <svg class="dropdown-arrow" :class="{ open: gameTypeSelectOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                      </div>
-                      <div class="multi-select-panel" v-if="gameTypeSelectOpen && getFilteredGameTypes().length">
-                        <div class="select-all-row" @click.stop="selectAllGameTypes()">
-                          <span class="checkbox-icon select-all-checkbox" :class="{ checked: isAllGameTypesSelected() }">
-                            <svg v-if="isAllGameTypesSelected()" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                          </span>
-                          <span class="select-all-label">{{ isAllGameTypesSelected() ? t('common.deselectAll') : t('common.selectAll') }}</span>
-                        </div>
-                        <label v-for="(opt, idx) in getFilteredGameTypes()" :key="opt" class="multi-select-option" :class="{ checked: isGameTypeSelected(opt) }" @click.stop="toggleGameTypeOption(opt)">
-                          <span class="checkbox-icon" :style="isGameTypeSelected(opt) ? { backgroundColor: '#10b981', borderColor: '#10b981' } : {}">
-                            <svg v-if="isGameTypeSelected(opt)" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                          </span>
-                          <span class="option-label game-type-label">{{ translateGameType(opt) }}</span>
-                        </label>
-                      </div>
-                      <div v-if="!getFilteredGameTypes().length" class="empty-options">
-                        <span>{{ formData.affected_tables?.length ? t('tableMaintenance.hints.noGameTypesForTables') : t('tableMaintenance.hints.selectTableFirst') }}</span>
-                      </div>
-                    </div>
-                    <div v-else-if="col.type === 'yes-no'" class="yes-no-group">
-                      <label v-for="opt in col.options" :key="opt"
-                             class="yes-no-option"
-                             :class="[opt === '是' ? 'opt-yes' : 'opt-no', { active: formData[col.key] === opt }]">
-                        <input type="radio" :name="col.key" :value="opt" v-model="formData[col.key]">
-                        <span>{{ opt }}</span>
+                      <label v-for="(opt, idx) in projectOptions" :key="getProjectKey(opt)" class="multi-select-option" :class="{ checked: isProjectSelected(getProjectKey(opt)) }" @click.stop="toggleProjectOption(getProjectKey(opt))">
+                        <span class="checkbox-icon" :style="isProjectSelected(getProjectKey(opt)) ? { backgroundColor: getProjectColor(idx), borderColor: getProjectColor(idx) } : {}"><svg v-if="isProjectSelected(getProjectKey(opt))" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>
+                        <span class="option-label" :style="{ color: getProjectColor(idx) }">{{ getProjectName(opt) }}</span>
                       </label>
                     </div>
-                    <select v-else-if="col.type === 'qc-status'" v-model="formData[col.key]" class="form-select qc-status-select">
-                      <option value="">{{ t('tableMaintenance.placeholders.select', { field: col.title }) }}</option>
-                      <option v-for="opt in col.options" :key="opt" :value="opt">{{ opt }}</option>
-                    </select>
-                    <select v-else-if="col.type === 'maint-type-select'" v-model="formData[col.key]" class="form-select">
-                      <option value="">{{ t('tableMaintenance.placeholders.select', { field: col.title }) }}</option>
-                      <option v-for="opt in maintTypeOptions" :key="opt" :value="opt">{{ opt }}</option>
-                    </select>
-                    <select v-else-if="col.type === 'select' || col.type === 'status' || col.type === 'tag-type'" v-model="formData[col.key]">
-                      <option v-for="opt in getColumnOptions(col)" :key="opt" :value="opt">{{ opt }}</option>
-                    </select>
-                    <input v-else type="text" v-model="formData[col.key]" :placeholder="col.title">
+                    <div v-if="!projectOptions.length" class="empty-options">
+                      <span>暂无配置的项目</span>
+                      <button v-if="isSuperAdmin" class="btn-link" @click="$router.push('/table-hierarchy-config')">去配置</button>
+                    </div>
                   </div>
-                </template>
+                </div>
+                <!-- 操作 -->
+                <div class="form-group">
+                  <label>{{ getCol('operation')?.title }} <span class="required">*</span></label>
+                  <select v-model="formData.operation">
+                    <option v-for="opt in getColumnOptions(getCol('operation'))" :key="opt" :value="opt">{{ opt }}</option>
+                  </select>
+                </div>
+                <!-- 维护类型（维护时必填） -->
+                <div class="form-group" v-if="isOp(formData.operation, 'maintenance')">
+                  <label>{{ getCol('maintenance_type')?.title }} <span class="required">*</span></label>
+                  <select v-model="formData.maintenance_type" class="form-select">
+                    <option value="">{{ t('tableMaintenance.placeholders.select', { field: getCol('maintenance_type')?.title }) }}</option>
+                    <option v-for="opt in maintTypeOptions.filter(o => o !== t('tableMaintenance.options.maintenanceType.none'))" :key="opt" :value="opt">{{ opt }}</option>
+                  </select>
+                </div>
+                <!-- 桌台 -->
+                <div class="form-group">
+                  <label>{{ getCol('affected_tables')?.title }} <span class="required">*</span></label>
+                  <div class="multi-select-dropdown-wrapper table-select-wrapper">
+                    <div class="multi-select-trigger" @click.stop="tableSelectOpen = !tableSelectOpen; if(tableSelectOpen) tableSearchQuery = ''" v-if="getFilteredTables().length">
+                      <div class="multi-select-selected">
+                        <span v-if="!formData.affected_tables?.length" class="placeholder">{{ t('tableMaintenance.placeholders.select', { field: getCol('affected_tables')?.title }) }}</span>
+                        <span v-for="(item, idx) in (formData.affected_tables || []).slice(0, 3)" :key="idx" class="selected-tag" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}</span>
+                        <span v-if="(formData.affected_tables?.length || 0) > 3" class="more-tag">+{{ formData.affected_tables.length - 3 }}</span>
+                      </div>
+                      <svg class="dropdown-arrow" :class="{ open: tableSelectOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="multi-select-panel with-search" v-if="tableSelectOpen && getFilteredTables().length">
+                      <div class="select-all-row" @click.stop="selectAllTables()">
+                        <span class="checkbox-icon select-all-checkbox" :class="{ checked: isAllTablesSelected() }"><svg v-if="isAllTablesSelected()" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>
+                        <span class="select-all-label">{{ isAllTablesSelected() ? '取消全选' : '全选' }} ({{ getFilteredTables().length }})</span>
+                      </div>
+                      <div class="panel-search-box" @click.stop>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                        <input type="text" v-model="tableSearchQuery" placeholder="搜索桌台..." class="panel-search-input" @keyup.enter.stop="getSearchFilteredTables().length === 1 && toggleTableOption(getSearchFilteredTables()[0])">
+                        <button v-if="tableSearchQuery" class="search-clear" @click.stop="tableSearchQuery = ''"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                      </div>
+                      <div class="panel-options-list">
+                        <label v-for="(opt, idx) in getSearchFilteredTables()" :key="opt" class="multi-select-option" :class="{ checked: isTableSelected(opt) }" @click.stop="toggleTableOption(opt)">
+                          <span class="checkbox-icon" :style="isTableSelected(opt) ? { backgroundColor: getProjectColor(idx), borderColor: getProjectColor(idx) } : {}"><svg v-if="isTableSelected(opt)" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>
+                          <span class="option-label" :style="{ color: getProjectColor(idx) }">{{ opt }}</span>
+                          <span v-if="getTableStatus(opt) === 'disabled'" class="status-tag-disabled-sm">{{ t('tableHierarchy.status.disabled') }}</span>
+                        </label>
+                        <div v-if="tableSearchQuery && !getSearchFilteredTables().length" class="no-match"><span>没有找到匹配的桌台</span></div>
+                      </div>
+                    </div>
+                    <div v-if="!getFilteredTables().length" class="empty-options">
+                      <span>暂无配置的桌台</span>
+                      <button v-if="isSuperAdmin" class="btn-link" @click="$router.push('/table-hierarchy-config')">去配置</button>
+                    </div>
+                  </div>
+                </div>
+                <!-- 现场（自动，只读展示） -->
+                <div class="form-group">
+                  <label>{{ getCol('affected_sites')?.title }} <span class="label-hint">（{{ t('tableMaintenance.form.auto') }}）</span></label>
+                  <div class="auto-tags">
+                    <span v-for="(item, idx) in (formData.affected_sites || [])" :key="idx" class="selected-tag" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ getSiteDisplayName(item) }}</span>
+                    <span v-if="!formData.affected_sites?.length" class="cell-muted">{{ t('tableMaintenance.hints.selectTableFirst') }}</span>
+                  </div>
+                </div>
+                <!-- 游戏类型（自动，只读展示） -->
+                <div class="form-group">
+                  <label>{{ getCol('game_types')?.title }} <span class="label-hint">（{{ t('tableMaintenance.form.auto') }}）</span></label>
+                  <div class="auto-tags">
+                    <span v-for="(item, idx) in (formData.game_types || [])" :key="idx" class="selected-tag game-type-tag-selected">{{ translateGameType(item) }}</span>
+                    <span v-if="!formData.game_types?.length" class="cell-muted">{{ t('tableMaintenance.hints.selectTableFirst') }}</span>
+                  </div>
+                </div>
+                <!-- 原因 -->
+                <div class="form-group full-width">
+                  <label>{{ getCol('reason')?.title }}</label>
+                  <textarea v-model="formData.reason" rows="3" :placeholder="getCol('reason')?.title"></textarea>
+                </div>
+                <!-- 影响结算 -->
+                <div class="form-group">
+                  <label>{{ getCol('affect_settlement')?.title }}</label>
+                  <select v-model="formData.affect_settlement">
+                    <option v-for="opt in getColumnOptions(getCol('affect_settlement'))" :key="opt" :value="opt">{{ opt }}</option>
+                  </select>
+                </div>
+                <!-- 影响局号 -->
+                <div class="form-group">
+                  <label>{{ getCol('affected_round_ids')?.title }}</label>
+                  <input type="text" v-model="formData.affected_round_ids" :placeholder="getCol('affected_round_ids')?.title">
+                </div>
+                <!-- 实际操作人 -->
+                <div class="form-group">
+                  <label>{{ getCol('operator')?.title }} <span class="required">*</span></label>
+                  <input type="text" v-model="formData.operator" :placeholder="getCol('operator')?.title">
+                </div>
+                <!-- 质检人 -->
+                <div class="form-group">
+                  <label>{{ getCol('inspector')?.title }}</label>
+                  <input type="text" v-model="formData.inspector" :placeholder="getCol('inspector')?.title">
+                </div>
+                <!-- 质检状态 -->
+                <div class="form-group">
+                  <label>{{ getCol('qc_status')?.title }}</label>
+                  <select v-model="formData.qc_status" class="form-select qc-status-select">
+                    <option value="">{{ t('tableMaintenance.placeholders.select', { field: getCol('qc_status')?.title }) }}</option>
+                    <option v-for="opt in getCol('qc_status')?.options" :key="opt" :value="opt">{{ opt }}</option>
+                  </select>
+                </div>
+                <!-- 备注 -->
+                <div class="form-group full-width">
+                  <label>{{ getCol('remark')?.title }} <span v-if="isQc(formData.qc_status, 'abnormal')" class="required">*</span></label>
+                  <textarea v-model="formData.remark" rows="3" :placeholder="isQc(formData.qc_status, 'abnormal') ? t('tableMaintenance.placeholders.remarkRequired') : getCol('remark')?.title" :class="{ 'required-field': isQc(formData.qc_status, 'abnormal') }"></textarea>
+                </div>
+              </div>
+            </div>
+            <!-- ▎时间与截图 -->
+            <div class="form-section">
+              <div class="section-title">{{ t('tableMaintenance.form.sectionTimeScreenshot') }}</div>
+              <div class="dynamic-form-grid">
+                <!-- 开始时间 -->
+                <div class="form-group">
+                  <label>{{ getCol('start_time')?.title }}</label>
+                  <input type="datetime-local" v-model="formData.start_time">
+                </div>
+                <!-- 开始维护时长 -->
+                <div class="form-group">
+                  <label>{{ getCol('start_duration')?.title }} <span class="required">*</span></label>
+                  <select v-model="formData.start_duration" class="form-select duration-dropdown">
+                    <option value="">{{ t('tableMaintenance.placeholders.select', { field: getCol('start_duration')?.title }) }}</option>
+                    <option v-for="opt in getCol('start_duration')?.options" :key="opt" :value="opt">{{ opt }}</option>
+                  </select>
+                </div>
+                <!-- 通知开始截图 -->
+                <div class="form-group full-width attachment-field">
+                  <label>{{ getCol('notify_start_screenshot')?.title }}</label>
+                  <div class="upload-zone" @dragover.prevent="e => e.currentTarget.classList.add('drag-over')" @dragleave.prevent="e => e.currentTarget.classList.remove('drag-over')" @drop.prevent="e => handleAttachmentDrop(e, 'notify_start_screenshot')" @paste="e => handleAttachmentPaste(e, 'notify_start_screenshot')" tabindex="0">
+                    <input :ref="el => attachmentInputRefs['notify_start_screenshot'] = el" type="file" multiple hidden @change="e => handleAttachmentSelect(e, 'notify_start_screenshot')" accept="image/*">
+                    <div class="upload-content">
+                      <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                      <p v-if="uploading" class="upload-text">{{ t('common.loading') }}</p>
+                      <p v-else class="upload-text"><span class="primary-action" @click.stop="triggerAttachmentInput('notify_start_screenshot')">{{ t('tableMaintenance.upload.click') }}</span></p>
+                      <p class="upload-hint">{{ t('tableMaintenance.upload.hint') }}</p>
+                    </div>
+                  </div>
+                  <div class="mini-uploaded-files" v-if="formAttachments['notify_start_screenshot']?.length">
+                    <div v-for="(att, idx) in formAttachments['notify_start_screenshot']" :key="idx" class="mini-file-item">
+                      <img v-if="isImageFile(att.name)" :src="getPresignedUrl(att.path) || att.preview" class="mini-thumb clickable" @click="previewFormImage('notify_start_screenshot', idx)" title="点击预览">
+                      <span class="mini-file-name">{{ att.name }}</span>
+                      <button class="mini-remove-btn" @click="removeFormAttachment('notify_start_screenshot', idx)">&times;</button>
+                    </div>
+                  </div>
+                </div>
+                <!-- 结束时间 -->
+                <div class="form-group" v-if="isOp(formData.operation, 'maintenance')">
+                  <label>{{ getCol('end_time')?.title }}</label>
+                  <input type="datetime-local" v-model="formData.end_time">
+                </div>
+                <!-- 关闭维护时长 -->
+                <div class="form-group" v-if="isOp(formData.operation, 'maintenance')">
+                  <label>{{ getCol('close_duration')?.title }}</label>
+                  <select v-model="formData.close_duration" class="form-select duration-dropdown">
+                    <option value="">{{ t('tableMaintenance.placeholders.select', { field: getCol('close_duration')?.title }) }}</option>
+                    <option v-for="opt in getCol('close_duration')?.options" :key="opt" :value="opt">{{ opt }}</option>
+                  </select>
+                </div>
+                <!-- 结束截图 -->
+                <div class="form-group full-width attachment-field" v-if="isOp(formData.operation, 'maintenance')">
+                  <label>{{ getCol('notify_end_screenshot')?.title }}</label>
+                  <div class="upload-zone" @dragover.prevent="e => e.currentTarget.classList.add('drag-over')" @dragleave.prevent="e => e.currentTarget.classList.remove('drag-over')" @drop.prevent="e => handleAttachmentDrop(e, 'notify_end_screenshot')" @paste="e => handleAttachmentPaste(e, 'notify_end_screenshot')" tabindex="0">
+                    <input :ref="el => attachmentInputRefs['notify_end_screenshot'] = el" type="file" multiple hidden @change="e => handleAttachmentSelect(e, 'notify_end_screenshot')" accept="image/*">
+                    <div class="upload-content">
+                      <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                      <p v-if="uploading" class="upload-text">{{ t('common.loading') }}</p>
+                      <p v-else class="upload-text"><span class="primary-action" @click.stop="triggerAttachmentInput('notify_end_screenshot')">{{ t('tableMaintenance.upload.click') }}</span></p>
+                      <p class="upload-hint">{{ t('tableMaintenance.upload.hint') }}</p>
+                    </div>
+                  </div>
+                  <div class="mini-uploaded-files" v-if="formAttachments['notify_end_screenshot']?.length">
+                    <div v-for="(att, idx) in formAttachments['notify_end_screenshot']" :key="idx" class="mini-file-item">
+                      <img v-if="isImageFile(att.name)" :src="getPresignedUrl(att.path) || att.preview" class="mini-thumb clickable" @click="previewFormImage('notify_end_screenshot', idx)" title="点击预览">
+                      <span class="mini-file-name">{{ att.name }}</span>
+                      <button class="mini-remove-btn" @click="removeFormAttachment('notify_end_screenshot', idx)">&times;</button>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -4169,6 +4245,10 @@ body.light-mode .data-table tr:hover td.sticky-col {
 .btn-link:hover { text-decoration: underline; }
 
 .btn-sm { padding: 8px 16px; font-size: 13px; }
+
+/* 自动填充标签（只读展示） */
+.auto-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; min-height: 38px; align-items: center; }
+.label-hint { font-weight: 400; color: var(--text-muted); font-size: 11px; }
 
 /* 桌台状态标签 */
 .status-tag-enabled { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(16, 185, 129, 0.12); color: #10b981; }

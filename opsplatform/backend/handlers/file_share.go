@@ -368,6 +368,11 @@ func HandleStorageUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if fileHeader.Size == 0 {
+		sendError(w, "文件为空，无法上传", http.StatusBadRequest)
+		return
+	}
+
 	if fileHeader.Size > 10*1024*1024 {
 		sendError(w, "文件超过10MB限制", http.StatusBadRequest)
 		return

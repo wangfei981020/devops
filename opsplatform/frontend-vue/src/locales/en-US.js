@@ -642,7 +642,11 @@ export default {
       editTitle: 'Edit Maintenance Record',
       pasteTitle: 'Paste Records',
       pasteCount: 'Paste Count',
-      pasteHint: 'Enter the number of records to paste (1-100)'
+      pasteHint: 'Enter the number of records to paste (1-100)',
+      sectionOperation: 'Operation Info',
+      sectionTimeScreenshot: 'Time & Screenshots',
+      auto: 'Auto',
+      maintTypeRequired: 'Maintenance type is required when operation is Maintenance'
     },
 
     hints: {
@@ -777,7 +781,8 @@ export default {
 
     upload: {
       click: 'Click or drag to upload',
-      hint: 'Supports JPG, PNG, GIF, max 5MB'
+      hint: 'Supports JPG, PNG, GIF, max 5MB',
+      empty: '{name} is empty, cannot upload'
     },
 
     selectAll: 'Select All / Deselect All'

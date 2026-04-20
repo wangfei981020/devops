@@ -642,7 +642,11 @@ export default {
       editTitle: '编辑维护记录',
       pasteTitle: '粘贴记录',
       pasteCount: '粘贴数量',
-      pasteHint: '输入要粘贴的记录数量（1-100）'
+      pasteHint: '输入要粘贴的记录数量（1-100）',
+      sectionOperation: '操作信息',
+      sectionTimeScreenshot: '时间与截图',
+      auto: '自动',
+      maintTypeRequired: '操作为维护时，维护类型为必填项'
     },
 
     hints: {
@@ -777,7 +781,8 @@ export default {
 
     upload: {
       click: '点击或拖拽上传',
-      hint: '支持 JPG、PNG、GIF 格式，最大 5MB'
+      hint: '支持 JPG、PNG、GIF 格式，最大 5MB',
+      empty: '{name} 为空文件，无法上传'
     },
 
     selectAll: '全选/取消全选'
