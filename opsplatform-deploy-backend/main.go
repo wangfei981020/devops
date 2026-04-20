@@ -60,6 +60,12 @@ func main() {
 
 	api.HandleFunc("/deployments", handlers.HandleListDeployments).Methods("GET", "OPTIONS")
 	api.HandleFunc("/deployments/{id}", handlers.HandleGetDeployment).Methods("GET", "OPTIONS")
+	api.HandleFunc("/deployments/{id}/rollback-preview", handlers.HandleRollbackPreview).Methods("GET", "OPTIONS")
+
+	api.HandleFunc("/deploy/preview-image", handlers.HandlePreviewImage).Methods("POST", "OPTIONS")
+	api.HandleFunc("/deploy/update-image", handlers.HandleUpdateImage).Methods("POST", "OPTIONS")
+	api.HandleFunc("/deploy/restart", handlers.HandleRestart).Methods("POST", "OPTIONS")
+	api.HandleFunc("/deploy/rollback", handlers.HandleRollback).Methods("POST", "OPTIONS")
 
 	log.Printf("API listening on %s", cfg.Port)
 	server := &http.Server{Addr: cfg.Port, Handler: r}
