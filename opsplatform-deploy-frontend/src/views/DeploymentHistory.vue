@@ -1,126 +1,204 @@
 <template>
-  <div>
-    <div class="kpi-row">
+  <div class="dh">
+    <!-- KPI 行 -->
+    <div class="kpis">
       <div class="kpi" v-for="k in kpis" :key="k.label">
-        <div class="l">{{ k.label }}</div>
-        <div class="v mono" :style="{ color: k.color }">{{ k.value }}</div>
+        <div class="k-lbl">{{ k.label }}</div>
+        <div class="k-val mono" :style="{color: k.color}">{{ k.value }}</div>
       </div>
     </div>
 
-    <div class="filters">
-      <el-select v-model="filters.project_env_id" placeholder="项目环境" clearable size="small" style="width:200px;">
-        <el-option v-for="e in envs" :key="e.id" :value="e.id" :label="e.name" />
-      </el-select>
-      <el-select v-model="filters.action" placeholder="操作类型" clearable size="small" style="width:140px;">
-        <el-option value="update_image" label="update_image" />
-        <el-option value="restart" label="restart" />
-        <el-option value="rollback" label="rollback" />
-      </el-select>
-      <el-select v-model="filters.status" placeholder="状态" clearable size="small" style="width:120px;">
-        <el-option value="success" label="success" />
-        <el-option value="partial" label="partial" />
-        <el-option value="failed" label="failed" />
-        <el-option value="pending" label="pending" />
-        <el-option value="no_change" label="no_change" />
-      </el-select>
-      <el-input v-model="filters.operator" placeholder="操作人..." size="small" style="width:160px;" />
-      <el-button type="primary" size="small" @click="load">查询</el-button>
-      <el-button size="small" @click="reset">重置</el-button>
+    <!-- 筛选 -->
+    <div class="filter-bar">
+      <div class="f-item">
+        <label>项目</label>
+        <select v-model="draft.project" @change="onProjectChange" class="sel">
+          <option value="">全部</option>
+          <option v-for="p in projects" :key="p" :value="p">{{ p }}</option>
+        </select>
+      </div>
+      <div class="f-item">
+        <label>环境</label>
+        <select v-model="draft.env_type" class="sel" :disabled="!draft.project">
+          <option value="">全部</option>
+          <option v-for="e in envsForProject" :key="e" :value="e">{{ envLabel(e) }}</option>
+        </select>
+      </div>
+      <div class="f-item">
+        <label>操作类型</label>
+        <select v-model="draft.action" class="sel">
+          <option value="">全部</option>
+          <option value="update_image">更新镜像</option>
+          <option value="restart">重启服务</option>
+          <option value="rollback">回滚</option>
+        </select>
+      </div>
+      <div class="f-item">
+        <label>状态</label>
+        <select v-model="draft.status" class="sel">
+          <option value="">全部</option>
+          <option value="success">成功</option>
+          <option value="partial">部分成功</option>
+          <option value="failed">失败</option>
+          <option value="pending">进行中</option>
+          <option value="no_change">无变化</option>
+        </select>
+      </div>
+      <div class="f-item">
+        <label>操作人</label>
+        <input v-model="draft.operator" class="inp" placeholder="模糊匹配" />
+      </div>
+      <div class="f-item wide">
+        <label>时间范围</label>
+        <div class="date-range">
+          <input type="datetime-local" v-model="draft.time_from" class="inp" />
+          <span class="sep">至</span>
+          <input type="datetime-local" v-model="draft.time_to" class="inp" />
+        </div>
+      </div>
+      <div class="f-actions">
+        <button class="btn-primary" @click="doSearch">
+          <el-icon><Search /></el-icon>查询
+        </button>
+        <button class="btn-ghost" @click="doReset">重置</button>
+      </div>
     </div>
 
-    <el-table :data="list" v-loading="loading" size="small" row-key="id" style="background:#fff;border:1px solid var(--border);border-radius:8px;">
-      <el-table-column type="expand">
-        <template #default="{ row }">
-          <div class="expand">
-            <div v-if="row.action !== 'restart'">
-              <div class="sec-title">Tag 变更明细</div>
-              <el-table :data="row.changes || []" size="small" empty-text="无">
-                <el-table-column label="模块" prop="module" />
-                <el-table-column label="From">
-                  <template #default="{ row: r }"><span class="mono tag-old">{{ r.from_tag }}</span></template>
-                </el-table-column>
-                <el-table-column label="To">
-                  <template #default="{ row: r }"><span class="mono tag-new">{{ r.to_tag }}</span></template>
-                </el-table-column>
-              </el-table>
-            </div>
-            <div v-else>
-              <div class="sec-title">重启模块</div>
-              <div>{{ (row.module_names || []).join(', ') }}</div>
-            </div>
+    <!-- 表格 -->
+    <div class="tbl-wrap">
+      <div v-if="loading" class="loading">加载中...</div>
+      <div v-else-if="!list.length" class="empty">
+        <div class="em-t">没有发布记录</div>
+        <div class="em-d">调整筛选条件，或点「查询」重新获取</div>
+      </div>
+      <table v-else class="tbl">
+        <thead>
+          <tr>
+            <th style="width:28px"></th>
+            <th style="width:150px">时间</th>
+            <th style="width:140px">项目环境</th>
+            <th style="width:120px">操作</th>
+            <th>涉及模块</th>
+            <th style="width:100px">状态</th>
+            <th style="width:110px">提交</th>
+            <th style="width:90px">操作人</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-for="(row, i) in list" :key="row.id">
+            <tr :class="['data-row', {opened: expanded[i]}]" @click="toggle(i)">
+              <td class="chev-cell">
+                <el-icon :class="['chev', {on: expanded[i]}]"><ArrowRight /></el-icon>
+              </td>
+              <td class="mono">{{ fmtTime(row.created_at) }}</td>
+              <td class="mono">
+                {{ envName(row.project_env_id) }}
+                <span :class="'env-chip ' + envType(row.project_env_id)" style="margin-left:4px">{{ envType(row.project_env_id).toUpperCase() }}</span>
+              </td>
+              <td>
+                <span :class="'action-tag ' + row.action">{{ actionLabel(row.action) }}</span>
+              </td>
+              <td>
+                <span v-for="(m, mi) in (row.module_names || []).slice(0, 3)" :key="mi" class="mod-chip">{{ m }}</span>
+                <span v-if="(row.module_names || []).length > 3" class="mod-chip more">+{{ row.module_names.length - 3 }}</span>
+                <span v-if="!row.module_names?.length" class="muted">—</span>
+              </td>
+              <td>
+                <span :class="'status-tag ' + row.status">{{ statusLabel(row.status) }}</span>
+              </td>
+              <td>
+                <a v-if="row.git_commit_url" :href="row.git_commit_url" target="_blank" class="commit mono" @click.stop>
+                  {{ row.git_commit }}
+                </a>
+                <span v-else class="muted mono">—</span>
+              </td>
+              <td class="mono">{{ row.operator }}</td>
+            </tr>
+            <tr v-if="expanded[i]" class="detail-row">
+              <td :colspan="8">
+                <div class="detail-wrap">
 
-            <div class="sec-title" style="margin-top:12px;">ArgoCD 结果</div>
-            <el-table :data="row.argocd_results || []" size="small" empty-text="无">
-              <el-table-column label="App" prop="app" />
-              <el-table-column label="Sync" prop="sync_status" width="120" />
-              <el-table-column label="Health" prop="health" width="120" />
-              <el-table-column label="耗时" prop="duration_sec" width="100">
-                <template #default="{ row: r }">{{ r.duration_sec }}s</template>
-              </el-table-column>
-              <el-table-column label="消息" prop="msg" />
-            </el-table>
+                  <div v-if="row.action !== 'restart'" class="section">
+                    <div class="sec-lbl">Tag 变更明细</div>
+                    <table class="sub-tbl">
+                      <thead><tr><th>模块</th><th>原 tag</th><th>新 tag</th></tr></thead>
+                      <tbody>
+                        <tr v-for="ch in (row.changes || [])" :key="ch.module">
+                          <td class="mono">{{ ch.module }}</td>
+                          <td class="mono tag-from">{{ ch.from_tag }}</td>
+                          <td class="mono tag-to">{{ ch.to_tag }}</td>
+                        </tr>
+                        <tr v-if="!row.changes?.length"><td colspan="3" class="muted" style="text-align:center">无</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div v-else class="section">
+                    <div class="sec-lbl">重启模块</div>
+                    <div class="restart-mods">
+                      <span v-for="m in (row.module_names || [])" :key="m" class="mod-chip">{{ m }}</span>
+                    </div>
+                  </div>
 
-            <div v-if="row.error_msg" style="margin-top:12px;color:var(--danger);font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;">
-              <b>错误：</b>{{ row.error_msg }}
-            </div>
+                  <div class="section">
+                    <div class="sec-lbl">ArgoCD 结果</div>
+                    <table class="sub-tbl">
+                      <thead><tr><th>应用</th><th>同步</th><th>健康</th><th>耗时</th><th>消息</th></tr></thead>
+                      <tbody>
+                        <tr v-for="r in (row.argocd_results || [])" :key="r.app">
+                          <td class="mono">{{ r.app }}</td>
+                          <td :class="'sync-' + (r.sync_status || '').toLowerCase()">{{ r.sync_status || '—' }}</td>
+                          <td :class="'health-' + (r.health || '').toLowerCase()">{{ r.health || '—' }}</td>
+                          <td class="mono">{{ r.duration_sec }}s</td>
+                          <td class="msg">{{ r.msg || '—' }}</td>
+                        </tr>
+                        <tr v-if="!row.argocd_results?.length"><td colspan="5" class="muted" style="text-align:center">无</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
 
-            <div style="margin-top:12px;">
-              <el-button size="small" type="primary"
-                v-if="row.action !== 'restart' && ['success','partial'].includes(row.status)"
-                @click="onRollback(row)">
-                回滚此次发布
-              </el-button>
-            </div>
-          </div>
-        </template>
-      </el-table-column>
-      <el-table-column label="时间" width="160">
-        <template #default="{ row }"><span class="mono">{{ fmt(row.created_at) }}</span></template>
-      </el-table-column>
-      <el-table-column label="项目环境" width="160">
-        <template #default="{ row }"><span class="mono">{{ envName(row.project_env_id) }}</span></template>
-      </el-table-column>
-      <el-table-column label="操作" width="140">
-        <template #default="{ row }">
-          <el-tag :type="actionType(row.action)" size="small" effect="plain">{{ row.action }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="模块">
-        <template #default="{ row }">
-          <el-tag v-for="m in (row.module_names || []).slice(0,4)" :key="m" size="small" effect="plain" style="margin-right:3px;">
-            {{ m }}
-          </el-tag>
-          <el-tag v-if="(row.module_names || []).length > 4" size="small" type="info">+{{ row.module_names.length - 4 }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="状态" width="110">
-        <template #default="{ row }">
-          <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="Commit" width="110">
-        <template #default="{ row }">
-          <a v-if="row.git_commit_url" :href="row.git_commit_url" target="_blank" class="mono" style="color:var(--primary);text-decoration:none;">
-            {{ row.git_commit }}
-          </a>
-          <span v-else class="mono" style="color:var(--text-3);">—</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作人" prop="operator" width="100" />
-    </el-table>
+                  <div v-if="row.error_msg" class="section">
+                    <div class="sec-lbl">错误信息</div>
+                    <pre class="err-msg">{{ row.error_msg }}</pre>
+                  </div>
 
-    <el-pagination
-      layout="total, prev, pager, next, sizes"
-      :total="total" v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[20, 50, 100]"
-      @current-change="load" @size-change="load" style="margin-top: 12px;" />
+                  <div class="section-actions">
+                    <button
+                      v-if="row.action !== 'restart' && ['success','partial'].includes(row.status)"
+                      class="btn-primary sm"
+                      @click.stop="onRollback(row)">
+                      回滚此次发布
+                    </button>
+                  </div>
+                </div>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
 
-    <RollbackDialog v-model="rbVisible" :deployment-id="rbID" @done="load" />
+      <div class="pager" v-if="list.length">
+        <div class="pg-info">共 <b>{{ total }}</b> 条</div>
+        <div class="pg-ctrl">
+          <button :disabled="page <= 1" @click="page--; doSearch()">‹</button>
+          <span>第 <b>{{ page }}</b> 页</span>
+          <button :disabled="page * pageSize >= total" @click="page++; doSearch()">›</button>
+          <select v-model="pageSize" @change="page = 1; doSearch()" class="sel-sm">
+            <option :value="20">20 条/页</option>
+            <option :value="50">50 条/页</option>
+            <option :value="100">100 条/页</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <RollbackDialog v-model="rbVis" :deployment-id="rbID" @done="doSearch" />
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import dayjs from 'dayjs'
+import { Search, ArrowRight } from '@element-plus/icons-vue'
 import { listDeployments, listProjectEnvs } from '../api'
 import RollbackDialog from '../components/RollbackDialog.vue'
 
@@ -130,74 +208,304 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const loading = ref(false)
-const filters = reactive({ project_env_id: null, action: '', status: '', operator: '' })
-const rbVisible = ref(false)
+const expanded = ref({})
+const rbVis = ref(false)
 const rbID = ref(null)
 
-const kpis = ref([
-  { label: '当前页数', value: '0', color: '' },
-  { label: '成功率', value: '—', color: 'var(--success)' },
-  { label: '重启次数', value: '0', color: '' },
-  { label: '平均耗时', value: '0s', color: '' },
-])
+// 草稿：用户正在编辑但未触发查询
+const blankFilters = () => ({
+  project: '', env_type: '',
+  action: '', status: '',
+  operator: '',
+  time_from: '', time_to: ''
+})
+const draft = reactive(blankFilters())
 
+const projects = computed(() => {
+  const set = new Set()
+  envs.value.forEach(e => {
+    const suffix = '-' + e.env_type
+    const p = e.name.endsWith(suffix) ? e.name.slice(0, -suffix.length) : e.name
+    set.add(p)
+  })
+  return [...set].sort()
+})
+const envsForProject = computed(() => {
+  if (!draft.project) return []
+  const set = new Set()
+  envs.value.forEach(e => {
+    const suffix = '-' + e.env_type
+    const p = e.name.endsWith(suffix) ? e.name.slice(0, -suffix.length) : e.name
+    if (p === draft.project) set.add(e.env_type)
+  })
+  return [...set]
+})
+function onProjectChange() { draft.env_type = '' }
+
+function envLabel(v) { return { uat: 'UAT', prod: 'PROD' }[v] || v }
 function envName(id) { return envs.value.find(e => e.id === id)?.name || id }
-function fmt(s) { return dayjs(s).format('YYYY-MM-DD HH:mm') }
-function actionType(a) {
-  return a === 'update_image' ? 'primary'
-    : a === 'rollback' ? 'warning'
-    : 'info'
+function envType(id) { return envs.value.find(e => e.id === id)?.env_type || 'uat' }
+function fmtTime(s) { return dayjs(s).format('YYYY-MM-DD HH:mm') }
+function actionLabel(a) {
+  return { update_image: '更新镜像', restart: '重启服务', rollback: '回滚' }[a] || a
 }
-function statusType(s) {
-  return s === 'success' ? 'success'
-    : s === 'failed' ? 'danger'
-    : s === 'partial' ? 'warning'
-    : 'info'
+function statusLabel(s) {
+  return { success: '成功', partial: '部分成功', failed: '失败', pending: '进行中', no_change: '无变化' }[s] || s
 }
 
-async function load() {
-  loading.value = true
-  try {
-    const params = { ...filters, page: page.value, page_size: pageSize.value }
-    const r = await listDeployments(params)
-    list.value = r.list || []
-    total.value = r.total || 0
-    computeKPIs()
-  } finally { loading.value = false }
-}
+const kpis = ref([
+  { label: '当前页数', value: '0' },
+  { label: '成功率', value: '—', color: 'var(--success)' },
+  { label: '重启次数', value: '0' },
+  { label: '平均耗时', value: '0s' }
+])
 function computeKPIs() {
   const n = list.value.length
   const ok = list.value.filter(d => d.status === 'success').length
   const restart = list.value.filter(d => d.action === 'restart').length
   const avg = n ? Math.round(list.value.reduce((a, b) => a + (b.duration_sec || 0), 0) / n) : 0
   kpis.value = [
-    { label: '当前页数', value: n.toString(), color: '' },
+    { label: '当前页数', value: n.toString() },
     { label: '成功率', value: n ? Math.round(ok * 100 / n) + '%' : '—', color: 'var(--success)' },
-    { label: '重启次数', value: restart.toString(), color: '' },
-    { label: '平均耗时', value: avg + 's', color: '' },
+    { label: '重启次数', value: restart.toString() },
+    { label: '平均耗时', value: avg + 's' }
   ]
 }
-function reset() {
-  Object.assign(filters, { project_env_id: null, action: '', status: '', operator: '' })
-  page.value = 1
-  load()
+
+async function doSearch() {
+  loading.value = true
+  try {
+    const params = { page: page.value, page_size: pageSize.value }
+    if (draft.project) params.project = draft.project
+    if (draft.env_type) params.env_type = draft.env_type
+    if (draft.action) params.action = draft.action
+    if (draft.status) params.status = draft.status
+    if (draft.operator) params.operator = draft.operator
+    if (draft.time_from) params.time_from = draft.time_from.replace('T', ' ') + ':00'
+    if (draft.time_to) params.time_to = draft.time_to.replace('T', ' ') + ':59'
+    const r = await listDeployments(params)
+    list.value = r.list || []
+    total.value = r.total || 0
+    computeKPIs()
+  } finally { loading.value = false }
 }
-function onRollback(row) { rbID.value = row.id; rbVisible.value = true }
+function doReset() {
+  Object.assign(draft, blankFilters())
+  page.value = 1
+  doSearch()
+}
+
+function toggle(i) { expanded.value[i] = !expanded.value[i] }
+function onRollback(row) { rbID.value = row.id; rbVis.value = true }
 
 onMounted(async () => {
   envs.value = (await listProjectEnvs()) || []
-  await load()
+  await doSearch()
 })
 </script>
 
 <style scoped>
-.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
-.kpi { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
-.kpi .l { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
-.kpi .v { font-size: 22px; font-weight: 700; margin-top: 2px; }
-.filters { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.expand { background: #fafbfc; padding: 14px 22px; }
-.sec-title { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-3); font-weight: 600; margin-bottom: 8px; }
-.tag-old { color: var(--text-3); text-decoration: line-through; }
-.tag-new { color: var(--success); font-weight: 500; }
+.dh { }
+
+/* ===== KPI ===== */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.kpi {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+}
+.k-lbl { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .6px; font-weight: 600; margin-bottom: 4px; }
+.k-val { font-size: 24px; font-weight: 700; color: var(--text); letter-spacing: -.5px; }
+
+/* ===== 筛选 ===== */
+.filter-bar {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: flex-end;
+}
+.f-item { display: flex; flex-direction: column; gap: 4px; min-width: 120px; }
+.f-item.wide { min-width: 280px; flex: 1; }
+.f-item label {
+  font-size: 11px; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: .6px; font-weight: 600;
+}
+.sel, .inp {
+  padding: 7px 10px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font: 500 12.5px var(--body);
+  color: var(--text);
+}
+.sel:focus, .inp:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+.sel:disabled { background: var(--bg-hover); color: var(--text-3); cursor: not-allowed; }
+.sel-sm { padding: 3px 8px; font-size: 12px; border: 1px solid var(--border); border-radius: 4px; background: #fff; }
+
+.date-range { display: flex; gap: 6px; align-items: center; }
+.date-range .inp { flex: 1; font-family: var(--mono); font-size: 12px; padding: 6px 9px; }
+.date-range .sep { color: var(--text-3); font-size: 12px; }
+
+.f-actions { display: flex; gap: 6px; align-items: center; }
+.btn-primary, .btn-ghost {
+  padding: 8px 18px; border-radius: 5px; font: 500 12.5px var(--body); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn-primary { background: var(--primary); color: #fff; border: 1px solid var(--primary); }
+.btn-primary:hover { background: var(--primary-dark); }
+.btn-primary .el-icon { font-size: 13px; }
+.btn-primary.sm { padding: 6px 14px; font-size: 12px; }
+.btn-ghost { background: #fff; border: 1px solid var(--border); color: var(--text); }
+.btn-ghost:hover { border-color: var(--primary); color: var(--primary); }
+
+/* ===== 表格 ===== */
+.tbl-wrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.loading, .empty { padding: 60px 20px; text-align: center; color: var(--text-3); }
+.empty .em-t { font-size: 14px; color: var(--text-2); font-weight: 500; margin-bottom: 4px; }
+.empty .em-d { font-size: 12px; }
+
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th {
+  background: var(--bg-input);
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  font-weight: 600;
+  position: sticky; top: 0; z-index: 1;
+}
+.tbl td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: middle;
+}
+.data-row { cursor: pointer; transition: background .1s; }
+.data-row:hover { background: var(--bg-input); }
+.data-row.opened { background: var(--primary-bg); }
+
+.chev-cell { text-align: center; padding-left: 14px; }
+.chev { color: var(--text-3); font-size: 12px; transition: transform .15s; }
+.chev.on { transform: rotate(90deg); color: var(--primary); }
+
+.mono { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--text-3); }
+
+.action-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--body);
+  white-space: nowrap;
+}
+.action-tag.update_image { background: #eff6ff; color: #1e40af; }
+.action-tag.restart { background: #fef3c7; color: #92400e; }
+.action-tag.rollback { background: #fce7f3; color: #9f1239; }
+
+.status-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.status-tag.success { background: var(--success-bg); color: var(--success-dark); }
+.status-tag.partial { background: #fef3c7; color: #92400e; }
+.status-tag.failed { background: var(--danger-bg); color: var(--danger-dark); }
+.status-tag.pending { background: #eff6ff; color: #1e40af; }
+.status-tag.no_change { background: var(--bg-hover); color: var(--text-2); }
+
+.mod-chip {
+  display: inline-block;
+  background: var(--bg-hover);
+  color: var(--text-2);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 11px;
+  margin-right: 3px;
+  margin-bottom: 2px;
+}
+.mod-chip.more { background: #e5e7eb; color: var(--text-3); }
+.env-chip { font-size: 9.5px; padding: 1px 5px; }
+
+.commit { color: var(--primary); text-decoration: none; }
+.commit:hover { text-decoration: underline; }
+
+/* expanded detail */
+.detail-row td { background: var(--bg-input); padding: 0; border-bottom: 1px solid var(--border); }
+.detail-wrap { padding: 16px 28px 18px 54px; display: flex; flex-direction: column; gap: 14px; }
+.section {}
+.sec-lbl {
+  font-size: 10.5px; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: .8px; font-weight: 600;
+  margin-bottom: 6px;
+}
+.sub-tbl { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.sub-tbl th { background: var(--bg-hover); color: var(--text-2); font-size: 10.5px; font-weight: 600; padding: 6px 10px; text-align: left; text-transform: uppercase; letter-spacing: .4px; }
+.sub-tbl td { padding: 6px 10px; border-top: 1px solid var(--border-soft); font-size: 12px; }
+.tag-from { color: var(--text-3); text-decoration: line-through; }
+.tag-to { color: var(--success-dark); font-weight: 600; }
+.sync-synced, .health-healthy { color: var(--success-dark); font-family: var(--mono); font-size: 11.5px; }
+.sync-outofsync, .health-degraded { color: var(--danger-dark); font-family: var(--mono); font-size: 11.5px; }
+.health-progressing { color: var(--primary); font-family: var(--mono); font-size: 11.5px; }
+.msg { color: var(--text-2); font-size: 11.5px; }
+
+.restart-mods { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0; }
+
+.err-msg {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #7f1d1d;
+  padding: 10px 12px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.section-actions { margin-top: 4px; }
+
+/* 分页 */
+.pager {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--bg-input);
+}
+.pg-info { font-size: 12.5px; color: var(--text-2); }
+.pg-info b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+.pg-ctrl { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text-2); }
+.pg-ctrl button {
+  background: #fff; border: 1px solid var(--border); color: var(--text);
+  width: 28px; height: 28px; border-radius: 4px;
+  cursor: pointer; font-family: var(--mono); font-size: 14px;
+}
+.pg-ctrl button:disabled { opacity: .35; cursor: not-allowed; }
+.pg-ctrl button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.pg-ctrl b { color: var(--text); font-family: var(--mono); font-weight: 600; }
 </style>

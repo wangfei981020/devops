@@ -25,6 +25,25 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 		where += " AND operator LIKE ?"
 		args = append(args, "%"+v+"%")
 	}
+	// 项目名前缀匹配 project_env.name（e.g. g32 匹配 g32-uat/g32-prod）
+	if v := r.URL.Query().Get("project"); v != "" {
+		where += " AND project_env_id IN (SELECT id FROM project_env WHERE name LIKE ?)"
+		args = append(args, v+"-%")
+	}
+	// 环境类型（uat/prod）
+	if v := r.URL.Query().Get("env_type"); v != "" {
+		where += " AND project_env_id IN (SELECT id FROM project_env WHERE env_type=?)"
+		args = append(args, v)
+	}
+	// 时间范围
+	if v := r.URL.Query().Get("time_from"); v != "" {
+		where += " AND created_at >= ?"
+		args = append(args, v)
+	}
+	if v := r.URL.Query().Get("time_to"); v != "" {
+		where += " AND created_at <= ?"
+		args = append(args, v)
+	}
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
