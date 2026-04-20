@@ -336,13 +336,8 @@ func HandleDeleteFileShare(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleStorageUpload 通用文件上传接口
+// 中间件已完成认证（JWT 或 API Key），这里不再检查 userID
 func HandleStorageUpload(w http.ResponseWriter, r *http.Request) {
-	userID, _, _ := GetUserFromContext(r)
-	if userID == "" {
-		sendError(w, "未登录", http.StatusUnauthorized)
-		return
-	}
-
 	err := r.ParseMultipartForm(32 << 20) // 32MB
 	if err != nil {
 		sendError(w, "解析表单失败", http.StatusBadRequest)

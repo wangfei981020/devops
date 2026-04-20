@@ -968,6 +968,41 @@ CREATE TABLE IF NOT EXISTS duty_records (
 		return err
 	}
 
+	// 创建 API Key 表
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS api_keys (
+			id VARCHAR(36) PRIMARY KEY,
+			name VARCHAR(100) NOT NULL,
+			description VARCHAR(500) DEFAULT '',
+			key_hash CHAR(64) NOT NULL UNIQUE,
+			key_prefix VARCHAR(16) NOT NULL COMMENT '前缀 opsk_ + 8 位明文，共13字符',
+			key_suffix VARCHAR(6) NOT NULL COMMENT '后6位明文',
+			domain VARCHAR(32) NOT NULL COMMENT '业务域：table_maintenance 等',
+			scopes TEXT NOT NULL COMMENT 'JSON 数组：权限码列表',
+			allowed_table_ids TEXT COMMENT 'JSON 数组：允许访问的自定义表ID，NULL/空=不限制',
+			enabled TINYINT(1) NOT NULL DEFAULT 1,
+			expires_at DATETIME NULL COMMENT 'NULL=永久有效',
+			last_used_at DATETIME NULL,
+			created_by VARCHAR(64) DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			INDEX idx_apikey_hash (key_hash),
+			INDEX idx_apikey_domain (domain),
+			INDEX idx_apikey_enabled (enabled)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Auto-migrate: 扩大 api_keys.key_prefix 到 VARCHAR(16)（旧版 12 位不够）
+	var keyPrefixLen int
+	DB.QueryRow(`SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'api_keys' AND COLUMN_NAME = 'key_prefix'`).Scan(&keyPrefixLen)
+	if keyPrefixLen > 0 && keyPrefixLen < 16 {
+		DB.Exec("ALTER TABLE api_keys MODIFY key_prefix VARCHAR(16) NOT NULL")
+		log.Println("[Migration] Expanded api_keys.key_prefix to VARCHAR(16)")
+	}
+
 	// 初始化默认角色和权限
 	initDefaultRolesAndPermissions()
 
@@ -1077,6 +1112,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_duty_projects", "menu:duty_projects", "值班项目", "/system/duty-projects", "perm_menu_system", "", 110},
 		{"perm_menu_table_maintenance", "menu:table_maintenance", "桌台维护记录", "/system/table-maintenance", "perm_menu_system", "", 120},
 		{"perm_menu_table_hierarchy_config", "menu:table_hierarchy_config", "桌台层级配置", "/system/table-hierarchy-config", "perm_menu_system", "", 130},
+		{"perm_menu_api_keys", "menu:api_keys", "API Key 管理", "/system/api-keys", "perm_menu_system", "", 140},
 
 		// 资源管理
 		{"perm_menu_resource", "menu:resource", "资源管理", "/resource", "", "resource", 2},
@@ -1297,6 +1333,12 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_table_maint_delete", "table_maintenance:delete", "[桌台维护] 删除记录", "允许删除桌台维护记录"},
 		{"perm_btn_table_maint_export", "table_maintenance:export", "[桌台维护] 导出记录", "允许导出桌台维护记录"},
 		{"perm_btn_table_maint_upload", "table_maintenance:upload", "[桌台维护] 上传附件", "允许上传附件"},
+		{"perm_btn_table_maint_read", "table_maintenance:read", "[桌台维护] 查看记录", "允许查看桌台维护记录"},
+
+		// API Key 管理
+		{"perm_btn_api_key_create", "api_key:create", "[API Key] 创建", "允许创建 API Key"},
+		{"perm_btn_api_key_update", "api_key:update", "[API Key] 编辑", "允许编辑 API Key（改名、权限、过期、启停）"},
+		{"perm_btn_api_key_delete", "api_key:delete", "[API Key] 删除", "允许删除 API Key"},
 
 		// 桌台层级配置
 		{"perm_btn_table_hierarchy_create", "table_hierarchy:create", "[桌台配置] 添加配置", "允许添加桌台层级配置"},

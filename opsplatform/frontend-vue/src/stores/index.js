@@ -170,7 +170,7 @@ export const useAuthStore = defineStore('auth', () => {
   function hasMenuGroup(groupCode) {
     if (isSuperAdmin()) return true
     const menuGroupMap = {
-      'system': ['welcome', 'users', 'roles', 'permissions', 'audit', 'api-manage', 'schedule', 'task-pool', 'incidents', 'duty', 'table_maintenance', 'table_hierarchy_config'],
+      'system': ['welcome', 'users', 'roles', 'permissions', 'audit', 'api-manage', 'schedule', 'task-pool', 'incidents', 'duty', 'table_maintenance', 'table_hierarchy_config', 'api_keys'],
       'resource': ['assets', 'domains', 'merchants', 'network', 'service-config', 'topology'],
       'monitor': ['metrics', 'alerts', 'alert-rules', 'alert-notify', 'dashboard-screen'],
       'k8s': ['clusters', 'workloads', 'configmaps', 'storage', 'terminal'],

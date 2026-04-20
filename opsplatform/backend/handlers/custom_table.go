@@ -491,6 +491,81 @@ func HandleUpdateCustomRow(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{"success": true, "message": "更新成功"})
 }
 
+// HandlePatchCustomRow 部分更新行数据（浅合并 data，只覆盖传入的 key）
+func HandlePatchCustomRow(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	rowID := vars["rowId"]
+
+	var req struct {
+		Data        map[string]interface{} `json:"data"`
+		Attachments json.RawMessage        `json:"attachments"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "无效的请求", http.StatusBadRequest)
+		return
+	}
+
+	// 取现有 data/attachments
+	var currentDataStr, currentAttachStr string
+	var tableID string
+	err := database.DB.QueryRow(
+		`SELECT table_id, COALESCE(data, '{}'), COALESCE(attachments, '[]') FROM custom_rows WHERE id = ?`,
+		rowID,
+	).Scan(&tableID, &currentDataStr, &currentAttachStr)
+	if err != nil {
+		http.Error(w, "记录不存在", http.StatusNotFound)
+		return
+	}
+
+	// 合并 data（浅合并，传入的 key 覆盖原值）
+	mergedDataStr := currentDataStr
+	if req.Data != nil && len(req.Data) > 0 {
+		var current map[string]interface{}
+		if err := json.Unmarshal([]byte(currentDataStr), &current); err != nil {
+			current = map[string]interface{}{}
+		}
+		for k, v := range req.Data {
+			current[k] = v
+		}
+		merged, err := json.Marshal(current)
+		if err != nil {
+			SafeError(w, "合并数据失败", http.StatusInternalServerError, err)
+			return
+		}
+		mergedDataStr = string(merged)
+	}
+
+	// attachments：若显式传入则替换，未传则保留原值
+	attachStr := currentAttachStr
+	if req.Attachments != nil {
+		attachStr = string(req.Attachments)
+	}
+
+	now := time.Now().Format("2006-01-02 15:04:05")
+	operator := r.Header.Get("X-Operator")
+
+	var tableName string
+	database.DB.QueryRow("SELECT name FROM custom_tables WHERE id = ?", tableID).Scan(&tableName)
+
+	_, err = database.DB.Exec(
+		`UPDATE custom_rows SET data = ?, attachments = ?, updated_at = ? WHERE id = ?`,
+		mergedDataStr, attachStr, now, rowID,
+	)
+	if err != nil {
+		SafeError(w, "更新数据失败", http.StatusInternalServerError, err)
+		return
+	}
+
+	AddAuditLogFromRequest(r, "部分更新记录", rowID, operator, currentDataStr, mergedDataStr,
+		fmt.Sprintf("在表格 %s 中部分更新记录", tableName))
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": "更新成功",
+		"data":    json.RawMessage(mergedDataStr),
+	})
+}
+
 // HandleDeleteCustomRow 删除行数据
 func HandleDeleteCustomRow(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)

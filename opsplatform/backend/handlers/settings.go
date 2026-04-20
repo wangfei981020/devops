@@ -57,6 +57,38 @@ func init() {
 	}()
 }
 
+// HandleGetHierarchy 返回桌台层级配置（只暴露 projects/sites/tables/gameTypes，不含其他敏感设置）
+// 供外部 API Key 对接方查询合法取值
+func HandleGetHierarchy(w http.ResponseWriter, r *http.Request) {
+	var raw string
+	err := database.DB.QueryRow(
+		`SELECT setting_value FROM system_settings WHERE setting_key = 'table_hierarchy_config'`,
+	).Scan(&raw)
+
+	out := map[string]interface{}{
+		"projects":   []interface{}{},
+		"sites":      []interface{}{},
+		"tables":     []interface{}{},
+		"gameTypes":  []interface{}{},
+	}
+	if err != nil || raw == "" {
+		respondJSON(w, http.StatusOK, out)
+		return
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		respondJSON(w, http.StatusOK, out)
+		return
+	}
+	for _, k := range []string{"projects", "sites", "tables", "gameTypes"} {
+		if v, ok := parsed[k]; ok && v != nil {
+			out[k] = v
+		}
+	}
+	respondJSON(w, http.StatusOK, out)
+}
+
 // HandleGetSettings 获取系统设置
 func HandleGetSettings(w http.ResponseWriter, r *http.Request) {
 	key := r.URL.Query().Get("key")

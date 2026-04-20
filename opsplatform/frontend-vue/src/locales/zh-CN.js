@@ -431,6 +431,7 @@ export default {
       duty: '值班记录',
       tableMaintenance: '桌台维护记录',
       tableHierarchyConfig: '桌台配置',
+      apiKeys: 'API Key 管理',
       assets: '资产管理',
       domains: '域名管理',
       merchants: '商户管理',

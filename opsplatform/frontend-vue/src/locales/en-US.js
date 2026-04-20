@@ -431,6 +431,7 @@ export default {
       duty: 'Duty Records',
       tableMaintenance: 'Table Maintenance',
       tableHierarchyConfig: 'Table Config',
+      apiKeys: 'API Keys',
       assets: 'Assets',
       domains: 'Domains',
       merchants: 'Merchants',

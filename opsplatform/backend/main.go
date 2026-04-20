@@ -83,7 +83,7 @@ func main() {
 
 	// ===== 需要认证的路由 =====
 	protected := api.PathPrefix("").Subrouter()
-	protected.Use(handlers.AuthMiddleware)
+	protected.Use(handlers.APIKeyOrJWTMiddleware)
 
 	// 会话管理
 	protected.HandleFunc("/session/info", handlers.HandleGetSessionInfo).Methods("GET", "OPTIONS")
@@ -213,9 +213,19 @@ func main() {
 	protected.HandleFunc("/custom-tables/{id}/columns/{colId}", handlers.HandleDeleteCustomColumn).Methods("DELETE", "OPTIONS")
 	protected.HandleFunc("/custom-tables/{id}/rows", handlers.HandleAddCustomRow).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/custom-tables/{id}/rows/{rowId}", handlers.HandleUpdateCustomRow).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/custom-tables/{id}/rows/{rowId}", handlers.HandlePatchCustomRow).Methods("PATCH", "OPTIONS")
 	protected.HandleFunc("/custom-tables/{id}/rows/{rowId}", handlers.HandleDeleteCustomRow).Methods("DELETE", "OPTIONS")
 	protected.HandleFunc("/custom-tables/{id}/stats", handlers.HandleGetCustomTableStats).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/custom-tables/{id}/column-config", handlers.HandleSaveColumnConfig).Methods("PUT", "OPTIONS")
+
+	// ===== 桌台层级配置只读（API Key 对接友好） =====
+	protected.HandleFunc("/hierarchy", handlers.HandleGetHierarchy).Methods("GET", "OPTIONS")
+
+	// ===== API Key 管理 =====
+	protected.HandleFunc("/api-keys", handlers.HandleListAPIKeys).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/api-keys", handlers.HandleCreateAPIKey).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/api-keys/{id}", handlers.HandleUpdateAPIKey).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/api-keys/{id}", handlers.HandleDeleteAPIKey).Methods("DELETE", "OPTIONS")
 
 	// 网站管理
 	protected.HandleFunc("/websites", handlers.HandleGetWebsites).Methods("GET", "OPTIONS")
@@ -449,7 +459,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 			allowedOrigin = "*" // 开发环境默认允许所有
 		}
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Operator, X-CSRF-Token")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 

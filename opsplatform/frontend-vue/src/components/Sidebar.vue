@@ -65,6 +65,7 @@ function getItemName(itemKey) {
   const keyMap = {
     'table-maintenance': 'tableMaintenance',
     'table-hierarchy-config': 'tableHierarchyConfig',
+    'api-keys': 'apiKeys',
     'alertrules': 'alertRules',
     'alertnotify': 'alertNotify',
     'dashboard': 'dashboardScreen',
@@ -103,7 +104,7 @@ function hasMenu(menuCode) {
 function hasMenuGroup(groupCode) {
   if (isAdmin.value) return true
   const menuGroupMap = {
-    'system': ['welcome', 'users', 'roles', 'permissions', 'audit', 'api-manage', 'schedule', 'task-pool', 'incidents', 'duty', 'table_maintenance', 'table_hierarchy_config'],
+    'system': ['welcome', 'users', 'roles', 'permissions', 'audit', 'api-manage', 'schedule', 'task-pool', 'incidents', 'duty', 'table_maintenance', 'table_hierarchy_config', 'api_keys'],
     'resource': ['assets', 'domains', 'merchants', 'network', 'service-config', 'topology'],
     'monitor': ['metrics', 'alerts', 'alert-rules', 'alert-notify', 'dashboard-screen'],
     'k8s': ['clusters', 'workloads', 'configmaps', 'storage', 'terminal'],
@@ -174,7 +175,8 @@ const menuGroups = [
       { key: 'incidents', perm: 'incidents', name: '失误记录', path: '/incidents' },
       { key: 'duty', perm: 'duty', name: '值班记录', path: '/duty-records' },
       { key: 'table-maintenance', perm: 'table_maintenance', name: '桌台维护记录', path: '/table-maintenance' },
-      { key: 'table-hierarchy-config', perm: 'table_hierarchy_config', name: '桌台配置', path: '/table-hierarchy-config' }
+      { key: 'table-hierarchy-config', perm: 'table_hierarchy_config', name: '桌台配置', path: '/table-hierarchy-config' },
+      { key: 'api-keys', perm: 'api_keys', name: 'API Key 管理', path: '/api-keys' }
     ]
   },
   {
