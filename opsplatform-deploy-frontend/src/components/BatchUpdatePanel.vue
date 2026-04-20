@@ -1,73 +1,86 @@
 <template>
-  <div class="panel">
-    <!-- 输入区 -->
-    <div class="input-block">
-      <div class="ib-label">
-        输入 <code>模块名:tag</code>，每行一个
-      </div>
-      <textarea
-        ref="taRef"
-        v-model="text"
-        class="ta"
-        spellcheck="false"
-        placeholder="atmosphere-frontend:20260416014126-83&#10;base-client-backend:20260416020000-99"
-        @keydown.ctrl.enter="onPreview"
-      ></textarea>
-      <div class="input-foot">
-        <button class="btn ghost" @click="onPreview" :disabled="!text.trim() || previewing">
-          <span v-if="!previewing">预览变更</span>
-          <span v-else>分析中...</span>
-        </button>
-        <span class="hint">空行忽略 · <code>#</code> 注释 · 同模块取最后一条 · <kbd>Ctrl</kbd>+<kbd>↵</kbd> 预览</span>
-      </div>
+  <div class="up-panel">
+    <div class="p-hd">
+      <h3>
+        <el-icon><Upload /></el-icon>
+        批量更新镜像
+      </h3>
+      <span class="sub">空行忽略 · # 注释 · 同模块取最后一条</span>
     </div>
 
-    <!-- 预览区（空状态不显示，不占位） -->
-    <div v-if="diff.length" class="preview">
-      <div class="pv-head">
-        <span class="pv-title">变更预览</span>
-        <span class="pv-summary">
-          <span class="ok">{{ diff.filter(d => !d.skip && !d.is_new).length }} 改动</span>
-          <span v-if="diff.filter(d => d.skip).length" class="mute"> · {{ diff.filter(d => d.skip).length }} 无变化</span>
-          <span v-if="diff.filter(d => d.is_new).length" class="warn"> · {{ diff.filter(d => d.is_new).length }} 未知</span>
-        </span>
-      </div>
-      <div class="pv-list">
-        <div v-for="d in sortedDiff" :key="d.module" :class="['pv-row', d.skip && 'is-skip', d.is_new && 'is-new']">
-          <span class="pv-mod mono">{{ d.module }}</span>
-          <div class="pv-change">
-            <template v-if="d.is_new">
-              <span class="warn-text">git 里找不到 · 将跳过</span>
-            </template>
-            <template v-else-if="d.skip">
-              <span class="mute-text mono">{{ d.from_tag }}  ·  无变化</span>
-            </template>
-            <template v-else>
-              <span class="from mono">{{ shortTag(d.from_tag) }}</span>
-              <span class="arrow">→</span>
-              <span class="to mono">{{ shortTag(d.to_tag) }}</span>
-            </template>
-          </div>
+    <div class="ws-grid">
+      <!-- 输入 -->
+      <div class="ws-col in">
+        <div class="ws-sub">输入</div>
+        <textarea
+          v-model="text"
+          class="ta"
+          spellcheck="false"
+          placeholder="atmosphere-frontend:20260416014126-83
+base-client-backend:20260416020000-99"
+          @keydown.ctrl.enter="onPreview"
+        ></textarea>
+        <div class="ta-ft">
+          <button class="btn ghost" @click="onPreview" :disabled="!text.trim() || previewing">
+            <span v-if="!previewing">预览变更</span>
+            <span v-else>分析中...</span>
+          </button>
+          <span class="hint">
+            支持 <kbd>Ctrl</kbd>+<kbd>↵</kbd> · 粘贴 <code>模块:tag</code>
+          </span>
         </div>
       </div>
+
+      <!-- 预览 -->
+      <div class="ws-col">
+        <div class="ws-sub">变更预览</div>
+        <div v-if="!diff.length" class="empty-pv">
+          <div class="ep-t">未预览</div>
+          <div class="ep-d">在左侧输入后点「预览变更」</div>
+        </div>
+        <template v-else>
+          <div class="pv-hd">
+            <span class="pv-total">{{ diff.length }} modules</span>
+            <span class="pv-sum">
+              <span class="ok">✓ {{ validCount }} ready</span>
+              <span v-if="skipCount" class="mute"> · {{ skipCount }} 无变化</span>
+              <span v-if="newCount" class="warn"> · {{ newCount }} 未知</span>
+            </span>
+          </div>
+          <div class="pv-list">
+            <div v-for="d in sortedDiff" :key="d.module" :class="['pv-row', d.skip && 'is-skip', d.is_new && 'is-new']">
+              <span class="pv-mod">{{ d.module }}</span>
+              <span class="pv-chg" v-if="d.is_new">
+                <span class="warn-text">git 找不到 · 跳过</span>
+              </span>
+              <span class="pv-chg" v-else-if="d.skip">
+                <span class="mute-text">无变化</span>
+              </span>
+              <span class="pv-chg" v-else>
+                <span class="from">{{ shortTag(d.from_tag) }}</span>
+                <span class="arr">→</span>
+                <span class="to">{{ shortTag(d.to_tag) }}</span>
+              </span>
+            </div>
+          </div>
+        </template>
+      </div>
     </div>
 
-    <!-- 底部执行条 -->
-    <div v-if="diff.length" class="exec-bar">
+    <!-- 提交条 -->
+    <div class="exec" v-if="diff.length">
       <div class="exec-info">
-        将提交到 <b class="mono">{{ projectEnv.git_repo.split('/').pop() }}</b> ·
-        分支 <b class="mono">{{ projectEnv.git_branch }}</b> ·
-        <span v-if="validCount">{{ validCount }} 个模块</span>
-        <span v-else class="mute-text">无有效变更</span>
+        将提交到 <b>{{ repoShort }}</b> · 分支 <b>{{ projectEnv.git_branch }}</b>
+        <span v-if="validCount"> · 涉及 <b>{{ validCount }}</b> 个模块</span>
       </div>
       <button
-        :class="['exec-btn', isProd ? 'danger' : 'success']"
+        :class="['cta', isProd ? 'danger' : 'success']"
         :disabled="!validCount || submitting"
         @click="onSubmit">
         <span v-if="submitting">提交中...</span>
-        <span v-else-if="isProd">提交 PROD ·需二次确认</span>
+        <span v-else-if="isProd">提交 PROD · 需二次确认</span>
         <span v-else>提交并同步 UAT</span>
-        <svg v-if="!submitting" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="m9 18 6-6-6-6"/></svg>
+        <el-icon v-if="!submitting"><ArrowRight /></el-icon>
       </button>
     </div>
   </div>
@@ -76,27 +89,30 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Upload, ArrowRight } from '@element-plus/icons-vue'
 import { previewImage, updateImage } from '../api'
 
 const props = defineProps(['projectEnv', 'modules'])
 const emit = defineEmits(['done'])
-const taRef = ref(null)
 const text = ref('')
 const diff = ref([])
 const previewing = ref(false)
 const submitting = ref(false)
+
 const isProd = computed(() => props.projectEnv?.env_type === 'prod')
 const validCount = computed(() => diff.value.filter(d => !d.skip && !d.is_new).length)
+const skipCount = computed(() => diff.value.filter(d => d.skip).length)
+const newCount = computed(() => diff.value.filter(d => d.is_new).length)
+const repoShort = computed(() => (props.projectEnv?.git_repo || '').split('/').pop() || '?')
+
 const sortedDiff = computed(() => {
-  // 有效改动在前，无变化其次，未知最后
   return [...diff.value].sort((a, b) => {
-    const order = (d) => (d.is_new ? 2 : d.skip ? 1 : 0)
+    const order = d => (d.is_new ? 2 : d.skip ? 1 : 0)
     return order(a) - order(b)
   })
 })
 
 function shortTag(t) {
-  // 长 tag (如 20260416014126-83) 保留尾部 8 位
   if (!t) return '—'
   return t.length > 12 ? '…' + t.slice(-10) : t
 }
@@ -117,7 +133,8 @@ async function onSubmit() {
     try {
       await ElMessageBox.confirm(
         `PROD 将提交 ${changes.length} 个模块到 GitLab，不可撤销。`,
-        '二次确认', { type: 'warning', confirmButtonText: '确认提交', cancelButtonText: '取消' }
+        '二次确认',
+        { type: 'warning', confirmButtonText: '确认提交', cancelButtonText: '取消' }
       )
     } catch (_) { return }
   }
@@ -133,102 +150,85 @@ async function onSubmit() {
 </script>
 
 <style scoped>
-.panel { display: flex; flex-direction: column; gap: 16px; }
+.up-panel { display: flex; flex-direction: column; }
 
-/* 输入区 */
-.input-block {}
-.ib-label { font-size: 12px; color: #64748b; margin-bottom: 8px; }
-.ib-label code {
-  font-family: var(--mono); background: #f1f5f9;
-  padding: 1px 6px; border-radius: 3px; color: #475569; font-size: 11px;
-}
+.p-hd { padding: 14px 20px; border-bottom: 1px solid var(--border-soft); display: flex; justify-content: space-between; align-items: center; }
+.p-hd h3 { font: 600 14px/1 var(--body); color: var(--text); display: flex; align-items: center; gap: 8px; }
+.p-hd h3 .el-icon { color: var(--primary); font-size: 16px; }
+.p-hd .sub { font: 500 11.5px var(--mono); color: var(--text-3); }
+
+.ws-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 0; }
+.ws-col { padding: 16px 20px; }
+.ws-col.in { border-right: 1px solid var(--border-soft); }
+.ws-sub { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .8px; font-weight: 600; margin-bottom: 10px; }
+
 .ta {
   width: 100%; min-height: 180px;
-  font-family: var(--mono); font-size: 13px; line-height: 1.8;
-  color: #0f172a;
-  background: #fafbfc; border: 1px solid #e5e7eb; border-radius: 6px;
-  padding: 14px 16px;
-  resize: vertical;
-  transition: all .15s;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: 5px;
+  padding: 12px 14px; color: var(--text);
+  font: 500 13px/1.85 var(--mono);
+  resize: vertical; transition: all .15s;
 }
 .ta:focus {
-  outline: none; background: #fff;
-  border-color: #0f172a;
-  box-shadow: 0 0 0 3px rgba(15,23,42,.05);
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, .12);
+  background: #fff;
 }
-.ta::placeholder { color: #cbd5e1; }
+.ta::placeholder { color: var(--text-3); }
 
-.input-foot { display: flex; align-items: center; gap: 14px; margin-top: 10px; }
-.hint { color: #94a3b8; font-size: 11.5px; flex: 1; }
-.hint code {
-  font-family: var(--mono); background: #f1f5f9;
-  padding: 1px 5px; border-radius: 3px; color: #475569; font-size: 10.5px;
-}
-.hint kbd {
-  font-family: var(--mono); font-size: 10.5px;
-  background: #fff; border: 1px solid #e5e7eb; border-bottom-width: 2px;
-  padding: 0 5px; border-radius: 3px; color: #475569;
-}
-
-/* 按钮 */
+.ta-ft { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
 .btn {
-  background: #fff; border: 1px solid #e5e7eb; border-radius: 6px;
-  padding: 7px 14px; font-size: 12.5px; font-weight: 500;
-  color: #334155; cursor: pointer; transition: all .12s;
-  font-family: var(--body);
+  background: #fff; border: 1px solid var(--border); color: var(--text);
+  padding: 6px 14px; border-radius: 5px;
+  font: 500 12.5px var(--body); cursor: pointer;
 }
-.btn:hover:not(:disabled) { border-color: #0f172a; color: #0f172a; }
+.btn.ghost:hover { border-color: var(--primary); color: var(--primary); }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
-.btn.ghost { background: transparent; }
 
-/* 预览 */
-.preview { border-top: 1px solid #eef1f4; padding-top: 14px; }
-.pv-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.pv-title {
-  font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
-  color: #94a3b8; font-weight: 600;
-}
-.pv-summary { font-size: 12px; font-family: var(--mono); }
-.pv-summary .ok { color: #059669; font-weight: 600; }
-.pv-summary .mute { color: #94a3b8; }
-.pv-summary .warn { color: #d97706; }
+.hint { font-size: 11.5px; color: var(--text-3); }
+.hint code { font-family: var(--mono); background: var(--bg-hover); padding: 1px 5px; border-radius: 3px; color: var(--text-2); font-size: 11px; }
+.hint kbd { font-family: var(--mono); font-size: 10.5px; background: var(--bg-hover); border: 1px solid var(--border); padding: 0 5px; border-radius: 3px; color: var(--text-2); }
 
-.pv-list { }
-.pv-row {
-  display: grid; grid-template-columns: 1fr auto;
-  padding: 8px 0; align-items: center; gap: 16px;
-  border-bottom: 1px solid #f1f5f9;
-}
+.empty-pv { padding: 40px 0; text-align: center; color: var(--text-3); }
+.empty-pv .ep-t { font-size: 13px; color: var(--text-2); font-weight: 500; margin-bottom: 4px; }
+.empty-pv .ep-d { font-size: 11.5px; }
+
+.pv-hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; margin-top: -4px; }
+.pv-total { font-size: 11.5px; color: var(--text-3); font-family: var(--mono); }
+.pv-sum { font-size: 11.5px; font-family: var(--mono); }
+.pv-sum .ok { color: var(--success); font-weight: 600; }
+.pv-sum .mute { color: var(--text-3); }
+.pv-sum .warn { color: var(--warning); }
+
+.pv-row { padding: 9px 0; border-bottom: 1px solid var(--border-soft); display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; }
 .pv-row:last-child { border-bottom: none; }
-.pv-row.is-skip .pv-mod { color: #94a3b8; }
-.pv-row.is-new .pv-mod { color: #94a3b8; }
-.pv-mod { font-size: 13px; color: #0f172a; font-weight: 500; }
+.pv-row.is-skip .pv-mod, .pv-row.is-new .pv-mod { color: var(--text-3); }
+.pv-mod { color: var(--text); font-size: 12.5px; font-weight: 500; }
+.pv-chg { font-family: var(--mono); font-size: 11.5px; display: flex; gap: 6px; align-items: center; }
+.from { color: var(--text-3); text-decoration: line-through; }
+.arr { color: var(--text-3); }
+.to { color: var(--success); font-weight: 600; }
+.mute-text { color: var(--text-3); font-size: 11.5px; }
+.warn-text { color: var(--warning); font-size: 11.5px; }
 
-.pv-change { display: flex; align-items: center; gap: 8px; }
-.from { color: #94a3b8; text-decoration: line-through; font-size: 12px; }
-.arrow { color: #cbd5e1; font-size: 12px; }
-.to { color: #059669; font-weight: 600; font-size: 12px; }
-.mute-text { color: #94a3b8; font-size: 11.5px; }
-.warn-text { color: #d97706; font-size: 12px; }
-
-/* 底部执行条 */
-.exec-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 0 0; margin-top: 4px; border-top: 1px solid #eef1f4;
+.exec {
+  border-top: 1px solid var(--border-soft);
+  background: #f0fdf4; padding: 14px 22px;
+  display: flex; justify-content: space-between; align-items: center;
+  border-bottom-left-radius: var(--radius); border-bottom-right-radius: var(--radius);
 }
-.exec-info { font-size: 12px; color: #64748b; }
-.exec-info b { color: #0f172a; font-weight: 600; }
+.exec-info { font-size: 12.5px; color: #166534; }
+.exec-info b { color: #14532d; font-family: var(--mono); font-weight: 600; }
 
-.exec-btn {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 9px 18px; border-radius: 6px;
-  font-size: 13px; font-weight: 600; color: #fff;
-  border: none; cursor: pointer; transition: all .15s;
-  font-family: var(--body);
+.cta {
+  background: var(--success); color: #fff; border: none;
+  padding: 10px 22px; border-radius: 5px;
+  font: 600 13.5px var(--body); cursor: pointer;
+  display: flex; gap: 8px; align-items: center;
 }
-.exec-btn:disabled { opacity: .35; cursor: not-allowed; }
-.exec-btn.success { background: #059669; }
-.exec-btn.success:hover:not(:disabled) { background: #047857; }
-.exec-btn.danger { background: #dc2626; }
-.exec-btn.danger:hover:not(:disabled) { background: #b91c1c; }
+.cta:hover:not(:disabled) { background: var(--success-dark); }
+.cta:disabled { opacity: .4; cursor: not-allowed; }
+.cta.danger { background: var(--danger); }
+.cta.danger:hover:not(:disabled) { background: var(--danger-dark); }
+.cta .el-icon { font-size: 14px; }
 </style>
