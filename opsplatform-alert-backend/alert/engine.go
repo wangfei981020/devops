@@ -1029,7 +1029,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		COALESCE(at_users,''), at_all, COALESCE(alert_mode,'found'),
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
 		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''), dedup_field, dedup_ttl, max_alerts,
-		COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3),
+		COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), COALESCE(label_filters,''),
 		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
 		status
 		FROM alert_rules WHERE id = ?`, id).Scan(
@@ -1040,7 +1040,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		&rule.MessageTitle, &rule.MessageTemplate, &rule.AtUsers, &rule.AtAll,
 		&rule.AlertMode, &rule.RecoveryEnabled, &rule.RecoveryTitle, &rule.RecoveryTemplate,
 		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
-		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency,
+		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.LabelFilters,
 		&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
 		&rule.Status)
 	return &rule, err
@@ -1957,7 +1957,7 @@ type NamespacedContainerResult struct {
 // QueryNamespacedLoki is the shared function for all 4 paths (preview, test-send, manual run, cron).
 // It queries Loki per namespace, groups by container, builds aggregated messages.
 // Exported so handlers package can call it.
-func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []string, pipeline, timeRange, extractFieldsJSON, severity, messageTemplate, routeConfigJSON string, maxAlerts, concurrency int, getLokiClient func(int) (*lokiclient.Client, error)) ([]NamespacedContainerResult, error) {
+func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []string, pipeline, timeRange, extractFieldsJSON, severity, messageTemplate, routeConfigJSON string, maxAlerts, concurrency int, labelFilters string, getLokiClient func(int) (*lokiclient.Client, error)) ([]NamespacedContainerResult, error) {
 	if concurrency <= 0 {
 		concurrency = 3
 	}
@@ -1988,6 +1988,7 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 	var lastErr error
 
 	pipelineTrimmed := strings.TrimSpace(pipeline)
+	extraLabels := strings.TrimSpace(labelFilters)
 
 	for _, ns := range namespaces {
 		select {
@@ -1999,7 +2000,12 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 		go func(namespace string) {
 			defer func() { <-sem }()
 
-			logql := fmt.Sprintf(`{namespace="%s"} %s`, namespace, pipelineTrimmed)
+			selector := fmt.Sprintf(`{namespace="%s"`, namespace)
+			if extraLabels != "" {
+				selector += ", " + extraLabels
+			}
+			selector += "}"
+			logql := selector + " " + pipelineTrimmed
 			now := time.Now()
 			start := now.Add(-duration)
 
@@ -2117,7 +2123,7 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 
 	results, err := QueryNamespacedLoki(ctx, rule.LokiConnectionID, namespaces,
 		rule.LogQL, rule.TimeRange, rule.ExtractFields, rule.Severity, rule.MessageTemplate, rule.RouteConfig,
-		rule.MaxAlerts, rule.NamespaceConcurrency, e.GetLokiClientFunc())
+		rule.MaxAlerts, rule.NamespaceConcurrency, rule.LabelFilters, e.GetLokiClientFunc())
 	if err != nil {
 		errMsg := fmt.Sprintf("Namespaced query error: %v", err)
 		log.Printf("[Engine] Rule %d: %s", rule.ID, errMsg)

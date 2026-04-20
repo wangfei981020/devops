@@ -141,6 +141,14 @@
               <div class="form-hint">同时查询的命名空间数量（默认3，越大越快但 Loki 压力越大）</div>
             </div>
           </div>
+          <div class="form-group" v-if="form.alert_mode === 'found' && namespacesArray.length">
+            <label class="form-label">标签过滤器（可选）</label>
+            <input v-model="form.label_filters" class="form-input"
+              placeholder='container!~"api-gateway|frontend", app="order"' />
+            <div class="form-hint">
+              注入到 selector：<code>{namespace="X", <b>此处</b>}</code>。支持任意 Loki label（container / app / pod ...）和操作符（= != =~ !~）。不要写外层大括号。
+            </div>
+          </div>
         </template>
 
         <div class="form-row">
@@ -671,6 +679,7 @@ const form = ref({
   route_config: '',
   namespaces: '',
   namespace_concurrency: 3,
+  label_filters: '',
   project_id: 0,
   realtime_enabled: 0,
   threshold_ms: 0,
@@ -878,6 +887,7 @@ async function loadRule() {
         route_config: d.route_config || '',
         namespaces: d.namespaces || '',
         namespace_concurrency: d.namespace_concurrency || 3,
+        label_filters: d.label_filters || '',
         project_id: d.project_id || 0,
         realtime_enabled: d.realtime_enabled || 0,
         threshold_ms: d.threshold_ms || 0,
@@ -896,6 +906,11 @@ async function loadRule() {
 async function handleSubmit() {
   syncPromConfig()
   syncRouteConfig()
+  // 简单校验：label_filters 不允许写大括号（避免被拼成双括号）
+  if (form.value.label_filters && /[{}]/.test(form.value.label_filters)) {
+    toast.error('标签过滤器不要写大括号 {}，只写 label="value" 的部分')
+    return
+  }
   submitting.value = true
   try {
     const data = { ...form.value }

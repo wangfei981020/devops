@@ -232,6 +232,7 @@ func autoMigrate() {
 		{"alert_rules", "route_config", "TEXT COMMENT '字段值路由配置JSON'"},
 		{"alert_rules", "namespaces", "TEXT COMMENT '命名空间列表JSON: [\"ns1\",\"ns2\"]'"},
 		{"alert_rules", "namespace_concurrency", "INT DEFAULT 3 COMMENT '命名空间并发查询数'"},
+		{"alert_rules", "label_filters", "TEXT COMMENT 'Loki selector 额外标签过滤: container!~\"c1|c2\", app=\"api\"（仅 found 模式）'"},
 		{"alert_rules", "project_id", "INT DEFAULT 0 COMMENT '所属项目ID'"},
 		{"alert_rules", "realtime_enabled", "TINYINT DEFAULT 0 COMMENT '性能告警:实时告警开关'"},
 		{"alert_rules", "threshold_ms", "INT DEFAULT 0 COMMENT '性能告警:实时阈值(毫秒)'"},

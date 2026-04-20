@@ -115,6 +115,7 @@ type AlertRule struct {
 	RouteConfig      string         `json:"route_config"`       // JSON: field value routing config
 	Namespaces       string         `json:"namespaces"`         // JSON array: ["ns1","ns2"] for multi-namespace Loki queries
 	NamespaceConcurrency int        `json:"namespace_concurrency"` // max concurrent namespace queries (default 3)
+	LabelFilters     string         `json:"label_filters"`      // extra Loki label matchers injected into selector, e.g. `container!~"c1|c2", app="api"` (found mode only)
 	ProjectID        int            `json:"project_id"`
 	// Performance alert (Loki only): realtime threshold + daily report
 	RealtimeEnabled int    `json:"realtime_enabled"`
@@ -225,6 +226,7 @@ type CreateAlertRuleReq struct {
 	RouteConfig          string `json:"route_config"`
 	Namespaces           string `json:"namespaces"`
 	NamespaceConcurrency int    `json:"namespace_concurrency"`
+	LabelFilters         string `json:"label_filters"`
 	ProjectID            int    `json:"project_id"`
 	RealtimeEnabled      int    `json:"realtime_enabled"`
 	ThresholdMs          int    `json:"threshold_ms"`
