@@ -19,7 +19,7 @@ func Load() *Config {
 	c := &Config{
 		Port:        getEnv("PORT", ":8080"),
 		HealthPort:  getEnv("HEALTH_PORT", ":8081"),
-		MySQLDSN:    getEnv("MYSQL_DSN", "deploy_user:123123@tcp(localhost:13307)/deploy_center?parseTime=true&charset=utf8mb4&loc=Local"),
+		MySQLDSN:    getEnv("MYSQL_DSN", "deploy_user:123123@tcp(127.0.0.1:13307)/deploy_center?parseTime=true&charset=utf8mb4&loc=Local"),
 		AESKey:      getEnv("AES_KEY", ""),
 		CORSOrigin:  getEnv("CORS_ORIGIN", "*"),
 		GitCacheDir: getEnv("GIT_CACHE_DIR", "./git-cache"),
