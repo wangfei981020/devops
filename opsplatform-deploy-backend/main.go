@@ -55,6 +55,12 @@ func main() {
 	api.HandleFunc("/project-envs/{id}/test-argocd", handlers.HandleTestProjectEnvArgocd).Methods("POST", "OPTIONS")
 	api.HandleFunc("/project-envs/{id}/scan-modules", handlers.HandleScanModules).Methods("POST", "OPTIONS")
 
+	api.HandleFunc("/modules", handlers.HandleListModules).Methods("GET", "OPTIONS")
+	api.HandleFunc("/modules/{id}/tag-history", handlers.HandleModuleTagHistory).Methods("GET", "OPTIONS")
+
+	api.HandleFunc("/deployments", handlers.HandleListDeployments).Methods("GET", "OPTIONS")
+	api.HandleFunc("/deployments/{id}", handlers.HandleGetDeployment).Methods("GET", "OPTIONS")
+
 	log.Printf("API listening on %s", cfg.Port)
 	server := &http.Server{Addr: cfg.Port, Handler: r}
 	go func() {
