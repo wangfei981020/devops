@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/gorilla/mux"
 	"opsplatform-deploy-backend/config"
@@ -33,6 +35,7 @@ func main() {
 	}
 
 	go startHealthServer(cfg.HealthPort)
+	go startScanScheduler(cfg.Port)
 
 	handlers.SetConfig(cfg)
 
@@ -79,6 +82,36 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 	log.Println("shutting down...")
+}
+
+// startScanScheduler 每 5 分钟对所有 project_env 触发一次 scan-modules（静默失败）
+// 通过 HTTP 自调用触发，避免 handlers 和 main 产生循环依赖
+func startScanScheduler(apiAddr string) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		rows, err := database.DB.Query(`SELECT id FROM project_env`)
+		if err != nil {
+			log.Printf("scheduler: list project_env err: %v", err)
+			continue
+		}
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			_ = rows.Scan(&id)
+			ids = append(ids, id)
+		}
+		rows.Close()
+		for _, id := range ids {
+			url := "http://localhost" + apiAddr + "/api/project-envs/" + strconv.FormatInt(id, 10) + "/scan-modules"
+			resp, err := http.Post(url, "application/json", nil)
+			if err != nil {
+				log.Printf("scheduler: scan id=%d err: %v", id, err)
+				continue
+			}
+			resp.Body.Close()
+		}
+	}
 }
 
 func startHealthServer(addr string) {
