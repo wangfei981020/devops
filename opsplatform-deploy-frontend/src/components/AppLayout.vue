@@ -22,7 +22,7 @@
         router
         class="menu"
       >
-        <el-sub-menu index="deploy" :expand-close-icon="ArrowDown" :expand-open-icon="ArrowUp">
+        <el-sub-menu index="deploy" :expand-close-icon="ArrowRight" :expand-open-icon="ArrowDown">
           <template #title>
             <el-icon><Upload /></el-icon>
             <span>发布管理</span>
@@ -31,7 +31,7 @@
           <el-menu-item index="/history">发布历史</el-menu-item>
         </el-sub-menu>
 
-        <el-sub-menu index="config" :expand-close-icon="ArrowDown" :expand-open-icon="ArrowUp">
+        <el-sub-menu index="config" :expand-close-icon="ArrowRight" :expand-open-icon="ArrowDown">
           <template #title>
             <el-icon><Setting /></el-icon>
             <span>配置管理</span>
@@ -64,7 +64,7 @@
 </template>
 
 <script setup>
-import { Upload, Setting, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
+import { Upload, Setting, ArrowRight, ArrowDown } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 const today = dayjs().format('YYYY-MM-DD')
 </script>
