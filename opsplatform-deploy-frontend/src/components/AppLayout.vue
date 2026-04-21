@@ -8,33 +8,38 @@
       </div>
 
       <nav class="nav">
-        <div class="group">
+        <RouterLink v-if="auth.hasMenu('dashboard')" to="/dashboard" class="top-item" active-class="active">
+          <el-icon class="ico"><Odometer /></el-icon>
+          <span>发布概览</span>
+        </RouterLink>
+
+        <div class="group" v-if="showPublishGroup">
           <div :class="['group-title', {opened: grp.publish}]" @click="grp.publish = !grp.publish">
             <el-icon class="ico"><Upload /></el-icon>
             <span>发布管理</span>
             <el-icon class="chev"><ArrowRight /></el-icon>
           </div>
           <template v-if="grp.publish">
-            <RouterLink to="/deploy" class="sub-item" active-class="active">部署控制台</RouterLink>
-            <RouterLink to="/history" class="sub-item" active-class="active">发布历史</RouterLink>
+            <RouterLink v-if="auth.hasMenu('console')" to="/deploy" class="sub-item" active-class="active">部署控制台</RouterLink>
+            <RouterLink v-if="auth.hasMenu('history')" to="/history" class="sub-item" active-class="active">发布历史</RouterLink>
           </template>
         </div>
 
-        <div class="group">
+        <div class="group" v-if="showConfigGroup">
           <div :class="['group-title', {opened: grp.config}]" @click="grp.config = !grp.config">
             <el-icon class="ico"><Setting /></el-icon>
             <span>配置管理</span>
             <el-icon class="chev"><ArrowRight /></el-icon>
           </div>
           <template v-if="grp.config">
-            <RouterLink to="/projects" class="sub-item" active-class="active">项目配置</RouterLink>
-            <RouterLink to="/settings" class="sub-item" active-class="active">系统设置</RouterLink>
+            <RouterLink v-if="auth.hasMenu('projects')" to="/projects" class="sub-item" active-class="active">项目配置</RouterLink>
+            <RouterLink v-if="auth.hasMenu('settings')" to="/settings" class="sub-item" active-class="active">系统设置</RouterLink>
           </template>
         </div>
       </nav>
 
       <div class="sidebar-foot">
-        <span>{{ currentIdentity || 'system' }}</span>
+        <span>{{ auth.user?.username || '-' }}</span>
         <span>v{{ version }}</span>
       </div>
     </aside>
@@ -44,11 +49,32 @@
         <div class="crumb">部署中心 / <b>{{ $route.meta.title }}</b></div>
         <div class="topbar-r">
           <span class="lbl">当前用户</span>
-          <div class="user-chip" @click="openPicker" :title="'点击切换身份'">
-            <el-icon><User /></el-icon>
-            <span>{{ currentIdentity || 'system' }}</span>
-            <el-icon class="ch-arrow"><ArrowDown /></el-icon>
-          </div>
+          <el-dropdown trigger="click" @command="onCommand">
+            <div class="user-chip">
+              <el-icon><User /></el-icon>
+              <span>{{ auth.user?.username || '-' }}</span>
+              <span v-if="auth.user?.auth_source === 'portal'" class="src-tag">SSO</span>
+              <el-icon class="ch-arrow"><ArrowDown /></el-icon>
+            </div>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item disabled>
+                  <div style="display:flex;flex-direction:column;line-height:1.4">
+                    <span style="font-weight:600;font-family:var(--mono)">{{ auth.user?.username }}</span>
+                    <span style="font-size:11px;color:var(--text-3);">
+                      <span v-if="auth.user?.display_name">{{ auth.user.display_name }} · </span>{{ auth.user?.role }}
+                    </span>
+                  </div>
+                </el-dropdown-item>
+                <el-dropdown-item divided command="refresh" v-if="auth.user?.auth_source === 'portal'">
+                  <el-icon><RefreshRight /></el-icon> 刷新权限
+                </el-dropdown-item>
+                <el-dropdown-item command="logout" divided>
+                  <el-icon><SwitchButton /></el-icon> 退出登录
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <span class="ver-badge">v{{ version }}</span>
         </div>
       </div>
@@ -56,79 +82,37 @@
         <RouterView />
       </div>
     </main>
-
-    <!-- 身份选择器 -->
-    <el-dialog v-model="pickerVis" title="选择身份" width="420px" custom-class="id-dialog">
-      <div class="picker-body">
-        <div class="picker-hint">选择你是谁 · 后续所有发布/重启/回滚都会记录为这个人 · 存本地浏览器</div>
-        <div v-if="loading" class="picker-loading">加载中...</div>
-        <div v-else-if="!accounts.length" class="picker-empty">
-          没有账号 · 请先去 <RouterLink to="/settings" @click="pickerVis = false">系统设置 → 账号管理</RouterLink> 添加
-        </div>
-        <div v-else class="picker-list">
-          <div
-            v-for="a in accounts" :key="a.id"
-            :class="['picker-item', {active: currentIdentity === a.username}]"
-            @click="pick(a.username)">
-            <div class="pi-avatar">{{ a.display_name?.[0] || a.username[0] }}</div>
-            <div class="pi-main">
-              <div class="pi-name">{{ a.display_name || a.username }}</div>
-              <div class="pi-sub mono">{{ a.username }} <span v-if="a.lark_id" class="pi-lark">· @lark</span></div>
-            </div>
-            <el-icon v-if="currentIdentity === a.username" class="pi-check"><Check /></el-icon>
-          </div>
-          <div
-            :class="['picker-item', 'sys', {active: !currentIdentity}]"
-            @click="pick('')">
-            <div class="pi-avatar sys">S</div>
-            <div class="pi-main">
-              <div class="pi-name">system</div>
-              <div class="pi-sub">匿名 · 不艾特任何人</div>
-            </div>
-            <el-icon v-if="!currentIdentity" class="pi-check"><Check /></el-icon>
-          </div>
-        </div>
-      </div>
-    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { reactive, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Upload, Setting, ArrowRight, ArrowDown, User, Check } from '@element-plus/icons-vue'
-import { listAccounts } from '../api'
+import { Upload, Setting, ArrowRight, ArrowDown, User, RefreshRight, SwitchButton, Odometer } from '@element-plus/icons-vue'
+import { useAuthStore } from '../stores/auth'
 
-const version = '42'
+const auth = useAuthStore()
+const router = useRouter()
+const version = '44'
 
-// 侧栏分组折叠状态（持久化到 localStorage）
 const grpRaw = JSON.parse(localStorage.getItem('deploy_sidebar_groups') || '{"publish":true,"config":true}')
 const grp = reactive(grpRaw)
-import { watch } from 'vue'
 watch(grp, (v) => localStorage.setItem('deploy_sidebar_groups', JSON.stringify(v)), { deep: true })
-const accounts = ref([])
-const loading = ref(false)
-const pickerVis = ref(false)
-const currentIdentity = ref(localStorage.getItem('deploy_identity') || '')
 
-async function openPicker() {
-  pickerVis.value = true
-  if (!accounts.value.length) {
-    loading.value = true
-    try { accounts.value = (await listAccounts()) || [] }
-    finally { loading.value = false }
+const showPublishGroup = computed(() => auth.hasMenu('console') || auth.hasMenu('history'))
+const showConfigGroup = computed(() => auth.hasMenu('projects') || auth.hasMenu('settings'))
+
+async function onCommand(cmd) {
+  if (cmd === 'logout') {
+    await auth.logout()
+    ElMessage.success('已登出')
+    router.replace('/login')
+  } else if (cmd === 'refresh') {
+    await auth.refreshPermissions()
+    ElMessage.success('权限已刷新')
   }
 }
-
-function pick(username) {
-  currentIdentity.value = username
-  if (username) localStorage.setItem('deploy_identity', username)
-  else localStorage.removeItem('deploy_identity')
-  ElMessage.success(`身份：${username || 'system'}`)
-  pickerVis.value = false
-}
-
-onMounted(() => {})
 </script>
 
 <style scoped>
@@ -141,6 +125,16 @@ onMounted(() => {})
 .brand-t { margin-left: auto; font-family: var(--mono); font-size: 10px; font-weight: 500; color: rgba(255, 255, 255, 0.4); padding: 1px 6px; background: rgba(255, 255, 255, 0.05); border-radius: 3px; }
 
 .nav { padding: 12px 0; flex: 1; overflow-y: auto; }
+
+.top-item {
+  display: flex; align-items: center; padding: 10px 16px; gap: 10px;
+  color: var(--sidebar-text); font-size: 13px; font-weight: 500;
+  text-decoration: none; border-left: 2px solid transparent; transition: all .12s;
+}
+.top-item .ico { font-size: 15px; opacity: .85; }
+.top-item:hover { background: var(--sidebar-hover); color: #fff; }
+.top-item.active { background: var(--sidebar-active-bg); border-left-color: var(--primary); color: #fff; }
+
 .group { margin-bottom: 4px; }
 .group-title { display: flex; align-items: center; padding: 10px 16px; color: var(--sidebar-text); font-size: 13px; font-weight: 500; gap: 10px; cursor: pointer; }
 .group-title:hover { background: var(--sidebar-hover); color: #fff; }
@@ -173,38 +167,11 @@ onMounted(() => {})
 }
 .user-chip:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-bg); }
 .user-chip .ch-arrow { font-size: 11px; opacity: .6; }
+.user-chip .src-tag {
+  font-family: var(--body); font-size: 10px; font-weight: 600;
+  padding: 1px 5px; background: var(--primary); color: #fff; border-radius: 3px;
+}
 .ver-badge { padding: 2px 7px; background: var(--primary-bg); color: var(--primary); border-radius: 4px; font-family: var(--mono); font-size: 11px; font-weight: 600; }
 
 .content { flex: 1; overflow: auto; padding: 20px 24px; }
-
-/* ===== 身份选择器弹窗 ===== */
-:deep(.id-dialog) { border-radius: 8px; }
-:deep(.id-dialog .el-dialog__header) { padding: 16px 22px; margin: 0; border-bottom: 1px solid var(--border-soft); }
-:deep(.id-dialog .el-dialog__title) { font-weight: 600; font-size: 15px; }
-:deep(.id-dialog .el-dialog__body) { padding: 0; }
-
-.picker-body { padding: 14px 22px 20px; }
-.picker-hint { font-size: 12px; color: var(--text-3); margin-bottom: 14px; line-height: 1.6; }
-.picker-loading, .picker-empty { text-align: center; padding: 30px; color: var(--text-3); font-size: 13px; }
-.picker-empty a { color: var(--primary); text-decoration: none; }
-.picker-list { display: flex; flex-direction: column; gap: 4px; }
-.picker-item {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 12px; border-radius: 6px; cursor: pointer;
-  transition: background .12s; border: 1px solid transparent;
-}
-.picker-item:hover { background: var(--bg-hover); }
-.picker-item.active { background: var(--primary-bg); border-color: var(--primary); }
-.pi-avatar {
-  width: 32px; height: 32px; border-radius: 50%;
-  background: linear-gradient(135deg, var(--primary), #06b6d4);
-  color: #fff; font-weight: 700; font-size: 13px;
-  display: flex; align-items: center; justify-content: center;
-}
-.pi-avatar.sys { background: var(--text-3); }
-.pi-main { flex: 1; }
-.pi-name { font-weight: 500; font-size: 13px; color: var(--text); }
-.pi-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
-.pi-lark { color: var(--success); font-weight: 500; }
-.pi-check { color: var(--primary); font-size: 16px; }
 </style>

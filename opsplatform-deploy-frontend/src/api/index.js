@@ -6,12 +6,12 @@ const http = axios.create({
   timeout: 30000,
 })
 
-// 请求拦截器：自动加 X-Operator header
+// 请求拦截器：挂 Authorization Bearer token
 http.interceptors.request.use((cfg) => {
-  const identity = localStorage.getItem('deploy_identity')
-  if (identity) {
+  const token = localStorage.getItem('deploy_token')
+  if (token) {
     cfg.headers = cfg.headers || {}
-    cfg.headers['X-Operator'] = identity
+    cfg.headers['Authorization'] = 'Bearer ' + token
   }
   return cfg
 })
@@ -25,8 +25,17 @@ http.interceptors.response.use(
     return resp.data?.data
   },
   (err) => {
+    const status = err.response?.status
+    if (status === 401) {
+      localStorage.removeItem('deploy_token')
+      localStorage.removeItem('deploy_user')
+      localStorage.removeItem('deploy_permissions')
+      if (location.pathname !== '/login') {
+        location.href = '/login'
+      }
+    }
     const msg = err.response?.data?.message || err.message || '网络错误'
-    ElMessage.error(msg)
+    if (status !== 401) ElMessage.error(msg)
     return Promise.reject(err)
   }
 )
@@ -36,11 +45,32 @@ export const getGlobalConfig = () => http.get('/global-config')
 export const updateGlobalConfig = (data) => http.put('/global-config', data)
 export const testGitlab = (data) => http.post('/global-config/test-gitlab', data || {})
 
-// Accounts（身份选择 / Lark 艾特）
-export const listAccounts = () => http.get('/accounts')
-export const createAccount = (data) => http.post('/accounts', data)
-export const updateAccount = (id, data) => http.put(`/accounts/${id}`, data)
-export const deleteAccount = (id) => http.delete(`/accounts/${id}`)
+// Users（平台登录账号，admin only）
+export const listUsers = () => http.get('/users')
+export const createUser = (data) => http.post('/users', data)
+export const updateUser = (id, data) => http.put(`/users/${id}`, data)
+export const toggleUser = (id) => http.put(`/users/${id}/toggle`)
+export const resetUserPassword = (id, password) => http.post(`/users/${id}/reset-password`, { password })
+export const deleteUser = (id) => http.delete(`/users/${id}`)
+
+// Auth
+export const apiLogin = (data) => http.post('/login', data)
+export const apiLogout = () => http.post('/logout')
+export const getCurrentUser = () => http.get('/users/me')
+export const refreshPerms = () => http.get('/refresh-permissions')
+
+// Contacts（通知人，Lark 艾特专用）
+export const listContacts = () => http.get('/contacts')
+export const createContact = (data) => http.post('/contacts', data)
+export const updateContact = (id, data) => http.put(`/contacts/${id}`, data)
+export const deleteContact = (id) => http.delete(`/contacts/${id}`)
+
+// Lark Bots
+export const listLarkBots = () => http.get('/lark-bots')
+export const createLarkBot = (data) => http.post('/lark-bots', data)
+export const updateLarkBot = (id, data) => http.put(`/lark-bots/${id}`, data)
+export const deleteLarkBot = (id) => http.delete(`/lark-bots/${id}`)
+export const testLarkBot = (id) => http.post(`/lark-bots/${id}/test`)
 
 // ArgoCD Instances
 export const listArgocdInstances = () => http.get('/argocd-instances')
@@ -73,6 +103,9 @@ export const getModuleTagHistory = (id, limit = 10) => http.get(`/modules/${id}/
 export const listDeployments = (params) => http.get('/deployments', { params })
 export const getDeployment = (id) => http.get(`/deployments/${id}`)
 export const getRollbackPreview = (id) => http.get(`/deployments/${id}/rollback-preview`)
+
+// Dashboard
+export const getDashboardStats = () => http.get('/dashboard/stats')
 
 // Deploy actions
 export const previewImage = (data) => http.post('/deploy/preview-image', data)

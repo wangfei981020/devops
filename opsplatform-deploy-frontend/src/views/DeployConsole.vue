@@ -38,7 +38,7 @@
           <el-icon><Aim /></el-icon>
           目标选择
         </h3>
-        <span class="sub">project · env · action</span>
+        <span class="sub">project · env</span>
       </div>
       <div class="p-bd">
         <div class="sel-row">
@@ -59,18 +59,27 @@
             <span v-if="selectedProject && !envsOfProject.length" class="empty-hint">该项目没有环境</span>
           </div>
         </div>
-        <div class="sel-row">
-          <span class="sel-k">Action</span>
-          <div class="seg">
-            <button :class="{active: tab === 'update'}" @click="tab = 'update'">
-              <el-icon><Upload /></el-icon>更新镜像
-            </button>
-            <button :class="{active: tab === 'restart'}" @click="tab = 'restart'">
-              <el-icon><RefreshRight /></el-icon>重启服务
-            </button>
-          </div>
-        </div>
       </div>
+    </div>
+
+    <!-- ===== Big action tabs ===== -->
+    <div class="action-tabs" v-if="currentEnv">
+      <button :class="['act-tab', {active: tab === 'update'}]" @click="tab = 'update'">
+        <span class="act-icon"><el-icon><Upload /></el-icon></span>
+        <span class="act-body">
+          <span class="act-title">批量更新镜像</span>
+          <span class="act-desc">写 values.yaml → git push → ArgoCD 同步</span>
+        </span>
+        <span class="act-badge">update-image</span>
+      </button>
+      <button :class="['act-tab', {active: tab === 'restart'}]" @click="tab = 'restart'">
+        <span class="act-icon"><el-icon><RefreshRight /></el-icon></span>
+        <span class="act-body">
+          <span class="act-title">批量重启服务</span>
+          <span class="act-desc">调用 ArgoCD Restart · 不动 git · 保持当前 tag</span>
+        </span>
+        <span class="act-badge">restart</span>
+      </button>
     </div>
 
     <!-- ===== Workspace ===== -->
@@ -221,16 +230,35 @@ onMounted(loadEnvs)
 .chip.env.prod.active { background: var(--danger); border-color: var(--danger); }
 .empty-hint { color: var(--text-3); font-size: 12px; padding: 6px 0; }
 
-.seg {
-  display: inline-flex; background: var(--bg-hover); border: 1px solid var(--border);
-  border-radius: 5px; padding: 2px; gap: 1px;
+/* ===== Big action tabs (A1) ===== */
+.action-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+.act-tab {
+  background: var(--bg-card); border: 1.5px solid var(--border); border-radius: var(--radius);
+  padding: 14px 18px; cursor: pointer; text-align: left;
+  display: flex; align-items: center; gap: 12px;
+  transition: all .15s; font-family: var(--body);
 }
-.seg button {
-  background: none; border: none; padding: 5px 14px; font-size: 12.5px;
-  color: var(--text-2); cursor: pointer; border-radius: 3px;
-  font: 500 12.5px var(--body); display: flex; gap: 6px; align-items: center;
+.act-tab:hover { border-color: var(--primary); background: #fbfdff; }
+.act-tab.active {
+  background: var(--primary); border-color: var(--primary); color: #fff;
+  box-shadow: 0 4px 12px rgba(24, 144, 255, .22);
 }
-.seg button:hover { color: var(--text); }
-.seg button.active { background: var(--primary); color: #fff; font-weight: 600; }
-.seg .el-icon { font-size: 13px; }
+.act-icon {
+  width: 40px; height: 40px; border-radius: 8px; flex-shrink: 0;
+  background: var(--primary-bg); color: var(--primary);
+  display: flex; align-items: center; justify-content: center;
+  transition: all .15s;
+}
+.act-icon .el-icon { font-size: 20px; }
+.act-tab.active .act-icon { background: rgba(255, 255, 255, .2); color: #fff; }
+.act-body { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.act-title { font: 600 14.5px var(--body); color: var(--text); }
+.act-tab.active .act-title { color: #fff; }
+.act-desc { font-size: 12px; color: var(--text-3); }
+.act-tab.active .act-desc { color: rgba(255, 255, 255, .85); }
+.act-badge {
+  font: 500 11px var(--mono); padding: 3px 8px; border-radius: 99px;
+  background: var(--bg-hover); color: var(--text-2);
+}
+.act-tab.active .act-badge { background: rgba(255, 255, 255, .18); color: #fff; }
 </style>

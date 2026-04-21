@@ -47,21 +47,31 @@ base-client-backend:20260416020000-99"
               <span v-if="newCount" class="warn"> · {{ newCount }} 未知</span>
             </span>
           </div>
-          <div class="pv-list">
-            <div v-for="d in sortedDiff" :key="d.module" :class="['pv-row', d.skip && 'is-skip', d.is_new && 'is-new']">
-              <span class="pv-mod">{{ d.module }}</span>
-              <span class="pv-chg" v-if="d.is_new">
-                <span class="warn-text">git 找不到 · 跳过</span>
-              </span>
-              <span class="pv-chg" v-else-if="d.skip">
-                <span class="mute-text">无变化</span>
-              </span>
-              <span class="pv-chg" v-else>
-                <span class="from">{{ shortTag(d.from_tag) }}</span>
-                <span class="arr">→</span>
-                <span class="to">{{ shortTag(d.to_tag) }}</span>
-              </span>
-            </div>
+          <div class="pv-table-wrap">
+            <table class="pv-table">
+              <thead>
+                <tr>
+                  <th style="width:32%;">模块</th>
+                  <th>Tag 变化</th>
+                  <th style="width:32%;">values.yaml</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="d in sortedDiff" :key="d.module" :class="[d.skip && 'is-skip', d.is_new && 'is-new']">
+                  <td class="pv-mod">{{ d.module }}</td>
+                  <td>
+                    <span v-if="d.is_new" class="warn-text">git 找不到 · 跳过</span>
+                    <span v-else-if="d.skip" class="mute-text">无变化</span>
+                    <span v-else class="pv-chg">
+                      <span class="from">{{ shortTag(d.from_tag) }}</span>
+                      <span class="arr">→</span>
+                      <span class="to">{{ shortTag(d.to_tag) }}</span>
+                    </span>
+                  </td>
+                  <td class="pv-path">{{ d.path || '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </template>
       </div>
@@ -200,11 +210,17 @@ async function onSubmit() {
 .pv-sum .mute { color: var(--text-3); }
 .pv-sum .warn { color: var(--warning); }
 
-.pv-row { padding: 9px 0; border-bottom: 1px solid var(--border-soft); display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; }
-.pv-row:last-child { border-bottom: none; }
-.pv-row.is-skip .pv-mod, .pv-row.is-new .pv-mod { color: var(--text-3); }
-.pv-mod { color: var(--text); font-size: 12.5px; font-weight: 500; }
-.pv-chg { font-family: var(--mono); font-size: 11.5px; display: flex; gap: 6px; align-items: center; }
+.pv-table-wrap { border: 1px solid var(--border); border-radius: 5px; overflow: auto; max-height: 380px; background: #fff; }
+.pv-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.pv-table thead { position: sticky; top: 0; z-index: 1; }
+.pv-table th { background: #f9fafb; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--text-3); font: 600 10.5px var(--body); text-transform: uppercase; letter-spacing: .5px; }
+.pv-table td { padding: 9px 10px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+.pv-table tr:last-child td { border-bottom: none; }
+.pv-table tr:hover td { background: #fafbfc; }
+.pv-table tr.is-skip .pv-mod, .pv-table tr.is-new .pv-mod { color: var(--text-3); }
+.pv-mod { color: var(--text); font-size: 12.5px; font-weight: 500; font-family: var(--mono); }
+.pv-path { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); word-break: break-all; }
+.pv-chg { font-family: var(--mono); font-size: 11.5px; display: inline-flex; gap: 6px; align-items: center; }
 .from { color: var(--text-3); text-decoration: line-through; }
 .arr { color: var(--text-3); }
 .to { color: var(--success); font-weight: 600; }

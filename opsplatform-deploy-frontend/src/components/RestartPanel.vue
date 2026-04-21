@@ -42,15 +42,41 @@ bet-client-backend"
               <span v-if="invalidCount" class="err"> · ✗ {{ invalidCount }} 找不到</span>
             </span>
           </div>
-          <div class="pv-list">
-            <div v-for="m in preview" :key="m.name" :class="['pv-row', !m.exists && 'is-missing']">
-              <span class="pv-mod">{{ m.name }}</span>
-              <span class="pv-detail" v-if="m.exists">
-                <span class="mute-text">当前</span>
-                <span class="tag-curr">{{ shortTag(m.currentTag) }}</span>
-              </span>
-              <span class="pv-detail missing" v-else>DB 里找不到 · 跳过</span>
-            </div>
+          <div class="pv-table-wrap">
+            <table class="pv-table">
+              <thead>
+                <tr>
+                  <th style="width:28%;">模块</th>
+                  <th style="width:16%;">状态</th>
+                  <th style="width:26%;">当前 tag</th>
+                  <th>ArgoCD App</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="m in preview" :key="m.name" :class="!m.exists && 'is-missing'">
+                  <td>
+                    <span class="pv-mod">{{ m.name }}</span>
+                    <div v-if="m.fixedFrom" class="fix-note">由 <b>{{ m.fixedFrom }}</b> 识别</div>
+                  </td>
+                  <td>
+                    <span v-if="m.exists" class="pill ok">
+                      <el-icon><Check /></el-icon>存在
+                    </span>
+                    <span v-else class="pill miss">
+                      <el-icon><Close /></el-icon>未找到
+                    </span>
+                  </td>
+                  <td>
+                    <span v-if="m.exists" class="tag-curr">{{ shortTag(m.currentTag) }}</span>
+                    <span v-else class="mute-text">—</span>
+                  </td>
+                  <td>
+                    <span v-if="m.exists" class="pv-app">{{ m.argoApp || '—' }}</span>
+                    <span v-else class="mute-text">—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </template>
       </div>
@@ -73,7 +99,7 @@ bet-client-backend"
 <script setup>
 import { ref, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { RefreshRight, ArrowRight } from '@element-plus/icons-vue'
+import { RefreshRight, ArrowRight, Check, Close } from '@element-plus/icons-vue'
 import { restartModules } from '../api'
 
 const props = defineProps(['projectEnv', 'modules'])
@@ -96,12 +122,20 @@ function onPreview() {
   text.value.split('\n').forEach(line => {
     line = line.trim()
     if (!line || line.startsWith('#')) return
-    const mod = line.includes(':') ? line.split(':')[0].trim() : line
+    const hasColon = line.includes(':')
+    const mod = hasColon ? line.split(':')[0].trim() : line
     if (!mod || seen.has(mod)) return
     seen.add(mod)
     const m = props.modules.find(x => x.name === mod)
-    if (m) out.push({ name: mod, exists: true, currentTag: m.current_tag, id: m.id })
-    else out.push({ name: mod, exists: false })
+    if (m) {
+      out.push({
+        name: mod, exists: true, currentTag: m.current_tag, id: m.id,
+        argoApp: m.argocd_app_name,
+        fixedFrom: hasColon ? line : '',
+      })
+    } else {
+      out.push({ name: mod, exists: false, fixedFrom: hasColon ? line : '' })
+    }
   })
   preview.value = out
 }
@@ -162,14 +196,29 @@ async function onRestart() {
 .pv-sum .ok { color: var(--success); font-weight: 600; }
 .pv-sum .err { color: var(--danger); }
 
-.pv-row { padding: 9px 0; border-bottom: 1px solid var(--border-soft); display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; }
-.pv-row:last-child { border-bottom: none; }
-.pv-row.is-missing .pv-mod { color: var(--text-3); }
-.pv-mod { color: var(--text); font-size: 12.5px; font-weight: 500; }
-.pv-detail { font-family: var(--mono); font-size: 11.5px; display: flex; gap: 6px; align-items: center; }
+.pv-table-wrap { border: 1px solid var(--border); border-radius: 5px; overflow: auto; max-height: 380px; background: #fff; }
+.pv-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.pv-table thead { position: sticky; top: 0; z-index: 1; }
+.pv-table th { background: #f9fafb; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--text-3); font: 600 10.5px var(--body); text-transform: uppercase; letter-spacing: .5px; }
+.pv-table td { padding: 9px 10px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+.pv-table tr:last-child td { border-bottom: none; }
+.pv-table tr:hover td { background: #fafbfc; }
+.pv-table tr.is-missing td { background: #fef8f8; }
+.pv-table tr.is-missing .pv-mod { color: var(--danger); }
+.pv-mod { color: var(--text); font-size: 12.5px; font-weight: 500; font-family: var(--mono); }
+.pv-app { font-family: var(--mono); font-size: 11px; color: var(--text-2); word-break: break-all; }
 .mute-text { color: var(--text-3); }
-.tag-curr { color: var(--text-2); background: var(--bg-hover); padding: 1px 6px; border-radius: 3px; }
-.missing { color: var(--danger); }
+.tag-curr { color: var(--text-2); background: var(--bg-hover); padding: 1px 6px; border-radius: 3px; font-family: var(--mono); font-size: 11px; }
+.fix-note { font-size: 10.5px; color: var(--warning); margin-top: 3px; font-family: var(--body); }
+.fix-note b { font-family: var(--mono); }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 500;
+}
+.pill .el-icon { font-size: 10px; }
+.pill.ok { background: #ecfdf5; color: var(--success); }
+.pill.miss { background: #fef2f2; color: var(--danger); }
 
 .exec {
   border-top: 1px solid var(--border-soft);

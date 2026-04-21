@@ -74,16 +74,73 @@
         </div>
       </div>
 
-      <!-- 账号管理 -->
+      <!-- 用户管理：平台登录账号（admin 可用）-->
       <div v-if="tab === 'accounts'" class="section">
         <div class="sec-head">
           <div class="sec-title-row">
             <div>
-              <div class="sec-title">账号管理</div>
-              <div class="sec-desc">身份选择用 · Lark 艾特根据 lark_id 匹配</div>
+              <div class="sec-title">用户管理</div>
+              <div class="sec-desc">登录此平台的账号 · portal 用户由运维平台 SSO 自动创建 · Lark 艾特请到「通知人」配置</div>
             </div>
-            <button class="add-btn" @click="openAccCreate">
-              <el-icon><Plus /></el-icon>新增账号
+            <button v-if="authStore.isAdmin" class="add-btn" @click="openUserCreate">
+              <el-icon><Plus /></el-icon>新增本地用户
+            </button>
+          </div>
+        </div>
+        <div class="sec-body">
+          <div v-if="!authStore.isAdmin" class="empty-row" style="padding:40px 20px;text-align:center;color:var(--text-3)">
+            仅管理员可查看 · 需要 admin 角色
+          </div>
+          <table v-else class="tbl">
+            <thead>
+              <tr>
+                <th style="width:140px">用户名</th>
+                <th style="width:140px">显示名</th>
+                <th style="width:90px">角色</th>
+                <th style="width:90px">来源</th>
+                <th style="width:80px">状态</th>
+                <th style="width:240px">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="u in users" :key="u.id">
+                <td class="mono"><b>{{ u.username }}</b></td>
+                <td>{{ u.display_name || '—' }}</td>
+                <td>
+                  <span :class="['role-tag', u.role]">{{ u.role }}</span>
+                </td>
+                <td>
+                  <span :class="['src-tag', u.auth_source]">{{ u.auth_source }}</span>
+                </td>
+                <td>
+                  <span v-if="u.status === 1" class="status-on">启用</span>
+                  <span v-else class="status-off">禁用</span>
+                </td>
+                <td>
+                  <button class="act" @click="openUserEdit(u)">编辑</button>
+                  <button v-if="u.auth_source === 'local'" class="act" @click="onResetPwd(u)">重置密码</button>
+                  <button class="act" @click="onToggleUser(u)">{{ u.status === 1 ? '禁用' : '启用' }}</button>
+                  <button class="act danger" @click="onDeleteUser(u)">删除</button>
+                </td>
+              </tr>
+              <tr v-if="!users.length">
+                <td colspan="6" class="empty-row">还没有用户</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 通知人：Lark 艾特专用 -->
+      <div v-if="tab === 'contacts'" class="section">
+        <div class="sec-head">
+          <div class="sec-title-row">
+            <div>
+              <div class="sec-title">通知人</div>
+              <div class="sec-desc">发布后根据操作人名字匹配 Lark ID · 艾特用</div>
+            </div>
+            <button class="add-btn" @click="openContactCreate">
+              <el-icon><Plus /></el-icon>新增通知人
             </button>
           </div>
         </div>
@@ -91,28 +148,66 @@
           <table class="tbl">
             <thead>
               <tr>
-                <th style="width:140px">用户名</th>
-                <th style="width:140px">显示名</th>
+                <th style="width:200px">名称</th>
                 <th>Lark ID</th>
-                <th>Email</th>
                 <th>备注</th>
                 <th style="width:120px">操作</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="a in accounts" :key="a.id">
-                <td class="mono"><b>{{ a.username }}</b></td>
-                <td>{{ a.display_name || '—' }}</td>
-                <td class="mono">{{ a.lark_id || '—' }}</td>
-                <td>{{ a.email || '—' }}</td>
-                <td>{{ a.remark || '—' }}</td>
+              <tr v-for="c in contacts" :key="c.id">
+                <td class="mono"><b>{{ c.name }}</b></td>
+                <td class="mono">{{ c.lark_id || '—' }}</td>
+                <td>{{ c.remark || '—' }}</td>
                 <td>
-                  <button class="act" @click="openAccEdit(a)">编辑</button>
-                  <button class="act danger" @click="onDeleteAcc(a)">删除</button>
+                  <button class="act" @click="openContactEdit(c)">编辑</button>
+                  <button class="act danger" @click="onDeleteContact(c)">删除</button>
                 </td>
               </tr>
-              <tr v-if="!accounts.length">
-                <td colspan="6" class="empty-row">还没有账号，点右上「+ 新增账号」添加</td>
+              <tr v-if="!contacts.length">
+                <td colspan="4" class="empty-row">还没有通知人，点右上「+ 新增通知人」添加</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Lark 机器人：多 webhook -->
+      <div v-if="tab === 'larkbots'" class="section">
+        <div class="sec-head">
+          <div class="sec-title-row">
+            <div>
+              <div class="sec-title">Lark 机器人</div>
+              <div class="sec-desc">全局可配置多个 webhook · 项目环境只需选一个</div>
+            </div>
+            <button class="add-btn" @click="openBotCreate">
+              <el-icon><Plus /></el-icon>新增机器人
+            </button>
+          </div>
+        </div>
+        <div class="sec-body">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th style="width:160px">名称</th>
+                <th>Webhook</th>
+                <th>描述</th>
+                <th style="width:180px">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="b in larkBots" :key="b.id">
+                <td class="mono"><b>{{ b.name }}</b></td>
+                <td class="mono webhook-cell">{{ b.webhook }}</td>
+                <td>{{ b.description || '—' }}</td>
+                <td>
+                  <button class="act" @click="onTestBot(b)">测试</button>
+                  <button class="act" @click="openBotEdit(b)">编辑</button>
+                  <button class="act danger" @click="onDeleteBot(b)">删除</button>
+                </td>
+              </tr>
+              <tr v-if="!larkBots.length">
+                <td colspan="4" class="empty-row">还没有 Lark 机器人，点右上「+ 新增机器人」添加</td>
               </tr>
             </tbody>
           </table>
@@ -174,8 +269,8 @@
         </div>
         <div class="sec-body">
           <div class="info-grid">
-            <div class="info"><div class="l">后端版本</div><div class="v mono">v33</div></div>
-            <div class="info"><div class="l">前端版本</div><div class="v mono">v41</div></div>
+            <div class="info"><div class="l">后端版本</div><div class="v mono">v35</div></div>
+            <div class="info"><div class="l">前端版本</div><div class="v mono">v44</div></div>
             <div class="info"><div class="l">数据库</div><div class="v">MySQL 8.0 · deploy_center</div></div>
           </div>
         </div>
@@ -204,28 +299,69 @@
       </template>
     </el-dialog>
 
-    <!-- 账号弹窗 -->
-    <el-dialog v-model="accDlg.vis" :title="accDlg.isEdit ? '编辑账号' : '新增账号'" width="520px">
-      <el-form :model="accDlg.form" label-width="100px" label-position="top" size="default">
+    <!-- 用户弹窗 -->
+    <el-dialog v-model="userDlg.vis" :title="userDlg.isEdit ? '编辑用户' : '新增本地用户'" width="520px">
+      <el-form :model="userDlg.form" label-width="100px" label-position="top" size="default">
         <el-form-item label="用户名 *">
-          <el-input v-model="accDlg.form.username" :disabled="accDlg.isEdit" class="mono" placeholder="如: zhangsan" />
+          <el-input v-model="userDlg.form.username" :disabled="userDlg.isEdit" class="mono" placeholder="如: zhangsan" />
+        </el-form-item>
+        <el-form-item v-if="!userDlg.isEdit" label="初始密码 *">
+          <el-input v-model="userDlg.form.password" type="password" show-password placeholder="用户首次登录后请修改" />
         </el-form-item>
         <el-form-item label="显示名">
-          <el-input v-model="accDlg.form.display_name" placeholder="如: 张三" />
+          <el-input v-model="userDlg.form.display_name" placeholder="如: 张三" />
         </el-form-item>
-        <el-form-item label="Lark ID">
-          <el-input v-model="accDlg.form.lark_id" class="mono" placeholder="ou_xxxxxxxxxxxxxxxxxxxx" />
-        </el-form-item>
-        <el-form-item label="Email">
-          <el-input v-model="accDlg.form.email" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="accDlg.form.remark" type="textarea" :rows="2" />
+        <el-form-item label="角色">
+          <el-select v-model="userDlg.form.role" style="width:100%">
+            <el-option value="user" label="user - 普通用户" />
+            <el-option value="admin" label="admin - 管理员" />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="accDlg.vis = false">取消</el-button>
-        <el-button type="primary" @click="onSaveAcc">保存</el-button>
+        <el-button @click="userDlg.vis = false">取消</el-button>
+        <el-button type="primary" @click="onSaveUser">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 通知人弹窗 -->
+    <el-dialog v-model="contactDlg.vis" :title="contactDlg.isEdit ? '编辑通知人' : '新增通知人'" width="520px">
+      <el-form :model="contactDlg.form" label-width="100px" label-position="top" size="default">
+        <el-form-item label="名称 *">
+          <el-input v-model="contactDlg.form.name" :disabled="contactDlg.isEdit" placeholder="如: 张三 或 zhangsan（和操作人名字一致时自动匹配）" />
+        </el-form-item>
+        <el-form-item label="Lark ID">
+          <el-input v-model="contactDlg.form.lark_id" class="mono" placeholder="ou_xxxxxxxxxxxxxxxxxxxx" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="contactDlg.form.remark" type="textarea" :rows="2" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="contactDlg.vis = false">取消</el-button>
+        <el-button type="primary" @click="onSaveContact">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Lark 机器人弹窗 -->
+    <el-dialog v-model="botDlg.vis" :title="botDlg.isEdit ? '编辑 Lark 机器人' : '新增 Lark 机器人'" width="560px">
+      <el-form :model="botDlg.form" label-width="100px" label-position="top" size="default">
+        <el-form-item label="名称 *">
+          <el-input v-model="botDlg.form.name" :disabled="botDlg.isEdit" class="mono" placeholder="如: uat-deploy" />
+        </el-form-item>
+        <el-form-item label="Webhook *">
+          <el-input v-model="botDlg.form.webhook" class="mono" placeholder="https://open.larksuite.com/open-apis/bot/v2/hook/..." />
+        </el-form-item>
+        <el-form-item :label="botDlg.isEdit ? 'Secret（留空不更新）' : 'Secret'">
+          <el-input v-model="botDlg.form.secret" type="password" show-password placeholder="机器人开启签名校验才需要" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="botDlg.form.description" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="botDlg.vis = false">取消</el-button>
+        <el-button type="primary" @click="onSaveBot">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -238,16 +374,22 @@ import { Plus } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import {
   getGlobalConfig, updateGlobalConfig, testGitlab,
-  listAccounts, createAccount, updateAccount, deleteAccount,
+  listUsers, createUser, updateUser, toggleUser, resetUserPassword, deleteUser,
+  listContacts, createContact, updateContact, deleteContact,
+  listLarkBots, createLarkBot, updateLarkBot, deleteLarkBot, testLarkBot,
   listArgocdInstances, createArgocdInstance, updateArgocdInstance, deleteArgocdInstance, testArgocdInstance
 } from '../api'
+import { useAuthStore } from '../stores/auth'
+const authStore = useAuthStore()
 
 const tab = ref('cred')
 const tabs = [
   { v: 'cred', label: '全局凭证' },
   { v: 'argocd', label: 'ArgoCD 实例' },
+  { v: 'larkbots', label: 'Lark 机器人' },
   { v: 'accounts', label: '账号管理' },
-  { v: 'lark', label: 'Lark 通知' },
+  { v: 'contacts', label: '通知人' },
+  { v: 'lark', label: 'Lark 默认' },
   { v: 'poll', label: '同步策略' },
   { v: 'about', label: '关于' }
 ]
@@ -257,7 +399,9 @@ const gc = reactive({
   lark_default_webhook: '', lark_default_secret: '',
   poll_interval_sec: 10, poll_timeout_min: 3, git_retry_count: 3
 })
-const accounts = ref([])
+const users = ref([])
+const contacts = ref([])
+const larkBots = ref([])
 const argoInstances = ref([])
 const loading = reactive({ cred: false })
 const saving = reactive({ cred: false })
@@ -324,38 +468,129 @@ async function onDeleteArgo(a) {
   try { await deleteArgocdInstance(a.id); ElMessage.success('已删除'); await loadArgo() } catch (_) {}
 }
 
-// === 账号 ===
-const accDlg = reactive({ vis: false, isEdit: false, editingID: null, form: { username: '', display_name: '', lark_id: '', email: '', remark: '' } })
-async function loadAcc() { accounts.value = (await listAccounts()) || [] }
-function openAccCreate() {
-  accDlg.isEdit = false; accDlg.editingID = null
-  Object.assign(accDlg.form, { username: '', display_name: '', lark_id: '', email: '', remark: '' })
-  accDlg.vis = true
+// === 用户（登录）===
+const userDlg = reactive({ vis: false, isEdit: false, editingID: null, form: { username: '', password: '', display_name: '', role: 'user' } })
+async function loadUsers() {
+  if (!authStore.isAdmin) return
+  users.value = (await listUsers()) || []
 }
-function openAccEdit(a) {
-  accDlg.isEdit = true; accDlg.editingID = a.id
-  Object.assign(accDlg.form, { username: a.username, display_name: a.display_name, lark_id: a.lark_id, email: a.email, remark: a.remark })
-  accDlg.vis = true
+function openUserCreate() {
+  userDlg.isEdit = false; userDlg.editingID = null
+  Object.assign(userDlg.form, { username: '', password: '', display_name: '', role: 'user' })
+  userDlg.vis = true
 }
-async function onSaveAcc() {
-  if (!accDlg.isEdit && !accDlg.form.username.trim()) { ElMessage.warning('用户名必填'); return }
-  if (accDlg.isEdit) await updateAccount(accDlg.editingID, accDlg.form)
-  else await createAccount(accDlg.form)
+function openUserEdit(u) {
+  userDlg.isEdit = true; userDlg.editingID = u.id
+  Object.assign(userDlg.form, { username: u.username, password: '', display_name: u.display_name, role: u.role })
+  userDlg.vis = true
+}
+async function onSaveUser() {
+  if (!userDlg.isEdit) {
+    if (!userDlg.form.username.trim()) { ElMessage.warning('用户名必填'); return }
+    if (!userDlg.form.password) { ElMessage.warning('初始密码必填'); return }
+    await createUser(userDlg.form)
+  } else {
+    await updateUser(userDlg.editingID, { display_name: userDlg.form.display_name, role: userDlg.form.role })
+  }
   ElMessage.success('已保存')
-  accDlg.vis = false
-  await loadAcc()
+  userDlg.vis = false
+  await loadUsers()
 }
-async function onDeleteAcc(a) {
-  try { await ElMessageBox.confirm(`确认删除账号「${a.username}」？`, '删除确认', { type: 'warning' }) }
+async function onDeleteUser(u) {
+  try { await ElMessageBox.confirm(`确认删除用户「${u.username}」？`, '删除确认', { type: 'warning' }) }
   catch { return }
-  await deleteAccount(a.id)
+  await deleteUser(u.id)
   ElMessage.success('已删除')
-  await loadAcc()
+  await loadUsers()
+}
+async function onToggleUser(u) {
+  await toggleUser(u.id)
+  ElMessage.success(u.status === 1 ? '已禁用' : '已启用')
+  await loadUsers()
+}
+async function onResetPwd(u) {
+  try {
+    const { value } = await ElMessageBox.prompt(`为「${u.username}」设置新密码`, '重置密码', {
+      inputType: 'password', inputPlaceholder: '至少 6 位',
+      inputValidator: v => !!v && v.length >= 6 || '密码至少 6 位',
+    })
+    await resetUserPassword(u.id, value)
+    ElMessage.success('密码已重置')
+  } catch (_) { /* 取消 */ }
+}
+
+// === 通知人（Lark 艾特） ===
+const contactDlg = reactive({ vis: false, isEdit: false, editingID: null, form: { name: '', lark_id: '', remark: '' } })
+async function loadContacts() { contacts.value = (await listContacts()) || [] }
+function openContactCreate() {
+  contactDlg.isEdit = false; contactDlg.editingID = null
+  Object.assign(contactDlg.form, { name: '', lark_id: '', remark: '' })
+  contactDlg.vis = true
+}
+function openContactEdit(c) {
+  contactDlg.isEdit = true; contactDlg.editingID = c.id
+  Object.assign(contactDlg.form, { name: c.name, lark_id: c.lark_id, remark: c.remark })
+  contactDlg.vis = true
+}
+async function onSaveContact() {
+  if (!contactDlg.isEdit && !contactDlg.form.name.trim()) { ElMessage.warning('名称必填'); return }
+  if (contactDlg.isEdit) await updateContact(contactDlg.editingID, contactDlg.form)
+  else await createContact(contactDlg.form)
+  ElMessage.success('已保存')
+  contactDlg.vis = false
+  await loadContacts()
+}
+async function onDeleteContact(c) {
+  try { await ElMessageBox.confirm(`确认删除通知人「${c.name}」？`, '删除确认', { type: 'warning' }) }
+  catch { return }
+  await deleteContact(c.id)
+  ElMessage.success('已删除')
+  await loadContacts()
+}
+
+// === Lark 机器人 ===
+const botDlg = reactive({ vis: false, isEdit: false, editingID: null, form: { name: '', webhook: '', secret: '', description: '' } })
+async function loadBots() { larkBots.value = (await listLarkBots()) || [] }
+function openBotCreate() {
+  botDlg.isEdit = false; botDlg.editingID = null
+  Object.assign(botDlg.form, { name: '', webhook: '', secret: '', description: '' })
+  botDlg.vis = true
+}
+function openBotEdit(b) {
+  botDlg.isEdit = true; botDlg.editingID = b.id
+  Object.assign(botDlg.form, { name: b.name, webhook: b.webhook, secret: '', description: b.description || '' })
+  botDlg.vis = true
+}
+async function onSaveBot() {
+  if (!botDlg.isEdit && !botDlg.form.name.trim()) { ElMessage.warning('名称必填'); return }
+  if (!botDlg.form.webhook.trim()) { ElMessage.warning('Webhook 必填'); return }
+  const payload = { ...botDlg.form }
+  if (botDlg.isEdit && !payload.secret) delete payload.secret
+  if (botDlg.isEdit) await updateLarkBot(botDlg.editingID, payload)
+  else await createLarkBot(payload)
+  ElMessage.success('已保存')
+  botDlg.vis = false
+  await loadBots()
+}
+async function onDeleteBot(b) {
+  try { await ElMessageBox.confirm(`确认删除 Lark 机器人「${b.name}」？被项目环境引用时会失败。`, '删除确认', { type: 'warning' }) }
+  catch { return }
+  await deleteLarkBot(b.id)
+  ElMessage.success('已删除')
+  await loadBots()
+}
+async function onTestBot(b) {
+  try {
+    await testLarkBot(b.id)
+    ElMessage.success(`已发送测试消息到「${b.name}」`)
+  } catch (_) {}
 }
 
 watch(tab, (t) => {
   if (t === 'argocd') loadArgo()
-  else if (t === 'accounts') loadAcc()
+  else if (t === 'accounts') loadUsers()
+  else if (t === 'contacts') loadContacts()
+  else if (t === 'larkbots') loadBots()
   else if (['cred', 'lark', 'poll'].includes(t)) loadGlobal()
 })
 
@@ -402,4 +637,17 @@ onMounted(loadGlobal)
 .act { background: transparent; border: 1px solid var(--border); color: var(--text-2); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11.5px; font-family: var(--body); margin-right: 4px; }
 .act:hover { border-color: var(--primary); color: var(--primary); }
 .act.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+.webhook-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.role-tag { display: inline-block; padding: 2px 8px; border-radius: 99px; font: 500 11px var(--mono); }
+.role-tag.admin { background: #fef2f2; color: #dc2626; }
+.role-tag.user { background: #eff6ff; color: #1d4ed8; }
+
+.src-tag { display: inline-block; padding: 2px 8px; border-radius: 99px; font: 500 11px var(--mono); }
+.src-tag.local { background: #f3f4f6; color: #4b5563; }
+.src-tag.portal { background: #ecfdf5; color: #059669; }
+
+.status-on { color: var(--success); font-size: 12px; font-weight: 500; }
+.status-off { color: var(--text-3); font-size: 12px; }
 </style>
