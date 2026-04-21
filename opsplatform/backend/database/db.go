@@ -1214,6 +1214,14 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_alert_mutes", "menu:alert_mutes", "屏蔽管理", "/alert/mutes", "perm_menu_alert", "", 75},
 		{"perm_menu_alert_users", "menu:alert_users", "告警账号管理", "/alert/users", "perm_menu_alert", "", 80},
 
+		// 发布中心（外部应用权限）
+		{"perm_menu_deploy_center", "menu:deploy_center", "发布中心", "/deploy-center", "", "deploy_center", 15},
+		{"perm_menu_deploy_center_dashboard", "menu:deploy_center_dashboard", "发布概览", "/deploy-center/dashboard", "perm_menu_deploy_center", "", 5},
+		{"perm_menu_deploy_center_console", "menu:deploy_center_console", "部署控制台", "/deploy-center/console", "perm_menu_deploy_center", "", 10},
+		{"perm_menu_deploy_center_projects", "menu:deploy_center_projects", "项目配置", "/deploy-center/projects", "perm_menu_deploy_center", "", 20},
+		{"perm_menu_deploy_center_history", "menu:deploy_center_history", "发布历史", "/deploy-center/history", "perm_menu_deploy_center", "", 30},
+		{"perm_menu_deploy_center_settings", "menu:deploy_center_settings", "系统设置", "/deploy-center/settings", "perm_menu_deploy_center", "", 40},
+
 		// 探测平台（外部应用权限）
 		{"perm_menu_probe", "menu:probe", "探测平台", "/probe", "", "probe", 16},
 		{"perm_menu_probe_dashboard", "menu:probe_dashboard", "探测概览", "/probe/dashboard", "perm_menu_probe", "", 10},
@@ -1245,6 +1253,7 @@ func initDefaultRolesAndPermissions() {
 		SortOrder int
 	}{
 		{"app_probe_platform", "probe", "探测平台", "http://localhost:30827", "probe", "运维工具", 16},
+		{"app_deploy_center", "deploy_center", "发布中心", "http://localhost:30826", "deploy_center", "运维工具", 15},
 	}
 	for _, a := range defaultExternalApps {
 		DB.Exec(`INSERT IGNORE INTO external_apps (id, app_key, name, url, perm_code, group_name, sort_order, status)
@@ -1371,6 +1380,18 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_alert_manage_connections", "alert:manage_connections", "[告警平台] 连接管理", "允许管理ES/Loki连接"},
 		{"perm_btn_alert_manage_contacts", "alert:manage_contacts", "[告警平台] 通知人管理", "允许管理通知人"},
 		{"perm_btn_alert_manage_lark", "alert:manage_lark", "[告警平台] Lark配置", "允许管理Lark配置"},
+
+		// 发布中心
+		{"perm_btn_dc_submit_uat", "deploy_center:submit_uat", "[发布中心] 提交 UAT", "允许提交 UAT 环境的镜像发布"},
+		{"perm_btn_dc_submit_prod", "deploy_center:submit_prod", "[发布中心] 提交 PROD", "允许提交 PROD 环境的镜像发布"},
+		{"perm_btn_dc_restart", "deploy_center:restart", "[发布中心] 重启服务", "允许通过 ArgoCD 重启服务"},
+		{"perm_btn_dc_rollback", "deploy_center:rollback", "[发布中心] 回滚发布", "允许回滚到历史版本"},
+		{"perm_btn_dc_scan_modules", "deploy_center:scan_modules", "[发布中心] 扫描模块", "允许触发 Git 扫描重建模块列表"},
+		{"perm_btn_dc_manage_projects", "deploy_center:manage_projects", "[发布中心] 项目环境管理", "允许增删改项目和环境"},
+		{"perm_btn_dc_manage_argocd", "deploy_center:manage_argocd", "[发布中心] ArgoCD 实例", "允许增删改 ArgoCD 实例"},
+		{"perm_btn_dc_manage_lark_bots", "deploy_center:manage_lark_bots", "[发布中心] Lark 机器人", "允许增删改 Lark 机器人"},
+		{"perm_btn_dc_manage_contacts", "deploy_center:manage_contacts", "[发布中心] 通知人管理", "允许增删改通知人"},
+		{"perm_btn_dc_manage_global", "deploy_center:manage_global", "[发布中心] 全局配置", "允许修改全局凭证/轮询策略"},
 	}
 
 	for _, perm := range buttonPermissions {
