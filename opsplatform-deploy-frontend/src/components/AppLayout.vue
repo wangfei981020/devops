@@ -9,23 +9,27 @@
 
       <nav class="nav">
         <div class="group">
-          <div class="group-title opened">
+          <div :class="['group-title', {opened: grp.publish}]" @click="grp.publish = !grp.publish">
             <el-icon class="ico"><Upload /></el-icon>
             <span>发布管理</span>
             <el-icon class="chev"><ArrowRight /></el-icon>
           </div>
-          <RouterLink to="/deploy" class="sub-item" active-class="active">部署控制台</RouterLink>
-          <RouterLink to="/history" class="sub-item" active-class="active">发布历史</RouterLink>
+          <template v-if="grp.publish">
+            <RouterLink to="/deploy" class="sub-item" active-class="active">部署控制台</RouterLink>
+            <RouterLink to="/history" class="sub-item" active-class="active">发布历史</RouterLink>
+          </template>
         </div>
 
         <div class="group">
-          <div class="group-title opened">
+          <div :class="['group-title', {opened: grp.config}]" @click="grp.config = !grp.config">
             <el-icon class="ico"><Setting /></el-icon>
             <span>配置管理</span>
             <el-icon class="chev"><ArrowRight /></el-icon>
           </div>
-          <RouterLink to="/projects" class="sub-item" active-class="active">项目配置</RouterLink>
-          <RouterLink to="/settings" class="sub-item" active-class="active">系统设置</RouterLink>
+          <template v-if="grp.config">
+            <RouterLink to="/projects" class="sub-item" active-class="active">项目配置</RouterLink>
+            <RouterLink to="/settings" class="sub-item" active-class="active">系统设置</RouterLink>
+          </template>
         </div>
       </nav>
 
@@ -90,12 +94,18 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Upload, Setting, ArrowRight, ArrowDown, User, Check } from '@element-plus/icons-vue'
 import { listAccounts } from '../api'
 
-const version = '41'
+const version = '42'
+
+// 侧栏分组折叠状态（持久化到 localStorage）
+const grpRaw = JSON.parse(localStorage.getItem('deploy_sidebar_groups') || '{"publish":true,"config":true}')
+const grp = reactive(grpRaw)
+import { watch } from 'vue'
+watch(grp, (v) => localStorage.setItem('deploy_sidebar_groups', JSON.stringify(v)), { deep: true })
 const accounts = ref([])
 const loading = ref(false)
 const pickerVis = ref(false)
@@ -135,8 +145,8 @@ onMounted(() => {})
 .group-title { display: flex; align-items: center; padding: 10px 16px; color: var(--sidebar-text); font-size: 13px; font-weight: 500; gap: 10px; cursor: pointer; }
 .group-title:hover { background: var(--sidebar-hover); color: #fff; }
 .group-title .ico { font-size: 15px; opacity: .8; }
-.group-title .chev { margin-left: auto; opacity: .5; font-size: 12px; transition: transform .15s; }
-.group-title.opened .chev { transform: rotate(90deg); }
+.group-title .chev { margin-left: auto; opacity: .5; font-size: 12px; transition: transform .2s; }
+.group-title.opened .chev { transform: rotate(90deg); opacity: .8; }
 
 .sub-item { display: block; padding: 8px 16px 8px 42px; color: var(--sidebar-text-sub); font-size: 12.5px; text-decoration: none; border-left: 2px solid transparent; transition: all .12s; }
 .sub-item:hover { color: #fff; background: var(--sidebar-hover); }
