@@ -26,6 +26,12 @@ export const getGlobalConfig = () => http.get('/global-config')
 export const updateGlobalConfig = (data) => http.put('/global-config', data)
 export const testGitlab = (data) => http.post('/global-config/test-gitlab', data || {})
 
+// Projects (空项目注册表 + 派生)
+export const listProjects = () => http.get('/projects')
+export const createProject = (data) => http.post('/projects', data)
+export const updateProject = (id, data) => http.put(`/projects/${id}`, data)
+export const deleteProject = (id) => http.delete(`/projects/${id}`)
+
 // Project Envs
 export const listProjectEnvs = () => http.get('/project-envs')
 export const getProjectEnv = (id) => http.get(`/project-envs/${id}`)
