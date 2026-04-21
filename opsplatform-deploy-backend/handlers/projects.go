@@ -27,7 +27,7 @@ func HandleListProjects(w http.ResponseWriter, r *http.Request) {
 	// 1. 从 project 表读
 	rows, err := database.DB.Query(`SELECT id, name, display_name, description, created_at FROM project ORDER BY name`)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	defer rows.Close()
@@ -44,7 +44,7 @@ func HandleListProjects(w http.ResponseWriter, r *http.Request) {
 	// 2. 从 project_env 派生项目名（name = {project}-{env_type}）
 	envRows, err := database.DB.Query(`SELECT name, env_type FROM project_env`)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	defer envRows.Close()
@@ -101,7 +101,7 @@ func HandleCreateProject(w http.ResponseWriter, r *http.Request) {
 			JSONError(w, 40900, "项目名已存在")
 			return
 		}
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	id, _ := res.LastInsertId()
@@ -124,7 +124,7 @@ func HandleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	_, err := database.DB.Exec(`UPDATE project SET display_name=?, description=? WHERE id=?`,
 		strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Description), id)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)
@@ -141,7 +141,7 @@ func HandleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	var cnt int
@@ -151,7 +151,7 @@ func HandleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := database.DB.Exec(`DELETE FROM project WHERE id=?`, id); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)

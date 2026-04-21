@@ -14,7 +14,7 @@ import (
 func HandleListContacts(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`SELECT id, name, lark_id, remark, created_at, updated_at FROM contact ORDER BY name`)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	defer rows.Close()
@@ -51,7 +51,7 @@ func HandleCreateContact(w http.ResponseWriter, r *http.Request) {
 			JSONError(w, 40900, "name 已存在")
 			return
 		}
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	id, _ := res.LastInsertId()
@@ -68,7 +68,7 @@ func HandleUpdateContact(w http.ResponseWriter, r *http.Request) {
 	_, err := database.DB.Exec(`UPDATE contact SET lark_id=?, remark=? WHERE id=?`,
 		strings.TrimSpace(req.LarkID), strings.TrimSpace(req.Remark), id)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)
@@ -78,7 +78,7 @@ func HandleUpdateContact(w http.ResponseWriter, r *http.Request) {
 func HandleDeleteContact(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
 	if _, err := database.DB.Exec(`DELETE FROM contact WHERE id=?`, id); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)

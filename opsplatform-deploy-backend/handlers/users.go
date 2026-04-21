@@ -30,7 +30,7 @@ func HandleListUsers(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`SELECT id, username, IFNULL(display_name,''), role, IFNULL(auth_source,'local'), status, created_at, updated_at
 		FROM users ORDER BY auth_source, username`)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	defer rows.Close()
@@ -66,7 +66,7 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	res, err := database.DB.Exec(
@@ -78,7 +78,7 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 			JSONError(w, 40900, "username 已存在")
 			return
 		}
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	id, _ := res.LastInsertId()
@@ -102,7 +102,7 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := database.DB.Exec(`UPDATE users SET display_name=?, role=? WHERE id=?`,
 		strings.TrimSpace(req.DisplayName), req.Role, id); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)
@@ -112,7 +112,7 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 func HandleToggleUser(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
 	if _, err := database.DB.Exec(`UPDATE users SET status = 1 - status WHERE id=?`, id); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)
@@ -135,11 +135,11 @@ func HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	if _, err := database.DB.Exec(`UPDATE users SET password_hash=? WHERE id=? AND auth_source='local'`, string(hash), id); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)
@@ -149,7 +149,7 @@ func HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
 	if _, err := database.DB.Exec(`DELETE FROM users WHERE id=?`, id); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	database.DB.Exec(`DELETE FROM sessions WHERE user_id=?`, id)

@@ -62,7 +62,7 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 		git_commit, git_commit_url, argocd_results, lark_notify, operator, status, IFNULL(error_msg,''), duration_sec, created_at
 		FROM deployment `+where+` ORDER BY created_at DESC LIMIT ? OFFSET ?`, args2...)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	defer rows.Close()

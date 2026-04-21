@@ -9,6 +9,7 @@ import (
 	"opsplatform-deploy-backend/crypto"
 	"opsplatform-deploy-backend/database"
 	"opsplatform-deploy-backend/models"
+	"opsplatform-deploy-backend/services"
 )
 
 func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
@@ -21,7 +22,7 @@ func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
 			&c.LarkDefaultWebhook, &c.LarkDefaultSecret,
 			&c.PollIntervalSec, &c.PollTimeoutMin, &c.GitRetryCount, &c.UpdatedAt)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	c.GitlabToken = maskToken(c.GitlabToken)
@@ -102,7 +103,7 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	q := "UPDATE global_config SET " + joinComma(sets) + " WHERE id=1"
 	if _, err := database.DB.Exec(q, args...); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)
@@ -136,10 +137,10 @@ func HandleTestGlobalGitlab(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.CommandContext(ctx, "git", "ls-remote", authURL, "HEAD")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		JSONError(w, 50001, "git ls-remote failed: "+string(out))
+		JSONError(w, 50001, "git ls-remote failed: "+services.ScrubSecrets(out))
 		return
 	}
-	JSONSuccess(w, map[string]interface{}{"ok": true, "head": string(out)})
+	JSONSuccess(w, map[string]interface{}{"ok": true, "head": services.ScrubSecrets(out)})
 }
 
 func injectTokenHelper(url, user, token string) string {

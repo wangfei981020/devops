@@ -25,24 +25,48 @@ type Config struct {
 
 func Load() *Config {
 	sessionTimeout, _ := strconv.Atoi(getEnv("SESSION_TIMEOUT", "180"))
+	appEnv := getEnv("APP_ENV", "prod")
+	isDev := appEnv == "dev"
+
 	c := &Config{
 		Port:        getEnv("PORT", ":8080"),
 		HealthPort:  getEnv("HEALTH_PORT", ":8081"),
 		MySQLDSN:    buildMySQLDSN(),
 		AESKey:      getEnv("AES_KEY", ""),
-		CORSOrigin:  getEnv("CORS_ORIGIN", "*"),
+		CORSOrigin:  getEnv("CORS_ORIGIN", ""),
 		GitCacheDir: getEnv("GIT_CACHE_DIR", "./git-cache"),
 
-		JWTSecret:       getEnv("JWT_SECRET", "dev-secret-key-change-in-production"),
+		JWTSecret:       getEnv("JWT_SECRET", ""),
 		SessionTimeout:  sessionTimeout,
 		PortalAPIURL:    getEnv("PORTAL_API_URL", ""),
 		AppPortalSecret: getEnv("APP_PORTAL_SECRET", ""),
-		CookieSecure:    getEnv("COOKIE_SECURE", "false") == "true",
-		CookieSameSite:  getEnv("COOKIE_SAMESITE", "lax"),
+		CookieSecure:    getEnv("COOKIE_SECURE", "true") == "true",
+		CookieSameSite:  getEnv("COOKIE_SAMESITE", "strict"),
 	}
+
+	// fail-fast: 生产环境必须显式提供 AES_KEY 和 JWT_SECRET
 	if c.AESKey == "" {
-		fmt.Fprintln(os.Stderr, "WARN: AES_KEY not set, using dev-only fallback (DO NOT USE IN PROD)")
-		c.AESKey = "ZGV2LW9ubHktZmFsbGJhY2stZG8tbm90LXVzZS1wcm9k" // base64 "dev-only-fallback-do-not-use-prod"
+		if !isDev {
+			fmt.Fprintln(os.Stderr, "FATAL: AES_KEY not set. Set APP_ENV=dev to use a dev fallback.")
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "WARN: AES_KEY not set, using dev-only fallback (APP_ENV=dev)")
+		c.AESKey = "ZGV2LW9ubHktZmFsbGJhY2stZG8tbm90LXVzZS1wcm9k"
+	}
+	if c.JWTSecret == "" {
+		if !isDev {
+			fmt.Fprintln(os.Stderr, "FATAL: JWT_SECRET not set. Set APP_ENV=dev to use a dev fallback.")
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "WARN: JWT_SECRET not set, using dev-only fallback (APP_ENV=dev)")
+		c.JWTSecret = "dev-secret-key-change-in-production"
+	}
+	if c.CORSOrigin == "" {
+		if !isDev {
+			fmt.Fprintln(os.Stderr, "FATAL: CORS_ORIGIN not set. Specify the allowed origin or set APP_ENV=dev.")
+			os.Exit(1)
+		}
+		c.CORSOrigin = "*"
 	}
 	return c
 }

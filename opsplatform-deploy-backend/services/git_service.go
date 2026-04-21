@@ -6,10 +6,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
+
+// tokenInURLRe 匹配 http(s)://user:token@host 形式的凭证
+var tokenInURLRe = regexp.MustCompile(`(https?://)([^:/\s]+):([^@/\s]+)@`)
+
+// ScrubSecrets 清洗 git 输出里的 URL 凭证，避免 PAT 泄露到 error / log / DB
+// 输入 "http://bot:abc@host/..." 变为 "http://bot:***@host/..."
+func ScrubSecrets(b []byte) string {
+	return tokenInURLRe.ReplaceAllString(string(b), "$1$2:***@")
+}
+
+// 保留小写别名给包内复用
+func scrubSecrets(b []byte) string { return ScrubSecrets(b) }
 
 type LockMgr struct {
 	mu    sync.Mutex

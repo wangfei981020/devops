@@ -67,6 +67,10 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40400, "project_env not found")
 		return
 	}
+	if p.EnvType == models.EnvPROD && !IsAdmin(r) {
+		JSONError(w, 40300, "PROD 发布仅限管理员")
+		return
+	}
 	pending := map[string]string{}
 	for _, c := range req.Changes {
 		if m, ok := c["module"]; ok {
@@ -114,6 +118,10 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 	p, err := LoadProjectEnvDecrypted(req.ProjectEnvID)
 	if err != nil {
 		JSONError(w, 40400, "project_env not found")
+		return
+	}
+	if p.EnvType == models.EnvPROD && !IsAdmin(r) {
+		JSONError(w, 40300, "PROD 重启仅限管理员")
 		return
 	}
 	argoURL, argoToken, err := ResolveArgocdForEnv(p)
@@ -222,6 +230,10 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 	p, err := LoadProjectEnvDecrypted(peID)
 	if err != nil {
 		JSONError(w, 40400, "project_env not found")
+		return
+	}
+	if p.EnvType == models.EnvPROD && !IsAdmin(r) {
+		JSONError(w, 40300, "PROD 回滚仅限管理员")
 		return
 	}
 	modules := loadModulesMap(peID, p.ChartBasePath)

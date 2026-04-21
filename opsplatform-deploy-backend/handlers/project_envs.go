@@ -21,7 +21,7 @@ func HandleListProjectEnvs(w http.ResponseWriter, r *http.Request) {
 		lark_webhook, lark_secret, lark_bot_id, auto_sync, created_at, updated_at
 		FROM project_env ORDER BY name`)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	defer rows.Close()
@@ -93,7 +93,7 @@ func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
 			JSONError(w, 40900, "name 已存在")
 			return
 		}
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	id, _ := res.LastInsertId()
@@ -121,7 +121,7 @@ func HandleUpdateProjectEnv(w http.ResponseWriter, r *http.Request) {
 	args = append(args, id)
 	q := "UPDATE project_env SET " + joinComma(sets) + " WHERE id=?"
 	if _, err := database.DB.Exec(q, args...); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)
@@ -131,7 +131,7 @@ func HandleDeleteProjectEnv(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
 	_, _ = database.DB.Exec(`DELETE FROM module WHERE project_env_id=?`, id)
 	if _, err := database.DB.Exec(`DELETE FROM project_env WHERE id=?`, id); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)
@@ -157,10 +157,10 @@ func HandleTestProjectEnvGit(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "git", "ls-remote", "--heads", authURL, p.GitBranch).CombinedOutput()
 	if err != nil {
-		JSONError(w, 50001, "ls-remote: "+string(out))
+		JSONError(w, 50001, "ls-remote: "+services.ScrubSecrets(out))
 		return
 	}
-	JSONSuccess(w, map[string]interface{}{"ok": true, "ref": string(out)})
+	JSONSuccess(w, map[string]interface{}{"ok": true, "ref": services.ScrubSecrets(out)})
 }
 
 func HandleTestProjectEnvArgocd(w http.ResponseWriter, r *http.Request) {
@@ -231,7 +231,7 @@ func HandleScanModules(w http.ResponseWriter, r *http.Request) {
 			JSONError(w, 40400, err.Error())
 			return
 		}
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, map[string]interface{}{"count": count})

@@ -394,6 +394,19 @@ func UsernameFromCtx(r *http.Request) string {
 	return ""
 }
 
+// RoleFromCtx 从 request context 取当前用户角色
+func RoleFromCtx(r *http.Request) string {
+	if v, ok := r.Context().Value(ctxUserRole).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// IsAdmin 判断当前请求是否来自 admin 角色
+func IsAdmin(r *http.Request) bool {
+	return RoleFromCtx(r) == "admin"
+}
+
 func generateToken(userID int, username, role string) (string, error) {
 	claims := JWTClaims{
 		UserID: userID, Username: username, Role: role,
@@ -419,16 +432,12 @@ func parseToken(tokenStr string) (*JWTClaims, error) {
 	return claims, nil
 }
 
+// extractToken 仅认 Authorization: Bearer <token>
+// 不接受 cookie 和 ?token= query 参数（避免 token 出现在日志、Referer、history）
 func extractToken(r *http.Request) string {
-	if c, err := r.Cookie("deploy_auth_token"); err == nil {
-		return c.Value
-	}
 	auth := r.Header.Get("Authorization")
 	if strings.HasPrefix(auth, "Bearer ") {
 		return strings.TrimPrefix(auth, "Bearer ")
-	}
-	if t := r.URL.Query().Get("token"); t != "" {
-		return t
 	}
 	return ""
 }

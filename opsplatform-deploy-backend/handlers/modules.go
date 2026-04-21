@@ -17,7 +17,7 @@ func HandleListModules(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`SELECT id, project_env_id, name, current_tag, image_repository, argocd_app_name,
 		IFNULL(namespace,''), last_scanned_at, created_at, updated_at FROM module WHERE project_env_id=? ORDER BY name`, peID)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	defer rows.Close()
@@ -49,7 +49,7 @@ func HandleModuleTagHistory(w http.ResponseWriter, r *http.Request) {
 		WHERE project_env_id=? AND action IN ('update_image','rollback') AND status IN ('success','partial')
 		ORDER BY created_at DESC`, peID)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	defer rows.Close()

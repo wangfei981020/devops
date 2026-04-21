@@ -56,61 +56,72 @@ func main() {
 	protected := api.PathPrefix("").Subrouter()
 	protected.Use(handlers.AuthMiddleware)
 
+	// ========== Protected：登录后可用（只读 + UAT 发布等低危操作）==========
 	protected.HandleFunc("/users/me", handlers.HandleGetCurrentUser).Methods("GET")
 	protected.HandleFunc("/refresh-permissions", handlers.HandleRefreshPermissions).Methods("GET")
-
 	protected.HandleFunc("/dashboard/stats", handlers.HandleDashboardStats).Methods("GET", "OPTIONS")
 
+	// 全局/项目/环境/ArgoCD/Lark/通知人 —— 所有用户可 GET
 	protected.HandleFunc("/global-config", handlers.HandleGetGlobalConfig).Methods("GET", "OPTIONS")
-	protected.HandleFunc("/global-config", handlers.HandleUpdateGlobalConfig).Methods("PUT", "OPTIONS")
-	protected.HandleFunc("/global-config/test-gitlab", handlers.HandleTestGlobalGitlab).Methods("POST", "OPTIONS")
-
 	protected.HandleFunc("/projects", handlers.HandleListProjects).Methods("GET", "OPTIONS")
-	protected.HandleFunc("/projects", handlers.HandleCreateProject).Methods("POST", "OPTIONS")
-	protected.HandleFunc("/projects/{id}", handlers.HandleUpdateProject).Methods("PUT", "OPTIONS")
-	protected.HandleFunc("/projects/{id}", handlers.HandleDeleteProject).Methods("DELETE", "OPTIONS")
-
-	protected.HandleFunc("/contacts", handlers.HandleListContacts).Methods("GET", "OPTIONS")
-	protected.HandleFunc("/contacts", handlers.HandleCreateContact).Methods("POST", "OPTIONS")
-	protected.HandleFunc("/contacts/{id}", handlers.HandleUpdateContact).Methods("PUT", "OPTIONS")
-	protected.HandleFunc("/contacts/{id}", handlers.HandleDeleteContact).Methods("DELETE", "OPTIONS")
-
-	protected.HandleFunc("/lark-bots", handlers.HandleListLarkBots).Methods("GET", "OPTIONS")
-	protected.HandleFunc("/lark-bots", handlers.HandleCreateLarkBot).Methods("POST", "OPTIONS")
-	protected.HandleFunc("/lark-bots/{id}", handlers.HandleUpdateLarkBot).Methods("PUT", "OPTIONS")
-	protected.HandleFunc("/lark-bots/{id}", handlers.HandleDeleteLarkBot).Methods("DELETE", "OPTIONS")
-	protected.HandleFunc("/lark-bots/{id}/test", handlers.HandleTestLarkBot).Methods("POST", "OPTIONS")
-
-	protected.HandleFunc("/argocd-instances", handlers.HandleListArgocdInstances).Methods("GET", "OPTIONS")
-	protected.HandleFunc("/argocd-instances", handlers.HandleCreateArgocdInstance).Methods("POST", "OPTIONS")
-	protected.HandleFunc("/argocd-instances/{id}", handlers.HandleUpdateArgocdInstance).Methods("PUT", "OPTIONS")
-	protected.HandleFunc("/argocd-instances/{id}", handlers.HandleDeleteArgocdInstance).Methods("DELETE", "OPTIONS")
-	protected.HandleFunc("/argocd-instances/{id}/test", handlers.HandleTestArgocdInstance).Methods("POST", "OPTIONS")
-
 	protected.HandleFunc("/project-envs", handlers.HandleListProjectEnvs).Methods("GET", "OPTIONS")
-	protected.HandleFunc("/project-envs", handlers.HandleCreateProjectEnv).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/project-envs/{id}", handlers.HandleGetProjectEnv).Methods("GET", "OPTIONS")
-	protected.HandleFunc("/project-envs/{id}", handlers.HandleUpdateProjectEnv).Methods("PUT", "OPTIONS")
-	protected.HandleFunc("/project-envs/{id}", handlers.HandleDeleteProjectEnv).Methods("DELETE", "OPTIONS")
-	protected.HandleFunc("/project-envs/{id}/test-git", handlers.HandleTestProjectEnvGit).Methods("POST", "OPTIONS")
-	protected.HandleFunc("/project-envs/{id}/test-argocd", handlers.HandleTestProjectEnvArgocd).Methods("POST", "OPTIONS")
-	protected.HandleFunc("/project-envs/{id}/scan-modules", handlers.HandleScanModules).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/contacts", handlers.HandleListContacts).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/lark-bots", handlers.HandleListLarkBots).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/argocd-instances", handlers.HandleListArgocdInstances).Methods("GET", "OPTIONS")
 
+	// 模块 / 发布历史 —— 只读
 	protected.HandleFunc("/modules", handlers.HandleListModules).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/modules/{id}/tag-history", handlers.HandleModuleTagHistory).Methods("GET", "OPTIONS")
-
 	protected.HandleFunc("/deployments", handlers.HandleListDeployments).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/deployments/{id}", handlers.HandleGetDeployment).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/deployments/{id}/rollback-preview", handlers.HandleRollbackPreview).Methods("GET", "OPTIONS")
 
+	// 发布动作（UAT handler 内自行放行 / PROD handler 内要求 admin）
 	protected.HandleFunc("/deploy/preview-image", handlers.HandlePreviewImage).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/deploy/update-image", handlers.HandleUpdateImage).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/deploy/restart", handlers.HandleRestart).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/deploy/rollback", handlers.HandleRollback).Methods("POST", "OPTIONS")
 
-	// Admin-only (用户管理)
+	// ========== Admin-only：所有管理类 CRUD、测试接口、PROD 扫描等 ==========
 	admin := protected.PathPrefix("").Subrouter()
 	admin.Use(handlers.AdminMiddleware)
+
+	// 全局配置
+	admin.HandleFunc("/global-config", handlers.HandleUpdateGlobalConfig).Methods("PUT", "OPTIONS")
+	admin.HandleFunc("/global-config/test-gitlab", handlers.HandleTestGlobalGitlab).Methods("POST", "OPTIONS")
+
+	// 项目 CRUD
+	admin.HandleFunc("/projects", handlers.HandleCreateProject).Methods("POST", "OPTIONS")
+	admin.HandleFunc("/projects/{id}", handlers.HandleUpdateProject).Methods("PUT", "OPTIONS")
+	admin.HandleFunc("/projects/{id}", handlers.HandleDeleteProject).Methods("DELETE", "OPTIONS")
+
+	// 项目环境 CRUD + 测试 + 扫描
+	admin.HandleFunc("/project-envs", handlers.HandleCreateProjectEnv).Methods("POST", "OPTIONS")
+	admin.HandleFunc("/project-envs/{id}", handlers.HandleUpdateProjectEnv).Methods("PUT", "OPTIONS")
+	admin.HandleFunc("/project-envs/{id}", handlers.HandleDeleteProjectEnv).Methods("DELETE", "OPTIONS")
+	admin.HandleFunc("/project-envs/{id}/test-git", handlers.HandleTestProjectEnvGit).Methods("POST", "OPTIONS")
+	admin.HandleFunc("/project-envs/{id}/test-argocd", handlers.HandleTestProjectEnvArgocd).Methods("POST", "OPTIONS")
+	admin.HandleFunc("/project-envs/{id}/scan-modules", handlers.HandleScanModules).Methods("POST", "OPTIONS")
+
+	// 通知人 CRUD
+	admin.HandleFunc("/contacts", handlers.HandleCreateContact).Methods("POST", "OPTIONS")
+	admin.HandleFunc("/contacts/{id}", handlers.HandleUpdateContact).Methods("PUT", "OPTIONS")
+	admin.HandleFunc("/contacts/{id}", handlers.HandleDeleteContact).Methods("DELETE", "OPTIONS")
+
+	// Lark 机器人 CRUD + 测试
+	admin.HandleFunc("/lark-bots", handlers.HandleCreateLarkBot).Methods("POST", "OPTIONS")
+	admin.HandleFunc("/lark-bots/{id}", handlers.HandleUpdateLarkBot).Methods("PUT", "OPTIONS")
+	admin.HandleFunc("/lark-bots/{id}", handlers.HandleDeleteLarkBot).Methods("DELETE", "OPTIONS")
+	admin.HandleFunc("/lark-bots/{id}/test", handlers.HandleTestLarkBot).Methods("POST", "OPTIONS")
+
+	// ArgoCD 实例 CRUD + 测试
+	admin.HandleFunc("/argocd-instances", handlers.HandleCreateArgocdInstance).Methods("POST", "OPTIONS")
+	admin.HandleFunc("/argocd-instances/{id}", handlers.HandleUpdateArgocdInstance).Methods("PUT", "OPTIONS")
+	admin.HandleFunc("/argocd-instances/{id}", handlers.HandleDeleteArgocdInstance).Methods("DELETE", "OPTIONS")
+	admin.HandleFunc("/argocd-instances/{id}/test", handlers.HandleTestArgocdInstance).Methods("POST", "OPTIONS")
+
+	// 用户管理
 	admin.HandleFunc("/users", handlers.HandleListUsers).Methods("GET", "OPTIONS")
 	admin.HandleFunc("/users", handlers.HandleCreateUser).Methods("POST", "OPTIONS")
 	admin.HandleFunc("/users/{id}", handlers.HandleUpdateUser).Methods("PUT", "OPTIONS")

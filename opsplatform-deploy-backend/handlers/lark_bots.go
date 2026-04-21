@@ -17,7 +17,7 @@ import (
 func HandleListLarkBots(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`SELECT id, name, webhook, secret, description, created_at, updated_at FROM lark_bot ORDER BY name`)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	defer rows.Close()
@@ -58,7 +58,7 @@ func HandleCreateLarkBot(w http.ResponseWriter, r *http.Request) {
 			JSONError(w, 40900, "name 已存在")
 			return
 		}
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	id, _ := res.LastInsertId()
@@ -82,7 +82,7 @@ func HandleUpdateLarkBot(w http.ResponseWriter, r *http.Request) {
 	args = append(args, id)
 	q := "UPDATE lark_bot SET " + joinComma(sets) + " WHERE id=?"
 	if _, err := database.DB.Exec(q, args...); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)
@@ -98,7 +98,7 @@ func HandleDeleteLarkBot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := database.DB.Exec(`DELETE FROM lark_bot WHERE id=?`, id); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)

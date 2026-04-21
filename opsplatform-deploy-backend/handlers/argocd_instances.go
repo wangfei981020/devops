@@ -17,7 +17,7 @@ import (
 func HandleListArgocdInstances(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`SELECT id, name, url, token, description, created_at, updated_at FROM argocd_instance ORDER BY name`)
 	if err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	defer rows.Close()
@@ -66,7 +66,7 @@ func HandleCreateArgocdInstance(w http.ResponseWriter, r *http.Request) {
 			JSONError(w, 40900, "name 已存在")
 			return
 		}
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	id, _ := res.LastInsertId()
@@ -94,7 +94,7 @@ func HandleUpdateArgocdInstance(w http.ResponseWriter, r *http.Request) {
 	args = append(args, id)
 	q := "UPDATE argocd_instance SET " + joinComma(sets) + " WHERE id=?"
 	if _, err := database.DB.Exec(q, args...); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)
@@ -111,7 +111,7 @@ func HandleDeleteArgocdInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := database.DB.Exec(`DELETE FROM argocd_instance WHERE id=?`, id); err != nil {
-		JSONError(w, 50000, err.Error())
+		InternalErr(w, r, err)
 		return
 	}
 	JSONSuccess(w, nil)
