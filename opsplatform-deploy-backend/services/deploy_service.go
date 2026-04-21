@@ -23,6 +23,7 @@ type Module struct {
 	CurrentTag   string
 	ChartRelPath string // e.g. charts/g32-uat/atmosphere-frontend/values.yaml
 	ArgocdApp    string
+	Namespace    string // 该模块实际部署的 K8s namespace（多 ns 项目必填）
 }
 
 // DiffEntry preview/update 共用的一条 diff 记录
@@ -212,7 +213,7 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 
 type RestartInput struct {
 	ProjectEnvName string
-	Namespace      string
+	Namespace      string // 默认 namespace，模块自身 Namespace 为空时 fallback
 	Modules        map[string]Module
 	ModuleNames    []string
 	ArgocdClient   *ArgocdClient
@@ -237,7 +238,12 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 			continue
 		}
 		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		err := in.ArgocdClient.RestartDeployment(rctx, m.ArgocdApp, in.Namespace, name)
+		// 优先用模块自己的 namespace，空则回退到 project_env 默认
+		ns := m.Namespace
+		if ns == "" {
+			ns = in.Namespace
+		}
+		err := in.ArgocdClient.RestartDeployment(rctx, m.ArgocdApp, ns, name)
 		cancel()
 		if err != nil {
 			res.ArgocdResults = append(res.ArgocdResults, models.ArgocdAppResult{

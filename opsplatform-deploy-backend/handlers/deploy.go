@@ -81,13 +81,13 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 
 	retry, interval, timeoutMin := loadPollCfg()
 	modNamesJSON := marshalJSON(keysOf(pending))
-	depID, err := insertPendingDeployment(req.ProjectEnvID, models.ActionUpdateImage, nil, modNamesJSON, "system")
+	depID, err := insertPendingDeployment(req.ProjectEnvID, models.ActionUpdateImage, nil, modNamesJSON, getOperator(r))
 	if err != nil {
 		JSONError(w, 50000, "insert deployment: "+err.Error())
 		return
 	}
 
-	go runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, nil)
+	go runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, nil, getOperator(r))
 
 	JSONSuccess(w, map[string]interface{}{
 		"deployment_id": depID,
@@ -116,13 +116,15 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40400, "project_env not found")
 		return
 	}
-	if p.ArgocdURL == "" || p.ArgocdToken == "" {
-		JSONError(w, 40001, "argocd_url/token 未配置")
+	argoURL, argoToken, err := ResolveArgocdForEnv(p)
+	if err != nil {
+		JSONError(w, 40001, err.Error())
 		return
 	}
 	modules := loadModulesMap(req.ProjectEnvID, p.ChartBasePath)
 	modNamesJSON := marshalJSON(req.ModuleNames)
-	depID, err := insertPendingDeployment(req.ProjectEnvID, models.ActionRestart, nil, modNamesJSON, "system")
+	operator := getOperator(r)
+	depID, err := insertPendingDeployment(req.ProjectEnvID, models.ActionRestart, nil, modNamesJSON, operator)
 	if err != nil {
 		JSONError(w, 50000, "insert deployment: "+err.Error())
 		return
@@ -138,12 +140,12 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 			Namespace:      p.Namespace,
 			Modules:        modules,
 			ModuleNames:    req.ModuleNames,
-			ArgocdClient:   services.NewArgocdClient(p.ArgocdURL, p.ArgocdToken),
+			ArgocdClient:   services.NewArgocdClient(argoURL, argoToken),
 		})
 		argoJSON := marshalJSON(res.ArgocdResults)
 		_, _ = database.DB.Exec(`UPDATE deployment SET argocd_results=?, status=?, duration_sec=? WHERE id=?`,
 			argoJSON, res.Status, int(time.Since(start).Seconds()), depID)
-		sendRestartNotify(p, depID, res)
+		sendRestartNotify(p, depID, operator, res)
 	}()
 
 	JSONSuccess(w, map[string]interface{}{"deployment_id": depID, "status": "pending"})
@@ -228,13 +230,13 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 
 	modNamesJSON := marshalJSON(keysOf(pending))
 	ref := req.RefDeploymentID
-	depID, err := insertPendingDeployment(peID, models.ActionRollback, &ref, modNamesJSON, "system")
+	depID, err := insertPendingDeployment(peID, models.ActionRollback, &ref, modNamesJSON, getOperator(r))
 	if err != nil {
 		JSONError(w, 50000, "insert deployment: "+err.Error())
 		return
 	}
 
-	go runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, &ref)
+	go runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, &ref, getOperator(r))
 
 	JSONSuccess(w, map[string]interface{}{
 		"deployment_id": depID,
@@ -245,23 +247,33 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 // --- helpers ---
 
 func loadModulesMap(projectEnvID int64, chartBasePath string) map[string]services.Module {
-	rows, err := database.DB.Query(`SELECT name, current_tag, argocd_app_name FROM module WHERE project_env_id=?`, projectEnvID)
+	rows, err := database.DB.Query(`SELECT name, current_tag, argocd_app_name, IFNULL(namespace,'') FROM module WHERE project_env_id=?`, projectEnvID)
 	if err != nil {
 		return map[string]services.Module{}
 	}
 	defer rows.Close()
 	out := map[string]services.Module{}
 	for rows.Next() {
-		var name, tag, app string
-		_ = rows.Scan(&name, &tag, &app)
+		var name, tag, app, ns string
+		_ = rows.Scan(&name, &tag, &app, &ns)
 		out[name] = services.Module{
 			Name:         name,
 			CurrentTag:   tag,
 			ChartRelPath: services.BuildValuesPath(chartBasePath, name),
 			ArgocdApp:    app,
+			Namespace:    ns,
 		}
 	}
 	return out
+}
+
+// getOperator 从请求 header 读取操作人（X-Operator），默认 system
+func getOperator(r *http.Request) string {
+	op := r.Header.Get("X-Operator")
+	if op == "" {
+		return "system"
+	}
+	return op
 }
 
 func loadPollCfg() (retry, interval, timeoutMin int) {
@@ -303,7 +315,7 @@ func insertPendingDeployment(peID int64, action string, refID *int64, modNamesJS
 
 // runUpdateImageAsync 后台跑完整的发布流水线，update-image 和 rollback 共用
 func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]string, modules map[string]services.Module,
-	gitRetry, pollInterval, pollTimeoutMin int, _refDepID *int64) {
+	gitRetry, pollInterval, pollTimeoutMin int, _refDepID *int64, operator string) {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(pollTimeoutMin+2)*time.Minute)
 	defer cancel()
@@ -311,8 +323,10 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 	gs := getGitService()
 	ds := services.NewDeployService(gs)
 	var argoClient *services.ArgocdClient
-	if p.AutoSync == 1 && p.ArgocdURL != "" && p.ArgocdToken != "" {
-		argoClient = services.NewArgocdClient(p.ArgocdURL, p.ArgocdToken)
+	if p.AutoSync == 1 {
+		if argoURL, argoToken, err := ResolveArgocdForEnv(p); err == nil {
+			argoClient = services.NewArgocdClient(argoURL, argoToken)
+		}
 	}
 	res := ds.UpdateImage(ctx, services.UpdateImageInput{
 		ProjectEnvName:  p.Name,
@@ -320,7 +334,7 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 		GitBranch:       p.GitBranch,
 		ChartBasePath:   p.ChartBasePath,
 		GitRetry:        gitRetry,
-		Operator:        "system",
+		Operator:        operator,
 		Pending:         pending,
 		Modules:         modules,
 		AutoSync:        p.AutoSync == 1,
@@ -342,7 +356,7 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 		_, _ = database.DB.Exec(`UPDATE module SET current_tag=? WHERE project_env_id=? AND name=?`, c.ToTag, p.ID, c.Module)
 	}
 
-	sendUpdateImageNotify(p, depID, res)
+	sendUpdateImageNotify(p, depID, operator, res)
 }
 
 // --- Lark notify ---
@@ -375,17 +389,22 @@ func larkColorForStatus(status string) (color, title string) {
 	}
 }
 
-func sendUpdateImageNotify(p *models.ProjectEnv, depID int64, res *services.UpdateImageResult) {
+func sendUpdateImageNotify(p *models.ProjectEnv, depID int64, operator string, res *services.UpdateImageResult) {
 	webhook, secret := resolveLarkTarget(p)
 	if webhook == "" {
 		return
 	}
 	color, title := larkColorForStatus(res.Status)
-	body := fmt.Sprintf("**环境**: %s (%s)\n**模块数**: %d\n**提交**: %s",
-		p.Name, p.EnvType, len(res.Changes), res.GitCommit)
+	opDisplay := operator
+	if operator != "" && operator != "system" {
+		opDisplay = operator
+	}
+	body := fmt.Sprintf("**环境**: %s (%s)\n**模块数**: %d\n**提交**: %s\n**操作人**: %s",
+		p.Name, p.EnvType, len(res.Changes), res.GitCommit, opDisplay)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, "查看 commit", res.GitCommitURL)
+	atID := LookupAccountLarkID(operator)
+	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, "查看 commit", res.GitCommitURL, atID)
 	status := "success"
 	if err != nil {
 		status = "failed"
@@ -393,17 +412,19 @@ func sendUpdateImageNotify(p *models.ProjectEnv, depID int64, res *services.Upda
 	_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, status, depID)
 }
 
-func sendRestartNotify(p *models.ProjectEnv, depID int64, res *services.RestartResult) {
+func sendRestartNotify(p *models.ProjectEnv, depID int64, operator string, res *services.RestartResult) {
 	webhook, secret := resolveLarkTarget(p)
 	if webhook == "" {
 		return
 	}
 	color, title := larkColorForStatus(res.Status)
 	title = "🔄 " + title + "（重启）"
-	body := fmt.Sprintf("**环境**: %s (%s)\n**模块数**: %d", p.Name, p.EnvType, len(res.ArgocdResults))
+	body := fmt.Sprintf("**环境**: %s (%s)\n**模块数**: %d\n**操作人**: %s",
+		p.Name, p.EnvType, len(res.ArgocdResults), operator)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, "", "")
+	atID := LookupAccountLarkID(operator)
+	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, "", "", atID)
 	status := "success"
 	if err != nil {
 		status = "failed"

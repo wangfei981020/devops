@@ -17,21 +17,45 @@ type GlobalConfig struct {
 }
 
 type ProjectEnv struct {
-	ID            int64     `json:"id"`
-	Name          string    `json:"name"`
-	DisplayName   string    `json:"display_name"`
-	EnvType       string    `json:"env_type"` // "uat" | "prod"
-	GitRepo       string    `json:"git_repo"`
-	GitBranch     string    `json:"git_branch"`
-	ChartBasePath string    `json:"chart_base_path"`
-	Namespace     string    `json:"namespace"`
-	ArgocdURL     string    `json:"argocd_url"`
-	ArgocdToken   string    `json:"argocd_token,omitempty"`
-	LarkWebhook   string    `json:"lark_webhook"`
-	LarkSecret    string    `json:"lark_secret,omitempty"`
-	AutoSync      int       `json:"auto_sync"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID               int64     `json:"id"`
+	Name             string    `json:"name"`
+	DisplayName      string    `json:"display_name"`
+	EnvType          string    `json:"env_type"` // "uat" | "prod"
+	GitRepo          string    `json:"git_repo"`
+	GitBranch        string    `json:"git_branch"`
+	ChartBasePath    string    `json:"chart_base_path"`
+	Namespace        string    `json:"namespace"` // 遗留字段（默认 namespace）
+	ArgocdURL        string    `json:"argocd_url,omitempty"`   // 遗留字段
+	ArgocdToken      string    `json:"argocd_token,omitempty"` // 遗留字段
+	ArgocdInstanceID *int64    `json:"argocd_instance_id"`
+	LarkWebhook      string    `json:"lark_webhook"`
+	LarkSecret       string    `json:"lark_secret,omitempty"`
+	AutoSync         int       `json:"auto_sync"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// Account 账号（身份选择 / Lark 艾特）
+type Account struct {
+	ID          int64     `json:"id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"display_name"`
+	LarkID      string    `json:"lark_id"`
+	Email       string    `json:"email"`
+	Remark      string    `json:"remark"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// ArgocdInstance ArgoCD 实例
+type ArgocdInstance struct {
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	URL         string    `json:"url"`
+	Token       string    `json:"token,omitempty"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type Module struct {
@@ -41,6 +65,7 @@ type Module struct {
 	CurrentTag      string     `json:"current_tag"`
 	ImageRepository string     `json:"image_repository"`
 	ArgocdAppName   string     `json:"argocd_app_name"`
+	Namespace       string     `json:"namespace"` // 该模块实际部署的 K8s namespace
 	LastScannedAt   *time.Time `json:"last_scanned_at"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`

@@ -54,6 +54,17 @@ func main() {
 	api.HandleFunc("/projects/{id}", handlers.HandleUpdateProject).Methods("PUT", "OPTIONS")
 	api.HandleFunc("/projects/{id}", handlers.HandleDeleteProject).Methods("DELETE", "OPTIONS")
 
+	api.HandleFunc("/accounts", handlers.HandleListAccounts).Methods("GET", "OPTIONS")
+	api.HandleFunc("/accounts", handlers.HandleCreateAccount).Methods("POST", "OPTIONS")
+	api.HandleFunc("/accounts/{id}", handlers.HandleUpdateAccount).Methods("PUT", "OPTIONS")
+	api.HandleFunc("/accounts/{id}", handlers.HandleDeleteAccount).Methods("DELETE", "OPTIONS")
+
+	api.HandleFunc("/argocd-instances", handlers.HandleListArgocdInstances).Methods("GET", "OPTIONS")
+	api.HandleFunc("/argocd-instances", handlers.HandleCreateArgocdInstance).Methods("POST", "OPTIONS")
+	api.HandleFunc("/argocd-instances/{id}", handlers.HandleUpdateArgocdInstance).Methods("PUT", "OPTIONS")
+	api.HandleFunc("/argocd-instances/{id}", handlers.HandleDeleteArgocdInstance).Methods("DELETE", "OPTIONS")
+	api.HandleFunc("/argocd-instances/{id}/test", handlers.HandleTestArgocdInstance).Methods("POST", "OPTIONS")
+
 	api.HandleFunc("/project-envs", handlers.HandleListProjectEnvs).Methods("GET", "OPTIONS")
 	api.HandleFunc("/project-envs", handlers.HandleCreateProjectEnv).Methods("POST", "OPTIONS")
 	api.HandleFunc("/project-envs/{id}", handlers.HandleGetProjectEnv).Methods("GET", "OPTIONS")

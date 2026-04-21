@@ -15,7 +15,7 @@ func HandleListModules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := database.DB.Query(`SELECT id, project_env_id, name, current_tag, image_repository, argocd_app_name,
-		last_scanned_at, created_at, updated_at FROM module WHERE project_env_id=? ORDER BY name`, peID)
+		IFNULL(namespace,''), last_scanned_at, created_at, updated_at FROM module WHERE project_env_id=? ORDER BY name`, peID)
 	if err != nil {
 		JSONError(w, 50000, err.Error())
 		return
@@ -25,7 +25,7 @@ func HandleListModules(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var m models.Module
 		_ = rows.Scan(&m.ID, &m.ProjectEnvID, &m.Name, &m.CurrentTag, &m.ImageRepository, &m.ArgocdAppName,
-			&m.LastScannedAt, &m.CreatedAt, &m.UpdatedAt)
+			&m.Namespace, &m.LastScannedAt, &m.CreatedAt, &m.UpdatedAt)
 		list = append(list, m)
 	}
 	JSONSuccess(w, list)

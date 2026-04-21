@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -16,7 +17,8 @@ import (
 
 func HandleListProjectEnvs(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`SELECT id, name, display_name, env_type, git_repo, git_branch,
-		chart_base_path, namespace, argocd_url, argocd_token, lark_webhook, lark_secret, auto_sync, created_at, updated_at
+		chart_base_path, namespace, IFNULL(argocd_url,''), IFNULL(argocd_token,''), argocd_instance_id,
+		lark_webhook, lark_secret, auto_sync, created_at, updated_at
 		FROM project_env ORDER BY name`)
 	if err != nil {
 		JSONError(w, 50000, err.Error())
@@ -27,8 +29,8 @@ func HandleListProjectEnvs(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p models.ProjectEnv
 		_ = rows.Scan(&p.ID, &p.Name, &p.DisplayName, &p.EnvType, &p.GitRepo, &p.GitBranch,
-			&p.ChartBasePath, &p.Namespace, &p.ArgocdURL, &p.ArgocdToken, &p.LarkWebhook, &p.LarkSecret,
-			&p.AutoSync, &p.CreatedAt, &p.UpdatedAt)
+			&p.ChartBasePath, &p.Namespace, &p.ArgocdURL, &p.ArgocdToken, &p.ArgocdInstanceID,
+			&p.LarkWebhook, &p.LarkSecret, &p.AutoSync, &p.CreatedAt, &p.UpdatedAt)
 		p.ArgocdToken = maskToken(p.ArgocdToken)
 		p.LarkSecret = maskToken(p.LarkSecret)
 		list = append(list, p)
@@ -47,18 +49,17 @@ func HandleGetProjectEnv(w http.ResponseWriter, r *http.Request) {
 }
 
 type projectEnvReq struct {
-	Name          string `json:"name"`
-	DisplayName   string `json:"display_name"`
-	EnvType       string `json:"env_type"`
-	GitRepo       string `json:"git_repo"`
-	GitBranch     string `json:"git_branch"`
-	ChartBasePath string `json:"chart_base_path"`
-	Namespace     string `json:"namespace"`
-	ArgocdURL     string `json:"argocd_url"`
-	ArgocdToken   string `json:"argocd_token"`
-	LarkWebhook   string `json:"lark_webhook"`
-	LarkSecret    string `json:"lark_secret"`
-	AutoSync      int    `json:"auto_sync"`
+	Name             string `json:"name"`
+	DisplayName      string `json:"display_name"`
+	EnvType          string `json:"env_type"`
+	GitRepo          string `json:"git_repo"`
+	GitBranch        string `json:"git_branch"`
+	ChartBasePath    string `json:"chart_base_path"`
+	Namespace        string `json:"namespace"`
+	ArgocdInstanceID *int64 `json:"argocd_instance_id"`
+	LarkWebhook      string `json:"lark_webhook"`
+	LarkSecret       string `json:"lark_secret"`
+	AutoSync         int    `json:"auto_sync"`
 }
 
 func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
@@ -80,13 +81,12 @@ func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
 	if req.EnvType == models.EnvPROD {
 		req.AutoSync = 0
 	}
-	encArgoToken, _ := crypto.Encrypt(req.ArgocdToken)
 	encLarkSecret, _ := crypto.Encrypt(req.LarkSecret)
 	res, err := database.DB.Exec(`INSERT INTO project_env
-		(name, display_name, env_type, git_repo, git_branch, chart_base_path, namespace, argocd_url, argocd_token,
-		 lark_webhook, lark_secret, auto_sync) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		(name, display_name, env_type, git_repo, git_branch, chart_base_path, namespace, argocd_instance_id,
+		 lark_webhook, lark_secret, auto_sync) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.DisplayName, req.EnvType, req.GitRepo, req.GitBranch, req.ChartBasePath,
-		req.Namespace, req.ArgocdURL, encArgoToken, req.LarkWebhook, encLarkSecret, req.AutoSync)
+		req.Namespace, req.ArgocdInstanceID, req.LarkWebhook, encLarkSecret, req.AutoSync)
 	if err != nil {
 		if strings.Contains(err.Error(), "Duplicate") {
 			JSONError(w, 40900, "name 已存在")
@@ -109,14 +109,9 @@ func HandleUpdateProjectEnv(w http.ResponseWriter, r *http.Request) {
 		req.AutoSync = 0
 	}
 	sets := []string{"display_name=?", "env_type=?", "git_repo=?", "git_branch=?", "chart_base_path=?",
-		"namespace=?", "argocd_url=?", "lark_webhook=?", "auto_sync=?"}
+		"namespace=?", "argocd_instance_id=?", "lark_webhook=?", "auto_sync=?"}
 	args := []interface{}{req.DisplayName, req.EnvType, req.GitRepo, req.GitBranch, req.ChartBasePath,
-		req.Namespace, req.ArgocdURL, req.LarkWebhook, req.AutoSync}
-	if req.ArgocdToken != "" {
-		enc, _ := crypto.Encrypt(req.ArgocdToken)
-		sets = append(sets, "argocd_token=?")
-		args = append(args, enc)
-	}
+		req.Namespace, req.ArgocdInstanceID, req.LarkWebhook, req.AutoSync}
 	if req.LarkSecret != "" {
 		enc, _ := crypto.Encrypt(req.LarkSecret)
 		sets = append(sets, "lark_secret=?")
@@ -174,11 +169,12 @@ func HandleTestProjectEnvArgocd(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40400, "project_env not found")
 		return
 	}
-	if p.ArgocdURL == "" || p.ArgocdToken == "" {
-		JSONError(w, 40001, "argocd_url/token 未配置")
+	argoURL, argoToken, err := ResolveArgocdForEnv(p)
+	if err != nil {
+		JSONError(w, 40001, err.Error())
 		return
 	}
-	c := services.NewArgocdClient(p.ArgocdURL, p.ArgocdToken)
+	c := services.NewArgocdClient(argoURL, argoToken)
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	version, err := c.Ping(ctx)
@@ -187,6 +183,23 @@ func HandleTestProjectEnvArgocd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSONSuccess(w, map[string]interface{}{"ok": true, "version": version})
+}
+
+// ResolveArgocdForEnv 返回 project_env 实际使用的 ArgoCD URL+Token
+// 优先用 argocd_instance_id 引用的实例，否则回退到遗留字段
+func ResolveArgocdForEnv(p *models.ProjectEnv) (url, token string, err error) {
+	if p.ArgocdInstanceID != nil && *p.ArgocdInstanceID > 0 {
+		inst, e := LoadArgocdInstanceDecrypted(*p.ArgocdInstanceID)
+		if e != nil {
+			return "", "", fmt.Errorf("argocd_instance %d 找不到", *p.ArgocdInstanceID)
+		}
+		return inst.URL, inst.Token, nil
+	}
+	// 回退（遗留数据）
+	if p.ArgocdURL != "" {
+		return p.ArgocdURL, p.ArgocdToken, nil
+	}
+	return "", "", fmt.Errorf("未配置 ArgoCD 实例")
 }
 
 // --- scan modules ---
@@ -246,13 +259,17 @@ func HandleScanModules(w http.ResponseWriter, r *http.Request) {
 	for _, s := range scanned {
 		seen[s.Name] = true
 		appName := s.Name + "-" + p.Name
+		ns := s.Namespace
+		if ns == "" {
+			ns = p.Namespace // 回退到 project_env.namespace
+		}
 		if mid, ok := existing[s.Name]; ok {
-			_, _ = database.DB.Exec(`UPDATE module SET current_tag=?, image_repository=?, argocd_app_name=?, last_scanned_at=NOW() WHERE id=?`,
-				s.CurrentTag, s.ImageRepository, appName, mid)
+			_, _ = database.DB.Exec(`UPDATE module SET current_tag=?, image_repository=?, argocd_app_name=?, namespace=?, last_scanned_at=NOW() WHERE id=?`,
+				s.CurrentTag, s.ImageRepository, appName, ns, mid)
 		} else {
-			_, _ = database.DB.Exec(`INSERT INTO module (project_env_id, name, current_tag, image_repository, argocd_app_name, last_scanned_at)
-				VALUES (?, ?, ?, ?, ?, NOW())`,
-				id, s.Name, s.CurrentTag, s.ImageRepository, appName)
+			_, _ = database.DB.Exec(`INSERT INTO module (project_env_id, name, current_tag, image_repository, argocd_app_name, namespace, last_scanned_at)
+				VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+				id, s.Name, s.CurrentTag, s.ImageRepository, appName, ns)
 		}
 	}
 	for name, mid := range existing {
@@ -278,11 +295,12 @@ func loadProjectEnvMasked(id int64) (*models.ProjectEnv, error) {
 func loadProjectEnvRaw(id int64) (*models.ProjectEnv, error) {
 	var p models.ProjectEnv
 	err := database.DB.QueryRow(`SELECT id, name, display_name, env_type, git_repo, git_branch,
-		chart_base_path, namespace, argocd_url, argocd_token, lark_webhook, lark_secret, auto_sync, created_at, updated_at
+		chart_base_path, namespace, IFNULL(argocd_url,''), IFNULL(argocd_token,''), argocd_instance_id,
+		lark_webhook, lark_secret, auto_sync, created_at, updated_at
 		FROM project_env WHERE id=?`, id).
 		Scan(&p.ID, &p.Name, &p.DisplayName, &p.EnvType, &p.GitRepo, &p.GitBranch,
-			&p.ChartBasePath, &p.Namespace, &p.ArgocdURL, &p.ArgocdToken, &p.LarkWebhook, &p.LarkSecret,
-			&p.AutoSync, &p.CreatedAt, &p.UpdatedAt)
+			&p.ChartBasePath, &p.Namespace, &p.ArgocdURL, &p.ArgocdToken, &p.ArgocdInstanceID,
+			&p.LarkWebhook, &p.LarkSecret, &p.AutoSync, &p.CreatedAt, &p.UpdatedAt)
 	return &p, err
 }
 

@@ -6,6 +6,16 @@ const http = axios.create({
   timeout: 30000,
 })
 
+// 请求拦截器：自动加 X-Operator header
+http.interceptors.request.use((cfg) => {
+  const identity = localStorage.getItem('deploy_identity')
+  if (identity) {
+    cfg.headers = cfg.headers || {}
+    cfg.headers['X-Operator'] = identity
+  }
+  return cfg
+})
+
 http.interceptors.response.use(
   (resp) => {
     if (resp.data && resp.data.code !== 0) {
@@ -25,6 +35,19 @@ http.interceptors.response.use(
 export const getGlobalConfig = () => http.get('/global-config')
 export const updateGlobalConfig = (data) => http.put('/global-config', data)
 export const testGitlab = (data) => http.post('/global-config/test-gitlab', data || {})
+
+// Accounts（身份选择 / Lark 艾特）
+export const listAccounts = () => http.get('/accounts')
+export const createAccount = (data) => http.post('/accounts', data)
+export const updateAccount = (id, data) => http.put(`/accounts/${id}`, data)
+export const deleteAccount = (id) => http.delete(`/accounts/${id}`)
+
+// ArgoCD Instances
+export const listArgocdInstances = () => http.get('/argocd-instances')
+export const createArgocdInstance = (data) => http.post('/argocd-instances', data)
+export const updateArgocdInstance = (id, data) => http.put(`/argocd-instances/${id}`, data)
+export const deleteArgocdInstance = (id) => http.delete(`/argocd-instances/${id}`)
+export const testArgocdInstance = (id) => http.post(`/argocd-instances/${id}/test`)
 
 // Projects (空项目注册表 + 派生)
 export const listProjects = () => http.get('/projects')

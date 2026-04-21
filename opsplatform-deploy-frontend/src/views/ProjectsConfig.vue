@@ -223,19 +223,19 @@
         </div>
 
         <div class="sec-lbl">Kubernetes · ArgoCD</div>
-        <div class="row2">
-          <div class="field">
-            <label>K8s Namespace</label>
-            <input v-model="envForm.namespace" class="inp mono" />
-          </div>
-          <div class="field">
-            <label>ArgoCD URL</label>
-            <input v-model="envForm.argocd_url" class="inp mono" />
-          </div>
+        <div class="field">
+          <label>K8s Namespace（默认）<span class="hint">模块扫描后会从 -apps/values.yaml 读各自的 namespace，这里只是默认值</span></label>
+          <input v-model="envForm.namespace" class="inp mono" placeholder="如: g32-uat（模块可有自己的 ns）" />
         </div>
         <div class="field">
-          <label>ArgoCD Token <span class="hint">{{ envDlgIsEdit ? '留空则不更新' : '必填' }}</span></label>
-          <input v-model="envForm.argocd_token" type="password" class="inp" :placeholder="envDlgIsEdit ? '••••••••' : '粘贴 ArgoCD token'" />
+          <label>ArgoCD 实例 <span class="hint">从系统设置里选</span></label>
+          <select v-model="envForm.argocd_instance_id" class="inp">
+            <option :value="null">— 未选 —</option>
+            <option v-for="i in argoInstances" :key="i.id" :value="i.id">{{ i.name }} · {{ i.url }}</option>
+          </select>
+          <div v-if="!argoInstances.length" class="hint-text" style="color:var(--warning);margin-top:4px">
+            还没有 ArgoCD 实例，去「系统设置 → ArgoCD 实例」添加
+          </div>
         </div>
         <div class="field">
           <label>Auto Sync</label>
@@ -279,7 +279,8 @@ import {
   listProjects, createProject, updateProject, deleteProject,
   listProjectEnvs, createProjectEnv, updateProjectEnv, deleteProjectEnv,
   testProjectEnvGit, testProjectEnvArgocd,
-  listModules, listDeployments
+  listModules, listDeployments,
+  listArgocdInstances
 } from '../api'
 
 const projects = ref([])  // [{id, name, display_name, description, env_count, in_db}]
@@ -307,10 +308,11 @@ const envEditingID = ref(null)
 const blankEnv = () => ({
   project_name: '', display_name: '', env_type: 'uat',
   git_repo: '', git_branch: 'main', chart_base_path: '',
-  namespace: '', argocd_url: '', argocd_token: '',
+  namespace: '', argocd_instance_id: null,
   lark_webhook: '', auto_sync: 1
 })
 const envForm = reactive(blankEnv())
+const argoInstances = ref([])
 
 function projectOf(e) {
   const suffix = '-' + e.env_type
@@ -389,9 +391,10 @@ function toggle(pn) { opened[pn] = !opened[pn] }
 async function load() {
   loading.value = true
   try {
-    const [ps, es] = await Promise.all([listProjects(), listProjectEnvs()])
+    const [ps, es, ai] = await Promise.all([listProjects(), listProjectEnvs(), listArgocdInstances()])
     projects.value = ps || []
     envs.value = es || []
+    argoInstances.value = ai || []
     projects.value.forEach(p => { if (opened[p.name] === undefined) opened[p.name] = true })
 
     // 加载每个 env 的 stats
@@ -474,8 +477,7 @@ function openEditEnv(e) {
     git_branch: e.git_branch || 'main',
     chart_base_path: e.chart_base_path || '',
     namespace: e.namespace || '',
-    argocd_url: e.argocd_url || '',
-    argocd_token: '',
+    argocd_instance_id: e.argocd_instance_id || null,
     lark_webhook: e.lark_webhook || '',
     auto_sync: e.auto_sync
   })
@@ -497,8 +499,7 @@ async function onSaveEnv() {
     git_branch: envForm.git_branch.trim() || 'main',
     chart_base_path: envForm.chart_base_path.trim(),
     namespace: envForm.namespace.trim(),
-    argocd_url: envForm.argocd_url.trim(),
-    argocd_token: envForm.argocd_token,
+    argocd_instance_id: envForm.argocd_instance_id || null,
     lark_webhook: envForm.lark_webhook.trim(),
     auto_sync: envForm.auto_sync
   }

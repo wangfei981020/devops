@@ -16,9 +16,22 @@ import (
 // SendLarkCard 发送飞书 interactive 卡片
 // color: "green"|"red"|"orange"|"blue"
 // linkURL 可空；不空则底部加 "查看" 按钮
-func SendLarkCard(ctx context.Context, webhook, secret, title, body, color, linkLabel, linkURL string) error {
+// atLarkIDs 可空；不空则在 body 顶部艾特这些用户
+func SendLarkCard(ctx context.Context, webhook, secret, title, body, color, linkLabel, linkURL string, atLarkIDs ...string) error {
 	if webhook == "" {
 		return fmt.Errorf("empty webhook")
+	}
+	// 把 @ 提及插到 body 顶部（飞书 lark_md 支持 <at id="xxx"></at>）
+	if len(atLarkIDs) > 0 {
+		ats := ""
+		for _, id := range atLarkIDs {
+			if id != "" {
+				ats += fmt.Sprintf(`<at id="%s"></at> `, id)
+			}
+		}
+		if ats != "" {
+			body = ats + "\n" + body
+		}
 	}
 	payload := map[string]interface{}{
 		"msg_type": "interactive",
