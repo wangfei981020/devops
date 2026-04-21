@@ -24,25 +24,47 @@ type ProjectEnv struct {
 	GitRepo          string    `json:"git_repo"`
 	GitBranch        string    `json:"git_branch"`
 	ChartBasePath    string    `json:"chart_base_path"`
-	Namespace        string    `json:"namespace"` // 遗留字段（默认 namespace）
+	Namespace        string    `json:"namespace"` // 默认 namespace（模块可覆盖）
 	ArgocdURL        string    `json:"argocd_url,omitempty"`   // 遗留字段
 	ArgocdToken      string    `json:"argocd_token,omitempty"` // 遗留字段
 	ArgocdInstanceID *int64    `json:"argocd_instance_id"`
-	LarkWebhook      string    `json:"lark_webhook"`
-	LarkSecret       string    `json:"lark_secret,omitempty"`
+	LarkWebhook      string    `json:"lark_webhook,omitempty"` // 遗留字段
+	LarkSecret       string    `json:"lark_secret,omitempty"`  // 遗留字段
+	LarkBotID        *int64    `json:"lark_bot_id"`
 	AutoSync         int       `json:"auto_sync"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-// Account 账号（身份选择 / Lark 艾特）
+// Account 平台登录账户
 type Account struct {
 	ID          int64     `json:"id"`
 	Username    string    `json:"username"`
 	DisplayName string    `json:"display_name"`
-	LarkID      string    `json:"lark_id"`
+	LarkID      string    `json:"lark_id,omitempty"` // 保留兼容字段
 	Email       string    `json:"email"`
 	Remark      string    `json:"remark"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// Contact 通知人（Lark 艾特专用）
+type Contact struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	LarkID    string    `json:"lark_id"`
+	Remark    string    `json:"remark"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// LarkBot Lark 机器人
+type LarkBot struct {
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Webhook     string    `json:"webhook"`
+	Secret      string    `json:"secret,omitempty"`
+	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }

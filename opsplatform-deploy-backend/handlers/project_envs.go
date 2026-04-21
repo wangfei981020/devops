@@ -18,7 +18,7 @@ import (
 func HandleListProjectEnvs(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`SELECT id, name, display_name, env_type, git_repo, git_branch,
 		chart_base_path, namespace, IFNULL(argocd_url,''), IFNULL(argocd_token,''), argocd_instance_id,
-		lark_webhook, lark_secret, auto_sync, created_at, updated_at
+		lark_webhook, lark_secret, lark_bot_id, auto_sync, created_at, updated_at
 		FROM project_env ORDER BY name`)
 	if err != nil {
 		JSONError(w, 50000, err.Error())
@@ -30,7 +30,7 @@ func HandleListProjectEnvs(w http.ResponseWriter, r *http.Request) {
 		var p models.ProjectEnv
 		_ = rows.Scan(&p.ID, &p.Name, &p.DisplayName, &p.EnvType, &p.GitRepo, &p.GitBranch,
 			&p.ChartBasePath, &p.Namespace, &p.ArgocdURL, &p.ArgocdToken, &p.ArgocdInstanceID,
-			&p.LarkWebhook, &p.LarkSecret, &p.AutoSync, &p.CreatedAt, &p.UpdatedAt)
+			&p.LarkWebhook, &p.LarkSecret, &p.LarkBotID, &p.AutoSync, &p.CreatedAt, &p.UpdatedAt)
 		p.ArgocdToken = maskToken(p.ArgocdToken)
 		p.LarkSecret = maskToken(p.LarkSecret)
 		list = append(list, p)
@@ -57,6 +57,7 @@ type projectEnvReq struct {
 	ChartBasePath    string `json:"chart_base_path"`
 	Namespace        string `json:"namespace"`
 	ArgocdInstanceID *int64 `json:"argocd_instance_id"`
+	LarkBotID        *int64 `json:"lark_bot_id"`
 	LarkWebhook      string `json:"lark_webhook"`
 	LarkSecret       string `json:"lark_secret"`
 	AutoSync         int    `json:"auto_sync"`
@@ -84,9 +85,9 @@ func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
 	encLarkSecret, _ := crypto.Encrypt(req.LarkSecret)
 	res, err := database.DB.Exec(`INSERT INTO project_env
 		(name, display_name, env_type, git_repo, git_branch, chart_base_path, namespace, argocd_instance_id,
-		 lark_webhook, lark_secret, auto_sync) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		 lark_bot_id, lark_webhook, lark_secret, auto_sync) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.DisplayName, req.EnvType, req.GitRepo, req.GitBranch, req.ChartBasePath,
-		req.Namespace, req.ArgocdInstanceID, req.LarkWebhook, encLarkSecret, req.AutoSync)
+		req.Namespace, req.ArgocdInstanceID, req.LarkBotID, req.LarkWebhook, encLarkSecret, req.AutoSync)
 	if err != nil {
 		if strings.Contains(err.Error(), "Duplicate") {
 			JSONError(w, 40900, "name 已存在")
@@ -109,9 +110,9 @@ func HandleUpdateProjectEnv(w http.ResponseWriter, r *http.Request) {
 		req.AutoSync = 0
 	}
 	sets := []string{"display_name=?", "env_type=?", "git_repo=?", "git_branch=?", "chart_base_path=?",
-		"namespace=?", "argocd_instance_id=?", "lark_webhook=?", "auto_sync=?"}
+		"namespace=?", "argocd_instance_id=?", "lark_bot_id=?", "lark_webhook=?", "auto_sync=?"}
 	args := []interface{}{req.DisplayName, req.EnvType, req.GitRepo, req.GitBranch, req.ChartBasePath,
-		req.Namespace, req.ArgocdInstanceID, req.LarkWebhook, req.AutoSync}
+		req.Namespace, req.ArgocdInstanceID, req.LarkBotID, req.LarkWebhook, req.AutoSync}
 	if req.LarkSecret != "" {
 		enc, _ := crypto.Encrypt(req.LarkSecret)
 		sets = append(sets, "lark_secret=?")
@@ -224,28 +225,38 @@ func getGitService() *services.GitService {
 
 func HandleScanModules(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
+	count, err := ScanModulesByProjectEnvID(r.Context(), id)
+	if err != nil {
+		if err.Error() == "project_env not found" {
+			JSONError(w, 40400, err.Error())
+			return
+		}
+		JSONError(w, 50000, err.Error())
+		return
+	}
+	JSONSuccess(w, map[string]interface{}{"count": count})
+}
+
+// ScanModulesByProjectEnvID 抽出的内部版本，给 scheduler 直接调用（跳过 HTTP 层）
+func ScanModulesByProjectEnvID(ctx context.Context, id int64) (int, error) {
 	p, err := LoadProjectEnvDecrypted(id)
 	if err != nil {
-		JSONError(w, 40400, "project_env not found")
-		return
+		return 0, fmt.Errorf("project_env not found")
 	}
 	gs := getGitService()
 	gs.Locks.Acquire(p.Name)
 	defer gs.Locks.Release(p.Name)
 
-	ctx, cancel := services.GitCtx(r.Context(), 60)
+	gitCtx, cancel := services.GitCtx(ctx, 60)
 	defer cancel()
-	if err := gs.EnsureClone(ctx, p.Name, p.GitRepo, p.GitBranch); err != nil {
-		JSONError(w, 50001, "git: "+err.Error())
-		return
+	if err := gs.EnsureClone(gitCtx, p.Name, p.GitRepo, p.GitBranch); err != nil {
+		return 0, fmt.Errorf("git: %w", err)
 	}
 	chartDir := gs.RepoPath(p.Name) + "/" + p.ChartBasePath
 	scanned, err := services.ScanModulesFromDir(chartDir)
 	if err != nil {
-		JSONError(w, 50000, "scan: "+err.Error())
-		return
+		return 0, fmt.Errorf("scan: %w", err)
 	}
-	// Upsert to DB
 	existing := map[string]int64{}
 	rows, _ := database.DB.Query(`SELECT id, name FROM module WHERE project_env_id=?`, id)
 	for rows.Next() {
@@ -261,7 +272,7 @@ func HandleScanModules(w http.ResponseWriter, r *http.Request) {
 		appName := s.Name + "-" + p.Name
 		ns := s.Namespace
 		if ns == "" {
-			ns = p.Namespace // 回退到 project_env.namespace
+			ns = p.Namespace
 		}
 		if mid, ok := existing[s.Name]; ok {
 			_, _ = database.DB.Exec(`UPDATE module SET current_tag=?, image_repository=?, argocd_app_name=?, namespace=?, last_scanned_at=NOW() WHERE id=?`,
@@ -277,7 +288,7 @@ func HandleScanModules(w http.ResponseWriter, r *http.Request) {
 			_, _ = database.DB.Exec(`DELETE FROM module WHERE id=?`, mid)
 		}
 	}
-	JSONSuccess(w, map[string]interface{}{"count": len(scanned)})
+	return len(scanned), nil
 }
 
 // --- load helpers ---
@@ -296,11 +307,11 @@ func loadProjectEnvRaw(id int64) (*models.ProjectEnv, error) {
 	var p models.ProjectEnv
 	err := database.DB.QueryRow(`SELECT id, name, display_name, env_type, git_repo, git_branch,
 		chart_base_path, namespace, IFNULL(argocd_url,''), IFNULL(argocd_token,''), argocd_instance_id,
-		lark_webhook, lark_secret, auto_sync, created_at, updated_at
+		lark_webhook, lark_secret, lark_bot_id, auto_sync, created_at, updated_at
 		FROM project_env WHERE id=?`, id).
 		Scan(&p.ID, &p.Name, &p.DisplayName, &p.EnvType, &p.GitRepo, &p.GitBranch,
 			&p.ChartBasePath, &p.Namespace, &p.ArgocdURL, &p.ArgocdToken, &p.ArgocdInstanceID,
-			&p.LarkWebhook, &p.LarkSecret, &p.AutoSync, &p.CreatedAt, &p.UpdatedAt)
+			&p.LarkWebhook, &p.LarkSecret, &p.LarkBotID, &p.AutoSync, &p.CreatedAt, &p.UpdatedAt)
 	return &p, err
 }
 

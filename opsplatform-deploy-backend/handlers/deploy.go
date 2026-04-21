@@ -267,8 +267,11 @@ func loadModulesMap(projectEnvID int64, chartBasePath string) map[string]service
 	return out
 }
 
-// getOperator 从请求 header 读取操作人（X-Operator），默认 system
+// getOperator: 优先从 JWT context 拿，其次 X-Operator header，最后 system
 func getOperator(r *http.Request) string {
+	if u := UsernameFromCtx(r); u != "" {
+		return u
+	}
 	op := r.Header.Get("X-Operator")
 	if op == "" {
 		return "system"
@@ -361,18 +364,23 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 
 // --- Lark notify ---
 
+// resolveLarkTarget 解析出 webhook + 明文 secret
+// 优先级: 1) p.LarkBotID → lark_bot 表  2) 遗留字段 p.LarkWebhook/Secret  3) global_config 默认
 func resolveLarkTarget(p *models.ProjectEnv) (webhook, secret string) {
-	webhook = p.LarkWebhook
-	secret = p.LarkSecret
-	if webhook == "" {
-		var gw, gs string
-		_ = database.DB.QueryRow(`SELECT lark_default_webhook, lark_default_secret FROM global_config WHERE id=1`).Scan(&gw, &gs)
-		webhook = gw
-		dec, _ := crypto.Decrypt(gs)
-		secret = dec
-	} else {
-		secret, _ = crypto.Decrypt(secret)
+	if p.LarkBotID != nil && *p.LarkBotID > 0 {
+		if bot, err := LoadLarkBotDecrypted(*p.LarkBotID); err == nil {
+			return bot.Webhook, bot.Secret
+		}
 	}
+	if p.LarkWebhook != "" {
+		webhook = p.LarkWebhook
+		secret, _ = crypto.Decrypt(p.LarkSecret)
+		return
+	}
+	var gw, gs string
+	_ = database.DB.QueryRow(`SELECT lark_default_webhook, lark_default_secret FROM global_config WHERE id=1`).Scan(&gw, &gs)
+	webhook = gw
+	secret, _ = crypto.Decrypt(gs)
 	return
 }
 
@@ -403,7 +411,7 @@ func sendUpdateImageNotify(p *models.ProjectEnv, depID int64, operator string, r
 		p.Name, p.EnvType, len(res.Changes), res.GitCommit, opDisplay)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	atID := LookupAccountLarkID(operator)
+	atID := LookupContactLarkID(operator)
 	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, "查看 commit", res.GitCommitURL, atID)
 	status := "success"
 	if err != nil {
@@ -423,7 +431,7 @@ func sendRestartNotify(p *models.ProjectEnv, depID int64, operator string, res *
 		p.Name, p.EnvType, len(res.ArgocdResults), operator)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	atID := LookupAccountLarkID(operator)
+	atID := LookupContactLarkID(operator)
 	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, "", "", atID)
 	status := "success"
 	if err != nil {

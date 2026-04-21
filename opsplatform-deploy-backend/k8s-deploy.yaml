@@ -5,10 +5,26 @@ metadata:
   namespace: opsplatform
 type: Opaque
 stringData:
-  # 生产环境部署前请替换成 `openssl rand -base64 32` 生成的真实 key
+  # ========== 敏感 ==========
+  # AES 加密密钥（openssl rand -base64 32），丢失 = DB 里所有加密 token 解不出
   AES_KEY: "REPLACE_ME_WITH_openssl_rand_base64_32"
-  # mysql-deploy 容器对外暴露 13307，集群内通过 host.docker.internal 访问（Docker Desktop 特殊 DNS）
-  MYSQL_DSN: "deploy_user:123123@tcp(host.docker.internal:13307)/deploy_center?parseTime=true&charset=utf8mb4&loc=Local"
+  # JWT 签名密钥（openssl rand -base64 48），换了会使所有在线会话失效
+  JWT_SECRET: "REPLACE_ME_WITH_openssl_rand_base64_48"
+  # 运维平台跳转 token AES 解密 secret；留空走明文 JWT
+  APP_PORTAL_SECRET: ""
+  # ========== MySQL 连接 ==========
+  MYSQL_HOST: "host.docker.internal"
+  MYSQL_PORT: "13307"
+  MYSQL_USER: "deploy_user"
+  MYSQL_PASSWORD: "123123"
+  MYSQL_DATABASE: "deploy_center"
+  # ========== 非敏感（统一 Secret 管理方便运维） ==========
+  CORS_ORIGIN: "*"
+  SESSION_TIMEOUT: "180"
+  PORTAL_API_URL: "http://opsplatform-backend.opsplatform.svc.cluster.local:8080"
+  COOKIE_SECURE: "false"
+  COOKIE_SAMESITE: "lax"
+  GIT_CACHE_DIR: "/app/git-cache"
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -38,20 +54,14 @@ spec:
     spec:
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/opsplatform-deploy-backend:v33
+          image: localhost:8070/opsplatform/opsplatform-deploy-backend:v38
           imagePullPolicy: Always
           ports:
             - { name: http,   containerPort: 8080 }
             - { name: health, containerPort: 8081 }
-          env:
-            - name: AES_KEY
-              valueFrom: { secretKeyRef: { name: opsplatform-deploy-secret, key: AES_KEY } }
-            - name: MYSQL_DSN
-              valueFrom: { secretKeyRef: { name: opsplatform-deploy-secret, key: MYSQL_DSN } }
-            - name: GIT_CACHE_DIR
-              value: /app/git-cache
-            - name: CORS_ORIGIN
-              value: "*"
+          envFrom:
+            - secretRef:
+                name: opsplatform-deploy-secret
           volumeMounts:
             - { name: cache, mountPath: /app/git-cache }
           resources:

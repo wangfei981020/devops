@@ -29,6 +29,10 @@ func JSONError(w http.ResponseWriter, code int, msg string) {
 	switch code {
 	case 40000, 40001:
 		httpStatus = http.StatusBadRequest
+	case 40100:
+		httpStatus = http.StatusUnauthorized
+	case 40300:
+		httpStatus = http.StatusForbidden
 	case 40400:
 		httpStatus = http.StatusNotFound
 	case 40900:
