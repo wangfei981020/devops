@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"opsplatform-deploy-backend/config"
 	"opsplatform-deploy-backend/crypto"
 	"opsplatform-deploy-backend/database"
@@ -198,7 +199,9 @@ func startHealthServer(addr string) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	})
-	log.Printf("health listening on %s", addr)
+	// Prometheus 抓取 /metrics（和生产 Helm values.yaml 里的 prometheus.io/port=8088 对齐）
+	m.Handle("/metrics", promhttp.Handler())
+	log.Printf("Health/Metrics server on %s (/health, /ready, /metrics)", addr)
 	if err := http.ListenAndServe(addr, m); err != nil {
 		log.Printf("health server: %v", err)
 	}

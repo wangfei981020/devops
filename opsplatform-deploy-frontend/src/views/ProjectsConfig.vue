@@ -487,7 +487,8 @@ function openEditEnv(e) {
     namespace: e.namespace || '',
     argocd_instance_id: e.argocd_instance_id || null,
     lark_bot_id: e.lark_bot_id || null,
-    auto_sync: e.auto_sync
+    // PROD 后端强制 auto_sync=0，UI 也显示为关（避免显示/实际不一致）
+    auto_sync: e.env_type === 'prod' ? 0 : e.auto_sync
   })
   envDlgVis.value = true
 }

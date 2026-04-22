@@ -14,6 +14,6 @@ RUN apk upgrade --no-cache && \
     ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 WORKDIR /app
 COPY --from=builder /out/deploy-backend /app/deploy-backend
-EXPOSE 8080 8081
-ENV PORT=:8080 HEALTH_PORT=:8081 GIT_CACHE_DIR=/app/git-cache
+EXPOSE 8080 8088
+ENV PORT=:8080 HEALTH_PORT=:8088 GIT_CACHE_DIR=/app/git-cache
 CMD ["/app/deploy-backend"]

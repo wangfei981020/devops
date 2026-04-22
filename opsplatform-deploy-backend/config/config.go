@@ -30,7 +30,7 @@ func Load() *Config {
 
 	c := &Config{
 		Port:        getEnv("PORT", ":8080"),
-		HealthPort:  getEnv("HEALTH_PORT", ":8081"),
+		HealthPort:  getEnv("HEALTH_PORT", ":8088"),
 		MySQLDSN:    buildMySQLDSN(),
 		AESKey:      getEnv("AES_KEY", ""),
 		CORSOrigin:  getEnv("CORS_ORIGIN", ""),
