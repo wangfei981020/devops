@@ -154,18 +154,26 @@ func (g *GitService) ReadFile(projectEnvName, relPath string) ([]byte, error) {
 
 // CommitAll 在 clone 目录下 git add -A + commit
 // 返回新 commit hash (short)。没有 staged changes 时返回 ("", nil) 代表 no-op。
-func (g *GitService) CommitAll(ctx context.Context, projectEnvName, message string) (string, error) {
+// operator: 实际操作人 username。作为 commit author 的后缀（e.g. "deploy-bot_user1"），
+//   email 沿用 global_config 的 gitlab_email（机器人邮箱）。
+//   operator 为空或 "system" 时不拼后缀，author 就是机器人本身。
+func (g *GitService) CommitAll(ctx context.Context, projectEnvName, operator, message string) (string, error) {
 	path := g.RepoPath(projectEnvName)
 	if out, err := exec.CommandContext(ctx, "git", "-C", path, "add", "-A").CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git add: %w\n%s", err, out)
+		return "", fmt.Errorf("git add: %w\n%s", err, scrubSecrets(out))
 	}
 	out, _ := exec.CommandContext(ctx, "git", "-C", path, "diff", "--cached", "--name-only").CombinedOutput()
 	if strings.TrimSpace(string(out)) == "" {
 		return "", nil
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", path, "commit", "-m", message)
+	authorName := g.User
+	if operator != "" && operator != "system" && operator != g.User {
+		authorName = g.User + "_" + operator
+	}
+	author := fmt.Sprintf("%s <%s>", authorName, g.Email)
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "commit", "--author", author, "-m", message)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git commit: %w\n%s", err, out)
+		return "", fmt.Errorf("git commit: %w\n%s", err, scrubSecrets(out))
 	}
 	shaOut, err := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--short", "HEAD").CombinedOutput()
 	if err != nil {

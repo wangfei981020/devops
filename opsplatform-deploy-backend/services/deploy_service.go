@@ -160,8 +160,9 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 	for _, c := range res.Changes {
 		modNames = append(modNames, c.Module)
 	}
-	msg := fmt.Sprintf("[deploy-center] update image: %s by %s", strings.Join(modNames, ","), in.Operator)
-	sha, err := d.Git.CommitAll(gctx, in.ProjectEnvName, msg)
+	msg := fmt.Sprintf("[deploy-center] update image: %s by %s\n\nvia deploy-center",
+		strings.Join(modNames, ","), in.Operator)
+	sha, err := d.Git.CommitAll(gctx, in.ProjectEnvName, in.Operator, msg)
 	if err != nil {
 		res.Err = fmt.Errorf("commit: %w", err)
 		res.Status = models.StatusFailed
