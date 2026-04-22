@@ -57,8 +57,12 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Username = strings.TrimSpace(req.Username)
-	if req.Username == "" || req.Password == "" {
-		JSONError(w, 40001, "username 和 password 必填")
+	if err := ValidateUsername(req.Username); err != nil {
+		JSONError(w, 40001, "username: "+err.Error())
+		return
+	}
+	if len(req.Password) < 6 {
+		JSONError(w, 40001, "密码至少 6 位")
 		return
 	}
 	if req.Role != "admin" {
@@ -100,6 +104,16 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if req.Role != "admin" {
 		req.Role = "user"
 	}
+	// 降级为 user 前，检查是否最后一个启用中的 admin
+	if req.Role != "admin" {
+		if ok, err := canDemoteOrDisableAdmin(id); err != nil {
+			InternalErr(w, r, err)
+			return
+		} else if !ok {
+			JSONError(w, 40300, "不能降级最后一个启用中的管理员")
+			return
+		}
+	}
 	if _, err := database.DB.Exec(`UPDATE users SET display_name=?, role=? WHERE id=?`,
 		strings.TrimSpace(req.DisplayName), req.Role, id); err != nil {
 		InternalErr(w, r, err)
@@ -111,11 +125,43 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 // PUT /api/users/{id}/toggle
 func HandleToggleUser(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
+	// 如果当前是启用中的 admin，要禁用前检查是否最后一个
+	var role string
+	var status int
+	if err := database.DB.QueryRow(`SELECT role, status FROM users WHERE id=?`, id).Scan(&role, &status); err != nil {
+		InternalErr(w, r, err)
+		return
+	}
+	if role == "admin" && status == 1 {
+		if ok, err := canDemoteOrDisableAdmin(id); err != nil {
+			InternalErr(w, r, err)
+			return
+		} else if !ok {
+			JSONError(w, 40300, "不能禁用最后一个启用中的管理员")
+			return
+		}
+	}
 	if _, err := database.DB.Exec(`UPDATE users SET status = 1 - status WHERE id=?`, id); err != nil {
 		InternalErr(w, r, err)
 		return
 	}
+	// 禁用用户时顺便清掉其 session
+	if status == 1 {
+		database.DB.Exec(`DELETE FROM sessions WHERE user_id=?`, id)
+	}
 	JSONSuccess(w, nil)
+}
+
+// canDemoteOrDisableAdmin 返回 true 表示允许降级/禁用 targetID 这个 admin
+// 条件：除了 targetID 之外，至少还有一个启用中的 admin
+func canDemoteOrDisableAdmin(targetID int64) (bool, error) {
+	var cnt int
+	err := database.DB.QueryRow(
+		`SELECT COUNT(*) FROM users WHERE role='admin' AND status=1 AND id<>?`, targetID).Scan(&cnt)
+	if err != nil {
+		return false, err
+	}
+	return cnt > 0, nil
 }
 
 type resetPwdReq struct {
@@ -142,12 +188,28 @@ func HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
+	// 重置密码后踢掉目标用户的所有活跃 session
+	database.DB.Exec(`DELETE FROM sessions WHERE user_id=?`, id)
 	JSONSuccess(w, nil)
 }
 
 // DELETE /api/users/{id}
 func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
+	// 删除前检查是否最后一个启用中的 admin
+	var role string
+	var status int
+	if err := database.DB.QueryRow(`SELECT role, status FROM users WHERE id=?`, id).Scan(&role, &status); err == nil {
+		if role == "admin" && status == 1 {
+			if ok, err := canDemoteOrDisableAdmin(id); err != nil {
+				InternalErr(w, r, err)
+				return
+			} else if !ok {
+				JSONError(w, 40300, "不能删除最后一个启用中的管理员")
+				return
+			}
+		}
+	}
 	if _, err := database.DB.Exec(`DELETE FROM users WHERE id=?`, id); err != nil {
 		InternalErr(w, r, err)
 		return

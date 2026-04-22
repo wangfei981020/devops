@@ -68,13 +68,23 @@ func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
 	if !DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == "" {
-		JSONError(w, 40001, "name 必填")
+	if err := ValidateName(req.Name); err != nil {
+		JSONError(w, 40001, "name: "+err.Error())
 		return
 	}
 	if req.EnvType != models.EnvUAT && req.EnvType != models.EnvPROD {
 		JSONError(w, 40001, "env_type 必须是 uat 或 prod")
 		return
+	}
+	if err := ValidateGitRepoURL(req.GitRepo); err != nil {
+		JSONError(w, 40001, err.Error())
+		return
+	}
+	if cb, err := CleanRelPath(req.ChartBasePath); err != nil {
+		JSONError(w, 40001, "chart_base_path: "+err.Error())
+		return
+	} else {
+		req.ChartBasePath = cb
 	}
 	if req.GitBranch == "" {
 		req.GitBranch = "main"
@@ -108,6 +118,16 @@ func HandleUpdateProjectEnv(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.EnvType == models.EnvPROD {
 		req.AutoSync = 0
+	}
+	if err := ValidateGitRepoURL(req.GitRepo); err != nil {
+		JSONError(w, 40001, err.Error())
+		return
+	}
+	if cb, err := CleanRelPath(req.ChartBasePath); err != nil {
+		JSONError(w, 40001, "chart_base_path: "+err.Error())
+		return
+	} else {
+		req.ChartBasePath = cb
 	}
 	sets := []string{"display_name=?", "env_type=?", "git_repo=?", "git_branch=?", "chart_base_path=?",
 		"namespace=?", "argocd_instance_id=?", "lark_bot_id=?", "lark_webhook=?", "auto_sync=?"}

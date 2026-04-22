@@ -46,8 +46,12 @@ func HandleCreateLarkBot(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	req.Webhook = strings.TrimSpace(req.Webhook)
-	if req.Name == "" || req.Webhook == "" {
-		JSONError(w, 40001, "name 和 webhook 必填")
+	if err := ValidateName(req.Name); err != nil {
+		JSONError(w, 40001, "name: "+err.Error())
+		return
+	}
+	if err := ValidateLarkWebhookURL(req.Webhook); err != nil {
+		JSONError(w, 40001, err.Error())
 		return
 	}
 	encSec, _ := crypto.Encrypt(req.Secret)

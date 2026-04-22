@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -17,6 +18,12 @@ type ArgocdClient struct {
 	HTTP    *http.Client
 }
 
+// argocdInsecureTLS 由 ARGOCD_INSECURE 环境变量控制是否跳过 TLS 校验
+// 默认 false（校验）；ArgoCD 使用自签证书时设 true
+func argocdInsecureTLS() bool {
+	return os.Getenv("ARGOCD_INSECURE") == "true"
+}
+
 func NewArgocdClient(baseURL, token string) *ArgocdClient {
 	return &ArgocdClient{
 		BaseURL: baseURL,
@@ -24,7 +31,7 @@ func NewArgocdClient(baseURL, token string) *ArgocdClient {
 		HTTP: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // argocd 常用自签证书
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: argocdInsecureTLS()},
 			},
 		},
 	}

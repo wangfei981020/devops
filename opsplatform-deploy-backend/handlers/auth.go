@@ -18,6 +18,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
+	"opsplatform-deploy-backend/crypto"
 	"opsplatform-deploy-backend/database"
 )
 
@@ -199,7 +200,8 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 	} else {
 		database.DB.Exec("UPDATE users SET role = ?, display_name = ? WHERE id = ?", role, displayName, userID)
 	}
-	database.DB.Exec("UPDATE users SET portal_token = ? WHERE id = ?", portalToken, userID)
+	encToken, _ := crypto.Encrypt(portalToken)
+	database.DB.Exec("UPDATE users SET portal_token = ? WHERE id = ?", encToken, userID)
 
 	permissions := fetchPortalPermissions(Cfg.PortalAPIURL, portalToken, username)
 	if role != "admin" && permissions != nil && !permissions["menu:deploy_center"] {

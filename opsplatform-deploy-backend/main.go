@@ -48,9 +48,9 @@ func main() {
 	api := r.PathPrefix("/api").Subrouter()
 
 	// Public
-	api.HandleFunc("/login", handlers.HandleLogin).Methods("POST", "OPTIONS")
+	api.Handle("/login", handlers.LoginRateLimit(http.HandlerFunc(handlers.HandleLogin))).Methods("POST", "OPTIONS")
 	api.HandleFunc("/logout", handlers.HandleLogout).Methods("POST", "OPTIONS")
-	api.HandleFunc("/portal-auth", handlers.HandlePortalAuth).Methods("POST", "OPTIONS")
+	api.Handle("/portal-auth", handlers.LoginRateLimit(http.HandlerFunc(handlers.HandlePortalAuth))).Methods("POST", "OPTIONS")
 
 	// Protected
 	protected := api.PathPrefix("").Subrouter()
@@ -89,7 +89,7 @@ func main() {
 
 	// 全局配置
 	admin.HandleFunc("/global-config", handlers.HandleUpdateGlobalConfig).Methods("PUT", "OPTIONS")
-	admin.HandleFunc("/global-config/test-gitlab", handlers.HandleTestGlobalGitlab).Methods("POST", "OPTIONS")
+	admin.Handle("/global-config/test-gitlab", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestGlobalGitlab))).Methods("POST", "OPTIONS")
 
 	// 项目 CRUD
 	admin.HandleFunc("/projects", handlers.HandleCreateProject).Methods("POST", "OPTIONS")
@@ -100,9 +100,9 @@ func main() {
 	admin.HandleFunc("/project-envs", handlers.HandleCreateProjectEnv).Methods("POST", "OPTIONS")
 	admin.HandleFunc("/project-envs/{id}", handlers.HandleUpdateProjectEnv).Methods("PUT", "OPTIONS")
 	admin.HandleFunc("/project-envs/{id}", handlers.HandleDeleteProjectEnv).Methods("DELETE", "OPTIONS")
-	admin.HandleFunc("/project-envs/{id}/test-git", handlers.HandleTestProjectEnvGit).Methods("POST", "OPTIONS")
-	admin.HandleFunc("/project-envs/{id}/test-argocd", handlers.HandleTestProjectEnvArgocd).Methods("POST", "OPTIONS")
-	admin.HandleFunc("/project-envs/{id}/scan-modules", handlers.HandleScanModules).Methods("POST", "OPTIONS")
+	admin.Handle("/project-envs/{id}/test-git", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvGit))).Methods("POST", "OPTIONS")
+	admin.Handle("/project-envs/{id}/test-argocd", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvArgocd))).Methods("POST", "OPTIONS")
+	admin.Handle("/project-envs/{id}/scan-modules", handlers.ScanRateLimit(http.HandlerFunc(handlers.HandleScanModules))).Methods("POST", "OPTIONS")
 
 	// 通知人 CRUD
 	admin.HandleFunc("/contacts", handlers.HandleCreateContact).Methods("POST", "OPTIONS")
@@ -113,13 +113,13 @@ func main() {
 	admin.HandleFunc("/lark-bots", handlers.HandleCreateLarkBot).Methods("POST", "OPTIONS")
 	admin.HandleFunc("/lark-bots/{id}", handlers.HandleUpdateLarkBot).Methods("PUT", "OPTIONS")
 	admin.HandleFunc("/lark-bots/{id}", handlers.HandleDeleteLarkBot).Methods("DELETE", "OPTIONS")
-	admin.HandleFunc("/lark-bots/{id}/test", handlers.HandleTestLarkBot).Methods("POST", "OPTIONS")
+	admin.Handle("/lark-bots/{id}/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestLarkBot))).Methods("POST", "OPTIONS")
 
 	// ArgoCD 实例 CRUD + 测试
 	admin.HandleFunc("/argocd-instances", handlers.HandleCreateArgocdInstance).Methods("POST", "OPTIONS")
 	admin.HandleFunc("/argocd-instances/{id}", handlers.HandleUpdateArgocdInstance).Methods("PUT", "OPTIONS")
 	admin.HandleFunc("/argocd-instances/{id}", handlers.HandleDeleteArgocdInstance).Methods("DELETE", "OPTIONS")
-	admin.HandleFunc("/argocd-instances/{id}/test", handlers.HandleTestArgocdInstance).Methods("POST", "OPTIONS")
+	admin.Handle("/argocd-instances/{id}/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestArgocdInstance))).Methods("POST", "OPTIONS")
 
 	// 用户管理
 	admin.HandleFunc("/users", handlers.HandleListUsers).Methods("GET", "OPTIONS")

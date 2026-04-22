@@ -84,24 +84,16 @@ func HandleDeleteContact(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, nil)
 }
 
-// LookupContactLarkID 按 operator 查 lark_id
-// 先直接在 contact 按 name 查；找不到则回退到 users.display_name 再查 contact
+// LookupContactLarkID 按 operator 的 username 精确匹配 contact.name
+// 不再用 display_name 兜底（避免冒名艾特）
 func LookupContactLarkID(operator string) string {
 	if operator == "" || operator == "system" {
 		return ""
 	}
-	// 1) contact.name = operator
 	var larkID string
 	err := database.DB.QueryRow(`SELECT lark_id FROM contact WHERE name=?`, operator).Scan(&larkID)
-	if err == nil && larkID != "" {
-		return larkID
-	}
-	// 2) users.display_name → contact.name
-	var displayName string
-	err = database.DB.QueryRow(`SELECT IFNULL(display_name,'') FROM users WHERE username=? LIMIT 1`, operator).Scan(&displayName)
-	if err == sql.ErrNoRows || displayName == "" {
+	if err == sql.ErrNoRows {
 		return ""
 	}
-	_ = database.DB.QueryRow(`SELECT lark_id FROM contact WHERE name=?`, displayName).Scan(&larkID)
 	return larkID
 }
