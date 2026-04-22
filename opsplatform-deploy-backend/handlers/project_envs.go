@@ -18,7 +18,7 @@ import (
 func HandleListProjectEnvs(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`SELECT id, name, display_name, env_type, git_repo, git_branch,
 		chart_base_path, namespace, IFNULL(argocd_url,''), IFNULL(argocd_token,''), argocd_instance_id,
-		lark_webhook, lark_secret, lark_bot_id, auto_sync, created_at, updated_at
+		lark_webhook, lark_secret, lark_bot_id, gitlab_repo_id, auto_sync, created_at, updated_at
 		FROM project_env ORDER BY name`)
 	if err != nil {
 		InternalErr(w, r, err)
@@ -30,7 +30,7 @@ func HandleListProjectEnvs(w http.ResponseWriter, r *http.Request) {
 		var p models.ProjectEnv
 		_ = rows.Scan(&p.ID, &p.Name, &p.DisplayName, &p.EnvType, &p.GitRepo, &p.GitBranch,
 			&p.ChartBasePath, &p.Namespace, &p.ArgocdURL, &p.ArgocdToken, &p.ArgocdInstanceID,
-			&p.LarkWebhook, &p.LarkSecret, &p.LarkBotID, &p.AutoSync, &p.CreatedAt, &p.UpdatedAt)
+			&p.LarkWebhook, &p.LarkSecret, &p.LarkBotID, &p.GitlabRepoID, &p.AutoSync, &p.CreatedAt, &p.UpdatedAt)
 		p.ArgocdToken = maskToken(p.ArgocdToken)
 		p.LarkSecret = maskToken(p.LarkSecret)
 		list = append(list, p)
@@ -58,9 +58,26 @@ type projectEnvReq struct {
 	Namespace        string `json:"namespace"`
 	ArgocdInstanceID *int64 `json:"argocd_instance_id"`
 	LarkBotID        *int64 `json:"lark_bot_id"`
+	GitlabRepoID     *int64 `json:"gitlab_repo_id"`
 	LarkWebhook      string `json:"lark_webhook"`
 	LarkSecret       string `json:"lark_secret"`
 	AutoSync         int    `json:"auto_sync"`
+}
+
+// applyGitlabRepo 如果 req 带 gitlab_repo_id 则从表里读 URL 和默认分支覆盖 GitRepo/GitBranch
+func applyGitlabRepo(req *projectEnvReq) error {
+	if req.GitlabRepoID == nil || *req.GitlabRepoID <= 0 {
+		return nil
+	}
+	g, err := LoadGitlabRepo(*req.GitlabRepoID)
+	if err != nil {
+		return fmt.Errorf("gitlab_repo_id %d 找不到", *req.GitlabRepoID)
+	}
+	req.GitRepo = g.RepoURL
+	if req.GitBranch == "" {
+		req.GitBranch = g.DefaultBranch
+	}
+	return nil
 }
 
 func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +91,11 @@ func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.EnvType != models.EnvUAT && req.EnvType != models.EnvPROD {
 		JSONError(w, 40001, "env_type 必须是 uat 或 prod")
+		return
+	}
+	// gitlab_repo_id 选了则从表里复制 url/default_branch 到 req
+	if err := applyGitlabRepo(&req); err != nil {
+		JSONError(w, 40001, err.Error())
 		return
 	}
 	if err := ValidateGitRepoURL(req.GitRepo); err != nil {
@@ -95,9 +117,9 @@ func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
 	encLarkSecret, _ := crypto.Encrypt(req.LarkSecret)
 	res, err := database.DB.Exec(`INSERT INTO project_env
 		(name, display_name, env_type, git_repo, git_branch, chart_base_path, namespace, argocd_instance_id,
-		 lark_bot_id, lark_webhook, lark_secret, auto_sync) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 lark_bot_id, gitlab_repo_id, lark_webhook, lark_secret, auto_sync) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.DisplayName, req.EnvType, req.GitRepo, req.GitBranch, req.ChartBasePath,
-		req.Namespace, req.ArgocdInstanceID, req.LarkBotID, req.LarkWebhook, encLarkSecret, req.AutoSync)
+		req.Namespace, req.ArgocdInstanceID, req.LarkBotID, req.GitlabRepoID, req.LarkWebhook, encLarkSecret, req.AutoSync)
 	if err != nil {
 		if strings.Contains(err.Error(), "Duplicate") {
 			JSONError(w, 40900, "name 已存在")
@@ -120,6 +142,11 @@ func HandleUpdateProjectEnv(w http.ResponseWriter, r *http.Request) {
 	if req.EnvType == models.EnvPROD {
 		req.AutoSync = 0
 	}
+	// gitlab_repo_id 选了则从表里复制 url/default_branch 到 req
+	if err := applyGitlabRepo(&req); err != nil {
+		JSONError(w, 40001, err.Error())
+		return
+	}
 	if err := ValidateGitRepoURL(req.GitRepo); err != nil {
 		JSONError(w, 40001, err.Error())
 		return
@@ -131,9 +158,9 @@ func HandleUpdateProjectEnv(w http.ResponseWriter, r *http.Request) {
 		req.ChartBasePath = cb
 	}
 	sets := []string{"display_name=?", "env_type=?", "git_repo=?", "git_branch=?", "chart_base_path=?",
-		"namespace=?", "argocd_instance_id=?", "lark_bot_id=?", "lark_webhook=?", "auto_sync=?"}
+		"namespace=?", "argocd_instance_id=?", "lark_bot_id=?", "gitlab_repo_id=?", "lark_webhook=?", "auto_sync=?"}
 	args := []interface{}{req.DisplayName, req.EnvType, req.GitRepo, req.GitBranch, req.ChartBasePath,
-		req.Namespace, req.ArgocdInstanceID, req.LarkBotID, req.LarkWebhook, req.AutoSync}
+		req.Namespace, req.ArgocdInstanceID, req.LarkBotID, req.GitlabRepoID, req.LarkWebhook, req.AutoSync}
 	if req.LarkSecret != "" {
 		enc, _ := crypto.Encrypt(req.LarkSecret)
 		sets = append(sets, "lark_secret=?")
@@ -376,11 +403,11 @@ func loadProjectEnvRaw(id int64) (*models.ProjectEnv, error) {
 	var p models.ProjectEnv
 	err := database.DB.QueryRow(`SELECT id, name, display_name, env_type, git_repo, git_branch,
 		chart_base_path, namespace, IFNULL(argocd_url,''), IFNULL(argocd_token,''), argocd_instance_id,
-		lark_webhook, lark_secret, lark_bot_id, auto_sync, created_at, updated_at
+		lark_webhook, lark_secret, lark_bot_id, gitlab_repo_id, auto_sync, created_at, updated_at
 		FROM project_env WHERE id=?`, id).
 		Scan(&p.ID, &p.Name, &p.DisplayName, &p.EnvType, &p.GitRepo, &p.GitBranch,
 			&p.ChartBasePath, &p.Namespace, &p.ArgocdURL, &p.ArgocdToken, &p.ArgocdInstanceID,
-			&p.LarkWebhook, &p.LarkSecret, &p.LarkBotID, &p.AutoSync, &p.CreatedAt, &p.UpdatedAt)
+			&p.LarkWebhook, &p.LarkSecret, &p.LarkBotID, &p.GitlabRepoID, &p.AutoSync, &p.CreatedAt, &p.UpdatedAt)
 	return &p, err
 }
 

@@ -70,6 +70,7 @@ func main() {
 	protected.HandleFunc("/contacts", handlers.HandleListContacts).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/lark-bots", handlers.HandleListLarkBots).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/argocd-instances", handlers.HandleListArgocdInstances).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/gitlab-repos", handlers.HandleListGitlabRepos).Methods("GET", "OPTIONS")
 
 	// 模块 / 发布历史 —— 只读
 	protected.HandleFunc("/modules", handlers.HandleListModules).Methods("GET", "OPTIONS")
@@ -126,6 +127,11 @@ func main() {
 	admin.HandleFunc("/argocd-instances/{id}", handlers.HandleDeleteArgocdInstance).Methods("DELETE", "OPTIONS")
 	admin.Handle("/argocd-instances/{id}/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestArgocdInstance))).Methods("POST", "OPTIONS")
 	admin.Handle("/argocd-instances/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestArgocdInstanceByBody))).Methods("POST", "OPTIONS")
+
+	// GitLab 仓库 CRUD
+	admin.HandleFunc("/gitlab-repos", handlers.HandleCreateGitlabRepo).Methods("POST", "OPTIONS")
+	admin.HandleFunc("/gitlab-repos/{id}", handlers.HandleUpdateGitlabRepo).Methods("PUT", "OPTIONS")
+	admin.HandleFunc("/gitlab-repos/{id}", handlers.HandleDeleteGitlabRepo).Methods("DELETE", "OPTIONS")
 
 	// 审计日志
 	admin.HandleFunc("/audit-logs", handlers.HandleListAuditLogs).Methods("GET", "OPTIONS")

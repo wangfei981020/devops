@@ -50,7 +50,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: localhost:8070/opsplatform/opsplatform-deploy-frontend:v55
+          image: localhost:8070/opsplatform/opsplatform-deploy-frontend:v56
           imagePullPolicy: Always
           ports:
             - { containerPort: 80 }

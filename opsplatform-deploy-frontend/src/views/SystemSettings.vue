@@ -3,11 +3,143 @@
     <div class="rail">
       <div class="rail-title">配置分区</div>
       <div v-for="t in tabs" :key="t.v" :class="['rail-item', { active: tab === t.v }]" @click="tab = t.v">
-        {{ t.label }}
+        <span>{{ t.label }}</span>
+        <span v-if="statusBadge(t.v)" :class="['rail-badge', statusBadge(t.v).kind]">{{ statusBadge(t.v).text }}</span>
       </div>
     </div>
 
     <div class="pane">
+      <!-- ✦ 配置总览 -->
+      <div v-if="tab === 'overview'" class="section">
+        <div class="sec-head">
+          <div class="sec-title">配置总览</div>
+          <div class="sec-desc">点卡片进入对应配置 · 新部署建议按「全局凭证 → GitLab 仓库 → ArgoCD 实例 → Lark 机器人」顺序配</div>
+        </div>
+        <div class="sec-body">
+          <div class="ov-group">
+            <div class="ov-group-title">🔐 认证与用户</div>
+            <div class="ov-grid">
+              <div class="ov-card" @click="tab='cred'">
+                <div class="ov-icon" style="background:#eff6ff;color:#1d4ed8"><el-icon><Key /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">全局凭证</div>
+                  <div class="ov-desc">GitLab URL/User/Token + 测试仓库路径</div>
+                </div>
+                <div class="ov-right">
+                  <span :class="['ov-badge', ovStatus.cred.kind]">{{ ovStatus.cred.text }}</span>
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
+              <div class="ov-card" @click="tab='accounts'">
+                <div class="ov-icon" style="background:#f3e8ff;color:#7e22ce"><el-icon><User /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">用户管理</div>
+                  <div class="ov-desc">平台登录账号（admin / portal SSO）</div>
+                </div>
+                <div class="ov-right">
+                  <span :class="['ov-badge', ovStatus.accounts.kind]">{{ ovStatus.accounts.text }}</span>
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
+              <div class="ov-card" @click="tab='contacts'">
+                <div class="ov-icon" style="background:#fef9c3;color:#a16207"><el-icon><UserFilled /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">通知人</div>
+                  <div class="ov-desc">Lark @ 艾特专用</div>
+                </div>
+                <div class="ov-right">
+                  <span :class="['ov-badge', ovStatus.contacts.kind]">{{ ovStatus.contacts.text }}</span>
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="ov-group">
+            <div class="ov-group-title">🔔 通知</div>
+            <div class="ov-grid">
+              <div class="ov-card" @click="tab='larkbots'">
+                <div class="ov-icon" style="background:#ecfdf5;color:#059669"><el-icon><ChatLineRound /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">Lark 机器人</div>
+                  <div class="ov-desc">多 webhook 管理 + 测试</div>
+                </div>
+                <div class="ov-right">
+                  <span :class="['ov-badge', ovStatus.larkbots.kind]">{{ ovStatus.larkbots.text }}</span>
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
+              <div class="ov-card" @click="tab='lark'">
+                <div class="ov-icon" style="background:#fef3c7;color:#b45309"><el-icon><Bell /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">Lark 默认</div>
+                  <div class="ov-desc">兜底通知渠道（未选机器人时用）</div>
+                </div>
+                <div class="ov-right">
+                  <span :class="['ov-badge', ovStatus.lark.kind]">{{ ovStatus.lark.text }}</span>
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="ov-group">
+            <div class="ov-group-title">🔌 集成</div>
+            <div class="ov-grid">
+              <div class="ov-card" @click="tab='gitlabrepos'">
+                <div class="ov-icon" style="background:#fff7ed;color:#c2410c"><el-icon><Folder /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">GitLab 仓库</div>
+                  <div class="ov-desc">可复用的仓库登记表（项目环境下拉选）</div>
+                </div>
+                <div class="ov-right">
+                  <span :class="['ov-badge', ovStatus.gitlabrepos.kind]">{{ ovStatus.gitlabrepos.text }}</span>
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
+              <div class="ov-card" @click="tab='argocd'">
+                <div class="ov-icon" style="background:#e0f2fe;color:#0369a1"><el-icon><Connection /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">ArgoCD 实例</div>
+                  <div class="ov-desc">ArgoCD Server URL + Token</div>
+                </div>
+                <div class="ov-right">
+                  <span :class="['ov-badge', ovStatus.argocd.kind]">{{ ovStatus.argocd.text }}</span>
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="ov-group">
+            <div class="ov-group-title">⚙ 系统</div>
+            <div class="ov-grid">
+              <div class="ov-card" @click="tab='poll'">
+                <div class="ov-icon" style="background:#f1f5f9;color:#475569"><el-icon><Timer /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">同步策略</div>
+                  <div class="ov-desc">ArgoCD 轮询 · Git push 重试</div>
+                </div>
+                <div class="ov-right">
+                  <span :class="['ov-badge', ovStatus.poll.kind]">{{ ovStatus.poll.text }}</span>
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
+              <div class="ov-card" @click="tab='about'">
+                <div class="ov-icon" style="background:#f5f5f4;color:#57534e"><el-icon><InfoFilled /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">关于</div>
+                  <div class="ov-desc">版本号 · 技术栈</div>
+                </div>
+                <div class="ov-right">
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 全局凭证 -->
       <div v-if="tab === 'cred'" class="section">
         <div class="sec-head">
@@ -30,6 +162,49 @@
             <el-button @click="onTestGit" :loading="testing.git">测试连接</el-button>
             <el-button type="primary" @click="saveGlobal" :loading="saving.cred">保存</el-button>
           </div>
+        </div>
+      </div>
+
+      <!-- GitLab 仓库 -->
+      <div v-if="tab === 'gitlabrepos'" class="section">
+        <div class="sec-head">
+          <div class="sec-title-row">
+            <div>
+              <div class="sec-title">GitLab 仓库</div>
+              <div class="sec-desc">登记一次，项目环境直接下拉选，避免重复敲长 URL</div>
+            </div>
+            <button class="add-btn" @click="openRepoCreate">
+              <el-icon><Plus /></el-icon>新增仓库
+            </button>
+          </div>
+        </div>
+        <div class="sec-body">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th style="width:160px">名称</th>
+                <th>Repo URL</th>
+                <th style="width:100px">默认分支</th>
+                <th>描述</th>
+                <th style="width:140px">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="g in gitlabRepos" :key="g.id">
+                <td class="mono"><b>{{ g.name }}</b></td>
+                <td class="mono webhook-cell">{{ g.repo_url }}</td>
+                <td class="mono">{{ g.default_branch }}</td>
+                <td>{{ g.description || '—' }}</td>
+                <td>
+                  <button class="act" @click="openRepoEdit(g)">编辑</button>
+                  <button class="act danger" @click="onDeleteRepo(g)">删除</button>
+                </td>
+              </tr>
+              <tr v-if="!gitlabRepos.length">
+                <td colspan="5" class="empty-row">还没有登记 GitLab 仓库，点右上「+ 新增仓库」添加</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -369,11 +544,33 @@
         <el-button type="primary" @click="onSaveBot">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- GitLab 仓库弹窗 -->
+    <el-dialog v-model="repoDlg.vis" :title="repoDlg.isEdit ? '编辑 GitLab 仓库' : '新增 GitLab 仓库'" width="580px">
+      <el-form :model="repoDlg.form" label-width="100px" label-position="top" size="default">
+        <el-form-item label="名称 *">
+          <el-input v-model="repoDlg.form.name" :disabled="repoDlg.isEdit" class="mono" placeholder="如: uat-k8s-platform" />
+        </el-form-item>
+        <el-form-item label="仓库 URL *">
+          <el-input v-model="repoDlg.form.repo_url" class="mono" placeholder="https://gitlab.xx/group/project.git" />
+        </el-form-item>
+        <el-form-item label="默认分支">
+          <el-input v-model="repoDlg.form.default_branch" class="mono" placeholder="main" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="repoDlg.form.description" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="repoDlg.vis = false">取消</el-button>
+        <el-button type="primary" @click="onSaveRepo">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
@@ -382,14 +579,20 @@ import {
   listUsers, createUser, updateUser, toggleUser, resetUserPassword, deleteUser,
   listContacts, createContact, updateContact, deleteContact,
   listLarkBots, createLarkBot, updateLarkBot, deleteLarkBot, testLarkBot,
-  listArgocdInstances, createArgocdInstance, updateArgocdInstance, deleteArgocdInstance, testArgocdInstance
+  listArgocdInstances, createArgocdInstance, updateArgocdInstance, deleteArgocdInstance, testArgocdInstance,
+  listGitlabRepos, createGitlabRepo, updateGitlabRepo, deleteGitlabRepo,
 } from '../api'
+import {
+  Key, User, UserFilled, ChatLineRound, Bell, Folder, Connection, Timer, InfoFilled, ArrowRight
+} from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 const authStore = useAuthStore()
 
-const tab = ref('cred')
+const tab = ref('overview')
 const tabs = [
+  { v: 'overview', label: '✦ 配置总览' },
   { v: 'cred', label: '全局凭证' },
+  { v: 'gitlabrepos', label: 'GitLab 仓库' },
   { v: 'argocd', label: 'ArgoCD 实例' },
   { v: 'larkbots', label: 'Lark 机器人' },
   { v: 'accounts', label: '账号管理' },
@@ -409,6 +612,7 @@ const users = ref([])
 const contacts = ref([])
 const larkBots = ref([])
 const argoInstances = ref([])
+const gitlabRepos = ref([])
 const loading = reactive({ cred: false })
 const saving = reactive({ cred: false })
 const testing = reactive({ git: false, argoDlg: false, botDlg: false })
@@ -633,24 +837,97 @@ async function onTestBotInDialog() {
   } catch (_) {} finally { testing.botDlg = false }
 }
 
+// === GitLab 仓库 ===
+const repoDlg = reactive({ vis: false, isEdit: false, editingID: null, form: { name: '', repo_url: '', default_branch: 'main', description: '' } })
+async function loadRepos() { gitlabRepos.value = (await listGitlabRepos()) || [] }
+function openRepoCreate() {
+  repoDlg.isEdit = false; repoDlg.editingID = null
+  Object.assign(repoDlg.form, { name: '', repo_url: '', default_branch: 'main', description: '' })
+  repoDlg.vis = true
+}
+function openRepoEdit(g) {
+  repoDlg.isEdit = true; repoDlg.editingID = g.id
+  Object.assign(repoDlg.form, { name: g.name, repo_url: g.repo_url, default_branch: g.default_branch, description: g.description || '' })
+  repoDlg.vis = true
+}
+async function onSaveRepo() {
+  if (!repoDlg.form.name.trim()) { ElMessage.warning('名称必填'); return }
+  if (!repoDlg.form.repo_url.trim()) { ElMessage.warning('仓库 URL 必填'); return }
+  const payload = { ...repoDlg.form }
+  if (repoDlg.isEdit) await updateGitlabRepo(repoDlg.editingID, payload)
+  else await createGitlabRepo(payload)
+  ElMessage.success('已保存')
+  repoDlg.vis = false
+  await loadRepos()
+}
+async function onDeleteRepo(g) {
+  try { await ElMessageBox.confirm(`确认删除 GitLab 仓库「${g.name}」？被项目环境引用时会失败。`, '删除确认', { type: 'warning' }) }
+  catch { return }
+  await deleteGitlabRepo(g.id)
+  ElMessage.success('已删除')
+  await loadRepos()
+}
+
+// === Overview 状态徽章 ===
+const ovStatus = computed(() => ({
+  cred: gc.gitlab_url && gc.gitlab_user ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
+  accounts: users.value.length ? { kind: 'count', text: `${users.value.length} 个用户` } : { kind: 'miss', text: '未配置' },
+  contacts: contacts.value.length ? { kind: 'count', text: `${contacts.value.length} 个通知人` } : { kind: 'miss', text: '未配置' },
+  larkbots: larkBots.value.length ? { kind: 'count', text: `${larkBots.value.length} 个机器人` } : { kind: 'miss', text: '未配置' },
+  lark: gc.lark_default_webhook ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
+  gitlabrepos: gitlabRepos.value.length ? { kind: 'count', text: `${gitlabRepos.value.length} 个仓库` } : { kind: 'miss', text: '未配置' },
+  argocd: argoInstances.value.length ? { kind: 'count', text: `${argoInstances.value.length} 个实例` } : { kind: 'miss', text: '未配置' },
+  poll: gc.poll_interval_sec ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
+}))
+
+// 左侧 rail 每个 tab 右侧的徽章（精简版：只显示数量或未配置）
+function statusBadge(v) {
+  const s = ovStatus.value[v]
+  if (!s) return null
+  return s
+}
+
+// Overview 打开时拉所有 resource
+async function loadOverview() {
+  await Promise.all([
+    loadGlobal(),
+    loadRepos(),
+    loadArgo(),
+    loadBots(),
+    loadContacts(),
+    authStore.isAdmin ? loadUsers() : Promise.resolve(),
+  ])
+}
+
 watch(tab, (t) => {
-  if (t === 'argocd') loadArgo()
+  if (t === 'overview') loadOverview()
+  else if (t === 'argocd') loadArgo()
+  else if (t === 'gitlabrepos') loadRepos()
   else if (t === 'accounts') loadUsers()
   else if (t === 'contacts') loadContacts()
   else if (t === 'larkbots') loadBots()
   else if (['cred', 'lark', 'poll'].includes(t)) loadGlobal()
 })
 
-onMounted(loadGlobal)
+onMounted(loadOverview)
 </script>
 
 <style scoped>
 .ss { display: grid; grid-template-columns: 200px 1fr; gap: 0; height: calc(100vh - 120px); }
 .rail { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius) 0 0 var(--radius); padding: 16px 0; border-right: none; }
 .rail-title { padding: 0 16px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-3); font-weight: 600; margin-bottom: 8px; }
-.rail-item { padding: 9px 16px; cursor: pointer; font-size: 13px; color: var(--text-2); border-left: 3px solid transparent; }
+.rail-item { padding: 9px 16px; cursor: pointer; font-size: 13px; color: var(--text-2); border-left: 3px solid transparent; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .rail-item:hover { background: var(--bg-hover); color: var(--text); }
 .rail-item.active { background: var(--primary-bg); border-left-color: var(--primary); color: var(--primary); font-weight: 600; }
+
+.rail-badge {
+  font: 500 10px var(--mono);
+  padding: 1px 6px; border-radius: 99px;
+  flex-shrink: 0;
+}
+.rail-badge.ok { background: #ecfdf5; color: #059669; }
+.rail-badge.count { background: #eff6ff; color: #1d4ed8; }
+.rail-badge.miss { background: #fef2f2; color: #dc2626; }
 
 .pane { flex: 1; overflow: auto; padding: 18px 24px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 0 var(--radius) var(--radius) 0; }
 .section { margin-bottom: 14px; }
@@ -697,4 +974,31 @@ onMounted(loadGlobal)
 
 .status-on { color: var(--success); font-size: 12px; font-weight: 500; }
 .status-off { color: var(--text-3); font-size: 12px; }
+
+/* ===== Overview 卡片 ===== */
+.ov-group { margin-bottom: 24px; }
+.ov-group-title { font: 600 13px var(--body); color: var(--text-2); margin-bottom: 10px; padding-left: 2px; }
+.ov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px; }
+.ov-card {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px; cursor: pointer; transition: all .15s;
+}
+.ov-card:hover { border-color: var(--primary); background: #fbfdff; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(24,144,255,.08); }
+.ov-icon { width: 40px; height: 40px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.ov-icon .el-icon { font-size: 20px; }
+.ov-main { flex: 1; min-width: 0; }
+.ov-title { font: 600 14px var(--body); color: var(--text); margin-bottom: 2px; }
+.ov-desc { font: 400 11.5px var(--body); color: var(--text-3); line-height: 1.5; }
+.ov-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.ov-arrow { color: var(--text-3); font-size: 14px; }
+.ov-card:hover .ov-arrow { color: var(--primary); }
+
+.ov-badge {
+  font: 500 11px var(--mono);
+  padding: 2px 8px; border-radius: 99px;
+}
+.ov-badge.ok { background: #ecfdf5; color: #059669; }
+.ov-badge.count { background: #eff6ff; color: #1d4ed8; }
+.ov-badge.miss { background: #fef2f2; color: #dc2626; }
 </style>

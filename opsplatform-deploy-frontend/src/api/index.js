@@ -73,6 +73,12 @@ export const deleteLarkBot = (id) => http.delete(`/lark-bots/${id}`)
 // testLarkBot body 方式，未保存也能测。body = { id?, webhook?, secret? }
 export const testLarkBot = (body) => http.post('/lark-bots/test', body || {})
 
+// GitLab 仓库（登记 + project_env 下拉选）
+export const listGitlabRepos = () => http.get('/gitlab-repos')
+export const createGitlabRepo = (data) => http.post('/gitlab-repos', data)
+export const updateGitlabRepo = (id, data) => http.put(`/gitlab-repos/${id}`, data)
+export const deleteGitlabRepo = (id) => http.delete(`/gitlab-repos/${id}`)
+
 // ArgoCD Instances
 export const listArgocdInstances = () => http.get('/argocd-instances')
 export const createArgocdInstance = (data) => http.post('/argocd-instances', data)

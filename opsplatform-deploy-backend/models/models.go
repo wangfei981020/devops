@@ -32,6 +32,7 @@ type ProjectEnv struct {
 	LarkWebhook      string    `json:"lark_webhook,omitempty"` // 遗留字段
 	LarkSecret       string    `json:"lark_secret,omitempty"`  // 遗留字段
 	LarkBotID        *int64    `json:"lark_bot_id"`
+	GitlabRepoID     *int64    `json:"gitlab_repo_id"`
 	AutoSync         int       `json:"auto_sync"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
@@ -57,6 +58,17 @@ type Contact struct {
 	Remark    string    `json:"remark"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// GitlabRepo 登记的 GitLab 仓库（可被多个 project_env 复用）
+type GitlabRepo struct {
+	ID            int64     `json:"id"`
+	Name          string    `json:"name"`
+	RepoURL       string    `json:"repo_url"`
+	DefaultBranch string    `json:"default_branch"`
+	Description   string    `json:"description"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // LarkBot Lark 机器人

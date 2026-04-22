@@ -208,8 +208,23 @@
 
         <div class="sec-lbl">GitLab 仓库</div>
         <div class="field">
-          <label>Git Repo URL <span class="req">*</span></label>
-          <input v-model="envForm.git_repo" class="inp mono" placeholder="http://gitlab.xx/ops/..." />
+          <label>Git 仓库 <span class="req">*</span><span class="hint">可从登记的仓库下拉选，或手动填完整 URL</span></label>
+          <select v-model="envForm.gitlab_repo_id" class="inp" @change="onRepoPicked">
+            <option :value="null">— 手动输入 URL —</option>
+            <option v-for="g in gitlabRepos" :key="g.id" :value="g.id">{{ g.name }} · {{ g.repo_url }}</option>
+          </select>
+          <input
+            v-if="!envForm.gitlab_repo_id"
+            v-model="envForm.git_repo"
+            class="inp mono"
+            style="margin-top:6px"
+            placeholder="https://gitlab.xx/group/project.git" />
+          <div v-else class="hint-text mono" style="color:var(--text-3);margin-top:4px;font-size:11px">
+            {{ envForm.git_repo }}
+          </div>
+          <div v-if="!gitlabRepos.length" class="hint-text" style="color:var(--text-3);margin-top:4px">
+            可在「系统设置 → GitLab 仓库」先登记常用仓库，下次复用
+          </div>
         </div>
         <div class="row2">
           <div class="field">
@@ -286,7 +301,7 @@ import {
   listProjectEnvs, createProjectEnv, updateProjectEnv, deleteProjectEnv,
   testProjectEnvGit, testProjectEnvArgocd,
   listModules, listDeployments,
-  listArgocdInstances, listLarkBots
+  listArgocdInstances, listLarkBots, listGitlabRepos
 } from '../api'
 
 const projects = ref([])  // [{id, name, display_name, description, env_count, in_db}]
@@ -315,11 +330,25 @@ const blankEnv = () => ({
   project_name: '', display_name: '', env_type: 'uat',
   git_repo: '', git_branch: 'main', chart_base_path: '',
   namespace: '', argocd_instance_id: null, lark_bot_id: null,
+  gitlab_repo_id: null,
   auto_sync: 1
 })
 const envForm = reactive(blankEnv())
 const argoInstances = ref([])
 const larkBots = ref([])
+const gitlabRepos = ref([])
+
+// 下拉选仓库 → 同步 repo_url + default_branch 到 envForm
+function onRepoPicked() {
+  if (!envForm.gitlab_repo_id) return
+  const g = gitlabRepos.value.find(x => x.id === envForm.gitlab_repo_id)
+  if (g) {
+    envForm.git_repo = g.repo_url
+    if (!envForm.git_branch || envForm.git_branch === 'main') {
+      envForm.git_branch = g.default_branch || 'main'
+    }
+  }
+}
 
 function projectOf(e) {
   const suffix = '-' + e.env_type
@@ -398,11 +427,12 @@ function toggle(pn) { opened[pn] = !opened[pn] }
 async function load() {
   loading.value = true
   try {
-    const [ps, es, ai, lb] = await Promise.all([listProjects(), listProjectEnvs(), listArgocdInstances(), listLarkBots()])
+    const [ps, es, ai, lb, gr] = await Promise.all([listProjects(), listProjectEnvs(), listArgocdInstances(), listLarkBots(), listGitlabRepos()])
     projects.value = ps || []
     envs.value = es || []
     argoInstances.value = ai || []
     larkBots.value = lb || []
+    gitlabRepos.value = gr || []
     projects.value.forEach(p => { if (opened[p.name] === undefined) opened[p.name] = true })
 
     // 加载每个 env 的 stats
@@ -487,6 +517,7 @@ function openEditEnv(e) {
     namespace: e.namespace || '',
     argocd_instance_id: e.argocd_instance_id || null,
     lark_bot_id: e.lark_bot_id || null,
+    gitlab_repo_id: e.gitlab_repo_id || null,
     // PROD 后端强制 auto_sync=0，UI 也显示为关（避免显示/实际不一致）
     auto_sync: e.env_type === 'prod' ? 0 : e.auto_sync
   })
@@ -510,6 +541,7 @@ async function onSaveEnv() {
     namespace: envForm.namespace.trim(),
     argocd_instance_id: envForm.argocd_instance_id || null,
     lark_bot_id: envForm.lark_bot_id || null,
+    gitlab_repo_id: envForm.gitlab_repo_id || null,
     auto_sync: envForm.auto_sync
   }
   saving.value = true
