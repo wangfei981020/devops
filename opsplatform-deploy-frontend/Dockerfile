@@ -1,4 +1,4 @@
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /src
 ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 COPY package.json package-lock.json ./
@@ -6,7 +6,8 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:1.27-alpine
+# nginx:mainline-alpine = nginx 1.29 on alpine 3.22（libxpm 3.5.19+，修 CVE-2026-4367）
+FROM nginx:mainline-alpine
 RUN apk upgrade --no-cache && \
     apk add --no-cache tzdata && \
     ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
