@@ -139,7 +139,7 @@ func HandleUpdateProjectEnv(w http.ResponseWriter, r *http.Request) {
 		args = append(args, enc)
 	}
 	args = append(args, id)
-	q := "UPDATE project_env SET " + joinComma(sets) + " WHERE id=?"
+	q := "UPDATE project_env SET " + strings.Join(sets, ",") + " WHERE id=?"
 	if _, err := database.DB.Exec(q, args...); err != nil {
 		InternalErr(w, r, err)
 		return

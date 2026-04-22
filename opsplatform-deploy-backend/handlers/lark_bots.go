@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,6 +67,7 @@ func HandleCreateLarkBot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	Audit(r, "lark_bot.create", "lark_bot", req.Name, nil)
 	JSONSuccess(w, map[string]interface{}{"id": id})
 }
 
@@ -84,11 +86,12 @@ func HandleUpdateLarkBot(w http.ResponseWriter, r *http.Request) {
 		args = append(args, enc)
 	}
 	args = append(args, id)
-	q := "UPDATE lark_bot SET " + joinComma(sets) + " WHERE id=?"
+	q := "UPDATE lark_bot SET " + strings.Join(sets, ",") + " WHERE id=?"
 	if _, err := database.DB.Exec(q, args...); err != nil {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "lark_bot.update", "lark_bot", strconv.FormatInt(id, 10), nil)
 	JSONSuccess(w, nil)
 }
 
@@ -98,13 +101,14 @@ func HandleDeleteLarkBot(w http.ResponseWriter, r *http.Request) {
 	var cnt int
 	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE lark_bot_id=?`, id).Scan(&cnt)
 	if cnt > 0 {
-		JSONError(w, 40900, "还有 "+intToStr(cnt)+" 个项目环境在使用此 Lark 机器人")
+		JSONError(w, 40900, "还有 "+strconv.Itoa(cnt)+" 个项目环境在使用此 Lark 机器人")
 		return
 	}
 	if _, err := database.DB.Exec(`DELETE FROM lark_bot WHERE id=?`, id); err != nil {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "lark_bot.delete", "lark_bot", strconv.FormatInt(id, 10), nil)
 	JSONSuccess(w, nil)
 }
 

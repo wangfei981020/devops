@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -147,7 +148,7 @@ func HandleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	var cnt int
 	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE name LIKE ?`, name+"-%").Scan(&cnt)
 	if cnt > 0 {
-		JSONError(w, 40900, "该项目下还有 "+intToStr(cnt)+" 个环境，请先删除所有环境")
+		JSONError(w, 40900, "该项目下还有 "+strconv.Itoa(cnt)+" 个环境，请先删除所有环境")
 		return
 	}
 	if _, err := database.DB.Exec(`DELETE FROM project WHERE id=?`, id); err != nil {
@@ -157,14 +158,3 @@ func HandleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, nil)
 }
 
-func intToStr(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	s := ""
-	for n > 0 {
-		s = string(rune('0'+n%10)) + s
-		n /= 10
-	}
-	return s
-}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	"opsplatform-deploy-backend/crypto"
@@ -101,7 +102,7 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 		JSONSuccess(w, nil)
 		return
 	}
-	q := "UPDATE global_config SET " + joinComma(sets) + " WHERE id=1"
+	q := "UPDATE global_config SET " + strings.Join(sets, ",") + " WHERE id=1"
 	if _, err := database.DB.Exec(q, args...); err != nil {
 		InternalErr(w, r, err)
 		return
@@ -157,17 +158,6 @@ func maskToken(s string) string {
 		return ""
 	}
 	return "••••••••"
-}
-
-func joinComma(ss []string) string {
-	out := ""
-	for i, s := range ss {
-		if i > 0 {
-			out += ", "
-		}
-		out += s
-	}
-	return out
 }
 
 // 一个 fake response writer，用来在 test-gitlab 里静默 DecodeJSON 失败

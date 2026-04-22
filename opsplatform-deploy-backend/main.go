@@ -121,6 +121,9 @@ func main() {
 	admin.HandleFunc("/argocd-instances/{id}", handlers.HandleDeleteArgocdInstance).Methods("DELETE", "OPTIONS")
 	admin.Handle("/argocd-instances/{id}/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestArgocdInstance))).Methods("POST", "OPTIONS")
 
+	// 审计日志
+	admin.HandleFunc("/audit-logs", handlers.HandleListAuditLogs).Methods("GET", "OPTIONS")
+
 	// 用户管理
 	admin.HandleFunc("/users", handlers.HandleListUsers).Methods("GET", "OPTIONS")
 	admin.HandleFunc("/users", handlers.HandleCreateUser).Methods("POST", "OPTIONS")

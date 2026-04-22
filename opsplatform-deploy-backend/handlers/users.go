@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -86,6 +87,7 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	Audit(r, "user.create", "user", req.Username, map[string]interface{}{"role": req.Role})
 	JSONSuccess(w, map[string]interface{}{"id": id})
 }
 
@@ -119,6 +121,7 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "user.update", "user", strconv.FormatInt(id, 10), map[string]interface{}{"role": req.Role})
 	JSONSuccess(w, nil)
 }
 
@@ -149,6 +152,8 @@ func HandleToggleUser(w http.ResponseWriter, r *http.Request) {
 	if status == 1 {
 		database.DB.Exec(`DELETE FROM sessions WHERE user_id=?`, id)
 	}
+	newStatus := 1 - status
+	Audit(r, "user.toggle", "user", strconv.FormatInt(id, 10), map[string]interface{}{"status": newStatus})
 	JSONSuccess(w, nil)
 }
 
@@ -190,6 +195,7 @@ func HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	// 重置密码后踢掉目标用户的所有活跃 session
 	database.DB.Exec(`DELETE FROM sessions WHERE user_id=?`, id)
+	Audit(r, "user.reset_password", "user", strconv.FormatInt(id, 10), nil)
 	JSONSuccess(w, nil)
 }
 
@@ -215,5 +221,6 @@ func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	database.DB.Exec(`DELETE FROM sessions WHERE user_id=?`, id)
+	Audit(r, "user.delete", "user", strconv.FormatInt(id, 10), nil)
 	JSONSuccess(w, nil)
 }

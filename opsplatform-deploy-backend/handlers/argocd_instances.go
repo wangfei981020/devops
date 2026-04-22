@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,7 +93,7 @@ func HandleUpdateArgocdInstance(w http.ResponseWriter, r *http.Request) {
 		args = append(args, enc)
 	}
 	args = append(args, id)
-	q := "UPDATE argocd_instance SET " + joinComma(sets) + " WHERE id=?"
+	q := "UPDATE argocd_instance SET " + strings.Join(sets, ",") + " WHERE id=?"
 	if _, err := database.DB.Exec(q, args...); err != nil {
 		InternalErr(w, r, err)
 		return
@@ -107,7 +108,7 @@ func HandleDeleteArgocdInstance(w http.ResponseWriter, r *http.Request) {
 	var cnt int
 	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE argocd_instance_id=?`, id).Scan(&cnt)
 	if cnt > 0 {
-		JSONError(w, 40900, "还有 "+intToStr(cnt)+" 个项目环境使用此 ArgoCD 实例，不能删除")
+		JSONError(w, 40900, "还有 "+strconv.Itoa(cnt)+" 个项目环境使用此 ArgoCD 实例，不能删除")
 		return
 	}
 	if _, err := database.DB.Exec(`DELETE FROM argocd_instance WHERE id=?`, id); err != nil {
