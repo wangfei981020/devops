@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -82,18 +83,29 @@ func clientIP(r *http.Request) string {
 // 登录：每 IP 每分钟 5 次
 var loginLimiter = newKeyedLimiter(rate.Every(12*time.Second), 5)
 
-// 测试类接口：每用户 3 秒 1 次，burst 3（允许连续点 3 下，然后补充）
-// 运维调测时节奏合理，又能挡住 Lark 刷屏 / PAT 探测
-var testEndpointLimiter = newKeyedLimiter(rate.Every(3*time.Second), 3)
+// 测试类接口：1 秒补 1 个 token，burst 10
+// 调宽到 burst 10 是为了兼容 Ingress/LB 可能把一次点击重放 3-5 次的情况
+// 真实恶意刷（>10 次/秒）仍能挡住
+var testEndpointLimiter = newKeyedLimiter(rate.Every(1*time.Second), 10)
 
 // 扫描类接口：每用户 1 分钟 1 次
 var scanLimiter = newKeyedLimiter(rate.Every(60*time.Second), 1)
+
+// logReject 记录被限流拒绝的请求细节（诊断 Ingress 重放等场景）
+func logReject(r *http.Request, limiter, key string) {
+	log.Printf("[ratelimit] REJECT limiter=%s key=%s path=%s method=%s remote=%s xff=%q ua=%q",
+		limiter, key, r.URL.Path, r.Method,
+		r.RemoteAddr,
+		r.Header.Get("X-Forwarded-For"),
+		r.Header.Get("User-Agent"))
+}
 
 // LoginRateLimit 基于 IP 的登录限流
 func LoginRateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		if !loginLimiter.get(ip).Allow() {
+			logReject(r, "login", ip)
 			JSONError(w, 40300, "登录尝试过于频繁，请稍后再试")
 			return
 		}
@@ -109,6 +121,7 @@ func TestRateLimit(next http.Handler) http.Handler {
 			key = clientIP(r)
 		}
 		if !testEndpointLimiter.get(key).Allow() {
+			logReject(r, "test", key)
 			JSONError(w, 40300, "测试接口调用过于频繁，请稍后再试")
 			return
 		}
@@ -124,6 +137,7 @@ func ScanRateLimit(next http.Handler) http.Handler {
 			key = clientIP(r)
 		}
 		if !scanLimiter.get(key).Allow() {
+			logReject(r, "scan", key)
 			JSONError(w, 40300, "扫描操作过于频繁，1 分钟后再试")
 			return
 		}
