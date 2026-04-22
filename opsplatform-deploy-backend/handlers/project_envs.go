@@ -160,6 +160,7 @@ func HandleDeleteProjectEnv(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, nil)
 }
 
+// POST /api/project-envs/{id}/test-git （保留兼容，按 ID 取 DB 值）
 func HandleTestProjectEnvGit(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
 	p, err := LoadProjectEnvDecrypted(id)
@@ -167,6 +168,37 @@ func HandleTestProjectEnvGit(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40400, "project_env not found")
 		return
 	}
+	doTestGit(w, r, p.GitRepo, p.GitBranch)
+}
+
+// POST /api/project-envs/test-git  新：body 方式，未保存也能测
+// body = {git_repo, git_branch}
+func HandleTestProjectEnvGitByBody(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		GitRepo   string `json:"git_repo"`
+		GitBranch string `json:"git_branch"`
+	}
+	if !DecodeJSON(w, r, &req) {
+		return
+	}
+	repo := strings.TrimSpace(req.GitRepo)
+	branch := strings.TrimSpace(req.GitBranch)
+	if repo == "" {
+		JSONError(w, 40001, "git_repo 必填")
+		return
+	}
+	if branch == "" {
+		branch = "main"
+	}
+	// 校验 host 必须跟全局 gitlab_url 一致（已有的输入校验）
+	if err := ValidateGitRepoURL(repo); err != nil {
+		JSONError(w, 40001, err.Error())
+		return
+	}
+	doTestGit(w, r, repo, branch)
+}
+
+func doTestGit(w http.ResponseWriter, r *http.Request, repo, branch string) {
 	var user, encToken string
 	_ = database.DB.QueryRow(`SELECT gitlab_user, gitlab_token FROM global_config WHERE id=1`).
 		Scan(&user, &encToken)
@@ -175,10 +207,10 @@ func HandleTestProjectEnvGit(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40001, "global gitlab_user/token 未配置")
 		return
 	}
-	authURL := injectTokenHelper(p.GitRepo, user, token)
+	authURL := injectTokenHelper(repo, user, token)
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "ls-remote", "--heads", authURL, p.GitBranch).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "git", "ls-remote", "--heads", authURL, branch).CombinedOutput()
 	if err != nil {
 		JSONError(w, 50001, "ls-remote: "+services.ScrubSecrets(out))
 		return
@@ -186,6 +218,7 @@ func HandleTestProjectEnvGit(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, map[string]interface{}{"ok": true, "ref": services.ScrubSecrets(out)})
 }
 
+// POST /api/project-envs/{id}/test-argocd （保留兼容）
 func HandleTestProjectEnvArgocd(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
 	p, err := LoadProjectEnvDecrypted(id)
@@ -198,15 +231,28 @@ func HandleTestProjectEnvArgocd(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40001, err.Error())
 		return
 	}
-	c := services.NewArgocdClient(argoURL, argoToken)
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	version, err := c.Ping(ctx)
-	if err != nil {
-		JSONError(w, 50002, "argocd ping: "+err.Error())
+	doTestArgocd(w, r, argoURL, argoToken)
+}
+
+// POST /api/project-envs/test-argocd  新：body = {argocd_instance_id}
+// 前端传 argocd 实例 ID，后端查 DB 拿 URL+Token 测试。不需要环境本身保存。
+func HandleTestProjectEnvArgocdByBody(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ArgocdInstanceID *int64 `json:"argocd_instance_id"`
+	}
+	if !DecodeJSON(w, r, &req) {
 		return
 	}
-	JSONSuccess(w, map[string]interface{}{"ok": true, "version": version})
+	if req.ArgocdInstanceID == nil || *req.ArgocdInstanceID <= 0 {
+		JSONError(w, 40001, "argocd_instance_id 必填")
+		return
+	}
+	inst, err := LoadArgocdInstanceDecrypted(*req.ArgocdInstanceID)
+	if err != nil {
+		JSONError(w, 40400, "argocd_instance 找不到")
+		return
+	}
+	doTestArgocd(w, r, inst.URL, inst.Token)
 }
 
 // ResolveArgocdForEnv 返回 project_env 实际使用的 ArgoCD URL+Token

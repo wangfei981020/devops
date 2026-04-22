@@ -103,6 +103,9 @@ func main() {
 	admin.HandleFunc("/project-envs/{id}", handlers.HandleDeleteProjectEnv).Methods("DELETE", "OPTIONS")
 	admin.Handle("/project-envs/{id}/test-git", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvGit))).Methods("POST", "OPTIONS")
 	admin.Handle("/project-envs/{id}/test-argocd", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvArgocd))).Methods("POST", "OPTIONS")
+	// 新：未保存也能测
+	admin.Handle("/project-envs/test-git", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvGitByBody))).Methods("POST", "OPTIONS")
+	admin.Handle("/project-envs/test-argocd", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvArgocdByBody))).Methods("POST", "OPTIONS")
 	admin.Handle("/project-envs/{id}/scan-modules", handlers.ScanRateLimit(http.HandlerFunc(handlers.HandleScanModules))).Methods("POST", "OPTIONS")
 
 	// 通知人 CRUD
@@ -115,12 +118,14 @@ func main() {
 	admin.HandleFunc("/lark-bots/{id}", handlers.HandleUpdateLarkBot).Methods("PUT", "OPTIONS")
 	admin.HandleFunc("/lark-bots/{id}", handlers.HandleDeleteLarkBot).Methods("DELETE", "OPTIONS")
 	admin.Handle("/lark-bots/{id}/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestLarkBot))).Methods("POST", "OPTIONS")
+	admin.Handle("/lark-bots/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestLarkBotByBody))).Methods("POST", "OPTIONS")
 
 	// ArgoCD 实例 CRUD + 测试
 	admin.HandleFunc("/argocd-instances", handlers.HandleCreateArgocdInstance).Methods("POST", "OPTIONS")
 	admin.HandleFunc("/argocd-instances/{id}", handlers.HandleUpdateArgocdInstance).Methods("PUT", "OPTIONS")
 	admin.HandleFunc("/argocd-instances/{id}", handlers.HandleDeleteArgocdInstance).Methods("DELETE", "OPTIONS")
 	admin.Handle("/argocd-instances/{id}/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestArgocdInstance))).Methods("POST", "OPTIONS")
+	admin.Handle("/argocd-instances/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestArgocdInstanceByBody))).Methods("POST", "OPTIONS")
 
 	// 审计日志
 	admin.HandleFunc("/audit-logs", handlers.HandleListAuditLogs).Methods("GET", "OPTIONS")

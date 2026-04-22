@@ -126,6 +126,7 @@ func HandleDeleteArgocdInstance(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/argocd-instances/{id}/test
+// （保留兼容）根据 ID 从 DB 读取测试
 func HandleTestArgocdInstance(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
 	inst, err := LoadArgocdInstanceDecrypted(id)
@@ -133,7 +134,42 @@ func HandleTestArgocdInstance(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40400, "argocd instance not found")
 		return
 	}
-	c := services.NewArgocdClient(inst.URL, inst.Token)
+	doTestArgocd(w, r, inst.URL, inst.Token)
+}
+
+// POST /api/argocd-instances/test
+// 新：前端 body 传 {id?, url?, token?} 测试连接。未保存时也能测。
+// id 有 + 某字段空 → 用 DB 的值 fallback；纯 body 时全靠 body。
+func HandleTestArgocdInstanceByBody(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID    *int64 `json:"id"`
+		URL   string `json:"url"`
+		Token string `json:"token"`
+	}
+	if !DecodeJSON(w, r, &req) {
+		return
+	}
+	url, token := strings.TrimSpace(req.URL), req.Token
+	// id 有则从 DB fallback 空字段
+	if req.ID != nil && *req.ID > 0 {
+		if inst, err := LoadArgocdInstanceDecrypted(*req.ID); err == nil {
+			if url == "" {
+				url = inst.URL
+			}
+			if token == "" {
+				token = inst.Token
+			}
+		}
+	}
+	if url == "" || token == "" {
+		JSONError(w, 40001, "url 和 token 必填")
+		return
+	}
+	doTestArgocd(w, r, url, token)
+}
+
+func doTestArgocd(w http.ResponseWriter, r *http.Request, url, token string) {
+	c := services.NewArgocdClient(url, token)
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	version, err := c.Ping(ctx)

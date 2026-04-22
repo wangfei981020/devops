@@ -82,8 +82,9 @@ func clientIP(r *http.Request) string {
 // 登录：每 IP 每分钟 5 次
 var loginLimiter = newKeyedLimiter(rate.Every(12*time.Second), 5)
 
-// 测试类接口：每用户 10 秒 1 次（防 Lark 机器人刷屏 / gitlab ls-remote 刷 PAT）
-var testEndpointLimiter = newKeyedLimiter(rate.Every(10*time.Second), 1)
+// 测试类接口：每用户 3 秒 1 次，burst 3（允许连续点 3 下，然后补充）
+// 运维调测时节奏合理，又能挡住 Lark 刷屏 / PAT 探测
+var testEndpointLimiter = newKeyedLimiter(rate.Every(3*time.Second), 3)
 
 // 扫描类接口：每用户 1 分钟 1 次
 var scanLimiter = newKeyedLimiter(rate.Every(60*time.Second), 1)
@@ -108,7 +109,7 @@ func TestRateLimit(next http.Handler) http.Handler {
 			key = clientIP(r)
 		}
 		if !testEndpointLimiter.get(key).Allow() {
-			JSONError(w, 40300, "测试接口调用过于频繁，10 秒后再试")
+			JSONError(w, 40300, "测试接口调用过于频繁，请稍后再试")
 			return
 		}
 		next.ServeHTTP(w, r)

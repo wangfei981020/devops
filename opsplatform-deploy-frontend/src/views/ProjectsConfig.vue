@@ -263,8 +263,8 @@
             <button v-if="envDlgIsEdit" class="btn-danger" @click="onDeleteEnv">
               <el-icon><Delete /></el-icon>删除
             </button>
-            <button v-if="envDlgIsEdit" class="btn-ghost" @click="onTestGit" :disabled="testing.git">测试 Git</button>
-            <button v-if="envDlgIsEdit" class="btn-ghost" @click="onTestArgo" :disabled="testing.argo">测试 ArgoCD</button>
+            <button class="btn-ghost" @click="onTestGit" :disabled="testing.git">测试 Git</button>
+            <button class="btn-ghost" @click="onTestArgo" :disabled="testing.argo">测试 ArgoCD</button>
           </div>
           <div class="foot-r">
             <button class="btn-ghost" @click="envDlgVis = false">取消</button>
@@ -538,14 +538,21 @@ async function onDeleteEnv() {
   await load()
 }
 async function onTestGit() {
+  if (!envForm.git_repo.trim()) { ElMessage.warning('请先填 Git Repo URL'); return }
   testing.git = true
-  try { await testProjectEnvGit(envEditingID.value); ElMessage.success('Git 连通 OK') }
-  finally { testing.git = false }
+  try {
+    await testProjectEnvGit({
+      git_repo: envForm.git_repo.trim(),
+      git_branch: (envForm.git_branch || 'main').trim(),
+    })
+    ElMessage.success('Git 连通 OK')
+  } finally { testing.git = false }
 }
 async function onTestArgo() {
+  if (!envForm.argocd_instance_id) { ElMessage.warning('请先选 ArgoCD 实例'); return }
   testing.argo = true
   try {
-    const r = await testProjectEnvArgocd(envEditingID.value)
+    const r = await testProjectEnvArgocd({ argocd_instance_id: envForm.argocd_instance_id })
     ElMessage.success(`ArgoCD OK (${r.version})`)
   } finally { testing.argo = false }
 }

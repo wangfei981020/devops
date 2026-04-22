@@ -294,6 +294,7 @@
         </el-form-item>
       </el-form>
       <template #footer>
+        <el-button @click="onTestArgoInDialog" :loading="testing.argoDlg">测试连接</el-button>
         <el-button @click="argoDlg.vis = false">取消</el-button>
         <el-button type="primary" @click="onSaveArgo">保存</el-button>
       </template>
@@ -360,6 +361,7 @@
         </el-form-item>
       </el-form>
       <template #footer>
+        <el-button @click="onTestBotInDialog" :loading="testing.botDlg">测试发送</el-button>
         <el-button @click="botDlg.vis = false">取消</el-button>
         <el-button type="primary" @click="onSaveBot">保存</el-button>
       </template>
@@ -405,7 +407,7 @@ const larkBots = ref([])
 const argoInstances = ref([])
 const loading = reactive({ cred: false })
 const saving = reactive({ cred: false })
-const testing = reactive({ git: false })
+const testing = reactive({ git: false, argoDlg: false, botDlg: false })
 
 function fmt(s) { return s ? dayjs(s).format('YYYY-MM-DD HH:mm') : '' }
 
@@ -429,8 +431,15 @@ async function saveGlobal() {
 }
 async function onTestGit() {
   testing.git = true
-  try { await testGitlab(); ElMessage.success('GitLab 连通 OK') }
-  finally { testing.git = false }
+  try {
+    // 把当前 form 值传给后端；token 留空时后端 fallback 到 DB 解密
+    await testGitlab({
+      gitlab_url: gc.gitlab_url,
+      gitlab_user: gc.gitlab_user,
+      gitlab_token: gc.gitlab_token || '',
+    })
+    ElMessage.success('GitLab 连通 OK')
+  } finally { testing.git = false }
 }
 
 // === ArgoCD 实例 ===
@@ -458,9 +467,25 @@ async function onSaveArgo() {
 }
 async function onTestArgo(a) {
   try {
-    const r = await testArgocdInstance(a.id)
+    // 列表里点测试：用 ID，token 为空后端 fallback DB
+    const r = await testArgocdInstance({ id: a.id })
     ElMessage.success(`连通 OK · version=${r.version}`)
   } catch (_) {}
+}
+// 弹窗内「测试连接」：用当前 form 值（未保存也能测）
+async function onTestArgoInDialog() {
+  if (!argoDlg.form.url) { ElMessage.warning('URL 必填'); return }
+  testing.argoDlg = true
+  try {
+    const body = {
+      url: argoDlg.form.url,
+      token: argoDlg.form.token || '',
+    }
+    // 编辑模式：token 留空时让后端 fallback DB
+    if (argoDlg.isEdit && argoDlg.editingID) body.id = argoDlg.editingID
+    const r = await testArgocdInstance(body)
+    ElMessage.success(`连通 OK · version=${r.version}`)
+  } catch (_) {} finally { testing.argoDlg = false }
 }
 async function onDeleteArgo(a) {
   try { await ElMessageBox.confirm(`确认删除 ArgoCD 实例「${a.name}」？`, '删除确认', { type: 'warning' }) }
@@ -581,9 +606,23 @@ async function onDeleteBot(b) {
 }
 async function onTestBot(b) {
   try {
-    await testLarkBot(b.id)
+    await testLarkBot({ id: b.id })
     ElMessage.success(`已发送测试消息到「${b.name}」`)
   } catch (_) {}
+}
+// 弹窗里「测试发送」：用当前 form 值，未保存也能测
+async function onTestBotInDialog() {
+  if (!botDlg.form.webhook) { ElMessage.warning('Webhook 必填'); return }
+  testing.botDlg = true
+  try {
+    const body = {
+      webhook: botDlg.form.webhook,
+      secret: botDlg.form.secret || '',
+    }
+    if (botDlg.isEdit && botDlg.editingID) body.id = botDlg.editingID
+    await testLarkBot(body)
+    ElMessage.success('测试消息已发送，请查看 Lark')
+  } catch (_) {} finally { testing.botDlg = false }
 }
 
 watch(tab, (t) => {

@@ -70,14 +70,17 @@ export const listLarkBots = () => http.get('/lark-bots')
 export const createLarkBot = (data) => http.post('/lark-bots', data)
 export const updateLarkBot = (id, data) => http.put(`/lark-bots/${id}`, data)
 export const deleteLarkBot = (id) => http.delete(`/lark-bots/${id}`)
-export const testLarkBot = (id) => http.post(`/lark-bots/${id}/test`)
+// testLarkBot body 方式，未保存也能测。body = { id?, webhook?, secret? }
+export const testLarkBot = (body) => http.post('/lark-bots/test', body || {})
 
 // ArgoCD Instances
 export const listArgocdInstances = () => http.get('/argocd-instances')
 export const createArgocdInstance = (data) => http.post('/argocd-instances', data)
 export const updateArgocdInstance = (id, data) => http.put(`/argocd-instances/${id}`, data)
 export const deleteArgocdInstance = (id) => http.delete(`/argocd-instances/${id}`)
-export const testArgocdInstance = (id) => http.post(`/argocd-instances/${id}/test`)
+// testArgocdInstanceByBody 新：body 方式，未保存也能测
+// body = { id?, url?, token? }
+export const testArgocdInstance = (body) => http.post('/argocd-instances/test', body || {})
 
 // Projects (空项目注册表 + 派生)
 export const listProjects = () => http.get('/projects')
@@ -91,8 +94,10 @@ export const getProjectEnv = (id) => http.get(`/project-envs/${id}`)
 export const createProjectEnv = (data) => http.post('/project-envs', data)
 export const updateProjectEnv = (id, data) => http.put(`/project-envs/${id}`, data)
 export const deleteProjectEnv = (id) => http.delete(`/project-envs/${id}`)
-export const testProjectEnvGit = (id) => http.post(`/project-envs/${id}/test-git`)
-export const testProjectEnvArgocd = (id) => http.post(`/project-envs/${id}/test-argocd`)
+// testProjectEnvGit body = { git_repo, git_branch }
+export const testProjectEnvGit = (body) => http.post('/project-envs/test-git', body || {})
+// testProjectEnvArgocd body = { argocd_instance_id }
+export const testProjectEnvArgocd = (body) => http.post('/project-envs/test-argocd', body || {})
 export const scanModules = (id) => http.post(`/project-envs/${id}/scan-modules`)
 
 // Modules

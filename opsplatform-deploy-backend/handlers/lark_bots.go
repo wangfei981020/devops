@@ -118,6 +118,7 @@ func HandleDeleteLarkBot(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/lark-bots/{id}/test
+// （保留兼容）根据 ID 从 DB 读取测试
 func HandleTestLarkBot(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
 	b, err := LoadLarkBotDecrypted(id)
@@ -125,9 +126,42 @@ func HandleTestLarkBot(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40400, "lark bot not found")
 		return
 	}
+	doTestLark(w, r, b.Webhook, b.Secret)
+}
+
+// POST /api/lark-bots/test
+// 新：前端 body 传 {id?, webhook?, secret?} 测试发送。未保存时也能测。
+func HandleTestLarkBotByBody(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID      *int64 `json:"id"`
+		Webhook string `json:"webhook"`
+		Secret  string `json:"secret"`
+	}
+	if !DecodeJSON(w, r, &req) {
+		return
+	}
+	webhook, secret := strings.TrimSpace(req.Webhook), req.Secret
+	if req.ID != nil && *req.ID > 0 {
+		if b, err := LoadLarkBotDecrypted(*req.ID); err == nil {
+			if webhook == "" {
+				webhook = b.Webhook
+			}
+			if secret == "" {
+				secret = b.Secret
+			}
+		}
+	}
+	if webhook == "" {
+		JSONError(w, 40001, "webhook 必填")
+		return
+	}
+	doTestLark(w, r, webhook, secret)
+}
+
+func doTestLark(w http.ResponseWriter, r *http.Request, webhook, secret string) {
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	if err := services.SendLarkCard(ctx, b.Webhook, b.Secret,
+	if err := services.SendLarkCard(ctx, webhook, secret,
 		"✅ 测试消息", "这是来自 Deploy Center 的测试消息", "blue", "", ""); err != nil {
 		JSONError(w, 50005, "发送失败: "+err.Error())
 		return

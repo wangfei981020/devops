@@ -28,7 +28,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/opsplatform-deploy-backend:v45
+          image: localhost:8070/opsplatform/opsplatform-deploy-backend:v46
           imagePullPolicy: Always
           ports:
             - { name: http,    containerPort: 8080 }
