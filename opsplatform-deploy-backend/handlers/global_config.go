@@ -16,10 +16,12 @@ import (
 func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	var c models.GlobalConfig
 	err := database.DB.QueryRow(`SELECT id, gitlab_url, gitlab_user, gitlab_email, gitlab_token,
+		IFNULL(test_repo_path,''),
 		lark_default_webhook, lark_default_secret,
 		poll_interval_sec, poll_timeout_min, git_retry_count, updated_at
 		FROM global_config WHERE id=1`).
 		Scan(&c.ID, &c.GitlabURL, &c.GitlabUser, &c.GitlabEmail, &c.GitlabToken,
+			&c.TestRepoPath,
 			&c.LarkDefaultWebhook, &c.LarkDefaultSecret,
 			&c.PollIntervalSec, &c.PollTimeoutMin, &c.GitRetryCount, &c.UpdatedAt)
 	if err != nil {
@@ -36,6 +38,7 @@ type updateGlobalConfigReq struct {
 	GitlabUser         *string `json:"gitlab_user"`
 	GitlabEmail        *string `json:"gitlab_email"`
 	GitlabToken        *string `json:"gitlab_token"`
+	TestRepoPath       *string `json:"test_repo_path"`
 	LarkDefaultWebhook *string `json:"lark_default_webhook"`
 	LarkDefaultSecret  *string `json:"lark_default_secret"`
 	PollIntervalSec    *int    `json:"poll_interval_sec"`
@@ -59,6 +62,7 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	addStr("gitlab_url", req.GitlabURL)
 	addStr("gitlab_user", req.GitlabUser)
 	addStr("gitlab_email", req.GitlabEmail)
+	addStr("test_repo_path", req.TestRepoPath)
 	addStr("lark_default_webhook", req.LarkDefaultWebhook)
 	if req.GitlabToken != nil && *req.GitlabToken != "" {
 		enc, err := crypto.Encrypt(*req.GitlabToken)
@@ -111,38 +115,95 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, nil)
 }
 
+// HandleTestGlobalGitlab 测试 GitLab 凭证
+// 策略：
+//   1) 如果前端传了 test_repo_path 或 DB 有配置 → 用该仓库做 git ls-remote（最精确）
+//   2) 否则调 GitLab API /api/v4/version → 200 表示 token 有效
+//      403 表示 token 只有 git scope（典型 impersonation token），提示用户
+//      401 表示 token 无效
 func HandleTestGlobalGitlab(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		URL   string `json:"gitlab_url"`
-		User  string `json:"gitlab_user"`
-		Token string `json:"gitlab_token"`
+		URL          string `json:"gitlab_url"`
+		User         string `json:"gitlab_user"`
+		Token        string `json:"gitlab_token"`
+		TestRepoPath string `json:"test_repo_path"`
 	}
-	// 允许空 body，DecodeJSON 失败时也能 fallback 到 DB
 	_ = DecodeJSON(newDiscardW(), r, &req)
-	url, user, token := req.URL, req.User, req.Token
-	if url == "" || user == "" || token == "" {
-		var t string
-		_ = database.DB.QueryRow(`SELECT gitlab_url, gitlab_user, gitlab_token FROM global_config WHERE id=1`).
-			Scan(&url, &user, &t)
+	url, user, token, repoPath := req.URL, req.User, req.Token, req.TestRepoPath
+
+	// 任一字段空就从 DB fallback
+	if url == "" || user == "" || token == "" || repoPath == "" {
+		var dbURL, dbUser, dbEnc, dbPath string
+		_ = database.DB.QueryRow(`SELECT gitlab_url, gitlab_user, gitlab_token, IFNULL(test_repo_path,'')
+			FROM global_config WHERE id=1`).
+			Scan(&dbURL, &dbUser, &dbEnc, &dbPath)
+		if url == "" {
+			url = dbURL
+		}
+		if user == "" {
+			user = dbUser
+		}
 		if token == "" {
-			dec, _ := crypto.Decrypt(t)
+			dec, _ := crypto.Decrypt(dbEnc)
 			token = dec
 		}
+		if repoPath == "" {
+			repoPath = dbPath
+		}
 	}
+
 	if url == "" || user == "" || token == "" {
 		JSONError(w, 40001, "gitlab_url/user/token 必填")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	authURL := injectTokenHelper(url, user, token)
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", authURL, "HEAD")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		JSONError(w, 50001, "git ls-remote failed: "+services.ScrubSecrets(out))
+
+	// 策略 1：有 test_repo_path → 用具体仓库做 git ls-remote（最可靠）
+	if repoPath != "" {
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer cancel()
+		repoURL := strings.TrimRight(url, "/") + "/" + strings.TrimLeft(repoPath, "/")
+		if !strings.HasSuffix(repoURL, ".git") {
+			repoURL += ".git"
+		}
+		authURL := injectTokenHelper(repoURL, user, token)
+		out, err := exec.CommandContext(ctx, "git", "ls-remote", authURL, "HEAD").CombinedOutput()
+		if err != nil {
+			JSONError(w, 50001, "git ls-remote failed: "+services.ScrubSecrets(out))
+			return
+		}
+		JSONSuccess(w, map[string]interface{}{
+			"ok":     true,
+			"method": "git",
+			"head":   strings.TrimSpace(services.ScrubSecrets(out)),
+		})
 		return
 	}
-	JSONSuccess(w, map[string]interface{}{"ok": true, "head": services.ScrubSecrets(out)})
+
+	// 策略 2：没填 test_repo_path → 调 API /api/v4/version
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	apiURL := strings.TrimRight(url, "/") + "/api/v4/version"
+	httpReq, _ := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	httpReq.Header.Set("PRIVATE-TOKEN", token)
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		JSONError(w, 50001, "GitLab 连接失败："+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case 200:
+		JSONSuccess(w, map[string]interface{}{"ok": true, "method": "api"})
+	case 401:
+		JSONError(w, 40100, "Token 无效（GitLab 返回 401）")
+	case 403:
+		JSONError(w, 40300, "Token 存在但缺少 read_api scope（git-only token 的典型情况）。"+
+			"建议：在「测试仓库路径」填一个有权限的仓库（如 argocd/uat-k8s-platform），点测试会用 git 协议精确验证。")
+	default:
+		JSONError(w, 50001, "GitLab API 返回异常状态码："+resp.Status)
+	}
 }
 
 func injectTokenHelper(url, user, token string) string {

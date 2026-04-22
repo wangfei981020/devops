@@ -10,14 +10,14 @@ import (
 	"opsplatform-deploy-backend/database"
 )
 
-// safeNameRe 严格限制项目/环境/模块等名称：小写字母/数字/- ，以字母数字开头，长度 1-64
-// 用作 git cache 目录名，防止 .. / 空格 / 特殊字符逃逸
-var safeNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+// safeNameRe 限制项目/环境/模块等名称：字母/数字/_-，以字母数字开头，长度 1-64
+// 作 git cache 目录名安全：禁止 .. / 空格 / 路径特殊字符，允许大小写和下划线
+var safeNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 // ValidateName 校验名称是否合法（用于 project_env.name、project.name、contact.name 等）
 func ValidateName(s string) error {
 	if !safeNameRe.MatchString(s) {
-		return fmt.Errorf("名称必须匹配 %s", safeNameRe.String())
+		return fmt.Errorf("名称只能包含字母/数字/_/-，字母数字开头，最长 64 字符")
 	}
 	return nil
 }

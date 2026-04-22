@@ -16,11 +16,14 @@
         </div>
         <div class="sec-body" v-loading="loading.cred">
           <el-form :model="gc" label-width="140px" label-position="left" size="default">
-            <el-form-item label="GitLab URL"><el-input v-model="gc.gitlab_url" class="mono" /></el-form-item>
-            <el-form-item label="User"><el-input v-model="gc.gitlab_user" /></el-form-item>
-            <el-form-item label="Email"><el-input v-model="gc.gitlab_email" /></el-form-item>
+            <el-form-item label="GitLab URL"><el-input v-model="gc.gitlab_url" class="mono" placeholder="https://gitlab.your-company.com" /></el-form-item>
+            <el-form-item label="User"><el-input v-model="gc.gitlab_user" placeholder="token 绑定的用户名（PAT）或 oauth2" /></el-form-item>
+            <el-form-item label="Email"><el-input v-model="gc.gitlab_email" placeholder="commit 使用" /></el-form-item>
             <el-form-item label="Token">
               <el-input v-model="gc.gitlab_token" type="password" show-password placeholder="已设置，留空则不覆盖" />
+            </el-form-item>
+            <el-form-item label="测试仓库路径">
+              <el-input v-model="gc.test_repo_path" class="mono" placeholder="如 argocd/uat-k8s-platform（可选，填了点「测试连接」用这个仓库精确验证）" />
             </el-form-item>
           </el-form>
           <div class="actions">
@@ -398,6 +401,7 @@ const tabs = [
 
 const gc = reactive({
   gitlab_url: '', gitlab_user: '', gitlab_email: '', gitlab_token: '',
+  test_repo_path: '',
   lark_default_webhook: '', lark_default_secret: '',
   poll_interval_sec: 10, poll_timeout_min: 3, git_retry_count: 3
 })
@@ -432,13 +436,17 @@ async function saveGlobal() {
 async function onTestGit() {
   testing.git = true
   try {
-    // 把当前 form 值传给后端；token 留空时后端 fallback 到 DB 解密
-    await testGitlab({
+    const r = await testGitlab({
       gitlab_url: gc.gitlab_url,
       gitlab_user: gc.gitlab_user,
       gitlab_token: gc.gitlab_token || '',
+      test_repo_path: gc.test_repo_path || '',
     })
-    ElMessage.success('GitLab 连通 OK')
+    if (r?.method === 'git') {
+      ElMessage.success(`GitLab 连通 OK · HEAD: ${r.head}`)
+    } else {
+      ElMessage.success('GitLab API 可访问，token 有效')
+    }
   } finally { testing.git = false }
 }
 

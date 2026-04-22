@@ -8,6 +8,7 @@ type GlobalConfig struct {
 	GitlabUser         string    `json:"gitlab_user"`
 	GitlabEmail        string    `json:"gitlab_email"`
 	GitlabToken        string    `json:"gitlab_token,omitempty"`
+	TestRepoPath       string    `json:"test_repo_path"` // 测试连接用的仓库相对路径
 	LarkDefaultWebhook string    `json:"lark_default_webhook"`
 	LarkDefaultSecret  string    `json:"lark_default_secret,omitempty"`
 	PollIntervalSec    int       `json:"poll_interval_sec"`
