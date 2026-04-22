@@ -25,6 +25,25 @@ func ValidateName(s string) error {
 // safeUsernameRe 用户名：字母数字+下划线/点/-，1-50
 var safeUsernameRe = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,50}$`)
 
+// ValidateLabel 宽松校验：允许中文/字母数字，禁止控制字符和 ..，长度 1-64
+func ValidateLabel(s string) error {
+	if s == "" {
+		return fmt.Errorf("必填")
+	}
+	if len([]rune(s)) > 64 {
+		return fmt.Errorf("长度不能超过 64 字符")
+	}
+	for _, r := range s {
+		if r < 32 || r == 127 {
+			return fmt.Errorf("包含非法控制字符")
+		}
+	}
+	if strings.Contains(s, "..") {
+		return fmt.Errorf("不能包含 ..")
+	}
+	return nil
+}
+
 // ValidateUsername 校验用户名
 func ValidateUsername(s string) error {
 	if !safeUsernameRe.MatchString(s) {

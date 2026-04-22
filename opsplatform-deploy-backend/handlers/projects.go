@@ -86,13 +86,8 @@ func HandleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
-		JSONError(w, 40001, "name 必填")
-		return
-	}
-	// name 不能包含短横线后面接 env_type（避免和 project_env 的 name 规则冲突）
-	if strings.Contains(req.Name, " ") {
-		JSONError(w, 40001, "name 不能包含空格")
+	if err := ValidateName(req.Name); err != nil {
+		JSONError(w, 40001, "name: "+err.Error())
 		return
 	}
 	res, err := database.DB.Exec(`INSERT INTO project (name, display_name, description) VALUES (?, ?, ?)`,
@@ -106,6 +101,7 @@ func HandleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	Audit(r, "project.create", "project", req.Name, nil)
 	JSONSuccess(w, map[string]interface{}{"id": id, "name": req.Name})
 }
 
@@ -128,6 +124,7 @@ func HandleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "project.update", "project", strconv.FormatInt(id, 10), nil)
 	JSONSuccess(w, nil)
 }
 
@@ -155,6 +152,7 @@ func HandleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "project.delete", "project", name, nil)
 	JSONSuccess(w, nil)
 }
 

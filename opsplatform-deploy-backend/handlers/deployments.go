@@ -66,6 +66,7 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
+	isAdmin := IsAdmin(r)
 	list := []models.Deployment{}
 	for rows.Next() {
 		var d models.Deployment
@@ -75,6 +76,10 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 		_ = jsonUnmarshalImpl(mnames, &d.ModuleNames)
 		_ = jsonUnmarshalImpl(changes, &d.Changes)
 		_ = jsonUnmarshalImpl(argoResults, &d.ArgocdResults)
+		// error_msg 可能含 git stderr / 文件路径等，非 admin 脱敏
+		if !isAdmin && d.ErrorMsg != "" {
+			d.ErrorMsg = "（失败详情已隐藏，请联系管理员查看）"
+		}
 		list = append(list, d)
 	}
 	JSONSuccess(w, map[string]interface{}{"total": total, "list": list})
@@ -96,5 +101,8 @@ func HandleGetDeployment(w http.ResponseWriter, r *http.Request) {
 	_ = jsonUnmarshalImpl(mnames, &d.ModuleNames)
 	_ = jsonUnmarshalImpl(changes, &d.Changes)
 	_ = jsonUnmarshalImpl(argoResults, &d.ArgocdResults)
+	if !IsAdmin(r) && d.ErrorMsg != "" {
+		d.ErrorMsg = "（失败详情已隐藏，请联系管理员查看）"
+	}
 	JSONSuccess(w, d)
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"log"
 	"strings"
 )
 
@@ -56,11 +57,14 @@ func Encrypt(plain string) (string, error) {
 }
 
 // Decrypt 解密；没有 enc: 前缀视为明文原样返回（兼容历史数据）
+// ⚠️ 明文分支会打 warn log，提示管理员 re-save 那条数据让它被加密
 func Decrypt(enc string) (string, error) {
 	if enc == "" {
 		return "", nil
 	}
 	if !strings.HasPrefix(enc, prefix) {
+		log.Printf("[crypto] WARN: legacy plaintext token detected (len=%d prefix=%q). Re-save the record via UI to encrypt it.",
+			len(enc), previewPlain(enc))
 		return enc, nil
 	}
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(enc, prefix))
@@ -84,4 +88,12 @@ func Decrypt(enc string) (string, error) {
 		return "", err
 	}
 	return string(pt), nil
+}
+
+// previewPlain 只返回前 4 个字符（用于 warn log 里标识是哪条记录，不泄露完整 token）
+func previewPlain(s string) string {
+	if len(s) <= 4 {
+		return "***"
+	}
+	return s[:4] + "***"
 }

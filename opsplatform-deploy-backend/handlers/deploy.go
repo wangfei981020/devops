@@ -93,6 +93,9 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 
 	go runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, nil, getOperator(r))
 
+	Audit(r, "deploy.update_image", "project_env", p.Name, map[string]interface{}{
+		"deployment_id": depID, "env_type": p.EnvType, "modules": len(pending),
+	})
 	JSONSuccess(w, map[string]interface{}{
 		"deployment_id": depID,
 		"status":        "pending",
@@ -156,6 +159,9 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		sendRestartNotify(p, depID, operator, res)
 	}()
 
+	Audit(r, "deploy.restart", "project_env", p.Name, map[string]interface{}{
+		"deployment_id": depID, "env_type": p.EnvType, "modules": len(req.ModuleNames),
+	})
 	JSONSuccess(w, map[string]interface{}{"deployment_id": depID, "status": "pending"})
 }
 
@@ -250,6 +256,9 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 
 	go runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, &ref, getOperator(r))
 
+	Audit(r, "deploy.rollback", "project_env", p.Name, map[string]interface{}{
+		"deployment_id": depID, "ref_deployment_id": ref, "modules": len(pending),
+	})
 	JSONSuccess(w, map[string]interface{}{
 		"deployment_id": depID,
 		"status":        "pending",

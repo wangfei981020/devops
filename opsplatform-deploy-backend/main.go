@@ -151,7 +151,7 @@ func startScanScheduler() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
-		rows, err := database.DB.Query(`SELECT id FROM project_env`)
+		rows, err := database.DB.Query(`SELECT id FROM project_env ORDER BY id LIMIT 500`)
 		if err != nil {
 			log.Printf("scheduler: list project_env err: %v", err)
 			continue

@@ -107,6 +107,7 @@ func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	Audit(r, "project_env.create", "project_env", req.Name, map[string]interface{}{"env_type": req.EnvType})
 	JSONSuccess(w, map[string]interface{}{"id": id})
 }
 
@@ -144,6 +145,7 @@ func HandleUpdateProjectEnv(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "project_env.update", "project_env", fmt.Sprintf("%d", id), nil)
 	JSONSuccess(w, nil)
 }
 
@@ -154,6 +156,7 @@ func HandleDeleteProjectEnv(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "project_env.delete", "project_env", fmt.Sprintf("%d", id), nil)
 	JSONSuccess(w, nil)
 }
 

@@ -87,11 +87,16 @@ bet-client-backend"
         调用 ArgoCD <b>Deployment Restart</b> · 不改动 git
         <span v-if="validCount"> · 将重启 <b>{{ validCount }}</b> 个</span>
       </div>
-      <button class="cta primary" :disabled="!validCount || submitting" @click="onRestart">
+      <button
+        v-if="!isProd || auth.isAdmin"
+        class="cta primary"
+        :disabled="!validCount || submitting"
+        @click="onRestart">
         <span v-if="submitting">重启中...</span>
         <span v-else>重启 {{ validCount }} 个</span>
         <el-icon v-if="!submitting"><ArrowRight /></el-icon>
       </button>
+      <span v-else class="no-perm-hint">⚠ PROD 重启仅限管理员</span>
     </div>
   </div>
 </template>
@@ -101,13 +106,16 @@ import { ref, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RefreshRight, ArrowRight, Check, Close } from '@element-plus/icons-vue'
 import { restartModules } from '../api'
+import { useAuthStore } from '../stores/auth'
 
 const props = defineProps(['projectEnv', 'modules'])
 const emit = defineEmits(['done'])
+const auth = useAuthStore()
 const text = ref('')
 const preview = ref([])
 const submitting = ref(false)
 
+const isProd = computed(() => props.projectEnv?.env_type === 'prod')
 const validCount = computed(() => preview.value.filter(p => p.exists).length)
 const invalidCount = computed(() => preview.value.filter(p => !p.exists).length)
 
@@ -238,4 +246,10 @@ async function onRestart() {
 .cta:hover:not(:disabled) { background: var(--primary-dark); }
 .cta:disabled { opacity: .4; cursor: not-allowed; }
 .cta .el-icon { font-size: 14px; }
+
+.no-perm-hint {
+  font-size: 12.5px; color: var(--warning);
+  padding: 10px 16px; border: 1px dashed var(--warning);
+  border-radius: 5px;
+}
 </style>

@@ -15,6 +15,7 @@ import (
 )
 
 // GET /api/lark-bots
+// 非 admin 用户不返回 webhook URL（URL 本身可被任何人用来发 lark 消息）
 func HandleListLarkBots(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`SELECT id, name, webhook, secret, description, created_at, updated_at FROM lark_bot ORDER BY name`)
 	if err != nil {
@@ -22,11 +23,15 @@ func HandleListLarkBots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
+	isAdmin := IsAdmin(r)
 	list := []models.LarkBot{}
 	for rows.Next() {
 		var b models.LarkBot
 		_ = rows.Scan(&b.ID, &b.Name, &b.Webhook, &b.Secret, &b.Description, &b.CreatedAt, &b.UpdatedAt)
 		b.Secret = maskToken(b.Secret)
+		if !isAdmin {
+			b.Webhook = maskToken(b.Webhook)
+		}
 		list = append(list, b)
 	}
 	JSONSuccess(w, list)

@@ -84,6 +84,7 @@ base-client-backend:20260416020000-99"
         <span v-if="validCount"> · 涉及 <b>{{ validCount }}</b> 个模块</span>
       </div>
       <button
+        v-if="!isProd || auth.isAdmin"
         :class="['cta', isProd ? 'danger' : 'success']"
         :disabled="!validCount || submitting"
         @click="onSubmit">
@@ -92,6 +93,7 @@ base-client-backend:20260416020000-99"
         <span v-else>提交并同步 UAT</span>
         <el-icon v-if="!submitting"><ArrowRight /></el-icon>
       </button>
+      <span v-else class="no-perm-hint">⚠ PROD 发布仅限管理员</span>
     </div>
   </div>
 </template>
@@ -101,9 +103,11 @@ import { ref, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload, ArrowRight } from '@element-plus/icons-vue'
 import { previewImage, updateImage } from '../api'
+import { useAuthStore } from '../stores/auth'
 
 const props = defineProps(['projectEnv', 'modules'])
 const emit = defineEmits(['done'])
+const auth = useAuthStore()
 const text = ref('')
 const diff = ref([])
 const previewing = ref(false)
@@ -246,5 +250,11 @@ async function onSubmit() {
 .cta:disabled { opacity: .4; cursor: not-allowed; }
 .cta.danger { background: var(--danger); }
 .cta.danger:hover:not(:disabled) { background: var(--danger-dark); }
+
+.no-perm-hint {
+  font-size: 12.5px; color: var(--warning);
+  padding: 10px 16px; border: 1px dashed var(--warning);
+  border-radius: 5px;
+}
 .cta .el-icon { font-size: 14px; }
 </style>

@@ -47,8 +47,12 @@ func HandleCreateArgocdInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	req.URL = strings.TrimSpace(req.URL)
-	if req.Name == "" || req.URL == "" {
-		JSONError(w, 40001, "name 和 url 必填")
+	if err := ValidateName(req.Name); err != nil {
+		JSONError(w, 40001, "name: "+err.Error())
+		return
+	}
+	if req.URL == "" {
+		JSONError(w, 40001, "url 必填")
 		return
 	}
 	if req.Token == "" {
@@ -71,6 +75,7 @@ func HandleCreateArgocdInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	Audit(r, "argocd_instance.create", "argocd_instance", req.Name, nil)
 	JSONSuccess(w, map[string]interface{}{"id": id})
 }
 
@@ -98,6 +103,7 @@ func HandleUpdateArgocdInstance(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "argocd_instance.update", "argocd_instance", strconv.FormatInt(id, 10), nil)
 	JSONSuccess(w, nil)
 }
 
@@ -115,6 +121,7 @@ func HandleDeleteArgocdInstance(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "argocd_instance.delete", "argocd_instance", strconv.FormatInt(id, 10), nil)
 	JSONSuccess(w, nil)
 }
 

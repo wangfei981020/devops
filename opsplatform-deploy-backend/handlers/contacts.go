@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -40,8 +41,8 @@ func HandleCreateContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
-		JSONError(w, 40001, "name 必填")
+	if err := ValidateLabel(req.Name); err != nil {
+		JSONError(w, 40001, "name: "+err.Error())
 		return
 	}
 	res, err := database.DB.Exec(`INSERT INTO contact (name, lark_id, remark) VALUES (?, ?, ?)`,
@@ -55,6 +56,7 @@ func HandleCreateContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	Audit(r, "contact.create", "contact", req.Name, nil)
 	JSONSuccess(w, map[string]interface{}{"id": id})
 }
 
@@ -71,6 +73,7 @@ func HandleUpdateContact(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "contact.update", "contact", strconv.FormatInt(id, 10), nil)
 	JSONSuccess(w, nil)
 }
 
@@ -81,6 +84,7 @@ func HandleDeleteContact(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "contact.delete", "contact", strconv.FormatInt(id, 10), nil)
 	JSONSuccess(w, nil)
 }
 

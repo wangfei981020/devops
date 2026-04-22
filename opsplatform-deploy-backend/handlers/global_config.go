@@ -107,6 +107,7 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "global_config.update", "global_config", "", map[string]interface{}{"fields": len(sets)})
 	JSONSuccess(w, nil)
 }
 
