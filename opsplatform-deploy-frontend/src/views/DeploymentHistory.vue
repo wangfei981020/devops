@@ -340,17 +340,18 @@ async function pollPending() {
   const ids = list.value.filter(d => d.status === 'pending').map(d => d.id)
   if (!ids.length) { stopPolling(); return }
   const results = await Promise.allSettled(ids.map(id => getDeployment(id)))
-  let changed = false
+  let statusChanged = false
   results.forEach((r, i) => {
     if (r.status !== 'fulfilled' || !r.value) return
     const id = ids[i]
     const idx = list.value.findIndex(d => d.id === id)
-    if (idx >= 0 && r.value.status !== 'pending') {
-      list.value[idx] = r.value
-      changed = true
-    }
+    if (idx < 0) return
+    // 无条件替换整条 — 即使 status 仍是 pending，argocd_results/duration_sec 也可能在变
+    // （后端在 pending 期间每 5s 推一次中间态的 argocd_results JSON）
+    if (list.value[idx].status !== r.value.status) statusChanged = true
+    list.value[idx] = r.value
   })
-  if (changed) computeKPIs()
+  if (statusChanged) computeKPIs()
   if (!hasPending()) stopPolling()
 }
 function startPolling() {
