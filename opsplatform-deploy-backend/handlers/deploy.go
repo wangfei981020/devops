@@ -3,7 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -97,7 +97,7 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 
 	op := getOperator(r)
 	InflightTrack(func() {
-		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, nil, op)
+		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, nil, op, "发布")
 	})
 
 	Audit(r, "deploy.update_image", "project_env", p.Name, map[string]interface{}{
@@ -179,7 +179,7 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		argoJSON := marshalJSON(res.ArgocdResults)
 		_, _ = database.DB.Exec(`UPDATE deployment SET argocd_results=?, status=?, duration_sec=? WHERE id=?`,
 			argoJSON, res.Status, int(time.Since(start).Seconds()), depID)
-		sendRestartNotify(p, depID, operator, res)
+		sendRestartNotify(p, depID, operator, modules, res)
 	})
 
 	Audit(r, "deploy.restart", "project_env", p.Name, map[string]interface{}{
@@ -283,7 +283,7 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 
 	op := getOperator(r)
 	InflightTrack(func() {
-		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, &ref, op)
+		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, &ref, op, "回滚")
 	})
 
 	Audit(r, "deploy.rollback", "project_env", p.Name, map[string]interface{}{
@@ -368,8 +368,10 @@ func insertPendingDeployment(peID int64, action string, refID *int64, modNamesJS
 }
 
 // runUpdateImageAsync 后台跑完整的发布流水线，update-image 和 rollback 共用
+//
+//	opLabel: Lark 通知标题用 —— "发布" 或 "回滚"
 func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]string, modules map[string]services.Module,
-	gitRetry, pollInterval, pollTimeoutMin int, _refDepID *int64, operator string) {
+	gitRetry, pollInterval, pollTimeoutMin int, _refDepID *int64, operator, opLabel string) {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(pollTimeoutMin+2)*time.Minute)
 	defer cancel()
@@ -418,7 +420,7 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 		_, _ = database.DB.Exec(`UPDATE module SET current_tag=? WHERE project_env_id=? AND name=?`, c.ToTag, p.ID, c.Module)
 	}
 
-	sendUpdateImageNotify(p, depID, operator, res)
+	sendUpdateImageNotify(p, depID, operator, opLabel, modules, res)
 }
 
 // --- Lark notify ---
@@ -456,22 +458,30 @@ func larkColorForStatus(status string) (color, title string) {
 	}
 }
 
-func sendUpdateImageNotify(p *models.ProjectEnv, depID int64, operator string, res *services.UpdateImageResult) {
+// sendUpdateImageNotify 发布/回滚的 Lark 通知
+//
+//	opLabel: "发布" 或 "回滚"（两个操作共享通知函数，标题不同）
+//	modules: 当前环境的 module map（用来拿 namespace / current_tag）
+func sendUpdateImageNotify(p *models.ProjectEnv, depID int64, operator, opLabel string,
+	modules map[string]services.Module, res *services.UpdateImageResult) {
 	webhook, secret := resolveLarkTarget(p)
 	if webhook == "" {
+		log.Printf("lark skip: dep=%d no webhook configured (project_env=%s)", depID, p.Name)
+		_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, "skipped", depID)
 		return
 	}
-	color, title := larkColorForStatus(res.Status)
-	opDisplay := operator
-	if operator != "" && operator != "system" {
-		opDisplay = operator
-	}
-	body := fmt.Sprintf("**环境**: %s (%s)\n**模块数**: %d\n**提交**: %s\n**操作人**: %s",
-		p.Name, p.EnvType, len(res.Changes), res.GitCommit, opDisplay)
+	atID := LookupContactLarkID(operator)
+	successes, skippeds, faileds := buildUpdateNotifyItems(modules, res)
+	title, color, body := buildDeployNotifyBody(opLabel, operator, atID, successes, skippeds, faileds)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	atID := LookupContactLarkID(operator)
-	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, "查看 commit", res.GitCommitURL, atID)
+	// atLarkIDs 传空，@ 已经写进 body 末尾（靠近失败分组，符合 @ 驱动阅读）
+	linkLabel, linkURL := "", ""
+	if res.GitCommitURL != "" {
+		linkLabel, linkURL = "查看 commit", res.GitCommitURL
+	}
+	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, linkLabel, linkURL)
 	status := "success"
 	if err != nil {
 		status = "failed"
@@ -479,19 +489,22 @@ func sendUpdateImageNotify(p *models.ProjectEnv, depID int64, operator string, r
 	_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, status, depID)
 }
 
-func sendRestartNotify(p *models.ProjectEnv, depID int64, operator string, res *services.RestartResult) {
+func sendRestartNotify(p *models.ProjectEnv, depID int64, operator string,
+	modules map[string]services.Module, res *services.RestartResult) {
 	webhook, secret := resolveLarkTarget(p)
 	if webhook == "" {
+		log.Printf("lark skip: dep=%d no webhook configured (project_env=%s)", depID, p.Name)
+		_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, "skipped", depID)
 		return
 	}
-	color, title := larkColorForStatus(res.Status)
-	title = "🔄 " + title + "（重启）"
-	body := fmt.Sprintf("**环境**: %s (%s)\n**模块数**: %d\n**操作人**: %s",
-		p.Name, p.EnvType, len(res.ArgocdResults), operator)
+	atID := LookupContactLarkID(operator)
+	successes, faileds := buildRestartNotifyItems(modules, res)
+	title, color, body := buildDeployNotifyBody("重启", operator, atID, successes, nil, faileds)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	atID := LookupContactLarkID(operator)
-	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, "", "", atID)
+	// atLarkIDs 传空，@ 已经写在 body 末尾（靠近失败分组）
+	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, "", "")
 	status := "success"
 	if err != nil {
 		status = "failed"
