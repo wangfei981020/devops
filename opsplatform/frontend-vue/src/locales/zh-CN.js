@@ -602,6 +602,7 @@ export default {
         cancel: '取消',
         recalculate: '重算',
         repayout: '重派彩',
+        vipTable: '包桌T人',
         missed: '漏操作',
         missedScreenshot: '漏截图'
       },
@@ -635,7 +636,11 @@ export default {
       exportSuccess: '导出成功',
       exportFailed: '导出失败',
       copySuccess: '复制成功，点击"粘贴记录"按钮来批量添加',
-      pasteSuccess: '粘贴成功，已添加 {count} 条记录'
+      pasteSuccess: '粘贴成功，已添加 {count} 条记录',
+      batchModifyInspector: '批量修改质检人',
+      batchModifyInspectorTitle: '批量修改质检人',
+      batchModifyInspectorHint: '将为选中的 {count} 条记录更新质检人',
+      inspectorPlaceholder: '请输入或选择质检人'
     },
 
     form: {
@@ -695,8 +700,11 @@ export default {
       cancelDetail: '取消操作明细',
       recalcDetail: '重算操作明细',
       repayoutDetail: '重派彩操作明细',
+      vipTableDetail: '包桌T人明细',
       missedDetail: '漏操作明细',
       missedScreenshotDetail: '漏截图明细',
+      byProjectOperation: '按项目 × 操作类型',
+      projectTotal: '项目合计',
       detailDate: '日期',
       detailTable: '桌号',
       detailProject: '项目',
@@ -761,6 +769,7 @@ export default {
       csvGameTypes: '游戏类型',
       csvStatus: '状态',
       csvTableDetail: '桌台明细（按项目）',
+      csvByProjectOperation: '按项目 × 操作类型统计',
       csvFileName: '桌台维护统计'
     },
 

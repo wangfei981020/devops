@@ -602,6 +602,7 @@ export default {
         cancel: 'Cancel',
         recalculate: 'Recalculate',
         repayout: 'Re-payout',
+        vipTable: 'VIP Table',
         missed: 'Missed Op',
         missedScreenshot: 'Missed Screenshot'
       },
@@ -635,7 +636,11 @@ export default {
       exportSuccess: 'Export successful',
       exportFailed: 'Export failed',
       copySuccess: 'Copied! Click "Paste Records" button to add multiple records',
-      pasteSuccess: 'Pasted successfully, {count} records added'
+      pasteSuccess: 'Pasted successfully, {count} records added',
+      batchModifyInspector: 'Batch Modify Inspector',
+      batchModifyInspectorTitle: 'Batch Modify Inspector',
+      batchModifyInspectorHint: 'Will update inspector for {count} selected record(s)',
+      inspectorPlaceholder: 'Enter or select inspector'
     },
 
     form: {
@@ -695,8 +700,11 @@ export default {
       cancelDetail: 'Cancel Detail',
       recalcDetail: 'Recalculate Detail',
       repayoutDetail: 'Repayout Detail',
+      vipTableDetail: 'VIP Table Detail',
       missedDetail: 'Missed Operation Detail',
       missedScreenshotDetail: 'Missed Screenshot Detail',
+      byProjectOperation: 'By Project × Operation',
+      projectTotal: 'Project Total',
       detailDate: 'Date',
       detailTable: 'Table',
       detailProject: 'Project',
@@ -761,6 +769,7 @@ export default {
       csvGameTypes: 'Game Types',
       csvStatus: 'Status',
       csvTableDetail: 'Table Detail (By Project)',
+      csvByProjectOperation: 'By Project × Operation',
       csvFileName: 'Table_Maintenance_Stats'
     },
 

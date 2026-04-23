@@ -111,7 +111,7 @@ const columns = computed(() => [
   { key: 'reason', title: t('tableMaintenance.columns.reason'), width: 150, type: 'textarea' },
   { key: 'affect_settlement', title: t('tableMaintenance.columns.affectSettlement'), width: 80, type: 'select', options: [t('tableMaintenance.options.yesNo.yes'), t('tableMaintenance.options.yesNo.no')], default: t('tableMaintenance.options.yesNo.no') },
   { key: 'affected_round_ids', title: t('tableMaintenance.columns.affectedRoundIds'), width: 120, type: 'text' },
-  { key: 'operation', title: t('tableMaintenance.columns.operation'), width: 100, type: 'select', required: true, options: [t('tableMaintenance.options.operation.maintenance'), t('tableMaintenance.options.operation.cancel'), t('tableMaintenance.options.operation.recalculate'), t('tableMaintenance.options.operation.repayout'), t('tableMaintenance.options.operation.missed'), t('tableMaintenance.options.operation.missedScreenshot')] },
+  { key: 'operation', title: t('tableMaintenance.columns.operation'), width: 100, type: 'select', required: true, options: [t('tableMaintenance.options.operation.maintenance'), t('tableMaintenance.options.operation.cancel'), t('tableMaintenance.options.operation.recalculate'), t('tableMaintenance.options.operation.repayout'), t('tableMaintenance.options.operation.vipTable'), t('tableMaintenance.options.operation.missed'), t('tableMaintenance.options.operation.missedScreenshot')] },
   { key: 'operator', title: t('tableMaintenance.columns.operator'), width: 90, type: 'text', required: true },
   { key: 'inspector', title: t('tableMaintenance.columns.inspector'), width: 80, type: 'text' },
   { key: 'qc_status', title: t('tableMaintenance.columns.qcStatus'), width: 90, type: 'qc-status', options: [t('tableMaintenance.options.qcStatus.normal'), t('tableMaintenance.options.qcStatus.abnormal')] },
@@ -124,24 +124,50 @@ const columns = computed(() => [
 
 const visibleColumns = computed(() => columns.value)
 
-// i18n 感知的操作类型/时长比较辅助（数据库可能存中文或英文值）
-const OP_ZH = { maintenance: '维护', cancel: '取消', recalculate: '重算', repayout: '重派彩', missed: '漏操作', missedScreenshot: '漏截图' }
-const DUR_ZH = { twoMin: '两分钟内', fiveMin: '五分钟内', tenMin: '十分钟内', overTenMin: '十分钟以上' }
-const MAINT_ZH = { none: '无', emergency: '紧急维护', temporary: '临时维护', routine: '例行维护' }
-const QC_ZH = { normal: '正常', abnormal: '异常' }
+// i18n 感知的比较辅助（数据库可能存中文或英文值，统计时两种都要匹配）
+const OP_LABELS = {
+  maintenance: ['维护', 'Maintenance'],
+  cancel: ['取消', 'Cancel'],
+  recalculate: ['重算', 'Recalculate'],
+  repayout: ['重派彩', 'Re-payout'],
+  vipTable: ['包桌T人', 'VIP Table'],
+  missed: ['漏操作', 'Missed Op'],
+  missedScreenshot: ['漏截图', 'Missed Screenshot'],
+}
+const DUR_LABELS = {
+  twoMin: ['两分钟内', 'Within 2 min'],
+  fiveMin: ['五分钟内', 'Within 5 min'],
+  tenMin: ['十分钟内', 'Within 10 min'],
+  overTenMin: ['十分钟以上', 'Over 10 min'],
+}
+const MAINT_LABELS = {
+  none: ['无', 'None'],
+  emergency: ['紧急维护', 'Emergency'],
+  temporary: ['临时维护', 'Temporary'],
+  routine: ['例行维护', 'Routine'],
+}
+const QC_LABELS = {
+  normal: ['正常', 'Normal'],
+  abnormal: ['异常', 'Abnormal'],
+}
 
-function isQc(val, key) {
-  return val === QC_ZH[key] || val === t(`tableMaintenance.options.qcStatus.${key}`)
+function isQc(val, key) { return QC_LABELS[key]?.includes(val) }
+function isOp(val, key) { return OP_LABELS[key]?.includes(val) }
+function isDur(val, key) { return DUR_LABELS[key]?.includes(val) }
+function isMaintType(val, key) { return MAINT_LABELS[key]?.includes(val) }
+
+// 显示归一化：无论存的是中文还是英文，都按当前界面语言展示对应 label
+function _normalizeBy(labels, prefix, val) {
+  if (!val) return val || ''
+  for (const key of Object.keys(labels)) {
+    if (labels[key].includes(val)) return t(`${prefix}.${key}`)
+  }
+  return val // 值不在枚举里就原样返回
 }
-function isOp(val, key) {
-  return val === OP_ZH[key] || val === t(`tableMaintenance.options.operation.${key}`)
-}
-function isDur(val, key) {
-  return val === DUR_ZH[key] || val === t(`tableMaintenance.options.duration.${key}`)
-}
-function isMaintType(val, key) {
-  return val === MAINT_ZH[key] || val === t(`tableMaintenance.options.maintenanceType.${key}`)
-}
+function displayOp(val) { return _normalizeBy(OP_LABELS, 'tableMaintenance.options.operation', val) }
+function displayDur(val) { return _normalizeBy(DUR_LABELS, 'tableMaintenance.options.duration', val) }
+function displayMaintType(val) { return _normalizeBy(MAINT_LABELS, 'tableMaintenance.options.maintenanceType', val) }
+function displayQc(val) { return _normalizeBy(QC_LABELS, 'tableMaintenance.options.qcStatus', val) }
 // 获取时长排序索引（兼容中英文）
 function getDurIndex(val) {
   const keys = ['twoMin', 'fiveMin', 'tenMin', 'overTenMin']
@@ -178,7 +204,7 @@ function onPageSizeChange(newSize) {
 }
 
 // 搜索输入（用户输入但未应用）
-const filterInput = ref({ search: '', status: '', dateStart: '', dateEnd: '', project: '', duration: '', operator: '', operation: '', tableStatus: '' })
+const filterInput = ref({ search: '', status: '', dateStart: '', dateEnd: '', project: '', duration: '', operator: '', operation: '', tableStatus: '', maintType: '' })
 // 已应用的搜索条件（点击搜索按钮后生效）
 const searchQuery = ref('')
 const selectedStatus = ref('')
@@ -188,6 +214,7 @@ const selectedDuration = ref('')
 const selectedOperator = ref('')
 const selectedOperation = ref('')
 const selectedTableStatus = ref('')
+const selectedMaintType = ref('')
 
 const selectedIds = ref([])
 
@@ -218,6 +245,7 @@ const statsDurationInput = ref('')  // 时长筛选
 const statsOperatorInput = ref('')  // 操作人筛选
 const statsOperationInput = ref('')  // 操作类型筛选
 const statsRoundIdInput = ref('')  // 局号筛选
+const statsMaintTypeInput = ref('')  // 维护类型筛选
 // 统计面板的筛选条件（已应用的值）
 const statsDateRange = ref({ start: '', end: '' })
 const statsProjectFilter = ref('')
@@ -225,15 +253,37 @@ const statsDurationFilter = ref('')
 const statsOperatorFilter = ref('')
 const statsOperationFilter = ref('')
 const statsRoundIdFilter = ref('')
+const statsMaintTypeFilter = ref('')
+
+// 取记录的有效日期：优先 date，否则从 start_time 提取日期部分
+function getEffectiveDate(r) {
+  if (r.date) return r.date
+  if (r.start_time) return r.start_time.split(/[ T]/)[0] || ''
+  return ''
+}
+
+// 计算记录的"代表时长"索引：维护取 max(start,close)，其他操作取 start
+function getRecordDurationIndex(r) {
+  if (isOp(r.operation, 'maintenance')) {
+    return Math.max(getDurIndex(r.start_duration), getDurIndex(r.close_duration))
+  }
+  return getDurIndex(r.start_duration)
+}
 
 // 根据筛选条件过滤的记录
 const statsFilteredRecords = computed(() => {
   let data = records.value
   if (statsDateRange.value.start) {
-    data = data.filter(r => r.date >= statsDateRange.value.start)
+    data = data.filter(r => {
+      const d = getEffectiveDate(r)
+      return d && d >= statsDateRange.value.start
+    })
   }
   if (statsDateRange.value.end) {
-    data = data.filter(r => r.date <= statsDateRange.value.end)
+    data = data.filter(r => {
+      const d = getEffectiveDate(r)
+      return d && d <= statsDateRange.value.end
+    })
   }
   // 按项目筛选
   if (statsProjectFilter.value) {
@@ -242,29 +292,30 @@ const statsFilteredRecords = computed(() => {
       return projects.includes(statsProjectFilter.value)
     })
   }
-  // 按时长筛选（维护总时长 = max(start_duration, close_duration)）
+  // 按时长筛选（值是 key，对所有操作生效：维护取 max，其他取 start_duration）
   if (statsDurationFilter.value) {
     data = data.filter(r => {
-      if (!isOp(r.operation, 'maintenance')) return false
-      const startIdx = getDurIndex(r.start_duration)
-      const closeIdx = getDurIndex(r.close_duration)
-      const maxIdx = Math.max(startIdx, closeIdx)
-      const maxKey = maxIdx >= 0 ? ['twoMin', 'fiveMin', 'tenMin', 'overTenMin'][maxIdx] : null
-      return maxKey && isDur(statsDurationFilter.value, maxKey)
+      const idx = getRecordDurationIndex(r)
+      if (idx < 0) return false
+      return ['twoMin', 'fiveMin', 'tenMin', 'overTenMin'][idx] === statsDurationFilter.value
     })
   }
   // 按操作人筛选
   if (statsOperatorFilter.value) {
     data = data.filter(r => r.operator === statsOperatorFilter.value)
   }
-  // 按操作类型筛选
+  // 按操作类型筛选（值是 key，走 isOp 匹配中英文）
   if (statsOperationFilter.value) {
-    data = data.filter(r => r.operation === statsOperationFilter.value)
+    data = data.filter(r => isOp(r.operation, statsOperationFilter.value))
   }
   // 按局号筛选
   if (statsRoundIdFilter.value) {
     const q = statsRoundIdFilter.value.toLowerCase()
     data = data.filter(r => r.affected_round_ids?.toLowerCase().includes(q))
+  }
+  // 按维护类型筛选（值是 key，走 isMaintType 兼容中英文）
+  if (statsMaintTypeFilter.value) {
+    data = data.filter(r => isMaintType(r.maintenance_type, statsMaintTypeFilter.value))
   }
   return data
 })
@@ -276,6 +327,7 @@ function applyStatsFilter() {
   statsOperatorFilter.value = statsOperatorInput.value
   statsOperationFilter.value = statsOperationInput.value
   statsRoundIdFilter.value = statsRoundIdInput.value
+  statsMaintTypeFilter.value = statsMaintTypeInput.value
 }
 
 // 统计分析数据
@@ -283,9 +335,10 @@ const statsAnalysis = computed(() => {
   const data = statsFilteredRecords.value
   if (!data.length) return {}
 
-  // 辅助函数：每条记录计为1次
+  // 辅助函数：按桌台数计数（一条记录影响多少个桌台，就算多少次）
   function getTableCount(r) {
-    return 1
+    const n = parseMultiSelect(r.affected_tables).length
+    return n > 0 ? n : 1
   }
 
   // 按游戏类型统计（支持多选，按桌台数计数）
@@ -320,8 +373,8 @@ const statsAnalysis = computed(() => {
   const bySite = Object.entries(siteMap).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
   const maxSite = Math.max(...bySite.map(i => i.count), 1)
 
-  // 按操作类型统计（维护/取消/重算/重派彩，按桌台数计数）
-  const opKeys = ['maintenance', 'cancel', 'recalculate', 'repayout']
+  // 按操作类型统计（维护/取消/重算/重派彩/包桌T人，按桌台数计数）
+  const opKeys = ['maintenance', 'cancel', 'recalculate', 'repayout', 'vipTable']
   const operationCounts = {}
   opKeys.forEach(k => { operationCounts[k] = 0 })
   data.forEach(r => {
@@ -392,10 +445,10 @@ const statsAnalysis = computed(() => {
     return {
       date: dateStr || '-',
       tableNo: parseMultiSelect(r.affected_tables).join(', ') || '-',
-      startDuration: r.start_duration || '-',
-      closeDuration: r.close_duration || '-',
+      startDuration: displayDur(r.start_duration) || '-',
+      closeDuration: displayDur(r.close_duration) || '-',
       totalDuration,
-      maintType: r.maintenance_type || '-',
+      maintType: displayMaintType(r.maintenance_type) || '-',
       roundIds: r.affected_round_ids || '-'
     }
   }).sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -410,7 +463,7 @@ const statsAnalysis = computed(() => {
       date: dateStr || '-',
       projects: parseMultiSelect(r.affected_projects).join(', ') || '-',
       roundIds: r.affected_round_ids || '-',
-      startDuration: r.start_duration || '-',
+      startDuration: displayDur(r.start_duration) || '-',
       operator: r.operator || '-'
     }
   }).sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -425,7 +478,7 @@ const statsAnalysis = computed(() => {
       date: dateStr || '-',
       projects: parseMultiSelect(r.affected_projects).join(', ') || '-',
       roundIds: r.affected_round_ids || '-',
-      startDuration: r.start_duration || '-',
+      startDuration: displayDur(r.start_duration) || '-',
       operator: r.operator || '-'
     }
   }).sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -440,7 +493,22 @@ const statsAnalysis = computed(() => {
       date: dateStr || '-',
       projects: parseMultiSelect(r.affected_projects).join(', ') || '-',
       roundIds: r.affected_round_ids || '-',
-      startDuration: r.start_duration || '-',
+      startDuration: displayDur(r.start_duration) || '-',
+      operator: r.operator || '-'
+    }
+  }).sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+
+  // 包桌T人明细列表
+  const vipTableDetailList = data.filter(r => isOp(r.operation, 'vipTable')).map(r => {
+    let dateStr = r.date
+    if (!dateStr && r.start_time) {
+      dateStr = r.start_time.split(' ')[0] || r.start_time.split('T')[0]
+    }
+    return {
+      date: dateStr || '-',
+      projects: parseMultiSelect(r.affected_projects).join(', ') || '-',
+      roundIds: r.affected_round_ids || '-',
+      startDuration: displayDur(r.start_duration) || '-',
       operator: r.operator || '-'
     }
   }).sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -455,7 +523,7 @@ const statsAnalysis = computed(() => {
       date: dateStr || '-',
       projects: parseMultiSelect(r.affected_projects).join(', ') || '-',
       roundIds: r.affected_round_ids || '-',
-      startDuration: r.start_duration || '-',
+      startDuration: displayDur(r.start_duration) || '-',
       operator: r.operator || '-',
       remark: r.remark || '-'
     }
@@ -618,10 +686,10 @@ const statsAnalysis = computed(() => {
   }).sort((a, b) => b.count - a.count)
   const maxTableSummary = Math.max(...byTableSummary.map(i => i.count), 1)
   
-  // 按维护类型统计各时长分布（不统计"无"，按桌台数计数）
+  // 按维护类型统计各时长分布（仅 operation=维护 的记录，不统计"无"，按桌台数计数）
   const maintTypeKeys = ['routine', 'temporary', 'emergency']
   const byMaintType = maintTypeKeys.map(mtKey => {
-    const items = data.filter(r => isMaintType(r.maintenance_type, mtKey))
+    const items = data.filter(r => isOp(r.operation, 'maintenance') && isMaintType(r.maintenance_type, mtKey))
     let total = 0
     const durations = {}
     durKeys.forEach(k => { durations[k] = 0 })
@@ -672,7 +740,34 @@ const statsAnalysis = computed(() => {
     return { name: t(`tableMaintenance.options.operation.${opKey}`), key: opKey, total, durations: displayDurations, hasDuration: true }
   })
   
-  // 总计（按记录数）
+  // 按项目 × 操作类型矩阵（每条记录按 affected_projects 展开，每个项目下 5 种操作各自累加桌台数）
+  const projectOpMap = {}
+  data.forEach(r => {
+    const tc = getTableCount(r)
+    const projects = parseMultiSelect(r.affected_projects)
+    if (!projects.length) return
+    let opKey = null
+    for (const k of opKeys) {
+      if (isOp(r.operation, k)) {
+        // 维护操作需排除 maintenance_type 为"无"的记录
+        if (k === 'maintenance' && (!r.maintenance_type || isMaintType(r.maintenance_type, 'none'))) return
+        opKey = k
+        break
+      }
+    }
+    if (!opKey) return
+    projects.forEach(p => {
+      if (!projectOpMap[p]) {
+        projectOpMap[p] = { project: p, total: 0, ops: {} }
+        opKeys.forEach(k => { projectOpMap[p].ops[k] = 0 })
+      }
+      projectOpMap[p].ops[opKey] += tc
+      projectOpMap[p].total += tc
+    })
+  })
+  const byProjectOperation = Object.values(projectOpMap).sort((a, b) => b.total - a.total)
+
+  // 总计（按桌台数）
   let totalByTable = 0
   data.forEach(r => { totalByTable += getTableCount(r) })
 
@@ -683,12 +778,12 @@ const statsAnalysis = computed(() => {
     bySite, maxSite,
     byOperation,
     byMaintStartDuration, byCloseDuration, byTotalDuration, maintDurationList,
-    cancelDetailList, recalcDetailList, repayoutDetailList, missedDetailList, missedScreenshotDetailList,
+    cancelDetailList, recalcDetailList, repayoutDetailList, vipTableDetailList, missedDetailList, missedScreenshotDetailList,
     byOperator, maxOperator,
     byInspector, maxInspector,
     byTableSummary, maxTableSummary,
     byTableNo, maxTableNo,
-    byMaintType, byOpType,
+    byMaintType, byOpType, byProjectOperation, opKeys,
     byAffectProject, maxAffectProject, noAffectCount,
     qcNormal, qcAbnormal, qcPending
   }
@@ -707,6 +802,8 @@ function resetStatsFilter() {
   statsOperationFilter.value = ''
   statsRoundIdInput.value = ''
   statsRoundIdFilter.value = ''
+  statsMaintTypeInput.value = ''
+  statsMaintTypeFilter.value = ''
 }
 
 function exportStatsToExcel() {
@@ -749,6 +846,18 @@ function exportStatsToExcel() {
     lines.push(`${item.name},${item.total},${item.durations[durTwoMin] || 0},${item.durations[durFiveMin] || 0},${item.durations[durTenMin] || 0},${item.durations[durOverTenMin] || 0}`)
   })
   lines.push('')
+
+  // 按项目 × 操作类型矩阵
+  if (stats.byProjectOperation?.length) {
+    lines.push(t('tableMaintenance.statsPanel.csvByProjectOperation'))
+    const opHeaders = (stats.opKeys || []).map(k => t(`tableMaintenance.options.operation.${k}`))
+    lines.push(`${t('tableMaintenance.statsPanel.csvProject')},${t('tableMaintenance.statsPanel.csvTotal')},${opHeaders.join(',')}`)
+    stats.byProjectOperation.forEach(item => {
+      const opCounts = (stats.opKeys || []).map(k => item.ops[k] || 0).join(',')
+      lines.push(`${item.project},${item.total},${opCounts}`)
+    })
+    lines.push('')
+  }
 
   // 维护-开始时长
   lines.push(t('tableMaintenance.statsPanel.csvMaintStartDuration'))
@@ -967,24 +1076,24 @@ const allFilteredRecords = computed(() => {
       return projects.includes(selectedProject.value)
     })
   }
-  // 按时长筛选（维护总时长 = max(start_duration, close_duration)）
+  // 按时长筛选（对所有操作生效：维护取 max(start,close)，其他取 start_duration）
   if (selectedDuration.value) {
     list = list.filter(r => {
-      if (!isOp(r.operation, 'maintenance')) return false
-      const startIdx = getDurIndex(r.start_duration)
-      const closeIdx = getDurIndex(r.close_duration)
-      const maxIdx = Math.max(startIdx, closeIdx)
-      const maxKey = maxIdx >= 0 ? ['twoMin', 'fiveMin', 'tenMin', 'overTenMin'][maxIdx] : null
-      return maxKey && isDur(selectedDuration.value, maxKey)
+      const idx = isOp(r.operation, 'maintenance')
+        ? Math.max(getDurIndex(r.start_duration), getDurIndex(r.close_duration))
+        : getDurIndex(r.start_duration)
+      if (idx < 0) return false
+      const key = ['twoMin', 'fiveMin', 'tenMin', 'overTenMin'][idx]
+      return isDur(selectedDuration.value, key)
     })
   }
   // 按操作人筛选
   if (selectedOperator.value) {
     list = list.filter(r => r.operator === selectedOperator.value)
   }
-  // 按操作类型筛选
+  // 按操作类型筛选（值是 key，走 isOp 兼容中英文）
   if (selectedOperation.value) {
-    list = list.filter(r => r.operation === selectedOperation.value)
+    list = list.filter(r => isOp(r.operation, selectedOperation.value))
   }
   // 按桌台状态筛选
   if (selectedTableStatus.value) {
@@ -993,7 +1102,16 @@ const allFilteredRecords = computed(() => {
       return tables.some(t => getTableStatus(t) === selectedTableStatus.value)
     })
   }
-  return list
+  // 按维护类型筛选（值是 key，走 isMaintType 兼容中英文）
+  if (selectedMaintType.value) {
+    list = list.filter(r => isMaintType(r.maintenance_type, selectedMaintType.value))
+  }
+  // 按 start_time > date > created_at 降序排序（最新在最上面）
+  return [...list].sort((a, b) => {
+    const at = a.start_time || a.date || a.created_at || ''
+    const bt = b.start_time || b.date || b.created_at || ''
+    return String(bt).localeCompare(String(at))
+  })
 })
 
 // 总页数
@@ -1478,9 +1596,77 @@ const operatorOptions = computed(() => {
   return Array.from(operators).sort()
 })
 
+// 质检人候选（从已有记录中收集）
+const inspectorOptions = computed(() => {
+  const s = new Set()
+  records.value.forEach(r => { if (r.inspector) s.add(r.inspector) })
+  return Array.from(s).sort()
+})
+
+// 批量修改质检人
+const showBatchInspectorModal = ref(false)
+const batchInspectorValue = ref('')
+const batchInspectorSaving = ref(false)
+
+function openBatchInspectorModal() {
+  if (selectedIds.value.length === 0) {
+    appStore.showToast(t('common.warning'), 'warning')
+    return
+  }
+  batchInspectorValue.value = ''
+  showBatchInspectorModal.value = true
+}
+
+async function confirmBatchInspector() {
+  const inspector = (batchInspectorValue.value || '').trim()
+  if (!inspector) {
+    appStore.showToast(t('common.warning'), 'warning')
+    return
+  }
+  batchInspectorSaving.value = true
+  let ok = 0, fail = 0
+  try {
+    for (const id of selectedIds.value) {
+      const r = records.value.find(x => x.id === id)
+      if (!r) { fail++; continue }
+      // 构造 data：保留所有业务字段，覆盖 inspector
+      const data = {}
+      columns.value.forEach(col => {
+        if (['checkbox', 'actions', 'created_by'].includes(col.key)) return
+        if (col.type === 'attachments') {
+          data[col.key] = r[col.key] || []
+        } else if (col.key === 'inspector') {
+          data[col.key] = inspector
+        } else {
+          data[col.key] = r[col.key] ?? ''
+        }
+      })
+      const payload = {
+        data: JSON.stringify(data),
+        attachments: JSON.stringify(r.attachments || []),
+      }
+      try {
+        await api.put(`/api/custom-tables/${tableId.value}/rows/${id}`, payload)
+        ok++
+      } catch (e) {
+        fail++
+      }
+    }
+    showBatchInspectorModal.value = false
+    selectedIds.value = []
+    appStore.showToast(`${t('tableMaintenance.actions.saveSuccess')} (${ok}/${ok + fail})`, ok && !fail ? 'success' : 'warning')
+    loadRecords()
+    loadStats()
+  } finally {
+    batchInspectorSaving.value = false
+  }
+}
+
 // 获取所有操作类型列表
 const operationOptions = computed(() => {
-  return ['maintenance', 'cancel', 'recalculate', 'repayout', 'missed', 'missedScreenshot'].map(k => t(`tableMaintenance.options.operation.${k}`))
+  // 返回 { key, label } 对：key 用于筛选匹配（走 isOp 兼容中英文），label 仅作展示
+  return ['maintenance', 'cancel', 'recalculate', 'repayout', 'vipTable', 'missed', 'missedScreenshot']
+    .map(k => ({ key: k, label: t(`tableMaintenance.options.operation.${k}`) }))
 })
 
 // 项目颜色列表
@@ -1980,11 +2166,12 @@ function applyFilters() {
   selectedOperator.value = filterInput.value.operator
   selectedOperation.value = filterInput.value.operation
   selectedTableStatus.value = filterInput.value.tableStatus
+  selectedMaintType.value = filterInput.value.maintType
   currentPage.value = 1
 }
 
 function resetFilters() {
-  filterInput.value = { search: '', status: '', dateStart: '', dateEnd: '', project: '', duration: '', operator: '', operation: '', tableStatus: '' }
+  filterInput.value = { search: '', status: '', dateStart: '', dateEnd: '', project: '', duration: '', operator: '', operation: '', tableStatus: '', maintType: '' }
   searchQuery.value = ''
   selectedStatus.value = ''
   dateRange.value = { start: '', end: '' }
@@ -1993,6 +2180,7 @@ function resetFilters() {
   selectedOperator.value = ''
   selectedOperation.value = ''
   selectedTableStatus.value = ''
+  selectedMaintType.value = ''
   currentPage.value = 1
 }
 
@@ -2057,6 +2245,10 @@ async function exportToExcel() {
         <span class="record-count">{{ t('tableMaintenance.recordCount', { count: filteredRecords.length }) }}</span>
       </div>
       <div class="header-actions">
+        <button v-if="selectedIds.length > 0" class="btn btn-secondary" @click="openBatchInspectorModal" style="margin-right:8px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;margin-right:4px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          {{ t('tableMaintenance.actions.batchModifyInspector') }} ({{ selectedIds.length }})
+        </button>
         <button v-if="selectedIds.length > 0" class="btn btn-danger" @click="batchDelete">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6v14a2,2,0,0,1-2,2H7a2,2,0,0,1-2-2V6M8,6V4a2,2,0,0,1,2-2h4a2,2,0,0,1,2,2v2"/></svg>
           {{ t('tableMaintenance.deleteSelected') }} ({{ selectedIds.length }})
@@ -2182,7 +2374,7 @@ async function exportToExcel() {
             <label>{{ t('tableMaintenance.filters.operationLabel') }}</label>
             <select v-model="filterInput.operation">
               <option value="">{{ t('tableMaintenance.filters.allOperations') }}</option>
-              <option v-for="op in operationOptions" :key="op" :value="op">{{ op }}</option>
+              <option v-for="op in operationOptions" :key="op.key" :value="op.key">{{ op.label }}</option>
             </select>
           </div>
           <div class="filter-field">
@@ -2191,6 +2383,15 @@ async function exportToExcel() {
               <option value="">{{ t('tableMaintenance.filters.allTableStatus') }}</option>
               <option value="enabled">{{ t('tableHierarchy.status.enabled') }}</option>
               <option value="disabled">{{ t('tableHierarchy.status.disabled') }}</option>
+            </select>
+          </div>
+          <div class="filter-field">
+            <label>{{ t('tableMaintenance.columns.maintenanceType') }}</label>
+            <select v-model="filterInput.maintType">
+              <option value="">{{ t('common.all') }}</option>
+              <option value="routine">{{ t('tableMaintenance.options.maintenanceType.routine') }}</option>
+              <option value="temporary">{{ t('tableMaintenance.options.maintenanceType.temporary') }}</option>
+              <option value="emergency">{{ t('tableMaintenance.options.maintenanceType.emergency') }}</option>
             </select>
           </div>
           <div class="filter-field date-field">
@@ -2242,10 +2443,13 @@ async function exportToExcel() {
                   <span class="status-tag" :class="'status-' + getStatusClass(r[col.key])">{{ r[col.key] || '-' }}</span>
                 </td>
                 <td v-else-if="col.type === 'select'">
-                  <span class="cell-select">{{ r[col.key] || '-' }}</span>
+                  <span class="cell-select">{{ col.key === 'operation' ? (displayOp(r[col.key]) || '-') : (r[col.key] || '-') }}</span>
                 </td>
                 <td v-else-if="col.type === 'duration-select'">
-                  <span class="duration-tag" :class="getDurationClass(r[col.key])">{{ r[col.key] || '-' }}</span>
+                  <span class="duration-tag" :class="getDurationClass(r[col.key])">{{ displayDur(r[col.key]) || '-' }}</span>
+                </td>
+                <td v-else-if="col.type === 'maint-type-select'">
+                  <span class="cell-select">{{ displayMaintType(r[col.key]) || '-' }}</span>
                 </td>
                 <td v-else-if="col.type === 'yes-no'">
                   <span class="yes-no-tag" :class="r[col.key] === '是' ? 'tag-yes' : 'tag-no'">{{ r[col.key] || '-' }}</span>
@@ -2281,7 +2485,7 @@ async function exportToExcel() {
                   <span v-else class="cell-muted">-</span>
                 </td>
                 <td v-else-if="col.type === 'qc-status'">
-                  <span class="qc-status-tag" :class="isQc(r[col.key], 'normal') ? 'qc-normal' : isQc(r[col.key], 'abnormal') ? 'qc-abnormal' : ''">{{ r[col.key] || '-' }}</span>
+                  <span class="qc-status-tag" :class="isQc(r[col.key], 'normal') ? 'qc-normal' : isQc(r[col.key], 'abnormal') ? 'qc-abnormal' : ''">{{ displayQc(r[col.key]) || '-' }}</span>
                 </td>
                 <td v-else-if="col.type === 'readonly'" class="cell-muted">
                   {{ r[col.key] || '-' }}
@@ -2380,10 +2584,10 @@ async function exportToExcel() {
           <div class="filter-label">{{ t('tableMaintenance.statsPanel.filterDuration') }}:</div>
           <select v-model="statsDurationInput" class="stats-select-input">
             <option value="">{{ t('common.all') }}</option>
-            <option :value="t('tableMaintenance.options.duration.twoMin')">{{ t('tableMaintenance.options.duration.twoMin') }}</option>
-            <option :value="t('tableMaintenance.options.duration.fiveMin')">{{ t('tableMaintenance.options.duration.fiveMin') }}</option>
-            <option :value="t('tableMaintenance.options.duration.tenMin')">{{ t('tableMaintenance.options.duration.tenMin') }}</option>
-            <option :value="t('tableMaintenance.options.duration.overTenMin')">{{ t('tableMaintenance.options.duration.overTenMin') }}</option>
+            <option value="twoMin">{{ t('tableMaintenance.options.duration.twoMin') }}</option>
+            <option value="fiveMin">{{ t('tableMaintenance.options.duration.fiveMin') }}</option>
+            <option value="tenMin">{{ t('tableMaintenance.options.duration.tenMin') }}</option>
+            <option value="overTenMin">{{ t('tableMaintenance.options.duration.overTenMin') }}</option>
           </select>
         </div>
         <div class="filter-group">
@@ -2397,7 +2601,16 @@ async function exportToExcel() {
           <div class="filter-label">{{ t('tableMaintenance.filters.operationLabel') }}:</div>
           <select v-model="statsOperationInput" class="stats-select-input">
             <option value="">{{ t('tableMaintenance.filters.allOperations') }}</option>
-            <option v-for="op in operationOptions" :key="op" :value="op">{{ op }}</option>
+            <option v-for="op in operationOptions" :key="op.key" :value="op.key">{{ op.label }}</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <div class="filter-label">{{ t('tableMaintenance.columns.maintenanceType') }}:</div>
+          <select v-model="statsMaintTypeInput" class="stats-select-input">
+            <option value="">{{ t('common.all') }}</option>
+            <option value="routine">{{ t('tableMaintenance.options.maintenanceType.routine') }}</option>
+            <option value="temporary">{{ t('tableMaintenance.options.maintenanceType.temporary') }}</option>
+            <option value="emergency">{{ t('tableMaintenance.options.maintenanceType.emergency') }}</option>
           </select>
         </div>
         <div class="filter-group">
@@ -2605,6 +2818,56 @@ async function exportToExcel() {
                   </tr>
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 包桌T人明细 -->
+        <div class="stats-row single" v-if="statsAnalysis.vipTableDetailList?.length">
+          <div class="stats-section">
+            <h4>{{ t('tableMaintenance.statsPanel.vipTableDetail') }} ({{ statsAnalysis.vipTableDetailList.length }})</h4>
+            <div class="duration-detail-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>{{ t('tableMaintenance.statsPanel.detailDate') }}</th>
+                    <th>{{ t('tableMaintenance.statsPanel.detailProject') }}</th>
+                    <th>{{ t('tableMaintenance.statsPanel.detailRoundId') }}</th>
+                    <th>{{ t('tableMaintenance.statsPanel.detailDuration') }}</th>
+                    <th>{{ t('tableMaintenance.statsPanel.detailOperator') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(item, idx) in statsAnalysis.vipTableDetailList" :key="idx">
+                    <td>{{ item.date }}</td>
+                    <td class="projects-cell">{{ item.projects }}</td>
+                    <td class="round-id-cell">{{ item.roundIds }}</td>
+                    <td><span class="dur-badge" :class="getDurationClass(item.startDuration)">{{ item.startDuration }}</span></td>
+                    <td>{{ item.operator }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 按项目 × 操作类型矩阵 -->
+        <div class="stats-row single" v-if="statsAnalysis.byProjectOperation?.length">
+          <div class="stats-section">
+            <h4>{{ t('tableMaintenance.statsPanel.byProjectOperation') }}</h4>
+            <div class="project-op-grid">
+              <div class="project-op-card" v-for="item in statsAnalysis.byProjectOperation" :key="item.project">
+                <div class="pop-header">
+                  <span class="pop-project">{{ item.project }}</span>
+                  <span class="pop-total">{{ item.total }}{{ t('tableMaintenance.statsPanel.tableTimes') }}</span>
+                </div>
+                <div class="pop-ops">
+                  <div class="pop-op" v-for="k in statsAnalysis.opKeys" :key="k" :class="'op-' + k">
+                    <span class="pop-op-name">{{ t('tableMaintenance.options.operation.' + k) }}</span>
+                    <span class="pop-op-count">{{ item.ops[k] || 0 }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -3075,7 +3338,9 @@ async function exportToExcel() {
                   <span v-else-if="col.key === 'table_no'" class="tag-table">{{ detailRecord[col.key] || '-' }}</span>
                   <span v-else-if="col.type === 'tag-type'" class="tag-issue" :class="'tag-issue-' + getIssueTypeClass(detailRecord[col.key])">{{ detailRecord[col.key] || '-' }}</span>
                   <span v-else-if="col.type === 'status'" class="status-tag" :class="'status-' + getStatusClass(detailRecord[col.key])">{{ detailRecord[col.key] || '-' }}</span>
-                  <span v-else-if="col.type === 'duration-select'" class="duration-tag" :class="getDurationClass(detailRecord[col.key])">{{ detailRecord[col.key] || '-' }}</span>
+                  <span v-else-if="col.type === 'duration-select'" class="duration-tag" :class="getDurationClass(detailRecord[col.key])">{{ displayDur(detailRecord[col.key]) || '-' }}</span>
+                  <span v-else-if="col.type === 'maint-type-select'" class="cell-select">{{ displayMaintType(detailRecord[col.key]) || '-' }}</span>
+                  <span v-else-if="col.type === 'select' && col.key === 'operation'" class="cell-select">{{ displayOp(detailRecord[col.key]) || '-' }}</span>
                   <span v-else-if="col.type === 'yes-no'" class="yes-no-tag" :class="detailRecord[col.key] === '是' ? 'tag-yes' : 'tag-no'">{{ detailRecord[col.key] || '-' }}</span>
                   <div v-else-if="col.type === 'multi-select-projects'" class="multi-select-tags">
                     <span v-for="(item, idx) in parseMultiSelect(detailRecord[col.key])" :key="idx" class="multi-tag" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}</span>
@@ -3093,7 +3358,7 @@ async function exportToExcel() {
                     <span v-for="(item, idx) in parseMultiSelect(detailRecord[col.key])" :key="idx" class="multi-tag game-type-multi-tag">{{ item }}</span>
                     <span v-if="!parseMultiSelect(detailRecord[col.key])?.length" class="cell-muted">-</span>
                   </div>
-                  <span v-else-if="col.type === 'qc-status'" class="qc-status-tag" :class="isQc(detailRecord[col.key], 'normal') ? 'qc-normal' : 'qc-abnormal'">{{ detailRecord[col.key] || '-' }}</span>
+                  <span v-else-if="col.type === 'qc-status'" class="qc-status-tag" :class="isQc(detailRecord[col.key], 'normal') ? 'qc-normal' : 'qc-abnormal'">{{ displayQc(detailRecord[col.key]) || '-' }}</span>
                   <div v-else-if="col.type === 'attachments'" class="detail-attachments">
                     <div v-if="getAttachmentsByKey(detailRecord, col.key)?.length" class="detail-attachment-list">
                       <img v-for="(att, idx) in getAttachmentsByKey(detailRecord, col.key)" :key="idx"
@@ -3190,6 +3455,40 @@ async function exportToExcel() {
             <button class="btn btn-primary" @click="pasteRecords" :disabled="loading">
               <span v-if="loading">粘贴中...</span>
               <span v-else>粘贴 {{ pasteCount }} 条记录</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 批量修改质检人 -->
+    <Teleport to="body">
+      <div class="modal-overlay" :class="{ active: showBatchInspectorModal }">
+        <div class="modal paste-modal" v-if="showBatchInspectorModal" style="max-width:440px;">
+          <div class="modal-header">
+            <div class="modal-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:20px;height:20px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              {{ t('tableMaintenance.actions.batchModifyInspectorTitle') }}
+            </div>
+            <button class="modal-close" @click="showBatchInspectorModal = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          </div>
+          <div class="modal-body">
+            <p class="paste-hint" style="margin-bottom:16px;">{{ t('tableMaintenance.actions.batchModifyInspectorHint', { count: selectedIds.length }) }}</p>
+            <div class="form-group">
+              <label>{{ t('tableMaintenance.columns.inspector') }}</label>
+              <input type="text" v-model="batchInspectorValue" list="batch-inspector-options"
+                     :placeholder="t('tableMaintenance.actions.inspectorPlaceholder')"
+                     class="form-input" style="width:100%;">
+              <datalist id="batch-inspector-options">
+                <option v-for="op in inspectorOptions" :key="op" :value="op" />
+              </datalist>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" @click="showBatchInspectorModal = false" :disabled="batchInspectorSaving">{{ t('common.cancel') }}</button>
+            <button class="btn btn-primary" @click="confirmBatchInspector" :disabled="batchInspectorSaving || !batchInspectorValue.trim()">
+              <span v-if="batchInspectorSaving">{{ t('common.loading') }}</span>
+              <span v-else>{{ t('common.confirm') }}</span>
             </button>
           </div>
         </div>
@@ -4156,6 +4455,8 @@ body.light-mode .data-table tr:hover td.sticky-col {
 .operation-card.op-recalculate .op-count { color: #f59e0b; }
 .operation-card.op-repayout { border-color: rgba(16, 185, 129, 0.4); }
 .operation-card.op-repayout .op-count { color: #10b981; }
+.operation-card.op-vipTable { border-color: rgba(168, 85, 247, 0.4); }
+.operation-card.op-vipTable .op-count { color: #a855f7; }
 
 /* 操作人/质检人/影响项目柱状图颜色 */
 .stats-item .bar-fill.operator { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
@@ -4188,6 +4489,29 @@ body.light-mode .data-table tr:hover td.sticky-col {
 .type-duration-card.op-card.op-recalculate .tdc-total { color: #f59e0b; }
 .type-duration-card.op-card.op-repayout { border-left: 4px solid #10b981; }
 .type-duration-card.op-card.op-repayout .tdc-total { color: #10b981; }
+.type-duration-card.op-card.op-vipTable { border-left: 4px solid #a855f7; }
+.type-duration-card.op-card.op-vipTable .tdc-total { color: #a855f7; }
+
+/* 按项目 × 操作类型矩阵 */
+.project-op-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.project-op-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; }
+.pop-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color); }
+.pop-project { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+.pop-total { font-weight: 700; font-size: 14px; color: #6366f1; }
+.pop-ops { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.pop-op { display: flex; flex-direction: column; align-items: center; padding: 6px 4px; border-radius: 6px; background: var(--bg-elevated, #f9fafb); font-size: 11px; }
+.pop-op-name { color: var(--text-secondary); margin-bottom: 2px; }
+.pop-op-count { font-weight: 700; font-size: 15px; color: var(--text-primary); }
+.pop-op.op-maintenance { background: rgba(59, 130, 246, 0.08); }
+.pop-op.op-maintenance .pop-op-count { color: #3b82f6; }
+.pop-op.op-cancel { background: rgba(239, 68, 68, 0.08); }
+.pop-op.op-cancel .pop-op-count { color: #ef4444; }
+.pop-op.op-recalculate { background: rgba(245, 158, 11, 0.08); }
+.pop-op.op-recalculate .pop-op-count { color: #f59e0b; }
+.pop-op.op-repayout { background: rgba(16, 185, 129, 0.08); }
+.pop-op.op-repayout .pop-op-count { color: #10b981; }
+.pop-op.op-vipTable { background: rgba(168, 85, 247, 0.08); }
+.pop-op.op-vipTable .pop-op-count { color: #a855f7; }
 
 /* 桌台统计表格样式 */
 .table-stats-table { max-height: 400px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-card); }
