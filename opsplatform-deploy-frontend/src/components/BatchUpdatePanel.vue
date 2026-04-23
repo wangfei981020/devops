@@ -89,8 +89,8 @@ base-client-backend:20260416020000-99"
         :disabled="!validCount || submitting"
         @click="onSubmit">
         <span v-if="submitting">提交中...</span>
-        <span v-else-if="isProd">提交 PROD · 需二次确认</span>
-        <span v-else>提交并同步 UAT</span>
+        <span v-else-if="isProd">提交到 {{ projectEnv.name }} · 需二次确认</span>
+        <span v-else>提交到 {{ projectEnv.name }} · {{ validCount }} 个</span>
         <el-icon v-if="!submitting"><ArrowRight /></el-icon>
       </button>
       <span v-else class="no-perm-hint">⚠ PROD 发布仅限管理员</span>
@@ -104,10 +104,12 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload, ArrowRight } from '@element-plus/icons-vue'
 import { previewImage, updateImage } from '../api'
 import { useAuthStore } from '../stores/auth'
+import { useDeploymentsStore } from '../stores/deployments'
 
 const props = defineProps(['projectEnv', 'modules'])
 const emit = defineEmits(['done'])
 const auth = useAuthStore()
+const deployments = useDeploymentsStore()
 const text = ref('')
 const diff = ref([])
 const previewing = ref(false)
@@ -144,18 +146,31 @@ async function onSubmit() {
   const changes = diff.value.filter(d => !d.skip && !d.is_new).map(d => ({ module: d.module, tag: d.to_tag }))
   if (!changes.length) return
   if (isProd.value) {
+    const env = props.projectEnv.name
     try {
       await ElMessageBox.confirm(
-        `PROD 将提交 ${changes.length} 个模块到 GitLab，不可撤销。`,
-        '二次确认',
-        { type: 'warning', confirmButtonText: '确认提交', cancelButtonText: '取消' }
+        `你正在向 【${env}】 提交 ${changes.length} 个模块到 GitLab，操作不可撤销。`,
+        '⚠ 生产环境二次确认',
+        {
+          type: 'warning',
+          confirmButtonText: `确认提交到 ${env}`,
+          cancelButtonText: '取消',
+          confirmButtonClass: 'el-button--danger',
+        }
       )
     } catch (_) { return }
   }
   submitting.value = true
   try {
     const r = await updateImage({ project_env_id: props.projectEnv.id, changes })
-    ElMessage.success(`已提交 · #${r.deployment_id}`)
+    ElMessage.success(`已提交 · #${r.deployment_id} · 进度看右下角浮动条`)
+    deployments.startTracking(r.deployment_id, {
+      action: 'update_image',
+      envName: props.projectEnv.name,
+      envType: props.projectEnv.env_type,
+      modules: changes.length,
+      operator: auth.user?.username || '',
+    })
     emit('done', r.deployment_id)
     text.value = ''
     diff.value = []

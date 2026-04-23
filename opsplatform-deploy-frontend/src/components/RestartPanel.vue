@@ -89,11 +89,12 @@ bet-client-backend"
       </div>
       <button
         v-if="!isProd || auth.isAdmin"
-        class="cta primary"
+        :class="['cta', isProd ? 'danger' : 'primary']"
         :disabled="!validCount || submitting"
         @click="onRestart">
         <span v-if="submitting">重启中...</span>
-        <span v-else>重启 {{ validCount }} 个</span>
+        <span v-else-if="isProd">重启 {{ projectEnv.name }} · {{ validCount }} 个 · 需二次确认</span>
+        <span v-else>重启 {{ projectEnv.name }} · {{ validCount }} 个</span>
         <el-icon v-if="!submitting"><ArrowRight /></el-icon>
       </button>
       <span v-else class="no-perm-hint">⚠ PROD 重启仅限管理员</span>
@@ -107,10 +108,12 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { RefreshRight, ArrowRight, Check, Close } from '@element-plus/icons-vue'
 import { restartModules } from '../api'
 import { useAuthStore } from '../stores/auth'
+import { useDeploymentsStore } from '../stores/deployments'
 
 const props = defineProps(['projectEnv', 'modules'])
 const emit = defineEmits(['done'])
 const auth = useAuthStore()
+const deployments = useDeploymentsStore()
 const text = ref('')
 const preview = ref([])
 const submitting = ref(false)
@@ -151,11 +154,30 @@ function onPreview() {
 async function onRestart() {
   const names = preview.value.filter(p => p.exists).map(p => p.name)
   if (!names.length) return
-  try { await ElMessageBox.confirm(`确认重启 ${names.length} 个模块？`, '重启确认') } catch (_) { return }
+  const env = props.projectEnv.name
+  const isProdEnv = isProd.value
+  try {
+    await ElMessageBox.confirm(
+      isProdEnv
+        ? `你正在向 【${env}】 重启 ${names.length} 个模块（生产环境），确认？`
+        : `确认在 【${env}】 重启 ${names.length} 个模块？`,
+      isProdEnv ? '⚠ 生产环境二次确认' : '重启确认',
+      isProdEnv
+        ? { type: 'warning', confirmButtonText: `确认重启 ${env}`, cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' }
+        : { confirmButtonText: '确认重启', cancelButtonText: '取消' }
+    )
+  } catch (_) { return }
   submitting.value = true
   try {
     const r = await restartModules({ project_env_id: props.projectEnv.id, module_names: names })
-    ElMessage.success(`已触发 · #${r.deployment_id}`)
+    ElMessage.success(`已触发 · #${r.deployment_id} · 进度看右下角浮动条`)
+    deployments.startTracking(r.deployment_id, {
+      action: 'restart',
+      envName: props.projectEnv.name,
+      envType: props.projectEnv.env_type,
+      modules: names.length,
+      operator: auth.user?.username || '',
+    })
     emit('done', r.deployment_id)
     text.value = ''
     preview.value = []
@@ -246,6 +268,8 @@ async function onRestart() {
 .cta:hover:not(:disabled) { background: var(--primary-dark); }
 .cta:disabled { opacity: .4; cursor: not-allowed; }
 .cta .el-icon { font-size: 14px; }
+.cta.danger { background: var(--danger); }
+.cta.danger:hover:not(:disabled) { background: var(--danger-dark, #dc2626); }
 
 .no-perm-hint {
   font-size: 12.5px; color: var(--warning);

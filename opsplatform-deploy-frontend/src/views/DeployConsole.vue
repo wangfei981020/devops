@@ -31,55 +31,69 @@
       <div>请选择一个项目和环境</div>
     </div>
 
-    <!-- ===== Target panel ===== -->
+    <!-- ===== Target + Action（同一行）===== -->
     <div class="panel">
       <div class="p-hd">
         <h3>
           <el-icon><Aim /></el-icon>
           目标选择
         </h3>
-        <span class="sub">project · env</span>
+        <span class="sub">输入搜索 · 例如 g32u / g50p · ⭐ 最近使用置顶</span>
       </div>
       <div class="p-bd">
         <div class="sel-row">
-          <span class="sel-k">Project</span>
-          <div class="chips">
-            <button v-for="p in projects" :key="p"
-              :class="['chip', {active: selectedProject === p}]"
-              @click="pickProject(p)">{{ p }}</button>
-            <span v-if="!projects.length" class="empty-hint">还没有项目，去「项目配置」添加</span>
-          </div>
-        </div>
-        <div class="sel-row">
-          <span class="sel-k">Env</span>
-          <div class="chips">
-            <button v-for="e in envsOfProject" :key="e.id"
-              :class="['chip', 'env', e.env_type, {active: selectedID === e.id}]"
-              @click="pickEnv(e)">{{ e.env_type.toUpperCase() }}</button>
-            <span v-if="selectedProject && !envsOfProject.length" class="empty-hint">该项目没有环境</span>
+          <span class="sel-k">目标</span>
+          <el-select
+            v-model="selectedID"
+            filterable
+            :filter-method="filterEnv"
+            :placeholder="envs.length ? '搜索 project_env，例如 g32u / g50p' : '还没有项目，去「项目配置」添加'"
+            :disabled="!envs.length"
+            style="width:340px;"
+            popper-class="env-select-popper"
+            @visible-change="v => { if (!v) searchQuery = '' }">
+            <el-option-group v-if="!searchQuery && filteredRecent.length" label="⭐ 最近使用">
+              <el-option v-for="e in filteredRecent" :key="'r-'+e.id" :value="e.id" :label="e.name">
+                <div class="opt-row">
+                  <span :class="['opt-dot', e.env_type]"></span>
+                  <span :class="['opt-name', { prod: e.env_type === 'prod' }]">{{ e.name }}</span>
+                  <span :class="'env-chip-mini ' + e.env_type">{{ e.env_type.toUpperCase() }}</span>
+                </div>
+              </el-option>
+            </el-option-group>
+            <el-option-group v-for="grp in envGroups" :key="grp.project" :label="grp.project">
+              <template v-for="e in grp.items" :key="e.id">
+                <el-option v-if="matchSearch(e)" :value="e.id" :label="e.name">
+                  <div class="opt-row">
+                    <span :class="['opt-dot', e.env_type]"></span>
+                    <span :class="['opt-name', { prod: e.env_type === 'prod' }]">{{ e.name }}</span>
+                    <span :class="'env-chip-mini ' + e.env_type">{{ e.env_type.toUpperCase() }}</span>
+                  </div>
+                </el-option>
+              </template>
+            </el-option-group>
+          </el-select>
+          <span v-if="currentEnv" :class="'env-chip-inline ' + currentEnv.env_type">
+            {{ currentEnv.env_type.toUpperCase() }}
+          </span>
+
+          <span class="sel-divider"></span>
+
+          <span class="sel-k">动作</span>
+          <div class="seg" role="tablist">
+            <button :class="['seg-btn', { active: tab === 'update' }]"
+                    :disabled="!currentEnv" @click="tab = 'update'">
+              <el-icon><Upload /></el-icon>
+              <span>批量更新镜像</span>
+            </button>
+            <button :class="['seg-btn', { active: tab === 'restart' }]"
+                    :disabled="!currentEnv" @click="tab = 'restart'">
+              <el-icon><RefreshRight /></el-icon>
+              <span>批量重启服务</span>
+            </button>
           </div>
         </div>
       </div>
-    </div>
-
-    <!-- ===== Big action tabs ===== -->
-    <div class="action-tabs" v-if="currentEnv">
-      <button :class="['act-tab', {active: tab === 'update'}]" @click="tab = 'update'">
-        <span class="act-icon"><el-icon><Upload /></el-icon></span>
-        <span class="act-body">
-          <span class="act-title">批量更新镜像</span>
-          <span class="act-desc">写 values.yaml → git push → ArgoCD 同步</span>
-        </span>
-        <span class="act-badge">update-image</span>
-      </button>
-      <button :class="['act-tab', {active: tab === 'restart'}]" @click="tab = 'restart'">
-        <span class="act-icon"><el-icon><RefreshRight /></el-icon></span>
-        <span class="act-body">
-          <span class="act-title">批量重启服务</span>
-          <span class="act-desc">调用 ArgoCD Restart · 不动 git · 保持当前 tag</span>
-        </span>
-        <span class="act-badge">restart</span>
-      </button>
     </div>
 
     <!-- ===== Workspace ===== -->
@@ -95,7 +109,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Aim, Upload, RefreshRight } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
@@ -104,9 +118,11 @@ import BatchUpdatePanel from '../components/BatchUpdatePanel.vue'
 import RestartPanel from '../components/RestartPanel.vue'
 import RollbackDialog from '../components/RollbackDialog.vue'
 
+const RECENT_KEY = 'deploy_recent_envs'
+const RECENT_MAX = 3
+
 const envs = ref([])
 const selectedID = ref(null)
-const selectedProject = ref(null)
 const modules = ref([])
 const tab = ref('update')
 const currentEnv = computed(() => envs.value.find(e => e.id === selectedID.value))
@@ -114,37 +130,67 @@ const recent = ref(null)
 const rbVis = ref(false)
 const rbID = ref(null)
 
+// 搜索查询：el-select 的 :filter-method 会调用 filterEnv 同步到这里，
+// 配合 v-if matchSearch 在选项 v-for 里隐藏不匹配项；非空时也隐藏"最近使用"分组
+const searchQuery = ref('')
+function filterEnv(q) { searchQuery.value = (q || '').toLowerCase().trim() }
+function matchSearch(e) {
+  if (!searchQuery.value) return true
+  return e.name.toLowerCase().includes(searchQuery.value)
+}
+
 function projectOf(e) {
   if (!e) return ''
   const suffix = '-' + e.env_type
   return e.name.endsWith(suffix) ? e.name.slice(0, -suffix.length) : e.name
 }
-const projects = computed(() => {
-  const set = new Set()
-  envs.value.forEach(e => set.add(projectOf(e)))
-  return [...set].sort()
-})
-const envsOfProject = computed(() => {
-  if (!selectedProject.value) return []
-  return envs.value
-    .filter(e => projectOf(e) === selectedProject.value)
-    .sort((a, b) => (a.env_type === 'uat' ? -1 : 1))
+
+// 按 project 名分组（每组里有 UAT/PROD），UAT 在前
+const envGroups = computed(() => {
+  const m = new Map()
+  envs.value.forEach(e => {
+    const p = projectOf(e)
+    if (!m.has(p)) m.set(p, [])
+    m.get(p).push(e)
+  })
+  const groups = []
+  for (const [project, items] of m.entries()) {
+    items.sort((a, b) => (a.env_type === 'uat' ? -1 : 1))
+    groups.push({ project, items })
+  }
+  groups.sort((a, b) => a.project.localeCompare(b.project))
+  return groups
 })
 
-function pickProject(p) {
-  selectedProject.value = p
-  const envs = envsOfProject.value
-  if (envs.length) pickEnv(envs[0])
-  else { selectedID.value = null; modules.value = [] }
-}
-function pickEnv(e) {
-  selectedID.value = e.id
+// 最近使用：localStorage 保存最近 3 个 env name；watch selectedID 维护
+const recentNames = ref(JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'))
+const filteredRecent = computed(() => {
+  return recentNames.value
+    .map(n => envs.value.find(e => e.name === n))
+    .filter(Boolean)
+    .slice(0, RECENT_MAX)
+})
+
+watch(selectedID, (id) => {
+  const env = envs.value.find(e => e.id === id)
+  if (!env) return
+  const list = recentNames.value.filter(n => n !== env.name)
+  list.unshift(env.name)
+  recentNames.value = list.slice(0, RECENT_MAX)
+  localStorage.setItem(RECENT_KEY, JSON.stringify(recentNames.value))
   loadModules()
-}
+})
 
 async function loadEnvs() {
   envs.value = (await listProjectEnvs()) || []
-  if (envs.value.length && !selectedProject.value) pickProject(projects.value[0])
+  if (envs.value.length && !selectedID.value) {
+    // 优先用 localStorage 里第一个最近使用的
+    const last = recentNames.value.find(n => envs.value.some(e => e.name === n))
+    const target = last
+      ? envs.value.find(e => e.name === last)
+      : envs.value[0]
+    selectedID.value = target.id
+  }
 }
 async function loadModules() {
   if (!selectedID.value) return
@@ -211,54 +257,71 @@ onMounted(loadEnvs)
 .p-hd .sub { font: 500 11.5px var(--mono); color: var(--text-3); }
 .p-bd { padding: 6px 20px 16px; }
 
-/* ===== Selector rows ===== */
-.sel-row { display: grid; grid-template-columns: 84px 1fr; gap: 14px; padding: 10px 0; align-items: center; border-top: 1px solid var(--border-soft); }
-.sel-row:first-child { border-top: none; padding-top: 8px; }
-.sel-k { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .8px; font-weight: 600; }
-
-.chips { display: flex; flex-wrap: wrap; gap: 5px; }
-.chip {
-  background: #fff; border: 1px solid var(--border); color: var(--text-2);
-  padding: 5px 12px; border-radius: 5px;
-  font: 500 12.5px var(--mono); cursor: pointer; transition: all .12s;
-  font-family: var(--mono);
+/* ===== Selector row (目标 + 动作 同一行) ===== */
+.sel-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+  padding: 6px 0;
 }
-.chip:hover { border-color: var(--primary); color: var(--primary); }
-.chip.active { background: var(--primary); color: #fff; border-color: var(--primary); font-weight: 600; }
-.chip.env { text-transform: uppercase; letter-spacing: .4px; font-weight: 600; font-size: 11px; }
-.chip.env.uat.active { background: var(--success); border-color: var(--success); }
-.chip.env.prod.active { background: var(--danger); border-color: var(--danger); }
+.sel-k {
+  font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .8px;
+  font-weight: 600;
+}
+.sel-divider {
+  display: inline-block; width: 1px; height: 20px;
+  background: var(--border); margin: 0 6px;
+}
 .empty-hint { color: var(--text-3); font-size: 12px; padding: 6px 0; }
 
-/* ===== Big action tabs (A1) ===== */
-.action-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
-.act-tab {
-  background: var(--bg-card); border: 1.5px solid var(--border); border-radius: var(--radius);
-  padding: 14px 18px; cursor: pointer; text-align: left;
-  display: flex; align-items: center; gap: 12px;
-  transition: all .15s; font-family: var(--body);
+/* Segmented control（代替以前的大 act-tab） */
+.seg {
+  display: inline-flex; background: #fff;
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
 }
-.act-tab:hover { border-color: var(--primary); background: #fbfdff; }
-.act-tab.active {
-  background: var(--primary); border-color: var(--primary); color: #fff;
-  box-shadow: 0 4px 12px rgba(24, 144, 255, .22);
+.seg-btn {
+  background: #fff; border: none; border-left: 1px solid var(--border);
+  padding: 7px 14px; font: 500 13px var(--body); color: var(--text-2);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  transition: all .12s;
 }
-.act-icon {
-  width: 40px; height: 40px; border-radius: 8px; flex-shrink: 0;
-  background: var(--primary-bg); color: var(--primary);
-  display: flex; align-items: center; justify-content: center;
-  transition: all .15s;
+.seg-btn:first-child { border-left: none; }
+.seg-btn:hover:not(:disabled):not(.active) { color: var(--primary); background: #f0f7ff; }
+.seg-btn.active { background: var(--primary); color: #fff; font-weight: 600; }
+.seg-btn.active + .seg-btn { border-left-color: var(--primary); }
+.seg-btn:disabled { opacity: .45; cursor: not-allowed; }
+.seg-btn .el-icon { font-size: 14px; }
+
+/* el-select 选项内布局 + 内联 chip */
+.sel-v { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.env-chip-inline {
+  font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .5px;
+  padding: 3px 8px; border-radius: 4px;
 }
-.act-icon .el-icon { font-size: 20px; }
-.act-tab.active .act-icon { background: rgba(255, 255, 255, .2); color: #fff; }
-.act-body { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.act-title { font: 600 14.5px var(--body); color: var(--text); }
-.act-tab.active .act-title { color: #fff; }
-.act-desc { font-size: 12px; color: var(--text-3); }
-.act-tab.active .act-desc { color: rgba(255, 255, 255, .85); }
-.act-badge {
-  font: 500 11px var(--mono); padding: 3px 8px; border-radius: 99px;
-  background: var(--bg-hover); color: var(--text-2);
+.env-chip-inline.uat { background: #ecfdf5; color: #059669; }
+.env-chip-inline.prod { background: #fef2f2; color: #dc2626; }
+</style>
+
+<!-- el-select 弹层样式（非 scoped，因为 popper 被 teleport 到 body 外）-->
+<style>
+.env-select-popper .opt-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  font-family: 'Fira Code', 'JetBrains Mono', Consolas, monospace;
 }
-.act-tab.active .act-badge { background: rgba(255, 255, 255, .18); color: #fff; }
+.env-select-popper .opt-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.env-select-popper .opt-dot.uat { background: #10b981; }
+.env-select-popper .opt-dot.prod {
+  background: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, .15);
+}
+.env-select-popper .opt-name {
+  flex: 1; font-size: 12.5px; color: #1f2937;
+}
+.env-select-popper .opt-name.prod { font-weight: 700; color: #b91c1c; }
+.env-select-popper .env-chip-mini {
+  font-size: 10px; font-weight: 700; letter-spacing: .4px;
+  padding: 1px 6px; border-radius: 3px; flex-shrink: 0;
+}
+.env-select-popper .env-chip-mini.uat { background: #ecfdf5; color: #059669; }
+.env-select-popper .env-chip-mini.prod { background: #fef2f2; color: #dc2626; }
 </style>

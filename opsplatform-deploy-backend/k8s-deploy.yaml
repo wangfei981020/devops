@@ -26,9 +26,11 @@ spec:
     metadata:
       labels: { app: opsplatform-deploy-backend }
     spec:
+      # 升级时给 preStop 留 10 分钟跑完 in-flight 发布任务（preStop 自身轮询 inflight=0 才放行 SIGTERM）
+      terminationGracePeriodSeconds: 600
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/opsplatform-deploy-backend:v49
+          image: localhost:8070/opsplatform/opsplatform-deploy-backend:v50
           imagePullPolicy: Always
           ports:
             - { name: http,    containerPort: 8080 }
@@ -49,6 +51,23 @@ spec:
             httpGet: { path: /ready, port: metrics }
             initialDelaySeconds: 5
             periodSeconds: 10
+          # 滚动升级核心：preStop 先把 pod 切到 drain（readiness=503 → Service 摘 endpoint），
+          # 然后轮询 /internal/inflight，等所有异步发布 goroutine 跑完再退出，K8s 才会发 SIGTERM
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    wget -qO- http://127.0.0.1:8088/internal/drain >/dev/null 2>&1 || true
+                    # 最多等 540s (9 分钟)，给 SIGTERM 留 60s 兜底
+                    for i in $(seq 1 270); do
+                      n=$(wget -qO- http://127.0.0.1:8088/internal/inflight 2>/dev/null | grep -o '"count":[0-9]*' | grep -o '[0-9]*')
+                      [ -z "$n" ] && n=0
+                      [ "$n" = "0" ] && exit 0
+                      sleep 2
+                    done
       volumes:
         - name: cache
           persistentVolumeClaim: { claimName: opsplatform-deploy-cache }

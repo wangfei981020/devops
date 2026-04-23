@@ -54,6 +54,10 @@ type updateImageReq struct {
 }
 
 func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
+	if IsDraining() {
+		JSONError(w, 50300, "service is draining (rolling update), please retry in a moment")
+		return
+	}
 	var req updateImageReq
 	if !DecodeJSON(w, r, &req) {
 		return
@@ -91,7 +95,10 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, nil, getOperator(r))
+	op := getOperator(r)
+	InflightTrack(func() {
+		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, nil, op)
+	})
 
 	Audit(r, "deploy.update_image", "project_env", p.Name, map[string]interface{}{
 		"deployment_id": depID, "env_type": p.EnvType, "modules": len(pending),
@@ -110,6 +117,10 @@ type restartReq struct {
 }
 
 func HandleRestart(w http.ResponseWriter, r *http.Request) {
+	if IsDraining() {
+		JSONError(w, 50300, "service is draining (rolling update), please retry in a moment")
+		return
+	}
 	var req restartReq
 	if !DecodeJSON(w, r, &req) {
 		return
@@ -141,7 +152,7 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go func() {
+	InflightTrack(func() {
 		start := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
@@ -157,7 +168,7 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		_, _ = database.DB.Exec(`UPDATE deployment SET argocd_results=?, status=?, duration_sec=? WHERE id=?`,
 			argoJSON, res.Status, int(time.Since(start).Seconds()), depID)
 		sendRestartNotify(p, depID, operator, res)
-	}()
+	})
 
 	Audit(r, "deploy.restart", "project_env", p.Name, map[string]interface{}{
 		"deployment_id": depID, "env_type": p.EnvType, "modules": len(req.ModuleNames),
@@ -210,6 +221,10 @@ type rollbackReq struct {
 }
 
 func HandleRollback(w http.ResponseWriter, r *http.Request) {
+	if IsDraining() {
+		JSONError(w, 50300, "service is draining (rolling update), please retry in a moment")
+		return
+	}
 	var req rollbackReq
 	if !DecodeJSON(w, r, &req) {
 		return
@@ -254,7 +269,10 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, &ref, getOperator(r))
+	op := getOperator(r)
+	InflightTrack(func() {
+		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, &ref, op)
+	})
 
 	Audit(r, "deploy.rollback", "project_env", p.Name, map[string]interface{}{
 		"deployment_id": depID, "ref_deployment_id": ref, "modules": len(pending),

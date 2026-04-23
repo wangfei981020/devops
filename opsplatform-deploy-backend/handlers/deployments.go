@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"net/http"
+	"regexp"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
 	"opsplatform-deploy-backend/database"
@@ -22,8 +24,23 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 	addEq("action", r.URL.Query().Get("action"))
 	addEq("status", r.URL.Query().Get("status"))
 	if v := r.URL.Query().Get("operator"); v != "" {
+		// 特殊值 "me" → 解析为当前登录用户名（前端不用知道用户名）
+		if v == "me" {
+			v = UsernameFromCtx(r)
+			if v == "" {
+				JSONSuccess(w, map[string]interface{}{"total": 0, "list": []models.Deployment{}})
+				return
+			}
+		}
 		where += " AND operator LIKE ?"
 		args = append(args, "%"+v+"%")
+	}
+	// since=30m / 1h / 2d → 转成 created_at >= NOW() - INTERVAL N MINUTE
+	if v := r.URL.Query().Get("since"); v != "" {
+		if d, ok := parseSinceDuration(v); ok {
+			where += " AND created_at >= DATE_SUB(NOW(), INTERVAL ? SECOND)"
+			args = append(args, int(d.Seconds()))
+		}
 	}
 	// 项目名前缀匹配 project_env.name（e.g. g32 匹配 g32-uat/g32-prod）
 	if v := r.URL.Query().Get("project"); v != "" {
@@ -83,6 +100,38 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 		list = append(list, d)
 	}
 	JSONSuccess(w, map[string]interface{}{"total": total, "list": list})
+}
+
+// parseSinceDuration 解析 "30m" / "1h" / "2d" 这类相对时长。无效返回 (_, false)。
+//
+//	支持的后缀：s/m/h/d。范围限制在 1s~7d，避免恶意大值打 DB。
+var sinceRe = regexp.MustCompile(`^(\d+)([smhd])$`)
+
+func parseSinceDuration(s string) (time.Duration, bool) {
+	m := sinceRe.FindStringSubmatch(s)
+	if m == nil {
+		return 0, false
+	}
+	n, _ := strconv.Atoi(m[1])
+	if n <= 0 {
+		return 0, false
+	}
+	var unit time.Duration
+	switch m[2] {
+	case "s":
+		unit = time.Second
+	case "m":
+		unit = time.Minute
+	case "h":
+		unit = time.Hour
+	case "d":
+		unit = 24 * time.Hour
+	}
+	d := time.Duration(n) * unit
+	if d > 7*24*time.Hour {
+		d = 7 * 24 * time.Hour
+	}
+	return d, true
 }
 
 func HandleGetDeployment(w http.ResponseWriter, r *http.Request) {

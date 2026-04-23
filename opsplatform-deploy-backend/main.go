@@ -35,6 +35,7 @@ func main() {
 		log.Fatalf("run migrations: %v", err)
 	}
 	warnIfDefaultAdmin()
+	cleanupZombiePending()
 
 	go startHealthServer(cfg.HealthPort)
 	go startScanScheduler()
@@ -155,7 +156,47 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
-	log.Println("shutting down...")
+	log.Println("SIGTERM received, draining + waiting for in-flight deploy jobs...")
+
+	// 收到 SIGTERM 时再次保险设 drain，preStop 也应已设过
+	// 等所有 in-flight 异步发布任务跑完。preStop 已经轮询过 inflight=0 才放行 SIGTERM，
+	// 此处兜底（避免 preStop 没正确配上时直接掐断 in-flight）。
+	handlers.MarkDraining()
+	doneCh := make(chan struct{})
+	go func() { handlers.WaitInflight(); close(doneCh) }()
+	select {
+	case <-doneCh:
+		log.Println("all in-flight jobs done")
+	case <-time.After(540 * time.Second):
+		log.Printf("⚠ timed out waiting in-flight jobs (still %d running), forcing shutdown", handlers.InflightCount())
+	}
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_ = server.Shutdown(shutCtx)
+	log.Println("api server stopped, bye")
+}
+
+// cleanupZombiePending：启动时把上次崩溃/重启遗留的 pending 任务标记成 unknown。
+//
+//	判定条件：status='pending' AND created_at < NOW()-10min。正常发布几十秒最多几分钟，
+//	超过 10 分钟还 pending 一定是上次进程异常退出留下的"僵尸"。
+//	已经 push 的 git commit 物理存在，ArgoCD 也会继续同步；只是 deployment 表里需要标个状态。
+func cleanupZombiePending() {
+	res, err := database.DB.Exec(`
+		UPDATE deployment
+		   SET status='unknown',
+		       error_msg=CONCAT(IFNULL(error_msg,''),
+		                ' [auto] backend restarted while job was pending; check git/argocd manually')
+		 WHERE status='pending'
+		   AND created_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)`)
+	if err != nil {
+		log.Printf("⚠ cleanupZombiePending: %v", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("⚠ cleaned up %d zombie pending deployments (backend was restarted while they were running)", n)
+	}
 }
 
 // startScanScheduler 每 5 分钟对所有 project_env 直接调用内部扫描函数（静默失败）
@@ -202,6 +243,12 @@ func startHealthServer(addr string) {
 		_, _ = w.Write([]byte(`{"status":"ok","service":"deploy-backend"}`))
 	})
 	m.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		// drain 期间 readiness 主动失败，让 Service 提前摘 endpoint，新请求不再路由到本 pod
+		if handlers.IsDraining() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"draining"}`))
+			return
+		}
 		if err := database.DB.Ping(); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte(`{"status":"db unreachable"}`))
@@ -212,6 +259,9 @@ func startHealthServer(addr string) {
 	})
 	// Prometheus 抓取 /metrics（和生产 Helm values.yaml 里的 prometheus.io/port=8088 对齐）
 	m.Handle("/metrics", promhttp.Handler())
+	// 滚动升级配套 endpoint：preStop hook 调用，不需要 auth
+	m.HandleFunc("/internal/drain", handlers.HandleInternalDrain)
+	m.HandleFunc("/internal/inflight", handlers.HandleInternalInflight)
 	log.Printf("Health/Metrics server on %s (/health, /ready, /metrics)", addr)
 	if err := http.ListenAndServe(addr, m); err != nil {
 		log.Printf("health server: %v", err)

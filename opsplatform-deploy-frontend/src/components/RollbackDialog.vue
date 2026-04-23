@@ -34,6 +34,9 @@
 import { computed, ref, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getRollbackPreview, rollback } from '../api'
+import { useDeploymentsStore } from '../stores/deployments'
+
+const deployments = useDeploymentsStore()
 
 const props = defineProps(['modelValue', 'deploymentId'])
 const emit = defineEmits(['update:modelValue', 'done'])
@@ -64,11 +67,17 @@ function onSel(rs) { selected.value = rs }
 async function onRollback() {
   submitting.value = true
   try {
-    await rollback({
+    const r = await rollback({
       ref_deployment_id: props.deploymentId,
       selected_modules: selected.value.map(s => s.module)
     })
-    ElMessage.success('回滚已提交')
+    ElMessage.success(`回滚已提交 · #${r.deployment_id} · 进度看右下角浮动条`)
+    if (r?.deployment_id) {
+      deployments.startTracking(r.deployment_id, {
+        action: 'rollback',
+        modules: selected.value.length,
+      })
+    }
     vis.value = false
     emit('done')
   } finally { submitting.value = false }
