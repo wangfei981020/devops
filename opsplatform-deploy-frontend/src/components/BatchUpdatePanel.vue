@@ -79,10 +79,7 @@ base-client-backend:20260416020000-99"
 
     <!-- 提交条 -->
     <div class="exec" v-if="diff.length">
-      <div class="exec-info">
-        将提交到 <b>{{ repoShort }}</b> · 分支 <b>{{ projectEnv.git_branch }}</b>
-        <span v-if="validCount"> · 涉及 <b>{{ validCount }}</b> 个模块</span>
-      </div>
+      <div class="exec-info"></div>
       <button
         v-if="!isProd || auth.isAdmin"
         :class="['cta', isProd ? 'danger' : 'success']"

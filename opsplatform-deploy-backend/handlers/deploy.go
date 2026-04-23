@@ -152,17 +152,22 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_, pollInterval, pollTimeoutMin := loadPollCfg()
 	InflightTrack(func() {
 		start := time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		// Restart 需要等所有 pod 真的 Healthy，30s 触发 + pollTimeoutMin 分钟轮询 + 1 分钟缓冲
+		ctx, cancel := context.WithTimeout(context.Background(),
+			time.Duration(pollTimeoutMin+1)*time.Minute+30*time.Second)
 		defer cancel()
 		ds := services.NewDeployService(nil)
 		res := ds.Restart(ctx, services.RestartInput{
-			ProjectEnvName: p.Name,
-			Namespace:      p.Namespace,
-			Modules:        modules,
-			ModuleNames:    req.ModuleNames,
-			ArgocdClient:   services.NewArgocdClient(argoURL, argoToken),
+			ProjectEnvName:  p.Name,
+			Namespace:       p.Namespace,
+			Modules:         modules,
+			ModuleNames:     req.ModuleNames,
+			ArgocdClient:    services.NewArgocdClient(argoURL, argoToken),
+			PollIntervalSec: pollInterval,
+			PollTimeoutSec:  pollTimeoutMin * 60,
 		})
 		argoJSON := marshalJSON(res.ArgocdResults)
 		_, _ = database.DB.Exec(`UPDATE deployment SET argocd_results=?, status=?, duration_sec=? WHERE id=?`,

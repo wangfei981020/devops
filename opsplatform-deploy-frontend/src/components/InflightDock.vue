@@ -1,11 +1,13 @@
 <template>
   <transition name="dock-fade">
-    <div v-if="store.hasInflight" class="dock" :class="{ expanded: store.expanded }">
+    <div v-if="store.hasInflight" class="dock" :class="['status-' + overallStatus, { expanded: store.expanded }]">
       <!-- 折叠态：mini bar -->
       <div v-if="!store.expanded" class="dock-bar" @click="store.toggleExpand">
-        <div class="spin"></div>
+        <div v-if="overallStatus === 'pending'" class="spin"></div>
+        <el-icon v-else-if="overallStatus === 'success'" class="status-ico ok"><CircleCheckFilled /></el-icon>
+        <el-icon v-else class="status-ico fail"><CircleCloseFilled /></el-icon>
         <div class="bar-text">
-          <b>{{ store.count }}</b> 个发布任务进行中
+          <b>{{ store.count }}</b> {{ headText }}
           <span class="bar-tip">点击展开</span>
         </div>
         <el-icon class="bar-arrow"><ArrowUp /></el-icon>
@@ -15,8 +17,10 @@
       <div v-else class="dock-panel">
         <div class="dock-head">
           <div class="head-title">
-            <div class="spin"></div>
-            <span><b>{{ store.count }}</b> 个发布任务进行中</span>
+            <div v-if="overallStatus === 'pending'" class="spin"></div>
+            <el-icon v-else-if="overallStatus === 'success'" class="status-ico ok"><CircleCheckFilled /></el-icon>
+            <el-icon v-else class="status-ico fail"><CircleCloseFilled /></el-icon>
+            <span><b>{{ store.count }}</b> {{ headText }}</span>
           </div>
           <el-icon class="head-close" @click="store.toggleExpand"><ArrowDown /></el-icon>
         </div>
@@ -40,7 +44,7 @@
           </div>
         </div>
         <div class="dock-foot">
-          <span class="foot-tip">完成的任务会自动消失 · <router-link to="/deployment-history">查看完整发布历史</router-link></span>
+          <span class="foot-tip">完成的任务会自动消失 · <router-link to="/history">查看完整发布历史</router-link></span>
         </div>
       </div>
     </div>
@@ -48,11 +52,24 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import { ArrowUp, ArrowDown } from '@element-plus/icons-vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ArrowUp, ArrowDown, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import { useDeploymentsStore } from '../stores/deployments'
 
 const store = useDeploymentsStore()
+
+// 整体状态：有 pending 就算进行中；全完成看有没有失败
+const overallStatus = computed(() => {
+  if (store.inflight.some(d => d.status === 'pending')) return 'pending'
+  if (store.inflight.some(d => d.status === 'failed' || d.status === 'partial' || d.status === 'unknown')) return 'failed'
+  return 'success'
+})
+
+const headText = computed(() => {
+  if (overallStatus.value === 'pending') return '个发布任务进行中'
+  if (overallStatus.value === 'success') return '个任务已完成'
+  return '个任务有失败'
+})
 
 const ACTION_LABEL = {
   update_image: '更新镜像',
@@ -103,6 +120,18 @@ function elapsed(start) {
 }
 .dock-bar:hover { box-shadow: 0 8px 24px rgba(24, 144, 255, .2); border-color: #1890ff; }
 .dock-bar b { color: #1890ff; font-family: var(--mono, 'Fira Code', monospace); font-weight: 700; margin: 0 2px; }
+
+/* 根据整体状态调色（折叠/展开共用） */
+.dock.status-success .dock-bar { border-color: #10b981; }
+.dock.status-success .dock-bar b,
+.dock.status-success .head-title b { color: #059669; }
+.dock.status-failed .dock-bar { border-color: #ef4444; }
+.dock.status-failed .dock-bar b,
+.dock.status-failed .head-title b { color: #dc2626; }
+
+.status-ico { font-size: 16px; flex-shrink: 0; }
+.status-ico.ok { color: #10b981; }
+.status-ico.fail { color: #ef4444; }
 .bar-tip { color: #9ca3af; font-size: 11px; margin-left: 6px; }
 .bar-arrow { color: #6b7280; font-size: 12px; }
 

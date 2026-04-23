@@ -47,6 +47,7 @@ func PollUntilStable(ctx context.Context, client *ArgocdClient, appName string, 
 		cancel()
 		if err == nil {
 			last = st
+			// Synced + Healthy → 立即成功
 			if st.SyncStatus == "Synced" && st.Health == "Healthy" {
 				return &models.ArgocdAppResult{
 					App:         appName,
@@ -54,6 +55,21 @@ func PollUntilStable(ctx context.Context, client *ArgocdClient, appName string, 
 					Health:      st.Health,
 					DurationSec: int(time.Since(start).Seconds()),
 					Msg:         "",
+				}
+			}
+			// Degraded → 立即失败（pod 起不来，不等超时）
+			// 典型场景：CrashLoopBackOff / ImagePullError / readiness probe 永远 fail
+			if st.Health == "Degraded" {
+				msg := "degraded"
+				if st.Message != "" {
+					msg = "degraded: " + st.Message
+				}
+				return &models.ArgocdAppResult{
+					App:         appName,
+					SyncStatus:  st.SyncStatus,
+					Health:      st.Health,
+					DurationSec: int(time.Since(start).Seconds()),
+					Msg:         msg,
 				}
 			}
 		} else {

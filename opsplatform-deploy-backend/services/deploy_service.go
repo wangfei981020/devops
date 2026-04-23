@@ -213,11 +213,13 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 // --- Restart ---
 
 type RestartInput struct {
-	ProjectEnvName string
-	Namespace      string // 默认 namespace，模块自身 Namespace 为空时 fallback
-	Modules        map[string]Module
-	ModuleNames    []string
-	ArgocdClient   *ArgocdClient
+	ProjectEnvName  string
+	Namespace       string // 默认 namespace，模块自身 Namespace 为空时 fallback
+	Modules         map[string]Module
+	ModuleNames     []string
+	ArgocdClient    *ArgocdClient
+	PollIntervalSec int
+	PollTimeoutSec  int
 }
 
 type RestartResult struct {
@@ -226,20 +228,32 @@ type RestartResult struct {
 	Err           error
 }
 
+// Restart：
+//  1. 逐个调用 ArgoCD RestartDeployment 触发 rollout（收集"没能触发"的失败项）
+//  2. 触发全部成功后，对每个 app 轮询 ArgoCD 状态直到 Healthy / Degraded / 超时
+//  3. 所有 app Healthy=success；任一 Degraded/timeout=failed；部分 Healthy 部分失败=partial
+//
+// 严格性：只看 ArgoCD application.health。Healthy 意味着底层 Deployment 所有 pod 都 Ready。
+// Degraded 会立即跳出（在 PollUntilStable 内），避免等满超时。
 func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartResult {
 	res := &RestartResult{}
-	okCount, failCount := 0, 0
+
+	// Step 1: 并记录成功触发的 app，失败的直接进结果
+	type triggered struct {
+		app string
+		mod string
+		ns  string
+	}
+	var toPoll []triggered
 	for _, name := range in.ModuleNames {
 		m, ok := in.Modules[name]
 		if !ok {
 			res.ArgocdResults = append(res.ArgocdResults, models.ArgocdAppResult{
 				App: name, SyncStatus: "failed", Msg: "module not found",
 			})
-			failCount++
 			continue
 		}
 		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		// 优先用模块自己的 namespace，空则回退到 project_env 默认
 		ns := m.Namespace
 		if ns == "" {
 			ns = in.Namespace
@@ -250,16 +264,41 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 			res.ArgocdResults = append(res.ArgocdResults, models.ArgocdAppResult{
 				App: m.ArgocdApp, SyncStatus: "failed", Msg: err.Error(),
 			})
-			failCount++
 			continue
 		}
-		res.ArgocdResults = append(res.ArgocdResults, models.ArgocdAppResult{
-			App: m.ArgocdApp, SyncStatus: "Restarted", Msg: "restart triggered",
-		})
-		okCount++
+		toPoll = append(toPoll, triggered{app: m.ArgocdApp, mod: name, ns: ns})
+	}
+
+	// Step 2: 让 ArgoCD 感知到滚动（rollout 刚触发的瞬间 health 可能还是旧的 Healthy）
+	if len(toPoll) > 0 {
+		time.Sleep(3 * time.Second)
+	}
+
+	// Step 3: 轮询每个成功触发的 app 到 Healthy/Degraded
+	interval := in.PollIntervalSec
+	if interval <= 0 {
+		interval = 5
+	}
+	timeout := in.PollTimeoutSec
+	if timeout <= 0 {
+		timeout = 180 // restart 通常 1-3 min 足够
+	}
+	for _, t := range toPoll {
+		ar := PollUntilStable(ctx, in.ArgocdClient, t.app, interval, timeout)
+		res.ArgocdResults = append(res.ArgocdResults, *ar)
+	}
+
+	// Step 4: 聚合。只有 SyncStatus=Synced & Health=Healthy 才算 success
+	okCount, failCount := 0, 0
+	for _, ar := range res.ArgocdResults {
+		if ar.SyncStatus == "Synced" && ar.Health == "Healthy" {
+			okCount++
+		} else {
+			failCount++
+		}
 	}
 	switch {
-	case failCount == 0:
+	case failCount == 0 && okCount > 0:
 		res.Status = models.StatusSuccess
 	case okCount == 0:
 		res.Status = models.StatusFailed

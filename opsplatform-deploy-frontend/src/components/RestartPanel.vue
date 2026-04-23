@@ -83,10 +83,7 @@ bet-client-backend"
     </div>
 
     <div class="exec" v-if="preview.length">
-      <div class="exec-info">
-        调用 ArgoCD <b>Deployment Restart</b> · 不改动 git
-        <span v-if="validCount"> · 将重启 <b>{{ validCount }}</b> 个</span>
-      </div>
+      <div class="exec-info"></div>
       <button
         v-if="!isProd || auth.isAdmin"
         :class="['cta', isProd ? 'danger' : 'primary']"
