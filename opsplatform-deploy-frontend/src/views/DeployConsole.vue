@@ -25,6 +25,11 @@
       </div>
       <div class="hdr-r">
         <div class="stat"><div class="k">Modules</div><div class="v">{{ modules.length }}</div></div>
+        <button class="btn-rescan" :disabled="rescanning" @click="onRescan"
+                title="从 Git 仓库重新扫描模块列表，写入 module 表">
+          <el-icon :class="{ spin: rescanning }"><RefreshRight /></el-icon>
+          <span>{{ rescanning ? '扫描中...' : '扫描 Git 重建模块' }}</span>
+        </button>
       </div>
     </div>
     <div v-else class="hdr-card empty">
@@ -134,6 +139,22 @@ const rbID = ref(null)
 // 配合 v-if matchSearch 在选项 v-for 里隐藏不匹配项；非空时也隐藏"最近使用"分组
 const searchQuery = ref('')
 function filterEnv(q) { searchQuery.value = (q || '').toLowerCase().trim() }
+
+const rescanning = ref(false)
+async function onRescan() {
+  if (!selectedID.value || rescanning.value) return
+  rescanning.value = true
+  try {
+    const r = await scanModules(selectedID.value)
+    await loadModules()
+    const n = r?.count ?? modules.value.length
+    ElMessage.success(`已扫描：${n} 个模块`)
+  } catch (_) {
+    // 全局拦截器已经弹了错误 toast
+  } finally {
+    rescanning.value = false
+  }
+}
 function matchSearch(e) {
   if (!searchQuery.value) return true
   return e.name.toLowerCase().includes(searchQuery.value)
@@ -244,7 +265,19 @@ onMounted(loadEnvs)
 .hdr-l .slash { color: var(--text-3); font-weight: 400; }
 .hdr-l p { color: var(--text-2); font-size: 13px; }
 .hdr-l p b { color: var(--text); font-family: var(--mono); font-weight: 500; }
-.hdr-r { display: flex; gap: 24px; }
+.hdr-r { display: flex; gap: 16px; align-items: center; }
+
+.btn-rescan {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #fff; border: 1px solid var(--border); color: var(--text-2);
+  padding: 7px 12px; border-radius: 6px;
+  font: 500 12.5px var(--body); cursor: pointer; transition: all .12s;
+}
+.btn-rescan:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); background: #f0f7ff; }
+.btn-rescan:disabled { opacity: .55; cursor: not-allowed; }
+.btn-rescan .el-icon { font-size: 14px; }
+.btn-rescan .el-icon.spin { animation: btnspin 1s linear infinite; }
+@keyframes btnspin { to { transform: rotate(360deg); } }
 .stat { text-align: center; }
 .stat .k { font-size: 10.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: .6px; font-weight: 600; margin-bottom: 2px; }
 .stat .v { font: 600 20px var(--mono); color: var(--text); }

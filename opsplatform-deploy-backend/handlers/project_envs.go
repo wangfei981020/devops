@@ -363,9 +363,13 @@ func ScanModulesByProjectEnvID(ctx context.Context, id int64) (int, error) {
 	}
 	rows.Close()
 	seen := map[string]bool{}
+	// ArgoCD app 命名按 k8s DNS-1123 全小写 kebab-case 惯例（helm 生成的 Application 资源强制小写），
+	// 无论模块目录名 / project_env.name 是什么大小写，拼出的 app name 一律 ToLower 保证匹配；
+	// 否则会出现 "G50-xxx-G50-uat" 和 ArgoCD 实际 "g50-xxx-g50-uat" 对不上 → restart 403
+	peNameLower := strings.ToLower(p.Name)
 	for _, s := range scanned {
 		seen[s.Name] = true
-		appName := s.Name + "-" + p.Name
+		appName := strings.ToLower(s.Name) + "-" + peNameLower
 		ns := s.Namespace
 		if ns == "" {
 			ns = p.Namespace
