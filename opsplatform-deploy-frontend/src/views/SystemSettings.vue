@@ -1,5 +1,10 @@
 <template>
-  <div class="ss">
+  <div v-if="!authStore.isAdmin" class="no-perm">
+    <el-icon class="np-icon"><Lock /></el-icon>
+    <div class="np-title">需要管理员权限</div>
+    <div class="np-desc">系统设置仅管理员可访问。如需查看或修改配置请联系管理员。</div>
+  </div>
+  <div v-else class="ss">
     <div class="rail">
       <div class="rail-title">配置分区</div>
       <div v-for="t in tabs" :key="t.v" :class="['rail-item', { active: tab === t.v }]" @click="tab = t.v">
@@ -66,17 +71,6 @@
                 </div>
                 <div class="ov-right">
                   <span :class="['ov-badge', ovStatus.larkbots.kind]">{{ ovStatus.larkbots.text }}</span>
-                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
-                </div>
-              </div>
-              <div class="ov-card" @click="tab='lark'">
-                <div class="ov-icon" style="background:#fef3c7;color:#b45309"><el-icon><Bell /></el-icon></div>
-                <div class="ov-main">
-                  <div class="ov-title">Lark 默认</div>
-                  <div class="ov-desc">兜底通知渠道（未选机器人时用）</div>
-                </div>
-                <div class="ov-right">
-                  <span :class="['ov-badge', ovStatus.lark.kind]">{{ ovStatus.lark.text }}</span>
                   <el-icon class="ov-arrow"><ArrowRight /></el-icon>
                 </div>
               </div>
@@ -156,6 +150,10 @@
             </el-form-item>
             <el-form-item label="测试仓库路径">
               <el-input v-model="gc.test_repo_path" class="mono" placeholder="如 argocd/uat-k8s-platform（可选，填了点「测试连接」用这个仓库精确验证）" />
+            </el-form-item>
+            <el-form-item label="发布中心 URL">
+              <el-input v-model="gc.deploy_center_base_url" class="mono"
+                placeholder="如 http://opsplatform-deploy.your-company.com（Lark 通知里「查看发布详情」按钮跳这个地址）" />
             </el-form-item>
           </el-form>
           <div class="actions">
@@ -392,25 +390,6 @@
         </div>
       </div>
 
-      <!-- Lark -->
-      <div v-if="tab === 'lark'" class="section">
-        <div class="sec-head">
-          <div class="sec-title">默认 Lark 通知</div>
-          <div class="sec-desc">project_env 未配置时使用此 webhook · 发布完成后艾特操作人</div>
-        </div>
-        <div class="sec-body" v-loading="loading.cred">
-          <el-form :model="gc" label-width="140px" label-position="left" size="default">
-            <el-form-item label="Webhook URL"><el-input v-model="gc.lark_default_webhook" class="mono" /></el-form-item>
-            <el-form-item label="Secret">
-              <el-input v-model="gc.lark_default_secret" type="password" show-password placeholder="可空，留空不更新" />
-            </el-form-item>
-          </el-form>
-          <div class="actions">
-            <el-button type="primary" @click="saveGlobal" :loading="saving.cred">保存</el-button>
-          </div>
-        </div>
-      </div>
-
       <!-- 同步策略 -->
       <div v-if="tab === 'poll'" class="section">
         <div class="sec-head">
@@ -504,8 +483,15 @@
     </el-dialog>
 
     <!-- 通知人弹窗 -->
-    <el-dialog v-model="contactDlg.vis" :title="contactDlg.isEdit ? '编辑通知人' : '新增通知人'" width="520px">
-      <el-form :model="contactDlg.form" label-width="100px" label-position="top" size="default">
+    <el-dialog v-model="contactDlg.vis" :title="contactDlg.isEdit ? '编辑通知人' : '新增通知人'" width="560px">
+      <!-- 新增时支持单个 / 批量切换；编辑时只能单个 -->
+      <el-radio-group v-if="!contactDlg.isEdit" v-model="contactDlg.mode" size="small" style="margin-bottom:14px;">
+        <el-radio-button value="single">单个</el-radio-button>
+        <el-radio-button value="batch">批量</el-radio-button>
+      </el-radio-group>
+
+      <el-form v-if="contactDlg.isEdit || contactDlg.mode === 'single'"
+               :model="contactDlg.form" label-width="100px" label-position="top" size="default">
         <el-form-item label="名称 *">
           <el-input v-model="contactDlg.form.name" :disabled="contactDlg.isEdit" placeholder="如: 张三 或 zhangsan（和操作人名字一致时自动匹配）" />
         </el-form-item>
@@ -516,9 +502,36 @@
           <el-input v-model="contactDlg.form.remark" type="textarea" :rows="2" />
         </el-form-item>
       </el-form>
+
+      <el-form v-else label-width="100px" label-position="top" size="default">
+        <el-form-item label="批量文本">
+          <el-input v-model="contactDlg.batchText" type="textarea" :rows="10" class="mono"
+            placeholder="每行一条，格式：名称,Lark ID&#10;&#10;示例：&#10;张三,ou_abc123...&#10;李四,ou_def456...&#10;cesar,ou_931577..."
+          />
+          <div class="batch-hint">
+            格式：<code>名称,Lark ID</code> 每行一条 ·
+            空行/以 <code>#</code> 开头的行忽略 ·
+            已解析：<b>{{ batchParsed.valid.length }}</b> 条有效
+            <span v-if="batchParsed.errors.length" style="color:var(--danger);margin-left:6px;">
+              · <b>{{ batchParsed.errors.length }}</b> 条格式错误
+            </span>
+          </div>
+          <div v-if="batchParsed.errors.length" class="batch-errors">
+            格式错误的行：
+            <div v-for="(e, i) in batchParsed.errors" :key="i">
+              行 {{ e.line }}：<code>{{ e.raw }}</code>
+            </div>
+          </div>
+        </el-form-item>
+      </el-form>
+
       <template #footer>
         <el-button @click="contactDlg.vis = false">取消</el-button>
-        <el-button type="primary" @click="onSaveContact">保存</el-button>
+        <el-button type="primary" @click="onSaveContact">
+          {{ !contactDlg.isEdit && contactDlg.mode === 'batch'
+              ? `批量新增 ${batchParsed.valid.length} 条`
+              : '保存' }}
+        </el-button>
       </template>
     </el-dialog>
 
@@ -583,7 +596,7 @@ import {
   listGitlabRepos, createGitlabRepo, updateGitlabRepo, deleteGitlabRepo,
 } from '../api'
 import {
-  Key, User, UserFilled, ChatLineRound, Bell, Folder, Connection, Timer, InfoFilled, ArrowRight
+  Key, User, UserFilled, ChatLineRound, Bell, Folder, Connection, Timer, InfoFilled, ArrowRight, Lock
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 const authStore = useAuthStore()
@@ -597,7 +610,6 @@ const tabs = [
   { v: 'larkbots', label: 'Lark 机器人' },
   { v: 'accounts', label: '账号管理' },
   { v: 'contacts', label: '通知人' },
-  { v: 'lark', label: 'Lark 默认' },
   { v: 'poll', label: '同步策略' },
   { v: 'about', label: '关于' }
 ]
@@ -605,6 +617,7 @@ const tabs = [
 const gc = reactive({
   gitlab_url: '', gitlab_user: '', gitlab_email: '', gitlab_token: '',
   test_repo_path: '',
+  deploy_center_base_url: '',
   lark_default_webhook: '', lark_default_secret: '',
   poll_interval_sec: 10, poll_timeout_min: 3, git_retry_count: 3
 })
@@ -757,23 +770,100 @@ async function onResetPwd(u) {
 }
 
 // === 通知人（Lark 艾特） ===
-const contactDlg = reactive({ vis: false, isEdit: false, editingID: null, form: { name: '', lark_id: '', remark: '' } })
+const contactDlg = reactive({
+  vis: false, isEdit: false, editingID: null,
+  mode: 'single', // 'single' | 'batch'，仅新增时可切换
+  form: { name: '', lark_id: '', remark: '' },
+  batchText: '',
+})
 async function loadContacts() { contacts.value = (await listContacts()) || [] }
 function openContactCreate() {
   contactDlg.isEdit = false; contactDlg.editingID = null
+  contactDlg.mode = 'single'
   Object.assign(contactDlg.form, { name: '', lark_id: '', remark: '' })
+  contactDlg.batchText = ''
   contactDlg.vis = true
 }
 function openContactEdit(c) {
   contactDlg.isEdit = true; contactDlg.editingID = c.id
+  contactDlg.mode = 'single'
   Object.assign(contactDlg.form, { name: c.name, lark_id: c.lark_id, remark: c.remark })
   contactDlg.vis = true
 }
+
+// 解析批量文本。每行格式：name,lark_id[,remark]
+// 逗号可以是中文逗号；空行/以 # 开头忽略。
+const batchParsed = computed(() => {
+  const valid = []
+  const errors = []
+  const lines = (contactDlg.batchText || '').split('\n')
+  lines.forEach((raw, idx) => {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) return
+    const parts = line.split(/[,，]/).map(s => s.trim())
+    if (parts.length < 2 || !parts[0] || !parts[1]) {
+      errors.push({ line: idx + 1, raw })
+      return
+    }
+    valid.push({
+      name: parts[0],
+      lark_id: parts[1],
+      remark: parts[2] || '',
+    })
+  })
+  return { valid, errors }
+})
+
 async function onSaveContact() {
-  if (!contactDlg.isEdit && !contactDlg.form.name.trim()) { ElMessage.warning('名称必填'); return }
-  if (contactDlg.isEdit) await updateContact(contactDlg.editingID, contactDlg.form)
-  else await createContact(contactDlg.form)
-  ElMessage.success('已保存')
+  // 编辑：单条更新
+  if (contactDlg.isEdit) {
+    await updateContact(contactDlg.editingID, contactDlg.form)
+    ElMessage.success('已保存')
+    contactDlg.vis = false
+    await loadContacts()
+    return
+  }
+  // 新增 · 单个
+  if (contactDlg.mode === 'single') {
+    if (!contactDlg.form.name.trim()) { ElMessage.warning('名称必填'); return }
+    await createContact(contactDlg.form)
+    ElMessage.success('已保存')
+    contactDlg.vis = false
+    await loadContacts()
+    return
+  }
+  // 新增 · 批量：按行解析 + 逐条创建，统计成功/失败
+  const { valid, errors } = batchParsed.value
+  if (!valid.length) {
+    ElMessage.warning('没有可创建的行，请检查格式：名称,Lark ID 每行一条')
+    return
+  }
+  if (errors.length) {
+    try {
+      await ElMessageBox.confirm(
+        `有 ${errors.length} 条格式错误（将跳过）；${valid.length} 条会被创建，是否继续？`,
+        '批量创建确认',
+        { type: 'warning' }
+      )
+    } catch { return }
+  }
+  let ok = 0, fail = 0
+  const failMsgs = []
+  for (const item of valid) {
+    try {
+      await createContact(item)
+      ok++
+    } catch (e) {
+      fail++
+      failMsgs.push(`${item.name}: ${e?.message || '失败'}`)
+    }
+  }
+  if (fail === 0) {
+    ElMessage.success(`已批量新增 ${ok} 条`)
+  } else {
+    ElMessage.warning(`成功 ${ok} 条 · 失败 ${fail} 条（可能重名已存在）`)
+    console.warn('batch contact failures:', failMsgs)
+  }
   contactDlg.vis = false
   await loadContacts()
 }
@@ -874,7 +964,6 @@ const ovStatus = computed(() => ({
   accounts: users.value.length ? { kind: 'count', text: `${users.value.length} 个用户` } : { kind: 'miss', text: '未配置' },
   contacts: contacts.value.length ? { kind: 'count', text: `${contacts.value.length} 个通知人` } : { kind: 'miss', text: '未配置' },
   larkbots: larkBots.value.length ? { kind: 'count', text: `${larkBots.value.length} 个机器人` } : { kind: 'miss', text: '未配置' },
-  lark: gc.lark_default_webhook ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
   gitlabrepos: gitlabRepos.value.length ? { kind: 'count', text: `${gitlabRepos.value.length} 个仓库` } : { kind: 'miss', text: '未配置' },
   argocd: argoInstances.value.length ? { kind: 'count', text: `${argoInstances.value.length} 个实例` } : { kind: 'miss', text: '未配置' },
   poll: gc.poll_interval_sec ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
@@ -1001,4 +1090,35 @@ onMounted(loadOverview)
 .ov-badge.ok { background: #ecfdf5; color: #059669; }
 .ov-badge.count { background: #eff6ff; color: #1d4ed8; }
 .ov-badge.miss { background: #fef2f2; color: #dc2626; }
+
+/* 批量新增通知人提示 */
+.batch-hint {
+  margin-top: 8px;
+  font-size: 12px; color: var(--text-2);
+  line-height: 1.7;
+}
+.batch-hint code {
+  font-family: var(--mono);
+  background: var(--bg-hover);
+  padding: 1px 6px; border-radius: 3px;
+  color: var(--text);
+  font-size: 11.5px;
+}
+.batch-hint b { color: var(--text); font-family: var(--mono); font-weight: 700; }
+.batch-errors {
+  margin-top: 6px; padding: 8px 12px;
+  background: #fef2f2; border: 1px solid #fecaca; border-radius: 4px;
+  font-size: 11.5px; color: #991b1b; line-height: 1.7;
+  max-height: 120px; overflow-y: auto;
+}
+.batch-errors code { font-family: var(--mono); background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 3px; }
+
+/* 非 admin 访问提示 */
+.no-perm {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 60vh; color: var(--text-2);
+}
+.no-perm .np-icon { font-size: 48px; color: #f59e0b; margin-bottom: 16px; }
+.no-perm .np-title { font: 600 18px var(--body); color: var(--text); margin-bottom: 8px; }
+.no-perm .np-desc { font-size: 13.5px; color: var(--text-3); }
 </style>

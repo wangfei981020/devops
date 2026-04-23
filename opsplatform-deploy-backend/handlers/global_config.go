@@ -16,12 +16,12 @@ import (
 func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	var c models.GlobalConfig
 	err := database.DB.QueryRow(`SELECT id, gitlab_url, gitlab_user, gitlab_email, gitlab_token,
-		IFNULL(test_repo_path,''),
+		IFNULL(test_repo_path,''), IFNULL(deploy_center_base_url,''),
 		lark_default_webhook, lark_default_secret,
 		poll_interval_sec, poll_timeout_min, git_retry_count, updated_at
 		FROM global_config WHERE id=1`).
 		Scan(&c.ID, &c.GitlabURL, &c.GitlabUser, &c.GitlabEmail, &c.GitlabToken,
-			&c.TestRepoPath,
+			&c.TestRepoPath, &c.DeployCenterBaseURL,
 			&c.LarkDefaultWebhook, &c.LarkDefaultSecret,
 			&c.PollIntervalSec, &c.PollTimeoutMin, &c.GitRetryCount, &c.UpdatedAt)
 	if err != nil {
@@ -34,16 +34,17 @@ func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateGlobalConfigReq struct {
-	GitlabURL          *string `json:"gitlab_url"`
-	GitlabUser         *string `json:"gitlab_user"`
-	GitlabEmail        *string `json:"gitlab_email"`
-	GitlabToken        *string `json:"gitlab_token"`
-	TestRepoPath       *string `json:"test_repo_path"`
-	LarkDefaultWebhook *string `json:"lark_default_webhook"`
-	LarkDefaultSecret  *string `json:"lark_default_secret"`
-	PollIntervalSec    *int    `json:"poll_interval_sec"`
-	PollTimeoutMin     *int    `json:"poll_timeout_min"`
-	GitRetryCount      *int    `json:"git_retry_count"`
+	GitlabURL           *string `json:"gitlab_url"`
+	GitlabUser          *string `json:"gitlab_user"`
+	GitlabEmail         *string `json:"gitlab_email"`
+	GitlabToken         *string `json:"gitlab_token"`
+	TestRepoPath        *string `json:"test_repo_path"`
+	DeployCenterBaseURL *string `json:"deploy_center_base_url"`
+	LarkDefaultWebhook  *string `json:"lark_default_webhook"`
+	LarkDefaultSecret   *string `json:"lark_default_secret"`
+	PollIntervalSec     *int    `json:"poll_interval_sec"`
+	PollTimeoutMin      *int    `json:"poll_timeout_min"`
+	GitRetryCount       *int    `json:"git_retry_count"`
 }
 
 func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
@@ -63,6 +64,7 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	addStr("gitlab_user", req.GitlabUser)
 	addStr("gitlab_email", req.GitlabEmail)
 	addStr("test_repo_path", req.TestRepoPath)
+	addStr("deploy_center_base_url", req.DeployCenterBaseURL)
 	addStr("lark_default_webhook", req.LarkDefaultWebhook)
 	if req.GitlabToken != nil && *req.GitlabToken != "" {
 		enc, err := crypto.Encrypt(*req.GitlabToken)

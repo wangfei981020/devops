@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/mux"
 	"golang.org/x/time/rate"
 )
 
@@ -129,16 +130,23 @@ func TestRateLimit(next http.Handler) http.Handler {
 	})
 }
 
-// ScanRateLimit 扫描接口限流
+// ScanRateLimit 扫描接口限流。
+// key = username + ":" + project_env_id（从 URL path 拿），让同一用户扫不同项目互不阻塞；
+// 只限制"同一用户对同一项目"的重复扫描（1 次/分钟）。
 func ScanRateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := UsernameFromCtx(r)
-		if key == "" {
-			key = clientIP(r)
+		user := UsernameFromCtx(r)
+		if user == "" {
+			user = clientIP(r)
 		}
+		peID := mux.Vars(r)["id"]
+		if peID == "" {
+			peID = "unknown"
+		}
+		key := user + ":" + peID
 		if !scanLimiter.get(key).Allow() {
 			logReject(r, "scan", key)
-			JSONError(w, 40300, "扫描操作过于频繁，1 分钟后再试")
+			JSONError(w, 40300, "该项目扫描过于频繁，1 分钟后再试")
 			return
 		}
 		next.ServeHTTP(w, r)

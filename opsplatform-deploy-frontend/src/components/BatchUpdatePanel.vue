@@ -82,10 +82,12 @@ base-client-backend:20260416020000-99"
       <div class="exec-info"></div>
       <button
         v-if="!isProd || auth.isAdmin"
-        :class="['cta', isProd ? 'danger' : 'success']"
+        :class="['cta', isProd ? 'danger' : (isRollback ? 'warn' : 'success')]"
         :disabled="!validCount || submitting"
         @click="onSubmit">
         <span v-if="submitting">提交中...</span>
+        <span v-else-if="isRollback && isProd">回滚 PROD · {{ projectEnv.name }} · 需二次确认</span>
+        <span v-else-if="isRollback">回滚到 {{ projectEnv.name }} · {{ validCount }} 个</span>
         <span v-else-if="isProd">提交到 {{ projectEnv.name }} · 需二次确认</span>
         <span v-else>提交到 {{ projectEnv.name }} · {{ validCount }} 个</span>
         <el-icon v-if="!submitting"><ArrowRight /></el-icon>
@@ -96,19 +98,29 @@ base-client-backend:20260416020000-99"
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload, ArrowRight } from '@element-plus/icons-vue'
 import { previewImage, updateImage } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useDeploymentsStore } from '../stores/deployments'
 
-const props = defineProps(['projectEnv', 'modules'])
-const emit = defineEmits(['done'])
+const props = defineProps(['projectEnv', 'modules', 'rollbackMode'])
+const emit = defineEmits(['done', 'rollback-consumed'])
 const auth = useAuthStore()
 const deployments = useDeploymentsStore()
+
+const isRollback = computed(() => !!props.rollbackMode)
 const text = ref('')
 const diff = ref([])
+
+// rollbackMode 进入时自动预填 textarea；用户可继续编辑/删行/改 tag
+watch(() => props.rollbackMode, (m) => {
+  if (m?.prefillText) {
+    text.value = m.prefillText
+    diff.value = [] // 旧 diff 清掉，用户要主动点"预览变更"看新 diff
+  }
+}, { immediate: true })
 const previewing = ref(false)
 const submitting = ref(false)
 
@@ -142,33 +154,41 @@ async function onPreview() {
 async function onSubmit() {
   const changes = diff.value.filter(d => !d.skip && !d.is_new).map(d => ({ module: d.module, tag: d.to_tag }))
   if (!changes.length) return
-  if (isProd.value) {
-    const env = props.projectEnv.name
+  const env = props.projectEnv.name
+  const rbMode = isRollback.value
+
+  // 二次确认：PROD 任何操作 必确认；回滚操作（UAT/PROD）也必确认
+  if (isProd.value || rbMode) {
+    const title = rbMode ? '⚠ 回滚二次确认' : '⚠ 生产环境二次确认'
+    const list = changes.map(c => `  • ${c.module} → ${c.tag}`).join('\n')
+    const prefix = rbMode
+      ? `即将回滚 ${changes.length} 个模块到 #${props.rollbackMode.refDeploymentID} 版本：\n${list}`
+      : `你正在向 【${env}】 提交 ${changes.length} 个模块到 GitLab，操作不可撤销。`
     try {
-      await ElMessageBox.confirm(
-        `你正在向 【${env}】 提交 ${changes.length} 个模块到 GitLab，操作不可撤销。`,
-        '⚠ 生产环境二次确认',
-        {
-          type: 'warning',
-          confirmButtonText: `确认提交到 ${env}`,
-          cancelButtonText: '取消',
-          confirmButtonClass: 'el-button--danger',
-        }
-      )
+      await ElMessageBox.confirm(prefix, title, {
+        type: 'warning',
+        confirmButtonText: rbMode ? `确认回滚到 ${env}` : `确认提交到 ${env}`,
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+      })
     } catch (_) { return }
   }
+
   submitting.value = true
   try {
-    const r = await updateImage({ project_env_id: props.projectEnv.id, changes })
-    ElMessage.success(`已提交 · #${r.deployment_id} · 进度看右下角浮动条`)
+    const payload = { project_env_id: props.projectEnv.id, changes }
+    if (rbMode) payload.ref_deployment_id = props.rollbackMode.refDeploymentID
+    const r = await updateImage(payload)
+    ElMessage.success(`${rbMode ? '回滚' : '发布'}已提交 · #${r.deployment_id} · 进度看右下角浮动条`)
     deployments.startTracking(r.deployment_id, {
-      action: 'update_image',
+      action: rbMode ? 'rollback' : 'update_image',
       envName: props.projectEnv.name,
       envType: props.projectEnv.env_type,
       modules: changes.length,
       operator: auth.user?.username || '',
     })
     emit('done', r.deployment_id)
+    if (rbMode) emit('rollback-consumed')
     text.value = ''
     diff.value = []
   } finally { submitting.value = false }
@@ -262,6 +282,8 @@ async function onSubmit() {
 .cta:disabled { opacity: .4; cursor: not-allowed; }
 .cta.danger { background: var(--danger); }
 .cta.danger:hover:not(:disabled) { background: var(--danger-dark); }
+.cta.warn { background: #f59e0b; }
+.cta.warn:hover:not(:disabled) { background: #d97706; }
 
 .no-perm-hint {
   font-size: 12.5px; color: var(--warning);

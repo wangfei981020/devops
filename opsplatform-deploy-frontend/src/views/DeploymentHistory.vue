@@ -202,11 +202,15 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { Search, ArrowRight } from '@element-plus/icons-vue'
 import { listDeployments, listProjectEnvs, getDeployment } from '../api'
 import RollbackDialog from '../components/RollbackDialog.vue'
+
+const route = useRoute()
+const router = useRouter()
 
 const list = ref([])
 const envs = ref([])
@@ -368,13 +372,25 @@ function doReset() {
 }
 
 function toggle(i) { expanded.value[i] = !expanded.value[i] }
-function onRollback(row) { rbID.value = row.id; rbVis.value = true }
+
+// 点回滚 → 跳转部署控制台，URL 带 rollback_from=<depID>
+// 部署控制台会自动把 changes 预填进 textarea，允许用户编辑/删行后提交
+function onRollback(row) {
+  router.push({ path: '/deploy', query: { rollback_from: String(row.id) } })
+}
 
 onMounted(async () => {
   envs.value = (await listProjectEnvs()) || []
   await doSearch()
   // 1s tick 驱动 liveDuration 插值，让非终态行的耗时每秒 +1；终态行不受影响
   tickTimer = setInterval(() => { tick.value++ }, 1000)
+  // Lark 通知「查看发布详情」按钮带 ?expand=<id>，加载完自动把该行展开
+  const expandID = route.query.expand ? Number(route.query.expand) : null
+  if (expandID) {
+    await nextTick()
+    const idx = list.value.findIndex(d => d.id === expandID)
+    if (idx >= 0) expanded.value[idx] = true
+  }
 })
 
 onUnmounted(() => {
@@ -428,7 +444,7 @@ watch(list, () => {
   align-items: flex-end;
 }
 .f-item { display: flex; flex-direction: column; gap: 4px; min-width: 120px; }
-.f-item.wide { min-width: 280px; flex: 1; }
+.f-item.wide { min-width: 400px; }
 .f-item label {
   font-size: 11px; color: var(--text-3);
   text-transform: uppercase; letter-spacing: .6px; font-weight: 600;
@@ -445,9 +461,9 @@ watch(list, () => {
 .sel:disabled { background: var(--bg-hover); color: var(--text-3); cursor: not-allowed; }
 .sel-sm { padding: 3px 8px; font-size: 12px; border: 1px solid var(--border); border-radius: 4px; background: #fff; }
 
-.date-range { display: flex; gap: 6px; align-items: center; }
-.date-range .inp { flex: 1; font-family: var(--mono); font-size: 12px; padding: 6px 9px; }
-.date-range .sep { color: var(--text-3); font-size: 12px; }
+.date-range { display: flex; gap: 8px; align-items: center; }
+.date-range .inp { width: 180px; font-family: var(--mono); font-size: 12px; padding: 6px 9px; }
+.date-range .sep { color: var(--text-3); font-size: 12px; flex-shrink: 0; }
 
 .f-actions { display: flex; gap: 6px; align-items: center; }
 .btn-primary, .btn-ghost {

@@ -73,15 +73,16 @@ func buildDeployNotifyBody(
 		for _, it := range items {
 			fmt.Fprintf(&sb, "%s **容器名**: %s\n", emoji, it.Module)
 			fmt.Fprintf(&sb, "   **命名空间**: %s\n", safeStr(it.Namespace))
-			switch {
-			case it.FromTag != "" && it.ToTag != "" && it.FromTag != it.ToTag:
-				fmt.Fprintf(&sb, "   **版本号**: %s → %s\n", it.FromTag, it.ToTag)
-			case it.ToTag != "" && it.FromTag == it.ToTag:
-				// 发布输入 tag 与当前一致 → 跳过组
-				fmt.Fprintf(&sb, "   **版本号**: %s（当前版本相同，跳过）\n", it.ToTag)
-			case it.ToTag != "":
-				// restart 场景，只显示当前 tag
-				fmt.Fprintf(&sb, "   **版本号**: %s\n", it.ToTag)
+			// 只显示"新版本号"（即 ToTag）；旧版本号不再展示
+			//   - 发布：ToTag = 新部署的 tag
+			//   - 重启：ToTag = 当前 tag（不变）
+			//   - 跳过：FromTag == ToTag，额外标 "当前版本相同，跳过"
+			if it.ToTag != "" {
+				if it.FromTag == it.ToTag && it.FromTag != "" {
+					fmt.Fprintf(&sb, "   **版本号**: %s（当前版本相同，跳过）\n", it.ToTag)
+				} else {
+					fmt.Fprintf(&sb, "   **版本号**: %s\n", it.ToTag)
+				}
 			}
 			if showReason && it.FailMsg != "" {
 				fmt.Fprintf(&sb, "   **失败原因**: %s\n", it.FailMsg)

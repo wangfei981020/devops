@@ -25,7 +25,7 @@
       </div>
       <div class="hdr-r">
         <div class="stat"><div class="k">Modules</div><div class="v">{{ modules.length }}</div></div>
-        <button class="btn-rescan" :disabled="rescanning" @click="onRescan"
+        <button v-if="auth.isAdmin" class="btn-rescan" :disabled="rescanning" @click="onRescan"
                 title="从 Git 仓库重新扫描模块列表，写入 module 表">
           <el-icon :class="{ spin: rescanning }"><RefreshRight /></el-icon>
           <span>{{ rescanning ? '扫描中...' : '扫描 Git 重建模块' }}</span>
@@ -101,10 +101,22 @@
       </div>
     </div>
 
+    <!-- ===== Rollback 模式横幅 ===== -->
+    <div v-if="rollbackMode" class="rb-banner">
+      <el-icon class="rb-icon"><RefreshLeft /></el-icon>
+      <div class="rb-text">
+        <div>⏮ <b>回滚模式</b> · 来源 #{{ rollbackMode.refDeploymentID }}</div>
+        <div class="rb-tip">已自动填入需回滚的模块 + 目标版本，可编辑或删除行；提交将记为回滚操作</div>
+      </div>
+      <button class="rb-cancel" @click="cancelRollback">取消回滚</button>
+    </div>
+
     <!-- ===== Workspace ===== -->
     <div class="panel" v-if="currentEnv">
       <BatchUpdatePanel v-if="tab === 'update'"
-        :project-env="currentEnv" :modules="modules" @done="handleDeployDone" />
+        :project-env="currentEnv" :modules="modules"
+        :rollback-mode="rollbackMode"
+        @done="handleDeployDone" @rollback-consumed="cancelRollback" />
       <RestartPanel v-else
         :project-env="currentEnv" :modules="modules" @done="handleRestartDone" />
     </div>
@@ -115,13 +127,31 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Aim, Upload, RefreshRight } from '@element-plus/icons-vue'
+import { Aim, Upload, RefreshRight, RefreshLeft } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
-import { listProjectEnvs, listModules, scanModules } from '../api'
+import { listProjectEnvs, listModules, scanModules, getRollbackPreview } from '../api'
 import BatchUpdatePanel from '../components/BatchUpdatePanel.vue'
 import RestartPanel from '../components/RestartPanel.vue'
 import RollbackDialog from '../components/RollbackDialog.vue'
+import { useAuthStore } from '../stores/auth'
+
+const auth = useAuthStore()
+const route = useRoute()
+const router = useRouter()
+
+// 回滚模式：来自 ?rollback_from=<depID>。
+// 传给 BatchUpdatePanel 后它会：预填 textarea + 修改按钮文案 + 提交时带 ref_deployment_id
+const rollbackMode = ref(null)  // { refDeploymentID, prefillText } 或 null
+
+function cancelRollback() {
+  rollbackMode.value = null
+  // 同时清掉 URL 的 rollback_from，避免刷新页面后又进入回滚模式
+  if (route.query.rollback_from) {
+    router.replace({ query: { ...route.query, rollback_from: undefined } })
+  }
+}
 
 const RECENT_KEY = 'deploy_recent_envs'
 const RECENT_MAX = 3
@@ -204,13 +234,52 @@ watch(selectedID, (id) => {
 
 async function loadEnvs() {
   envs.value = (await listProjectEnvs()) || []
+  // 如果 URL 带 rollback_from，优先按回滚预览选中对应 env；否则按"最近使用"
+  const rbFrom = route.query.rollback_from ? Number(route.query.rollback_from) : null
+  if (rbFrom) {
+    await enterRollbackMode(rbFrom)
+    return
+  }
   if (envs.value.length && !selectedID.value) {
-    // 优先用 localStorage 里第一个最近使用的
     const last = recentNames.value.find(n => envs.value.some(e => e.name === n))
     const target = last
       ? envs.value.find(e => e.name === last)
       : envs.value[0]
     selectedID.value = target.id
+  }
+}
+
+// 加载回滚预览 → 自动选中项目环境 → 拼 textarea 预填串 → 切到 update tab
+async function enterRollbackMode(depID) {
+  try {
+    const preview = await getRollbackPreview(depID)
+    if (!preview?.modules?.length) {
+      ElMessage.warning('该发布记录没有可回滚的模块')
+      return
+    }
+    // 选中对应 env
+    const peID = preview.project_env_id
+    const targetEnv = envs.value.find(e => e.id === peID)
+    if (!targetEnv) {
+      ElMessage.error('找不到对应的项目环境，可能已被删除')
+      return
+    }
+    selectedID.value = peID
+    // 只取 can_rollback=true（当前 tag 还是上次发布的 to_tag，回到 from_tag 才有意义）
+    const lines = preview.modules
+      .filter(m => m.can_rollback)
+      .map(m => `${m.module}:${m.to_tag}`)
+    if (!lines.length) {
+      ElMessage.warning('这些模块当前 tag 已经不是此次发布的结果，无需回滚')
+      return
+    }
+    rollbackMode.value = {
+      refDeploymentID: depID,
+      prefillText: lines.join('\n'),
+    }
+    tab.value = 'update'  // 切到批量更新镜像 tab
+  } catch (e) {
+    console.error('enter rollback mode failed:', e)
   }
 }
 async function loadModules() {
@@ -331,6 +400,25 @@ onMounted(loadEnvs)
 }
 .env-chip-inline.uat { background: #ecfdf5; color: #059669; }
 .env-chip-inline.prod { background: #fef2f2; color: #dc2626; }
+
+/* 回滚模式横幅 */
+.rb-banner {
+  display: flex; align-items: center; gap: 12px;
+  background: linear-gradient(90deg, #fef3c7, #fff);
+  border: 1px solid #fde68a; border-left: 4px solid #f59e0b;
+  border-radius: var(--radius);
+  padding: 12px 16px; margin-bottom: 14px;
+}
+.rb-icon { color: #b45309; font-size: 22px; flex-shrink: 0; }
+.rb-text { flex: 1; font-size: 13px; color: #78350f; line-height: 1.55; }
+.rb-text b { font-family: var(--mono); color: #92400e; }
+.rb-tip { font-size: 11.5px; color: #92400e; margin-top: 2px; }
+.rb-cancel {
+  padding: 5px 12px; border: 1px solid #fcd34d; background: #fff;
+  color: #92400e; border-radius: 4px; cursor: pointer;
+  font: 500 12px var(--body);
+}
+.rb-cancel:hover { background: #fef3c7; }
 </style>
 
 <!-- el-select 弹层样式（非 scoped，因为 popper 被 teleport 到 body 外）-->

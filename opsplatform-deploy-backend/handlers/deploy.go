@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -49,8 +51,11 @@ func HandlePreviewImage(w http.ResponseWriter, r *http.Request) {
 // --- Update image ---
 
 type updateImageReq struct {
-	ProjectEnvID int64               `json:"project_env_id"`
-	Changes      []map[string]string `json:"changes"` // [{module,tag}, ...]
+	ProjectEnvID    int64               `json:"project_env_id"`
+	Changes         []map[string]string `json:"changes"` // [{module,tag}, ...]
+	RefDeploymentID int64               `json:"ref_deployment_id,omitempty"`
+	// 传了 ref_deployment_id 表示"来自某次发布的回滚"；此时 action 记 rollback，
+	// tag 仍以前端 textarea 里的为准（用户可以在回滚基础上改 tag）
 }
 
 func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
@@ -89,7 +94,20 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 
 	retry, interval, timeoutMin := loadPollCfg()
 	modNamesJSON := marshalJSON(keysOf(pending))
-	depID, err := insertPendingDeployment(req.ProjectEnvID, models.ActionUpdateImage, nil, modNamesJSON, getOperator(r))
+
+	// 前端传了 ref_deployment_id 说明这是"基于某次发布的回滚"（可能编辑过 tag），action 记 rollback
+	action := models.ActionUpdateImage
+	opLabel := "发布"
+	auditEvent := "deploy.update_image"
+	var refID *int64
+	if req.RefDeploymentID > 0 {
+		action = models.ActionRollback
+		opLabel = "回滚"
+		auditEvent = "deploy.rollback_via_update"
+		refID = &req.RefDeploymentID
+	}
+
+	depID, err := insertPendingDeployment(req.ProjectEnvID, action, refID, modNamesJSON, getOperator(r))
 	if err != nil {
 		JSONError(w, 50000, "insert deployment: "+err.Error())
 		return
@@ -97,11 +115,12 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 
 	op := getOperator(r)
 	InflightTrack(func() {
-		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, nil, op, "发布")
+		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, refID, op, opLabel)
 	})
 
-	Audit(r, "deploy.update_image", "project_env", p.Name, map[string]interface{}{
+	Audit(r, auditEvent, "project_env", p.Name, map[string]interface{}{
 		"deployment_id": depID, "env_type": p.EnvType, "modules": len(pending),
+		"ref_deployment_id": req.RefDeploymentID,
 	})
 	JSONSuccess(w, map[string]interface{}{
 		"deployment_id": depID,
@@ -223,6 +242,7 @@ func HandleRollbackPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	JSONSuccess(w, map[string]interface{}{
 		"ref_deployment_id": id,
+		"project_env_id":    peID,
 		"modules":           out,
 	})
 }
@@ -426,7 +446,8 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 // --- Lark notify ---
 
 // resolveLarkTarget 解析出 webhook + 明文 secret
-// 优先级: 1) p.LarkBotID → lark_bot 表  2) 遗留字段 p.LarkWebhook/Secret  3) global_config 默认
+// 只有两级：1) p.LarkBotID → lark_bot 表  2) 遗留字段 p.LarkWebhook/Secret（历史）
+// 全局默认回落已移除——必须在项目环境里显式选 Lark 机器人才会发通知。
 func resolveLarkTarget(p *models.ProjectEnv) (webhook, secret string) {
 	if p.LarkBotID != nil && *p.LarkBotID > 0 {
 		if bot, err := LoadLarkBotDecrypted(*p.LarkBotID); err == nil {
@@ -438,11 +459,21 @@ func resolveLarkTarget(p *models.ProjectEnv) (webhook, secret string) {
 		secret, _ = crypto.Decrypt(p.LarkSecret)
 		return
 	}
-	var gw, gs string
-	_ = database.DB.QueryRow(`SELECT lark_default_webhook, lark_default_secret FROM global_config WHERE id=1`).Scan(&gw, &gs)
-	webhook = gw
-	secret, _ = crypto.Decrypt(gs)
-	return
+	return "", ""
+}
+
+// deployDetailURL 构造 Lark 卡片"查看发布详情"按钮的 URL。
+//
+//	base_url 在「系统设置 → 全局凭证」里配置（deploy_center_base_url）。
+//	未配置则返回空串，调用方可选择回落到 git commit URL 或不加按钮。
+func deployDetailURL(depID int64) string {
+	var base string
+	_ = database.DB.QueryRow(`SELECT IFNULL(deploy_center_base_url,'') FROM global_config WHERE id=1`).Scan(&base)
+	base = strings.TrimRight(base, "/")
+	if base == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/history?expand=%d", base, depID)
 }
 
 func larkColorForStatus(status string) (color, title string) {
@@ -477,8 +508,11 @@ func sendUpdateImageNotify(p *models.ProjectEnv, depID int64, operator, opLabel 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	// atLarkIDs 传空，@ 已经写进 body 末尾（靠近失败分组，符合 @ 驱动阅读）
+	// 按钮优先跳"查看发布详情"（deploy_center_base_url+/history）；未配时回落到 git commit
 	linkLabel, linkURL := "", ""
-	if res.GitCommitURL != "" {
+	if u := deployDetailURL(depID); u != "" {
+		linkLabel, linkURL = "查看发布详情", u
+	} else if res.GitCommitURL != "" {
 		linkLabel, linkURL = "查看 commit", res.GitCommitURL
 	}
 	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, linkLabel, linkURL)
@@ -504,7 +538,11 @@ func sendRestartNotify(p *models.ProjectEnv, depID int64, operator string,
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	// atLarkIDs 传空，@ 已经写在 body 末尾（靠近失败分组）
-	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, "", "")
+	linkLabel, linkURL := "", ""
+	if u := deployDetailURL(depID); u != "" {
+		linkLabel, linkURL = "查看发布详情", u
+	}
+	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, linkLabel, linkURL)
 	status := "success"
 	if err != nil {
 		status = "failed"
