@@ -27,18 +27,21 @@ import (
 //
 //   - jobs:    输入切片（按序分发）
 //   - limit:   最大并发 worker 数（≤0 自动降到 1；>len(jobs) 等价于全并发）
-//   - workFn:  每个 job 的处理函数，返回 R
-//   - onEach:  可为 nil；每个 job 完成时在锁内调用一次，接收 index 和当前 results 快照。
+//   - workFn:  每个 job 的处理函数，签名 (ctx, job, publish) -> R。workFn 可以在执行
+//     过程中多次调用 publish(partial) 推送中间结果（渐进式状态），最终返回值也会作为
+//     最后一次 publish。每次 publish 都会触发 onEach(i, results)。publish 调用是线程
+//     安全的（内部加锁）。
+//   - onEach:  可为 nil；每次 publish 被调用后触发一次，接收 index 和当前 results 快照。
 //     用途：渐进式写 DB。实现里可以安全地读 results（已被锁保护），但读完
 //     立刻应复制数据离开锁，不要把引用传出。
 //
-// 返回：results，长度 == len(jobs)，每个元素按输入 index 对应。即使 ctx 超时/取消，
-// 也返回部分结果（未完成的 slot 是 R 的零值）。
+// 返回：results，长度 == len(jobs)，每个元素按输入 index 对应（workFn 最终返回值）。
+// 即使 ctx 超时/取消，也返回部分结果（未完成的 slot 是 R 的零值或中间 publish 值）。
 func RunBoundedConcurrent[T any, R any](
 	ctx context.Context,
 	jobs []T,
 	limit int,
-	workFn func(ctx context.Context, job T) R,
+	workFn func(ctx context.Context, job T, publish func(R)) R,
 	onEach func(idx int, results []R),
 ) []R {
 	results := make([]R, len(jobs))
@@ -69,14 +72,18 @@ func RunBoundedConcurrent[T any, R any](
 			}
 			defer func() { <-sem }()
 
-			r := workFn(ctx, job)
-
-			mu.Lock()
-			results[i] = r
-			if onEach != nil {
-				onEach(i, results)
+			// 提供给 workFn 用的线程安全 publish 函数
+			publish := func(partial R) {
+				mu.Lock()
+				results[i] = partial
+				if onEach != nil {
+					onEach(i, results)
+				}
+				mu.Unlock()
 			}
-			mu.Unlock()
+
+			final := workFn(ctx, job, publish)
+			publish(final) // 最终值也触发一次，确保最后一次 onEach 是 final 状态
 		}()
 	}
 	wg.Wait()

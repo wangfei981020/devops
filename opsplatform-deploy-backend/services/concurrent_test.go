@@ -13,7 +13,7 @@ import (
 func TestBounded_AllComplete(t *testing.T) {
 	jobs := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 	results := RunBoundedConcurrent(context.Background(), jobs, 3,
-		func(_ context.Context, n int) int { return n * n }, nil)
+		func(_ context.Context, n int, _ func(int)) int { return n * n }, nil)
 	for i, r := range results {
 		want := jobs[i] * jobs[i]
 		if r != want {
@@ -28,10 +28,9 @@ func TestBounded_RespectsLimit(t *testing.T) {
 	jobs := make([]int, 50)
 	limit := 5
 	_ = RunBoundedConcurrent(context.Background(), jobs, limit,
-		func(_ context.Context, _ int) struct{} {
+		func(_ context.Context, _ int, _ func(struct{})) struct{} {
 			cur := inflight.Add(1)
 			for {
-				// 以 CAS 方式记录峰值
 				old := maxInflight.Load()
 				if cur <= old || maxInflight.CompareAndSwap(old, cur) {
 					break
@@ -55,9 +54,8 @@ func TestBounded_OnEachProgressive(t *testing.T) {
 	var mu sync.Mutex
 	snapshots := [][]int{}
 	results := RunBoundedConcurrent(context.Background(), jobs, 4,
-		func(_ context.Context, n int) int { return n + 100 },
-		func(idx int, rs []int) {
-			// rs 是 results 的引用；测试这里模拟调用方做快照
+		func(_ context.Context, n int, _ func(int)) int { return n + 100 },
+		func(_ int, rs []int) {
 			cp := make([]int, len(rs))
 			copy(cp, rs)
 			mu.Lock()
@@ -65,22 +63,52 @@ func TestBounded_OnEachProgressive(t *testing.T) {
 			mu.Unlock()
 			seen.Add(1)
 		})
+	// workFn 只通过最终返回值触发 1 次 publish，所以 onEach 调用 = jobs 数
 	if int(seen.Load()) != len(jobs) {
 		t.Fatalf("onEach called %d times, want %d", seen.Load(), len(jobs))
-	}
-	if len(results) != len(jobs) {
-		t.Fatalf("results len %d, want %d", len(results), len(jobs))
 	}
 	for i, r := range results {
 		if r != i+100 {
 			t.Fatalf("results[%d]=%d want %d", i, r, i+100)
 		}
 	}
-	// 最后一次快照应该完整
 	last := snapshots[len(snapshots)-1]
 	for i, v := range last {
 		if v != i+100 {
 			t.Fatalf("last snapshot[%d]=%d want %d", i, v, i+100)
+		}
+	}
+}
+
+func TestBounded_ProgressiveMultiPublish(t *testing.T) {
+	// 新能力测试：workFn 在执行过程中多次调用 publish 推送中间值
+	jobs := []int{0, 1, 2}
+	var onEachCount atomic.Int32
+	var mu sync.Mutex
+	allSnapshots := [][]int{}
+	results := RunBoundedConcurrent(context.Background(), jobs, 3,
+		func(_ context.Context, n int, publish func(int)) int {
+			publish(n * 10)  // 中间状态 1
+			publish(n * 100) // 中间状态 2
+			return n * 1000  // 最终状态
+		},
+		func(_ int, rs []int) {
+			onEachCount.Add(1)
+			cp := make([]int, len(rs))
+			copy(cp, rs)
+			mu.Lock()
+			allSnapshots = append(allSnapshots, cp)
+			mu.Unlock()
+		})
+	// 每个 job 3 次 publish（2 中间 + 1 最终）→ onEach 共 9 次
+	if int(onEachCount.Load()) != 9 {
+		t.Fatalf("onEach count = %d, want 9 (3 publishes × 3 jobs)", onEachCount.Load())
+	}
+	// 最终结果应该是最后的 final 值
+	want := []int{0, 1000, 2000}
+	for i, r := range results {
+		if r != want[i] {
+			t.Fatalf("results[%d]=%d want %d", i, r, want[i])
 		}
 	}
 }
@@ -96,7 +124,7 @@ func TestBounded_CancelPropagation(t *testing.T) {
 	}()
 
 	_ = RunBoundedConcurrent(ctx, jobs, 5,
-		func(c context.Context, _ int) int {
+		func(c context.Context, _ int, _ func(int)) int {
 			startCount.Add(1)
 			select {
 			case <-time.After(200 * time.Millisecond):
@@ -105,7 +133,6 @@ func TestBounded_CancelPropagation(t *testing.T) {
 				return -1
 			}
 		}, nil)
-	// 100 个 jobs，limit=5，20ms 后 cancel → 只有前几批能启动
 	if got := startCount.Load(); got >= 100 {
 		t.Fatalf("cancel 没起作用，100 个 job 全部启动了 (实际启动 %d)", got)
 	}
@@ -113,7 +140,7 @@ func TestBounded_CancelPropagation(t *testing.T) {
 
 func TestBounded_EmptyJobs(t *testing.T) {
 	results := RunBoundedConcurrent(context.Background(), []int{}, 5,
-		func(_ context.Context, _ int) int { return 1 }, nil)
+		func(_ context.Context, _ int, _ func(int)) int { return 1 }, nil)
 	if len(results) != 0 {
 		t.Fatalf("empty jobs should return empty results, got len=%d", len(results))
 	}
@@ -124,7 +151,7 @@ func TestBounded_ZeroLimitClampedToOne(t *testing.T) {
 	var inflight atomic.Int32
 	var maxInflight atomic.Int32
 	_ = RunBoundedConcurrent(context.Background(), jobs, 0,
-		func(_ context.Context, _ int) int {
+		func(_ context.Context, _ int, _ func(int)) int {
 			cur := inflight.Add(1)
 			for {
 				old := maxInflight.Load()

@@ -154,7 +154,7 @@
                           <td class="mono">{{ r.app }}</td>
                           <td :class="'sync-' + (r.sync_status || '').toLowerCase()">{{ r.sync_status || '—' }}</td>
                           <td :class="'health-' + (r.health || '').toLowerCase()">{{ r.health || '—' }}</td>
-                          <td class="mono">{{ r.duration_sec }}s</td>
+                          <td class="mono">{{ liveDuration(r) }}s</td>
                           <td class="msg">{{ r.msg || '—' }}</td>
                         </tr>
                         <tr v-if="!row.argocd_results?.length"><td colspan="5" class="muted" style="text-align:center">无</td></tr>
@@ -202,7 +202,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import dayjs from 'dayjs'
 import { Search, ArrowRight } from '@element-plus/icons-vue'
 import { listDeployments, listProjectEnvs, getDeployment } from '../api'
@@ -299,6 +299,36 @@ async function doSearch() {
   } finally { loading.value = false }
 }
 
+// ---- 单模块耗时秒表插值 ----
+// 后端每 5s 推一次真实 duration_sec，前端在两次推送之间按本地时间 +1 插值，
+// 让非终态的行耗时看起来每秒都在跳。终态（Healthy/Degraded/failed/timeout）直接用后端值。
+const tick = ref(0)
+let tickTimer = null
+// 每个 app 独立记录"上次收到新值时的本地时间 + 当时的 duration_sec"
+// key = row.id + '|' + app   value = { base: number, baseAt: number }
+const liveAnchors = reactive({})
+function isTerminal(r) {
+  const h = (r.health || '').toLowerCase()
+  const s = (r.sync_status || '').toLowerCase()
+  return h === 'healthy' || h === 'degraded' || s === 'failed' || s === 'timeout'
+}
+function liveDuration(r) {
+  // 读 tick 触发响应式
+  void tick.value
+  if (isTerminal(r)) return r.duration_sec ?? 0
+  const key = r.app || ''
+  const anchor = liveAnchors[key]
+  const now = Date.now()
+  // 如果后端推来的 duration 比 anchor 里的大，更新 anchor
+  if (!anchor || (r.duration_sec ?? 0) !== anchor.base) {
+    liveAnchors[key] = { base: r.duration_sec ?? 0, baseAt: now }
+    return r.duration_sec ?? 0
+  }
+  // anchor 已对齐，根据本地时间插值（每秒 +1）
+  const delta = Math.floor((now - anchor.baseAt) / 1000)
+  return anchor.base + delta
+}
+
 // ---- 轮询 pending 项 ----
 // 不重新拉整个列表，只对每条 pending 单独查 /deployments/:id，避免页码抖动和 KPI 波动
 const POLL_INTERVAL_MS = 5000
@@ -342,9 +372,27 @@ function onRollback(row) { rbID.value = row.id; rbVis.value = true }
 onMounted(async () => {
   envs.value = (await listProjectEnvs()) || []
   await doSearch()
+  // 1s tick 驱动 liveDuration 插值，让非终态行的耗时每秒 +1；终态行不受影响
+  tickTimer = setInterval(() => { tick.value++ }, 1000)
 })
 
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  stopPolling()
+  if (tickTimer) { clearInterval(tickTimer); tickTimer = null }
+})
+
+// pending 全部结束后清理 anchors，避免长时间积累
+watch(list, () => {
+  const stillActive = new Set()
+  list.value.forEach(row => {
+    (row.argocd_results || []).forEach(r => {
+      if (!isTerminal(r)) stillActive.add(r.app)
+    })
+  })
+  Object.keys(liveAnchors).forEach(k => {
+    if (!stillActive.has(k)) delete liveAnchors[k]
+  })
+}, { deep: true })
 </script>
 
 <style scoped>

@@ -395,6 +395,14 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 		ArgocdClient:    argoClient,
 		PollIntervalSec: pollInterval,
 		PollTimeoutSec:  pollTimeoutMin * 60,
+		// 渐进式写 argocd_results：每个 app 每次 poll 都推一个中间态，前端 5s 刷能看到
+		// Syncing → Progressing → Healthy 的过程以及单模块耗时实时增长
+		OnProgress: func(snapshot []models.ArgocdAppResult) {
+			progJSON := marshalJSON(snapshot)
+			_, _ = database.DB.Exec(
+				`UPDATE deployment SET argocd_results=? WHERE id=?`,
+				progJSON, depID)
+		},
 	})
 	changesJSON := marshalJSON(res.Changes)
 	argoJSON := marshalJSON(res.ArgocdResults)

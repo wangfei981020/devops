@@ -96,6 +96,9 @@ type UpdateImageInput struct {
 	ArgocdClient    *ArgocdClient
 	PollIntervalSec int
 	PollTimeoutSec  int
+	ConcurrentLimit int
+	// OnProgress 可选：每个 app 轮询中间态/完成时回调，传入当前完整快照供渐进式写 DB。
+	OnProgress func(snapshot []models.ArgocdAppResult)
 }
 
 type UpdateImageResult struct {
@@ -186,20 +189,61 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 		return res
 	}
 
-	allOK := true
+	// 有界并发池并行 sync + poll，与 Restart 保持一致的体验
+	interval := in.PollIntervalSec
+	if interval <= 0 {
+		interval = 5
+	}
+	timeout := in.PollTimeoutSec
+	if timeout <= 0 {
+		timeout = 180
+	}
+	limit := in.ConcurrentLimit
+	if limit <= 0 {
+		limit = 10
+	}
+	// ArgoCD app name 与 module scanner 约定一致：全小写 kebab-case
+	peNameLower := strings.ToLower(in.ProjectEnvName)
+	type syncJob struct {
+		module string
+		app    string
+	}
+	jobs := make([]syncJob, 0, len(res.Changes))
 	for _, c := range res.Changes {
-		appName := c.Module + "-" + in.ProjectEnvName
-		if err := in.ArgocdClient.Sync(ctx, appName); err != nil {
-			res.ArgocdResults = append(res.ArgocdResults, models.ArgocdAppResult{
-				App: appName, SyncStatus: "failed", Msg: err.Error(),
+		jobs = append(jobs, syncJob{
+			module: c.Module,
+			app:    strings.ToLower(c.Module) + "-" + peNameLower,
+		})
+	}
+
+	res.ArgocdResults = RunBoundedConcurrent(ctx, jobs, limit,
+		func(c context.Context, j syncJob, publish func(models.ArgocdAppResult)) models.ArgocdAppResult {
+			// 初始状态先让前端看到这一行
+			publish(models.ArgocdAppResult{
+				App: j.app, SyncStatus: "Syncing", Health: "Progressing",
+				DurationSec: 0, Msg: "calling argocd sync",
 			})
-			allOK = false
-			continue
-		}
-		ar := PollUntilStable(ctx, in.ArgocdClient, appName, in.PollIntervalSec, in.PollTimeoutSec)
-		res.ArgocdResults = append(res.ArgocdResults, *ar)
+			if err := in.ArgocdClient.Sync(c, j.app); err != nil {
+				return models.ArgocdAppResult{
+					App: j.app, SyncStatus: "failed",
+					Msg: "sync api: " + err.Error(),
+				}
+			}
+			return *PollUntilStable(c, in.ArgocdClient, j.app, interval, timeout,
+				func(tick *models.ArgocdAppResult) { publish(*tick) })
+		},
+		func(_ int, snapshot []models.ArgocdAppResult) {
+			if in.OnProgress != nil {
+				in.OnProgress(snapshot)
+			}
+		},
+	)
+
+	allOK := true
+	for _, ar := range res.ArgocdResults {
 		if ar.SyncStatus != "Synced" || ar.Health != "Healthy" {
 			allOK = false
+			break
 		}
 	}
 	if allOK {
@@ -297,13 +341,21 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 	}
 
 	pollResults := RunBoundedConcurrent(ctx, toPoll, limit,
-		func(c context.Context, t triggered) models.ArgocdAppResult {
-			return *PollUntilStable(c, in.ArgocdClient, t.app, interval, timeout)
+		func(c context.Context, t triggered, publish func(models.ArgocdAppResult)) models.ArgocdAppResult {
+			// 入池立刻推一个"Progressing/等待中"初始状态，让前端 3 行同时出现
+			publish(models.ArgocdAppResult{
+				App:         t.app,
+				SyncStatus:  "Progressing",
+				Health:      "Progressing",
+				DurationSec: 0,
+				Msg:         "waiting for ArgoCD",
+			})
+			// 每次 ArgoCD poll 后都把中间状态 publish 出去（5s 节奏），前端靠这个 + 本地秒表做秒级跳动
+			return *PollUntilStable(c, in.ArgocdClient, t.app, interval, timeout,
+				func(tick *models.ArgocdAppResult) { publish(*tick) })
 		},
 		func(_ int, snapshot []models.ArgocdAppResult) {
-			// 在锁内调用；调用方实现里须立刻复制快照离开锁
 			if in.OnProgress != nil {
-				// 合并 preFail + 当前 poll 快照给调用方
 				merged := make([]models.ArgocdAppResult, 0, len(preFail)+len(snapshot))
 				merged = append(merged, preFail...)
 				merged = append(merged, snapshot...)
