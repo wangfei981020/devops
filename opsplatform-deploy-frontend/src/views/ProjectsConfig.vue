@@ -85,7 +85,6 @@
               <div class="env-head">
                 <span>环境</span>
                 <span>分支</span>
-                <span>Namespace</span>
                 <span>Auto-sync</span>
                 <span>模块</span>
                 <span>最近发布</span>
@@ -95,7 +94,6 @@
               <div v-for="e in proj.envs" :key="e.id" class="env-row" @click="openEditEnv(e)">
                 <span :class="'env-badge ' + e.env_type">{{ e.env_type }}</span>
                 <span class="env-branch mono">{{ e.git_branch }}</span>
-                <span class="env-ns mono">{{ e.namespace || '—' }}</span>
                 <span class="env-sync">
                   <span class="dot" :class="e.auto_sync ? 'ok' : 'off'"></span>
                   {{ e.auto_sync ? 'ON' : 'OFF' }}
@@ -211,7 +209,7 @@
           <label>Git 仓库 <span class="req">*</span><span class="hint">可从登记的仓库下拉选，或手动填完整 URL</span></label>
           <select v-model="envForm.gitlab_repo_id" class="inp" @change="onRepoPicked">
             <option :value="null">— 手动输入 URL —</option>
-            <option v-for="g in gitlabRepos" :key="g.id" :value="g.id">{{ g.name }} · {{ g.repo_url }}</option>
+            <option v-for="g in gitlabRepos" :key="g.id" :value="g.id">{{ g.name }}</option>
           </select>
           <input
             v-if="!envForm.gitlab_repo_id"
@@ -219,9 +217,6 @@
             class="inp mono"
             style="margin-top:6px"
             placeholder="https://gitlab.xx/group/project.git" />
-          <div v-else class="hint-text mono" style="color:var(--text-3);margin-top:4px;font-size:11px">
-            {{ envForm.git_repo }}
-          </div>
           <div v-if="!gitlabRepos.length" class="hint-text" style="color:var(--text-3);margin-top:4px">
             可在「系统设置 → GitLab 仓库」先登记常用仓库，下次复用
           </div>
@@ -239,14 +234,10 @@
 
         <div class="sec-lbl">Kubernetes · ArgoCD</div>
         <div class="field">
-          <label>K8s Namespace（默认）<span class="hint">模块扫描后会从 -apps/values.yaml 读各自的 namespace，这里只是默认值</span></label>
-          <input v-model="envForm.namespace" class="inp mono" placeholder="如: g32-uat（模块可有自己的 ns）" />
-        </div>
-        <div class="field">
           <label>ArgoCD 实例 <span class="hint">从系统设置里选</span></label>
           <select v-model="envForm.argocd_instance_id" class="inp">
             <option :value="null">— 未选 —</option>
-            <option v-for="i in argoInstances" :key="i.id" :value="i.id">{{ i.name }} · {{ i.url }}</option>
+            <option v-for="i in argoInstances" :key="i.id" :value="i.id">{{ i.name }}</option>
           </select>
           <div v-if="!argoInstances.length" class="hint-text" style="color:var(--warning);margin-top:4px">
             还没有 ArgoCD 实例，去「系统设置 → ArgoCD 实例」添加
@@ -650,15 +641,15 @@ onMounted(load)
 .env-list { background: var(--bg-input); padding: 6px 0 4px; }
 .no-envs { padding: 14px 18px 14px 48px; color: var(--text-3); font-size: 12.5px; }
 .no-envs .lnk { color: var(--primary); cursor: pointer; text-decoration: underline; }
-.env-head { display: grid; grid-template-columns: 64px 88px 140px 100px 70px 120px 90px 36px; gap: 18px; padding: 6px 18px 6px 48px; font-size: 10.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: .6px; font-weight: 600; }
-.env-row { display: grid; grid-template-columns: 64px 88px 140px 100px 70px 120px 90px 36px; gap: 18px; align-items: center; padding: 10px 18px 10px 48px; cursor: pointer; transition: background .1s; font-size: 12.5px; border-left: 2px solid transparent; }
+.env-head { display: grid; grid-template-columns: 64px 88px 100px 70px 120px 90px 36px; gap: 18px; padding: 6px 18px 6px 48px; font-size: 10.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: .6px; font-weight: 600; }
+.env-row { display: grid; grid-template-columns: 64px 88px 100px 70px 120px 90px 36px; gap: 18px; align-items: center; padding: 10px 18px 10px 48px; cursor: pointer; transition: background .1s; font-size: 12.5px; border-left: 2px solid transparent; }
 .env-row:hover { background: #fff; border-left-color: var(--primary); }
 
 .env-badge { font-family: var(--mono); font-size: 10.5px; font-weight: 600; padding: 3px 8px; border-radius: 3px; letter-spacing: .5px; text-transform: uppercase; text-align: center; }
 .env-badge.uat { background: var(--success-bg); color: var(--success-dark); }
 .env-badge.prod { background: var(--danger-bg); color: var(--danger-dark); }
 
-.env-branch, .env-ns { color: var(--text-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.env-branch { color: var(--text-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .env-sync { font: 500 11.5px var(--mono); color: var(--text-2); display: flex; align-items: center; gap: 6px; }
 .dot { width: 6px; height: 6px; border-radius: 50%; }
 .dot.ok { background: var(--success); }
