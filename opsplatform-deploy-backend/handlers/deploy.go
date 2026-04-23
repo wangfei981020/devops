@@ -168,6 +168,13 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 			ArgocdClient:    services.NewArgocdClient(argoURL, argoToken),
 			PollIntervalSec: pollInterval,
 			PollTimeoutSec:  pollTimeoutMin * 60,
+			// OnProgress 在 concurrent.go 的锁内调用；snapshot 在这里立刻序列化（离开栈后就不再引用）
+			OnProgress: func(snapshot []models.ArgocdAppResult) {
+				progJSON := marshalJSON(snapshot)
+				_, _ = database.DB.Exec(
+					`UPDATE deployment SET argocd_results=? WHERE id=?`,
+					progJSON, depID)
+			},
 		})
 		argoJSON := marshalJSON(res.ArgocdResults)
 		_, _ = database.DB.Exec(`UPDATE deployment SET argocd_results=?, status=?, duration_sec=? WHERE id=?`,

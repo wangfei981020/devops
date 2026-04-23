@@ -140,9 +140,15 @@
                   </div>
 
                   <div class="section">
-                    <div class="sec-lbl">ArgoCD 结果</div>
+                    <div class="sec-lbl">
+                      ArgoCD 结果
+                      <span class="sec-sub">
+                        模块数 <b>{{ row.argocd_results?.length || 0 }}</b>
+                        <span v-if="row.duration_sec != null"> · 总耗时 <b>{{ row.duration_sec }}s</b></span>
+                      </span>
+                    </div>
                     <table class="sub-tbl">
-                      <thead><tr><th>应用</th><th>同步</th><th>健康</th><th>耗时</th><th>消息</th></tr></thead>
+                      <thead><tr><th>应用</th><th>同步</th><th>健康</th><th>单模块耗时</th><th>消息</th></tr></thead>
                       <tbody>
                         <tr v-for="r in (row.argocd_results || [])" :key="r.app">
                           <td class="mono">{{ r.app }}</td>
@@ -196,10 +202,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import dayjs from 'dayjs'
 import { Search, ArrowRight } from '@element-plus/icons-vue'
-import { listDeployments, listProjectEnvs } from '../api'
+import { listDeployments, listProjectEnvs, getDeployment } from '../api'
 import RollbackDialog from '../components/RollbackDialog.vue'
 
 const list = ref([])
@@ -287,7 +293,42 @@ async function doSearch() {
     list.value = r.list || []
     total.value = r.total || 0
     computeKPIs()
+    // 列表里若有 pending 项，启动轮询自动刷新到终态；否则关掉轮询
+    if (hasPending()) startPolling()
+    else stopPolling()
   } finally { loading.value = false }
+}
+
+// ---- 轮询 pending 项 ----
+// 不重新拉整个列表，只对每条 pending 单独查 /deployments/:id，避免页码抖动和 KPI 波动
+const POLL_INTERVAL_MS = 5000
+let pollTimer = null
+function hasPending() {
+  return list.value.some(d => d.status === 'pending')
+}
+async function pollPending() {
+  const ids = list.value.filter(d => d.status === 'pending').map(d => d.id)
+  if (!ids.length) { stopPolling(); return }
+  const results = await Promise.allSettled(ids.map(id => getDeployment(id)))
+  let changed = false
+  results.forEach((r, i) => {
+    if (r.status !== 'fulfilled' || !r.value) return
+    const id = ids[i]
+    const idx = list.value.findIndex(d => d.id === id)
+    if (idx >= 0 && r.value.status !== 'pending') {
+      list.value[idx] = r.value
+      changed = true
+    }
+  })
+  if (changed) computeKPIs()
+  if (!hasPending()) stopPolling()
+}
+function startPolling() {
+  if (pollTimer) return
+  pollTimer = setInterval(pollPending, POLL_INTERVAL_MS)
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
 }
 function doReset() {
   Object.assign(draft, blankFilters())
@@ -302,6 +343,8 @@ onMounted(async () => {
   envs.value = (await listProjectEnvs()) || []
   await doSearch()
 })
+
+onUnmounted(stopPolling)
 </script>
 
 <style scoped>
@@ -460,7 +503,14 @@ onMounted(async () => {
   font-size: 10.5px; color: var(--text-3);
   text-transform: uppercase; letter-spacing: .8px; font-weight: 600;
   margin-bottom: 6px;
+  display: flex; align-items: center; gap: 12px;
 }
+.sec-sub {
+  font-size: 11px; color: var(--text-2); font-weight: 400;
+  text-transform: none; letter-spacing: 0;
+  font-family: var(--mono);
+}
+.sec-sub b { color: var(--text); font-weight: 600; }
 .sub-tbl { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
 .sub-tbl th { background: var(--bg-hover); color: var(--text-2); font-size: 10.5px; font-weight: 600; padding: 6px 10px; text-align: left; text-transform: uppercase; letter-spacing: .4px; }
 .sub-tbl td { padding: 6px 10px; border-top: 1px solid var(--border-soft); font-size: 12px; }

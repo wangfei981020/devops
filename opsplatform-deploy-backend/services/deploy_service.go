@@ -220,6 +220,10 @@ type RestartInput struct {
 	ArgocdClient    *ArgocdClient
 	PollIntervalSec int
 	PollTimeoutSec  int
+	ConcurrentLimit int // 并发 poll 池大小，<=0 默认 10
+	// OnProgress 可选：每个 app 轮询完成时回调，传入当前快照供渐进式写 DB。
+	// 调用方法内部已上锁，回调函数可直接读取 snapshot；但请勿持有引用到锁外。
+	OnProgress func(snapshot []models.ArgocdAppResult)
 }
 
 type RestartResult struct {
@@ -230,25 +234,29 @@ type RestartResult struct {
 
 // Restart：
 //  1. 逐个调用 ArgoCD RestartDeployment 触发 rollout（收集"没能触发"的失败项）
-//  2. 触发全部成功后，对每个 app 轮询 ArgoCD 状态直到 Healthy / Degraded / 超时
-//  3. 所有 app Healthy=success；任一 Degraded/timeout=failed；部分 Healthy 部分失败=partial
+//  2. 有界并发池轮询每个 app 到 Healthy/Degraded/超时
+//  3. 所有 app Healthy=success；任一 Degraded/timeout=failed；混合=partial
 //
 // 严格性：只看 ArgoCD application.health。Healthy 意味着底层 Deployment 所有 pod 都 Ready。
 // Degraded 会立即跳出（在 PollUntilStable 内），避免等满超时。
+//
+// 并发模型：见 services/concurrent.go 顶部注释。默认 10 并发；
+// 每个 app 完成时通过 OnProgress 回调提供给调用方做渐进式 DB 更新。
 func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartResult {
 	res := &RestartResult{}
 
-	// Step 1: 并记录成功触发的 app，失败的直接进结果
+	// Step 1: 触发 restart，记录成功触发的 app
 	type triggered struct {
 		app string
 		mod string
 		ns  string
 	}
 	var toPoll []triggered
+	var preFail []models.ArgocdAppResult
 	for _, name := range in.ModuleNames {
 		m, ok := in.Modules[name]
 		if !ok {
-			res.ArgocdResults = append(res.ArgocdResults, models.ArgocdAppResult{
+			preFail = append(preFail, models.ArgocdAppResult{
 				App: name, SyncStatus: "failed", Msg: "module not found",
 			})
 			continue
@@ -261,7 +269,7 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 		err := in.ArgocdClient.RestartDeployment(rctx, m.ArgocdApp, ns, name)
 		cancel()
 		if err != nil {
-			res.ArgocdResults = append(res.ArgocdResults, models.ArgocdAppResult{
+			preFail = append(preFail, models.ArgocdAppResult{
 				App: m.ArgocdApp, SyncStatus: "failed", Msg: err.Error(),
 			})
 			continue
@@ -269,26 +277,45 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 		toPoll = append(toPoll, triggered{app: m.ArgocdApp, mod: name, ns: ns})
 	}
 
-	// Step 2: 让 ArgoCD 感知到滚动（rollout 刚触发的瞬间 health 可能还是旧的 Healthy）
+	// Step 2: 等 3s 让 ArgoCD 感知到 rollout（避免 poll 到旧 Healthy）
 	if len(toPoll) > 0 {
 		time.Sleep(3 * time.Second)
 	}
 
-	// Step 3: 轮询每个成功触发的 app 到 Healthy/Degraded
+	// Step 3: 有界并发池 poll
 	interval := in.PollIntervalSec
 	if interval <= 0 {
 		interval = 5
 	}
 	timeout := in.PollTimeoutSec
 	if timeout <= 0 {
-		timeout = 180 // restart 通常 1-3 min 足够
+		timeout = 180
 	}
-	for _, t := range toPoll {
-		ar := PollUntilStable(ctx, in.ArgocdClient, t.app, interval, timeout)
-		res.ArgocdResults = append(res.ArgocdResults, *ar)
+	limit := in.ConcurrentLimit
+	if limit <= 0 {
+		limit = 10
 	}
 
-	// Step 4: 聚合。只有 SyncStatus=Synced & Health=Healthy 才算 success
+	pollResults := RunBoundedConcurrent(ctx, toPoll, limit,
+		func(c context.Context, t triggered) models.ArgocdAppResult {
+			return *PollUntilStable(c, in.ArgocdClient, t.app, interval, timeout)
+		},
+		func(_ int, snapshot []models.ArgocdAppResult) {
+			// 在锁内调用；调用方实现里须立刻复制快照离开锁
+			if in.OnProgress != nil {
+				// 合并 preFail + 当前 poll 快照给调用方
+				merged := make([]models.ArgocdAppResult, 0, len(preFail)+len(snapshot))
+				merged = append(merged, preFail...)
+				merged = append(merged, snapshot...)
+				in.OnProgress(merged)
+			}
+		},
+	)
+
+	// Step 4: 聚合结果
+	res.ArgocdResults = append(res.ArgocdResults, preFail...)
+	res.ArgocdResults = append(res.ArgocdResults, pollResults...)
+
 	okCount, failCount := 0, 0
 	for _, ar := range res.ArgocdResults {
 		if ar.SyncStatus == "Synced" && ar.Health == "Healthy" {

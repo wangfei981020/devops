@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -236,6 +237,27 @@ func warnIfDefaultAdmin() {
 	}
 }
 
+// requireLocalhost：只允许来自 pod 自身 (127.0.0.1 / ::1) 的请求通过，
+// 集群内其他 pod 通过 Service IP 访问会被 403。用于 /internal/* 这类
+// 只打算给 preStop hook 调用的内部接口。
+//
+// 注意：health server 不在 Service 端口 8080 上，所以 /metrics /health /ready
+// 无法被集群内其他 pod 通过 Service 访问；但 8088 直接暴露在 pod IP 上，
+// 集群内可通过 pod IP:8088 访问。这层校验防的就是这种路径。
+func requireLocalhost(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		if host != "127.0.0.1" && host != "::1" {
+			http.Error(w, "forbidden: localhost only", http.StatusForbidden)
+			return
+		}
+		h(w, r)
+	}
+}
+
 func startHealthServer(addr string) {
 	m := http.NewServeMux()
 	m.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -259,9 +281,10 @@ func startHealthServer(addr string) {
 	})
 	// Prometheus 抓取 /metrics（和生产 Helm values.yaml 里的 prometheus.io/port=8088 对齐）
 	m.Handle("/metrics", promhttp.Handler())
-	// 滚动升级配套 endpoint：preStop hook 调用，不需要 auth
-	m.HandleFunc("/internal/drain", handlers.HandleInternalDrain)
-	m.HandleFunc("/internal/inflight", handlers.HandleInternalInflight)
+	// 滚动升级配套 endpoint：仅 pod 自己 preStop hook (localhost) 可调，
+	// 防止集群内其他 pod 通过 Service IP 触发 drain 造成 DoS
+	m.HandleFunc("/internal/drain", requireLocalhost(handlers.HandleInternalDrain))
+	m.HandleFunc("/internal/inflight", requireLocalhost(handlers.HandleInternalInflight))
 	log.Printf("Health/Metrics server on %s (/health, /ready, /metrics)", addr)
 	if err := http.ListenAndServe(addr, m); err != nil {
 		log.Printf("health server: %v", err)
