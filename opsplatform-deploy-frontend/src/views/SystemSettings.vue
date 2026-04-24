@@ -1,8 +1,8 @@
 <template>
-  <div v-if="!authStore.isAdmin" class="no-perm">
+  <div v-if="!hasAnyManagePerm" class="no-perm">
     <el-icon class="np-icon"><Lock /></el-icon>
-    <div class="np-title">需要管理员权限</div>
-    <div class="np-desc">系统设置仅管理员可访问。如需查看或修改配置请联系管理员。</div>
+    <div class="np-title">需要管理类权限</div>
+    <div class="np-desc">系统设置需要 admin 或任一管理类按钮权限（global / projects / argocd / lark / contacts）。请联系管理员分配。</div>
   </div>
   <div v-else class="ss">
     <div class="rail">
@@ -156,7 +156,7 @@
                 placeholder="如 http://opsplatform-deploy.your-company.com（Lark 通知里「查看发布详情」按钮跳这个地址）" />
             </el-form-item>
           </el-form>
-          <div class="actions">
+          <div class="actions" v-if="authStore.isAdmin || authStore.hasButton('manage_global')">
             <el-button @click="onTestGit" :loading="testing.git">测试连接</el-button>
             <el-button type="primary" @click="saveGlobal" :loading="saving.cred">保存</el-button>
           </div>
@@ -171,7 +171,7 @@
               <div class="sec-title">GitLab 仓库</div>
               <div class="sec-desc">登记一次，项目环境直接下拉选，避免重复敲长 URL</div>
             </div>
-            <button class="add-btn" @click="openRepoCreate">
+            <button v-if="authStore.isAdmin || authStore.hasButton('manage_global')" class="add-btn" @click="openRepoCreate">
               <el-icon><Plus /></el-icon>新增仓库
             </button>
           </div>
@@ -194,8 +194,8 @@
                 <td class="mono">{{ g.default_branch }}</td>
                 <td>{{ g.description || '—' }}</td>
                 <td>
-                  <button class="act" @click="openRepoEdit(g)">编辑</button>
-                  <button class="act danger" @click="onDeleteRepo(g)">删除</button>
+                  <button v-if="authStore.isAdmin || authStore.hasButton('manage_global')" class="act" @click="openRepoEdit(g)">编辑</button>
+                  <button v-if="authStore.isAdmin || authStore.hasButton('manage_global')" class="act danger" @click="onDeleteRepo(g)">删除</button>
                 </td>
               </tr>
               <tr v-if="!gitlabRepos.length">
@@ -214,7 +214,7 @@
               <div class="sec-title">ArgoCD 实例</div>
               <div class="sec-desc">全局可管理多个 ArgoCD · 项目环境只从这里选一个</div>
             </div>
-            <button class="add-btn" @click="openArgoCreate">
+            <button v-if="authStore.isAdmin || authStore.hasButton('manage_argocd')" class="add-btn" @click="openArgoCreate">
               <el-icon><Plus /></el-icon>新增实例
             </button>
           </div>
@@ -238,8 +238,8 @@
                 <td class="mono">{{ fmt(a.created_at) }}</td>
                 <td>
                   <button class="act" @click="onTestArgo(a)">测试</button>
-                  <button class="act" @click="openArgoEdit(a)">编辑</button>
-                  <button class="act danger" @click="onDeleteArgo(a)">删除</button>
+                  <button v-if="authStore.isAdmin || authStore.hasButton('manage_argocd')" class="act" @click="openArgoEdit(a)">编辑</button>
+                  <button v-if="authStore.isAdmin || authStore.hasButton('manage_argocd')" class="act danger" @click="onDeleteArgo(a)">删除</button>
                 </td>
               </tr>
               <tr v-if="!argoInstances.length">
@@ -315,7 +315,7 @@
               <div class="sec-title">通知人</div>
               <div class="sec-desc">发布后根据操作人名字匹配 Lark ID · 艾特用</div>
             </div>
-            <button class="add-btn" @click="openContactCreate">
+            <button v-if="authStore.isAdmin || authStore.hasButton('manage_contacts')" class="add-btn" @click="openContactCreate">
               <el-icon><Plus /></el-icon>新增通知人
             </button>
           </div>
@@ -336,8 +336,8 @@
                 <td class="mono">{{ c.lark_id || '—' }}</td>
                 <td>{{ c.remark || '—' }}</td>
                 <td>
-                  <button class="act" @click="openContactEdit(c)">编辑</button>
-                  <button class="act danger" @click="onDeleteContact(c)">删除</button>
+                  <button v-if="authStore.isAdmin || authStore.hasButton('manage_contacts')" class="act" @click="openContactEdit(c)">编辑</button>
+                  <button v-if="authStore.isAdmin || authStore.hasButton('manage_contacts')" class="act danger" @click="onDeleteContact(c)">删除</button>
                 </td>
               </tr>
               <tr v-if="!contacts.length">
@@ -356,7 +356,7 @@
               <div class="sec-title">Lark 机器人</div>
               <div class="sec-desc">全局可配置多个 webhook · 项目环境只需选一个</div>
             </div>
-            <button class="add-btn" @click="openBotCreate">
+            <button v-if="authStore.isAdmin || authStore.hasButton('manage_lark_bots')" class="add-btn" @click="openBotCreate">
               <el-icon><Plus /></el-icon>新增机器人
             </button>
           </div>
@@ -378,8 +378,8 @@
                 <td>{{ b.description || '—' }}</td>
                 <td>
                   <button class="act" @click="onTestBot(b)">测试</button>
-                  <button class="act" @click="openBotEdit(b)">编辑</button>
-                  <button class="act danger" @click="onDeleteBot(b)">删除</button>
+                  <button v-if="authStore.isAdmin || authStore.hasButton('manage_lark_bots')" class="act" @click="openBotEdit(b)">编辑</button>
+                  <button v-if="authStore.isAdmin || authStore.hasButton('manage_lark_bots')" class="act danger" @click="onDeleteBot(b)">删除</button>
                 </td>
               </tr>
               <tr v-if="!larkBots.length">
@@ -412,7 +412,7 @@
             <el-slider v-model="gc.git_retry_count" :min="1" :max="10" :step="1" style="flex:1;margin:0 16px" />
             <div class="val mono">{{ gc.git_retry_count }} 次</div>
           </div>
-          <div class="actions">
+          <div class="actions" v-if="authStore.isAdmin || authStore.hasButton('manage_global')">
             <el-button type="primary" @click="saveGlobal" :loading="saving.cred">保存</el-button>
           </div>
         </div>
@@ -600,6 +600,16 @@ import {
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 const authStore = useAuthStore()
+
+// 有任一管理类按钮 或 admin → 能进 SystemSettings
+const hasAnyManagePerm = computed(() =>
+  authStore.isAdmin ||
+  authStore.hasButton('manage_global') ||
+  authStore.hasButton('manage_projects') ||
+  authStore.hasButton('manage_argocd') ||
+  authStore.hasButton('manage_lark_bots') ||
+  authStore.hasButton('manage_contacts')
+)
 
 const tab = ref('overview')
 const tabs = [

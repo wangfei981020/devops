@@ -76,9 +76,17 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40400, "project_env not found")
 		return
 	}
-	if p.EnvType == models.EnvPROD && !IsAdmin(r) {
-		JSONError(w, 40300, "PROD 发布仅限管理员")
-		return
+	// PROD 要 submit_prod；UAT 要 submit_uat（admin 自动放行）
+	if p.EnvType == models.EnvPROD {
+		if !HasButton(r, "submit_prod") {
+			JSONError(w, 40300, "没有 PROD 发布权限（submit_prod）")
+			return
+		}
+	} else {
+		if !HasButton(r, "submit_uat") {
+			JSONError(w, 40300, "没有 UAT 发布权限（submit_uat）")
+			return
+		}
 	}
 	pending := map[string]string{}
 	for _, c := range req.Changes {
@@ -153,8 +161,8 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40400, "project_env not found")
 		return
 	}
-	if p.EnvType == models.EnvPROD && !IsAdmin(r) {
-		JSONError(w, 40300, "PROD 重启仅限管理员")
+	if !HasButton(r, "restart") {
+		JSONError(w, 40300, "没有重启权限（restart）")
 		return
 	}
 	argoURL, argoToken, err := ResolveArgocdForEnv(p)
@@ -285,8 +293,8 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40400, "project_env not found")
 		return
 	}
-	if p.EnvType == models.EnvPROD && !IsAdmin(r) {
-		JSONError(w, 40300, "PROD 回滚仅限管理员")
+	if !HasButton(r, "rollback") {
+		JSONError(w, 40300, "没有回滚权限（rollback）")
 		return
 	}
 	modules := loadModulesMap(peID, p.ChartBasePath)

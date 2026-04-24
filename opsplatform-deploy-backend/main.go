@@ -87,58 +87,65 @@ func main() {
 	protected.HandleFunc("/deploy/restart", handlers.HandleRestart).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/deploy/rollback", handlers.HandleRollback).Methods("POST", "OPTIONS")
 
-	// ========== Admin-only：所有管理类 CRUD、测试接口、PROD 扫描等 ==========
+	// ========== 按钮权限分组：每组 admin 自动放行，portal 用户按勾选授权 ==========
+	// ① manage_global — 全局凭证 + GitLab 仓库登记
+	mg := protected.PathPrefix("").Subrouter()
+	mg.Use(handlers.RequireButton("manage_global"))
+	mg.HandleFunc("/global-config", handlers.HandleUpdateGlobalConfig).Methods("PUT", "OPTIONS")
+	mg.Handle("/global-config/test-gitlab", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestGlobalGitlab))).Methods("POST", "OPTIONS")
+	mg.HandleFunc("/gitlab-repos", handlers.HandleCreateGitlabRepo).Methods("POST", "OPTIONS")
+	mg.HandleFunc("/gitlab-repos/{id}", handlers.HandleUpdateGitlabRepo).Methods("PUT", "OPTIONS")
+	mg.HandleFunc("/gitlab-repos/{id}", handlers.HandleDeleteGitlabRepo).Methods("DELETE", "OPTIONS")
+
+	// ② manage_projects — 项目 / 环境 CRUD + 测试连接
+	mp := protected.PathPrefix("").Subrouter()
+	mp.Use(handlers.RequireButton("manage_projects"))
+	mp.HandleFunc("/projects", handlers.HandleCreateProject).Methods("POST", "OPTIONS")
+	mp.HandleFunc("/projects/{id}", handlers.HandleUpdateProject).Methods("PUT", "OPTIONS")
+	mp.HandleFunc("/projects/{id}", handlers.HandleDeleteProject).Methods("DELETE", "OPTIONS")
+	mp.HandleFunc("/project-envs", handlers.HandleCreateProjectEnv).Methods("POST", "OPTIONS")
+	mp.HandleFunc("/project-envs/{id}", handlers.HandleUpdateProjectEnv).Methods("PUT", "OPTIONS")
+	mp.HandleFunc("/project-envs/{id}", handlers.HandleDeleteProjectEnv).Methods("DELETE", "OPTIONS")
+	mp.Handle("/project-envs/{id}/test-git", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvGit))).Methods("POST", "OPTIONS")
+	mp.Handle("/project-envs/{id}/test-argocd", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvArgocd))).Methods("POST", "OPTIONS")
+	mp.Handle("/project-envs/test-git", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvGitByBody))).Methods("POST", "OPTIONS")
+	mp.Handle("/project-envs/test-argocd", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvArgocdByBody))).Methods("POST", "OPTIONS")
+
+	// ③ scan_modules — 单独按钮，让只想看模块状态的人也能勾
+	sc := protected.PathPrefix("").Subrouter()
+	sc.Use(handlers.RequireButton("scan_modules"))
+	sc.Handle("/project-envs/{id}/scan-modules", handlers.ScanRateLimit(http.HandlerFunc(handlers.HandleScanModules))).Methods("POST", "OPTIONS")
+
+	// ④ manage_contacts — 通知人 CRUD
+	mc := protected.PathPrefix("").Subrouter()
+	mc.Use(handlers.RequireButton("manage_contacts"))
+	mc.HandleFunc("/contacts", handlers.HandleCreateContact).Methods("POST", "OPTIONS")
+	mc.HandleFunc("/contacts/{id}", handlers.HandleUpdateContact).Methods("PUT", "OPTIONS")
+	mc.HandleFunc("/contacts/{id}", handlers.HandleDeleteContact).Methods("DELETE", "OPTIONS")
+
+	// ⑤ manage_lark_bots — Lark 机器人 CRUD
+	ml := protected.PathPrefix("").Subrouter()
+	ml.Use(handlers.RequireButton("manage_lark_bots"))
+	ml.HandleFunc("/lark-bots", handlers.HandleCreateLarkBot).Methods("POST", "OPTIONS")
+	ml.HandleFunc("/lark-bots/{id}", handlers.HandleUpdateLarkBot).Methods("PUT", "OPTIONS")
+	ml.HandleFunc("/lark-bots/{id}", handlers.HandleDeleteLarkBot).Methods("DELETE", "OPTIONS")
+	ml.Handle("/lark-bots/{id}/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestLarkBot))).Methods("POST", "OPTIONS")
+	ml.Handle("/lark-bots/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestLarkBotByBody))).Methods("POST", "OPTIONS")
+
+	// ⑥ manage_argocd — ArgoCD 实例 CRUD
+	ma := protected.PathPrefix("").Subrouter()
+	ma.Use(handlers.RequireButton("manage_argocd"))
+	ma.HandleFunc("/argocd-instances", handlers.HandleCreateArgocdInstance).Methods("POST", "OPTIONS")
+	ma.HandleFunc("/argocd-instances/{id}", handlers.HandleUpdateArgocdInstance).Methods("PUT", "OPTIONS")
+	ma.HandleFunc("/argocd-instances/{id}", handlers.HandleDeleteArgocdInstance).Methods("DELETE", "OPTIONS")
+	ma.Handle("/argocd-instances/{id}/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestArgocdInstance))).Methods("POST", "OPTIONS")
+	ma.Handle("/argocd-instances/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestArgocdInstanceByBody))).Methods("POST", "OPTIONS")
+
+	// ========== 仍然严格 admin-only：平台用户管理、审计日志 ==========
+	// 这两个不属于发布中心按钮语义，保留 admin-only
 	admin := protected.PathPrefix("").Subrouter()
 	admin.Use(handlers.AdminMiddleware)
-
-	// 全局配置
-	admin.HandleFunc("/global-config", handlers.HandleUpdateGlobalConfig).Methods("PUT", "OPTIONS")
-	admin.Handle("/global-config/test-gitlab", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestGlobalGitlab))).Methods("POST", "OPTIONS")
-
-	// 项目 CRUD
-	admin.HandleFunc("/projects", handlers.HandleCreateProject).Methods("POST", "OPTIONS")
-	admin.HandleFunc("/projects/{id}", handlers.HandleUpdateProject).Methods("PUT", "OPTIONS")
-	admin.HandleFunc("/projects/{id}", handlers.HandleDeleteProject).Methods("DELETE", "OPTIONS")
-
-	// 项目环境 CRUD + 测试 + 扫描
-	admin.HandleFunc("/project-envs", handlers.HandleCreateProjectEnv).Methods("POST", "OPTIONS")
-	admin.HandleFunc("/project-envs/{id}", handlers.HandleUpdateProjectEnv).Methods("PUT", "OPTIONS")
-	admin.HandleFunc("/project-envs/{id}", handlers.HandleDeleteProjectEnv).Methods("DELETE", "OPTIONS")
-	admin.Handle("/project-envs/{id}/test-git", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvGit))).Methods("POST", "OPTIONS")
-	admin.Handle("/project-envs/{id}/test-argocd", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvArgocd))).Methods("POST", "OPTIONS")
-	// 新：未保存也能测
-	admin.Handle("/project-envs/test-git", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvGitByBody))).Methods("POST", "OPTIONS")
-	admin.Handle("/project-envs/test-argocd", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestProjectEnvArgocdByBody))).Methods("POST", "OPTIONS")
-	admin.Handle("/project-envs/{id}/scan-modules", handlers.ScanRateLimit(http.HandlerFunc(handlers.HandleScanModules))).Methods("POST", "OPTIONS")
-
-	// 通知人 CRUD
-	admin.HandleFunc("/contacts", handlers.HandleCreateContact).Methods("POST", "OPTIONS")
-	admin.HandleFunc("/contacts/{id}", handlers.HandleUpdateContact).Methods("PUT", "OPTIONS")
-	admin.HandleFunc("/contacts/{id}", handlers.HandleDeleteContact).Methods("DELETE", "OPTIONS")
-
-	// Lark 机器人 CRUD + 测试
-	admin.HandleFunc("/lark-bots", handlers.HandleCreateLarkBot).Methods("POST", "OPTIONS")
-	admin.HandleFunc("/lark-bots/{id}", handlers.HandleUpdateLarkBot).Methods("PUT", "OPTIONS")
-	admin.HandleFunc("/lark-bots/{id}", handlers.HandleDeleteLarkBot).Methods("DELETE", "OPTIONS")
-	admin.Handle("/lark-bots/{id}/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestLarkBot))).Methods("POST", "OPTIONS")
-	admin.Handle("/lark-bots/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestLarkBotByBody))).Methods("POST", "OPTIONS")
-
-	// ArgoCD 实例 CRUD + 测试
-	admin.HandleFunc("/argocd-instances", handlers.HandleCreateArgocdInstance).Methods("POST", "OPTIONS")
-	admin.HandleFunc("/argocd-instances/{id}", handlers.HandleUpdateArgocdInstance).Methods("PUT", "OPTIONS")
-	admin.HandleFunc("/argocd-instances/{id}", handlers.HandleDeleteArgocdInstance).Methods("DELETE", "OPTIONS")
-	admin.Handle("/argocd-instances/{id}/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestArgocdInstance))).Methods("POST", "OPTIONS")
-	admin.Handle("/argocd-instances/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestArgocdInstanceByBody))).Methods("POST", "OPTIONS")
-
-	// GitLab 仓库 CRUD
-	admin.HandleFunc("/gitlab-repos", handlers.HandleCreateGitlabRepo).Methods("POST", "OPTIONS")
-	admin.HandleFunc("/gitlab-repos/{id}", handlers.HandleUpdateGitlabRepo).Methods("PUT", "OPTIONS")
-	admin.HandleFunc("/gitlab-repos/{id}", handlers.HandleDeleteGitlabRepo).Methods("DELETE", "OPTIONS")
-
-	// 审计日志
 	admin.HandleFunc("/audit-logs", handlers.HandleListAuditLogs).Methods("GET", "OPTIONS")
-
-	// 用户管理
 	admin.HandleFunc("/users", handlers.HandleListUsers).Methods("GET", "OPTIONS")
 	admin.HandleFunc("/users", handlers.HandleCreateUser).Methods("POST", "OPTIONS")
 	admin.HandleFunc("/users/{id}", handlers.HandleUpdateUser).Methods("PUT", "OPTIONS")

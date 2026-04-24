@@ -81,7 +81,7 @@ base-client-backend:20260416020000-99"
     <div class="exec" v-if="diff.length">
       <div class="exec-info"></div>
       <button
-        v-if="!isProd || auth.isAdmin"
+        v-if="canSubmit"
         :class="['cta', isProd ? 'danger' : (isRollback ? 'warn' : 'success')]"
         :disabled="!validCount || submitting"
         @click="onSubmit">
@@ -111,6 +111,17 @@ const auth = useAuthStore()
 const deployments = useDeploymentsStore()
 
 const isRollback = computed(() => !!props.rollbackMode)
+
+// 发布按钮显示规则：admin 放行；否则按操作类型检查对应权限
+//   - 回滚 → rollback 权限
+//   - PROD 发布 → submit_prod
+//   - UAT 发布 → submit_uat
+const canSubmit = computed(() => {
+  if (auth.isAdmin) return true
+  if (isRollback.value) return auth.hasButton('rollback')
+  if (isProd.value) return auth.hasButton('submit_prod')
+  return auth.hasButton('submit_uat')
+})
 const text = ref('')
 const diff = ref([])
 

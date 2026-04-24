@@ -44,7 +44,7 @@
           <button class="btn-refresh" @click="load" :disabled="loading" title="刷新">
             <el-icon :class="{spin: loading}"><RefreshRight /></el-icon>
           </button>
-          <button v-if="auth.isAdmin" class="add-btn" @click="openCreateProject">
+          <button v-if="auth.isAdmin || auth.hasButton('manage_projects')" class="add-btn" @click="openCreateProject">
             <el-icon><Plus /></el-icon>新增项目
           </button>
         </div>
@@ -68,7 +68,7 @@
                 <el-icon><Clock /></el-icon>{{ fromNow(proj.lastDeployAt) }}
               </span>
             </div>
-            <div class="proj-actions" v-if="auth.isAdmin">
+            <div class="proj-actions" v-if="auth.isAdmin || auth.hasButton('manage_projects')">
               <button v-if="proj.in_db" class="row-btn edit-proj" title="编辑项目" @click.stop="openEditProject(proj)">
                 <el-icon><EditPen /></el-icon>
               </button>
@@ -79,8 +79,8 @@
           </div>
           <div v-if="opened[proj.name]" class="env-list">
             <div v-if="!proj.envs.length" class="no-envs">
-              <template v-if="auth.isAdmin">还没有环境 · <a class="lnk" @click="openCreateEnv(proj.name)">新增环境</a></template>
-              <template v-else>还没有环境</template>
+              <template v-if="auth.isAdmin || auth.hasButton('manage_projects')">还没有环境 · <a class="lnk" @click="openCreateEnv(proj.name)">新增环境</a></template>
+              <template v-else>还没有环境（无管理权限）</template>
             </div>
             <template v-else>
               <div class="env-head">
@@ -113,7 +113,7 @@
                   </span>
                   <span v-else class="muted">—</span>
                 </span>
-                <button v-if="auth.isAdmin" class="row-btn edit" title="编辑环境" @click.stop="openEditEnv(e)">
+                <button v-if="auth.isAdmin || auth.hasButton('manage_projects')" class="row-btn edit" title="编辑环境" @click.stop="openEditEnv(e)">
                   <el-icon><EditPen /></el-icon>
                 </button>
               </div>

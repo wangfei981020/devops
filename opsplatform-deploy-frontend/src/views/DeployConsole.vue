@@ -25,7 +25,7 @@
       </div>
       <div class="hdr-r">
         <div class="stat"><div class="k">Modules</div><div class="v">{{ modules.length }}</div></div>
-        <button v-if="auth.isAdmin" class="btn-rescan" :disabled="rescanning" @click="onRescan"
+        <button v-if="auth.isAdmin || auth.hasButton('scan_modules')" class="btn-rescan" :disabled="rescanning" @click="onRescan"
                 title="从 Git 仓库重新扫描模块列表，写入 module 表">
           <el-icon :class="{ spin: rescanning }"><RefreshRight /></el-icon>
           <span>{{ rescanning ? '扫描中...' : '扫描 Git 重建模块' }}</span>

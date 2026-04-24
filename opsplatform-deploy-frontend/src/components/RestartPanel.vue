@@ -85,7 +85,7 @@ bet-client-backend"
     <div class="exec" v-if="preview.length">
       <div class="exec-info"></div>
       <button
-        v-if="!isProd || auth.isAdmin"
+        v-if="auth.isAdmin || auth.hasButton('restart')"
         :class="['cta', isProd ? 'danger' : 'primary']"
         :disabled="!validCount || submitting"
         @click="onRestart">

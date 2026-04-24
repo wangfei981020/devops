@@ -25,9 +25,10 @@ import (
 type contextKey string
 
 const (
-	ctxUserID   contextKey = "userID"
-	ctxUsername contextKey = "username"
-	ctxUserRole contextKey = "userRole"
+	ctxUserID      contextKey = "userID"
+	ctxUsername    contextKey = "username"
+	ctxUserRole    contextKey = "userRole"
+	ctxPermissions contextKey = "permissions"
 )
 
 type JWTClaims struct {
@@ -208,11 +209,23 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40300, "您没有发布中心的访问权限，请联系管理员")
 		return
 	}
+	// 应用级访问控制：调运维平台 external-apps/my，确认用户的角色关联了 deploy_center 应用
+	// （截图那个"发布中心-角色权限"对话框对应的数据）。管理员在运维平台 UI 配了哪些角色能访问，
+	// 这里强制校验；不通过就拒登录，哪怕 portal_token 本身有效。
+	// admin 跳过（本地 admin 账号走 local login 不到这里；如果 portal 的 admin 也能豁免）
+	if role != "admin" && !portalUserCanAccessApp(Cfg.PortalAPIURL, portalToken, "deploy_center") {
+		JSONError(w, 40300, "您所在的角色未被授予访问发布中心的权限")
+		return
+	}
 
 	token, _ := generateToken(userID, username, role)
 	tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
 	expiresAt := time.Now().Add(time.Duration(Cfg.SessionTimeout) * time.Minute)
-	database.DB.Exec("INSERT INTO sessions (user_id, token_hash, expires_at) VALUES (?, ?, ?)", userID, tokenHash, expiresAt)
+	// 缓存权限到 session，AuthMiddleware 时能直接拿，不用每次回头查 portal
+	permJSON, _ := json.Marshal(permissions)
+	database.DB.Exec(
+		"INSERT INTO sessions (user_id, token_hash, expires_at, permissions) VALUES (?, ?, ?, ?)",
+		userID, tokenHash, expiresAt, string(permJSON))
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "deploy_auth_token",
@@ -278,6 +291,47 @@ func HandleRefreshPermissions(w http.ResponseWriter, r *http.Request) {
 		"role":        role,
 		"auth_source": authSource,
 	})
+}
+
+// portalUserCanAccessApp 调运维平台 /api/external-apps/my 看用户的角色是否授权了指定 app_key。
+//
+//	portalToken 代表用户身份；运维平台那边按 token 解析用户 → 查 user_roles → role_external_apps。
+//	运维平台 UI「发布中心-角色权限」对话框勾的就是这张表。
+//	没关联 → 返回 false → 发布中心 portal-auth 直接拒绝登录。
+func portalUserCanAccessApp(portalURL, portalToken, appKey string) bool {
+	u := strings.TrimRight(portalURL, "/") + "/api/external-apps/my"
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, _ := http.NewRequest("GET", u, nil)
+	req.Header.Set("Authorization", "Bearer "+portalToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[AppAccess] fetch external-apps/my failed: %v", err)
+		// 运维平台临时不可用时不拦截，避免 portal 挂了连带发布中心也登不了
+		return true
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	// 兼容 {code,data:[...]} 和 [...] 两种格式
+	var wrapped struct {
+		Data []struct {
+			AppKey string `json:"app_key"`
+		} `json:"data"`
+	}
+	var direct []struct {
+		AppKey string `json:"app_key"`
+	}
+	list := wrapped.Data
+	if err := json.Unmarshal(raw, &wrapped); err != nil || len(wrapped.Data) == 0 {
+		if err2 := json.Unmarshal(raw, &direct); err2 == nil {
+			list = direct
+		}
+	}
+	for _, a := range list {
+		if a.AppKey == appKey {
+			return true
+		}
+	}
+	return false
 }
 
 // fetchPortalPermissions: 用用户 token 调 portal 拉权限
@@ -363,15 +417,22 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
-		var count int
-		database.DB.QueryRow("SELECT COUNT(*) FROM sessions WHERE token_hash = ? AND expires_at > NOW()", tokenHash).Scan(&count)
-		if count == 0 {
+		var permJSON sql.NullString
+		err = database.DB.QueryRow(
+			"SELECT permissions FROM sessions WHERE token_hash = ? AND expires_at > NOW()",
+			tokenHash).Scan(&permJSON)
+		if err != nil {
 			JSONError(w, 40100, "会话已过期")
 			return
+		}
+		perms := map[string]bool{}
+		if permJSON.Valid && permJSON.String != "" {
+			_ = json.Unmarshal([]byte(permJSON.String), &perms)
 		}
 		ctx := context.WithValue(r.Context(), ctxUserID, claims.UserID)
 		ctx = context.WithValue(ctx, ctxUsername, claims.Username)
 		ctx = context.WithValue(ctx, ctxUserRole, claims.Role)
+		ctx = context.WithValue(ctx, ctxPermissions, perms)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -402,6 +463,37 @@ func RoleFromCtx(r *http.Request) string {
 		return v
 	}
 	return ""
+}
+
+// HasButton 判断当前用户是否拥有某个按钮权限。
+//
+//	admin 无条件放行；其他用户看 session.permissions 缓存（portal-auth 时从运维平台拉好的）。
+//	code 约定用短码，如 "submit_uat"、"manage_projects"；会自动补全前缀 "deploy_center:"。
+func HasButton(r *http.Request, code string) bool {
+	if RoleFromCtx(r) == "admin" {
+		return true
+	}
+	perms, _ := r.Context().Value(ctxPermissions).(map[string]bool)
+	if perms == nil {
+		return false
+	}
+	return perms["deploy_center:"+code]
+}
+
+// RequireButton 中间件：admin 或 deploy_center:<code> 为 true 才放行。
+//
+//	用在 admin/子 router 替代 AdminMiddleware。新的检查语义是
+//	"admin OR 该按钮权限"，portal 用户也能通过单个按钮勾选获得权限。
+func RequireButton(code string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !HasButton(r, code) {
+				JSONError(w, 40300, "需要「"+code+"」权限")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // IsAdmin 判断当前请求是否来自 admin 角色

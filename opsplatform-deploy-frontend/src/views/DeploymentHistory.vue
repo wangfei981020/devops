@@ -169,7 +169,7 @@
 
                   <div class="section-actions">
                     <button
-                      v-if="row.action !== 'restart' && ['success','partial'].includes(row.status)"
+                      v-if="row.action !== 'restart' && ['success','partial'].includes(row.status) && (auth.isAdmin || auth.hasButton('rollback'))"
                       class="btn-primary sm"
                       @click.stop="onRollback(row)">
                       回滚此次发布
@@ -209,9 +209,11 @@ import dayjs from 'dayjs'
 import { Search, ArrowRight } from '@element-plus/icons-vue'
 import { listDeployments, listProjectEnvs, getDeployment } from '../api'
 import RollbackDialog from '../components/RollbackDialog.vue'
+import { useAuthStore } from '../stores/auth'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 
 const list = ref([])
 const envs = ref([])
