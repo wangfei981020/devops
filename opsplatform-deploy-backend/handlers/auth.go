@@ -311,20 +311,24 @@ func portalUserCanAccessApp(portalURL, portalToken, appKey string) bool {
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
-	// 兼容 {code,data:[...]} 和 [...] 两种格式
-	var wrapped struct {
-		Data []struct {
-			AppKey string `json:"app_key"`
-		} `json:"data"`
-	}
-	var direct []struct {
+	// 兼容两种响应包装：
+	//   运维平台: {"success": true, "data": [{...}]}  ← 实际返回（见 opsplatform/handlers/response.go）
+	//   纯数组:   [{...}]
+	type appItem struct {
 		AppKey string `json:"app_key"`
 	}
-	list := wrapped.Data
-	if err := json.Unmarshal(raw, &wrapped); err != nil || len(wrapped.Data) == 0 {
-		if err2 := json.Unmarshal(raw, &direct); err2 == nil {
-			list = direct
-		}
+	var wrapped struct {
+		Data []appItem `json:"data"`
+	}
+	var direct []appItem
+	var list []appItem
+	if err := json.Unmarshal(raw, &wrapped); err == nil && len(wrapped.Data) > 0 {
+		list = wrapped.Data
+	} else if err2 := json.Unmarshal(raw, &direct); err2 == nil {
+		list = direct
+	}
+	if len(list) == 0 {
+		log.Printf("[AppAccess] external-apps/my returned 0 items (raw=%.200s)", string(raw))
 	}
 	for _, a := range list {
 		if a.AppKey == appKey {
