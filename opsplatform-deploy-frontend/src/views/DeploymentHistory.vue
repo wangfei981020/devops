@@ -189,6 +189,7 @@
           <span>第 <b>{{ page }}</b> 页</span>
           <button :disabled="page * pageSize >= total" @click="page++; doSearch()">›</button>
           <select v-model="pageSize" @change="page = 1; doSearch()" class="sel-sm">
+            <option :value="10">10 条/页</option>
             <option :value="20">20 条/页</option>
             <option :value="50">50 条/页</option>
             <option :value="100">100 条/页</option>
@@ -216,7 +217,7 @@ const list = ref([])
 const envs = ref([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = ref(20)
+const pageSize = ref(10)
 const loading = ref(false)
 const expanded = ref({})
 const rbVis = ref(false)
