@@ -984,6 +984,38 @@ CREATE TABLE IF NOT EXISTS duty_records (
 		return err
 	}
 
+	// 发布中心：角色 → 可访问项目（项目级权限，与 env 级 AND 关系：必须同时勾才生效）
+	// project_name 为发布中心 project_env.name 去掉 -uat/-prod 后缀，如 "g32"
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS role_deploy_projects (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			role_id VARCHAR(64) NOT NULL,
+			project_name VARCHAR(100) NOT NULL COMMENT '发布中心项目名，如 g32',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_rdp_role (role_id),
+			UNIQUE KEY uk_role_project (role_id, project_name)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	// 一次性回填：把已存在的 role_deploy_envs 的项目名补到 role_deploy_projects
+	// 仅当 role_deploy_projects 完全空时跑（避免覆盖 admin 后续的手动调整）
+	var rdpCnt int
+	_ = DB.QueryRow(`SELECT COUNT(*) FROM role_deploy_projects`).Scan(&rdpCnt)
+	if rdpCnt == 0 {
+		// 用 SQL 直接 derive：name 形如 g32-uat → 去掉 "-uat" / "-prod" 后缀；不带后缀的整个名当项目名
+		// REGEXP_REPLACE: 把末尾的 -(uat|prod) 切掉
+		_, err := DB.Exec(`
+			INSERT IGNORE INTO role_deploy_projects (role_id, project_name)
+			SELECT DISTINCT role_id, REGEXP_REPLACE(env_name, '-(uat|prod)$', '') FROM role_deploy_envs
+		`)
+		if err != nil {
+			log.Printf("[migration] backfill role_deploy_projects failed (non-fatal): %v", err)
+		}
+	}
+
 	// 创建 API Key 表
 	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS api_keys (

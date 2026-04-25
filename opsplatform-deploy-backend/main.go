@@ -59,6 +59,9 @@ func main() {
 	api.Handle("/public/project-envs",
 		handlers.InternalTokenMiddleware(http.HandlerFunc(handlers.HandlePublicListProjectEnvs))).
 		Methods("GET", "OPTIONS")
+	api.Handle("/public/projects",
+		handlers.InternalTokenMiddleware(http.HandlerFunc(handlers.HandlePublicListProjects))).
+		Methods("GET", "OPTIONS")
 
 	// Protected
 	protected := api.PathPrefix("").Subrouter()

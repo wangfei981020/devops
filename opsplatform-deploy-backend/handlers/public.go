@@ -46,6 +46,60 @@ func HandlePublicListProjectEnvs(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, out)
 }
 
+// HandlePublicListProjects GET /api/public/projects
+//
+//	返回项目名列表（项目级 RBAC 用）。包括 project 表里的 + 从 project_env name
+//	派生出来的（与 HandleListProjects 同源去重逻辑），但只返回最简字段。
+func HandlePublicListProjects(w http.ResponseWriter, r *http.Request) {
+	type item struct {
+		Name        string `json:"name"`
+		DisplayName string `json:"display_name"`
+	}
+	byName := map[string]*item{}
+
+	// 1. project 表所有
+	rows, err := database.DB.Query(`SELECT name, display_name FROM project`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var n, d string
+			_ = rows.Scan(&n, &d)
+			byName[n] = &item{Name: n, DisplayName: d}
+		}
+	}
+	// 2. project_env 派生（去 -uat / -prod 后缀）
+	envRows, err := database.DB.Query(`SELECT name, env_type FROM project_env`)
+	if err == nil {
+		defer envRows.Close()
+		for envRows.Next() {
+			var name, envType string
+			_ = envRows.Scan(&name, &envType)
+			projName := name
+			if envType != "" && len(name) > len(envType)+1 &&
+				name[len(name)-len(envType)-1:] == "-"+envType {
+				projName = name[:len(name)-len(envType)-1]
+			}
+			if _, ok := byName[projName]; !ok {
+				byName[projName] = &item{Name: projName, DisplayName: ""}
+			}
+		}
+	}
+
+	out := make([]*item, 0, len(byName))
+	for _, v := range byName {
+		out = append(out, v)
+	}
+	// 按 name 字典序排（简单冒泡，量级很小）
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].Name < out[i].Name {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	JSONSuccess(w, out)
+}
+
 // InternalTokenMiddleware 校验 X-Internal-Token header 与 env 中配置的值一致
 //
 //	未配 env 或 token 不匹配 → 403。运维平台通过 HandleProxyDeployCenterEnvs

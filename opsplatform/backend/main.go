@@ -359,7 +359,10 @@ func main() {
 	protected.HandleFunc("/my/deploy-envs", handlers.HandleGetMyDeployEnvs).Methods("GET", "OPTIONS")
 	adminOnly.HandleFunc("/admin/role-deploy-envs/{roleID}", handlers.HandleGetRoleDeployEnvs).Methods("GET", "OPTIONS")
 	adminOnly.HandleFunc("/admin/role-deploy-envs/{roleID}", handlers.HandleUpdateRoleDeployEnvs).Methods("PUT", "OPTIONS")
+	adminOnly.HandleFunc("/admin/role-deploy-projects/{roleID}", handlers.HandleGetRoleDeployProjects).Methods("GET", "OPTIONS")
+	adminOnly.HandleFunc("/admin/role-deploy-projects/{roleID}", handlers.HandleUpdateRoleDeployProjects).Methods("PUT", "OPTIONS")
 	adminOnly.HandleFunc("/admin/deploy-center-envs", handlers.HandleProxyDeployCenterEnvs).Methods("GET", "OPTIONS")
+	adminOnly.HandleFunc("/admin/deploy-center-projects", handlers.HandleProxyDeployCenterProjects).Methods("GET", "OPTIONS")
 
 	// Kubernetes 管理
 	protected.HandleFunc("/k8s/namespaces", handlers.HandleGetNamespaces).Methods("GET", "OPTIONS")

@@ -29,8 +29,10 @@ const selectedRole = ref(null)
 const selectedRolePermissions = ref({})
 
 // 发布中心环境权限（与菜单/按钮/数据/API 权限并列的第 5 类）
-const deployEnvs = ref([])              // [{id, name, env_type}]
-const selectedDeployEnvs = ref(new Set()) // Set<envName>
+// 双层 AND 语义：env 必须同时在 envs 集合 + 其所属 project 在 projects 集合，才生效
+const deployEnvs = ref([])                  // [{id, name, env_type}]
+const selectedDeployEnvs = ref(new Set())   // Set<envName>
+const selectedDeployProjects = ref(new Set()) // Set<projectName>  ← 新增
 const deployEnvsLoadFailed = ref(false)
 
 const stats = computed(() => ({
@@ -229,6 +231,7 @@ async function openRolePermissionModal(role) {
   selectedRole.value = role
   selectedRolePermissions.value = {}
   selectedDeployEnvs.value = new Set()
+  selectedDeployProjects.value = new Set()
   deployEnvsLoadFailed.value = false
 
   // 加载已有权限和全部权限
@@ -243,16 +246,19 @@ async function openRolePermissionModal(role) {
     console.error('加载角色权限失败:', e)
   }
 
-  // 加载发布中心环境列表 + 当前角色已勾的 env
+  // 加载发布中心环境列表 + 当前角色已勾的 env + 已勾的 project
   try {
-    const [envsRes, roleEnvsRes] = await Promise.all([
+    const [envsRes, roleEnvsRes, roleProjectsRes] = await Promise.all([
       api.get('/api/admin/deploy-center-envs'),
-      api.get('/api/admin/role-deploy-envs/' + role.id)
+      api.get('/api/admin/role-deploy-envs/' + role.id),
+      api.get('/api/admin/role-deploy-projects/' + role.id),
     ])
     const rawEnvs = envsRes?.data?.data ?? envsRes?.data ?? []
     deployEnvs.value = Array.isArray(rawEnvs) ? rawEnvs : []
     const rawRoleEnvs = roleEnvsRes?.data?.data ?? roleEnvsRes?.data ?? []
     selectedDeployEnvs.value = new Set(Array.isArray(rawRoleEnvs) ? rawRoleEnvs : [])
+    const rawRoleProjects = roleProjectsRes?.data?.data ?? roleProjectsRes?.data ?? []
+    selectedDeployProjects.value = new Set(Array.isArray(rawRoleProjects) ? rawRoleProjects : [])
   } catch (e) {
     console.error('加载发布中心环境失败:', e)
     deployEnvs.value = []
@@ -273,10 +279,11 @@ function toggleDeployEnv(envName, on) {
   selectedDeployEnvs.value = s
 }
 
-function toggleAllDeployEnvs(on) {
-  selectedDeployEnvs.value = on
-    ? new Set(deployEnvs.value.map(e => e.name))
-    : new Set()
+function toggleDeployProject(projectName, on) {
+  const s = new Set(selectedDeployProjects.value)
+  if (on) s.add(projectName)
+  else s.delete(projectName)
+  selectedDeployProjects.value = s
 }
 
 // 把 env_name "g32-uat" 拆成项目名 "g32"（剥掉末尾的 -uat / -prod）
@@ -288,7 +295,7 @@ function projectOfEnv(e) {
     : e.name
 }
 
-// 按项目分组：[{ project: 'g32', envs: [{...uat}, {...prod}], selectedCount }]
+// 按项目分组：[{ project: 'g32', envs: [...], envsSelected, projectSelected, effectiveCount }]
 const deployEnvGroups = computed(() => {
   const map = new Map()
   for (const e of deployEnvs.value) {
@@ -298,32 +305,46 @@ const deployEnvGroups = computed(() => {
   }
   return Array.from(map.entries())
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([project, envs]) => ({
-      project,
-      envs: envs.slice().sort((a, b) => a.env_type.localeCompare(b.env_type)), // uat 在前
-      selectedCount: envs.filter(e => selectedDeployEnvs.value.has(e.name)).length,
-      total: envs.length,
-    }))
+    .map(([project, envs]) => {
+      const projectSelected = selectedDeployProjects.value.has(project)
+      const envsSelected = envs.filter(e => selectedDeployEnvs.value.has(e.name)).length
+      return {
+        project,
+        envs: envs.slice().sort((a, b) => a.env_type.localeCompare(b.env_type)), // uat 在前
+        projectSelected,
+        envsSelected,
+        envsTotal: envs.length,
+        // 实际生效数 = projectSelected ? envsSelected : 0
+        effectiveCount: projectSelected ? envsSelected : 0,
+      }
+    })
 })
 
-function isProjectAllSelected(envs) {
-  return envs.length > 0 && envs.every(e => selectedDeployEnvs.value.has(e.name))
-}
-
-function toggleProjectEnvs(envs, on) {
-  const s = new Set(selectedDeployEnvs.value)
-  envs.forEach(e => on ? s.add(e.name) : s.delete(e.name))
-  selectedDeployEnvs.value = s
+// 全选所有：项目 + 环境同时勾上
+function toggleAllDeployEnvs(on) {
+  if (on) {
+    selectedDeployEnvs.value = new Set(deployEnvs.value.map(e => e.name))
+    const allProjs = new Set()
+    deployEnvs.value.forEach(e => allProjs.add(projectOfEnv(e)))
+    selectedDeployProjects.value = allProjs
+  } else {
+    selectedDeployEnvs.value = new Set()
+    selectedDeployProjects.value = new Set()
+  }
 }
 
 async function saveRolePermissions() {
   const permIds = Object.keys(selectedRolePermissions.value).filter(k => selectedRolePermissions.value[k])
   try {
     await api.put('/api/roles/' + selectedRole.value.id + '/permissions', permIds)
-    // 同时保存发布中心 env 权限（拉取失败时跳过，避免误清空）
+    // 同时保存发布中心 env 权限 + project 权限（拉取失败时跳过，避免误清空）
     if (!deployEnvsLoadFailed.value) {
       const env_names = Array.from(selectedDeployEnvs.value)
-      await api.put('/api/admin/role-deploy-envs/' + selectedRole.value.id, { env_names })
+      const project_names = Array.from(selectedDeployProjects.value)
+      await Promise.all([
+        api.put('/api/admin/role-deploy-envs/' + selectedRole.value.id, { env_names }),
+        api.put('/api/admin/role-deploy-projects/' + selectedRole.value.id, { project_names }),
+      ])
     }
     appStore.showToast('权限保存成功', 'success')
     showRolePermissionModal.value = false
@@ -627,14 +648,12 @@ function formatDate(str) {
                 </div>
               </div>
 
-              <!-- 发布中心环境权限（数据级 RBAC，仅对非 admin 角色生效） -->
+              <!-- 发布中心环境权限（数据级 RBAC，仅对非 admin 角色生效）
+                   双层 AND 语义：项目 ✓ AND 环境 ✓ → 真正可见，缺一不可 -->
               <div class="permission-section permission-section-full">
                 <h4 class="section-title">
                   发布中心环境
-                  <span class="section-hint">没勾的环境，该角色用户在发布中心完全看不到（admin / super_admin 自动绕过）</span>
-                  <span v-if="deployEnvs.length > 0" class="section-counter">
-                    已勾 {{ selectedDeployEnvs.size }} / {{ deployEnvs.length }}
-                  </span>
+                  <span class="section-hint">项目和环境必须**同时勾选**才生效（admin / super_admin 自动绕过）</span>
                 </h4>
                 <div v-if="deployEnvsLoadFailed" class="env-load-failed">
                   无法连接发布中心，已暂时禁用此处的修改（保存时会跳过 env 部分以免误清空）。请检查 <code>DEPLOY_CENTER_INTERNAL_URL</code> / <code>DEPLOY_CENTER_INTERNAL_TOKEN</code>。
@@ -646,24 +665,35 @@ function formatDate(str) {
                   <div class="env-toolbar">
                     <button type="button" class="btn-mini" @click="toggleAllDeployEnvs(true)">全选所有</button>
                     <button type="button" class="btn-mini" @click="toggleAllDeployEnvs(false)">清空所有</button>
-                    <span class="env-toolbar-hint">按项目分组 · 勾「项目」会一次勾该项目下所有环境</span>
+                    <span class="env-toolbar-hint">📁 项目和环境是两个独立勾选；项目未勾 → 下方环境即使勾了也不生效</span>
                   </div>
                   <div class="env-project-list">
                     <div v-for="g in deployEnvGroups" :key="g.project"
-                      :class="['env-project-card', { 'all-on': isProjectAllSelected(g.envs) }]">
+                      :class="['env-project-card', { 'project-on': g.projectSelected, 'project-off': !g.projectSelected }]">
                       <div class="env-project-head">
                         <label class="env-project-name">
                           <input type="checkbox"
-                            :checked="isProjectAllSelected(g.envs)"
-                            @change="toggleProjectEnvs(g.envs, $event.target.checked)" />
+                            :checked="g.projectSelected"
+                            @change="toggleDeployProject(g.project, $event.target.checked)" />
                           <span class="env-project-folder">📁</span>
                           <span class="env-project-text">{{ g.project }}</span>
+                          <span class="env-project-tag">项目</span>
                         </label>
-                        <span class="env-project-count">{{ g.selectedCount }} / {{ g.total }}</span>
+                        <div class="env-project-meta">
+                          <span v-if="!g.projectSelected && g.envsSelected > 0" class="env-warn-tag">
+                            ⚠ 项目未勾 · 下方 {{ g.envsSelected }} 个环境不生效
+                          </span>
+                          <span class="env-project-count">
+                            生效 {{ g.effectiveCount }} / {{ g.envsTotal }}
+                          </span>
+                        </div>
                       </div>
-                      <div class="env-project-envs">
+                      <div :class="['env-project-envs', { 'envs-disabled-look': !g.projectSelected }]">
                         <label v-for="e in g.envs" :key="e.name"
-                          :class="['deploy-env-chip', e.env_type, { on: selectedDeployEnvs.has(e.name) }]">
+                          :class="['deploy-env-chip', e.env_type, {
+                            on: selectedDeployEnvs.has(e.name),
+                            'inactive': !g.projectSelected && selectedDeployEnvs.has(e.name)
+                          }]">
                           <input type="checkbox"
                             :checked="selectedDeployEnvs.has(e.name)"
                             @change="toggleDeployEnv(e.name, $event.target.checked)" />
@@ -1018,35 +1048,58 @@ td { font-size: 0.875rem; color: var(--text-primary); }
 }
 .roles-modal .btn-mini:hover { border-color: #3b82f6; color: #3b82f6; }
 
-/* 项目分组卡片 */
+/* 项目分组卡片：项目和环境独立勾选 */
 .roles-modal .env-project-list { display: flex; flex-direction: column; gap: 10px; }
 .roles-modal .env-project-card {
   background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;
   transition: border-color .12s, background .12s;
 }
-.roles-modal .env-project-card.all-on { border-color: #10b981; background: #f0fdf4; }
+.roles-modal .env-project-card.project-on { border-color: #3b82f6; background: #f0f9ff; }
+.roles-modal .env-project-card.project-off { background: #fafbfc; }
 .roles-modal .env-project-head {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 10px 14px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+  padding: 10px 14px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; gap: 10px;
 }
-.roles-modal .env-project-card.all-on .env-project-head { background: #ecfdf5; border-bottom-color: #bbf7d0; }
+.roles-modal .env-project-card.project-on .env-project-head { background: #eff6ff; border-bottom-color: #bfdbfe; }
 .roles-modal .env-project-name {
   display: flex; align-items: center; gap: 8px; cursor: pointer;
-  font-size: 13.5px; font-weight: 600; color: #1e293b;
+  font-size: 13.5px; font-weight: 600; color: #1e293b; flex: 1;
 }
 .roles-modal .env-project-name input {
-  width: 16px; height: 16px; cursor: pointer; accent-color: #10b981; margin: 0;
+  width: 16px; height: 16px; cursor: pointer; accent-color: #3b82f6; margin: 0;
 }
 .roles-modal .env-project-folder { font-size: 14px; }
 .roles-modal .env-project-text { font-family: 'Consolas', monospace; }
+.roles-modal .env-project-tag {
+  font: 600 10px 'Consolas', monospace; padding: 2px 6px; border-radius: 3px;
+  background: rgba(59,130,246,.12); color: #1d4ed8; letter-spacing: .4px;
+}
+.roles-modal .env-project-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.roles-modal .env-warn-tag {
+  font-size: 11px; color: #b45309; padding: 2px 8px;
+  background: #fef3c7; border-radius: 4px; font-weight: 500;
+}
 .roles-modal .env-project-count {
   font: 600 11px 'Consolas', monospace; color: #64748b;
   padding: 2px 8px; background: rgba(0,0,0,.04); border-radius: 10px;
 }
-.roles-modal .env-project-card.all-on .env-project-count { color: #059669; background: rgba(16,185,129,.12); }
+.roles-modal .env-project-card.project-on .env-project-count { color: #1d4ed8; background: rgba(59,130,246,.12); }
 .roles-modal .env-project-envs {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 6px; padding: 10px 14px;
+}
+/* 项目未勾时下方 env 视觉灰显（但仍可勾，状态保留） */
+.roles-modal .env-project-envs.envs-disabled-look { opacity: .55; background: #f8fafc; }
+.roles-modal .deploy-env-chip.inactive {
+  position: relative;
+  text-decoration: line-through;
+  text-decoration-color: rgba(180,83,9,.6);
+}
+.roles-modal .deploy-env-chip.inactive::after {
+  content: '不生效';
+  position: absolute; top: -7px; right: 4px;
+  font-size: 9px; padding: 1px 5px; background: #fef3c7; color: #92400e;
+  border-radius: 3px; font-weight: 600;
 }
 .roles-modal .deploy-env-chip {
   display: flex; align-items: center; gap: 8px;
