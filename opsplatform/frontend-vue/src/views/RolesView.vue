@@ -279,6 +279,43 @@ function toggleAllDeployEnvs(on) {
     : new Set()
 }
 
+// 把 env_name "g32-uat" 拆成项目名 "g32"（剥掉末尾的 -uat / -prod）
+function projectOfEnv(e) {
+  if (!e || !e.name) return ''
+  const suffix = '-' + (e.env_type || '')
+  return e.env_type && e.name.endsWith(suffix)
+    ? e.name.slice(0, -suffix.length)
+    : e.name
+}
+
+// 按项目分组：[{ project: 'g32', envs: [{...uat}, {...prod}], selectedCount }]
+const deployEnvGroups = computed(() => {
+  const map = new Map()
+  for (const e of deployEnvs.value) {
+    const p = projectOfEnv(e)
+    if (!map.has(p)) map.set(p, [])
+    map.get(p).push(e)
+  }
+  return Array.from(map.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([project, envs]) => ({
+      project,
+      envs: envs.slice().sort((a, b) => a.env_type.localeCompare(b.env_type)), // uat 在前
+      selectedCount: envs.filter(e => selectedDeployEnvs.value.has(e.name)).length,
+      total: envs.length,
+    }))
+})
+
+function isProjectAllSelected(envs) {
+  return envs.length > 0 && envs.every(e => selectedDeployEnvs.value.has(e.name))
+}
+
+function toggleProjectEnvs(envs, on) {
+  const s = new Set(selectedDeployEnvs.value)
+  envs.forEach(e => on ? s.add(e.name) : s.delete(e.name))
+  selectedDeployEnvs.value = s
+}
+
 async function saveRolePermissions() {
   const permIds = Object.keys(selectedRolePermissions.value).filter(k => selectedRolePermissions.value[k])
   try {
@@ -607,18 +644,34 @@ function formatDate(str) {
                 </div>
                 <template v-else>
                   <div class="env-toolbar">
-                    <button type="button" class="btn-mini" @click="toggleAllDeployEnvs(true)">全选</button>
-                    <button type="button" class="btn-mini" @click="toggleAllDeployEnvs(false)">清空</button>
+                    <button type="button" class="btn-mini" @click="toggleAllDeployEnvs(true)">全选所有</button>
+                    <button type="button" class="btn-mini" @click="toggleAllDeployEnvs(false)">清空所有</button>
+                    <span class="env-toolbar-hint">按项目分组 · 勾「项目」会一次勾该项目下所有环境</span>
                   </div>
-                  <div class="deploy-env-grid">
-                    <label v-for="e in deployEnvs" :key="e.name"
-                      :class="['deploy-env-chip', e.env_type, { on: selectedDeployEnvs.has(e.name) }]">
-                      <input type="checkbox"
-                        :checked="selectedDeployEnvs.has(e.name)"
-                        @change="toggleDeployEnv(e.name, $event.target.checked)" />
-                      <span class="deploy-env-name">{{ e.name }}</span>
-                      <span :class="'deploy-env-badge ' + e.env_type">{{ e.env_type.toUpperCase() }}</span>
-                    </label>
+                  <div class="env-project-list">
+                    <div v-for="g in deployEnvGroups" :key="g.project"
+                      :class="['env-project-card', { 'all-on': isProjectAllSelected(g.envs) }]">
+                      <div class="env-project-head">
+                        <label class="env-project-name">
+                          <input type="checkbox"
+                            :checked="isProjectAllSelected(g.envs)"
+                            @change="toggleProjectEnvs(g.envs, $event.target.checked)" />
+                          <span class="env-project-folder">📁</span>
+                          <span class="env-project-text">{{ g.project }}</span>
+                        </label>
+                        <span class="env-project-count">{{ g.selectedCount }} / {{ g.total }}</span>
+                      </div>
+                      <div class="env-project-envs">
+                        <label v-for="e in g.envs" :key="e.name"
+                          :class="['deploy-env-chip', e.env_type, { on: selectedDeployEnvs.has(e.name) }]">
+                          <input type="checkbox"
+                            :checked="selectedDeployEnvs.has(e.name)"
+                            @change="toggleDeployEnv(e.name, $event.target.checked)" />
+                          <span class="deploy-env-name">{{ e.name }}</span>
+                          <span :class="'deploy-env-badge ' + e.env_type">{{ e.env_type.toUpperCase() }}</span>
+                        </label>
+                      </div>
+                    </div>
                   </div>
                 </template>
               </div>
@@ -957,14 +1010,43 @@ td { font-size: 0.875rem; color: var(--text-primary); }
   padding: 16px; text-align: center; color: #94a3b8; font-size: 13px;
   background: #fff; border: 1px dashed #e2e8f0; border-radius: 6px;
 }
-.roles-modal .env-toolbar { display: flex; gap: 6px; margin-bottom: 10px; }
+.roles-modal .env-toolbar { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; }
+.roles-modal .env-toolbar-hint { font-size: 11.5px; color: #94a3b8; margin-left: 4px; }
 .roles-modal .btn-mini {
   padding: 4px 10px; font-size: 12px; border: 1px solid #e2e8f0;
   background: #fff; border-radius: 4px; cursor: pointer; color: #475569;
 }
 .roles-modal .btn-mini:hover { border-color: #3b82f6; color: #3b82f6; }
-.roles-modal .deploy-env-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px;
+
+/* 项目分组卡片 */
+.roles-modal .env-project-list { display: flex; flex-direction: column; gap: 10px; }
+.roles-modal .env-project-card {
+  background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;
+  transition: border-color .12s, background .12s;
+}
+.roles-modal .env-project-card.all-on { border-color: #10b981; background: #f0fdf4; }
+.roles-modal .env-project-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+}
+.roles-modal .env-project-card.all-on .env-project-head { background: #ecfdf5; border-bottom-color: #bbf7d0; }
+.roles-modal .env-project-name {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  font-size: 13.5px; font-weight: 600; color: #1e293b;
+}
+.roles-modal .env-project-name input {
+  width: 16px; height: 16px; cursor: pointer; accent-color: #10b981; margin: 0;
+}
+.roles-modal .env-project-folder { font-size: 14px; }
+.roles-modal .env-project-text { font-family: 'Consolas', monospace; }
+.roles-modal .env-project-count {
+  font: 600 11px 'Consolas', monospace; color: #64748b;
+  padding: 2px 8px; background: rgba(0,0,0,.04); border-radius: 10px;
+}
+.roles-modal .env-project-card.all-on .env-project-count { color: #059669; background: rgba(16,185,129,.12); }
+.roles-modal .env-project-envs {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px; padding: 10px 14px;
 }
 .roles-modal .deploy-env-chip {
   display: flex; align-items: center; gap: 8px;

@@ -60,45 +60,67 @@ func HandleDashboardStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 构造可复用的 IN 子句和参数；不过滤时为空串
-	envIDClause := ""    // " AND project_env_id IN (1,2,3)" 等
-	peIDClause := ""     // 用 pe.id 时的版本
+	// 注意：project_env 表自身的主键是 id（不是 project_env_id），所以分两种 clause：
+	//   - peSelfClause: 用于 project_env 本表（id IN (...)）
+	//   - fkClause:     用于子表 module/deployment（project_env_id IN (...)）
+	//   - peAliasClause: 用于带 pe. 别名的查询（pe.id IN (...)）
+	peSelfClause := ""
+	fkClause := ""
+	peAliasClause := ""
 	envIDArgs := []interface{}{}
 	if enforce {
 		ph := strings.Repeat("?,", len(allowedIDs))
 		ph = ph[:len(ph)-1]
-		envIDClause = " AND project_env_id IN (" + ph + ")"
-		peIDClause = " AND pe.id IN (" + ph + ")"
+		peSelfClause = " AND id IN (" + ph + ")"
+		fkClause = " AND project_env_id IN (" + ph + ")"
+		peAliasClause = " AND pe.id IN (" + ph + ")"
 		for _, id := range allowedIDs {
 			envIDArgs = append(envIDArgs, id)
 		}
 	}
 
 	var k kpi
-	// projects: 只统计「至少有一个允许 env」的 project
+	// projects: project_env.name 形如 "{project}-{env_type}"，去掉 "-uat/-prod" 后缀即项目名
 	if enforce {
+		// 拿 allowed envs 的 name+env_type，在 Go 层算 distinct 项目名
 		args := append([]interface{}{}, envIDArgs...)
-		_ = database.DB.QueryRow(
-			`SELECT COUNT(DISTINCT project_id) FROM project_env WHERE 1=1`+envIDClause, args...,
-		).Scan(&k.Projects)
+		rows, err := database.DB.Query(
+			`SELECT name, env_type FROM project_env WHERE 1=1`+peSelfClause, args...)
+		if err == nil {
+			defer rows.Close()
+			seen := map[string]struct{}{}
+			for rows.Next() {
+				var n, t string
+				_ = rows.Scan(&n, &t)
+				p := strings.TrimSuffix(n, "-"+t)
+				seen[p] = struct{}{}
+			}
+			k.Projects = len(seen)
+		}
 	} else {
-		_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project`).Scan(&k.Projects)
+		// admin / 不过滤：直接用 project 表 + project_env 派生（与 HandleListProjects 同源）
+		_ = database.DB.QueryRow(`SELECT COUNT(DISTINCT name) FROM (
+			SELECT name FROM project
+			UNION
+			SELECT TRIM(TRAILING CONCAT('-', env_type) FROM name) AS name FROM project_env
+		) t`).Scan(&k.Projects)
 	}
 
-	// envs total / uat / prod
-	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE 1=1`+envIDClause, envIDArgs...).Scan(&k.EnvsTotal)
-	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE env_type='uat'`+envIDClause, envIDArgs...).Scan(&k.EnvsUAT)
-	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE env_type='prod'`+envIDClause, envIDArgs...).Scan(&k.EnvsPROD)
+	// envs total / uat / prod（用 project_env 自身的 id）
+	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE 1=1`+peSelfClause, envIDArgs...).Scan(&k.EnvsTotal)
+	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE env_type='uat'`+peSelfClause, envIDArgs...).Scan(&k.EnvsUAT)
+	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE env_type='prod'`+peSelfClause, envIDArgs...).Scan(&k.EnvsPROD)
 
-	// modules
-	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM module WHERE 1=1`+envIDClause, envIDArgs...).Scan(&k.ModulesTotal)
+	// modules（module 表的 FK 是 project_env_id）
+	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM module WHERE 1=1`+fkClause, envIDArgs...).Scan(&k.ModulesTotal)
 
-	// deployments 24h（注意：deployment 表也有 project_env_id 字段，envIDClause 直接拼即可）
+	// deployments 24h（deployment 表 FK 是 project_env_id）
 	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM deployment
-		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`+envIDClause, envIDArgs...).Scan(&k.Deployments24h)
+		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`+fkClause, envIDArgs...).Scan(&k.Deployments24h)
 	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM deployment
-		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND status='success'`+envIDClause, envIDArgs...).Scan(&k.Deployments24hSuccess)
+		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND status='success'`+fkClause, envIDArgs...).Scan(&k.Deployments24hSuccess)
 	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM deployment
-		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND status='failed'`+envIDClause, envIDArgs...).Scan(&k.Deployments24hFailed)
+		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND status='failed'`+fkClause, envIDArgs...).Scan(&k.Deployments24hFailed)
 
 	// 最近 10 条发布（loadDeploymentBriefs 内部用 d.project_env_id，所以传 envIDClause 一样生效，
 	// 但 d. 别名前缀更清楚——下面给 helper 同时传 clause 和 args）
@@ -123,7 +145,7 @@ func HandleDashboardStats(w http.ResponseWriter, r *http.Request) {
 		(SELECT MAX(last_scanned_at) FROM module WHERE project_env_id=pe.id) AS last_scanned_at,
 		(SELECT MAX(created_at) FROM deployment WHERE project_env_id=pe.id) AS last_deploy_at,
 		(SELECT status FROM deployment WHERE project_env_id=pe.id ORDER BY created_at DESC LIMIT 1) AS last_deploy_status
-		FROM project_env pe WHERE 1=1`+peIDClause+` ORDER BY last_deploy_at DESC, pe.name`, envIDArgs...)
+		FROM project_env pe WHERE 1=1`+peAliasClause+` ORDER BY last_deploy_at DESC, pe.name`, envIDArgs...)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {

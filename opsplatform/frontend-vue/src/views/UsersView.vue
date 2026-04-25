@@ -119,7 +119,8 @@ async function openUserModal(mode, user = null) {
       username: user.username,
       password: '',
       display_name: user.display_name || '',
-      role: user.role || 'user',
+      role: user.role || 'user', // 兼容 legacy 单字段（保存时同步成 role_codes 的第一个）
+      role_codes: [],
       status: user.status || 'active',
       permissions: perms,
       mfa_enabled: user.mfa_enabled || false,
@@ -130,15 +131,48 @@ async function openUserModal(mode, user = null) {
       session_timeout: user.session_timeout || 60,
       language: user.language || 'zh-CN'
     }
+    // 加载该用户的所有角色（user_roles 表，N:N）
+    try {
+      const res = await api.get('/api/users/' + user.id + '/roles')
+      const list = res.data || []
+      // 后端返回 [{ID, UserID, RoleID, RoleName, CreatedAt}]，把 RoleID 反查 code
+      const idToCode = {}
+      roles.value.forEach(r => { idToCode[r.id] = r.code })
+      userForm.value.role_codes = list.map(ur => idToCode[ur.role_id]).filter(Boolean)
+      // 兜底：如果一个角色都没（老数据），用 legacy role 单字段补上
+      if (userForm.value.role_codes.length === 0 && user.role) {
+        userForm.value.role_codes = [user.role]
+      }
+    } catch (e) {
+      console.error('加载用户角色失败:', e)
+      userForm.value.role_codes = user.role ? [user.role] : []
+    }
   } else {
-    userForm.value = { id: '', username: '', password: '', display_name: '', role: 'user', status: 'active', permissions: [], mfa_enabled: false, mfa_bound: false, phone: '', email: '', description: '', session_timeout: 60, language: 'zh-CN' }
+    userForm.value = { id: '', username: '', password: '', display_name: '', role: 'user', role_codes: ['user'], status: 'active', permissions: [], mfa_enabled: false, mfa_bound: false, phone: '', email: '', description: '', session_timeout: 60, language: 'zh-CN' }
   }
   showUserModal.value = true
+}
+
+function toggleUserRole(code, on) {
+  const arr = userForm.value.role_codes || []
+  if (on && !arr.includes(code)) arr.push(code)
+  else if (!on) {
+    const i = arr.indexOf(code)
+    if (i >= 0) arr.splice(i, 1)
+  }
+  // legacy role 字段同步成第一个，super_admin/admin 优先（避免用户表 role 字段降级丢权限判定）
+  const priority = ['super_admin', 'admin']
+  const primary = arr.find(c => priority.includes(c)) || arr[0] || 'user'
+  userForm.value.role = primary
+  userForm.value.role_codes = arr
 }
 
 async function saveUser() {
   if (!userForm.value.username) { appStore.showToast('请输入用户名', 'error'); return }
   if (userModalMode.value === 'add' && !userForm.value.password) { appStore.showToast('请输入密码', 'error'); return }
+  if (!userForm.value.role_codes || userForm.value.role_codes.length === 0) {
+    appStore.showToast('请至少选择一个角色', 'error'); return
+  }
   try {
     const userData = {
       ...userForm.value,
@@ -146,14 +180,27 @@ async function saveUser() {
       mfa_enabled: userForm.value.mfa_enabled || false,
       status: userForm.value.status || 'active'
     }
+    delete userData.role_codes // 仅前端用，后端 /api/users 不识别
     if (!userData.password) delete userData.password
+    let savedUserID = userForm.value.id
     if (userModalMode.value === 'edit') {
       await api.put('/api/users/' + userForm.value.id, userData)
-      appStore.showToast('更新成功', 'success')
     } else {
-      await api.post('/api/users', userData)
-      appStore.showToast('创建成功', 'success')
+      const res = await api.post('/api/users', userData)
+      // 创建接口返回 { id: '...' } 或类似，兼容多种响应
+      savedUserID = res?.data?.id || res?.id || res?.data?.data?.id || ''
     }
+    // 同步多角色到 user_roles 表（N:N）。需要 role_id 数组，从 code 反查。
+    if (savedUserID) {
+      const codeToID = {}
+      roles.value.forEach(r => { codeToID[r.code] = r.id })
+      const roleIDs = userForm.value.role_codes.map(c => codeToID[c]).filter(Boolean)
+      if (roleIDs.length > 0) {
+        try { await api.put('/api/users/' + savedUserID + '/roles', roleIDs) }
+        catch (e) { console.warn('多角色同步失败（用户主信息已保存）:', e) }
+      }
+    }
+    appStore.showToast(userModalMode.value === 'edit' ? '更新成功' : '创建成功', 'success')
     showUserModal.value = false
     loadUsers()
   } catch (e) { appStore.showToast('保存失败: ' + (e.response?.data || e.message), 'error') }
@@ -365,7 +412,15 @@ function formatDate(str) {
                 <div class="sidebar-title">{{ userModalMode === 'add' ? '添加用户' : '编辑用户' }}</div>
                 <div class="user-card">
                   <div class="user-avatar" :style="{ background: getAvatarColor(userForm.username || 'U') }">{{ (userForm.display_name || userForm.username || 'U').charAt(0).toUpperCase() }}</div>
-                  <div class="user-card-info"><div class="user-card-name">{{ userForm.display_name || userForm.username || '新用户' }}</div><div class="user-card-role">{{ getRoleName(userForm.role) }}</div></div>
+                  <div class="user-card-info">
+                    <div class="user-card-name">{{ userForm.display_name || userForm.username || '新用户' }}</div>
+                    <div class="user-card-role">
+                      <template v-if="userForm.role_codes?.length">
+                        {{ userForm.role_codes.map(getRoleName).join(' · ') }}
+                      </template>
+                      <template v-else>未分配角色</template>
+                    </div>
+                  </div>
                 </div>
               </div>
               <ul class="nav-list">
@@ -402,9 +457,24 @@ function formatDate(str) {
                       <div class="status-card-desc">账号暂停使用，无法登录</div>
                     </div>
                   </div>
-                  <div class="section-divider">角色分配</div>
+                  <div class="section-divider">角色分配 <span class="hint">（可多选，权限自动取并集）</span></div>
                   <div class="form-row">
-                    <div class="form-group"><label>用户角色</label><select v-model="userForm.role"><option v-for="role in roles" :key="role.id" :value="role.code">{{ role.name }}</option><option v-if="roles.length === 0" value="user">普通用户</option></select></div>
+                    <div class="form-group full-width">
+                      <label>用户角色 <span class="role-counter">已选 {{ userForm.role_codes?.length || 0 }} / {{ roles.length }}</span></label>
+                      <div v-if="roles.length === 0" class="role-empty">还没有可用角色，请先去「角色管理」创建</div>
+                      <div v-else class="role-grid">
+                        <label v-for="r in roles" :key="r.id"
+                          :class="['role-chip', { on: userForm.role_codes?.includes(r.code), admin: r.code === 'super_admin' || r.code === 'admin' }]">
+                          <input type="checkbox"
+                            :checked="userForm.role_codes?.includes(r.code)"
+                            @change="toggleUserRole(r.code, $event.target.checked)" />
+                          <span class="role-chip-name">{{ r.name }}</span>
+                          <span class="role-chip-code">{{ r.code }}</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="form-row">
                     <div class="form-group"><label>界面语言</label><select v-model="userForm.language"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></div>
                   </div>
                 </div>
@@ -688,4 +758,39 @@ function formatDate(str) {
 .user-password-modal .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 20px; border-top: 1px solid #e2e8f0; }
 .user-password-modal .btn-cancel { padding: 10px 20px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; cursor: pointer; font-size: 0.875rem; color: #1e293b; }
 .user-password-modal .btn-submit { padding: 10px 20px; border: none; border-radius: 8px; background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; cursor: pointer; font-size: 0.875rem; }
+
+/* 多角色选择器 (Teleport 弹窗用) */
+.user-edit-modal .role-counter {
+  font-weight: 500; font-size: 12px; color: #3b82f6;
+  margin-left: 8px; font-family: 'Consolas', monospace;
+}
+.user-edit-modal .role-empty {
+  padding: 16px; text-align: center; color: #94a3b8; font-size: 13px;
+  background: #f8fafc; border: 1px dashed #e2e8f0; border-radius: 6px;
+}
+.user-edit-modal .role-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px;
+}
+.user-edit-modal .role-chip {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px;
+  background: #fff; cursor: pointer; transition: all .12s;
+}
+.user-edit-modal .role-chip:hover { border-color: #3b82f6; background: #fbfdff; }
+.user-edit-modal .role-chip.on { border-color: #3b82f6; background: #eff6ff; }
+.user-edit-modal .role-chip.on.admin { border-color: #8b5cf6; background: #f5f3ff; }
+.user-edit-modal .role-chip input { margin: 0; width: 16px; height: 16px; cursor: pointer; accent-color: #3b82f6; }
+.user-edit-modal .role-chip.admin input { accent-color: #8b5cf6; }
+.user-edit-modal .role-chip-name { flex: 1; font-size: 13px; color: #1e293b; font-weight: 500; }
+.user-edit-modal .role-chip-code {
+  font: 600 10px 'Consolas', monospace;
+  padding: 2px 6px; border-radius: 3px;
+  background: #f1f5f9; color: #64748b;
+}
+.user-edit-modal .role-chip.on .role-chip-code { background: rgba(59,130,246,.15); color: #1d4ed8; }
+.user-edit-modal .role-chip.on.admin .role-chip-code { background: rgba(139,92,246,.15); color: #6d28d9; }
+.user-edit-modal .form-group.full-width { width: 100%; }
+.user-edit-modal .section-divider .hint {
+  font-weight: 400; font-size: 12px; color: #94a3b8;
+}
 </style>
