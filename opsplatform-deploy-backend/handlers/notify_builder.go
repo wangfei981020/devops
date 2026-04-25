@@ -29,77 +29,71 @@ type deployNotifyItem struct {
 	FailMsg   string // 失败原因，只对 failed 组有意义
 }
 
-// buildDeployNotifyBody 构造 Lark 卡片正文
+// buildDeployNotifyBody 构造**单一类型** Lark 卡片正文（要么纯成功 / 跳过 / 失败之一）。
 //
 //	opLabel: "发布" / "重启" / "回滚"
-//	atLarkID: 空串 = 不艾特；否则在 body 末尾插入 <at id="...">
+//	kind: "success" / "skip" / "fail"，决定标题、颜色、emoji
+//	atLarkID: 空串 = 不艾特；否则 body 末尾追加 <at id="...">（成功 / 失败都艾特）
 //
-// 返回 title / color / body，供 services.SendLarkCard 使用。
+// **partial 场景由调用方拆成两次调用**（一次 success，一次 fail），每次卡片只关心一类。
+//
+// 失败原因（FailMsg）已从卡片移除，运维同学要看详情按"查看发布详情"按钮跳前端。
 func buildDeployNotifyBody(
-	opLabel, operator, atLarkID string,
-	successes, skippeds, faileds []deployNotifyItem,
+	opLabel, operator, atLarkID, kind string,
+	items []deployNotifyItem,
 ) (title, color, body string) {
-	n := len(successes) + len(skippeds) + len(faileds)
-	nS, nK, nF := len(successes), len(skippeds), len(faileds)
-
-	switch {
-	case n == 0:
+	n := len(items)
+	if n == 0 {
+		// 调用方应保证 items 非空才进来，这里只是兜底
 		title = fmt.Sprintf("%s · 0 个模块", opLabel)
 		color = "blue"
-	case nF == 0 && nS == 0 && nK > 0:
-		title = fmt.Sprintf("ℹ️ 无变更 · %d 个模块都已是目标版本", n)
-		color = "blue"
-	case nF > 0 && nS == 0:
+		return
+	}
+
+	var emoji, sectionLabel string
+	switch kind {
+	case "fail":
 		title = fmt.Sprintf("❌ %s失败 · %d 个模块", opLabel, n)
 		color = "red"
-	case nF == 0:
+		emoji = "❌"
+		sectionLabel = "失败"
+	case "skip":
+		title = fmt.Sprintf("ℹ️ 无变更 · %d 个模块都已是目标版本", n)
+		color = "blue"
+		emoji = "⏭️"
+		sectionLabel = "跳过"
+	default: // "success"
 		title = fmt.Sprintf("✅ %s成功 · %d 个模块", opLabel, n)
 		color = "green"
-	default:
-		title = fmt.Sprintf("⚠️ %s部分成功 · %d 个模块（%d 失败 / %d 跳过 / %d 成功）",
-			opLabel, n, nF, nK, nS)
-		color = "orange"
+		emoji = "✓"
+		sectionLabel = "成功"
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "**名称**: %s\n", safeStr(operator))
 	fmt.Fprintf(&sb, "**更新时间**: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
-
-	writeSection := func(emoji, label string, items []deployNotifyItem, showReason bool) {
-		if len(items) == 0 {
-			return
-		}
-		fmt.Fprintf(&sb, "━━━━━━ %s (%d) ━━━━━━\n", label, len(items))
-		for _, it := range items {
-			fmt.Fprintf(&sb, "%s **容器名**: %s\n", emoji, it.Module)
-			fmt.Fprintf(&sb, "   **命名空间**: %s\n", safeStr(it.Namespace))
-			// 只显示"新版本号"（即 ToTag）；旧版本号不再展示
-			//   - 发布：ToTag = 新部署的 tag
-			//   - 重启：ToTag = 当前 tag（不变）
-			//   - 跳过：FromTag == ToTag，额外标 "当前版本相同，跳过"
-			if it.ToTag != "" {
-				if it.FromTag == it.ToTag && it.FromTag != "" {
-					fmt.Fprintf(&sb, "   **版本号**: %s（当前版本相同，跳过）\n", it.ToTag)
-				} else {
-					fmt.Fprintf(&sb, "   **版本号**: %s\n", it.ToTag)
-				}
+	fmt.Fprintf(&sb, "━━━━━━ %s (%d) ━━━━━━\n", sectionLabel, n)
+	for _, it := range items {
+		fmt.Fprintf(&sb, "%s **容器名**: %s\n", emoji, it.Module)
+		fmt.Fprintf(&sb, "   **命名空间**: %s\n", safeStr(it.Namespace))
+		if it.ToTag != "" {
+			if it.FromTag == it.ToTag && it.FromTag != "" {
+				fmt.Fprintf(&sb, "   **版本号**: %s（当前版本相同，跳过）\n", it.ToTag)
+			} else {
+				fmt.Fprintf(&sb, "   **版本号**: %s\n", it.ToTag)
 			}
-			if showReason && it.FailMsg != "" {
-				fmt.Fprintf(&sb, "   **失败原因**: %s\n", it.FailMsg)
-			}
-			sb.WriteString("\n")
 		}
+		sb.WriteString("\n")
 	}
 
-	// 固定顺序：成功 → 跳过 → 失败 → @艾特（最紧急贴着 @ 一起，@ 驱动阅读时第一眼看到失败）
-	writeSection("✓", "成功", successes, false)
-	writeSection("⏭️", "跳过", skippeds, false)
-	writeSection("❌", "失败", faileds, true)
-
+	// 一律 @ 操作人（不论成功失败，都让责任人知道）
 	if atLarkID != "" {
-		if nF > 0 {
+		switch kind {
+		case "fail":
 			fmt.Fprintf(&sb, `<at id="%s"></at> 请检查失败模块`, atLarkID)
-		} else {
+		case "skip":
+			fmt.Fprintf(&sb, `<at id="%s"></at>`, atLarkID)
+		default:
 			fmt.Fprintf(&sb, `<at id="%s"></at>`, atLarkID)
 		}
 	}

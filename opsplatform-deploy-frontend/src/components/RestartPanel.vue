@@ -153,15 +153,27 @@ async function onRestart() {
   if (!names.length) return
   const env = props.projectEnv.name
   const isProdEnv = isProd.value
+  // 头部说明 + 滚动列表，每模块一行
+  const headerText = isProdEnv
+    ? `你正在向 <b>${env}</b>（生产）重启 <b>${names.length}</b> 个模块：`
+    : `将在 <b>${env}</b> 重启 <b>${names.length}</b> 个模块：`
+  const itemsHtml = names.map(n => `
+    <li style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-weight:500;color:#1f2937;">${n}</li>`).join('')
+  const html = `
+    <div style="font-size:13px;color:#374151;">${headerText}</div>
+    <ul style="list-style:none;padding:0;margin:10px 0 0;max-height:240px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:6px;background:#fafbfc;padding:0 12px;">${itemsHtml}</ul>`
   try {
     await ElMessageBox.confirm(
-      isProdEnv
-        ? `你正在向 【${env}】 重启 ${names.length} 个模块（生产环境），确认？`
-        : `确认在 【${env}】 重启 ${names.length} 个模块？`,
+      html,
       isProdEnv ? '⚠ 生产环境二次确认' : '重启确认',
-      isProdEnv
-        ? { type: 'warning', confirmButtonText: `确认重启 ${env}`, cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' }
-        : { confirmButtonText: '确认重启', cancelButtonText: '取消' }
+      {
+        type: isProdEnv ? 'warning' : 'info',
+        dangerouslyUseHTMLString: true,
+        customClass: 'deploy-confirm-modal',
+        confirmButtonText: isProdEnv ? `确认重启 ${env}` : '确认重启',
+        cancelButtonText: '取消',
+        ...(isProdEnv ? { confirmButtonClass: 'el-button--danger' } : {}),
+      }
     )
   } catch (_) { return }
   submitting.value = true

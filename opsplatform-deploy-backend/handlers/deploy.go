@@ -517,10 +517,10 @@ func larkColorForStatus(status string) (color, title string) {
 	}
 }
 
-// sendUpdateImageNotify 发布/回滚的 Lark 通知
+// sendUpdateImageNotify 发布/回滚的 Lark 通知。
 //
-//	opLabel: "发布" 或 "回滚"（两个操作共享通知函数，标题不同）
-//	modules: 当前环境的 module map（用来拿 namespace / current_tag）
+//	**partial 场景拆成两张卡发送**（一张绿成功 + 一张红失败），其它纯成功/纯失败/无变更
+//	照常一张。所有卡都 @ 操作人，方便 cesar 这种业务负责人在 lark 群里被定位。
 func sendUpdateImageNotify(p *models.ProjectEnv, depID int64, operator, opLabel string,
 	modules map[string]services.Module, res *services.UpdateImageResult) {
 	webhook, secret := resolveLarkTarget(p)
@@ -531,24 +531,8 @@ func sendUpdateImageNotify(p *models.ProjectEnv, depID int64, operator, opLabel 
 	}
 	atID := LookupContactLarkID(operator)
 	successes, skippeds, faileds := buildUpdateNotifyItems(modules, res)
-	title, color, body := buildDeployNotifyBody(opLabel, operator, atID, successes, skippeds, faileds)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	// atLarkIDs 传空，@ 已经写进 body 末尾（靠近失败分组，符合 @ 驱动阅读）
-	// 按钮优先跳"查看发布详情"（deploy_center_base_url+/history）；未配时回落到 git commit
-	linkLabel, linkURL := "", ""
-	if u := deployDetailURL(depID); u != "" {
-		linkLabel, linkURL = "查看发布详情", u
-	} else if res.GitCommitURL != "" {
-		linkLabel, linkURL = "查看 commit", res.GitCommitURL
-	}
-	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, linkLabel, linkURL)
-	status := "success"
-	if err != nil {
-		status = "failed"
-	}
-	_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, status, depID)
+	sendCardSets(p, depID, operator, opLabel, atID, webhook, secret, res.GitCommitURL,
+		successes, skippeds, faileds)
 }
 
 func sendRestartNotify(p *models.ProjectEnv, depID int64, operator string,
@@ -561,18 +545,57 @@ func sendRestartNotify(p *models.ProjectEnv, depID int64, operator string,
 	}
 	atID := LookupContactLarkID(operator)
 	successes, faileds := buildRestartNotifyItems(modules, res)
-	title, color, body := buildDeployNotifyBody("重启", operator, atID, successes, nil, faileds)
+	sendCardSets(p, depID, operator, "重启", atID, webhook, secret, "",
+		successes, nil, faileds)
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	// atLarkIDs 传空，@ 已经写在 body 末尾（靠近失败分组）
+// sendCardSets 根据成功/跳过/失败三个分组决定发几张卡：
+//   - 全部三组都为空 → 不发
+//   - 只有一组非空 → 发 1 张该类型卡
+//   - 多组非空 → 拆开发多张（先成功，后跳过，最后失败）
+func sendCardSets(p *models.ProjectEnv, depID int64, operator, opLabel, atID,
+	webhook, secret, gitCommitURL string,
+	successes, skippeds, faileds []deployNotifyItem) {
+	type setEntry struct {
+		kind  string
+		items []deployNotifyItem
+	}
+	sets := []setEntry{}
+	if len(successes) > 0 {
+		sets = append(sets, setEntry{"success", successes})
+	}
+	if len(skippeds) > 0 {
+		sets = append(sets, setEntry{"skip", skippeds})
+	}
+	if len(faileds) > 0 {
+		sets = append(sets, setEntry{"fail", faileds})
+	}
+	if len(sets) == 0 {
+		_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, "skipped", depID)
+		return
+	}
+
+	// 链接按钮：优先发布详情，回落 git commit
 	linkLabel, linkURL := "", ""
 	if u := deployDetailURL(depID); u != "" {
 		linkLabel, linkURL = "查看发布详情", u
+	} else if gitCommitURL != "" {
+		linkLabel, linkURL = "查看 commit", gitCommitURL
 	}
-	err := services.SendLarkCard(ctx, webhook, secret, title, body, color, linkLabel, linkURL)
+
+	anyFail := false
+	for _, s := range sets {
+		title, color, body := buildDeployNotifyBody(opLabel, operator, atID, s.kind, s.items)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := services.SendLarkCard(ctx, webhook, secret, title, body, color, linkLabel, linkURL)
+		cancel()
+		if err != nil {
+			log.Printf("lark send failed: dep=%d kind=%s err=%v", depID, s.kind, err)
+			anyFail = true
+		}
+	}
 	status := "success"
-	if err != nil {
+	if anyFail {
 		status = "failed"
 	}
 	_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, status, depID)

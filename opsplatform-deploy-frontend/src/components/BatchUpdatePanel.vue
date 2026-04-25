@@ -171,13 +171,22 @@ async function onSubmit() {
   // 二次确认：PROD 任何操作 必确认；回滚操作（UAT/PROD）也必确认
   if (isProd.value || rbMode) {
     const title = rbMode ? '⚠ 回滚二次确认' : '⚠ 生产环境二次确认'
-    const list = changes.map(c => `  • ${c.module} → ${c.tag}`).join('\n')
-    const prefix = rbMode
-      ? `即将回滚 ${changes.length} 个模块到 #${props.rollbackMode.refDeploymentID} 版本：\n${list}`
-      : `你正在向 【${env}】 提交 ${changes.length} 个模块到 GitLab，操作不可撤销。`
+    const headerText = rbMode
+      ? `即将回滚 <b>${changes.length}</b> 个模块到 <code style="background:#f3f4f6;padding:1px 6px;border-radius:3px;">#${props.rollbackMode.refDeploymentID}</code> 版本：`
+      : `你正在向 <b>${env}</b> 提交 <b>${changes.length}</b> 个模块到 GitLab，操作不可撤销：`
+    const items = changes.map(c => `
+      <li style="padding:6px 0;border-bottom:1px solid #f1f5f9;">
+        <div style="font-weight:600;color:#1f2937;">${c.module}</div>
+        <div style="margin-top:2px;font-family:'Fira Code',monospace;font-size:12px;color:#10b981;">→ ${c.tag}</div>
+      </li>`).join('')
+    const html = `
+      <div style="font-size:13px;color:#374151;">${headerText}</div>
+      <ul style="list-style:none;padding:0;margin:10px 0 0;max-height:240px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:6px;background:#fafbfc;padding:0 12px;">${items}</ul>`
     try {
-      await ElMessageBox.confirm(prefix, title, {
+      await ElMessageBox.confirm(html, title, {
         type: 'warning',
+        dangerouslyUseHTMLString: true,
+        customClass: 'deploy-confirm-modal',
         confirmButtonText: rbMode ? `确认回滚到 ${env}` : `确认提交到 ${env}`,
         cancelButtonText: '取消',
         confirmButtonClass: 'el-button--danger',

@@ -105,8 +105,7 @@ function elapsed(start) {
 
 <style scoped>
 .dock {
-  position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
-  z-index: 1500;
+  position: fixed; top: 60px; right: 24px; z-index: 1500;
   font-family: var(--body, 'Inter', sans-serif);
   /* 不让面板挤压内容；展开后下方阴影交代层次 */
   pointer-events: none;
@@ -209,10 +208,10 @@ function elapsed(start) {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* 入场/出场：从顶部滑入（与底部浮动版方向相反） */
+/* 入场/出场：从右侧滑入 */
 .dock-fade-enter-active, .dock-fade-leave-active { transition: all .25s ease; }
 .dock-fade-enter-from, .dock-fade-leave-to {
   opacity: 0;
-  transform: translateX(-50%) translateY(-20px);
+  transform: translateX(20px);
 }
 </style>

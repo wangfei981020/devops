@@ -96,22 +96,26 @@ func PollUntilStable(
 			if err == nil && st != nil {
 				tick.SyncStatus = st.SyncStatus
 				tick.Health = st.Health
-				if st.Message != "" {
-					tick.Msg = st.Message
-				}
-				// 如果"我们这次"的操作还没启动，即使 Health 是 Healthy 也算 Progressing
-				// 给前端展示，避免误导
-				if !syncStartedAt.IsZero() && !ourOpStarted {
+				// Phase 状态文案——按用户能看懂的人话表达：
+				//   Phase 1: 我们触发的 sync 操作还没启动 → 「初始化中」
+				//   Phase 2: argocd 操作 Running，正在应用 manifests → 「正在同步配置」
+				//   Phase 3: 操作完成但 health 还 Progressing → 「等待 Pod 就绪」
+				//   Phase 4: 已 Healthy 但还没满稳定窗口 → 「已 Healthy，稳定观察中 X/N」
+				switch {
+				case !syncStartedAt.IsZero() && !ourOpStarted:
 					tick.Health = "Progressing"
-					if tick.Msg == "" {
-						tick.Msg = "等待 ArgoCD 处理新 revision"
-					}
-				}
-				// 在稳定窗口内（已 Healthy 但还没满 N 次）显式告知前端「稳定中 X/N」
-				if isStableTick && stabilityTicks > 1 && consecutiveOK+1 < stabilityTicks {
+					tick.Msg = "初始化中"
+				case isStableTick && stabilityTicks > 1 && consecutiveOK+1 < stabilityTicks:
 					tick.Health = "Progressing"
 					tick.Msg = "已 Healthy，稳定观察中 " +
 						strconv.Itoa(consecutiveOK+1) + "/" + strconv.Itoa(stabilityTicks)
+				case st.OperationPhase == "Running":
+					tick.Msg = "正在同步配置"
+				case st.Health == "Progressing" &&
+					(st.OperationPhase == "Succeeded" || st.OperationPhase == ""):
+					tick.Msg = "等待 Pod 就绪"
+				case st.Message != "":
+					tick.Msg = st.Message
 				}
 			} else if err != nil {
 				tick.SyncStatus = "—"
