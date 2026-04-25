@@ -1,5 +1,5 @@
 # 构建阶段
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
@@ -11,16 +11,16 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o opsplatform .
 
-# 运行阶段
-FROM alpine:latest
+# 运行阶段（钉小版本 + apk upgrade 兜底所有后发 CVE）
+FROM alpine:3.21
 
 WORKDIR /app
 
-# 设置时区为北京时间
-RUN apk add --no-cache tzdata && \
+# 升级 OS 层 + 装 ca-certificates / tzdata 并保留时区
+RUN apk upgrade --no-cache && \
+    apk add --no-cache ca-certificates tzdata && \
     cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
-    echo "Asia/Shanghai" > /etc/timezone && \
-    apk del tzdata
+    echo "Asia/Shanghai" > /etc/timezone
 
 # 复制二进制文件
 COPY --from=builder /app/opsplatform .

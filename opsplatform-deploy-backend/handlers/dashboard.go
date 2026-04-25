@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"opsplatform-deploy-backend/database"
@@ -46,25 +47,73 @@ type envHealth struct {
 func HandleDashboardStats(w http.ResponseWriter, r *http.Request) {
 	operator := UsernameFromCtx(r)
 
-	var k kpi
-	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project`).Scan(&k.Projects)
-	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env`).Scan(&k.EnvsTotal)
-	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE env_type='uat'`).Scan(&k.EnvsUAT)
-	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE env_type='prod'`).Scan(&k.EnvsPROD)
-	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM module`).Scan(&k.ModulesTotal)
-	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM deployment WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`).Scan(&k.Deployments24h)
-	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM deployment
-		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND status='success'`).Scan(&k.Deployments24hSuccess)
-	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM deployment
-		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND status='failed'`).Scan(&k.Deployments24hFailed)
+	allowedIDs, enforce := AllowedEnvIDs(r)
+	// 用户启用过滤但没配任何 env → 一切归零
+	if enforce && len(allowedIDs) == 0 {
+		JSONSuccess(w, map[string]interface{}{
+			"kpi":                   kpi{},
+			"recent_deployments":    []deploymentBrief{},
+			"my_recent_deployments": []deploymentBrief{},
+			"envs":                  []envHealth{},
+		})
+		return
+	}
 
-	// 最近 10 条发布
-	recent := loadDeploymentBriefs(`ORDER BY d.created_at DESC LIMIT 10`, nil)
+	// 构造可复用的 IN 子句和参数；不过滤时为空串
+	envIDClause := ""    // " AND project_env_id IN (1,2,3)" 等
+	peIDClause := ""     // 用 pe.id 时的版本
+	envIDArgs := []interface{}{}
+	if enforce {
+		ph := strings.Repeat("?,", len(allowedIDs))
+		ph = ph[:len(ph)-1]
+		envIDClause = " AND project_env_id IN (" + ph + ")"
+		peIDClause = " AND pe.id IN (" + ph + ")"
+		for _, id := range allowedIDs {
+			envIDArgs = append(envIDArgs, id)
+		}
+	}
+
+	var k kpi
+	// projects: 只统计「至少有一个允许 env」的 project
+	if enforce {
+		args := append([]interface{}{}, envIDArgs...)
+		_ = database.DB.QueryRow(
+			`SELECT COUNT(DISTINCT project_id) FROM project_env WHERE 1=1`+envIDClause, args...,
+		).Scan(&k.Projects)
+	} else {
+		_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project`).Scan(&k.Projects)
+	}
+
+	// envs total / uat / prod
+	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE 1=1`+envIDClause, envIDArgs...).Scan(&k.EnvsTotal)
+	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE env_type='uat'`+envIDClause, envIDArgs...).Scan(&k.EnvsUAT)
+	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM project_env WHERE env_type='prod'`+envIDClause, envIDArgs...).Scan(&k.EnvsPROD)
+
+	// modules
+	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM module WHERE 1=1`+envIDClause, envIDArgs...).Scan(&k.ModulesTotal)
+
+	// deployments 24h（注意：deployment 表也有 project_env_id 字段，envIDClause 直接拼即可）
+	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM deployment
+		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`+envIDClause, envIDArgs...).Scan(&k.Deployments24h)
+	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM deployment
+		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND status='success'`+envIDClause, envIDArgs...).Scan(&k.Deployments24hSuccess)
+	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM deployment
+		WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND status='failed'`+envIDClause, envIDArgs...).Scan(&k.Deployments24hFailed)
+
+	// 最近 10 条发布（loadDeploymentBriefs 内部用 d.project_env_id，所以传 envIDClause 一样生效，
+	// 但 d. 别名前缀更清楚——下面给 helper 同时传 clause 和 args）
+	dEnvClause := ""
+	if enforce {
+		dEnvClause = " AND d.project_env_id IN (" + strings.Repeat("?,", len(allowedIDs))[:len(allowedIDs)*2-1] + ")"
+	}
+	recent := loadDeploymentBriefs(dEnvClause+` ORDER BY d.created_at DESC LIMIT 10`, envIDArgs)
 
 	// 我的最近 5 条
 	mine := []deploymentBrief{}
 	if operator != "" && operator != "system" {
-		mine = loadDeploymentBriefs(`AND d.operator=? ORDER BY d.created_at DESC LIMIT 5`, []interface{}{operator})
+		args := append([]interface{}{}, envIDArgs...)
+		args = append(args, operator)
+		mine = loadDeploymentBriefs(dEnvClause+` AND d.operator=? ORDER BY d.created_at DESC LIMIT 5`, args)
 	}
 
 	// 环境健康列表
@@ -74,7 +123,7 @@ func HandleDashboardStats(w http.ResponseWriter, r *http.Request) {
 		(SELECT MAX(last_scanned_at) FROM module WHERE project_env_id=pe.id) AS last_scanned_at,
 		(SELECT MAX(created_at) FROM deployment WHERE project_env_id=pe.id) AS last_deploy_at,
 		(SELECT status FROM deployment WHERE project_env_id=pe.id ORDER BY created_at DESC LIMIT 1) AS last_deploy_status
-		FROM project_env pe ORDER BY last_deploy_at DESC, pe.name`)
+		FROM project_env pe WHERE 1=1`+peIDClause+` ORDER BY last_deploy_at DESC, pe.name`, envIDArgs...)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {

@@ -30,7 +30,7 @@ spec:
       terminationGracePeriodSeconds: 600
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/opsplatform-deploy-backend:v62
+          image: localhost:8070/opsplatform/opsplatform-deploy-backend:v66
           imagePullPolicy: Always
           ports:
             - { name: http,    containerPort: 8080 }
@@ -38,6 +38,11 @@ spec:
           envFrom:
             - secretRef:
                 name: opsplatform-deploy-secret
+          env:
+            # 系统间调用共享 token（运维平台管理页代理调 /api/public/* 用）
+            # 必须和 opsplatform backend 的同名 env 一致
+            - name: DEPLOY_CENTER_INTERNAL_TOKEN
+              value: "opsplatform-deploy-internal-2026-please-rotate"
           volumeMounts:
             - { name: cache, mountPath: /app/git-cache }
           resources:

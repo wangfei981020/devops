@@ -55,6 +55,11 @@ func main() {
 	api.HandleFunc("/logout", handlers.HandleLogout).Methods("POST", "OPTIONS")
 	api.Handle("/portal-auth", handlers.LoginRateLimit(http.HandlerFunc(handlers.HandlePortalAuth))).Methods("POST", "OPTIONS")
 
+	// 系统间调用（运维平台管理页拉 env 列表用）：X-Internal-Token header 校验，不走用户 JWT
+	api.Handle("/public/project-envs",
+		handlers.InternalTokenMiddleware(http.HandlerFunc(handlers.HandlePublicListProjectEnvs))).
+		Methods("GET", "OPTIONS")
+
 	// Protected
 	protected := api.PathPrefix("").Subrouter()
 	protected.Use(handlers.AuthMiddleware)

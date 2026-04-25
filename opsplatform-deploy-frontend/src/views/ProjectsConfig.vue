@@ -12,7 +12,7 @@
         <div class="k-val mono" style="color:var(--success-dark)">{{ uatCount }}</div>
         <div class="k-d">auto-sync ON · {{ uatSyncedCount }}</div>
       </div>
-      <div class="kpi">
+      <div class="kpi" v-if="auth.hasAnyProdEnv">
         <div class="k-lbl">PROD 环境</div>
         <div class="k-val mono" style="color:var(--danger-dark)">{{ prodCount }}</div>
         <div class="k-d">需人工 sync</div>
@@ -190,9 +190,11 @@
           <div class="field">
             <label>环境类型 <span class="req">*</span></label>
             <div class="rb-grp">
-              <button :class="['rb', 'uat', {active: envForm.env_type === 'uat'}]"
+              <button v-if="auth.hasAnyUatEnv || envDlgIsEdit"
+                :class="['rb', 'uat', {active: envForm.env_type === 'uat'}]"
                 :disabled="envDlgIsEdit" @click="setEnvType('uat')">UAT</button>
-              <button :class="['rb', 'prod', {active: envForm.env_type === 'prod'}]"
+              <button v-if="auth.hasAnyProdEnv || envDlgIsEdit"
+                :class="['rb', 'prod', {active: envForm.env_type === 'prod'}]"
                 :disabled="envDlgIsEdit" @click="setEnvType('prod')">PROD</button>
             </div>
           </div>
@@ -496,7 +498,9 @@ async function onDeleteProject() {
 function openCreateEnv(projectName) {
   envDlgIsEdit.value = false
   envEditingID.value = null
-  Object.assign(envForm, blankEnv(), { project_name: projectName })
+  // 用户只能见 UAT/PROD 之一时，默认选可见的那个；否则保留 blank（uat）
+  const defaultType = !auth.hasAnyUatEnv && auth.hasAnyProdEnv ? 'prod' : 'uat'
+  Object.assign(envForm, blankEnv(), { project_name: projectName, env_type: defaultType })
   envDlgVis.value = true
 }
 function openEditEnv(e) {

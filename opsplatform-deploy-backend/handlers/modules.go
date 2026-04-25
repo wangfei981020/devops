@@ -9,13 +9,17 @@ import (
 )
 
 func HandleListModules(w http.ResponseWriter, r *http.Request) {
-	peID := r.URL.Query().Get("project_env_id")
-	if peID == "" {
+	peIDStr := r.URL.Query().Get("project_env_id")
+	if peIDStr == "" {
 		JSONError(w, 40001, "project_env_id required")
 		return
 	}
+	if !IsEnvIDAllowed(r, ParseID(peIDStr)) {
+		JSONError(w, 40300, "无权访问该环境")
+		return
+	}
 	rows, err := database.DB.Query(`SELECT id, project_env_id, name, current_tag, image_repository, argocd_app_name,
-		IFNULL(namespace,''), last_scanned_at, created_at, updated_at FROM module WHERE project_env_id=? ORDER BY name`, peID)
+		IFNULL(namespace,''), last_scanned_at, created_at, updated_at FROM module WHERE project_env_id=? ORDER BY name`, peIDStr)
 	if err != nil {
 		InternalErr(w, r, err)
 		return
@@ -43,6 +47,10 @@ func HandleModuleTagHistory(w http.ResponseWriter, r *http.Request) {
 	var peID int64
 	if err := database.DB.QueryRow(`SELECT name, project_env_id FROM module WHERE id=?`, id).Scan(&name, &peID); err != nil {
 		JSONError(w, 40400, "module not found")
+		return
+	}
+	if !IsEnvIDAllowed(r, peID) {
+		JSONError(w, 40300, "无权访问该模块所在环境")
 		return
 	}
 	rows, err := database.DB.Query(`SELECT id, changes, created_at FROM deployment

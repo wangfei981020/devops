@@ -33,6 +33,10 @@ func HandlePreviewImage(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40400, "project_env not found")
 		return
 	}
+	if !IsEnvIDAllowed(r, req.ProjectEnvID) {
+		JSONError(w, 40300, "无权访问该环境")
+		return
+	}
 	pending := services.ParseBatchInput(req.Text)
 	if len(pending) == 0 {
 		JSONError(w, 40001, "未解析出任何 模块:tag")
@@ -74,6 +78,10 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 	p, err := LoadProjectEnvDecrypted(req.ProjectEnvID)
 	if err != nil {
 		JSONError(w, 40400, "project_env not found")
+		return
+	}
+	if !IsEnvIDAllowed(r, req.ProjectEnvID) {
+		JSONError(w, 40300, "无权操作该环境")
 		return
 	}
 	// PROD 要 submit_prod；UAT 要 submit_uat（admin 自动放行）
@@ -161,6 +169,10 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40400, "project_env not found")
 		return
 	}
+	if !IsEnvIDAllowed(r, req.ProjectEnvID) {
+		JSONError(w, 40300, "无权操作该环境")
+		return
+	}
 	if !HasButton(r, "restart") {
 		JSONError(w, 40300, "没有重启权限（restart）")
 		return
@@ -223,6 +235,10 @@ func HandleRollbackPreview(w http.ResponseWriter, r *http.Request) {
 	var raw []byte
 	if err := database.DB.QueryRow(`SELECT project_env_id, changes FROM deployment WHERE id=?`, id).Scan(&peID, &raw); err != nil {
 		JSONError(w, 40400, "deployment not found")
+		return
+	}
+	if !IsEnvIDAllowed(r, peID) {
+		JSONError(w, 40300, "无权访问该环境的发布记录")
 		return
 	}
 	var changes []models.Change
@@ -291,6 +307,10 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 	p, err := LoadProjectEnvDecrypted(peID)
 	if err != nil {
 		JSONError(w, 40400, "project_env not found")
+		return
+	}
+	if !IsEnvIDAllowed(r, peID) {
+		JSONError(w, 40300, "无权操作该环境")
 		return
 	}
 	if !HasButton(r, "rollback") {

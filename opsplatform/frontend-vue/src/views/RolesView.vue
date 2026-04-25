@@ -28,6 +28,11 @@ const showRolePermissionModal = ref(false)
 const selectedRole = ref(null)
 const selectedRolePermissions = ref({})
 
+// 发布中心环境权限（与菜单/按钮/数据/API 权限并列的第 5 类）
+const deployEnvs = ref([])              // [{id, name, env_type}]
+const selectedDeployEnvs = ref(new Set()) // Set<envName>
+const deployEnvsLoadFailed = ref(false)
+
 const stats = computed(() => ({
   total: roles.value.length,
   system: roles.value.filter(r => r.is_system).length,
@@ -223,21 +228,37 @@ async function deleteRole(role) {
 async function openRolePermissionModal(role) {
   selectedRole.value = role
   selectedRolePermissions.value = {}
-  
+  selectedDeployEnvs.value = new Set()
+  deployEnvsLoadFailed.value = false
+
   // 加载已有权限和全部权限
   await loadAllPermissions()
-  
+
   // 从后端获取角色已分配的权限
   try {
     const res = await api.get('/api/roles/' + role.id + '/permissions')
-    // 后端返回的是 map[string]bool 格式，如 {"perm_id": true}
     const permMap = res.data || {}
     selectedRolePermissions.value = { ...permMap }
-    console.log('加载角色权限:', Object.keys(permMap).filter(k => permMap[k]).length, '条')
   } catch (e) {
     console.error('加载角色权限失败:', e)
   }
-  
+
+  // 加载发布中心环境列表 + 当前角色已勾的 env
+  try {
+    const [envsRes, roleEnvsRes] = await Promise.all([
+      api.get('/api/admin/deploy-center-envs'),
+      api.get('/api/admin/role-deploy-envs/' + role.id)
+    ])
+    const rawEnvs = envsRes?.data?.data ?? envsRes?.data ?? []
+    deployEnvs.value = Array.isArray(rawEnvs) ? rawEnvs : []
+    const rawRoleEnvs = roleEnvsRes?.data?.data ?? roleEnvsRes?.data ?? []
+    selectedDeployEnvs.value = new Set(Array.isArray(rawRoleEnvs) ? rawRoleEnvs : [])
+  } catch (e) {
+    console.error('加载发布中心环境失败:', e)
+    deployEnvs.value = []
+    deployEnvsLoadFailed.value = true
+  }
+
   showRolePermissionModal.value = true
 }
 
@@ -245,17 +266,34 @@ function togglePermission(permId) {
   selectedRolePermissions.value[permId] = !selectedRolePermissions.value[permId]
 }
 
+function toggleDeployEnv(envName, on) {
+  const s = new Set(selectedDeployEnvs.value)
+  if (on) s.add(envName)
+  else s.delete(envName)
+  selectedDeployEnvs.value = s
+}
+
+function toggleAllDeployEnvs(on) {
+  selectedDeployEnvs.value = on
+    ? new Set(deployEnvs.value.map(e => e.name))
+    : new Set()
+}
+
 async function saveRolePermissions() {
   const permIds = Object.keys(selectedRolePermissions.value).filter(k => selectedRolePermissions.value[k])
   try {
-    // 使用正确的 API: PUT /api/roles/{id}/permissions，发送权限 ID 数组
     await api.put('/api/roles/' + selectedRole.value.id + '/permissions', permIds)
+    // 同时保存发布中心 env 权限（拉取失败时跳过，避免误清空）
+    if (!deployEnvsLoadFailed.value) {
+      const env_names = Array.from(selectedDeployEnvs.value)
+      await api.put('/api/admin/role-deploy-envs/' + selectedRole.value.id, { env_names })
+    }
     appStore.showToast('权限保存成功', 'success')
     showRolePermissionModal.value = false
     loadRoles()
-  } catch (e) { 
+  } catch (e) {
     console.error('保存权限失败:', e)
-    appStore.showToast(e.response?.data || '保存失败', 'error') 
+    appStore.showToast(e.response?.data || '保存失败', 'error')
   }
 }
 
@@ -550,6 +588,39 @@ function formatDate(str) {
                     </label>
                   </div>
                 </div>
+              </div>
+
+              <!-- 发布中心环境权限（数据级 RBAC，仅对非 admin 角色生效） -->
+              <div class="permission-section permission-section-full">
+                <h4 class="section-title">
+                  发布中心环境
+                  <span class="section-hint">没勾的环境，该角色用户在发布中心完全看不到（admin / super_admin 自动绕过）</span>
+                  <span v-if="deployEnvs.length > 0" class="section-counter">
+                    已勾 {{ selectedDeployEnvs.size }} / {{ deployEnvs.length }}
+                  </span>
+                </h4>
+                <div v-if="deployEnvsLoadFailed" class="env-load-failed">
+                  无法连接发布中心，已暂时禁用此处的修改（保存时会跳过 env 部分以免误清空）。请检查 <code>DEPLOY_CENTER_INTERNAL_URL</code> / <code>DEPLOY_CENTER_INTERNAL_TOKEN</code>。
+                </div>
+                <div v-else-if="deployEnvs.length === 0" class="env-empty">
+                  发布中心暂无项目环境。
+                </div>
+                <template v-else>
+                  <div class="env-toolbar">
+                    <button type="button" class="btn-mini" @click="toggleAllDeployEnvs(true)">全选</button>
+                    <button type="button" class="btn-mini" @click="toggleAllDeployEnvs(false)">清空</button>
+                  </div>
+                  <div class="deploy-env-grid">
+                    <label v-for="e in deployEnvs" :key="e.name"
+                      :class="['deploy-env-chip', e.env_type, { on: selectedDeployEnvs.has(e.name) }]">
+                      <input type="checkbox"
+                        :checked="selectedDeployEnvs.has(e.name)"
+                        @change="toggleDeployEnv(e.name, $event.target.checked)" />
+                      <span class="deploy-env-name">{{ e.name }}</span>
+                      <span :class="'deploy-env-badge ' + e.env_type">{{ e.env_type.toUpperCase() }}</span>
+                    </label>
+                  </div>
+                </template>
               </div>
 
               <!-- API 权限 -->
@@ -866,4 +937,49 @@ td { font-size: 0.875rem; color: var(--text-primary); }
 .roles-modal .btn-default:hover { background: #e2e8f0; }
 .roles-modal .btn-primary { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: #fff; }
 .roles-modal .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4); }
+
+/* 发布中心环境权限 section */
+.roles-modal .section-title .section-hint {
+  font-weight: 400; font-size: 12px; color: #94a3b8; margin-left: 8px;
+}
+.roles-modal .section-title .section-counter {
+  float: right; font-weight: 500; font-size: 12px; color: #3b82f6;
+  font-family: 'Consolas', monospace;
+}
+.roles-modal .env-load-failed {
+  padding: 12px; background: #fef3c7; border: 1px solid #fde68a; border-radius: 6px;
+  font-size: 12.5px; color: #78350f; line-height: 1.6;
+}
+.roles-modal .env-load-failed code {
+  background: rgba(0,0,0,.06); padding: 1px 5px; border-radius: 3px; font-family: monospace;
+}
+.roles-modal .env-empty {
+  padding: 16px; text-align: center; color: #94a3b8; font-size: 13px;
+  background: #fff; border: 1px dashed #e2e8f0; border-radius: 6px;
+}
+.roles-modal .env-toolbar { display: flex; gap: 6px; margin-bottom: 10px; }
+.roles-modal .btn-mini {
+  padding: 4px 10px; font-size: 12px; border: 1px solid #e2e8f0;
+  background: #fff; border-radius: 4px; cursor: pointer; color: #475569;
+}
+.roles-modal .btn-mini:hover { border-color: #3b82f6; color: #3b82f6; }
+.roles-modal .deploy-env-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px;
+}
+.roles-modal .deploy-env-chip {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 6px;
+  background: #fff; cursor: pointer; transition: all .12s;
+}
+.roles-modal .deploy-env-chip:hover { border-color: #3b82f6; background: #fbfdff; }
+.roles-modal .deploy-env-chip.on { border-color: #10b981; background: #ecfdf5; }
+.roles-modal .deploy-env-chip.on.prod { border-color: #ef4444; background: #fef2f2; }
+.roles-modal .deploy-env-chip input { margin: 0; cursor: pointer; accent-color: #3b82f6; width: 16px; height: 16px; }
+.roles-modal .deploy-env-chip.prod input { accent-color: #ef4444; }
+.roles-modal .deploy-env-name { flex: 1; font-family: 'Consolas', monospace; font-size: 12.5px; color: #1e293b; }
+.roles-modal .deploy-env-badge {
+  font: 700 10px 'Consolas', monospace; padding: 2px 6px; border-radius: 3px; letter-spacing: .4px;
+}
+.roles-modal .deploy-env-badge.uat { background: #ecfdf5; color: #059669; }
+.roles-modal .deploy-env-badge.prod { background: #fef2f2; color: #dc2626; }
 </style>

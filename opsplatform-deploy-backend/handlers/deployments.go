@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -60,6 +61,19 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("time_to"); v != "" {
 		where += " AND created_at <= ?"
 		args = append(args, v)
+	}
+	// env 白名单过滤（admin 时 enforce=false 不加 WHERE）
+	if allowedIDs, enforce := AllowedEnvIDs(r); enforce {
+		if len(allowedIDs) == 0 {
+			JSONSuccess(w, map[string]interface{}{"total": 0, "list": []models.Deployment{}})
+			return
+		}
+		ph := strings.Repeat("?,", len(allowedIDs))
+		ph = ph[:len(ph)-1]
+		where += " AND project_env_id IN (" + ph + ")"
+		for _, id := range allowedIDs {
+			args = append(args, id)
+		}
 	}
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -145,6 +159,10 @@ func HandleGetDeployment(w http.ResponseWriter, r *http.Request) {
 			&argoResults, &d.LarkNotify, &d.Operator, &d.Status, &d.ErrorMsg, &d.DurationSec, &d.CreatedAt)
 	if err != nil {
 		JSONError(w, 40400, "deployment not found")
+		return
+	}
+	if !IsEnvIDAllowed(r, d.ProjectEnvID) {
+		JSONError(w, 40300, "无权访问该环境的发布记录")
 		return
 	}
 	_ = jsonUnmarshalImpl(mnames, &d.ModuleNames)

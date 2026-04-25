@@ -27,8 +27,8 @@
           <span class="main">{{ stats.kpi?.envs_total || 0 }}</span>
         </div>
         <div class="k-sub">
-          <span class="tag uat">UAT {{ stats.kpi?.envs_uat || 0 }}</span>
-          <span class="tag prod">PROD {{ stats.kpi?.envs_prod || 0 }}</span>
+          <span v-if="auth.hasAnyUatEnv" class="tag uat">UAT {{ stats.kpi?.envs_uat || 0 }}</span>
+          <span v-if="auth.hasAnyProdEnv" class="tag prod">PROD {{ stats.kpi?.envs_prod || 0 }}</span>
         </div>
       </div>
 

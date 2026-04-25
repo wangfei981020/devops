@@ -968,6 +968,22 @@ CREATE TABLE IF NOT EXISTS duty_records (
 		return err
 	}
 
+	// 发布中心：角色 → 可访问项目环境（env_name 为发布中心的 project_env.name，如 "g32-uat"）
+	// 运维平台只存 env_name 字符串，不存发布中心的 env ID；管理页从发布中心拉实时列表
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS role_deploy_envs (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			role_id VARCHAR(64) NOT NULL,
+			env_name VARCHAR(100) NOT NULL COMMENT '发布中心 project_env.name，如 g32-uat',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_rde_role (role_id),
+			UNIQUE KEY uk_role_env (role_id, env_name)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
 	// 创建 API Key 表
 	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS api_keys (

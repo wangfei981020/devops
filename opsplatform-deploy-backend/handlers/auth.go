@@ -25,10 +25,11 @@ import (
 type contextKey string
 
 const (
-	ctxUserID      contextKey = "userID"
-	ctxUsername    contextKey = "username"
-	ctxUserRole    contextKey = "userRole"
-	ctxPermissions contextKey = "permissions"
+	ctxUserID       contextKey = "userID"
+	ctxUsername     contextKey = "username"
+	ctxUserRole     contextKey = "userRole"
+	ctxPermissions  contextKey = "permissions"
+	ctxAllowedEnvs  contextKey = "allowedEnvs"  // *[]string；nil=不过滤；空切片=啥都看不到
 )
 
 type JWTClaims struct {
@@ -218,14 +219,30 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 拉发布中心 env 白名单（来自运维平台 role_deploy_envs）。admin 跳过。
+	// 若调用失败则白名单为 nil（fail-open），不影响登录；后续 v64+ 可以视情况收紧
+	var allowedEnvsJSON sql.NullString
+	// 默认 admin / 不过滤 → 全可见
+	hasUAT, hasPROD := true, true
+	if role != "admin" {
+		envs, isAdmin, ok := portalUserDeployEnvs(Cfg.PortalAPIURL, portalToken, username)
+		if ok && !isAdmin {
+			// 即使空数组也存——空数组明确表示"没有任何 env 权限"，fail-close
+			b, _ := json.Marshal(envs)
+			allowedEnvsJSON = sql.NullString{String: string(b), Valid: true}
+			hasUAT, hasPROD = computeEnvTypeFlags(envs)
+		}
+		// ok=false（调用失败）或 isAdmin=true → allowed_envs 留 NULL，等同 admin 不过滤
+	}
+
 	token, _ := generateToken(userID, username, role)
 	tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
 	expiresAt := time.Now().Add(time.Duration(Cfg.SessionTimeout) * time.Minute)
 	// 缓存权限到 session，AuthMiddleware 时能直接拿，不用每次回头查 portal
 	permJSON, _ := json.Marshal(permissions)
 	database.DB.Exec(
-		"INSERT INTO sessions (user_id, token_hash, expires_at, permissions) VALUES (?, ?, ?, ?)",
-		userID, tokenHash, expiresAt, string(permJSON))
+		"INSERT INTO sessions (user_id, token_hash, expires_at, permissions, allowed_envs) VALUES (?, ?, ?, ?, ?)",
+		userID, tokenHash, expiresAt, string(permJSON), allowedEnvsJSON)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "deploy_auth_token",
@@ -239,11 +256,13 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, map[string]interface{}{
 		"token": token,
 		"user": map[string]interface{}{
-			"id":           userID,
-			"username":     username,
-			"display_name": displayName,
-			"role":         role,
-			"auth_source":  "portal",
+			"id":               userID,
+			"username":         username,
+			"display_name":     displayName,
+			"role":             role,
+			"auth_source":      "portal",
+			"has_any_uat_env":  hasUAT,
+			"has_any_prod_env": hasPROD,
 		},
 		"permissions": permissions,
 	})
@@ -259,12 +278,17 @@ func HandleGetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	database.DB.QueryRow("SELECT IFNULL(display_name,''), IFNULL(auth_source,'local') FROM users WHERE id = ?", userID).
 		Scan(&displayName, &authSource)
 
+	// 根据 ctx 里的 allowed_envs 计算 has_any_uat / has_any_prod（admin/不过滤 → 全 true）
+	hasUAT, hasPROD := envTypeFlagsFromCtx(r)
+
 	JSONSuccess(w, map[string]interface{}{
-		"id":           userID,
-		"username":     username,
-		"display_name": displayName,
-		"role":         role,
-		"auth_source":  authSource,
+		"id":               userID,
+		"username":         username,
+		"display_name":     displayName,
+		"role":             role,
+		"auth_source":      authSource,
+		"has_any_uat_env":  hasUAT,
+		"has_any_prod_env": hasPROD,
 	})
 }
 
@@ -282,15 +306,63 @@ func HandleRefreshPermissions(w http.ResponseWriter, r *http.Request) {
 	database.DB.QueryRow("SELECT IFNULL(auth_source,'local') FROM users WHERE id = ?", userID).Scan(&authSource)
 
 	if authSource != "portal" {
-		JSONSuccess(w, map[string]interface{}{"permissions": map[string]bool{}, "role": role, "auth_source": authSource})
+		JSONSuccess(w, map[string]interface{}{
+			"permissions":      map[string]bool{},
+			"role":             role,
+			"auth_source":      authSource,
+			"has_any_uat_env":  true,
+			"has_any_prod_env": true,
+		})
 		return
 	}
 	permissions := fetchPortalPermissionsInternal(Cfg.PortalAPIURL, username)
+	hasUAT, hasPROD := envTypeFlagsFromCtx(r)
 	JSONSuccess(w, map[string]interface{}{
-		"permissions": permissions,
-		"role":        role,
-		"auth_source": authSource,
+		"permissions":      permissions,
+		"role":             role,
+		"auth_source":      authSource,
+		"has_any_uat_env":  hasUAT,
+		"has_any_prod_env": hasPROD,
 	})
+}
+
+// portalUserDeployEnvs 调运维平台 /api/my/deploy-envs 拿用户在发布中心的 env 白名单。
+//
+//	返回值：
+//	  - envs: 白名单（admin 时为 nil）
+//	  - isAdmin: 是否管理员（管理员不应用过滤）
+//	  - ok:    调用是否成功（失败时返回 false，调用方决定是否放行/拒登录）
+//
+//	运维平台返回格式：{"success":true,"data":{"admin":bool,"env_names":[]}}
+//	或纯包装 {"data":{...}} / {...}
+func portalUserDeployEnvs(portalURL, portalToken, username string) (envs []string, isAdmin bool, ok bool) {
+	u := strings.TrimRight(portalURL, "/") + "/api/my/deploy-envs"
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, _ := http.NewRequest("GET", u, nil)
+	req.Header.Set("Authorization", "Bearer "+portalToken)
+	req.Header.Set("X-Operator", username)
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[DeployEnvs] fetch /api/my/deploy-envs failed: %v", err)
+		return nil, false, false
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	type payload struct {
+		Admin    bool     `json:"admin"`
+		EnvNames []string `json:"env_names"`
+	}
+	var wrapped struct {
+		Data payload `json:"data"`
+	}
+	var p payload
+	if err := json.Unmarshal(raw, &wrapped); err == nil && (wrapped.Data.Admin || wrapped.Data.EnvNames != nil) {
+		p = wrapped.Data
+	} else if err2 := json.Unmarshal(raw, &p); err2 != nil {
+		log.Printf("[DeployEnvs] unparseable response: %.200s", string(raw))
+		return nil, false, false
+	}
+	return p.EnvNames, p.Admin, true
 }
 
 // portalUserCanAccessApp 调运维平台 /api/external-apps/my 看用户的角色是否授权了指定 app_key。
@@ -421,10 +493,10 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
-		var permJSON sql.NullString
+		var permJSON, allowedEnvsJSON sql.NullString
 		err = database.DB.QueryRow(
-			"SELECT permissions FROM sessions WHERE token_hash = ? AND expires_at > NOW()",
-			tokenHash).Scan(&permJSON)
+			"SELECT permissions, allowed_envs FROM sessions WHERE token_hash = ? AND expires_at > NOW()",
+			tokenHash).Scan(&permJSON, &allowedEnvsJSON)
 		if err != nil {
 			JSONError(w, 40100, "会话已过期")
 			return
@@ -433,10 +505,19 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		if permJSON.Valid && permJSON.String != "" {
 			_ = json.Unmarshal([]byte(permJSON.String), &perms)
 		}
+		// allowed_envs：NULL → ctx 里也是 nil（admin 不过滤）
+		//   有值 → 解析成 *[]string（可能是空数组，表示啥都看不到）
+		var allowedEnvsPtr *[]string
+		if allowedEnvsJSON.Valid {
+			var arr []string
+			_ = json.Unmarshal([]byte(allowedEnvsJSON.String), &arr)
+			allowedEnvsPtr = &arr
+		}
 		ctx := context.WithValue(r.Context(), ctxUserID, claims.UserID)
 		ctx = context.WithValue(ctx, ctxUsername, claims.Username)
 		ctx = context.WithValue(ctx, ctxUserRole, claims.Role)
 		ctx = context.WithValue(ctx, ctxPermissions, perms)
+		ctx = context.WithValue(ctx, ctxAllowedEnvs, allowedEnvsPtr)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

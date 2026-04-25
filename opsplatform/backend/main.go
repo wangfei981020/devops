@@ -355,6 +355,12 @@ func main() {
 	adminOnly.HandleFunc("/external-apps/{appKey}/roles", handlers.HandleGetAppRoles).Methods("GET", "OPTIONS")
 	adminOnly.HandleFunc("/external-apps/{appKey}/roles", handlers.HandleUpdateAppRoles).Methods("PUT", "OPTIONS")
 
+	// 发布中心环境权限（role -> env_name 映射）
+	protected.HandleFunc("/my/deploy-envs", handlers.HandleGetMyDeployEnvs).Methods("GET", "OPTIONS")
+	adminOnly.HandleFunc("/admin/role-deploy-envs/{roleID}", handlers.HandleGetRoleDeployEnvs).Methods("GET", "OPTIONS")
+	adminOnly.HandleFunc("/admin/role-deploy-envs/{roleID}", handlers.HandleUpdateRoleDeployEnvs).Methods("PUT", "OPTIONS")
+	adminOnly.HandleFunc("/admin/deploy-center-envs", handlers.HandleProxyDeployCenterEnvs).Methods("GET", "OPTIONS")
+
 	// Kubernetes 管理
 	protected.HandleFunc("/k8s/namespaces", handlers.HandleGetNamespaces).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/k8s/deployments", handlers.HandleGetDeployments).Methods("GET", "OPTIONS")

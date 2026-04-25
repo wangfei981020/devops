@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -16,10 +17,30 @@ import (
 )
 
 func HandleListProjectEnvs(w http.ResponseWriter, r *http.Request) {
-	rows, err := database.DB.Query(`SELECT id, name, display_name, env_type, git_repo, git_branch,
+	// 按用户白名单过滤；admin / fail-open 时 enforce=false 不加 WHERE
+	allowedNames, enforce := AllowedEnvNames(r)
+	baseSQL := `SELECT id, name, display_name, env_type, git_repo, git_branch,
 		chart_base_path, namespace, IFNULL(argocd_url,''), IFNULL(argocd_token,''), argocd_instance_id,
 		lark_webhook, lark_secret, lark_bot_id, gitlab_repo_id, auto_sync, created_at, updated_at
-		FROM project_env ORDER BY name`)
+		FROM project_env`
+	var rows *sql.Rows
+	var err error
+	if !enforce {
+		rows, err = database.DB.Query(baseSQL + " ORDER BY name")
+	} else if len(allowedNames) == 0 {
+		// 用户白名单为空：直接返回空列表（不必查 DB）
+		JSONSuccess(w, []models.ProjectEnv{})
+		return
+	} else {
+		// IN 占位
+		ph := strings.Repeat("?,", len(allowedNames))
+		ph = ph[:len(ph)-1]
+		args := make([]interface{}, len(allowedNames))
+		for i, n := range allowedNames {
+			args[i] = n
+		}
+		rows, err = database.DB.Query(baseSQL+" WHERE name IN ("+ph+") ORDER BY name", args...)
+	}
 	if err != nil {
 		InternalErr(w, r, err)
 		return
@@ -40,6 +61,10 @@ func HandleListProjectEnvs(w http.ResponseWriter, r *http.Request) {
 
 func HandleGetProjectEnv(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
+	if !IsEnvIDAllowed(r, id) {
+		JSONError(w, 40300, "无权访问该环境")
+		return
+	}
 	p, err := loadProjectEnvMasked(id)
 	if err != nil {
 		JSONError(w, 40400, "project_env not found")
@@ -321,6 +346,10 @@ func getGitService() *services.GitService {
 
 func HandleScanModules(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
+	if !IsEnvIDAllowed(r, id) {
+		JSONError(w, 40300, "无权扫描该环境")
+		return
+	}
 	count, err := ScanModulesByProjectEnvID(r.Context(), id)
 	if err != nil {
 		if err.Error() == "project_env not found" {

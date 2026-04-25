@@ -13,6 +13,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isLoggedIn = computed(() => !!token.value)
   const isAdmin = computed(() => user.value?.role === 'admin')
+  // env 类型可见性（admin / 老登录 session 缺这两个字段时默认 true）
+  const hasAnyUatEnv  = computed(() => user.value?.has_any_uat_env  !== false)
+  const hasAnyProdEnv = computed(() => user.value?.has_any_prod_env !== false)
 
   // 本地账号和 admin 放行；portal 用户查权限
   function hasPermission(code) {
@@ -59,6 +62,15 @@ export const useAuthStore = defineStore('auth', () => {
         permissions.value = data.permissions
         localStorage.setItem(LS_PERMS, JSON.stringify(data.permissions))
       }
+      // 同步刷新 env 类型可见性 flags（admin 给 role 改了 env 后，用户点刷新就能即时生效）
+      if (user.value && (typeof data?.has_any_uat_env === 'boolean' || typeof data?.has_any_prod_env === 'boolean')) {
+        user.value = {
+          ...user.value,
+          has_any_uat_env:  data.has_any_uat_env,
+          has_any_prod_env: data.has_any_prod_env,
+        }
+        localStorage.setItem(LS_USER, JSON.stringify(user.value))
+      }
     } catch (_) {}
   }
 
@@ -72,5 +84,5 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem(LS_PERMS)
   }
 
-  return { user, token, permissions, isLoggedIn, isAdmin, hasPermission, hasMenu, hasButton, login, portalAuth, refreshPermissions, logout }
+  return { user, token, permissions, isLoggedIn, isAdmin, hasAnyUatEnv, hasAnyProdEnv, hasPermission, hasMenu, hasButton, login, portalAuth, refreshPermissions, logout }
 })
