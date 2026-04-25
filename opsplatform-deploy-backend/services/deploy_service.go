@@ -238,7 +238,9 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 			case <-c.Done():
 				return models.ArgocdAppResult{App: j.app, SyncStatus: "canceled", Msg: "context canceled"}
 			}
-			return *PollUntilStable(c, in.ArgocdClient, j.app, interval, timeout, syncStartedAt,
+			// stabilityTicks=6: 配 5s interval = 30s 稳定窗口，避免 readinessProbe 通过
+			// 后 livenessProbe 失败 / panic 导致的 CrashLoopBackOff 误报成功
+			return *PollUntilStable(c, in.ArgocdClient, j.app, interval, timeout, syncStartedAt, 6,
 				func(tick *models.ArgocdAppResult) { publish(*tick) })
 		},
 		func(_ int, snapshot []models.ArgocdAppResult) {
@@ -361,8 +363,9 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 			})
 			// 每次 ArgoCD poll 后都把中间状态 publish 出去（5s 节奏），前端靠这个 + 本地秒表做秒级跳动
 			// Restart 不经过 argocd Sync 操作（走 resource action），所以没有 OperationState 可比对，
-			// 传零值 time，PollUntilStable 内部退化为只看 Synced+Healthy（既有逻辑）。
-			return *PollUntilStable(c, in.ArgocdClient, t.app, interval, timeout, time.Time{},
+			// 传零值 time 退化成只看 Synced+Healthy。
+			// 但稳定性窗口必须保留——重启同样可能 readinessProbe 通过后 crash-loop。
+			return *PollUntilStable(c, in.ArgocdClient, t.app, interval, timeout, time.Time{}, 6,
 				func(tick *models.ArgocdAppResult) { publish(*tick) })
 		},
 		func(_ int, snapshot []models.ArgocdAppResult) {
