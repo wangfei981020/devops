@@ -83,9 +83,14 @@ type AppStatus struct {
 	SyncStatus string `json:"sync_status"` // Synced / OutOfSync / Unknown
 	Health     string `json:"health"`      // Healthy / Progressing / Degraded / Missing / Suspended
 	Message    string `json:"message"`
+	// 当前/最近一次 sync 操作的状态。Sync API 是异步的，靠这两个字段判定"我们触发的
+	// 这次 sync 是否已经被 argocd 处理完"，避免 PollUntilStable 第一次就误命中旧
+	// Healthy 状态导致 0s "成功"。
+	OperationPhase     string    `json:"operation_phase"`      // Running / Succeeded / Failed / Error / Terminating
+	OperationStartedAt time.Time `json:"operation_started_at"` // 最近 sync 操作开始时间（零值表示无操作）
 }
 
-// GetAppStatus 读取 application 的 sync 和 health
+// GetAppStatus 读取 application 的 sync / health / 最近 sync 操作状态
 func (c *ArgocdClient) GetAppStatus(ctx context.Context, name string) (*AppStatus, error) {
 	raw, _, err := c.do(ctx, "GET", "/api/v1/applications/"+name, nil)
 	if err != nil {
@@ -100,17 +105,26 @@ func (c *ArgocdClient) GetAppStatus(ctx context.Context, name string) (*AppStatu
 				Status  string `json:"status"`
 				Message string `json:"message"`
 			} `json:"health"`
+			OperationState *struct {
+				Phase     string    `json:"phase"`
+				StartedAt time.Time `json:"startedAt"`
+			} `json:"operationState"`
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("parse argocd app: %w", err)
 	}
-	return &AppStatus{
+	st := &AppStatus{
 		Name:       name,
 		SyncStatus: resp.Status.Sync.Status,
 		Health:     resp.Status.Health.Status,
 		Message:    resp.Status.Health.Message,
-	}, nil
+	}
+	if resp.Status.OperationState != nil {
+		st.OperationPhase = resp.Status.OperationState.Phase
+		st.OperationStartedAt = resp.Status.OperationState.StartedAt
+	}
+	return st, nil
 }
 
 // Sync 触发应用同步

@@ -223,22 +223,22 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 				App: j.app, SyncStatus: "Syncing", Health: "Progressing",
 				DurationSec: 0, Msg: "calling argocd sync",
 			})
+			// 记录 Sync API 调用前的时刻，用于 PollUntilStable 验证「这次 sync 是我们触发的」
+			syncStartedAt := time.Now()
 			if err := in.ArgocdClient.Sync(c, j.app); err != nil {
 				return models.ArgocdAppResult{
 					App: j.app, SyncStatus: "failed",
 					Msg: "sync api: " + err.Error(),
 				}
 			}
-			// Sync API 返回只代表"ArgoCD 收到请求"，不代表已经开始同步资源。
-			// 立刻去 poll 可能命中旧 cache（还是旧 pod 的 Healthy 状态），被误判为 0s 成功。
-			// 等 5s 让 ArgoCD 感知新 revision → Deployment 开始 rollout → Health 真正转 Progressing。
-			// 与 Restart 里的 sleep 3s 同一个问题，这里用 5s 更稳（sync 触发的状态转换比 restart 慢）
+			// 短暂 idle 减少首次 poll 的空查；根本性的"等我们触发的 operation 真的完成"
+			// 由 PollUntilStable 内部根据 OperationStartedAt > syncStartedAt 判定。
 			select {
-			case <-time.After(5 * time.Second):
+			case <-time.After(2 * time.Second):
 			case <-c.Done():
 				return models.ArgocdAppResult{App: j.app, SyncStatus: "canceled", Msg: "context canceled"}
 			}
-			return *PollUntilStable(c, in.ArgocdClient, j.app, interval, timeout,
+			return *PollUntilStable(c, in.ArgocdClient, j.app, interval, timeout, syncStartedAt,
 				func(tick *models.ArgocdAppResult) { publish(*tick) })
 		},
 		func(_ int, snapshot []models.ArgocdAppResult) {
@@ -360,7 +360,9 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 				Msg:         "waiting for ArgoCD",
 			})
 			// 每次 ArgoCD poll 后都把中间状态 publish 出去（5s 节奏），前端靠这个 + 本地秒表做秒级跳动
-			return *PollUntilStable(c, in.ArgocdClient, t.app, interval, timeout,
+			// Restart 不经过 argocd Sync 操作（走 resource action），所以没有 OperationState 可比对，
+			// 传零值 time，PollUntilStable 内部退化为只看 Synced+Healthy（既有逻辑）。
+			return *PollUntilStable(c, in.ArgocdClient, t.app, interval, timeout, time.Time{},
 				func(tick *models.ArgocdAppResult) { publish(*tick) })
 		},
 		func(_ int, snapshot []models.ArgocdAppResult) {
