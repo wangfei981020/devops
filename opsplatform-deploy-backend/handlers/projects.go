@@ -23,32 +23,36 @@ type projectView struct {
 }
 
 // GET /api/projects
-// 返回 project 表的所有 + 从 project_env 派生出来但尚未在表里的
+// 返回 project 表的所有 + 从 project_env 派生出来但尚未在表里的。
+// 数据级权限：非 admin 只看到自己有 env 权限的项目（同 env 过滤逻辑）。
 func HandleListProjects(w http.ResponseWriter, r *http.Request) {
-	// 1. 从 project 表读
-	rows, err := database.DB.Query(`SELECT id, name, display_name, description, created_at FROM project ORDER BY name`)
-	if err != nil {
-		InternalErr(w, r, err)
+	allowedIDs, enforce := AllowedEnvIDs(r)
+	if enforce && len(allowedIDs) == 0 {
+		// 用户没分到任何 env → 也不能看到任何项目（包括空的）
+		JSONSuccess(w, []*projectView{})
 		return
 	}
-	defer rows.Close()
 
-	byName := map[string]*projectView{}
-	list := []*projectView{}
-	for rows.Next() {
-		p := &projectView{InDB: true}
-		_ = rows.Scan(&p.ID, &p.Name, &p.DisplayName, &p.Description, &p.CreatedAt)
-		byName[p.Name] = p
-		list = append(list, p)
+	// 1. 从 project_env 派生：只取允许的 env，并算出每个项目的可见 env 数
+	envQ := `SELECT name, env_type FROM project_env`
+	var envArgs []interface{}
+	if enforce {
+		ph := strings.Repeat("?,", len(allowedIDs))
+		ph = ph[:len(ph)-1]
+		envQ += ` WHERE id IN (` + ph + `)`
+		for _, id := range allowedIDs {
+			envArgs = append(envArgs, id)
+		}
 	}
-
-	// 2. 从 project_env 派生项目名（name = {project}-{env_type}）
-	envRows, err := database.DB.Query(`SELECT name, env_type FROM project_env`)
+	envRows, err := database.DB.Query(envQ, envArgs...)
 	if err != nil {
 		InternalErr(w, r, err)
 		return
 	}
 	defer envRows.Close()
+
+	byName := map[string]*projectView{}
+	list := []*projectView{}
 	for envRows.Next() {
 		var peName, envType string
 		_ = envRows.Scan(&peName, &envType)
@@ -60,6 +64,37 @@ func HandleListProjects(w http.ResponseWriter, r *http.Request) {
 			byName[projName] = p
 			list = append(list, p)
 		}
+	}
+
+	// 2. 从 project 表补 metadata（只补已在 byName 里的；admin 时全部补）。
+	//    这样实现：
+	//    - admin（不过滤）：所有 project 表行都加进来（即使 env_count=0 也能看到「空项目」）
+	//    - 非 admin：只看到他有 env 权限的项目，project 表的额外信息只是补 display_name/description
+	projRows, err := database.DB.Query(`SELECT id, name, display_name, description, created_at FROM project ORDER BY name`)
+	if err != nil {
+		InternalErr(w, r, err)
+		return
+	}
+	defer projRows.Close()
+	for projRows.Next() {
+		var id int64
+		var name, displayName, description string
+		var createdAt time.Time
+		_ = projRows.Scan(&id, &name, &displayName, &description, &createdAt)
+		if p, ok := byName[name]; ok {
+			// 已在派生集合里：补 metadata
+			p.ID = id
+			p.DisplayName = displayName
+			p.Description = description
+			p.CreatedAt = createdAt
+			p.InDB = true
+		} else if !enforce {
+			// 不过滤（admin）：把 project 表里的「空项目」也加进来
+			np := &projectView{ID: id, Name: name, DisplayName: displayName, Description: description, CreatedAt: createdAt, InDB: true}
+			byName[name] = np
+			list = append(list, np)
+		}
+		// 非 admin 且这个 project 不在用户允许 env 派生集里 → 跳过（这就是新加的过滤）
 	}
 
 	// 按 name 排序
