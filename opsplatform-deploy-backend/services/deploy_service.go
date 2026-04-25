@@ -221,7 +221,7 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 			// 初始状态先让前端看到这一行
 			publish(models.ArgocdAppResult{
 				App: j.app, SyncStatus: "Syncing", Health: "Progressing",
-				DurationSec: 0, Msg: "calling argocd sync",
+				DurationSec: 0, Msg: "正在调用同步",
 			})
 			// 记录 Sync API 调用前的时刻，用于 PollUntilStable 验证「这次 sync 是我们触发的」
 			syncStartedAt := time.Now()
@@ -359,7 +359,7 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 				SyncStatus:  "Progressing",
 				Health:      "Progressing",
 				DurationSec: 0,
-				Msg:         "waiting for ArgoCD",
+				Msg:         "等待同步",
 			})
 			// 每次 ArgoCD poll 后都把中间状态 publish 出去（5s 节奏），前端靠这个 + 本地秒表做秒级跳动
 			// Restart 不经过 argocd Sync 操作（走 resource action），所以没有 OperationState 可比对，

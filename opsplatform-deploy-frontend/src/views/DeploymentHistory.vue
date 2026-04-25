@@ -141,7 +141,7 @@
 
                   <div class="section">
                     <div class="sec-lbl">
-                      ArgoCD 结果
+                      同步结果
                       <span class="sec-sub">
                         模块数 <b>{{ row.argocd_results?.length || 0 }}</b>
                         <span v-if="row.duration_sec != null"> · 总耗时 <b>{{ row.duration_sec }}s</b></span>

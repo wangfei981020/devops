@@ -99,10 +99,14 @@ func PollUntilStable(
 				// Phase 状态文案——按用户能看懂的人话表达：
 				//   Phase 1: 我们触发的 sync 操作还没启动 → 「初始化中」
 				//   Phase 2: argocd 操作 Running，正在应用 manifests → 「正在同步配置」
+				//        ↑ 此时 status.sync.status 还是上次的 "Synced"、status.health.status
+				//          还是旧 pod 的 "Healthy"（滞后），需要前两列也强制改成同步中样式，
+				//          让三列一致（不然用户看到 Synced/Healthy/正在同步配置 觉得矛盾）
 				//   Phase 3: 操作完成但 health 还 Progressing → 「等待 Pod 就绪」
 				//   Phase 4: 已 Healthy 但还没满稳定窗口 → 「已 Healthy，稳定观察中 X/N」
 				switch {
 				case !syncStartedAt.IsZero() && !ourOpStarted:
+					tick.SyncStatus = "Syncing"
 					tick.Health = "Progressing"
 					tick.Msg = "初始化中"
 				case isStableTick && stabilityTicks > 1 && consecutiveOK+1 < stabilityTicks:
@@ -110,6 +114,8 @@ func PollUntilStable(
 					tick.Msg = "已 Healthy，稳定观察中 " +
 						strconv.Itoa(consecutiveOK+1) + "/" + strconv.Itoa(stabilityTicks)
 				case st.OperationPhase == "Running":
+					tick.SyncStatus = "Syncing"
+					tick.Health = "Progressing"
 					tick.Msg = "正在同步配置"
 				case st.Health == "Progressing" &&
 					(st.OperationPhase == "Succeeded" || st.OperationPhase == ""):
@@ -146,7 +152,7 @@ func PollUntilStable(
 
 			// 操作 Failed → 立即失败
 			if ourOpStarted && (st.OperationPhase == "Failed" || st.OperationPhase == "Error") {
-				msg := "argocd sync " + st.OperationPhase
+				msg := "同步 " + st.OperationPhase
 				if st.Message != "" {
 					msg += ": " + st.Message
 				}

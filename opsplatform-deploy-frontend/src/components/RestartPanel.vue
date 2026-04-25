@@ -49,7 +49,7 @@ bet-client-backend"
                   <th style="width:28%;">模块</th>
                   <th style="width:16%;">状态</th>
                   <th style="width:26%;">当前 tag</th>
-                  <th>ArgoCD App</th>
+                  <th>应用</th>
                 </tr>
               </thead>
               <tbody>
