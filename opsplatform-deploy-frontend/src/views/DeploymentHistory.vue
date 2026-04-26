@@ -148,7 +148,7 @@
                       </span>
                     </div>
                     <table class="sub-tbl">
-                      <thead><tr><th>应用</th><th>同步</th><th>健康</th><th>单模块耗时</th><th>消息</th></tr></thead>
+                      <thead><tr><th>应用</th><th>同步</th><th>健康</th><th>单模块耗时</th><th>消息</th><th style="width:100px;">操作</th></tr></thead>
                       <tbody>
                         <tr v-for="r in (row.argocd_results || [])" :key="r.app">
                           <td class="mono">{{ r.app }}</td>
@@ -156,8 +156,14 @@
                           <td :class="'health-' + (r.health || '').toLowerCase()">{{ r.health || '—' }}</td>
                           <td class="mono">{{ liveDuration(r, row) }}s</td>
                           <td class="msg">{{ r.msg || '—' }}</td>
+                          <td>
+                            <button v-if="canShowLogs(r)" class="view-logs-btn" @click="openLogsModal(row.id, r.app)">
+                              查看日志
+                            </button>
+                            <span v-else class="muted">—</span>
+                          </td>
                         </tr>
-                        <tr v-if="!row.argocd_results?.length"><td colspan="5" class="muted" style="text-align:center">无</td></tr>
+                        <tr v-if="!row.argocd_results?.length"><td colspan="6" class="muted" style="text-align:center">无</td></tr>
                       </tbody>
                     </table>
                   </div>
@@ -199,11 +205,14 @@
     </div>
 
     <RollbackDialog v-model="rbVis" :deployment-id="rbID" @done="doSearch" />
+    <PodLogsModal :show="logsModal.show" :deployment-id="logsModal.deploymentId"
+      :app="logsModal.app" @close="logsModal.show = false" />
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import PodLogsModal from '../components/PodLogsModal.vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { Search, ArrowRight } from '@element-plus/icons-vue'
@@ -328,6 +337,20 @@ function isTerminal(r) {
   return h === 'healthy' || h === 'degraded' ||
     s === 'failed' || s === 'timeout' || s === 'canceled'
 }
+// ---- 查看日志 modal ----
+const logsModal = reactive({ show: false, deploymentId: 0, app: '' })
+function canShowLogs(r) {
+  // 只对失败行显示按钮（同步=Failed/Timeout 或 健康=Degraded）
+  const s = (r.sync_status || '').toLowerCase()
+  const h = (r.health || '').toLowerCase()
+  return s === 'failed' || s === 'timeout' || h === 'degraded'
+}
+function openLogsModal(deploymentId, app) {
+  logsModal.deploymentId = deploymentId
+  logsModal.app = app
+  logsModal.show = true
+}
+
 function liveDuration(r, row) {
   void tick.value // 读 tick 触发响应式
   if (isParentTerminal(row) || isTerminal(r)) return r.duration_sec ?? 0
@@ -621,4 +644,21 @@ onUnmounted(() => {
 .pg-ctrl button:disabled { opacity: .35; cursor: not-allowed; }
 .pg-ctrl button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
 .pg-ctrl b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+
+/* 查看日志按钮（仅失败行显示） */
+.view-logs-btn {
+  padding: 3px 10px;
+  border: 1px solid #fda4af;
+  border-radius: 4px;
+  background: #fff5f5;
+  color: #b91c1c;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.view-logs-btn:hover {
+  background: #fee2e2;
+  border-color: #ef4444;
+  color: #991b1b;
+}
 </style>

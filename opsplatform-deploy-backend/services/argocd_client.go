@@ -191,6 +191,85 @@ func (c *ArgocdClient) GetAppResourceTree(ctx context.Context, name string) ([]R
 	return out, nil
 }
 
+// GetPodLogs 拉指定 pod 的容器日志（默认主 container）。
+//
+// argocd 该接口返回 NDJSON 流（每行 `{"result":{"content":"...","timeStampStr":"..."}}`），
+// 我们解析出 content 拼回纯文本。若返回不是 NDJSON（旧版本 / 错误），原样回退。
+//
+// previous=true 时拿「上一次崩溃前」容器的日志（kubectl logs --previous）——
+// 这是 crash-loop 排查关键：当前容器才起来几秒没什么日志，上次容器才记着 panic。
+func (c *ArgocdClient) GetPodLogs(
+	ctx context.Context,
+	appName, namespace, podName, container string,
+	tailLines int, previous bool,
+) (string, error) {
+	if tailLines <= 0 {
+		tailLines = 200
+	}
+	if tailLines > 2000 {
+		tailLines = 2000
+	}
+	q := fmt.Sprintf("namespace=%s&podName=%s&tailLines=%d&previous=%t",
+		urlQ(namespace), urlQ(podName), tailLines, previous)
+	if container != "" {
+		q += "&container=" + urlQ(container)
+	}
+	path := "/api/v1/applications/" + appName + "/pods/" + podName + "/logs?" + q
+
+	// 单独 30s timeout（不影响 client 默认 timeout 给其他接口用）
+	lctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	raw, _, err := c.do(lctx, "GET", path, nil)
+	if err != nil {
+		return "", err
+	}
+	// 尝试 NDJSON 解析；失败则原样返回（兼容旧版本 / 错误页）
+	lines := bytes.Split(raw, []byte("\n"))
+	var out bytes.Buffer
+	parsed := 0
+	for _, ln := range lines {
+		ln = bytes.TrimSpace(ln)
+		if len(ln) == 0 {
+			continue
+		}
+		var entry struct {
+			Result struct {
+				Content      string `json:"content"`
+				TimeStampStr string `json:"timeStampStr"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(ln, &entry); err != nil {
+			// 不是 JSON，整个 raw 当纯文本回退
+			return string(raw), nil
+		}
+		out.WriteString(entry.Result.Content)
+		out.WriteByte('\n')
+		parsed++
+	}
+	if parsed == 0 {
+		return string(raw), nil
+	}
+	return out.String(), nil
+}
+
+// urlQ 简单 URL query 转义；只处理 = & 空格 等基础字符
+func urlQ(s string) string {
+	r := bytes.NewBuffer(nil)
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch {
+		case ch >= 'a' && ch <= 'z',
+			ch >= 'A' && ch <= 'Z',
+			ch >= '0' && ch <= '9',
+			ch == '-' || ch == '_' || ch == '.' || ch == '~':
+			r.WriteByte(ch)
+		default:
+			fmt.Fprintf(r, "%%%02X", ch)
+		}
+	}
+	return r.String()
+}
+
 // Sync 触发应用同步
 func (c *ArgocdClient) Sync(ctx context.Context, name string) error {
 	body := map[string]interface{}{

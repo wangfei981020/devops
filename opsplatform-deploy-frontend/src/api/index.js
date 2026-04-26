@@ -114,6 +114,8 @@ export const getModuleTagHistory = (id, limit = 10) => http.get(`/modules/${id}/
 export const listDeployments = (params) => http.get('/deployments', { params })
 export const getDeployment = (id) => http.get(`/deployments/${id}`)
 export const getRollbackPreview = (id) => http.get(`/deployments/${id}/rollback-preview`)
+export const getDeploymentPods = (id, app) => http.get(`/deployments/${id}/pods`, { params: { app } })
+export const getDeploymentPodLogs = (id, params) => http.get(`/deployments/${id}/pod-logs`, { params })
 
 // Dashboard
 export const getDashboardStats = () => http.get('/dashboard/stats')
