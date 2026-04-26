@@ -119,6 +119,17 @@
                   <el-icon class="ov-arrow"><ArrowRight /></el-icon>
                 </div>
               </div>
+              <div class="ov-card" @click="tab='minio'">
+                <div class="ov-icon" style="background:#fef3c7;color:#b45309"><el-icon><Box /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">日志归档</div>
+                  <div class="ov-desc">失败 pod 日志存 MinIO · 保留 {{ gc.minio_retention_days || 90 }} 天</div>
+                </div>
+                <div class="ov-right">
+                  <span :class="['ov-badge', ovStatus.minio.kind]">{{ ovStatus.minio.text }}</span>
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
               <div class="ov-card" @click="tab='about'">
                 <div class="ov-icon" style="background:#f5f5f4;color:#57534e"><el-icon><InfoFilled /></el-icon></div>
                 <div class="ov-main">
@@ -455,16 +466,14 @@
                 placeholder="保存后此处不再回显，留空则保留原值" />
             </div>
           </div>
-          <div class="form-row">
-            <div class="form-group full-width">
-              <label>保留天数 <span class="hint">改后立即更新 bucket lifecycle 规则</span></label>
-              <el-radio-group v-model="gc.minio_retention_days">
-                <el-radio-button :value="7">7 天</el-radio-button>
-                <el-radio-button :value="30">30 天</el-radio-button>
-                <el-radio-button :value="90">90 天（推荐）</el-radio-button>
-                <el-radio-button :value="180">180 天</el-radio-button>
-              </el-radio-group>
-            </div>
+          <div class="minio-retention">
+            <div class="retention-label">保留天数 <span class="hint">改后立即更新 bucket lifecycle 规则</span></div>
+            <el-radio-group v-model="gc.minio_retention_days" class="retention-radio">
+              <el-radio-button :value="7">7 天</el-radio-button>
+              <el-radio-button :value="30">30 天</el-radio-button>
+              <el-radio-button :value="90">90 天（推荐）</el-radio-button>
+              <el-radio-button :value="180">180 天</el-radio-button>
+            </el-radio-group>
           </div>
           <div class="actions" v-if="authStore.isAdmin || authStore.hasButton('manage_global')">
             <el-button @click="onTestMinIO" :loading="testing.minio">测试连接</el-button>
@@ -1051,6 +1060,8 @@ const ovStatus = computed(() => ({
   gitlabrepos: gitlabRepos.value.length ? { kind: 'count', text: `${gitlabRepos.value.length} 个仓库` } : { kind: 'miss', text: '未配置' },
   argocd: argoInstances.value.length ? { kind: 'count', text: `${argoInstances.value.length} 个实例` } : { kind: 'miss', text: '未配置' },
   poll: gc.poll_interval_sec ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
+  minio: gc.minio_endpoint && gc.minio_access_key
+    ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
 }))
 
 // 左侧 rail 每个 tab 右侧的徽章（精简版：只显示数量或未配置）
@@ -1205,4 +1216,15 @@ onMounted(loadOverview)
 .no-perm .np-icon { font-size: 48px; color: #f59e0b; margin-bottom: 16px; }
 .no-perm .np-title { font: 600 18px var(--body); color: var(--text); margin-bottom: 8px; }
 .no-perm .np-desc { font-size: 13.5px; color: var(--text-3); }
+
+/* MinIO 保留天数：label 一行 / 按钮组一行 */
+.minio-retention { margin: 16px 0 8px; }
+.minio-retention .retention-label {
+  display: block; margin-bottom: 8px;
+  font-size: 13px; color: var(--text-2); font-weight: 500;
+}
+.minio-retention .retention-label .hint {
+  color: var(--text-3); font-weight: 400; margin-left: 6px; font-size: 12px;
+}
+.minio-retention .retention-radio { display: block; }
 </style>
