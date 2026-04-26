@@ -164,6 +164,12 @@ func main() {
 	admin.HandleFunc("/users/{id}/toggle", handlers.HandleToggleUser).Methods("PUT", "OPTIONS")
 	admin.HandleFunc("/users/{id}/reset-password", handlers.HandleResetPassword).Methods("POST", "OPTIONS")
 	admin.HandleFunc("/users/{id}", handlers.HandleDeleteUser).Methods("DELETE", "OPTIONS")
+	admin.HandleFunc("/history-cleanup/preview", handlers.HandlePreviewHistoryCleanup).Methods("GET", "OPTIONS")
+	admin.HandleFunc("/history-cleanup", handlers.HandleRunHistoryCleanup).Methods("POST", "OPTIONS")
+
+	// 后台定时任务：发布历史自动清理（每天 02:00）+ 模块锁过期 sweep（每 5 分钟）
+	handlers.StartHistoryCleanupCron()
+	handlers.StartLockSweeper()
 
 	log.Printf("API listening on %s", cfg.Port)
 	server := &http.Server{Addr: cfg.Port, Handler: r}

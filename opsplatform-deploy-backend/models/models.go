@@ -23,6 +23,9 @@ type GlobalConfig struct {
 	MinIOSecretKey     string `json:"minio_secret_key,omitempty"` // 返回时脱敏
 	MinIORegion        string `json:"minio_region"`
 	MinIORetentionDays int    `json:"minio_retention_days"`
+	// 发布历史保留天数（自动清理）
+	HistoryRetentionDays int        `json:"history_retention_days"`
+	LastHistoryCleanupAt *time.Time `json:"last_history_cleanup_at"`
 }
 
 type ProjectEnv struct {

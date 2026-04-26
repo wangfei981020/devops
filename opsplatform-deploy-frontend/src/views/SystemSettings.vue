@@ -130,6 +130,17 @@
                   <el-icon class="ov-arrow"><ArrowRight /></el-icon>
                 </div>
               </div>
+              <div class="ov-card" @click="tab='history'">
+                <div class="ov-icon" style="background:#fee2e2;color:#b91c1c"><el-icon><Delete /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">发布历史</div>
+                  <div class="ov-desc">每天凌晨自动清理 · 保留 {{ gc.history_retention_days || 180 }} 天</div>
+                </div>
+                <div class="ov-right">
+                  <span :class="['ov-badge', ovStatus.history.kind]">{{ ovStatus.history.text }}</span>
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
               <div class="ov-card" @click="tab='about'">
                 <div class="ov-icon" style="background:#f5f5f4;color:#57534e"><el-icon><InfoFilled /></el-icon></div>
                 <div class="ov-main">
@@ -482,6 +493,41 @@
         </div>
       </div>
 
+      <!-- 发布历史清理 -->
+      <div v-if="tab === 'history'" class="section">
+        <div class="sec-head">
+          <div class="sec-title">发布历史自动清理</div>
+          <div class="sec-desc">
+            后端每天凌晨 2:00 自动删除 N 天前的发布记录（含归档日志的 DB 索引）。
+            实际 MinIO 文件靠 lifecycle 自动过期。
+          </div>
+        </div>
+        <div class="sec-body" v-loading="loading.cred">
+          <div class="minio-retention">
+            <div class="retention-label">保留时长 <span class="hint">改后立即生效，下次凌晨清理使用新值</span></div>
+            <el-radio-group v-model="gc.history_retention_days" class="retention-radio">
+              <el-radio-button :value="30">30 天</el-radio-button>
+              <el-radio-button :value="90">90 天</el-radio-button>
+              <el-radio-button :value="180">180 天（推荐）</el-radio-button>
+              <el-radio-button :value="365">365 天</el-radio-button>
+              <el-radio-button :value="0">永久（不清理）</el-radio-button>
+            </el-radio-group>
+          </div>
+          <div class="form-row" style="margin-top:14px;">
+            <div class="form-group full-width">
+              <label>最后清理时间</label>
+              <div class="info-text">
+                {{ gc.last_history_cleanup_at ? formatDate(gc.last_history_cleanup_at) : '从未清理' }}
+              </div>
+            </div>
+          </div>
+          <div class="actions" v-if="authStore.isAdmin || authStore.hasButton('manage_global')">
+            <el-button @click="openHistoryCleanupDialog">立即清理…</el-button>
+            <el-button type="primary" @click="saveGlobal" :loading="saving.cred">保存</el-button>
+          </div>
+        </div>
+      </div>
+
       <!-- About -->
       <div v-if="tab === 'about'" class="section">
         <div class="sec-head">
@@ -643,6 +689,41 @@
         <el-button type="primary" @click="onSaveRepo">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 立即清理发布历史弹窗 -->
+    <el-dialog v-model="historyCleanupDlg.vis" title="立即清理发布历史" width="500px"
+      :close-on-click-modal="false" :close-on-press-escape="false">
+      <el-form :model="historyCleanupDlg" label-width="100px" label-position="left" size="default">
+        <el-form-item label="删除多少天前">
+          <el-radio-group v-model="historyCleanupDlg.days" @change="onPreviewCleanup">
+            <el-radio-button :value="30">30 天</el-radio-button>
+            <el-radio-button :value="90">90 天</el-radio-button>
+            <el-radio-button :value="180">180 天</el-radio-button>
+            <el-radio-button :value="365">365 天</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="环境范围">
+          <el-select v-model="historyCleanupDlg.envNames" style="width:100%" multiple
+            collapse-tags collapse-tags-tooltip
+            @change="onPreviewCleanup"
+            placeholder="所有环境（留空）">
+            <el-option v-for="e in historyCleanupDlg.envs" :key="e" :value="e" :label="e" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <div class="cleanup-preview" :class="{ ok: historyCleanupDlg.preview === 0 }">
+        <template v-if="historyCleanupDlg.previewing">正在统计…</template>
+        <template v-else-if="historyCleanupDlg.preview === 0">没有符合条件的发布记录</template>
+        <template v-else>预览将删除 <b>{{ historyCleanupDlg.preview }}</b> 条发布记录</template>
+      </div>
+      <template #footer>
+        <el-button @click="historyCleanupDlg.vis = false">取消</el-button>
+        <el-button type="danger" :disabled="!historyCleanupDlg.preview" :loading="historyCleanupDlg.running"
+          @click="onRunCleanup">
+          确认删除 {{ historyCleanupDlg.preview }} 条
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -653,6 +734,7 @@ import { Plus } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import {
   getGlobalConfig, updateGlobalConfig, testGitlab, testMinIO,
+  previewHistoryCleanup, runHistoryCleanup, listProjectEnvs,
   listUsers, createUser, updateUser, toggleUser, resetUserPassword, deleteUser,
   listContacts, createContact, updateContact, deleteContact,
   listLarkBots, createLarkBot, updateLarkBot, deleteLarkBot, testLarkBot,
@@ -660,7 +742,7 @@ import {
   listGitlabRepos, createGitlabRepo, updateGitlabRepo, deleteGitlabRepo,
 } from '../api'
 import {
-  Key, User, UserFilled, ChatLineRound, Bell, Folder, Connection, Timer, InfoFilled, ArrowRight, Lock
+  Key, User, UserFilled, ChatLineRound, Bell, Folder, Connection, Timer, InfoFilled, ArrowRight, Lock, Box, Delete
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 const authStore = useAuthStore()
@@ -686,6 +768,7 @@ const tabs = [
   { v: 'contacts', label: '通知人' },
   { v: 'poll', label: '同步策略' },
   { v: 'minio', label: '日志归档' },
+  { v: 'history', label: '发布历史' },
   { v: 'about', label: '关于' }
 ]
 
@@ -697,6 +780,7 @@ const gc = reactive({
   poll_interval_sec: 10, poll_timeout_min: 3, git_retry_count: 3,
   minio_endpoint: '', minio_bucket: '', minio_region: '',
   minio_access_key: '', minio_secret_key: '', minio_retention_days: 90,
+  history_retention_days: 180, last_history_cleanup_at: '',
 })
 const users = ref([])
 const contacts = ref([])
@@ -721,6 +805,7 @@ async function saveGlobal() {
   if (!payload.gitlab_token) delete payload.gitlab_token
   if (!payload.lark_default_secret) delete payload.lark_default_secret
   if (!payload.minio_secret_key) delete payload.minio_secret_key
+  delete payload.last_history_cleanup_at // 只读字段，不允许更新
   saving.cred = true
   try {
     await updateGlobalConfig(payload)
@@ -742,6 +827,54 @@ async function onTestMinIO() {
   } catch (e) {
     ElMessage.error(e?.response?.data?.message || e.message || '测试失败')
   } finally { testing.minio = false }
+}
+
+// ---- 发布历史立即清理 ----
+const historyCleanupDlg = reactive({
+  vis: false, days: 90, envNames: [],
+  envs: [], preview: 0, previewing: false, running: false,
+})
+async function openHistoryCleanupDialog() {
+  historyCleanupDlg.vis = true
+  historyCleanupDlg.days = 90
+  historyCleanupDlg.envNames = []
+  // 拉环境列表
+  try {
+    const r = await listProjectEnvs()
+    historyCleanupDlg.envs = (Array.isArray(r) ? r : []).map(e => e.name)
+  } catch { historyCleanupDlg.envs = [] }
+  await onPreviewCleanup()
+}
+async function onPreviewCleanup() {
+  historyCleanupDlg.previewing = true
+  try {
+    const r = await previewHistoryCleanup({
+      days: historyCleanupDlg.days,
+      envs: (historyCleanupDlg.envNames || []).join(','),
+    })
+    historyCleanupDlg.preview = r.count || 0
+  } catch (e) {
+    ElMessage.error('预览失败：' + (e?.response?.data?.message || e.message))
+    historyCleanupDlg.preview = 0
+  } finally { historyCleanupDlg.previewing = false }
+}
+async function onRunCleanup() {
+  historyCleanupDlg.running = true
+  try {
+    const r = await runHistoryCleanup({
+      days: historyCleanupDlg.days,
+      env_names: historyCleanupDlg.envNames || [],
+    })
+    ElMessage.success(`已删除 ${r.deleted} 条发布记录`)
+    historyCleanupDlg.vis = false
+    await loadGlobal()
+  } catch (e) {
+    ElMessage.error('清理失败：' + (e?.response?.data?.message || e.message))
+  } finally { historyCleanupDlg.running = false }
+}
+function formatDate(s) {
+  if (!s) return '—'
+  return dayjs(s).format('YYYY-MM-DD HH:mm:ss')
 }
 async function onTestGit() {
   testing.git = true
@@ -1062,6 +1195,9 @@ const ovStatus = computed(() => ({
   poll: gc.poll_interval_sec ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
   minio: gc.minio_endpoint && gc.minio_access_key
     ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
+  history: gc.history_retention_days === 0
+    ? { kind: 'count', text: '永久' }
+    : { kind: 'ok', text: `${gc.history_retention_days || 180} 天` },
 }))
 
 // 左侧 rail 每个 tab 右侧的徽章（精简版：只显示数量或未配置）
@@ -1227,4 +1363,17 @@ onMounted(loadOverview)
   color: var(--text-3); font-weight: 400; margin-left: 6px; font-size: 12px;
 }
 .minio-retention .retention-radio { display: block; }
+
+.cleanup-preview {
+  margin-top: 16px; padding: 10px 14px;
+  background: #fef3c7; border: 1px solid #fde68a; border-radius: 6px;
+  color: #92400e; font-size: 13px;
+}
+.cleanup-preview b { font-family: 'Fira Code', monospace; color: #b91c1c; }
+.cleanup-preview.ok { background: #ecfdf5; border-color: #a7f3d0; color: #047857; }
+
+.info-text {
+  font-size: 13px; color: var(--text-2); padding: 6px 10px;
+  background: var(--bg-input); border-radius: 4px; font-family: 'Fira Code', monospace;
+}
 </style>

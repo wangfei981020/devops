@@ -101,7 +101,7 @@ bet-client-backend"
 
 <script setup>
 import { ref, computed } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { RefreshRight, ArrowRight, Check, Close } from '@element-plus/icons-vue'
 import { restartModules } from '../api'
 import { useAuthStore } from '../stores/auth'
@@ -180,7 +180,13 @@ async function onRestart() {
   } catch (_) { return }
   submitting.value = true
   try {
-    const r = await restartModules({ project_env_id: props.projectEnv.id, module_names: names })
+    let r
+    try {
+      r = await restartModules({ project_env_id: props.projectEnv.id, module_names: names })
+    } catch (err) {
+      handleLockConflict(err)
+      throw err
+    }
     ElMessage.success(`已触发 · #${r.deployment_id} · 进度看右下角浮动条`)
     deployments.startTracking(r.deployment_id, {
       action: 'restart',
@@ -192,7 +198,31 @@ async function onRestart() {
     emit('done', r.deployment_id)
     text.value = ''
     preview.value = []
-  } finally { submitting.value = false }
+  } catch (_) { /* 已处理 */ }
+  finally { submitting.value = false }
+}
+
+function handleLockConflict(err) {
+  const status = err?.response?.status
+  const data = err?.response?.data
+  if (status !== 409 || !data?.data?.conflicts?.length) {
+    ElMessage.error(data?.message || err?.message || '提交失败')
+    return
+  }
+  const conflicts = data.data.conflicts
+  const lines = conflicts.map(c => {
+    const sec = c.elapsed_sec || 0
+    const elapsed = sec < 60 ? `${sec}s` : `${Math.floor(sec/60)}m ${sec%60}s`
+    return `<b>${c.module}</b>：${c.operator || '其他人'} 正在发布（已耗时 ${elapsed}）`
+  }).join('<br>')
+  ElNotification({
+    title: '⚠ 重启被拒绝',
+    dangerouslyUseHTMLString: true,
+    message: `<div style="line-height:1.7">${lines}<br><span style="color:#94a3b8;font-size:11px">请等候完成后再试</span></div>`,
+    type: 'warning',
+    duration: 8000,
+    position: 'top-right',
+  })
 }
 </script>
 

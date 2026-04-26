@@ -130,7 +130,25 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	op := getOperator(r)
+
+	// 抢同模块互斥锁——同 (env, module) 已被发布时拒绝
+	moduleNames := keysOf(pending)
+	conflicts, lockErr := AcquireModuleLocks(p.Name, moduleNames, depID, op)
+	if lockErr != nil {
+		// 锁系统异常（DB 错）—— 不阻塞发布，记 log 继续
+		log.Printf("[module-lock] acquire error (continue without lock): %v", lockErr)
+	} else if len(conflicts) > 0 {
+		// 锁被别人占——409 Conflict 让前端显示通知
+		// 把刚 INSERT 的 deployment 也撤回（避免出现一条永远 pending 的孤立记录）
+		_, _ = database.DB.Exec(`DELETE FROM deployment WHERE id=?`, depID)
+		JSONErrorWithData(w, 40900, "已有发布在进行中", map[string]interface{}{
+			"conflicts": conflicts,
+		})
+		return
+	}
+
 	InflightTrack(func() {
+		defer ReleaseModuleLocks(p.Name, moduleNames)
 		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, refID, op, opLabel)
 	})
 
@@ -191,8 +209,21 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 抢同模块互斥锁
+	conflicts, lockErr := AcquireModuleLocks(p.Name, req.ModuleNames, depID, operator)
+	if lockErr != nil {
+		log.Printf("[module-lock] acquire error (continue without lock): %v", lockErr)
+	} else if len(conflicts) > 0 {
+		_, _ = database.DB.Exec(`DELETE FROM deployment WHERE id=?`, depID)
+		JSONErrorWithData(w, 40900, "已有发布在进行中", map[string]interface{}{
+			"conflicts": conflicts,
+		})
+		return
+	}
+
 	_, pollInterval, pollTimeoutMin := loadPollCfg()
 	InflightTrack(func() {
+		defer ReleaseModuleLocks(p.Name, req.ModuleNames)
 		start := time.Now()
 		// Restart 需要等所有 pod 真的 Healthy，30s 触发 + pollTimeoutMin 分钟轮询 + 1 分钟缓冲
 		ctx, cancel := context.WithTimeout(context.Background(),
@@ -331,7 +362,22 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	op := getOperator(r)
+
+	// 抢同模块互斥锁
+	moduleNames := keysOf(pending)
+	conflicts, lockErr := AcquireModuleLocks(p.Name, moduleNames, depID, op)
+	if lockErr != nil {
+		log.Printf("[module-lock] acquire error (continue without lock): %v", lockErr)
+	} else if len(conflicts) > 0 {
+		_, _ = database.DB.Exec(`DELETE FROM deployment WHERE id=?`, depID)
+		JSONErrorWithData(w, 40900, "已有发布在进行中", map[string]interface{}{
+			"conflicts": conflicts,
+		})
+		return
+	}
+
 	InflightTrack(func() {
+		defer ReleaseModuleLocks(p.Name, moduleNames)
 		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, &ref, op, "回滚")
 	})
 

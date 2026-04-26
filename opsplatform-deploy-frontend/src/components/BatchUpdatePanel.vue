@@ -99,7 +99,7 @@ base-client-backend:20260416020000-99"
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { Upload, ArrowRight } from '@element-plus/icons-vue'
 import { previewImage, updateImage } from '../api'
 import { useAuthStore } from '../stores/auth'
@@ -200,7 +200,13 @@ async function onSubmit() {
   try {
     const payload = { project_env_id: props.projectEnv.id, changes }
     if (rbMode) payload.ref_deployment_id = props.rollbackMode.refDeploymentID
-    const r = await updateImage(payload)
+    let r
+    try {
+      r = await updateImage(payload)
+    } catch (err) {
+      handleLockConflict(err)
+      throw err // 让 finally 跑
+    }
     ElMessage.success(`${rbMode ? '回滚' : '发布'}已提交 · #${r.deployment_id} · 进度看右下角浮动条`)
     deployments.startTracking(r.deployment_id, {
       action: rbMode ? 'rollback' : 'update_image',
@@ -213,7 +219,33 @@ async function onSubmit() {
     if (rbMode) emit('rollback-consumed')
     text.value = ''
     diff.value = []
-  } finally { submitting.value = false }
+  } catch (_) { /* 已经处理过了 */ }
+  finally { submitting.value = false }
+}
+
+// 同 (env, module) 互斥锁冲突 → 后端返回 409 + conflicts 数组，前端右上角 ElNotification
+function handleLockConflict(err) {
+  const status = err?.response?.status
+  const data = err?.response?.data
+  if (status !== 409 || !data?.data?.conflicts?.length) {
+    // 非锁冲突 → 走默认 toast
+    ElMessage.error(data?.message || err?.message || '提交失败')
+    return
+  }
+  const conflicts = data.data.conflicts
+  const lines = conflicts.map(c => {
+    const sec = c.elapsed_sec || 0
+    const elapsed = sec < 60 ? `${sec}s` : `${Math.floor(sec/60)}m ${sec%60}s`
+    return `<b>${c.module}</b>：${c.operator || '其他人'} 正在发布（已耗时 ${elapsed}）`
+  }).join('<br>')
+  ElNotification({
+    title: '⚠ 发布被拒绝',
+    dangerouslyUseHTMLString: true,
+    message: `<div style="line-height:1.7">${lines}<br><span style="color:#94a3b8;font-size:11px">请等候完成后再试</span></div>`,
+    type: 'warning',
+    duration: 8000,
+    position: 'top-right',
+  })
 }
 </script>
 

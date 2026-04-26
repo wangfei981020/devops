@@ -46,6 +46,10 @@ export const updateGlobalConfig = (data) => http.put('/global-config', data)
 export const testGitlab = (data) => http.post('/global-config/test-gitlab', data || {})
 export const testMinIO = (data) => http.post('/global-config/test-minio', data || {})
 
+// History cleanup
+export const previewHistoryCleanup = (params) => http.get('/history-cleanup/preview', { params })
+export const runHistoryCleanup = (data) => http.post('/history-cleanup', data || {})
+
 // Users（平台登录账号，admin only）
 export const listUsers = () => http.get('/users')
 export const createUser = (data) => http.post('/users', data)

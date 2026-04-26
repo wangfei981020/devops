@@ -50,6 +50,30 @@ func JSONError(w http.ResponseWriter, code int, msg string) {
 	_ = json.NewEncoder(w).Encode(resp{Code: code, Message: msg})
 }
 
+// JSONErrorWithData 同 JSONError 但带额外结构体（让前端拿到冲突详情等元数据）
+func JSONErrorWithData(w http.ResponseWriter, code int, msg string, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	httpStatus := http.StatusOK
+	switch code {
+	case 40000, 40001:
+		httpStatus = http.StatusBadRequest
+	case 40100:
+		httpStatus = http.StatusUnauthorized
+	case 40300:
+		httpStatus = http.StatusForbidden
+	case 40400:
+		httpStatus = http.StatusNotFound
+	case 40900:
+		httpStatus = http.StatusConflict
+	default:
+		if code >= 50000 {
+			httpStatus = http.StatusInternalServerError
+		}
+	}
+	w.WriteHeader(httpStatus)
+	_ = json.NewEncoder(w).Encode(resp{Code: code, Message: msg, Data: data})
+}
+
 func DecodeJSON(w http.ResponseWriter, r *http.Request, v interface{}) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {

@@ -21,14 +21,16 @@ func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
 		poll_interval_sec, poll_timeout_min, git_retry_count, updated_at,
 		IFNULL(minio_endpoint,''), IFNULL(minio_bucket,'deploy-logs'),
 		IFNULL(minio_access_key,''), IFNULL(minio_secret_key,''),
-		IFNULL(minio_region,'us-east-1'), IFNULL(minio_retention_days, 90)
+		IFNULL(minio_region,'us-east-1'), IFNULL(minio_retention_days, 90),
+		IFNULL(history_retention_days, 180), last_history_cleanup_at
 		FROM global_config WHERE id=1`).
 		Scan(&c.ID, &c.GitlabURL, &c.GitlabUser, &c.GitlabEmail, &c.GitlabToken,
 			&c.TestRepoPath, &c.DeployCenterBaseURL,
 			&c.LarkDefaultWebhook, &c.LarkDefaultSecret,
 			&c.PollIntervalSec, &c.PollTimeoutMin, &c.GitRetryCount, &c.UpdatedAt,
 			&c.MinIOEndpoint, &c.MinIOBucket, &c.MinIOAccessKey, &c.MinIOSecretKey,
-			&c.MinIORegion, &c.MinIORetentionDays)
+			&c.MinIORegion, &c.MinIORetentionDays,
+			&c.HistoryRetentionDays, &c.LastHistoryCleanupAt)
 	if err != nil {
 		InternalErr(w, r, err)
 		return
@@ -58,6 +60,8 @@ type updateGlobalConfigReq struct {
 	MinIOSecretKey     *string `json:"minio_secret_key"`
 	MinIORegion        *string `json:"minio_region"`
 	MinIORetentionDays *int    `json:"minio_retention_days"`
+	// 发布历史保留天数
+	HistoryRetentionDays *int `json:"history_retention_days"`
 }
 
 func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
@@ -139,6 +143,17 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sets = append(sets, "minio_retention_days=?")
+		args = append(args, days)
+	}
+	if req.HistoryRetentionDays != nil {
+		days := *req.HistoryRetentionDays
+		validDays := map[int]bool{30: true, 90: true, 180: true, 365: true, 0: true}
+		// 0 = 永久保留
+		if !validDays[days] {
+			JSONError(w, 40001, "history_retention_days 必须是 0 / 30 / 90 / 180 / 365")
+			return
+		}
+		sets = append(sets, "history_retention_days=?")
 		args = append(args, days)
 	}
 	if len(sets) == 0 {
