@@ -430,19 +430,18 @@
         <div class="sec-body" v-loading="loading.cred">
           <div class="form-row">
             <div class="form-group full-width">
-              <label>MinIO 端点 URL <span class="hint">支持集群内 SVC 或域名</span></label>
-              <el-input v-model="gc.minio_endpoint" class="mono"
-                placeholder="http://minio.minio.svc.cluster.local:9000  /  https://minio.example.com" />
+              <label>MinIO 端点 URL</label>
+              <el-input v-model="gc.minio_endpoint" class="mono" />
             </div>
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label>Bucket 名</label>
-              <el-input v-model="gc.minio_bucket" class="mono" placeholder="deploy-logs" />
+              <label>Bucket</label>
+              <el-input v-model="gc.minio_bucket" class="mono" />
             </div>
             <div class="form-group">
               <label>Region</label>
-              <el-input v-model="gc.minio_region" class="mono" placeholder="us-east-1" />
+              <el-input v-model="gc.minio_region" class="mono" />
             </div>
           </div>
           <div class="form-row">
@@ -687,7 +686,7 @@ const gc = reactive({
   deploy_center_base_url: '',
   lark_default_webhook: '', lark_default_secret: '',
   poll_interval_sec: 10, poll_timeout_min: 3, git_retry_count: 3,
-  minio_endpoint: '', minio_bucket: 'deploy-logs', minio_region: 'us-east-1',
+  minio_endpoint: '', minio_bucket: '', minio_region: '',
   minio_access_key: '', minio_secret_key: '', minio_retention_days: 90,
 })
 const users = ref([])
