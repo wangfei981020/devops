@@ -134,8 +134,9 @@
     <el-dialog
       v-model="projDlgVis"
       :title="projDlgIsEdit ? '编辑项目' : '新增项目'"
-      width="480px"
       :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      width="480px"
       custom-class="env-dialog">
       <div class="dlg-body">
         <div class="field">
@@ -179,6 +180,7 @@
       :title="envDlgIsEdit ? '编辑环境' : '新增环境'"
       width="680px"
       :close-on-click-modal="false"
+      :close-on-press-escape="false"
       custom-class="env-dialog">
       <div class="dlg-body">
         <div class="sec-lbl">基本信息</div>
@@ -484,7 +486,7 @@ async function onSaveProject() {
 }
 async function onDeleteProject() {
   try {
-    await ElMessageBox.confirm(`确认删除项目「${projForm.name}」？`, '删除确认', { type: 'warning' })
+    await ElMessageBox.confirm(`确认删除项目「${projForm.name}」？`, '删除确认', { type: 'warning', closeOnClickModal: false, closeOnPressEscape: false })
   } catch (_) { return }
   try {
     await deleteProject(projEditingID.value)
@@ -560,7 +562,7 @@ async function onDeleteEnv() {
   try {
     await ElMessageBox.confirm(
       `确认删除 ${envForm.project_name}-${envForm.env_type}？该操作不可恢复。`,
-      '删除确认', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
+      '删除确认', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消', closeOnClickModal: false, closeOnPressEscape: false }
     )
   } catch (_) { return }
   await deleteProjectEnv(envEditingID.value)

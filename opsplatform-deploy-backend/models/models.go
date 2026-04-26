@@ -3,19 +3,26 @@ package models
 import "time"
 
 type GlobalConfig struct {
-	ID                 int64     `json:"id"`
-	GitlabURL          string    `json:"gitlab_url"`
-	GitlabUser         string    `json:"gitlab_user"`
-	GitlabEmail        string    `json:"gitlab_email"`
-	GitlabToken        string    `json:"gitlab_token,omitempty"`
-	TestRepoPath       string    `json:"test_repo_path"` // 测试连接用的仓库相对路径
-	DeployCenterBaseURL string   `json:"deploy_center_base_url"` // Lark 通知「查看详情」跳转用
-	LarkDefaultWebhook string    `json:"lark_default_webhook"`
-	LarkDefaultSecret  string    `json:"lark_default_secret,omitempty"`
-	PollIntervalSec    int       `json:"poll_interval_sec"`
-	PollTimeoutMin     int       `json:"poll_timeout_min"`
-	GitRetryCount      int       `json:"git_retry_count"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                  int64     `json:"id"`
+	GitlabURL           string    `json:"gitlab_url"`
+	GitlabUser          string    `json:"gitlab_user"`
+	GitlabEmail         string    `json:"gitlab_email"`
+	GitlabToken         string    `json:"gitlab_token,omitempty"`
+	TestRepoPath        string    `json:"test_repo_path"`         // 测试连接用的仓库相对路径
+	DeployCenterBaseURL string    `json:"deploy_center_base_url"` // Lark 通知「查看详情」跳转用
+	LarkDefaultWebhook  string    `json:"lark_default_webhook"`
+	LarkDefaultSecret   string    `json:"lark_default_secret,omitempty"`
+	PollIntervalSec     int       `json:"poll_interval_sec"`
+	PollTimeoutMin      int       `json:"poll_timeout_min"`
+	GitRetryCount       int       `json:"git_retry_count"`
+	UpdatedAt           time.Time `json:"updated_at"`
+	// MinIO 配置——失败 pod 日志归档用。未配则跳过归档功能
+	MinIOEndpoint      string `json:"minio_endpoint"`
+	MinIOBucket        string `json:"minio_bucket"`
+	MinIOAccessKey     string `json:"minio_access_key"`
+	MinIOSecretKey     string `json:"minio_secret_key,omitempty"` // 返回时脱敏
+	MinIORegion        string `json:"minio_region"`
+	MinIORetentionDays int    `json:"minio_retention_days"`
 }
 
 type ProjectEnv struct {

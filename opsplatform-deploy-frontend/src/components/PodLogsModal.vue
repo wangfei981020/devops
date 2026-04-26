@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <transition name="modal-fade">
-      <div v-if="show" class="logs-overlay" @click.self="$emit('close')">
+      <div v-if="show" class="logs-overlay">
         <div class="logs-modal">
           <!-- 头部 -->
           <div class="logs-head">
@@ -47,8 +47,13 @@
           <div class="logs-toolbar">
             <div class="tb-l">
               <span class="lbl">来源：</span>
-              <label class="radio"><input type="radio" v-model="previous" :value="true" @change="reload" /> 上一次崩溃前</label>
-              <label class="radio"><input type="radio" v-model="previous" :value="false" @change="reload" /> 当前容器</label>
+              <span class="src-tag">上一次崩溃前的日志</span>
+              <span v-if="logsSource === 'archive'" class="src-badge archive" title="发布失败时已存档到 MinIO，pod 被替换也能看">
+                📦 归档快照
+              </span>
+              <span v-else-if="logsSource === 'live'" class="src-badge live" title="实时从 ArgoCD 拉取（pod 还在）">
+                ⚡ 实时拉取
+              </span>
             </div>
             <div class="tb-r">
               <span class="lbl">尾部行数：</span>
@@ -131,7 +136,7 @@ import {
   Document, Close, CircleCheck, Warning, Search, ArrowUp, ArrowDown,
   Refresh, DocumentCopy, InfoFilled, DArrowRight,
 } from '@element-plus/icons-vue'
-import { getDeploymentPods, getDeploymentPodLogs } from '../api'
+import { getDeploymentPods, getDeploymentPodLogs, getDeploymentArchivedPods } from '../api'
 
 const props = defineProps({
   show: Boolean,
@@ -144,9 +149,10 @@ const emit = defineEmits(['close'])
 
 const pods = ref([])
 const podName = ref('')
-const previous = ref(true)
+const previous = ref(true) // 固定 true，发布工具只关心崩溃前日志
 const tailLines = ref(200)
 const logs = ref('')
+const logsSource = ref('') // 'archive' 或 'live'
 const loading = ref(false)
 const error = ref('')
 const errorHint = ref('')
@@ -181,18 +187,53 @@ const noLogsHint = computed(() => {
 })
 
 // ---- 加载 pods ----
+// 优先级：归档列表（pod 可能已被 k8s 收走，实时拿不到了）→ argocd 实时
 async function loadPods() {
   if (!props.deploymentId || !props.app) return
   try {
-    const r = await getDeploymentPods(props.deploymentId, props.app)
-    pods.value = r.pods || []
+    // 1. 先查归档（失败时已存的 pod 快照）
+    let archived = []
+    try {
+      const ar = await getDeploymentArchivedPods(props.deploymentId, props.app)
+      archived = ar.pods || []
+    } catch { /* 忽略 */ }
+
+    // 2. 再拉实时 pod 列表（可能拿不到，比如 pod 已被替换）
+    let livePods = []
+    try {
+      const r = await getDeploymentPods(props.deploymentId, props.app)
+      livePods = r.pods || []
+    } catch { /* 忽略 */ }
+
+    // 3. 合并：归档的 pod 标记为「已存档」，实时 pod 用真实状态
+    const map = {}
+    for (const a of archived) {
+      map[a.pod] = {
+        name: a.pod,
+        namespace: '', // 归档不需要 namespace
+        health: 'Archived',
+        status_reason: '已归档（' + a.captured_at + '）',
+        restart_count: '',
+        containers_ready: '',
+        archived: true,
+      }
+    }
+    for (const lp of livePods) {
+      if (map[lp.name]) {
+        // 同时存在 → 用实时状态覆盖（更新 health / restart count）
+        Object.assign(map[lp.name], lp, { archived: true })
+      } else {
+        map[lp.name] = { ...lp, archived: false }
+      }
+    }
+    pods.value = Object.values(map)
     if (pods.value.length === 0) {
       error.value = '未找到任何 pod'
-      errorHint.value = 'argocd 资源树为空，可能是 app 同步失败或还未创建资源'
+      errorHint.value = '该次发布没有失败 pod 的归档日志，且 ArgoCD 也没有当前 pod 资源'
       return
     }
-    // 默认选第一个 unhealthy 的；都健康就选第一个
-    const fail = pods.value.find(p => p.health && p.health !== 'Healthy')
+    // 默认选第一个失败/归档的
+    const fail = pods.value.find(p => p.archived || (p.health && p.health !== 'Healthy'))
     podName.value = props.initialPodName || (fail ? fail.name : pods.value[0].name)
     await fetchLogs()
   } catch (e) {
@@ -211,11 +252,12 @@ async function fetchLogs() {
     const r = await getDeploymentPodLogs(props.deploymentId, {
       app: props.app,
       pod: podName.value,
-      namespace: currentPod.value.namespace,
+      namespace: currentPod.value.namespace || '',
       previous: previous.value,
       tail_lines: tailLines.value,
     })
     logs.value = r.logs || ''
+    logsSource.value = r.source || ''
     lastFetchedAt.value = Date.now()
     // 拿到日志后自动跳到错误段
     nextTick(() => {
@@ -358,6 +400,7 @@ watch(() => props.show, (v) => {
     pods.value = []
     podName.value = ''
     logs.value = ''
+    logsSource.value = ''
     error.value = ''
     searchQuery.value = ''
     searchMatches.value = []
@@ -434,6 +477,13 @@ watch(() => props.show, (v) => {
 }
 .tb-l, .tb-r { display: flex; align-items: center; gap: 8px; }
 .lbl { color: #6b7280; }
+.src-tag { font-weight: 500; color: #1f2937; font-size: 12.5px; }
+.src-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 99px;
+  font-weight: 500; display: inline-flex; align-items: center; gap: 3px;
+}
+.src-badge.archive { background: #ecfdf5; color: #059669; border: 1px solid #a7f3d0; }
+.src-badge.live { background: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; }
 .radio { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 .radio input { margin: 0; cursor: pointer; }
 .sel {

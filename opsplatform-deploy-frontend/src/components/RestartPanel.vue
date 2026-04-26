@@ -172,6 +172,8 @@ async function onRestart() {
         customClass: 'deploy-confirm-modal',
         confirmButtonText: isProdEnv ? `确认重启 ${env}` : '确认重启',
         cancelButtonText: '取消',
+        closeOnClickModal: false,
+        closeOnPressEscape: false,
         ...(isProdEnv ? { confirmButtonClass: 'el-button--danger' } : {}),
       }
     )

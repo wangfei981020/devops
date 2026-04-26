@@ -90,6 +90,8 @@ func main() {
 	protected.HandleFunc("/deployments/{id}/rollback-preview", handlers.HandleRollbackPreview).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/deployments/{id}/pods", handlers.HandleGetDeploymentPods).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/deployments/{id}/pod-logs", handlers.HandleGetDeploymentPodLogs).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/deployments/{id}/archived-pods", handlers.HandleGetDeploymentArchivedPods).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/global-config/test-minio", handlers.HandleTestMinIO).Methods("POST", "OPTIONS")
 
 	// 发布动作（UAT handler 内自行放行 / PROD handler 内要求 admin）
 	protected.HandleFunc("/deploy/preview-image", handlers.HandlePreviewImage).Methods("POST", "OPTIONS")

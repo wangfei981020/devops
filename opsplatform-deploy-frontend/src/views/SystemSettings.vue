@@ -418,6 +418,62 @@
         </div>
       </div>
 
+      <!-- MinIO 日志归档配置 -->
+      <div v-if="tab === 'minio'" class="section">
+        <div class="sec-head">
+          <div class="sec-title">失败日志归档（MinIO）</div>
+          <div class="sec-desc">
+            发布失败时把「上一次崩溃前」pod 日志（最多 2000 行）异步上传到 MinIO，
+            避免 pod 更新后日志丢失。<b>未配置时归档功能跳过，不影响发布主流程</b>。
+          </div>
+        </div>
+        <div class="sec-body" v-loading="loading.cred">
+          <div class="form-row">
+            <div class="form-group full-width">
+              <label>MinIO 端点 URL <span class="hint">支持集群内 SVC 或域名</span></label>
+              <el-input v-model="gc.minio_endpoint" class="mono"
+                placeholder="http://minio.minio.svc.cluster.local:9000  /  https://minio.example.com" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Bucket 名</label>
+              <el-input v-model="gc.minio_bucket" class="mono" placeholder="deploy-logs" />
+            </div>
+            <div class="form-group">
+              <label>Region</label>
+              <el-input v-model="gc.minio_region" class="mono" placeholder="us-east-1" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Access Key</label>
+              <el-input v-model="gc.minio_access_key" class="mono" />
+            </div>
+            <div class="form-group">
+              <label>Secret Key <span class="hint">已保存的留空表示不修改</span></label>
+              <el-input v-model="gc.minio_secret_key" type="password" show-password
+                placeholder="保存后此处不再回显，留空则保留原值" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group full-width">
+              <label>保留天数 <span class="hint">改后立即更新 bucket lifecycle 规则</span></label>
+              <el-radio-group v-model="gc.minio_retention_days">
+                <el-radio-button :value="7">7 天</el-radio-button>
+                <el-radio-button :value="30">30 天</el-radio-button>
+                <el-radio-button :value="90">90 天（推荐）</el-radio-button>
+                <el-radio-button :value="180">180 天</el-radio-button>
+              </el-radio-group>
+            </div>
+          </div>
+          <div class="actions" v-if="authStore.isAdmin || authStore.hasButton('manage_global')">
+            <el-button @click="onTestMinIO" :loading="testing.minio">测试连接</el-button>
+            <el-button type="primary" @click="saveGlobal" :loading="saving.cred">保存</el-button>
+          </div>
+        </div>
+      </div>
+
       <!-- About -->
       <div v-if="tab === 'about'" class="section">
         <div class="sec-head">
@@ -435,7 +491,7 @@
     </div>
 
     <!-- ArgoCD 实例弹窗 -->
-    <el-dialog v-model="argoDlg.vis" :title="argoDlg.isEdit ? '编辑 ArgoCD 实例' : '新增 ArgoCD 实例'" width="520px">
+    <el-dialog v-model="argoDlg.vis" :title="argoDlg.isEdit ? '编辑 ArgoCD 实例' : '新增 ArgoCD 实例'" width="520px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="argoDlg.form" label-width="100px" label-position="top" size="default">
         <el-form-item label="名称 *">
           <el-input v-model="argoDlg.form.name" :disabled="argoDlg.isEdit" class="mono" placeholder="如: uat-cluster" />
@@ -458,7 +514,7 @@
     </el-dialog>
 
     <!-- 用户弹窗 -->
-    <el-dialog v-model="userDlg.vis" :title="userDlg.isEdit ? '编辑用户' : '新增本地用户'" width="520px">
+    <el-dialog v-model="userDlg.vis" :title="userDlg.isEdit ? '编辑用户' : '新增本地用户'" width="520px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="userDlg.form" label-width="100px" label-position="top" size="default">
         <el-form-item label="用户名 *">
           <el-input v-model="userDlg.form.username" :disabled="userDlg.isEdit" class="mono" placeholder="如: zhangsan" />
@@ -483,7 +539,7 @@
     </el-dialog>
 
     <!-- 通知人弹窗 -->
-    <el-dialog v-model="contactDlg.vis" :title="contactDlg.isEdit ? '编辑通知人' : '新增通知人'" width="560px">
+    <el-dialog v-model="contactDlg.vis" :title="contactDlg.isEdit ? '编辑通知人' : '新增通知人'" width="560px" :close-on-click-modal="false" :close-on-press-escape="false">
       <!-- 新增时支持单个 / 批量切换；编辑时只能单个 -->
       <el-radio-group v-if="!contactDlg.isEdit" v-model="contactDlg.mode" size="small" style="margin-bottom:14px;">
         <el-radio-button value="single">单个</el-radio-button>
@@ -536,7 +592,7 @@
     </el-dialog>
 
     <!-- Lark 机器人弹窗 -->
-    <el-dialog v-model="botDlg.vis" :title="botDlg.isEdit ? '编辑 Lark 机器人' : '新增 Lark 机器人'" width="560px">
+    <el-dialog v-model="botDlg.vis" :title="botDlg.isEdit ? '编辑 Lark 机器人' : '新增 Lark 机器人'" width="560px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="botDlg.form" label-width="100px" label-position="top" size="default">
         <el-form-item label="名称 *">
           <el-input v-model="botDlg.form.name" :disabled="botDlg.isEdit" class="mono" placeholder="如: uat-deploy" />
@@ -559,7 +615,7 @@
     </el-dialog>
 
     <!-- GitLab 仓库弹窗 -->
-    <el-dialog v-model="repoDlg.vis" :title="repoDlg.isEdit ? '编辑 GitLab 仓库' : '新增 GitLab 仓库'" width="580px">
+    <el-dialog v-model="repoDlg.vis" :title="repoDlg.isEdit ? '编辑 GitLab 仓库' : '新增 GitLab 仓库'" width="580px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="repoDlg.form" label-width="100px" label-position="top" size="default">
         <el-form-item label="名称 *">
           <el-input v-model="repoDlg.form.name" :disabled="repoDlg.isEdit" class="mono" placeholder="如: uat-k8s-platform" />
@@ -588,7 +644,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import {
-  getGlobalConfig, updateGlobalConfig, testGitlab,
+  getGlobalConfig, updateGlobalConfig, testGitlab, testMinIO,
   listUsers, createUser, updateUser, toggleUser, resetUserPassword, deleteUser,
   listContacts, createContact, updateContact, deleteContact,
   listLarkBots, createLarkBot, updateLarkBot, deleteLarkBot, testLarkBot,
@@ -621,6 +677,7 @@ const tabs = [
   { v: 'accounts', label: '账号管理' },
   { v: 'contacts', label: '通知人' },
   { v: 'poll', label: '同步策略' },
+  { v: 'minio', label: '日志归档' },
   { v: 'about', label: '关于' }
 ]
 
@@ -629,7 +686,9 @@ const gc = reactive({
   test_repo_path: '',
   deploy_center_base_url: '',
   lark_default_webhook: '', lark_default_secret: '',
-  poll_interval_sec: 10, poll_timeout_min: 3, git_retry_count: 3
+  poll_interval_sec: 10, poll_timeout_min: 3, git_retry_count: 3,
+  minio_endpoint: '', minio_bucket: 'deploy-logs', minio_region: 'us-east-1',
+  minio_access_key: '', minio_secret_key: '', minio_retention_days: 90,
 })
 const users = ref([])
 const contacts = ref([])
@@ -638,7 +697,7 @@ const argoInstances = ref([])
 const gitlabRepos = ref([])
 const loading = reactive({ cred: false })
 const saving = reactive({ cred: false })
-const testing = reactive({ git: false, argoDlg: false, botDlg: false })
+const testing = reactive({ git: false, argoDlg: false, botDlg: false, minio: false })
 
 function fmt(s) { return s ? dayjs(s).format('YYYY-MM-DD HH:mm') : '' }
 
@@ -653,12 +712,28 @@ async function saveGlobal() {
   const payload = { ...gc }
   if (!payload.gitlab_token) delete payload.gitlab_token
   if (!payload.lark_default_secret) delete payload.lark_default_secret
+  if (!payload.minio_secret_key) delete payload.minio_secret_key
   saving.cred = true
   try {
     await updateGlobalConfig(payload)
     ElMessage.success('已保存')
     await loadGlobal()
   } finally { saving.cred = false }
+}
+async function onTestMinIO() {
+  testing.minio = true
+  try {
+    await testMinIO({
+      minio_endpoint: gc.minio_endpoint,
+      minio_bucket: gc.minio_bucket,
+      minio_access_key: gc.minio_access_key,
+      minio_secret_key: gc.minio_secret_key || '',
+      minio_region: gc.minio_region,
+    })
+    ElMessage.success('MinIO 连接 OK · bucket 已就绪 + lifecycle 已设置')
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || e.message || '测试失败')
+  } finally { testing.minio = false }
 }
 async function onTestGit() {
   testing.git = true
@@ -723,7 +798,7 @@ async function onTestArgoInDialog() {
   } catch (_) {} finally { testing.argoDlg = false }
 }
 async function onDeleteArgo(a) {
-  try { await ElMessageBox.confirm(`确认删除 ArgoCD 实例「${a.name}」？`, '删除确认', { type: 'warning' }) }
+  try { await ElMessageBox.confirm(`确认删除 ArgoCD 实例「${a.name}」？`, '删除确认', { type: 'warning', closeOnClickModal: false, closeOnPressEscape: false }) }
   catch { return }
   try { await deleteArgocdInstance(a.id); ElMessage.success('已删除'); await loadArgo() } catch (_) {}
 }
@@ -757,7 +832,7 @@ async function onSaveUser() {
   await loadUsers()
 }
 async function onDeleteUser(u) {
-  try { await ElMessageBox.confirm(`确认删除用户「${u.username}」？`, '删除确认', { type: 'warning' }) }
+  try { await ElMessageBox.confirm(`确认删除用户「${u.username}」？`, '删除确认', { type: 'warning', closeOnClickModal: false, closeOnPressEscape: false }) }
   catch { return }
   await deleteUser(u.id)
   ElMessage.success('已删除')
@@ -853,7 +928,7 @@ async function onSaveContact() {
       await ElMessageBox.confirm(
         `有 ${errors.length} 条格式错误（将跳过）；${valid.length} 条会被创建，是否继续？`,
         '批量创建确认',
-        { type: 'warning' }
+        { type: 'warning', closeOnClickModal: false, closeOnPressEscape: false }
       )
     } catch { return }
   }
@@ -878,7 +953,7 @@ async function onSaveContact() {
   await loadContacts()
 }
 async function onDeleteContact(c) {
-  try { await ElMessageBox.confirm(`确认删除通知人「${c.name}」？`, '删除确认', { type: 'warning' }) }
+  try { await ElMessageBox.confirm(`确认删除通知人「${c.name}」？`, '删除确认', { type: 'warning', closeOnClickModal: false, closeOnPressEscape: false }) }
   catch { return }
   await deleteContact(c.id)
   ElMessage.success('已删除')
@@ -910,7 +985,7 @@ async function onSaveBot() {
   await loadBots()
 }
 async function onDeleteBot(b) {
-  try { await ElMessageBox.confirm(`确认删除 Lark 机器人「${b.name}」？被项目环境引用时会失败。`, '删除确认', { type: 'warning' }) }
+  try { await ElMessageBox.confirm(`确认删除 Lark 机器人「${b.name}」？被项目环境引用时会失败。`, '删除确认', { type: 'warning', closeOnClickModal: false, closeOnPressEscape: false }) }
   catch { return }
   await deleteLarkBot(b.id)
   ElMessage.success('已删除')
@@ -961,7 +1036,7 @@ async function onSaveRepo() {
   await loadRepos()
 }
 async function onDeleteRepo(g) {
-  try { await ElMessageBox.confirm(`确认删除 GitLab 仓库「${g.name}」？被项目环境引用时会失败。`, '删除确认', { type: 'warning' }) }
+  try { await ElMessageBox.confirm(`确认删除 GitLab 仓库「${g.name}」？被项目环境引用时会失败。`, '删除确认', { type: 'warning', closeOnClickModal: false, closeOnPressEscape: false }) }
   catch { return }
   await deleteGitlabRepo(g.id)
   ElMessage.success('已删除')

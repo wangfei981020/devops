@@ -1,5 +1,6 @@
 <template>
-  <el-dialog v-model="vis" title="回滚发布" width="720px" @open="onOpen">
+  <el-dialog v-model="vis" title="回滚发布" width="720px" @open="onOpen"
+    :close-on-click-modal="false" :close-on-press-escape="false">
     <div v-loading="loading">
       <div class="hint">勾选需要回滚的模块。默认全选（仅可回滚的），请取消已验证通过的。</div>
       <el-table :data="rows" size="small" @selection-change="onSel" ref="tbl">

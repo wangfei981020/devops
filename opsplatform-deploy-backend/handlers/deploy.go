@@ -218,6 +218,7 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		argoJSON := marshalJSON(res.ArgocdResults)
 		_, _ = database.DB.Exec(`UPDATE deployment SET argocd_results=?, status=?, duration_sec=? WHERE id=?`,
 			argoJSON, res.Status, int(time.Since(start).Seconds()), depID)
+		archiveFailedPodLogsAsync(depID, p, collectFailedApps(res.ArgocdResults))
 		sendRestartNotify(p, depID, operator, modules, res)
 	})
 
@@ -468,7 +469,21 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 		_, _ = database.DB.Exec(`UPDATE module SET current_tag=? WHERE project_env_id=? AND name=?`, c.ToTag, p.ID, c.Module)
 	}
 
+	archiveFailedPodLogsAsync(depID, p, collectFailedApps(res.ArgocdResults))
 	sendUpdateImageNotify(p, depID, operator, opLabel, modules, res)
+}
+
+// collectFailedApps 从 argocd 结果里挑出失败的 app 名（Failed/Timeout/Degraded）
+func collectFailedApps(results []models.ArgocdAppResult) []string {
+	out := []string{}
+	for _, r := range results {
+		s := strings.ToLower(r.SyncStatus)
+		h := strings.ToLower(r.Health)
+		if s == "failed" || s == "timeout" || h == "degraded" {
+			out = append(out, r.App)
+		}
+	}
+	return out
 }
 
 // --- Lark notify ---

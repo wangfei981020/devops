@@ -190,6 +190,8 @@ async function onSubmit() {
         confirmButtonText: rbMode ? `确认回滚到 ${env}` : `确认提交到 ${env}`,
         cancelButtonText: '取消',
         confirmButtonClass: 'el-button--danger',
+        closeOnClickModal: false,
+        closeOnPressEscape: false,
       })
     } catch (_) { return }
   }

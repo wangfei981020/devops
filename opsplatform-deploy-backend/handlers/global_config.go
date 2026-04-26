@@ -18,18 +18,24 @@ func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	err := database.DB.QueryRow(`SELECT id, gitlab_url, gitlab_user, gitlab_email, gitlab_token,
 		IFNULL(test_repo_path,''), IFNULL(deploy_center_base_url,''),
 		lark_default_webhook, lark_default_secret,
-		poll_interval_sec, poll_timeout_min, git_retry_count, updated_at
+		poll_interval_sec, poll_timeout_min, git_retry_count, updated_at,
+		IFNULL(minio_endpoint,''), IFNULL(minio_bucket,'deploy-logs'),
+		IFNULL(minio_access_key,''), IFNULL(minio_secret_key,''),
+		IFNULL(minio_region,'us-east-1'), IFNULL(minio_retention_days, 90)
 		FROM global_config WHERE id=1`).
 		Scan(&c.ID, &c.GitlabURL, &c.GitlabUser, &c.GitlabEmail, &c.GitlabToken,
 			&c.TestRepoPath, &c.DeployCenterBaseURL,
 			&c.LarkDefaultWebhook, &c.LarkDefaultSecret,
-			&c.PollIntervalSec, &c.PollTimeoutMin, &c.GitRetryCount, &c.UpdatedAt)
+			&c.PollIntervalSec, &c.PollTimeoutMin, &c.GitRetryCount, &c.UpdatedAt,
+			&c.MinIOEndpoint, &c.MinIOBucket, &c.MinIOAccessKey, &c.MinIOSecretKey,
+			&c.MinIORegion, &c.MinIORetentionDays)
 	if err != nil {
 		InternalErr(w, r, err)
 		return
 	}
 	c.GitlabToken = maskToken(c.GitlabToken)
 	c.LarkDefaultSecret = maskToken(c.LarkDefaultSecret)
+	c.MinIOSecretKey = maskToken(c.MinIOSecretKey)
 	JSONSuccess(w, c)
 }
 
@@ -45,6 +51,13 @@ type updateGlobalConfigReq struct {
 	PollIntervalSec     *int    `json:"poll_interval_sec"`
 	PollTimeoutMin      *int    `json:"poll_timeout_min"`
 	GitRetryCount       *int    `json:"git_retry_count"`
+	// MinIO 配置
+	MinIOEndpoint      *string `json:"minio_endpoint"`
+	MinIOBucket        *string `json:"minio_bucket"`
+	MinIOAccessKey     *string `json:"minio_access_key"`
+	MinIOSecretKey     *string `json:"minio_secret_key"`
+	MinIORegion        *string `json:"minio_region"`
+	MinIORetentionDays *int    `json:"minio_retention_days"`
 }
 
 func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +117,30 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 		sets = append(sets, "git_retry_count=?")
 		args = append(args, *req.GitRetryCount)
 	}
+	// MinIO 字段
+	addStr("minio_endpoint", req.MinIOEndpoint)
+	addStr("minio_bucket", req.MinIOBucket)
+	addStr("minio_access_key", req.MinIOAccessKey)
+	addStr("minio_region", req.MinIORegion)
+	if req.MinIOSecretKey != nil && *req.MinIOSecretKey != "" {
+		enc, err := crypto.Encrypt(*req.MinIOSecretKey)
+		if err != nil {
+			JSONError(w, 50000, "encrypt: "+err.Error())
+			return
+		}
+		sets = append(sets, "minio_secret_key=?")
+		args = append(args, enc)
+	}
+	if req.MinIORetentionDays != nil {
+		days := *req.MinIORetentionDays
+		validDays := map[int]bool{7: true, 30: true, 90: true, 180: true}
+		if !validDays[days] {
+			JSONError(w, 40001, "minio_retention_days 必须是 7 / 30 / 90 / 180")
+			return
+		}
+		sets = append(sets, "minio_retention_days=?")
+		args = append(args, days)
+	}
 	if len(sets) == 0 {
 		JSONSuccess(w, nil)
 		return
@@ -112,6 +149,12 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	if _, err := database.DB.Exec(q, args...); err != nil {
 		InternalErr(w, r, err)
 		return
+	}
+	// MinIO 字段有任何变化时，异步刷新 bucket lifecycle
+	// （admin 改保留天数 90→30 之后，立刻让 bucket 用新规则）
+	if req.MinIOEndpoint != nil || req.MinIOBucket != nil || req.MinIOAccessKey != nil ||
+		req.MinIOSecretKey != nil || req.MinIORegion != nil || req.MinIORetentionDays != nil {
+		ApplyMinIOLifecycleNow()
 	}
 	Audit(r, "global_config.update", "global_config", "", map[string]interface{}{"fields": len(sets)})
 	JSONSuccess(w, nil)

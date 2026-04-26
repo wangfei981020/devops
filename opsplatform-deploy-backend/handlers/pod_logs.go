@@ -113,7 +113,12 @@ var (
 //
 //	?app=...&pod=...&namespace=...&container=...&previous=true&tail_lines=200
 //
-//	返回 {"logs": "...", "lines": 187, "previous": true}
+//	返回 {"logs": "...", "lines": 187, "source": "archive"|"live"}
+//
+// 流程：
+//  1. 先查 deployment_pod_logs 表是否有该 (depID, app, pod) 的归档（失败时存的快照）
+//  2. 有 → 从 MinIO 拉文本返回，source=archive（最可靠：pod 已被替换也能看）
+//  3. 无 → 退回 argocd 实时拉（成功的发布 / 未配 minio / 历史日志）source=live
 func HandleGetDeploymentPodLogs(w http.ResponseWriter, r *http.Request) {
 	depID := ParseID(mux.Vars(r)["id"])
 	q := r.URL.Query()
@@ -129,8 +134,8 @@ func HandleGetDeploymentPodLogs(w http.ResponseWriter, r *http.Request) {
 	if tailLines > 2000 {
 		tailLines = 2000
 	}
-	if app == "" || pod == "" || namespace == "" {
-		JSONError(w, 40000, "app / pod / namespace 必填")
+	if app == "" || pod == "" {
+		JSONError(w, 40000, "app / pod 必填")
 		return
 	}
 
@@ -145,28 +150,42 @@ func HandleGetDeploymentPodLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1s 防抖缓存：粗粒度 key（不带 tailLines，因为 200/500/2000 都从同一日志流取，
-	// 缓存按"全部加载过一次"对待，前端根据 tail_lines 客户端裁剪也可，但简单起见
-	// 我们仍按完整 key 区分缓存）
+	// 1. 先查归档（previous=true 时优先；归档存的就是上一次崩溃前的日志）
+	if previous {
+		if objKey, ok, err := queryArchivedLog(depID, app, pod); err == nil && ok {
+			if mc, _ := loadMinIOClientFromDB(); mc != nil {
+				ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+				defer cancel()
+				logs, err := mc.GetLog(ctx, objKey)
+				if err == nil && logs != "" {
+					respondPodLogs(w, logs, "archive")
+					return
+				}
+			}
+		}
+	}
+
+	// 2. 退回 argocd 实时拉（带 1s 防抖缓存）
+	if namespace == "" {
+		// 这里 namespace 必须给 argocd，归档没有需要从 pod-list 推断
+		JSONError(w, 40000, "namespace 必填（实时模式）")
+		return
+	}
 	cacheKey := app + "|" + pod + "|" + container + "|" + strconv.FormatBool(previous) + "|" + strconv.Itoa(tailLines)
 	if v, ok := podLogsCache.Load(cacheKey); ok {
 		if e, ok := v.(*logCacheEntry); ok && time.Since(e.at) < time.Second {
-			respondPodLogs(w, e.logs, previous)
+			respondPodLogs(w, e.logs, "live")
 			return
 		}
 	}
-
-	// 串行同一 key 的并发请求（防多人同时狂点刷新打 argocd）
 	podLogsCacheMu.Lock()
 	defer podLogsCacheMu.Unlock()
-	// 双检：可能其他 goroutine 刚填好缓存
 	if v, ok := podLogsCache.Load(cacheKey); ok {
 		if e, ok := v.(*logCacheEntry); ok && time.Since(e.at) < time.Second {
-			respondPodLogs(w, e.logs, previous)
+			respondPodLogs(w, e.logs, "live")
 			return
 		}
 	}
-
 	argoURL, argoToken, err := ResolveArgocdForEnv(p)
 	if err != nil {
 		InternalErr(w, r, err)
@@ -175,15 +194,39 @@ func HandleGetDeploymentPodLogs(w http.ResponseWriter, r *http.Request) {
 	client := services.NewArgocdClient(argoURL, argoToken)
 	logs, err := client.GetPodLogs(r.Context(), app, namespace, pod, container, tailLines, previous)
 	if err != nil {
-		// 上一次崩溃前没日志（pod 首次部署）→ argocd 通常返回 400，前端友好提示
 		JSONError(w, 50000, "拉取日志失败 · "+err.Error())
 		return
 	}
 	podLogsCache.Store(cacheKey, &logCacheEntry{logs: logs, at: time.Now()})
-	respondPodLogs(w, logs, previous)
+	respondPodLogs(w, logs, "live")
 }
 
-func respondPodLogs(w http.ResponseWriter, logs string, previous bool) {
+// HandleGetDeploymentArchivedPods GET /api/deployments/{id}/archived-pods?app=
+//
+//	列出某次 deployment 已归档的 pod。前端「查看日志」打开弹窗时，
+//	先调这个，归档列表不为空就直接显示归档（pod 可能已被 k8s 收走，
+//	实时模式拿不到了）。
+func HandleGetDeploymentArchivedPods(w http.ResponseWriter, r *http.Request) {
+	depID := ParseID(mux.Vars(r)["id"])
+	app := r.URL.Query().Get("app")
+	p, err := loadProjectEnvByDeployment(depID)
+	if err != nil {
+		JSONError(w, 40400, "deployment 不存在")
+		return
+	}
+	if !IsEnvIDAllowed(r, p.ID) {
+		JSONError(w, 40300, "无权访问该环境")
+		return
+	}
+	list, err := queryArchivedLogsByDeployment(depID, app)
+	if err != nil {
+		InternalErr(w, r, err)
+		return
+	}
+	JSONSuccess(w, map[string]interface{}{"pods": list})
+}
+
+func respondPodLogs(w http.ResponseWriter, logs, source string) {
 	lines := 0
 	for i := 0; i < len(logs); i++ {
 		if logs[i] == '\n' {
@@ -191,9 +234,9 @@ func respondPodLogs(w http.ResponseWriter, logs string, previous bool) {
 		}
 	}
 	JSONSuccess(w, map[string]interface{}{
-		"logs":     logs,
-		"lines":    lines,
-		"previous": previous,
+		"logs":   logs,
+		"lines":  lines,
+		"source": source, // "archive" | "live"
 	})
 }
 

@@ -44,6 +44,7 @@ http.interceptors.response.use(
 export const getGlobalConfig = () => http.get('/global-config')
 export const updateGlobalConfig = (data) => http.put('/global-config', data)
 export const testGitlab = (data) => http.post('/global-config/test-gitlab', data || {})
+export const testMinIO = (data) => http.post('/global-config/test-minio', data || {})
 
 // Users（平台登录账号，admin only）
 export const listUsers = () => http.get('/users')
@@ -116,6 +117,7 @@ export const getDeployment = (id) => http.get(`/deployments/${id}`)
 export const getRollbackPreview = (id) => http.get(`/deployments/${id}/rollback-preview`)
 export const getDeploymentPods = (id, app) => http.get(`/deployments/${id}/pods`, { params: { app } })
 export const getDeploymentPodLogs = (id, params) => http.get(`/deployments/${id}/pod-logs`, { params })
+export const getDeploymentArchivedPods = (id, app) => http.get(`/deployments/${id}/archived-pods`, { params: { app } })
 
 // Dashboard
 export const getDashboardStats = () => http.get('/dashboard/stats')
