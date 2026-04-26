@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"strconv"
+	"strings"
 	"time"
 
 	"opsplatform-deploy-backend/models"
@@ -46,19 +47,17 @@ func PollUntilStable(
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			msg := "timeout waiting for Synced+Healthy"
-			if last != nil {
-				msg = "timeout: last " + last.SyncStatus + "/" + last.Health
-				if last.OperationPhase != "" {
-					msg += " op=" + last.OperationPhase
-				}
-				if last.Message != "" {
-					msg += " · " + last.Message
-				}
+			msg := "失败 · 等待 Synced+Healthy 超时"
+			if last != nil && last.Message != "" {
+				msg = "失败 · " + sanitizeMsg(last.Message)
 			} else if lastErr != nil {
-				msg = "timeout: " + lastErr.Error()
+				msg = "失败 · " + sanitizeMsg(lastErr.Error())
 			}
-			status := "timeout"
+			// 进一步深挖：调 argocd resource-tree 找出哪个 pod 哪个原因
+			if detail := enrichFailureDetail(ctx, client, appName); detail != "" {
+				msg = "失败 · " + sanitizeMsg(detail)
+			}
+			status := "Failed"
 			health := ""
 			if last != nil {
 				status = last.SyncStatus
@@ -121,12 +120,12 @@ func PollUntilStable(
 					(st.OperationPhase == "Succeeded" || st.OperationPhase == ""):
 					tick.Msg = "等待 Pod 就绪"
 				case st.Message != "":
-					tick.Msg = st.Message
+					tick.Msg = sanitizeMsg(st.Message)
 				}
 			} else if err != nil {
 				tick.SyncStatus = "—"
 				tick.Health = "—"
-				tick.Msg = "query error: " + err.Error()
+				tick.Msg = "查询失败 · " + sanitizeMsg(err.Error())
 			}
 			onTick(tick)
 		}
@@ -137,9 +136,12 @@ func PollUntilStable(
 			// Degraded → 立即失败（pod 起不来，不等超时）。但仅当「我们这次」的操作已起来
 			// 且 phase 不是 Running 才算（防止 pre-sync 的旧 Degraded 被误读）
 			if ourOpStarted && st.Health == "Degraded" && st.OperationPhase != "Running" {
-				msg := "degraded"
+				msg := "失败"
 				if st.Message != "" {
-					msg = "degraded: " + st.Message
+					msg = "失败 · " + sanitizeMsg(st.Message)
+				}
+				if detail := enrichFailureDetail(ctx, client, appName); detail != "" {
+					msg = "失败 · " + sanitizeMsg(detail)
 				}
 				return &models.ArgocdAppResult{
 					App:         appName,
@@ -152,9 +154,12 @@ func PollUntilStable(
 
 			// 操作 Failed → 立即失败
 			if ourOpStarted && (st.OperationPhase == "Failed" || st.OperationPhase == "Error") {
-				msg := "同步 " + st.OperationPhase
+				msg := "失败 · 同步 " + st.OperationPhase
 				if st.Message != "" {
-					msg += ": " + st.Message
+					msg = "失败 · " + sanitizeMsg(st.Message)
+				}
+				if detail := enrichFailureDetail(ctx, client, appName); detail != "" {
+					msg = "失败 · " + sanitizeMsg(detail)
 				}
 				return &models.ArgocdAppResult{
 					App:         appName,
@@ -201,6 +206,88 @@ func PollUntilStable(
 		case <-time.After(sleep):
 		}
 	}
+}
+
+// enrichFailureDetail 失败时调 argocd resource-tree，找出 unhealthy 的 Pod 节点
+// 提取「Status Reason / Containers / Restart Count」拼成人话失败原因。
+//
+// 返回字符串例：
+//   pod user-central-backend-789bbb-s7hrz CrashLoopBackOff（重启 3 次，0/1 ready）
+//   pod user-client-backend-abc ImagePullBackOff
+//   pod foo OOMKilled
+//
+// 拿不到（API 失败 / 没有 Pod 节点 / 全 Healthy）→ 返回 "" 让上层用兜底文案。
+func enrichFailureDetail(ctx context.Context, client *ArgocdClient, appName string) string {
+	qctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	nodes, err := client.GetAppResourceTree(qctx, appName)
+	if err != nil || len(nodes) == 0 {
+		return ""
+	}
+	// 优先找 Pod，其它资源（Deployment、ReplicaSet）只是 wrapper，pod 才是实际崩的
+	var failingPods []ResourceNode
+	for _, n := range nodes {
+		if n.Kind != "Pod" {
+			continue
+		}
+		// Healthy 的 pod 跳过
+		if n.Health == "Healthy" || n.Health == "" {
+			continue
+		}
+		failingPods = append(failingPods, n)
+	}
+	if len(failingPods) == 0 {
+		// 没找到失败 pod —— 退一步看 Deployment / 其它资源的 health.message
+		for _, n := range nodes {
+			if (n.Kind == "Deployment" || n.Kind == "StatefulSet" || n.Kind == "Rollout") &&
+				n.Health != "" && n.Health != "Healthy" && n.HealthMsg != "" {
+				return n.Kind + " " + n.Name + " · " + n.HealthMsg
+			}
+		}
+		return ""
+	}
+
+	// 拼第一个失败 pod 的详情（多个失败 pod 一般原因相同；UI cell 不够长不全列）
+	p := failingPods[0]
+	parts := []string{"pod " + p.Name}
+	if p.StatusReason != "" {
+		parts = append(parts, p.StatusReason)
+	}
+	extras := []string{}
+	if p.RestartCount != "" && p.RestartCount != "0" {
+		extras = append(extras, "重启 "+p.RestartCount+" 次")
+	}
+	if p.ContainersOK != "" {
+		extras = append(extras, p.ContainersOK+" ready")
+	}
+	if len(extras) > 0 {
+		parts = append(parts, "（"+strings.Join(extras, "，")+"）")
+	}
+	out := strings.Join(parts, " ")
+	// 多个失败 pod 时附加计数提示
+	if len(failingPods) > 1 {
+		out += " · 另有 " + strconv.Itoa(len(failingPods)-1) + " 个 pod 同样异常"
+	}
+	return out
+}
+
+// sanitizeMsg 把任何透传到前端的失败/状态文案里的 "argocd"/"ArgoCD" 字眼清掉。
+// 防御性兜底：argocd 自身的 health.message 通常是 k8s 风格（不含 argocd 字眼），但
+// 某些插件 / 版本 / controller 错误会出现 "argocd application controller failed to..."
+// 之类，统一在出口过滤。
+func sanitizeMsg(s string) string {
+	if s == "" {
+		return s
+	}
+	s = strings.ReplaceAll(s, "ArgoCD", "")
+	s = strings.ReplaceAll(s, "ArgoCd", "")
+	s = strings.ReplaceAll(s, "argocd", "")
+	s = strings.ReplaceAll(s, "Argocd", "")
+	// 折叠多余空白 + 清两侧空格/标点
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	return strings.Trim(s, " ·:")
 }
 
 // isOurOperationStarted 判定 argocd 当前/最近的 sync 操作是不是「我们这次」触发的。

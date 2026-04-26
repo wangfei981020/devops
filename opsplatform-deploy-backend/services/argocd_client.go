@@ -127,6 +127,70 @@ func (c *ArgocdClient) GetAppStatus(ctx context.Context, name string) (*AppStatu
 	return st, nil
 }
 
+// ResourceNode 是 argocd 资源树里一个节点（Pod / Deployment / Service 等）
+type ResourceNode struct {
+	Kind      string
+	Name      string
+	Namespace string
+	Health    string // Healthy / Progressing / Degraded / Missing / Suspended / Unknown
+	HealthMsg string // 例: "back-off 5m0s restarting failed container=foo pod=..."
+	// 来自 node.info[] 的关键字段。argocd UI 显示的 "Status Reason" / "Containers" / "Restart Count"
+	StatusReason string // 例: "CrashLoopBackOff" / "ImagePullBackOff" / "OOMKilled" / "Pending"
+	ContainersOK string // 例: "0/1"
+	RestartCount string // 例: "3"
+}
+
+// GetAppResourceTree 拉 argocd application 的完整资源树。
+// 失败排查用：失败的 deploy 调这个找出究竟哪个 Pod 起不来 + 为什么。
+func (c *ArgocdClient) GetAppResourceTree(ctx context.Context, name string) ([]ResourceNode, error) {
+	raw, _, err := c.do(ctx, "GET", "/api/v1/applications/"+name+"/resource-tree", nil)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Nodes []struct {
+			Kind      string `json:"kind"`
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+			Health    *struct {
+				Status  string `json:"status"`
+				Message string `json:"message"`
+			} `json:"health"`
+			Info []struct {
+				Name  string `json:"name"`
+				Value string `json:"value"`
+			} `json:"info"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("parse resource-tree: %w", err)
+	}
+	out := make([]ResourceNode, 0, len(resp.Nodes))
+	for _, n := range resp.Nodes {
+		rn := ResourceNode{
+			Kind:      n.Kind,
+			Name:      n.Name,
+			Namespace: n.Namespace,
+		}
+		if n.Health != nil {
+			rn.Health = n.Health.Status
+			rn.HealthMsg = n.Health.Message
+		}
+		for _, kv := range n.Info {
+			switch kv.Name {
+			case "Status Reason":
+				rn.StatusReason = kv.Value
+			case "Containers":
+				rn.ContainersOK = kv.Value
+			case "Restart Count":
+				rn.RestartCount = kv.Value
+			}
+		}
+		out = append(out, rn)
+	}
+	return out, nil
+}
+
 // Sync 触发应用同步
 func (c *ArgocdClient) Sync(ctx context.Context, name string) error {
 	body := map[string]interface{}{
