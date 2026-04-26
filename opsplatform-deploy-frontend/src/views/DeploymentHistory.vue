@@ -154,7 +154,7 @@
                           <td class="mono">{{ r.app }}</td>
                           <td :class="'sync-' + (r.sync_status || '').toLowerCase()">{{ r.sync_status || '—' }}</td>
                           <td :class="'health-' + (r.health || '').toLowerCase()">{{ r.health || '—' }}</td>
-                          <td class="mono">{{ liveDuration(r) }}s</td>
+                          <td class="mono">{{ liveDuration(r, row) }}s</td>
                           <td class="msg">{{ r.msg || '—' }}</td>
                         </tr>
                         <tr v-if="!row.argocd_results?.length"><td colspan="5" class="muted" style="text-align:center">无</td></tr>
@@ -307,33 +307,38 @@ async function doSearch() {
 }
 
 // ---- 单模块耗时秒表插值 ----
-// 后端每 5s 推一次真实 duration_sec，前端在两次推送之间按本地时间 +1 插值，
-// 让非终态的行耗时看起来每秒都在跳。终态（Healthy/Degraded/failed/timeout）直接用后端值。
+// 后端在每条 argocd_results 上带 last_polled_at（写 DB 时填入 server time），前端
+// 用它做插值锚点：刷新页面后仍能根据 (now - last_polled_at) 继续累积秒数，避免
+// "刷新后从 180 重新涨"的视觉 bug。
+//
+// 终态判定优先级：
+//   1) 父 deployment.status 是终态（success/failed/partial/no_change）→ 全部行用 duration_sec
+//   2) 单行 sync/health 是终态（Healthy/Degraded/Failed/Timeout）→ 该行用 duration_sec
+//   3) 其它 → 用 last_polled_at 插值
 const tick = ref(0)
 let tickTimer = null
-// 每个 app 独立记录"上次收到新值时的本地时间 + 当时的 duration_sec"
-// key = row.id + '|' + app   value = { base: number, baseAt: number }
-const liveAnchors = reactive({})
+
+function isParentTerminal(row) {
+  const s = (row?.status || '').toLowerCase()
+  return s === 'success' || s === 'failed' || s === 'partial' || s === 'no_change'
+}
 function isTerminal(r) {
   const h = (r.health || '').toLowerCase()
   const s = (r.sync_status || '').toLowerCase()
-  return h === 'healthy' || h === 'degraded' || s === 'failed' || s === 'timeout'
+  return h === 'healthy' || h === 'degraded' ||
+    s === 'failed' || s === 'timeout' || s === 'canceled'
 }
-function liveDuration(r) {
-  // 读 tick 触发响应式
-  void tick.value
-  if (isTerminal(r)) return r.duration_sec ?? 0
-  const key = r.app || ''
-  const anchor = liveAnchors[key]
-  const now = Date.now()
-  // 如果后端推来的 duration 比 anchor 里的大，更新 anchor
-  if (!anchor || (r.duration_sec ?? 0) !== anchor.base) {
-    liveAnchors[key] = { base: r.duration_sec ?? 0, baseAt: now }
-    return r.duration_sec ?? 0
-  }
-  // anchor 已对齐，根据本地时间插值（每秒 +1）
-  const delta = Math.floor((now - anchor.baseAt) / 1000)
-  return anchor.base + delta
+function liveDuration(r, row) {
+  void tick.value // 读 tick 触发响应式
+  if (isParentTerminal(row) || isTerminal(r)) return r.duration_sec ?? 0
+  // 用后端 last_polled_at 做锚点，刷新页面后也能继续累积
+  const base = r.duration_sec ?? 0
+  const polledStr = r.last_polled_at
+  if (!polledStr) return base
+  const polledMs = new Date(polledStr).getTime()
+  if (isNaN(polledMs)) return base
+  const delta = Math.max(0, Math.floor((Date.now() - polledMs) / 1000))
+  return base + delta
 }
 
 // ---- 轮询 pending 项 ----
@@ -402,17 +407,7 @@ onUnmounted(() => {
 })
 
 // pending 全部结束后清理 anchors，避免长时间积累
-watch(list, () => {
-  const stillActive = new Set()
-  list.value.forEach(row => {
-    (row.argocd_results || []).forEach(r => {
-      if (!isTerminal(r)) stillActive.add(r.app)
-    })
-  })
-  Object.keys(liveAnchors).forEach(k => {
-    if (!stillActive.has(k)) delete liveAnchors[k]
-  })
-}, { deep: true })
+// liveAnchors 已被 last_polled_at 锚点替代，无需再做清理 watcher
 </script>
 
 <style scoped>

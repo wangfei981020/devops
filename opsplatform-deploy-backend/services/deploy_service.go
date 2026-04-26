@@ -222,13 +222,15 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 			publish(models.ArgocdAppResult{
 				App: j.app, SyncStatus: "Syncing", Health: "Progressing",
 				DurationSec: 0, Msg: "正在调用同步",
+				LastPolledAt: time.Now(),
 			})
 			// 记录 Sync API 调用前的时刻，用于 PollUntilStable 验证「这次 sync 是我们触发的」
 			syncStartedAt := time.Now()
 			if err := in.ArgocdClient.Sync(c, j.app); err != nil {
 				return models.ArgocdAppResult{
-					App: j.app, SyncStatus: "failed",
-					Msg: "sync api: " + err.Error(),
+					App: j.app, SyncStatus: "Failed",
+					Msg:          "失败 · 调用同步接口出错",
+					LastPolledAt: time.Now(),
 				}
 			}
 			// 短暂 idle 减少首次 poll 的空查；根本性的"等我们触发的 operation 真的完成"
@@ -236,7 +238,10 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 			select {
 			case <-time.After(2 * time.Second):
 			case <-c.Done():
-				return models.ArgocdAppResult{App: j.app, SyncStatus: "canceled", Msg: "context canceled"}
+				return models.ArgocdAppResult{
+					App: j.app, SyncStatus: "canceled", Msg: "context canceled",
+					LastPolledAt: time.Now(),
+				}
 			}
 			// stabilityTicks=6: 配 5s interval = 30s 稳定窗口，避免 readinessProbe 通过
 			// 后 livenessProbe 失败 / panic 导致的 CrashLoopBackOff 误报成功
@@ -312,7 +317,8 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 		m, ok := in.Modules[name]
 		if !ok {
 			preFail = append(preFail, models.ArgocdAppResult{
-				App: name, SyncStatus: "failed", Msg: "module not found",
+				App: name, SyncStatus: "Failed", Msg: "失败 · 模块不存在",
+				LastPolledAt: time.Now(),
 			})
 			continue
 		}
@@ -325,7 +331,9 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 		cancel()
 		if err != nil {
 			preFail = append(preFail, models.ArgocdAppResult{
-				App: m.ArgocdApp, SyncStatus: "failed", Msg: err.Error(),
+				App: m.ArgocdApp, SyncStatus: "Failed",
+				Msg:          "失败 · 触发重启失败 · " + sanitizeMsg(err.Error()),
+				LastPolledAt: time.Now(),
 			})
 			continue
 		}
@@ -355,11 +363,12 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 		func(c context.Context, t triggered, publish func(models.ArgocdAppResult)) models.ArgocdAppResult {
 			// 入池立刻推一个"Progressing/等待中"初始状态，让前端 3 行同时出现
 			publish(models.ArgocdAppResult{
-				App:         t.app,
-				SyncStatus:  "Progressing",
-				Health:      "Progressing",
-				DurationSec: 0,
-				Msg:         "等待同步",
+				App:          t.app,
+				SyncStatus:   "Progressing",
+				Health:       "Progressing",
+				DurationSec:  0,
+				Msg:          "等待同步",
+				LastPolledAt: time.Now(),
 			})
 			// 每次 ArgoCD poll 后都把中间状态 publish 出去（5s 节奏），前端靠这个 + 本地秒表做秒级跳动
 			// Restart 不经过 argocd Sync 操作（走 resource action），所以没有 OperationState 可比对，

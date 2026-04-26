@@ -114,11 +114,15 @@ type Change struct {
 }
 
 type ArgocdAppResult struct {
-	App         string `json:"app"`
-	SyncStatus  string `json:"sync_status"`
-	Health      string `json:"health"`
-	DurationSec int    `json:"duration_sec"`
-	Msg         string `json:"msg"`
+	App         string    `json:"app"`
+	SyncStatus  string    `json:"sync_status"`
+	Health      string    `json:"health"`
+	DurationSec int       `json:"duration_sec"`
+	Msg         string    `json:"msg"`
+	// 该行被服务端最后一次更新的时刻（每次 onTick / 终态返回都设）
+	// 前端用这个做单模块耗时插值锚点：刷新后仍能根据 last_polled_at 继续累积，
+	// 避免「刷新就把秒数从 180 重新开始算」的视觉 bug。
+	LastPolledAt time.Time `json:"last_polled_at"`
 }
 
 type Deployment struct {

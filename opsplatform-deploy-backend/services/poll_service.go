@@ -57,18 +57,19 @@ func PollUntilStable(
 			if detail := enrichFailureDetail(ctx, client, appName); detail != "" {
 				msg = "失败 · " + sanitizeMsg(detail)
 			}
-			status := "Failed"
+			// 终态：sync 强制 Failed（不沿用 argocd 滞后的 "Synced"），方便前端
+			// isTerminal 判断；health 沿用最后一次观测做参考
 			health := ""
 			if last != nil {
-				status = last.SyncStatus
 				health = last.Health
 			}
 			return &models.ArgocdAppResult{
-				App:         appName,
-				SyncStatus:  status,
-				Health:      health,
-				DurationSec: int(time.Since(start).Seconds()),
-				Msg:         msg,
+				App:          appName,
+				SyncStatus:   "Failed",
+				Health:       health,
+				DurationSec:  int(time.Since(start).Seconds()),
+				Msg:          msg,
+				LastPolledAt: time.Now(),
 			}
 		}
 
@@ -89,8 +90,9 @@ func PollUntilStable(
 		// 上报当前 tick 状态（无论查询成功或失败），让上层能够实时看到状态推进
 		if onTick != nil {
 			tick := &models.ArgocdAppResult{
-				App:         appName,
-				DurationSec: int(time.Since(start).Seconds()),
+				App:          appName,
+				DurationSec:  int(time.Since(start).Seconds()),
+				LastPolledAt: time.Now(),
 			}
 			if err == nil && st != nil {
 				tick.SyncStatus = st.SyncStatus
@@ -144,11 +146,12 @@ func PollUntilStable(
 					msg = "失败 · " + sanitizeMsg(detail)
 				}
 				return &models.ArgocdAppResult{
-					App:         appName,
-					SyncStatus:  st.SyncStatus,
-					Health:      st.Health,
-					DurationSec: int(time.Since(start).Seconds()),
-					Msg:         msg,
+					App:          appName,
+					SyncStatus:   st.SyncStatus,
+					Health:       st.Health,
+					DurationSec:  int(time.Since(start).Seconds()),
+					Msg:          msg,
+					LastPolledAt: time.Now(),
 				}
 			}
 
@@ -162,11 +165,12 @@ func PollUntilStable(
 					msg = "失败 · " + sanitizeMsg(detail)
 				}
 				return &models.ArgocdAppResult{
-					App:         appName,
-					SyncStatus:  st.SyncStatus,
-					Health:      st.Health,
-					DurationSec: int(time.Since(start).Seconds()),
-					Msg:         msg,
+					App:          appName,
+					SyncStatus:   "Failed",
+					Health:       st.Health,
+					DurationSec:  int(time.Since(start).Seconds()),
+					Msg:          msg,
+					LastPolledAt: time.Now(),
 				}
 			}
 
@@ -176,11 +180,12 @@ func PollUntilStable(
 				consecutiveOK++
 				if consecutiveOK >= stabilityTicks {
 					return &models.ArgocdAppResult{
-						App:         appName,
-						SyncStatus:  st.SyncStatus,
-						Health:      st.Health,
-						DurationSec: int(time.Since(start).Seconds()),
-						Msg:         "",
+						App:          appName,
+						SyncStatus:   st.SyncStatus,
+						Health:       st.Health,
+						DurationSec:  int(time.Since(start).Seconds()),
+						Msg:          "",
+						LastPolledAt: time.Now(),
 					}
 				}
 			} else {
@@ -198,10 +203,11 @@ func PollUntilStable(
 		select {
 		case <-ctx.Done():
 			return &models.ArgocdAppResult{
-				App:         appName,
-				SyncStatus:  "canceled",
-				DurationSec: int(time.Since(start).Seconds()),
-				Msg:         "context canceled",
+				App:          appName,
+				SyncStatus:   "canceled",
+				DurationSec:  int(time.Since(start).Seconds()),
+				Msg:          "context canceled",
+				LastPolledAt: time.Now(),
 			}
 		case <-time.After(sleep):
 		}
