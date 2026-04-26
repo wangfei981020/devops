@@ -1107,10 +1107,12 @@ const allFilteredRecords = computed(() => {
     list = list.filter(r => isMaintType(r.maintenance_type, selectedMaintType.value))
   }
   // 按 start_time > date > created_at 降序排序（最新在最上面）
+  // 归一化 'T' → 空格，兼容历史数据：UI 写入是 "YYYY-MM-DDTHH:MM"、脚本写入是 "YYYY-MM-DD HH:MM"
+  const normTs = s => String(s || '').replace('T', ' ')
   return [...list].sort((a, b) => {
-    const at = a.start_time || a.date || a.created_at || ''
-    const bt = b.start_time || b.date || b.created_at || ''
-    return String(bt).localeCompare(String(at))
+    const at = normTs(a.start_time || a.date || a.created_at)
+    const bt = normTs(b.start_time || b.date || b.created_at)
+    return bt.localeCompare(at)
   })
 })
 
@@ -1881,6 +1883,10 @@ async function saveRecord() {
     if (['checkbox', 'actions', 'created_by'].includes(col.key)) return
     if (col.type === 'attachments') {
       data[col.key] = formAttachments.value[col.key] || []
+    } else if (col.type === 'datetime') {
+      // datetime-local 控件返回 "YYYY-MM-DDTHH:MM"，统一归一为空格分隔，避免和脚本/旧数据混排
+      const v = formData.value[col.key] || ''
+      data[col.key] = typeof v === 'string' ? v.replace('T', ' ') : v
     } else {
       data[col.key] = formData.value[col.key] || ''
     }
