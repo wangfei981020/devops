@@ -155,7 +155,7 @@
                           <td :class="'sync-' + (r.sync_status || '').toLowerCase()">{{ r.sync_status || '—' }}</td>
                           <td :class="'health-' + (r.health || '').toLowerCase()">{{ r.health || '—' }}</td>
                           <td class="mono">{{ liveDuration(r, row) }}s</td>
-                          <td class="msg">{{ r.msg || '—' }}</td>
+                          <td :class="['msg', msgClass(r)]">{{ msgText(r) }}</td>
                           <td>
                             <button v-if="canShowLogs(r)" class="view-logs-btn" @click="openLogsModal(row.id, r.app)">
                               查看日志
@@ -337,6 +337,25 @@ function isTerminal(r) {
   return h === 'healthy' || h === 'degraded' ||
     s === 'failed' || s === 'timeout' || s === 'canceled'
 }
+// ---- 消息列 color-coded 辅助 ----
+function msgClass(r) {
+  const s = (r.sync_status || '').toLowerCase()
+  const h = (r.health || '').toLowerCase()
+  if (h === 'healthy' && s === 'synced') return 'ok'
+  if (s === 'failed' || s === 'timeout' || h === 'degraded') return 'fail'
+  return ''
+}
+function msgText(r) {
+  const cls = msgClass(r)
+  if (cls === 'ok') return '✓ 成功'
+  if (cls === 'fail') {
+    // 去掉冗余的「失败 ·」前缀（颜色 + ✗ 已经说明），保留具体原因
+    const m = (r.msg || '').replace(/^失败\s*·\s*/, '')
+    return m ? `✗ ${m}` : '✗ 失败'
+  }
+  return r.msg || '—'
+}
+
 // ---- 查看日志 modal ----
 const logsModal = reactive({ show: false, deploymentId: 0, app: '' })
 function canShowLogs(r) {
@@ -644,6 +663,10 @@ onUnmounted(() => {
 .pg-ctrl button:disabled { opacity: .35; cursor: not-allowed; }
 .pg-ctrl button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
 .pg-ctrl b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+
+/* 消息列 color-coded：成功绿、失败红、进行中保持原色 */
+.sub-tbl .msg.ok   { color: #10b981; font-weight: 500; }
+.sub-tbl .msg.fail { color: #ef4444; font-weight: 500; }
 
 /* 查看日志按钮（仅失败行显示） */
 .view-logs-btn {
