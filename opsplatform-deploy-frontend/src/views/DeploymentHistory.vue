@@ -46,7 +46,11 @@
       </div>
       <div class="f-item">
         <label>操作人</label>
-        <input v-model="draft.operator" class="inp" placeholder="模糊匹配" />
+        <input v-model="draft.operator" class="inp" placeholder="模糊匹配" @keyup.enter="doSearch" />
+      </div>
+      <div class="f-item">
+        <label>模块</label>
+        <input v-model="draft.module" class="inp" placeholder="模糊匹配 user-client" @keyup.enter="doSearch" />
       </div>
       <div class="f-item wide">
         <label>时间范围</label>
@@ -247,6 +251,7 @@ const blankFilters = () => ({
   project: '', env_type: '',
   action: '', status: '',
   operator: '',
+  module: '',
   time_from: '', time_to: ''
 })
 const draft = reactive(blankFilters())
@@ -311,6 +316,7 @@ async function doSearch() {
     if (draft.action) params.action = draft.action
     if (draft.status) params.status = draft.status
     if (draft.operator) params.operator = draft.operator
+    if (draft.module) params.module = draft.module.trim()
     if (draft.time_from) params.time_from = draft.time_from.replace('T', ' ') + ':00'
     if (draft.time_to) params.time_to = draft.time_to.replace('T', ' ') + ':59'
     const r = await listDeployments(params)

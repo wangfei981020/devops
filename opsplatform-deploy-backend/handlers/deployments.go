@@ -62,6 +62,12 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 		where += " AND created_at <= ?"
 		args = append(args, v)
 	}
+	// 模块名模糊匹配（"user-client" 命中 user-client-backend / user-client-frontend）
+	// module_names 是 JSON 数组（["a","b","c"]），用 JSON_SEARCH 在数组每个元素里 LIKE 找
+	if v := strings.TrimSpace(r.URL.Query().Get("module")); v != "" {
+		where += " AND JSON_SEARCH(module_names, 'one', ?) IS NOT NULL"
+		args = append(args, "%"+v+"%")
+	}
 	// env 白名单过滤（admin 时 enforce=false 不加 WHERE）
 	if allowedIDs, enforce := AllowedEnvIDs(r); enforce {
 		if len(allowedIDs) == 0 {
