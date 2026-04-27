@@ -852,7 +852,14 @@ async function loadGlobal() {
   loading.cred = true
   try {
     const r = await getGlobalConfig()
-    Object.assign(gc, r, { gitlab_token: '', lark_default_secret: '' })
+    // 所有"密码/token"类字段在加载后必须重置成空，避免后端返的掩码 "••••••••"
+    // 被用户无意中保存覆盖到 DB（曾经的真密码就被掩码顶掉了，导致后续认证全 401）
+    Object.assign(gc, r, {
+      gitlab_token: '',
+      lark_default_secret: '',
+      minio_secret_key: '',
+      harbor_token: '',
+    })
   } finally { loading.cred = false }
 }
 async function saveGlobal() {

@@ -79,6 +79,14 @@ func (c *HarborClient) authHeader() string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(creds))
 }
 
+// debugTokenLen 给排查 401 用：记录 user 名 + token 长度（不记录 token 内容）
+//
+//	真密码 length 一般 30-100；如果是掩码 "••••••••" 会是 24 字节（每个 BLACK CIRCLE U+25CF
+//	UTF-8 是 3 字节，8 个就是 24）→ 立刻能识别"前端把掩码当密码存进了 DB"的 bug
+func (c *HarborClient) debugTokenLen() string {
+	return fmt.Sprintf("user=%s token_len=%d", c.User, len(c.Token))
+}
+
 // ListTags 拉某 repo 最近 limit 个 tag（按推送时间倒序）
 //
 //	repo 格式：project/repository，如 "g32/user-client-backend"
@@ -131,8 +139,8 @@ func (c *HarborClient) ListTags(ctx context.Context, repo string, limit int) ([]
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
 		// 把 Harbor 真实返回的 body 写到 backend log，让运维能查
-		log.Printf("[harbor][ListTags] status=%d url=%s body=%s",
-			resp.StatusCode, req.URL.String(), truncate(string(body), 1000))
+		log.Printf("[harbor][ListTags] status=%d %s url=%s body=%s",
+			resp.StatusCode, c.debugTokenLen(), req.URL.String(), truncate(string(body), 1000))
 	}
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
 		// 透传 Harbor 真实错误 message，前端 toast 显示前 200 字
@@ -219,8 +227,8 @@ func (c *HarborClient) VerifyTag(ctx context.Context, repo, tag string) (bool, e
 		return false, nil
 	}
 	if resp.StatusCode >= 400 {
-		log.Printf("[harbor][VerifyTag] status=%d url=%s body=%s",
-			resp.StatusCode, req.URL.String(), truncate(string(body), 1000))
+		log.Printf("[harbor][VerifyTag] status=%d %s url=%s body=%s",
+			resp.StatusCode, c.debugTokenLen(), req.URL.String(), truncate(string(body), 1000))
 	}
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
 		return false, fmt.Errorf("Harbor 拒绝请求 (%d): %s", resp.StatusCode, truncate(string(body), 200))
@@ -252,8 +260,8 @@ func (c *HarborClient) TestConnection(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[harbor][TestConnection] status=%d url=%s body_len=%d",
-		resp.StatusCode, req.URL.String(), len(body))
+	log.Printf("[harbor][TestConnection] status=%d %s url=%s body_len=%d",
+		resp.StatusCode, c.debugTokenLen(), req.URL.String(), len(body))
 	if resp.StatusCode == 200 {
 		return nil
 	}

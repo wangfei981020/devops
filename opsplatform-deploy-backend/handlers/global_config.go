@@ -75,11 +75,29 @@ type updateGlobalConfigReq struct {
 	HarborVerifyOnSubmit *bool   `json:"harbor_verify_on_submit"`
 }
 
+// maskedTokenString 是 GET 时给前端的占位串。任何 token 字段如果用户把这个串原样
+// 提交回来，必然是「前端没让用户重新填，把掩码当真密码送回来了」，必须拒绝写入，
+// 否则会把真密码覆盖成掩码字符串，导致后续所有认证都失败。
+const maskedTokenString = "••••••••"
+
+// stripMaskedToken 把 *string 字段如果等于掩码就改成 nil（视为「未提供」）
+func stripMaskedToken(p **string) {
+	if *p != nil && **p == maskedTokenString {
+		*p = nil
+	}
+}
+
 func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	var req updateGlobalConfigReq
 	if !DecodeJSON(w, r, &req) {
 		return
 	}
+	// 防御：前端如果把"••••••••"掩码字符串当 token 送回来（应该送 nil/空），
+	// 后端必须忽略这一字段，不能加密存进 DB
+	stripMaskedToken(&req.GitlabToken)
+	stripMaskedToken(&req.LarkDefaultSecret)
+	stripMaskedToken(&req.MinIOSecretKey)
+	stripMaskedToken(&req.HarborToken)
 	sets := []string{}
 	args := []interface{}{}
 	addStr := func(col string, v *string) {
