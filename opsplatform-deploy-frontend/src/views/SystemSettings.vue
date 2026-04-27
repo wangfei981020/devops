@@ -102,6 +102,17 @@
                   <el-icon class="ov-arrow"><ArrowRight /></el-icon>
                 </div>
               </div>
+              <div class="ov-card" @click="tab='harbor'">
+                <div class="ov-icon" style="background:#e0e7ff;color:#3730a3"><el-icon><Box /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">Harbor 镜像仓库</div>
+                  <div class="ov-desc">Robot 账号 · 镜像 tag 下拉 + 提交前校验</div>
+                </div>
+                <div class="ov-right">
+                  <span :class="['ov-badge', ovStatus.harbor.kind]">{{ ovStatus.harbor.text }}</span>
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1260,6 +1271,8 @@ const ovStatus = computed(() => ({
   history: gc.history_retention_days === 0
     ? { kind: 'count', text: '永久' }
     : { kind: 'ok', text: `${gc.history_retention_days || 180} 天` },
+  harbor: gc.harbor_url && gc.harbor_user
+    ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
 }))
 
 // 左侧 rail 每个 tab 右侧的徽章（精简版：只显示数量或未配置）

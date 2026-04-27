@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -128,8 +129,14 @@ func (c *HarborClient) ListTags(ctx context.Context, repo string, limit int) ([]
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		// 把 Harbor 真实返回的 body 写到 backend log，让运维能查
+		log.Printf("[harbor][ListTags] status=%d url=%s body=%s",
+			resp.StatusCode, req.URL.String(), truncate(string(body), 1000))
+	}
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return nil, fmt.Errorf("Harbor 认证失败 (%d)，请检查 user/token 配置", resp.StatusCode)
+		// 透传 Harbor 真实错误 message，前端 toast 显示前 200 字
+		return nil, fmt.Errorf("Harbor 拒绝请求 (%d): %s", resp.StatusCode, truncate(string(body), 200))
 	}
 	if resp.StatusCode == 404 {
 		// repo 不存在 — 返回空列表（caller 可据此判定）
@@ -204,15 +211,19 @@ func (c *HarborClient) VerifyTag(ctx context.Context, repo, tag string) (bool, e
 		return false, fmt.Errorf("调用 Harbor 失败: %w", err)
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == 200 {
 		return true, nil
 	}
 	if resp.StatusCode == 404 {
 		return false, nil
 	}
+	if resp.StatusCode >= 400 {
+		log.Printf("[harbor][VerifyTag] status=%d url=%s body=%s",
+			resp.StatusCode, req.URL.String(), truncate(string(body), 1000))
+	}
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return false, fmt.Errorf("Harbor 认证失败 (%d)", resp.StatusCode)
+		return false, fmt.Errorf("Harbor 拒绝请求 (%d): %s", resp.StatusCode, truncate(string(body), 200))
 	}
 	return false, fmt.Errorf("Harbor 返回异常状态码 %d", resp.StatusCode)
 }
@@ -240,14 +251,16 @@ func (c *HarborClient) TestConnection(ctx context.Context) error {
 		return fmt.Errorf("无法连通 Harbor: %w", err)
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf("[harbor][TestConnection] status=%d url=%s body_len=%d",
+		resp.StatusCode, req.URL.String(), len(body))
 	if resp.StatusCode == 200 {
 		return nil
 	}
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return fmt.Errorf("user/token 无效 (%d)", resp.StatusCode)
+		return fmt.Errorf("user/token 无效 (%d): %s", resp.StatusCode, truncate(string(body), 200))
 	}
-	return fmt.Errorf("Harbor 返回异常状态码 %d", resp.StatusCode)
+	return fmt.Errorf("Harbor 返回异常状态码 %d: %s", resp.StatusCode, truncate(string(body), 200))
 }
 
 // InvalidateRepo 清掉某 repo 的缓存（提交时强制重拉 / 用户手动刷新）
