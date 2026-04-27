@@ -6,7 +6,7 @@
         批量更新镜像
       </h3>
       <div class="mode-toggle">
-        <button :class="['mt-btn', mode === 'select' && 'on']" @click="switchMode('select')">选择模式</button>
+        <button :class="['mt-btn', mode === 'select' && 'on']" @click="switchMode('select')">自动模式</button>
         <button :class="['mt-btn', mode === 'manual' && 'on']" @click="switchMode('manual')">手输模式</button>
       </div>
     </div>
@@ -114,24 +114,27 @@ base-client-backend:20260416020000-99"
         <table class="pv-table">
           <thead>
             <tr>
-              <th style="width:32%;">模块</th>
-              <th>Tag 变化</th>
-              <th style="width:32%;">values.yaml</th>
+              <th style="width:40%;">模块</th>
+              <th style="width:30%;">当前 TAG</th>
+              <th style="width:30%;">新 TAG</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="d in sortedDiff" :key="d.module" :class="[d.skip && 'is-skip', d.is_new && 'is-new']">
-              <td class="pv-mod">{{ d.module }}</td>
-              <td>
-                <span v-if="d.is_new" class="warn-text">git 找不到 · 跳过</span>
-                <span v-else-if="d.skip" class="mute-text">无变化</span>
-                <span v-else class="pv-chg">
-                  <span class="from">{{ shortTag(d.from_tag) }}</span>
-                  <span class="arr">→</span>
-                  <span class="to">{{ shortTag(d.to_tag) }}</span>
-                </span>
+              <td class="pv-mod">
+                {{ d.module }}
+                <span v-if="d.is_new" class="warn-text">· 未登记</span>
+                <span v-else-if="d.skip" class="mute-text">· 无变化</span>
               </td>
-              <td class="pv-path">{{ d.path || '—' }}</td>
+              <td>
+                <span v-if="d.from_tag" class="tag-curr">{{ d.from_tag }}</span>
+                <span v-else class="mute-text">—</span>
+              </td>
+              <td>
+                <span v-if="d.is_new" class="mute-text">—</span>
+                <span v-else-if="d.skip" class="mute-text">{{ d.to_tag }}</span>
+                <span v-else class="tag-new">{{ d.to_tag }}</span>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -636,6 +639,8 @@ function handleLockConflict(err) {
 .from { color: var(--text-3); text-decoration: line-through; }
 .arr { color: var(--text-3); }
 .to { color: var(--success); font-weight: 600; }
+.tag-curr { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); background: #f3f4f6; padding: 2px 8px; border-radius: 3px; }
+.tag-new { font-family: var(--mono); font-size: 11.5px; color: #059669; background: #ecfdf5; padding: 2px 8px; border-radius: 3px; font-weight: 600; }
 .mute-text { color: var(--text-3); font-size: 11.5px; }
 .warn-text { color: var(--warning); font-size: 11.5px; }
 
