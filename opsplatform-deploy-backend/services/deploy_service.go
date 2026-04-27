@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,12 +17,93 @@ var restartTsRe = regexp.MustCompile(`manual restart at \d{4}-\d{2}-\d{2} \d{2}:
 
 // replaceRestartTimestamp 在 templates/deployment.yaml 内容里把
 // "manual restart at <旧 ts>" 替换成 "manual restart at <newTs>"
-// 找不到该锚点行返回 (content, false)，调用方应把这个模块标为"chart 缺 restart hook"。
+// 找不到该锚点行返回 (content, false)，调用方应把这个模块标为"模板配置缺少重启标记"。
 func replaceRestartTimestamp(content []byte, newTs string) ([]byte, bool) {
 	if !restartTsRe.Match(content) {
 		return content, false
 	}
 	return restartTsRe.ReplaceAll(content, []byte("manual restart at "+newTs)), true
+}
+
+// dynamicStabilityTicks 根据 poll interval 算稳定窗口需要的连续 OK 次数
+// 始终维持约 30s 的稳定观察窗口，下限 3 次（防止极小 interval 配置）
+//
+//	interval=5  → 6 次  (30s 窗口，跟历史默认一致)
+//	interval=10 → 3 次  (30s 窗口)
+//	interval=20 → 3 次  (60s 窗口，下限保护)
+func dynamicStabilityTicks(intervalSec int) int {
+	if intervalSec <= 0 {
+		return 6
+	}
+	t := 30 / intervalSec
+	if 30%intervalSec != 0 {
+		t++
+	}
+	if t < 3 {
+		t = 3
+	}
+	return t
+}
+
+// 副本数感知 / 动态超时
+//
+//	业务事实：5 副本 maxSurge=1 maxUnavailable=0 滚动更新需要 ~150s
+//	30 副本同模式需要 ~900s。固定 180s 超时对多副本服务必失败。
+//	解决：clone 后顺手读 values.yaml 拿副本数，按副本数计算每个 app 的超时。
+const (
+	restartPerPodSec     = 60      // 重启每 pod 估时（含 readinessProbe initialDelay 30s + 容器启动 + 探针缓冲）
+	updateImagePerPodSec = 90      // 发布每 pod 估时（多预留镜像 pull 时间）
+	timeoutBufferSec     = 120     // 超时硬缓冲（git 拉推 + ArgoCD reconcile 滞后）
+	timeoutCapSec        = 30 * 60 // 单 app timeout 上限 30 分钟（防 typo 把 replicaCount 写成 1000）
+)
+
+// readEffectiveReplicas 从 values.yaml 内容推断"实际副本数上限"
+//
+//	优先 autoscaling.maxReplicas，回退 replicaCount，都没有返回 1。
+func readEffectiveReplicas(valuesContent []byte) int {
+	const noOp = 1
+	if len(valuesContent) == 0 {
+		return noOp
+	}
+	maxRep := extractIntField(valuesContent, "maxReplicas")
+	if maxRep > 0 {
+		return maxRep
+	}
+	rep := extractIntField(valuesContent, "replicaCount")
+	if rep > 0 {
+		return rep
+	}
+	return noOp
+}
+
+// extractIntField 从 yaml 文本里抓 "<key>: <int>" 格式的值，找不到/非数字返回 0
+// 不区分缩进层级，只匹配第一个出现的；够用因为 maxReplicas/replicaCount 在 values.yaml 唯一。
+func extractIntField(content []byte, key string) int {
+	re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(key) + `:\s*"?(\d+)"?\s*(?:#.*)?$`)
+	m := re.FindSubmatch(content)
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(string(m[1]))
+	return n
+}
+
+// computeAppTimeout 根据副本数 + per-pod 估值 + 配置下限算单个 app 的 timeout
+//
+//	max(配置 timeout, replicas * per_pod + buffer)，封顶 30 分钟
+func computeAppTimeout(replicas, perPodSec, configSec int) int {
+	if replicas < 1 {
+		replicas = 1
+	}
+	dynamic := replicas*perPodSec + timeoutBufferSec
+	t := configSec
+	if dynamic > t {
+		t = dynamic
+	}
+	if t > timeoutCapSec {
+		t = timeoutCapSec
+	}
+	return t
 }
 
 type DeployService struct {
@@ -209,10 +291,11 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 	if interval <= 0 {
 		interval = 5
 	}
-	timeout := in.PollTimeoutSec
-	if timeout <= 0 {
-		timeout = 180
+	configTimeout := in.PollTimeoutSec
+	if configTimeout <= 0 {
+		configTimeout = 180
 	}
+	stableTicks := dynamicStabilityTicks(interval)
 	limit := in.ConcurrentLimit
 	if limit <= 0 {
 		limit = 10
@@ -220,14 +303,26 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 	// ArgoCD app name 与 module scanner 约定一致：全小写 kebab-case
 	peNameLower := strings.ToLower(in.ProjectEnvName)
 	type syncJob struct {
-		module string
-		app    string
+		module     string
+		app        string
+		timeoutSec int // 按副本数动态算（含镜像 pull 缓冲）
 	}
 	jobs := make([]syncJob, 0, len(res.Changes))
 	for _, c := range res.Changes {
+		// 副本数感知：从已 clone 的 values.yaml 读
+		var replicas int
+		if m, ok := in.Modules[c.Module]; ok && m.ChartRelPath != "" {
+			if vb, _ := d.Git.ReadFile(in.ProjectEnvName, m.ChartRelPath); len(vb) > 0 {
+				replicas = readEffectiveReplicas(vb)
+			}
+		}
+		if replicas <= 0 {
+			replicas = 1
+		}
 		jobs = append(jobs, syncJob{
-			module: c.Module,
-			app:    strings.ToLower(c.Module) + "-" + peNameLower,
+			module:     c.Module,
+			app:        strings.ToLower(c.Module) + "-" + peNameLower,
+			timeoutSec: computeAppTimeout(replicas, updateImagePerPodSec, configTimeout),
 		})
 	}
 
@@ -236,7 +331,7 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 			// 初始状态先让前端看到这一行
 			publish(models.ArgocdAppResult{
 				App: j.app, SyncStatus: "Syncing", Health: "Progressing",
-				DurationSec: 0, Msg: "正在调用同步",
+				DurationSec: 0, Msg: "正在触发同步",
 				LastPolledAt: time.Now(),
 			})
 			// 记录 Sync API 调用前的时刻，用于 PollUntilStable 验证「这次 sync 是我们触发的」
@@ -244,7 +339,7 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 			if err := in.ArgocdClient.Sync(c, j.app); err != nil {
 				return models.ArgocdAppResult{
 					App: j.app, SyncStatus: "Failed",
-					Msg:          "失败 · 调用同步接口出错",
+					Msg:          "失败 · 服务同步触发失败",
 					LastPolledAt: time.Now(),
 				}
 			}
@@ -254,13 +349,12 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 			case <-time.After(2 * time.Second):
 			case <-c.Done():
 				return models.ArgocdAppResult{
-					App: j.app, SyncStatus: "canceled", Msg: "context canceled",
+					App: j.app, SyncStatus: "canceled", Msg: "已由用户取消等待",
 					LastPolledAt: time.Now(),
 				}
 			}
-			// stabilityTicks=6: 配 5s interval = 30s 稳定窗口，避免 readinessProbe 通过
-			// 后 livenessProbe 失败 / panic 导致的 CrashLoopBackOff 误报成功
-			return *PollUntilStable(c, in.ArgocdClient, j.app, interval, timeout, syncStartedAt, 6,
+			// 副本数动态超时 + 稳定窗口动态 ticks（始终 ~30s 窗口）
+			return *PollUntilStable(c, in.ArgocdClient, j.app, interval, j.timeoutSec, syncStartedAt, stableTicks,
 				func(tick *models.ArgocdAppResult) { publish(*tick) })
 		},
 		func(_ int, snapshot []models.ArgocdAppResult) {
@@ -270,16 +364,24 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 		},
 	)
 
+	hasCanceled := false
 	allOK := true
 	for _, ar := range res.ArgocdResults {
+		if ar.SyncStatus == "canceled" {
+			hasCanceled = true
+			allOK = false
+			continue
+		}
 		if ar.SyncStatus != "Synced" || ar.Health != "Healthy" {
 			allOK = false
-			break
 		}
 	}
-	if allOK {
+	switch {
+	case hasCanceled:
+		res.Status = models.StatusCanceled
+	case allOK:
 		res.Status = models.StatusSuccess
-	} else {
+	default:
 		res.Status = models.StatusPartial
 	}
 	return res
@@ -357,19 +459,24 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 
 	// Step 2: 每个模块改 templates/deployment.yaml 的 manual restart at <ts>
 	type triggered struct {
-		app string
-		mod string
-		ns  string
+		app        string
+		mod        string
+		ns         string
+		timeoutSec int // 按副本数动态算
 	}
 	var toPoll []triggered
 	var preFail []models.ArgocdAppResult
 	var changedModules []string
 	newTs := time.Now().Format("2006-01-02 15:04:05")
+	configTimeout := in.PollTimeoutSec
+	if configTimeout <= 0 {
+		configTimeout = 180
+	}
 	for _, name := range in.ModuleNames {
 		m, ok := in.Modules[name]
 		if !ok {
 			preFail = append(preFail, models.ArgocdAppResult{
-				App: name, SyncStatus: "Failed", Msg: "失败 · 模块不存在",
+				App: name, SyncStatus: "Failed", Msg: "失败 · 模块未在系统中登记，请先扫描",
 				LastPolledAt: time.Now(),
 			})
 			continue
@@ -381,7 +488,7 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 		if err != nil {
 			preFail = append(preFail, models.ArgocdAppResult{
 				App: m.ArgocdApp, SyncStatus: "Failed",
-				Msg:          "失败 · 读取 templates/deployment.yaml 失败（chart 结构异常）· " + sanitizeMsg(err.Error()),
+				Msg:          "失败 · 读取部署配置失败（模板目录可能异常）· " + sanitizeMsg(err.Error()),
 				LastPolledAt: time.Now(),
 			})
 			continue
@@ -390,7 +497,7 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 		if !replaced {
 			preFail = append(preFail, models.ArgocdAppResult{
 				App: m.ArgocdApp, SyncStatus: "Failed",
-				Msg:          "失败 · chart 缺少 'manual restart at <ts>' 锚点行，无法触发重启（请联系 chart 维护者）",
+				Msg:          "失败 · 模板配置缺少重启标记，无法触发重启（请联系运维）",
 				LastPolledAt: time.Now(),
 			})
 			continue
@@ -398,7 +505,7 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 		if err := d.Git.WriteFile(in.ProjectEnvName, deployRel, newContent); err != nil {
 			preFail = append(preFail, models.ArgocdAppResult{
 				App: m.ArgocdApp, SyncStatus: "Failed",
-				Msg:          "失败 · 写回 deployment.yaml 失败 · " + sanitizeMsg(err.Error()),
+				Msg:          "失败 · 写入配置失败 · " + sanitizeMsg(err.Error()),
 				LastPolledAt: time.Now(),
 			})
 			continue
@@ -408,7 +515,11 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 		if ns == "" {
 			ns = in.Namespace
 		}
-		toPoll = append(toPoll, triggered{app: m.ArgocdApp, mod: name, ns: ns})
+		// 副本数感知：读同目录 values.yaml 算这个 app 应该等多久
+		valuesRaw, _ := d.Git.ReadFile(in.ProjectEnvName, m.ChartRelPath)
+		replicas := readEffectiveReplicas(valuesRaw)
+		appTimeout := computeAppTimeout(replicas, restartPerPodSec, configTimeout)
+		toPoll = append(toPoll, triggered{app: m.ArgocdApp, mod: name, ns: ns, timeoutSec: appTimeout})
 	}
 
 	// Step 3: commit + push（一次提交包所有改动，atomic）
@@ -448,10 +559,7 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 	if interval <= 0 {
 		interval = 5
 	}
-	timeout := in.PollTimeoutSec
-	if timeout <= 0 {
-		timeout = 180
-	}
+	stableTicks := dynamicStabilityTicks(interval)
 	limit := in.ConcurrentLimit
 	if limit <= 0 {
 		limit = 10
@@ -461,7 +569,7 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 		func(c context.Context, t triggered, publish func(models.ArgocdAppResult)) models.ArgocdAppResult {
 			publish(models.ArgocdAppResult{
 				App: t.app, SyncStatus: "Syncing", Health: "Progressing",
-				DurationSec: 0, Msg: "正在调用同步",
+				DurationSec: 0, Msg: "正在触发同步",
 				LastPolledAt: time.Now(),
 			})
 			// 记录 Sync 调用前的 wall-clock，PollUntilStable 用它做 ourOpStarted 判定，
@@ -470,7 +578,7 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 			if err := in.ArgocdClient.Sync(c, t.app); err != nil {
 				return models.ArgocdAppResult{
 					App: t.app, SyncStatus: "Failed",
-					Msg:          "失败 · 调用同步接口出错 · " + sanitizeMsg(err.Error()),
+					Msg:          "失败 · 服务同步触发失败 · " + sanitizeMsg(err.Error()),
 					LastPolledAt: time.Now(),
 				}
 			}
@@ -478,12 +586,12 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 			case <-time.After(2 * time.Second):
 			case <-c.Done():
 				return models.ArgocdAppResult{
-					App: t.app, SyncStatus: "canceled", Msg: "context canceled",
+					App: t.app, SyncStatus: "canceled", Msg: "已由用户取消等待",
 					LastPolledAt: time.Now(),
 				}
 			}
-			// stabilityTicks=6 配 5s interval = 30s 稳定窗口
-			return *PollUntilStable(c, in.ArgocdClient, t.app, interval, timeout, syncStartedAt, 6,
+			// 副本数动态超时 + 稳定窗口动态 ticks（始终 ~30s 窗口）
+			return *PollUntilStable(c, in.ArgocdClient, t.app, interval, t.timeoutSec, syncStartedAt, stableTicks,
 				func(tick *models.ArgocdAppResult) { publish(*tick) })
 		},
 		func(_ int, snapshot []models.ArgocdAppResult) {
@@ -500,15 +608,21 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 	res.ArgocdResults = append(res.ArgocdResults, preFail...)
 	res.ArgocdResults = append(res.ArgocdResults, pollResults...)
 
-	okCount, failCount := 0, 0
+	okCount, failCount, canceledCount := 0, 0, 0
 	for _, ar := range res.ArgocdResults {
-		if ar.SyncStatus == "Synced" && ar.Health == "Healthy" {
+		switch {
+		case ar.SyncStatus == "canceled":
+			canceledCount++
+		case ar.SyncStatus == "Synced" && ar.Health == "Healthy":
 			okCount++
-		} else {
+		default:
 			failCount++
 		}
 	}
 	switch {
+	case canceledCount > 0:
+		// 任一 app 被取消 → 整次记 canceled（用户取消等待的语义）
+		res.Status = models.StatusCanceled
 	case failCount == 0 && okCount > 0:
 		res.Status = models.StatusSuccess
 	case okCount == 0:

@@ -98,6 +98,8 @@ func main() {
 	protected.HandleFunc("/deploy/update-image", handlers.HandleUpdateImage).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/deploy/restart", handlers.HandleRestart).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/deploy/rollback", handlers.HandleRollback).Methods("POST", "OPTIONS")
+	// 取消等待：handler 内部判定权限（操作发起人 OR admin）
+	protected.HandleFunc("/deployments/{id}/cancel", handlers.HandleCancelDeployment).Methods("POST", "OPTIONS")
 
 	// ========== 按钮权限分组：每组 admin 自动放行，portal 用户按勾选授权 ==========
 	// ① manage_global — 全局凭证 + GitLab 仓库登记

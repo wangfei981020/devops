@@ -148,6 +148,55 @@ func parseSinceDuration(s string) (time.Duration, bool) {
 	return d, true
 }
 
+// HandleCancelDeployment POST /api/deployments/{id}/cancel
+//
+//	用户在等待中点「取消等待」：停 deploy-center 这边的 poll，但已 push 的 git commit
+//	不会回滚，ArgoCD 会继续把 sync 跑完。任务结束时取消 ctx 让 PollUntilStable 自然
+//	退出，状态记 canceled，释放 inflight 槽 + 模块锁（各自的 defer 会处理）。
+//
+// 权限：操作发起者本人 OR admin
+func HandleCancelDeployment(w http.ResponseWriter, r *http.Request) {
+	id := ParseID(mux.Vars(r)["id"])
+	if id <= 0 {
+		JSONError(w, 40001, "id 非法")
+		return
+	}
+	var d models.Deployment
+	err := database.DB.QueryRow(`SELECT id, project_env_id, status, operator FROM deployment WHERE id=?`, id).
+		Scan(&d.ID, &d.ProjectEnvID, &d.Status, &d.Operator)
+	if err != nil {
+		JSONError(w, 40400, "发布记录不存在")
+		return
+	}
+	if !IsEnvIDAllowed(r, d.ProjectEnvID) {
+		JSONError(w, 40300, "无权操作该环境的发布")
+		return
+	}
+	currentUser := UsernameFromCtx(r)
+	if !IsAdmin(r) && d.Operator != currentUser {
+		JSONError(w, 40300, "只能取消自己发起的等待")
+		return
+	}
+	if d.Status != models.StatusPending {
+		JSONError(w, 40900, "该发布已结束，无法取消（当前状态："+d.Status+"）")
+		return
+	}
+	if !CancelDeployment(id) {
+		// 注册表里没有：可能正好刚结束、或服务重启过。把 DB 状态置 canceled 兜底。
+		_, _ = database.DB.Exec(
+			`UPDATE deployment SET status=?, error_msg=CONCAT(IFNULL(error_msg,''),
+				'\n[auto] cancel requested but task already finished or process restarted')
+			 WHERE id=? AND status='pending'`,
+			models.StatusCanceled, id)
+		Audit(r, "deploy.cancel.stale", "deployment", strconv.FormatInt(id, 10), nil)
+		JSONSuccess(w, map[string]interface{}{"id": id, "result": "stale"})
+		return
+	}
+	Audit(r, "deploy.cancel", "deployment", strconv.FormatInt(id, 10),
+		map[string]interface{}{"action": d.Action, "operator": d.Operator})
+	JSONSuccess(w, map[string]interface{}{"id": id, "result": "canceled"})
+}
+
 func HandleGetDeployment(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
 	var d models.Deployment

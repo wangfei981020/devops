@@ -17,7 +17,41 @@ var (
 	draining atomic.Bool
 	wg       sync.WaitGroup
 	counter  atomic.Int32
+
+	// 取消注册表：deployment_id → context.CancelFunc
+	// 异步发布任务启动时 RegisterCancel(depID, cancel)，结束 / 取消时 UnregisterCancel(depID)
+	// 用户点「取消等待」按钮时 CancelDeployment(depID) 触发对应 cancel，让 ctx.Done() 唤醒 PollUntilStable
+	inflightCancels sync.Map // map[int64]context.CancelFunc
 )
+
+// RegisterCancel 给 deployment 注册一个 cancel 钩子（通常是 ctx 的 cancel）
+// 调用方负责在任务结束时调 UnregisterCancel 释放，否则会有 cancel 函数泄漏
+func RegisterCancel(deploymentID int64, cancel func()) {
+	if deploymentID <= 0 || cancel == nil {
+		return
+	}
+	inflightCancels.Store(deploymentID, cancel)
+}
+
+// UnregisterCancel 任务结束时清理
+func UnregisterCancel(deploymentID int64) {
+	if deploymentID <= 0 {
+		return
+	}
+	inflightCancels.Delete(deploymentID)
+}
+
+// CancelDeployment 触发对应 deployment 的 cancel；不存在返回 false（任务可能已结束）
+func CancelDeployment(deploymentID int64) bool {
+	v, ok := inflightCancels.LoadAndDelete(deploymentID)
+	if !ok {
+		return false
+	}
+	if cancel, ok := v.(func()); ok && cancel != nil {
+		cancel()
+	}
+	return true
+}
 
 // IsDraining 业务 handler 在接到新发布请求时调用，true 表示拒收
 func IsDraining() bool { return draining.Load() }

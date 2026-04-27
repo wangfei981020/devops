@@ -225,10 +225,12 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 	InflightTrack(func() {
 		defer ReleaseModuleLocks(p.Name, req.ModuleNames)
 		start := time.Now()
-		// Restart 需要等所有 pod 真的 Healthy；走 git 路径要在原超时基础上多预留 git push 时间
-		ctx, cancel := context.WithTimeout(context.Background(),
-			time.Duration(pollTimeoutMin+2)*time.Minute+30*time.Second)
+		// 单 app 动态 timeout 上限是 30 分钟（services.timeoutCapSec），父 ctx 留 35 分钟够用
+		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
 		defer cancel()
+		// 注册到 cancel 表：用户点「取消等待」时调 cancel() 让 PollUntilStable 立刻退出
+		RegisterCancel(depID, cancel)
+		defer UnregisterCancel(depID)
 		ds := services.NewDeployService(getGitService())
 		res := ds.Restart(ctx, services.RestartInput{
 			ProjectEnvName:  p.Name,
@@ -478,8 +480,12 @@ func insertPendingDeployment(peID int64, action string, refID *int64, modNamesJS
 func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]string, modules map[string]services.Module,
 	gitRetry, pollInterval, pollTimeoutMin int, _refDepID *int64, operator, opLabel string) {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(pollTimeoutMin+2)*time.Minute)
+	// 单 app 动态 timeout 上限是 30 分钟（services.timeoutCapSec），父 ctx 留 35 分钟够用
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
 	defer cancel()
+	// 注册到 cancel 表：用户点「取消等待」时调 cancel() 让 PollUntilStable 立刻退出
+	RegisterCancel(depID, cancel)
+	defer UnregisterCancel(depID)
 
 	gs := getGitService()
 	ds := services.NewDeployService(gs)

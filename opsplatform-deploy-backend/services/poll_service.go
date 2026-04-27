@@ -47,7 +47,7 @@ func PollUntilStable(
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			msg := "失败 · 等待 Synced+Healthy 超时"
+			msg := "失败 · 等待服务部署完成超时（请到对应平台检查 Pod 状态）"
 			if last != nil && last.Message != "" {
 				msg = "失败 · " + sanitizeMsg(last.Message)
 			} else if lastErr != nil {

@@ -38,7 +38,12 @@
               </div>
             </div>
             <div class="it-r">
-              <div v-if="d.status === 'pending'" class="dot-spin"></div>
+              <template v-if="d.status === 'pending'">
+                <div class="dot-spin"></div>
+                <button class="cancel-btn" :disabled="cancelingIds.has(d.id)" @click.stop="onCancel(d)" title="停止等待，已提交的改动不会回滚">
+                  {{ cancelingIds.has(d.id) ? '取消中…' : '取消等待' }}
+                </button>
+              </template>
               <span v-else class="status-pill" :class="'st-' + d.status">{{ statusLabel(d.status) }}</span>
             </div>
           </div>
@@ -52,11 +57,48 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive } from 'vue'
 import { ArrowUp, ArrowDown, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useDeploymentsStore } from '../stores/deployments'
+import { cancelDeployment } from '../api'
 
 const store = useDeploymentsStore()
+
+// 正在取消中的 id 集合（防止重复点）
+const cancelingIds = reactive(new Set())
+
+async function onCancel(d) {
+  if (cancelingIds.has(d.id)) return
+  try {
+    await ElMessageBox.confirm(
+      '代码已提交仓库，后台同步会继续进行。\n取消后只是不再等待状态反馈。\n\n如果 30 分钟内仍未完成，请人工检查对应服务的 Pod 是否已正常启动。',
+      '确认取消等待？',
+      {
+        type: 'warning',
+        confirmButtonText: '确定取消',
+        cancelButtonText: '继续等待',
+        dangerouslyUseHTMLString: false,
+        autofocus: false,
+      }
+    )
+  } catch (_) {
+    return // 用户选了"继续等待"
+  }
+  cancelingIds.add(d.id)
+  try {
+    const r = await cancelDeployment(d.id)
+    if (r?.result === 'stale') {
+      ElMessage.info('该任务已结束，无需取消')
+    } else {
+      ElMessage.success('已取消等待 · 后台同步会继续进行')
+    }
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || e.message || '取消失败')
+  } finally {
+    cancelingIds.delete(d.id)
+  }
+}
 
 // 整体状态：有 pending 就算进行中；全完成看有没有失败
 const overallStatus = computed(() => {
@@ -85,6 +127,7 @@ const STATUS_LABEL = {
   partial: '部分成功',
   no_change: '无变更',
   unknown: '未知',
+  canceled: '已取消',
 }
 function statusLabel(s) { return STATUS_LABEL[s] || s }
 
@@ -189,6 +232,16 @@ function elapsed(start) {
 .status-pill.st-partial { background: #fffbeb; color: #b45309; }
 .status-pill.st-no_change { background: #f3f4f6; color: #6b7280; }
 .status-pill.st-unknown { background: #fff7ed; color: #ea580c; }
+.status-pill.st-canceled { background: #f3f4f6; color: #4b5563; }
+
+.it-r { display: flex; align-items: center; gap: 8px; }
+.cancel-btn {
+  font-size: 11px; padding: 3px 8px; border-radius: 4px;
+  background: #fff; color: #6b7280; border: 1px solid #d1d5db;
+  cursor: pointer; transition: all .12s;
+}
+.cancel-btn:hover:not(:disabled) { color: #dc2626; border-color: #fca5a5; background: #fef2f2; }
+.cancel-btn:disabled { opacity: .5; cursor: not-allowed; }
 
 .dock-foot {
   padding: 8px 16px; background: #fafbfc; border-top: 1px solid #f1f3f5;

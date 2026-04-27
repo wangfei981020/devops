@@ -166,4 +166,5 @@ const (
 	StatusPartial  = "partial"
 	StatusFailed   = "failed"
 	StatusNoChange = "no_change"
+	StatusCanceled = "canceled" // 用户在等待中点了"取消等待"，git 改动已 push、ArgoCD 在自己同步，仅停 deploy-center 这边的轮询
 )

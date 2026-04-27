@@ -47,12 +47,21 @@
           <div class="logs-toolbar">
             <div class="tb-l">
               <span class="lbl">来源：</span>
-              <span class="src-tag">上一次崩溃前的日志</span>
-              <span v-if="logsSource === 'archive'" class="src-badge archive" title="发布失败时已存档到 MinIO，pod 被替换也能看">
-                📦 归档快照
+              <button
+                :class="['mode-btn', { on: !previous }]"
+                @click="switchMode(false)" title="拉当前正在运行的容器最近日志">
+                当前容器
+              </button>
+              <button
+                :class="['mode-btn', { on: previous }]"
+                @click="switchMode(true)" title="拉上一次崩溃前的容器日志（仅在容器至少崩溃过一次时可用）">
+                上次崩溃前
+              </button>
+              <span v-if="logsSource === 'archive'" class="src-badge archive" title="发布失败时已存档，pod 被替换也能看">
+                归档快照
               </span>
-              <span v-else-if="logsSource === 'live'" class="src-badge live" title="实时从 ArgoCD 拉取（pod 还在）">
-                ⚡ 实时拉取
+              <span v-else-if="logsSource === 'live'" class="src-badge live" title="实时拉取（容器仍在）">
+                实时拉取
               </span>
             </div>
             <div class="tb-r">
@@ -149,7 +158,7 @@ const emit = defineEmits(['close'])
 
 const pods = ref([])
 const podName = ref('')
-const previous = ref(true) // 固定 true，发布工具只关心崩溃前日志
+const previous = ref(false) // 默认拉「当前容器」实时日志，pod 没崩过也能看；切到「上次崩溃前」才拉 --previous
 const tailLines = ref(200)
 const logs = ref('')
 const logsSource = ref('') // 'archive' 或 'live'
@@ -175,15 +184,15 @@ const noLogsHint = computed(() => {
   if (!currentPod.value) return ''
   const r = currentPod.value.status_reason || ''
   if (r.includes('ImagePullBackOff') || r.includes('ErrImagePull')) {
-    return '容器从未启动成功（镜像拉取失败）。请检查镜像名 / Harbor 凭证 / 节点网络。'
+    return '容器从未启动成功（镜像拉取失败）。请检查镜像名 / 仓库凭证 / 节点网络。'
   }
   if (r.includes('Pending')) {
     return 'Pod 还在 Pending 状态（资源不足 / 节点选择器 / PVC 等）。'
   }
   if (previous.value) {
-    return '没有上一次容器日志（可能是首次部署）。可切换到「当前容器」查看。'
+    return '该容器从未异常崩溃，没有「上次崩溃前」日志可查。点上方「当前容器」查看运行日志。'
   }
-  return '当前容器无输出。'
+  return '当前容器暂无输出（应用刚启动或没产生日志）。'
 })
 
 // ---- 加载 pods ----
@@ -265,8 +274,15 @@ async function fetchLogs() {
     })
   } catch (e) {
     logs.value = ''
-    error.value = '拉取日志失败'
-    errorHint.value = e?.response?.data?.message || e.message || '请稍后重试'
+    const raw = e?.response?.data?.message || e.message || ''
+    // 友好化常见错误：「previous terminated container ... not found」 → 提示切到当前容器
+    if (previous.value && /previous terminated container.*not found/i.test(raw)) {
+      error.value = '该容器从未崩溃过'
+      errorHint.value = '没有「上次崩溃前」的日志可查。请点上方「当前容器」查看实时日志。'
+    } else {
+      error.value = '拉取日志失败'
+      errorHint.value = raw || '请稍后重试'
+    }
   } finally {
     loading.value = false
   }
@@ -275,6 +291,12 @@ async function fetchLogs() {
 function selectPod(name) {
   if (podName.value === name) return
   podName.value = name
+  fetchLogs()
+}
+
+function switchMode(toPrevious) {
+  if (previous.value === toPrevious) return
+  previous.value = toPrevious
   fetchLogs()
 }
 
@@ -404,7 +426,7 @@ watch(() => props.show, (v) => {
     error.value = ''
     searchQuery.value = ''
     searchMatches.value = []
-    previous.value = true
+    previous.value = false
     tailLines.value = 200
     loadPods()
   }
@@ -478,6 +500,13 @@ watch(() => props.show, (v) => {
 .tb-l, .tb-r { display: flex; align-items: center; gap: 8px; }
 .lbl { color: #6b7280; }
 .src-tag { font-weight: 500; color: #1f2937; font-size: 12.5px; }
+.mode-btn {
+  padding: 4px 12px; border: 1px solid #d1d5db; border-radius: 4px;
+  background: #fff; cursor: pointer; font-size: 12px; color: #374151;
+  transition: all .12s;
+}
+.mode-btn:hover { border-color: #1890ff; color: #1890ff; }
+.mode-btn.on { background: #1890ff; border-color: #1890ff; color: #fff; }
 .src-badge {
   font-size: 11px; padding: 2px 8px; border-radius: 99px;
   font-weight: 500; display: inline-flex; align-items: center; gap: 3px;

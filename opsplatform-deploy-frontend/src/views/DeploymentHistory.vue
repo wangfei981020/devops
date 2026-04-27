@@ -175,6 +175,13 @@
 
                   <div class="section-actions">
                     <button
+                      v-if="row.status === 'pending' && (auth.isAdmin || row.operator === auth.user?.username)"
+                      class="btn-cancel sm"
+                      :disabled="cancelingIds.has(row.id)"
+                      @click.stop="onCancelRow(row)">
+                      {{ cancelingIds.has(row.id) ? '取消中…' : '取消等待' }}
+                    </button>
+                    <button
                       v-if="row.action !== 'restart' && ['success','partial'].includes(row.status) && (auth.isAdmin || auth.hasButton('rollback'))"
                       class="btn-primary sm"
                       @click.stop="onRollback(row)">
@@ -216,7 +223,8 @@ import PodLogsModal from '../components/PodLogsModal.vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { Search, ArrowRight } from '@element-plus/icons-vue'
-import { listDeployments, listProjectEnvs, getDeployment } from '../api'
+import { listDeployments, listProjectEnvs, getDeployment, cancelDeployment } from '../api'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import RollbackDialog from '../components/RollbackDialog.vue'
 import { useAuthStore } from '../stores/auth'
 
@@ -272,7 +280,7 @@ function actionLabel(a) {
   return { update_image: '更新镜像', restart: '重启服务', rollback: '回滚' }[a] || a
 }
 function statusLabel(s) {
-  return { success: '成功', partial: '部分成功', failed: '失败', pending: '进行中', no_change: '无变化' }[s] || s
+  return { success: '成功', partial: '部分成功', failed: '失败', pending: '进行中', no_change: '无变化', canceled: '已取消' }[s] || s
 }
 
 const kpis = ref([
@@ -429,6 +437,33 @@ function onRollback(row) {
   router.push({ path: '/deploy', query: { rollback_from: String(row.id) } })
 }
 
+// 取消等待：仅 status=pending 的发布可取消，git 改动已 push、不会回滚
+const cancelingIds = reactive(new Set())
+async function onCancelRow(row) {
+  if (cancelingIds.has(row.id)) return
+  try {
+    await ElMessageBox.confirm(
+      '代码已提交仓库，后台同步会继续进行。\n取消后只是不再等待状态反馈。\n\n如果 30 分钟内仍未完成，请人工检查对应服务的 Pod 是否已正常启动。',
+      '确认取消等待？',
+      { type: 'warning', confirmButtonText: '确定取消', cancelButtonText: '继续等待', autofocus: false }
+    )
+  } catch (_) { return }
+  cancelingIds.add(row.id)
+  try {
+    const r = await cancelDeployment(row.id)
+    if (r?.result === 'stale') {
+      ElMessage.info('该任务已结束，无需取消')
+    } else {
+      ElMessage.success('已取消等待 · 后台同步会继续进行')
+    }
+    await doSearch()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || e.message || '取消失败')
+  } finally {
+    cancelingIds.delete(row.id)
+  }
+}
+
 onMounted(async () => {
   envs.value = (await listProjectEnvs()) || []
   await doSearch()
@@ -581,6 +616,10 @@ onUnmounted(() => {
 .status-tag.partial { background: #fef3c7; color: #92400e; }
 .status-tag.failed { background: var(--danger-bg); color: var(--danger-dark); }
 .status-tag.pending { background: #eff6ff; color: #1e40af; }
+.status-tag.canceled { background: #f3f4f6; color: #4b5563; }
+.btn-cancel { padding: 6px 14px; font-size: 12px; border-radius: 4px; background: #fff; color: #6b7280; border: 1px solid #d1d5db; cursor: pointer; transition: all .12s; }
+.btn-cancel:hover:not(:disabled) { color: #dc2626; border-color: #fca5a5; background: #fef2f2; }
+.btn-cancel:disabled { opacity: .5; cursor: not-allowed; }
 .status-tag.no_change { background: var(--bg-hover); color: var(--text-2); }
 
 .mod-chip {

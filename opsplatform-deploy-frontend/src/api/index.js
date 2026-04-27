@@ -118,6 +118,8 @@ export const getModuleTagHistory = (id, limit = 10) => http.get(`/modules/${id}/
 // Deployments
 export const listDeployments = (params) => http.get('/deployments', { params })
 export const getDeployment = (id) => http.get(`/deployments/${id}`)
+// 取消等待：仅 status=pending 的发布可取消，git 改动不会回滚
+export const cancelDeployment = (id) => http.post(`/deployments/${id}/cancel`)
 export const getRollbackPreview = (id) => http.get(`/deployments/${id}/rollback-preview`)
 export const getDeploymentPods = (id, app) => http.get(`/deployments/${id}/pods`, { params: { app } })
 export const getDeploymentPodLogs = (id, params) => http.get(`/deployments/${id}/pod-logs`, { params })
