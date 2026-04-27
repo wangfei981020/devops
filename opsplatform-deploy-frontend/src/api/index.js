@@ -47,9 +47,14 @@ export const testGitlab = (data) => http.post('/global-config/test-gitlab', data
 export const testMinIO = (data) => http.post('/global-config/test-minio', data || {})
 // Harbor 测试连接 + 拉镜像 tag 列表 + 刷新 ArgoCD app 缓存
 export const testHarbor = (data) => http.post('/global-config/test-harbor', data || {})
-// listHarborTags(envID, module, limit?) → { module, image_repo, tags:[{name,pushed_at,size_mb}], fetched_at }
-export const listHarborTags = (envID, module, limit) =>
-  http.get('/harbor/tags', { params: { project_env_id: envID, module, limit: limit || 50 } })
+// listHarborTags(envID, module, page=1, limit=100) → { module, image_repo, page, tags, has_more, fetched_at }
+export const listHarborTags = (envID, module, page, limit) =>
+  http.get('/harbor/tags', { params: {
+    project_env_id: envID,
+    module,
+    page: page || 1,
+    limit: limit || 100,
+  }})
 // 用户手动刷新 ArgoCD app 列表缓存
 export const refreshArgocdAppCache = (envID) =>
   http.post('/argocd-app-cache/refresh', null, { params: { project_env_id: envID } })

@@ -26,7 +26,7 @@ import (
 // =========================================================================
 
 const (
-	defaultTagPageSize = 50
+	defaultTagPageSize = 100
 	maxTagPageSize     = 200
 	harborCacheTTL     = 60 * time.Second
 	harborHTTPTimeout  = 8 * time.Second
@@ -41,11 +41,12 @@ type HarborClient struct {
 	HTTP *http.Client
 
 	mu    sync.Mutex
-	cache map[string]*harborTagCacheEntry // key = "<proj>/<repo>" → entry
+	cache map[string]*harborTagCacheEntry // key = "<proj>/<repo>|page=N" → entry
 }
 
 type harborTagCacheEntry struct {
 	tags     []HarborTag
+	hasMore  bool
 	cachedAt time.Time
 }
 
@@ -87,14 +88,24 @@ func (c *HarborClient) debugTokenLen() string {
 	return fmt.Sprintf("user=%s token_len=%d", c.User, len(c.Token))
 }
 
-// ListTags 拉某 repo 最近 limit 个 tag（按推送时间倒序）
+// ListTagsResult 一页拉取的结果
+type ListTagsResult struct {
+	Tags    []HarborTag
+	HasMore bool // tags 数量 == limit 时为 true，提示前端"可能还有下一页"
+}
+
+// ListTags 拉某 repo 第 page 页的 tag（按推送时间倒序，每页 limit 个）
 //
 //	repo 格式：project/repository，如 "g32/user-client-backend"
-//	limit <=0 用默认 50；上限 200
-//	带 60s 缓存（同 repo 60s 内不重复调 Harbor）
-func (c *HarborClient) ListTags(ctx context.Context, repo string, limit int) ([]HarborTag, error) {
+//	page  <=0 默认 1
+//	limit <=0 默认 100；上限 200
+//	带 60s 缓存，缓存 key = (repo, page)，按页独立缓存
+func (c *HarborClient) ListTags(ctx context.Context, repo string, page, limit int) (*ListTagsResult, error) {
 	if !c.ok() {
 		return nil, fmt.Errorf("harbor 未配置")
+	}
+	if page <= 0 {
+		page = 1
 	}
 	if limit <= 0 {
 		limit = defaultTagPageSize
@@ -107,10 +118,14 @@ func (c *HarborClient) ListTags(ctx context.Context, repo string, limit int) ([]
 		return nil, fmt.Errorf("repo 不能为空")
 	}
 
+	cacheKey := fmt.Sprintf("%s|p%d|l%d", repo, page, limit)
 	// 缓存 hit
 	c.mu.Lock()
-	if e, ok := c.cache[repo]; ok && time.Since(e.cachedAt) < harborCacheTTL {
-		out := append([]HarborTag(nil), e.tags...)
+	if e, ok := c.cache[cacheKey]; ok && time.Since(e.cachedAt) < harborCacheTTL {
+		out := &ListTagsResult{
+			Tags:    append([]HarborTag(nil), e.tags...),
+			HasMore: e.hasMore,
+		}
 		c.mu.Unlock()
 		return out, nil
 	}
@@ -124,8 +139,8 @@ func (c *HarborClient) ListTags(ctx context.Context, repo string, limit int) ([]
 	repoSegment := url.PathEscape(strings.ReplaceAll(parts[1], "/", "%2F"))
 
 	apiURL := fmt.Sprintf(
-		"%s/api/v2.0/projects/%s/repositories/%s/artifacts?page=1&page_size=%d&with_tag=true&sort=-push_time",
-		c.BaseURL, project, repoSegment, limit,
+		"%s/api/v2.0/projects/%s/repositories/%s/artifacts?page=%d&page_size=%d&with_tag=true&sort=-push_time",
+		c.BaseURL, project, repoSegment, page, limit,
 	)
 
 	req, _ := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
@@ -147,8 +162,8 @@ func (c *HarborClient) ListTags(ctx context.Context, repo string, limit int) ([]
 		return nil, fmt.Errorf("Harbor 拒绝请求 (%d): %s", resp.StatusCode, truncate(string(body), 200))
 	}
 	if resp.StatusCode == 404 {
-		// repo 不存在 — 返回空列表（caller 可据此判定）
-		return nil, nil
+		// repo 不存在 — 返回空结果（caller 可据此判定）
+		return &ListTagsResult{Tags: nil, HasMore: false}, nil
 	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("Harbor 返回 %d: %s", resp.StatusCode, truncate(string(body), 200))
@@ -179,12 +194,15 @@ func (c *HarborClient) ListTags(ctx context.Context, repo string, limit int) ([]
 			})
 		}
 	}
+	// has_more 判定：返回的 artifact 数 == limit 时认为可能还有下一页
+	// (artifacts 数量不一定 == tags 数量，因为一个 artifact 可能有多个 tag，但 Harbor 分页是按 artifact 数算的)
+	hasMore := len(artifacts) >= limit
 
 	// 写缓存
 	c.mu.Lock()
-	c.cache[repo] = &harborTagCacheEntry{tags: tags, cachedAt: time.Now()}
+	c.cache[cacheKey] = &harborTagCacheEntry{tags: tags, hasMore: hasMore, cachedAt: time.Now()}
 	c.mu.Unlock()
-	return tags, nil
+	return &ListTagsResult{Tags: tags, HasMore: hasMore}, nil
 }
 
 // VerifyTag 校验 (repo, tag) 是否存在于 Harbor
@@ -230,8 +248,11 @@ func (c *HarborClient) VerifyTag(ctx context.Context, repo, tag string) (bool, e
 		log.Printf("[harbor][VerifyTag] status=%d %s url=%s body=%s",
 			resp.StatusCode, c.debugTokenLen(), req.URL.String(), truncate(string(body), 1000))
 	}
-	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return false, fmt.Errorf("Harbor 拒绝请求 (%d): %s", resp.StatusCode, truncate(string(body), 200))
+	if resp.StatusCode == 401 {
+		return false, fmt.Errorf("Harbor 凭证无效")
+	}
+	if resp.StatusCode == 403 {
+		return false, fmt.Errorf("Harbor Robot 缺读取权限")
 	}
 	return false, fmt.Errorf("Harbor 返回异常状态码 %d", resp.StatusCode)
 }

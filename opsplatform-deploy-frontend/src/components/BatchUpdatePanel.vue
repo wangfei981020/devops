@@ -14,11 +14,14 @@
     <!-- ============== 选择模式：多选模块 + 每模块 tag 下拉 ============== -->
     <div v-if="mode === 'select'" class="select-mode">
       <div class="sm-toolbar">
-        <span class="sm-tip">从 Harbor 拉最近 50 个 tag · 按推送时间倒序</span>
+        <span class="sm-tip">从 Harbor 拉最近 100 个 tag · 按推送时间倒序 · 不够可点「加载更早」翻页</span>
         <div class="sm-cache">
           <span class="hint">{{ argocdCacheHint }}</span>
           <button class="btn ghost sm" @click="onRefreshCache" :disabled="refreshing">
             {{ refreshing ? '刷新中...' : '🔄 刷新校验数据' }}
+          </button>
+          <button v-if="selectedModules.length" class="btn ghost sm danger-hover" @click="onClearAll">
+            ✕ 清空已选 ({{ selectedModules.length }})
           </button>
         </div>
       </div>
@@ -28,7 +31,7 @@
           placeholder="点击下拉选择 / 输入关键字搜索" style="width:100%;"
           @change="onSelectedChanged">
           <el-option v-for="m in props.modules" :key="m.name"
-            :label="m.name + ' · 当前 ' + (m.current_tag || '-')" :value="m.name" />
+            :label="m.name" :value="m.name" />
         </el-select>
       </div>
       <div v-if="selectedModules.length" class="sm-table-wrap">
@@ -47,6 +50,15 @@
                   style="width:100%;">
                   <el-option v-for="t in tagsByModule[m] || []" :key="t.name"
                     :label="t.name + ' · ' + relTime(t.pushed_at)" :value="t.name" />
+                  <template #footer>
+                    <button v-if="tagsByModule[m]?.length" class="load-more-btn"
+                      :disabled="loadingTags[m] || tagsAllLoaded[m]"
+                      @click.stop="loadMoreTags(m)">
+                      <span v-if="loadingTags[m]">加载中...</span>
+                      <span v-else-if="tagsAllLoaded[m]">已无更多 · 共 {{ tagsByModule[m].length }} 条</span>
+                      <span v-else>📥 加载更早 (已 {{ tagsByModule[m].length }} 条)</span>
+                    </button>
+                  </template>
                 </el-select>
               </td>
             </tr>
@@ -262,8 +274,10 @@ function switchMode(m) {
 // ---- 选择模式状态 ----
 const selectedModules = ref([])
 const modulePicks = reactive({})       // { module → tag }
-const tagsByModule = reactive({})      // { module → [{name, pushed_at, ...}] }
+const tagsByModule = reactive({})      // { module → 累积 [{name, pushed_at, ...}] }
 const loadingTags = reactive({})       // { module → bool }
+const tagPageByModule = reactive({})   // { module → 当前已加载到第几页 }
+const tagsAllLoaded = reactive({})     // { module → bool 已无更多 }
 const refreshing = ref(false)
 const argocdCacheAt = ref(0)           // unix seconds
 
@@ -304,14 +318,54 @@ async function fetchTags(name) {
   if (loadingTags[name] || tagsByModule[name]) return
   loadingTags[name] = true
   try {
-    const r = await listHarborTags(props.projectEnv.id, name, 50)
+    const r = await listHarborTags(props.projectEnv.id, name, 1, 100)
     tagsByModule[name] = r.tags || []
+    tagPageByModule[name] = 1
+    tagsAllLoaded[name] = !r.has_more
+    // 默认填最新（仅当用户还没手动选过）
+    if (!modulePicks[name] && tagsByModule[name].length > 0) {
+      modulePicks[name] = tagsByModule[name][0].name
+    }
   } catch (e) {
     ElMessage.error(`${name} · ${e?.response?.data?.message || e.message || '拉 tag 失败'}`)
     tagsByModule[name] = []
   } finally {
     loadingTags[name] = false
   }
+}
+
+async function loadMoreTags(name) {
+  if (loadingTags[name] || tagsAllLoaded[name]) return
+  const nextPage = (tagPageByModule[name] || 1) + 1
+  loadingTags[name] = true
+  try {
+    const r = await listHarborTags(props.projectEnv.id, name, nextPage, 100)
+    const more = r.tags || []
+    tagsByModule[name] = [...(tagsByModule[name] || []), ...more]
+    tagPageByModule[name] = nextPage
+    tagsAllLoaded[name] = !r.has_more
+  } catch (e) {
+    ElMessage.error(`${name} · ${e?.response?.data?.message || e.message || '加载更早失败'}`)
+  } finally {
+    loadingTags[name] = false
+  }
+}
+
+// 一键清空已选模块（永远二次确认）
+async function onClearAll() {
+  const n = selectedModules.value.length
+  if (n === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确认清空 ${n} 个已选模块？所选 tag、预览结果都会清掉，但 Harbor tag 缓存保留。`,
+      '清空已选',
+      { type: 'warning', confirmButtonText: '确认清空', cancelButtonText: '取消', autofocus: false }
+    )
+  } catch (_) { return }
+  selectedModules.value = []
+  Object.keys(modulePicks).forEach(k => delete modulePicks[k])
+  diff.value = []
+  precheckBundle.value = null
 }
 
 function onPreviewSelect() {
@@ -331,6 +385,8 @@ async function onRefreshCache() {
     argocdCacheAt.value = r.refresh_at || Math.floor(Date.now() / 1000)
     // 同时清掉已加载的 Harbor tag 缓存（前端层），让用户重新看到最新 tag
     Object.keys(tagsByModule).forEach(k => delete tagsByModule[k])
+    Object.keys(tagPageByModule).forEach(k => delete tagPageByModule[k])
+    Object.keys(tagsAllLoaded).forEach(k => delete tagsAllLoaded[k])
     // 重新拉已选模块的 tag
     for (const name of selectedModules.value) {
       fetchTags(name)
@@ -605,6 +661,17 @@ function handleLockConflict(err) {
 .sm-table tr:last-child td { border-bottom: none; }
 .sm-actions { display: flex; align-items: center; gap: 12px; }
 .btn.sm { padding: 4px 10px; font-size: 11.5px; }
+.btn.danger-hover:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); background: #fef2f2; }
+
+/* tag 下拉底部「加载更早」按钮 */
+.load-more-btn {
+  display: block; width: 100%;
+  padding: 7px 12px; font-size: 12px;
+  background: #fafbfc; color: var(--primary); border: none;
+  border-top: 1px solid var(--border-soft); cursor: pointer; transition: all .12s;
+}
+.load-more-btn:hover:not(:disabled) { background: #eff6ff; color: #0f7ce6; }
+.load-more-btn:disabled { color: var(--text-3); cursor: not-allowed; background: #f9fafb; }
 
 /* 通用预览区 */
 .preview-block { padding: 14px 20px; border-top: 1px solid var(--border-soft); }

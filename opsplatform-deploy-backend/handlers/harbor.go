@@ -72,14 +72,16 @@ func InvalidateHarborClient() {
 	harborClientCfgKey = ""
 }
 
-// HandleListHarborTags GET /api/harbor/tags?project_env_id=N&module=xxx&limit=50
+// HandleListHarborTags GET /api/harbor/tags?project_env_id=N&module=xxx&page=1&limit=100
 //
-//	拉某模块对应 Harbor repo 的最近 N 个 tag (按推送时间倒序)
+//	拉某模块对应 Harbor repo 第 page 页的 tag (按推送时间倒序，每页 limit 个)
 //	module 来自 modules 表，需要先扫描出来才能查到 image_repository
+//	Response 含 has_more 让前端决定是否还能加载更早
 func HandleListHarborTags(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	envID, _ := strconv.ParseInt(q.Get("project_env_id"), 10, 64)
 	module := strings.TrimSpace(q.Get("module"))
+	page, _ := strconv.Atoi(q.Get("page"))
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	if envID <= 0 || module == "" {
 		JSONError(w, 40001, "project_env_id / module 必填")
@@ -112,16 +114,21 @@ func HandleListHarborTags(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	tags, err := hc.ListTags(ctx, projectRepo, limit)
+	res, err := hc.ListTags(ctx, projectRepo, page, limit)
 	if err != nil {
 		JSONError(w, 50001, err.Error())
 		return
 	}
+	if res == nil {
+		res = &services.ListTagsResult{}
+	}
 	JSONSuccess(w, map[string]interface{}{
-		"module":      module,
-		"image_repo":  imageRepo,
-		"tags":        tags, // [{name, pushed_at, digest, size_mb}]
-		"fetched_at":  time.Now().Unix(),
+		"module":     module,
+		"image_repo": imageRepo,
+		"page":       page,
+		"tags":       res.Tags,    // [{name, pushed_at, digest, size_mb}]
+		"has_more":   res.HasMore, // 是否还有下一页
+		"fetched_at": time.Now().Unix(),
 	})
 }
 
