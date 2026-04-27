@@ -48,8 +48,9 @@
                   placeholder="选择 tag"
                   @click.once="fetchTags(m)"
                   style="width:100%;">
-                  <el-option v-for="t in tagsByModule[m] || []" :key="t.name"
-                    :label="t.name + ' · ' + relTime(t.pushed_at)" :value="t.name" />
+                  <el-option v-for="t in mergedTags(m)" :key="t.name"
+                    :label="t.name + (t.pinned ? ' · ↩ 回滚目标' : ' · ' + relTime(t.pushed_at))"
+                    :value="t.name" />
                   <template #footer>
                     <button v-if="tagsByModule[m]?.length" class="load-more-btn"
                       :disabled="loadingTags[m] || tagsAllLoaded[m]"
@@ -114,9 +115,10 @@ base-client-backend:20260416020000-99"
         <table class="pv-table">
           <thead>
             <tr>
-              <th style="width:40%;">模块</th>
-              <th style="width:30%;">当前 TAG</th>
-              <th style="width:30%;">新 TAG</th>
+              <th style="width:38%;">模块</th>
+              <th style="width:28%;">当前 TAG</th>
+              <th style="width:28%;">新 TAG</th>
+              <th style="width:6%;text-align:center;">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -134,6 +136,9 @@ base-client-backend:20260416020000-99"
                 <span v-if="d.is_new" class="mute-text">—</span>
                 <span v-else-if="d.skip" class="mute-text">{{ d.to_tag }}</span>
                 <span v-else class="tag-new">{{ d.to_tag }}</span>
+              </td>
+              <td style="text-align:center;">
+                <button class="row-del-btn" @click="removeFromPreview(d.module)" title="从本次发布移除">✕</button>
               </td>
             </tr>
           </tbody>
@@ -283,6 +288,7 @@ const tagPageByModule = reactive({})   // { module → 当前已加载到第几�
 const tagsAllLoaded = reactive({})     // { module → bool 已无更多 }
 const refreshing = ref(false)
 const argocdCacheAt = ref(0)           // unix seconds
+const rollbackPinned = reactive({})    // { module → 回滚目标 tag }；即便 Harbor 最近 100 没拉到也要让下拉能显示
 
 const hasAnyPick = computed(() => selectedModules.value.length > 0
   && selectedModules.value.every(m => modulePicks[m]))
@@ -448,13 +454,45 @@ const canSubmit = computed(() => {
 const text = ref('')
 const diff = ref([])
 
-// rollbackMode 进入时自动预填 textarea；用户可继续编辑/删行/改 tag
+// rollbackMode 进入时自动预填 textarea + 选择模式状态
+//
+//   关键：默认模式是 select，用户切到回滚后看到的是下拉，必须把 selectedModules + modulePicks
+//   也填上，否则 fetchTags 会用 Harbor 最新 tag 覆盖回滚目标。
+//   rollbackPinned 记下"回滚目标"，让 dropdown 即使 Harbor 最近 100 tag 没包含也能显示。
 watch(() => props.rollbackMode, (m) => {
-  if (m?.prefillText) {
-    text.value = m.prefillText
-    diff.value = [] // 旧 diff 清掉，用户要主动点"预览变更"看新 diff
+  if (!m?.prefillText) return
+  text.value = m.prefillText
+  diff.value = []
+  precheckBundle.value = null
+
+  // 解析 "module:tag" 行 → 同步进 selectedModules + modulePicks + rollbackPinned
+  const sel = []
+  Object.keys(modulePicks).forEach(k => delete modulePicks[k])
+  Object.keys(rollbackPinned).forEach(k => delete rollbackPinned[k])
+  for (const line of m.prefillText.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const idx = trimmed.indexOf(':')
+    if (idx <= 0) continue
+    const mod = trimmed.slice(0, idx).trim()
+    const tag = trimmed.slice(idx + 1).trim()
+    if (mod && tag) {
+      sel.push(mod)
+      modulePicks[mod] = tag
+      rollbackPinned[mod] = tag
+    }
   }
+  selectedModules.value = sel
 }, { immediate: true })
+
+// mergedTags 合并 Harbor 拉到的 tag 列表 + 回滚目标 tag（Harbor 没返回也要置顶展示）
+function mergedTags(name) {
+  const list = tagsByModule[name] || []
+  const pinned = rollbackPinned[name]
+  if (!pinned) return list
+  if (list.some(t => t.name === pinned)) return list
+  return [{ name: pinned, pinned: true }, ...list]
+}
 const previewing = ref(false)
 const submitting = ref(false)
 
@@ -474,6 +512,36 @@ const sortedDiff = computed(() => {
 function shortTag(t) {
   if (!t) return '—'
   return t.length > 12 ? '…' + t.slice(-10) : t
+}
+
+// removeFromPreview 行级 ✕：把这个模块从 diff/select/text/precheck 全部清掉，再次预览也不会带回来
+//   不做二次确认 —— 删错了上面下拉再选回来即可
+function removeFromPreview(name) {
+  diff.value = diff.value.filter(d => d.module !== name)
+  // 自动模式：从已选 + tag 选择中剔除
+  selectedModules.value = selectedModules.value.filter(m => m !== name)
+  delete modulePicks[name]
+  delete rollbackPinned[name]
+  // 手输模式：从 textarea 拿掉对应行（保留其他行的格式）
+  if (text.value) {
+    const kept = text.value.split(/\r?\n/).filter(line => {
+      const t = line.trim()
+      if (!t || t.startsWith('#')) return true
+      const idx = t.indexOf(':')
+      if (idx <= 0) return true
+      return t.slice(0, idx).trim() !== name
+    })
+    text.value = kept.join('\n')
+  }
+  // 同步 precheck 结果分组
+  if (precheckBundle.value) {
+    const filterOut = arr => (arr || []).filter(x => x.module !== name)
+    precheckBundle.value = {
+      ...precheckBundle.value,
+      passed: filterOut(precheckBundle.value.passed),
+      failed: filterOut(precheckBundle.value.failed),
+    }
+  }
 }
 
 async function onPreview() {
@@ -641,6 +709,12 @@ function handleLockConflict(err) {
 .to { color: var(--success); font-weight: 600; }
 .tag-curr { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); background: #f3f4f6; padding: 2px 8px; border-radius: 3px; }
 .tag-new { font-family: var(--mono); font-size: 11.5px; color: #059669; background: #ecfdf5; padding: 2px 8px; border-radius: 3px; font-weight: 600; }
+.row-del-btn {
+  background: transparent; border: 1px solid transparent;
+  color: var(--text-3); font-size: 13px; line-height: 1;
+  padding: 3px 7px; border-radius: 4px; cursor: pointer; transition: all .12s;
+}
+.row-del-btn:hover { color: var(--danger); border-color: var(--danger); background: #fef2f2; }
 .mute-text { color: var(--text-3); font-size: 11.5px; }
 .warn-text { color: var(--warning); font-size: 11.5px; }
 
