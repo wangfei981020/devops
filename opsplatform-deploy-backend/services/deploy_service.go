@@ -365,23 +365,26 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 		},
 	)
 
-	hasCanceled := false
-	allOK := true
+	// 数 ok/fail/canceled —— 单模块全 fail 时必须落到 Failed 而非 Partial
+	okCount, failCount, canceledCount := 0, 0, 0
 	for _, ar := range res.ArgocdResults {
-		if ar.SyncStatus == "canceled" {
-			hasCanceled = true
-			allOK = false
-			continue
-		}
-		if ar.SyncStatus != "Synced" || ar.Health != "Healthy" {
-			allOK = false
+		switch {
+		case ar.SyncStatus == "canceled":
+			canceledCount++
+		case ar.SyncStatus == "Synced" && ar.Health == "Healthy":
+			okCount++
+		default:
+			failCount++
 		}
 	}
 	switch {
-	case hasCanceled:
+	case canceledCount > 0:
+		// 任一 app 被取消 → 整次记 canceled（保留与 Restart 一致的语义）
 		res.Status = models.StatusCanceled
-	case allOK:
+	case failCount == 0 && okCount > 0:
 		res.Status = models.StatusSuccess
+	case okCount == 0:
+		res.Status = models.StatusFailed
 	default:
 		res.Status = models.StatusPartial
 	}
