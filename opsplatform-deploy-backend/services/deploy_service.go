@@ -3,11 +3,26 @@ package services
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"opsplatform-deploy-backend/models"
 )
+
+// restartTsRe 匹配 chart 模板里 "manual restart at YYYY-MM-DD HH:MM:SS"
+// 跟生产 Jenkins 流水线 sed 行为一致（同一行同一格式）
+var restartTsRe = regexp.MustCompile(`manual restart at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}`)
+
+// replaceRestartTimestamp 在 templates/deployment.yaml 内容里把
+// "manual restart at <旧 ts>" 替换成 "manual restart at <newTs>"
+// 找不到该锚点行返回 (content, false)，调用方应把这个模块标为"chart 缺 restart hook"。
+func replaceRestartTimestamp(content []byte, newTs string) ([]byte, bool) {
+	if !restartTsRe.Match(content) {
+		return content, false
+	}
+	return restartTsRe.ReplaceAll(content, []byte("manual restart at "+newTs)), true
+}
 
 type DeployService struct {
 	Git *GitService
@@ -273,10 +288,15 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 // --- Restart ---
 
 type RestartInput struct {
-	ProjectEnvName  string
-	Namespace       string // 默认 namespace，模块自身 Namespace 为空时 fallback
-	Modules         map[string]Module
-	ModuleNames     []string
+	ProjectEnvName string
+	Namespace      string // 默认 namespace，模块自身 Namespace 为空时 fallback
+	Modules        map[string]Module
+	ModuleNames    []string
+	// 走 git 路径触发重启需要的字段（与 UpdateImageInput 对齐）
+	GitRepo         string
+	GitBranch       string
+	GitRetry        int    // push 冲突自动 pull --rebase 重试次数
+	Operator        string // commit author 后缀
 	ArgocdClient    *ArgocdClient
 	PollIntervalSec int
 	PollTimeoutSec  int
@@ -288,24 +308,54 @@ type RestartInput struct {
 
 type RestartResult struct {
 	ArgocdResults []models.ArgocdAppResult
+	GitCommit     string // 触发重启的 commit sha（短）
+	GitCommitURL  string
 	Status        string
 	Err           error
 }
 
-// Restart：
-//  1. 逐个调用 ArgoCD RestartDeployment 触发 rollout（收集"没能触发"的失败项）
-//  2. 有界并发池轮询每个 app 到 Healthy/Degraded/超时
-//  3. 所有 app Healthy=success；任一 Degraded/timeout=failed；混合=partial
+// Restart 走 git 触发重启：跟生产 Jenkins 同款做法
+//  1. clone/pull 该 env 的 chart repo
+//  2. 每个模块 templates/deployment.yaml 用 regex 替换 "manual restart at <ts>"
+//     找不到锚点行的模块标记为失败（chart 缺 restart hook）
+//  3. 单个 commit 包所有模块 + push origin <branch>
+//  4. 对每个成功改文件的模块调 ArgoCD Sync API + PollUntilStable（6 ticks 稳定）
+//  5. 聚合结果
 //
-// 严格性：只看 ArgoCD application.health。Healthy 意味着底层 Deployment 所有 pod 都 Ready。
-// Degraded 会立即跳出（在 PollUntilStable 内），避免等满超时。
-//
-// 并发模型：见 services/concurrent.go 顶部注释。默认 10 并发；
-// 每个 app 完成时通过 OnProgress 回调提供给调用方做渐进式 DB 更新。
+// 之所以不用 ArgoCD resource action restart：
+//   ArgoCD restart 给 Deployment 加 kubectl.kubernetes.io/restartedAt annotation，
+//   生产环境 ArgoCD 会把它当成 drift → application 永远 OutOfSync → poll 等不到
+//   Synced，180s 后误报失败（pod 实际已经重启好了）。改走 git 让 ArgoCD 正常
+//   sync 路径，状态机干净，跟 update_image 一致。
 func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartResult {
 	res := &RestartResult{}
 
-	// Step 1: 触发 restart，记录成功触发的 app
+	d.Git.Locks.Acquire(in.ProjectEnvName)
+	defer d.Git.Locks.Release(in.ProjectEnvName)
+
+	gctx, cancel := GitCtx(ctx, 120)
+	defer cancel()
+
+	// Step 1: clone or pull
+	if err := d.Git.EnsureClone(gctx, in.ProjectEnvName, in.GitRepo, in.GitBranch); err != nil {
+		res.Err = fmt.Errorf("git pull: %w", err)
+		res.Status = models.StatusFailed
+		// 把所有模块标为失败，给前端可见
+		for _, name := range in.ModuleNames {
+			app := name
+			if m, ok := in.Modules[name]; ok && m.ArgocdApp != "" {
+				app = m.ArgocdApp
+			}
+			res.ArgocdResults = append(res.ArgocdResults, models.ArgocdAppResult{
+				App: app, SyncStatus: "Failed",
+				Msg:          "失败 · 拉取仓库出错 · " + sanitizeMsg(err.Error()),
+				LastPolledAt: time.Now(),
+			})
+		}
+		return res
+	}
+
+	// Step 2: 每个模块改 templates/deployment.yaml 的 manual restart at <ts>
 	type triggered struct {
 		app string
 		mod string
@@ -313,6 +363,8 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 	}
 	var toPoll []triggered
 	var preFail []models.ArgocdAppResult
+	var changedModules []string
+	newTs := time.Now().Format("2006-01-02 15:04:05")
 	for _, name := range in.ModuleNames {
 		m, ok := in.Modules[name]
 		if !ok {
@@ -322,30 +374,76 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 			})
 			continue
 		}
-		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		ns := m.Namespace
-		if ns == "" {
-			ns = in.Namespace
-		}
-		err := in.ArgocdClient.RestartDeployment(rctx, m.ArgocdApp, ns, name)
-		cancel()
+		// chart 目录下的 templates/deployment.yaml
+		// m.ChartRelPath 形如 charts/g32-uat/<module>/values.yaml
+		deployRel := strings.Replace(m.ChartRelPath, "values.yaml", "templates/deployment.yaml", 1)
+		raw, err := d.Git.ReadFile(in.ProjectEnvName, deployRel)
 		if err != nil {
 			preFail = append(preFail, models.ArgocdAppResult{
 				App: m.ArgocdApp, SyncStatus: "Failed",
-				Msg:          "失败 · 触发重启失败 · " + sanitizeMsg(err.Error()),
+				Msg:          "失败 · 读取 templates/deployment.yaml 失败（chart 结构异常）· " + sanitizeMsg(err.Error()),
 				LastPolledAt: time.Now(),
 			})
 			continue
 		}
+		newContent, replaced := replaceRestartTimestamp(raw, newTs)
+		if !replaced {
+			preFail = append(preFail, models.ArgocdAppResult{
+				App: m.ArgocdApp, SyncStatus: "Failed",
+				Msg:          "失败 · chart 缺少 'manual restart at <ts>' 锚点行，无法触发重启（请联系 chart 维护者）",
+				LastPolledAt: time.Now(),
+			})
+			continue
+		}
+		if err := d.Git.WriteFile(in.ProjectEnvName, deployRel, newContent); err != nil {
+			preFail = append(preFail, models.ArgocdAppResult{
+				App: m.ArgocdApp, SyncStatus: "Failed",
+				Msg:          "失败 · 写回 deployment.yaml 失败 · " + sanitizeMsg(err.Error()),
+				LastPolledAt: time.Now(),
+			})
+			continue
+		}
+		changedModules = append(changedModules, name)
+		ns := m.Namespace
+		if ns == "" {
+			ns = in.Namespace
+		}
 		toPoll = append(toPoll, triggered{app: m.ArgocdApp, mod: name, ns: ns})
 	}
 
-	// Step 2: 等 3s 让 ArgoCD 感知到 rollout（避免 poll 到旧 Healthy）
-	if len(toPoll) > 0 {
-		time.Sleep(3 * time.Second)
+	// Step 3: commit + push（一次提交包所有改动，atomic）
+	if len(changedModules) > 0 {
+		commitMsg := fmt.Sprintf("[deploy-center] restart %d modules: %s by %s\n\nrestartedAt: %s\nvia deploy-center",
+			len(changedModules), strings.Join(changedModules, ","), in.Operator, newTs)
+		sha, err := d.Git.CommitAll(gctx, in.ProjectEnvName, in.Operator, commitMsg)
+		if err != nil {
+			res.Err = fmt.Errorf("commit: %w", err)
+			res.Status = models.StatusFailed
+			res.ArgocdResults = preFail
+			return res
+		}
+		// sha == "" 极端情况：1 秒内连点两次重启，时间戳相同 → 没 diff
+		// 这种情况下不 push、不调 sync，但仍算 no-op 成功（前端静默）
+		if sha != "" {
+			res.GitCommit = sha
+			res.GitCommitURL = CommitURL(in.GitRepo, sha)
+			if err := d.Git.Push(gctx, in.ProjectEnvName, in.GitBranch, in.GitRetry); err != nil {
+				res.Err = fmt.Errorf("push: %w", err)
+				res.Status = models.StatusFailed
+				res.ArgocdResults = preFail
+				return res
+			}
+		}
 	}
 
-	// Step 3: 有界并发池 poll
+	// Step 4: 全部 preFail 的兜底
+	if len(toPoll) == 0 {
+		res.ArgocdResults = preFail
+		res.Status = models.StatusFailed
+		return res
+	}
+
+	// Step 5: 主动触发 ArgoCD Sync 并 poll 到 Synced+Healthy
 	interval := in.PollIntervalSec
 	if interval <= 0 {
 		interval = 5
@@ -361,20 +459,31 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 
 	pollResults := RunBoundedConcurrent(ctx, toPoll, limit,
 		func(c context.Context, t triggered, publish func(models.ArgocdAppResult)) models.ArgocdAppResult {
-			// 入池立刻推一个"Progressing/等待中"初始状态，让前端 3 行同时出现
 			publish(models.ArgocdAppResult{
-				App:          t.app,
-				SyncStatus:   "Progressing",
-				Health:       "Progressing",
-				DurationSec:  0,
-				Msg:          "等待同步",
+				App: t.app, SyncStatus: "Syncing", Health: "Progressing",
+				DurationSec: 0, Msg: "正在调用同步",
 				LastPolledAt: time.Now(),
 			})
-			// 每次 ArgoCD poll 后都把中间状态 publish 出去（5s 节奏），前端靠这个 + 本地秒表做秒级跳动
-			// Restart 不经过 argocd Sync 操作（走 resource action），所以没有 OperationState 可比对，
-			// 传零值 time 退化成只看 Synced+Healthy。
-			// 但稳定性窗口必须保留——重启同样可能 readinessProbe 通过后 crash-loop。
-			return *PollUntilStable(c, in.ArgocdClient, t.app, interval, timeout, time.Time{}, 6,
+			// 记录 Sync 调用前的 wall-clock，PollUntilStable 用它做 ourOpStarted 判定，
+			// 避免命中上一次 sync 的旧 Synced+Healthy
+			syncStartedAt := time.Now()
+			if err := in.ArgocdClient.Sync(c, t.app); err != nil {
+				return models.ArgocdAppResult{
+					App: t.app, SyncStatus: "Failed",
+					Msg:          "失败 · 调用同步接口出错 · " + sanitizeMsg(err.Error()),
+					LastPolledAt: time.Now(),
+				}
+			}
+			select {
+			case <-time.After(2 * time.Second):
+			case <-c.Done():
+				return models.ArgocdAppResult{
+					App: t.app, SyncStatus: "canceled", Msg: "context canceled",
+					LastPolledAt: time.Now(),
+				}
+			}
+			// stabilityTicks=6 配 5s interval = 30s 稳定窗口
+			return *PollUntilStable(c, in.ArgocdClient, t.app, interval, timeout, syncStartedAt, 6,
 				func(tick *models.ArgocdAppResult) { publish(*tick) })
 		},
 		func(_ int, snapshot []models.ArgocdAppResult) {
@@ -387,7 +496,7 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 		},
 	)
 
-	// Step 4: 聚合结果
+	// Step 6: 聚合
 	res.ArgocdResults = append(res.ArgocdResults, preFail...)
 	res.ArgocdResults = append(res.ArgocdResults, pollResults...)
 

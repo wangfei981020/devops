@@ -221,20 +221,24 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, pollInterval, pollTimeoutMin := loadPollCfg()
+	gitRetry, pollInterval, pollTimeoutMin := loadPollCfg()
 	InflightTrack(func() {
 		defer ReleaseModuleLocks(p.Name, req.ModuleNames)
 		start := time.Now()
-		// Restart 需要等所有 pod 真的 Healthy，30s 触发 + pollTimeoutMin 分钟轮询 + 1 分钟缓冲
+		// Restart 需要等所有 pod 真的 Healthy；走 git 路径要在原超时基础上多预留 git push 时间
 		ctx, cancel := context.WithTimeout(context.Background(),
-			time.Duration(pollTimeoutMin+1)*time.Minute+30*time.Second)
+			time.Duration(pollTimeoutMin+2)*time.Minute+30*time.Second)
 		defer cancel()
-		ds := services.NewDeployService(nil)
+		ds := services.NewDeployService(getGitService())
 		res := ds.Restart(ctx, services.RestartInput{
 			ProjectEnvName:  p.Name,
 			Namespace:       p.Namespace,
 			Modules:         modules,
 			ModuleNames:     req.ModuleNames,
+			GitRepo:         p.GitRepo,
+			GitBranch:       p.GitBranch,
+			GitRetry:        gitRetry,
+			Operator:        operator,
 			ArgocdClient:    services.NewArgocdClient(argoURL, argoToken),
 			PollIntervalSec: pollInterval,
 			PollTimeoutSec:  pollTimeoutMin * 60,
@@ -247,8 +251,14 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 		argoJSON := marshalJSON(res.ArgocdResults)
-		_, _ = database.DB.Exec(`UPDATE deployment SET argocd_results=?, status=?, duration_sec=? WHERE id=?`,
-			argoJSON, res.Status, int(time.Since(start).Seconds()), depID)
+		errMsg := ""
+		if res.Err != nil {
+			errMsg = res.Err.Error()
+		}
+		_, _ = database.DB.Exec(
+			`UPDATE deployment SET argocd_results=?, git_commit=?, git_commit_url=?, status=?, error_msg=?, duration_sec=? WHERE id=?`,
+			argoJSON, res.GitCommit, res.GitCommitURL, res.Status, errMsg,
+			int(time.Since(start).Seconds()), depID)
 		archiveFailedPodLogsAsync(depID, p, collectFailedApps(res.ArgocdResults))
 		sendRestartNotify(p, depID, operator, modules, res)
 	})
