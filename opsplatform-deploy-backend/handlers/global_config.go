@@ -15,6 +15,7 @@ import (
 
 func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	var c models.GlobalConfig
+	var harborVerify int
 	err := database.DB.QueryRow(`SELECT id, gitlab_url, gitlab_user, gitlab_email, gitlab_token,
 		IFNULL(test_repo_path,''), IFNULL(deploy_center_base_url,''),
 		lark_default_webhook, lark_default_secret,
@@ -22,7 +23,9 @@ func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
 		IFNULL(minio_endpoint,''), IFNULL(minio_bucket,'deploy-logs'),
 		IFNULL(minio_access_key,''), IFNULL(minio_secret_key,''),
 		IFNULL(minio_region,'us-east-1'), IFNULL(minio_retention_days, 90),
-		IFNULL(history_retention_days, 180), last_history_cleanup_at
+		IFNULL(history_retention_days, 180), last_history_cleanup_at,
+		IFNULL(harbor_url,''), IFNULL(harbor_user,''), IFNULL(harbor_token,''),
+		IFNULL(harbor_verify_on_submit, 1)
 		FROM global_config WHERE id=1`).
 		Scan(&c.ID, &c.GitlabURL, &c.GitlabUser, &c.GitlabEmail, &c.GitlabToken,
 			&c.TestRepoPath, &c.DeployCenterBaseURL,
@@ -30,14 +33,17 @@ func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
 			&c.PollIntervalSec, &c.PollTimeoutMin, &c.GitRetryCount, &c.UpdatedAt,
 			&c.MinIOEndpoint, &c.MinIOBucket, &c.MinIOAccessKey, &c.MinIOSecretKey,
 			&c.MinIORegion, &c.MinIORetentionDays,
-			&c.HistoryRetentionDays, &c.LastHistoryCleanupAt)
+			&c.HistoryRetentionDays, &c.LastHistoryCleanupAt,
+			&c.HarborURL, &c.HarborUser, &c.HarborToken, &harborVerify)
 	if err != nil {
 		InternalErr(w, r, err)
 		return
 	}
+	c.HarborVerifyOnSubmit = harborVerify == 1
 	c.GitlabToken = maskToken(c.GitlabToken)
 	c.LarkDefaultSecret = maskToken(c.LarkDefaultSecret)
 	c.MinIOSecretKey = maskToken(c.MinIOSecretKey)
+	c.HarborToken = maskToken(c.HarborToken)
 	JSONSuccess(w, c)
 }
 
@@ -62,6 +68,11 @@ type updateGlobalConfigReq struct {
 	MinIORetentionDays *int    `json:"minio_retention_days"`
 	// 发布历史保留天数
 	HistoryRetentionDays *int `json:"history_retention_days"`
+	// Harbor 镜像仓库
+	HarborURL            *string `json:"harbor_url"`
+	HarborUser           *string `json:"harbor_user"`
+	HarborToken          *string `json:"harbor_token"`
+	HarborVerifyOnSubmit *bool   `json:"harbor_verify_on_submit"`
 }
 
 func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +167,26 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 		sets = append(sets, "history_retention_days=?")
 		args = append(args, days)
 	}
+	// Harbor 配置
+	addStr("harbor_url", req.HarborURL)
+	addStr("harbor_user", req.HarborUser)
+	if req.HarborToken != nil && *req.HarborToken != "" {
+		enc, err := crypto.Encrypt(*req.HarborToken)
+		if err != nil {
+			JSONError(w, 50000, "encrypt harbor_token: "+err.Error())
+			return
+		}
+		sets = append(sets, "harbor_token=?")
+		args = append(args, enc)
+	}
+	if req.HarborVerifyOnSubmit != nil {
+		v := 0
+		if *req.HarborVerifyOnSubmit {
+			v = 1
+		}
+		sets = append(sets, "harbor_verify_on_submit=?")
+		args = append(args, v)
+	}
 	if len(sets) == 0 {
 		JSONSuccess(w, nil)
 		return
@@ -170,6 +201,10 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	if req.MinIOEndpoint != nil || req.MinIOBucket != nil || req.MinIOAccessKey != nil ||
 		req.MinIOSecretKey != nil || req.MinIORegion != nil || req.MinIORetentionDays != nil {
 		ApplyMinIOLifecycleNow()
+	}
+	// Harbor 字段有变化时，让单例客户端下次调用时按新配置重建
+	if req.HarborURL != nil || req.HarborUser != nil || req.HarborToken != nil {
+		InvalidateHarborClient()
 	}
 	Audit(r, "global_config.update", "global_config", "", map[string]interface{}{"fields": len(sets)})
 	JSONSuccess(w, nil)

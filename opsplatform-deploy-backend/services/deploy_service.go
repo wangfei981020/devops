@@ -116,11 +116,12 @@ func NewDeployService(git *GitService) *DeployService {
 
 // Module 简化视图（handler 把 models.Module 映射过来）
 type Module struct {
-	Name         string
-	CurrentTag   string
-	ChartRelPath string // e.g. charts/g32-uat/atmosphere-frontend/values.yaml
-	ArgocdApp    string
-	Namespace    string // 该模块实际部署的 K8s namespace（多 ns 项目必填）
+	Name            string
+	CurrentTag      string
+	ChartRelPath    string // e.g. charts/g32-uat/atmosphere-frontend/values.yaml
+	ArgocdApp       string
+	Namespace       string // 该模块实际部署的 K8s namespace（多 ns 项目必填）
+	ImageRepository string // e.g. harbor.slileisure.com/g32/user-client-backend (precheck 用)
 }
 
 // DiffEntry preview/update 共用的一条 diff 记录

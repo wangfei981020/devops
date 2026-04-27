@@ -44,11 +44,55 @@ func HandlePreviewImage(w http.ResponseWriter, r *http.Request) {
 	}
 	modules := loadModulesMap(req.ProjectEnvID, p.ChartBasePath)
 	diff := services.PreviewImage(pending, modules)
+
+	// 三方一致性预检（Harbor + ArgoCD + GitLab）
+	// preview 阶段不强制刷 ArgoCD 缓存（那是 submit 时才做），用 60s 内的快照即可，
+	// 失败的模块前端展示在「未通过」分组，让用户决定跳过/取消
+	precheck := runPrecheckForPreview(r.Context(), p, pending, modules)
+
 	JSONSuccess(w, map[string]interface{}{
 		"diff":        diff,
 		"env_type":    p.EnvType,
 		"auto_sync":   p.AutoSync,
 		"total_count": len(diff),
+		"precheck":    precheck, // {passed:[], failed:[], argocd_cache_at}
+	})
+}
+
+// runPrecheckForPreview preview 阶段调用：
+//
+//	1. 不强刷 ArgoCD 缓存（避免每次 preview 都打 ArgoCD）
+//	2. Harbor 校验仅在 verify_on_submit=true 时跑
+//	3. GitLab 校验需要 chart 已 clone — preview 时通常 clone 过了；没 clone 会标 GitLab fail，提示运维扫描
+func runPrecheckForPreview(ctx context.Context, p *models.ProjectEnv, pending map[string]string,
+	modules map[string]services.Module) services.PrecheckBundle {
+	hc, verify := LoadGlobalConfigForPrecheck()
+	if !verify {
+		hc = nil // verify off → 不调 Harbor
+	}
+	var argoClient *services.ArgocdClient
+	if argoURL, argoToken, err := ResolveArgocdForEnv(p); err == nil && argoURL != "" {
+		argoClient = services.NewArgocdClient(argoURL, argoToken)
+	}
+	items := make([]services.PrecheckRequestItem, 0, len(pending))
+	for name, newTag := range pending {
+		m := modules[name]
+		items = append(items, services.PrecheckRequestItem{
+			Module:          name,
+			NewTag:          newTag,
+			OldTag:          m.CurrentTag,
+			ImageRepository: m.ImageRepository,
+		})
+	}
+	return services.RunPrecheck(ctx, services.PrecheckInput{
+		ProjectEnvName:  p.Name,
+		GitCacheRoot:    Cfg.GitCacheDir,
+		ChartBasePath:   p.ChartBasePath,
+		ProjectEnvLower: strings.ToLower(p.Name),
+		HarborClient:    hc,
+		ArgocdClient:    argoClient,
+		ArgocdCache:     services.GetArgocdAppCache(),
+		Items:           items,
 	})
 }
 
@@ -405,21 +449,22 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 // --- helpers ---
 
 func loadModulesMap(projectEnvID int64, chartBasePath string) map[string]services.Module {
-	rows, err := database.DB.Query(`SELECT name, current_tag, argocd_app_name, IFNULL(namespace,'') FROM module WHERE project_env_id=?`, projectEnvID)
+	rows, err := database.DB.Query(`SELECT name, current_tag, argocd_app_name, IFNULL(namespace,''), IFNULL(image_repository,'') FROM module WHERE project_env_id=?`, projectEnvID)
 	if err != nil {
 		return map[string]services.Module{}
 	}
 	defer rows.Close()
 	out := map[string]services.Module{}
 	for rows.Next() {
-		var name, tag, app, ns string
-		_ = rows.Scan(&name, &tag, &app, &ns)
+		var name, tag, app, ns, imgRepo string
+		_ = rows.Scan(&name, &tag, &app, &ns, &imgRepo)
 		out[name] = services.Module{
-			Name:         name,
-			CurrentTag:   tag,
-			ChartRelPath: services.BuildValuesPath(chartBasePath, name),
-			ArgocdApp:    app,
-			Namespace:    ns,
+			Name:            name,
+			CurrentTag:      tag,
+			ChartRelPath:    services.BuildValuesPath(chartBasePath, name),
+			ArgocdApp:       app,
+			Namespace:       ns,
+			ImageRepository: imgRepo,
 		}
 	}
 	return out
@@ -474,6 +519,47 @@ func insertPendingDeployment(peID int64, action string, refID *int64, modNamesJS
 	return res.LastInsertId()
 }
 
+// preflightFilterPending submit 前实时跑三方预检，把不通过的模块从 pending map 里剔除
+//
+//	返回被剔除的项（含失败原因）；调用方负责把信息写到 deployment.error_msg
+//	verify_on_submit=false 时跳过 Harbor 校验（仍校验 ArgoCD + GitLab）
+func preflightFilterPending(ctx context.Context, p *models.ProjectEnv,
+	pending map[string]string, modules map[string]services.Module) []services.PrecheckItem {
+
+	hc, verify := LoadGlobalConfigForPrecheck()
+	if !verify {
+		hc = nil
+	}
+	var argoClient *services.ArgocdClient
+	if argoURL, argoToken, err := ResolveArgocdForEnv(p); err == nil && argoURL != "" {
+		argoClient = services.NewArgocdClient(argoURL, argoToken)
+	}
+	items := make([]services.PrecheckRequestItem, 0, len(pending))
+	for name, newTag := range pending {
+		m := modules[name]
+		items = append(items, services.PrecheckRequestItem{
+			Module:          name,
+			NewTag:          newTag,
+			OldTag:          m.CurrentTag,
+			ImageRepository: m.ImageRepository,
+		})
+	}
+	bundle := services.RunPrecheck(ctx, services.PrecheckInput{
+		ProjectEnvName:  p.Name,
+		GitCacheRoot:    Cfg.GitCacheDir,
+		ChartBasePath:   p.ChartBasePath,
+		ProjectEnvLower: strings.ToLower(p.Name),
+		HarborClient:    hc,
+		ArgocdClient:    argoClient,
+		ArgocdCache:     services.GetArgocdAppCache(),
+		Items:           items,
+	})
+	for _, it := range bundle.Failed {
+		delete(pending, it.Module)
+	}
+	return bundle.Failed
+}
+
 // runUpdateImageAsync 后台跑完整的发布流水线，update-image 和 rollback 共用
 //
 //	opLabel: Lark 通知标题用 —— "发布" 或 "回滚"
@@ -486,6 +572,27 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 	// 注册到 cancel 表：用户点「取消等待」时调 cancel() 让 PollUntilStable 立刻退出
 	RegisterCancel(depID, cancel)
 	defer UnregisterCancel(depID)
+
+	// 三方一致性预检（submit 前实时校验，过滤掉 Harbor / ArgoCD / GitLab 缺失的模块）
+	// 走全局开关 verify_on_submit；关闭时跳过 Harbor 校验，但 ArgoCD/GitLab 仍校验
+	skippedItems := preflightFilterPending(ctx, p, pending, modules)
+	if len(skippedItems) > 0 {
+		// 把跳过的模块写进 deployment 错误信息，供发布历史展示
+		msgLines := []string{"已跳过的模块（未通过预检）："}
+		for _, it := range skippedItems {
+			msgLines = append(msgLines, "  · "+it.Module+" → "+it.Reason)
+		}
+		_, _ = database.DB.Exec(
+			`UPDATE deployment SET error_msg=? WHERE id=?`,
+			strings.Join(msgLines, "\n"), depID)
+	}
+	if len(pending) == 0 {
+		// 全部被过滤完了 → 终止流水线
+		_, _ = database.DB.Exec(
+			`UPDATE deployment SET status=?, duration_sec=? WHERE id=?`,
+			models.StatusFailed, int(time.Since(start).Seconds()), depID)
+		return
+	}
 
 	gs := getGitService()
 	ds := services.NewDeployService(gs)

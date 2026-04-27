@@ -493,6 +493,48 @@
         </div>
       </div>
 
+      <!-- Harbor 镜像仓库 -->
+      <div v-if="tab === 'harbor'" class="section">
+        <div class="sec-head">
+          <div class="sec-title">Harbor 镜像仓库</div>
+          <div class="sec-desc">
+            发布时从 Harbor 拉取镜像 tag 列表给用户下拉选择，并在提交前实时校验所选 tag 是否存在。
+            <b>使用 Robot 账号</b>（含 <code>$</code> 字符），跟你 Jenkins 流水线同款认证。
+          </div>
+        </div>
+        <div class="sec-body" v-loading="loading.cred">
+          <div class="form-row">
+            <div class="form-group full-width">
+              <label>Harbor URL</label>
+              <el-input v-model="gc.harbor_url" class="mono" placeholder="https://harbor.slileisure.com" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Robot 账号 <span class="hint">含 $ 字符，如 robot$public-pull</span></label>
+              <el-input v-model="gc.harbor_user" class="mono" placeholder="robot$public-pull" />
+            </div>
+            <div class="form-group">
+              <label>Robot 密码 <span class="hint">已保存的留空表示不修改</span></label>
+              <el-input v-model="gc.harbor_token" type="password" show-password
+                placeholder="保存后此处不再回显，留空则保留原值" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group full-width">
+              <label>提交前校验 tag 是否存在
+                <span class="hint">关闭后只用于下拉，不在提交时拦截"不存在的 tag"</span></label>
+              <el-switch v-model="gc.harbor_verify_on_submit"
+                active-text="开（推荐）" inactive-text="关" inline-prompt />
+            </div>
+          </div>
+          <div class="actions" v-if="authStore.isAdmin || authStore.hasButton('manage_global')">
+            <el-button @click="onTestHarbor" :loading="testing.harbor">测试连接</el-button>
+            <el-button type="primary" @click="saveGlobal" :loading="saving.cred">保存</el-button>
+          </div>
+        </div>
+      </div>
+
       <!-- 发布历史清理 -->
       <div v-if="tab === 'history'" class="section">
         <div class="sec-head">
@@ -733,7 +775,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import {
-  getGlobalConfig, updateGlobalConfig, testGitlab, testMinIO,
+  getGlobalConfig, updateGlobalConfig, testGitlab, testMinIO, testHarbor,
   previewHistoryCleanup, runHistoryCleanup, listProjectEnvs,
   listUsers, createUser, updateUser, toggleUser, resetUserPassword, deleteUser,
   listContacts, createContact, updateContact, deleteContact,
@@ -763,6 +805,7 @@ const tabs = [
   { v: 'cred', label: '全局凭证' },
   { v: 'gitlabrepos', label: 'GitLab 仓库' },
   { v: 'argocd', label: 'ArgoCD 实例' },
+  { v: 'harbor', label: 'Harbor 镜像仓库' },
   { v: 'larkbots', label: 'Lark 机器人' },
   { v: 'accounts', label: '账号管理' },
   { v: 'contacts', label: '通知人' },
@@ -781,6 +824,7 @@ const gc = reactive({
   minio_endpoint: '', minio_bucket: '', minio_region: '',
   minio_access_key: '', minio_secret_key: '', minio_retention_days: 90,
   history_retention_days: 180, last_history_cleanup_at: '',
+  harbor_url: '', harbor_user: '', harbor_token: '', harbor_verify_on_submit: true,
 })
 const users = ref([])
 const contacts = ref([])
@@ -789,7 +833,7 @@ const argoInstances = ref([])
 const gitlabRepos = ref([])
 const loading = reactive({ cred: false })
 const saving = reactive({ cred: false })
-const testing = reactive({ git: false, argoDlg: false, botDlg: false, minio: false })
+const testing = reactive({ git: false, argoDlg: false, botDlg: false, minio: false, harbor: false })
 
 function fmt(s) { return s ? dayjs(s).format('YYYY-MM-DD HH:mm') : '' }
 
@@ -805,6 +849,7 @@ async function saveGlobal() {
   if (!payload.gitlab_token) delete payload.gitlab_token
   if (!payload.lark_default_secret) delete payload.lark_default_secret
   if (!payload.minio_secret_key) delete payload.minio_secret_key
+  if (!payload.harbor_token) delete payload.harbor_token // 留空 = 不修改原值
   delete payload.last_history_cleanup_at // 只读字段，不允许更新
   saving.cred = true
   try {
@@ -827,6 +872,23 @@ async function onTestMinIO() {
   } catch (e) {
     ElMessage.error(e?.response?.data?.message || e.message || '测试失败')
   } finally { testing.minio = false }
+}
+
+async function onTestHarbor() {
+  if (!gc.harbor_url || !gc.harbor_user) {
+    ElMessage.warning('Harbor URL 和 User 必填'); return
+  }
+  testing.harbor = true
+  try {
+    await testHarbor({
+      harbor_url: gc.harbor_url,
+      harbor_user: gc.harbor_user,
+      harbor_token: gc.harbor_token || '', // 空表示用 DB 已存的
+    })
+    ElMessage.success('Harbor 连接 OK · 凭证有效')
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || e.message || '测试失败')
+  } finally { testing.harbor = false }
 }
 
 // ---- 发布历史立即清理 ----

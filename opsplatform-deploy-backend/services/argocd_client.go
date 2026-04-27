@@ -90,6 +90,38 @@ type AppStatus struct {
 	OperationStartedAt time.Time `json:"operation_started_at"` // 最近 sync 操作开始时间（零值表示无操作）
 }
 
+// ListAppNames 拉某 ArgoCD 实例下所有 application 名字列表（批量缓存用）
+//
+//	可选 selector 过滤（如 "project=g50-uat"），空则拉全量
+//	相比逐个 GetApp，此方法发 1 个请求即可，适合做"批量校验前刷新缓存"
+func (c *ArgocdClient) ListAppNames(ctx context.Context, selector string) ([]string, error) {
+	path := "/api/v1/applications"
+	if selector != "" {
+		path += "?selector=" + urlQ(selector)
+	}
+	raw, _, err := c.do(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("parse argocd app list: %w", err)
+	}
+	out := make([]string, 0, len(resp.Items))
+	for _, item := range resp.Items {
+		if item.Metadata.Name != "" {
+			out = append(out, item.Metadata.Name)
+		}
+	}
+	return out, nil
+}
+
 // GetAppStatus 读取 application 的 sync / health / 最近 sync 操作状态
 func (c *ArgocdClient) GetAppStatus(ctx context.Context, name string) (*AppStatus, error) {
 	raw, _, err := c.do(ctx, "GET", "/api/v1/applications/"+name, nil)

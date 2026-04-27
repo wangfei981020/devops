@@ -81,6 +81,10 @@ func main() {
 	protected.HandleFunc("/lark-bots", handlers.HandleListLarkBots).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/argocd-instances", handlers.HandleListArgocdInstances).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/gitlab-repos", handlers.HandleListGitlabRepos).Methods("GET", "OPTIONS")
+	// Harbor: 拉某模块的最近 tag 列表 (任何登录用户能查)
+	protected.HandleFunc("/harbor/tags", handlers.HandleListHarborTags).Methods("GET", "OPTIONS")
+	// ArgoCD App 缓存手动刷新（前端 [刷新] 按钮）
+	protected.HandleFunc("/argocd-app-cache/refresh", handlers.HandleRefreshArgocdAppCache).Methods("POST", "OPTIONS")
 
 	// 模块 / 发布历史 —— 只读
 	protected.HandleFunc("/modules", handlers.HandleListModules).Methods("GET", "OPTIONS")
@@ -107,6 +111,7 @@ func main() {
 	mg.Use(handlers.RequireButton("manage_global"))
 	mg.HandleFunc("/global-config", handlers.HandleUpdateGlobalConfig).Methods("PUT", "OPTIONS")
 	mg.Handle("/global-config/test-gitlab", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestGlobalGitlab))).Methods("POST", "OPTIONS")
+	mg.Handle("/global-config/test-harbor", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestHarbor))).Methods("POST", "OPTIONS")
 	mg.HandleFunc("/gitlab-repos", handlers.HandleCreateGitlabRepo).Methods("POST", "OPTIONS")
 	mg.HandleFunc("/gitlab-repos/{id}", handlers.HandleUpdateGitlabRepo).Methods("PUT", "OPTIONS")
 	mg.HandleFunc("/gitlab-repos/{id}", handlers.HandleDeleteGitlabRepo).Methods("DELETE", "OPTIONS")

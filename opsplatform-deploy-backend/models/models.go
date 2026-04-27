@@ -26,6 +26,11 @@ type GlobalConfig struct {
 	// 发布历史保留天数（自动清理）
 	HistoryRetentionDays int        `json:"history_retention_days"`
 	LastHistoryCleanupAt *time.Time `json:"last_history_cleanup_at"`
+	// Harbor 镜像仓库（镜像 tag 下拉 + 提交前校验）
+	HarborURL            string `json:"harbor_url"`
+	HarborUser           string `json:"harbor_user"`             // 通常是 robot$xxx 账号
+	HarborToken          string `json:"harbor_token,omitempty"`  // 返回时脱敏
+	HarborVerifyOnSubmit bool   `json:"harbor_verify_on_submit"` // true = 提交前校验 tag 是否在 Harbor
 }
 
 type ProjectEnv struct {
