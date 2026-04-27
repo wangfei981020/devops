@@ -59,13 +59,41 @@ func HandlePreviewImage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// pullForPrecheck 在 precheck 之前刷新 git_cache，让 GitLab 校验吃到最新 chart 目录。
+//
+//	blocking=true: 提交流程，必须等到锁拿到再 pull —— 哪怕慢一点也要权威；
+//	blocking=false: 预览流程，抢不到锁立刻放弃 pull（用旧 cache 校验），不让用户白等。
+//	pull 失败本身不阻塞 precheck —— 旧 cache 校验比直接报错好。
+//	GitLab 这边只是 git fetch，对 GitLab/ArgoCD 都不构成压力（毫秒级流量）。
+func pullForPrecheck(ctx context.Context, p *models.ProjectEnv, blocking bool) {
+	gs := getGitService()
+	var got bool
+	if blocking {
+		gs.Locks.Acquire(p.Name)
+		got = true
+	} else {
+		got = gs.Locks.TryAcquire(p.Name, 3*time.Second)
+	}
+	if !got {
+		log.Printf("[precheck-pull] skip: lock busy on %s (using cached chart dir)", p.Name)
+		return
+	}
+	defer gs.Locks.Release(p.Name)
+	gitCtx, cancel := services.GitCtx(ctx, 60)
+	defer cancel()
+	if err := gs.EnsureClone(gitCtx, p.Name, p.GitRepo, p.GitBranch); err != nil {
+		log.Printf("[precheck-pull] %s: %v (using cached chart dir)", p.Name, err)
+	}
+}
+
 // runPrecheckForPreview preview 阶段调用：
 //
 //	1. 不强刷 ArgoCD 缓存（避免每次 preview 都打 ArgoCD）
 //	2. Harbor 校验仅在 verify_on_submit=true 时跑
-//	3. GitLab 校验需要 chart 已 clone — preview 时通常 clone 过了；没 clone 会标 GitLab fail，提示运维扫描
+//	3. 进 precheck 前 try-pull git_cache（抢不到锁就吃旧 cache，不阻塞 UI）
 func runPrecheckForPreview(ctx context.Context, p *models.ProjectEnv, pending map[string]string,
 	modules map[string]services.Module) services.PrecheckBundle {
+	pullForPrecheck(ctx, p, false)
 	hc, verify := LoadGlobalConfigForPrecheck()
 	if !verify {
 		hc = nil // verify off → 不调 Harbor
@@ -523,9 +551,11 @@ func insertPendingDeployment(peID int64, action string, refID *int64, modNamesJS
 //
 //	返回被剔除的项（含失败原因）；调用方负责把信息写到 deployment.error_msg
 //	verify_on_submit=false 时跳过 Harbor 校验（仍校验 ArgoCD + GitLab）
+//	提交前必须 git pull —— 阻塞式拿锁，确保校验吃到最新的 chart 目录
 func preflightFilterPending(ctx context.Context, p *models.ProjectEnv,
 	pending map[string]string, modules map[string]services.Module) []services.PrecheckItem {
 
+	pullForPrecheck(ctx, p, true)
 	hc, verify := LoadGlobalConfigForPrecheck()
 	if !verify {
 		hc = nil

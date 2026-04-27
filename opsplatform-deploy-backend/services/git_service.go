@@ -47,6 +47,28 @@ func (m *LockMgr) get(key string) *sync.Mutex {
 func (m *LockMgr) Acquire(key string) { m.get(key).Lock() }
 func (m *LockMgr) Release(key string) { m.get(key).Unlock() }
 
+// TryAcquire 抢锁带超时；抢到返回 true，超时返回 false（不会改锁状态）
+//
+//	预览路径用：抢不到就放弃 git pull，保留旧 git_cache 走 precheck，
+//	避免用户因为别的发布在跑而白等几分钟才看到 diff。
+func (m *LockMgr) TryAcquire(key string, timeout time.Duration) bool {
+	mu := m.get(key)
+	if mu.TryLock() {
+		return true
+	}
+	if timeout <= 0 {
+		return false
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+		if mu.TryLock() {
+			return true
+		}
+	}
+	return false
+}
+
 // GitService 管理每个 project_env 的本地 clone + git 操作
 type GitService struct {
 	CacheDir string        // e.g. /app/git-cache
