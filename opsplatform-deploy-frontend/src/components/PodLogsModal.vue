@@ -165,7 +165,10 @@
               </span>
             </div>
             <div class="foot-r">
-              <button class="tb-btn" @click="copyLogs" :disabled="!logs">
+              <button class="tb-btn" @click="downloadLog" :disabled="!hasContent">
+                <el-icon><Download /></el-icon> 下载
+              </button>
+              <button class="tb-btn" @click="copyLogs" :disabled="!hasContent">
                 <el-icon><DocumentCopy /></el-icon> 复制
               </button>
               <button class="tb-btn" @click="reload" :disabled="loading">
@@ -185,7 +188,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   Document, Close, CircleCheck, Warning, Search, ArrowUp, ArrowDown,
-  Refresh, DocumentCopy, InfoFilled, DArrowRight,
+  Refresh, DocumentCopy, Download, InfoFilled, DArrowRight,
 } from '@element-plus/icons-vue'
 import { getDeploymentPodLogs, getDeploymentPodEvents, getDeploymentArchivedPods } from '../api'
 
@@ -219,6 +222,8 @@ const searchIdx = ref(0)
 
 const currentPod = computed(() => pods.value.find(p => p.name === podName.value) || null)
 const totalLines = computed(() => logs.value ? logs.value.split('\n').length : 0)
+// hasContent 当前 tab 是否有可导出内容（events tab 看 events 数组，其他 tab 看 logs 文本）
+const hasContent = computed(() => mode.value === 'events' ? events.value.length > 0 : !!logs.value)
 const lastFetchedAtText = computed(() => {
   if (!lastFetchedAt.value) return ''
   const s = Math.floor((Date.now() - lastFetchedAt.value) / 1000)
@@ -490,21 +495,53 @@ function shortPodName(name) {
   return parts.slice(0, -2).join('-') + '...' + parts.slice(-1).join('-')
 }
 
-async function copyLogs() {
-  let text = ''
+// buildExportContent 把当前 tab 内容拼成可导出的纯文本 + 推荐文件名 + MIME
+//   previous/current 直接用 logs 字符串（已是 2000/200 行）
+//   events 序列化成可读 JSON（带 indent 方便编辑器查看）
+function buildExportContent() {
+  const podShort = (podName.value || 'pod').replace(/[^a-zA-Z0-9_.-]/g, '_')
+  const dep = props.deploymentId
   if (mode.value === 'events') {
-    if (!events.value.length) return
-    text = events.value.map(e => `[${e.type}] ${e.reason} (×${e.count})  ${e.message}  · ${formatEventTime(e.last_at)}`).join('\n')
-  } else {
-    if (!logs.value) return
-    text = logs.value
+    return {
+      text: JSON.stringify(events.value, null, 2),
+      filename: `${dep}-${podShort}-events.json`,
+      mime: 'application/json;charset=utf-8',
+    }
   }
+  const kind = mode.value === 'previous' ? 'previous' : 'current'
+  return {
+    text: logs.value,
+    filename: `${dep}-${podShort}-${kind}.log`,
+    mime: 'text/plain;charset=utf-8',
+  }
+}
+
+async function copyLogs() {
+  if (!hasContent.value) return
+  const { text } = buildExportContent()
   try {
     await navigator.clipboard.writeText(text)
     ElMessage.success(mode.value === 'events' ? '事件已复制到剪贴板' : '日志已复制到剪贴板')
   } catch {
     ElMessage.error('复制失败，请手动选中')
   }
+}
+
+// downloadLog 把当前 tab 内容打包成文件触发浏览器下载
+//   previous tab 默认 2000 行（归档原文）；current 200 行；events 全量 JSON
+function downloadLog() {
+  if (!hasContent.value) return
+  const { text, filename, mime } = buildExportContent()
+  const blob = new Blob([text], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  ElMessage.success(`已下载 ${filename}`)
 }
 
 // 弹窗打开时加载
