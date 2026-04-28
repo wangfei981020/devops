@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"log"
 	"net/http"
 	"time"
@@ -57,17 +56,12 @@ func loadMinIOClientFromDB() (*services.MinIOClient, error) {
 	})
 }
 
-// ArchiveFailedPodLogs 同步归档：在 deploy goroutine 返回前完成。
+// ArchiveFailedPodLogs 同步归档：把 fail 决策瞬间已抓好的 logs/events 字节上传 MinIO + 写 DB。
 //
-//	关键改动（v93）：
-//	1. 同步执行 —— 不再 goroutine。保证用户下一次 deploy 一定排在 archive 之后，
-//	   ReplicaSet 不会抢在 archive 前把失败 pod 滚走。
-//	2. 用调用方传入的 FailingPods 快照（fail 决策瞬间抓的）—— 不再调 resource-tree
-//	   二次过滤，即使 pod 已被删 k8s logs API 仍能拉到 terminated pod 的日志（~1 小时）。
-//	3. 调用方从 res.ArgocdResults 收集每个失败 app 的 FailingPods 列表，按 app 分组传入。
-//
-//	由于同步执行，整体耗时控制在 ~10s 内（每 pod 3 次 API 拉取 + MinIO 上传）。
-//	失败的 deploy 多 10s 完成对用户感知 0 影响（反正失败不在赶时间）。
+//	v94 关键：FailingPods 里 PreviousLog/CurrentLog/EventsJSON 字段已经是 poll_service 在
+//	失败决策那一刻（pod 还活着时）抓的字节内容。本函数**完全不依赖 ArgoCD/k8s API**，
+//	也不需要 pod 还活着 —— 即使用户秒回滚把失败 pod 删了，归档已经握住数据。
+//	只做 MinIO PUT + DB INSERT，毫秒级完成。
 func ArchiveFailedPodLogs(
 	deploymentID int64,
 	p *models.ProjectEnv,
@@ -85,6 +79,7 @@ func ArchiveFailedPodLogs(
 		return
 	}
 	if mc == nil {
+		log.Printf("[log-archive] minio not configured, skip dep=%d", deploymentID)
 		return
 	}
 	if err := mc.EnsureBucket(ctx); err != nil {
@@ -92,27 +87,24 @@ func ArchiveFailedPodLogs(
 		return
 	}
 
-	argoURL, argoToken, err := ResolveArgocdForEnv(p)
-	if err != nil {
-		log.Printf("[log-archive] resolve argocd: %v (skip)", err)
-		return
-	}
-	argoClient := services.NewArgocdClient(argoURL, argoToken)
-
 	for app, pods := range appPods {
 		for _, snap := range pods {
-			archivePodThreeKinds(ctx, deploymentID, app, snap, argoClient, mc)
+			archivePodThreeKinds(ctx, deploymentID, app, snap, mc)
 		}
 	}
 }
 
-// archivePodThreeKinds 对单个 pod 拉三种归档并写表（用 FailingPods 快照里的 name/uid/ns）
+// archivePodThreeKinds 把 fail 决策瞬间已经抓好的 logs/events 字节内容上传 MinIO + 写 DB。
+//
+//	**关键：完全不再调 GetPodLogs / GetPodEvents**。
+//	pod.PreviousLog / pod.CurrentLog / pod.EventsJSON 都是 poll_service.go 在 fail 决策那一刻
+//	（pod 还活着时）就抓到 Go 内存的字节内容。这里只是 PutLog 上传字节。
+//	即便 pod 已被后续 deploy 的 ReplicaSet 删除、k8s 已 GC pod 对象，归档不受影响。
 func archivePodThreeKinds(
 	ctx context.Context,
 	deploymentID int64,
 	app string,
 	pod models.FailingPodSnapshot,
-	argoClient *services.ArgocdClient,
 	mc *services.MinIOClient,
 ) {
 	type kindResult struct {
@@ -121,42 +113,40 @@ func archivePodThreeKinds(
 	}
 	out := map[services.LogKind]kindResult{}
 
-	// previous.log（最关键 —— 崩溃前最后输出）
-	if logs, _ := argoClient.GetPodLogs(ctx, app, pod.Namespace, pod.Name, "", 2000, true); logs != "" {
+	// previous.log
+	if pod.PreviousLog != "" {
 		key := services.LogObjectKey(deploymentID, app, pod.Name, services.LogKindPrevious)
-		if size, err := mc.PutLog(ctx, key, logs); err == nil {
+		if size, err := mc.PutLog(ctx, key, pod.PreviousLog); err == nil {
 			out[services.LogKindPrevious] = kindResult{key, size}
 		} else {
 			log.Printf("[log-archive] put previous %s: %v", key, err)
 		}
 	}
 
-	// current.log（200 行兜底）
-	if logs, _ := argoClient.GetPodLogs(ctx, app, pod.Namespace, pod.Name, "", 200, false); logs != "" {
+	// current.log
+	if pod.CurrentLog != "" {
 		key := services.LogObjectKey(deploymentID, app, pod.Name, services.LogKindCurrent)
-		if size, err := mc.PutLog(ctx, key, logs); err == nil {
+		if size, err := mc.PutLog(ctx, key, pod.CurrentLog); err == nil {
 			out[services.LogKindCurrent] = kindResult{key, size}
 		} else {
 			log.Printf("[log-archive] put current %s: %v", key, err)
 		}
 	}
 
-	// events.json（FailedScheduling / ImagePullBackOff / FailedMount 等）
-	// 注意：UID 来自 fail 决策瞬间的快照，即便 pod 已被 ReplicaSet 删，UID 仍能让 ArgoCD/k8s
-	// 按 involvedObject.uid 索引到 events（events 自身有 ~1 小时保留）
-	if events, err := argoClient.GetPodEvents(ctx, app, pod.UID, pod.Namespace, pod.Name); err == nil && len(events) > 0 {
-		if data, jerr := json.Marshal(events); jerr == nil {
-			key := services.LogObjectKey(deploymentID, app, pod.Name, services.LogKindEvents)
-			if size, perr := mc.PutLog(ctx, key, string(data)); perr == nil {
-				out[services.LogKindEvents] = kindResult{key, size}
-			} else {
-				log.Printf("[log-archive] put events %s: %v", key, perr)
-			}
+	// events.json
+	if len(pod.EventsJSON) > 0 {
+		key := services.LogObjectKey(deploymentID, app, pod.Name, services.LogKindEvents)
+		if size, err := mc.PutLog(ctx, key, string(pod.EventsJSON)); err == nil {
+			out[services.LogKindEvents] = kindResult{key, size}
+		} else {
+			log.Printf("[log-archive] put events %s: %v", key, err)
 		}
 	}
 
 	if len(out) == 0 {
-		return // 三种全空，不留 DB 行（避免前端打开看到空 tab 集）
+		log.Printf("[log-archive] dep=%d app=%s pod=%s: 无可归档数据（fail 决策时未捕获到 logs/events）",
+			deploymentID, app, pod.Name)
+		return
 	}
 
 	// ON DUPLICATE KEY UPDATE：同 pod 多次归档时让最新内容覆盖旧的

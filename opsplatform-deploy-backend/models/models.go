@@ -151,6 +151,12 @@ type FailingPodSnapshot struct {
 	Namespace    string `json:"namespace"`
 	StatusReason string `json:"status_reason,omitempty"`
 	RestartCount string `json:"restart_count,omitempty"`
+	// 内部字段（json:"-" 不出 API）：fail 决策瞬间从 ArgoCD 抓的日志/事件原文
+	// 必须在 pod 还活着的时候立刻抓 —— 后续若被新 ReplicaSet 删除，pod 对象会从 etcd 移除，
+	// kubectl logs 就拉不到了。在这里先落进 Go 变量，archive 时直接 PutLog 不再调 GetPodLogs。
+	PreviousLog string `json:"-"`
+	CurrentLog  string `json:"-"`
+	EventsJSON  []byte `json:"-"`
 }
 
 type Deployment struct {

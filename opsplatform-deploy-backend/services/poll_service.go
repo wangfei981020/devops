@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -53,8 +55,8 @@ func PollUntilStable(
 			} else if lastErr != nil {
 				msg = "失败 · " + sanitizeMsg(lastErr.Error())
 			}
-			// 调 resource-tree 找哪个 pod 哪个原因 + 抓 pod 快照给 archive 用
-			snaps, detail := snapshotFailingPods(ctx, client, appName)
+			// 同步抓 pod metadata + logs + events（pod 此刻还活着）
+			snaps, detail := captureFailingPodData(ctx, client, appName)
 			if detail != "" {
 				msg = "失败 · " + sanitizeMsg(detail)
 			}
@@ -142,7 +144,7 @@ func PollUntilStable(
 				if st.Message != "" {
 					msg = "失败 · " + sanitizeMsg(st.Message)
 				}
-				snaps, detail := snapshotFailingPods(ctx, client, appName)
+				snaps, detail := captureFailingPodData(ctx, client, appName)
 				if detail != "" {
 					msg = "失败 · " + sanitizeMsg(detail)
 				}
@@ -163,7 +165,7 @@ func PollUntilStable(
 				if st.Message != "" {
 					msg = "失败 · " + sanitizeMsg(st.Message)
 				}
-				snaps, detail := snapshotFailingPods(ctx, client, appName)
+				snaps, detail := captureFailingPodData(ctx, client, appName)
 				if detail != "" {
 					msg = "失败 · " + sanitizeMsg(detail)
 				}
@@ -185,6 +187,8 @@ func PollUntilStable(
 			if ourOpStarted && st.OperationPhase != "Running" && elapsed >= 30 &&
 				(elapsed/intervalSec)%3 == 0 {
 				if snaps, detail, fatal := detectFatalPodState(ctx, client, appName); fatal {
+					// pod 此刻还活着，立刻把 logs + events 字节抓进 snapshot
+					enrichSnapshotWithLogs(ctx, client, appName, snaps)
 					return &models.ArgocdAppResult{
 						App:          appName,
 						SyncStatus:   "Failed",
@@ -237,8 +241,43 @@ func PollUntilStable(
 	}
 }
 
-// snapshotFailingPods 在 fail 决策那一刻调 resource-tree，返回失败 pod 的快照（给 archive 用）
-// 同时返回拼好的人话 detail（给 Msg 用）。
+// captureFailingPodData 在 fail 决策那一刻同步抓全部数据：metadata + previous logs + current logs + events
+//
+//	关键：pod 此刻还活着，立刻把日志+事件**字节内容**抓到 Go 变量里。
+//	archive 后续只是 PutLog 上传字节，不再依赖 pod 对象存在。
+//	即便用户秒回滚把失败 pod 删了，归档已经握住数据。
+func captureFailingPodData(ctx context.Context, client *ArgocdClient, appName string) ([]models.FailingPodSnapshot, string) {
+	snaps, detail := snapshotFailingPods(ctx, client, appName)
+	enrichSnapshotWithLogs(ctx, client, appName, snaps)
+	return snaps, detail
+}
+
+// enrichSnapshotWithLogs 给已有的 snapshot 列表填充 PreviousLog/CurrentLog/EventsJSON
+//
+//	pod 此刻必须还活着（fail 决策刚做出来）。逐个 pod 同步抓 3 种数据进 Go 变量。
+//	archive 后续直接用，不再调 GetPodLogs。
+func enrichSnapshotWithLogs(ctx context.Context, client *ArgocdClient, appName string, snaps []models.FailingPodSnapshot) {
+	for i := range snaps {
+		// previous.log（关键 —— 崩溃前的输出）
+		if logs, err := client.GetPodLogs(ctx, appName, snaps[i].Namespace, snaps[i].Name, "", 2000, true); err == nil {
+			snaps[i].PreviousLog = logs
+		} else {
+			log.Printf("[capture] app=%s pod=%s previous: %v", appName, snaps[i].Name, err)
+		}
+		// current.log（兜底 —— 当前容器最近 200 行）
+		if logs, err := client.GetPodLogs(ctx, appName, snaps[i].Namespace, snaps[i].Name, "", 200, false); err == nil {
+			snaps[i].CurrentLog = logs
+		}
+		// events.json（FailedScheduling/ImagePullBackOff/BackOff 等）
+		if events, err := client.GetPodEvents(ctx, appName, snaps[i].UID, snaps[i].Namespace, snaps[i].Name); err == nil && len(events) > 0 {
+			if data, jerr := json.Marshal(events); jerr == nil {
+				snaps[i].EventsJSON = data
+			}
+		}
+	}
+}
+
+// snapshotFailingPods 仅抓 metadata（不拉日志/事件），用于不需要归档的轻量场景
 //
 //	拿不到（API 失败 / 没有 Pod 节点 / 全 Healthy）→ 返回 (nil, "")。
 //	单次调用同时产出快照和文案，避免 fail 路径重复打 ArgoCD。

@@ -75,9 +75,6 @@
               <span v-if="logsSource === 'archive'" class="src-badge archive" title="发布失败时已存档，pod 被替换也能看">
                 归档快照
               </span>
-              <span v-else-if="logsSource === 'live'" class="src-badge live" title="实时拉取（容器仍在）">
-                实时拉取
-              </span>
             </div>
             <div class="tb-r" v-if="mode !== 'events'">
               <span class="lbl">尾部行数：</span>
@@ -190,7 +187,7 @@ import {
   Document, Close, CircleCheck, Warning, Search, ArrowUp, ArrowDown,
   Refresh, DocumentCopy, InfoFilled, DArrowRight,
 } from '@element-plus/icons-vue'
-import { getDeploymentPods, getDeploymentPodLogs, getDeploymentPodEvents, getDeploymentArchivedPods } from '../api'
+import { getDeploymentPodLogs, getDeploymentPodEvents, getDeploymentArchivedPods } from '../api'
 
 const props = defineProps({
   show: Boolean,
@@ -230,35 +227,26 @@ const lastFetchedAtText = computed(() => {
 })
 
 const noLogsHint = computed(() => {
-  if (!currentPod.value) return ''
-  const r = currentPod.value.status_reason || ''
-  if (r.includes('ImagePullBackOff') || r.includes('ErrImagePull')) {
-    return '容器从未启动成功（镜像拉取失败）。请切到「📋 K8s 事件」看具体原因。'
-  }
-  if (r.includes('Pending') || r.includes('FailedScheduling')) {
-    return 'Pod 还在 Pending（资源不足 / 节点选择器 / PVC 等）。请切到「📋 K8s 事件」。'
-  }
   if (mode.value === 'previous') {
-    return '该容器从未异常崩溃，没有「上次崩溃前」日志可查。'
+    return '该 pod 没有归档「上次崩溃前」日志（容器没崩过，或失败决策时拉取失败）。'
   }
-  return '当前容器暂无输出（应用刚启动或没产生日志）。'
+  return '该 pod 没有归档「当前容器」日志（fail 决策时容器无 stdout 输出）。'
 })
 
 const noEventsHint = computed(() => {
-  if (!currentPod.value) return ''
-  return '该 pod 当前无 k8s 事件（事件可能已被 k8s 自动清理 ~1 小时后过期；本次发布若早于 v92 也未归档）。'
+  return '该 pod 没有归档 k8s 事件（fail 决策时无 Warning/Normal 事件，或 ArgoCD 事件接口未返回）。'
 })
 
-// tabHas 判某 tab 在当前 pod 是否有内容；用于按钮 dim 灰显 + 自动跳避空
+// tabHas 判某 tab 在当前 pod 是否有归档内容；用于按钮 dim 灰显 + 自动跳避空
+//   v103：历史只读归档，所以严格按 has_xxx flag 判断，没归档 = 该 tab 空
 function tabHas(tab) {
-  if (!currentPod.value) return true
+  if (!currentPod.value) return false
   const av = podAvailability.value[currentPod.value.name]
-  // 没归档信息（live pod / 未存档） → 假设有，避免误灰
-  if (!av) return true
-  if (tab === 'previous') return av.has_previous || (currentPod.value.restart_count && currentPod.value.restart_count !== '0')
-  if (tab === 'current') return av.has_current || (currentPod.value.health === 'Healthy')
-  if (tab === 'events') return av.has_events
-  return true
+  if (!av) return false
+  if (tab === 'previous') return !!av.has_previous
+  if (tab === 'current') return !!av.has_current
+  if (tab === 'events') return !!av.has_events
+  return false
 }
 
 // pickInitialMode 根据当前 pod 的可用 tab 选默认 mode
@@ -292,24 +280,23 @@ async function loadPods() {
   if (!props.deploymentId || !props.app) return
   try {
     // 1. 先查归档（失败时已存的 pod 快照）
+    // v103：历史「查看日志」严格只读归档。
+    //   不再 merge 实时 pod chip（实时拉的是当前活着的 pod，不是这次 deploy 失败的 pod，
+    //   展示给用户是误导）。
     let archived = []
     try {
       const ar = await getDeploymentArchivedPods(props.deploymentId, props.app)
       archived = ar.pods || []
     } catch { /* 忽略 */ }
 
-    // 2. 再拉实时 pod 列表（可能拿不到，比如 pod 已被替换）
-    let livePods = []
-    try {
-      const r = await getDeploymentPods(props.deploymentId, props.app)
-      livePods = r.pods || []
-    } catch { /* 忽略 */ }
-
-    // 3. 合并 + 同步 podAvailability 让 tabHas 知道每个 pod 哪个 tab 有内容
-    const map = {}
     const availability = {}
-    for (const a of archived) {
-      map[a.pod] = {
+    pods.value = archived.map(a => {
+      availability[a.pod] = {
+        has_previous: !!a.has_previous,
+        has_current: !!a.has_current,
+        has_events: !!a.has_events,
+      }
+      return {
         name: a.pod,
         namespace: '',
         health: 'Archived',
@@ -318,34 +305,20 @@ async function loadPods() {
         containers_ready: '',
         archived: true,
       }
-      availability[a.pod] = {
-        has_previous: !!a.has_previous,
-        has_current: !!a.has_current,
-        has_events: !!a.has_events,
-      }
-    }
-    for (const lp of livePods) {
-      if (map[lp.name]) {
-        Object.assign(map[lp.name], lp, { archived: true })
-      } else {
-        map[lp.name] = { ...lp, archived: false }
-      }
-    }
-    pods.value = Object.values(map)
+    })
     podAvailability.value = availability
+
     if (pods.value.length === 0) {
-      error.value = '未找到任何 pod'
-      errorHint.value = '该次发布没有失败 pod 的归档日志，且 ArgoCD 也没有当前 pod 资源'
+      error.value = '该次发布无归档日志'
+      errorHint.value = '可能原因：本次发布成功（成功的发布不归档）、MinIO 未配置、或后端 < v94。失败的发布请检查后端 [log-archive] 行日志诊断。'
       return
     }
-    // 默认选第一个失败/归档的
-    const fail = pods.value.find(p => p.archived || (p.health && p.health !== 'Healthy'))
-    podName.value = props.initialPodName || (fail ? fail.name : pods.value[0].name)
-    // 默认 mode：失败优先 previous；previous 空则按 events / current 顺延
+
+    podName.value = props.initialPodName || pods.value[0].name
     mode.value = pickInitialMode()
     await fetchData()
   } catch (e) {
-    error.value = '加载 pod 列表失败'
+    error.value = '加载归档列表失败'
     errorHint.value = e?.response?.data?.message || e.message || ''
   }
 }
