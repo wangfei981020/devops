@@ -224,7 +224,25 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	if req.HarborURL != nil || req.HarborUser != nil || req.HarborToken != nil {
 		InvalidateHarborClient()
 	}
-	Audit(r, "global_config.update", "global_config", "", map[string]interface{}{"fields": len(sets)})
+	// 把改的列名收进 detail，敏感列只标 changed:true 不记值
+	changedFields := make([]string, 0, len(sets))
+	sensitiveChanged := []string{}
+	for _, s := range sets {
+		col := strings.SplitN(s, "=", 2)[0]
+		if isSensitiveField(col) {
+			sensitiveChanged = append(sensitiveChanged, col)
+		} else {
+			changedFields = append(changedFields, col)
+		}
+	}
+	auditDetail := map[string]interface{}{
+		"changed_fields": changedFields,
+		"count":          len(sets),
+	}
+	if len(sensitiveChanged) > 0 {
+		auditDetail["sensitive_changed"] = sensitiveChanged
+	}
+	Audit(r, "global_config.update", "global_config", "", auditDetail)
 	JSONSuccess(w, nil)
 }
 

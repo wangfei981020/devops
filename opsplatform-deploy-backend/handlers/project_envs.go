@@ -197,7 +197,7 @@ func HandleUpdateProjectEnv(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
-	Audit(r, "project_env.update", "project_env", fmt.Sprintf("%d", id), nil)
+	Audit(r, "project_env.update", "project_env", fmt.Sprintf("%d", id), auditDetailFromReq(req))
 	JSONSuccess(w, nil)
 }
 
@@ -359,6 +359,7 @@ func HandleScanModules(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
+	Audit(r, "project_env.scan_modules", "project_env", fmt.Sprintf("%d", id), map[string]interface{}{"count": count})
 	JSONSuccess(w, map[string]interface{}{"count": count})
 }
 

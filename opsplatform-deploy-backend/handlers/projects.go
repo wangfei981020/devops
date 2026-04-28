@@ -159,7 +159,7 @@ func HandleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
-	Audit(r, "project.update", "project", strconv.FormatInt(id, 10), nil)
+	Audit(r, "project.update", "project", strconv.FormatInt(id, 10), auditDetailFromReq(req))
 	JSONSuccess(w, nil)
 }
 

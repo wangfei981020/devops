@@ -103,7 +103,7 @@ func HandleUpdateArgocdInstance(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
-	Audit(r, "argocd_instance.update", "argocd_instance", strconv.FormatInt(id, 10), nil)
+	Audit(r, "argocd_instance.update", "argocd_instance", strconv.FormatInt(id, 10), auditDetailFromReq(req))
 	JSONSuccess(w, nil)
 }
 

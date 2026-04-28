@@ -139,6 +139,10 @@ export const getDeploymentPodLogs = (id, params) => http.get(`/deployments/${id}
 export const getDeploymentPodEvents = (id, params) => http.get(`/deployments/${id}/pod-events`, { params })
 export const getDeploymentArchivedPods = (id, app) => http.get(`/deployments/${id}/archived-pods`, { params: { app } })
 
+// Audit logs (admin only)
+export const listAuditLogs = (params) => http.get('/audit-logs', { params })
+export const listAuditActionTypes = () => http.get('/audit-logs/action-types')
+
 // Dashboard
 export const getDashboardStats = () => http.get('/dashboard/stats')
 

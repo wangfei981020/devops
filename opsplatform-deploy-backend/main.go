@@ -166,6 +166,7 @@ func main() {
 	admin := protected.PathPrefix("").Subrouter()
 	admin.Use(handlers.AdminMiddleware)
 	admin.HandleFunc("/audit-logs", handlers.HandleListAuditLogs).Methods("GET", "OPTIONS")
+	admin.HandleFunc("/audit-logs/action-types", handlers.HandleListAuditActionTypes).Methods("GET", "OPTIONS")
 	admin.HandleFunc("/users", handlers.HandleListUsers).Methods("GET", "OPTIONS")
 	admin.HandleFunc("/users", handlers.HandleCreateUser).Methods("POST", "OPTIONS")
 	admin.HandleFunc("/users/{id}", handlers.HandleUpdateUser).Methods("PUT", "OPTIONS")

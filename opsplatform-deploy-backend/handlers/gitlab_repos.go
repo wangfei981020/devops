@@ -93,7 +93,7 @@ func HandleUpdateGitlabRepo(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
-	Audit(r, "gitlab_repo.update", "gitlab_repo", strconv.FormatInt(id, 10), nil)
+	Audit(r, "gitlab_repo.update", "gitlab_repo", strconv.FormatInt(id, 10), auditDetailFromReq(req))
 	JSONSuccess(w, nil)
 }
 

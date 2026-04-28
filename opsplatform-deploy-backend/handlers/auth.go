@@ -56,10 +56,12 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		"SELECT id, username, password_hash, role, IFNULL(display_name,'') FROM users WHERE username = ? AND auth_source = 'local' AND status = 1",
 		req.Username).Scan(&id, &username, &passwordHash, &role, &displayName)
 	if err != nil {
+		AuditAs(r, req.Username, "auth.login.failed", "user", req.Username, map[string]interface{}{"reason": "user not found / disabled"})
 		JSONError(w, 40100, "用户名或密码错误")
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
+		AuditAs(r, req.Username, "auth.login.failed", "user", req.Username, map[string]interface{}{"reason": "wrong password"})
 		JSONError(w, 40100, "用户名或密码错误")
 		return
 	}
@@ -71,6 +73,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
 	expiresAt := time.Now().Add(time.Duration(Cfg.SessionTimeout) * time.Minute)
 	database.DB.Exec("INSERT INTO sessions (user_id, token_hash, expires_at) VALUES (?, ?, ?)", id, tokenHash, expiresAt)
+	AuditAs(r, username, "auth.login.success", "user", username, map[string]interface{}{"role": role, "auth_source": "local"})
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "deploy_auth_token",
@@ -96,11 +99,19 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 // POST /api/logout
 func HandleLogout(w http.ResponseWriter, r *http.Request) {
 	token := extractToken(r)
+	username := UsernameFromCtx(r)
 	if token != "" {
 		tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
+		// 取出 user_id 让审计日志能记完整身份（即便 ctx 已过期 token 也能反查出谁登的）
+		if username == "" {
+			_ = database.DB.QueryRow(
+				`SELECT u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? LIMIT 1`,
+				tokenHash).Scan(&username)
+		}
 		database.DB.Exec("DELETE FROM sessions WHERE token_hash = ?", tokenHash)
 	}
 	http.SetCookie(w, &http.Cookie{Name: "deploy_auth_token", Value: "", Path: "/", MaxAge: -1})
+	AuditAs(r, username, "auth.logout", "user", username, nil)
 	JSONSuccess(w, nil)
 }
 
@@ -174,6 +185,7 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 		role = portalDirect.Role
 	} else {
 		log.Printf("[PortalAuth] 无法解析 Portal 响应: %s", string(body))
+		AuditAs(r, "anonymous", "auth.portal_auth.failed", "user", "", map[string]interface{}{"reason": "portal response unparseable"})
 		JSONError(w, 40100, "Portal 认证失败")
 		return
 	}
@@ -207,6 +219,7 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 
 	permissions := fetchPortalPermissions(Cfg.PortalAPIURL, portalToken, username)
 	if role != "admin" && permissions != nil && !permissions["menu:deploy_center"] {
+		AuditAs(r, username, "auth.portal_auth.denied", "user", username, map[string]interface{}{"reason": "no menu:deploy_center"})
 		JSONError(w, 40300, "您没有发布中心的访问权限，请联系管理员")
 		return
 	}
@@ -215,6 +228,7 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 	// 这里强制校验；不通过就拒登录，哪怕 portal_token 本身有效。
 	// admin 跳过（本地 admin 账号走 local login 不到这里；如果 portal 的 admin 也能豁免）
 	if role != "admin" && !portalUserCanAccessApp(Cfg.PortalAPIURL, portalToken, "deploy_center") {
+		AuditAs(r, username, "auth.portal_auth.denied", "user", username, map[string]interface{}{"reason": "no app access"})
 		JSONError(w, 40300, "您所在的角色未被授予访问发布中心的权限")
 		return
 	}
@@ -253,6 +267,7 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   Cfg.SessionTimeout * 60,
 		SameSite: parseSameSite(Cfg.CookieSameSite),
 	})
+	AuditAs(r, username, "auth.login.success", "user", username, map[string]interface{}{"role": role, "auth_source": "portal"})
 	JSONSuccess(w, map[string]interface{}{
 		"token": token,
 		"user": map[string]interface{}{

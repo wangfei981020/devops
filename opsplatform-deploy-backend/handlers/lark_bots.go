@@ -96,7 +96,7 @@ func HandleUpdateLarkBot(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
-	Audit(r, "lark_bot.update", "lark_bot", strconv.FormatInt(id, 10), nil)
+	Audit(r, "lark_bot.update", "lark_bot", strconv.FormatInt(id, 10), auditDetailFromReq(req))
 	JSONSuccess(w, nil)
 }
 

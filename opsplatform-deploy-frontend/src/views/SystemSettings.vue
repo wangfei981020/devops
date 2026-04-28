@@ -7,7 +7,7 @@
   <div v-else class="ss">
     <div class="rail">
       <div class="rail-title">配置分区</div>
-      <div v-for="t in tabs" :key="t.v" :class="['rail-item', { active: tab === t.v }]" @click="tab = t.v">
+      <div v-for="t in visibleTabs" :key="t.v" :class="['rail-item', { active: tab === t.v }]" @click="tab = t.v">
         <span>{{ t.label }}</span>
         <span v-if="statusBadge(t.v)" :class="['rail-badge', statusBadge(t.v).kind]">{{ statusBadge(t.v).text }}</span>
       </div>
@@ -581,6 +581,11 @@
         </div>
       </div>
 
+      <!-- Audit Logs (admin only) -->
+      <div v-if="tab === 'audit'" class="section" style="padding:0;">
+        <AuditLogPanel />
+      </div>
+
       <!-- About -->
       <div v-if="tab === 'about'" class="section">
         <div class="sec-head">
@@ -798,6 +803,7 @@ import {
   Key, User, UserFilled, ChatLineRound, Bell, Folder, Connection, Timer, InfoFilled, ArrowRight, Lock, Box, Delete
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
+import AuditLogPanel from '../components/AuditLogPanel.vue'
 const authStore = useAuthStore()
 
 // 有任一管理类按钮 或 admin → 能进 SystemSettings
@@ -823,8 +829,10 @@ const tabs = [
   { v: 'poll', label: '同步策略' },
   { v: 'minio', label: '日志归档' },
   { v: 'history', label: '发布历史' },
+  { v: 'audit', label: '📋 审计日志', adminOnly: true },
   { v: 'about', label: '关于' }
 ]
+const visibleTabs = computed(() => tabs.filter(t => !t.adminOnly || authStore.isAdmin))
 
 const gc = reactive({
   gitlab_url: '', gitlab_user: '', gitlab_email: '', gitlab_token: '',

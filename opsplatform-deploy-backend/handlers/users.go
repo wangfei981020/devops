@@ -121,7 +121,7 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
-	Audit(r, "user.update", "user", strconv.FormatInt(id, 10), map[string]interface{}{"role": req.Role})
+	Audit(r, "user.update", "user", strconv.FormatInt(id, 10), auditDetailFromReq(req))
 	JSONSuccess(w, nil)
 }
 

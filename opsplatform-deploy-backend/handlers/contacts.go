@@ -73,7 +73,7 @@ func HandleUpdateContact(w http.ResponseWriter, r *http.Request) {
 		InternalErr(w, r, err)
 		return
 	}
-	Audit(r, "contact.update", "contact", strconv.FormatInt(id, 10), nil)
+	Audit(r, "contact.update", "contact", strconv.FormatInt(id, 10), auditDetailFromReq(req))
 	JSONSuccess(w, nil)
 }
 

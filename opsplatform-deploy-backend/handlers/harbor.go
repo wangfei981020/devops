@@ -208,6 +208,7 @@ func HandleRefreshArgocdAppCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, _ := cache.LastRefreshedAt(client)
+	Audit(r, "argocd_cache.refresh", "project_env", strconv.FormatInt(envID, 10), map[string]interface{}{"app_count": count})
 	JSONSuccess(w, map[string]interface{}{
 		"app_count":  count,
 		"refresh_at": t.Unix(),
