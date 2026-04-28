@@ -186,7 +186,7 @@
                       {{ cancelingIds.has(row.id) ? '取消中…' : '取消等待' }}
                     </button>
                     <button
-                      v-if="row.action !== 'restart' && ['success','partial'].includes(row.status) && (auth.isAdmin || auth.hasButton('rollback'))"
+                      v-if="row.action !== 'restart' && ['success','partial','failed'].includes(row.status) && (auth.isAdmin || auth.hasButton('rollback'))"
                       class="btn-primary sm"
                       @click.stop="onRollback(row)">
                       回滚此次发布

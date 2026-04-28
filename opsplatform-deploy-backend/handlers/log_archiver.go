@@ -57,99 +57,61 @@ func loadMinIOClientFromDB() (*services.MinIOClient, error) {
 	})
 }
 
-// archiveFailedPodLogsAsync 在后台 goroutine 里拉日志 + 上传 + 写表。
+// ArchiveFailedPodLogs 同步归档：在 deploy goroutine 返回前完成。
 //
-// 调用方应在 deploy/restart 完成后（拿到 ArgocdResults）对每个失败 app 调一次。
-// 内部完全自包含：自己开 ctx、自己处理错误（只 log），不影响调用方。
-func archiveFailedPodLogsAsync(
+//	关键改动（v93）：
+//	1. 同步执行 —— 不再 goroutine。保证用户下一次 deploy 一定排在 archive 之后，
+//	   ReplicaSet 不会抢在 archive 前把失败 pod 滚走。
+//	2. 用调用方传入的 FailingPods 快照（fail 决策瞬间抓的）—— 不再调 resource-tree
+//	   二次过滤，即使 pod 已被删 k8s logs API 仍能拉到 terminated pod 的日志（~1 小时）。
+//	3. 调用方从 res.ArgocdResults 收集每个失败 app 的 FailingPods 列表，按 app 分组传入。
+//
+//	由于同步执行，整体耗时控制在 ~10s 内（每 pod 3 次 API 拉取 + MinIO 上传）。
+//	失败的 deploy 多 10s 完成对用户感知 0 影响（反正失败不在赶时间）。
+func ArchiveFailedPodLogs(
 	deploymentID int64,
 	p *models.ProjectEnv,
-	failedApps []string,
+	appPods map[string][]models.FailingPodSnapshot,
 ) {
-	if len(failedApps) == 0 {
+	if len(appPods) == 0 {
 		return
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 
-		mc, err := loadMinIOClientFromDB()
-		if err != nil {
-			log.Printf("[log-archive] load minio config: %v (skip)", err)
-			return
-		}
-		if mc == nil {
-			return // 未配置 MinIO，静默跳过
-		}
-		// 确保 bucket + lifecycle（每次都 idempotent，开销可忽略）
-		if err := mc.EnsureBucket(ctx); err != nil {
-			log.Printf("[log-archive] ensure bucket: %v (skip)", err)
-			return
-		}
-
-		argoURL, argoToken, err := ResolveArgocdForEnv(p)
-		if err != nil {
-			log.Printf("[log-archive] resolve argocd: %v (skip)", err)
-			return
-		}
-		argoClient := services.NewArgocdClient(argoURL, argoToken)
-
-		for _, app := range failedApps {
-			if err := archiveOneApp(ctx, deploymentID, p, app, argoClient, mc); err != nil {
-				log.Printf("[log-archive] dep=%d app=%s failed: %v", deploymentID, app, err)
-			}
-		}
-	}()
-}
-
-// archiveOneApp 处理单个 app：找出"过程中 crash 过 OR 终态非 Healthy"的 pod → 拉 3 种归档 → 写表
-//
-//	归档触发条件比之前宽松：RestartCount > 0 也算（pod 后来被替换/恢复也能存证），
-//	不再只看终态 Health 是否非 Healthy。
-//	每个失败 pod 存 3 份到 MinIO：
-//	  - previous.log：--previous 容器日志（崩溃前最后输出，2000 行）
-//	  - current.log： 当前容器日志（兜底，pod 被收走后还能看，200 行）
-//	  - events.json： pod 关联的 k8s events（FailedScheduling / ImagePullBackOff 等无日志故障的唯一线索）
-//	任一拉空则跳过该 kind，DB 列保持 NULL，前端按 NULL 隐藏对应 tab。
-func archiveOneApp(
-	ctx context.Context,
-	deploymentID int64,
-	p *models.ProjectEnv,
-	app string,
-	argoClient *services.ArgocdClient,
-	mc *services.MinIOClient,
-) error {
-	nodes, err := argoClient.GetAppResourceTree(ctx, app)
+	mc, err := loadMinIOClientFromDB()
 	if err != nil {
-		return err
+		log.Printf("[log-archive] load minio config: %v (skip)", err)
+		return
 	}
-	candidatePods := []services.ResourceNode{}
-	for _, n := range nodes {
-		if n.Kind != "Pod" {
-			continue
-		}
-		unhealthy := n.Health != "" && n.Health != "Healthy"
-		crashed := n.RestartCount != "" && n.RestartCount != "0"
-		if unhealthy || crashed {
-			candidatePods = append(candidatePods, n)
-		}
+	if mc == nil {
+		return
 	}
-	if len(candidatePods) == 0 {
-		return nil
+	if err := mc.EnsureBucket(ctx); err != nil {
+		log.Printf("[log-archive] ensure bucket: %v (skip)", err)
+		return
 	}
 
-	for _, pod := range candidatePods {
-		archivePodThreeKinds(ctx, deploymentID, app, pod, argoClient, mc)
+	argoURL, argoToken, err := ResolveArgocdForEnv(p)
+	if err != nil {
+		log.Printf("[log-archive] resolve argocd: %v (skip)", err)
+		return
 	}
-	return nil
+	argoClient := services.NewArgocdClient(argoURL, argoToken)
+
+	for app, pods := range appPods {
+		for _, snap := range pods {
+			archivePodThreeKinds(ctx, deploymentID, app, snap, argoClient, mc)
+		}
+	}
 }
 
-// archivePodThreeKinds 对单个 pod 拉三种归档并写表
+// archivePodThreeKinds 对单个 pod 拉三种归档并写表（用 FailingPods 快照里的 name/uid/ns）
 func archivePodThreeKinds(
 	ctx context.Context,
 	deploymentID int64,
 	app string,
-	pod services.ResourceNode,
+	pod models.FailingPodSnapshot,
 	argoClient *services.ArgocdClient,
 	mc *services.MinIOClient,
 ) {
@@ -180,6 +142,8 @@ func archivePodThreeKinds(
 	}
 
 	// events.json（FailedScheduling / ImagePullBackOff / FailedMount 等）
+	// 注意：UID 来自 fail 决策瞬间的快照，即便 pod 已被 ReplicaSet 删，UID 仍能让 ArgoCD/k8s
+	// 按 involvedObject.uid 索引到 events（events 自身有 ~1 小时保留）
 	if events, err := argoClient.GetPodEvents(ctx, app, pod.UID, pod.Namespace, pod.Name); err == nil && len(events) > 0 {
 		if data, jerr := json.Marshal(events); jerr == nil {
 			key := services.LogObjectKey(deploymentID, app, pod.Name, services.LogKindEvents)

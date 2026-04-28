@@ -53,12 +53,11 @@ func PollUntilStable(
 			} else if lastErr != nil {
 				msg = "失败 · " + sanitizeMsg(lastErr.Error())
 			}
-			// 进一步深挖：调 argocd resource-tree 找出哪个 pod 哪个原因
-			if detail := enrichFailureDetail(ctx, client, appName); detail != "" {
+			// 调 resource-tree 找哪个 pod 哪个原因 + 抓 pod 快照给 archive 用
+			snaps, detail := snapshotFailingPods(ctx, client, appName)
+			if detail != "" {
 				msg = "失败 · " + sanitizeMsg(detail)
 			}
-			// 终态：sync 强制 Failed（不沿用 argocd 滞后的 "Synced"），方便前端
-			// isTerminal 判断；health 沿用最后一次观测做参考
 			health := ""
 			if last != nil {
 				health = last.Health
@@ -70,6 +69,7 @@ func PollUntilStable(
 				DurationSec:  int(time.Since(start).Seconds()),
 				Msg:          msg,
 				LastPolledAt: time.Now(),
+				FailingPods:  snaps,
 			}
 		}
 
@@ -142,7 +142,8 @@ func PollUntilStable(
 				if st.Message != "" {
 					msg = "失败 · " + sanitizeMsg(st.Message)
 				}
-				if detail := enrichFailureDetail(ctx, client, appName); detail != "" {
+				snaps, detail := snapshotFailingPods(ctx, client, appName)
+				if detail != "" {
 					msg = "失败 · " + sanitizeMsg(detail)
 				}
 				return &models.ArgocdAppResult{
@@ -152,6 +153,7 @@ func PollUntilStable(
 					DurationSec:  int(time.Since(start).Seconds()),
 					Msg:          msg,
 					LastPolledAt: time.Now(),
+					FailingPods:  snaps,
 				}
 			}
 
@@ -161,7 +163,8 @@ func PollUntilStable(
 				if st.Message != "" {
 					msg = "失败 · " + sanitizeMsg(st.Message)
 				}
-				if detail := enrichFailureDetail(ctx, client, appName); detail != "" {
+				snaps, detail := snapshotFailingPods(ctx, client, appName)
+				if detail != "" {
 					msg = "失败 · " + sanitizeMsg(detail)
 				}
 				return &models.ArgocdAppResult{
@@ -171,6 +174,26 @@ func PollUntilStable(
 					DurationSec:  int(time.Since(start).Seconds()),
 					Msg:          msg,
 					LastPolledAt: time.Now(),
+					FailingPods:  snaps,
+				}
+			}
+
+			// Pod-level fail-fast：app 还在 Progressing，但具体 pod 已经卡死（CrashLoop/ImagePullBackOff 等）
+			// 不等 ArgoCD 慢吞吞的 Degraded 判定，每 30s 扫一次 pod 终态。
+			// 前 30s 不扫（给应用启动时间），避免新版本第一次拉镜像慢被误杀。
+			elapsed := int(time.Since(start).Seconds())
+			if ourOpStarted && st.OperationPhase != "Running" && elapsed >= 30 &&
+				(elapsed/intervalSec)%3 == 0 {
+				if snaps, detail, fatal := detectFatalPodState(ctx, client, appName); fatal {
+					return &models.ArgocdAppResult{
+						App:          appName,
+						SyncStatus:   "Failed",
+						Health:       st.Health,
+						DurationSec:  elapsed,
+						Msg:          "失败 · " + sanitizeMsg(detail),
+						LastPolledAt: time.Now(),
+						FailingPods:  snaps,
+					}
 				}
 			}
 
@@ -214,47 +237,58 @@ func PollUntilStable(
 	}
 }
 
-// enrichFailureDetail 失败时调 argocd resource-tree，找出 unhealthy 的 Pod 节点
-// 提取「Status Reason / Containers / Restart Count」拼成人话失败原因。
+// snapshotFailingPods 在 fail 决策那一刻调 resource-tree，返回失败 pod 的快照（给 archive 用）
+// 同时返回拼好的人话 detail（给 Msg 用）。
 //
-// 返回字符串例：
-//   pod user-central-backend-789bbb-s7hrz CrashLoopBackOff（重启 3 次，0/1 ready）
-//   pod user-client-backend-abc ImagePullBackOff
-//   pod foo OOMKilled
-//
-// 拿不到（API 失败 / 没有 Pod 节点 / 全 Healthy）→ 返回 "" 让上层用兜底文案。
-func enrichFailureDetail(ctx context.Context, client *ArgocdClient, appName string) string {
+//	拿不到（API 失败 / 没有 Pod 节点 / 全 Healthy）→ 返回 (nil, "")。
+//	单次调用同时产出快照和文案，避免 fail 路径重复打 ArgoCD。
+func snapshotFailingPods(ctx context.Context, client *ArgocdClient, appName string) ([]models.FailingPodSnapshot, string) {
 	qctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	nodes, err := client.GetAppResourceTree(qctx, appName)
 	if err != nil || len(nodes) == 0 {
-		return ""
+		return nil, ""
 	}
-	// 优先找 Pod，其它资源（Deployment、ReplicaSet）只是 wrapper，pod 才是实际崩的
-	var failingPods []ResourceNode
+	var failing []ResourceNode
 	for _, n := range nodes {
 		if n.Kind != "Pod" {
 			continue
 		}
-		// Healthy 的 pod 跳过
 		if n.Health == "Healthy" || n.Health == "" {
 			continue
 		}
-		failingPods = append(failingPods, n)
+		failing = append(failing, n)
 	}
-	if len(failingPods) == 0 {
+	if len(failing) == 0 {
 		// 没找到失败 pod —— 退一步看 Deployment / 其它资源的 health.message
 		for _, n := range nodes {
 			if (n.Kind == "Deployment" || n.Kind == "StatefulSet" || n.Kind == "Rollout") &&
 				n.Health != "" && n.Health != "Healthy" && n.HealthMsg != "" {
-				return n.Kind + " " + n.Name + " · " + n.HealthMsg
+				return nil, n.Kind + " " + n.Name + " · " + n.HealthMsg
 			}
 		}
-		return ""
+		return nil, ""
 	}
 
-	// 拼第一个失败 pod 的详情（多个失败 pod 一般原因相同；UI cell 不够长不全列）
-	p := failingPods[0]
+	snaps := make([]models.FailingPodSnapshot, 0, len(failing))
+	for _, p := range failing {
+		snaps = append(snaps, models.FailingPodSnapshot{
+			Name:         p.Name,
+			UID:          p.UID,
+			Namespace:    p.Namespace,
+			StatusReason: p.StatusReason,
+			RestartCount: p.RestartCount,
+		})
+	}
+	return snaps, formatPodFailureMsg(failing)
+}
+
+// formatPodFailureMsg 拼第一个失败 pod 的人话详情（多个失败 pod 通常同因；UI cell 不够长不全列）
+func formatPodFailureMsg(failing []ResourceNode) string {
+	if len(failing) == 0 {
+		return ""
+	}
+	p := failing[0]
 	parts := []string{"pod " + p.Name}
 	if p.StatusReason != "" {
 		parts = append(parts, p.StatusReason)
@@ -270,11 +304,63 @@ func enrichFailureDetail(ctx context.Context, client *ArgocdClient, appName stri
 		parts = append(parts, "（"+strings.Join(extras, "，")+"）")
 	}
 	out := strings.Join(parts, " ")
-	// 多个失败 pod 时附加计数提示
-	if len(failingPods) > 1 {
-		out += " · 另有 " + strconv.Itoa(len(failingPods)-1) + " 个 pod 同样异常"
+	if len(failing) > 1 {
+		out += " · 另有 " + strconv.Itoa(len(failing)-1) + " 个 pod 同样异常"
 	}
 	return out
+}
+
+// enrichFailureDetail 旧接口兼容（只返字符串，不返快照）
+func enrichFailureDetail(ctx context.Context, client *ArgocdClient, appName string) string {
+	_, msg := snapshotFailingPods(ctx, client, appName)
+	return msg
+}
+
+// detectFatalPodState 扫 pod 找永久性故障（不会自愈）
+//
+//	- ImagePullBackOff / ErrImagePull / CreateContainerConfigError / InvalidImageName /
+//	  RegistryUnavailable → 镜像/配置问题，立即 fatal
+//	- CrashLoopBackOff + RestartCount >= 3 → 应用启动有 bug，立即 fatal
+//
+//	返回 (snapshot, msg, isFatal)。同时把命中的 pod 收进快照供 archive 用。
+//	非 fatal 状态（Pending、Progressing 等）返回 isFatal=false，让 caller 继续等。
+func detectFatalPodState(ctx context.Context, client *ArgocdClient, appName string) ([]models.FailingPodSnapshot, string, bool) {
+	qctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	nodes, err := client.GetAppResourceTree(qctx, appName)
+	if err != nil || len(nodes) == 0 {
+		return nil, "", false
+	}
+	var failing []ResourceNode
+	for _, n := range nodes {
+		if n.Kind != "Pod" {
+			continue
+		}
+		switch n.StatusReason {
+		case "ImagePullBackOff", "ErrImagePull",
+			"CreateContainerConfigError", "InvalidImageName", "RegistryUnavailable":
+			failing = append(failing, n)
+		case "CrashLoopBackOff":
+			rc, _ := strconv.Atoi(n.RestartCount)
+			if rc >= 3 {
+				failing = append(failing, n)
+			}
+		}
+	}
+	if len(failing) == 0 {
+		return nil, "", false
+	}
+	snaps := make([]models.FailingPodSnapshot, 0, len(failing))
+	for _, p := range failing {
+		snaps = append(snaps, models.FailingPodSnapshot{
+			Name:         p.Name,
+			UID:          p.UID,
+			Namespace:    p.Namespace,
+			StatusReason: p.StatusReason,
+			RestartCount: p.RestartCount,
+		})
+	}
+	return snaps, formatPodFailureMsg(failing), true
 }
 
 // sanitizeMsg 把任何透传到前端的失败/状态文案里的 "argocd"/"ArgoCD" 字眼清掉。

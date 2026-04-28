@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -73,20 +74,37 @@ func Load() *Config {
 
 // buildMySQLDSN 优先从 MYSQL_HOST/PORT/USER/PASSWORD/DATABASE 拼 DSN；
 // 若都没设置则 fallback 到 MYSQL_DSN（老配置兼容）。
+//
+//	强制 session time_zone='+08:00' —— 避免 mysql 容器在 UTC 时
+//	CURRENT_TIMESTAMP 写入 UTC 字面量，导致历史时间晚 8 小时。
+//	无论 DSN 来自拼装还是 MYSQL_DSN env，统一兜底注入 time_zone。
 func buildMySQLDSN() string {
 	host := os.Getenv("MYSQL_HOST")
+	var dsn string
 	if host == "" {
-		if dsn := os.Getenv("MYSQL_DSN"); dsn != "" {
-			return dsn
+		if d := os.Getenv("MYSQL_DSN"); d != "" {
+			dsn = d
+		} else {
+			host = "127.0.0.1"
 		}
-		host = "127.0.0.1"
 	}
-	port := getEnv("MYSQL_PORT", "3306")
-	user := getEnv("MYSQL_USER", "deploy_user")
-	pwd := getEnv("MYSQL_PASSWORD", "")
-	db := getEnv("MYSQL_DATABASE", "deploy_center")
-	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4&loc=Local",
-		user, pwd, host, port, db)
+	if dsn == "" {
+		port := getEnv("MYSQL_PORT", "3306")
+		user := getEnv("MYSQL_USER", "deploy_user")
+		pwd := getEnv("MYSQL_PASSWORD", "")
+		db := getEnv("MYSQL_DATABASE", "deploy_center")
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4&loc=Local",
+			user, pwd, host, port, db)
+	}
+	// 强制 session TZ = +08:00（URL-encoded '+08:00'）；已有则不重复加
+	if !strings.Contains(dsn, "time_zone") {
+		sep := "&"
+		if !strings.Contains(dsn, "?") {
+			sep = "?"
+		}
+		dsn += sep + "time_zone=%27%2B08%3A00%27"
+	}
+	return dsn
 }
 
 func getEnv(k, def string) string {

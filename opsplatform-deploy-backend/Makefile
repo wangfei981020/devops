@@ -1,4 +1,4 @@
-VERSION ?= v92
+VERSION ?= v93
 HARBOR  := localhost:8070/opsplatform
 IMAGE   := $(HARBOR)/opsplatform-deploy-backend:$(VERSION)
 

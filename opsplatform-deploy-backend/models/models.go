@@ -138,6 +138,19 @@ type ArgocdAppResult struct {
 	// 前端用这个做单模块耗时插值锚点：刷新后仍能根据 last_polled_at 继续累积，
 	// 避免「刷新就把秒数从 180 重新开始算」的视觉 bug。
 	LastPolledAt time.Time `json:"last_polled_at"`
+	// FailingPods 失败决策瞬间抓的 pod 快照（name + uid + namespace）。
+	// 让 archive 能用快照直接拉日志，而不是后续再调 resource-tree
+	// 否则 ReplicaSet 可能已把失败 pod 滚走，归档抓空。
+	FailingPods []FailingPodSnapshot `json:"failing_pods,omitempty"`
+}
+
+// FailingPodSnapshot fail 决策那一刻的 pod 关键字段（archive 用）
+type FailingPodSnapshot struct {
+	Name         string `json:"name"`
+	UID          string `json:"uid"`
+	Namespace    string `json:"namespace"`
+	StatusReason string `json:"status_reason,omitempty"`
+	RestartCount string `json:"restart_count,omitempty"`
 }
 
 type Deployment struct {
