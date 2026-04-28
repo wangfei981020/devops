@@ -333,7 +333,7 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 			`UPDATE deployment SET argocd_results=?, git_commit=?, git_commit_url=?, status=?, error_msg=?, duration_sec=? WHERE id=?`,
 			argoJSON, res.GitCommit, res.GitCommitURL, res.Status, errMsg,
 			int(time.Since(start).Seconds()), depID)
-		archiveFailedPodLogsAsync(depID, p, collectFailedApps(res.ArgocdResults))
+		archiveFailedPodLogsAsync(depID, p, collectAllAppsForArchive(res.ArgocdResults))
 		sendRestartNotify(p, depID, operator, modules, res)
 	})
 
@@ -668,8 +668,21 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 		_, _ = database.DB.Exec(`UPDATE module SET current_tag=? WHERE project_env_id=? AND name=?`, c.ToTag, p.ID, c.Module)
 	}
 
-	archiveFailedPodLogsAsync(depID, p, collectFailedApps(res.ArgocdResults))
+	archiveFailedPodLogsAsync(depID, p, collectAllAppsForArchive(res.ArgocdResults))
 	sendUpdateImageNotify(p, depID, operator, opLabel, modules, res)
+}
+
+// collectAllAppsForArchive 列出本次发布所有触达的 app 名 —— 归档器会进每个 app 的 resource-tree
+//
+//	查"过程中 crash 过的 pod"。即便某 app 终态 Healthy，过程中可能 crash 过几次，
+//	归档下 --previous 日志才能事后排错。性能上每 app 一次 resource-tree 调用（async + read-only），
+//	30 模块成功发布约 ~6s 跑完，对前端 0 感知，对 ArgoCD 不构成压力。
+func collectAllAppsForArchive(results []models.ArgocdAppResult) []string {
+	out := make([]string, 0, len(results))
+	for _, r := range results {
+		out = append(out, r.App)
+	}
+	return out
 }
 
 // collectFailedApps 从 argocd 结果里挑出失败的 app 名（Failed/Timeout/Degraded）

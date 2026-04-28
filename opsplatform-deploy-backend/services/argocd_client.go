@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -164,12 +165,24 @@ type ResourceNode struct {
 	Kind      string
 	Name      string
 	Namespace string
+	UID       string // k8s resource uid，调 events 接口必填（按 involvedObject.uid 过滤）
 	Health    string // Healthy / Progressing / Degraded / Missing / Suspended / Unknown
 	HealthMsg string // 例: "back-off 5m0s restarting failed container=foo pod=..."
 	// 来自 node.info[] 的关键字段。argocd UI 显示的 "Status Reason" / "Containers" / "Restart Count"
 	StatusReason string // 例: "CrashLoopBackOff" / "ImagePullBackOff" / "OOMKilled" / "Pending"
 	ContainersOK string // 例: "0/1"
 	RestartCount string // 例: "3"
+}
+
+// PodEvent 是从 ArgoCD events 接口透传的 k8s Event 关键字段
+type PodEvent struct {
+	Type      string    `json:"type"`       // Normal / Warning
+	Reason    string    `json:"reason"`     // FailedScheduling / ImagePullBackOff / BackOff / Pulled ...
+	Message   string    `json:"message"`
+	Count     int       `json:"count"`
+	First     time.Time `json:"first_at"`
+	Last      time.Time `json:"last_at"`
+	FieldPath string    `json:"field_path"` // 例: spec.containers{frontend}
 }
 
 // GetAppResourceTree 拉 argocd application 的完整资源树。
@@ -184,6 +197,7 @@ func (c *ArgocdClient) GetAppResourceTree(ctx context.Context, name string) ([]R
 			Kind      string `json:"kind"`
 			Name      string `json:"name"`
 			Namespace string `json:"namespace"`
+			UID       string `json:"uid"`
 			Health    *struct {
 				Status  string `json:"status"`
 				Message string `json:"message"`
@@ -203,6 +217,7 @@ func (c *ArgocdClient) GetAppResourceTree(ctx context.Context, name string) ([]R
 			Kind:      n.Kind,
 			Name:      n.Name,
 			Namespace: n.Namespace,
+			UID:       n.UID,
 		}
 		if n.Health != nil {
 			rn.Health = n.Health.Status
@@ -282,6 +297,63 @@ func (c *ArgocdClient) GetPodLogs(
 		return string(raw), nil
 	}
 	return out.String(), nil
+}
+
+// GetPodEvents 拉指定 pod 的 k8s events（FailedScheduling / ImagePullBackOff / BackOff 等）
+//
+//	走 ArgoCD `/applications/{name}/events?resourceUID=&resourceNamespace=&resourceName=`，
+//	后端转 kubectl get events --field-selector involvedObject.uid=<uid> 拿数据。
+//	uid 是必填的：不传 ArgoCD 会返回该 application 的所有 sync 事件，不是 pod 事件。
+//	返回按 lastTimestamp 倒序（最近的事件在前）。
+func (c *ArgocdClient) GetPodEvents(
+	ctx context.Context,
+	appName, podUID, podNamespace, podName string,
+) ([]PodEvent, error) {
+	if podUID == "" {
+		return nil, nil // 没 uid 拉不出 events，静默返回空（旧 pod 已被收走的常见情况）
+	}
+	q := fmt.Sprintf("resourceUID=%s&resourceNamespace=%s&resourceName=%s",
+		urlQ(podUID), urlQ(podNamespace), urlQ(podName))
+	path := "/api/v1/applications/" + appName + "/events?" + q
+
+	ectx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	raw, _, err := c.do(ectx, "GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Items []struct {
+			Type           string    `json:"type"`
+			Reason         string    `json:"reason"`
+			Message        string    `json:"message"`
+			Count          int       `json:"count"`
+			FirstTimestamp time.Time `json:"firstTimestamp"`
+			LastTimestamp  time.Time `json:"lastTimestamp"`
+			InvolvedObject struct {
+				FieldPath string `json:"fieldPath"`
+			} `json:"involvedObject"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("parse events: %w", err)
+	}
+	out := make([]PodEvent, 0, len(resp.Items))
+	for _, it := range resp.Items {
+		out = append(out, PodEvent{
+			Type:      it.Type,
+			Reason:    it.Reason,
+			Message:   it.Message,
+			Count:     it.Count,
+			First:     it.FirstTimestamp,
+			Last:      it.LastTimestamp,
+			FieldPath: it.InvolvedObject.FieldPath,
+		})
+	}
+	// 按 Last 倒序（最近事件在前）
+	sort.Slice(out, func(i, j int) bool { return out[i].Last.After(out[j].Last) })
+	return out, nil
 }
 
 // urlQ 简单 URL query 转义；只处理 = & 空格 等基础字符

@@ -39,6 +39,7 @@ import (
 type podBrief struct {
 	Name         string `json:"name"`
 	Namespace    string `json:"namespace"`
+	UID          string `json:"uid"` // 拉 events 必填，前端透传
 	Health       string `json:"health"`
 	StatusReason string `json:"status_reason"`
 	RestartCount string `json:"restart_count"`
@@ -86,6 +87,7 @@ func HandleGetDeploymentPods(w http.ResponseWriter, r *http.Request) {
 		pods = append(pods, podBrief{
 			Name:         n.Name,
 			Namespace:    n.Namespace,
+			UID:          n.UID,
 			Health:       n.Health,
 			StatusReason: n.StatusReason,
 			RestartCount: n.RestartCount,
@@ -115,10 +117,9 @@ var (
 //
 //	返回 {"logs": "...", "lines": 187, "source": "archive"|"live"}
 //
-// 流程：
-//  1. 先查 deployment_pod_logs 表是否有该 (depID, app, pod) 的归档（失败时存的快照）
-//  2. 有 → 从 MinIO 拉文本返回，source=archive（最可靠：pod 已被替换也能看）
-//  3. 无 → 退回 argocd 实时拉（成功的发布 / 未配 minio / 历史日志）source=live
+// 优先级（按 kind 不同决定）：
+//   - previous=true（kind=previous）：archive 优先 —— 归档是 deploy 当时拉的快照，最可靠；失败回退 live --previous
+//   - previous=false（kind=current）：live 优先 —— 拿最新输出；失败（pod 已被收走）回退 archive
 func HandleGetDeploymentPodLogs(w http.ResponseWriter, r *http.Request) {
 	depID := ParseID(mux.Vars(r)["id"])
 	q := r.URL.Query()
@@ -139,7 +140,6 @@ func HandleGetDeploymentPodLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// env 权限校验
 	p, err := loadProjectEnvByDeployment(depID)
 	if err != nil {
 		JSONError(w, 40400, "deployment 不存在")
@@ -150,41 +150,114 @@ func HandleGetDeploymentPodLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. 先查归档（previous=true 时优先；归档存的就是上一次崩溃前的日志）
+	kind := services.LogKindCurrent
 	if previous {
-		if objKey, ok, err := queryArchivedLog(depID, app, pod); err == nil && ok {
-			if mc, _ := loadMinIOClientFromDB(); mc != nil {
-				ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-				defer cancel()
-				logs, err := mc.GetLog(ctx, objKey)
-				if err == nil && logs != "" {
-					respondPodLogs(w, logs, "archive")
-					return
-				}
-			}
+		kind = services.LogKindPrevious
+	}
+
+	// previous 路径：archive 优先
+	if previous {
+		if logs, ok := tryArchive(r.Context(), depID, app, pod, kind); ok {
+			respondPodLogs(w, logs, "archive")
+			return
 		}
 	}
 
-	// 2. 退回 argocd 实时拉（带 1s 防抖缓存）
-	if namespace == "" {
-		// 这里 namespace 必须给 argocd，归档没有需要从 pod-list 推断
-		JSONError(w, 40000, "namespace 必填（实时模式）")
+	// live 路径（current 优先 / previous 回退）
+	if namespace != "" {
+		cacheKey := app + "|" + pod + "|" + container + "|" + strconv.FormatBool(previous) + "|" + strconv.Itoa(tailLines)
+		if v, ok := podLogsCache.Load(cacheKey); ok {
+			if e, ok := v.(*logCacheEntry); ok && time.Since(e.at) < time.Second {
+				respondPodLogs(w, e.logs, "live")
+				return
+			}
+		}
+		podLogsCacheMu.Lock()
+		argoURL, argoToken, perr := ResolveArgocdForEnv(p)
+		if perr == nil {
+			client := services.NewArgocdClient(argoURL, argoToken)
+			logs, lerr := client.GetPodLogs(r.Context(), app, namespace, pod, container, tailLines, previous)
+			if lerr == nil && logs != "" {
+				podLogsCache.Store(cacheKey, &logCacheEntry{logs: logs, at: time.Now()})
+				podLogsCacheMu.Unlock()
+				respondPodLogs(w, logs, "live")
+				return
+			}
+		}
+		podLogsCacheMu.Unlock()
+	}
+
+	// current 路径回退到 archive（pod 已被收走、namespace 缺失等场景）
+	if !previous {
+		if logs, ok := tryArchive(r.Context(), depID, app, pod, kind); ok {
+			respondPodLogs(w, logs, "archive")
+			return
+		}
+	}
+
+	// 全空：返回友好错误
+	JSONError(w, 40400, "该 pod 暂无可用日志（容器从未输出 / 未归档 / 实时拉失败）")
+}
+
+// tryArchive 尝试从 MinIO 拿归档日志；找不到 / MinIO 没配 / 读取失败都返回 ok=false
+func tryArchive(ctx context.Context, depID int64, app, pod string, kind services.LogKind) (string, bool) {
+	objKey, ok, err := queryArchivedLog(depID, app, pod, kind)
+	if err != nil || !ok {
+		return "", false
+	}
+	mc, _ := loadMinIOClientFromDB()
+	if mc == nil {
+		return "", false
+	}
+	tctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	logs, err := mc.GetLog(tctx, objKey)
+	if err != nil || logs == "" {
+		return "", false
+	}
+	return logs, true
+}
+
+// HandleGetDeploymentPodEvents GET /api/deployments/{id}/pod-events
+//
+//	?app=...&pod=...&namespace=...&pod_uid=...
+//	返回 {"events": [{type,reason,message,count,first_at,last_at,field_path}], "source": "archive"|"live"}
+//
+//	归档优先（events.json 是 deploy 时刻的快照），归档没有 / 缺 pod_uid 退到 live ArgoCD events 接口。
+func HandleGetDeploymentPodEvents(w http.ResponseWriter, r *http.Request) {
+	depID := ParseID(mux.Vars(r)["id"])
+	q := r.URL.Query()
+	app := q.Get("app")
+	pod := q.Get("pod")
+	namespace := q.Get("namespace")
+	podUID := q.Get("pod_uid")
+	if app == "" || pod == "" {
+		JSONError(w, 40000, "app / pod 必填")
 		return
 	}
-	cacheKey := app + "|" + pod + "|" + container + "|" + strconv.FormatBool(previous) + "|" + strconv.Itoa(tailLines)
-	if v, ok := podLogsCache.Load(cacheKey); ok {
-		if e, ok := v.(*logCacheEntry); ok && time.Since(e.at) < time.Second {
-			respondPodLogs(w, e.logs, "live")
+	p, err := loadProjectEnvByDeployment(depID)
+	if err != nil {
+		JSONError(w, 40400, "deployment 不存在")
+		return
+	}
+	if !IsEnvIDAllowed(r, p.ID) {
+		JSONError(w, 40300, "无权访问该环境")
+		return
+	}
+
+	// 1. 归档优先
+	if raw, ok := tryArchive(r.Context(), depID, app, pod, services.LogKindEvents); ok {
+		var events []services.PodEvent
+		if jerr := jsonUnmarshalImpl([]byte(raw), &events); jerr == nil {
+			respondEvents(w, events, "archive")
 			return
 		}
 	}
-	podLogsCacheMu.Lock()
-	defer podLogsCacheMu.Unlock()
-	if v, ok := podLogsCache.Load(cacheKey); ok {
-		if e, ok := v.(*logCacheEntry); ok && time.Since(e.at) < time.Second {
-			respondPodLogs(w, e.logs, "live")
-			return
-		}
+
+	// 2. live ArgoCD（需要 pod_uid 才能精确过滤；缺则返回空）
+	if podUID == "" {
+		respondEvents(w, []services.PodEvent{}, "live")
+		return
 	}
 	argoURL, argoToken, err := ResolveArgocdForEnv(p)
 	if err != nil {
@@ -192,13 +265,23 @@ func HandleGetDeploymentPodLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := services.NewArgocdClient(argoURL, argoToken)
-	logs, err := client.GetPodLogs(r.Context(), app, namespace, pod, container, tailLines, previous)
+	events, err := client.GetPodEvents(r.Context(), app, podUID, namespace, pod)
 	if err != nil {
-		JSONError(w, 50000, "拉取日志失败 · "+err.Error())
+		JSONError(w, 50000, "拉取事件失败 · "+err.Error())
 		return
 	}
-	podLogsCache.Store(cacheKey, &logCacheEntry{logs: logs, at: time.Now()})
-	respondPodLogs(w, logs, "live")
+	respondEvents(w, events, "live")
+}
+
+func respondEvents(w http.ResponseWriter, events []services.PodEvent, source string) {
+	if events == nil {
+		events = []services.PodEvent{}
+	}
+	JSONSuccess(w, map[string]interface{}{
+		"events": events,
+		"count":  len(events),
+		"source": source,
+	})
 }
 
 // HandleGetDeploymentArchivedPods GET /api/deployments/{id}/archived-pods?app=

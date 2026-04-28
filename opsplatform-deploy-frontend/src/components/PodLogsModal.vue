@@ -14,16 +14,23 @@
             </button>
           </div>
 
-          <!-- 状态横条（pod 异常状态摘要） -->
+          <!-- 状态横条（健康 = 绿；非健康 = 红，错误信息更醒目） -->
           <div v-if="currentPod" class="status-bar"
-            :class="{ ok: currentPod.health === 'Healthy', warn: currentPod.health !== 'Healthy' }">
-            <el-icon v-if="currentPod.health === 'Healthy'"><CircleCheck /></el-icon>
+            :class="{ ok: isHealthy(currentPod), bad: !isHealthy(currentPod) }">
+            <el-icon v-if="isHealthy(currentPod)"><CircleCheck /></el-icon>
             <el-icon v-else><Warning /></el-icon>
             <span>
-              <template v-if="currentPod.status_reason">该容器 <b>{{ currentPod.status_reason }}</b></template>
-              <template v-else>状态：<b>{{ currentPod.health || '未知' }}</b></template>
+              <template v-if="!isHealthy(currentPod)">
+                <b>{{ currentPod.status_reason || currentPod.health || '异常' }}</b>
+              </template>
+              <template v-else-if="currentPod.status_reason">
+                该容器 <b>{{ currentPod.status_reason }}</b>
+              </template>
+              <template v-else>
+                状态：<b>{{ currentPod.health || '未知' }}</b>
+              </template>
               <template v-if="currentPod.restart_count && currentPod.restart_count !== '0'">
-                · 已重启 <b>{{ currentPod.restart_count }}</b> 次
+                · 重启 <b>{{ currentPod.restart_count }}</b> 次
               </template>
               <template v-if="currentPod.containers_ready">
                 · <b>{{ currentPod.containers_ready }}</b> ready
@@ -48,14 +55,22 @@
             <div class="tb-l">
               <span class="lbl">来源：</span>
               <button
-                :class="['mode-btn', { on: !previous }]"
-                @click="switchMode(false)" title="拉当前正在运行的容器最近日志">
-                当前容器
+                :class="['mode-btn', { on: mode === 'previous', dim: !tabHas('previous') }]"
+                @click="switchMode('previous')" title="上一次崩溃前的容器日志（默认）">
+                ⏮ 上次崩溃前
+                <span v-if="!tabHas('previous')" class="empty-mark">空</span>
               </button>
               <button
-                :class="['mode-btn', { on: previous }]"
-                @click="switchMode(true)" title="拉上一次崩溃前的容器日志（仅在容器至少崩溃过一次时可用）">
-                上次崩溃前
+                :class="['mode-btn', { on: mode === 'events', dim: !tabHas('events') }]"
+                @click="switchMode('events')" title="K8s 事件（FailedScheduling / ImagePullBackOff 等无日志故障的线索）">
+                📋 K8s 事件
+                <span v-if="!tabHas('events')" class="empty-mark">空</span>
+              </button>
+              <button
+                :class="['mode-btn', { on: mode === 'current', dim: !tabHas('current') }]"
+                @click="switchMode('current')" title="当前容器最近日志">
+                📺 当前容器
+                <span v-if="!tabHas('current')" class="empty-mark">空</span>
               </button>
               <span v-if="logsSource === 'archive'" class="src-badge archive" title="发布失败时已存档，pod 被替换也能看">
                 归档快照
@@ -64,7 +79,7 @@
                 实时拉取
               </span>
             </div>
-            <div class="tb-r">
+            <div class="tb-r" v-if="mode !== 'events'">
               <span class="lbl">尾部行数：</span>
               <select v-model.number="tailLines" @change="reload" class="sel">
                 <option :value="200">200</option>
@@ -75,8 +90,8 @@
             </div>
           </div>
 
-          <!-- 搜索栏 -->
-          <div class="logs-search">
+          <!-- 搜索栏（仅 logs 模式显示） -->
+          <div class="logs-search" v-if="mode !== 'events'">
             <el-icon><Search /></el-icon>
             <input v-model="searchQuery" placeholder="搜索关键字（panic / error / exception ...）"
               @keyup.enter="search" @input="onSearchInput" class="search-input" />
@@ -99,9 +114,39 @@
             </button>
           </div>
 
-          <!-- 日志区 -->
-          <div ref="logArea" class="logs-area" v-loading="loading">
-            <pre v-if="logs && !loading" class="logs-pre" v-html="renderedLogs"></pre>
+          <!-- 日志/事件 区 -->
+          <div ref="logArea" :class="['logs-area', mode === 'events' ? 'events-bg' : '']" v-loading="loading">
+            <!-- Events tab：表格 -->
+            <div v-if="mode === 'events' && !loading">
+              <div v-if="!events.length" class="logs-empty">
+                <el-icon size="32"><InfoFilled /></el-icon>
+                <p>无 K8s 事件</p>
+                <p class="empty-sub">{{ noEventsHint }}</p>
+              </div>
+              <table v-else class="events-table">
+                <thead>
+                  <tr>
+                    <th style="width:80px;">类型</th>
+                    <th style="width:180px;">原因</th>
+                    <th>消息</th>
+                    <th style="width:60px;text-align:center;">次数</th>
+                    <th style="width:140px;">最近时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(ev, idx) in events" :key="idx" :class="ev.type === 'Warning' ? 'ev-warn' : 'ev-norm'">
+                    <td><span :class="['ev-type', ev.type === 'Warning' ? 'warn' : 'normal']">{{ ev.type }}</span></td>
+                    <td class="mono">{{ ev.reason }}</td>
+                    <td class="ev-msg">{{ ev.message }}</td>
+                    <td style="text-align:center;font-family:'Fira Code',monospace;">{{ ev.count }}</td>
+                    <td class="ev-time">{{ formatEventTime(ev.last_at) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Logs tab（previous / current）：文本 -->
+            <pre v-else-if="logs && !loading" class="logs-pre" v-html="renderedLogs"></pre>
             <div v-else-if="!loading && error" class="logs-empty">
               <el-icon size="32"><Warning /></el-icon>
               <p>{{ error }}</p>
@@ -145,7 +190,7 @@ import {
   Document, Close, CircleCheck, Warning, Search, ArrowUp, ArrowDown,
   Refresh, DocumentCopy, InfoFilled, DArrowRight,
 } from '@element-plus/icons-vue'
-import { getDeploymentPods, getDeploymentPodLogs, getDeploymentArchivedPods } from '../api'
+import { getDeploymentPods, getDeploymentPodLogs, getDeploymentPodEvents, getDeploymentArchivedPods } from '../api'
 
 const props = defineProps({
   show: Boolean,
@@ -158,14 +203,18 @@ const emit = defineEmits(['close'])
 
 const pods = ref([])
 const podName = ref('')
-const previous = ref(false) // 默认拉「当前容器」实时日志，pod 没崩过也能看；切到「上次崩溃前」才拉 --previous
+// mode: 'previous' (默认 — 失败排查首选) | 'current' (当前容器最近输出) | 'events' (k8s 事件)
+const mode = ref('previous')
 const tailLines = ref(200)
 const logs = ref('')
-const logsSource = ref('') // 'archive' 或 'live'
+const events = ref([])           // mode=events 时填充
+const logsSource = ref('')       // 'archive' / 'live'
 const loading = ref(false)
 const error = ref('')
 const errorHint = ref('')
 const lastFetchedAt = ref(null)
+// 每个 pod 各 tab 是否有归档内容；从 getDeploymentArchivedPods 拿
+const podAvailability = ref({})  // { podName: { has_previous, has_current, has_events } }
 
 const searchQuery = ref('')
 const searchMatches = ref([]) // 行号数组
@@ -184,16 +233,58 @@ const noLogsHint = computed(() => {
   if (!currentPod.value) return ''
   const r = currentPod.value.status_reason || ''
   if (r.includes('ImagePullBackOff') || r.includes('ErrImagePull')) {
-    return '容器从未启动成功（镜像拉取失败）。请检查镜像名 / 仓库凭证 / 节点网络。'
+    return '容器从未启动成功（镜像拉取失败）。请切到「📋 K8s 事件」看具体原因。'
   }
-  if (r.includes('Pending')) {
-    return 'Pod 还在 Pending 状态（资源不足 / 节点选择器 / PVC 等）。'
+  if (r.includes('Pending') || r.includes('FailedScheduling')) {
+    return 'Pod 还在 Pending（资源不足 / 节点选择器 / PVC 等）。请切到「📋 K8s 事件」。'
   }
-  if (previous.value) {
-    return '该容器从未异常崩溃，没有「上次崩溃前」日志可查。点上方「当前容器」查看运行日志。'
+  if (mode.value === 'previous') {
+    return '该容器从未异常崩溃，没有「上次崩溃前」日志可查。'
   }
   return '当前容器暂无输出（应用刚启动或没产生日志）。'
 })
+
+const noEventsHint = computed(() => {
+  if (!currentPod.value) return ''
+  return '该 pod 当前无 k8s 事件（事件可能已被 k8s 自动清理 ~1 小时后过期；本次发布若早于 v92 也未归档）。'
+})
+
+// tabHas 判某 tab 在当前 pod 是否有内容；用于按钮 dim 灰显 + 自动跳避空
+function tabHas(tab) {
+  if (!currentPod.value) return true
+  const av = podAvailability.value[currentPod.value.name]
+  // 没归档信息（live pod / 未存档） → 假设有，避免误灰
+  if (!av) return true
+  if (tab === 'previous') return av.has_previous || (currentPod.value.restart_count && currentPod.value.restart_count !== '0')
+  if (tab === 'current') return av.has_current || (currentPod.value.health === 'Healthy')
+  if (tab === 'events') return av.has_events
+  return true
+}
+
+// pickInitialMode 根据当前 pod 的可用 tab 选默认 mode
+//   优先 previous（用户核心需求）；previous 没内容时按 events → current 顺延
+function pickInitialMode() {
+  if (tabHas('previous')) return 'previous'
+  if (tabHas('events')) return 'events'
+  if (tabHas('current')) return 'current'
+  return 'previous'
+}
+
+function isHealthy(p) {
+  if (!p) return false
+  return p.health === 'Healthy' && (!p.status_reason || p.status_reason === 'Running')
+}
+
+function formatEventTime(iso) {
+  if (!iso) return ''
+  const t = new Date(iso).getTime()
+  if (!t || isNaN(t)) return ''
+  const sec = Math.floor((Date.now() - t) / 1000)
+  if (sec < 60) return sec + 's 前'
+  if (sec < 3600) return Math.floor(sec / 60) + 'm 前'
+  if (sec < 86400) return Math.floor(sec / 3600) + 'h 前'
+  return new Date(iso).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
 
 // ---- 加载 pods ----
 // 优先级：归档列表（pod 可能已被 k8s 收走，实时拿不到了）→ argocd 实时
@@ -214,28 +305,34 @@ async function loadPods() {
       livePods = r.pods || []
     } catch { /* 忽略 */ }
 
-    // 3. 合并：归档的 pod 标记为「已存档」，实时 pod 用真实状态
+    // 3. 合并 + 同步 podAvailability 让 tabHas 知道每个 pod 哪个 tab 有内容
     const map = {}
+    const availability = {}
     for (const a of archived) {
       map[a.pod] = {
         name: a.pod,
-        namespace: '', // 归档不需要 namespace
+        namespace: '',
         health: 'Archived',
         status_reason: '已归档（' + a.captured_at + '）',
         restart_count: '',
         containers_ready: '',
         archived: true,
       }
+      availability[a.pod] = {
+        has_previous: !!a.has_previous,
+        has_current: !!a.has_current,
+        has_events: !!a.has_events,
+      }
     }
     for (const lp of livePods) {
       if (map[lp.name]) {
-        // 同时存在 → 用实时状态覆盖（更新 health / restart count）
         Object.assign(map[lp.name], lp, { archived: true })
       } else {
         map[lp.name] = { ...lp, archived: false }
       }
     }
     pods.value = Object.values(map)
+    podAvailability.value = availability
     if (pods.value.length === 0) {
       error.value = '未找到任何 pod'
       errorHint.value = '该次发布没有失败 pod 的归档日志，且 ArgoCD 也没有当前 pod 资源'
@@ -244,43 +341,55 @@ async function loadPods() {
     // 默认选第一个失败/归档的
     const fail = pods.value.find(p => p.archived || (p.health && p.health !== 'Healthy'))
     podName.value = props.initialPodName || (fail ? fail.name : pods.value[0].name)
-    await fetchLogs()
+    // 默认 mode：失败优先 previous；previous 空则按 events / current 顺延
+    mode.value = pickInitialMode()
+    await fetchData()
   } catch (e) {
     error.value = '加载 pod 列表失败'
     errorHint.value = e?.response?.data?.message || e.message || ''
   }
 }
 
-// ---- 拉日志 ----
-async function fetchLogs() {
+// ---- 拉数据（按 mode 路由） ----
+async function fetchData() {
   if (!podName.value || !currentPod.value) return
   loading.value = true
   error.value = ''
   errorHint.value = ''
+  logs.value = ''
+  events.value = []
+  logsSource.value = ''
   try {
-    const r = await getDeploymentPodLogs(props.deploymentId, {
-      app: props.app,
-      pod: podName.value,
-      namespace: currentPod.value.namespace || '',
-      previous: previous.value,
-      tail_lines: tailLines.value,
-    })
-    logs.value = r.logs || ''
-    logsSource.value = r.source || ''
-    lastFetchedAt.value = Date.now()
-    // 拿到日志后自动跳到错误段
-    nextTick(() => {
-      if (logs.value) jumpToError(true /*silent*/)
-    })
-  } catch (e) {
-    logs.value = ''
-    const raw = e?.response?.data?.message || e.message || ''
-    // 友好化常见错误：「previous terminated container ... not found」 → 提示切到当前容器
-    if (previous.value && /previous terminated container.*not found/i.test(raw)) {
-      error.value = '该容器从未崩溃过'
-      errorHint.value = '没有「上次崩溃前」的日志可查。请点上方「当前容器」查看实时日志。'
+    if (mode.value === 'events') {
+      const r = await getDeploymentPodEvents(props.deploymentId, {
+        app: props.app,
+        pod: podName.value,
+        namespace: currentPod.value.namespace || '',
+        pod_uid: currentPod.value.uid || '',
+      })
+      events.value = r.events || []
+      logsSource.value = r.source || ''
     } else {
-      error.value = '拉取日志失败'
+      const r = await getDeploymentPodLogs(props.deploymentId, {
+        app: props.app,
+        pod: podName.value,
+        namespace: currentPod.value.namespace || '',
+        previous: mode.value === 'previous',
+        tail_lines: tailLines.value,
+      })
+      logs.value = r.logs || ''
+      logsSource.value = r.source || ''
+      // 拿到日志后自动跳到错误段
+      nextTick(() => { if (logs.value) jumpToError(true) })
+    }
+    lastFetchedAt.value = Date.now()
+  } catch (e) {
+    const raw = e?.response?.data?.message || e.message || ''
+    if (mode.value === 'previous' && /previous terminated container.*not found/i.test(raw)) {
+      error.value = '该容器从未崩溃过'
+      errorHint.value = '没有「上次崩溃前」的日志。试试「📋 K8s 事件」或「📺 当前容器」。'
+    } else {
+      error.value = mode.value === 'events' ? '拉取事件失败' : '拉取日志失败'
       errorHint.value = raw || '请稍后重试'
     }
   } finally {
@@ -291,17 +400,19 @@ async function fetchLogs() {
 function selectPod(name) {
   if (podName.value === name) return
   podName.value = name
-  fetchLogs()
+  // 切 pod 时按新 pod 的可用性重置 mode（避免选到空 tab）
+  mode.value = pickInitialMode()
+  fetchData()
 }
 
-function switchMode(toPrevious) {
-  if (previous.value === toPrevious) return
-  previous.value = toPrevious
-  fetchLogs()
+function switchMode(toMode) {
+  if (mode.value === toMode) return
+  mode.value = toMode
+  fetchData()
 }
 
 function reload() {
-  fetchLogs()
+  fetchData()
 }
 
 // ---- 搜索 ----
@@ -407,12 +518,19 @@ function shortPodName(name) {
 }
 
 async function copyLogs() {
-  if (!logs.value) return
+  let text = ''
+  if (mode.value === 'events') {
+    if (!events.value.length) return
+    text = events.value.map(e => `[${e.type}] ${e.reason} (×${e.count})  ${e.message}  · ${formatEventTime(e.last_at)}`).join('\n')
+  } else {
+    if (!logs.value) return
+    text = logs.value
+  }
   try {
-    await navigator.clipboard.writeText(logs.value)
-    ElMessage.success('日志已复制到剪贴板')
+    await navigator.clipboard.writeText(text)
+    ElMessage.success(mode.value === 'events' ? '事件已复制到剪贴板' : '日志已复制到剪贴板')
   } catch {
-    ElMessage.error('复制失败，请手动选中日志区')
+    ElMessage.error('复制失败，请手动选中')
   }
 }
 
@@ -422,12 +540,14 @@ watch(() => props.show, (v) => {
     pods.value = []
     podName.value = ''
     logs.value = ''
+    events.value = []
     logsSource.value = ''
     error.value = ''
     searchQuery.value = ''
     searchMatches.value = []
-    previous.value = false
+    mode.value = 'previous'   // 默认 — loadPods 完成后 pickInitialMode 会按可用性微调
     tailLines.value = 200
+    podAvailability.value = {}
     loadPods()
   }
 })
@@ -469,6 +589,8 @@ watch(() => props.show, (v) => {
 }
 .status-bar.ok { background: #ecfdf5; color: #047857; }
 .status-bar.warn { background: #fffbeb; color: #92400e; }
+.status-bar.bad { background: #fef2f2; color: #b91c1c; font-weight: 500; }
+.status-bar.bad b { color: #991b1b; }
 .status-bar b { font-family: 'Fira Code', monospace; }
 
 .pod-selector {
@@ -507,6 +629,14 @@ watch(() => props.show, (v) => {
 }
 .mode-btn:hover { border-color: #1890ff; color: #1890ff; }
 .mode-btn.on { background: #1890ff; border-color: #1890ff; color: #fff; }
+.mode-btn.dim { color: #94a3b8; background: #fafbfc; }
+.mode-btn.dim.on { background: #94a3b8; border-color: #94a3b8; color: #fff; }
+.mode-btn .empty-mark {
+  margin-left: 4px; font-size: 9.5px; padding: 0 4px;
+  background: #e5e7eb; color: #6b7280; border-radius: 99px;
+  font-family: 'Fira Code', monospace;
+}
+.mode-btn.on .empty-mark { background: rgba(255,255,255,.25); color: #fff; }
 .src-badge {
   font-size: 11px; padding: 2px 8px; border-radius: 99px;
   font-weight: 500; display: inline-flex; align-items: center; gap: 3px;
@@ -557,6 +687,35 @@ watch(() => props.show, (v) => {
   flex: 1; overflow: auto;
   background: #1e1e1e; color: #d4d4d4;
 }
+.logs-area.events-bg { background: #fff; color: #1f2937; }
+
+.events-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 12.5px; font-family: 'Inter', sans-serif;
+}
+.events-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: #f9fafb; border-bottom: 1px solid #e5e7eb;
+  text-align: left; padding: 8px 12px;
+  color: #6b7280; font-weight: 500; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .4px;
+}
+.events-table tbody td {
+  padding: 9px 12px; border-bottom: 1px solid #f1f5f9;
+  vertical-align: top;
+}
+.events-table tr.ev-warn td { background: #fef9f9; }
+.events-table tr.ev-warn td:first-child { border-left: 3px solid #ef4444; padding-left: 9px; }
+.events-table tr.ev-norm td:first-child { border-left: 3px solid #d1d5db; padding-left: 9px; }
+.ev-type {
+  display: inline-block; padding: 2px 8px; border-radius: 99px;
+  font-size: 10.5px; font-weight: 600; font-family: 'Fira Code', monospace;
+}
+.ev-type.warn { background: #fef2f2; color: #b91c1c; }
+.ev-type.normal { background: #f3f4f6; color: #374151; }
+.events-table .mono { font-family: 'Fira Code', monospace; font-size: 12px; color: #1f2937; font-weight: 500; }
+.events-table .ev-msg { color: #374151; line-height: 1.55; }
+.events-table .ev-time { color: #6b7280; font-family: 'Fira Code', monospace; font-size: 11.5px; }
 .logs-pre {
   margin: 0; padding: 10px 14px;
   font-family: 'Fira Code', 'Consolas', monospace;

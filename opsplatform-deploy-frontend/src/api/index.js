@@ -136,6 +136,7 @@ export const cancelDeployment = (id) => http.post(`/deployments/${id}/cancel`)
 export const getRollbackPreview = (id) => http.get(`/deployments/${id}/rollback-preview`)
 export const getDeploymentPods = (id, app) => http.get(`/deployments/${id}/pods`, { params: { app } })
 export const getDeploymentPodLogs = (id, params) => http.get(`/deployments/${id}/pod-logs`, { params })
+export const getDeploymentPodEvents = (id, params) => http.get(`/deployments/${id}/pod-events`, { params })
 export const getDeploymentArchivedPods = (id, app) => http.get(`/deployments/${id}/archived-pods`, { params: { app } })
 
 // Dashboard

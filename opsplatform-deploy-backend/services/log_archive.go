@@ -156,7 +156,23 @@ func (m *MinIOClient) TestConnection(ctx context.Context) error {
 	return err
 }
 
-// LogObjectKey 统一对象命名：deploy-logs/{depID}/{argocdApp}/{podName}.txt
-func LogObjectKey(deploymentID int64, argocdApp, podName string) string {
-	return fmt.Sprintf("deploy-logs/%d/%s/%s.txt", deploymentID, argocdApp, podName)
+// LogKind 归档种类：previous = --previous 容器日志；current = 当前容器日志；events = k8s events JSON
+type LogKind string
+
+const (
+	LogKindPrevious LogKind = "previous"
+	LogKindCurrent  LogKind = "current"
+	LogKindEvents   LogKind = "events"
+)
+
+// LogObjectKey 对象命名：deploy-logs/{depID}/{argocdApp}/{podName}/{kind}.{ext}
+//
+//	拆分到子目录而不是文件名后缀，方便 MinIO 控制台按 pod 浏览
+//	events 用 .json，其他用 .log
+func LogObjectKey(deploymentID int64, argocdApp, podName string, kind LogKind) string {
+	ext := "log"
+	if kind == LogKindEvents {
+		ext = "json"
+	}
+	return fmt.Sprintf("deploy-logs/%d/%s/%s/%s.%s", deploymentID, argocdApp, podName, string(kind), ext)
 }

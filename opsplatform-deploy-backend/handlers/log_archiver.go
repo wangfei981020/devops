@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"log"
 	"net/http"
 	"time"
@@ -101,7 +102,15 @@ func archiveFailedPodLogsAsync(
 	}()
 }
 
-// archiveOneApp 处理单个失败 app：找出 unhealthy pod → 拉日志 → 上传 → 写表
+// archiveOneApp 处理单个 app：找出"过程中 crash 过 OR 终态非 Healthy"的 pod → 拉 3 种归档 → 写表
+//
+//	归档触发条件比之前宽松：RestartCount > 0 也算（pod 后来被替换/恢复也能存证），
+//	不再只看终态 Health 是否非 Healthy。
+//	每个失败 pod 存 3 份到 MinIO：
+//	  - previous.log：--previous 容器日志（崩溃前最后输出，2000 行）
+//	  - current.log： 当前容器日志（兜底，pod 被收走后还能看，200 行）
+//	  - events.json： pod 关联的 k8s events（FailedScheduling / ImagePullBackOff 等无日志故障的唯一线索）
+//	任一拉空则跳过该 kind，DB 列保持 NULL，前端按 NULL 隐藏对应 tab。
 func archiveOneApp(
 	ctx context.Context,
 	deploymentID int64,
@@ -110,55 +119,140 @@ func archiveOneApp(
 	argoClient *services.ArgocdClient,
 	mc *services.MinIOClient,
 ) error {
-	// 1. 找出该 app 的 unhealthy pods
 	nodes, err := argoClient.GetAppResourceTree(ctx, app)
 	if err != nil {
 		return err
 	}
-	failingPods := []services.ResourceNode{}
+	candidatePods := []services.ResourceNode{}
 	for _, n := range nodes {
-		if n.Kind == "Pod" && n.Health != "" && n.Health != "Healthy" {
-			failingPods = append(failingPods, n)
-		}
-	}
-	if len(failingPods) == 0 {
-		return nil // 没有 unhealthy pod 不归档
-	}
-
-	// 2. 每个失败 pod 拉一次日志
-	for _, pod := range failingPods {
-		// 优先 previous（上一次崩溃前）；previous 拿不到（首次部署）退到 current
-		logs, err := argoClient.GetPodLogs(ctx, app, pod.Namespace, pod.Name, "", 2000, true)
-		if err != nil || logs == "" {
-			logs, _ = argoClient.GetPodLogs(ctx, app, pod.Namespace, pod.Name, "", 2000, false)
-		}
-		if logs == "" {
+		if n.Kind != "Pod" {
 			continue
 		}
-
-		// 3. 上传 MinIO
-		objectKey := services.LogObjectKey(deploymentID, app, pod.Name)
-		size, err := mc.PutLog(ctx, objectKey, logs)
-		if err != nil {
-			log.Printf("[log-archive] put %s: %v", objectKey, err)
-			continue
+		unhealthy := n.Health != "" && n.Health != "Healthy"
+		crashed := n.RestartCount != "" && n.RestartCount != "0"
+		if unhealthy || crashed {
+			candidatePods = append(candidatePods, n)
 		}
+	}
+	if len(candidatePods) == 0 {
+		return nil
+	}
 
-		// 4. 写入 DB（INSERT IGNORE 防重复——同一 pod 多次失败时保留最新）
-		_, _ = database.DB.Exec(`
-			INSERT INTO deployment_pod_logs (deployment_id, argocd_app, pod_name, object_key, size_bytes)
-			VALUES (?, ?, ?, ?, ?)`,
-			deploymentID, app, pod.Name, objectKey, size)
-		log.Printf("[log-archive] archived dep=%d app=%s pod=%s size=%d", deploymentID, app, pod.Name, size)
+	for _, pod := range candidatePods {
+		archivePodThreeKinds(ctx, deploymentID, app, pod, argoClient, mc)
 	}
 	return nil
 }
 
-// queryArchivedLog 按 deployment + pod + app 找归档日志的 object_key
-// 返回 (objectKey, found, error)
-func queryArchivedLog(deploymentID int64, app, pod string) (string, bool, error) {
-	var objectKey string
-	q := `SELECT object_key FROM deployment_pod_logs
+// archivePodThreeKinds 对单个 pod 拉三种归档并写表
+func archivePodThreeKinds(
+	ctx context.Context,
+	deploymentID int64,
+	app string,
+	pod services.ResourceNode,
+	argoClient *services.ArgocdClient,
+	mc *services.MinIOClient,
+) {
+	type kindResult struct {
+		key  string
+		size int64
+	}
+	out := map[services.LogKind]kindResult{}
+
+	// previous.log（最关键 —— 崩溃前最后输出）
+	if logs, _ := argoClient.GetPodLogs(ctx, app, pod.Namespace, pod.Name, "", 2000, true); logs != "" {
+		key := services.LogObjectKey(deploymentID, app, pod.Name, services.LogKindPrevious)
+		if size, err := mc.PutLog(ctx, key, logs); err == nil {
+			out[services.LogKindPrevious] = kindResult{key, size}
+		} else {
+			log.Printf("[log-archive] put previous %s: %v", key, err)
+		}
+	}
+
+	// current.log（200 行兜底）
+	if logs, _ := argoClient.GetPodLogs(ctx, app, pod.Namespace, pod.Name, "", 200, false); logs != "" {
+		key := services.LogObjectKey(deploymentID, app, pod.Name, services.LogKindCurrent)
+		if size, err := mc.PutLog(ctx, key, logs); err == nil {
+			out[services.LogKindCurrent] = kindResult{key, size}
+		} else {
+			log.Printf("[log-archive] put current %s: %v", key, err)
+		}
+	}
+
+	// events.json（FailedScheduling / ImagePullBackOff / FailedMount 等）
+	if events, err := argoClient.GetPodEvents(ctx, app, pod.UID, pod.Namespace, pod.Name); err == nil && len(events) > 0 {
+		if data, jerr := json.Marshal(events); jerr == nil {
+			key := services.LogObjectKey(deploymentID, app, pod.Name, services.LogKindEvents)
+			if size, perr := mc.PutLog(ctx, key, string(data)); perr == nil {
+				out[services.LogKindEvents] = kindResult{key, size}
+			} else {
+				log.Printf("[log-archive] put events %s: %v", key, perr)
+			}
+		}
+	}
+
+	if len(out) == 0 {
+		return // 三种全空，不留 DB 行（避免前端打开看到空 tab 集）
+	}
+
+	// ON DUPLICATE KEY UPDATE：同 pod 多次归档时让最新内容覆盖旧的
+	// COALESCE(VALUES(x), x)：本次没拉到 (NULL) 就保留上次的值
+	// （unique key = (deployment_id, argocd_app, pod_name)）
+	prev := out[services.LogKindPrevious]
+	curr := out[services.LogKindCurrent]
+	evts := out[services.LogKindEvents]
+	_, err := database.DB.Exec(`
+		INSERT INTO deployment_pod_logs
+		  (deployment_id, argocd_app, pod_name,
+		   previous_key, previous_size, current_key, current_size, events_key, events_size)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+		  previous_key  = COALESCE(VALUES(previous_key),  previous_key),
+		  previous_size = IF(VALUES(previous_key) IS NULL, previous_size, VALUES(previous_size)),
+		  current_key   = COALESCE(VALUES(current_key),   current_key),
+		  current_size  = IF(VALUES(current_key)  IS NULL, current_size,  VALUES(current_size)),
+		  events_key    = COALESCE(VALUES(events_key),    events_key),
+		  events_size   = IF(VALUES(events_key)   IS NULL, events_size,   VALUES(events_size)),
+		  captured_at   = CURRENT_TIMESTAMP`,
+		deploymentID, app, pod.Name,
+		nullableStr(prev.key), prev.size,
+		nullableStr(curr.key), curr.size,
+		nullableStr(evts.key), evts.size,
+	)
+	if err != nil {
+		log.Printf("[log-archive] upsert dep=%d app=%s pod=%s: %v", deploymentID, app, pod.Name, err)
+		return
+	}
+	log.Printf("[log-archive] archived dep=%d app=%s pod=%s prev=%dB curr=%dB events=%dB",
+		deploymentID, app, pod.Name, prev.size, curr.size, evts.size)
+}
+
+// nullableStr 空字符串转 NULL（让 COALESCE 把"本次没拉到"的字段保留旧值）
+func nullableStr(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// queryArchivedLog 按 deployment + pod + app + kind 找归档日志的 object_key
+//
+//	kind ∈ previous / current / events
+//	返回 (objectKey, found, error)；该 kind 对应列 NULL 时返回 found=false
+func queryArchivedLog(deploymentID int64, app, pod string, kind services.LogKind) (string, bool, error) {
+	column := ""
+	switch kind {
+	case services.LogKindPrevious:
+		column = "previous_key"
+	case services.LogKindCurrent:
+		column = "current_key"
+	case services.LogKindEvents:
+		column = "events_key"
+	default:
+		return "", false, nil
+	}
+	var objectKey sql.NullString
+	q := `SELECT ` + column + ` FROM deployment_pod_logs
 		WHERE deployment_id=? AND argocd_app=? AND pod_name=?
 		ORDER BY captured_at DESC LIMIT 1`
 	err := database.DB.QueryRow(q, deploymentID, app, pod).Scan(&objectKey)
@@ -168,21 +262,24 @@ func queryArchivedLog(deploymentID int64, app, pod string) (string, bool, error)
 	if err != nil {
 		return "", false, err
 	}
-	return objectKey, true, nil
+	if !objectKey.Valid || objectKey.String == "" {
+		return "", false, nil
+	}
+	return objectKey.String, true, nil
 }
 
-// queryArchivedLogsByDeployment 列出某 deployment 已归档的所有 pod
-// 用于前端弹窗在 argocd 实时拿不到 pod 时回退到归档列表
+// archivedLog 列表项；HasXxx 三个 flag 让前端打开弹窗时知道哪些 tab 有内容
 type archivedLog struct {
-	App       string `json:"app"`
-	Pod       string `json:"pod"`
-	ObjectKey string `json:"-"`
-	Size      int64  `json:"size_bytes"`
-	At        string `json:"captured_at"`
+	App         string `json:"app"`
+	Pod         string `json:"pod"`
+	HasPrevious bool   `json:"has_previous"`
+	HasCurrent  bool   `json:"has_current"`
+	HasEvents   bool   `json:"has_events"`
+	At          string `json:"captured_at"`
 }
 
 func queryArchivedLogsByDeployment(deploymentID int64, app string) ([]archivedLog, error) {
-	q := `SELECT argocd_app, pod_name, object_key, size_bytes, captured_at
+	q := `SELECT argocd_app, pod_name, previous_key, current_key, events_key, captured_at
 		FROM deployment_pod_logs WHERE deployment_id=?`
 	args := []interface{}{deploymentID}
 	if app != "" {
@@ -198,8 +295,12 @@ func queryArchivedLogsByDeployment(deploymentID int64, app string) ([]archivedLo
 	out := []archivedLog{}
 	for rows.Next() {
 		var r archivedLog
+		var prev, curr, evts sql.NullString
 		var t time.Time
-		_ = rows.Scan(&r.App, &r.Pod, &r.ObjectKey, &r.Size, &t)
+		_ = rows.Scan(&r.App, &r.Pod, &prev, &curr, &evts, &t)
+		r.HasPrevious = prev.Valid && prev.String != ""
+		r.HasCurrent = curr.Valid && curr.String != ""
+		r.HasEvents = evts.Valid && evts.String != ""
 		r.At = t.Format("2006-01-02 15:04:05")
 		out = append(out, r)
 	}

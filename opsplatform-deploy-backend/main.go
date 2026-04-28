@@ -94,6 +94,7 @@ func main() {
 	protected.HandleFunc("/deployments/{id}/rollback-preview", handlers.HandleRollbackPreview).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/deployments/{id}/pods", handlers.HandleGetDeploymentPods).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/deployments/{id}/pod-logs", handlers.HandleGetDeploymentPodLogs).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/deployments/{id}/pod-events", handlers.HandleGetDeploymentPodEvents).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/deployments/{id}/archived-pods", handlers.HandleGetDeploymentArchivedPods).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/global-config/test-minio", handlers.HandleTestMinIO).Methods("POST", "OPTIONS")
 
