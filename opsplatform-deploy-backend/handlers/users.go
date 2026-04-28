@@ -87,7 +87,7 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
-	Audit(r, "user.create", "user", req.Username, map[string]interface{}{"role": req.Role})
+	Audit(r, "user.create", "user", req.Username, auditDetailFromReq(req))
 	JSONSuccess(w, map[string]interface{}{"id": id})
 }
 

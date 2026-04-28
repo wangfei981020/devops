@@ -154,7 +154,7 @@ func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
-	Audit(r, "project_env.create", "project_env", req.Name, map[string]interface{}{"env_type": req.EnvType})
+	Audit(r, "project_env.create", "project_env", req.Name, auditDetailFromReq(req))
 	JSONSuccess(w, map[string]interface{}{"id": id})
 }
 

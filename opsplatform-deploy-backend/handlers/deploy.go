@@ -224,8 +224,16 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, refID, op, opLabel)
 	})
 
+	// 把改动详情 (module → 新 tag) 全部写进审计；前端展开能看到具体改了哪几个模块
+	auditChanges := make([]map[string]string, 0, len(pending))
+	for name, tag := range pending {
+		auditChanges = append(auditChanges, map[string]string{"module": name, "new_tag": tag})
+	}
 	Audit(r, auditEvent, "project_env", p.Name, map[string]interface{}{
-		"deployment_id": depID, "env_type": p.EnvType, "modules": len(pending),
+		"deployment_id":     depID,
+		"env_type":          p.EnvType,
+		"modules_count":     len(pending),
+		"changes":           auditChanges,
 		"ref_deployment_id": req.RefDeploymentID,
 	})
 	JSONSuccess(w, map[string]interface{}{
@@ -338,7 +346,10 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 	})
 
 	Audit(r, "deploy.restart", "project_env", p.Name, map[string]interface{}{
-		"deployment_id": depID, "env_type": p.EnvType, "modules": len(req.ModuleNames),
+		"deployment_id": depID,
+		"env_type":      p.EnvType,
+		"modules_count": len(req.ModuleNames),
+		"module_names":  req.ModuleNames,
 	})
 	JSONSuccess(w, map[string]interface{}{"deployment_id": depID, "status": "pending"})
 }
@@ -465,8 +476,16 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, &ref, op, "回滚")
 	})
 
+	rollbackChanges := make([]map[string]string, 0, len(pending))
+	for name, tag := range pending {
+		rollbackChanges = append(rollbackChanges, map[string]string{"module": name, "new_tag": tag})
+	}
 	Audit(r, "deploy.rollback", "project_env", p.Name, map[string]interface{}{
-		"deployment_id": depID, "ref_deployment_id": ref, "modules": len(pending),
+		"deployment_id":     depID,
+		"ref_deployment_id": ref,
+		"modules_count":     len(pending),
+		"changes":           rollbackChanges,
+		"selected_modules":  req.SelectedModules,
 	})
 	JSONSuccess(w, map[string]interface{}{
 		"deployment_id": depID,
