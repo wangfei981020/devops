@@ -96,7 +96,7 @@
             {{ currentEnv.env_type.toUpperCase() }}
           </span>
 
-          <!-- 动作 tab 仅 K8s 显示（VM 的 rsync/update_version 在 VmDeployPanel 内部） -->
+          <!-- 动作 seg control：K8s + VM 都有（K8s 是 update/restart，VM 是 rsync/update_version） -->
           <template v-if="currentEnv && currentEnv._kind === 'k8s'">
             <span class="sel-divider"></span>
             <span class="sel-k">动作</span>
@@ -116,7 +116,18 @@
           <template v-if="currentEnv && currentEnv._kind === 'vm'">
             <span class="sel-divider"></span>
             <span class="sel-k">动作</span>
-            <span class="vm-action-hint">VM 部署面板内可执行 <b>rsync</b> / <b>update_version</b></span>
+            <div class="seg" role="tablist">
+              <button :class="['seg-btn', { active: vmTab === 'rsync' }]"
+                      @click="vmTab = 'rsync'">
+                <el-icon><RefreshRight /></el-icon>
+                <span>批量同步代码</span>
+              </button>
+              <button :class="['seg-btn', { active: vmTab === 'update_version' }]"
+                      @click="vmTab = 'update_version'">
+                <el-icon><Upload /></el-icon>
+                <span>批量部署</span>
+              </button>
+            </div>
           </template>
         </div>
       </div>
@@ -143,8 +154,8 @@
         <RestartPanel v-else
           :project-env="currentEnv" :modules="modules" @done="handleRestartDone" />
       </template>
-      <!-- VM: ansible playbook 部署 -->
-      <VmDeployPanel v-else :vm-project-env="currentEnv" />
+      <!-- VM: ansible playbook 部署，按 vmTab 决定 rsync 还是 update_version -->
+      <VmDeployPanel v-else :vm-project-env="currentEnv" :tab="vmTab" />
     </div>
 
     <RollbackDialog v-model="rbVis" :deployment-id="rbID" @done="onRollbackDone" />
@@ -188,7 +199,8 @@ const RECENT_MAX = 3
 const envs = ref([])
 const selectedID = ref(null)  // _selID 字符串
 const modules = ref([])       // 仅 K8s 用
-const tab = ref('update')
+const tab = ref('update')     // K8s seg: 'update' | 'restart'
+const vmTab = ref('update_version')  // VM seg: 'rsync' | 'update_version'
 const currentEnv = computed(() => envs.value.find(e => e._selID === selectedID.value))
 // 小工具：env_type 归一化到小写，给 chip CSS class 用（K8s 是 uat/prod，VM 是 UAT/LPT/PROD）
 function envTypeKey(e) { return (e?.env_type || '').toLowerCase() }

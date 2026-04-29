@@ -3,7 +3,7 @@
     <div class="p-hd">
       <h3>
         <el-icon><Monitor /></el-icon>
-        VM 部署
+        {{ tabLabel }}
         <span class="env-tag" :class="envType">{{ envType }}</span>
       </h3>
       <div class="hd-r">
@@ -14,156 +14,131 @@
     </div>
 
     <div class="vm-body">
-      <!-- 单服务 rsync 行（始终单选，rsync 不批量） -->
-      <div class="row">
-        <label>① 选服务（rsync 用）</label>
-        <el-select v-model="rsyncService" filterable placeholder="选择 service" style="flex:1;">
-          <el-option v-for="s in services" :key="s.id" :label="s.name" :value="s.name">
-            <div style="display:flex;justify-content:space-between;">
-              <span>{{ s.name }}</span>
-              <span class="hint" style="margin-left:12px;">
-                {{ s.hosts?.length || 0 }} 台 · {{ s.current_version || '未发布' }}
-              </span>
-            </div>
-          </el-option>
-        </el-select>
+      <!-- 子模式切换：自动 / 手动 -->
+      <div class="batch-modes-row">
+        <span class="row-k">输入方式</span>
+        <div class="batch-modes">
+          <button :class="['mode-btn', { active: mode === 'auto' }]" @click="mode = 'auto'">自动获取</button>
+          <button :class="['mode-btn', { active: mode === 'manual' }]" @click="mode = 'manual'">手动输入</button>
+        </div>
       </div>
 
-      <div class="action-card rsync">
-        <div class="ac-l">
-          <div class="ac-title">📥 同步代码（rsync）</div>
-          <div class="ac-desc">从代码服务器拉源码到 ansible 服务器，刷新版本列表。**不部署到目标 VM**。</div>
-        </div>
-        <button class="btn warn" @click="onRsync" :disabled="!rsyncService || submitting">
-          {{ submitting ? '提交中...' : '执行 rsync' }}
-        </button>
-      </div>
-
-      <!-- 批量部署主区 -->
-      <div class="batch-section">
-        <div class="batch-head">
-          <div class="batch-title">🚀 批量部署到 VM (update_version)</div>
-          <div class="batch-modes">
-            <button :class="['mode-btn', { active: mode === 'auto' }]" @click="mode = 'auto'">自动获取</button>
-            <button :class="['mode-btn', { active: mode === 'manual' }]" @click="mode = 'manual'">手动输入</button>
-          </div>
-        </div>
-
-        <!-- 自动模式 -->
-        <div v-if="mode === 'auto'" class="auto-mode">
-          <div class="row">
-            <label>① 选服务</label>
-            <el-select v-model="autoSelected" multiple filterable collapse-tags collapse-tags-tooltip
-              placeholder="搜索/多选服务" style="flex:1;">
-              <el-option v-for="s in services" :key="s.id" :label="s.name" :value="s.name">
-                <div style="display:flex;justify-content:space-between;">
-                  <span>{{ s.name }}</span>
-                  <span class="hint" style="margin-left:12px;">
-                    {{ s.hosts?.length || 0 }} 台 · {{ s.current_version || '未发布' }}
-                  </span>
-                </div>
-              </el-option>
-            </el-select>
-            <span class="hint" style="margin-left: 4px;">
-              已选 <b>{{ autoSelected.length }}</b> / {{ services.length }}
-            </span>
-          </div>
-          <div class="row" style="padding-left:90px;">
-            <el-checkbox v-model="autoUseLatest" @change="onAutoLatestToggle">
-              全部用最新版（取消勾选可逐行选历史版本）
-            </el-checkbox>
-          </div>
-        </div>
-
-        <!-- 手动模式 -->
-        <div v-if="mode === 'manual'" class="manual-mode">
-          <div class="row">
-            <label>① 输入清单</label>
-            <textarea v-model="manualText" class="batch-textarea" rows="6"
-              placeholder="每行一个：service[:version]，省略 version = 用最新&#10;G01_op_office:011994266913a15a7ab51c479129fd17d1dacf5c&#10;G01_anchor_web&#10;G01_xxx:5318b2c89abc"
-              @blur="parseManual"></textarea>
-          </div>
-          <div class="row" style="padding-left:90px;">
-            <button class="btn ghost sm" @click="parseManual">预览</button>
-            <button class="btn ghost sm" @click="manualText = ''; manualParsed = []">清空</button>
-            <span class="hint" style="margin-left:8px;">
-              解析 <b>{{ manualParsed.length }}</b> 行
-              <span v-if="manualErrors.length" style="color:var(--danger);">
-                · <b>{{ manualErrors.length }}</b> 行错误
-              </span>
-            </span>
-          </div>
-        </div>
-
-        <!-- 预览表（自动 / 手动 共用） -->
-        <div v-if="batchPreview.length > 0" class="row" style="display:block;padding-left:0;">
-          <label style="display:block; margin-left: 90px; font-size:11.5px; color:var(--text-2); margin-bottom:6px;">
-            ② 部署清单预览（{{ batchPreview.length }} 个服务，{{ totalHosts }} 台目标主机）
-          </label>
-          <table class="batch-table">
-            <thead>
-              <tr>
-                <th>服务</th>
-                <th>版本</th>
-                <th>目标主机</th>
-                <th style="width:36px;"></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(p, idx) in batchPreview" :key="p.service" :class="{ invalid: !p.valid }">
-                <td class="mono">{{ p.service }}</td>
-                <td>
-                  <span v-if="!p.valid" class="err-text">❌ {{ p.error }}</span>
-                  <el-select v-else-if="mode === 'auto' && !autoUseLatest"
-                    v-model="p.version" filterable size="small"
-                    style="width:100%;"
-                    :loading="p.loadingVersions"
-                    @click="onPerRowVersionClick(p)">
-                    <el-option v-for="(v, i) in (p.versionList || [])" :key="v"
-                      :label="(i === 0 ? '⭐最新 · ' : '') + v" :value="v" />
-                  </el-select>
-                  <span v-else class="mono">
-                    <span v-if="p.isLatest" class="latest-tag">⭐最新</span>
-                    {{ p.version }}
-                  </span>
-                </td>
-                <td class="mono hosts-cell">
-                  <span v-if="p.hosts && p.hosts.length > 0">
-                    {{ p.hosts.join(', ') }}
-                  </span>
-                  <span v-else class="hint">—</span>
-                </td>
-                <td>
-                  <button v-if="mode === 'auto'" class="row-x" @click="removeFromBatch(idx)" title="从清单中移除">×</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <!-- 批量部署按钮 -->
-        <div class="action-card deploy" style="margin-top:12px;">
-          <div class="ac-l">
-            <div class="ac-title">🚀 部署到 VM</div>
-            <div class="ac-desc">
-              <span v-if="batchPreview.length === 0">先选服务（自动）或输入清单（手动）</span>
-              <span v-else>
-                共 <b>{{ validCount }}</b> 个服务 ·
-                <b>{{ totalHosts }}</b> 台目标主机
-                <span v-if="invalidCount > 0" style="color:var(--warning);">
-                  · {{ invalidCount }} 行错误将跳过
+      <!-- 自动模式 -->
+      <div v-if="mode === 'auto'" class="auto-mode">
+        <div class="row">
+          <label>① 选服务</label>
+          <el-select v-model="autoSelected" multiple filterable collapse-tags collapse-tags-tooltip
+            placeholder="搜索/多选服务" style="flex:1;">
+            <el-option v-for="s in services" :key="s.id" :label="s.name" :value="s.name">
+              <div style="display:flex;justify-content:space-between;">
+                <span>{{ s.name }}</span>
+                <span class="hint" style="margin-left:12px;">
+                  {{ s.hosts?.length || 0 }} 台 · {{ s.current_version || '未发布' }}
                 </span>
-              </span>
-            </div>
-          </div>
-          <button :class="['btn', envType === 'PROD' ? 'danger' : 'success']"
-            @click="onBatchDeploy"
-            :disabled="validCount === 0 || submitting">
-            <span v-if="submitting">提交中...</span>
-            <span v-else-if="envType === 'PROD'">部署 PROD · 需二次确认</span>
-            <span v-else>部署 {{ validCount }} 个到 {{ envType }}</span>
-          </button>
+              </div>
+            </el-option>
+          </el-select>
+          <span class="hint" style="margin-left: 4px;">
+            已选 <b>{{ autoSelected.length }}</b> / {{ services.length }}
+          </span>
         </div>
+        <!-- update_version 才有"全部最新版"勾选；rsync 不需要版本 -->
+        <div v-if="isUpdate" class="row" style="padding-left:90px;">
+          <el-checkbox v-model="autoUseLatest" @change="onAutoLatestToggle">
+            全部用最新版（取消勾选可逐行选历史版本）
+          </el-checkbox>
+        </div>
+      </div>
+
+      <!-- 手动模式 -->
+      <div v-if="mode === 'manual'" class="manual-mode">
+        <div class="row">
+          <label>① 输入清单</label>
+          <textarea v-model="manualText" class="batch-textarea" rows="6"
+            :placeholder="manualPlaceholder"
+            @blur="parseManual"></textarea>
+        </div>
+        <div class="row" style="padding-left:90px;">
+          <button class="btn ghost sm" @click="parseManual">预览</button>
+          <button class="btn ghost sm" @click="manualText = ''; manualParsed = []; batchPreview = []">清空</button>
+          <span class="hint" style="margin-left:8px;">
+            解析 <b>{{ manualParsed.length }}</b> 行
+            <span v-if="manualErrors.length" style="color:var(--danger);">
+              · <b>{{ manualErrors.length }}</b> 行错误
+            </span>
+          </span>
+        </div>
+      </div>
+
+      <!-- 预览表 -->
+      <div v-if="batchPreview.length > 0" class="row" style="display:block;padding-left:0;">
+        <label style="display:block; margin-left: 90px; font-size:11.5px; color:var(--text-2); margin-bottom:6px;">
+          ② 清单预览（{{ batchPreview.length }} 个服务，{{ totalHosts }} 台目标主机{{ isUpdate ? '' : ' · rsync 不部署到目标 VM' }})
+        </label>
+        <table class="batch-table">
+          <thead>
+            <tr>
+              <th>服务</th>
+              <th v-if="isUpdate">版本</th>
+              <th>目标主机</th>
+              <th style="width:36px;"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(p, idx) in batchPreview" :key="p.service" :class="{ invalid: !p.valid }">
+              <td class="mono">{{ p.service }}</td>
+              <td v-if="isUpdate">
+                <span v-if="!p.valid" class="err-text">❌ {{ p.error }}</span>
+                <el-select v-else-if="mode === 'auto' && !autoUseLatest"
+                  v-model="p.version" filterable size="small" style="width:100%;"
+                  :loading="p.loadingVersions"
+                  @click="onPerRowVersionClick(p)">
+                  <el-option v-for="(v, i) in (p.versionList || [])" :key="v"
+                    :label="(i === 0 ? '⭐最新 · ' : '') + v" :value="v" />
+                </el-select>
+                <span v-else class="mono">
+                  <span v-if="p.isLatest" class="latest-tag">⭐最新</span>
+                  {{ p.version }}
+                </span>
+              </td>
+              <td class="mono hosts-cell">
+                <span v-if="!p.valid && !isUpdate" class="err-text">❌ {{ p.error }}</span>
+                <span v-else-if="p.hosts && p.hosts.length > 0">
+                  {{ p.hosts.join(', ') }}
+                </span>
+                <span v-else class="hint">—</span>
+              </td>
+              <td>
+                <button class="row-x" @click="removeFromBatch(idx)" title="从清单中移除">×</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 提交按钮 -->
+      <div class="action-card" :class="isUpdate ? 'deploy' : 'rsync'" style="margin-top:12px;">
+        <div class="ac-l">
+          <div class="ac-title">{{ submitTitle }}</div>
+          <div class="ac-desc">
+            <span v-if="batchPreview.length === 0">
+              {{ mode === 'auto' ? '先选服务（自动）' : '先输入清单（手动）' }}
+            </span>
+            <span v-else>
+              共 <b>{{ validCount }}</b> 个服务
+              <span v-if="isUpdate"> · <b>{{ totalHosts }}</b> 台目标主机</span>
+              <span v-if="invalidCount > 0" style="color:var(--warning);">
+                · {{ invalidCount }} 行错误将跳过
+              </span>
+            </span>
+          </div>
+        </div>
+        <button :class="submitBtnClass" @click="onSubmit"
+          :disabled="validCount === 0 || submitting">
+          <span v-if="submitting">提交中...</span>
+          <span v-else-if="envType === 'PROD'">{{ submitBtnText }} · 需二次确认</span>
+          <span v-else>{{ submitBtnText }}</span>
+        </button>
       </div>
     </div>
   </div>
@@ -182,36 +157,53 @@ import { useAuthStore } from '../stores/auth'
 
 const props = defineProps({
   vmProjectEnv: { type: Object, required: true },
+  // tab：'rsync' = 批量同步代码（不部署 VM）；'update_version' = 批量部署到 VM
+  tab: { type: String, default: 'update_version' },
 })
 
 const deployments = useDeploymentsStore()
 const auth = useAuthStore()
 
-const services = ref([])              // [{id, name, hosts:[], current_version}]
+const services = ref([])
 const scanning = ref(false)
 const submitting = ref(false)
 
-// rsync 用单选
-const rsyncService = ref('')
-
-// 批量模式：'auto' | 'manual'
-const mode = ref('auto')
-// 自动模式状态
-const autoSelected = ref([])          // [serviceName, ...]
+const mode = ref('auto')              // 'auto' | 'manual'
+const autoSelected = ref([])
 const autoUseLatest = ref(true)
-// 手动模式状态
 const manualText = ref('')
-const manualParsed = ref([])          // [{service, version}]，省略 version 时为 ''
-const manualErrors = ref([])          // [{line, raw, err}]
+const manualParsed = ref([])
+const manualErrors = ref([])
 
-// 每个服务的版本列表缓存（避免 dropdown 每次打开重拉）
-const versionCache = ref({})          // service → [v1, v2, v3...]
+const versionCache = ref({})
+const batchPreview = ref([])
 
 const envType = computed(() => props.vmProjectEnv?.env_type || 'UAT')
+const isUpdate = computed(() => props.tab === 'update_version')
+const tabLabel = computed(() => isUpdate.value ? '批量部署' : '批量同步代码（rsync）')
 
-// batchPreview 是 自动/手动 共用的预览数据
-//   {service, version, hosts, valid, error, isLatest, loadingVersions, versionList}
-const batchPreview = ref([])
+const submitTitle = computed(() =>
+  isUpdate.value ? '🚀 部署到 VM' : '📥 同步代码到 ansible 服务器')
+const submitBtnText = computed(() =>
+  isUpdate.value ? `部署 ${validCount.value} 个到 ${envType.value}`
+                 : `执行 rsync ${validCount.value} 个`)
+const submitBtnClass = computed(() => {
+  if (envType.value === 'PROD') return 'btn danger'
+  return isUpdate.value ? 'btn success' : 'btn warn'
+})
+
+const manualPlaceholder = computed(() => {
+  if (isUpdate.value) {
+    return `每行一个：service[:version]，省略 version = 用最新
+G01_op_office:011994266913a15a7ab51c479129fd17d1dacf5c
+G01_anchor_web
+G01_xxx:5318b2c89abc`
+  }
+  return `每行一个 service（rsync 不需要版本号）
+G01_op_office
+G01_anchor_web
+G01_xxx`
+})
 
 const validCount = computed(() => batchPreview.value.filter(p => p.valid).length)
 const invalidCount = computed(() => batchPreview.value.filter(p => !p.valid).length)
@@ -224,19 +216,24 @@ const totalHosts = computed(() => {
 watch(() => props.vmProjectEnv?.id, (id) => {
   if (id) {
     loadServices()
-    // 切换 env 时清掉旧选择
-    autoSelected.value = []
-    manualText.value = ''
-    manualParsed.value = []
-    batchPreview.value = []
-    rsyncService.value = ''
+    resetState()
   }
 }, { immediate: true })
 
-// 自动模式：用户多选服务后，同步生成预览行
+// 切 tab 重置选择 + 预览
+watch(() => props.tab, () => { resetState() })
+
+function resetState() {
+  autoSelected.value = []
+  manualText.value = ''
+  manualParsed.value = []
+  manualErrors.value = []
+  batchPreview.value = []
+}
+
+// 自动模式：multi-select 同步到 batchPreview
 watch(autoSelected, (newList) => {
   if (mode.value !== 'auto') return
-  // 保留已存在的 row（带 version 选择），新增的 row 用 latest
   const oldMap = new Map(batchPreview.value.map(p => [p.service, p]))
   batchPreview.value = newList.map(name => {
     const old = oldMap.get(name)
@@ -244,7 +241,7 @@ watch(autoSelected, (newList) => {
     const svc = services.value.find(s => s.name === name)
     return {
       service: name,
-      version: '',           // 等 latest 加载或 dropdown 选完填
+      version: '',
       hosts: svc?.hosts || [],
       valid: true,
       error: '',
@@ -253,16 +250,17 @@ watch(autoSelected, (newList) => {
       versionList: [],
     }
   })
-  if (autoUseLatest.value) refreshLatestForAll()
+  // update_version 模式 + 默认勾"最新"，自动拉版本号填进去
+  if (isUpdate.value && autoUseLatest.value) {
+    refreshLatestForAll()
+  }
 }, { deep: false })
 
 watch(mode, () => {
-  // 切 tab 重置预览
+  // 子模式 auto/manual 切换重置
   batchPreview.value = []
-  if (mode.value === 'manual') {
-    manualParsed.value = []
-    manualErrors.value = []
-  }
+  manualParsed.value = []
+  manualErrors.value = []
 })
 
 async function loadServices() {
@@ -285,7 +283,6 @@ async function onScanServices() {
   } finally { scanning.value = false }
 }
 
-// 给一个服务加载版本列表（带缓存），返回 versions 数组
 async function loadVersionsFor(serviceName) {
   if (versionCache.value[serviceName]) return versionCache.value[serviceName]
   const svc = services.value.find(s => s.name === serviceName)
@@ -301,7 +298,6 @@ async function loadVersionsFor(serviceName) {
   }
 }
 
-// 全部用最新版：批量拉所有 row 的最新版填进去
 async function refreshLatestForAll() {
   await Promise.all(batchPreview.value.map(async (p) => {
     if (!p.valid) return
@@ -317,7 +313,6 @@ function onAutoLatestToggle(checked) {
   if (checked) {
     refreshLatestForAll()
   } else {
-    // 取消"全部最新"→ 让每行可选历史版本，自动给每行预拉版本列表
     batchPreview.value.forEach(p => {
       p.isLatest = false
       if (p.versionList.length === 0) {
@@ -337,13 +332,11 @@ async function onPerRowVersionClick(p) {
 function removeFromBatch(idx) {
   const removed = batchPreview.value[idx]
   batchPreview.value.splice(idx, 1)
-  // 同步从 autoSelected 移除（让多选 chip 也消失）
   if (mode.value === 'auto') {
     autoSelected.value = autoSelected.value.filter(s => s !== removed.service)
   }
 }
 
-// 手动模式：解析 textarea
 async function parseManual() {
   if (mode.value !== 'manual') return
   const lines = manualText.value.split('\n').map(l => l.trim()).filter(Boolean)
@@ -367,35 +360,36 @@ async function parseManual() {
   manualParsed.value = parsed
   manualErrors.value = errors
 
-  // 校验每个 service 是否存在 + 加载版本（缺省时取最新）
   const preview = []
   for (const p of parsed) {
     const svc = services.value.find(s => s.name === p.service)
     if (!svc) {
       preview.push({
-        service: p.service, version: p.version || '—',
+        service: p.service, version: isUpdate.value ? (p.version || '—') : '',
         hosts: [], valid: false,
         error: '服务不存在（先点"同步服务列表"）',
         isLatest: false, loadingVersions: false, versionList: [],
       })
       continue
     }
-    let version = p.version
+    let version = ''
     let isLatest = false
-    if (!version) {
-      // 没指定版本 → 拉最新
-      const versions = await loadVersionsFor(p.service)
-      if (versions.length === 0) {
-        preview.push({
-          service: p.service, version: '—',
-          hosts: svc.hosts || [], valid: false,
-          error: '版本列表为空（先 rsync 同步代码）',
-          isLatest: false, loadingVersions: false, versionList: versions,
-        })
-        continue
+    if (isUpdate.value) {
+      version = p.version
+      if (!version) {
+        const versions = await loadVersionsFor(p.service)
+        if (versions.length === 0) {
+          preview.push({
+            service: p.service, version: '—',
+            hosts: svc.hosts || [], valid: false,
+            error: '版本列表为空（先 rsync 同步代码）',
+            isLatest: false, loadingVersions: false, versionList: versions,
+          })
+          continue
+        }
+        version = versions[0]
+        isLatest = true
       }
-      version = versions[0]
-      isLatest = true
     }
     preview.push({
       service: p.service, version,
@@ -406,71 +400,59 @@ async function parseManual() {
   batchPreview.value = preview
 }
 
-async function onRsync() {
-  if (!rsyncService.value || submitting.value) return
-  submitting.value = true
-  try {
-    const r = await vmDeploy({
-      vm_project_env_id: props.vmProjectEnv.id,
-      action: 'rsync',
-      services: [{ service: rsyncService.value }],
-    })
-    deployments.startTracking(r.deployment_id, {
-      action: 'vm_rsync',
-      envName: props.vmProjectEnv.name,
-      envType: envType.value,
-      modules: 1,
-      operator: auth.user?.username || '',
-    })
-    ElMessage.success(`已提交 rsync · 任务 #${r.deployment_id}，右上角看进度`)
-  } catch (e) {
-    ElMessage.error('提交失败：' + (e?.response?.data?.message || e.message))
-  } finally { submitting.value = false }
-}
-
-async function onBatchDeploy() {
+async function onSubmit() {
   if (validCount.value === 0 || submitting.value) return
-  const validRows = batchPreview.value.filter(p => p.valid && p.version)
-  if (validRows.length !== validCount.value) {
-    ElMessage.warning('有些行还没选版本，先补齐')
-    return
+  const validRows = batchPreview.value.filter(p => p.valid)
+  if (isUpdate.value) {
+    if (validRows.some(p => !p.version)) {
+      ElMessage.warning('有些行还没选版本，先补齐')
+      return
+    }
   }
 
-  // PROD 二次确认（带详细列表）
+  // PROD 二次确认（rsync + update_version 都要确认；但 rsync 提示更轻量）
   if (envType.value === 'PROD') {
-    const lines = validRows.map(p => `· <b>${p.service}</b> → <code>${p.version.slice(0, 12)}...</code>`).join('<br>')
+    let lines, title, btnText
+    if (isUpdate.value) {
+      lines = validRows.map(p => `· <b>${p.service}</b> → <code>${p.version.slice(0, 12)}...</code>`).join('<br>')
+      title = '⚠ PROD 部署二次确认'
+      btnText = '确认部署 PROD'
+    } else {
+      lines = validRows.map(p => `· <b>${p.service}</b>`).join('<br>')
+      title = '⚠ PROD rsync 二次确认'
+      btnText = '确认 rsync PROD'
+    }
+    const desc = isUpdate.value
+      ? `即将批量部署 <b>${validRows.length}</b> 个服务到 <b>PROD</b>，影响 ${totalHosts.value} 台机器：`
+      : `即将批量同步 <b>${validRows.length}</b> 个 PROD 服务的源码到 ansible 服务器（不部署到目标 VM）：`
     try {
       await ElMessageBox.confirm(
-        `即将批量部署 <b>${validRows.length}</b> 个服务到 <b>PROD</b>，影响 ${totalHosts.value} 台机器：<br><br>${lines}`,
-        '⚠ PROD 二次确认',
+        `${desc}<br><br>${lines}`,
+        title,
         { type: 'warning', dangerouslyUseHTMLString: true,
-          confirmButtonText: '确认部署 PROD', confirmButtonClass: 'el-button--danger' })
+          confirmButtonText: btnText, confirmButtonClass: 'el-button--danger' })
     } catch { return }
   }
 
   submitting.value = true
   try {
-    const r = await vmDeploy({
+    const payload = {
       vm_project_env_id: props.vmProjectEnv.id,
-      action: 'update_version',
-      services: validRows.map(p => ({ service: p.service, version: p.version })),
-    })
+      action: isUpdate.value ? 'update_version' : 'rsync',
+      services: validRows.map(p => isUpdate.value
+        ? { service: p.service, version: p.version }
+        : { service: p.service }),
+    }
+    const r = await vmDeploy(payload)
     deployments.startTracking(r.deployment_id, {
-      action: 'vm_update_version',
+      action: isUpdate.value ? 'vm_update_version' : 'vm_rsync',
       envName: props.vmProjectEnv.name,
       envType: envType.value,
       modules: validRows.length,
       operator: auth.user?.username || '',
     })
     ElMessage.success(`已提交 ${validRows.length} 个服务 · 任务 #${r.deployment_id}，右上角看进度`)
-    // 清空选择，避免误重复提交
-    if (mode.value === 'auto') {
-      autoSelected.value = []
-    } else {
-      manualText.value = ''
-      manualParsed.value = []
-    }
-    batchPreview.value = []
+    resetState()
   } catch (e) {
     ElMessage.error('提交失败：' + (e?.response?.data?.message || e.message))
   } finally { submitting.value = false }
@@ -492,6 +474,30 @@ async function onBatchDeploy() {
 
 .row { display: flex; align-items: center; gap: 10px; }
 .row label { width: 80px; font-size: 12.5px; color: var(--text-2); font-weight: 500; }
+.row-k { width: 80px; font-size: 12.5px; color: var(--text-2); font-weight: 500; }
+
+.batch-modes-row { display: flex; align-items: center; gap: 10px; }
+.batch-modes { display: inline-flex; background: #fff; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.mode-btn {
+  background: #fff; border: none; border-left: 1px solid var(--border);
+  padding: 6px 14px; font: 500 12.5px var(--body); color: var(--text-2);
+  cursor: pointer; transition: all .12s;
+}
+.mode-btn:first-child { border-left: none; }
+.mode-btn:hover:not(.active) { color: var(--primary); }
+.mode-btn.active { background: var(--primary); color: #fff; }
+
+.auto-mode, .manual-mode { display: flex; flex-direction: column; gap: 10px; }
+
+.batch-textarea {
+  width: 100%; min-height: 120px;
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px 12px;
+  font: 500 12.5px/1.7 var(--mono);
+  background: #fff; color: var(--text);
+  resize: vertical;
+}
+.batch-textarea:focus { outline: none; border-color: var(--primary); }
 
 .action-card { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 6px; background: #fafbfc; }
 .action-card.rsync { border-color: #fde68a; background: #fffbeb; }
@@ -514,38 +520,6 @@ async function onBatchDeploy() {
 .hint { font-size: 11.5px; color: var(--text-3); }
 .hint b { color: var(--text); font-family: var(--mono); font-weight: 600; }
 
-/* 批量区 */
-.batch-section {
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
-  padding: 12px 14px;
-  background: #fcfcfd;
-  margin-top: 4px;
-}
-.batch-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.batch-title { font-weight: 600; font-size: 13px; color: var(--text); }
-.batch-modes { display: inline-flex; background: #fff; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-.mode-btn {
-  background: #fff; border: none; border-left: 1px solid var(--border);
-  padding: 5px 12px; font: 500 12px var(--body); color: var(--text-2);
-  cursor: pointer; transition: all .12s;
-}
-.mode-btn:first-child { border-left: none; }
-.mode-btn:hover:not(.active) { color: var(--primary); }
-.mode-btn.active { background: var(--primary); color: #fff; }
-
-.auto-mode, .manual-mode { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
-.batch-textarea {
-  width: 100%; min-height: 120px;
-  border: 1px solid var(--border); border-radius: 6px;
-  padding: 10px 12px;
-  font: 500 12.5px/1.7 var(--mono);
-  background: #fff; color: var(--text);
-  resize: vertical;
-}
-.batch-textarea:focus { outline: none; border-color: var(--primary); }
-
-/* 预览表 */
 .batch-table {
   width: 100%; border-collapse: collapse;
   font-size: 12.5px; margin-top: 4px;
@@ -564,7 +538,7 @@ async function onBatchDeploy() {
 .batch-table tr:last-child td { border-bottom: none; }
 .batch-table tr.invalid td { background: #fef2f2; }
 .batch-table .mono { font-family: var(--mono); font-size: 12px; color: var(--text); }
-.batch-table .hosts-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.batch-table .hosts-cell { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
 .err-text { color: var(--danger); font-size: 11.5px; }
 .latest-tag {
   font-family: var(--mono); font-size: 10px;

@@ -93,10 +93,7 @@ func HandleVmDeploy(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40001, "action 只支持 rsync / update_version")
 		return
 	}
-	if req.Action == "rsync" && len(req.Services) != 1 {
-		JSONError(w, 40001, "rsync 只支持单 service")
-		return
-	}
+	// rsync 也支持批量：每个 service 独立 agent task（agent 端 rsync 本就是 per-service 跑 python 脚本）
 	for i, it := range req.Services {
 		if it.Service == "" {
 			JSONError(w, 40001, fmt.Sprintf("services[%d].service 必填", i))
