@@ -146,10 +146,38 @@ export const listAuditActionTypes = () => http.get('/audit-logs/action-types')
 // Dashboard
 export const getDashboardStats = () => http.get('/dashboard/stats')
 
-// Deploy actions
+// Deploy actions (K8s)
 export const previewImage = (data) => http.post('/deploy/preview-image', data)
 export const updateImage = (data) => http.post('/deploy/update-image', data)
 export const restartModules = (data) => http.post('/deploy/restart', data)
 export const rollback = (data) => http.post('/deploy/rollback', data)
+
+// VM 相关：deploy_agent / vm_project_env / vm_service / VM deploy
+// agent
+export const listDeployAgents   = () => http.get('/deploy-agents')
+export const createDeployAgent  = (data) => http.post('/deploy-agents', data)
+export const updateDeployAgent  = (id, data) => http.put(`/deploy-agents/${id}`, data)
+export const deleteDeployAgent  = (id) => http.delete(`/deploy-agents/${id}`)
+// testDeployAgent body { id?, url?, token? }，未保存也能测
+export const testDeployAgent    = (body) => http.post('/deploy-agents/test', body || {})
+
+// vm project env
+export const listVmProjectEnvs   = (projectId) => http.get('/vm-project-envs', { params: projectId ? { project_id: projectId } : {} })
+export const getVmProjectEnv     = (id) => http.get(`/vm-project-envs/${id}`)
+export const createVmProjectEnv  = (data) => http.post('/vm-project-envs', data)
+export const updateVmProjectEnv  = (id, data) => http.put(`/vm-project-envs/${id}`, data)
+export const deleteVmProjectEnv  = (id) => http.delete(`/vm-project-envs/${id}`)
+export const scanVmServices      = (id) => http.post(`/vm-project-envs/${id}/scan-services`)
+export const listVmServices      = (id) => http.get(`/vm-project-envs/${id}/services`)
+
+// versions（list-version API 代理）
+export const listVmServiceVersions = (id) => http.get(`/vm-services/${id}/versions`)
+
+// VM 部署
+export const vmDeploy            = (data) => http.post('/deploy/vm-run', data)
+export const vmDeployCancel      = (id) => http.post(`/deployments/${id}/vm-cancel`)
+// vm-logs 走 SSE，前端用 EventSource 或 fetch+ReadableStream，这里只导出 URL 给上层用
+export const vmDeployLogsURL     = (id, since = 0, stream = true) =>
+  `/api/deployments/${id}/vm-logs?since=${since}${stream ? '&stream=true' : ''}`
 
 export default http

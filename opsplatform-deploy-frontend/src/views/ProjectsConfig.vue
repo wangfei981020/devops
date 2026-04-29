@@ -57,12 +57,13 @@
               <el-icon class="chev" :class="{opened: opened[proj.name]}"><ArrowRight /></el-icon>
               <el-icon class="ico"><Folder /></el-icon>
               <span class="proj-name">{{ proj.name }}</span>
+              <span :class="'kind-chip ' + proj.target_type">{{ proj.target_type === 'vm' ? 'VM' : 'K8S' }}</span>
               <span v-if="proj.display_name" class="proj-disp">{{ proj.display_name }}</span>
               <span class="count">{{ proj.env_count }}</span>
             </div>
             <div class="proj-stats" v-if="proj.totalModules || proj.lastDeployAt">
               <span class="p-stat" v-if="proj.totalModules">
-                <el-icon><Box /></el-icon>{{ proj.totalModules }} 模块
+                <el-icon><Box /></el-icon>{{ proj.totalModules }} {{ proj.target_type === 'vm' ? '服务' : '模块' }}
               </span>
               <span class="p-stat" v-if="proj.lastDeployAt">
                 <el-icon><Clock /></el-icon>{{ fromNow(proj.lastDeployAt) }}
@@ -72,17 +73,18 @@
               <button v-if="proj.in_db" class="row-btn edit-proj" title="编辑项目" @click.stop="openEditProject(proj)">
                 <el-icon><EditPen /></el-icon>
               </button>
-              <button class="row-btn plus" title="在此项目下新增环境" @click.stop="openCreateEnv(proj.name)">
+              <button class="row-btn plus" title="在此项目下新增环境" @click.stop="openCreateEnv(proj)">
                 <el-icon><Plus /></el-icon>
               </button>
             </div>
           </div>
           <div v-if="opened[proj.name]" class="env-list">
             <div v-if="!proj.envs.length" class="no-envs">
-              <template v-if="auth.isAdmin || auth.hasButton('manage_projects')">还没有环境 · <a class="lnk" @click="openCreateEnv(proj.name)">新增环境</a></template>
+              <template v-if="auth.isAdmin || auth.hasButton('manage_projects')">还没有环境 · <a class="lnk" @click="openCreateEnv(proj)">新增环境</a></template>
               <template v-else>还没有环境（无管理权限）</template>
             </div>
-            <template v-else>
+            <!-- K8s 项目环境 -->
+            <template v-else-if="proj.target_type !== 'vm'">
               <div class="env-head">
                 <span>环境</span>
                 <span>分支</span>
@@ -92,27 +94,51 @@
                 <span>状态</span>
                 <span></span>
               </div>
-              <div v-for="e in proj.envs" :key="e.id" class="env-row" @click="openEditEnv(e)">
-                <span :class="'env-badge ' + e.env_type">{{ e.env_type }}</span>
+              <div v-for="e in proj.envs" :key="'k8s-' + e.id" class="env-row" @click="openEditEnv(e)">
+                <span :class="'env-badge ' + envTypeKey(e)">{{ e.env_type.toUpperCase() }}</span>
                 <span class="env-branch mono">{{ e.git_branch }}</span>
                 <span class="env-sync">
                   <span class="dot" :class="e.auto_sync ? 'ok' : 'off'"></span>
                   {{ e.auto_sync ? 'ON' : 'OFF' }}
                 </span>
                 <span class="env-mods">
-                  <b v-if="envStats[e.id]?.moduleCount != null">{{ envStats[e.id].moduleCount }}</b>
+                  <b v-if="envStats[statKey(e)]?.moduleCount != null">{{ envStats[statKey(e)].moduleCount }}</b>
                   <span v-else class="muted">—</span>
                 </span>
                 <span class="env-last">
-                  <span v-if="envStats[e.id]?.lastDeployAt">{{ fromNow(envStats[e.id].lastDeployAt) }}</span>
+                  <span v-if="envStats[statKey(e)]?.lastDeployAt">{{ fromNow(envStats[statKey(e)].lastDeployAt) }}</span>
                   <span v-else class="muted">—</span>
                 </span>
                 <span class="env-status">
-                  <span v-if="envStats[e.id]?.lastStatus" :class="'st-pill ' + envStats[e.id].lastStatus">
-                    {{ statusLabel(envStats[e.id].lastStatus) }}
+                  <span v-if="envStats[statKey(e)]?.lastStatus" :class="'st-pill ' + envStats[statKey(e)].lastStatus">
+                    {{ statusLabel(envStats[statKey(e)].lastStatus) }}
                   </span>
                   <span v-else class="muted">—</span>
                 </span>
+                <button v-if="auth.isAdmin || auth.hasButton('manage_projects')" class="row-btn edit" title="编辑环境" @click.stop="openEditEnv(e)">
+                  <el-icon><EditPen /></el-icon>
+                </button>
+              </div>
+            </template>
+            <!-- VM 项目环境（不同列） -->
+            <template v-else>
+              <div class="env-head vm">
+                <span>环境</span>
+                <span>Agent</span>
+                <span>项目代码</span>
+                <span>服务数</span>
+                <span>ansible_root</span>
+                <span></span>
+              </div>
+              <div v-for="e in proj.envs" :key="'vm-' + e.id" class="env-row vm" @click="openEditEnv(e)">
+                <span :class="'env-badge ' + envTypeKey(e)">{{ e.env_type.toUpperCase() }}</span>
+                <span class="env-branch mono">{{ agentName(e.agent_id) }}</span>
+                <span class="env-branch mono">{{ e.project_code || '—' }}</span>
+                <span class="env-mods">
+                  <b v-if="envStats[statKey(e)]?.moduleCount != null">{{ envStats[statKey(e)].moduleCount }}</b>
+                  <span v-else class="muted">—</span>
+                </span>
+                <span class="env-branch mono">{{ e.ansible_root || '/etc/ansible' }}</span>
                 <button v-if="auth.isAdmin || auth.hasButton('manage_projects')" class="row-btn edit" title="编辑环境" @click.stop="openEditEnv(e)">
                   <el-icon><EditPen /></el-icon>
                 </button>
@@ -145,6 +171,15 @@
           <input v-else v-model="projForm.name" class="inp mono" placeholder="如: g33" />
           <div v-if="!projDlgIsEdit" class="hint-text">
             项目名是标识符，保存后不可修改（会作为环境 name 的前缀）
+          </div>
+        </div>
+        <div class="field">
+          <label>部署目标 <span class="req">*</span><span class="hint">建项目后不可修改</span></label>
+          <div class="rb-grp">
+            <button :class="['rb', 'k8s', {active: projForm.target_type === 'k8s'}]"
+              :disabled="projDlgIsEdit" @click="projForm.target_type = 'k8s'">K8S</button>
+            <button :class="['rb', 'vm', {active: projForm.target_type === 'vm'}]"
+              :disabled="projDlgIsEdit" @click="projForm.target_type = 'vm'">VM</button>
           </div>
         </div>
         <div class="field">
@@ -284,6 +319,75 @@
         </div>
       </template>
     </el-dialog>
+
+    <!-- ========== VM 项目环境弹窗 ========== -->
+    <el-dialog
+      v-model="vmEnvDlgVis"
+      :title="vmEnvDlgIsEdit ? '编辑 VM 项目环境' : '新增 VM 项目环境'"
+      width="600px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      custom-class="env-dialog">
+      <div class="dlg-body">
+        <div class="sec-lbl">基本信息</div>
+        <div class="row2">
+          <div class="field">
+            <label>所属项目 <span class="req">*</span></label>
+            <input :value="vmEnvForm.project_name" class="inp mono" disabled />
+          </div>
+          <div class="field">
+            <label>环境类型 <span class="req">*</span></label>
+            <div class="rb-grp">
+              <button :class="['rb', 'uat', {active: vmEnvForm.env_type === 'UAT'}]" :disabled="vmEnvDlgIsEdit" @click="setVmEnvType('UAT')">UAT</button>
+              <button :class="['rb', 'lpt', {active: vmEnvForm.env_type === 'LPT'}]" :disabled="vmEnvDlgIsEdit" @click="setVmEnvType('LPT')">LPT</button>
+              <button :class="['rb', 'prod', {active: vmEnvForm.env_type === 'PROD'}]" :disabled="vmEnvDlgIsEdit" @click="setVmEnvType('PROD')">PROD</button>
+            </div>
+          </div>
+        </div>
+        <div class="field">
+          <label>显示名 <span class="hint">可选</span></label>
+          <input v-model="vmEnvForm.display_name" class="inp" />
+        </div>
+        <div class="field preview-name" v-if="!vmEnvDlgIsEdit && vmEnvForm.project_name && vmEnvForm.env_type">
+          将创建：<code class="mono">{{ vmEnvForm.project_name }}-{{ vmEnvForm.env_type.toLowerCase() }}</code>
+        </div>
+
+        <div class="sec-lbl">Ansible 部署</div>
+        <div class="field">
+          <label>Deploy Agent <span class="req">*</span><span class="hint">从「系统设置 → VM Agent」里选</span></label>
+          <select v-model="vmEnvForm.agent_id" class="inp">
+            <option :value="null">— 未选 —</option>
+            <option v-for="a in deployAgents" :key="a.id" :value="a.id">{{ a.name }} · {{ a.url }}</option>
+          </select>
+          <div v-if="!deployAgents.length" class="hint-text" style="color:var(--warning);margin-top:4px">
+            还没有 Deploy Agent，去「系统设置 → VM Agent · 版本接口」添加
+          </div>
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label>ansible_root</label>
+            <input v-model="vmEnvForm.ansible_root" class="inp mono" placeholder="/etc/ansible" />
+          </div>
+          <div class="field">
+            <label>项目代码 <span class="hint">如 G01, G32</span></label>
+            <input v-model="vmEnvForm.project_code" class="inp mono" placeholder="G01" />
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <div class="dlg-foot">
+          <div class="foot-l">
+            <button v-if="vmEnvDlgIsEdit" class="btn-danger" @click="onDeleteVmEnv">
+              <el-icon><Delete /></el-icon>删除
+            </button>
+          </div>
+          <div class="foot-r">
+            <button class="btn-ghost" @click="vmEnvDlgVis = false">取消</button>
+            <button class="btn-primary" @click="onSaveVmEnv" :disabled="saving">{{ saving ? '保存中...' : '保存' }}</button>
+          </div>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -296,6 +400,9 @@ import {
   listProjects, createProject, updateProject, deleteProject,
   listProjectEnvs, createProjectEnv, updateProjectEnv, deleteProjectEnv,
   testProjectEnvGit, testProjectEnvArgocd,
+  listVmProjectEnvs, createVmProjectEnv, updateVmProjectEnv, deleteVmProjectEnv,
+  listVmServices,
+  listDeployAgents,
   listModules, listDeployments,
   listArgocdInstances, listLarkBots, listGitlabRepos
 } from '../api'
@@ -303,9 +410,9 @@ import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
 
-const projects = ref([])  // [{id, name, display_name, description, env_count, in_db}]
-const envs = ref([])
-const envStats = ref({})
+const projects = ref([])  // [{id, name, display_name, description, env_count, in_db, target_type}]
+const envs = ref([])      // K8s + VM 合并，每条加 _kind ('k8s'|'vm')
+const envStats = ref({})  // K8s 用：moduleCount/lastDeployAt/lastStatus；VM 用：serviceCount
 const q = ref('')
 const opened = reactive({})
 const loading = ref(false)
@@ -316,10 +423,20 @@ const testing = reactive({ git: false, argo: false })
 const projDlgVis = ref(false)
 const projDlgIsEdit = ref(false)
 const projEditingID = ref(null)
-const blankProj = () => ({ name: '', display_name: '', description: '' })
+const blankProj = () => ({ name: '', display_name: '', description: '', target_type: 'k8s' })
 const projForm = reactive(blankProj())
 const projEnvCount = ref(0)
 const projHasEnvs = computed(() => projEnvCount.value > 0)
+// VM 项目环境弹窗
+const vmEnvDlgVis = ref(false)
+const vmEnvDlgIsEdit = ref(false)
+const vmEnvEditingID = ref(null)
+const blankVmEnv = () => ({
+  project_name: '', display_name: '', env_type: 'UAT',
+  agent_id: null, ansible_root: '/etc/ansible', project_code: '',
+})
+const vmEnvForm = reactive(blankVmEnv())
+const deployAgents = ref([])
 
 // 环境弹窗
 const envDlgVis = ref(false)
@@ -350,9 +467,14 @@ function onRepoPicked() {
 }
 
 function projectOf(e) {
-  const suffix = '-' + e.env_type
-  return e.name.endsWith(suffix) ? e.name.slice(0, -suffix.length) : e.name
+  // VM env_type 是 UAT/LPT/PROD（大写），K8s 是 uat/prod（小写）；统一小写比对
+  const t = (e?.env_type || '').toLowerCase()
+  if (!t) return e?.name || ''
+  const lower = (e.name || '').toLowerCase()
+  const sfx = '-' + t
+  return lower.endsWith(sfx) ? e.name.slice(0, -sfx.length) : e.name
 }
+function envTypeKey(e) { return (e?.env_type || '').toLowerCase() }
 function fromNow(s) {
   if (!s) return ''
   const d = dayjs(s)
@@ -367,6 +489,11 @@ function fromNow(s) {
 function statusLabel(s) {
   return { success: '成功', partial: '部分', failed: '失败', pending: '进行中', no_change: '无变化' }[s] || s
 }
+function agentName(id) {
+  if (!id) return '—'
+  const a = deployAgents.value.find(x => x.id === id)
+  return a ? a.name : `#${id}`
+}
 
 // 把 projects + envs 合并成树数据
 const projectTree = computed(() => {
@@ -377,12 +504,17 @@ const projectTree = computed(() => {
     envByProj[p].push(e)
   })
   return projects.value.map(p => {
-    const envList = (envByProj[p.name] || []).sort((a, b) => (a.env_type === 'uat' ? -1 : 1))
-    const totalMods = envList.reduce((a, e) => a + (envStats.value[e.id]?.moduleCount || 0), 0)
-    const lastDeploys = envList.map(e => envStats.value[e.id]?.lastDeployAt)
+    // 按 project.target_type 过滤：K8s 项目只显 K8s env，VM 项目只显 VM env
+    const t = p.target_type || 'k8s'
+    const envList = (envByProj[p.name] || [])
+      .filter(e => e._kind === t)
+      .sort((a, b) => (envTypeKey(a) === 'uat' ? -1 : 1))
+    const totalMods = envList.reduce((a, e) => a + (envStats.value[statKey(e)]?.moduleCount || 0), 0)
+    const lastDeploys = envList.map(e => envStats.value[statKey(e)]?.lastDeployAt)
       .filter(Boolean).sort((a, b) => dayjs(b).valueOf() - dayjs(a).valueOf())
     return {
       ...p,
+      target_type: t,
       envs: envList,
       totalModules: totalMods,
       lastDeployAt: lastDeploys[0] || null
@@ -407,9 +539,9 @@ const filteredProjects = computed(() => {
     )
 })
 
-const uatCount = computed(() => envs.value.filter(e => e.env_type === 'uat').length)
-const prodCount = computed(() => envs.value.filter(e => e.env_type === 'prod').length)
-const uatSyncedCount = computed(() => envs.value.filter(e => e.env_type === 'uat' && e.auto_sync).length)
+const uatCount = computed(() => envs.value.filter(e => envTypeKey(e) === 'uat').length)
+const prodCount = computed(() => envs.value.filter(e => envTypeKey(e) === 'prod').length)
+const uatSyncedCount = computed(() => envs.value.filter(e => envTypeKey(e) === 'uat' && e.auto_sync).length)
 const totalModules = computed(() => Object.values(envStats.value).reduce((a, s) => a + (s?.moduleCount || 0), 0))
 const recent24hCount = computed(() => {
   const cutoff = dayjs().subtract(24, 'hour')
@@ -426,36 +558,57 @@ function toggle(pn) { opened[pn] = !opened[pn] }
 async function load() {
   loading.value = true
   try {
-    const [ps, es, ai, lb, gr] = await Promise.all([listProjects(), listProjectEnvs(), listArgocdInstances(), listLarkBots(), listGitlabRepos()])
+    const [ps, es, vms, ai, lb, gr, ags] = await Promise.all([
+      listProjects(),
+      listProjectEnvs(),
+      listVmProjectEnvs().catch(() => []),
+      listArgocdInstances(),
+      listLarkBots(),
+      listGitlabRepos(),
+      listDeployAgents().catch(() => []),
+    ])
     projects.value = ps || []
-    envs.value = es || []
+    // 合并：K8s + VM env，每条打 _kind
+    const k8sEnvs = (es || []).map(e => ({ ...e, _kind: 'k8s' }))
+    const vmEnvs  = (vms || []).map(e => ({ ...e, _kind: 'vm' }))
+    envs.value = [...k8sEnvs, ...vmEnvs]
     argoInstances.value = ai || []
     larkBots.value = lb || []
     gitlabRepos.value = gr || []
+    deployAgents.value = ags || []
     projects.value.forEach(p => { if (opened[p.name] === undefined) opened[p.name] = true })
 
-    // 加载每个 env 的 stats
+    // 加载每个 env 的 stats（K8s 用 modules/deployments；VM 用 services 数）
     const results = await Promise.all(envs.value.map(async (e) => {
       try {
-        const [mods, deps] = await Promise.all([
-          listModules(e.id).catch(() => []),
-          listDeployments({ project_env_id: e.id, page_size: 1 }).catch(() => ({ list: [] }))
-        ])
-        const last = deps.list?.[0]
-        return { id: e.id, moduleCount: (mods || []).length, lastDeployAt: last?.created_at || null, lastStatus: last?.status || null }
-      } catch { return { id: e.id, moduleCount: 0, lastDeployAt: null, lastStatus: null } }
+        if (e._kind === 'k8s') {
+          const [mods, deps] = await Promise.all([
+            listModules(e.id).catch(() => []),
+            listDeployments({ project_env_id: e.id, page_size: 1 }).catch(() => ({ list: [] }))
+          ])
+          const last = deps.list?.[0]
+          return { key: 'k8s-' + e.id, moduleCount: (mods || []).length, lastDeployAt: last?.created_at || null, lastStatus: last?.status || null }
+        } else {
+          const svcs = await listVmServices(e.id).catch(() => [])
+          return { key: 'vm-' + e.id, moduleCount: (svcs || []).length, lastDeployAt: null, lastStatus: null }
+        }
+      } catch {
+        return { key: e._kind + '-' + e.id, moduleCount: 0, lastDeployAt: null, lastStatus: null }
+      }
     }))
     const map = {}
-    results.forEach(s => { map[s.id] = s })
+    results.forEach(s => { map[s.key] = s })
     envStats.value = map
   } finally { loading.value = false }
 }
+
+function statKey(e) { return e._kind + '-' + e.id }
 
 // ==== 项目弹窗 ====
 function openCreateProject() {
   projDlgIsEdit.value = false
   projEditingID.value = null
-  Object.assign(projForm, blankProj())
+  Object.assign(projForm, blankProj())  // target_type 默认 'k8s'
   projEnvCount.value = 0
   projDlgVis.value = true
 }
@@ -463,7 +616,7 @@ function openEditProject(p) {
   if (!p.in_db) { ElMessage.warning('该项目是从环境派生的，请先转正（添加一个环境）或直接管理环境'); return }
   projDlgIsEdit.value = true
   projEditingID.value = p.id
-  Object.assign(projForm, { name: p.name, display_name: p.display_name || '', description: p.description || '' })
+  Object.assign(projForm, { name: p.name, display_name: p.display_name || '', description: p.description || '', target_type: p.target_type || 'k8s' })
   projEnvCount.value = p.env_count
   projDlgVis.value = true
 }
@@ -474,10 +627,16 @@ async function onSaveProject() {
   saving.value = true
   try {
     if (projDlgIsEdit.value) {
+      // 不传 target_type（建项目后不允许修改，避免误踩）
       await updateProject(projEditingID.value, { display_name: projForm.display_name, description: projForm.description })
       ElMessage.success('已保存')
     } else {
-      await createProject({ name: projForm.name, display_name: projForm.display_name, description: projForm.description })
+      await createProject({
+        name: projForm.name,
+        display_name: projForm.display_name,
+        description: projForm.description,
+        target_type: projForm.target_type || 'k8s',
+      })
       ElMessage.success('已创建')
     }
     projDlgVis.value = false
@@ -497,15 +656,23 @@ async function onDeleteProject() {
 }
 
 // ==== 环境弹窗 ====
-function openCreateEnv(projectName) {
+// 按 project.target_type 路由到 K8s 或 VM 弹窗
+function openCreateEnv(project) {
+  if ((project.target_type || 'k8s') === 'vm') {
+    return openCreateVmEnv(project)
+  }
   envDlgIsEdit.value = false
   envEditingID.value = null
   // 用户只能见 UAT/PROD 之一时，默认选可见的那个；否则保留 blank（uat）
   const defaultType = !auth.hasAnyUatEnv && auth.hasAnyProdEnv ? 'prod' : 'uat'
-  Object.assign(envForm, blankEnv(), { project_name: projectName, env_type: defaultType })
+  Object.assign(envForm, blankEnv(), { project_name: project.name, env_type: defaultType })
   envDlgVis.value = true
 }
 function openEditEnv(e) {
+  // VM env 走另一套表单
+  if (e._kind === 'vm') {
+    return openEditVmEnv(e)
+  }
   envDlgIsEdit.value = true
   envEditingID.value = e.id
   Object.assign(envForm, {
@@ -520,9 +687,78 @@ function openEditEnv(e) {
     lark_bot_id: e.lark_bot_id || null,
     gitlab_repo_id: e.gitlab_repo_id || null,
     // PROD 后端强制 auto_sync=0，UI 也显示为关（避免显示/实际不一致）
-    auto_sync: e.env_type === 'prod' ? 0 : e.auto_sync
+    auto_sync: envTypeKey(e) === 'prod' ? 0 : e.auto_sync
   })
   envDlgVis.value = true
+}
+
+// ==== VM 环境弹窗 ====
+function openCreateVmEnv(project) {
+  vmEnvDlgIsEdit.value = false
+  vmEnvEditingID.value = null
+  Object.assign(vmEnvForm, blankVmEnv(), {
+    project_name: project.name,
+    env_type: 'UAT',
+    project_code: project.name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || '',
+  })
+  // 项目 ID（vm_project_env 需要 project_id）
+  vmEnvForm._project_id = project.id || null
+  vmEnvDlgVis.value = true
+}
+function openEditVmEnv(e) {
+  vmEnvDlgIsEdit.value = true
+  vmEnvEditingID.value = e.id
+  Object.assign(vmEnvForm, {
+    project_name: projectOf(e),
+    display_name: e.display_name || '',
+    env_type: e.env_type,
+    agent_id: e.agent_id || null,
+    ansible_root: e.ansible_root || '/etc/ansible',
+    project_code: e.project_code || '',
+    _project_id: e.project_id || null,
+  })
+  vmEnvDlgVis.value = true
+}
+async function onSaveVmEnv() {
+  if (!vmEnvForm.env_type) { ElMessage.warning('请选择环境类型'); return }
+  if (!vmEnvForm.agent_id) { ElMessage.warning('请选择 Deploy Agent'); return }
+  const payload = {
+    project_id: vmEnvForm._project_id || 0,
+    name: vmEnvForm.project_name + '-' + vmEnvForm.env_type.toLowerCase(),
+    display_name: vmEnvForm.display_name.trim(),
+    env_type: vmEnvForm.env_type,
+    agent_id: vmEnvForm.agent_id,
+    ansible_root: vmEnvForm.ansible_root.trim() || '/etc/ansible',
+    project_code: vmEnvForm.project_code.trim(),
+  }
+  saving.value = true
+  try {
+    if (vmEnvDlgIsEdit.value) {
+      await updateVmProjectEnv(vmEnvEditingID.value, payload)
+      ElMessage.success('已保存')
+    } else {
+      await createVmProjectEnv(payload)
+      ElMessage.success('已创建')
+    }
+    vmEnvDlgVis.value = false
+    await load()
+  } finally { saving.value = false }
+}
+async function onDeleteVmEnv() {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除 ${vmEnvForm.project_name}-${vmEnvForm.env_type}？该操作不可恢复。`,
+      '删除确认', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消', closeOnClickModal: false, closeOnPressEscape: false }
+    )
+  } catch (_) { return }
+  await deleteVmProjectEnv(vmEnvEditingID.value)
+  ElMessage.success('已删除')
+  vmEnvDlgVis.value = false
+  await load()
+}
+function setVmEnvType(t) {
+  if (vmEnvDlgIsEdit.value) return
+  vmEnvForm.env_type = t
 }
 function setEnvType(t) {
   if (envDlgIsEdit.value) return
@@ -657,7 +893,20 @@ onMounted(load)
 
 .env-badge { font-family: var(--mono); font-size: 10.5px; font-weight: 600; padding: 3px 8px; border-radius: 3px; letter-spacing: .5px; text-transform: uppercase; text-align: center; }
 .env-badge.uat { background: var(--success-bg); color: var(--success-dark); }
+.env-badge.lpt { background: #eff6ff; color: #1d4ed8; }
 .env-badge.prod { background: var(--danger-bg); color: var(--danger-dark); }
+
+/* K8S / VM 项目区分徽标 */
+.kind-chip {
+  font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .6px;
+  padding: 2px 7px; border-radius: 3px; margin-left: 2px;
+  border: 1px solid;
+}
+.kind-chip.k8s { background: #f0f7ff; color: #1d4ed8; border-color: #bfdbfe; }
+.kind-chip.vm  { background: #faf5ff; color: #7c3aed; border-color: #ddd6fe; }
+
+/* VM 项目环境行：列宽不同（无 auto-sync/status，多一列 ansible_root） */
+.env-head.vm, .env-row.vm { grid-template-columns: 64px 140px 100px 70px 1fr 36px; }
 
 .env-branch { color: var(--text-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .env-sync { font: 500 11.5px var(--mono); color: var(--text-2); display: flex; align-items: center; gap: 6px; }
@@ -707,7 +956,10 @@ onMounted(load)
 .rb:hover:not(:disabled) { border-color: var(--text-2); }
 .rb:disabled { opacity: .7; cursor: not-allowed; }
 .rb.uat.active { background: var(--success); border-color: var(--success); color: #fff; }
+.rb.lpt.active { background: #2563eb; border-color: #2563eb; color: #fff; }
 .rb.prod.active { background: var(--danger); border-color: var(--danger); color: #fff; }
+.rb.k8s.active { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
+.rb.vm.active { background: #7c3aed; border-color: #7c3aed; color: #fff; }
 
 .preview-name { padding: 8px 12px; background: var(--primary-bg); border-radius: 4px; font-size: 12px; color: var(--text-2); margin-bottom: 0; }
 .preview-name code { background: #fff; padding: 2px 8px; border-radius: 3px; color: var(--primary); font-weight: 600; margin-left: 4px; }

@@ -67,5 +67,6 @@ html, body, #app {
   font-family: var(--mono); text-transform: uppercase; letter-spacing: .5px;
 }
 .env-chip.uat { background: var(--success-bg); color: var(--success-dark); }
+.env-chip.lpt { background: #eff6ff; color: #1d4ed8; }
 .env-chip.prod { background: var(--danger-bg); color: var(--danger-dark); }
 .mono { font-family: var(--mono); }

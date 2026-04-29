@@ -161,6 +161,29 @@ func main() {
 	ma.Handle("/argocd-instances/{id}/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestArgocdInstance))).Methods("POST", "OPTIONS")
 	ma.Handle("/argocd-instances/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestArgocdInstanceByBody))).Methods("POST", "OPTIONS")
 
+	// ⑦ VM 部署 — Deploy Agents + VM 项目环境 + VM 服务发现 + 版本代理 + 部署触发
+	//   读接口 protected 即可；写接口跟 K8s 一样按 button 权限
+	protected.HandleFunc("/deploy-agents", handlers.HandleListDeployAgents).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/vm-project-envs", handlers.HandleListVmProjectEnvs).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/vm-project-envs/{id}", handlers.HandleGetVmProjectEnv).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/vm-project-envs/{id}/services", handlers.HandleListVmServices).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/vm-services/{id}/versions", handlers.HandleListVmServiceVersions).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/deploy/vm-run", handlers.HandleVmDeploy).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/deployments/{id}/vm-logs", handlers.HandleVmDeployLogs).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/deployments/{id}/vm-cancel", handlers.HandleVmDeployCancel).Methods("POST", "OPTIONS")
+
+	// VM 写接口（仅 manage_argocd 权限放行；后续如需独立 manage_vm 权限再分）
+	ma.HandleFunc("/deploy-agents", handlers.HandleCreateDeployAgent).Methods("POST", "OPTIONS")
+	ma.HandleFunc("/deploy-agents/{id}", handlers.HandleUpdateDeployAgent).Methods("PUT", "OPTIONS")
+	ma.HandleFunc("/deploy-agents/{id}", handlers.HandleDeleteDeployAgent).Methods("DELETE", "OPTIONS")
+	ma.Handle("/deploy-agents/test", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestDeployAgent))).Methods("POST", "OPTIONS")
+
+	mp.HandleFunc("/vm-project-envs", handlers.HandleCreateVmProjectEnv).Methods("POST", "OPTIONS")
+	mp.HandleFunc("/vm-project-envs/{id}", handlers.HandleUpdateVmProjectEnv).Methods("PUT", "OPTIONS")
+	mp.HandleFunc("/vm-project-envs/{id}", handlers.HandleDeleteVmProjectEnv).Methods("DELETE", "OPTIONS")
+
+	sc.Handle("/vm-project-envs/{id}/scan-services", handlers.ScanRateLimit(http.HandlerFunc(handlers.HandleScanVmServices))).Methods("POST", "OPTIONS")
+
 	// ========== 仍然严格 admin-only：平台用户管理、审计日志 ==========
 	// 这两个不属于发布中心按钮语义，保留 admin-only
 	admin := protected.PathPrefix("").Subrouter()

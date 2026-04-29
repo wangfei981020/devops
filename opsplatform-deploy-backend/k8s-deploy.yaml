@@ -30,7 +30,7 @@ spec:
       terminationGracePeriodSeconds: 600
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/opsplatform-deploy-backend:v97
+          image: localhost:8070/opsplatform/opsplatform-deploy-backend:v98
           imagePullPolicy: Always
           ports:
             - { name: http,    containerPort: 8080 }

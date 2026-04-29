@@ -17,6 +17,7 @@ type projectView struct {
 	Name        string    `json:"name"`
 	DisplayName string    `json:"display_name"`
 	Description string    `json:"description,omitempty"`
+	TargetType  string    `json:"target_type"` // 'k8s' | 'vm'
 	EnvCount    int       `json:"env_count"`
 	InDB        bool      `json:"in_db"` // 是否在 project 表里
 	CreatedAt   time.Time `json:"created_at,omitempty"`
@@ -70,7 +71,7 @@ func HandleListProjects(w http.ResponseWriter, r *http.Request) {
 	//    这样实现：
 	//    - admin（不过滤）：所有 project 表行都加进来（即使 env_count=0 也能看到「空项目」）
 	//    - 非 admin：只看到他有 env 权限的项目，project 表的额外信息只是补 display_name/description
-	projRows, err := database.DB.Query(`SELECT id, name, display_name, description, created_at FROM project ORDER BY name`)
+	projRows, err := database.DB.Query(`SELECT id, name, display_name, description, target_type, created_at FROM project ORDER BY name`)
 	if err != nil {
 		InternalErr(w, r, err)
 		return
@@ -78,23 +79,34 @@ func HandleListProjects(w http.ResponseWriter, r *http.Request) {
 	defer projRows.Close()
 	for projRows.Next() {
 		var id int64
-		var name, displayName, description string
+		var name, displayName, description, targetType string
 		var createdAt time.Time
-		_ = projRows.Scan(&id, &name, &displayName, &description, &createdAt)
+		_ = projRows.Scan(&id, &name, &displayName, &description, &targetType, &createdAt)
+		if targetType == "" {
+			targetType = "k8s"
+		}
 		if p, ok := byName[name]; ok {
 			// 已在派生集合里：补 metadata
 			p.ID = id
 			p.DisplayName = displayName
 			p.Description = description
+			p.TargetType = targetType
 			p.CreatedAt = createdAt
 			p.InDB = true
 		} else if !enforce {
 			// 不过滤（admin）：把 project 表里的「空项目」也加进来
-			np := &projectView{ID: id, Name: name, DisplayName: displayName, Description: description, CreatedAt: createdAt, InDB: true}
+			np := &projectView{ID: id, Name: name, DisplayName: displayName, Description: description, TargetType: targetType, CreatedAt: createdAt, InDB: true}
 			byName[name] = np
 			list = append(list, np)
 		}
 		// 非 admin 且这个 project 不在用户允许 env 派生集里 → 跳过（这就是新加的过滤）
+	}
+
+	// 派生项目（仅在 project_env 里有但 project 表没注册的）默认 k8s
+	for _, p := range list {
+		if p.TargetType == "" {
+			p.TargetType = "k8s"
+		}
 	}
 
 	// 按 name 排序
@@ -112,6 +124,7 @@ type createProjectReq struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
 	Description string `json:"description"`
+	TargetType  string `json:"target_type"` // 'k8s' | 'vm'，留空默认 k8s
 }
 
 // POST /api/projects
@@ -125,8 +138,15 @@ func HandleCreateProject(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40001, "name: "+err.Error())
 		return
 	}
-	res, err := database.DB.Exec(`INSERT INTO project (name, display_name, description) VALUES (?, ?, ?)`,
-		req.Name, strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Description))
+	if req.TargetType == "" {
+		req.TargetType = "k8s"
+	}
+	if req.TargetType != "k8s" && req.TargetType != "vm" {
+		JSONError(w, 40001, "target_type 必须是 k8s / vm")
+		return
+	}
+	res, err := database.DB.Exec(`INSERT INTO project (name, display_name, description, target_type) VALUES (?, ?, ?, ?)`,
+		req.Name, strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Description), req.TargetType)
 	if err != nil {
 		if strings.Contains(err.Error(), "Duplicate") {
 			JSONError(w, 40900, "项目名已存在")
@@ -136,25 +156,37 @@ func HandleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
-	Audit(r, "project.create", "project", req.Name, nil)
+	Audit(r, "project.create", "project", req.Name, auditDetailFromReq(req))
 	JSONSuccess(w, map[string]interface{}{"id": id, "name": req.Name})
 }
 
 type updateProjectReq struct {
 	DisplayName string `json:"display_name"`
 	Description string `json:"description"`
+	TargetType  string `json:"target_type,omitempty"` // 留空不动；可改 k8s↔vm（但不建议，已有数据可能不兼容）
 }
 
 // PUT /api/projects/{id}
-// 只能改 display_name 和 description。name 不可改（改 name 意味着批量 rename 所有 envs，不支持）
+// 只能改 display_name / description / target_type。name 不可改
 func HandleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
 	var req updateProjectReq
 	if !DecodeJSON(w, r, &req) {
 		return
 	}
-	_, err := database.DB.Exec(`UPDATE project SET display_name=?, description=? WHERE id=?`,
-		strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Description), id)
+	sets := []string{"display_name=?", "description=?"}
+	args := []interface{}{strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Description)}
+	if req.TargetType != "" {
+		if req.TargetType != "k8s" && req.TargetType != "vm" {
+			JSONError(w, 40001, "target_type 必须是 k8s / vm")
+			return
+		}
+		sets = append(sets, "target_type=?")
+		args = append(args, req.TargetType)
+	}
+	args = append(args, id)
+	q := "UPDATE project SET " + strings.Join(sets, ",") + " WHERE id=?"
+	_, err := database.DB.Exec(q, args...)
 	if err != nil {
 		InternalErr(w, r, err)
 		return

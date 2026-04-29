@@ -31,6 +31,9 @@ type GlobalConfig struct {
 	HarborUser           string `json:"harbor_user"`             // 通常是 robot$xxx 账号
 	HarborToken          string `json:"harbor_token,omitempty"`  // 返回时脱敏
 	HarborVerifyOnSubmit bool   `json:"harbor_verify_on_submit"` // true = 提交前校验 tag 是否在 Harbor
+	// VM 部署：list-version API（拉版本号）
+	ListVersionAPI   string `json:"list_version_api"`
+	ListVersionToken string `json:"list_version_token,omitempty"` // 返回时脱敏
 }
 
 type ProjectEnv struct {
@@ -96,6 +99,49 @@ type LarkBot struct {
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// DeployAgent VM agent 元数据（部署在 ansible 控制机上的 deploy-vm-agent）
+//
+//	跟 ArgocdInstance 同构：name + url + token + description
+//	deploy-center 通过 url + token 调 agent 的 HTTP API 触发 ansible 任务
+type DeployAgent struct {
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	URL         string    `json:"url"`             // https://ansible-host:8443
+	Token       string    `json:"token,omitempty"` // 返回时脱敏
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// VmProjectEnv VM 项目环境（独立于 K8s 的 project_env）
+//
+//	跟 ProjectEnv 业务概念对齐，但字段差异大（ansible vs argocd）
+type VmProjectEnv struct {
+	ID           int64     `json:"id"`
+	ProjectID    int64     `json:"project_id"`
+	Name         string    `json:"name"`
+	DisplayName  string    `json:"display_name"`
+	EnvType      string    `json:"env_type"` // LPT / UAT / PROD
+	AgentID      int64     `json:"agent_id"`
+	AnsibleRoot  string    `json:"ansible_root"`  // 默认 /etc/ansible
+	ProjectCode  string    `json:"project_code"`  // G01 / G02
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// VmService VM 服务（= ansible playbook 文件）
+type VmService struct {
+	ID              int64      `json:"id"`
+	VmProjectEnvID  int64      `json:"vm_project_env_id"`
+	Name            string     `json:"name"`              // playbook 文件名（去 .yaml）
+	AnsibleGroup    string     `json:"ansible_group"`     // playbook 第一行 hosts: 值
+	Hosts           []string   `json:"hosts"`             // 从 inventory 解析的 IP 列表
+	CurrentVersion  string     `json:"current_version"`   // 上次 update_version 成功后写入
+	LastScannedAt   *time.Time `json:"last_scanned_at"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // ArgocdInstance ArgoCD 实例

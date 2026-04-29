@@ -16,20 +16,32 @@
           <span class="proj">{{ projectOf(currentEnv) }}</span>
           <span class="slash">/</span>
           <span>{{ currentEnv.env_type.toUpperCase() }}</span>
-          <span :class="'env-chip ' + currentEnv.env_type">● {{ currentEnv.env_type.toUpperCase() }}</span>
+          <span :class="'env-chip ' + envTypeKey(currentEnv)">● {{ currentEnv.env_type.toUpperCase() }}</span>
+          <span :class="'kind-chip ' + currentEnv._kind">{{ currentEnv._kind === 'vm' ? 'VM' : 'K8S' }}</span>
         </h1>
-        <p>
+        <p v-if="currentEnv._kind === 'k8s'">
           <b>{{ modules.length }}</b> modules ·
           auto-sync <b :style="{color: currentEnv.auto_sync ? 'var(--success)' : 'var(--text-3)'}">{{ currentEnv.auto_sync ? 'ON' : 'OFF' }}</b>
         </p>
+        <p v-else>
+          VM 部署 · 项目代码 <b>{{ currentEnv.project_code || '—' }}</b> ·
+          ansible_root <b>{{ currentEnv.ansible_root || '/etc/ansible' }}</b>
+        </p>
       </div>
       <div class="hdr-r">
-        <div class="stat"><div class="k">Modules</div><div class="v">{{ modules.length }}</div></div>
-        <button v-if="auth.isAdmin || auth.hasButton('scan_modules')" class="btn-rescan" :disabled="rescanning" @click="onRescan"
-                title="从 Git 仓库重新同步模块列表，写入 module 表">
-          <el-icon :class="{ spin: rescanning }"><RefreshRight /></el-icon>
-          <span>{{ rescanning ? '同步中...' : '同步模块' }}</span>
-        </button>
+        <!-- K8s: modules count + 同步模块按钮 -->
+        <template v-if="currentEnv._kind === 'k8s'">
+          <div class="stat"><div class="k">Modules</div><div class="v">{{ modules.length }}</div></div>
+          <button v-if="auth.isAdmin || auth.hasButton('scan_modules')" class="btn-rescan" :disabled="rescanning" @click="onRescan"
+                  title="从 Git 仓库重新同步模块列表，写入 module 表">
+            <el-icon :class="{ spin: rescanning }"><RefreshRight /></el-icon>
+            <span>{{ rescanning ? '同步中...' : '同步模块' }}</span>
+          </button>
+        </template>
+        <!-- VM: 服务同步按钮在 VmDeployPanel 内部，这里只显示 agent 信息 -->
+        <template v-else>
+          <div class="stat"><div class="k">Agent</div><div class="v">#{{ currentEnv.agent_id }}</div></div>
+        </template>
       </div>
     </div>
     <div v-else class="hdr-card empty">
@@ -58,45 +70,54 @@
             popper-class="env-select-popper"
             @visible-change="v => { if (!v) searchQuery = '' }">
             <el-option-group v-if="!searchQuery && filteredRecent.length" label="⭐ 最近使用">
-              <el-option v-for="e in filteredRecent" :key="'r-'+e.id" :value="e.id" :label="e.name">
+              <el-option v-for="e in filteredRecent" :key="'r-'+e._selID" :value="e._selID" :label="e.name">
                 <div class="opt-row">
-                  <span :class="['opt-dot', e.env_type]"></span>
-                  <span :class="['opt-name', { prod: e.env_type === 'prod' }]">{{ e.name }}</span>
-                  <span :class="'env-chip-mini ' + e.env_type">{{ e.env_type.toUpperCase() }}</span>
+                  <span :class="['opt-dot', envTypeKey(e)]"></span>
+                  <span :class="['opt-name', { prod: envTypeKey(e) === 'prod' }]">{{ e.name }}</span>
+                  <span :class="'kind-mini ' + e._kind">{{ e._kind === 'vm' ? 'VM' : 'K8S' }}</span>
+                  <span :class="'env-chip-mini ' + envTypeKey(e)">{{ e.env_type.toUpperCase() }}</span>
                 </div>
               </el-option>
             </el-option-group>
             <el-option-group v-for="grp in envGroups" :key="grp.project" :label="grp.project">
-              <template v-for="e in grp.items" :key="e.id">
-                <el-option v-if="matchSearch(e)" :value="e.id" :label="e.name">
+              <template v-for="e in grp.items" :key="e._selID">
+                <el-option v-if="matchSearch(e)" :value="e._selID" :label="e.name">
                   <div class="opt-row">
-                    <span :class="['opt-dot', e.env_type]"></span>
-                    <span :class="['opt-name', { prod: e.env_type === 'prod' }]">{{ e.name }}</span>
-                    <span :class="'env-chip-mini ' + e.env_type">{{ e.env_type.toUpperCase() }}</span>
+                    <span :class="['opt-dot', envTypeKey(e)]"></span>
+                    <span :class="['opt-name', { prod: envTypeKey(e) === 'prod' }]">{{ e.name }}</span>
+                    <span :class="'kind-mini ' + e._kind">{{ e._kind === 'vm' ? 'VM' : 'K8S' }}</span>
+                    <span :class="'env-chip-mini ' + envTypeKey(e)">{{ e.env_type.toUpperCase() }}</span>
                   </div>
                 </el-option>
               </template>
             </el-option-group>
           </el-select>
-          <span v-if="currentEnv" :class="'env-chip-inline ' + currentEnv.env_type">
+          <span v-if="currentEnv" :class="'env-chip-inline ' + envTypeKey(currentEnv)">
             {{ currentEnv.env_type.toUpperCase() }}
           </span>
 
-          <span class="sel-divider"></span>
-
-          <span class="sel-k">动作</span>
-          <div class="seg" role="tablist">
-            <button :class="['seg-btn', { active: tab === 'update' }]"
-                    :disabled="!currentEnv" @click="tab = 'update'">
-              <el-icon><Upload /></el-icon>
-              <span>批量更新镜像</span>
-            </button>
-            <button :class="['seg-btn', { active: tab === 'restart' }]"
-                    :disabled="!currentEnv" @click="tab = 'restart'">
-              <el-icon><RefreshRight /></el-icon>
-              <span>批量重启服务</span>
-            </button>
-          </div>
+          <!-- 动作 tab 仅 K8s 显示（VM 的 rsync/update_version 在 VmDeployPanel 内部） -->
+          <template v-if="currentEnv && currentEnv._kind === 'k8s'">
+            <span class="sel-divider"></span>
+            <span class="sel-k">动作</span>
+            <div class="seg" role="tablist">
+              <button :class="['seg-btn', { active: tab === 'update' }]"
+                      @click="tab = 'update'">
+                <el-icon><Upload /></el-icon>
+                <span>批量更新镜像</span>
+              </button>
+              <button :class="['seg-btn', { active: tab === 'restart' }]"
+                      @click="tab = 'restart'">
+                <el-icon><RefreshRight /></el-icon>
+                <span>批量重启服务</span>
+              </button>
+            </div>
+          </template>
+          <template v-if="currentEnv && currentEnv._kind === 'vm'">
+            <span class="sel-divider"></span>
+            <span class="sel-k">动作</span>
+            <span class="vm-action-hint">VM 部署面板内可执行 <b>rsync</b> / <b>update_version</b></span>
+          </template>
         </div>
       </div>
     </div>
@@ -113,12 +134,17 @@
 
     <!-- ===== Workspace ===== -->
     <div class="panel" v-if="currentEnv">
-      <BatchUpdatePanel v-if="tab === 'update'"
-        :project-env="currentEnv" :modules="modules"
-        :rollback-mode="rollbackMode"
-        @done="handleDeployDone" @rollback-consumed="cancelRollback" />
-      <RestartPanel v-else
-        :project-env="currentEnv" :modules="modules" @done="handleRestartDone" />
+      <!-- K8s: 批量更新镜像 / 批量重启服务 -->
+      <template v-if="currentEnv._kind === 'k8s'">
+        <BatchUpdatePanel v-if="tab === 'update'"
+          :project-env="currentEnv" :modules="modules"
+          :rollback-mode="rollbackMode"
+          @done="handleDeployDone" @rollback-consumed="cancelRollback" />
+        <RestartPanel v-else
+          :project-env="currentEnv" :modules="modules" @done="handleRestartDone" />
+      </template>
+      <!-- VM: ansible playbook 部署 -->
+      <VmDeployPanel v-else :vm-project-env="currentEnv" />
     </div>
 
     <RollbackDialog v-model="rbVis" :deployment-id="rbID" @done="onRollbackDone" />
@@ -131,10 +157,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Aim, Upload, RefreshRight, RefreshLeft } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
-import { listProjectEnvs, listModules, scanModules, getRollbackPreview } from '../api'
+import { listProjectEnvs, listVmProjectEnvs, listModules, scanModules, getRollbackPreview } from '../api'
 import BatchUpdatePanel from '../components/BatchUpdatePanel.vue'
 import RestartPanel from '../components/RestartPanel.vue'
 import RollbackDialog from '../components/RollbackDialog.vue'
+import VmDeployPanel from '../components/VmDeployPanel.vue'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -153,14 +180,18 @@ function cancelRollback() {
   }
 }
 
-const RECENT_KEY = 'deploy_recent_envs'
+// v2 是因为 selID 从纯 number 变成 'k8s-1'/'vm-2' 字符串，老 key 数据自动失效
+const RECENT_KEY = 'deploy_recent_envs_v2'
 const RECENT_MAX = 3
 
+// envs 同时包含 K8s 和 VM 两种环境，每条加 _kind ('k8s'|'vm') 和 _selID ('k8s-1'/'vm-2')
 const envs = ref([])
-const selectedID = ref(null)
-const modules = ref([])
+const selectedID = ref(null)  // _selID 字符串
+const modules = ref([])       // 仅 K8s 用
 const tab = ref('update')
-const currentEnv = computed(() => envs.value.find(e => e.id === selectedID.value))
+const currentEnv = computed(() => envs.value.find(e => e._selID === selectedID.value))
+// 小工具：env_type 归一化到小写，给 chip CSS class 用（K8s 是 uat/prod，VM 是 UAT/LPT/PROD）
+function envTypeKey(e) { return (e?.env_type || '').toLowerCase() }
 const recent = ref(null)
 const rbVis = ref(false)
 const rbID = ref(null)
@@ -172,10 +203,11 @@ function filterEnv(q) { searchQuery.value = (q || '').toLowerCase().trim() }
 
 const rescanning = ref(false)
 async function onRescan() {
-  if (!selectedID.value || rescanning.value) return
+  // 仅 K8s env 有 scanModules（VM 用 VmDeployPanel 内的"同步服务列表"按钮）
+  if (!currentEnv.value || currentEnv.value._kind !== 'k8s' || rescanning.value) return
   rescanning.value = true
   try {
-    const r = await scanModules(selectedID.value)
+    const r = await scanModules(currentEnv.value.id)
     await loadModules()
     const n = r?.count ?? modules.value.length
     ElMessage.success(`已扫描：${n} 个模块`)
@@ -213,27 +245,41 @@ const envGroups = computed(() => {
   return groups
 })
 
-// 最近使用：localStorage 保存最近 3 个 env name；watch selectedID 维护
-const recentNames = ref(JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'))
+// 最近使用：localStorage 保存最近 3 个 _selID（'k8s-1'/'vm-2'）；watch selectedID 维护
+const recentSelIDs = ref(JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'))
 const filteredRecent = computed(() => {
-  return recentNames.value
-    .map(n => envs.value.find(e => e.name === n))
+  return recentSelIDs.value
+    .map(s => envs.value.find(e => e._selID === s))
     .filter(Boolean)
     .slice(0, RECENT_MAX)
 })
 
-watch(selectedID, (id) => {
-  const env = envs.value.find(e => e.id === id)
+watch(selectedID, (selID) => {
+  const env = envs.value.find(e => e._selID === selID)
   if (!env) return
-  const list = recentNames.value.filter(n => n !== env.name)
-  list.unshift(env.name)
-  recentNames.value = list.slice(0, RECENT_MAX)
-  localStorage.setItem(RECENT_KEY, JSON.stringify(recentNames.value))
-  loadModules()
+  const list = recentSelIDs.value.filter(s => s !== selID)
+  list.unshift(selID)
+  recentSelIDs.value = list.slice(0, RECENT_MAX)
+  localStorage.setItem(RECENT_KEY, JSON.stringify(recentSelIDs.value))
+  // VM env 没有 K8s modules，清空老的避免误显示
+  if (env._kind === 'k8s') {
+    loadModules()
+  } else {
+    modules.value = []
+    tab.value = 'update' // 切回 K8s 时默认 update tab
+  }
 })
 
 async function loadEnvs() {
-  envs.value = (await listProjectEnvs()) || []
+  // 同时拉 K8s 和 VM 两种环境，统一打 _kind / _selID 标记
+  const [k8s, vm] = await Promise.all([
+    listProjectEnvs().catch(() => []),
+    listVmProjectEnvs().catch(() => []),
+  ])
+  const k8sEnvs = (k8s || []).map(e => ({ ...e, _kind: 'k8s', _selID: `k8s-${e.id}` }))
+  const vmEnvs  = (vm  || []).map(e => ({ ...e, _kind: 'vm',  _selID: `vm-${e.id}`  }))
+  envs.value = [...k8sEnvs, ...vmEnvs]
+
   // 如果 URL 带 rollback_from，优先按回滚预览选中对应 env；否则按"最近使用"
   const rbFrom = route.query.rollback_from ? Number(route.query.rollback_from) : null
   if (rbFrom) {
@@ -241,15 +287,16 @@ async function loadEnvs() {
     return
   }
   if (envs.value.length && !selectedID.value) {
-    const last = recentNames.value.find(n => envs.value.some(e => e.name === n))
+    const last = recentSelIDs.value.find(s => envs.value.some(e => e._selID === s))
     const target = last
-      ? envs.value.find(e => e.name === last)
+      ? envs.value.find(e => e._selID === last)
       : envs.value[0]
-    selectedID.value = target.id
+    selectedID.value = target._selID
   }
 }
 
 // 加载回滚预览 → 自动选中项目环境 → 拼 textarea 预填串 → 切到 update tab
+// 注意：回滚仅 K8s（VM 没回滚概念，部署是 update_version）
 async function enterRollbackMode(depID) {
   try {
     const preview = await getRollbackPreview(depID)
@@ -257,14 +304,14 @@ async function enterRollbackMode(depID) {
       ElMessage.warning('该发布记录没有可回滚的模块')
       return
     }
-    // 选中对应 env
+    // 选中对应 K8s env
     const peID = preview.project_env_id
-    const targetEnv = envs.value.find(e => e.id === peID)
+    const targetEnv = envs.value.find(e => e._kind === 'k8s' && e.id === peID)
     if (!targetEnv) {
       ElMessage.error('找不到对应的项目环境，可能已被删除')
       return
     }
-    selectedID.value = peID
+    selectedID.value = targetEnv._selID
     // 只取 can_rollback=true（当前 tag 还是上次发布的 to_tag，回到 from_tag 才有意义）
     const lines = preview.modules
       .filter(m => m.can_rollback)
@@ -283,8 +330,8 @@ async function enterRollbackMode(depID) {
   }
 }
 async function loadModules() {
-  if (!selectedID.value) return
-  modules.value = (await listModules(selectedID.value)) || []
+  if (!currentEnv.value || currentEnv.value._kind !== 'k8s') return
+  modules.value = (await listModules(currentEnv.value.id)) || []
 }
 
 function handleDeployDone(depID) {
@@ -399,7 +446,23 @@ onMounted(loadEnvs)
   padding: 3px 8px; border-radius: 4px;
 }
 .env-chip-inline.uat { background: #ecfdf5; color: #059669; }
+.env-chip-inline.lpt { background: #eff6ff; color: #1d4ed8; }
 .env-chip-inline.prod { background: #fef2f2; color: #dc2626; }
+
+/* K8S / VM 区分徽标（header h1 内） */
+.kind-chip {
+  font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .6px;
+  padding: 2px 7px; border-radius: 3px; margin-left: 4px;
+  border: 1px solid;
+}
+.kind-chip.k8s { background: #f0f7ff; color: #1d4ed8; border-color: #bfdbfe; }
+.kind-chip.vm  { background: #faf5ff; color: #7c3aed; border-color: #ddd6fe; }
+
+/* VM 动作占位提示 */
+.vm-action-hint {
+  font: 500 12px var(--body); color: var(--text-3);
+}
+.vm-action-hint b { font-family: var(--mono); color: var(--text-2); font-weight: 600; }
 
 /* 回滚模式横幅 */
 .rb-banner {
@@ -431,6 +494,7 @@ onMounted(loadEnvs)
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 }
 .env-select-popper .opt-dot.uat { background: #10b981; }
+.env-select-popper .opt-dot.lpt { background: #2563eb; }
 .env-select-popper .opt-dot.prod {
   background: #ef4444;
   box-shadow: 0 0 0 3px rgba(239, 68, 68, .15);
@@ -444,5 +508,13 @@ onMounted(loadEnvs)
   padding: 1px 6px; border-radius: 3px; flex-shrink: 0;
 }
 .env-select-popper .env-chip-mini.uat { background: #ecfdf5; color: #059669; }
+.env-select-popper .env-chip-mini.lpt { background: #eff6ff; color: #1d4ed8; }
 .env-select-popper .env-chip-mini.prod { background: #fef2f2; color: #dc2626; }
+.env-select-popper .kind-mini {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .5px;
+  padding: 1px 5px; border-radius: 3px; flex-shrink: 0;
+  border: 1px solid;
+}
+.env-select-popper .kind-mini.k8s { background: #f0f7ff; color: #1d4ed8; border-color: #bfdbfe; }
+.env-select-popper .kind-mini.vm  { background: #faf5ff; color: #7c3aed; border-color: #ddd6fe; }
 </style>

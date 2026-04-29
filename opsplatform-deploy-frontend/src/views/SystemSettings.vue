@@ -113,6 +113,17 @@
                   <el-icon class="ov-arrow"><ArrowRight /></el-icon>
                 </div>
               </div>
+              <div class="ov-card" @click="tab='agents'">
+                <div class="ov-icon" style="background:#faf5ff;color:#7c3aed"><el-icon><Monitor /></el-icon></div>
+                <div class="ov-main">
+                  <div class="ov-title">VM Agent · 版本接口</div>
+                  <div class="ov-desc">VM 部署所需的 agent + list-version API（所有项目共用）</div>
+                </div>
+                <div class="ov-right">
+                  <span :class="['ov-badge', ovStatus.agents.kind]">{{ ovStatus.agents.text }}</span>
+                  <el-icon class="ov-arrow"><ArrowRight /></el-icon>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -504,6 +515,78 @@
         </div>
       </div>
 
+      <!-- VM Agent · 版本接口 -->
+      <div v-if="tab === 'agents'" class="section">
+        <div class="sec-head">
+          <div class="sec-title">VM 版本接口（list-version API）</div>
+          <div class="sec-desc">
+            所有 VM 项目共用一个接口拉版本号。token 可空。配 URL 后保存即可。
+          </div>
+        </div>
+        <div class="sec-body" v-loading="loading.cred">
+          <div class="form-row">
+            <div class="form-group full-width">
+              <label>API URL</label>
+              <el-input v-model="gc.list_version_api" class="mono"
+                placeholder="https://list-version.slileisure.com/list-version" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group full-width">
+              <label>Token <span class="hint">已保存的留空表示不修改</span></label>
+              <el-input v-model="gc.list_version_token" type="password" show-password
+                placeholder="保存后此处不再回显" />
+            </div>
+          </div>
+          <div class="actions" v-if="authStore.isAdmin || authStore.hasButton('manage_global')">
+            <el-button type="primary" @click="saveGlobal" :loading="saving.cred">保存</el-button>
+          </div>
+        </div>
+
+        <div class="sec-head" style="margin-top:24px;">
+          <div class="sec-title-row">
+            <div>
+              <div class="sec-title">Deploy Agent（VM ansible 控制机）</div>
+              <div class="sec-desc">
+                VM 项目环境必须绑定一个 agent · agent 跑在 ansible 控制机上 · token 加密存 DB
+              </div>
+            </div>
+            <button v-if="authStore.isAdmin || authStore.hasButton('manage_argocd')" class="add-btn" @click="openAgentCreate">
+              <el-icon><Plus /></el-icon>新增 Agent
+            </button>
+          </div>
+        </div>
+        <div class="sec-body">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th style="width:160px">名称</th>
+                <th>URL</th>
+                <th>描述</th>
+                <th style="width:160px">创建时间</th>
+                <th style="width:200px">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="a in deployAgents" :key="a.id">
+                <td class="mono"><b>{{ a.name }}</b></td>
+                <td class="mono webhook-cell">{{ a.url }}</td>
+                <td>{{ a.description || '—' }}</td>
+                <td class="mono">{{ fmt(a.created_at) }}</td>
+                <td>
+                  <button class="act" @click="onTestAgent(a)">测试</button>
+                  <button v-if="authStore.isAdmin || authStore.hasButton('manage_argocd')" class="act" @click="openAgentEdit(a)">编辑</button>
+                  <button v-if="authStore.isAdmin || authStore.hasButton('manage_argocd')" class="act danger" @click="onDeleteAgent(a)">删除</button>
+                </td>
+              </tr>
+              <tr v-if="!deployAgents.length">
+                <td colspan="5" class="empty-row">还没有 agent，点右上「+ 新增 Agent」添加</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- Harbor 镜像仓库 -->
       <div v-if="tab === 'harbor'" class="section">
         <div class="sec-head">
@@ -594,13 +677,36 @@
         </div>
         <div class="sec-body">
           <div class="info-grid">
-            <div class="info"><div class="l">后端版本</div><div class="v mono">v35</div></div>
-            <div class="info"><div class="l">前端版本</div><div class="v mono">v44</div></div>
+            <div class="info"><div class="l">后端版本</div><div class="v mono">v98</div></div>
+            <div class="info"><div class="l">前端版本</div><div class="v mono">v108</div></div>
             <div class="info"><div class="l">数据库</div><div class="v">MySQL 8.0 · deploy_center</div></div>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- Deploy Agent 弹窗 -->
+    <el-dialog v-model="agentDlg.vis" :title="agentDlg.isEdit ? '编辑 Deploy Agent' : '新增 Deploy Agent'" width="520px" :close-on-click-modal="false" :close-on-press-escape="false">
+      <el-form :model="agentDlg.form" label-width="100px" label-position="top" size="default">
+        <el-form-item label="名称 *">
+          <el-input v-model="agentDlg.form.name" :disabled="agentDlg.isEdit" class="mono" placeholder="如: ansible-uat" />
+        </el-form-item>
+        <el-form-item label="URL *">
+          <el-input v-model="agentDlg.form.url" class="mono" placeholder="https://10.x.x.x:8443" />
+        </el-form-item>
+        <el-form-item :label="agentDlg.isEdit ? 'Token（留空不更新）' : 'Token *'">
+          <el-input v-model="agentDlg.form.token" type="password" show-password placeholder="agent 端配置的 bearer token" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="agentDlg.form.description" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="onTestAgentInDialog" :loading="testing.agentDlg">测试连接</el-button>
+        <el-button @click="agentDlg.vis = false">取消</el-button>
+        <el-button type="primary" @click="onSaveAgent">保存</el-button>
+      </template>
+    </el-dialog>
 
     <!-- ArgoCD 实例弹窗 -->
     <el-dialog v-model="argoDlg.vis" :title="argoDlg.isEdit ? '编辑 ArgoCD 实例' : '新增 ArgoCD 实例'" width="520px" :close-on-click-modal="false" :close-on-press-escape="false">
@@ -797,10 +903,11 @@ import {
   listContacts, createContact, updateContact, deleteContact,
   listLarkBots, createLarkBot, updateLarkBot, deleteLarkBot, testLarkBot,
   listArgocdInstances, createArgocdInstance, updateArgocdInstance, deleteArgocdInstance, testArgocdInstance,
+  listDeployAgents, createDeployAgent, updateDeployAgent, deleteDeployAgent, testDeployAgent,
   listGitlabRepos, createGitlabRepo, updateGitlabRepo, deleteGitlabRepo,
 } from '../api'
 import {
-  Key, User, UserFilled, ChatLineRound, Bell, Folder, Connection, Timer, InfoFilled, ArrowRight, Lock, Box, Delete
+  Key, User, UserFilled, ChatLineRound, Bell, Folder, Connection, Timer, InfoFilled, ArrowRight, Lock, Box, Delete, Monitor
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import AuditLogPanel from '../components/AuditLogPanel.vue'
@@ -822,6 +929,7 @@ const tabs = [
   { v: 'cred', label: '全局凭证' },
   { v: 'gitlabrepos', label: 'GitLab 仓库' },
   { v: 'argocd', label: 'ArgoCD 实例' },
+  { v: 'agents', label: 'VM Agent · 版本接口' },
   { v: 'harbor', label: 'Harbor 镜像仓库' },
   { v: 'larkbots', label: 'Lark 机器人' },
   { v: 'accounts', label: '账号管理' },
@@ -844,15 +952,18 @@ const gc = reactive({
   minio_access_key: '', minio_secret_key: '', minio_retention_days: 90,
   history_retention_days: 180, last_history_cleanup_at: '',
   harbor_url: '', harbor_user: '', harbor_token: '', harbor_verify_on_submit: true,
+  // VM list-version API（拉版本号）：所有 VM 项目共用一个
+  list_version_api: '', list_version_token: '',
 })
 const users = ref([])
 const contacts = ref([])
 const larkBots = ref([])
 const argoInstances = ref([])
 const gitlabRepos = ref([])
+const deployAgents = ref([])
 const loading = reactive({ cred: false })
 const saving = reactive({ cred: false })
-const testing = reactive({ git: false, argoDlg: false, botDlg: false, minio: false, harbor: false })
+const testing = reactive({ git: false, argoDlg: false, botDlg: false, minio: false, harbor: false, agentDlg: false })
 
 function fmt(s) { return s ? dayjs(s).format('YYYY-MM-DD HH:mm') : '' }
 
@@ -867,6 +978,7 @@ async function loadGlobal() {
       lark_default_secret: '',
       minio_secret_key: '',
       harbor_token: '',
+      list_version_token: '',
     })
   } finally { loading.cred = false }
 }
@@ -876,6 +988,7 @@ async function saveGlobal() {
   if (!payload.lark_default_secret) delete payload.lark_default_secret
   if (!payload.minio_secret_key) delete payload.minio_secret_key
   if (!payload.harbor_token) delete payload.harbor_token // 留空 = 不修改原值
+  if (!payload.list_version_token) delete payload.list_version_token
   delete payload.last_history_cleanup_at // 只读字段，不允许更新
   saving.cred = true
   try {
@@ -1272,6 +1385,55 @@ async function onDeleteRepo(g) {
   await loadRepos()
 }
 
+// === Deploy Agent (VM) ===
+const agentDlg = reactive({ vis: false, isEdit: false, editingID: null, form: { name: '', url: '', token: '', description: '' } })
+async function loadAgents() { deployAgents.value = (await listDeployAgents()) || [] }
+function openAgentCreate() {
+  agentDlg.isEdit = false; agentDlg.editingID = null
+  Object.assign(agentDlg.form, { name: '', url: '', token: '', description: '' })
+  agentDlg.vis = true
+}
+function openAgentEdit(a) {
+  agentDlg.isEdit = true; agentDlg.editingID = a.id
+  Object.assign(agentDlg.form, { name: a.name, url: a.url, token: '', description: a.description || '' })
+  agentDlg.vis = true
+}
+async function onSaveAgent() {
+  if (!agentDlg.isEdit && !agentDlg.form.name.trim()) { ElMessage.warning('名称必填'); return }
+  if (!agentDlg.form.url.trim()) { ElMessage.warning('URL 必填'); return }
+  if (!agentDlg.isEdit && !agentDlg.form.token) { ElMessage.warning('Token 必填'); return }
+  const payload = { ...agentDlg.form }
+  if (agentDlg.isEdit && !payload.token) delete payload.token
+  if (agentDlg.isEdit) await updateDeployAgent(agentDlg.editingID, payload)
+  else await createDeployAgent(payload)
+  ElMessage.success('已保存')
+  agentDlg.vis = false
+  await loadAgents()
+}
+async function onDeleteAgent(a) {
+  try { await ElMessageBox.confirm(`确认删除 Agent「${a.name}」？被 VM 项目环境引用时会失败。`, '删除确认', { type: 'warning', closeOnClickModal: false, closeOnPressEscape: false }) }
+  catch { return }
+  await deleteDeployAgent(a.id)
+  ElMessage.success('已删除')
+  await loadAgents()
+}
+async function onTestAgent(a) {
+  try {
+    const r = await testDeployAgent({ id: a.id })
+    ElMessage.success(`Agent OK · v${r.version} · max_concurrent=${r.max_concurrent}`)
+  } catch (_) {}
+}
+async function onTestAgentInDialog() {
+  if (!agentDlg.form.url) { ElMessage.warning('URL 必填'); return }
+  testing.agentDlg = true
+  try {
+    const body = { url: agentDlg.form.url, token: agentDlg.form.token || '' }
+    if (agentDlg.isEdit && agentDlg.editingID) body.id = agentDlg.editingID
+    const r = await testDeployAgent(body)
+    ElMessage.success(`Agent OK · v${r.version}`)
+  } catch (_) {} finally { testing.agentDlg = false }
+}
+
 // === Overview 状态徽章 ===
 const ovStatus = computed(() => ({
   cred: gc.gitlab_url && gc.gitlab_user ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
@@ -1280,6 +1442,9 @@ const ovStatus = computed(() => ({
   larkbots: larkBots.value.length ? { kind: 'count', text: `${larkBots.value.length} 个机器人` } : { kind: 'miss', text: '未配置' },
   gitlabrepos: gitlabRepos.value.length ? { kind: 'count', text: `${gitlabRepos.value.length} 个仓库` } : { kind: 'miss', text: '未配置' },
   argocd: argoInstances.value.length ? { kind: 'count', text: `${argoInstances.value.length} 个实例` } : { kind: 'miss', text: '未配置' },
+  agents: deployAgents.value.length
+    ? { kind: 'count', text: `${deployAgents.value.length} 个 agent${gc.list_version_api ? '' : ' · 缺版本 API'}` }
+    : { kind: 'miss', text: '未配置' },
   poll: gc.poll_interval_sec ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
   minio: gc.minio_endpoint && gc.minio_access_key
     ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
@@ -1305,6 +1470,7 @@ async function loadOverview() {
     loadArgo(),
     loadBots(),
     loadContacts(),
+    loadAgents(),
     authStore.isAdmin ? loadUsers() : Promise.resolve(),
   ])
 }
@@ -1316,6 +1482,7 @@ watch(tab, (t) => {
   else if (t === 'accounts') loadUsers()
   else if (t === 'contacts') loadContacts()
   else if (t === 'larkbots') loadBots()
+  else if (t === 'agents') { loadAgents(); loadGlobal() }
   else if (['cred', 'lark', 'poll'].includes(t)) loadGlobal()
 })
 

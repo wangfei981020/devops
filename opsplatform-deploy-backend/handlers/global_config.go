@@ -25,7 +25,8 @@ func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
 		IFNULL(minio_region,'us-east-1'), IFNULL(minio_retention_days, 90),
 		IFNULL(history_retention_days, 180), last_history_cleanup_at,
 		IFNULL(harbor_url,''), IFNULL(harbor_user,''), IFNULL(harbor_token,''),
-		IFNULL(harbor_verify_on_submit, 1)
+		IFNULL(harbor_verify_on_submit, 1),
+		IFNULL(list_version_api,''), IFNULL(list_version_token,'')
 		FROM global_config WHERE id=1`).
 		Scan(&c.ID, &c.GitlabURL, &c.GitlabUser, &c.GitlabEmail, &c.GitlabToken,
 			&c.TestRepoPath, &c.DeployCenterBaseURL,
@@ -34,7 +35,8 @@ func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
 			&c.MinIOEndpoint, &c.MinIOBucket, &c.MinIOAccessKey, &c.MinIOSecretKey,
 			&c.MinIORegion, &c.MinIORetentionDays,
 			&c.HistoryRetentionDays, &c.LastHistoryCleanupAt,
-			&c.HarborURL, &c.HarborUser, &c.HarborToken, &harborVerify)
+			&c.HarborURL, &c.HarborUser, &c.HarborToken, &harborVerify,
+			&c.ListVersionAPI, &c.ListVersionToken)
 	if err != nil {
 		InternalErr(w, r, err)
 		return
@@ -44,6 +46,7 @@ func HandleGetGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	c.LarkDefaultSecret = maskToken(c.LarkDefaultSecret)
 	c.MinIOSecretKey = maskToken(c.MinIOSecretKey)
 	c.HarborToken = maskToken(c.HarborToken)
+	c.ListVersionToken = maskToken(c.ListVersionToken)
 	JSONSuccess(w, c)
 }
 
@@ -73,6 +76,9 @@ type updateGlobalConfigReq struct {
 	HarborUser           *string `json:"harbor_user"`
 	HarborToken          *string `json:"harbor_token"`
 	HarborVerifyOnSubmit *bool   `json:"harbor_verify_on_submit"`
+	// VM 部署：list-version API（拉版本号）
+	ListVersionAPI   *string `json:"list_version_api"`
+	ListVersionToken *string `json:"list_version_token"`
 }
 
 // maskedTokenString 是 GET 时给前端的占位串。任何 token 字段如果用户把这个串原样
@@ -98,6 +104,7 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 	stripMaskedToken(&req.LarkDefaultSecret)
 	stripMaskedToken(&req.MinIOSecretKey)
 	stripMaskedToken(&req.HarborToken)
+	stripMaskedToken(&req.ListVersionToken)
 	sets := []string{}
 	args := []interface{}{}
 	addStr := func(col string, v *string) {
@@ -195,6 +202,17 @@ func HandleUpdateGlobalConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sets = append(sets, "harbor_token=?")
+		args = append(args, enc)
+	}
+	// VM 部署 list-version API 配置
+	addStr("list_version_api", req.ListVersionAPI)
+	if req.ListVersionToken != nil && *req.ListVersionToken != "" {
+		enc, err := crypto.Encrypt(*req.ListVersionToken)
+		if err != nil {
+			JSONError(w, 50000, "encrypt list_version_token: "+err.Error())
+			return
+		}
+		sets = append(sets, "list_version_token=?")
 		args = append(args, enc)
 	}
 	if req.HarborVerifyOnSubmit != nil {
