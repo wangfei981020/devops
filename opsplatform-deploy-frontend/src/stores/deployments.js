@@ -11,6 +11,8 @@ const ACTION_LABEL = {
   update_image: '批量更新镜像',
   restart: '重启服务',
   rollback: '回滚发布',
+  vm_rsync: 'VM 同步代码',
+  vm_update_version: 'VM 部署',
 }
 
 const STATUS_LABEL = {
@@ -51,7 +53,8 @@ export const useDeploymentsStore = defineStore('deployments', () => {
       id: deploymentID,
       action: meta.action || 'update_image',
       envName: meta.envName || '',
-      envType: meta.envType || 'uat',
+      // VM env_type 来自后端是大写（UAT/LPT/PROD），统一小写做 chip CSS class
+      envType: (meta.envType || 'uat').toLowerCase(),
       modules: meta.modules || 0,
       operator: meta.operator || '',
       status: 'pending',
@@ -110,9 +113,11 @@ export const useDeploymentsStore = defineStore('deployments', () => {
     const action = ACTION_LABEL[item.action] || item.action
     const status = STATUS_LABEL[item.status] || item.status
     const type = STATUS_TYPE[item.status] || 'info'
+    // VM 行表达成"服务"更准确（K8s 才是模块）
+    const unit = (item.action || '').startsWith('vm_') ? '服务' : '模块'
     ElNotification({
       title: `${action} · ${item.envName || '#' + item.id}`,
-      message: `${status}（${item.modules} 个模块） · 点击「发布历史」查看详情`,
+      message: `${status}（${item.modules} 个${unit}） · 点击「发布历史」查看详情`,
       type,
       duration: 6000,
       position: 'bottom-right',

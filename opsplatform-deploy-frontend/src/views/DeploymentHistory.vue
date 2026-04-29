@@ -134,12 +134,7 @@
                       </div>
                     </div>
                     <div class="section">
-                      <div class="sec-lbl">
-                        Ansible 日志
-                        <span class="sec-sub">
-                          {{ row.status === 'pending' ? '进行中 → 实时 SSE 流' : '归档在 MinIO，跟 K8s 失败 pod 日志同 bucket，过期自动清理' }}
-                        </span>
-                      </div>
+                      <div class="sec-lbl">Ansible 日志</div>
                       <button class="view-logs-btn" @click.stop="openVmLog(row.id, row.status)">
                         {{ row.status === 'pending' ? '查看实时日志' : '查看完整日志' }}
                       </button>

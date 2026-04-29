@@ -33,7 +33,7 @@
               </div>
               <div class="it-meta">
                 <span v-if="d.envName" class="it-env" :class="d.envType">{{ d.envName }}</span>
-                <span v-if="d.modules" class="it-mod">{{ d.modules }} 个模块</span>
+                <span v-if="d.modules" class="it-mod">{{ d.modules }} 个{{ isVm(d.action) ? '服务' : '模块' }}</span>
                 <span class="it-time">{{ elapsed(d.startedAt) }}</span>
               </div>
             </div>
@@ -70,18 +70,21 @@ const cancelingIds = reactive(new Set())
 
 async function onCancel(d) {
   if (cancelingIds.has(d.id)) return
+  // VM 跟 K8s 二次确认提示不一样：VM 真的会 SIGTERM 杀 ansible-playbook 进程
+  const vm = isVm(d.action)
+  const message = vm
+    ? 'VM 任务取消会向 ansible 控制机发 SIGTERM 杀 ansible-playbook 进程，<b style="color:#dc2626;">可能让目标机器留在半部署状态</b>。\n\n确认要取消吗？'
+    : '代码已提交仓库，后台同步会继续进行。\n取消后只是不再等待状态反馈。\n\n如果 30 分钟内仍未完成，请人工检查对应服务的 Pod 是否已正常启动。'
+  const title = vm ? '⚠ 取消 VM 任务（不可逆）' : '确认取消等待？'
   try {
-    await ElMessageBox.confirm(
-      '代码已提交仓库，后台同步会继续进行。\n取消后只是不再等待状态反馈。\n\n如果 30 分钟内仍未完成，请人工检查对应服务的 Pod 是否已正常启动。',
-      '确认取消等待？',
-      {
-        type: 'warning',
-        confirmButtonText: '确定取消',
-        cancelButtonText: '继续等待',
-        dangerouslyUseHTMLString: false,
-        autofocus: false,
-      }
-    )
+    await ElMessageBox.confirm(message, title, {
+      type: 'warning',
+      dangerouslyUseHTMLString: vm,
+      confirmButtonText: vm ? '确认取消（接受半部署风险）' : '确定取消',
+      cancelButtonText: vm ? '不取消' : '继续等待',
+      confirmButtonClass: vm ? 'el-button--danger' : '',
+      autofocus: false,
+    })
   } catch (_) {
     return // 用户选了"继续等待"
   }
@@ -90,6 +93,8 @@ async function onCancel(d) {
     const r = await cancelDeployment(d.id)
     if (r?.result === 'stale') {
       ElMessage.info('该任务已结束，无需取消')
+    } else if (vm) {
+      ElMessage.success('已发取消请求 · agent 杀进程后状态会变 canceled')
     } else {
       ElMessage.success('已取消等待 · 后台同步会继续进行')
     }
@@ -117,8 +122,11 @@ const ACTION_LABEL = {
   update_image: '更新镜像',
   restart: '重启服务',
   rollback: '回滚',
+  vm_rsync: 'VM 同步代码',
+  vm_update_version: 'VM 部署',
 }
 function actionLabel(a) { return ACTION_LABEL[a] || a }
+function isVm(a) { return typeof a === 'string' && a.startsWith('vm_') }
 
 const STATUS_LABEL = {
   pending: '执行中',
@@ -219,6 +227,7 @@ function elapsed(start) {
   padding: 1px 6px; border-radius: 3px; font-size: 10.5px;
 }
 .it-env.uat { background: #ecfdf5; color: #059669; }
+.it-env.lpt { background: #eff6ff; color: #1d4ed8; }
 .it-env.prod { background: #fef2f2; color: #dc2626; }
 .it-mod { color: #6b7280; }
 .it-time { color: #9ca3af; font-family: var(--mono, 'Fira Code', monospace); margin-left: auto; }

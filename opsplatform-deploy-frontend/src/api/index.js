@@ -27,11 +27,18 @@ http.interceptors.response.use(
   (err) => {
     const status = err.response?.status
     if (status === 401) {
-      localStorage.removeItem('deploy_token')
-      localStorage.removeItem('deploy_user')
-      localStorage.removeItem('deploy_permissions')
-      if (location.pathname !== '/login') {
-        location.href = '/login'
+      // 关键：URL 含 portal_token 时，正在走 SSO 入站握手（router beforeEach 的 portalAuth）。
+      // 这时如果 App.vue onMounted 的 recoverInflight 等"启动期 API 调用"用了过期的 deploy_token
+      // 撞 401，不能 hard reload，否则会把握手中的 portalAuth 也冲掉，用户回到 /login。
+      // 让 401 静默 reject，beforeEach 的 portalAuth 会接着把新 token 写进 localStorage。
+      const hasPortalToken = new URLSearchParams(location.search).has('portal_token')
+      if (!hasPortalToken) {
+        localStorage.removeItem('deploy_token')
+        localStorage.removeItem('deploy_user')
+        localStorage.removeItem('deploy_permissions')
+        if (location.pathname !== '/login') {
+          location.href = '/login'
+        }
       }
     }
     const msg = err.response?.data?.message || err.message || '网络错误'

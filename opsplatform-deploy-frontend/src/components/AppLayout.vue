@@ -94,7 +94,7 @@ import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
 const router = useRouter()
-const version = '110'
+const version = '111'
 
 const grpRaw = JSON.parse(localStorage.getItem('deploy_sidebar_groups') || '{"publish":true,"config":true}')
 const grp = reactive(grpRaw)

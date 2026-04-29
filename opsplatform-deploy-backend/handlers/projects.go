@@ -24,47 +24,88 @@ type projectView struct {
 }
 
 // GET /api/projects
-// 返回 project 表的所有 + 从 project_env 派生出来但尚未在表里的。
-// 数据级权限：非 admin 只看到自己有 env 权限的项目（同 env 过滤逻辑）。
+// 返回 project 表的所有 + 从 project_env / vm_project_env 派生出来但尚未在表里的。
+// 数据级权限：非 admin 只看到自己有 env 权限的项目（K8s + VM 都看）。
 func HandleListProjects(w http.ResponseWriter, r *http.Request) {
-	allowedIDs, enforce := AllowedEnvIDs(r)
-	if enforce && len(allowedIDs) == 0 {
-		// 用户没分到任何 env → 也不能看到任何项目（包括空的）
+	// K8s + VM 各自的 allowed env id 列表（admin 时两者都 enforce=false 不过滤）
+	k8sIDs, k8sEnforce := AllowedEnvIDs(r)
+	vmIDs, vmEnforce := AllowedVmEnvIDs(r)
+	enforce := k8sEnforce || vmEnforce
+	if enforce && len(k8sIDs) == 0 && len(vmIDs) == 0 {
+		// 用户既无 K8s env 权限也无 VM env 权限 → 看不到任何项目
 		JSONSuccess(w, []*projectView{})
 		return
 	}
 
-	// 1. 从 project_env 派生：只取允许的 env，并算出每个项目的可见 env 数
-	envQ := `SELECT name, env_type FROM project_env`
-	var envArgs []interface{}
-	if enforce {
-		ph := strings.Repeat("?,", len(allowedIDs))
-		ph = ph[:len(ph)-1]
-		envQ += ` WHERE id IN (` + ph + `)`
-		for _, id := range allowedIDs {
-			envArgs = append(envArgs, id)
-		}
-	}
-	envRows, err := database.DB.Query(envQ, envArgs...)
-	if err != nil {
-		InternalErr(w, r, err)
-		return
-	}
-	defer envRows.Close()
-
 	byName := map[string]*projectView{}
 	list := []*projectView{}
-	for envRows.Next() {
-		var peName, envType string
-		_ = envRows.Scan(&peName, &envType)
-		projName := strings.TrimSuffix(peName, "-"+envType)
-		if p, ok := byName[projName]; ok {
-			p.EnvCount++
-		} else {
-			p := &projectView{Name: projName, EnvCount: 1, InDB: false}
-			byName[projName] = p
-			list = append(list, p)
+
+	// 1a. 从 project_env (K8s) 派生
+	//     enforce 但 k8sIDs 为空 → 跳过 K8s 派生（用户没有 K8s 权限）
+	//     enforce 且 k8sIDs 非空 → WHERE id IN (...)
+	//     不 enforce → 全表（admin）
+	if !enforce || len(k8sIDs) > 0 {
+		envQ := `SELECT name, env_type FROM project_env`
+		var envArgs []interface{}
+		if enforce {
+			ph := strings.Repeat("?,", len(k8sIDs))
+			ph = ph[:len(ph)-1]
+			envQ += ` WHERE id IN (` + ph + `)`
+			for _, id := range k8sIDs {
+				envArgs = append(envArgs, id)
+			}
 		}
+		envRows, err := database.DB.Query(envQ, envArgs...)
+		if err != nil {
+			InternalErr(w, r, err)
+			return
+		}
+		for envRows.Next() {
+			var peName, envType string
+			_ = envRows.Scan(&peName, &envType)
+			projName := strings.TrimSuffix(peName, "-"+envType)
+			if p, ok := byName[projName]; ok {
+				p.EnvCount++
+			} else {
+				p := &projectView{Name: projName, EnvCount: 1, InDB: false}
+				byName[projName] = p
+				list = append(list, p)
+			}
+		}
+		envRows.Close()
+	}
+
+	// 1b. 从 vm_project_env 派生（VM env_type 大写，剥后缀时统一小写比对）
+	if !enforce || len(vmIDs) > 0 {
+		vmQ := `SELECT name, env_type FROM vm_project_env`
+		var vmArgs []interface{}
+		if enforce {
+			ph := strings.Repeat("?,", len(vmIDs))
+			ph = ph[:len(ph)-1]
+			vmQ += ` WHERE id IN (` + ph + `)`
+			for _, id := range vmIDs {
+				vmArgs = append(vmArgs, id)
+			}
+		}
+		vmRows, err := database.DB.Query(vmQ, vmArgs...)
+		if err != nil {
+			InternalErr(w, r, err)
+			return
+		}
+		for vmRows.Next() {
+			var peName, envType string
+			_ = vmRows.Scan(&peName, &envType)
+			// VM env_type 大写（UAT/LPT/PROD），name 是 g01-uat 小写格式 → 用小写后缀剥
+			projName := strings.TrimSuffix(peName, "-"+strings.ToLower(envType))
+			if p, ok := byName[projName]; ok {
+				p.EnvCount++
+			} else {
+				p := &projectView{Name: projName, EnvCount: 1, InDB: false}
+				byName[projName] = p
+				list = append(list, p)
+			}
+		}
+		vmRows.Close()
 	}
 
 	// 2. 从 project 表补 metadata（只补已在 byName 里的；admin 时全部补）。

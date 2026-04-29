@@ -43,8 +43,8 @@
           <div class="ac-title">📥 同步代码（rsync）</div>
           <div class="ac-desc">从代码服务器拉源码到 ansible 服务器，刷新版本列表。**不部署到目标 VM**。</div>
         </div>
-        <button class="btn warn" @click="onRsync" :disabled="!selectedService || running">
-          {{ runningAction === 'rsync' ? '同步中...' : '执行 rsync' }}
+        <button class="btn warn" @click="onRsync" :disabled="!selectedService || submitting">
+          {{ submitting ? '提交中...' : '执行 rsync' }}
         </button>
       </div>
 
@@ -69,66 +69,35 @@
         </div>
         <button :class="['btn', envType === 'PROD' ? 'danger' : 'success']"
           @click="onDeploy"
-          :disabled="!selectedService || !selectedVersion || running">
-          <span v-if="runningAction === 'update_version'">部署中...</span>
+          :disabled="!selectedService || !selectedVersion || submitting">
+          <span v-if="submitting">提交中...</span>
           <span v-else-if="envType === 'PROD'">部署 PROD · 需二次确认</span>
           <span v-else>部署到 {{ envType }}</span>
         </button>
       </div>
 
-      <!-- 进行中卡片：替代以前的黑底实时日志，跟 K8s BatchUpdatePanel 风格统一 -->
-      <!-- 完整 ansible 日志去发布历史看（实时 SSE 或归档），这里只显示进度 -->
-      <div v-if="running || lastDone" class="progress-card" :class="progressKind">
-        <div class="pc-l">
-          <el-icon class="pc-icon" :class="{ spin: running }">
-            <Loading v-if="running" />
-            <SuccessFilled v-else-if="lastDone?.status === 'success'" />
-            <CircleCloseFilled v-else-if="lastDone?.status === 'failed'" />
-            <Warning v-else />
-          </el-icon>
-          <div class="pc-text">
-            <div class="pc-title">
-              <span v-if="running">{{ runningAction === 'rsync' ? '同步中…' : '部署中…' }}</span>
-              <span v-else-if="lastDone?.status === 'success'">✅ 完成</span>
-              <span v-else-if="lastDone?.status === 'canceled'">⏹ 已取消</span>
-              <span v-else>❌ 失败</span>
-              <span class="pc-meta">
-                · 任务 #{{ deploymentID }}
-                <span v-if="elapsedSec > 0"> · 耗时 {{ elapsedSec }}s</span>
-              </span>
-            </div>
-            <div class="pc-sub">
-              <RouterLink :to="`/history?expand=${deploymentID}`" class="pc-link">
-                {{ running ? '查看实时日志 →' : '查看完整日志 →' }}
-              </RouterLink>
-              <span v-if="lastDone?.error_msg" class="pc-err" :title="lastDone.error_msg">
-                · {{ lastDone.error_msg.slice(0, 80) }}{{ lastDone.error_msg.length > 80 ? '…' : '' }}
-              </span>
-            </div>
-          </div>
-        </div>
-        <div class="pc-r">
-          <button v-if="running" class="btn ghost sm danger-hover" @click="onCancel">✕ 取消</button>
-          <button v-else class="btn ghost sm" @click="lastDone = null; deploymentID = 0; elapsedSec = 0">关闭</button>
-        </div>
-      </div>
+      <!-- 提交后没有进度卡片：状态去右上角 InflightDock 看，详情去发布历史 -->
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onUnmounted, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Monitor, Loading, SuccessFilled, CircleCloseFilled, Warning } from '@element-plus/icons-vue'
-import { RouterLink } from 'vue-router'
+import { Monitor } from '@element-plus/icons-vue'
 import {
   scanVmServices, listVmServices, listVmServiceVersions,
-  vmDeploy, vmDeployCancel, getDeployment,
+  vmDeploy,
 } from '../api'
+import { useDeploymentsStore } from '../stores/deployments'
+import { useAuthStore } from '../stores/auth'
 
 const props = defineProps({
   vmProjectEnv: { type: Object, required: true },     // { id, name, env_type, ... }
 })
+
+const deployments = useDeploymentsStore()
+const auth = useAuthStore()
 
 const services = ref([])
 const selectedService = ref(null)
@@ -136,25 +105,11 @@ const selectedVersion = ref('')
 const versions = ref([])
 const loadingVersions = ref(false)
 const scanning = ref(false)
-
-// 进行中状态：跟 K8s BatchUpdatePanel 一样轮询 getDeployment(id) 每 2s
-// 不再实时拉 ansible 日志（那个去发布历史里看）
-const deploymentID = ref(0)
-const runningAction = ref('') // 'rsync' | 'update_version' | ''
-const running = computed(() => runningAction.value !== '')
-const elapsedSec = ref(0)
-const lastDone = ref(null) // { status, error_msg } 终态后留 30s 给用户看
-let pollTimer = null
-let elapsedTimer = null
+// submitting: 提交动作期间禁用按钮防重；提交后状态交给 InflightDock 跟踪
+const submitting = ref(false)
 
 const envType = computed(() => props.vmProjectEnv?.env_type || 'UAT')
 const currentService = computed(() => services.value.find(s => s.id === selectedService.value))
-
-const progressKind = computed(() => {
-  if (running.value) return 'running'
-  if (!lastDone.value) return ''
-  return lastDone.value.status // success / failed / canceled
-})
 
 watch(() => props.vmProjectEnv?.id, (id) => {
   if (id) loadServices()
@@ -219,11 +174,11 @@ async function onDeploy() {
   await runAction('update_version')
 }
 
+// runAction：提交任务后把 deployment_id 注册进 InflightDock，剩下进度跟踪由 store 统一管。
+//   不再面板内轮询 / 显示进度卡 / 提供取消按钮 —— 全部去右上角 dock 看
 async function runAction(action) {
-  runningAction.value = action
-  deploymentID.value = 0
-  elapsedSec.value = 0
-  lastDone.value = null
+  if (submitting.value) return
+  submitting.value = true
   try {
     const r = await vmDeploy({
       vm_project_env_id: props.vmProjectEnv.id,
@@ -231,76 +186,21 @@ async function runAction(action) {
       action,
       version: action === 'update_version' ? selectedVersion.value : undefined,
     })
-    deploymentID.value = r.deployment_id
-    ElMessage.success(`已提交 · 任务 #${r.deployment_id}`)
-    startPolling(r.deployment_id)
+    // 注册进 InflightDock
+    deployments.startTracking(r.deployment_id, {
+      action: 'vm_' + action,           // store 里 ACTION_LABEL 会映射成中文
+      envName: props.vmProjectEnv.name,
+      envType: envType.value,            // store 内部 toLowerCase
+      modules: 1,                        // VM 单服务 = 1
+      operator: auth.user?.username || '',
+    })
+    ElMessage.success(`已提交 · 任务 #${r.deployment_id}，右上角看进度`)
   } catch (e) {
-    runningAction.value = ''
     ElMessage.error('提交失败：' + (e?.response?.data?.message || e.message))
+  } finally {
+    submitting.value = false
   }
 }
-
-// 轮询 deployment 状态：每 2s 一次拉 status / duration_sec / error_msg
-function startPolling(depID) {
-  stopPolling()
-  // 本地秒表（终态前每秒 +1，给用户即时反馈，避免只靠后端 duration_sec 显示卡顿）
-  const startTs = Date.now()
-  elapsedTimer = setInterval(() => {
-    if (!running.value) return
-    elapsedSec.value = Math.floor((Date.now() - startTs) / 1000)
-  }, 1000)
-  pollTimer = setInterval(async () => {
-    try {
-      const dep = await getDeployment(depID)
-      if (!dep) return
-      // 后端 duration_sec 在终态时才靠谱；进行中用本地秒表
-      if (dep.status && dep.status !== 'pending') {
-        elapsedSec.value = dep.duration_sec ?? elapsedSec.value
-        lastDone.value = { status: dep.status, error_msg: dep.error_msg || '' }
-        runningAction.value = ''
-        stopPolling()
-        // 任务结束后刷新当前 service（current_version 可能更新了）
-        await loadServices()
-        const tip = {
-          success: '✅ 部署成功',
-          failed: '❌ 部署失败，去发布历史看完整日志',
-          canceled: '⏹ 已取消',
-        }[dep.status] || `状态：${dep.status}`
-        if (dep.status === 'success') ElMessage.success(tip)
-        else if (dep.status === 'canceled') ElMessage.warning(tip)
-        else ElMessage.error(tip)
-      }
-    } catch (e) {
-      // 单次拉失败不打断，下次 tick 继续
-      console.warn('[vm-poll] tick failed:', e?.message)
-    }
-  }, 2000)
-}
-
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
-  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null }
-}
-
-async function onCancel() {
-  if (!deploymentID.value) return
-  try {
-    await ElMessageBox.confirm(
-      'VM 任务取消会向 ansible 控制机发 SIGTERM 杀掉 ansible-playbook 进程，**可能让目标机器留在半部署状态**。继续吗？',
-      '⚠ 取消 VM 任务',
-      { type: 'warning', dangerouslyUseHTMLString: true, confirmButtonText: '确认取消', confirmButtonClass: 'el-button--danger' })
-  } catch { return }
-  try {
-    await vmDeployCancel(deploymentID.value)
-    ElMessage.success('已请求取消，等 agent 真正杀进程后状态会更新')
-  } catch (e) {
-    ElMessage.error('取消失败：' + (e?.response?.data?.message || e.message))
-  }
-}
-
-onUnmounted(() => {
-  stopPolling()
-})
 </script>
 
 <style scoped>
@@ -343,40 +243,4 @@ code { font-family: var(--mono); background: #f3f4f6; padding: 1px 6px; border-r
 .btn.danger-hover:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); background: #fef2f2; }
 
 .hint { font-size: 11.5px; color: var(--text-3); }
-
-/* 进行中卡片：跟 K8s 那边同款风格 */
-.progress-card {
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 18px;
-  border: 1px solid; border-radius: 8px;
-  margin-top: 4px;
-}
-.progress-card.running { background: #eff6ff; border-color: #bfdbfe; }
-.progress-card.success { background: #ecfdf5; border-color: #a7f3d0; }
-.progress-card.failed  { background: #fef2f2; border-color: #fecaca; }
-.progress-card.canceled { background: #fff7ed; border-color: #fed7aa; }
-
-.pc-l { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
-.pc-r { display: flex; align-items: center; gap: 8px; }
-.pc-icon { font-size: 28px; flex-shrink: 0; }
-.progress-card.running .pc-icon { color: #1d4ed8; }
-.progress-card.success .pc-icon { color: #059669; }
-.progress-card.failed .pc-icon { color: #dc2626; }
-.progress-card.canceled .pc-icon { color: #c2410c; }
-.pc-icon.spin { animation: pc-spin 1s linear infinite; }
-@keyframes pc-spin { to { transform: rotate(360deg); } }
-
-.pc-text { flex: 1; min-width: 0; }
-.pc-title { font: 600 14px/1.3 var(--body); color: var(--text); display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
-.pc-meta { color: var(--text-3); font-weight: 400; font-family: var(--mono); font-size: 12px; }
-.pc-sub { font-size: 12px; color: var(--text-2); margin-top: 4px; }
-.pc-link { color: var(--primary); text-decoration: none; font-weight: 500; }
-.pc-link:hover { text-decoration: underline; }
-.pc-err {
-  margin-left: 6px; color: var(--danger);
-  font-family: var(--mono); font-size: 11.5px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: 50%;
-  display: inline-block; vertical-align: bottom;
-}
 </style>
