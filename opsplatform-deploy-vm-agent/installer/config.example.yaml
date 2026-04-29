@@ -27,3 +27,16 @@ task_retention_hours: 24
 
 # 日志级别 info / debug
 log_level: "info"
+
+# 日志文件落盘（v4+）：
+#   留空 → 不写文件，只 stdout（systemd journal）
+#   非空 → 双写：stdout + 按小时切的本地文件
+#     文件路径：<log_dir>/YYYY-MM-DD/YYYY-MM-DD-HH-00.log
+#     例：/var/log/opsplatform-deploy-vm-agent/2026-04-29/2026-04-29-15-00.log
+#   注意：systemd ReadWritePaths 必须包含 log_dir，否则 agent 写不进去
+log_dir: "/var/log/opsplatform-deploy-vm-agent"
+
+# 旧日志保留天数；后台 goroutine 每小时跑一次，删超过 N 天的 YYYY-MM-DD 子目录
+#   <=0 → 不清理（永久保留，自己看着办）
+#   默认 60
+log_retention_days: 60

@@ -34,6 +34,14 @@ type Config struct {
 
 	// 日志
 	LogLevel string `yaml:"log_level"` // info / debug
+
+	// 日志文件落盘（除了 stdout / journald 之外）
+	//   LogDir 空 → 不写文件，只 stdout
+	//   非空 → 按小时切文件 + 按天分目录：
+	//     <log_dir>/<YYYY-MM-DD>/<YYYY-MM-DD-HH-00>.log
+	//   LogRetentionDays 0 / 负 → 不清理；正数 → 每天清一次旧目录
+	LogDir           string `yaml:"log_dir"`            // /var/log/opsplatform-deploy-vm-agent
+	LogRetentionDays int    `yaml:"log_retention_days"` // 默认 60
 }
 
 // Load 从 path 读取 YAML 配置；填默认值；最后校验必填项
@@ -71,6 +79,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
+	}
+	// LogDir 留空表示不写文件（保持向后兼容旧配置）；保留天数默认 60
+	if c.LogRetentionDays == 0 {
+		c.LogRetentionDays = 60
 	}
 }
 
