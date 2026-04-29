@@ -42,11 +42,9 @@
             已选 <b>{{ autoSelected.length }}</b> / {{ services.length }}
           </span>
         </div>
-        <!-- update_version 才有"全部最新版"勾选；rsync 不需要版本 -->
+        <!-- update_version 提示：每行独立选版本，默认⭐最新，可单独改 -->
         <div v-if="isUpdate" class="row" style="padding-left:90px;">
-          <el-checkbox v-model="autoUseLatest" @change="onAutoLatestToggle">
-            全部用最新版（取消勾选可逐行选历史版本）
-          </el-checkbox>
+          <span class="hint">默认 ⭐最新 · 想用历史版本，点对应行的下拉单独改（互不影响）</span>
         </div>
       </div>
 
@@ -89,13 +87,14 @@
               <td class="mono">{{ p.service }}</td>
               <td v-if="isUpdate">
                 <span v-if="!p.valid" class="err-text">❌ {{ p.error }}</span>
-                <el-select v-else-if="mode === 'auto' && !autoUseLatest"
+                <!-- 自动模式：每行独立下拉，默认⭐最新版，可单独改 -->
+                <el-select v-else-if="mode === 'auto'"
                   v-model="p.version" filterable size="small" style="width:100%;"
-                  :loading="p.loadingVersions"
-                  @click="onPerRowVersionClick(p)">
+                  :loading="p.loadingVersions">
                   <el-option v-for="(v, i) in (p.versionList || [])" :key="v"
                     :label="(i === 0 ? '⭐最新 · ' : '') + v" :value="v" />
                 </el-select>
+                <!-- 手动模式：用户在 textarea 显式写了 version，preview 表格静态显示 -->
                 <span v-else class="mono">
                   <span v-if="p.isLatest" class="latest-tag">⭐最新</span>
                   {{ p.version }}
@@ -170,7 +169,6 @@ const submitting = ref(false)
 
 const mode = ref('auto')              // 'auto' | 'manual'
 const autoSelected = ref([])
-const autoUseLatest = ref(true)
 const manualText = ref('')
 const manualParsed = ref([])
 const manualErrors = ref([])
@@ -180,13 +178,13 @@ const batchPreview = ref([])
 
 const envType = computed(() => props.vmProjectEnv?.env_type || 'UAT')
 const isUpdate = computed(() => props.tab === 'update_version')
-const tabLabel = computed(() => isUpdate.value ? '批量部署' : '批量同步代码（rsync）')
+const tabLabel = computed(() => isUpdate.value ? '批量更新' : '批量 rsync')
 
 const submitTitle = computed(() =>
-  isUpdate.value ? '🚀 部署到 VM' : '📥 同步代码到 ansible 服务器')
+  isUpdate.value ? '🚀 更新到 VM' : '📥 rsync 同步代码到 ansible 服务器')
 const submitBtnText = computed(() =>
-  isUpdate.value ? `部署 ${validCount.value} 个到 ${envType.value}`
-                 : `执行 rsync ${validCount.value} 个`)
+  isUpdate.value ? `更新 ${validCount.value} 个到 ${envType.value}`
+                 : `rsync ${validCount.value} 个`)
 const submitBtnClass = computed(() => {
   if (envType.value === 'PROD') return 'btn danger'
   return isUpdate.value ? 'btn success' : 'btn warn'
@@ -232,7 +230,9 @@ function resetState() {
 }
 
 // 自动模式：multi-select 同步到 batchPreview
-watch(autoSelected, (newList) => {
+//   每个新加的 row：update_version 时立即拉版本列表，默认填⭐最新版
+//   已存在的 row（用户改过版本）保留
+watch(autoSelected, async (newList) => {
   if (mode.value !== 'auto') return
   const oldMap = new Map(batchPreview.value.map(p => [p.service, p]))
   batchPreview.value = newList.map(name => {
@@ -245,14 +245,25 @@ watch(autoSelected, (newList) => {
       hosts: svc?.hosts || [],
       valid: true,
       error: '',
-      isLatest: autoUseLatest.value,
+      isLatest: false,
       loadingVersions: false,
       versionList: [],
     }
   })
-  // update_version 模式 + 默认勾"最新"，自动拉版本号填进去
-  if (isUpdate.value && autoUseLatest.value) {
-    refreshLatestForAll()
+  // update_version 模式：给每个新 row 拉版本列表 + 默认填⭐最新
+  if (isUpdate.value) {
+    for (const p of batchPreview.value) {
+      if (!p.valid) continue
+      if (p.versionList.length > 0) continue // 已加载过，跳过
+      p.loadingVersions = true
+      const versions = await loadVersionsFor(p.service)
+      p.versionList = versions
+      if (versions.length > 0 && !p.version) {
+        p.version = versions[0]
+        p.isLatest = true
+      }
+      p.loadingVersions = false
+    }
   }
 }, { deep: false })
 
@@ -296,37 +307,6 @@ async function loadVersionsFor(serviceName) {
     ElMessage.error(`${serviceName} 版本列表失败：${e?.response?.data?.message || e.message}`)
     return []
   }
-}
-
-async function refreshLatestForAll() {
-  await Promise.all(batchPreview.value.map(async (p) => {
-    if (!p.valid) return
-    const versions = await loadVersionsFor(p.service)
-    if (versions.length > 0) {
-      p.version = versions[0]
-      p.isLatest = true
-    }
-  }))
-}
-
-function onAutoLatestToggle(checked) {
-  if (checked) {
-    refreshLatestForAll()
-  } else {
-    batchPreview.value.forEach(p => {
-      p.isLatest = false
-      if (p.versionList.length === 0) {
-        loadVersionsFor(p.service).then(vs => { p.versionList = vs })
-      }
-    })
-  }
-}
-
-async function onPerRowVersionClick(p) {
-  if (p.versionList.length > 0) return
-  p.loadingVersions = true
-  p.versionList = await loadVersionsFor(p.service)
-  p.loadingVersions = false
 }
 
 function removeFromBatch(idx) {
@@ -414,17 +394,17 @@ async function onSubmit() {
   if (envType.value === 'PROD') {
     let lines, title, btnText
     if (isUpdate.value) {
-      lines = validRows.map(p => `· <b>${p.service}</b> → <code>${p.version.slice(0, 12)}...</code>`).join('<br>')
-      title = '⚠ PROD 部署二次确认'
-      btnText = '确认部署 PROD'
+      lines = validRows.map(p => `· <b>${p.service}</b> → <code>${p.version}</code>`).join('<br>')
+      title = '⚠ PROD 更新二次确认'
+      btnText = '确认更新 PROD'
     } else {
       lines = validRows.map(p => `· <b>${p.service}</b>`).join('<br>')
       title = '⚠ PROD rsync 二次确认'
       btnText = '确认 rsync PROD'
     }
     const desc = isUpdate.value
-      ? `即将批量部署 <b>${validRows.length}</b> 个服务到 <b>PROD</b>，影响 ${totalHosts.value} 台机器：`
-      : `即将批量同步 <b>${validRows.length}</b> 个 PROD 服务的源码到 ansible 服务器（不部署到目标 VM）：`
+      ? `即将批量更新 <b>${validRows.length}</b> 个模块到 <b>PROD</b>，影响 ${totalHosts.value} 台机器：`
+      : `即将批量 rsync <b>${validRows.length}</b> 个 PROD 模块的源码到 ansible 服务器（不部署到目标 VM）：`
     try {
       await ElMessageBox.confirm(
         `${desc}<br><br>${lines}`,

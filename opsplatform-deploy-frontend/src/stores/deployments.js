@@ -11,8 +11,8 @@ const ACTION_LABEL = {
   update_image: '批量更新镜像',
   restart: '重启服务',
   rollback: '回滚发布',
-  vm_rsync: 'VM 同步代码',
-  vm_update_version: 'VM 部署',
+  vm_rsync: 'VM rsync',
+  vm_update_version: 'VM 更新',
 }
 
 const STATUS_LABEL = {

@@ -14,7 +14,7 @@ import (
 //
 // 用户约定的最终格式（见 PR 讨论）：
 //   - 标题：发布/重启/回滚 + 成功/失败/部分成功/无变更
-//   - 名称: {operator username，不带 @}
+//   - 操作人: {operator username，不带 @}
 //   - 更新时间: {now}
 //   - 分组顺序：成功 → 跳过 → 失败 → @艾特
 //   - 每个模块独立一块（容器名 / 命名空间 / 版本号 / 失败原因）
@@ -70,7 +70,7 @@ func buildDeployNotifyBody(
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "**名称**: %s\n", safeStr(operator))
+	fmt.Fprintf(&sb, "**操作人**: %s\n", safeStr(operator))
 	fmt.Fprintf(&sb, "**更新时间**: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(&sb, "━━━━━━ %s (%d) ━━━━━━\n", sectionLabel, n)
 	for _, it := range items {

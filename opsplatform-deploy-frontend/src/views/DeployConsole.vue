@@ -120,12 +120,12 @@
               <button :class="['seg-btn', { active: vmTab === 'rsync' }]"
                       @click="vmTab = 'rsync'">
                 <el-icon><RefreshRight /></el-icon>
-                <span>批量同步代码</span>
+                <span>批量 rsync</span>
               </button>
               <button :class="['seg-btn', { active: vmTab === 'update_version' }]"
                       @click="vmTab = 'update_version'">
                 <el-icon><Upload /></el-icon>
-                <span>批量部署</span>
+                <span>批量更新</span>
               </button>
             </div>
           </template>

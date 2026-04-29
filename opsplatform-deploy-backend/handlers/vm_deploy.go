@@ -409,7 +409,20 @@ func finalizeVmBatch(depID int64, status, errMsg string, duration int, taskMap [
 //	- @ 操作人：通过 contacts 表按 operator 名查 lark_id
 //	- 卡片色按状态：success=green / canceled=orange / failed/no_change=red
 //	- 失败/取消/超时整 3 次仍失败 → log + UPDATE deployment.lark_notify='failed'
+// sendVmLarkNotify 按 K8s 同款"分组拆卡"模式发 VM 部署通知。
+//
+//	全 success / 全 failed / 全 canceled → 1 张该色卡（列出所有该状态模块）
+//	混合 partial → 拆 2-3 张：成功一张绿、失败一张红、取消一张橙
+//	每张卡顶部公共字段一致：操作人 / 项目环境 / 更新时间
+//	每个模块块：✅/❌/⏹ 模块名 + （update_version 时）版本号
+//	rsync 卡每个模块块没有"版本号"行
+//	@ 操作人通过 SendLarkCard 的变长参数加，body 内不再手写 <at>（避免重复 @）
+//	任何一张卡发送失败（重试 3 次后还失败）→ deployment.lark_notify='failed'，否则 'success'
 func sendVmLarkNotify(depID int64, status, errMsg string, duration int, req vmDeployReq, taskMap []vmTaskMapEntry, v *models.VmProjectEnv, operator string) {
+	_ = errMsg     // 错误信息已经在每个 task 的 ErrMsg 里，不再单独显示
+	_ = duration   // 用 created_at 当"更新时间"，不显示耗时（K8s 也不显示）
+	_ = status     // 用 taskMap 自己分组，不依赖外层 status
+
 	defer func() {
 		if rec := recover(); rec != nil {
 			log.Printf("[vm-lark] panic dep=%d: %v", depID, rec)
@@ -427,107 +440,124 @@ func sendVmLarkNotify(depID int64, status, errMsg string, duration int, req vmDe
 		return
 	}
 
-	atID := LookupContactLarkID(operator)
+	// 取 deployment.created_at 当"更新时间"，跟发布历史的时间列保持一致
+	var createdAt time.Time
+	_ = database.DB.QueryRow(`SELECT created_at FROM deployment WHERE id=?`, depID).Scan(&createdAt)
+	updateTime := createdAt.Format("2006-01-02 15:04:05")
 
-	actLabel := "VM 部署"
+	// op 字眼按 UI 命名：rsync / 更新
+	opLabel := "更新"
 	if req.Action == "rsync" {
-		actLabel = "VM 同步代码"
+		opLabel = "rsync"
 	}
 
-	// 标题：根据 status + 服务数显示不同模板
-	//   单服务：用首个 service 名
-	//   批量：N 个服务，按 success/fail 计数
-	successCnt, failedCnt, canceledCnt := 0, 0, 0
+	atID := LookupContactLarkID(operator)
+
+	// 按状态分组
+	var successItems, failedItems, canceledItems []vmTaskMapEntry
 	for _, e := range taskMap {
 		switch e.Status {
 		case "success":
-			successCnt++
+			successItems = append(successItems, e)
 		case "failed":
-			failedCnt++
+			failedItems = append(failedItems, e)
 		case "canceled":
-			canceledCnt++
-		}
-	}
-	total := len(taskMap)
-	servicesLabel := ""
-	if total == 1 && len(taskMap) > 0 {
-		servicesLabel = taskMap[0].Service
-	} else {
-		servicesLabel = fmt.Sprintf("%d 个服务", total)
-	}
-	var title, color string
-	switch status {
-	case "success":
-		title = fmt.Sprintf("✅ %s成功 · %s", actLabel, servicesLabel)
-		color = "green"
-	case "partial":
-		title = fmt.Sprintf("⚠ %s部分成功 · %d/%d", actLabel, successCnt, total)
-		color = "orange"
-	case "canceled":
-		title = fmt.Sprintf("⏹ %s已取消 · %s", actLabel, servicesLabel)
-		color = "orange"
-	default:
-		title = fmt.Sprintf("❌ %s失败 · %s", actLabel, servicesLabel)
-		color = "red"
-	}
-
-	// 正文：项目环境 / 操作人 / 耗时 / 服务列表（每个 service+version+状态一行）/ 错误
-	var sb strings.Builder
-	if atID != "" {
-		sb.WriteString(fmt.Sprintf(`<at id="%s"></at>`+"\n\n", atID))
-	}
-	sb.WriteString(fmt.Sprintf("**项目环境**：`%s` · **%s**\n", v.Name, strings.ToUpper(v.EnvType)))
-	sb.WriteString(fmt.Sprintf("**操作**：%s · **操作人**：%s · **耗时**：%ds\n", actLabel, operator, duration))
-	if total > 1 {
-		sb.WriteString(fmt.Sprintf("**汇总**：✅ %d · ❌ %d · ⏹ %d / 共 %d\n", successCnt, failedCnt, canceledCnt, total))
-	}
-
-	// 服务列表（最多展示 10 个，避免卡片爆）
-	if len(taskMap) > 0 {
-		sb.WriteString("\n**服务**：\n")
-		max := 10
-		for i, e := range taskMap {
-			if i >= max {
-				sb.WriteString(fmt.Sprintf("  …（还有 %d 个，详情见发布历史）\n", len(taskMap)-max))
-				break
-			}
-			icon := map[string]string{"success": "✅", "failed": "❌", "canceled": "⏹", "pending": "⏳", "running": "⏳"}[e.Status]
-			if icon == "" {
-				icon = "•"
-			}
-			line := fmt.Sprintf("  %s `%s`", icon, e.Service)
-			if e.Version != "" {
-				v := e.Version
-				if len(v) > 12 {
-					v = v[:12]
-				}
-				line += " · `" + v + "`"
-			}
-			sb.WriteString(line + "\n")
+			canceledItems = append(canceledItems, e)
 		}
 	}
 
-	if status != "success" && errMsg != "" {
-		em := errMsg
-		if len(em) > 500 {
-			em = em[:500] + "..."
-		}
-		sb.WriteString(fmt.Sprintf("\n**错误**：\n```\n%s\n```\n", em))
+	// 构造卡片集合：每组非空就出一张卡（K8s sendCardSets 同款）
+	type cardSpec struct {
+		title string
+		color string // green / red / orange
+		body  string
+	}
+	cards := []cardSpec{}
+	if len(successItems) > 0 {
+		cards = append(cards, cardSpec{
+			title: fmt.Sprintf("✅ %s成功 · %d 个模块", opLabel, len(successItems)),
+			color: "green",
+			body:  buildVmCardBody(operator, v.Name, updateTime, "成功", "✅", successItems, req.Action),
+		})
+	}
+	if len(failedItems) > 0 {
+		cards = append(cards, cardSpec{
+			title: fmt.Sprintf("❌ %s失败 · %d 个模块", opLabel, len(failedItems)),
+			color: "red",
+			body:  buildVmCardBody(operator, v.Name, updateTime, "失败", "❌", failedItems, req.Action),
+		})
+	}
+	if len(canceledItems) > 0 {
+		cards = append(cards, cardSpec{
+			title: fmt.Sprintf("⏹ %s已取消 · %d 个模块", opLabel, len(canceledItems)),
+			color: "orange",
+			body:  buildVmCardBody(operator, v.Name, updateTime, "已取消", "⏹", canceledItems, req.Action),
+		})
+	}
+	if len(cards) == 0 {
+		// 极端兜底：所有 task 都是 pending/running 终态？理论不会到这里
+		log.Printf("[vm-lark] dep=%d no terminal tasks to notify", depID)
+		_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, "skipped", depID)
+		return
 	}
 
+	// 链接按钮：发布详情页
 	linkLabel, linkURL := "", ""
 	if u := deployDetailURL(depID); u != "" {
 		linkLabel, linkURL = "查看发布详情", u
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-	defer cancel()
-	if err := services.SendLarkCardWithRetry(ctx, bot.Webhook, bot.Secret, title, sb.String(), color, linkLabel, linkURL, atID); err != nil {
-		log.Printf("[vm-lark] dep=%d send failed (after retries): %v", depID, err)
-		_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, "failed", depID)
-		return
+	// 逐张发送，整体成功才记 'success'，任何 1 张失败记 'failed'
+	anyFail := false
+	for _, c := range cards {
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		err := services.SendLarkCardWithRetry(ctx, bot.Webhook, bot.Secret, c.title, c.body, c.color, linkLabel, linkURL, atID)
+		cancel()
+		if err != nil {
+			log.Printf("[vm-lark] dep=%d send card %q failed (after retries): %v", depID, c.title, err)
+			anyFail = true
+		}
 	}
-	_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, "success", depID)
+	finalStatus := "success"
+	if anyFail {
+		finalStatus = "failed"
+	}
+	_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, finalStatus, depID)
+}
+
+// buildVmCardBody 拼一张 VM Lark 卡的 body（顶部公共字段 + 分隔线 + 状态分组 + 模块列表）。
+//
+//	统一格式：
+//	  操作人: cesar
+//	  项目环境: g01-uat
+//	  更新时间: 2026-04-29 22:20:00
+//	  ———— {状态} ({N}) ————
+//	  ✅ 模块: G01_op_office
+//	    版本号: 531198bb...      ← rsync 时省略此行
+//	  ✅ 模块: G01_anchor_web
+//	    版本号: 078e7d129cca...
+func buildVmCardBody(operator, envName, updateTime, statusLabel, icon string, items []vmTaskMapEntry, action string) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**操作人**: %s\n", operator))
+	sb.WriteString(fmt.Sprintf("**项目环境**: %s\n", envName))
+	sb.WriteString(fmt.Sprintf("**更新时间**: %s\n", updateTime))
+	sb.WriteString(fmt.Sprintf("\n———— %s (%d) ————\n", statusLabel, len(items)))
+	for _, e := range items {
+		sb.WriteString(fmt.Sprintf("%s **模块**: %s\n", icon, e.Service))
+		// rsync 不显示版本号
+		if action == "update_version" && e.Version != "" {
+			sb.WriteString(fmt.Sprintf("  **版本号**: %s\n", e.Version))
+		}
+		// 失败模块带一行错误信息（截断到 200 字防爆）
+		if e.Status == "failed" && e.ErrMsg != "" {
+			em := e.ErrMsg
+			if len(em) > 200 {
+				em = em[:200] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("  **错误**: %s\n", em))
+		}
+	}
+	return sb.String()
 }
 
 // archiveVmBatchLogs 给批量任务每个 task 各自归档一份 MinIO 日志，object_key 写回 vm_task_map[i]。

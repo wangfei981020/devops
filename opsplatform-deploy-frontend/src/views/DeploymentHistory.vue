@@ -274,6 +274,9 @@
         <span class="vm-log-live-dot"></span>
         <span>实时流（SSE）· 任务进行中，新日志会自动追加</span>
       </div>
+      <div class="vm-log-status-bar done" v-else-if="vmLogDlg.deploymentId && vmLogDlg.text && !vmLogDlg.error && vmLogDlg.status !== 'pending'">
+        <span>✅ 任务已完成</span>
+      </div>
       <div v-if="vmLogDlg.loading && !vmLogDlg.text" class="vm-log-loading">加载中…</div>
       <div v-else-if="vmLogDlg.error" class="vm-log-error">
         <el-icon><Warning /></el-icon> {{ vmLogDlg.error }}
@@ -363,7 +366,7 @@ function isVmAction(a) { return typeof a === 'string' && a.startsWith('vm_') }
 function actionLabel(a) {
   return {
     update_image: '更新镜像', restart: '重启服务', rollback: '回滚',
-    vm_rsync: 'VM 同步代码', vm_update_version: 'VM 部署',
+    vm_rsync: 'VM rsync', vm_update_version: 'VM 更新',
   }[a] || a
 }
 
@@ -553,7 +556,11 @@ async function streamVmLog(depID, service) {
     const dec = new TextDecoder()
     while (true) {
       const { value, done } = await reader.read()
-      if (done) break
+      if (done) {
+        // 后端 SSE 流结束 = 任务终态。banner 切「✅ 任务已完成」
+        vmLogDlg.isLive = false
+        break
+      }
       const chunk = dec.decode(value)
       // SSE 解析：每行 'data: xxx' → 拼回正文
       for (const line of chunk.split('\n')) {
@@ -767,6 +774,9 @@ onUnmounted(() => {
   margin-bottom: 8px; padding: 6px 12px;
   background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 4px;
   font-size: 12px; color: #1e40af;
+}
+.vm-log-status-bar.done {
+  background: #ecfdf5; border-color: #a7f3d0; color: #059669;
 }
 .vm-log-live-dot {
   width: 8px; height: 8px; border-radius: 50%;
