@@ -209,7 +209,7 @@ type FailingPodSnapshot struct {
 type Deployment struct {
 	ID              int64             `json:"id"`
 	ProjectEnvID    int64             `json:"project_env_id"`
-	Action          string            `json:"action"` // update_image|restart|rollback
+	Action          string            `json:"action"` // update_image|restart|rollback|vm_rsync|vm_update_version
 	RefDeploymentID *int64            `json:"ref_deployment_id"`
 	ModuleNames     []string          `json:"module_names"`
 	Changes         []Change          `json:"changes"`
@@ -218,10 +218,27 @@ type Deployment struct {
 	ArgocdResults   []ArgocdAppResult `json:"argocd_results"`
 	LarkNotify      string            `json:"lark_notify"` // success|failed|skipped
 	Operator        string            `json:"operator"`
-	Status          string            `json:"status"` // pending|success|partial|failed|no_change
+	Status          string            `json:"status"` // pending|success|partial|failed|no_change|canceled
 	ErrorMsg        string            `json:"error_msg"`
 	DurationSec     int               `json:"duration_sec"`
 	CreatedAt       time.Time         `json:"created_at"`
+
+	// VM 批量部署专用：vm_task_map JSON 列反序列化结果。
+	// K8s 行没用，前端按 row.action 是否 vm_ 前缀决定看 ArgocdResults 还是 VmTaskMap
+	VmTaskMap []VmTaskMapEntry `json:"vm_task_map,omitempty"`
+}
+
+// VmTaskMapEntry 复刻 handlers.vmTaskMapEntry，让 models 包能被前端 JSON 序列化用。
+//
+//	跟后端 handler 那个保持字段一致；其它 service 状态由 pollVmTaskBatch 持续更新。
+type VmTaskMapEntry struct {
+	Service      string `json:"service"`
+	Version      string `json:"version,omitempty"`
+	TaskID       string `json:"task_id"`
+	Status       string `json:"status"`
+	ErrMsg       string `json:"error_msg,omitempty"`
+	LogObjectKey string `json:"log_object_key,omitempty"`
+	LogSize      int    `json:"log_size,omitempty"`
 }
 
 const (

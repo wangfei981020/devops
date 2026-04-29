@@ -121,7 +121,8 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 
 	args2 := append(append([]interface{}{}, args...), pageSize, (page-1)*pageSize)
 	rows, err := database.DB.Query(`SELECT id, project_env_id, action, ref_deployment_id, module_names, changes,
-		git_commit, git_commit_url, argocd_results, lark_notify, operator, status, IFNULL(error_msg,''), duration_sec, created_at
+		git_commit, git_commit_url, argocd_results, lark_notify, operator, status, IFNULL(error_msg,''), duration_sec, created_at,
+		vm_task_map
 		FROM deployment `+where+` ORDER BY created_at DESC LIMIT ? OFFSET ?`, args2...)
 	if err != nil {
 		InternalErr(w, r, err)
@@ -132,12 +133,14 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 	list := []models.Deployment{}
 	for rows.Next() {
 		var d models.Deployment
-		var mnames, changes, argoResults []byte
+		var mnames, changes, argoResults, vmTaskMap []byte
 		_ = rows.Scan(&d.ID, &d.ProjectEnvID, &d.Action, &d.RefDeploymentID, &mnames, &changes, &d.GitCommit, &d.GitCommitURL,
-			&argoResults, &d.LarkNotify, &d.Operator, &d.Status, &d.ErrorMsg, &d.DurationSec, &d.CreatedAt)
+			&argoResults, &d.LarkNotify, &d.Operator, &d.Status, &d.ErrorMsg, &d.DurationSec, &d.CreatedAt,
+			&vmTaskMap)
 		_ = jsonUnmarshalImpl(mnames, &d.ModuleNames)
 		_ = jsonUnmarshalImpl(changes, &d.Changes)
 		_ = jsonUnmarshalImpl(argoResults, &d.ArgocdResults)
+		_ = jsonUnmarshalImpl(vmTaskMap, &d.VmTaskMap)
 		// error_msg 可能含 git stderr / 文件路径等，非 admin 脱敏
 		if !isAdmin && d.ErrorMsg != "" {
 			d.ErrorMsg = "（失败详情已隐藏，请联系管理员查看）"
@@ -249,23 +252,35 @@ func HandleCancelDeployment(w http.ResponseWriter, r *http.Request) {
 func HandleGetDeployment(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
 	var d models.Deployment
-	var mnames, changes, argoResults []byte
+	var targetType string
+	var mnames, changes, argoResults, vmTaskMap []byte
 	err := database.DB.QueryRow(`SELECT id, project_env_id, action, ref_deployment_id, module_names, changes,
-		git_commit, git_commit_url, argocd_results, lark_notify, operator, status, IFNULL(error_msg,''), duration_sec, created_at
+		git_commit, git_commit_url, argocd_results, lark_notify, operator, status, IFNULL(error_msg,''), duration_sec, created_at,
+		IFNULL(target_type,'k8s'), vm_task_map
 		FROM deployment WHERE id=?`, id).
 		Scan(&d.ID, &d.ProjectEnvID, &d.Action, &d.RefDeploymentID, &mnames, &changes, &d.GitCommit, &d.GitCommitURL,
-			&argoResults, &d.LarkNotify, &d.Operator, &d.Status, &d.ErrorMsg, &d.DurationSec, &d.CreatedAt)
+			&argoResults, &d.LarkNotify, &d.Operator, &d.Status, &d.ErrorMsg, &d.DurationSec, &d.CreatedAt,
+			&targetType, &vmTaskMap)
 	if err != nil {
 		JSONError(w, 40400, "deployment not found")
 		return
 	}
-	if !IsEnvIDAllowed(r, d.ProjectEnvID) {
-		JSONError(w, 40300, "无权访问该环境的发布记录")
-		return
+	// 数据级权限按 target_type 分流：VM 行 project_env_id 实际是 vm_project_env.id
+	if targetType == "vm" {
+		if !IsVmEnvIDAllowed(r, d.ProjectEnvID) {
+			JSONError(w, 40300, "无权访问该 VM 环境的发布记录")
+			return
+		}
+	} else {
+		if !IsEnvIDAllowed(r, d.ProjectEnvID) {
+			JSONError(w, 40300, "无权访问该环境的发布记录")
+			return
+		}
 	}
 	_ = jsonUnmarshalImpl(mnames, &d.ModuleNames)
 	_ = jsonUnmarshalImpl(changes, &d.Changes)
 	_ = jsonUnmarshalImpl(argoResults, &d.ArgocdResults)
+	_ = jsonUnmarshalImpl(vmTaskMap, &d.VmTaskMap)
 	if !IsAdmin(r) && d.ErrorMsg != "" {
 		d.ErrorMsg = "（失败详情已隐藏，请联系管理员查看）"
 	}

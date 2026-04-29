@@ -123,21 +123,47 @@
               <td :colspan="8">
                 <div class="detail-wrap">
 
-                  <!-- VM 行专属：服务 + ansible 日志按钮（不显示 K8s 那套 Tag/同步结果） -->
+                  <!-- VM 行专属：服务表（含版本+主机+per-service 日志按钮）；不显示 K8s 那套 Tag/同步结果 -->
                   <template v-if="isVmAction(row.action)">
                     <div class="section">
-                      <div class="sec-lbl">VM 部署明细</div>
-                      <div class="vm-detail-grid">
-                        <div><span class="muted">服务</span> <b class="mono">{{ (row.module_names || [])[0] || '—' }}</b></div>
-                        <div v-if="row.duration_sec != null"><span class="muted">总耗时</span> <b>{{ row.duration_sec }}s</b></div>
-                        <div><span class="muted">操作</span> <b>{{ actionLabel(row.action) }}</b></div>
+                      <div class="sec-lbl">
+                        VM 部署明细
+                        <span class="sec-sub">
+                          {{ (row.module_names || []).length }} 个服务
+                          <span v-if="row.duration_sec != null">· 总耗时 {{ row.duration_sec }}s</span>
+                          · 操作 {{ actionLabel(row.action) }}
+                        </span>
                       </div>
-                    </div>
-                    <div class="section">
-                      <div class="sec-lbl">Ansible 日志</div>
-                      <button class="view-logs-btn" @click.stop="openVmLog(row.id, row.status)">
-                        {{ row.status === 'pending' ? '查看实时日志' : '查看完整日志' }}
-                      </button>
+                      <table class="sub-tbl vm-tbl">
+                        <thead>
+                          <tr>
+                            <th>服务</th>
+                            <th>版本</th>
+                            <th>状态</th>
+                            <th>日志</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="svc in vmDetailRows(row)" :key="svc.service">
+                            <td class="mono">{{ svc.service }}</td>
+                            <td class="mono">
+                              <span v-if="svc.version">{{ svc.version }}</span>
+                              <span v-else class="muted">—</span>
+                            </td>
+                            <td>
+                              <span :class="'st-pill ' + (svc.status || 'unknown')">{{ vmServiceStatusLabel(svc.status) }}</span>
+                            </td>
+                            <td>
+                              <button class="view-logs-btn" @click.stop="openVmLog(row.id, row.status, svc.service)">
+                                {{ row.status === 'pending' ? '实时' : '查看' }}
+                              </button>
+                            </td>
+                          </tr>
+                          <tr v-if="vmDetailRows(row).length === 0">
+                            <td colspan="4" class="muted" style="text-align:center">无</td>
+                          </tr>
+                        </tbody>
+                      </table>
                     </div>
                   </template>
 
@@ -340,6 +366,36 @@ function actionLabel(a) {
     vm_rsync: 'VM 同步代码', vm_update_version: 'VM 部署',
   }[a] || a
 }
+
+// vmDetailRows 从 row 拼出 VM 明细行：
+//   优先 row.vm_task_map（含每个 service 的 status/log_object_key 等真实状态）；
+//   否则回退到 row.changes（仅有 module + to_tag），status 用 row.status 兜底显示
+//   再回退到 module_names（极老数据，单服务无版本）
+function vmDetailRows(row) {
+  if (Array.isArray(row.vm_task_map) && row.vm_task_map.length) {
+    return row.vm_task_map.map(t => ({
+      service: t.service,
+      version: t.version || '',
+      status: t.status || row.status,
+    }))
+  }
+  if (Array.isArray(row.changes) && row.changes.length) {
+    return row.changes.map(c => ({
+      service: c.module,
+      version: c.to_tag || '',
+      status: row.status,
+    }))
+  }
+  return (row.module_names || []).map(m => ({
+    service: m, version: '', status: row.status,
+  }))
+}
+function vmServiceStatusLabel(s) {
+  return {
+    pending: '执行中', running: '执行中',
+    success: '成功', failed: '失败', canceled: '已取消',
+  }[s] || s || '—'
+}
 function statusLabel(s) {
   return { success: '成功', partial: '部分成功', failed: '失败', pending: '进行中', no_change: '无变化', canceled: '已取消' }[s] || s
 }
@@ -441,30 +497,30 @@ function openLogsModal(deploymentId, app) {
 }
 
 // ---- VM ansible 日志弹窗 ----
-//   pending 状态 → 走 /vm-logs?stream=true 实时 SSE
-//   终态 → 走 /vm-archived-log 拿 MinIO 归档（已成型，不会再变）
+//   pending 状态 → 走 /vm-logs?stream=true&service=... 实时 SSE
+//   终态 → 走 /vm-archived-log?service=... 拿 MinIO 归档
+//   service 参数批量场景必填（前端传哪个服务的日志）；单服务场景传也兼容
 const vmLogDlg = reactive({
-  vis: false, deploymentId: 0, status: '',
+  vis: false, deploymentId: 0, status: '', service: '',
   text: '', size: 0,
   loading: false, error: '',
-  isLive: false,            // true = SSE 实时流；false = 归档静态
+  isLive: false,
 })
 const vmLogPre = ref(null)
 let vmLogAbort = null
 
-async function openVmLog(depID, status) {
-  // 关掉上一次的 SSE 连接
+async function openVmLog(depID, status, service = '') {
   closeVmLog()
   Object.assign(vmLogDlg, {
-    vis: true, deploymentId: depID, status: status || '',
+    vis: true, deploymentId: depID, status: status || '', service,
     text: '', size: 0, loading: true, error: '',
     isLive: status === 'pending',
   })
   if (status === 'pending') {
-    streamVmLog(depID)
+    streamVmLog(depID, service)
   } else {
     try {
-      const r = await fetchVmArchivedLog(depID)
+      const r = await fetchVmArchivedLog(depID, service)
       vmLogDlg.text = r.text
       vmLogDlg.size = r.size
       vmLogDlg.status = r.status || status
@@ -478,11 +534,13 @@ async function openVmLog(depID, status) {
 }
 
 // streamVmLog 用 fetch+ReadableStream 拉 SSE（EventSource 不能带 Authorization）
-async function streamVmLog(depID) {
+async function streamVmLog(depID, service) {
   vmLogAbort = new AbortController()
   const token = localStorage.getItem('deploy_token') || ''
   try {
-    const resp = await fetch(`/api/deployments/${depID}/vm-logs?stream=true&since=0`, {
+    const sp = new URLSearchParams({ stream: 'true', since: '0' })
+    if (service) sp.set('service', service)
+    const resp = await fetch(`/api/deployments/${depID}/vm-logs?` + sp.toString(), {
       headers: { Authorization: 'Bearer ' + token },
       signal: vmLogAbort.signal,
     })

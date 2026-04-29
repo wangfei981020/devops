@@ -187,15 +187,18 @@ export const vmDeployCancel      = (id) => http.post(`/deployments/${id}/vm-canc
 export const vmDeployLogsURL     = (id, since = 0, stream = true) =>
   `/api/deployments/${id}/vm-logs?since=${since}${stream ? '&stream=true' : ''}`
 // vm 任务终态后归档在 MinIO 的完整 ansible 日志（成败都归档）。
+// 批量场景传 service 参数挑某个服务的日志；单服务可省略
 // 用原生 fetch 拿 raw text，绕开 axios 的 JSON 响应拦截器
-export async function fetchVmArchivedLog(id) {
+export async function fetchVmArchivedLog(id, service = '') {
   const token = localStorage.getItem('deploy_token') || ''
-  const resp = await fetch(`/api/deployments/${id}/vm-archived-log`, {
+  const url = service
+    ? `/api/deployments/${id}/vm-archived-log?service=${encodeURIComponent(service)}`
+    : `/api/deployments/${id}/vm-archived-log`
+  const resp = await fetch(url, {
     headers: { Authorization: 'Bearer ' + token },
   })
   const text = await resp.text()
   if (!resp.ok) {
-    // 后端返的是 JSON 错误格式 {code,message}；尝试解析
     try { const j = JSON.parse(text); throw new Error(j.message || `HTTP ${resp.status}`) }
     catch (e) { if (e.message?.startsWith('HTTP ')) throw e; throw new Error(text || `HTTP ${resp.status}`) }
   }

@@ -677,8 +677,8 @@
         </div>
         <div class="sec-body">
           <div class="info-grid">
-            <div class="info"><div class="l">后端版本</div><div class="v mono">v102</div></div>
-            <div class="info"><div class="l">前端版本</div><div class="v mono">v111</div></div>
+            <div class="info"><div class="l">后端版本</div><div class="v mono">v103</div></div>
+            <div class="info"><div class="l">前端版本</div><div class="v mono">v112</div></div>
             <div class="info"><div class="l">数据库</div><div class="v">MySQL 8.0 · deploy_center</div></div>
           </div>
         </div>
