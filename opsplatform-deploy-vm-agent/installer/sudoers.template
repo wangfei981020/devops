@@ -1,0 +1,14 @@
+# /etc/sudoers.d/deploy-vm-agent — install.sh 安装；占位符 __AGENT_USER__ 会被替换
+# 让 agent 以非 root 用户运行，但能执行 ansible-playbook 和 G0X.py 同步脚本（这两个需要 root 权限）
+#
+# 限制范围：只允许这两类命令，路径限定在 ansible 仓库内，不能跑其他 sudo 命令
+# 验证：sudo visudo -cf /etc/sudoers.d/deploy-vm-agent
+
+Defaults:__AGENT_USER__ !requiretty
+
+__AGENT_USER__ ALL=(root) NOPASSWD: /usr/bin/ansible-playbook *
+__AGENT_USER__ ALL=(root) NOPASSWD: /usr/local/bin/ansible-playbook *
+__AGENT_USER__ ALL=(root) NOPASSWD: /usr/bin/python /etc/ansible/*.py *
+__AGENT_USER__ ALL=(root) NOPASSWD: /usr/bin/python3 /etc/ansible/*.py *
+__AGENT_USER__ ALL=(root) NOPASSWD: /usr/bin/python /etc/ansible/*/*.py *
+__AGENT_USER__ ALL=(root) NOPASSWD: /usr/bin/python3 /etc/ansible/*/*.py *

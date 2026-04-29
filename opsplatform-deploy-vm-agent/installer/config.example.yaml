@@ -1,0 +1,29 @@
+# deploy-vm-agent 配置文件
+# 安装时由 install.sh 生成；可手工编辑后 systemctl restart deploy-vm-agent 生效
+
+# HTTP 监听地址（不能为 0.0.0.0:80 之类，跟 ansible 机器其他服务冲突；通常 8443）
+listen: ":8443"
+
+# TLS 证书路径（你的域名证书。留空则跑 HTTP，仅本地调试）
+# 推荐：deploy-center 那边客户端配 InsecureSkipVerify=true 时可用自签
+tls_cert: "/etc/deploy-vm-agent/agent.crt"
+tls_key:  "/etc/deploy-vm-agent/agent.key"
+
+# 鉴权 token（install.sh 自动生成；deploy-center 配置 deploy_agent 时填这个）
+# ⚠️ 不要分享！等同 ansible 控制权
+token: "REPLACE_ME_WITH_RANDOM_TOKEN"
+
+# ansible 仓库本地 checkout 目录（agent 在这里 git pull）
+ansible_root: "/etc/ansible"
+
+# 版本根目录（rsync 落地处，扫服务版本用）
+version_root: "/data/vcs"
+
+# 同时跑多少 ansible 任务（rsync + update_version 一起算）
+max_concurrent: 10
+
+# 完成任务保留多久（清理内存中的任务记录）
+task_retention_hours: 24
+
+# 日志级别 info / debug
+log_level: "info"

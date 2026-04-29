@@ -1,0 +1,25 @@
+[Unit]
+Description=Deploy VM Agent (ansible 触发器)
+After=network.target
+
+[Service]
+Type=simple
+# install.sh 会替换 __AGENT_USER__ 占位符
+User=__AGENT_USER__
+Group=__AGENT_USER__
+ExecStart=/usr/local/bin/deploy-vm-agent --config /etc/deploy-vm-agent/config.yaml
+Restart=on-failure
+RestartSec=3s
+# 日志走 journald，systemctl status / journalctl -u deploy-vm-agent 看
+StandardOutput=journal
+StandardError=journal
+
+# 安全加固
+NoNewPrivileges=false   # 需要 sudo ansible-playbook，所以不能完全 NoNewPrivileges
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/etc/ansible /data/vcs /etc/deploy-vm-agent /var/log/deploy-vm-agent /tmp
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
