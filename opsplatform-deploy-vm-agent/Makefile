@@ -1,4 +1,4 @@
-VERSION ?= v1
+VERSION ?= v2
 HARBOR  := localhost:8070/opsplatform
 IMAGE   := $(HARBOR)/opsplatform-deploy-vm-agent:$(VERSION)
 
