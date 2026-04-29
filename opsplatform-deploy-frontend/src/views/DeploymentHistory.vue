@@ -96,8 +96,9 @@
               </td>
               <td class="mono">{{ fmtTime(row.created_at) }}</td>
               <td class="mono">
-                {{ envName(row.project_env_id) }}
-                <span :class="'env-chip ' + envType(row.project_env_id)" style="margin-left:4px">{{ envType(row.project_env_id).toUpperCase() }}</span>
+                {{ envName(row) }}
+                <span :class="'env-chip ' + envType(row)" style="margin-left:4px">{{ envType(row).toUpperCase() }}</span>
+                <span v-if="isVmAction(row.action)" class="kind-mini vm" style="margin-left:4px">VM</span>
               </td>
               <td>
                 <span :class="'action-tag ' + row.action">{{ actionLabel(row.action) }}</span>
@@ -122,7 +123,29 @@
               <td :colspan="8">
                 <div class="detail-wrap">
 
-                  <div v-if="row.action !== 'restart'" class="section">
+                  <!-- VM 行专属：服务 + ansible 日志按钮（不显示 K8s 那套 Tag/同步结果） -->
+                  <template v-if="isVmAction(row.action)">
+                    <div class="section">
+                      <div class="sec-lbl">VM 部署明细</div>
+                      <div class="vm-detail-grid">
+                        <div><span class="muted">服务</span> <b class="mono">{{ (row.module_names || [])[0] || '—' }}</b></div>
+                        <div v-if="row.duration_sec != null"><span class="muted">总耗时</span> <b>{{ row.duration_sec }}s</b></div>
+                        <div><span class="muted">操作</span> <b>{{ actionLabel(row.action) }}</b></div>
+                      </div>
+                    </div>
+                    <div class="section">
+                      <div class="sec-lbl">
+                        Ansible 日志
+                        <span class="sec-sub">归档在 MinIO，跟 K8s 失败 pod 日志同 bucket，过期自动清理</span>
+                      </div>
+                      <button class="view-logs-btn" @click="openVmLog(row.id)"
+                              :disabled="row.status === 'pending'">
+                        {{ row.status === 'pending' ? '任务进行中…' : '查看完整日志' }}
+                      </button>
+                    </div>
+                  </template>
+
+                  <div v-else-if="row.action !== 'restart'" class="section">
                     <div class="sec-lbl">Tag 变更明细</div>
                     <table class="sub-tbl">
                       <thead><tr><th>模块</th><th>原 tag</th><th>新 tag</th></tr></thead>
@@ -143,7 +166,7 @@
                     </div>
                   </div>
 
-                  <div class="section">
+                  <div v-if="!isVmAction(row.action)" class="section">
                     <div class="sec-lbl">
                       同步结果
                       <span class="sec-sub">
@@ -186,7 +209,7 @@
                       {{ cancelingIds.has(row.id) ? '取消中…' : '取消等待' }}
                     </button>
                     <button
-                      v-if="row.action !== 'restart' && ['success','partial','failed'].includes(row.status) && (auth.isAdmin || auth.hasButton('rollback'))"
+                      v-if="row.action !== 'restart' && !isVmAction(row.action) && ['success','partial','failed'].includes(row.status) && (auth.isAdmin || auth.hasButton('rollback'))"
                       class="btn-primary sm"
                       @click.stop="onRollback(row)">
                       回滚此次发布
@@ -218,6 +241,27 @@
     <RollbackDialog v-model="rbVis" :deployment-id="rbID" @done="doSearch" />
     <PodLogsModal :show="logsModal.show" :deployment-id="logsModal.deploymentId"
       :app="logsModal.app" @close="logsModal.show = false" />
+
+    <!-- VM ansible 日志弹窗：归档在 MinIO 的完整 stdout+stderr -->
+    <el-dialog v-model="vmLogDlg.vis"
+      :title="`Ansible 日志 · #${vmLogDlg.deploymentId}`"
+      width="900px"
+      :close-on-click-modal="false"
+      custom-class="vm-log-dialog">
+      <div v-if="vmLogDlg.loading" class="vm-log-loading">加载中…</div>
+      <div v-else-if="vmLogDlg.error" class="vm-log-error">
+        <el-icon><Warning /></el-icon> {{ vmLogDlg.error }}
+      </div>
+      <pre v-else ref="vmLogPre" class="vm-log-pre">{{ vmLogDlg.text || '（空）' }}</pre>
+      <template #footer>
+        <span class="vm-log-meta">
+          <span v-if="vmLogDlg.size">大小 <b>{{ formatBytes(vmLogDlg.size) }}</b></span>
+          <span v-if="vmLogDlg.status"> · 状态 <b>{{ statusLabel(vmLogDlg.status) }}</b></span>
+        </span>
+        <el-button @click="copyVmLog" :disabled="!vmLogDlg.text">复制全文</el-button>
+        <el-button @click="vmLogDlg.vis = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -226,8 +270,8 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from
 import PodLogsModal from '../components/PodLogsModal.vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
-import { Search, ArrowRight } from '@element-plus/icons-vue'
-import { listDeployments, listProjectEnvs, getDeployment, cancelDeployment } from '../api'
+import { Search, ArrowRight, Warning } from '@element-plus/icons-vue'
+import { listDeployments, listProjectEnvs, listVmProjectEnvs, getDeployment, cancelDeployment, fetchVmArchivedLog } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import RollbackDialog from '../components/RollbackDialog.vue'
 import { useAuthStore } from '../stores/auth'
@@ -277,12 +321,24 @@ const envsForProject = computed(() => {
 })
 function onProjectChange() { draft.env_type = '' }
 
-function envLabel(v) { return { uat: 'UAT', prod: 'PROD' }[v] || v }
-function envName(id) { return envs.value.find(e => e.id === id)?.name || id }
-function envType(id) { return envs.value.find(e => e.id === id)?.env_type || 'uat' }
+function envLabel(v) { return { uat: 'UAT', prod: 'PROD', lpt: 'LPT' }[v.toLowerCase()] || v }
+// envs 是 K8s + VM 合并的扁平数组，每条带 _kind 和原始 env_type
+// VM env_type 是 UAT/LPT/PROD 大写，K8s 是 uat/prod 小写。envType() 统一返小写做 chip class
+// K8s 和 VM env id 在不同表，可能撞号 → 必须根据 row.action 是否 vm_ 前缀来过滤 _kind
+function envForRow(row) {
+  if (!row) return null
+  const kind = isVmAction(row.action) ? 'vm' : 'k8s'
+  return envs.value.find(e => e._kind === kind && e.id === row.project_env_id)
+}
+function envName(row) { return envForRow(row)?.name || row?.project_env_id || '' }
+function envType(row) { return (envForRow(row)?.env_type || 'uat').toLowerCase() }
 function fmtTime(s) { return dayjs(s).format('YYYY-MM-DD HH:mm') }
+function isVmAction(a) { return typeof a === 'string' && a.startsWith('vm_') }
 function actionLabel(a) {
-  return { update_image: '更新镜像', restart: '重启服务', rollback: '回滚' }[a] || a
+  return {
+    update_image: '更新镜像', restart: '重启服务', rollback: '回滚',
+    vm_rsync: 'VM 同步代码', vm_update_version: 'VM 部署',
+  }[a] || a
 }
 function statusLabel(s) {
   return { success: '成功', partial: '部分成功', failed: '失败', pending: '进行中', no_change: '无变化', canceled: '已取消' }[s] || s
@@ -384,6 +440,36 @@ function openLogsModal(deploymentId, app) {
   logsModal.show = true
 }
 
+// ---- VM ansible 日志弹窗 ----
+const vmLogDlg = reactive({ vis: false, deploymentId: 0, text: '', size: 0, status: '', loading: false, error: '' })
+const vmLogPre = ref(null)
+async function openVmLog(depID) {
+  Object.assign(vmLogDlg, { vis: true, deploymentId: depID, text: '', size: 0, status: '', loading: true, error: '' })
+  try {
+    const r = await fetchVmArchivedLog(depID)
+    vmLogDlg.text = r.text
+    vmLogDlg.size = r.size
+    vmLogDlg.status = r.status
+  } catch (e) {
+    vmLogDlg.error = e.message || '加载失败'
+  } finally {
+    vmLogDlg.loading = false
+    // 滚到最后一行（ansible PLAY RECAP 通常在末尾）
+    nextTick(() => { if (vmLogPre.value) vmLogPre.value.scrollTop = vmLogPre.value.scrollHeight })
+  }
+}
+async function copyVmLog() {
+  try {
+    await navigator.clipboard.writeText(vmLogDlg.text || '')
+    ElMessage.success('已复制到剪贴板')
+  } catch { ElMessage.error('复制失败，请手动选中') }
+}
+function formatBytes(n) {
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+  return (n / 1024 / 1024).toFixed(2) + ' MB'
+}
+
 function liveDuration(r, row) {
   void tick.value // 读 tick 触发响应式
   if (isParentTerminal(row) || isTerminal(r)) return r.duration_sec ?? 0
@@ -471,7 +557,18 @@ async function onCancelRow(row) {
 }
 
 onMounted(async () => {
-  envs.value = (await listProjectEnvs()) || []
+  // K8s 和 VM 环境都要拉，前端按 row.action 是否 vm_ 前缀判断走哪个 detail 块
+  // env id 是不同表的，但加载到同一数组按 _kind 区分；envName/envType 通过 id 在数组里找
+  // 注意：K8s 和 VM 的 id 来自不同表，可能撞号 → 这里要么按"先 K8s 后 VM"的顺序保留 K8s 优先匹配
+  // 因为 listDeployments 返回的 row.project_env_id 实际意义按 row.action 是否 vm_ 区分：
+  // - K8s action → K8s project_env.id
+  // - VM action  → vm_project_env.id
+  // 所以查找时也得带上 row 上下文，下面 envFor()/envName()/envType() 都改成接 row
+  const [k8s, vm] = await Promise.all([listProjectEnvs(), listVmProjectEnvs().catch(() => [])])
+  envs.value = [
+    ...(k8s || []).map(e => ({ ...e, _kind: 'k8s' })),
+    ...(vm  || []).map(e => ({ ...e, _kind: 'vm'  })),
+  ]
   await doSearch()
   // 1s tick 驱动 liveDuration 插值，让非终态行的耗时每秒 +1；终态行不受影响
   tickTimer = setInterval(() => { tick.value++ }, 1000)
@@ -495,6 +592,41 @@ onUnmounted(() => {
 
 <style scoped>
 .dh { }
+
+/* ===== VM 行专属样式 ===== */
+.kind-mini.vm {
+  display: inline-block;
+  font: 700 9.5px 'Fira Code', monospace;
+  letter-spacing: .5px;
+  padding: 1px 5px; border-radius: 3px;
+  background: #faf5ff; color: #7c3aed;
+  border: 1px solid #ddd6fe;
+  vertical-align: middle;
+}
+.vm-detail-grid { display: flex; gap: 24px; flex-wrap: wrap; font-size: 12.5px; padding: 4px 0; }
+.vm-detail-grid > div { color: var(--text); }
+.vm-detail-grid b { font-family: 'Fira Code', monospace; font-weight: 600; margin-left: 4px; }
+.vm-detail-grid .muted { color: var(--text-3); }
+
+/* ===== VM 日志弹窗 ===== */
+:deep(.vm-log-dialog .el-dialog__body) { padding: 0 22px 12px; }
+.vm-log-loading, .vm-log-error {
+  padding: 60px 20px; text-align: center; color: var(--text-2);
+}
+.vm-log-error { color: var(--danger); display: flex; align-items: center; justify-content: center; gap: 6px; }
+.vm-log-pre {
+  margin: 0; padding: 14px 16px;
+  background: #1e1e1e; color: #d4d4d4;
+  font: 500 12px/1.65 'Fira Code', monospace;
+  max-height: 65vh; overflow: auto;
+  white-space: pre-wrap; word-break: break-all;
+  border-radius: 6px;
+}
+.vm-log-meta {
+  font-size: 12px; color: var(--text-3); margin-right: auto;
+}
+.vm-log-meta b { font-family: 'Fira Code', monospace; color: var(--text-2); font-weight: 600; }
+:deep(.vm-log-dialog .el-dialog__footer) { display: flex; align-items: center; }
 
 /* ===== KPI ===== */
 .kpis {

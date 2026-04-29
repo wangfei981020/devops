@@ -170,6 +170,7 @@ func main() {
 	protected.HandleFunc("/vm-services/{id}/versions", handlers.HandleListVmServiceVersions).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/deploy/vm-run", handlers.HandleVmDeploy).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/deployments/{id}/vm-logs", handlers.HandleVmDeployLogs).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/deployments/{id}/vm-archived-log", handlers.HandleVmArchivedLog).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/deployments/{id}/vm-cancel", handlers.HandleVmDeployCancel).Methods("POST", "OPTIONS")
 
 	// VM 写接口（仅 manage_argocd 权限放行；后续如需独立 manage_vm 权限再分）

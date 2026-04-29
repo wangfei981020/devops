@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -179,9 +180,66 @@ func pollVmTask(depID int64, agent *models.DeployAgent, taskID string, req vmDep
 					 AND name=?`,
 					req.Version, depID, req.Service)
 			}
+			// 不管成败，归档 ansible 日志到 MinIO（异步，失败不阻塞 deployment 写回）
+			go archiveVmTaskLog(depID, agent, taskID)
 			return
 		}
 	}
+}
+
+// archiveVmTaskLog 把 agent 端的 logBuffer 全量拉回上传 MinIO，并把 object_key/size 写回 deployment 行。
+//
+//	不管 success / failed / canceled 都归档。MinIO 未配置时优雅跳过。
+//	bucket 跟 K8s pod 日志共用同一个，lifecycle 自动过期；object key 路径 vm-logs/{depID}.log
+func archiveVmTaskLog(depID int64, agent *models.DeployAgent, taskID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[vm-archive] panic dep=%d: %v", depID, r)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	mc, err := loadMinIOClientFromDB()
+	if err != nil {
+		log.Printf("[vm-archive] load minio config: %v (skip dep=%d)", err, depID)
+		return
+	}
+	if mc == nil {
+		// 未配置，优雅跳过
+		log.Printf("[vm-archive] minio not configured, skip dep=%d", depID)
+		return
+	}
+	if err := mc.EnsureBucket(ctx); err != nil {
+		log.Printf("[vm-archive] ensure bucket: %v (skip dep=%d)", err, depID)
+		return
+	}
+
+	cli := services.NewVmAgentClient(agent.URL, agent.Token)
+	logs, _, err := cli.GetTaskLogs(ctx, taskID, 0)
+	if err != nil {
+		log.Printf("[vm-archive] get task logs from agent: %v (dep=%d)", err, depID)
+		return
+	}
+	if logs == "" {
+		// 任务可能根本没产出（agent 端日志已被 24h GC 清掉，或者任务一启动就崩没输出）
+		log.Printf("[vm-archive] empty log content, skip dep=%d", depID)
+		return
+	}
+
+	key := fmt.Sprintf("vm-logs/%d.log", depID)
+	size, err := mc.PutLog(ctx, key, logs)
+	if err != nil {
+		log.Printf("[vm-archive] put log: %v (dep=%d)", err, depID)
+		return
+	}
+	if _, err := database.DB.Exec(
+		`UPDATE deployment SET vm_log_object_key=?, vm_log_size=? WHERE id=?`,
+		key, int(size), depID); err != nil {
+		log.Printf("[vm-archive] update deployment: %v (dep=%d)", err, depID)
+		return
+	}
+	log.Printf("[vm-archive] dep=%d archived %d bytes → %s", depID, size, key)
 }
 
 // GET /api/deployments/{id}/vm-logs?since=<offset>&stream=true
@@ -275,6 +333,56 @@ func HandleVmDeployCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	Audit(r, "deploy.vm_cancel", "deployment", strconv.FormatInt(depID, 10), nil)
 	JSONSuccess(w, map[string]interface{}{"canceled": true})
+}
+
+// GET /api/deployments/{id}/vm-archived-log
+//
+//	返回 MinIO 里归档的 ansible 完整日志（成败都归档）。任务终态后才有；
+//	pending/running 期间走 /vm-logs?stream=true 实时流。
+func HandleVmArchivedLog(w http.ResponseWriter, r *http.Request) {
+	depID := ParseID(mux.Vars(r)["id"])
+
+	var status, objectKey string
+	var size int
+	err := database.DB.QueryRow(
+		`SELECT IFNULL(status,''), IFNULL(vm_log_object_key,''), IFNULL(vm_log_size,0)
+		   FROM deployment
+		  WHERE id=? AND target_type='vm'`,
+		depID).Scan(&status, &objectKey, &size)
+	if err != nil {
+		JSONError(w, 40400, "vm deployment not found")
+		return
+	}
+	if objectKey == "" {
+		// 归档不可用的几种情况，分别给清晰提示
+		switch status {
+		case "pending":
+			JSONError(w, 40901, "任务进行中，去部署控制台看实时日志")
+		case "":
+			JSONError(w, 40901, "任务还没开始，无日志")
+		default:
+			// 终态但没归档：可能 MinIO 未配置 / agent 端日志已 GC / 上传失败
+			JSONError(w, 40402, "该任务没有归档日志（可能未配置 MinIO 或归档时 agent 已 GC 日志）")
+		}
+		return
+	}
+
+	mc, err := loadMinIOClientFromDB()
+	if err != nil || mc == nil {
+		JSONError(w, 50000, "MinIO 不可用，归档日志读不出来")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	content, err := mc.GetLog(ctx, objectKey)
+	if err != nil {
+		JSONError(w, 50000, "minio get: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Log-Size", strconv.Itoa(size))
+	w.Header().Set("X-Log-Status", status)
+	_, _ = w.Write([]byte(content))
 }
 
 // flushingWriter 在每次 Write 后触发 HTTP flush，让 SSE 数据立刻到前端
