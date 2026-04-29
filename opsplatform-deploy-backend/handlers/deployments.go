@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -43,15 +44,23 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 			args = append(args, int(d.Seconds()))
 		}
 	}
-	// 项目名前缀匹配 project_env.name（e.g. g32 匹配 g32-uat/g32-prod）
+	// 项目名前缀匹配（e.g. g32 匹配 g32-uat/g32-prod）；K8s + VM 都看，按 target_type 选表
 	if v := r.URL.Query().Get("project"); v != "" {
-		where += " AND project_env_id IN (SELECT id FROM project_env WHERE name LIKE ?)"
-		args = append(args, v+"-%")
+		where += ` AND (
+			(target_type='k8s' AND project_env_id IN (SELECT id FROM project_env WHERE name LIKE ?))
+			OR
+			(target_type='vm'  AND project_env_id IN (SELECT id FROM vm_project_env WHERE name LIKE ?))
+		)`
+		args = append(args, v+"-%", v+"-%")
 	}
-	// 环境类型（uat/prod）
+	// 环境类型（uat/prod/lpt）；VM 表 env_type 大写，用 LOWER() 归一化
 	if v := r.URL.Query().Get("env_type"); v != "" {
-		where += " AND project_env_id IN (SELECT id FROM project_env WHERE env_type=?)"
-		args = append(args, v)
+		where += ` AND (
+			(target_type='k8s' AND project_env_id IN (SELECT id FROM project_env WHERE LOWER(env_type)=?))
+			OR
+			(target_type='vm'  AND project_env_id IN (SELECT id FROM vm_project_env WHERE LOWER(env_type)=?))
+		)`
+		args = append(args, v, v)
 	}
 	// 时间范围
 	if v := r.URL.Query().Get("time_from"); v != "" {
@@ -69,17 +78,33 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 		args = append(args, "%"+v+"%")
 	}
 	// env 白名单过滤（admin 时 enforce=false 不加 WHERE）
-	if allowedIDs, enforce := AllowedEnvIDs(r); enforce {
-		if len(allowedIDs) == 0 {
+	// K8s id 来自 project_env，VM id 来自 vm_project_env，分别取后按 target_type 拼条件
+	k8sIDs, k8sEnforce := AllowedEnvIDs(r)
+	vmIDs, vmEnforce := AllowedVmEnvIDs(r)
+	if k8sEnforce || vmEnforce {
+		if len(k8sIDs) == 0 && len(vmIDs) == 0 {
 			JSONSuccess(w, map[string]interface{}{"total": 0, "list": []models.Deployment{}})
 			return
 		}
-		ph := strings.Repeat("?,", len(allowedIDs))
-		ph = ph[:len(ph)-1]
-		where += " AND project_env_id IN (" + ph + ")"
-		for _, id := range allowedIDs {
-			args = append(args, id)
+		// 拼 (target_type='k8s' AND id IN (...)) OR (target_type='vm' AND id IN (...))
+		clauses := []string{}
+		if len(k8sIDs) > 0 {
+			ph := strings.Repeat("?,", len(k8sIDs))
+			ph = ph[:len(ph)-1]
+			clauses = append(clauses, "(target_type='k8s' AND project_env_id IN ("+ph+"))")
+			for _, id := range k8sIDs {
+				args = append(args, id)
+			}
 		}
+		if len(vmIDs) > 0 {
+			ph := strings.Repeat("?,", len(vmIDs))
+			ph = ph[:len(ph)-1]
+			clauses = append(clauses, "(target_type='vm' AND project_env_id IN ("+ph+"))")
+			for _, id := range vmIDs {
+				args = append(args, id)
+			}
+		}
+		where += " AND (" + strings.Join(clauses, " OR ") + ")"
 	}
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -167,15 +192,14 @@ func HandleCancelDeployment(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40001, "id 非法")
 		return
 	}
+	// 多读 target_type，按它分流到 K8s / VM 处理
 	var d models.Deployment
-	err := database.DB.QueryRow(`SELECT id, project_env_id, status, operator FROM deployment WHERE id=?`, id).
-		Scan(&d.ID, &d.ProjectEnvID, &d.Status, &d.Operator)
+	var targetType string
+	err := database.DB.QueryRow(
+		`SELECT id, project_env_id, status, operator, action, IFNULL(target_type,'k8s') FROM deployment WHERE id=?`, id).
+		Scan(&d.ID, &d.ProjectEnvID, &d.Status, &d.Operator, &d.Action, &targetType)
 	if err != nil {
 		JSONError(w, 40400, "发布记录不存在")
-		return
-	}
-	if !IsEnvIDAllowed(r, d.ProjectEnvID) {
-		JSONError(w, 40300, "无权操作该环境的发布")
 		return
 	}
 	currentUser := UsernameFromCtx(r)
@@ -185,6 +209,24 @@ func HandleCancelDeployment(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.Status != models.StatusPending {
 		JSONError(w, 40900, "该发布已结束，无法取消（当前状态："+d.Status+"）")
+		return
+	}
+
+	// VM 分支：调 agent 真正杀进程，pollVmTask 走 ctx.Done() 写状态
+	if targetType == "vm" {
+		if !cancelVmDeploymentByID(w, r, id) {
+			return
+		}
+		Audit(r, "deploy.cancel", "deployment", strconv.FormatInt(id, 10),
+			map[string]interface{}{"action": d.Action, "operator": d.Operator, "target_type": "vm"})
+		log.Printf("[deploy-cancel] dep=%d operator=%s target_type=vm canceled", id, currentUser)
+		JSONSuccess(w, map[string]interface{}{"id": id, "result": "canceled"})
+		return
+	}
+
+	// K8s 分支（现有逻辑）
+	if !IsEnvIDAllowed(r, d.ProjectEnvID) {
+		JSONError(w, 40300, "无权操作该环境的发布")
 		return
 	}
 	if !CancelDeployment(id) {
@@ -200,6 +242,7 @@ func HandleCancelDeployment(w http.ResponseWriter, r *http.Request) {
 	}
 	Audit(r, "deploy.cancel", "deployment", strconv.FormatInt(id, 10),
 		map[string]interface{}{"action": d.Action, "operator": d.Operator})
+	log.Printf("[deploy-cancel] dep=%d operator=%s target_type=k8s canceled", id, currentUser)
 	JSONSuccess(w, map[string]interface{}{"id": id, "result": "canceled"})
 }
 

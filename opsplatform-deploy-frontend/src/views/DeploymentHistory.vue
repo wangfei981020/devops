@@ -136,11 +136,12 @@
                     <div class="section">
                       <div class="sec-lbl">
                         Ansible 日志
-                        <span class="sec-sub">归档在 MinIO，跟 K8s 失败 pod 日志同 bucket，过期自动清理</span>
+                        <span class="sec-sub">
+                          {{ row.status === 'pending' ? '进行中 → 实时 SSE 流' : '归档在 MinIO，跟 K8s 失败 pod 日志同 bucket，过期自动清理' }}
+                        </span>
                       </div>
-                      <button class="view-logs-btn" @click="openVmLog(row.id)"
-                              :disabled="row.status === 'pending'">
-                        {{ row.status === 'pending' ? '任务进行中…' : '查看完整日志' }}
+                      <button class="view-logs-btn" @click.stop="openVmLog(row.id, row.status)">
+                        {{ row.status === 'pending' ? '查看实时日志' : '查看完整日志' }}
                       </button>
                     </div>
                   </template>
@@ -242,13 +243,17 @@
     <PodLogsModal :show="logsModal.show" :deployment-id="logsModal.deploymentId"
       :app="logsModal.app" @close="logsModal.show = false" />
 
-    <!-- VM ansible 日志弹窗：归档在 MinIO 的完整 stdout+stderr -->
+    <!-- VM ansible 日志弹窗：pending 走 SSE 实时流，终态走归档 -->
     <el-dialog v-model="vmLogDlg.vis"
       :title="`Ansible 日志 · #${vmLogDlg.deploymentId}`"
       width="900px"
       :close-on-click-modal="false"
       custom-class="vm-log-dialog">
-      <div v-if="vmLogDlg.loading" class="vm-log-loading">加载中…</div>
+      <div class="vm-log-status-bar" v-if="vmLogDlg.isLive">
+        <span class="vm-log-live-dot"></span>
+        <span>实时流（SSE）· 任务进行中，新日志会自动追加</span>
+      </div>
+      <div v-if="vmLogDlg.loading && !vmLogDlg.text" class="vm-log-loading">加载中…</div>
       <div v-else-if="vmLogDlg.error" class="vm-log-error">
         <el-icon><Warning /></el-icon> {{ vmLogDlg.error }}
       </div>
@@ -441,23 +446,87 @@ function openLogsModal(deploymentId, app) {
 }
 
 // ---- VM ansible 日志弹窗 ----
-const vmLogDlg = reactive({ vis: false, deploymentId: 0, text: '', size: 0, status: '', loading: false, error: '' })
+//   pending 状态 → 走 /vm-logs?stream=true 实时 SSE
+//   终态 → 走 /vm-archived-log 拿 MinIO 归档（已成型，不会再变）
+const vmLogDlg = reactive({
+  vis: false, deploymentId: 0, status: '',
+  text: '', size: 0,
+  loading: false, error: '',
+  isLive: false,            // true = SSE 实时流；false = 归档静态
+})
 const vmLogPre = ref(null)
-async function openVmLog(depID) {
-  Object.assign(vmLogDlg, { vis: true, deploymentId: depID, text: '', size: 0, status: '', loading: true, error: '' })
-  try {
-    const r = await fetchVmArchivedLog(depID)
-    vmLogDlg.text = r.text
-    vmLogDlg.size = r.size
-    vmLogDlg.status = r.status
-  } catch (e) {
-    vmLogDlg.error = e.message || '加载失败'
-  } finally {
-    vmLogDlg.loading = false
-    // 滚到最后一行（ansible PLAY RECAP 通常在末尾）
-    nextTick(() => { if (vmLogPre.value) vmLogPre.value.scrollTop = vmLogPre.value.scrollHeight })
+let vmLogAbort = null
+
+async function openVmLog(depID, status) {
+  // 关掉上一次的 SSE 连接
+  closeVmLog()
+  Object.assign(vmLogDlg, {
+    vis: true, deploymentId: depID, status: status || '',
+    text: '', size: 0, loading: true, error: '',
+    isLive: status === 'pending',
+  })
+  if (status === 'pending') {
+    streamVmLog(depID)
+  } else {
+    try {
+      const r = await fetchVmArchivedLog(depID)
+      vmLogDlg.text = r.text
+      vmLogDlg.size = r.size
+      vmLogDlg.status = r.status || status
+    } catch (e) {
+      vmLogDlg.error = e.message || '加载失败'
+    } finally {
+      vmLogDlg.loading = false
+      nextTick(() => { if (vmLogPre.value) vmLogPre.value.scrollTop = vmLogPre.value.scrollHeight })
+    }
   }
 }
+
+// streamVmLog 用 fetch+ReadableStream 拉 SSE（EventSource 不能带 Authorization）
+async function streamVmLog(depID) {
+  vmLogAbort = new AbortController()
+  const token = localStorage.getItem('deploy_token') || ''
+  try {
+    const resp = await fetch(`/api/deployments/${depID}/vm-logs?stream=true&since=0`, {
+      headers: { Authorization: 'Bearer ' + token },
+      signal: vmLogAbort.signal,
+    })
+    vmLogDlg.loading = false
+    if (!resp.ok || !resp.body) {
+      vmLogDlg.error = `HTTP ${resp.status}`
+      return
+    }
+    const reader = resp.body.getReader()
+    const dec = new TextDecoder()
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      const chunk = dec.decode(value)
+      // SSE 解析：每行 'data: xxx' → 拼回正文
+      for (const line of chunk.split('\n')) {
+        if (line.startsWith('data: ')) {
+          vmLogDlg.text += line.slice(6) + '\n'
+        }
+      }
+      vmLogDlg.size = vmLogDlg.text.length
+      nextTick(() => { if (vmLogPre.value) vmLogPre.value.scrollTop = vmLogPre.value.scrollHeight })
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      vmLogDlg.error = '[stream error] ' + e.message
+    }
+  } finally {
+    vmLogDlg.loading = false
+  }
+}
+
+function closeVmLog() {
+  if (vmLogAbort) { vmLogAbort.abort(); vmLogAbort = null }
+}
+
+// 弹窗关闭 → 中断 SSE
+watch(() => vmLogDlg.vis, (v) => { if (!v) closeVmLog() })
+
 async function copyVmLog() {
   try {
     await navigator.clipboard.writeText(vmLogDlg.text || '')
@@ -529,22 +598,35 @@ function onRollback(row) {
   router.push({ path: '/deploy', query: { rollback_from: String(row.id) } })
 }
 
-// 取消等待：仅 status=pending 的发布可取消，git 改动已 push、不会回滚
+// 取消等待：仅 status=pending 的发布可取消
+//   K8s：git 已 push，后台同步会继续；只是不再等待
+//   VM：会真的发 SIGTERM 杀 ansible-playbook 进程，可能让目标机器留半部署状态
 const cancelingIds = reactive(new Set())
 async function onCancelRow(row) {
   if (cancelingIds.has(row.id)) return
+  // 按 K8s / VM 给不同提示
+  const isVm = isVmAction(row.action)
+  const message = isVm
+    ? 'VM 任务取消会向 ansible 控制机发 SIGTERM 杀 ansible-playbook 进程，<b style="color:#dc2626;">可能让目标机器留在半部署状态</b>。\n\n确认要取消吗？'
+    : '代码已提交仓库，后台同步会继续进行。\n取消后只是不再等待状态反馈。\n\n如果 30 分钟内仍未完成，请人工检查对应服务的 Pod 是否已正常启动。'
+  const title = isVm ? '⚠ 取消 VM 任务（不可逆）' : '确认取消等待？'
   try {
-    await ElMessageBox.confirm(
-      '代码已提交仓库，后台同步会继续进行。\n取消后只是不再等待状态反馈。\n\n如果 30 分钟内仍未完成，请人工检查对应服务的 Pod 是否已正常启动。',
-      '确认取消等待？',
-      { type: 'warning', confirmButtonText: '确定取消', cancelButtonText: '继续等待', autofocus: false }
-    )
+    await ElMessageBox.confirm(message, title, {
+      type: 'warning',
+      dangerouslyUseHTMLString: isVm,
+      confirmButtonText: isVm ? '确认取消（接受半部署风险）' : '确定取消',
+      cancelButtonText: isVm ? '不取消' : '继续等待',
+      confirmButtonClass: isVm ? 'el-button--danger' : '',
+      autofocus: false,
+    })
   } catch (_) { return }
   cancelingIds.add(row.id)
   try {
     const r = await cancelDeployment(row.id)
     if (r?.result === 'stale') {
       ElMessage.info('该任务已结束，无需取消')
+    } else if (isVm) {
+      ElMessage.success('已发取消请求 · agent 杀进程后状态会变 canceled')
     } else {
       ElMessage.success('已取消等待 · 后台同步会继续进行')
     }
@@ -627,6 +709,21 @@ onUnmounted(() => {
 }
 .vm-log-meta b { font-family: 'Fira Code', monospace; color: var(--text-2); font-weight: 600; }
 :deep(.vm-log-dialog .el-dialog__footer) { display: flex; align-items: center; }
+.vm-log-status-bar {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 8px; padding: 6px 12px;
+  background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 4px;
+  font-size: 12px; color: #1e40af;
+}
+.vm-log-live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #ef4444;
+  animation: vm-live-pulse 1.2s infinite;
+}
+@keyframes vm-live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .4; }
+}
 
 /* ===== KPI ===== */
 .kpis {

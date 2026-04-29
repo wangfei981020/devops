@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -37,6 +38,11 @@ func HandleListVmServiceVersions(w http.ResponseWriter, r *http.Request) {
 		`SELECT name, vm_project_env_id FROM vm_service WHERE id=?`, id).
 		Scan(&name, &envID); err != nil {
 		JSONError(w, 40400, "vm_service not found")
+		return
+	}
+	// 数据级权限：用户对 service 所属 vm_project_env 有访问权
+	if !IsVmEnvIDAllowed(r, envID) {
+		JSONError(w, 40300, "无权访问该 VM 服务的版本列表")
 		return
 	}
 	v, err := loadVmProjectEnv(envID)
@@ -72,20 +78,23 @@ func HandleListVmServiceVersions(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := client.Get(u)
 	if err != nil {
-		JSONError(w, 50001, "list-version api: "+err.Error())
+		log.Printf("[vm-versions] svc=%d call list-version api failed: %v", id, err)
+		JSONError(w, 50001, "调 list-version 接口失败，详情见服务端日志")
 		return
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		JSONError(w, 50001, "list-version api status "+strconv.Itoa(resp.StatusCode)+": "+string(raw))
+		log.Printf("[vm-versions] svc=%d list-version api status=%d body=%s", id, resp.StatusCode, string(raw))
+		JSONError(w, 50001, "list-version 接口返回 "+strconv.Itoa(resp.StatusCode)+"，详情见服务端日志")
 		return
 	}
 	var parsed struct {
 		Versions []string `json:"versions"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		JSONError(w, 50001, "parse api response: "+err.Error())
+		log.Printf("[vm-versions] svc=%d parse response failed: %v body=%s", id, err, string(raw))
+		JSONError(w, 50001, "list-version 接口响应格式错误，详情见服务端日志")
 		return
 	}
 	JSONSuccess(w, map[string]interface{}{

@@ -834,8 +834,9 @@ func sendCardSets(p *models.ProjectEnv, depID int64, operator, opLabel, atID,
 	anyFail := false
 	for _, s := range sets {
 		title, color, body := buildDeployNotifyBody(opLabel, operator, atID, s.kind, s.items)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		err := services.SendLarkCard(ctx, webhook, secret, title, body, color, linkLabel, linkURL)
+		// 用带重试版：3 次 attempt，每次 10s + 1s/2s 退避，外层留 40s 总预算
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		err := services.SendLarkCardWithRetry(ctx, webhook, secret, title, body, color, linkLabel, linkURL)
 		cancel()
 		if err != nil {
 			log.Printf("lark send failed: dep=%d kind=%s err=%v", depID, s.kind, err)

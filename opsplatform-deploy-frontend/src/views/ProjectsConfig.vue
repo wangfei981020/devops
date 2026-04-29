@@ -373,6 +373,18 @@
             <input v-model="vmEnvForm.project_code" class="inp mono" placeholder="G01" />
           </div>
         </div>
+
+        <div class="sec-lbl">通知</div>
+        <div class="field">
+          <label>Lark 机器人 <span class="hint">可选 · 选了发布完会发卡片通知（带 3 次重试）</span></label>
+          <select v-model="vmEnvForm.lark_bot_id" class="inp">
+            <option :value="null">— 不发通知 —</option>
+            <option v-for="b in larkBots" :key="b.id" :value="b.id">{{ b.name }}{{ b.description ? ' · ' + b.description : '' }}</option>
+          </select>
+          <div v-if="!larkBots.length" class="hint-text" style="color:var(--warning);margin-top:4px">
+            还没有 Lark 机器人，去「系统设置 → Lark 机器人」添加
+          </div>
+        </div>
       </div>
       <template #footer>
         <div class="dlg-foot">
@@ -434,6 +446,7 @@ const vmEnvEditingID = ref(null)
 const blankVmEnv = () => ({
   project_name: '', display_name: '', env_type: 'UAT',
   agent_id: null, ansible_root: '/etc/ansible', project_code: '',
+  lark_bot_id: null,
 })
 const vmEnvForm = reactive(blankVmEnv())
 const deployAgents = ref([])
@@ -715,6 +728,7 @@ function openEditVmEnv(e) {
     agent_id: e.agent_id || null,
     ansible_root: e.ansible_root || '/etc/ansible',
     project_code: e.project_code || '',
+    lark_bot_id: e.lark_bot_id || null,
     _project_id: e.project_id || null,
   })
   vmEnvDlgVis.value = true
@@ -730,6 +744,7 @@ async function onSaveVmEnv() {
     agent_id: vmEnvForm.agent_id,
     ansible_root: vmEnvForm.ansible_root.trim() || '/etc/ansible',
     project_code: vmEnvForm.project_code.trim(),
+    lark_bot_id: vmEnvForm.lark_bot_id || null,
   }
   saving.value = true
   try {

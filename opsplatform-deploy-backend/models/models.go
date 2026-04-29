@@ -127,6 +127,7 @@ type VmProjectEnv struct {
 	AgentID      int64     `json:"agent_id"`
 	AnsibleRoot  string    `json:"ansible_root"`  // 默认 /etc/ansible
 	ProjectCode  string    `json:"project_code"`  // G01 / G02
+	LarkBotID    *int64    `json:"lark_bot_id"`   // 跟 K8s project_env.lark_bot_id 同义；NULL 走 gc.lark_default_webhook
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }

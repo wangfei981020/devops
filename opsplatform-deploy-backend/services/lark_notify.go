@@ -8,10 +8,44 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
 )
+
+// SendLarkCardWithRetry 包装 SendLarkCard，失败重试 3 次（1s/2s 指数退避）。
+//
+//	所有发布通知（K8s + VM）都走这个，避免临时网抖把通知吞了。
+//	最后一次仍失败才返 error，调用方按现有逻辑 log + 把 deployment.lark_notify 标 'failed'。
+//	注意：测试发送（系统设置里的"测试"按钮）不要重试，用 SendLarkCard 单次即可。
+func SendLarkCardWithRetry(ctx context.Context, webhook, secret, title, body, color, linkLabel, linkURL string, atLarkIDs ...string) error {
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		// 每次 attempt 独立 10s timeout，避免外层 ctx 太长导致重试无意义
+		attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := SendLarkCard(attemptCtx, webhook, secret, title, body, color, linkLabel, linkURL, atLarkIDs...)
+		cancel()
+		if err == nil {
+			if attempt > 1 {
+				log.Printf("[lark] sent OK on attempt %d", attempt)
+			}
+			return nil
+		}
+		lastErr = err
+		log.Printf("[lark] attempt %d/3 failed: %v", attempt, err)
+		if attempt < 3 {
+			// 指数退避：第 1 次失败后等 1s，第 2 次失败后等 2s
+			backoff := time.Duration(1<<(attempt-1)) * time.Second
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return fmt.Errorf("aborted during retry: %w", ctx.Err())
+			}
+		}
+	}
+	return fmt.Errorf("after 3 attempts: %w", lastErr)
+}
 
 // SendLarkCard 发送飞书 interactive 卡片
 // color: "green"|"red"|"orange"|"blue"

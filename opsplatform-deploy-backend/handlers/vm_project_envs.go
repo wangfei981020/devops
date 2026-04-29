@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -29,18 +30,37 @@ type vmProjectEnvReq struct {
 	AgentID     int64  `json:"agent_id"`
 	AnsibleRoot string `json:"ansible_root"` // 留空走 /etc/ansible
 	ProjectCode string `json:"project_code"` // G01 / G02
+	LarkBotID   *int64 `json:"lark_bot_id"`  // 可选；NULL = 不发 Lark
 }
 
 // GET /api/vm-project-envs?project_id=<id>
 //
-//	可选按 project_id 过滤；不传则全列（admin 用）
+//	可选按 project_id 过滤；不传则全列。
+//	非 admin 用户按 env name 白名单过滤（admin 直通看全部）
 func HandleListVmProjectEnvs(w http.ResponseWriter, r *http.Request) {
-	q := `SELECT id, project_id, name, IFNULL(display_name,''), env_type, agent_id, ansible_root, project_code, created_at, updated_at FROM vm_project_env`
+	q := `SELECT id, project_id, name, IFNULL(display_name,''), env_type, agent_id, ansible_root, project_code, lark_bot_id, created_at, updated_at FROM vm_project_env`
+	conds := []string{}
 	args := []interface{}{}
 	if pidStr := r.URL.Query().Get("project_id"); pidStr != "" {
-		q += ` WHERE project_id=?`
+		conds = append(conds, "project_id=?")
 		pid, _ := strconv.ParseInt(pidStr, 10, 64)
 		args = append(args, pid)
+	}
+	// 数据级权限：非 admin 仅返回白名单内的 env
+	if names, enforce := AllowedEnvNames(r); enforce {
+		if len(names) == 0 {
+			JSONSuccess(w, []models.VmProjectEnv{})
+			return
+		}
+		ph := make([]string, len(names))
+		for i, n := range names {
+			ph[i] = "?"
+			args = append(args, n)
+		}
+		conds = append(conds, "name IN ("+strings.Join(ph, ",")+")")
+	}
+	if len(conds) > 0 {
+		q += " WHERE " + strings.Join(conds, " AND ")
 	}
 	q += ` ORDER BY name`
 	rows, err := database.DB.Query(q, args...)
@@ -52,7 +72,7 @@ func HandleListVmProjectEnvs(w http.ResponseWriter, r *http.Request) {
 	out := []models.VmProjectEnv{}
 	for rows.Next() {
 		var v models.VmProjectEnv
-		_ = rows.Scan(&v.ID, &v.ProjectID, &v.Name, &v.DisplayName, &v.EnvType, &v.AgentID, &v.AnsibleRoot, &v.ProjectCode, &v.CreatedAt, &v.UpdatedAt)
+		_ = rows.Scan(&v.ID, &v.ProjectID, &v.Name, &v.DisplayName, &v.EnvType, &v.AgentID, &v.AnsibleRoot, &v.ProjectCode, &v.LarkBotID, &v.CreatedAt, &v.UpdatedAt)
 		out = append(out, v)
 	}
 	JSONSuccess(w, out)
@@ -61,6 +81,10 @@ func HandleListVmProjectEnvs(w http.ResponseWriter, r *http.Request) {
 // GET /api/vm-project-envs/{id}
 func HandleGetVmProjectEnv(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
+	if !IsVmEnvIDAllowed(r, id) {
+		JSONError(w, 40300, "无权访问该 VM 环境")
+		return
+	}
 	v, err := loadVmProjectEnv(id)
 	if err != nil {
 		JSONError(w, 40400, "vm_project_env not found")
@@ -80,11 +104,11 @@ func HandleCreateVmProjectEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := database.DB.Exec(
-		`INSERT INTO vm_project_env (project_id, name, display_name, env_type, agent_id, ansible_root, project_code)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		req.ProjectID, req.Name, req.DisplayName, req.EnvType, req.AgentID, req.AnsibleRoot, req.ProjectCode)
+		`INSERT INTO vm_project_env (project_id, name, display_name, env_type, agent_id, ansible_root, project_code, lark_bot_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.ProjectID, req.Name, req.DisplayName, req.EnvType, req.AgentID, req.AnsibleRoot, req.ProjectCode, req.LarkBotID)
 	if err != nil {
-		JSONError(w, 40001, "create: "+err.Error())
+		InternalErr(w, r, fmt.Errorf("create vm_project_env (name=%s): %w", req.Name, err))
 		return
 	}
 	id, _ := res.LastInsertId()
@@ -104,8 +128,8 @@ func HandleUpdateVmProjectEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, err := database.DB.Exec(
-		`UPDATE vm_project_env SET display_name=?, env_type=?, agent_id=?, ansible_root=?, project_code=? WHERE id=?`,
-		req.DisplayName, req.EnvType, req.AgentID, req.AnsibleRoot, req.ProjectCode, id)
+		`UPDATE vm_project_env SET display_name=?, env_type=?, agent_id=?, ansible_root=?, project_code=?, lark_bot_id=? WHERE id=?`,
+		req.DisplayName, req.EnvType, req.AgentID, req.AnsibleRoot, req.ProjectCode, req.LarkBotID, id)
 	if err != nil {
 		InternalErr(w, r, err)
 		return
@@ -133,6 +157,10 @@ func HandleDeleteVmProjectEnv(w http.ResponseWriter, r *http.Request) {
 //	幂等，可重复跑。
 func HandleScanVmServices(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
+	if !IsVmEnvIDAllowed(r, id) {
+		JSONError(w, 40300, "无权扫描该 VM 环境")
+		return
+	}
 	v, err := loadVmProjectEnv(id)
 	if err != nil {
 		JSONError(w, 40400, "vm_project_env not found")
@@ -148,7 +176,7 @@ func HandleScanVmServices(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	svcs, err := cli.ListServices(ctx, v.ProjectCode, v.EnvType)
 	if err != nil {
-		JSONError(w, 50000, "agent: "+err.Error())
+		InternalErr(w, r, fmt.Errorf("agent list services (env=%s): %w", v.Name, err))
 		return
 	}
 
@@ -200,6 +228,10 @@ func HandleScanVmServices(w http.ResponseWriter, r *http.Request) {
 //	前端列服务下拉用
 func HandleListVmServices(w http.ResponseWriter, r *http.Request) {
 	envID := ParseID(mux.Vars(r)["id"])
+	if !IsVmEnvIDAllowed(r, envID) {
+		JSONError(w, 40300, "无权访问该 VM 环境")
+		return
+	}
 	rows, err := database.DB.Query(
 		`SELECT id, vm_project_env_id, name, IFNULL(ansible_group,''), IFNULL(hosts,'[]'),
 		        IFNULL(current_version,''), last_scanned_at, created_at, updated_at
@@ -239,9 +271,9 @@ func validateVmReq(req *vmProjectEnvReq) error {
 func loadVmProjectEnv(id int64) (*models.VmProjectEnv, error) {
 	var v models.VmProjectEnv
 	err := database.DB.QueryRow(
-		`SELECT id, project_id, name, IFNULL(display_name,''), env_type, agent_id, ansible_root, project_code, created_at, updated_at
+		`SELECT id, project_id, name, IFNULL(display_name,''), env_type, agent_id, ansible_root, project_code, lark_bot_id, created_at, updated_at
 		 FROM vm_project_env WHERE id=?`, id).
-		Scan(&v.ID, &v.ProjectID, &v.Name, &v.DisplayName, &v.EnvType, &v.AgentID, &v.AnsibleRoot, &v.ProjectCode, &v.CreatedAt, &v.UpdatedAt)
+		Scan(&v.ID, &v.ProjectID, &v.Name, &v.DisplayName, &v.EnvType, &v.AgentID, &v.AnsibleRoot, &v.ProjectCode, &v.LarkBotID, &v.CreatedAt, &v.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
