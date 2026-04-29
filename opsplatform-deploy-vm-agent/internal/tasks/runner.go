@@ -81,20 +81,43 @@ sudo %sansible-playbook -i %s %s -e deploy_version=%s --diff`,
 	return exec.Command("/bin/bash", "-c", script), nil
 }
 
-// buildAnsibleEnvPrefix 读 agent 进程自己的 ANSIBLE_* 环境变量，拼成 sudo 命令前缀。
+// buildAnsibleEnvPrefix 把 agent 进程的所有 ANSIBLE_* 环境变量透传给 sudo。
 //
-//	返回形如 `ANSIBLE_LOCAL_TEMP='/data/xxx' ANSIBLE_REMOTE_TEMP='/tmp' `（末尾带空格），
-//	让调用方拼到 `sudo <prefix>ansible-playbook ...` 中间。没有任何相关 env 时返空串。
-//	目前只透传：
-//	  ANSIBLE_LOCAL_TEMP   控制机临时目录（绕开 systemd ProtectHome=read-only 锁住的 ~/.ansible）
-//	  ANSIBLE_REMOTE_TEMP  目标 VM 临时目录（一般不用设，留默认即可；用户设了我们不挡）
+//	返回形如 `ANSIBLE_LOCAL_TEMP='/data/xxx' ANSIBLE_SSH_CONTROL_PATH_DIR='/data/xxx/cp' `
+//	（末尾带空格），让调用方拼到 `sudo <prefix>ansible-playbook ...` 中间。
+//	没有任何 ANSIBLE_* env 时返空串。
+//
+//	设计：白名单按"前缀"而不是"具体变量名"——
+//	  - sudo 默认会清环境变量，必须显式 `sudo VAR=value cmd` 透传
+//	  - ansible 子进程要写 ~/.ansible/{tmp,cp,galaxy_cache,...} 等多个目录
+//	    被 systemd ProtectHome=read-only 挡住时，每种都得有对应的 ANSIBLE_* 重定向
+//	  - 未来 ansible 加新用法（写新目录）时，只要 systemd Environment 加一行新的 ANSIBLE_X，
+//	    本函数自动透传，**不用改 agent 代码 / 重出镜像**
+//
+//	安全性：前缀白名单 ANSIBLE_* 比"全开"更收敛。攻击面只覆盖 ansible 自己识别的 env，
+//	并且这些 env 必须先在 systemd Environment 显式声明（用户主动控制）才会出现在进程里。
+//
+//	常见可重定向到可写路径的 env 名（用户可在 systemd unit 配置）：
+//	  ANSIBLE_LOCAL_TEMP             控制机本地临时目录（默认 ~/.ansible/tmp）
+//	  ANSIBLE_SSH_CONTROL_PATH_DIR   SSH ControlPath 目录（默认 ~/.ansible/cp）
+//	  ANSIBLE_GALAXY_CACHE_DIR       galaxy 缓存（默认 ~/.ansible/galaxy_cache）
+//	  ANSIBLE_PERSISTENT_CACHE_DIR   持久化连接缓存（默认 ~/.ansible/persistent_cache）
+//	  ANSIBLE_ASYNC_DIR              async 任务目录（默认 ~/.ansible_async）
 func buildAnsibleEnvPrefix() string {
-	keys := []string{"ANSIBLE_LOCAL_TEMP", "ANSIBLE_REMOTE_TEMP"}
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		if v := os.Getenv(k); v != "" {
-			parts = append(parts, k+"="+shQuote(v))
+	parts := []string{}
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "ANSIBLE_") {
+			continue
 		}
+		i := strings.IndexByte(kv, '=')
+		if i <= 0 { // 防御：没有 '=' 或 key 为空
+			continue
+		}
+		k, v := kv[:i], kv[i+1:]
+		if v == "" {
+			continue
+		}
+		parts = append(parts, k+"="+shQuote(v))
 	}
 	if len(parts) == 0 {
 		return ""
