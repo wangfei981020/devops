@@ -68,3 +68,6 @@ mysql-query.sh
 opsplatform-probe-agent/
 opsplatform-probe-dist-nginx/
 opsplatform-jira-confluence-lock-backend/
+
+# 本地敏感备份（含 AES_KEY / mysqldump），切勿提交
+backups/

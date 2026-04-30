@@ -37,12 +37,25 @@
           <div class="k-icon" style="background:#ecfdf5;color:#059669">
             <el-icon><Box /></el-icon>
           </div>
-          <div class="k-label">模块总数</div>
+          <div class="k-label">K8s 模块总数</div>
         </div>
         <div class="k-value">
-          <span class="main">{{ stats.kpi?.modules_total || 0 }}</span>
+          <span class="main">{{ stats.kpi?.k8s_modules_total || 0 }}</span>
         </div>
-        <div class="k-sub mono">实时根据扫描结果统计</div>
+        <div class="k-sub mono">来自 ArgoCD app values.yaml 扫描</div>
+      </div>
+
+      <div class="kpi">
+        <div class="k-head">
+          <div class="k-icon" style="background:#f5f3ff;color:#7c3aed">
+            <el-icon><Connection /></el-icon>
+          </div>
+          <div class="k-label">VM 服务总数</div>
+        </div>
+        <div class="k-value">
+          <span class="main">{{ stats.kpi?.vm_services_total || 0 }}</span>
+        </div>
+        <div class="k-sub mono">来自 ansible playbook 扫描</div>
       </div>
 
       <div class="kpi">
@@ -98,9 +111,10 @@
                 <span :class="'env-dot ' + d.env_type"></span>
                 <div class="dep-info">
                   <div class="dep-top">
+                    <span :class="'kind-chip ' + (d.kind || 'k8s')">{{ (d.kind || 'k8s') === 'vm' ? 'VM' : 'K8s' }}</span>
                     <span class="dep-env mono">{{ d.project_env_name }}</span>
                     <span class="dep-action">{{ actionLabel(d.action) }}</span>
-                    <span class="dep-mods">{{ d.module_count }} 个模块</span>
+                    <span class="dep-mods">{{ d.module_count }} 个{{ (d.kind || 'k8s') === 'vm' ? '服务' : '模块' }}</span>
                   </div>
                   <div class="dep-bot">
                     <span :class="'status ' + d.status">{{ statusLabel(d.status) }}</span>
@@ -136,9 +150,10 @@
                 <span :class="'env-dot ' + d.env_type"></span>
                 <div class="dep-info">
                   <div class="dep-top">
+                    <span :class="'kind-chip ' + (d.kind || 'k8s')">{{ (d.kind || 'k8s') === 'vm' ? 'VM' : 'K8s' }}</span>
                     <span class="dep-env mono">{{ d.project_env_name }}</span>
                     <span class="dep-action">{{ actionLabel(d.action) }}</span>
-                    <span class="dep-mods">{{ d.module_count }} 个模块</span>
+                    <span class="dep-mods">{{ d.module_count }} 个{{ (d.kind || 'k8s') === 'vm' ? '服务' : '模块' }}</span>
                   </div>
                   <div class="dep-bot">
                     <span :class="'status ' + d.status">{{ statusLabel(d.status) }}</span>
@@ -167,10 +182,11 @@
         <div class="card-body">
           <div v-if="!stats.envs?.length" class="empty">还没有项目环境，去「项目配置」添加</div>
           <div v-else class="env-list">
-            <div v-for="e in stats.envs" :key="e.id" class="env-row">
+            <div v-for="e in stats.envs" :key="(e.kind || 'k8s') + '-' + e.id" class="env-row">
+              <span :class="'kind-chip ' + (e.kind || 'k8s')">{{ (e.kind || 'k8s') === 'vm' ? 'VM' : 'K8s' }}</span>
               <span :class="'env-chip ' + e.env_type">{{ e.env_type.toUpperCase() }}</span>
               <span class="env-name mono">{{ e.name }}</span>
-              <span class="env-mods">{{ e.modules_total }} 模块</span>
+              <span class="env-mods">{{ e.modules_total }} {{ (e.kind || 'k8s') === 'vm' ? '服务' : '模块' }}</span>
               <span class="env-sep"></span>
               <span class="env-last">
                 <span v-if="e.last_deploy_at">
@@ -239,7 +255,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Folder, Box, Upload, User, UserFilled, Clock, Monitor, Lightning, Setting, ArrowRight } from '@element-plus/icons-vue'
+import { Folder, Box, Connection, Upload, User, UserFilled, Clock, Monitor, Lightning, Setting, ArrowRight } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { getDashboardStats } from '../api'
 import { useAuthStore } from '../stores/auth'
@@ -274,7 +290,10 @@ function statusLabel(s) {
   return { success: '成功', partial: '部分', failed: '失败', pending: '进行中', no_change: '无变化' }[s] || s || '-'
 }
 function actionLabel(a) {
-  return { update_image: '更新镜像', restart: '重启服务', rollback: '回滚' }[a] || a
+  return {
+    update_image: '更新镜像', restart: '重启服务', rollback: '回滚',
+    vm_rsync: 'VM rsync', vm_update_version: 'VM 更新',
+  }[a] || a
 }
 function goHistory(id) {
   router.push({ path: '/history', query: { id } })
@@ -312,7 +331,9 @@ onMounted(() => {
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 
 /* ===== KPI ===== */
-.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.kpi-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+@media (max-width: 1280px) { .kpi-row { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 768px)  { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
 .kpi { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; }
 .k-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .k-icon { width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
@@ -387,6 +408,9 @@ onMounted(() => {
 .env-chip { padding: 2px 7px; border-radius: 3px; font: 600 10px var(--mono); letter-spacing: .4px; }
 .env-chip.uat { background: #ecfdf5; color: #059669; }
 .env-chip.prod { background: #fef2f2; color: #dc2626; }
+.kind-chip { padding: 1px 6px; border-radius: 3px; font: 600 9.5px var(--mono); letter-spacing: .3px; line-height: 1.5; }
+.kind-chip.k8s { background: #eff6ff; color: #1d4ed8; }
+.kind-chip.vm { background: #f5f3ff; color: #7c3aed; }
 .env-name { font-weight: 500; color: var(--text); min-width: 140px; }
 .env-mods { color: var(--text-3); font-family: var(--mono); font-size: 11.5px; }
 .env-sep { flex: 1; }
