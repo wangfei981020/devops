@@ -331,22 +331,28 @@ const blankFilters = () => ({
 })
 const draft = reactive(blankFilters())
 
+// 从 env name 剥掉 "-{env_type}" 后缀拿项目名
+//
+//   K8s 数据：name=G33-uat / env_type=uat → 后缀大小写一致 → 直接剥成 G33
+//   VM  数据：name=G01-uat / env_type=UAT → 后缀大小写不一致 → 必须归一化小写比较
+//   显示按原 name 切片（保留 G01 而不是变成 g01）
+function projectFromEnv(e) {
+  const suffix = '-' + e.env_type
+  return e.name.toLowerCase().endsWith(suffix.toLowerCase())
+    ? e.name.slice(0, -suffix.length)
+    : e.name
+}
+
 const projects = computed(() => {
   const set = new Set()
-  envs.value.forEach(e => {
-    const suffix = '-' + e.env_type
-    const p = e.name.endsWith(suffix) ? e.name.slice(0, -suffix.length) : e.name
-    set.add(p)
-  })
+  envs.value.forEach(e => set.add(projectFromEnv(e)))
   return [...set].sort()
 })
 const envsForProject = computed(() => {
   if (!draft.project) return []
   const set = new Set()
   envs.value.forEach(e => {
-    const suffix = '-' + e.env_type
-    const p = e.name.endsWith(suffix) ? e.name.slice(0, -suffix.length) : e.name
-    if (p === draft.project) set.add(e.env_type)
+    if (projectFromEnv(e) === draft.project) set.add(e.env_type)
   })
   return [...set]
 })

@@ -23,6 +23,9 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	addEq("project_env_id", r.URL.Query().Get("project_env_id"))
+	// target_type='k8s'|'vm'：K8s 和 VM 的 project_env_id 来自不同表会撞号，
+	// 单纯按 project_env_id 查会把对方的发布记录混进来。前端按 e._kind 传这个参数过滤。
+	addEq("target_type", r.URL.Query().Get("target_type"))
 	addEq("action", r.URL.Query().Get("action"))
 	addEq("status", r.URL.Query().Get("status"))
 	if v := r.URL.Query().Get("operator"); v != "" {

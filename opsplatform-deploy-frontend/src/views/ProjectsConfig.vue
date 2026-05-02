@@ -597,7 +597,10 @@ async function load() {
         if (e._kind === 'k8s') {
           const [mods, deps] = await Promise.all([
             listModules(e.id).catch(() => []),
-            listDeployments({ project_env_id: e.id, page_size: 1 }).catch(() => ({ list: [] }))
+            // 必须传 target_type='k8s'：deployment 表里 K8s/VM 的 project_env_id
+            // 来自不同表会撞号；不带 target_type 会把同 id 的 VM 发布记录也拉进来，
+            // 导致这里把 VM 最近发布的状态错认成 K8s env 的状态
+            listDeployments({ project_env_id: e.id, target_type: 'k8s', page_size: 1 }).catch(() => ({ list: [] }))
           ])
           const last = deps.list?.[0]
           return { key: 'k8s-' + e.id, moduleCount: (mods || []).length, lastDeployAt: last?.created_at || null, lastStatus: last?.status || null }
