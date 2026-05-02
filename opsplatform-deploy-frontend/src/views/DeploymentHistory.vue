@@ -98,7 +98,7 @@
               <td class="mono">
                 {{ envName(row) }}
                 <span :class="'env-chip ' + envType(row)" style="margin-left:4px">{{ envType(row).toUpperCase() }}</span>
-                <span v-if="isVmAction(row.action)" class="kind-mini vm" style="margin-left:4px">VM</span>
+                <span :class="'kind-mini ' + (isVmAction(row.action) ? 'vm' : 'k8s')" style="margin-left:4px">{{ isVmAction(row.action) ? 'VM' : 'K8s' }}</span>
               </td>
               <td>
                 <span :class="'action-tag ' + row.action">{{ actionLabel(row.action) }}</span>
@@ -735,16 +735,16 @@ onUnmounted(() => {
 <style scoped>
 .dh { }
 
-/* ===== VM 行专属样式 ===== */
-.kind-mini.vm {
+/* ===== K8s / VM 区分徽章（跟 Dashboard 配色一致） ===== */
+.kind-mini {
   display: inline-block;
   font: 700 9.5px 'Fira Code', monospace;
   letter-spacing: .5px;
   padding: 1px 5px; border-radius: 3px;
-  background: #faf5ff; color: #7c3aed;
-  border: 1px solid #ddd6fe;
   vertical-align: middle;
 }
+.kind-mini.vm  { background: #faf5ff; color: #7c3aed; border: 1px solid #ddd6fe; }
+.kind-mini.k8s { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
 .vm-detail-grid { display: flex; gap: 24px; flex-wrap: wrap; font-size: 12.5px; padding: 4px 0; }
 .vm-detail-grid > div { color: var(--text); }
 .vm-detail-grid b { font-family: 'Fira Code', monospace; font-weight: 600; margin-left: 4px; }
