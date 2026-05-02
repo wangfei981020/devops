@@ -135,6 +135,45 @@ func (c *VmAgentClient) SubmitTask(ctx context.Context, spec AgentTaskSpec) (str
 	return resp.TaskID, nil
 }
 
+// AgentBatchItem 批量请求里的单个 service 项
+type AgentBatchItem struct {
+	Service string `json:"service"`
+	Version string `json:"version,omitempty"`
+}
+
+// AgentBatchSpec 批量提交参数（agent /v1/tasks/batch 入参）
+type AgentBatchSpec struct {
+	Action   string           `json:"action"`
+	Project  string           `json:"project"`
+	Env      string           `json:"env,omitempty"`
+	Services []AgentBatchItem `json:"services"`
+}
+
+// AgentBatchResult 批量提交返回的单条 task
+type AgentBatchResult struct {
+	Service string `json:"service"`
+	TaskID  string `json:"task_id"`
+}
+
+// SubmitBatch POST /v1/tasks/batch → { tasks: [{service, task_id}, ...] }
+//
+//	agent 内部：1 次 git sync（gitMu 串行 + 智能重试）→ 成功后并行起 N 个 work；
+//	git 失败 → 返回的 task 都已创建但 status=failed，调用方 poll 时能看到统一错误。
+//	agent 整体拒收（spec 校验失败 / service 锁占用）才返 error。
+func (c *VmAgentClient) SubmitBatch(ctx context.Context, spec AgentBatchSpec) ([]AgentBatchResult, error) {
+	raw, _, err := c.do(ctx, "POST", "/v1/tasks/batch", spec)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Tasks []AgentBatchResult `json:"tasks"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Tasks, nil
+}
+
 // AgentTask 任务状态完整字段（agent 那边的 Task struct）
 type AgentTask struct {
 	ID         string    `json:"id"`

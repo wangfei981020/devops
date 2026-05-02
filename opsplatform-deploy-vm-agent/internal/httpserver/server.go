@@ -25,11 +25,12 @@ type Server struct {
 	srv     *http.Server
 }
 
-func New(cfg *config.Config, mgr *tasks.Manager) *Server {
+// New 构造 HTTP server；runner 由 caller 注入（main.go 同时把它传给 NewManager 当 GitSyncer）。
+func New(cfg *config.Config, mgr *tasks.Manager, runner *tasks.AnsibleRunner) *Server {
 	return &Server{
 		cfg:     cfg,
 		manager: mgr,
-		runner:  &tasks.AnsibleRunner{AnsibleRoot: cfg.AnsibleRoot},
+		runner:  runner,
 		scanner: &inventory.Scanner{AnsibleRoot: cfg.AnsibleRoot},
 	}
 }
@@ -40,7 +41,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/v1/health", s.handleHealth)               // 不要鉴权
 	mux.HandleFunc("/v1/services", s.auth(s.handleServices))
 	mux.HandleFunc("/v1/tasks", s.auth(s.handleTasks))
-	mux.HandleFunc("/v1/tasks/", s.auth(s.handleTaskDetail)) // /v1/tasks/<id> + /v1/tasks/<id>/logs + /v1/tasks/<id>/cancel
+	mux.HandleFunc("/v1/tasks/batch", s.auth(s.handleTasksBatch)) // 精确匹配，优先于下面 /v1/tasks/
+	mux.HandleFunc("/v1/tasks/", s.auth(s.handleTaskDetail))      // /v1/tasks/<id> + /v1/tasks/<id>/logs + /v1/tasks/<id>/cancel
 
 	s.srv = &http.Server{
 		Addr:              s.cfg.Listen,
@@ -139,6 +141,66 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"task_id": t.ID,
 		"status":  t.Status,
+	})
+}
+
+// POST /v1/tasks/batch
+//
+//	body: { action, project, env, services: [{service, version}, ...] }
+//	return: { tasks: [{service, task_id}, ...] }
+//
+//	agent 内部：先一次 git sync（gitMu 保护，带智能重试）→ 成功后并行起 N 个 work；
+//	git 失败 → N 个 task 全部 status=failed，err_msg="git sync failed: ..."。
+//	调用方拿到 task_id 数组后照常 poll，跟单 task 接口语义一致。
+func (s *Server) handleTasksBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	var req struct {
+		Action   string `json:"action"`
+		Project  string `json:"project"`
+		Env      string `json:"env,omitempty"`
+		Services []struct {
+			Service string `json:"service"`
+			Version string `json:"version,omitempty"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "decode body: "+err.Error())
+		return
+	}
+	if len(req.Services) == 0 {
+		writeError(w, http.StatusBadRequest, "services 至少 1 项")
+		return
+	}
+
+	specs := make([]tasks.Spec, len(req.Services))
+	for i, it := range req.Services {
+		specs[i] = tasks.Spec{
+			Action:  tasks.Action(req.Action),
+			Project: req.Project,
+			Env:     req.Env,
+			Service: it.Service,
+			Version: it.Version,
+		}
+	}
+
+	created, err := s.manager.SubmitBatch(specs, s.runner)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	out := make([]map[string]string, len(created))
+	for i, t := range created {
+		out[i] = map[string]string{
+			"service": t.Spec.Service,
+			"task_id": t.ID,
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"tasks": out,
 	})
 }
 

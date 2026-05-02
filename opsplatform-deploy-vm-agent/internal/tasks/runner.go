@@ -10,16 +10,19 @@ import (
 
 // AnsibleRunner 把 Spec 翻译成实际要跑的 shell 命令
 //
-//	所有命令格式跟用户现有 Jenkins pipeline 对齐：
-//	  rsync:          cd <ansible_root> && git pull && python <ansible_root>/<proj>/<proj>.py <service>
-//	  update_version: cd <ansible_root> && git pull && ansible-playbook -i ... <service>.yaml -e deploy_version=...
-//	  git_sync:       cd <ansible_root> && git pull
+//	v5 起 git 同步从 work 命令里剥离，改由 manager 在 batch 入口统一跑一次（gitMu 保护）：
+//	  rsync work:           cd <ansible_root> && sudo python <proj>/<proj>.py <service>
+//	  update_version work:  cd <ansible_root> && sudo ansible-playbook -i ... <service>.yaml -e deploy_version=...
+//	  git sync (manager):   cd <ansible_root> && git checkout main && git reset --hard && git pull
 //
-//	命令通过 bash -c 执行，让 cd / && / shell 展开都生效
+//	不再每个 task 自己 git pull → N 个 service 并行不会撞 .git/index.lock；
+//	git pull 失败 → 整批 failed（语义跟 K8s update_image 对齐）
 type AnsibleRunner struct {
 	AnsibleRoot string // /etc/ansible
 }
 
+// BuildCommand 构造仅执行「业务工作」的命令（不含 git 同步）。
+// ActionGitSync 不该走这里 —— manager 直接调 BuildGitSyncCommand。
 func (r *AnsibleRunner) BuildCommand(s Spec) (*exec.Cmd, error) {
 	switch s.Action {
 	case ActionRsync:
@@ -27,19 +30,24 @@ func (r *AnsibleRunner) BuildCommand(s Spec) (*exec.Cmd, error) {
 	case ActionUpdateVersion:
 		return r.buildUpdateVersion(s)
 	case ActionGitSync:
-		return r.buildGitSync()
+		// git_sync 没有「work」部分；manager 应特判走 GitSync 路径而不是这里
+		return nil, fmt.Errorf("ActionGitSync 不该走 BuildCommand；manager 应直接调 GitSync()")
 	default:
 		return nil, fmt.Errorf("unknown action: %s", s.Action)
 	}
 }
 
-func (r *AnsibleRunner) buildGitSync() (*exec.Cmd, error) {
+// BuildGitSyncCommand 单独的 git 同步命令；manager 在 gitMu 保护下调用，给整批 task 做前置。
+//
+//	checkout main + reset --hard + pull，跟 V1 行为完全一致；
+//	失败由 manager 解析 stderr 决定是否重试（白名单瞬时错误重试 3 次）
+func (r *AnsibleRunner) BuildGitSyncCommand() *exec.Cmd {
 	script := fmt.Sprintf(`set -e
 cd %s
 git checkout main
 git reset --hard
 git pull`, shQuote(r.AnsibleRoot))
-	return exec.Command("/bin/bash", "-c", script), nil
+	return exec.Command("/bin/bash", "-c", script)
 }
 
 func (r *AnsibleRunner) buildRsync(s Spec) (*exec.Cmd, error) {
@@ -47,9 +55,6 @@ func (r *AnsibleRunner) buildRsync(s Spec) (*exec.Cmd, error) {
 	// rsync 走 python 脚本，跟 ansible 没关系，sudo 不用透传 ANSIBLE_*
 	script := fmt.Sprintf(`set -e
 cd %s
-git checkout main
-git reset --hard
-git pull
 sudo python %s %s`,
 		shQuote(r.AnsibleRoot),
 		shQuote(pyPath),
@@ -69,9 +74,6 @@ func (r *AnsibleRunner) buildUpdateVersion(s Spec) (*exec.Cmd, error) {
 
 	script := fmt.Sprintf(`set -e
 cd %s
-git checkout main
-git reset --hard
-git pull
 sudo %sansible-playbook -i %s %s -e deploy_version=%s --diff`,
 		shQuote(r.AnsibleRoot),
 		envPrefix,

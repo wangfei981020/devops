@@ -16,7 +16,7 @@ import (
 	"opsplatform-deploy-vm-agent/internal/tasks"
 )
 
-const Version = "v4"
+const Version = "v5"
 
 func main() {
 	configPath := flag.String("config", "/etc/deploy-vm-agent/config.yaml", "path to config file")
@@ -52,8 +52,9 @@ func main() {
 			cfg.LogDir, cfg.LogRetentionDays)
 	}
 
-	mgr := tasks.NewManager(cfg.MaxConcurrent, time.Duration(cfg.TaskRetention)*time.Hour)
-	srv := httpserver.New(cfg, mgr)
+	runner := &tasks.AnsibleRunner{AnsibleRoot: cfg.AnsibleRoot}
+	mgr := tasks.NewManager(cfg.MaxConcurrent, time.Duration(cfg.TaskRetention)*time.Hour, runner)
+	srv := httpserver.New(cfg, mgr, runner)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {

@@ -159,30 +159,54 @@ func HandleVmDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	depID, _ := depRes.LastInsertId()
 
-	// 给每个 service 提交 agent task；某个失败不影响其他（status='failed' 标记，继续）
+	// v107 起改用 batch 端点：1 次 git sync（agent 内 gitMu 串行 + 智能重试）→ 并行起 N 个 work。
+	// 解决多 service 并发时各自 git pull 抢 .git/index.lock 的问题；语义跟 K8s update_image 对齐：
+	// git pull 失败 → 整批 failed（agent 内部把 N 个 task 都标 failed，前端轮询时一致显示）。
 	cli := services.NewVmAgentClient(agent.URL, agent.Token)
 	taskMap := make([]vmTaskMapEntry, len(req.Services))
+
+	batchItems := make([]services.AgentBatchItem, len(req.Services))
 	for i, it := range req.Services {
-		submitCtx, cancelSubmit := context.WithTimeout(r.Context(), 10*time.Second)
-		taskID, terr := cli.SubmitTask(submitCtx, services.AgentTaskSpec{
-			Action:  req.Action,
-			Project: v.ProjectCode,
-			Env:     v.EnvType,
-			Service: it.Service,
-			Version: it.Version,
-		})
-		cancelSubmit()
-		if terr != nil {
-			log.Printf("[vm-deploy] dep=%d service=%s submit failed: %v", depID, it.Service, terr)
+		batchItems[i] = services.AgentBatchItem{Service: it.Service, Version: it.Version}
+	}
+	submitCtx, cancelSubmit := context.WithTimeout(r.Context(), 30*time.Second)
+	batchResults, batchErr := cli.SubmitBatch(submitCtx, services.AgentBatchSpec{
+		Action:   req.Action,
+		Project:  v.ProjectCode,
+		Env:      v.EnvType,
+		Services: batchItems,
+	})
+	cancelSubmit()
+
+	if batchErr != nil {
+		// agent 整体拒收（spec 校验 / service 锁占用）→ 全部 failed
+		log.Printf("[vm-deploy] dep=%d batch submit failed: %v", depID, batchErr)
+		for i, it := range req.Services {
 			taskMap[i] = vmTaskMapEntry{
 				Service: it.Service, Version: it.Version,
-				TaskID: "", Status: "failed", ErrMsg: terr.Error(),
+				TaskID: "", Status: "failed", ErrMsg: batchErr.Error(),
 			}
-			continue
 		}
-		taskMap[i] = vmTaskMapEntry{
-			Service: it.Service, Version: it.Version,
-			TaskID: taskID, Status: "pending",
+	} else {
+		// 把 agent 返回的 task_id 按 service 名匹配到 taskMap（顺序通常一致，按名匹配防错位）
+		idByService := make(map[string]string, len(batchResults))
+		for _, r := range batchResults {
+			idByService[r.Service] = r.TaskID
+		}
+		for i, it := range req.Services {
+			tid, ok := idByService[it.Service]
+			if !ok || tid == "" {
+				taskMap[i] = vmTaskMapEntry{
+					Service: it.Service, Version: it.Version,
+					TaskID: "", Status: "failed",
+					ErrMsg: "agent 未返回此 service 的 task_id（可能 spec 校验失败）",
+				}
+				continue
+			}
+			taskMap[i] = vmTaskMapEntry{
+				Service: it.Service, Version: it.Version,
+				TaskID: tid, Status: "pending",
+			}
 		}
 	}
 
