@@ -77,7 +77,7 @@
           <thead>
             <tr>
               <th>服务</th>
-              <th v-if="isUpdate">版本</th>
+              <th v-if="isUpdate" style="width:480px;">版本</th>
               <th>目标主机</th>
               <th style="width:36px;"></th>
             </tr>
