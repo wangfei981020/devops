@@ -31,6 +31,8 @@
           <option value="update_image">更新镜像</option>
           <option value="restart">重启服务</option>
           <option value="rollback">回滚</option>
+          <option value="vm_rsync">VM rsync</option>
+          <option value="vm_update_version">VM 更新</option>
         </select>
       </div>
       <div class="f-item">
