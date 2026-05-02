@@ -357,7 +357,7 @@
           <label>Deploy Agent <span class="req">*</span><span class="hint">从「系统设置 → VM Agent」里选</span></label>
           <select v-model="vmEnvForm.agent_id" class="inp">
             <option :value="null">— 未选 —</option>
-            <option v-for="a in deployAgents" :key="a.id" :value="a.id">{{ a.name }} · {{ a.url }}</option>
+            <option v-for="a in deployAgents" :key="a.id" :value="a.id">{{ a.name }}</option>
           </select>
           <div v-if="!deployAgents.length" class="hint-text" style="color:var(--warning);margin-top:4px">
             还没有 Deploy Agent，去「系统设置 → VM Agent · 版本接口」添加
