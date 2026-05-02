@@ -16,7 +16,7 @@ import (
 	"opsplatform-deploy-vm-agent/internal/tasks"
 )
 
-const Version = "v5"
+const Version = "v6"
 
 func main() {
 	configPath := flag.String("config", "/etc/deploy-vm-agent/config.yaml", "path to config file")

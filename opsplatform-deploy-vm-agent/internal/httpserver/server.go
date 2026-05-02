@@ -101,7 +101,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /v1/services?project=G01&env=UAT
+// GET /v1/services?project=G01&env=UAT[&git_sync=true]
+//
+//	git_sync=true：扫盘前先跑一次 git pull（受 manager.gitMu 保护，跟 batch 部署共享同一把锁，
+//	不会撞 .git/index.lock）。让 backend 的"同步服务列表"按钮一键拿到 ansible 仓库最新 playbook。
+//	默认 false，保持向后兼容（外部脚本只想读 service 列表时不强制 pull）。
 func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	env := r.URL.Query().Get("env")
@@ -109,6 +113,14 @@ func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "project / env required")
 		return
 	}
+
+	if r.URL.Query().Get("git_sync") == "true" {
+		if err := s.manager.GitSync(r.Context(), nil); err != nil {
+			writeError(w, http.StatusInternalServerError, "git sync: "+err.Error())
+			return
+		}
+	}
+
 	services, err := s.scanner.ListServices(project, env)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

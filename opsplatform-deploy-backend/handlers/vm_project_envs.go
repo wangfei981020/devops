@@ -172,7 +172,9 @@ func HandleScanVmServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cli := services.NewVmAgentClient(agent.URL, agent.Token)
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	// agent 端在扫盘前会先跑 git pull（默认行为，含 0/2/5s 智能退避重试，最坏 ~7s）
+	// + 扫盘 ~1s + ListServices RPC 自身开销，留 60s 给整个链路足够裕度
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	svcs, err := cli.ListServices(ctx, v.ProjectCode, v.EnvType)
 	if err != nil {

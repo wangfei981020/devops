@@ -28,7 +28,9 @@ func NewVmAgentClient(baseURL, token string) *VmAgentClient {
 		BaseURL: strings.TrimRight(baseURL, "/"),
 		Token:   token,
 		HTTP: &http.Client{
-			Timeout: 30 * time.Second,
+			// 60s：覆盖 ListServices 时 agent 先 git pull (~7s 最坏含重试) + 扫盘 (~1s) 链路；
+			// 单个调用真要超过 60s 应该报错而不是憋着。流式 SSE 日志请求自己造 client 不受这里限制。
+			Timeout: 60 * time.Second,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 			},
@@ -95,9 +97,14 @@ type AgentService struct {
 	SourcePath   string   `json:"source_path"`
 }
 
-// ListServices /v1/services?project=&env=
+// ListServices /v1/services?project=&env=&git_sync=true
+//
+//	默认带 git_sync=true：让 agent 先 git pull 拿到 ansible 仓库最新 playbook 再扫盘。
+//	对齐 K8s 那边「同步模块」按钮的语义（git pull + 扫盘 一气呵成），用户在 UI 点
+//	"🔄 同步服务列表"就不用再 ssh 到 agent 主机手动 git pull 了。
+//	受 agent.manager.gitMu 保护，跟批量发布共享同一把锁。
 func (c *VmAgentClient) ListServices(ctx context.Context, project, env string) ([]AgentService, error) {
-	path := fmt.Sprintf("/v1/services?project=%s&env=%s", urlQ(project), urlQ(env))
+	path := fmt.Sprintf("/v1/services?project=%s&env=%s&git_sync=true", urlQ(project), urlQ(env))
 	raw, _, err := c.do(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
