@@ -33,13 +33,16 @@ type deployNotifyItem struct {
 //
 //	opLabel: "发布" / "重启" / "回滚"
 //	kind: "success" / "skip" / "fail"，决定标题、颜色、emoji
+//	envName / envType: 项目环境名（如 "g33-uat"）/ 类型（"uat" / "prod"）—— 标题与 body 都展示
+//	  生产用同一 namespace 部署 uat/prod 时，靠这两个字段区分（namespace 一样看不出来）。
+//	  envType 在 body 里以大写括号呈现：g33-uat (UAT) / g33-prod (PROD)。
 //	atLarkID: 空串 = 不艾特；否则 body 末尾追加 <at id="...">（成功 / 失败都艾特）
 //
 // **partial 场景由调用方拆成两次调用**（一次 success，一次 fail），每次卡片只关心一类。
 //
 // 失败原因（FailMsg）已从卡片移除，运维同学要看详情按"查看发布详情"按钮跳前端。
 func buildDeployNotifyBody(
-	opLabel, operator, atLarkID, kind string,
+	opLabel, operator, atLarkID, kind, envName, envType string,
 	items []deployNotifyItem,
 ) (title, color, body string) {
 	n := len(items)
@@ -50,20 +53,26 @@ func buildDeployNotifyBody(
 		return
 	}
 
+	// 标题加 [envName] 前缀，让群里通知列表一眼看出是哪个 env 的发布
+	envPrefix := ""
+	if envName != "" {
+		envPrefix = "[" + envName + "] "
+	}
+
 	var emoji, sectionLabel string
 	switch kind {
 	case "fail":
-		title = fmt.Sprintf("❌ %s失败 · %d 个模块", opLabel, n)
+		title = fmt.Sprintf("❌ %s%s失败 · %d 个模块", envPrefix, opLabel, n)
 		color = "red"
 		emoji = "❌"
 		sectionLabel = "失败"
 	case "skip":
-		title = fmt.Sprintf("ℹ️ 无变更 · %d 个模块都已是目标版本", n)
+		title = fmt.Sprintf("ℹ️ %s无变更 · %d 个模块都已是目标版本", envPrefix, n)
 		color = "blue"
 		emoji = "⏭️"
 		sectionLabel = "跳过"
 	default: // "success"
-		title = fmt.Sprintf("✅ %s成功 · %d 个模块", opLabel, n)
+		title = fmt.Sprintf("✅ %s%s成功 · %d 个模块", envPrefix, opLabel, n)
 		color = "green"
 		emoji = "✓"
 		sectionLabel = "成功"
@@ -71,6 +80,14 @@ func buildDeployNotifyBody(
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "**操作人**: %s\n", safeStr(operator))
+	if envName != "" {
+		// envType 大写括号显式区分 uat/prod（同 namespace 时唯一区分依据）
+		envLine := envName
+		if envType != "" {
+			envLine = fmt.Sprintf("%s (%s)", envName, strings.ToUpper(envType))
+		}
+		fmt.Fprintf(&sb, "**项目环境**: %s\n", envLine)
+	}
 	fmt.Fprintf(&sb, "**更新时间**: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(&sb, "━━━━━━ %s (%d) ━━━━━━\n", sectionLabel, n)
 	for _, it := range items {

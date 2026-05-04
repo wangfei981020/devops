@@ -496,24 +496,26 @@ func sendVmLarkNotify(depID int64, status, errMsg string, duration int, req vmDe
 		color string // green / red / orange
 		body  string
 	}
+	// 标题加 [envName] 前缀，跟 K8s 通知格式拉齐
+	envPrefix := "[" + v.Name + "] "
 	cards := []cardSpec{}
 	if len(successItems) > 0 {
 		cards = append(cards, cardSpec{
-			title: fmt.Sprintf("✅ %s成功 · %d 个模块", opLabel, len(successItems)),
+			title: fmt.Sprintf("✅ %s%s成功 · %d 个模块", envPrefix, opLabel, len(successItems)),
 			color: "green",
 			body:  buildVmCardBody(operator, v.Name, updateTime, "成功", "✅", successItems, req.Action),
 		})
 	}
 	if len(failedItems) > 0 {
 		cards = append(cards, cardSpec{
-			title: fmt.Sprintf("❌ %s失败 · %d 个模块", opLabel, len(failedItems)),
+			title: fmt.Sprintf("❌ %s%s失败 · %d 个模块", envPrefix, opLabel, len(failedItems)),
 			color: "red",
 			body:  buildVmCardBody(operator, v.Name, updateTime, "失败", "❌", failedItems, req.Action),
 		})
 	}
 	if len(canceledItems) > 0 {
 		cards = append(cards, cardSpec{
-			title: fmt.Sprintf("⏹ %s已取消 · %d 个模块", opLabel, len(canceledItems)),
+			title: fmt.Sprintf("⏹ %s%s已取消 · %d 个模块", envPrefix, opLabel, len(canceledItems)),
 			color: "orange",
 			body:  buildVmCardBody(operator, v.Name, updateTime, "已取消", "⏹", canceledItems, req.Action),
 		})
