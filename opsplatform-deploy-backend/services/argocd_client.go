@@ -375,9 +375,15 @@ func urlQ(s string) string {
 }
 
 // Sync 触发应用同步
+//
+//	body 不传 revision：让 ArgoCD 用 Application 自己的 spec.source.targetRevision。
+//	历史教训：写死 "revision": "HEAD" 时，如果 Application 的 targetRevision 是 "main"
+//	（字符串不等），且 syncPolicy.automated 开着，ArgoCD 会拒绝：
+//	  Cannot sync to HEAD: auto-sync currently set to main
+//	省掉 revision 字段后，ArgoCD 永远跟自己的 targetRevision 一致，
+//	不论用户配的是 main / HEAD / pre-uat 都能正确触发同步。
 func (c *ArgocdClient) Sync(ctx context.Context, name string) error {
 	body := map[string]interface{}{
-		"revision": "HEAD",
 		"prune":    false,
 		"dryRun":   false,
 		"strategy": map[string]interface{}{"hook": map[string]interface{}{}},

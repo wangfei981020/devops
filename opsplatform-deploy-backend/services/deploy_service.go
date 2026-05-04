@@ -340,7 +340,7 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 			if err := in.ArgocdClient.Sync(c, j.app); err != nil {
 				return models.ArgocdAppResult{
 					App: j.app, SyncStatus: "Failed",
-					Msg:          "失败 · 服务同步触发失败",
+					Msg:          "失败 · 服务同步触发失败 · " + sanitizeMsg(err.Error()),
 					LastPolledAt: time.Now(),
 				}
 			}
