@@ -394,12 +394,17 @@ func ScanModulesByProjectEnvID(ctx context.Context, id int64) (int, error) {
 	rows.Close()
 	seen := map[string]bool{}
 	// ArgoCD app 命名按 k8s DNS-1123 全小写 kebab-case 惯例（helm 生成的 Application 资源强制小写），
-	// 无论模块目录名 / project_env.name 是什么大小写，拼出的 app name 一律 ToLower 保证匹配；
-	// 否则会出现 "G50-xxx-G50-uat" 和 ArgoCD 实际 "g50-xxx-g50-uat" 对不上 → restart 403
-	peNameLower := strings.ToLower(p.Name)
+	// 拼出的 app name 一律 ToLower 保证匹配。
+	//
+	// app name 后缀（service- 之后那段）有两种生产约定，跟着 git 上的 helm 模板走：
+	//   - global.spec.project（老格式 g50/g33）→ "atmosphere-frontend-g50-uat"
+	//   - global.env（新格式 g32）            → "atmosphere-frontend-uat"
+	// ResolveAppNameSuffix 读 {chartBasePath}-apps/templates/applications.yaml 自动识别。
+	// 未用 app-of-apps 模式 / 模板解析失败时回退 ToLower(p.Name)，跟以前行为一致。
+	suffix := gs.ResolveAppNameSuffix(p.Name, p.ChartBasePath)
 	for _, s := range scanned {
 		seen[s.Name] = true
-		appName := strings.ToLower(s.Name) + "-" + peNameLower
+		appName := strings.ToLower(s.Name) + "-" + suffix
 		ns := s.Namespace
 		if ns == "" {
 			ns = p.Namespace

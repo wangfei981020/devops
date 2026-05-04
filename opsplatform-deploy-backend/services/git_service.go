@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // tokenInURLRe 匹配 http(s)://user:token@host 形式的凭证
@@ -232,4 +234,88 @@ func (g *GitService) Push(ctx context.Context, projectEnvName, branch string, re
 func CommitURL(repoURL, sha string) string {
 	base := strings.TrimSuffix(repoURL, ".git")
 	return base + "/-/commit/" + sha
+}
+
+// ====================== ArgoCD app name suffix 智能解析 ======================
+//
+// 背景：deploy-center 要拼 ArgoCD app name 才能调 ArgoCD API（restart/sync/health）。
+// 老规则：app_name = "{service}-{project_env.name}"
+// 但生产 helm 模板里有两种命名约定：
+//   g50/g33-uat-apps/templates/applications.yaml:
+//     name: {{ .name }}-{{ $.Values.global.spec.project }}   ← 老格式
+//   g32-uat-apps/templates/applications.yaml:
+//     name: {{ .name }}-{{ $.Values.global.env }}            ← 新格式
+//
+// 同样的 service "atmosphere-frontend" 在两种约定下渲染出来不一样：
+//   - 老：atmosphere-frontend-g32-uat
+//   - 新：atmosphere-frontend-uat
+//
+// 不能写死规则。改成「跟着 git 走」：scanModules 时读这两个文件，
+// 正则识别 metadata.name 引用的是 global.<X>，再从 values.yaml 取 global.<X> 的值。
+// 解析失败就回退 strings.ToLower(projectEnvName) 保持当前行为，对未配应用编排
+// 的简单项目无侵入。
+
+// appNameTplRe 匹配 helm 模板里 metadata.name 形如 "{{ .name }}-{{ $.Values.global.X }}" 的写法
+//
+//	支持：trim 标记（{{- .name -}}）、字段路径含点号（spec.project）
+//	(?m) 让 ^ 匹配行首
+var appNameTplRe = regexp.MustCompile(`(?m)^\s*name:\s*\{\{-?\s*\.name\s*-?\}\}-\{\{-?\s*\$\.Values\.global\.([\w.]+)\s*-?\}\}`)
+
+// ResolveAppNameSuffix 读 {chartBasePath}-apps/templates/applications.yaml 智能识别后缀
+//
+//	约定：app-of-apps 编排目录是子 chart 目录的 sibling，名字 "{chartBasePath}-apps"
+//	例如 chartBasePath = "argocd-apps/charts/g32-uat"
+//	     则 apps  目录 = "argocd-apps/charts/g32-uat-apps"
+//
+//	找不到模板 / 解析失败 / values 里没有对应字段 → 回退 strings.ToLower(projectEnvName)
+//	（兼容老项目和未用 app-of-apps 模式的简单项目）
+func (g *GitService) ResolveAppNameSuffix(projectEnvName, chartBasePath string) string {
+	fallback := strings.ToLower(projectEnvName)
+	if chartBasePath == "" {
+		return fallback
+	}
+
+	repoRoot := g.RepoPath(projectEnvName)
+	appsDir := filepath.Join(repoRoot, chartBasePath+"-apps")
+	tplPath := filepath.Join(appsDir, "templates", "applications.yaml")
+	valuesPath := filepath.Join(appsDir, "values.yaml")
+
+	tpl, err := os.ReadFile(tplPath)
+	if err != nil {
+		return fallback
+	}
+	m := appNameTplRe.FindStringSubmatch(string(tpl))
+	if len(m) < 2 {
+		return fallback
+	}
+	keyPath := m[1] // "env" / "spec.project" / 任意点号嵌套
+
+	raw, err := os.ReadFile(valuesPath)
+	if err != nil {
+		return fallback
+	}
+	var v map[string]interface{}
+	if err := yaml.Unmarshal(raw, &v); err != nil {
+		return fallback
+	}
+	cur, ok := v["global"].(map[string]interface{})
+	if !ok {
+		return fallback
+	}
+	var val interface{} = cur
+	for _, p := range strings.Split(keyPath, ".") {
+		mp, ok := val.(map[string]interface{})
+		if !ok {
+			return fallback
+		}
+		val, ok = mp[p]
+		if !ok {
+			return fallback
+		}
+	}
+	str, ok := val.(string)
+	if !ok || str == "" {
+		return fallback
+	}
+	return strings.ToLower(str)
 }
