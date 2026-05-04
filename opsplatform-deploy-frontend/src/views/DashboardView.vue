@@ -42,7 +42,7 @@
         <div class="k-value">
           <span class="main">{{ stats.kpi?.k8s_modules_total || 0 }}</span>
         </div>
-        <div class="k-sub mono">来自 ArgoCD app values.yaml 扫描</div>
+        <div class="k-sub mono">实时根据扫描结果统计</div>
       </div>
 
       <div class="kpi">
@@ -55,7 +55,7 @@
         <div class="k-value">
           <span class="main">{{ stats.kpi?.vm_services_total || 0 }}</span>
         </div>
-        <div class="k-sub mono">来自 ansible playbook 扫描</div>
+        <div class="k-sub mono">实时根据扫描结果统计</div>
       </div>
 
       <div class="kpi">

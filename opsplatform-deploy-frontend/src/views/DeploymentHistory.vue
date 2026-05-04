@@ -675,7 +675,7 @@ async function onCancelRow(row) {
   // 按 K8s / VM 给不同提示
   const isVm = isVmAction(row.action)
   const message = isVm
-    ? 'VM 任务取消会向 ansible 控制机发 SIGTERM 杀 ansible-playbook 进程，<b style="color:#dc2626;">可能让目标机器留在半部署状态</b>。\n\n确认要取消吗？'
+    ? '取消 VM 任务后，正在执行的部署会被强制中断，<b style="color:#dc2626;">可能让目标机器留在半部署状态</b>。\n\n确认要取消吗？'
     : '代码已提交仓库，后台同步会继续进行。\n取消后只是不再等待状态反馈。\n\n如果 30 分钟内仍未完成，请人工检查对应服务的 Pod 是否已正常启动。'
   const title = isVm ? '⚠ 取消 VM 任务（不可逆）' : '确认取消等待？'
   try {

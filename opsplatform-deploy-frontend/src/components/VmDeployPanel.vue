@@ -181,7 +181,7 @@ const isUpdate = computed(() => props.tab === 'update_version')
 const tabLabel = computed(() => isUpdate.value ? '批量更新' : '批量 rsync')
 
 const submitTitle = computed(() =>
-  isUpdate.value ? '🚀 更新到 VM' : '📥 rsync 同步代码到 ansible 服务器')
+  isUpdate.value ? '🚀 更新到 VM' : '📥 rsync 从 206 同步代码')
 const submitBtnText = computed(() =>
   isUpdate.value ? `更新 ${validCount.value} 个到 ${envType.value}`
                  : `rsync ${validCount.value} 个`)
@@ -404,7 +404,7 @@ async function onSubmit() {
     }
     const desc = isUpdate.value
       ? `即将批量更新 <b>${validRows.length}</b> 个模块到 <b>PROD</b>，影响 ${totalHosts.value} 台机器：`
-      : `即将批量 rsync <b>${validRows.length}</b> 个 PROD 模块的源码到 ansible 服务器（不部署到目标 VM）：`
+      : `即将批量 rsync <b>${validRows.length}</b> 个 PROD 模块的源码（从 206 同步，不更新到目标机器）：`
     try {
       await ElMessageBox.confirm(
         `${desc}<br><br>${lines}`,

@@ -25,7 +25,7 @@
         </p>
         <p v-else>
           VM 部署 · 项目代码 <b>{{ currentEnv.project_code || '—' }}</b> ·
-          ansible_root <b>{{ currentEnv.ansible_root || '/etc/ansible' }}</b>
+          部署目录 <b>{{ currentEnv.ansible_root || '/etc/ansible' }}</b>
         </p>
       </div>
       <div class="hdr-r">
