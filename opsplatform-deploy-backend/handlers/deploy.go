@@ -276,6 +276,12 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40300, "没有重启权限（restart）")
 		return
 	}
+	// 🔒 PROD 重启 = 写操作 → 跟 submit_prod 一起守门，跟 HandleUpdateImage 对齐
+	// （Gate 1 env 白名单是第一道；这是第二道 defense-in-depth）
+	if p.EnvType == models.EnvPROD && !HasButton(r, "submit_prod") {
+		JSONError(w, 40300, "PROD 重启需要 submit_prod 权限")
+		return
+	}
 	argoURL, argoToken, err := ResolveArgocdForEnv(p)
 	if err != nil {
 		JSONError(w, 40001, err.Error())
@@ -443,6 +449,12 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 	}
 	if !HasButton(r, "rollback") {
 		JSONError(w, 40300, "没有回滚权限（rollback）")
+		return
+	}
+	// 🔒 PROD 回滚 = 写操作 → 跟 submit_prod 一起守门，跟 HandleUpdateImage 对齐
+	// （Gate 1 env 白名单是第一道；这是第二道 defense-in-depth）
+	if p.EnvType == models.EnvPROD && !HasButton(r, "submit_prod") {
+		JSONError(w, 40300, "PROD 回滚需要 submit_prod 权限")
 		return
 	}
 	modules := loadModulesMap(peID, p.ChartBasePath)
