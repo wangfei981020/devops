@@ -2,7 +2,7 @@
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-logo">D</div>
+        <img class="brand-logo" :src="brandLogo" alt="logo"/>
         <div class="brand-n">Deploy</div>
         <div class="brand-t">v{{ version }}</div>
       </div>
@@ -91,10 +91,11 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Upload, Setting, ArrowRight, ArrowDown, User, RefreshRight, SwitchButton, Odometer } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
+import brandLogo from '../assets/logo.png'
 
 const auth = useAuthStore()
 const router = useRouter()
-const version = '121'
+const version = '122'
 
 const grpRaw = JSON.parse(localStorage.getItem('deploy_sidebar_groups') || '{"publish":true,"config":true}')
 const grp = reactive(grpRaw)
@@ -120,7 +121,7 @@ async function onCommand(cmd) {
 
 .sidebar { width: 220px; background: var(--sidebar-bg); flex-shrink: 0; display: flex; flex-direction: column; }
 .brand { padding: 18px 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); display: flex; align-items: center; gap: 10px; }
-.brand-logo { width: 30px; height: 30px; background: var(--primary); border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 14px; }
+.brand-logo { width: 32px; height: 32px; background: #fff; border-radius: 6px; object-fit: contain; padding: 2px; box-sizing: border-box; flex-shrink: 0; }
 .brand-n { color: #fff; font-weight: 600; font-size: 14px; }
 .brand-t { margin-left: auto; font-family: var(--mono); font-size: 10px; font-weight: 500; color: rgba(255, 255, 255, 0.4); padding: 1px 6px; background: rgba(255, 255, 255, 0.05); border-radius: 3px; }
 
