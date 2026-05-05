@@ -139,6 +139,13 @@ func HandleTestDeployAgent(w http.ResponseWriter, r *http.Request) {
 	url, token := strings.TrimSpace(req.URL), req.Token
 	if req.ID != nil && *req.ID > 0 {
 		if a, err := LoadDeployAgentDecrypted(*req.ID); err == nil {
+			// 🔒 安全：改了 url（可能指向攻击者主机）必须重新提供 token，
+			// 否则 DB 真 token 以 Bearer 头打到攻击者 → VM agent token 等同 ansible/root 权限直接外泄。
+			urlChanged := url != "" && url != a.URL
+			if urlChanged && token == "" {
+				JSONError(w, 40000, "修改了 url 时必须重新提供 token（防止 VM agent token 外泄到不可信地址）")
+				return
+			}
 			if url == "" {
 				url = a.URL
 			}

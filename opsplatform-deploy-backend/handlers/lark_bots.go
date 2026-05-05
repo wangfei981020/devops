@@ -143,6 +143,13 @@ func HandleTestLarkBotByBody(w http.ResponseWriter, r *http.Request) {
 	webhook, secret := strings.TrimSpace(req.Webhook), req.Secret
 	if req.ID != nil && *req.ID > 0 {
 		if b, err := LoadLarkBotDecrypted(*req.ID); err == nil {
+			// 🔒 安全：改了 webhook（可能指向攻击者地址）必须重新提供 secret，
+			// 否则用 DB 真 secret 给攻击者 webhook 算 HMAC 签名 → 攻击者从签名+timestamp 反推 secret。
+			webhookChanged := webhook != "" && webhook != b.Webhook
+			if webhookChanged && secret == "" {
+				JSONError(w, 40000, "修改了 webhook 时必须重新提供 secret（防止 HMAC 签名材料外泄到不可信地址）")
+				return
+			}
 			if webhook == "" {
 				webhook = b.Webhook
 			}
