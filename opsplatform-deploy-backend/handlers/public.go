@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"os"
 	"strings"
@@ -139,7 +140,8 @@ func InternalTokenMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		got := r.Header.Get("X-Internal-Token")
-		if got == "" || got != expected {
+		// 🔒 安全：常量时间比较防 timing attack
+		if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
 			JSONError(w, 40300, "invalid internal token")
 			return
 		}

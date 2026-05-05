@@ -75,15 +75,9 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	database.DB.Exec("INSERT INTO sessions (user_id, token_hash, expires_at) VALUES (?, ?, ?)", id, tokenHash, expiresAt)
 	AuditAs(r, username, "auth.login.success", "user", username, map[string]interface{}{"role": role, "auth_source": "local"})
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "deploy_auth_token",
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   Cfg.CookieSecure,
-		MaxAge:   Cfg.SessionTimeout * 60,
-		SameSite: parseSameSite(Cfg.CookieSameSite),
-	})
+	// 注：曾经设过 HttpOnly cookie，但前端实际只读 localStorage（auth.js + axios 拦截器走 Authorization 头）。
+	// 留着会让审计困惑（有 cookie 但没用），还可能形成"两套 session"假象。删除。
+	// 真正要走 HttpOnly cookie + CSRF 是独立大改造，不在本次 scope。
 	JSONSuccess(w, map[string]interface{}{
 		"token": token,
 		"user": map[string]interface{}{
@@ -110,7 +104,7 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 		}
 		database.DB.Exec("DELETE FROM sessions WHERE token_hash = ?", tokenHash)
 	}
-	http.SetCookie(w, &http.Cookie{Name: "deploy_auth_token", Value: "", Path: "/", MaxAge: -1})
+	// cookie 已不再设置（见 HandleLogin 注释）；session 删表 + 前端清 localStorage 即可登出。
 	AuditAs(r, username, "auth.logout", "user", username, nil)
 	JSONSuccess(w, nil)
 }
@@ -224,29 +218,39 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 应用级访问控制：调运维平台 external-apps/my，确认用户的角色关联了 deploy_center 应用
-	// （截图那个"发布中心-角色权限"对话框对应的数据）。管理员在运维平台 UI 配了哪些角色能访问，
-	// 这里强制校验；不通过就拒登录，哪怕 portal_token 本身有效。
-	// admin 跳过（本地 admin 账号走 local login 不到这里；如果 portal 的 admin 也能豁免）
-	if role != "admin" && !portalUserCanAccessApp(Cfg.PortalAPIURL, portalToken, "deploy_center") {
-		AuditAs(r, username, "auth.portal_auth.denied", "user", username, map[string]interface{}{"reason": "no app access"})
-		JSONError(w, 40300, "您所在的角色未被授予访问发布中心的权限")
-		return
+	// 🔒 安全：portal 调用失败时 fail-closed 拒登（之前 fail-open = portal 挂了人人是 admin）
+	if role != "admin" {
+		allowed, ok := portalUserCanAccessApp(Cfg.PortalAPIURL, portalToken, "deploy_center")
+		if !ok {
+			AuditAs(r, username, "auth.portal_auth.denied", "user", username, map[string]interface{}{"reason": "portal unreachable (app-access)"})
+			JSONError(w, 50301, "权限服务暂不可用，请稍后重试")
+			return
+		}
+		if !allowed {
+			AuditAs(r, username, "auth.portal_auth.denied", "user", username, map[string]interface{}{"reason": "no app access"})
+			JSONError(w, 40300, "您所在的角色未被授予访问发布中心的权限")
+			return
+		}
 	}
 
 	// 拉发布中心 env 白名单（来自运维平台 role_deploy_envs）。admin 跳过。
-	// 若调用失败则白名单为 nil（fail-open），不影响登录；后续 v64+ 可以视情况收紧
+	// 🔒 安全：portal 调用失败时同样 fail-closed（之前 ok=false 时 allowed_envs=NULL = 当 admin 看全部）
 	var allowedEnvsJSON sql.NullString
-	// 默认 admin / 不过滤 → 全可见
-	hasUAT, hasPROD := true, true
+	hasUAT, hasPROD := true, true // admin / isAdmin=true 默认全可见
 	if role != "admin" {
 		envs, isAdmin, ok := portalUserDeployEnvs(Cfg.PortalAPIURL, portalToken, username)
-		if ok && !isAdmin {
+		if !ok {
+			AuditAs(r, username, "auth.portal_auth.denied", "user", username, map[string]interface{}{"reason": "portal unreachable (deploy-envs)"})
+			JSONError(w, 50301, "权限服务暂不可用（无法获取环境白名单），请稍后重试")
+			return
+		}
+		if !isAdmin {
 			// 即使空数组也存——空数组明确表示"没有任何 env 权限"，fail-close
 			b, _ := json.Marshal(envs)
 			allowedEnvsJSON = sql.NullString{String: string(b), Valid: true}
 			hasUAT, hasPROD = computeEnvTypeFlags(envs)
 		}
-		// ok=false（调用失败）或 isAdmin=true → allowed_envs 留 NULL，等同 admin 不过滤
+		// isAdmin=true → allowed_envs 留 NULL，admin 不过滤
 	}
 
 	token, _ := generateToken(userID, username, role)
@@ -258,15 +262,7 @@ func HandlePortalAuth(w http.ResponseWriter, r *http.Request) {
 		"INSERT INTO sessions (user_id, token_hash, expires_at, permissions, allowed_envs) VALUES (?, ?, ?, ?, ?)",
 		userID, tokenHash, expiresAt, string(permJSON), allowedEnvsJSON)
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "deploy_auth_token",
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   Cfg.CookieSecure,
-		MaxAge:   Cfg.SessionTimeout * 60,
-		SameSite: parseSameSite(Cfg.CookieSameSite),
-	})
+	// 不再设 HttpOnly cookie（见 HandleLogin 注释）。前端 axios 走 Authorization 头读 localStorage。
 	AuditAs(r, username, "auth.login.success", "user", username, map[string]interface{}{"role": role, "auth_source": "portal"})
 	JSONSuccess(w, map[string]interface{}{
 		"token": token,
@@ -384,8 +380,14 @@ func portalUserDeployEnvs(portalURL, portalToken, username string) (envs []strin
 //
 //	portalToken 代表用户身份；运维平台那边按 token 解析用户 → 查 user_roles → role_external_apps。
 //	运维平台 UI「发布中心-角色权限」对话框勾的就是这张表。
-//	没关联 → 返回 false → 发布中心 portal-auth 直接拒绝登录。
-func portalUserCanAccessApp(portalURL, portalToken, appKey string) bool {
+//
+//	返回值：
+//	  - allowed: true=用户角色授权了 app_key；false=未授权或调用失败
+//	  - ok:      true=调用成功（allowed 是确认结果）；false=调用失败（无法判断，应 fail-closed）
+//
+//	🔒 安全：之前调用失败时返回 true（fail-open），等同于"运维平台挂了 = 任何人都是 admin"。
+//	现改为返回 (false, false)，让 caller 显式 fail-closed 拒绝登录。
+func portalUserCanAccessApp(portalURL, portalToken, appKey string) (allowed, ok bool) {
 	u := strings.TrimRight(portalURL, "/") + "/api/external-apps/my"
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, _ := http.NewRequest("GET", u, nil)
@@ -393,8 +395,7 @@ func portalUserCanAccessApp(portalURL, portalToken, appKey string) bool {
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[AppAccess] fetch external-apps/my failed: %v", err)
-		// 运维平台临时不可用时不拦截，避免 portal 挂了连带发布中心也登不了
-		return true
+		return false, false // 服务不可用 → 调用方 fail-closed
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -419,10 +420,10 @@ func portalUserCanAccessApp(portalURL, portalToken, appKey string) bool {
 	}
 	for _, a := range list {
 		if a.AppKey == appKey {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return false, true
 }
 
 // fetchPortalPermissions: 用用户 token 调 portal 拉权限

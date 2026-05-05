@@ -280,25 +280,33 @@ func HandleTestGlobalGitlab(w http.ResponseWriter, r *http.Request) {
 	_ = DecodeJSON(newDiscardW(), r, &req)
 	url, user, token, repoPath := req.URL, req.User, req.Token, req.TestRepoPath
 
-	// 任一字段空就从 DB fallback
-	if url == "" || user == "" || token == "" || repoPath == "" {
-		var dbURL, dbUser, dbEnc, dbPath string
-		_ = database.DB.QueryRow(`SELECT gitlab_url, gitlab_user, gitlab_token, IFNULL(test_repo_path,'')
-			FROM global_config WHERE id=1`).
-			Scan(&dbURL, &dbUser, &dbEnc, &dbPath)
-		if url == "" {
-			url = dbURL
-		}
-		if user == "" {
-			user = dbUser
-		}
-		if token == "" {
-			dec, _ := crypto.Decrypt(dbEnc)
-			token = dec
-		}
-		if repoPath == "" {
-			repoPath = dbPath
-		}
+	// 先读 DB 当前配置以做安全校验
+	var dbURL, dbUser, dbEnc, dbPath string
+	_ = database.DB.QueryRow(`SELECT gitlab_url, gitlab_user, gitlab_token, IFNULL(test_repo_path,'')
+		FROM global_config WHERE id=1`).
+		Scan(&dbURL, &dbUser, &dbEnc, &dbPath)
+
+	// 🔒 安全：改了 url 或 user（可能指向新地址）必须重新提供 token
+	// 否则攻击者传 url=evil.com → 后端把 DB 真实 PAT 注入到 git ls-remote 或打到 evil/api/v4
+	urlChanged := url != "" && url != dbURL
+	userChanged := user != "" && user != dbUser
+	if (urlChanged || userChanged) && token == "" {
+		JSONError(w, 40000, "修改了 gitlab_url 或 user 时必须重新提供 token（防止 PAT 外泄到不可信地址）")
+		return
+	}
+
+	if url == "" {
+		url = dbURL
+	}
+	if user == "" {
+		user = dbUser
+	}
+	if token == "" {
+		dec, _ := crypto.Decrypt(dbEnc)
+		token = dec
+	}
+	if repoPath == "" {
+		repoPath = dbPath
 	}
 
 	if url == "" || user == "" || token == "" {

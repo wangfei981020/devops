@@ -145,20 +145,28 @@ func HandleTestHarbor(w http.ResponseWriter, r *http.Request) {
 	_ = DecodeJSON(newDiscardW(), r, &req)
 	url, user, token := strings.TrimSpace(req.HarborURL), strings.TrimSpace(req.HarborUser), req.HarborToken
 
-	if url == "" || user == "" || token == "" {
-		var dbURL, dbUser, dbEnc string
-		_ = database.DB.QueryRow(`SELECT IFNULL(harbor_url,''), IFNULL(harbor_user,''), IFNULL(harbor_token,'')
-			FROM global_config WHERE id=1`).Scan(&dbURL, &dbUser, &dbEnc)
-		if url == "" {
-			url = dbURL
-		}
-		if user == "" {
-			user = dbUser
-		}
-		if token == "" {
-			dec, _ := crypto.Decrypt(dbEnc)
-			token = dec
-		}
+	// 先读 DB 当前配置以做安全校验
+	var dbURL, dbUser, dbEnc string
+	_ = database.DB.QueryRow(`SELECT IFNULL(harbor_url,''), IFNULL(harbor_user,''), IFNULL(harbor_token,'')
+		FROM global_config WHERE id=1`).Scan(&dbURL, &dbUser, &dbEnc)
+
+	// 🔒 安全：改了 url 或 user（可能指向新地址）必须重新提供 token
+	urlChanged := url != "" && url != dbURL
+	userChanged := user != "" && user != dbUser
+	if (urlChanged || userChanged) && token == "" {
+		JSONError(w, 40000, "修改了 harbor_url 或 user 时必须重新提供 token（防止凭证外泄到不可信地址）")
+		return
+	}
+
+	if url == "" {
+		url = dbURL
+	}
+	if user == "" {
+		user = dbUser
+	}
+	if token == "" {
+		dec, _ := crypto.Decrypt(dbEnc)
+		token = dec
 	}
 	if url == "" || user == "" || token == "" {
 		JSONError(w, 40001, "harbor_url / user / token 必填")

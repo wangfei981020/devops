@@ -220,7 +220,8 @@ func (g *GitService) Push(ctx context.Context, projectEnvName, branch string, re
 		}
 		lower := strings.ToLower(string(out))
 		if !strings.Contains(lower, "rejected") && !strings.Contains(lower, "non-fast-forward") {
-			return fmt.Errorf("git push: %w\n%s", err, out)
+			// 🔒 安全：scrub PAT/secret，避免 http://bot:PAT@... 写进 deployment.error_msg 给前端
+			return fmt.Errorf("git push: %w\n%s", err, ScrubSecrets(out))
 		}
 		if rerr := g.PullRebase(ctx, projectEnvName, branch); rerr != nil {
 			return fmt.Errorf("push conflict, rebase failed: %w", rerr)

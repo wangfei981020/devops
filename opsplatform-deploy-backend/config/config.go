@@ -67,7 +67,10 @@ func Load() *Config {
 			fmt.Fprintln(os.Stderr, "FATAL: CORS_ORIGIN not set. Specify the allowed origin or set APP_ENV=dev.")
 			os.Exit(1)
 		}
-		c.CORSOrigin = "*"
+		// 🔒 安全：dev 默认绑死 localhost:5173 而非 "*"，否则误把 dev 配上线 + token 在 LS
+		// 任意站点 fetch 带 Bearer 就能跨域拿数据。前端用别的端口请显式设 CORS_ORIGIN env。
+		c.CORSOrigin = "http://localhost:5173"
+		fmt.Fprintln(os.Stderr, "WARN: CORS_ORIGIN not set, dev fallback = http://localhost:5173 (set CORS_ORIGIN env for other origins)")
 	}
 	return c
 }

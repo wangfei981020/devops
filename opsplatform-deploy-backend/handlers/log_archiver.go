@@ -274,19 +274,41 @@ func HandleTestMinIO(w http.ResponseWriter, r *http.Request) {
 	if !DecodeJSON(w, r, &req) {
 		return
 	}
-	// 任一字段空就 fallback DB（admin 改时密钥可能不传）
-	if req.Endpoint == "" || req.Bucket == "" || req.AccessKey == "" || req.SecretKey == "" {
-		var encSecret string
-		_ = database.DB.QueryRow(`SELECT
-			IFNULL(minio_endpoint,''), IFNULL(minio_bucket,''),
-			IFNULL(minio_access_key,''), IFNULL(minio_secret_key,''),
-			IFNULL(minio_region,'us-east-1')
-			FROM global_config WHERE id=1`).
-			Scan(&req.Endpoint, &req.Bucket, &req.AccessKey, &encSecret, &req.Region)
-		if req.SecretKey == "" {
-			dec, _ := crypto.Decrypt(encSecret)
-			req.SecretKey = dec
-		}
+	// 先读 DB 当前配置以做"是否改了关键字段"的校验
+	var encSecret, dbEndpoint, dbBucket, dbAK, dbRegion string
+	_ = database.DB.QueryRow(`SELECT
+		IFNULL(minio_endpoint,''), IFNULL(minio_bucket,''),
+		IFNULL(minio_access_key,''), IFNULL(minio_secret_key,''),
+		IFNULL(minio_region,'us-east-1')
+		FROM global_config WHERE id=1`).
+		Scan(&dbEndpoint, &dbBucket, &dbAK, &encSecret, &dbRegion)
+
+	// 🔒 安全：改了 endpoint 或 access_key（可能指向新地址）必须重新提供 secret_key。
+	// 否则攻击者传 endpoint=evil.com + 留空 secret → 后端拿 DB 真实 secret 签名打到 evil.com
+	// 攻击者从 Authorization 头还原 secret。
+	endpointChanged := req.Endpoint != "" && req.Endpoint != dbEndpoint
+	akChanged := req.AccessKey != "" && req.AccessKey != dbAK
+	if (endpointChanged || akChanged) && req.SecretKey == "" {
+		JSONError(w, 40000, "修改了 endpoint 或 access_key 时必须重新提供 secret_key（防止凭证外泄到不可信地址）")
+		return
+	}
+
+	// 安全前提通过 → 对未传字段做 DB fallback
+	if req.Endpoint == "" {
+		req.Endpoint = dbEndpoint
+	}
+	if req.Bucket == "" {
+		req.Bucket = dbBucket
+	}
+	if req.AccessKey == "" {
+		req.AccessKey = dbAK
+	}
+	if req.Region == "" {
+		req.Region = dbRegion
+	}
+	if req.SecretKey == "" {
+		dec, _ := crypto.Decrypt(encSecret)
+		req.SecretKey = dec
 	}
 	mc, err := services.NewMinIOClient(services.MinIOConfig{
 		Endpoint: req.Endpoint, Bucket: req.Bucket,
