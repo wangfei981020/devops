@@ -116,6 +116,7 @@ func HandleBatchCheckRecords(w http.ResponseWriter, r *http.Request) {
 		DestAddr     string `json:"dest_addr"`
 		Exists       bool   `json:"exists"`
 		ExistingInfo string `json:"existing_info,omitempty"` // 已存在记录的信息
+		Status       string `json:"status,omitempty"`        // 已存在记录的状态：active/pending/inactive
 	}
 
 	existsRecords := make([]CheckResult, 0)
@@ -145,9 +146,10 @@ func HandleBatchCheckRecords(w http.ResponseWriter, r *http.Request) {
 			result.Exists = true
 			// 获取已存在记录的详细信息
 			if existingRec, err := GetRecordByConnectionID(record.ConnectionID); err == nil && existingRec != nil {
-				result.ExistingInfo = fmt.Sprintf("项目=%s, VID=%s, 源=%s:%s, 目标=%s:%s", 
-					existingRec.Project, existingRec.VID, existingRec.SrcIP, existingRec.SrcPort, 
+				result.ExistingInfo = fmt.Sprintf("项目=%s, VID=%s, 源=%s:%s, 目标=%s:%s",
+					existingRec.Project, existingRec.VID, existingRec.SrcIP, existingRec.SrcPort,
 					existingRec.DestIP, existingRec.DestPort)
+				result.Status = existingRec.Status
 			}
 			existsRecords = append(existsRecords, result)
 		} else {

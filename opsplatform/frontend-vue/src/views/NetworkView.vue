@@ -57,8 +57,8 @@ const batchCheckLoading = ref(false)
 const batchCheckResult = ref(null)
 
 const showBatchEditModal = ref(false)
-const batchEditForm = ref({ src_ip: '', src_port: '', dest_ip: '', dest_port: '' })
-const batchEditFields = ref({ src_ip: false, src_port: false, dest_ip: false, dest_port: false })
+const batchEditForm = ref({ module: '', src_ip: '', src_port: '', dest_ip: '', dest_port: '' })
+const batchEditFields = ref({ module: false, src_ip: false, src_port: false, dest_ip: false, dest_port: false })
 
 const showHistoryModal = ref(false)
 const historyRecord = ref(null)
@@ -92,7 +92,7 @@ const filteredRecords = computed(() => {
   
   if (searchQuery.value) {
     const q = searchQuery.value.toLowerCase()
-    r = r.filter(x => [x.connection_id, x.vid, x.src_ip, x.dest_ip, x.src_port, x.dest_port].some(v => v && String(v).toLowerCase().includes(q)))
+    r = r.filter(x => [x.connection_id, x.vid, x.src_ip, x.dest_ip, x.src_port, x.dest_port, x.module].some(v => v && String(v).toLowerCase().includes(q)))
   }
   
   if (sortField.value) {
@@ -416,15 +416,15 @@ async function batchUpdateStatus(status) {
 
 function openBatchEdit() {
   if (selectedRecords.value.length === 0) return
-  batchEditForm.value = { src_ip: '', src_port: '', dest_ip: '', dest_port: '' }
-  batchEditFields.value = { src_ip: false, src_port: false, dest_ip: false, dest_port: false }
+  batchEditForm.value = { module: '', src_ip: '', src_port: '', dest_ip: '', dest_port: '' }
+  batchEditFields.value = { module: false, src_ip: false, src_port: false, dest_ip: false, dest_port: false }
   showBatchEditModal.value = true
 }
 
 async function submitBatchEdit() {
   const fields = batchEditFields.value
   const form = batchEditForm.value
-  if (!fields.src_ip && !fields.src_port && !fields.dest_ip && !fields.dest_port) {
+  if (!fields.module && !fields.src_ip && !fields.src_port && !fields.dest_ip && !fields.dest_port) {
     appStore.showToast('请至少勾选一个要修改的字段', 'error')
     return
   }
@@ -432,6 +432,7 @@ async function submitBatchEdit() {
     const selectedList = records.value.filter(r => selectedRecords.value.includes(r.id))
     const updatedRecords = selectedList.map(r => {
       const merged = { ...r }
+      if (fields.module) merged.module = form.module
       if (fields.src_ip) merged.src_ip = form.src_ip
       if (fields.src_port) merged.src_port = form.src_port
       if (fields.dest_ip) merged.dest_ip = form.dest_ip
@@ -503,7 +504,7 @@ async function confirmBatchDelete() {
     <div class="filter-bar">
       <div class="search-box">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-        <input type="text" v-model="tempSearchQuery" placeholder="搜索VID、IP、端口..." class="search-input" @keyup.enter="applyFilter" />
+        <input type="text" v-model="tempSearchQuery" placeholder="搜索 VID、IP、端口、模块名..." class="search-input" @keyup.enter="applyFilter" />
       </div>
       <select v-model="tempProjectFilter" class="filter-select"><option value="">所有项目</option><option v-for="p in projectList" :key="p" :value="p">{{ p }}</option></select>
       <select v-model="tempEnvFilter" class="filter-select"><option value="">所有环境</option><option value="prod">PROD</option><option value="uat">UAT</option></select>
@@ -728,6 +729,10 @@ async function confirmBatchDelete() {
           <div class="modal-body">
             <p class="batch-edit-tip">勾选要修改的字段，未勾选的字段保持不变</p>
             <div class="batch-edit-row">
+              <label class="batch-edit-check"><input type="checkbox" v-model="batchEditFields.module" /> 模块名</label>
+              <input type="text" class="form-input" v-model="batchEditForm.module" :disabled="!batchEditFields.module" placeholder="如 baccarat-resource-backend" />
+            </div>
+            <div class="batch-edit-row">
               <label class="batch-edit-check"><input type="checkbox" v-model="batchEditFields.src_ip" /> 源地址 IP</label>
               <input type="text" class="form-input" v-model="batchEditForm.src_ip" :disabled="!batchEditFields.src_ip" placeholder="如 192.168.1.10" />
             </div>
@@ -760,7 +765,7 @@ async function confirmBatchDelete() {
             <div v-if="batchCheckError" class="batch-error">{{ batchCheckError }}</div>
             <div v-if="batchCheckResult" class="batch-check-result">
               <div class="result-summary"><div class="result-card success"><div class="result-value">{{ batchCheckResult.new_count }}</div><div class="result-label">可添加（新记录）</div></div><div class="result-card danger"><div class="result-value">{{ batchCheckResult.exists_count }}</div><div class="result-label">已存在（需修改）</div></div></div>
-              <div v-if="batchCheckResult.exists?.length > 0" class="result-section exists"><div class="result-header"><h4>已存在的连接ID（{{ batchCheckResult.exists.length }} 条）</h4><button class="btn btn-sm" @click="copyCheckResult('exists')">复制</button></div><div class="result-table"><table><thead><tr><th>项目</th><th>模块名</th><th>VID</th><th>源地址</th><th>目标地址</th><th>连接ID</th><th>数据库中的记录</th></tr></thead><tbody><tr v-for="r in batchCheckResult.exists" :key="r.connection_id"><td>{{ r.project }}</td><td>{{ r.module }}</td><td>{{ r.vid }}</td><td>{{ r.src_addr }}</td><td>{{ r.dest_addr }}</td><td class="conn-id danger">{{ r.connection_id }}</td><td class="existing-info">{{ r.existing_info }}</td></tr></tbody></table></div></div>
+              <div v-if="batchCheckResult.exists?.length > 0" class="result-section exists"><div class="result-header"><h4>已存在的连接ID（{{ batchCheckResult.exists.length }} 条）</h4><button class="btn btn-sm" @click="copyCheckResult('exists')">复制</button></div><div class="result-table"><table><thead><tr><th>项目</th><th>模块名</th><th>VID</th><th>源地址</th><th>目标地址</th><th>连接ID</th><th>状态</th><th>数据库中的记录</th></tr></thead><tbody><tr v-for="r in batchCheckResult.exists" :key="r.connection_id"><td>{{ r.project }}</td><td>{{ r.module }}</td><td>{{ r.vid }}</td><td>{{ r.src_addr }}</td><td>{{ r.dest_addr }}</td><td class="conn-id danger">{{ r.connection_id }}</td><td><span class="status-badge" :class="r.status">{{ ({active:'启用', pending:'待定', inactive:'停用'})[r.status] || '-' }}</span></td><td class="existing-info">{{ r.existing_info }}</td></tr></tbody></table></div></div>
               <div v-if="batchCheckResult.new?.length > 0" class="result-section new"><div class="result-header"><h4>可添加的记录（{{ batchCheckResult.new.length }} 条）</h4><button class="btn btn-sm" @click="copyCheckResult('new')">复制</button></div><div class="result-table"><table><thead><tr><th>项目</th><th>模块名</th><th>VID</th><th>源地址</th><th>目标地址</th><th>连接ID</th></tr></thead><tbody><tr v-for="r in batchCheckResult.new" :key="r.connection_id"><td>{{ r.project }}</td><td>{{ r.module }}</td><td>{{ r.vid }}</td><td>{{ r.src_addr }}</td><td>{{ r.dest_addr }}</td><td class="conn-id success">{{ r.connection_id }}</td></tr></tbody></table></div></div>
             </div>
           </div>
