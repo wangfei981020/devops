@@ -148,7 +148,7 @@ func HandleGetMyDeployEnvs(w http.ResponseWriter, r *http.Request) {
 		  FROM role_deploy_envs rde
 		  INNER JOIN user_roles ur ON ur.role_id = rde.role_id
 		 WHERE ur.user_id = ?
-		   AND REGEXP_REPLACE(rde.env_name, '-(uat|prod)$', '') IN (
+		   AND REGEXP_REPLACE(rde.env_name, '-(uat|prod|lpt)$', '') IN (
 		     SELECT DISTINCT rdp.project_name
 		       FROM role_deploy_projects rdp
 		       INNER JOIN user_roles ur2 ON ur2.role_id = rdp.role_id

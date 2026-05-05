@@ -1005,11 +1005,11 @@ CREATE TABLE IF NOT EXISTS duty_records (
 	var rdpCnt int
 	_ = DB.QueryRow(`SELECT COUNT(*) FROM role_deploy_projects`).Scan(&rdpCnt)
 	if rdpCnt == 0 {
-		// 用 SQL 直接 derive：name 形如 g32-uat → 去掉 "-uat" / "-prod" 后缀；不带后缀的整个名当项目名
-		// REGEXP_REPLACE: 把末尾的 -(uat|prod) 切掉
+		// 用 SQL 直接 derive：name 形如 g32-uat / g01-lpt → 去掉 "-uat" / "-prod" / "-lpt" 后缀；不带后缀的整个名当项目名
+		// REGEXP_REPLACE: 把末尾的 -(uat|prod|lpt) 切掉
 		_, err := DB.Exec(`
 			INSERT IGNORE INTO role_deploy_projects (role_id, project_name)
-			SELECT DISTINCT role_id, REGEXP_REPLACE(env_name, '-(uat|prod)$', '') FROM role_deploy_envs
+			SELECT DISTINCT role_id, REGEXP_REPLACE(env_name, '-(uat|prod|lpt)$', '') FROM role_deploy_envs
 		`)
 		if err != nil {
 			log.Printf("[migration] backfill role_deploy_projects failed (non-fatal): %v", err)
