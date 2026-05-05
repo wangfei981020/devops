@@ -301,7 +301,10 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 	if limit <= 0 {
 		limit = 10
 	}
-	// ArgoCD app name 与 module scanner 约定一致：全小写 kebab-case
+	// ArgoCD app name 优先用 module.argocd_app_name（scan 时按 helm 模板解析的真值）；
+	// 空时 fallback 到老的 module-projectEnvName 拼法（兼容未重扫的项目）。
+	// 跟 Restart 流程一致 (line 451+)。否则 g32 这种 helm 用 {{ $.Values.global.env }}
+	// 的项目，sync API 用错名 → ArgoCD 报"app not found"。
 	peNameLower := strings.ToLower(in.ProjectEnvName)
 	type syncJob struct {
 		module     string
@@ -310,19 +313,27 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 	}
 	jobs := make([]syncJob, 0, len(res.Changes))
 	for _, c := range res.Changes {
-		// 副本数感知：从已 clone 的 values.yaml 读
 		var replicas int
-		if m, ok := in.Modules[c.Module]; ok && m.ChartRelPath != "" {
-			if vb, _ := d.Git.ReadFile(in.ProjectEnvName, m.ChartRelPath); len(vb) > 0 {
-				replicas = readEffectiveReplicas(vb)
+		var appName string
+		if m, ok := in.Modules[c.Module]; ok {
+			if m.ChartRelPath != "" {
+				if vb, _ := d.Git.ReadFile(in.ProjectEnvName, m.ChartRelPath); len(vb) > 0 {
+					replicas = readEffectiveReplicas(vb)
+				}
 			}
+			if m.ArgocdApp != "" {
+				appName = m.ArgocdApp
+			}
+		}
+		if appName == "" {
+			appName = strings.ToLower(c.Module) + "-" + peNameLower
 		}
 		if replicas <= 0 {
 			replicas = 1
 		}
 		jobs = append(jobs, syncJob{
 			module:     c.Module,
-			app:        strings.ToLower(c.Module) + "-" + peNameLower,
+			app:        appName,
 			timeoutSec: computeAppTimeout(replicas, updateImagePerPodSec, configTimeout),
 		})
 	}

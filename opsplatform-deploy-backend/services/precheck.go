@@ -61,6 +61,7 @@ type PrecheckInput struct {
 // PrecheckRequestItem 输入的单模块项
 type PrecheckRequestItem struct {
 	Module          string
+	ArgocdAppName   string // ← 优先用这个 (来自 module.argocd_app_name DB 列，scan 时按 helm 模板解析)
 	NewTag          string // 为空 = restart 路径，跳过 Harbor 校验
 	OldTag          string
 	ImageRepository string // 完整 image，如 harbor.slileisure.com/g32/user-client-backend
@@ -110,11 +111,19 @@ func RunPrecheck(ctx context.Context, in PrecheckInput) PrecheckBundle {
 
 // checkOne 跑单个模块的三方检查
 func checkOne(ctx context.Context, in PrecheckInput, item PrecheckRequestItem) PrecheckItem {
+	// ArgoCD app 名优先用 module.argocd_app_name（scan 时按 helm 模板解析的真值）；
+	// 空时 fallback 到老的 module-projectEnv 拼法（兼容未重扫的项目）。
+	// 这是 v110 的 ResolveAppNameSuffix 修复在 precheck 通路的对齐 —— 否则 g32
+	// 这种 helm 用 {{ $.Values.global.env }} 的项目，预检永远找不到 ArgoCD app。
+	appName := item.ArgocdAppName
+	if appName == "" {
+		appName = strings.ToLower(item.Module) + "-" + in.ProjectEnvLower
+	}
 	out := PrecheckItem{
 		Module:    item.Module,
 		NewTag:    item.NewTag,
 		OldTag:    item.OldTag,
-		ArgocdApp: strings.ToLower(item.Module) + "-" + in.ProjectEnvLower,
+		ArgocdApp: appName,
 		HarborOK:  true, // restart 模式没 NewTag → 默认 true
 		ArgocdOK:  true,
 		GitlabOK:  true,

@@ -107,6 +107,7 @@ func runPrecheckForPreview(ctx context.Context, p *models.ProjectEnv, pending ma
 		m := modules[name]
 		items = append(items, services.PrecheckRequestItem{
 			Module:          name,
+			ArgocdAppName:   m.ArgocdApp, // 用 DB 里 scan 出来的真值，避免 g32 这种 helm 模板用 env 后缀的项目对不上
 			NewTag:          newTag,
 			OldTag:          m.CurrentTag,
 			ImageRepository: m.ImageRepository,
@@ -588,6 +589,7 @@ func preflightFilterPending(ctx context.Context, p *models.ProjectEnv,
 		m := modules[name]
 		items = append(items, services.PrecheckRequestItem{
 			Module:          name,
+			ArgocdAppName:   m.ArgocdApp,
 			NewTag:          newTag,
 			OldTag:          m.CurrentTag,
 			ImageRepository: m.ImageRepository,
