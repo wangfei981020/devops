@@ -61,12 +61,10 @@ func HandleListProjectEnvs(w http.ResponseWriter, r *http.Request) {
 
 func HandleGetProjectEnv(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
-	if !IsEnvIDAllowed(r, id) {
-		JSONError(w, 40300, "无权访问该环境")
-		return
-	}
+	// 🔒 安全：先 load 再校验权限，且无权限时也返 404 而非 403。
+	// 之前先 403 再 404 导致攻击者可以按 ID 序列枚举存在性（403 = 存在但无权限，404 = 不存在）
 	p, err := loadProjectEnvMasked(id)
-	if err != nil {
+	if err != nil || !IsEnvIDAllowed(r, id) {
 		JSONError(w, 40400, "project_env not found")
 		return
 	}

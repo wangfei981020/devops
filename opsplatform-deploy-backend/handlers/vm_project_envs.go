@@ -81,12 +81,9 @@ func HandleListVmProjectEnvs(w http.ResponseWriter, r *http.Request) {
 // GET /api/vm-project-envs/{id}
 func HandleGetVmProjectEnv(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
-	if !IsVmEnvIDAllowed(r, id) {
-		JSONError(w, 40300, "无权访问该 VM 环境")
-		return
-	}
+	// 🔒 安全：先 load 再校验权限，无权限时也返 404 防 ID 枚举（同 HandleGetProjectEnv 注释）
 	v, err := loadVmProjectEnv(id)
-	if err != nil {
+	if err != nil || !IsVmEnvIDAllowed(r, id) {
 		JSONError(w, 40400, "vm_project_env not found")
 		return
 	}

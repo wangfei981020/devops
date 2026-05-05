@@ -269,14 +269,15 @@ func HandleGetDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 数据级权限按 target_type 分流：VM 行 project_env_id 实际是 vm_project_env.id
+	// 🔒 安全：无权限时也返 404 防 ID 枚举（之前 403 暴露存在性）
 	if targetType == "vm" {
 		if !IsVmEnvIDAllowed(r, d.ProjectEnvID) {
-			JSONError(w, 40300, "无权访问该 VM 环境的发布记录")
+			JSONError(w, 40400, "deployment not found")
 			return
 		}
 	} else {
 		if !IsEnvIDAllowed(r, d.ProjectEnvID) {
-			JSONError(w, 40300, "无权访问该环境的发布记录")
+			JSONError(w, 40400, "deployment not found")
 			return
 		}
 	}

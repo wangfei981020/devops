@@ -73,7 +73,8 @@ func main() {
 	protected.HandleFunc("/dashboard/stats", handlers.HandleDashboardStats).Methods("GET", "OPTIONS")
 
 	// 全局/项目/环境/ArgoCD/Lark/通知人 —— 所有用户可 GET
-	protected.HandleFunc("/global-config", handlers.HandleGetGlobalConfig).Methods("GET", "OPTIONS")
+	// 注：/global-config GET 移到 mg 子路由（manage_global），因为响应里包含 minio AK / lark webhook /
+	// 各家 endpoint URL 等敏感信息。前端 SystemSettings 页面本来就是 manage_global 限定。
 	protected.HandleFunc("/projects", handlers.HandleListProjects).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/project-envs", handlers.HandleListProjectEnvs).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/project-envs/{id}", handlers.HandleGetProjectEnv).Methods("GET", "OPTIONS")
@@ -96,7 +97,8 @@ func main() {
 	protected.HandleFunc("/deployments/{id}/pod-logs", handlers.HandleGetDeploymentPodLogs).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/deployments/{id}/pod-events", handlers.HandleGetDeploymentPodEvents).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/deployments/{id}/archived-pods", handlers.HandleGetDeploymentArchivedPods).Methods("GET", "OPTIONS")
-	protected.HandleFunc("/global-config/test-minio", handlers.HandleTestMinIO).Methods("POST", "OPTIONS")
+	// 注：/global-config/test-minio 也移到 mg（同 test-gitlab/test-harbor），任何登录用户能触发出站请求
+	// + 用 DB AK 探测任意 bucket 是 SSRF 面，必须 manage_global 限定。
 
 	// 发布动作（UAT handler 内自行放行 / PROD handler 内要求 admin）
 	protected.HandleFunc("/deploy/preview-image", handlers.HandlePreviewImage).Methods("POST", "OPTIONS")
@@ -110,9 +112,11 @@ func main() {
 	// ① manage_global — 全局凭证 + GitLab 仓库登记
 	mg := protected.PathPrefix("").Subrouter()
 	mg.Use(handlers.RequireButton("manage_global"))
+	mg.HandleFunc("/global-config", handlers.HandleGetGlobalConfig).Methods("GET", "OPTIONS")
 	mg.HandleFunc("/global-config", handlers.HandleUpdateGlobalConfig).Methods("PUT", "OPTIONS")
 	mg.Handle("/global-config/test-gitlab", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestGlobalGitlab))).Methods("POST", "OPTIONS")
 	mg.Handle("/global-config/test-harbor", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestHarbor))).Methods("POST", "OPTIONS")
+	mg.Handle("/global-config/test-minio", handlers.TestRateLimit(http.HandlerFunc(handlers.HandleTestMinIO))).Methods("POST", "OPTIONS")
 	mg.HandleFunc("/gitlab-repos", handlers.HandleCreateGitlabRepo).Methods("POST", "OPTIONS")
 	mg.HandleFunc("/gitlab-repos/{id}", handlers.HandleUpdateGitlabRepo).Methods("PUT", "OPTIONS")
 	mg.HandleFunc("/gitlab-repos/{id}", handlers.HandleDeleteGitlabRepo).Methods("DELETE", "OPTIONS")

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -31,6 +32,47 @@ func isSensitiveField(name string) bool {
 	return false
 }
 
+// URL 类字段名（部分匹配）—— 审计日志只保留 scheme://host，路径/参数脱敏
+//
+//	防 audit 详情泄露 internal hostname / 仓库路径等情报。
+//	gitlab_url / harbor_url / lark_default_webhook / minio_endpoint /
+//	deploy_center_base_url / list_version_api / argocd_url / agent.url 全在范围。
+var urlFieldKeywords = []string{"url", "endpoint", "webhook", "_api"}
+
+func isURLField(name string) bool {
+	low := strings.ToLower(name)
+	for _, kw := range urlFieldKeywords {
+		if strings.Contains(low, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// maskURLToHost: http://gitlab.com/owner/repo?x=1 → http://gitlab.com/...
+// 非 URL 字符串原样返回；空串返回空。
+func maskURLToHost(s string) string {
+	if s == "" {
+		return ""
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return s
+	}
+	return u.Scheme + "://" + u.Host + "/..."
+}
+
+// maskValueIfURL：值是字符串且字段名是 URL 类时，脱敏到 host。
+func maskValueIfURL(name string, v interface{}) interface{} {
+	if !isURLField(name) {
+		return v
+	}
+	if s, ok := v.(string); ok {
+		return maskURLToHost(s)
+	}
+	return v
+}
+
 // auditDiff 比较 before/after 两个 map，返回每个变化字段的 {old, new}
 //
 //	敏感字段（含 password/secret/token/key/credential）只输出 {"changed": true}
@@ -47,7 +89,7 @@ func auditDiff(before, after map[string]interface{}) map[string]interface{} {
 		if isSensitiveField(k) {
 			out[k] = map[string]interface{}{"changed": true}
 		} else {
-			out[k] = map[string]interface{}{"old": bv, "new": av}
+			out[k] = map[string]interface{}{"old": maskValueIfURL(k, bv), "new": maskValueIfURL(k, av)}
 		}
 	}
 	// before 里有但 after 里没的字段（被清空 / 删除）
@@ -58,7 +100,7 @@ func auditDiff(before, after map[string]interface{}) map[string]interface{} {
 		if isSensitiveField(k) {
 			out[k] = map[string]interface{}{"changed": true}
 		} else {
-			out[k] = map[string]interface{}{"old": bv, "new": nil}
+			out[k] = map[string]interface{}{"old": maskValueIfURL(k, bv), "new": nil}
 		}
 	}
 	return out
@@ -87,6 +129,8 @@ func auditDetailFromReq(req interface{}) map[string]interface{} {
 		}
 		if isSensitiveField(k) {
 			m[k] = "***changed***"
+		} else {
+			m[k] = maskValueIfURL(k, v)
 		}
 	}
 	if len(m) == 0 {
