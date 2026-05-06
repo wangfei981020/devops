@@ -95,7 +95,7 @@ import brandLogo from '../assets/logo.png'
 
 const auth = useAuthStore()
 const router = useRouter()
-const version = '122'
+const version = '123'
 
 const grpRaw = JSON.parse(localStorage.getItem('deploy_sidebar_groups') || '{"publish":true,"config":true}')
 const grp = reactive(grpRaw)
