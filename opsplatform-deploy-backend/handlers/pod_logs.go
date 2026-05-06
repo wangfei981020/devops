@@ -107,7 +107,7 @@ type logCacheEntry struct {
 }
 
 var (
-	podLogsCache   sync.Map // key=app|pod|container|previous → *logCacheEntry
+	podLogsCache   sync.Map // key=envID|namespace|app|pod|container|previous|tailLines → *logCacheEntry
 	podLogsCacheMu sync.Mutex
 )
 
@@ -165,7 +165,10 @@ func HandleGetDeploymentPodLogs(w http.ResponseWriter, r *http.Request) {
 
 	// live 路径（current 优先 / previous 回退）
 	if namespace != "" {
-		cacheKey := app + "|" + pod + "|" + container + "|" + strconv.FormatBool(previous) + "|" + strconv.Itoa(tailLines)
+		// 🔒 缓存 key 必须含 envID + namespace 防跨租户串台：
+		// 多 ArgoCD 实例 / 不同 env 出现同名 app 时（Helm 模板很容易撞），1 秒缓存窗口里
+		// 一个用户的查询可能命中另一个 env 的数据。
+		cacheKey := strconv.FormatInt(p.ID, 10) + "|" + namespace + "|" + app + "|" + pod + "|" + container + "|" + strconv.FormatBool(previous) + "|" + strconv.Itoa(tailLines)
 		if v, ok := podLogsCache.Load(cacheKey); ok {
 			if e, ok := v.(*logCacheEntry); ok && time.Since(e.at) < time.Second {
 				respondPodLogs(w, e.logs, "live")

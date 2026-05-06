@@ -614,9 +614,12 @@ func generateToken(userID int, username, role string) (string, error) {
 }
 
 func parseToken(tokenStr string) (*JWTClaims, error) {
+	// 🔒 强绑定 HS256，防 method confusion (RS256→HS256 用公钥当 secret 签 token) 和 alg=none。
+	// golang-jwt v5 默认拒 alg=none，但显式 WithValidMethods 是 defense-in-depth
+	// 防未来引入 RSA keyfunc 配错就形成攻击面。
 	token, err := jwt.ParseWithClaims(tokenStr, &JWTClaims{}, func(t *jwt.Token) (interface{}, error) {
 		return []byte(Cfg.JWTSecret), nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil {
 		return nil, err
 	}
