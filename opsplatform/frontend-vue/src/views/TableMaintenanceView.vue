@@ -2349,7 +2349,6 @@ async function exportToExcel() {
     <div class="page-header">
       <div class="header-left">
         <h2>{{ t('tableMaintenance.pageTitle') }}</h2>
-        <span class="record-count">{{ t('tableMaintenance.recordCount', { count: filteredRecords.length }) }}</span>
       </div>
       <div class="header-actions">
         <button v-if="selectedIds.length > 0" class="btn btn-secondary" @click="openBatchInspectorModal" style="margin-right:8px;">
