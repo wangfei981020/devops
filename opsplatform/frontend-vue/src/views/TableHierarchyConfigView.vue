@@ -318,9 +318,9 @@ function getPendingProjectKey() {
   return p ? getProjectKey(p) : ''
 }
 
-// 切换桌台状态（单个表单）
-// pending → 默认选"未接入"项目（如有），现场清空让用户跟新项目联动重选
-// pending → enabled/disabled：若 project="未接入" 自动清空，强迫用户重选真实项目
+// 切换桌台状态（单个表单）—— 原则：status 控件只切状态，site 永远不动
+// pending：仅在 project 当前为空时兜底填"未接入"占位项目；project 已有值则保持
+// pending → enabled/disabled：若 project="未接入" 自动清空（启用桌台不该挂占位项目下，强迫重选）
 function setFormStatus(newStatus) {
   const oldStatus = formData.value.status || 'enabled'
   formData.value.status = newStatus
@@ -328,11 +328,9 @@ function setFormStatus(newStatus) {
     const pendingKey = getPendingProjectKey()
     if (pendingKey && !formData.value.project) {
       formData.value.project = pendingKey
-      formData.value.site = ''
     }
   } else if (oldStatus === 'pending' && formData.value.project === '未接入') {
     formData.value.project = ''
-    formData.value.site = ''
   }
 }
 
@@ -344,11 +342,9 @@ function setBatchStatus(newStatus) {
     const pendingKey = getPendingProjectKey()
     if (pendingKey && !batchData.value.project) {
       batchData.value.project = pendingKey
-      batchData.value.site = ''
     }
   } else if (oldStatus === 'pending' && batchData.value.project === '未接入') {
     batchData.value.project = ''
-    batchData.value.site = ''
   }
 }
 
@@ -356,6 +352,24 @@ function getSitesByBatchProject() {
   const projectKey = batchData.value.project
   if (!projectKey) return []
   return tempSites.value.filter(s => s.project === projectKey)
+}
+
+// 现场下拉兜底：如果当前 site 不在选中项目的现场列表里（典型是改了项目但 site 来自老项目），
+// 把它加到列表前面以让 v-model 能匹配 + 视觉上保留显示
+function getSitesForForm() {
+  const inProject = getSitesByFormProject()
+  const cur = formData.value.site
+  if (!cur || inProject.find(s => getSiteKey(s) === cur)) return inProject
+  const siteObj = tempSites.value.find(s => getSiteKey(s) === cur)
+  return siteObj ? [siteObj, ...inProject] : inProject
+}
+
+function getSitesForBatch() {
+  const inProject = getSitesByBatchProject()
+  const cur = batchData.value.site
+  if (!cur || inProject.find(s => getSiteKey(s) === cur)) return inProject
+  const siteObj = tempSites.value.find(s => getSiteKey(s) === cur)
+  return siteObj ? [siteObj, ...inProject] : inProject
 }
 
 function getSiteCountByProject(projectKey) {
@@ -1428,7 +1442,7 @@ const batchPlaceholder = computed(() => {
               <label class="form-label" :class="{ required: formData.status !== 'pending' }">{{ t('tableHierarchy.form.belongSite') }}</label>
               <select v-model="formData.site" class="form-input">
                 <option value="">{{ formData.status === 'pending' ? t('tableHierarchy.form.siteNone') : t('tableHierarchy.form.selectSite') }}</option>
-                <option v-for="s in getSitesByFormProject()" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
+                <option v-for="s in getSitesForForm()" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
               </select>
             </div>
             <!-- 游戏类型中英文名称 -->
@@ -1526,7 +1540,7 @@ const batchPlaceholder = computed(() => {
               <label class="form-label" :class="{ required: batchData.status !== 'pending' }">{{ t('tableHierarchy.form.belongSite') }}</label>
               <select v-model="batchData.site" class="form-input">
                 <option value="">{{ batchData.status === 'pending' ? t('tableHierarchy.form.siteNone') : t('tableHierarchy.form.selectSite') }}</option>
-                <option v-for="s in getSitesByBatchProject()" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
+                <option v-for="s in getSitesForBatch()" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
               </select>
             </div>
             <div class="form-group" v-if="batchMode === 'table'">
