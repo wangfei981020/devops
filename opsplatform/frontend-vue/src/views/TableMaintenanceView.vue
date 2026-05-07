@@ -260,6 +260,9 @@ const statsExcludeApiKeyInput = ref(false)
 const statsExcludeCreatorsFilter = ref([])
 const statsExcludeApiKeyFilter = ref(false)
 const showExcludeCreatorsDropdown = ref(false)
+// 桌台状态筛选（启用/关闭/未接入），跟列表页 tableStatus 筛选语义一致
+const statsTableStatusInput = ref('')
+const statsTableStatusFilter = ref('')
 
 // 取记录的有效日期：优先 date，否则从 start_time 提取日期部分
 function getEffectiveDate(r) {
@@ -330,6 +333,13 @@ const statsFilteredRecords = computed(() => {
   if (statsExcludeCreatorsFilter.value.length) {
     data = data.filter(r => !statsExcludeCreatorsFilter.value.includes(r.created_by))
   }
+  // 按桌台状态筛选：记录里 affected_tables 任一桌台 status === 选中值即保留
+  if (statsTableStatusFilter.value) {
+    data = data.filter(r => {
+      const tables = parseMultiSelect(r.affected_tables)
+      return tables.some(t => getTableStatus(t) === statsTableStatusFilter.value)
+    })
+  }
   return data
 })
 
@@ -343,6 +353,7 @@ function applyStatsFilter() {
   statsMaintTypeFilter.value = statsMaintTypeInput.value
   statsExcludeCreatorsFilter.value = [...statsExcludeCreatorsInput.value]
   statsExcludeApiKeyFilter.value = statsExcludeApiKeyInput.value
+  statsTableStatusFilter.value = statsTableStatusInput.value
   saveStatsExcludeConfig()
 }
 
@@ -841,6 +852,12 @@ const statsAnalysis = computed(() => {
   let totalByTable = 0
   data.forEach(r => { totalByTable += getTableCount(r) })
 
+  // 未接入桌台维护汇总：从 byTableSummary 取 status='pending' 的桌台
+  // 卡片显示用 pendingMaintCount = 涉及次数总和（多桌联合记录按桌台数累加，跟其他卡片口径一致）
+  const pendingTables = byTableSummary.filter(it => it.status === 'pending')
+  const pendingMaintCount = pendingTables.reduce((s, it) => s + it.count, 0)
+  const pendingTableCount = pendingTables.length
+
   return {
     total: totalByTable,
     totalRecords: data.length,
@@ -855,7 +872,8 @@ const statsAnalysis = computed(() => {
     byTableNo, maxTableNo,
     byMaintType, byOpType, byProjectOperation, opKeys,
     byAffectProject, maxAffectProject, noAffectCount,
-    qcNormal, qcAbnormal, qcPending
+    qcNormal, qcAbnormal, qcPending,
+    pendingMaintCount, pendingTableCount
   }
 })
 
@@ -878,6 +896,8 @@ function resetStatsFilter() {
   statsExcludeApiKeyInput.value = false
   statsExcludeCreatorsFilter.value = []
   statsExcludeApiKeyFilter.value = false
+  statsTableStatusInput.value = ''
+  statsTableStatusFilter.value = ''
   saveStatsExcludeConfig()
 }
 
@@ -996,7 +1016,7 @@ function exportStatsToExcel() {
   // 桌台汇总
   lines.push(t('tableMaintenance.statsPanel.csvTableSummary'))
   lines.push(`${t('tableMaintenance.statsPanel.csvTableNo')},${t('tableMaintenance.statsPanel.csvMaintCount')},${t('tableMaintenance.statsPanel.csvProjects')},${t('tableMaintenance.statsPanel.csvSites')},${t('tableMaintenance.statsPanel.csvGameTypes')},${t('tableMaintenance.statsPanel.csvStatus')}`)
-  stats.byTableSummary?.forEach(item => lines.push(`${item.tableNo},${item.count},"${item.projects}","${item.sites}","${item.gameTypes}",${item.status === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled')}`))
+  stats.byTableSummary?.forEach(item => lines.push(`${item.tableNo},${item.count},"${item.projects}","${item.sites}","${item.gameTypes}",${t('tableHierarchy.status.' + (item.status || 'enabled'))}`))
   lines.push('')
 
   // 桌台明细（按项目）
@@ -1525,7 +1545,9 @@ function getSiteDisplayName(key) {
 function getFilteredTables() {
   const selectedProjects = formData.value.affected_projects || []
 
-  let filteredTables = tableOptions.value
+  // 未接入桌台 (status='pending') 不进入手动录入下拉，
+  // API 录入路径仍然不受限（后端不校验 affected_tables 字段）
+  let filteredTables = tableOptions.value.filter(t => (t.status || 'enabled') !== 'pending')
 
   // 根据选中的项目过滤
   if (selectedProjects.length > 0) {
@@ -2465,6 +2487,7 @@ async function exportToExcel() {
               <option value="">{{ t('tableMaintenance.filters.allTableStatus') }}</option>
               <option value="enabled">{{ t('tableHierarchy.status.enabled') }}</option>
               <option value="disabled">{{ t('tableHierarchy.status.disabled') }}</option>
+              <option value="pending">{{ t('tableHierarchy.status.pending') }}</option>
             </select>
           </div>
           <div class="filter-field">
@@ -2544,13 +2567,13 @@ async function exportToExcel() {
                 </td>
                 <td v-else-if="col.type === 'multi-select-tables'">
                   <div class="multi-select-tags" v-if="parseMultiSelect(r[col.key])?.length">
-                    <span v-for="(item, idx) in parseMultiSelect(r[col.key])" :key="idx" class="multi-tag" :class="{ 'table-disabled': getTableStatus(item) === 'disabled' }" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}<span v-if="getTableStatus(item) === 'disabled'" class="status-tag-disabled-inline">{{ t('tableHierarchy.status.disabled') }}</span></span>
+                    <span v-for="(item, idx) in parseMultiSelect(r[col.key])" :key="idx" class="multi-tag" :class="{ 'table-disabled': getTableStatus(item) === 'disabled' }" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}<span v-if="getTableStatus(item) === 'disabled'" class="status-tag-disabled-inline">{{ t('tableHierarchy.status.disabled') }}</span><span v-else-if="getTableStatus(item) === 'pending'" class="status-tag-pending-inline">{{ t('tableHierarchy.status.pending') }}</span></span>
                   </div>
                   <span v-else class="cell-muted">-</span>
                 </td>
                 <td v-else-if="col.type === 'table-status-display'">
                   <div class="multi-select-tags" v-if="parseMultiSelect(r.affected_tables)?.length">
-                    <span v-for="(item, idx) in parseMultiSelect(r.affected_tables)" :key="idx" :class="getTableStatus(item) === 'enabled' ? 'status-tag-enabled' : 'status-tag-disabled'">{{ item }}: {{ getTableStatus(item) === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled') }}</span>
+                    <span v-for="(item, idx) in parseMultiSelect(r.affected_tables)" :key="idx" :class="['status-tag', 'status-tag-' + getTableStatus(item)]">{{ item }}: {{ t('tableHierarchy.status.' + getTableStatus(item)) }}</span>
                   </div>
                   <span v-else class="cell-muted">-</span>
                 </td>
@@ -2699,6 +2722,15 @@ async function exportToExcel() {
           <div class="filter-label">{{ t('tableMaintenance.statsPanel.filterRoundId') }}:</div>
           <input type="text" v-model="statsRoundIdInput" class="stats-text-input" :placeholder="t('tableMaintenance.filters.roundIdPlaceholder')">
         </div>
+        <div class="filter-group">
+          <div class="filter-label">{{ t('tableMaintenance.statsPanel.filterTableStatus') }}:</div>
+          <select v-model="statsTableStatusInput" class="stats-select-input">
+            <option value="">{{ t('tableMaintenance.statsPanel.allTableStatus') }}</option>
+            <option value="enabled">{{ t('tableHierarchy.status.enabled') }}</option>
+            <option value="disabled">{{ t('tableHierarchy.status.disabled') }}</option>
+            <option value="pending">{{ t('tableHierarchy.status.pending') }}</option>
+          </select>
+        </div>
         <div class="filter-group exclude-creator-group">
           <div class="filter-label">{{ t('tableMaintenance.statsPanel.excludeFilterLabel') }}:</div>
           <button type="button" class="stats-select-input exclude-trigger"
@@ -2741,6 +2773,11 @@ async function exportToExcel() {
         </button>
         <div class="filter-result">
           {{ t('tableMaintenance.table.pagination.total') }}: <strong>{{ statsAnalysis.totalRecords || 0 }}</strong> {{ t('tableMaintenance.table.pagination.records') }}{{ t('tableMaintenance.statsPanel.involves') }} <strong>{{ statsAnalysis.total || 0 }}</strong> {{ t('tableMaintenance.statsPanel.tableTimes') }}
+          <span class="filter-pending-card" v-if="statsAnalysis.pendingMaintCount">
+            · {{ t('tableMaintenance.statsPanel.pendingMaintCard') }}:
+            <strong>{{ statsAnalysis.pendingMaintCount }}</strong> {{ t('tableMaintenance.statsPanel.tableTimes') }}
+            ({{ statsAnalysis.pendingTableCount }})
+          </span>
         </div>
       </div>
 
@@ -3143,7 +3180,7 @@ async function exportToExcel() {
                     <td class="projects-cell">{{ item.projects }}</td>
                     <td>{{ item.sites }}</td>
                     <td>{{ item.gameTypes }}</td>
-                    <td><span :class="item.status === 'enabled' ? 'status-tag-enabled' : 'status-tag-disabled'">{{ item.status === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled') }}</span></td>
+                    <td><span :class="['status-tag', 'status-tag-' + (item.status || 'enabled')]">{{ t('tableHierarchy.status.' + (item.status || 'enabled')) }}</span></td>
                   </tr>
                 </tbody>
               </table>
@@ -3173,7 +3210,7 @@ async function exportToExcel() {
                     <td class="projects-cell">{{ item.project }}</td>
                     <td>{{ item.site }}</td>
                     <td>{{ item.gameType }}</td>
-                    <td><span :class="item.status === 'enabled' ? 'status-tag-enabled' : 'status-tag-disabled'">{{ item.status === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled') }}</span></td>
+                    <td><span :class="['status-tag', 'status-tag-' + (item.status || 'enabled')]">{{ t('tableHierarchy.status.' + (item.status || 'enabled')) }}</span></td>
                     <td><span class="count-badge">{{ item.count }}</span></td>
                   </tr>
                 </tbody>
@@ -3458,7 +3495,7 @@ async function exportToExcel() {
                     <span v-if="!parseMultiSelect(detailRecord[col.key])?.length" class="cell-muted">-</span>
                   </div>
                   <div v-else-if="col.type === 'multi-select-tables'" class="multi-select-tags">
-                    <span v-for="(item, idx) in parseMultiSelect(detailRecord[col.key])" :key="idx" class="multi-tag" :class="{ 'table-disabled': getTableStatus(item) === 'disabled' }" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}<span v-if="getTableStatus(item) === 'disabled'" class="status-tag-disabled-inline">{{ t('tableHierarchy.status.disabled') }}</span></span>
+                    <span v-for="(item, idx) in parseMultiSelect(detailRecord[col.key])" :key="idx" class="multi-tag" :class="{ 'table-disabled': getTableStatus(item) === 'disabled' }" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}<span v-if="getTableStatus(item) === 'disabled'" class="status-tag-disabled-inline">{{ t('tableHierarchy.status.disabled') }}</span><span v-else-if="getTableStatus(item) === 'pending'" class="status-tag-pending-inline">{{ t('tableHierarchy.status.pending') }}</span></span>
                     <span v-if="!parseMultiSelect(detailRecord[col.key])?.length" class="cell-muted">-</span>
                   </div>
                   <div v-else-if="col.type === 'multi-select-sites'" class="multi-select-tags">
@@ -4706,12 +4743,18 @@ body.light-mode .data-table tr:hover td.sticky-col {
 .auto-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; min-height: 38px; align-items: center; }
 .label-hint { font-weight: 400; color: var(--text-muted); font-size: 11px; }
 
-/* 桌台状态标签 */
+/* 桌台状态标签 三态 */
 .status-tag-enabled { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(16, 185, 129, 0.12); color: #10b981; }
 .status-tag-disabled { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(156, 163, 175, 0.15); color: #9ca3af; }
+.status-tag-pending { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(99, 102, 241, 0.12); color: #6366f1; }
 .status-tag-disabled-sm { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; font-weight: 500; background: rgba(156, 163, 175, 0.15); color: #9ca3af; margin-left: 4px; }
 .status-tag-disabled-inline { font-size: 10px; margin-left: 3px; opacity: 0.7; }
+.status-tag-pending-inline { font-size: 10px; margin-left: 3px; padding: 1px 5px; border-radius: 6px; background: rgba(99, 102, 241, 0.18); color: #6366f1; }
 .multi-tag.table-disabled { opacity: 0.6; }
+
+/* 统计页顶部"未接入维护"独立卡片 */
+.filter-pending-card { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; padding: 4px 10px; border-radius: 8px; background: rgba(99, 102, 241, 0.12); color: #6366f1; font-size: 13px; }
+.filter-pending-card strong { color: #6366f1; font-size: 16px; font-weight: 700; margin: 0 2px; }
 </style>
 
 <style>

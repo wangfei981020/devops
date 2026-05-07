@@ -703,6 +703,9 @@ export default {
       excludeNoCreators: 'No creators yet',
       excludeClear: 'Clear',
       excludeApplyHint: 'Click Search to apply',
+      filterTableStatus: 'Table Status',
+      allTableStatus: 'All Status',
+      pendingMaintCard: 'Pending Maint',
       cancelDetail: 'Cancel Detail',
       recalcDetail: 'Recalculate Detail',
       repayoutDetail: 'Repayout Detail',
@@ -828,9 +831,11 @@ export default {
       site: 'Site',
       gameType: 'Game Type',
       tableNo: 'Table No.',
+      status: 'Status',
       allProjects: 'All Projects',
       allSites: 'All Sites',
       allGameTypes: 'All Game Types',
+      allStatus: 'All Status',
       tableNoPlaceholder: 'Enter table number...'
     },
 
@@ -862,7 +867,8 @@ export default {
 
     status: {
       enabled: 'Enabled',
-      disabled: 'Disabled'
+      disabled: 'Disabled',
+      pending: 'Pending'
     },
 
     types: {
@@ -915,6 +921,8 @@ export default {
       sitePlaceholder: 'e.g., Site 1',
       tablePlaceholder: 'e.g., B01',
       tableStatus: 'Table Status',
+      statusPendingHint: 'Pending tables don\'t belong to any project',
+      siteNone: '(None)',
       batchHint: '(One per line)',
       batchProjectPlaceholder: 'Project A|项目A\nProject B|项目B\nProject C|项目C',
       batchSitePlaceholder: 'Site 1|1号现场\nSite 2|2号现场\nVIP Site|VIP现场',

@@ -703,6 +703,9 @@ export default {
       excludeNoCreators: '暂无创建人',
       excludeClear: '清空',
       excludeApplyHint: '点查询生效',
+      filterTableStatus: '桌台状态',
+      allTableStatus: '全部状态',
+      pendingMaintCard: '未接入维护',
       cancelDetail: '取消操作明细',
       recalcDetail: '重算操作明细',
       repayoutDetail: '重派彩操作明细',
@@ -828,9 +831,11 @@ export default {
       site: '现场',
       gameType: '游戏类型',
       tableNo: '桌台号',
+      status: '状态',
       allProjects: '全部项目',
       allSites: '全部现场',
       allGameTypes: '全部游戏类型',
+      allStatus: '全部状态',
       tableNoPlaceholder: '输入桌台号...'
     },
 
@@ -862,7 +867,8 @@ export default {
 
     status: {
       enabled: '启用',
-      disabled: '关闭'
+      disabled: '关闭',
+      pending: '未接入'
     },
 
     types: {
@@ -915,6 +921,8 @@ export default {
       sitePlaceholder: '如：1号现场',
       tablePlaceholder: '如：B01',
       tableStatus: '桌台状态',
+      statusPendingHint: '未接入桌台不属于任何项目',
+      siteNone: '(无)',
       batchHint: '（每行一个）',
       batchGameTypeHintBatch: '（每行一个，格式：中文名称|英文名称）',
       batchProjectPlaceholder: '项目A|Project A\n项目B|Project B\n项目C|Project C',

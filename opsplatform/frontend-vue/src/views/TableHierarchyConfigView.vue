@@ -25,9 +25,9 @@ const loading = ref(false)
 const searchQuery = ref('')
 
 // 筛选条件输入
-const filterInput = ref({ search: '', project: '', site: '', gameType: '', tableNo: '' })
+const filterInput = ref({ search: '', project: '', site: '', gameType: '', tableNo: '', status: '' })
 // 已应用的筛选
-const appliedFilter = ref({ search: '', project: '', site: '', gameType: '', tableNo: '' })
+const appliedFilter = ref({ search: '', project: '', site: '', gameType: '', tableNo: '', status: '' })
 
 // 分页
 const currentPage = ref(1)
@@ -297,6 +297,36 @@ function getSitesByFormProject() {
   return tempSites.value.filter(s => s.project === projectKey)
 }
 
+// 未接入桌台用：跨项目去重的全部现场（按 name_zh 去重）
+function getAllSitesDedup() {
+  const seen = new Set()
+  const result = []
+  for (const s of tempSites.value) {
+    const key = getSiteKey(s)
+    if (!seen.has(key)) {
+      seen.add(key)
+      result.push(s)
+    }
+  }
+  return result
+}
+
+// 切换桌台状态（单个表单）：切到 pending 自动清项目
+function setFormStatus(newStatus) {
+  formData.value.status = newStatus
+  if (newStatus === 'pending') {
+    formData.value.project = ''
+  }
+}
+
+// 切换桌台状态（批量表单）
+function setBatchStatus(newStatus) {
+  batchData.value.status = newStatus
+  if (newStatus === 'pending') {
+    batchData.value.project = ''
+  }
+}
+
 function getSitesByBatchProject() {
   const projectKey = batchData.value.project
   if (!projectKey) return []
@@ -331,8 +361,8 @@ function applyFilters() {
 }
 
 function resetFilters() {
-  filterInput.value = { search: '', project: '', site: '', gameType: '', tableNo: '' }
-  appliedFilter.value = { search: '', project: '', site: '', gameType: '', tableNo: '' }
+  filterInput.value = { search: '', project: '', site: '', gameType: '', tableNo: '', status: '' }
+  appliedFilter.value = { search: '', project: '', site: '', gameType: '', tableNo: '', status: '' }
   searchQuery.value = ''
   currentPage.value = 1
 }
@@ -378,12 +408,14 @@ const allFilteredTables = computed(() => {
   const fSite = f.site
   const fGameType = f.gameType
   const fTableNo = f.tableNo?.toLowerCase() || ''
+  const fStatus = f.status
 
   return flatTableList.value.filter(row => {
     if (fProject && row.projectKey !== fProject) return false
     if (fSite && row.siteKey !== fSite) return false
     if (fGameType && !(row.gameTypes || []).includes(fGameType)) return false
     if (fTableNo && !row.name.toLowerCase().includes(fTableNo)) return false
+    if (fStatus && (row.status || 'enabled') !== fStatus) return false
     if (q) {
       const match = row.projectName.toLowerCase().includes(q) ||
         row.siteName.toLowerCase().includes(q) ||
@@ -620,21 +652,25 @@ async function saveForm() {
       newSites.push(newItem)
     }
   } else if (formMode.value === 'table') {
-    if (!project) {
+    const status = formData.value.status || 'enabled'
+    const isPending = status === 'pending'
+    // 未接入桌台：项目强制空、现场可空（'' 表示无）；其他状态：项目+现场必填
+    const tProject = isPending ? '' : project
+    const tSite = isPending ? (site || '') : site
+    if (!isPending && !tProject) {
       appStore.showToast(t('tableHierarchy.form.selectProject'), 'warning')
       return
     }
-    if (!site) {
+    if (!isPending && !tSite) {
       appStore.showToast(t('tableHierarchy.form.selectSite'), 'warning')
       return
     }
     const gameTypes = formData.value.gameTypes || []
-    const status = formData.value.status || 'enabled'
-    const newItem = { name: name.trim(), site, project, gameTypes, status }
+    const newItem = { name: name.trim(), site: tSite, project: tProject, gameTypes, status }
     if (editingIdx.value >= 0) {
       newTables[editingIdx.value] = newItem
     } else {
-      const exists = newTables.some(t => t.name === name.trim() && t.site === site && t.project === project)
+      const exists = newTables.some(t => t.name === name.trim() && t.site === tSite && t.project === tProject)
       if (exists) {
         appStore.showToast(t('common.error'), 'warning')
         return
@@ -727,19 +763,23 @@ async function saveBatch() {
       }
     }
   } else if (batchMode.value === 'table') {
-    if (!project) {
+    const bStatus = batchData.value.status || 'enabled'
+    const isPending = bStatus === 'pending'
+    const tProject = isPending ? '' : project
+    const tSite = isPending ? (site || '') : site
+    if (!isPending && !tProject) {
       appStore.showToast(t('tableHierarchy.form.selectProject'), 'warning')
       return
     }
-    if (!site) {
+    if (!isPending && !tSite) {
       appStore.showToast(t('tableHierarchy.form.selectSite'), 'warning')
       return
     }
     const gameTypes = batchData.value.gameTypes || []
     for (const name of nameList) {
-      const exists = newTables.some(t => t.name === name && t.site === site && t.project === project)
+      const exists = newTables.some(t => t.name === name && t.site === tSite && t.project === tProject)
       if (!exists) {
-        newTables.push({ name, site, project, gameTypes: [...gameTypes], status: batchData.value.status || 'enabled' })
+        newTables.push({ name, site: tSite, project: tProject, gameTypes: [...gameTypes], status: bStatus })
         addedCount++
       } else {
         skippedCount++
@@ -1016,6 +1056,15 @@ const batchPlaceholder = computed(() => {
             <label>{{ t('tableHierarchy.filters.tableNo') }}</label>
             <input type="text" v-model="filterInput.tableNo" :placeholder="t('tableHierarchy.filters.tableNoPlaceholder')" @keyup.enter="applyFilters">
           </div>
+          <div class="filter-field">
+            <label>{{ t('tableHierarchy.filters.status') }}</label>
+            <select v-model="filterInput.status" @change="applyFilters">
+              <option value="">{{ t('tableHierarchy.filters.allStatus') }}</option>
+              <option value="enabled">{{ t('tableHierarchy.status.enabled') }}</option>
+              <option value="disabled">{{ t('tableHierarchy.status.disabled') }}</option>
+              <option value="pending">{{ t('tableHierarchy.status.pending') }}</option>
+            </select>
+          </div>
         </div>
       </div>
     </div>
@@ -1041,8 +1090,14 @@ const batchPlaceholder = computed(() => {
             <template v-if="pagedTables.length">
               <tr v-for="(row, idx) in pagedTables" :key="row.name + '-' + row.siteKey + '-' + row.projectKey">
                 <td class="row-number">{{ (currentPage - 1) * pageSize + idx + 1 }}</td>
-                <td><div class="cell-content"><div class="type-badge project">{{ t('tableHierarchy.types.project') }}</div><span>{{ row.projectName }}</span></div></td>
-                <td><div class="cell-content"><div class="type-badge site">{{ t('tableHierarchy.types.site') }}</div><span>{{ row.siteName }}</span></div></td>
+                <td>
+                  <div class="cell-content" v-if="row.projectKey"><div class="type-badge project">{{ t('tableHierarchy.types.project') }}</div><span>{{ row.projectName }}</span></div>
+                  <span v-else class="cell-muted">-</span>
+                </td>
+                <td>
+                  <div class="cell-content" v-if="row.siteKey"><div class="type-badge site">{{ t('tableHierarchy.types.site') }}</div><span>{{ row.siteName }}</span></div>
+                  <span v-else class="cell-muted">-</span>
+                </td>
                 <td><span class="table-number">{{ row.name }}</span></td>
                 <td>
                   <div class="game-type-tags" v-if="row.gameTypes?.length">
@@ -1051,7 +1106,7 @@ const batchPlaceholder = computed(() => {
                   <span v-else class="cell-muted">-</span>
                 </td>
                 <td>
-                  <span :class="row.status === 'enabled' ? 'status-tag-on' : 'status-tag-off'">{{ row.status === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled') }}</span>
+                  <span :class="['status-tag', 'status-tag-' + (row.status || 'enabled')]">{{ t('tableHierarchy.status.' + (row.status || 'enabled')) }}</span>
                 </td>
                 <td class="sticky-col">
                   <div class="action-btns">
@@ -1319,18 +1374,42 @@ const batchPlaceholder = computed(() => {
             </button>
           </div>
           <div class="modal-body">
-            <div class="form-group" v-if="formMode === 'site' || formMode === 'table'">
+            <!-- 桌台状态：三态 segmented，挪到表单顶部，决定下面字段是否必填 -->
+            <div class="form-group" v-if="formMode === 'table'">
+              <label class="form-label">{{ t('tableHierarchy.form.tableStatus') }}</label>
+              <div class="status-segmented">
+                <button type="button" class="seg-btn" :class="{ active: (formData.status || 'enabled') === 'enabled', enabled: (formData.status || 'enabled') === 'enabled' }" @click="setFormStatus('enabled')">{{ t('tableHierarchy.status.enabled') }}</button>
+                <button type="button" class="seg-btn" :class="{ active: formData.status === 'disabled', disabled: formData.status === 'disabled' }" @click="setFormStatus('disabled')">{{ t('tableHierarchy.status.disabled') }}</button>
+                <button type="button" class="seg-btn" :class="{ active: formData.status === 'pending', pending: formData.status === 'pending' }" @click="setFormStatus('pending')">{{ t('tableHierarchy.status.pending') }}</button>
+              </div>
+            </div>
+            <div class="form-group" v-if="formMode === 'site'">
               <label class="form-label required">{{ t('tableHierarchy.form.belongProject') }}</label>
               <select v-model="formData.project" class="form-input" @change="formData.site = ''">
                 <option value="">{{ t('tableHierarchy.form.selectProject') }}</option>
                 <option v-for="p in tempProjects" :key="getProjectKey(p)" :value="getProjectKey(p)">{{ getProjectName(p) }}</option>
               </select>
             </div>
+            <!-- 桌台：项目字段，pending 时变成只读提示，否则下拉 -->
             <div class="form-group" v-if="formMode === 'table'">
-              <label class="form-label required">{{ t('tableHierarchy.form.belongSite') }}</label>
+              <template v-if="formData.status === 'pending'">
+                <label class="form-label">{{ t('tableHierarchy.form.belongProject') }}</label>
+                <div class="form-pending-hint">⊘ {{ t('tableHierarchy.form.statusPendingHint') }}</div>
+              </template>
+              <template v-else>
+                <label class="form-label required">{{ t('tableHierarchy.form.belongProject') }}</label>
+                <select v-model="formData.project" class="form-input" @change="formData.site = ''">
+                  <option value="">{{ t('tableHierarchy.form.selectProject') }}</option>
+                  <option v-for="p in tempProjects" :key="getProjectKey(p)" :value="getProjectKey(p)">{{ getProjectName(p) }}</option>
+                </select>
+              </template>
+            </div>
+            <!-- 桌台：现场字段，pending 时无 *，下拉显示全部现场+(无)；否则按项目联动+必填 -->
+            <div class="form-group" v-if="formMode === 'table'">
+              <label class="form-label" :class="{ required: formData.status !== 'pending' }">{{ t('tableHierarchy.form.belongSite') }}</label>
               <select v-model="formData.site" class="form-input">
-                <option value="">{{ t('tableHierarchy.form.selectSite') }}</option>
-                <option v-for="s in getSitesByFormProject()" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
+                <option value="">{{ formData.status === 'pending' ? t('tableHierarchy.form.siteNone') : t('tableHierarchy.form.selectSite') }}</option>
+                <option v-for="s in (formData.status === 'pending' ? getAllSitesDedup() : getSitesByFormProject())" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
               </select>
             </div>
             <!-- 游戏类型中英文名称 -->
@@ -1376,15 +1455,6 @@ const batchPlaceholder = computed(() => {
                 </label>
               </div>
             </div>
-            <div class="form-group" v-if="formMode === 'table'">
-              <label class="form-label">{{ t('tableHierarchy.form.tableStatus') }}</label>
-              <label class="status-toggle" @click.prevent="formData.status = formData.status === 'enabled' ? 'disabled' : 'enabled'">
-                <span class="status-checkbox" :class="{ checked: formData.status === 'enabled' }">
-                  <svg v-if="formData.status === 'enabled'" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                </span>
-                <span :class="formData.status === 'enabled' ? 'status-enabled' : 'status-disabled'">{{ formData.status === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled') }}</span>
-              </label>
-            </div>
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" @click="showFormModal = false">{{ t('tableHierarchy.actions.cancel') }}</button>
@@ -1408,18 +1478,42 @@ const batchPlaceholder = computed(() => {
             </button>
           </div>
           <div class="modal-body">
-            <div class="form-group" v-if="batchMode === 'site' || batchMode === 'table'">
+            <!-- 批量桌台：状态控件挪到顶部，三态 segmented -->
+            <div class="form-group" v-if="batchMode === 'table'">
+              <label class="form-label">{{ t('tableHierarchy.form.tableStatus') }}</label>
+              <div class="status-segmented">
+                <button type="button" class="seg-btn" :class="{ active: (batchData.status || 'enabled') === 'enabled', enabled: (batchData.status || 'enabled') === 'enabled' }" @click="setBatchStatus('enabled')">{{ t('tableHierarchy.status.enabled') }}</button>
+                <button type="button" class="seg-btn" :class="{ active: batchData.status === 'disabled', disabled: batchData.status === 'disabled' }" @click="setBatchStatus('disabled')">{{ t('tableHierarchy.status.disabled') }}</button>
+                <button type="button" class="seg-btn" :class="{ active: batchData.status === 'pending', pending: batchData.status === 'pending' }" @click="setBatchStatus('pending')">{{ t('tableHierarchy.status.pending') }}</button>
+              </div>
+            </div>
+            <div class="form-group" v-if="batchMode === 'site'">
               <label class="form-label required">{{ t('tableHierarchy.form.belongProject') }}</label>
               <select v-model="batchData.project" class="form-input" @change="batchData.site = ''">
                 <option value="">{{ t('tableHierarchy.form.selectProject') }}</option>
                 <option v-for="p in tempProjects" :key="getProjectKey(p)" :value="getProjectKey(p)">{{ getProjectName(p) }}</option>
               </select>
             </div>
+            <!-- 批量桌台：项目字段 -->
             <div class="form-group" v-if="batchMode === 'table'">
-              <label class="form-label required">{{ t('tableHierarchy.form.belongSite') }}</label>
+              <template v-if="batchData.status === 'pending'">
+                <label class="form-label">{{ t('tableHierarchy.form.belongProject') }}</label>
+                <div class="form-pending-hint">⊘ {{ t('tableHierarchy.form.statusPendingHint') }}</div>
+              </template>
+              <template v-else>
+                <label class="form-label required">{{ t('tableHierarchy.form.belongProject') }}</label>
+                <select v-model="batchData.project" class="form-input" @change="batchData.site = ''">
+                  <option value="">{{ t('tableHierarchy.form.selectProject') }}</option>
+                  <option v-for="p in tempProjects" :key="getProjectKey(p)" :value="getProjectKey(p)">{{ getProjectName(p) }}</option>
+                </select>
+              </template>
+            </div>
+            <!-- 批量桌台：现场字段 -->
+            <div class="form-group" v-if="batchMode === 'table'">
+              <label class="form-label" :class="{ required: batchData.status !== 'pending' }">{{ t('tableHierarchy.form.belongSite') }}</label>
               <select v-model="batchData.site" class="form-input">
-                <option value="">{{ t('tableHierarchy.form.selectSite') }}</option>
-                <option v-for="s in getSitesByBatchProject()" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
+                <option value="">{{ batchData.status === 'pending' ? t('tableHierarchy.form.siteNone') : t('tableHierarchy.form.selectSite') }}</option>
+                <option v-for="s in (batchData.status === 'pending' ? getAllSitesDedup() : getSitesByBatchProject())" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
               </select>
             </div>
             <div class="form-group" v-if="batchMode === 'table'">
@@ -1432,15 +1526,6 @@ const batchPlaceholder = computed(() => {
                   <span>{{ gt.label }}</span>
                 </label>
               </div>
-            </div>
-            <div class="form-group" v-if="batchMode === 'table'">
-              <label class="form-label">{{ t('tableHierarchy.form.tableStatus') }}</label>
-              <label class="status-toggle" @click.prevent="batchData.status = batchData.status === 'enabled' ? 'disabled' : 'enabled'">
-                <span class="status-checkbox" :class="{ checked: batchData.status === 'enabled' }">
-                  <svg v-if="batchData.status === 'enabled'" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                </span>
-                <span :class="batchData.status === 'enabled' ? 'status-enabled' : 'status-disabled'">{{ batchData.status === 'enabled' ? t('tableHierarchy.status.enabled') : t('tableHierarchy.status.disabled') }}</span>
-              </label>
             </div>
             <div class="form-group">
               <label class="form-label required">
@@ -1700,11 +1785,32 @@ thead .sticky-col { background: var(--bg-secondary); z-index: 2; }
 .form-textarea:focus { outline: none; border-color: #3a84ff; box-shadow: 0 0 0 3px rgba(58, 132, 255, 0.12); }
 .form-textarea::placeholder { color: var(--text-muted); }
 
-/* 状态标签（列表展示） */
+/* 状态标签（列表展示）三态 */
+.status-tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: 500; }
+.status-tag::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; }
+.status-tag-enabled { background: rgba(16, 185, 129, 0.12); color: #10b981; }
+.status-tag-enabled::before { background: #10b981; }
+.status-tag-disabled { background: rgba(156, 163, 175, 0.15); color: #9ca3af; }
+.status-tag-disabled::before { background: #9ca3af; }
+.status-tag-pending { background: rgba(99, 102, 241, 0.12); color: #6366f1; }
+.status-tag-pending::before { background: #6366f1; }
+/* 兼容旧 class（避免别处引用断 ）*/
 .status-tag-on { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(16, 185, 129, 0.12); color: #10b981; }
 .status-tag-on::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
 .status-tag-off { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(156, 163, 175, 0.15); color: #9ca3af; }
 .status-tag-off::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #9ca3af; }
+
+/* 三态 segmented 按钮（添加/编辑桌台弹窗） */
+.status-segmented { display: inline-flex; border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; background: var(--bg-input, var(--bg-secondary)); }
+.status-segmented .seg-btn { padding: 8px 18px; font-size: 13px; font-weight: 500; border: none; background: transparent; color: var(--text-secondary); cursor: pointer; transition: all 0.15s; border-right: 1px solid var(--border-color); }
+.status-segmented .seg-btn:last-child { border-right: none; }
+.status-segmented .seg-btn:hover { background: var(--bg-hover); }
+.status-segmented .seg-btn.active.enabled { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+.status-segmented .seg-btn.active.disabled { background: rgba(156, 163, 175, 0.2); color: #6b7280; }
+.status-segmented .seg-btn.active.pending { background: rgba(99, 102, 241, 0.15); color: #6366f1; }
+
+/* 未接入桌台的项目字段提示 */
+.form-pending-hint { padding: 10px 14px; background: rgba(99, 102, 241, 0.08); border: 1px dashed rgba(99, 102, 241, 0.3); border-radius: 8px; color: #6366f1; font-size: 13px; }
 
 /* 状态切换（编辑弹窗） */
 .status-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
