@@ -868,7 +868,8 @@ export default {
     status: {
       enabled: '启用',
       disabled: '关闭',
-      pending: '未接入'
+      pending: '未接入',
+      unconfigured: '未配置'
     },
 
     types: {

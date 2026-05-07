@@ -311,19 +311,44 @@ function getAllSitesDedup() {
   return result
 }
 
-// 切换桌台状态（单个表单）：切到 pending 自动清项目
+// "未接入"项目占位：在 hierarchy 中名为"未接入"的项目，作为 pending 桌台的默认归属
+// 找不到时返回空字符串，让用户自己选
+function getPendingProjectKey() {
+  const p = tempProjects.value.find(p => getProjectKey(p) === '未接入')
+  return p ? getProjectKey(p) : ''
+}
+
+// 切换桌台状态（单个表单）
+// pending → 默认选"未接入"项目（如有），现场清空让用户跟新项目联动重选
+// pending → enabled/disabled：若 project="未接入" 自动清空，强迫用户重选真实项目
 function setFormStatus(newStatus) {
+  const oldStatus = formData.value.status || 'enabled'
   formData.value.status = newStatus
   if (newStatus === 'pending') {
+    const pendingKey = getPendingProjectKey()
+    if (pendingKey && !formData.value.project) {
+      formData.value.project = pendingKey
+      formData.value.site = ''
+    }
+  } else if (oldStatus === 'pending' && formData.value.project === '未接入') {
     formData.value.project = ''
+    formData.value.site = ''
   }
 }
 
-// 切换桌台状态（批量表单）
+// 切换桌台状态（批量表单）：同样逻辑
 function setBatchStatus(newStatus) {
+  const oldStatus = batchData.value.status || 'enabled'
   batchData.value.status = newStatus
   if (newStatus === 'pending') {
+    const pendingKey = getPendingProjectKey()
+    if (pendingKey && !batchData.value.project) {
+      batchData.value.project = pendingKey
+      batchData.value.site = ''
+    }
+  } else if (oldStatus === 'pending' && batchData.value.project === '未接入') {
     batchData.value.project = ''
+    batchData.value.site = ''
   }
 }
 
@@ -1390,26 +1415,20 @@ const batchPlaceholder = computed(() => {
                 <option v-for="p in tempProjects" :key="getProjectKey(p)" :value="getProjectKey(p)">{{ getProjectName(p) }}</option>
               </select>
             </div>
-            <!-- 桌台：项目字段，pending 时变成只读提示，否则下拉 -->
+            <!-- 桌台：项目字段，pending 时无 * 且默认选"未接入"，否则带 * -->
             <div class="form-group" v-if="formMode === 'table'">
-              <template v-if="formData.status === 'pending'">
-                <label class="form-label">{{ t('tableHierarchy.form.belongProject') }}</label>
-                <div class="form-pending-hint">⊘ {{ t('tableHierarchy.form.statusPendingHint') }}</div>
-              </template>
-              <template v-else>
-                <label class="form-label required">{{ t('tableHierarchy.form.belongProject') }}</label>
-                <select v-model="formData.project" class="form-input" @change="formData.site = ''">
-                  <option value="">{{ t('tableHierarchy.form.selectProject') }}</option>
-                  <option v-for="p in tempProjects" :key="getProjectKey(p)" :value="getProjectKey(p)">{{ getProjectName(p) }}</option>
-                </select>
-              </template>
+              <label class="form-label" :class="{ required: formData.status !== 'pending' }">{{ t('tableHierarchy.form.belongProject') }}</label>
+              <select v-model="formData.project" class="form-input" @change="formData.site = ''">
+                <option value="">{{ t('tableHierarchy.form.selectProject') }}</option>
+                <option v-for="p in tempProjects" :key="getProjectKey(p)" :value="getProjectKey(p)">{{ getProjectName(p) }}</option>
+              </select>
             </div>
-            <!-- 桌台：现场字段，pending 时无 *，下拉显示全部现场+(无)；否则按项目联动+必填 -->
+            <!-- 桌台：现场字段，pending 时无 *，下拉跟项目联动 + 保留 (无) 占位选项 -->
             <div class="form-group" v-if="formMode === 'table'">
               <label class="form-label" :class="{ required: formData.status !== 'pending' }">{{ t('tableHierarchy.form.belongSite') }}</label>
               <select v-model="formData.site" class="form-input">
                 <option value="">{{ formData.status === 'pending' ? t('tableHierarchy.form.siteNone') : t('tableHierarchy.form.selectSite') }}</option>
-                <option v-for="s in (formData.status === 'pending' ? getAllSitesDedup() : getSitesByFormProject())" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
+                <option v-for="s in getSitesByFormProject()" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
               </select>
             </div>
             <!-- 游戏类型中英文名称 -->
@@ -1496,24 +1515,18 @@ const batchPlaceholder = computed(() => {
             </div>
             <!-- 批量桌台：项目字段 -->
             <div class="form-group" v-if="batchMode === 'table'">
-              <template v-if="batchData.status === 'pending'">
-                <label class="form-label">{{ t('tableHierarchy.form.belongProject') }}</label>
-                <div class="form-pending-hint">⊘ {{ t('tableHierarchy.form.statusPendingHint') }}</div>
-              </template>
-              <template v-else>
-                <label class="form-label required">{{ t('tableHierarchy.form.belongProject') }}</label>
-                <select v-model="batchData.project" class="form-input" @change="batchData.site = ''">
-                  <option value="">{{ t('tableHierarchy.form.selectProject') }}</option>
-                  <option v-for="p in tempProjects" :key="getProjectKey(p)" :value="getProjectKey(p)">{{ getProjectName(p) }}</option>
-                </select>
-              </template>
+              <label class="form-label" :class="{ required: batchData.status !== 'pending' }">{{ t('tableHierarchy.form.belongProject') }}</label>
+              <select v-model="batchData.project" class="form-input" @change="batchData.site = ''">
+                <option value="">{{ t('tableHierarchy.form.selectProject') }}</option>
+                <option v-for="p in tempProjects" :key="getProjectKey(p)" :value="getProjectKey(p)">{{ getProjectName(p) }}</option>
+              </select>
             </div>
-            <!-- 批量桌台：现场字段 -->
+            <!-- 批量桌台：现场字段（跟项目联动 + 保留 (无)） -->
             <div class="form-group" v-if="batchMode === 'table'">
               <label class="form-label" :class="{ required: batchData.status !== 'pending' }">{{ t('tableHierarchy.form.belongSite') }}</label>
               <select v-model="batchData.site" class="form-input">
                 <option value="">{{ batchData.status === 'pending' ? t('tableHierarchy.form.siteNone') : t('tableHierarchy.form.selectSite') }}</option>
-                <option v-for="s in (batchData.status === 'pending' ? getAllSitesDedup() : getSitesByBatchProject())" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
+                <option v-for="s in getSitesByBatchProject()" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
               </select>
             </div>
             <div class="form-group" v-if="batchMode === 'table'">
@@ -1794,6 +1807,8 @@ thead .sticky-col { background: var(--bg-secondary); z-index: 2; }
 .status-tag-disabled::before { background: #9ca3af; }
 .status-tag-pending { background: rgba(99, 102, 241, 0.12); color: #6366f1; }
 .status-tag-pending::before { background: #6366f1; }
+.status-tag-unconfigured { background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
+.status-tag-unconfigured::before { background: #f59e0b; }
 /* 兼容旧 class（避免别处引用断 ）*/
 .status-tag-on { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(16, 185, 129, 0.12); color: #10b981; }
 .status-tag-on::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #10b981; }

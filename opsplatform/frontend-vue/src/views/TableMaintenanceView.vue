@@ -736,7 +736,7 @@ const statsAnalysis = computed(() => {
       project: item.project,
       gameType: item.gameType,
       site: item.site,
-      status: tableConfig?.status || 'enabled',
+      status: tableConfig ? (tableConfig.status || 'enabled') : 'unconfigured',
       count: item.count
     }
   }).sort((a, b) => b.count - a.count)
@@ -761,7 +761,7 @@ const statsAnalysis = computed(() => {
       projects: Array.from(item.projects).join(', ') || '-',
       sites: Array.from(item.sites).join(', ') || '-',
       gameTypes: Array.from(item.gameTypes).join(', ') || '-',
-      status: tableConfig?.status || 'enabled',
+      status: tableConfig ? (tableConfig.status || 'enabled') : 'unconfigured',
       count: item.count
     }
   }).sort((a, b) => b.count - a.count)
@@ -1567,9 +1567,12 @@ function getSearchFilteredTables() {
 }
 
 // 获取桌台状态
+// hierarchy 里找不到 → 'unconfigured'（API 误录、桌台名不在配置里的脏数据用第四态显示）
+// hierarchy 里找到但 status 字段为空 → fallback 'enabled'（兼容旧数据）
 function getTableStatus(tableName) {
   const table = tableOptions.value.find(t => t.name === tableName)
-  return table?.status || 'enabled'
+  if (!table) return 'unconfigured'
+  return table.status || 'enabled'
 }
 
 // 清除桌台搜索
@@ -2488,6 +2491,7 @@ async function exportToExcel() {
               <option value="enabled">{{ t('tableHierarchy.status.enabled') }}</option>
               <option value="disabled">{{ t('tableHierarchy.status.disabled') }}</option>
               <option value="pending">{{ t('tableHierarchy.status.pending') }}</option>
+              <option value="unconfigured">{{ t('tableHierarchy.status.unconfigured') }}</option>
             </select>
           </div>
           <div class="filter-field">
@@ -2567,7 +2571,7 @@ async function exportToExcel() {
                 </td>
                 <td v-else-if="col.type === 'multi-select-tables'">
                   <div class="multi-select-tags" v-if="parseMultiSelect(r[col.key])?.length">
-                    <span v-for="(item, idx) in parseMultiSelect(r[col.key])" :key="idx" class="multi-tag" :class="{ 'table-disabled': getTableStatus(item) === 'disabled' }" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}<span v-if="getTableStatus(item) === 'disabled'" class="status-tag-disabled-inline">{{ t('tableHierarchy.status.disabled') }}</span><span v-else-if="getTableStatus(item) === 'pending'" class="status-tag-pending-inline">{{ t('tableHierarchy.status.pending') }}</span></span>
+                    <span v-for="(item, idx) in parseMultiSelect(r[col.key])" :key="idx" class="multi-tag" :class="{ 'table-disabled': getTableStatus(item) === 'disabled' }" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}<span v-if="getTableStatus(item) === 'disabled'" class="status-tag-disabled-inline">{{ t('tableHierarchy.status.disabled') }}</span><span v-else-if="getTableStatus(item) === 'pending'" class="status-tag-pending-inline">{{ t('tableHierarchy.status.pending') }}</span><span v-else-if="getTableStatus(item) === 'unconfigured'" class="status-tag-unconfigured-inline">{{ t('tableHierarchy.status.unconfigured') }}</span></span>
                   </div>
                   <span v-else class="cell-muted">-</span>
                 </td>
@@ -2729,6 +2733,7 @@ async function exportToExcel() {
             <option value="enabled">{{ t('tableHierarchy.status.enabled') }}</option>
             <option value="disabled">{{ t('tableHierarchy.status.disabled') }}</option>
             <option value="pending">{{ t('tableHierarchy.status.pending') }}</option>
+            <option value="unconfigured">{{ t('tableHierarchy.status.unconfigured') }}</option>
           </select>
         </div>
         <div class="filter-group exclude-creator-group">
@@ -3495,7 +3500,7 @@ async function exportToExcel() {
                     <span v-if="!parseMultiSelect(detailRecord[col.key])?.length" class="cell-muted">-</span>
                   </div>
                   <div v-else-if="col.type === 'multi-select-tables'" class="multi-select-tags">
-                    <span v-for="(item, idx) in parseMultiSelect(detailRecord[col.key])" :key="idx" class="multi-tag" :class="{ 'table-disabled': getTableStatus(item) === 'disabled' }" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}<span v-if="getTableStatus(item) === 'disabled'" class="status-tag-disabled-inline">{{ t('tableHierarchy.status.disabled') }}</span><span v-else-if="getTableStatus(item) === 'pending'" class="status-tag-pending-inline">{{ t('tableHierarchy.status.pending') }}</span></span>
+                    <span v-for="(item, idx) in parseMultiSelect(detailRecord[col.key])" :key="idx" class="multi-tag" :class="{ 'table-disabled': getTableStatus(item) === 'disabled' }" :style="{ backgroundColor: getProjectColorByName(item) + '18', color: getProjectColorByName(item), borderColor: getProjectColorByName(item) + '40' }">{{ item }}<span v-if="getTableStatus(item) === 'disabled'" class="status-tag-disabled-inline">{{ t('tableHierarchy.status.disabled') }}</span><span v-else-if="getTableStatus(item) === 'pending'" class="status-tag-pending-inline">{{ t('tableHierarchy.status.pending') }}</span><span v-else-if="getTableStatus(item) === 'unconfigured'" class="status-tag-unconfigured-inline">{{ t('tableHierarchy.status.unconfigured') }}</span></span>
                     <span v-if="!parseMultiSelect(detailRecord[col.key])?.length" class="cell-muted">-</span>
                   </div>
                   <div v-else-if="col.type === 'multi-select-sites'" class="multi-select-tags">
@@ -4743,13 +4748,15 @@ body.light-mode .data-table tr:hover td.sticky-col {
 .auto-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; min-height: 38px; align-items: center; }
 .label-hint { font-weight: 400; color: var(--text-muted); font-size: 11px; }
 
-/* 桌台状态标签 三态 */
+/* 桌台状态标签 四态 */
 .status-tag-enabled { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(16, 185, 129, 0.12); color: #10b981; }
 .status-tag-disabled { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(156, 163, 175, 0.15); color: #9ca3af; }
 .status-tag-pending { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(99, 102, 241, 0.12); color: #6366f1; }
+.status-tag-unconfigured { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
 .status-tag-disabled-sm { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; font-weight: 500; background: rgba(156, 163, 175, 0.15); color: #9ca3af; margin-left: 4px; }
 .status-tag-disabled-inline { font-size: 10px; margin-left: 3px; opacity: 0.7; }
 .status-tag-pending-inline { font-size: 10px; margin-left: 3px; padding: 1px 5px; border-radius: 6px; background: rgba(99, 102, 241, 0.18); color: #6366f1; }
+.status-tag-unconfigured-inline { font-size: 10px; margin-left: 3px; padding: 1px 5px; border-radius: 6px; background: rgba(245, 158, 11, 0.18); color: #f59e0b; }
 .multi-tag.table-disabled { opacity: 0.6; }
 
 /* 统计页顶部"未接入维护"独立卡片 */

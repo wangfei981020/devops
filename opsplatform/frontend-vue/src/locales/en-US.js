@@ -868,7 +868,8 @@ export default {
     status: {
       enabled: 'Enabled',
       disabled: 'Disabled',
-      pending: 'Pending'
+      pending: 'Pending',
+      unconfigured: 'Unconfigured'
     },
 
     types: {
