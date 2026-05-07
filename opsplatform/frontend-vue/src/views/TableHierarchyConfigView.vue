@@ -354,23 +354,19 @@ function getSitesByBatchProject() {
   return tempSites.value.filter(s => s.project === projectKey)
 }
 
-// 现场下拉兜底：如果当前 site 不在选中项目的现场列表里（典型是改了项目但 site 来自老项目），
-// 把它加到列表前面以让 v-model 能匹配 + 视觉上保留显示
-function getSitesForForm() {
-  const inProject = getSitesByFormProject()
+// site 校验：当前选中的现场必须在 hierarchy 中和当前项目挂在一起
+// 空 site 视为有效（pending 桌台允许无现场）
+const siteValidInForm = computed(() => {
   const cur = formData.value.site
-  if (!cur || inProject.find(s => getSiteKey(s) === cur)) return inProject
-  const siteObj = tempSites.value.find(s => getSiteKey(s) === cur)
-  return siteObj ? [siteObj, ...inProject] : inProject
-}
+  if (!cur) return true
+  return getSitesByFormProject().some(s => getSiteKey(s) === cur)
+})
 
-function getSitesForBatch() {
-  const inProject = getSitesByBatchProject()
+const siteValidInBatch = computed(() => {
   const cur = batchData.value.site
-  if (!cur || inProject.find(s => getSiteKey(s) === cur)) return inProject
-  const siteObj = tempSites.value.find(s => getSiteKey(s) === cur)
-  return siteObj ? [siteObj, ...inProject] : inProject
-}
+  if (!cur) return true
+  return getSitesByBatchProject().some(s => getSiteKey(s) === cur)
+})
 
 function getSiteCountByProject(projectKey) {
   return tempSites.value.filter(s => s.project === projectKey).length
@@ -693,23 +689,26 @@ async function saveForm() {
   } else if (formMode.value === 'table') {
     const status = formData.value.status || 'enabled'
     const isPending = status === 'pending'
-    // 未接入桌台：项目强制空、现场可空（'' 表示无）；其他状态：项目+现场必填
-    const tProject = isPending ? '' : project
-    const tSite = isPending ? (site || '') : site
-    if (!isPending && !tProject) {
+    // pending 不强制必填项目和现场；启用/关闭则项目+现场都必填
+    if (!isPending && !project) {
       appStore.showToast(t('tableHierarchy.form.selectProject'), 'warning')
       return
     }
-    if (!isPending && !tSite) {
+    if (!isPending && !site) {
       appStore.showToast(t('tableHierarchy.form.selectSite'), 'warning')
       return
     }
+    // 现场必须挂在所选项目下（site 不为空时校验）
+    if (site && !siteValidInForm.value) {
+      appStore.showToast(t('tableHierarchy.form.siteNotInProjectToast'), 'warning')
+      return
+    }
     const gameTypes = formData.value.gameTypes || []
-    const newItem = { name: name.trim(), site: tSite, project: tProject, gameTypes, status }
+    const newItem = { name: name.trim(), site, project, gameTypes, status }
     if (editingIdx.value >= 0) {
       newTables[editingIdx.value] = newItem
     } else {
-      const exists = newTables.some(t => t.name === name.trim() && t.site === tSite && t.project === tProject)
+      const exists = newTables.some(t => t.name === name.trim() && t.site === site && t.project === project)
       if (exists) {
         appStore.showToast(t('common.error'), 'warning')
         return
@@ -804,21 +803,23 @@ async function saveBatch() {
   } else if (batchMode.value === 'table') {
     const bStatus = batchData.value.status || 'enabled'
     const isPending = bStatus === 'pending'
-    const tProject = isPending ? '' : project
-    const tSite = isPending ? (site || '') : site
-    if (!isPending && !tProject) {
+    if (!isPending && !project) {
       appStore.showToast(t('tableHierarchy.form.selectProject'), 'warning')
       return
     }
-    if (!isPending && !tSite) {
+    if (!isPending && !site) {
       appStore.showToast(t('tableHierarchy.form.selectSite'), 'warning')
+      return
+    }
+    if (site && !siteValidInBatch.value) {
+      appStore.showToast(t('tableHierarchy.form.siteNotInProjectToast'), 'warning')
       return
     }
     const gameTypes = batchData.value.gameTypes || []
     for (const name of nameList) {
-      const exists = newTables.some(t => t.name === name && t.site === tSite && t.project === tProject)
+      const exists = newTables.some(t => t.name === name && t.site === site && t.project === project)
       if (!exists) {
-        newTables.push({ name, site: tSite, project: tProject, gameTypes: [...gameTypes], status: bStatus })
+        newTables.push({ name, site, project, gameTypes: [...gameTypes], status: bStatus })
         addedCount++
       } else {
         skippedCount++
@@ -1432,18 +1433,21 @@ const batchPlaceholder = computed(() => {
             <!-- 桌台：项目字段，pending 时无 * 且默认选"未接入"，否则带 * -->
             <div class="form-group" v-if="formMode === 'table'">
               <label class="form-label" :class="{ required: formData.status !== 'pending' }">{{ t('tableHierarchy.form.belongProject') }}</label>
-              <select v-model="formData.project" class="form-input" @change="formData.site = ''">
+              <select v-model="formData.project" class="form-input">
                 <option value="">{{ t('tableHierarchy.form.selectProject') }}</option>
                 <option v-for="p in tempProjects" :key="getProjectKey(p)" :value="getProjectKey(p)">{{ getProjectName(p) }}</option>
               </select>
             </div>
-            <!-- 桌台：现场字段，pending 时无 *，下拉跟项目联动 + 保留 (无) 占位选项 -->
+            <!-- 桌台：现场字段，下拉只列当前项目下的现场；当前 site 不在新项目下时显式提示 -->
             <div class="form-group" v-if="formMode === 'table'">
               <label class="form-label" :class="{ required: formData.status !== 'pending' }">{{ t('tableHierarchy.form.belongSite') }}</label>
               <select v-model="formData.site" class="form-input">
                 <option value="">{{ formData.status === 'pending' ? t('tableHierarchy.form.siteNone') : t('tableHierarchy.form.selectSite') }}</option>
-                <option v-for="s in getSitesForForm()" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
+                <option v-for="s in getSitesByFormProject()" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
               </select>
+              <div v-if="!siteValidInForm" class="form-warn">
+                ⚠ {{ t('tableHierarchy.form.siteNotInProjectWarn', { site: formData.site, project: getProjectName(tempProjects.find(p => getProjectKey(p) === formData.project)) || formData.project }) }}
+              </div>
             </div>
             <!-- 游戏类型中英文名称 -->
             <div class="form-group" v-if="formMode === 'gameType'">
@@ -1491,7 +1495,7 @@ const batchPlaceholder = computed(() => {
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" @click="showFormModal = false">{{ t('tableHierarchy.actions.cancel') }}</button>
-            <button class="btn btn-primary" @click="saveForm" :disabled="loading">
+            <button class="btn btn-primary" @click="saveForm" :disabled="loading || (formMode === 'table' && !siteValidInForm)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
               {{ loading ? t('tableHierarchy.actions.saving') : t('tableHierarchy.actions.save') }}
             </button>
@@ -1530,18 +1534,21 @@ const batchPlaceholder = computed(() => {
             <!-- 批量桌台：项目字段 -->
             <div class="form-group" v-if="batchMode === 'table'">
               <label class="form-label" :class="{ required: batchData.status !== 'pending' }">{{ t('tableHierarchy.form.belongProject') }}</label>
-              <select v-model="batchData.project" class="form-input" @change="batchData.site = ''">
+              <select v-model="batchData.project" class="form-input">
                 <option value="">{{ t('tableHierarchy.form.selectProject') }}</option>
                 <option v-for="p in tempProjects" :key="getProjectKey(p)" :value="getProjectKey(p)">{{ getProjectName(p) }}</option>
               </select>
             </div>
-            <!-- 批量桌台：现场字段（跟项目联动 + 保留 (无)） -->
+            <!-- 批量桌台：现场字段（只列当前项目下的现场） -->
             <div class="form-group" v-if="batchMode === 'table'">
               <label class="form-label" :class="{ required: batchData.status !== 'pending' }">{{ t('tableHierarchy.form.belongSite') }}</label>
               <select v-model="batchData.site" class="form-input">
                 <option value="">{{ batchData.status === 'pending' ? t('tableHierarchy.form.siteNone') : t('tableHierarchy.form.selectSite') }}</option>
-                <option v-for="s in getSitesForBatch()" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
+                <option v-for="s in getSitesByBatchProject()" :key="getSiteKey(s)" :value="getSiteKey(s)">{{ getSiteName(s) }}</option>
               </select>
+              <div v-if="!siteValidInBatch" class="form-warn">
+                ⚠ {{ t('tableHierarchy.form.siteNotInProjectWarn', { site: batchData.site, project: getProjectName(tempProjects.find(p => getProjectKey(p) === batchData.project)) || batchData.project }) }}
+              </div>
             </div>
             <div class="form-group" v-if="batchMode === 'table'">
               <label class="form-label">{{ t('tableHierarchy.form.gameType') }} <span class="label-hint">{{ t('tableHierarchy.form.batchGameTypeHint') }}</span></label>
@@ -1564,7 +1571,7 @@ const batchPlaceholder = computed(() => {
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" @click="showBatchModal = false">{{ t('tableHierarchy.actions.cancel') }}</button>
-            <button class="btn btn-primary" @click="saveBatch" :disabled="loading">
+            <button class="btn btn-primary" @click="saveBatch" :disabled="loading || (batchMode === 'table' && !siteValidInBatch)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
               {{ loading ? t('tableHierarchy.actions.saving') : t('tableHierarchy.actions.save') }}
             </button>
@@ -1840,6 +1847,9 @@ thead .sticky-col { background: var(--bg-secondary); z-index: 2; }
 
 /* 未接入桌台的项目字段提示 */
 .form-pending-hint { padding: 10px 14px; background: rgba(99, 102, 241, 0.08); border: 1px dashed rgba(99, 102, 241, 0.3); border-radius: 8px; color: #6366f1; font-size: 13px; }
+
+/* 表单警告（如：当前现场未接入项目） */
+.form-warn { margin-top: 6px; padding: 8px 12px; background: rgba(239, 68, 68, 0.08); border-left: 3px solid #ef4444; border-radius: 4px; color: #b91c1c; font-size: 12px; line-height: 1.5; }
 
 /* 状态切换（编辑弹窗） */
 .status-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }

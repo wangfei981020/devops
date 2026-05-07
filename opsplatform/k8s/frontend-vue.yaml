@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: localhost:8070/opsplatform/frontend-vue:v553
+        image: localhost:8070/opsplatform/frontend-vue:v554
         imagePullPolicy: Always
         ports:
         - containerPort: 80

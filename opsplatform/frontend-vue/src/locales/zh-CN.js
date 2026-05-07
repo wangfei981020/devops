@@ -924,6 +924,8 @@ export default {
       tableStatus: '桌台状态',
       statusPendingHint: '未接入桌台不属于任何项目',
       siteNone: '(无)',
+      siteNotInProjectWarn: '当前现场"{site}"未接入项目"{project}"，请先到现场管理把该现场添加到此项目',
+      siteNotInProjectToast: '当前现场未接入所选项目，请先到现场管理添加',
       batchHint: '（每行一个）',
       batchGameTypeHintBatch: '（每行一个，格式：中文名称|英文名称）',
       batchProjectPlaceholder: '项目A|Project A\n项目B|Project B\n项目C|Project C',

@@ -924,6 +924,8 @@ export default {
       tableStatus: 'Table Status',
       statusPendingHint: 'Pending tables don\'t belong to any project',
       siteNone: '(None)',
+      siteNotInProjectWarn: 'Site "{site}" is not connected to project "{project}". Please add it via Site Management first.',
+      siteNotInProjectToast: 'The selected site is not connected to the chosen project. Please add it via Site Management first.',
       batchHint: '(One per line)',
       batchProjectPlaceholder: 'Project A|项目A\nProject B|项目B\nProject C|项目C',
       batchSitePlaceholder: 'Site 1|1号现场\nSite 2|2号现场\nVIP Site|VIP现场',
