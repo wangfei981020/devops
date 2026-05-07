@@ -254,6 +254,12 @@ const statsOperatorFilter = ref('')
 const statsOperationFilter = ref('')
 const statsRoundIdFilter = ref('')
 const statsMaintTypeFilter = ref('')
+// 忽略创建人（统计 / 统计导出生效，不影响列表）
+const statsExcludeCreatorsInput = ref([])
+const statsExcludeApiKeyInput = ref(false)
+const statsExcludeCreatorsFilter = ref([])
+const statsExcludeApiKeyFilter = ref(false)
+const showExcludeCreatorsDropdown = ref(false)
 
 // 取记录的有效日期：优先 date，否则从 start_time 提取日期部分
 function getEffectiveDate(r) {
@@ -317,6 +323,13 @@ const statsFilteredRecords = computed(() => {
   if (statsMaintTypeFilter.value) {
     data = data.filter(r => isMaintType(r.maintenance_type, statsMaintTypeFilter.value))
   }
+  // 忽略指定创建人（统计页生效，列表页不受影响）
+  if (statsExcludeApiKeyFilter.value) {
+    data = data.filter(r => !(r.created_by || '').startsWith('apikey:'))
+  }
+  if (statsExcludeCreatorsFilter.value.length) {
+    data = data.filter(r => !statsExcludeCreatorsFilter.value.includes(r.created_by))
+  }
   return data
 })
 
@@ -328,6 +341,63 @@ function applyStatsFilter() {
   statsOperationFilter.value = statsOperationInput.value
   statsRoundIdFilter.value = statsRoundIdInput.value
   statsMaintTypeFilter.value = statsMaintTypeInput.value
+  statsExcludeCreatorsFilter.value = [...statsExcludeCreatorsInput.value]
+  statsExcludeApiKeyFilter.value = statsExcludeApiKeyInput.value
+  saveStatsExcludeConfig()
+}
+
+// 候选创建人（从已加载记录里去重，按字母排序）
+const creatorOptions = computed(() => {
+  const s = new Set()
+  records.value.forEach(r => {
+    if (r.created_by && r.created_by !== '-') s.add(r.created_by)
+  })
+  return Array.from(s).sort()
+})
+
+// 忽略按钮的标签：未选 = "忽略创建人"；有选 = "忽略创建人: apikey:* +N"
+const excludeBtnLabel = computed(() => {
+  const n = statsExcludeCreatorsInput.value.length
+  const apiKey = statsExcludeApiKeyInput.value
+  const base = t('tableMaintenance.statsPanel.excludeCreators')
+  if (!n && !apiKey) return base
+  const parts = []
+  if (apiKey) parts.push('apikey:*')
+  if (n) parts.push('+' + n)
+  return base + ': ' + parts.join(' ')
+})
+
+async function loadStatsExcludeConfig() {
+  if (!tableId.value) return
+  try {
+    const res = await api.get('/api/user-settings?key=table_maint_stats_exclude_' + tableId.value)
+    const v = res.data?.value
+    if (v && typeof v === 'object') {
+      const creators = Array.isArray(v.creators) ? v.creators : []
+      const excludeApiKey = !!v.excludeApiKey
+      statsExcludeCreatorsInput.value = [...creators]
+      statsExcludeApiKeyInput.value = excludeApiKey
+      statsExcludeCreatorsFilter.value = [...creators]
+      statsExcludeApiKeyFilter.value = excludeApiKey
+    }
+  } catch (e) {
+    // 没配置就用默认值，安静失败
+  }
+}
+
+async function saveStatsExcludeConfig() {
+  if (!tableId.value) return
+  try {
+    await api.post('/api/user-settings', {
+      key: 'table_maint_stats_exclude_' + tableId.value,
+      value: {
+        creators: statsExcludeCreatorsFilter.value,
+        excludeApiKey: statsExcludeApiKeyFilter.value
+      }
+    })
+  } catch (e) {
+    // 保存失败不打扰用户，下次刷新会重新展示当前选择
+  }
 }
 
 // 统计分析数据
@@ -804,6 +874,11 @@ function resetStatsFilter() {
   statsRoundIdFilter.value = ''
   statsMaintTypeInput.value = ''
   statsMaintTypeFilter.value = ''
+  statsExcludeCreatorsInput.value = []
+  statsExcludeApiKeyInput.value = false
+  statsExcludeCreatorsFilter.value = []
+  statsExcludeApiKeyFilter.value = false
+  saveStatsExcludeConfig()
 }
 
 function exportStatsToExcel() {
@@ -1702,6 +1777,7 @@ async function initTable() {
     } else {
       tableId.value = table.id
     }
+    await loadStatsExcludeConfig()
     await loadRecords()
     loadStats()
   } catch (e) {
@@ -2622,6 +2698,35 @@ async function exportToExcel() {
         <div class="filter-group">
           <div class="filter-label">{{ t('tableMaintenance.statsPanel.filterRoundId') }}:</div>
           <input type="text" v-model="statsRoundIdInput" class="stats-text-input" :placeholder="t('tableMaintenance.filters.roundIdPlaceholder')">
+        </div>
+        <div class="filter-group exclude-creator-group">
+          <div class="filter-label">{{ t('tableMaintenance.statsPanel.excludeFilterLabel') }}:</div>
+          <button type="button" class="stats-select-input exclude-trigger"
+                  :class="{ 'has-exclude': statsExcludeApiKeyInput || statsExcludeCreatorsInput.length }"
+                  @click="showExcludeCreatorsDropdown = !showExcludeCreatorsDropdown">
+            <span>{{ excludeBtnLabel }}</span>
+            <svg class="exclude-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div v-if="showExcludeCreatorsDropdown" class="exclude-backdrop" @click="showExcludeCreatorsDropdown = false"></div>
+          <div v-if="showExcludeCreatorsDropdown" class="exclude-dropdown" @click.stop>
+            <label class="exclude-row exclude-apikey-row">
+              <input type="checkbox" v-model="statsExcludeApiKeyInput">
+              <span>{{ t('tableMaintenance.statsPanel.excludeApiKey') }}</span>
+            </label>
+            <div class="exclude-divider"></div>
+            <div class="exclude-list">
+              <label v-for="c in creatorOptions" :key="c" class="exclude-row">
+                <input type="checkbox" :value="c" v-model="statsExcludeCreatorsInput">
+                <span :title="c">{{ c }}</span>
+              </label>
+              <div v-if="!creatorOptions.length" class="exclude-empty">{{ t('tableMaintenance.statsPanel.excludeNoCreators') }}</div>
+            </div>
+            <div class="exclude-actions-bar">
+              <button type="button" class="exclude-link" @click="statsExcludeCreatorsInput = [...creatorOptions]">{{ t('common.selectAll') }}</button>
+              <button type="button" class="exclude-link" @click="statsExcludeCreatorsInput = []">{{ t('tableMaintenance.statsPanel.excludeClear') }}</button>
+              <span class="exclude-hint">{{ t('tableMaintenance.statsPanel.excludeApplyHint') }}</span>
+            </div>
+          </div>
         </div>
         <div class="filter-actions">
           <button class="btn btn-primary" @click="applyStatsFilter">
@@ -4444,6 +4549,27 @@ body.light-mode .data-table tr:hover td.sticky-col {
 .filter-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .filter-result { margin-left: auto; font-size: 14px; color: var(--text-secondary); }
 .filter-result strong { color: #3a84ff; font-size: 18px; font-weight: 700; }
+
+/* 忽略创建人 多选下拉 */
+.exclude-creator-group { position: relative; }
+.exclude-trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 180px; max-width: 260px; text-align: left; }
+.exclude-trigger.has-exclude { border-color: #f59e0b; color: #b45309; background: rgba(245, 158, 11, 0.08); }
+.exclude-trigger > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exclude-caret { width: 14px; height: 14px; flex-shrink: 0; }
+.exclude-backdrop { position: fixed; inset: 0; z-index: 40; background: transparent; }
+.exclude-dropdown { position: absolute; top: calc(100% + 4px); left: 0; z-index: 41; min-width: 240px; max-width: 320px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); padding: 8px; }
+.exclude-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text-primary); }
+.exclude-row:hover { background: var(--bg-secondary); }
+.exclude-row input[type="checkbox"] { margin: 0; cursor: pointer; }
+.exclude-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exclude-apikey-row { font-weight: 500; color: #b45309; }
+.exclude-divider { height: 1px; background: var(--border-color); margin: 6px 0; }
+.exclude-list { max-height: 220px; overflow-y: auto; }
+.exclude-empty { padding: 12px 8px; text-align: center; font-size: 12px; color: var(--text-muted); }
+.exclude-actions-bar { display: flex; align-items: center; gap: 8px; padding: 8px 8px 4px; border-top: 1px solid var(--border-color); margin-top: 4px; }
+.exclude-link { background: none; border: none; padding: 2px 6px; font-size: 12px; color: #3a84ff; cursor: pointer; }
+.exclude-link:hover { text-decoration: underline; }
+.exclude-hint { margin-left: auto; font-size: 11px; color: var(--text-muted); }
 
 /* 操作类型统计卡片 */
 .stats-row.single { grid-template-columns: 1fr; }
