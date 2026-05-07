@@ -1542,12 +1542,12 @@ function getSiteDisplayName(key) {
 }
 
 // 获取桌台列表 - 只根据选择的项目过滤（现场和游戏类型由桌台自动联动）
+// pending（未接入）桌台允许出现：v552 起未接入桌台已挂在"未接入"项目下，
+// 是合法的可维护实体，下拉里通过紫色小标签提示状态
 function getFilteredTables() {
   const selectedProjects = formData.value.affected_projects || []
 
-  // 未接入桌台 (status='pending') 不进入手动录入下拉，
-  // API 录入路径仍然不受限（后端不校验 affected_tables 字段）
-  let filteredTables = tableOptions.value.filter(t => (t.status || 'enabled') !== 'pending')
+  let filteredTables = tableOptions.value
 
   // 根据选中的项目过滤
   if (selectedProjects.length > 0) {
@@ -3318,6 +3318,7 @@ async function exportToExcel() {
                           <span class="checkbox-icon" :style="isTableSelected(opt) ? { backgroundColor: getProjectColor(idx), borderColor: getProjectColor(idx) } : {}"><svg v-if="isTableSelected(opt)" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>
                           <span class="option-label" :style="{ color: getProjectColor(idx) }">{{ opt }}</span>
                           <span v-if="getTableStatus(opt) === 'disabled'" class="status-tag-disabled-sm">{{ t('tableHierarchy.status.disabled') }}</span>
+                          <span v-else-if="getTableStatus(opt) === 'pending'" class="status-tag-pending-sm">{{ t('tableHierarchy.status.pending') }}</span>
                         </label>
                         <div v-if="tableSearchQuery && !getSearchFilteredTables().length" class="no-match"><span>没有找到匹配的桌台</span></div>
                       </div>
@@ -4754,6 +4755,7 @@ body.light-mode .data-table tr:hover td.sticky-col {
 .status-tag-pending { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(99, 102, 241, 0.12); color: #6366f1; }
 .status-tag-unconfigured { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
 .status-tag-disabled-sm { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; font-weight: 500; background: rgba(156, 163, 175, 0.15); color: #9ca3af; margin-left: 4px; }
+.status-tag-pending-sm { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; font-weight: 500; background: rgba(99, 102, 241, 0.15); color: #6366f1; margin-left: 4px; }
 .status-tag-disabled-inline { font-size: 10px; margin-left: 3px; opacity: 0.7; }
 .status-tag-pending-inline { font-size: 10px; margin-left: 3px; padding: 1px 5px; border-radius: 6px; background: rgba(99, 102, 241, 0.18); color: #6366f1; }
 .status-tag-unconfigured-inline { font-size: 10px; margin-left: 3px; padding: 1px 5px; border-radius: 6px; background: rgba(245, 158, 11, 0.18); color: #f59e0b; }
