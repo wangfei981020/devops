@@ -512,8 +512,8 @@ onMounted(async () => {
           <option v-for="p in [...new Set(sources.map(s => s.project))]" :key="p" :value="p">{{ p }}</option>
         </select></label>
         <label>环境: <select v-model="filterEnv" @change="loadRooms">
-          <option value="PROD">PROD（生产）</option>
-          <option value="UAT">UAT（测试）</option>
+          <option value="PROD">PROD</option>
+          <option value="UAT">UAT</option>
           <option value="all">全部</option>
         </select></label>
         <label>状态: <select v-model="filterStatus">
@@ -636,8 +636,8 @@ onMounted(async () => {
               <div class="form-group">
                 <label class="form-label required">环境</label>
                 <select v-model="sourceForm.env" :disabled="!!editingSource" class="form-input">
-                  <option value="PROD">PROD（生产）</option>
-                  <option value="UAT">UAT（测试）</option>
+                  <option value="PROD">PROD</option>
+                  <option value="UAT">UAT</option>
                 </select>
               </div>
               <div class="form-group">
