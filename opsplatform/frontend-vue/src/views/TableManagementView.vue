@@ -33,11 +33,17 @@ async function loadDataSourceSwitch() {
 async function toggleDataSource() {
   if (switchSaving.value) return
   const newVal = dataSourceSwitch.value === 'external' ? 'hierarchy' : 'external'
-  if (!confirm(
-    newVal === 'external'
-      ? '切换后：桌台维护记录的桌台/现场/项目下拉将从「桌台管理」这里同步过来的数据拿。\n\n请先确认：\n1. 已经配好至少一个数据源并同步过\n2. 同步过来的桌台数据没问题\n\n确定切换吗？'
-      : '切换回老的「桌台配置」作为维护记录的数据源吗？'
-  )) return
+
+  const confirmed = await appStore.showConfirm({
+    type: 'warning',
+    title: newVal === 'external' ? '切换到「桌台管理」数据源' : '切回「桌台配置」数据源',
+    message: newVal === 'external'
+      ? '切换后：桌台维护记录的桌台/现场/项目下拉将从「桌台管理」这里同步过来的数据拿。\n\n请先确认：\n  1. 已经配好至少一个数据源并同步过\n  2. 同步过来的桌台数据没问题'
+      : '切换回老的「桌台配置」作为维护记录的数据源吗？',
+    okText: '确定切换',
+    cancelText: '取消'
+  })
+  if (!confirmed) return
 
   switchSaving.value = true
   try {
@@ -218,7 +224,14 @@ async function saveSource() {
 }
 
 async function deleteSource(s) {
-  if (!confirm(`确定删除项目 "${s.project}" 的数据源吗？该项目下的同步桌台也会一并清除。`)) return
+  const confirmed = await appStore.showConfirm({
+    type: 'danger',
+    title: '删除数据源',
+    message: `确定删除项目 "${s.project}" 的数据源吗？\n\n该项目下的同步桌台也会一并清除。`,
+    okText: '删除',
+    cancelText: '取消'
+  })
+  if (!confirmed) return
   try {
     await api.delete(`/api/external-data-sources/${s.id}`)
     appStore.showToast('删除成功', 'success')
