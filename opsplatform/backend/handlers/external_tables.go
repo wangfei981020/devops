@@ -60,6 +60,7 @@ var defaultStatusMap = map[string][]string{
 type ExternalDataSource struct {
 	ID             string            `json:"id"`
 	Project        string            `json:"project"`
+	Env            string            `json:"env"` // UAT / PROD
 	URL            string            `json:"url"`
 	Method         string            `json:"method"`
 	RequestBody    string            `json:"request_body"`
@@ -79,6 +80,7 @@ type ExternalDataSource struct {
 type ExternalRoom struct {
 	ID             string     `json:"id"`
 	Project        string     `json:"project"`
+	Env            string     `json:"env"`
 	PlatformID     string     `json:"platform_id"`
 	PlatformName   string     `json:"platform_name"`
 	PlatformNameZh string     `json:"platform_name_zh"`
@@ -88,6 +90,17 @@ type ExternalRoom struct {
 	Status         string     `json:"status"`      // 派生：enabled / disabled
 	SyncedAt       time.Time  `json:"synced_at"`
 	DeletedAt      *time.Time `json:"deleted_at"`
+}
+
+// 合法的 env 值
+var validEnvs = map[string]bool{"UAT": true, "PROD": true}
+
+func normalizeEnv(e string) string {
+	e = strings.ToUpper(strings.TrimSpace(e))
+	if validEnvs[e] {
+		return e
+	}
+	return "PROD"
 }
 
 type ExternalAlias struct {
@@ -333,14 +346,15 @@ func scanDataSource(scanner interface {
 }) (*ExternalDataSource, error) {
 	var s ExternalDataSource
 	var lastSyncedAt sql.NullTime
-	var method, dataPath, fieldMapStr, statusMapStr string
+	var env, method, dataPath, fieldMapStr, statusMapStr string
 	var enabled int
-	if err := scanner.Scan(&s.ID, &s.Project, &s.URL, &method, &s.RequestBody, &dataPath,
+	if err := scanner.Scan(&s.ID, &s.Project, &env, &s.URL, &method, &s.RequestBody, &dataPath,
 		&fieldMapStr, &statusMapStr, &enabled, &lastSyncedAt,
 		&s.LastSyncStatus, &s.LastSyncError, &s.LastSyncCount,
 		&s.CreatedBy, &s.CreatedAt, &s.UpdatedAt); err != nil {
 		return nil, err
 	}
+	s.Env = normalizeEnv(env)
 	if method == "" {
 		method = "POST"
 	}
@@ -359,7 +373,7 @@ func scanDataSource(scanner interface {
 	return &s, nil
 }
 
-const selectDataSourceSQL = `SELECT id, project, url, COALESCE(method, 'POST'), request_body, COALESCE(data_path, 'data.data'),
+const selectDataSourceSQL = `SELECT id, project, COALESCE(env, 'PROD'), url, COALESCE(method, 'POST'), request_body, COALESCE(data_path, 'data.data'),
        COALESCE(field_map, ''), COALESCE(status_map, ''),
        enabled, last_synced_at, COALESCE(last_sync_status, ''), COALESCE(last_sync_error, ''),
        COALESCE(last_sync_count, 0), created_by, created_at, updated_at
@@ -371,7 +385,7 @@ func HandleListExtDataSources(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "无权限", http.StatusForbidden)
 		return
 	}
-	rows, err := database.DB.Query(selectDataSourceSQL + " ORDER BY project ASC")
+	rows, err := database.DB.Query(selectDataSourceSQL + " ORDER BY project ASC, env ASC")
 	if err != nil {
 		SafeError(w, "查询失败", http.StatusInternalServerError, err)
 		return
@@ -390,6 +404,7 @@ func HandleListExtDataSources(w http.ResponseWriter, r *http.Request) {
 
 type createExtSourceReq struct {
 	Project     string              `json:"project"`
+	Env         string              `json:"env"` // UAT / PROD
 	URL         string              `json:"url"`
 	Method      string              `json:"method"`
 	RequestBody string              `json:"request_body"`
@@ -447,21 +462,22 @@ func HandleCreateExtDataSource(w http.ResponseWriter, r *http.Request) {
 	fieldMapJSON, _ := json.Marshal(req.FieldMap)
 	statusMapJSON, _ := json.Marshal(req.StatusMap)
 
+	env := normalizeEnv(req.Env)
 	id := uuid.New().String()
 	_, err := database.DB.Exec(`
-		INSERT INTO external_data_sources (id, project, url, method, request_body, data_path, field_map, status_map, enabled, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-	`, id, req.Project, req.URL, strings.ToUpper(req.Method), req.RequestBody, req.DataPath,
+		INSERT INTO external_data_sources (id, project, env, url, method, request_body, data_path, field_map, status_map, enabled, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+	`, id, req.Project, env, req.URL, strings.ToUpper(req.Method), req.RequestBody, req.DataPath,
 		string(fieldMapJSON), string(statusMapJSON), username)
 	if err != nil {
 		if strings.Contains(err.Error(), "Duplicate") {
-			sendError(w, "该项目已配置过数据源", http.StatusBadRequest)
+			sendError(w, "该项目+环境组合已配置过数据源", http.StatusBadRequest)
 			return
 		}
 		SafeError(w, "创建失败", http.StatusInternalServerError, err)
 		return
 	}
-	log.Printf("[ExternalTables] user=%s created data source for project=%s method=%s", username, req.Project, req.Method)
+	log.Printf("[ExternalTables] user=%s created data source for project=%s env=%s method=%s", username, req.Project, env, req.Method)
 	respondJSON(w, http.StatusOK, map[string]interface{}{"success": true, "id": id})
 }
 
@@ -558,8 +574,8 @@ func HandleDeleteExtDataSource(w http.ResponseWriter, r *http.Request) {
 	}
 	id := mux.Vars(r)["id"]
 
-	var project string
-	if err := database.DB.QueryRow(`SELECT project FROM external_data_sources WHERE id = ?`, id).Scan(&project); err != nil {
+	var project, env string
+	if err := database.DB.QueryRow(`SELECT project, COALESCE(env, 'PROD') FROM external_data_sources WHERE id = ?`, id).Scan(&project, &env); err != nil {
 		sendError(w, "数据源不存在", http.StatusNotFound)
 		return
 	}
@@ -569,7 +585,8 @@ func HandleDeleteExtDataSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM external_rooms WHERE project = ?`, project); err != nil {
+	// 只删该 project+env 的桌台，不影响同项目下其他环境的数据
+	if _, err := tx.Exec(`DELETE FROM external_rooms WHERE project = ? AND env = ?`, project, env); err != nil {
 		SafeError(w, "清理桌台失败", http.StatusInternalServerError, err)
 		return
 	}
@@ -688,7 +705,7 @@ func SyncOneDataSource(id string) (added, updated, deleted int, err error) {
 	}
 
 	existing := map[string]string{}
-	rows, _ := database.DB.Query(`SELECT id, platform_id, room_id FROM external_rooms WHERE project = ?`, src.Project)
+	rows, _ := database.DB.Query(`SELECT id, platform_id, room_id FROM external_rooms WHERE project = ? AND env = ?`, src.Project, src.Env)
 	for rows.Next() {
 		var rid, pid, rmid string
 		rows.Scan(&rid, &pid, &rmid)
@@ -724,9 +741,9 @@ func SyncOneDataSource(id string) (added, updated, deleted int, err error) {
 			}
 		} else {
 			_, e := database.DB.Exec(`
-				INSERT INTO external_rooms (id, project, platform_id, platform_name, platform_name_zh, room_id, game_type, room_status, synced_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				uuid.New().String(), src.Project, pid, n.PlatformName, n.PlatformNameZh, n.RoomID, n.GameType, statusInt, now)
+				INSERT INTO external_rooms (id, project, env, platform_id, platform_name, platform_name_zh, room_id, game_type, room_status, synced_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				uuid.New().String(), src.Project, src.Env, pid, n.PlatformName, n.PlatformNameZh, n.RoomID, n.GameType, statusInt, now)
 			if e == nil {
 				added++
 			}
@@ -759,8 +776,8 @@ func SyncOneDataSource(id string) (added, updated, deleted int, err error) {
 		WHERE id=?`,
 		now, count, id)
 
-	log.Printf("[ExternalTables] sync project=%s method=%s added=%d updated=%d deleted=%d total=%d",
-		src.Project, src.Method, added, updated, deleted, count)
+	log.Printf("[ExternalTables] sync project=%s env=%s method=%s added=%d updated=%d deleted=%d total=%d",
+		src.Project, src.Env, src.Method, added, updated, deleted, count)
 	return added, updated, deleted, nil
 }
 
@@ -777,16 +794,25 @@ func HandleListExternalRooms(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "无权限", http.StatusForbidden)
 		return
 	}
-	q := "SELECT id, project, platform_id, platform_name, COALESCE(platform_name_zh, ''), room_id, game_type, room_status, synced_at, deleted_at FROM external_rooms WHERE 1=1"
+	q := "SELECT id, project, COALESCE(env, 'PROD'), platform_id, platform_name, COALESCE(platform_name_zh, ''), room_id, game_type, room_status, synced_at, deleted_at FROM external_rooms WHERE 1=1"
 	args := []interface{}{}
 	if proj := r.URL.Query().Get("project"); proj != "" {
 		q += " AND project = ?"
 		args = append(args, proj)
 	}
+	// env 过滤：?env=all → 不过滤；?env=UAT/PROD → 该环境；不传 → 默认 PROD
+	envQ := r.URL.Query().Get("env")
+	if envQ == "" {
+		envQ = "PROD"
+	}
+	if envQ != "all" {
+		q += " AND env = ?"
+		args = append(args, normalizeEnv(envQ))
+	}
 	if r.URL.Query().Get("showDeleted") != "true" {
 		q += " AND deleted_at IS NULL"
 	}
-	q += " ORDER BY project, platform_id, room_id"
+	q += " ORDER BY project, env, platform_id, room_id"
 	rows, err := database.DB.Query(q, args...)
 	if err != nil {
 		SafeError(w, "查询失败", http.StatusInternalServerError, err)
@@ -797,7 +823,7 @@ func HandleListExternalRooms(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var rm ExternalRoom
 		var deletedAt sql.NullTime
-		if err := rows.Scan(&rm.ID, &rm.Project, &rm.PlatformID, &rm.PlatformName, &rm.PlatformNameZh,
+		if err := rows.Scan(&rm.ID, &rm.Project, &rm.Env, &rm.PlatformID, &rm.PlatformName, &rm.PlatformNameZh,
 			&rm.RoomID, &rm.GameType, &rm.RoomStatus, &rm.SyncedAt, &deletedAt); err != nil {
 			continue
 		}

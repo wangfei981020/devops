@@ -1044,11 +1044,12 @@ CREATE TABLE IF NOT EXISTS duty_records (
 	}
 
 	// ===== 桌台管理（新菜单，独立于桌台层级配置）=====
-	// 项目数据源配置：每个项目挂一份外部 OpenAPI 接口配置
+	// 项目数据源配置：每个项目 + 环境挂一份外部 OpenAPI 接口配置
 	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS external_data_sources (
 			id VARCHAR(36) PRIMARY KEY,
 			project VARCHAR(100) NOT NULL COMMENT '项目名（name_zh 或 key）',
+			env VARCHAR(8) NOT NULL DEFAULT 'PROD' COMMENT '环境：UAT / PROD',
 			url TEXT NOT NULL COMMENT '外部 OpenAPI 接口地址',
 			method VARCHAR(10) NOT NULL DEFAULT 'POST' COMMENT 'HTTP 方法：GET / POST',
 			request_body TEXT NOT NULL COMMENT 'JSON 请求体模板（仅 POST 有效）',
@@ -1063,18 +1064,19 @@ CREATE TABLE IF NOT EXISTS duty_records (
 			created_by VARCHAR(64) DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			UNIQUE KEY uk_project (project)
+			UNIQUE KEY uk_project_env (project, env)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`)
 	if err != nil {
 		return err
 	}
-	// Auto-migrate: 加新字段（兼容 v557 已部署的实例）
+	// Auto-migrate: 加新字段（兼容 v557/v729 已部署的实例）
 	for _, col := range []struct{ name, typ string }{
 		{"method", "VARCHAR(10) NOT NULL DEFAULT 'POST'"},
 		{"data_path", "VARCHAR(128) DEFAULT 'data.data'"},
 		{"field_map", "TEXT"},
 		{"status_map", "TEXT"},
+		{"env", "VARCHAR(8) NOT NULL DEFAULT 'PROD'"},
 	} {
 		var n int
 		DB.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'external_data_sources' AND COLUMN_NAME = ?`, col.name).Scan(&n)
@@ -1083,12 +1085,21 @@ CREATE TABLE IF NOT EXISTS duty_records (
 			log.Printf("[Migration] external_data_sources add column %s", col.name)
 		}
 	}
+	// 把老的 UNIQUE KEY (project) 升级成 (project, env)
+	var oldUkExists int
+	DB.QueryRow(`SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='external_data_sources' AND INDEX_NAME='uk_project'`).Scan(&oldUkExists)
+	if oldUkExists > 0 {
+		DB.Exec(`ALTER TABLE external_data_sources DROP INDEX uk_project`)
+		DB.Exec(`ALTER TABLE external_data_sources ADD UNIQUE KEY uk_project_env (project, env)`)
+		log.Printf("[Migration] external_data_sources: uk_project → uk_project_env")
+	}
 
 	// 同步过来的桌台缓存：每条来自外部 API
 	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS external_rooms (
 			id VARCHAR(36) PRIMARY KEY,
 			project VARCHAR(100) NOT NULL COMMENT '项目（关联 external_data_sources.project）',
+			env VARCHAR(8) NOT NULL DEFAULT 'PROD' COMMENT '环境：UAT / PROD',
 			platform_id VARCHAR(64) NOT NULL COMMENT '外部 platformId',
 			platform_name VARCHAR(64) NOT NULL COMMENT '外部 platformName，英文/代号',
 			platform_name_zh VARCHAR(128) DEFAULT '' COMMENT '外部返回的中文，可被别名覆盖',
@@ -1099,14 +1110,31 @@ CREATE TABLE IF NOT EXISTS duty_records (
 			deleted_at DATETIME NULL COMMENT '软删除：外部 API 已不再返回此桌台时打标',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			UNIQUE KEY uk_room (project, platform_id, room_id),
+			UNIQUE KEY uk_room (project, env, platform_id, room_id),
 			INDEX idx_ext_room_project (project),
+			INDEX idx_ext_room_env (env),
 			INDEX idx_ext_room_status (room_status),
 			INDEX idx_ext_room_deleted (deleted_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`)
 	if err != nil {
 		return err
+	}
+	// Auto-migrate: 给老 external_rooms 加 env 字段
+	var roomEnvCol int
+	DB.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'external_rooms' AND COLUMN_NAME = 'env'`).Scan(&roomEnvCol)
+	if roomEnvCol == 0 {
+		DB.Exec(`ALTER TABLE external_rooms ADD COLUMN env VARCHAR(8) NOT NULL DEFAULT 'PROD'`)
+		DB.Exec(`ALTER TABLE external_rooms ADD INDEX idx_ext_room_env (env)`)
+		log.Printf("[Migration] external_rooms add column env + index")
+	}
+	// 升级 UNIQUE KEY uk_room (project, platform_id, room_id) → (project, env, platform_id, room_id)
+	var oldRoomUk int
+	DB.QueryRow(`SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='external_rooms' AND INDEX_NAME='uk_room' AND COLUMN_NAME='env'`).Scan(&oldRoomUk)
+	if oldRoomUk == 0 {
+		DB.Exec(`ALTER TABLE external_rooms DROP INDEX uk_room`)
+		DB.Exec(`ALTER TABLE external_rooms ADD UNIQUE KEY uk_room (project, env, platform_id, room_id)`)
+		log.Printf("[Migration] external_rooms: uk_room 升级带 env")
 	}
 
 	// 别名映射表：英文 code → 中文显示名（全局）

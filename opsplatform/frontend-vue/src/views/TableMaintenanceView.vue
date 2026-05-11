@@ -1262,9 +1262,9 @@ async function loadHierarchyOptions() {
     } catch (_) { useExternal = false }
 
     if (useExternal) {
-      // 从桌台管理拉自动同步数据，转成 hierarchy 风格塞进 *Options
+      // 从桌台管理拉自动同步数据（默认只拿 PROD 环境），转成 hierarchy 风格塞进 *Options
       const [roomsRes, aliasRes] = await Promise.all([
-        api.get('/api/external-rooms'),
+        api.get('/api/external-rooms?env=PROD'),
         api.get('/api/external-aliases')
       ])
       const rooms = Array.isArray(roomsRes.data) ? roomsRes.data : []

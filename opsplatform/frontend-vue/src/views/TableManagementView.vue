@@ -99,6 +99,7 @@ function defaultStatusMap() {
 
 const sourceForm = ref({
   project: '',
+  env: 'PROD',     // UAT / PROD
   url: '',
   method: 'POST',
   request_body: '{\n  "operator": "opsplatform",\n  "status": 0,\n  "roomIds": []\n}',
@@ -139,6 +140,7 @@ function openCreateSource() {
   editingSource.value = null
   sourceForm.value = {
     project: '',
+    env: 'PROD',
     url: '',
     method: 'POST',
     request_body: '{\n  "operator": "opsplatform",\n  "status": 0,\n  "roomIds": []\n}',
@@ -155,6 +157,7 @@ function openEditSource(s) {
   editingSource.value = s
   sourceForm.value = {
     project: s.project,
+    env: s.env || 'PROD',
     url: s.url,
     method: s.method || 'POST',
     request_body: s.request_body || '',
@@ -201,9 +204,14 @@ async function saveSource() {
     appStore.showToast('项目和 URL 必填', 'warning')
     return
   }
+  if (sourceForm.value.env !== 'UAT' && sourceForm.value.env !== 'PROD') {
+    appStore.showToast('环境只支持 UAT / PROD', 'warning')
+    return
+  }
   syncStatusMapToForm()
   try {
     if (editingSource.value) {
+      // 编辑不允许改 project + env（唯一键）
       await api.put(`/api/external-data-sources/${editingSource.value.id}`, {
         url: sourceForm.value.url,
         method: sourceForm.value.method,
@@ -281,6 +289,7 @@ const rooms = ref([])
 const aliases = ref([])
 const roomsLoading = ref(false)
 const filterProject = ref('')
+const filterEnv = ref('PROD')     // 默认 PROD，可切 UAT / all
 const filterStatus = ref('')
 const filterRoomId = ref('')
 
@@ -289,6 +298,7 @@ async function loadRooms() {
   try {
     const params = new URLSearchParams()
     if (filterProject.value) params.set('project', filterProject.value)
+    params.set('env', filterEnv.value || 'PROD')
     const res = await api.get(`/api/external-rooms?${params}`)
     rooms.value = Array.isArray(res.data) ? res.data : []
   } catch (e) {
@@ -456,6 +466,7 @@ onMounted(async () => {
           <thead>
             <tr>
               <th>项目</th>
+              <th>环境</th>
               <th>URL</th>
               <th>启用</th>
               <th>上次同步</th>
@@ -465,9 +476,10 @@ onMounted(async () => {
             </tr>
           </thead>
           <tbody>
-            <tr v-if="!sourcesLoading && !sources.length"><td colspan="7" class="empty">暂无数据源，点击上方"+ 添加数据源"开始配置</td></tr>
+            <tr v-if="!sourcesLoading && !sources.length"><td colspan="8" class="empty">暂无数据源，点击上方"+ 添加数据源"开始配置</td></tr>
             <tr v-for="s in sources" :key="s.id">
               <td><strong>{{ s.project }}</strong></td>
+              <td><span :class="s.env === 'PROD' ? 'env-tag env-prod' : 'env-tag env-uat'">{{ s.env }}</span></td>
               <td class="url-cell" :title="s.url">{{ s.url }}</td>
               <td>
                 <span :class="s.enabled ? 'tag-enabled' : 'tag-disabled'">
@@ -497,7 +509,12 @@ onMounted(async () => {
       <div class="filter-bar">
         <label>项目: <select v-model="filterProject" @change="loadRooms">
           <option value="">全部</option>
-          <option v-for="s in sources" :key="s.project" :value="s.project">{{ s.project }}</option>
+          <option v-for="p in [...new Set(sources.map(s => s.project))]" :key="p" :value="p">{{ p }}</option>
+        </select></label>
+        <label>环境: <select v-model="filterEnv" @change="loadRooms">
+          <option value="PROD">PROD（生产）</option>
+          <option value="UAT">UAT（测试）</option>
+          <option value="all">全部</option>
         </select></label>
         <label>状态: <select v-model="filterStatus">
           <option value="">全部</option>
@@ -514,6 +531,7 @@ onMounted(async () => {
           <thead>
             <tr>
               <th>项目</th>
+              <th>环境</th>
               <th>现场 (code)</th>
               <th>现场 (中文)</th>
               <th>桌台号</th>
@@ -523,9 +541,10 @@ onMounted(async () => {
             </tr>
           </thead>
           <tbody>
-            <tr v-if="!roomsLoading && !filteredRooms.length"><td colspan="7" class="empty">暂无桌台数据。先配置数据源并同步。</td></tr>
+            <tr v-if="!roomsLoading && !filteredRooms.length"><td colspan="8" class="empty">暂无桌台数据。先配置数据源并同步。</td></tr>
             <tr v-for="r in filteredRooms" :key="r.id">
               <td>{{ r.project }}</td>
+              <td><span :class="r.env === 'PROD' ? 'env-tag env-prod' : 'env-tag env-uat'">{{ r.env }}</span></td>
               <td><code class="code-cell">{{ r.platform_name }}</code></td>
               <td>{{ platformDisplay(r) }}</td>
               <td><strong>{{ r.room_id }}</strong></td>
@@ -608,11 +627,18 @@ onMounted(async () => {
           <div class="modal-body">
 
             <!-- 基础配置 -->
-            <div class="form-row">
+            <div class="form-row form-row-3">
               <div class="form-group">
                 <label class="form-label required">项目</label>
                 <input v-model="sourceForm.project" :disabled="!!editingSource" placeholder="例：G01" class="form-input">
-                <span v-if="editingSource" class="form-hint">项目创建后不可修改</span>
+                <span v-if="editingSource" class="form-hint">项目+环境创建后不可修改</span>
+              </div>
+              <div class="form-group">
+                <label class="form-label required">环境</label>
+                <select v-model="sourceForm.env" :disabled="!!editingSource" class="form-input">
+                  <option value="PROD">PROD（生产）</option>
+                  <option value="UAT">UAT（测试）</option>
+                </select>
               </div>
               <div class="form-group">
                 <label class="form-label required">HTTP 方法</label>
@@ -772,6 +798,12 @@ onMounted(async () => {
 .modal { background: var(--bg-card); border-radius: 12px; width: 90%; max-width: 600px; max-height: 90vh; display: flex; flex-direction: column; }
 .modal-wide { max-width: 900px; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.form-row-3 { grid-template-columns: 2fr 1fr 1fr; }
+
+/* 环境标签 */
+.env-tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; }
+.env-tag.env-prod { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
+.env-tag.env-uat { background: rgba(245, 158, 11, 0.15); color: #d97706; }
 .section-title { margin: 20px 0 10px; font-size: 14px; font-weight: 600; color: var(--text-primary); padding-bottom: 6px; border-bottom: 1px solid var(--border-color); }
 .field-map-grid { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
 .field-map-row { display: grid; grid-template-columns: 200px 24px 1fr; align-items: center; gap: 8px; }
