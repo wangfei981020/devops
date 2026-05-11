@@ -431,6 +431,7 @@ export default {
       duty: 'Duty Records',
       tableMaintenance: 'Table Maintenance',
       tableHierarchyConfig: 'Table Config',
+      tableManagement: 'Table Management',
       apiKeys: 'API Keys',
       assets: 'Assets',
       domains: 'Domains',
@@ -805,6 +806,17 @@ export default {
     },
 
     selectAll: 'Select All / Deselect All'
+  },
+
+  // Table Management (new menu, auto-sync external rooms)
+  tableManagement: {
+    title: 'Table Management',
+    tabSources: 'Data Sources',
+    tabRooms: 'Synced Rooms',
+    tabAliases: 'Aliases',
+    addSource: 'Add Data Source',
+    syncAll: 'Sync All',
+    scheduleHint: 'Auto-syncs every day at 03:00'
   },
 
   // Table Config Page

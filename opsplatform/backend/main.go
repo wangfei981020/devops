@@ -227,6 +227,17 @@ func main() {
 	protected.HandleFunc("/api-keys/{id}", handlers.HandleUpdateAPIKey).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/api-keys/{id}", handlers.HandleDeleteAPIKey).Methods("DELETE", "OPTIONS")
 
+	// ===== 桌台管理（新菜单） =====
+	protected.HandleFunc("/external-data-sources", handlers.HandleListExtDataSources).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/external-data-sources", handlers.HandleCreateExtDataSource).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/external-data-sources/test", handlers.HandleTestConnection).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/external-data-sources/{id}", handlers.HandleUpdateExtDataSource).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/external-data-sources/{id}", handlers.HandleDeleteExtDataSource).Methods("DELETE", "OPTIONS")
+	protected.HandleFunc("/external-data-sources/{id}/sync", handlers.HandleSyncExtDataSource).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/external-rooms", handlers.HandleListExternalRooms).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/external-aliases", handlers.HandleListAliases).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/external-aliases", handlers.HandleUpsertAlias).Methods("PUT", "OPTIONS")
+
 	// 网站管理
 	protected.HandleFunc("/websites", handlers.HandleGetWebsites).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/websites", handlers.HandleCreateWebsite).Methods("POST", "OPTIONS")
@@ -389,6 +400,9 @@ func main() {
 
 	// 启动域名到期时间定时刷新任务（每天0点执行）
 	go startDomainRefreshScheduler()
+
+	// 启动桌台管理同步调度器（每天3点执行）
+	go handlers.StartExternalTableScheduler()
 
 	// 启动 Prometheus metrics 服务器 (8088)
 	go func() {

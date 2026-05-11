@@ -1043,6 +1043,88 @@ CREATE TABLE IF NOT EXISTS duty_records (
 		return err
 	}
 
+	// ===== 桌台管理（新菜单，独立于桌台层级配置）=====
+	// 项目数据源配置：每个项目挂一份外部 OpenAPI 接口配置
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS external_data_sources (
+			id VARCHAR(36) PRIMARY KEY,
+			project VARCHAR(100) NOT NULL COMMENT '项目名（name_zh 或 key）',
+			url TEXT NOT NULL COMMENT '外部 OpenAPI 接口地址',
+			method VARCHAR(10) NOT NULL DEFAULT 'POST' COMMENT 'HTTP 方法：GET / POST',
+			request_body TEXT NOT NULL COMMENT 'JSON 请求体模板（仅 POST 有效）',
+			data_path VARCHAR(128) DEFAULT 'data.data' COMMENT '响应 JSON 里桌台数组的路径，点分（如 data / data.data / data.list）',
+			field_map TEXT COMMENT 'JSON 对象：外部字段名 → 内部字段名（platform_id/platform_name/platform_name_zh/room_id/game_type/game_type_name/room_status）',
+			status_map TEXT COMMENT 'JSON：外部状态值 → 内部状态（enabled/disabled），格式 {"enabled":["0","Enable"],"disabled":["1","Disable"]}',
+			enabled TINYINT(1) NOT NULL DEFAULT 1,
+			last_synced_at DATETIME NULL COMMENT '上次成功同步时间',
+			last_sync_status VARCHAR(20) DEFAULT '' COMMENT '上次同步状态：success/failed/never',
+			last_sync_error TEXT COMMENT '上次失败的错误信息',
+			last_sync_count INT DEFAULT 0 COMMENT '上次同步拉到的桌台数',
+			created_by VARCHAR(64) DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uk_project (project)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+	// Auto-migrate: 加新字段（兼容 v557 已部署的实例）
+	for _, col := range []struct{ name, typ string }{
+		{"method", "VARCHAR(10) NOT NULL DEFAULT 'POST'"},
+		{"data_path", "VARCHAR(128) DEFAULT 'data.data'"},
+		{"field_map", "TEXT"},
+		{"status_map", "TEXT"},
+	} {
+		var n int
+		DB.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'external_data_sources' AND COLUMN_NAME = ?`, col.name).Scan(&n)
+		if n == 0 {
+			DB.Exec("ALTER TABLE external_data_sources ADD COLUMN " + col.name + " " + col.typ)
+			log.Printf("[Migration] external_data_sources add column %s", col.name)
+		}
+	}
+
+	// 同步过来的桌台缓存：每条来自外部 API
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS external_rooms (
+			id VARCHAR(36) PRIMARY KEY,
+			project VARCHAR(100) NOT NULL COMMENT '项目（关联 external_data_sources.project）',
+			platform_id VARCHAR(64) NOT NULL COMMENT '外部 platformId',
+			platform_name VARCHAR(64) NOT NULL COMMENT '外部 platformName，英文/代号',
+			platform_name_zh VARCHAR(128) DEFAULT '' COMMENT '外部返回的中文，可被别名覆盖',
+			room_id VARCHAR(64) NOT NULL COMMENT '桌台 ID',
+			game_type VARCHAR(64) NOT NULL COMMENT '外部 gameType 英文代号',
+			room_status TINYINT NOT NULL DEFAULT 0 COMMENT '外部 roomStatus: 0=enable, 1=disable, 2=maintenance',
+			synced_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '同步入库时间',
+			deleted_at DATETIME NULL COMMENT '软删除：外部 API 已不再返回此桌台时打标',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uk_room (project, platform_id, room_id),
+			INDEX idx_ext_room_project (project),
+			INDEX idx_ext_room_status (room_status),
+			INDEX idx_ext_room_deleted (deleted_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
+	// 别名映射表：英文 code → 中文显示名（全局）
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS external_aliases (
+			id VARCHAR(36) PRIMARY KEY,
+			alias_type VARCHAR(20) NOT NULL COMMENT 'platform / gameType',
+			code VARCHAR(64) NOT NULL COMMENT '英文代号，如 BAC / AGEU',
+			name_zh VARCHAR(128) NOT NULL DEFAULT '' COMMENT '用户编辑的中文名；空时 UI 回退到 code',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uk_alias (alias_type, code)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
 	// Auto-migrate: 扩大 api_keys.key_prefix 到 VARCHAR(16)（旧版 12 位不够）
 	var keyPrefixLen int
 	DB.QueryRow(`SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'api_keys' AND COLUMN_NAME = 'key_prefix'`).Scan(&keyPrefixLen)
@@ -1160,6 +1242,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_duty_projects", "menu:duty_projects", "值班项目", "/system/duty-projects", "perm_menu_system", "", 110},
 		{"perm_menu_table_maintenance", "menu:table_maintenance", "桌台维护记录", "/system/table-maintenance", "perm_menu_system", "", 120},
 		{"perm_menu_table_hierarchy_config", "menu:table_hierarchy_config", "桌台层级配置", "/system/table-hierarchy-config", "perm_menu_system", "", 130},
+		{"perm_menu_table_management", "menu:table_management", "桌台管理", "/system/table-management", "perm_menu_system", "", 135},
 		{"perm_menu_api_keys", "menu:api_keys", "API Key 管理", "/system/api-keys", "perm_menu_system", "", 140},
 
 		// 资源管理
@@ -1405,6 +1488,13 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_table_hierarchy_manage_site", "table_hierarchy:manage_site", "[桌台配置] 现场管理", "允许查看和管理现场配置"},
 		{"perm_btn_table_hierarchy_manage_gametype", "table_hierarchy:manage_gametype", "[桌台配置] 游戏类型管理", "允许查看和管理游戏类型配置"},
 		{"perm_btn_table_hierarchy_manage_table", "table_hierarchy:manage_table", "[桌台配置] 桌台管理", "允许查看和管理桌台配置"},
+
+		// 桌台管理（新菜单）
+		{"perm_btn_table_mgmt_source_create", "table_management:source_create", "[桌台管理] 添加数据源", "允许添加项目外部数据源"},
+		{"perm_btn_table_mgmt_source_update", "table_management:source_update", "[桌台管理] 编辑数据源", "允许编辑项目外部数据源"},
+		{"perm_btn_table_mgmt_source_delete", "table_management:source_delete", "[桌台管理] 删除数据源", "允许删除项目外部数据源"},
+		{"perm_btn_table_mgmt_sync", "table_management:sync", "[桌台管理] 手动同步", "允许手动触发同步外部桌台"},
+		{"perm_btn_table_mgmt_alias_update", "table_management:alias_update", "[桌台管理] 编辑别名", "允许编辑游戏类型/现场中文别名"},
 
 		// Jira中心
 		{"perm_btn_jira_transition", "jira:transition", "[Jira中心] 工单状态流转", "允许在Jira中心执行工单状态流转"},

@@ -431,6 +431,7 @@ export default {
       duty: '值班记录',
       tableMaintenance: '桌台维护记录',
       tableHierarchyConfig: '桌台配置',
+      tableManagement: '桌台管理',
       apiKeys: 'API Key 管理',
       assets: '资产管理',
       domains: '域名管理',
@@ -805,6 +806,17 @@ export default {
     },
 
     selectAll: '全选/取消全选'
+  },
+
+  // 桌台管理（新菜单，自动同步外部桌台）
+  tableManagement: {
+    title: '桌台管理',
+    tabSources: '数据源配置',
+    tabRooms: '自动桌台清单',
+    tabAliases: '中文别名',
+    addSource: '添加数据源',
+    syncAll: '一键同步全部',
+    scheduleHint: '每天凌晨 03:00 自动同步'
   },
 
   // 桌台配置页面
