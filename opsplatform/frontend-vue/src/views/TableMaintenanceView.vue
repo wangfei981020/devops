@@ -1254,13 +1254,92 @@ onMounted(async () => {
 // 加载层级配置选项（项目、现场、桌台、游戏类型）
 async function loadHierarchyOptions() {
   try {
-    const config = await getTableHierarchy(true)
-    projectOptions.value = config.projects || []
-    siteOptions.value = config.sites || []
-    tableOptions.value = config.tables || []
-    gameTypeData.value = config.gameTypes || []
+    // 读全局开关：'external' = 用桌台管理同步数据；其他 = 用桌台层级配置
+    let useExternal = false
+    try {
+      const sres = await api.get('/api/settings?key=table_maint_data_source')
+      useExternal = (sres.data?.table_maint_data_source === 'external')
+    } catch (_) { useExternal = false }
+
+    if (useExternal) {
+      // 从桌台管理拉自动同步数据，转成 hierarchy 风格塞进 *Options
+      const [roomsRes, aliasRes] = await Promise.all([
+        api.get('/api/external-rooms'),
+        api.get('/api/external-aliases')
+      ])
+      const rooms = Array.isArray(roomsRes.data) ? roomsRes.data : []
+      const aliases = Array.isArray(aliasRes.data) ? aliasRes.data : []
+      const aliasMap = { platform: {}, gameType: {} }
+      aliases.forEach(a => {
+        if (a.alias_type === 'platform' || a.alias_type === 'gameType') {
+          aliasMap[a.alias_type][a.code] = a.name_zh || a.code
+        }
+      })
+      const transformed = transformExternalToHierarchy(rooms, aliasMap)
+      projectOptions.value = transformed.projects
+      siteOptions.value = transformed.sites
+      tableOptions.value = transformed.tables
+      gameTypeData.value = transformed.gameTypes
+    } else {
+      const config = await getTableHierarchy(true)
+      projectOptions.value = config.projects || []
+      siteOptions.value = config.sites || []
+      tableOptions.value = config.tables || []
+      gameTypeData.value = config.gameTypes || []
+    }
   } catch (e) {
     console.error('加载层级配置失败', e)
+  }
+}
+
+// 把 external_rooms 列表转成 hierarchy 风格的 { projects, sites, gameTypes, tables }
+// rooms: [{ project, platform_id, platform_name, platform_name_zh, room_id, game_type, status }]
+function transformExternalToHierarchy(rooms, aliasMap) {
+  const projectSet = new Set()
+  const siteMap = new Map()       // key="siteName|project" → { name_zh, name_en, project }
+  const gameTypeSet = new Set()
+  const tableMap = new Map()      // key="roomId|siteName|project" → table object
+
+  const platformAlias = (code, defaultZh) => {
+    if (aliasMap?.platform?.[code]) return aliasMap.platform[code]
+    return defaultZh || code
+  }
+  const gameTypeAlias = (code) => aliasMap?.gameType?.[code] || code
+
+  rooms.forEach(r => {
+    const project = r.project || ''
+    if (!project) return
+    projectSet.add(project)
+
+    const siteName = platformAlias(r.platform_name || r.platform_id, r.platform_name_zh)
+    const siteKey = siteName + '|' + project
+    if (!siteMap.has(siteKey)) {
+      siteMap.set(siteKey, { name_zh: siteName, name_en: r.platform_name || '', project })
+    }
+
+    const gtName = gameTypeAlias(r.game_type)
+    if (gtName) gameTypeSet.add(gtName)
+
+    const tableKey = r.room_id + '|' + siteName + '|' + project
+    if (!tableMap.has(tableKey)) {
+      tableMap.set(tableKey, {
+        name: r.room_id,
+        project,
+        site: siteName,
+        gameTypes: gtName ? [gtName] : [],
+        status: r.status || 'enabled'
+      })
+    } else {
+      const existing = tableMap.get(tableKey)
+      if (gtName && !existing.gameTypes.includes(gtName)) existing.gameTypes.push(gtName)
+    }
+  })
+
+  return {
+    projects: Array.from(projectSet).sort().map(p => ({ name_zh: p, name: p })),
+    sites: Array.from(siteMap.values()),
+    gameTypes: Array.from(gameTypeSet).sort().map(g => ({ name_zh: g })),
+    tables: Array.from(tableMap.values())
   }
 }
 

@@ -15,6 +15,47 @@ const canAliasUpdate = computed(() => isSuperAdmin.value || authStore.hasPermiss
 
 const activeTab = ref('sources')   // sources / rooms / aliases
 
+// ===== 全局开关：维护记录数据源 =====
+// system_settings.table_maint_data_source = 'hierarchy' (默认) / 'external'
+const dataSourceSwitch = ref('hierarchy')
+const switchSaving = ref(false)
+
+async function loadDataSourceSwitch() {
+  try {
+    const res = await api.get('/api/settings?key=table_maint_data_source')
+    const v = res.data?.table_maint_data_source || 'hierarchy'
+    dataSourceSwitch.value = (v === 'external') ? 'external' : 'hierarchy'
+  } catch (e) {
+    dataSourceSwitch.value = 'hierarchy'
+  }
+}
+
+async function toggleDataSource() {
+  if (switchSaving.value) return
+  const newVal = dataSourceSwitch.value === 'external' ? 'hierarchy' : 'external'
+  if (!confirm(
+    newVal === 'external'
+      ? '切换后：桌台维护记录的桌台/现场/项目下拉将从「桌台管理」这里同步过来的数据拿。\n\n请先确认：\n1. 已经配好至少一个数据源并同步过\n2. 同步过来的桌台数据没问题\n\n确定切换吗？'
+      : '切换回老的「桌台配置」作为维护记录的数据源吗？'
+  )) return
+
+  switchSaving.value = true
+  try {
+    await api.post('/api/settings', { table_maint_data_source: newVal })
+    dataSourceSwitch.value = newVal
+    appStore.showToast(
+      newVal === 'external'
+        ? '已切换到「桌台管理」数据源。打开桌台维护记录页刷新生效。'
+        : '已切回「桌台配置」数据源。',
+      'success'
+    )
+  } catch (e) {
+    appStore.showToast('切换失败: ' + (e.response?.data?.error || e.message), 'error')
+  } finally {
+    switchSaving.value = false
+  }
+}
+
 // ===== 数据源 =====
 const sources = ref([])
 const sourcesLoading = ref(false)
@@ -335,6 +376,7 @@ function fmt(dt) {
 }
 
 onMounted(async () => {
+  await loadDataSourceSwitch()
   await loadAliases()
   await loadSources()
   await loadRooms()
@@ -350,6 +392,28 @@ onMounted(async () => {
           🔄 {{ t('tableManagement.syncAll') }}
         </button>
       </div>
+    </div>
+
+    <!-- 维护记录数据源开关 -->
+    <div class="data-source-switch" :class="{ 'using-external': dataSourceSwitch === 'external' }">
+      <div class="dss-left">
+        <div class="dss-icon">⚙️</div>
+        <div>
+          <div class="dss-title">桌台维护记录数据源</div>
+          <div class="dss-hint">
+            <template v-if="dataSourceSwitch === 'external'">
+              <strong>当前：桌台管理</strong>（用本菜单同步过来的桌台作为维护记录下拉来源）
+            </template>
+            <template v-else>
+              <strong>当前：桌台配置</strong>（老菜单的手动配置）—— 验收 OK 后切换到本菜单
+            </template>
+          </div>
+        </div>
+      </div>
+      <button class="btn-switch" :class="{ on: dataSourceSwitch === 'external' }" @click="toggleDataSource" :disabled="switchSaving">
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+        <span class="switch-label">{{ dataSourceSwitch === 'external' ? '✓ 已切换' : '切换到桌台管理' }}</span>
+      </button>
     </div>
 
     <!-- Tabs -->
@@ -629,6 +693,23 @@ onMounted(async () => {
 .table-mgmt-page { padding: 20px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 .page-header h2 { margin: 0; font-size: 20px; font-weight: 600; }
+
+/* 数据源切换开关 */
+.data-source-switch { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border-color); border-left: 4px solid #9ca3af; border-radius: 8px; }
+.data-source-switch.using-external { border-left-color: #3a84ff; background: rgba(58, 132, 255, 0.04); }
+.dss-left { display: flex; align-items: center; gap: 12px; }
+.dss-icon { font-size: 20px; }
+.dss-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.dss-hint { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.dss-hint strong { color: var(--text-primary); }
+.btn-switch { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border: 1px solid var(--border-color); background: var(--bg-card); border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text-primary); }
+.btn-switch:hover { border-color: #3a84ff; }
+.btn-switch:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-switch.on { background: #3a84ff; color: white; border-color: #3a84ff; }
+.switch-track { width: 32px; height: 18px; background: #d1d5db; border-radius: 9px; position: relative; transition: background 0.2s; }
+.btn-switch.on .switch-track { background: rgba(255,255,255,0.4); }
+.switch-thumb { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; background: white; border-radius: 50%; transition: left 0.2s; }
+.btn-switch.on .switch-thumb { left: 16px; background: white; }
 
 .tabs { display: flex; border-bottom: 2px solid var(--border-color); margin-bottom: 20px; gap: 4px; }
 .tab { padding: 10px 20px; border: none; background: transparent; cursor: pointer; font-size: 14px; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -2px; }
