@@ -977,7 +977,25 @@ func HandleVmArchivedLog(w http.ResponseWriter, r *http.Request) {
 		case "":
 			JSONError(w, 40901, "任务还没开始，无日志")
 		default:
-			JSONError(w, 40402, "该任务没有归档日志（可能未配置 MinIO 或归档时 agent 已 GC 日志）")
+			// 分场景：submit 阶段就挂（task_id 全空）vs 真正归档失败
+			submitFailed := false
+			if taskMapRaw.Valid && taskMapRaw.String != "" {
+				var taskMap []vmTaskMapEntry
+				if jerr := json.Unmarshal([]byte(taskMapRaw.String), &taskMap); jerr == nil && len(taskMap) > 0 {
+					submitFailed = true
+					for _, e := range taskMap {
+						if e.TaskID != "" {
+							submitFailed = false
+							break
+						}
+					}
+				}
+			}
+			if submitFailed {
+				JSONError(w, 40402, "任务在提交阶段就失败了，没有生成日志。具体原因看发布历史展开行里的「错误信息」字段")
+			} else {
+				JSONError(w, 40402, "该任务没有归档日志（可能未配置 MinIO 或归档时 agent 已 GC 日志）")
+			}
 		}
 		return
 	}
