@@ -19,7 +19,10 @@ http.interceptors.request.use((cfg) => {
 http.interceptors.response.use(
   (resp) => {
     if (resp.data && resp.data.code !== 0) {
-      ElMessage.error(resp.data.message || '请求失败')
+      // 40901「资源冲突 / 进行中」由调用方自处理（如 VM 发布冲突弹专属弹窗），不走通用 ElMessage
+      if (resp.data.code !== 40901) {
+        ElMessage.error(resp.data.message || '请求失败')
+      }
       return Promise.reject(resp.data)
     }
     return resp.data?.data
