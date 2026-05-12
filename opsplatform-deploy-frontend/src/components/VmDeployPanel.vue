@@ -434,8 +434,53 @@ async function onSubmit() {
     ElMessage.success(`已提交 ${validRows.length} 个服务 · 任务 #${r.deployment_id}，右上角看进度`)
     resetState()
   } catch (e) {
-    ElMessage.error('提交失败：' + (e?.response?.data?.message || e.message))
+    if (e?.code === 40901 && Array.isArray(e?.data?.conflicts) && e.data.conflicts.length) {
+      showConflictDialog(e.data.conflicts)
+    } else {
+      ElMessage.error('提交失败：' + (e?.response?.data?.message || e?.message || e))
+    }
   } finally { submitting.value = false }
+}
+
+function fmtElapsed(startedAt) {
+  if (!startedAt) return '—'
+  const s = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000))
+  if (s < 60) return `${s}s`
+  return `${Math.floor(s / 60)}m${s % 60}s`
+}
+
+const VM_ACTION_LABEL = {
+  vm_rsync: 'VM rsync',
+  vm_update_version: 'VM 更新',
+}
+
+function showConflictDialog(conflicts) {
+  const lines = conflicts.map(c =>
+    `<li style="margin:6px 0;">
+       <code style="font-family:var(--mono,'Fira Code',monospace);color:#1f2937;">${c.service}</code>
+       <div style="font-size:11.5px;color:#6b7280;margin-top:2px;">
+         操作人: <b>${c.operator || '—'}</b>
+         · 任务号: <b>#${c.deployment_id}</b>
+         · 已运行: <b>${fmtElapsed(c.started_at)}</b>
+         · 操作: ${VM_ACTION_LABEL[c.action] || c.action || '—'}
+       </div>
+     </li>`
+  ).join('')
+  const title = `⚠ 无法发布：${conflicts.length} 个服务有任务在跑`
+  const body = `
+    <div style="font-size:13px;color:#374151;margin-bottom:8px;">
+      以下服务已有发布任务在执行中，请等它跑完再发：
+    </div>
+    <ul style="padding-left:18px;margin:0;list-style-type:disc;">${lines}</ul>
+    <div style="margin-top:12px;font-size:11.5px;color:#9ca3af;">
+      可以先取消勾选这些服务，把其它服务先发出去。
+    </div>
+  `
+  ElMessageBox.alert(body, title, {
+    dangerouslyUseHTMLString: true,
+    confirmButtonText: '我知道了',
+    customClass: 'vm-conflict-dialog',
+  }).catch(() => {})
 }
 </script>
 
