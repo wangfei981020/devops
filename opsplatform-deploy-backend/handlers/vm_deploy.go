@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -67,6 +68,84 @@ type vmTaskMapEntry struct {
 	ErrMsg        string `json:"error_msg,omitempty"`
 	LogObjectKey  string `json:"log_object_key,omitempty"`
 	LogSize       int    `json:"log_size,omitempty"`
+}
+
+// vmInflightConflict 描述某个 service 当前正被一个 pending VM deployment 占用
+type vmInflightConflict struct {
+	Service      string    `json:"service"`
+	Operator     string    `json:"operator"`
+	DeploymentID int64     `json:"deployment_id"`
+	Action       string    `json:"action"`
+	StartedAt    time.Time `json:"started_at"`
+}
+
+// findVmInflightConflicts 查 envID 下所有 pending VM deployment 的 vm_task_map，
+// 找出 services 集合里有任何一项已经被占用的情况。
+//
+//	vm_task_map 为 NULL / 空 / JSON 解析失败 → 跳过该行（脏数据不阻塞主流程）。
+//	返回按 service 名字母序排序，让弹窗稳定显示。
+func findVmInflightConflicts(envID int64, services []string) ([]vmInflightConflict, error) {
+	if len(services) == 0 {
+		return nil, nil
+	}
+	wanted := make(map[string]struct{}, len(services))
+	for _, s := range services {
+		wanted[s] = struct{}{}
+	}
+
+	rows, err := database.DB.Query(`
+		SELECT id, IFNULL(operator,''), IFNULL(action,''), created_at, vm_task_map
+		  FROM deployment
+		 WHERE project_env_id = ? AND target_type = 'vm' AND status = 'pending'`,
+		envID)
+	if err != nil {
+		return nil, fmt.Errorf("query pending vm deployments: %w", err)
+	}
+	defer rows.Close()
+
+	var out []vmInflightConflict
+	for rows.Next() {
+		var (
+			depID     int64
+			operator  string
+			action    string
+			createdAt time.Time
+			rawMap    sql.NullString
+		)
+		if err := rows.Scan(&depID, &operator, &action, &createdAt, &rawMap); err != nil {
+			return nil, fmt.Errorf("scan row: %w", err)
+		}
+		if !rawMap.Valid || rawMap.String == "" {
+			continue
+		}
+		var entries []vmTaskMapEntry
+		if err := json.Unmarshal([]byte(rawMap.String), &entries); err != nil {
+			log.Printf("[vm-inflight] dep=%d vm_task_map unmarshal: %v", depID, err)
+			continue
+		}
+		for _, e := range entries {
+			if _, ok := wanted[e.Service]; !ok {
+				continue
+			}
+			// 终态的 service 不算占用，agent 锁已经释放
+			if e.Status == "success" || e.Status == "failed" || e.Status == "canceled" {
+				continue
+			}
+			out = append(out, vmInflightConflict{
+				Service:      e.Service,
+				Operator:     operator,
+				DeploymentID: depID,
+				Action:       action,
+				StartedAt:    createdAt,
+			})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rows: %w", err)
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Service < out[j].Service })
+	return out, nil
 }
 
 // POST /api/deploy/vm-run
