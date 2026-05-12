@@ -214,6 +214,26 @@ func HandleVmDeploy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// pre-check：同 env 下 pending VM 任务里，本次请求的 services 有没有已经在跑的
+	// 命中 → 直接 40901 + conflicts，前端弹冲突弹窗。
+	// 不查这一步的话，请求会一路走到 agent，被 agent 端 service 锁 400 退回，
+	// 用户看到的就是 "总耗时 0s + 失败" + "没归档日志" 的误导提示。
+	preCheckNames := make([]string, len(req.Services))
+	for i, it := range req.Services {
+		preCheckNames[i] = it.Service
+	}
+	conflicts, err := findVmInflightConflicts(req.VmProjectEnvID, preCheckNames)
+	if err != nil {
+		InternalErr(w, r, fmt.Errorf("check inflight conflicts: %w", err))
+		return
+	}
+	if len(conflicts) > 0 {
+		JSONErrorWithData(w, 40901, "有服务正在发布中，无法重复提交", map[string]interface{}{
+			"conflicts": conflicts,
+		})
+		return
+	}
+
 	// 收集 module_names（前端 row 显示用）+ changes（发布历史 Tag 变更明细复用 K8s 逻辑）
 	operator := getOperator(r)
 	modNames := make([]string, len(req.Services))
