@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -168,8 +169,8 @@ func HandleVmDeploy(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40001, "vm_project_env_id / action / services 必填（services 至少 1 项）")
 		return
 	}
-	if req.Action != "rsync" && req.Action != "update_version" {
-		JSONError(w, 40001, "action 只支持 rsync / update_version")
+	if req.Action != "rsync" && req.Action != "update_version" && req.Action != "rsync_and_update" {
+		JSONError(w, 40001, "action 只支持 rsync / update_version / rsync_and_update")
 		return
 	}
 	// rsync 也支持批量：每个 service 独立 agent task（agent 端 rsync 本就是 per-service 跑 python 脚本）
@@ -178,6 +179,7 @@ func HandleVmDeploy(w http.ResponseWriter, r *http.Request) {
 			JSONError(w, 40001, fmt.Sprintf("services[%d].service 必填", i))
 			return
 		}
+		// rsync_and_update 不需要前端传 version，agent 自己从 version.txt 解析
 		if req.Action == "update_version" && it.Version == "" {
 			JSONError(w, 40001, fmt.Sprintf("update_version 每个 service 必须传 version: %s", it.Service))
 			return
@@ -201,9 +203,9 @@ func HandleVmDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 按钮权限：仅 update_version 需要校验，rsync 不部署到 VM 没风险
+	// 按钮权限：仅 update_version / rsync_and_update 需要校验（都会部署到 VM）；纯 rsync 不部署没风险
 	//   LPT 业务等同 UAT，复用 submit_uat
-	if req.Action == "update_version" {
+	if req.Action == "update_version" || req.Action == "rsync_and_update" {
 		if v.EnvType == "PROD" && !HasButton(r, "submit_prod") {
 			JSONError(w, 40300, "没有 PROD 发布权限（submit_prod）")
 			return
@@ -503,13 +505,19 @@ func aggregateBatchStatus(taskMap []vmTaskMapEntry) (status, errMsg string) {
 // finalizeVmBatch 终态共享收尾：写 deployment 终态 + 每个 success service 的 current_version
 // + 异步归档每个 task 的 ansible 日志（per task → MinIO 各自一个文件）+ Lark 通知
 func finalizeVmBatch(depID int64, status, errMsg string, duration int, taskMap []vmTaskMapEntry, req vmDeployReq, agent *models.DeployAgent, v *models.VmProjectEnv, operator string) {
+	// rsync_and_update：从 agent 日志里 grep 出每个 success task 的 detected version 回写
+	// taskMap[i].Version（提交时没传，agent shell 里从 /data/<proj>/<svc>/version.txt 解析）
+	if req.Action == "rsync_and_update" {
+		grepDetectedVersions(agent, taskMap)
+	}
+
 	taskMapBytes, _ := json.Marshal(taskMap)
 	_, _ = database.DB.Exec(
 		`UPDATE deployment SET status=?, error_msg=?, duration_sec=?, vm_task_map=? WHERE id=?`,
 		status, errMsg, duration, taskMapBytes, depID)
 
-	// 成功 + update_version → 写每个成功 service 的 current_version
-	if req.Action == "update_version" {
+	// 成功 + update_version / rsync_and_update → 写每个成功 service 的 current_version
+	if req.Action == "update_version" || req.Action == "rsync_and_update" {
 		for _, e := range taskMap {
 			if e.Status == "success" && e.Version != "" {
 				_, _ = database.DB.Exec(
@@ -524,6 +532,32 @@ func finalizeVmBatch(depID int64, status, errMsg string, duration int, taskMap [
 	go archiveVmBatchLogs(depID, agent, taskMap)
 	// 发 Lark 通知（带 3 次重试，异步）；批量时正文展开多服务列表
 	go sendVmLarkNotify(depID, status, errMsg, duration, req, taskMap, v, operator)
+}
+
+// grepDetectedVersions 从 agent task 日志里抽出 "[agent] detected version: <X>" 写回 taskMap[i].Version
+//
+//	仅 rsync_and_update 用：用户提交时没指定版本，由 agent shell 阶段 2 从 version.txt 解析后 echo 出来。
+//	finalize 阶段拿这个版本回写 vm_task_map，让 vm_service.current_version 能正确更新 + 前端发布历史
+//	的「VM 部署明细」表的"版本"列能显示。
+//	任何拉日志 / 正则不匹配的错误都跳过，不影响主流程（task 本身已经 success）。
+func grepDetectedVersions(agent *models.DeployAgent, taskMap []vmTaskMapEntry) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cli := services.NewVmAgentClient(agent.URL, agent.Token)
+	re := regexp.MustCompile(`\[agent\] detected version: (\S+)`)
+	for i, e := range taskMap {
+		if e.Status != "success" || e.TaskID == "" || e.Version != "" {
+			continue
+		}
+		logs, _, err := cli.GetTaskLogs(ctx, e.TaskID, 0)
+		if err != nil {
+			log.Printf("[vm-finalize] grep version: get logs dep-task=%s service=%s: %v", e.TaskID, e.Service, err)
+			continue
+		}
+		if m := re.FindStringSubmatch(logs); len(m) == 2 {
+			taskMap[i].Version = m[1]
+		}
+	}
 }
 
 // sendVmLarkNotify 发送 VM 部署完成的 Lark 卡片（带 3 次重试）。
@@ -568,10 +602,13 @@ func sendVmLarkNotify(depID int64, status, errMsg string, duration int, req vmDe
 	_ = database.DB.QueryRow(`SELECT created_at FROM deployment WHERE id=?`, depID).Scan(&createdAt)
 	updateTime := createdAt.Format("2006-01-02 15:04:05")
 
-	// op 字眼按 UI 命名：rsync / 更新
+	// op 字眼按 UI 命名：rsync / 更新 / rsync + 更新
 	opLabel := "更新"
-	if req.Action == "rsync" {
+	switch req.Action {
+	case "rsync":
 		opLabel = "rsync"
+	case "rsync_and_update":
+		opLabel = "rsync + 更新"
 	}
 
 	atID := LookupContactLarkID(operator)

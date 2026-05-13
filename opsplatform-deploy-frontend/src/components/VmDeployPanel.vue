@@ -71,13 +71,13 @@
       <!-- 预览表 -->
       <div v-if="batchPreview.length > 0" class="row" style="display:block;padding-left:0;">
         <label style="display:block; margin-left: 90px; font-size:11.5px; color:var(--text-2); margin-bottom:6px;">
-          ② 清单预览（{{ batchPreview.length }} 个服务，{{ totalHosts }} 台目标主机{{ isUpdate ? '' : ' · rsync 不部署到目标 VM' }})
+          ② 清单预览（{{ batchPreview.length }} 个服务，{{ totalHosts }} 台目标主机{{ willDeploy ? '' : ' · rsync 不部署到目标 VM' }})
         </label>
         <table class="batch-table">
           <thead>
             <tr>
               <th>服务</th>
-              <th v-if="isUpdate" style="width:480px;">版本</th>
+              <th v-if="needPickVersion" style="width:480px;">版本</th>
               <th>目标主机</th>
               <th style="width:36px;"></th>
             </tr>
@@ -85,7 +85,7 @@
           <tbody>
             <tr v-for="(p, idx) in batchPreview" :key="p.service" :class="{ invalid: !p.valid }">
               <td class="mono">{{ p.service }}</td>
-              <td v-if="isUpdate">
+              <td v-if="needPickVersion">
                 <span v-if="!p.valid" class="err-text">❌ {{ p.error }}</span>
                 <!-- 自动模式：每行独立下拉，默认⭐最新版，可单独改 -->
                 <el-select v-else-if="mode === 'auto'"
@@ -101,7 +101,7 @@
                 </span>
               </td>
               <td class="mono hosts-cell">
-                <span v-if="!p.valid && !isUpdate" class="err-text">❌ {{ p.error }}</span>
+                <span v-if="!p.valid && !needPickVersion" class="err-text">❌ {{ p.error }}</span>
                 <span v-else-if="p.hosts && p.hosts.length > 0">
                   {{ p.hosts.join(', ') }}
                 </span>
@@ -116,7 +116,7 @@
       </div>
 
       <!-- 提交按钮 -->
-      <div class="action-card" :class="isUpdate ? 'deploy' : 'rsync'" style="margin-top:12px;">
+      <div class="action-card" :class="willDeploy ? 'deploy' : 'rsync'" style="margin-top:12px;">
         <div class="ac-l">
           <div class="ac-title">{{ submitTitle }}</div>
           <div class="ac-desc">
@@ -125,7 +125,7 @@
             </span>
             <span v-else>
               共 <b>{{ validCount }}</b> 个服务
-              <span v-if="isUpdate"> · <b>{{ totalHosts }}</b> 台目标主机</span>
+              <span v-if="willDeploy"> · <b>{{ totalHosts }}</b> 台目标主机</span>
               <span v-if="invalidCount > 0" style="color:var(--warning);">
                 · {{ invalidCount }} 行错误将跳过
               </span>
@@ -156,8 +156,11 @@ import { useAuthStore } from '../stores/auth'
 
 const props = defineProps({
   vmProjectEnv: { type: Object, required: true },
-  // tab：'rsync' = 批量同步代码（不部署 VM）；'update_version' = 批量部署到 VM
-  tab: { type: String, default: 'update_version' },
+  // tab：
+  //   'rsync_and_update' = 一键：rsync + 自动用 version.txt 真值 update_version（UAT/LPT 默认）
+  //   'rsync'            = 只同步代码（不部署 VM）
+  //   'update_version'   = 选历史版本号部署到 VM（PROD 唯一选项）
+  tab: { type: String, default: 'rsync_and_update' },
 })
 
 const deployments = useDeploymentsStore()
@@ -177,15 +180,29 @@ const batchPreview = ref([])
 
 const envType = computed(() => props.vmProjectEnv?.env_type || 'UAT')
 const isUpdate = computed(() => props.tab === 'update_version')
-const tabLabel = computed(() => isUpdate.value ? '批量更新' : '批量 rsync')
+const isRsyncAndUpdate = computed(() => props.tab === 'rsync_and_update')
+// 「需要预览/选版本号」语义：只有 update_version 需要在预览表里选历史版本。
+// rsync 和 rsync_and_update 都不需要选版本（一个不部署，一个用 version.txt 真值）。
+const needPickVersion = computed(() => isUpdate.value)
+// 「会部署到 VM」语义：update_version + rsync_and_update 都会部署，rsync 不会。
+const willDeploy = computed(() => isUpdate.value || isRsyncAndUpdate.value)
+const tabLabel = computed(() => {
+  if (isRsyncAndUpdate.value) return '批量 rsync + 更新'
+  return isUpdate.value ? '批量更新' : '批量 rsync'
+})
 
-const submitTitle = computed(() =>
-  isUpdate.value ? '🚀 更新到 VM' : '📥 rsync 从 206 同步代码')
-const submitBtnText = computed(() =>
-  isUpdate.value ? `更新 ${validCount.value} 个到 ${envType.value}`
-                 : `rsync ${validCount.value} 个`)
+const submitTitle = computed(() => {
+  if (isRsyncAndUpdate.value) return '🚀 rsync + 更新到 VM'
+  return isUpdate.value ? '🚀 更新到 VM' : '📥 rsync 从 206 同步代码'
+})
+const submitBtnText = computed(() => {
+  if (isRsyncAndUpdate.value) return `rsync + 更新 ${validCount.value} 个到 ${envType.value}`
+  return isUpdate.value ? `更新 ${validCount.value} 个到 ${envType.value}`
+                        : `rsync ${validCount.value} 个`
+})
 const submitBtnClass = computed(() => {
   if (envType.value === 'PROD') return 'btn danger'
+  if (isRsyncAndUpdate.value) return 'btn success'
   return isUpdate.value ? 'btn success' : 'btn warn'
 })
 
@@ -397,21 +414,26 @@ async function onSubmit() {
     }
   }
 
-  // PROD 二次确认（rsync + update_version 都要确认；但 rsync 提示更轻量）
+  // PROD 二次确认（三种 action 都要确认；rsync_and_update PROD 上其实不会出现 — DeployConsole 已限制
+  // PROD 只能用 update_version tab，但这里加分支兜底防误用）
   if (envType.value === 'PROD') {
-    let lines, title, btnText
+    let lines, title, btnText, desc
     if (isUpdate.value) {
       lines = validRows.map(p => `· <b>${p.service}</b> → <code>${p.version}</code>`).join('<br>')
       title = '⚠ PROD 更新二次确认'
       btnText = '确认更新 PROD'
+      desc = `即将批量更新 <b>${validRows.length}</b> 个模块到 <b>PROD</b>，影响 ${totalHosts.value} 台机器：`
+    } else if (isRsyncAndUpdate.value) {
+      lines = validRows.map(p => `· <b>${p.service}</b>`).join('<br>')
+      title = '⚠ PROD rsync + 更新 二次确认'
+      btnText = '确认 rsync + 更新 PROD'
+      desc = `即将对 <b>${validRows.length}</b> 个模块做 rsync + 自动更新到 <b>PROD</b>（版本号取 rsync 落地后的 version.txt 真值），影响 ${totalHosts.value} 台机器：`
     } else {
       lines = validRows.map(p => `· <b>${p.service}</b>`).join('<br>')
       title = '⚠ PROD rsync 二次确认'
       btnText = '确认 rsync PROD'
+      desc = `即将批量 rsync <b>${validRows.length}</b> 个 PROD 模块的源码（从 206 同步，不更新到目标机器）：`
     }
-    const desc = isUpdate.value
-      ? `即将批量更新 <b>${validRows.length}</b> 个模块到 <b>PROD</b>，影响 ${totalHosts.value} 台机器：`
-      : `即将批量 rsync <b>${validRows.length}</b> 个 PROD 模块的源码（从 206 同步，不更新到目标机器）：`
     try {
       await ElMessageBox.confirm(
         `${desc}<br><br>${lines}`,
@@ -421,18 +443,31 @@ async function onSubmit() {
     } catch { return }
   }
 
+  // 三种 action 的请求 payload + tracking action 派发
+  let apiAction, trackingAction
+  if (isUpdate.value) {
+    apiAction = 'update_version'
+    trackingAction = 'vm_update_version'
+  } else if (isRsyncAndUpdate.value) {
+    apiAction = 'rsync_and_update'
+    trackingAction = 'vm_rsync_and_update'
+  } else {
+    apiAction = 'rsync'
+    trackingAction = 'vm_rsync'
+  }
+
   submitting.value = true
   try {
     const payload = {
       vm_project_env_id: props.vmProjectEnv.id,
-      action: isUpdate.value ? 'update_version' : 'rsync',
+      action: apiAction,
       services: validRows.map(p => isUpdate.value
-        ? { service: p.service, version: p.version }
-        : { service: p.service }),
+        ? { service: p.service, version: p.version }   // 只有 update_version 带版本
+        : { service: p.service }),                      // rsync 和 rsync_and_update 都不带
     }
     const r = await vmDeploy(payload)
     deployments.startTracking(r.deployment_id, {
-      action: isUpdate.value ? 'vm_update_version' : 'vm_rsync',
+      action: trackingAction,
       envName: props.vmProjectEnv.name,
       envType: envType.value,
       modules: validRows.length,
@@ -459,6 +494,7 @@ function fmtElapsed(startedAt) {
 const VM_ACTION_LABEL = {
   vm_rsync: 'VM rsync',
   vm_update_version: 'VM 更新',
+  vm_rsync_and_update: 'VM rsync + 更新',
 }
 
 function showConflictDialog(conflicts) {

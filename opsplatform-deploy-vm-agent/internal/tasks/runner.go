@@ -29,6 +29,8 @@ func (r *AnsibleRunner) BuildCommand(s Spec) (*exec.Cmd, error) {
 		return r.buildRsync(s)
 	case ActionUpdateVersion:
 		return r.buildUpdateVersion(s)
+	case ActionRsyncAndUpdate:
+		return r.buildRsyncAndUpdate(s)
 	case ActionGitSync:
 		// git_sync 没有「work」部分；manager 应特判走 GitSync 路径而不是这里
 		return nil, fmt.Errorf("ActionGitSync 不该走 BuildCommand；manager 应直接调 GitSync()")
@@ -80,6 +82,52 @@ sudo %sansible-playbook -i %s %s -e deploy_version=%s --diff`,
 		shQuote(inventory),
 		shQuote(playbook),
 		shQuote(s.Version))
+	return exec.Command("/bin/bash", "-c", script), nil
+}
+
+// buildRsyncAndUpdate 单 task 内 shell 串行三阶段：
+//
+//	stage 1/3: rsync                → sudo python <proj>/<proj>.py <service>
+//	stage 2/3: detect version       → 从 /data/<proj>/<svc>/version.txt 提取 'last ver <X>'
+//	stage 3/3: ansible-playbook     → 用 stage 2 提取出的版本号当 deploy_version
+//
+// set -e 严格：任一阶段失败立刻退出（rsync 失败 → 不读 version.txt → 不跑 ansible）。
+// 三阶段的 stdout/stderr 都进 task 的 logBuffer，前端实时日志能看到完整流程。
+// 关键日志格式约定：`[agent] detected version: <X>`，让 backend finalize 可以 grep 回写
+// taskMap[i].Version 用于 vm_service.current_version 更新。
+func (r *AnsibleRunner) buildRsyncAndUpdate(s Spec) (*exec.Cmd, error) {
+	pyPath := filepath.Join(r.AnsibleRoot, s.Project, s.Project+".py")
+	inventory := filepath.Join(r.AnsibleRoot, "inventory", s.Project, s.Env,
+		fmt.Sprintf("%s_%s_hosts", s.Project, s.Env))
+	playbook := filepath.Join(r.AnsibleRoot, s.Project, s.Env, s.Service+".yaml")
+	// rsync 落地的版本号文件：所有项目都在 /data/<project>/<service>/version.txt
+	versionFile := filepath.Join("/data", s.Project, s.Service, "version.txt")
+	envPrefix := buildAnsibleEnvPrefix()
+
+	script := fmt.Sprintf(`set -e
+cd %s
+echo "[agent] === stage 1/3: rsync ==="
+sudo python %s %s
+echo "[agent] === stage 2/3: detect version ==="
+if [ ! -f %s ]; then
+  echo "[agent] FATAL: version.txt 不存在: %s"
+  exit 1
+fi
+VERSION=$(grep -oP 'last ver \K\S+' %s || true)
+if [ -z "$VERSION" ]; then
+  echo "[agent] FATAL: version.txt 格式不符 '<name> last ver <version>': $(cat %s)"
+  exit 1
+fi
+echo "[agent] detected version: $VERSION"
+echo "[agent] === stage 3/3: ansible-playbook ==="
+sudo %sansible-playbook -i %s %s -e deploy_version="$VERSION" --diff
+`,
+		shQuote(r.AnsibleRoot),
+		shQuote(pyPath), shQuote(s.Service),
+		shQuote(versionFile), shQuote(versionFile),
+		shQuote(versionFile), shQuote(versionFile),
+		envPrefix,
+		shQuote(inventory), shQuote(playbook))
 	return exec.Command("/bin/bash", "-c", script), nil
 }
 

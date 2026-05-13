@@ -117,11 +117,20 @@
             <span class="sel-divider"></span>
             <span class="sel-k">动作</span>
             <div class="seg" role="tablist">
-              <button :class="['seg-btn', { active: vmTab === 'rsync' }]"
-                      @click="vmTab = 'rsync'">
-                <el-icon><RefreshRight /></el-icon>
-                <span>批量 rsync</span>
-              </button>
+              <!-- PROD 只显示「批量更新」（PROD 不允许 rsync，必须选历史版本） -->
+              <!-- UAT/LPT 显示 3 个 tab，默认「批量 rsync + 更新」 -->
+              <template v-if="currentEnv.env_type !== 'PROD'">
+                <button :class="['seg-btn', { active: vmTab === 'rsync_and_update' }]"
+                        @click="vmTab = 'rsync_and_update'">
+                  <el-icon><Promotion /></el-icon>
+                  <span>批量 rsync + 更新</span>
+                </button>
+                <button :class="['seg-btn', { active: vmTab === 'rsync' }]"
+                        @click="vmTab = 'rsync'">
+                  <el-icon><RefreshRight /></el-icon>
+                  <span>批量 rsync</span>
+                </button>
+              </template>
               <button :class="['seg-btn', { active: vmTab === 'update_version' }]"
                       @click="vmTab = 'update_version'">
                 <el-icon><Upload /></el-icon>
@@ -166,7 +175,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Aim, Upload, RefreshRight, RefreshLeft } from '@element-plus/icons-vue'
+import { Aim, Upload, RefreshRight, RefreshLeft, Promotion } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { listProjectEnvs, listVmProjectEnvs, listModules, scanModules, getRollbackPreview } from '../api'
 import BatchUpdatePanel from '../components/BatchUpdatePanel.vue'
@@ -200,7 +209,9 @@ const envs = ref([])
 const selectedID = ref(null)  // _selID 字符串
 const modules = ref([])       // 仅 K8s 用
 const tab = ref('update')     // K8s seg: 'update' | 'restart'
-const vmTab = ref('update_version')  // VM seg: 'rsync' | 'update_version'
+const vmTab = ref('rsync_and_update')  // VM seg: 'rsync_and_update' (默认) | 'rsync' | 'update_version'
+
+// 切换环境时重置 vmTab：PROD 只能用 update_version，UAT/LPT 默认 rsync_and_update
 const currentEnv = computed(() => envs.value.find(e => e._selID === selectedID.value))
 // 小工具：env_type 归一化到小写，给 chip CSS class 用（K8s 是 uat/prod，VM 是 UAT/LPT/PROD）
 function envTypeKey(e) { return (e?.env_type || '').toLowerCase() }
@@ -279,6 +290,8 @@ watch(selectedID, (selID) => {
   } else {
     modules.value = []
     tab.value = 'update' // 切回 K8s 时默认 update tab
+    // VM env 切换：PROD 只能 update_version；UAT/LPT 默认 rsync_and_update
+    vmTab.value = env.env_type === 'PROD' ? 'update_version' : 'rsync_and_update'
   }
 })
 

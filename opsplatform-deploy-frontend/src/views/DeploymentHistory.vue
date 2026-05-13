@@ -33,6 +33,7 @@
           <option value="rollback">回滚</option>
           <option value="vm_rsync">VM rsync</option>
           <option value="vm_update_version">VM 更新</option>
+          <option value="vm_rsync_and_update">VM rsync + 更新</option>
         </select>
       </div>
       <div class="f-item">
@@ -374,7 +375,7 @@ function isVmAction(a) { return typeof a === 'string' && a.startsWith('vm_') }
 function actionLabel(a) {
   return {
     update_image: '更新镜像', restart: '重启服务', rollback: '回滚',
-    vm_rsync: 'VM rsync', vm_update_version: 'VM 更新',
+    vm_rsync: 'VM rsync', vm_update_version: 'VM 更新', vm_rsync_and_update: 'VM rsync + 更新',
   }[a] || a
 }
 

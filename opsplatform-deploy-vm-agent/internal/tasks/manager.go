@@ -28,9 +28,10 @@ const (
 type Action string
 
 const (
-	ActionRsync         Action = "rsync"
-	ActionUpdateVersion Action = "update_version"
-	ActionGitSync       Action = "git_sync" // 单独跑一次 git pull（diagnostic 用）
+	ActionRsync          Action = "rsync"
+	ActionUpdateVersion  Action = "update_version"
+	ActionGitSync        Action = "git_sync"          // 单独跑一次 git pull（diagnostic 用）
+	ActionRsyncAndUpdate Action = "rsync_and_update"  // 单 task 内 shell 串行：rsync → grep version.txt → ansible-playbook
 )
 
 // Spec 触发任务的输入参数
@@ -369,13 +370,14 @@ func validateSpec(s Spec) error {
 	if s.Action != ActionGitSync && s.Service == "" {
 		return fmt.Errorf("service 必填")
 	}
-	if (s.Action == ActionUpdateVersion) && s.Version == "" {
+	if s.Action == ActionUpdateVersion && s.Version == "" {
 		return fmt.Errorf("update_version 必须传 version")
 	}
-	if (s.Action == ActionUpdateVersion) && s.Env == "" {
-		return fmt.Errorf("update_version 必须传 env")
+	// rsync_and_update 不要求 version（agent 自己从 version.txt 解析）但要 env（playbook 路径要用）
+	if (s.Action == ActionUpdateVersion || s.Action == ActionRsyncAndUpdate) && s.Env == "" {
+		return fmt.Errorf("%s 必须传 env", s.Action)
 	}
-	if s.Action != ActionRsync && s.Action != ActionUpdateVersion && s.Action != ActionGitSync {
+	if s.Action != ActionRsync && s.Action != ActionUpdateVersion && s.Action != ActionGitSync && s.Action != ActionRsyncAndUpdate {
 		return fmt.Errorf("未知 action: %s", s.Action)
 	}
 	return nil

@@ -13,6 +13,7 @@ const ACTION_LABEL = {
   rollback: '回滚发布',
   vm_rsync: 'VM rsync',
   vm_update_version: 'VM 更新',
+  vm_rsync_and_update: 'VM rsync + 更新',
 }
 
 const STATUS_LABEL = {

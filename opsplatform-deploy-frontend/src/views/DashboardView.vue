@@ -292,7 +292,7 @@ function statusLabel(s) {
 function actionLabel(a) {
   return {
     update_image: '更新镜像', restart: '重启服务', rollback: '回滚',
-    vm_rsync: 'VM rsync', vm_update_version: 'VM 更新',
+    vm_rsync: 'VM rsync', vm_update_version: 'VM 更新', vm_rsync_and_update: 'VM rsync + 更新',
   }[a] || a
 }
 function goHistory(id) {
