@@ -65,9 +65,6 @@ func getHarborClient() *services.HarborClient {
 func InvalidateHarborClient() {
 	harborClientMu.Lock()
 	defer harborClientMu.Unlock()
-	if harborClientInstance != nil {
-		harborClientInstance.InvalidateAll()
-	}
 	harborClientInstance = nil
 	harborClientCfgKey = ""
 }

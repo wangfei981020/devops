@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -18,17 +17,17 @@ import (
 //   Harbor Client
 //
 // 用 Robot 账号 + HTTP Basic Auth（跟生产 Jenkins 流水线相同）。
-// 仅拉最近 50 条 tag（按推送时间倒序），下拉框够用、不压 Harbor。
+// 仅拉最近 100 条 tag（按推送时间倒序），下拉框够用、不压 Harbor。
 //
-// 缓存：
-//   ListTags / VerifyTag 都按 (project, repo) 缓存 60s
-//   submit 路径会调 invalidate 强制刷新；前端手动刷新按钮也走 invalidate
+// 实时获取：
+//   ListTags / VerifyTag 每次都直调 Harbor，不做内存缓存。
+//   规模评估：UAT 日常 < 1 QPS，极端场景 50 QPS，Harbor 完全无压。
+//   去 cache 是为了消除 "F5 看不到刚推的 tag" 的体验问题。
 // =========================================================================
 
 const (
 	defaultTagPageSize = 100
 	maxTagPageSize     = 200
-	harborCacheTTL     = 60 * time.Second
 	harborHTTPTimeout  = 8 * time.Second
 )
 
@@ -39,15 +38,6 @@ type HarborClient struct {
 	Token   string // robot 密码
 
 	HTTP *http.Client
-
-	mu    sync.Mutex
-	cache map[string]*harborTagCacheEntry // key = "<proj>/<repo>|page=N" → entry
-}
-
-type harborTagCacheEntry struct {
-	tags     []HarborTag
-	hasMore  bool
-	cachedAt time.Time
 }
 
 // HarborTag 单个 tag 的元数据
@@ -65,7 +55,6 @@ func NewHarborClient(baseURL, user, token string) *HarborClient {
 		User:    user,
 		Token:   token,
 		HTTP:    &http.Client{Timeout: harborHTTPTimeout},
-		cache:   make(map[string]*harborTagCacheEntry),
 	}
 }
 
@@ -99,7 +88,7 @@ type ListTagsResult struct {
 //	repo 格式：project/repository，如 "g32/user-client-backend"
 //	page  <=0 默认 1
 //	limit <=0 默认 100；上限 200
-//	带 60s 缓存，缓存 key = (repo, page)，按页独立缓存
+//	不做缓存，每次都直调 Harbor 拿最新 tag。
 func (c *HarborClient) ListTags(ctx context.Context, repo string, page, limit int) (*ListTagsResult, error) {
 	if !c.ok() {
 		return nil, fmt.Errorf("harbor 未配置")
@@ -117,19 +106,6 @@ func (c *HarborClient) ListTags(ctx context.Context, repo string, page, limit in
 	if repo == "" {
 		return nil, fmt.Errorf("repo 不能为空")
 	}
-
-	cacheKey := fmt.Sprintf("%s|p%d|l%d", repo, page, limit)
-	// 缓存 hit
-	c.mu.Lock()
-	if e, ok := c.cache[cacheKey]; ok && time.Since(e.cachedAt) < harborCacheTTL {
-		out := &ListTagsResult{
-			Tags:    append([]HarborTag(nil), e.tags...),
-			HasMore: e.hasMore,
-		}
-		c.mu.Unlock()
-		return out, nil
-	}
-	c.mu.Unlock()
 
 	parts := strings.SplitN(repo, "/", 2)
 	if len(parts) != 2 {
@@ -198,10 +174,6 @@ func (c *HarborClient) ListTags(ctx context.Context, repo string, page, limit in
 	// (artifacts 数量不一定 == tags 数量，因为一个 artifact 可能有多个 tag，但 Harbor 分页是按 artifact 数算的)
 	hasMore := len(artifacts) >= limit
 
-	// 写缓存
-	c.mu.Lock()
-	c.cache[cacheKey] = &harborTagCacheEntry{tags: tags, hasMore: hasMore, cachedAt: time.Now()}
-	c.mu.Unlock()
 	return &ListTagsResult{Tags: tags, HasMore: hasMore}, nil
 }
 
@@ -290,26 +262,6 @@ func (c *HarborClient) TestConnection(ctx context.Context) error {
 		return fmt.Errorf("user/token 无效 (%d): %s", resp.StatusCode, truncate(string(body), 200))
 	}
 	return fmt.Errorf("Harbor 返回异常状态码 %d: %s", resp.StatusCode, truncate(string(body), 200))
-}
-
-// InvalidateRepo 清掉某 repo 的缓存（提交时强制重拉 / 用户手动刷新）
-func (c *HarborClient) InvalidateRepo(repo string) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	delete(c.cache, strings.Trim(repo, "/"))
-	c.mu.Unlock()
-}
-
-// InvalidateAll 清整个客户端缓存（配置变更后调用）
-func (c *HarborClient) InvalidateAll() {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	c.cache = make(map[string]*harborTagCacheEntry)
-	c.mu.Unlock()
 }
 
 // SplitImageRepoForHarbor 把完整镜像地址拆出 Harbor 域名 + project/repo

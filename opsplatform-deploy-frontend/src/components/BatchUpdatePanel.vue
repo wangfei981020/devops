@@ -324,7 +324,8 @@ function onSelectedChanged(newList) {
 }
 
 async function fetchTags(name) {
-  if (loadingTags[name] || tagsByModule[name]) return
+  // 不读 tagsByModule 当 cache（永远拉 Harbor 拿最新 tag）；保留 loadingTags 防并发去重
+  if (loadingTags[name]) return
   loadingTags[name] = true
   try {
     const r = await listHarborTags(props.projectEnv.id, name, 1, 100)
