@@ -173,7 +173,6 @@ const manualText = ref('')
 const manualParsed = ref([])
 const manualErrors = ref([])
 
-const versionCache = ref({})
 const batchPreview = ref([])
 
 const envType = computed(() => props.vmProjectEnv?.env_type || 'UAT')
@@ -250,11 +249,12 @@ watch(autoSelected, async (newList) => {
       versionList: [],
     }
   })
-  // update_version 模式：给每个新 row 拉版本列表 + 默认填⭐最新
+  // update_version 模式：给每个新 row 并行拉版本列表 + 默认填⭐最新
+  // 并行：N 个服务 = 单次延迟（~300ms），不是 N × 300ms 串行
   if (isUpdate.value) {
-    for (const p of batchPreview.value) {
-      if (!p.valid) continue
-      if (p.versionList.length > 0) continue // 已加载过，跳过
+    await Promise.all(batchPreview.value.map(async (p) => {
+      if (!p.valid) return
+      if (p.versionList.length > 0) return // 已加载过，跳过
       p.loadingVersions = true
       const versions = await loadVersionsFor(p.service)
       p.versionList = versions
@@ -263,7 +263,7 @@ watch(autoSelected, async (newList) => {
         p.isLatest = true
       }
       p.loadingVersions = false
-    }
+    }))
   }
 }, { deep: false })
 
@@ -295,14 +295,13 @@ async function onScanServices() {
 }
 
 async function loadVersionsFor(serviceName) {
-  if (versionCache.value[serviceName]) return versionCache.value[serviceName]
+  // 不缓存：避免出现 A 用户看到旧版本、B 用户看到新版本的不一致。
+  // 性能由调用方用 Promise.all 并行化承接，单次后端 ~300ms 用户可接受。
   const svc = services.value.find(s => s.name === serviceName)
   if (!svc) return []
   try {
     const r = await listVmServiceVersions(svc.id)
-    const versions = r.versions || []
-    versionCache.value[serviceName] = versions
-    return versions
+    return r.versions || []
   } catch (e) {
     ElMessage.error(`${serviceName} 版本列表失败：${e?.response?.data?.message || e.message}`)
     return []
@@ -340,43 +339,51 @@ async function parseManual() {
   manualParsed.value = parsed
   manualErrors.value = errors
 
-  const preview = []
-  for (const p of parsed) {
+  // 先拼好「需要拉版本」的项，并行拉，再组装 preview
+  const items = parsed.map(p => {
     const svc = services.value.find(s => s.name === p.service)
+    return {
+      p, svc,
+      needFetch: !!svc && isUpdate.value && !p.version,
+    }
+  })
+  const fetchResults = await Promise.all(
+    items.map(it => it.needFetch ? loadVersionsFor(it.p.service) : Promise.resolve(null))
+  )
+
+  const preview = items.map(({ p, svc }, i) => {
     if (!svc) {
-      preview.push({
+      return {
         service: p.service, version: isUpdate.value ? (p.version || '—') : '',
         hosts: [], valid: false,
         error: '服务不存在（先点"同步服务列表"）',
         isLatest: false, loadingVersions: false, versionList: [],
-      })
-      continue
+      }
     }
     let version = ''
     let isLatest = false
     if (isUpdate.value) {
       version = p.version
       if (!version) {
-        const versions = await loadVersionsFor(p.service)
+        const versions = fetchResults[i] || []
         if (versions.length === 0) {
-          preview.push({
+          return {
             service: p.service, version: '—',
             hosts: svc.hosts || [], valid: false,
             error: '版本列表为空（先 rsync 同步代码）',
             isLatest: false, loadingVersions: false, versionList: versions,
-          })
-          continue
+          }
         }
         version = versions[0]
         isLatest = true
       }
     }
-    preview.push({
+    return {
       service: p.service, version,
       hosts: svc.hosts || [], valid: true, error: '',
       isLatest, loadingVersions: false, versionList: [],
-    })
-  }
+    }
+  })
   batchPreview.value = preview
 }
 
