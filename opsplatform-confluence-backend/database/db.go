@@ -214,6 +214,79 @@ func createTables() error {
 	DB.Exec(`ALTER TABLE maintenance_windows MODIFY COLUMN start_time DATETIME DEFAULT NULL`)
 	DB.Exec(`ALTER TABLE maintenance_windows MODIFY COLUMN end_time DATETIME DEFAULT NULL`)
 
+	// ===== Jira 状态监听 =====
+	if _, err := DB.Exec(`
+		CREATE TABLE IF NOT EXISTS jira_notify_rules (
+			id              INT AUTO_INCREMENT PRIMARY KEY,
+			name            VARCHAR(128) NOT NULL,
+			enabled         TINYINT(1) NOT NULL DEFAULT 1,
+			jira_conn_id    INT NOT NULL COMMENT 'service_connections.id (type=jira)',
+			lark_conn_id    INT NOT NULL COMMENT 'service_connections.id (type=lark)',
+			project_keys    JSON NOT NULL COMMENT '["YX","OPS"]',
+			issue_types     JSON COMMENT '["升级单","紧急升级单"]，可空',
+			extra_jql       TEXT COMMENT '附加 JQL，AND 拼接，可空',
+			created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			KEY idx_enabled (enabled)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+	`); err != nil {
+		return fmt.Errorf("创建 jira_notify_rules 失败: %v", err)
+	}
+
+	if _, err := DB.Exec(`
+		CREATE TABLE IF NOT EXISTS jira_notify_rule_targets (
+			id                    INT AUTO_INCREMENT PRIMARY KEY,
+			rule_id               INT NOT NULL,
+			status_name           VARCHAR(128) NOT NULL,
+			use_default_template  TINYINT(1) NOT NULL DEFAULT 1,
+			custom_template       TEXT,
+			startup_lookback_min  INT NOT NULL DEFAULT 0,
+			KEY idx_rule (rule_id),
+			KEY idx_status (status_name),
+			CONSTRAINT fk_target_rule FOREIGN KEY (rule_id) REFERENCES jira_notify_rules(id) ON DELETE CASCADE
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+	`); err != nil {
+		return fmt.Errorf("创建 jira_notify_rule_targets 失败: %v", err)
+	}
+
+	if _, err := DB.Exec(`
+		CREATE TABLE IF NOT EXISTS jira_notify_status_users (
+			id           INT AUTO_INCREMENT PRIMARY KEY,
+			project_key  VARCHAR(64) NOT NULL,
+			status_name  VARCHAR(128) NOT NULL,
+			at_users     JSON NOT NULL COMMENT '[{open_id,user_id,mobile,name}]',
+			created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_proj_status (project_key, status_name)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+	`); err != nil {
+		return fmt.Errorf("创建 jira_notify_status_users 失败: %v", err)
+	}
+
+	if _, err := DB.Exec(`
+		CREATE TABLE IF NOT EXISTS jira_notify_history (
+			id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+			rule_id         INT NOT NULL,
+			target_id       INT NOT NULL,
+			issue_key       VARCHAR(64) NOT NULL,
+			issue_summary   VARCHAR(512),
+			from_status     VARCHAR(128),
+			to_status       VARCHAR(128) NOT NULL,
+			transition_at   DATETIME NOT NULL,
+			notified_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			status          ENUM('success','failed','pending') NOT NULL,
+			retry_count     INT NOT NULL DEFAULT 0,
+			last_error      TEXT,
+			lark_message_id VARCHAR(128),
+			KEY idx_issue (issue_key),
+			KEY idx_rule_time (rule_id, notified_at),
+			KEY idx_status (status),
+			UNIQUE KEY uniq_dedup (rule_id, issue_key, transition_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+	`); err != nil {
+		return fmt.Errorf("创建 jira_notify_history 失败: %v", err)
+	}
+
 	return nil
 }
 
