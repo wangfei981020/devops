@@ -322,3 +322,43 @@ func getLarkWebhookURLs(connIDs []int) []string {
 	}
 	return urls
 }
+
+// SendLarkInteractiveCard 发送 interactive 卡片到飞书群
+// 返回 message_id 用于历史表追溯
+func SendLarkInteractiveCard(webhookURL string, card map[string]interface{}) (string, error) {
+	body := map[string]interface{}{
+		"msg_type": "interactive",
+		"card":     card,
+	}
+	jsonData, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("JSON 编码失败: %v", err)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(webhookURL, "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("飞书返回 %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			MessageID string `json:"message_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("解析响应失败: %v", err)
+	}
+	if result.Code != 0 {
+		return "", fmt.Errorf("飞书错误 %d: %s", result.Code, result.Msg)
+	}
+	return result.Data.MessageID, nil
+}
