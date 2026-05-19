@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -296,7 +297,28 @@ func (c *ArgocdClient) GetPodLogs(
 	if parsed == 0 {
 		return string(raw), nil
 	}
-	return out.String(), nil
+	result := out.String()
+
+	// kubectl stderr 兜底检测：ArgoCD 在 pod 已 GC / container 还没起 / previous 不存在等场景
+	// 会把 kubectl 报错通过 NDJSON 200 包装返回（content 字段塞 "pods xxx not found" 之类）。
+	// 上面解析逻辑会把这段 stderr 当真日志返回，最终被归档进 MinIO 误导用户。
+	//
+	// 判定：单行短文本 + 已知 kubectl stderr pattern → 返回 err 让上游跳过写入。
+	// 真日志几乎都有多行换行 + 长度远大于 500B，所以这个 filter 误伤率极低。
+	trimmed := strings.TrimSpace(result)
+	if len(trimmed) > 0 && len(trimmed) < 500 && strings.Count(trimmed, "\n") == 0 {
+		knownStderrPatterns := []string{
+			"not found",                     // pods "xxx" not found
+			"previous terminated container", // previous terminated container "xxx" in pod "yyy" not found
+			"is waiting to start",           // container "xxx" in pod "yyy" is waiting to start
+		}
+		for _, p := range knownStderrPatterns {
+			if strings.Contains(trimmed, p) {
+				return "", fmt.Errorf("argocd returned kubectl stderr (not real log): %s", trimmed)
+			}
+		}
+	}
+	return result, nil
 }
 
 // GetPodEvents 拉指定 pod 的 k8s events（FailedScheduling / ImagePullBackOff / BackOff 等）
