@@ -89,6 +89,13 @@ func HandleUpdateESProject(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "无效的请求")
 		return
 	}
+	req.Code = strings.TrimSpace(req.Code)
+	req.DisplayName = strings.TrimSpace(req.DisplayName)
+	req.MatchKeywords = strings.TrimSpace(req.MatchKeywords)
+	if req.Code == "" || req.DisplayName == "" || req.MatchKeywords == "" {
+		jsonError(w, http.StatusBadRequest, "code/display_name/match_keywords 不能为空")
+		return
+	}
 
 	_, err := database.DB.Exec(`UPDATE es_projects SET code=?, display_name=?, match_keywords=?, enabled=?, sort_order=? WHERE id=?`,
 		req.Code, req.DisplayName, req.MatchKeywords, req.Enabled, req.SortOrder, id)
