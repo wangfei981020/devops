@@ -69,6 +69,10 @@ type vmTaskMapEntry struct {
 	ErrMsg        string `json:"error_msg,omitempty"`
 	LogObjectKey  string `json:"log_object_key,omitempty"`
 	LogSize       int    `json:"log_size,omitempty"`
+	// FailedStage 仅 rsync_and_update 失败时填：
+	//   "rsync"  → rsync 阶段同步失败（stage 1 或 stage 2 detect version 失败）
+	//   "update" → 更新服务到代码服务器阶段失败（stage 3 ansible-playbook 失败）
+	FailedStage string `json:"failed_stage,omitempty"`
 }
 
 // vmInflightConflict 描述某个 service 当前正被一个 pending VM deployment 占用
@@ -506,9 +510,11 @@ func aggregateBatchStatus(taskMap []vmTaskMapEntry) (status, errMsg string) {
 // + 异步归档每个 task 的 ansible 日志（per task → MinIO 各自一个文件）+ Lark 通知
 func finalizeVmBatch(depID int64, status, errMsg string, duration int, taskMap []vmTaskMapEntry, req vmDeployReq, agent *models.DeployAgent, v *models.VmProjectEnv, operator string) {
 	// rsync_and_update：从 agent 日志里 grep 出每个 success task 的 detected version 回写
-	// taskMap[i].Version（提交时没传，agent shell 里从 /data/<proj>/<svc>/version.txt 解析）
+	// taskMap[i].Version（提交时没传，agent shell 里从 /data/<proj>/<svc>/version.txt 解析）；
+	// 同款 grep 出 failed task 挂在哪个阶段（rsync / update）回写 FailedStage 供 Lark 卡片显示
 	if req.Action == "rsync_and_update" {
 		grepDetectedVersions(agent, taskMap)
+		grepFailedStages(agent, taskMap)
 	}
 
 	taskMapBytes, _ := json.Marshal(taskMap)
@@ -532,6 +538,38 @@ func finalizeVmBatch(depID int64, status, errMsg string, duration int, taskMap [
 	go archiveVmBatchLogs(depID, agent, taskMap)
 	// 发 Lark 通知（带 3 次重试，异步）；批量时正文展开多服务列表
 	go sendVmLarkNotify(depID, status, errMsg, duration, req, taskMap, v, operator)
+}
+
+// grepFailedStages 仅 rsync_and_update 用：从 agent task 日志里识别每个 failed task 挂在哪个 stage，回写 FailedStage。
+//
+//	agent shell 里三个 stage 各有 echo 标识：
+//	  [agent] === stage 1/3: rsync ===
+//	  [agent] === stage 2/3: detect version ===
+//	  [agent] === stage 3/3: ansible-playbook ===
+//	判定逻辑：
+//	  日志含 "stage 3/3" 标识 → 失败一定在 stage 3 → FailedStage = "update"
+//	  否则                    → 失败在 stage 1 或 2 → FailedStage = "rsync"
+//
+//	拉日志 / 网络错跳过，不影响主流程（FailedStage 留空时前端/Lark 都按"无阶段标识"显示）。
+func grepFailedStages(agent *models.DeployAgent, taskMap []vmTaskMapEntry) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cli := services.NewVmAgentClient(agent.URL, agent.Token)
+	for i, e := range taskMap {
+		if e.Status != "failed" || e.TaskID == "" || e.FailedStage != "" {
+			continue
+		}
+		logs, _, err := cli.GetTaskLogs(ctx, e.TaskID, 0)
+		if err != nil {
+			log.Printf("[vm-finalize] grep stage: get logs dep-task=%s service=%s: %v", e.TaskID, e.Service, err)
+			continue
+		}
+		if strings.Contains(logs, "[agent] === stage 3/3") {
+			taskMap[i].FailedStage = "update"
+		} else {
+			taskMap[i].FailedStage = "rsync"
+		}
+	}
 }
 
 // grepDetectedVersions 从 agent task 日志里抽出 "[agent] detected version: <X>" 写回 taskMap[i].Version
@@ -710,6 +748,15 @@ func buildVmCardBody(operator, envName, updateTime, statusLabel, icon string, it
 		// 由 grepDetectedVersions 从 agent 日志 grep 出来回写到 vm_task_map[i].Version）
 		if (action == "update_version" || action == "rsync_and_update") && e.Version != "" {
 			sb.WriteString(fmt.Sprintf("  **版本号**: %s\n", e.Version))
+		}
+		// rsync_and_update 失败时显示挂在哪个阶段（FailedStage 由 finalize 阶段 grepFailedStages 回写）
+		if action == "rsync_and_update" && e.Status == "failed" {
+			switch e.FailedStage {
+			case "rsync":
+				sb.WriteString("  **阶段**: rsync 阶段同步失败\n")
+			case "update":
+				sb.WriteString("  **阶段**: 更新服务到代码服务器阶段失败\n")
+			}
 		}
 		// 失败模块带一行错误信息（截断到 200 字防爆）
 		if e.Status == "failed" && e.ErrMsg != "" {
