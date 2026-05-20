@@ -101,8 +101,8 @@
           <div class="form-row">
             <div class="form-group">
               <label class="form-label">ES 索引</label>
-              <input v-model="form.es_index" class="form-input" placeholder="如: app-logs-* 或 filebeat-*" />
-              <div class="form-hint">支持通配符，多个用逗号分隔</div>
+              <IndexSelector v-model="form.es_index" :es-connection-id="form.es_connection_id" />
+              <div class="form-hint">支持通配符（高级模式），多个用逗号分隔</div>
             </div>
             <div class="form-group">
               <label class="form-label">搜索关键词</label>
@@ -623,6 +623,7 @@ import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import { useToast, useConfirm } from '../stores/ui'
 import { X } from 'lucide-vue-next'
+import IndexSelector from '../components/IndexSelector.vue'
 
 const toast = useToast()
 const dialog = useConfirm()
