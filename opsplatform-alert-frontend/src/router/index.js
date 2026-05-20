@@ -15,6 +15,7 @@ const routes = [
       { path: 'es-explore', name: 'ESExplore', component: () => import('../views/ESExploreView.vue'), meta: { menuKey: 'explore' } },
       { path: 'es-connections', name: 'ESConnections', component: () => import('../views/ESConnectionsView.vue'), meta: { menuKey: 'connections' } },
       { path: 'loki-connections', name: 'LokiConnections', component: () => import('../views/LokiConnectionsView.vue'), meta: { menuKey: 'connections' } },
+      { path: 'es-projects', name: 'ESProjects', component: () => import('../views/ESProjectsView.vue'), meta: { menuKey: 'es_projects' } },
       { path: 'lark-configs', name: 'LarkConfigs', component: () => import('../views/LarkConfigsView.vue'), meta: { menuKey: 'lark' } },
       { path: 'alert-logs', name: 'AlertLogs', component: () => import('../views/AlertLogsView.vue'), meta: { menuKey: 'logs' } },
       { path: 'mutes', name: 'Mutes', component: () => import('../views/MutesView.vue'), meta: { menuKey: 'mutes' } },

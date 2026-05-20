@@ -21,6 +21,9 @@
         <router-link v-if="auth.hasMenu('connections')" to="/loki-connections" class="nav-item" :class="{ active: $route.path === '/loki-connections' }">
           <Database :size="18" /> Loki 连接
         </router-link>
+        <router-link v-if="auth.hasMenu('es_projects')" to="/es-projects" class="nav-item" :class="{ active: $route.path === '/es-projects' }">
+          <Layers :size="18" /> ES 项目分类
+        </router-link>
         <router-link v-if="auth.hasMenu('lark')" to="/lark-configs" class="nav-item" :class="{ active: $route.path === '/lark-configs' }">
           <Send :size="18" /> Lark 配置
         </router-link>
@@ -66,7 +69,7 @@
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import { LayoutDashboard, Bell, Search, Database, Send, FileText, UserPlus, Users, ClipboardList, ShieldOff, LogOut } from 'lucide-vue-next'
+import { LayoutDashboard, Bell, Search, Database, Send, FileText, UserPlus, Users, ClipboardList, ShieldOff, LogOut, Layers } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
@@ -78,6 +81,7 @@ const pageTitle = computed(() => {
     '/alert-rules': '告警规则',
     '/es-explore': '日志查询',
     '/es-connections': 'ES 连接管理',
+    '/es-projects': 'ES 项目分类',
     '/loki-connections': 'Loki 连接管理',
     '/lark-configs': 'Lark 配置',
     '/alert-logs': '告警日志',
