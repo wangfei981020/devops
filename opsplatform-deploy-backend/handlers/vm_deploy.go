@@ -706,8 +706,9 @@ func buildVmCardBody(operator, envName, updateTime, statusLabel, icon string, it
 	sb.WriteString(fmt.Sprintf("\n———— %s (%d) ————\n", statusLabel, len(items)))
 	for _, e := range items {
 		sb.WriteString(fmt.Sprintf("%s **模块**: %s\n", icon, e.Service))
-		// rsync 不显示版本号
-		if action == "update_version" && e.Version != "" {
+		// rsync 不显示版本号；update_version / rsync_and_update 都显示（后者的 Version 在 finalize 时
+		// 由 grepDetectedVersions 从 agent 日志 grep 出来回写到 vm_task_map[i].Version）
+		if (action == "update_version" || action == "rsync_and_update") && e.Version != "" {
 			sb.WriteString(fmt.Sprintf("  **版本号**: %s\n", e.Version))
 		}
 		// 失败模块带一行错误信息（截断到 200 字防爆）
