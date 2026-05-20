@@ -113,16 +113,40 @@ func (g *GitService) EnsureClone(ctx context.Context, projectEnvName, repoURL, b
 	return g.configRepo(ctx, path)
 }
 
-// PullRebase 拉取最新并 rebase 本地改动
+// PullRebase 硬同步本地 cache 到远端 branch（跟 vm-agent BuildGitSyncCommand 同款逻辑）。
+//
+//	  git fetch --prune origin
+//	  git checkout -f <branch>
+//	  git reset --hard origin/<branch>
+//	  git clean -fd
+//
+//	任何脏状态（dirty working tree / 半截 rebase / untracked / 远端历史被重写）
+//	都强制对齐远端，零手工介入。
+//
+//	deploy-backend 的 git_cache 是只读副本（没人在 cache 里 commit），
+//	reset/clean 零数据丢失风险。
+//
+//	为啥不用 git pull --rebase：碰到 dirty / 历史重写就 abort 卡死，
+//	pullForPrecheck 静默吞错误后 cache 永远是旧的，需要 kubectl rm -rf 才能恢复。
+//
+//	函数名保留 PullRebase 不改（实现换成硬同步），调用方零改动。
 func (g *GitService) PullRebase(ctx context.Context, projectEnvName, branch string) error {
 	path := g.RepoPath(projectEnvName)
 	if err := g.configRepo(ctx, path); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", path, "pull", "--rebase", "origin", branch)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("git pull --rebase: %w\n%s", err, out)
+	steps := [][]string{
+		{"-C", path, "fetch", "--prune", "origin"},
+		{"-C", path, "checkout", "-f", branch},
+		{"-C", path, "reset", "--hard", "origin/" + branch},
+		{"-C", path, "clean", "-fd"},
+	}
+	for _, args := range steps {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("git %v: %w\n%s", args, err, out)
+		}
 	}
 	return nil
 }
