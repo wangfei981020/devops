@@ -191,6 +191,19 @@ func createTables() error {
 			INDEX idx_token (token_hash),
 			INDEX idx_expires (expires_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+		// ES 项目分类（项目+环境作为整体单元）
+		`CREATE TABLE IF NOT EXISTS es_projects (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			code VARCHAR(64) NOT NULL UNIQUE COMMENT '唯一标识: g32-prod',
+			display_name VARCHAR(128) NOT NULL COMMENT '显示名',
+			match_keywords VARCHAR(255) NOT NULL COMMENT '匹配关键词,逗号分隔,AND语义',
+			enabled TINYINT NOT NULL DEFAULT 1,
+			sort_order INT NOT NULL DEFAULT 0,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			INDEX idx_enabled_sort (enabled, sort_order)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	}
 
 	for _, t := range tables {
