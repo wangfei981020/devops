@@ -19,7 +19,7 @@
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">ES 连接</label>
-            <select v-model="form.es_connection_id" class="form-select" @change="loadIndices">
+            <select v-model="form.es_connection_id" class="form-select">
               <option :value="0">请选择 ES 连接</option>
               <option v-for="c in esConnections" :key="c.id" :value="c.id">
                 {{ c.name }} ({{ c.version }}.x)
@@ -28,13 +28,7 @@
           </div>
           <div class="form-group">
             <label class="form-label">ES 索引</label>
-            <div class="flex gap-2">
-              <input v-model="form.es_index" class="form-input" placeholder="*" style="flex: 1;" />
-              <select v-if="indices.length > 0" class="form-select" style="width: 200px;" @change="selectIndex($event)">
-                <option value="">选择索引...</option>
-                <option v-for="idx in indices" :key="idx" :value="idx">{{ idx }}</option>
-              </select>
-            </div>
+            <IndexSelector v-model="form.es_index" :es-connection-id="form.es_connection_id" />
           </div>
         </div>
         <div class="form-group">
@@ -217,6 +211,7 @@ import { useRouter } from 'vue-router'
 import api from '../api'
 import { useToast } from '../stores/ui'
 import { Search, Plus, X } from 'lucide-vue-next'
+import IndexSelector from '../components/IndexSelector.vue'
 
 const router = useRouter()
 const toast = useToast()
@@ -224,7 +219,6 @@ const toast = useToast()
 const dataSource = ref('es')
 const esConnections = ref([])
 const lokiConnections = ref([])
-const indices = ref([])
 const lokiLabels = ref([])
 const labelFilters = ref([])
 const logFilter = ref({ op: '|=', value: '' })
@@ -257,8 +251,6 @@ const form = ref({
   end_time: '',
   size: 20
 })
-
-function selectIndex(e) { if (e.target.value) form.value.es_index = e.target.value }
 
 function addLabelFilter() {
   labelFilters.value.push({ label: '', op: '=', value: '', values: [] })
@@ -297,15 +289,6 @@ async function loadOptions() {
     ])
     if (esRes.code === 0) esConnections.value = esRes.data
     if (lokiRes.code === 0) lokiConnections.value = lokiRes.data
-  } catch (e) { /* ignore */ }
-}
-
-async function loadIndices() {
-  indices.value = []
-  if (!form.value.es_connection_id) return
-  try {
-    const res = await api.get('/es-explore/indices', { params: { es_connection_id: form.value.es_connection_id } })
-    if (res.code === 0) indices.value = res.data || []
   } catch (e) { /* ignore */ }
 }
 
