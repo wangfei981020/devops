@@ -115,6 +115,14 @@ func main() {
 	// ES Explore
 	protected.HandleFunc("/es-explore", handlers.HandleESExplore).Methods("POST")
 	protected.HandleFunc("/es-explore/indices", handlers.HandleESIndices).Methods("GET")
+
+	// ES 项目分类
+	protected.HandleFunc("/es-projects", handlers.HandleListESProjects).Methods("GET")
+	protected.HandleFunc("/es-projects", handlers.HandleCreateESProject).Methods("POST")
+	protected.HandleFunc("/es-projects/{id}", handlers.HandleUpdateESProject).Methods("PUT")
+	protected.HandleFunc("/es-projects/{id}", handlers.HandleDeleteESProject).Methods("DELETE")
+	protected.HandleFunc("/es-projects/discover", handlers.HandleDiscoverESProjects).Methods("POST")
+
 	protected.HandleFunc("/loki-explore", handlers.HandleLokiExplore).Methods("POST")
 
 	// Projects
