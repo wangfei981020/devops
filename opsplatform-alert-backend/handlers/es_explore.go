@@ -83,6 +83,7 @@ func HandleESExplore(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Build from params
 		must := []map[string]interface{}{}
+		mustNot := []map[string]interface{}{}
 
 		// Time range
 		timeFilter := buildTimeFilter(req.StartTime, req.EndTime, req.TimeRange)
@@ -112,6 +113,8 @@ func HandleESExplore(w http.ResponseWriter, r *http.Request) {
 					switch op {
 					case "term":
 						must = append(must, map[string]interface{}{"term": map[string]interface{}{f.Field: f.Value}})
+					case "not_term":
+						mustNot = append(mustNot, map[string]interface{}{"term": map[string]interface{}{f.Field: f.Value}})
 					case "wildcard":
 						must = append(must, map[string]interface{}{"wildcard": map[string]interface{}{f.Field: f.Value}})
 					case "exists":
@@ -123,15 +126,17 @@ func HandleESExplore(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		boolQuery := map[string]interface{}{"must": must}
+		if len(mustNot) > 0 {
+			boolQuery["must_not"] = mustNot
+		}
 		query = map[string]interface{}{
 			"size": size,
 			"sort": []map[string]interface{}{
 				{"@timestamp": map[string]interface{}{"order": "desc"}},
 			},
 			"query": map[string]interface{}{
-				"bool": map[string]interface{}{
-					"must": must,
-				},
+				"bool": boolQuery,
 			},
 		}
 	}
