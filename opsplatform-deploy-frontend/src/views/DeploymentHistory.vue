@@ -97,7 +97,10 @@
               <td class="chev-cell">
                 <el-icon :class="['chev', {on: expanded[i]}]"><ArrowRight /></el-icon>
               </td>
-              <td class="mono">{{ fmtTime(row.created_at) }}</td>
+              <td class="mono">
+                <div>{{ fmtTime(row.created_at) }}</div>
+                <div class="dep-id-hint" :title="'点击复制 deployment id'" @click.stop="copyDepId(row.id)">#{{ row.id }}</div>
+              </td>
               <td class="mono">
                 {{ envName(row) }}
                 <span :class="'env-chip ' + envType(row)" style="margin-left:4px">{{ envType(row).toUpperCase() }}</span>
@@ -602,6 +605,15 @@ async function copyVmLog() {
     ElMessage.success('已复制到剪贴板')
   } catch { ElMessage.error('复制失败，请手动选中') }
 }
+
+// 点击发布历史时间下方的 #<id> 复制 dep_id 到剪贴板
+// 排查问题时省去去 DB 查 id 的步骤
+async function copyDepId(id) {
+  try {
+    await navigator.clipboard.writeText(String(id))
+    ElMessage.success(`已复制 deployment id: ${id}`)
+  } catch { ElMessage.error('复制失败') }
+}
 function formatBytes(n) {
   if (n < 1024) return n + ' B'
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
@@ -743,6 +755,18 @@ onUnmounted(() => {
 
 <style scoped>
 .dh { }
+
+/* ===== 发布历史时间下方的 #id 小字（v128 加） ===== */
+/* 点击复制 deployment id 到剪贴板，避免每次排查都 SQL 查 id */
+.dep-id-hint {
+  font-family: var(--mono, 'Fira Code', monospace);
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 2px;
+  cursor: pointer;
+  user-select: all;
+}
+.dep-id-hint:hover { color: #1890ff; }
 
 /* ===== K8s / VM 区分徽章（跟 Dashboard 配色一致） ===== */
 .kind-mini {

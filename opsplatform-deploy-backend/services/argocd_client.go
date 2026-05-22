@@ -173,6 +173,20 @@ type ResourceNode struct {
 	StatusReason string // 例: "CrashLoopBackOff" / "ImagePullBackOff" / "OOMKilled" / "Pending"
 	ContainersOK string // 例: "0/1"
 	RestartCount string // 例: "3"
+	// v127 起：用来把"本次发布产生的新 RS pod"跟"老 RS 残留的 pod"区分开
+	// pod 的 parentRefs 指向 ReplicaSet；RS 的 parentRefs 指向 Deployment。
+	ParentRefs []ResourceRef
+	// pod / RS / 等 K8s 资源的 creationTimestamp。多个 RS 共存时按这个挑最新的 = 本次发布的 RS。
+	CreatedAt time.Time
+}
+
+// ResourceRef 是 ArgoCD resource-tree 里 parentRefs 数组的元素。
+// pod 视角看 parentRefs[0].Kind=ReplicaSet；RS 视角看 parentRefs[0].Kind=Deployment。
+type ResourceRef struct {
+	Kind      string
+	Name      string
+	Namespace string
+	UID       string
 }
 
 // PodEvent 是从 ArgoCD events 接口透传的 k8s Event 关键字段
@@ -207,6 +221,13 @@ func (c *ArgocdClient) GetAppResourceTree(ctx context.Context, name string) ([]R
 				Name  string `json:"name"`
 				Value string `json:"value"`
 			} `json:"info"`
+			ParentRefs []struct {
+				Kind      string `json:"kind"`
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+				UID       string `json:"uid"`
+			} `json:"parentRefs"`
+			CreatedAt time.Time `json:"createdAt"`
 		} `json:"nodes"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -219,6 +240,7 @@ func (c *ArgocdClient) GetAppResourceTree(ctx context.Context, name string) ([]R
 			Name:      n.Name,
 			Namespace: n.Namespace,
 			UID:       n.UID,
+			CreatedAt: n.CreatedAt,
 		}
 		if n.Health != nil {
 			rn.Health = n.Health.Status
@@ -233,6 +255,11 @@ func (c *ArgocdClient) GetAppResourceTree(ctx context.Context, name string) ([]R
 			case "Restart Count":
 				rn.RestartCount = kv.Value
 			}
+		}
+		for _, p := range n.ParentRefs {
+			rn.ParentRefs = append(rn.ParentRefs, ResourceRef{
+				Kind: p.Kind, Name: p.Name, Namespace: p.Namespace, UID: p.UID,
+			})
 		}
 		out = append(out, rn)
 	}

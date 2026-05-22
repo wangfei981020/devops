@@ -277,10 +277,73 @@ func enrichSnapshotWithLogs(ctx context.Context, client *ArgocdClient, appName s
 	}
 }
 
+// pickActiveReplicaSet 从 resource-tree 找本次发布对应的 ReplicaSet。
+//
+//	K8s 每次 deployment spec 改变就创建一个新 RS（pod-template-hash 后缀），
+//	老 RS 跟新 RS 共存于资源树。本次发布产生的 RS = createdAt 最新的那个。
+//
+//	返回 nil 表示：
+//	  - 应用不是 Deployment（StatefulSet / DaemonSet / 没 RS）
+//	  - ArgoCD 不返回 createdAt（老版本）
+//	caller 拿到 nil 应该 fallback 到看所有 pod（旧行为）。
+func pickActiveReplicaSet(nodes []ResourceNode) *ResourceNode {
+	var newest *ResourceNode
+	for i := range nodes {
+		if nodes[i].Kind != "ReplicaSet" {
+			continue
+		}
+		if nodes[i].CreatedAt.IsZero() {
+			continue // 没 createdAt 信息，没法挑最新
+		}
+		if newest == nil || nodes[i].CreatedAt.After(newest.CreatedAt) {
+			newest = &nodes[i]
+		}
+	}
+	return newest
+}
+
+// filterPodsByActiveRS 从 nodes 里挑 parentRefs 指向 activeRS 的 pod。
+//
+//	activeRS == nil → fallback：返回所有 Pod 节点（兼容老行为，
+//	对 StatefulSet / 老 ArgoCD 等场景仍能工作）。
+func filterPodsByActiveRS(nodes []ResourceNode, activeRS *ResourceNode) []ResourceNode {
+	out := []ResourceNode{}
+	for _, n := range nodes {
+		if n.Kind != "Pod" {
+			continue
+		}
+		if activeRS == nil {
+			out = append(out, n)
+			continue
+		}
+		for _, p := range n.ParentRefs {
+			if p.Kind == "ReplicaSet" && p.Name == activeRS.Name {
+				out = append(out, n)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// countPods 简单数下 nodes 里 Pod 节点总数（诊断日志用，看过滤前后差异）
+func countPods(nodes []ResourceNode) int {
+	c := 0
+	for _, n := range nodes {
+		if n.Kind == "Pod" {
+			c++
+		}
+	}
+	return c
+}
+
 // snapshotFailingPods 仅抓 metadata（不拉日志/事件），用于不需要归档的轻量场景
 //
 //	拿不到（API 失败 / 没有 Pod 节点 / 全 Healthy）→ 返回 (nil, "")。
 //	单次调用同时产出快照和文案，避免 fail 路径重复打 ArgoCD。
+//
+//	v127 起：只看"本次发布产生的新 RS 下的 pod"，老 RS 残留 crash pod 不算到本次 deploy 头上。
+//	找不到 active RS（StatefulSet / 老 ArgoCD）时 fallback 到看所有 pod（同 v126 及之前行为）。
 func snapshotFailingPods(ctx context.Context, client *ArgocdClient, appName string) ([]models.FailingPodSnapshot, string) {
 	qctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -288,11 +351,15 @@ func snapshotFailingPods(ctx context.Context, client *ArgocdClient, appName stri
 	if err != nil || len(nodes) == 0 {
 		return nil, ""
 	}
+	activeRS := pickActiveReplicaSet(nodes)
+	pods := filterPodsByActiveRS(nodes, activeRS)
+	if activeRS != nil {
+		log.Printf("[poll] app=%s activeRS=%s (created %s) filtered %d→%d pods",
+			appName, activeRS.Name, activeRS.CreatedAt.Format(time.RFC3339),
+			countPods(nodes), len(pods))
+	}
 	var failing []ResourceNode
-	for _, n := range nodes {
-		if n.Kind != "Pod" {
-			continue
-		}
+	for _, n := range pods {
 		if n.Health == "Healthy" || n.Health == "" {
 			continue
 		}
@@ -370,11 +437,18 @@ func detectFatalPodState(ctx context.Context, client *ArgocdClient, appName stri
 	if err != nil || len(nodes) == 0 {
 		return nil, "", false
 	}
+	// v127 起：只看本次发布的新 RS 下的 pod（按 createdAt 取最新 ReplicaSet）
+	// 解决"老 RS 残留 crash pod 干扰本次 fail 决策"的误判（m9tzc / zjh 系列案例）。
+	// 找不到 active RS（StatefulSet / 老 ArgoCD 无 createdAt）→ fallback 看所有 pod。
+	activeRS := pickActiveReplicaSet(nodes)
+	pods := filterPodsByActiveRS(nodes, activeRS)
+	if activeRS != nil {
+		log.Printf("[poll] app=%s activeRS=%s (created %s) filtered %d→%d pods (fatal check)",
+			appName, activeRS.Name, activeRS.CreatedAt.Format(time.RFC3339),
+			countPods(nodes), len(pods))
+	}
 	var failing []ResourceNode
-	for _, n := range nodes {
-		if n.Kind != "Pod" {
-			continue
-		}
+	for _, n := range pods {
 		switch n.StatusReason {
 		case "ImagePullBackOff", "ErrImagePull",
 			"CreateContainerConfigError", "InvalidImageName", "RegistryUnavailable":
