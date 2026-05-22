@@ -182,7 +182,9 @@
           </tbody>
         </table>
         <div v-if="expandedHit >= 0 && result.hits[expandedHit]" class="card" style="margin: 8px 0; padding: 12px; background: #f8fafc;">
-          <pre style="font-size: 12px; white-space: pre-wrap; max-height: 400px; overflow-y: auto;">{{ formatJSON(result.hits[expandedHit]) }}</pre>
+          <div style="max-height: 400px; overflow-y: auto;">
+            <JsonFilterable :data="cleanObj(result.hits[expandedHit])" @filter-add="onFilterAdd" />
+          </div>
         </div>
       </div>
 
@@ -191,7 +193,9 @@
           <div class="flex justify-between items-center" style="margin-bottom: 6px;">
             <span class="badge badge-info">#{{ idx + 1 }} — {{ formatTimestamp(hit['@timestamp'] || hit.timestamp) }}</span>
           </div>
-          <pre style="font-size: 12px; white-space: pre-wrap; max-height: 200px; overflow-y: auto; background: #f1f5f9; padding: 10px; border-radius: 6px;">{{ formatJSON(hit) }}</pre>
+          <div style="max-height: 200px; overflow-y: auto; background: #f1f5f9; padding: 10px; border-radius: 6px;">
+            <JsonFilterable :data="cleanObj(hit)" @filter-add="onFilterAdd" />
+          </div>
         </div>
       </div>
     </div>
@@ -212,6 +216,7 @@ import api from '../api'
 import { useToast } from '../stores/ui'
 import { Search, Plus, X } from 'lucide-vue-next'
 import IndexSelector from '../components/IndexSelector.vue'
+import JsonFilterable from '../components/JsonFilterable.vue'
 
 const router = useRouter()
 const toast = useToast()
@@ -390,6 +395,21 @@ function cleanObj(obj) {
 
 function formatJSON(obj) {
   try { return JSON.stringify(cleanObj(obj), null, 2) } catch { return String(obj) }
+}
+
+function onFilterAdd(payload) {
+  // Parse current filter_fields (JSON string), append, re-stringify
+  let current = []
+  try {
+    if (form.value.filter_fields && form.value.filter_fields.trim()) {
+      current = JSON.parse(form.value.filter_fields)
+      if (!Array.isArray(current)) current = []
+    }
+  } catch { current = [] }
+  current.push(payload)
+  form.value.filter_fields = JSON.stringify(current)
+  // Auto re-query
+  search()
 }
 
 onMounted(loadOptions)
