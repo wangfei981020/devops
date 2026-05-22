@@ -1,5 +1,11 @@
 FROM node:22-alpine AS builder
 WORKDIR /src
+# v129 起：通过 --build-arg VERSION=vXXX 把版本号注入到 Vite build 时的环境变量，
+# 前端 AppLayout 通过 import.meta.env.VITE_APP_VERSION 读，保证侧边栏显示的版本号
+# 跟 image tag 永远一致（不再依赖手动改 AppLayout.vue 里的字符串）。
+# 缺省 dev：未传 --build-arg 时（本地开发）显示 "vdev"。
+ARG VERSION=dev
+ENV VITE_APP_VERSION=$VERSION
 ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 COPY package.json package-lock.json ./
 RUN npm ci

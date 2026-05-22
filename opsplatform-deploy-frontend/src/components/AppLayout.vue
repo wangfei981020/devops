@@ -95,7 +95,9 @@ import brandLogo from '../assets/logo.png'
 
 const auth = useAuthStore()
 const router = useRouter()
-const version = '123'
+// v129 起：版本号从 Vite build 时注入的环境变量读，由 Dockerfile ARG VERSION 提供
+// 永远跟镜像 tag 一致，不再依赖手动改这个字符串
+const version = import.meta.env.VITE_APP_VERSION || 'dev'
 
 const grpRaw = JSON.parse(localStorage.getItem('deploy_sidebar_groups') || '{"publish":true,"config":true}')
 const grp = reactive(grpRaw)

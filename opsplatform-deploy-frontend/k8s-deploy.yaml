@@ -11,6 +11,15 @@ data:
       root /usr/share/nginx/html;
       index index.html;
 
+      # v129: index.html 不缓存
+      # SPA 升级后 /assets/ 是新 hash JS/CSS，若浏览器缓存旧 index.html 仍引用旧 hash → 404
+      # 让 index.html 永远新鲜，hash 文件继续 7d immutable 缓存
+      location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        expires 0;
+      }
+
       location / {
         try_files $uri $uri/ /index.html;
       }
