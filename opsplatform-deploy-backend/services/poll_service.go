@@ -183,8 +183,13 @@ func PollUntilStable(
 			// Pod-level fail-fast：app 还在 Progressing，但具体 pod 已经卡死（CrashLoop/ImagePullBackOff 等）
 			// 不等 ArgoCD 慢吞吞的 Degraded 判定，每 30s 扫一次 pod 终态。
 			// 前 30s 不扫（给应用启动时间），避免新版本第一次拉镜像慢被误杀。
+			//
+			// v128 起：去掉 OperationPhase != "Running" 条件。
+			// 原因：ArgoCD operation Running 状态可能持续 5+ 分钟（等 K8s rollout 完成 ArgoCD 才肯
+			// 转 Succeeded/Failed），期间 pod 已经 CrashLoopBackOff restart 6+ 次都拖到 300+s 才报失败。
+			// detectFatalPodState 内部已经有足够保护（pickActiveReplicaSet 只看新 RS pod + RestartCount >= 3 阈值）。
 			elapsed := int(time.Since(start).Seconds())
-			if ourOpStarted && st.OperationPhase != "Running" && elapsed >= 30 &&
+			if ourOpStarted && elapsed >= 30 &&
 				(elapsed/intervalSec)%3 == 0 {
 				if snaps, detail, fatal := detectFatalPodState(ctx, client, appName); fatal {
 					// pod 此刻还活着，立刻把 logs + events 字节抓进 snapshot
