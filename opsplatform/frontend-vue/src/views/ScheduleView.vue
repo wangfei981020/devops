@@ -112,6 +112,33 @@ const dailyStats = computed(() => {
   return stats
 })
 
+// 每个员工本月休息天数：OFF（排班休）+ CT（调休）
+// 大数字 = 总和；小标签拆分 "休N 调M"（M=0 时省略 "调0"）
+const restStats = computed(() => {
+  const stats = {}
+  employees.value.forEach(emp => {
+    let off = 0
+    let ct = 0
+    daysInMonth.value.forEach(d => {
+      const shift = emp.shifts?.[d.dateStr]
+      if (shift === 'OFF') off++
+      else if (shift === 'CT') ct++
+    })
+    stats[emp.id] = { off, ct, total: off + ct }
+  })
+  return stats
+})
+
+const totalRestStats = computed(() => {
+  let off = 0
+  let ct = 0
+  employees.value.forEach(emp => {
+    const s = restStats.value[emp.id]
+    if (s) { off += s.off; ct += s.ct }
+  })
+  return { off, ct, total: off + ct }
+})
+
 onMounted(() => {
   loadSchedule()
   loadShiftConfig()
@@ -694,6 +721,7 @@ watch(activeTab, (tab) => {
             <col class="col-name-def">
             <col class="col-role-def">
             <col v-for="d in daysInMonth" :key="'col-'+d.dateStr" class="col-day-def">
+            <col class="col-rest-def">
           </colgroup>
           <thead>
             <tr class="header-row">
@@ -703,12 +731,16 @@ watch(activeTab, (tab) => {
                 <div class="day-num">{{ d.day }}</div>
                 <div class="day-week">{{ weekDays[d.weekDay] }}</div>
               </th>
+              <th class="th-rest" title="本月休息天数 = OFF（排班休）+ CT（调休）">
+                <div class="day-num">休息</div>
+                <div class="day-week">本月</div>
+              </th>
             </tr>
           </thead>
           <tbody>
             <template v-for="(groupEmps, groupName) in groupedEmployees" :key="groupName">
               <tr class="group-row" v-if="Object.keys(groupedEmployees).length > 1">
-                <td :colspan="daysInMonth.length + 2" class="group-cell">{{ groupName }}</td>
+                <td :colspan="daysInMonth.length + 3" class="group-cell">{{ groupName }}</td>
               </tr>
               <tr v-for="emp in groupEmps" :key="emp.id" class="employee-row" 
                     draggable="true"
@@ -735,6 +767,14 @@ watch(activeTab, (tab) => {
                     {{ emp.shifts[d.dateStr] }}
                   </span>
                 </td>
+                <td class="td-rest" :class="{ 'rest-low': restStats[emp.id]?.total <= 4, 'rest-mid': restStats[emp.id]?.total >= 5 && restStats[emp.id]?.total <= 7, 'rest-high': restStats[emp.id]?.total >= 8 }"
+                    :title="`OFF（排班休）${restStats[emp.id]?.off || 0} 天 + CT（调休）${restStats[emp.id]?.ct || 0} 天`">
+                  <div class="rest-total">{{ restStats[emp.id]?.total || 0 }}</div>
+                  <div class="rest-detail">
+                    <span class="rest-off">休{{ restStats[emp.id]?.off || 0 }}</span>
+                    <span class="rest-ct" v-if="restStats[emp.id]?.ct > 0">调{{ restStats[emp.id].ct }}</span>
+                  </div>
+                </td>
               </tr>
             </template>
             <tr class="stats-row">
@@ -746,6 +786,14 @@ watch(activeTab, (tab) => {
                   <span class="stat-b" :class="{ zero: dailyStats[d.dateStr]?.B === 0 }">B:{{ dailyStats[d.dateStr]?.B }}</span>
                   <span class="stat-c" :class="{ zero: dailyStats[d.dateStr]?.C === 0 }">C:{{ dailyStats[d.dateStr]?.C }}</span>
                   <span class="stat-d" v-if="dailyStats[d.dateStr]?.D > 0">D:{{ dailyStats[d.dateStr]?.D }}</span>
+                </div>
+              </td>
+              <td class="td-rest td-rest-sum"
+                  :title="`全员本月合计：OFF ${totalRestStats.off} 天 + CT ${totalRestStats.ct} 天`">
+                <div class="rest-total">{{ totalRestStats.total }}</div>
+                <div class="rest-detail">
+                  <span class="rest-off">休{{ totalRestStats.off }}</span>
+                  <span class="rest-ct" v-if="totalRestStats.ct > 0">调{{ totalRestStats.ct }}</span>
                 </div>
               </td>
             </tr>
@@ -1064,6 +1112,7 @@ watch(activeTab, (tab) => {
 .col-name-def { width: 120px; min-width: 120px; max-width: 120px; }
 .col-role-def { width: 80px; min-width: 80px; max-width: 80px; }
 .col-day-def { width: 38px; min-width: 38px; max-width: 38px; }
+.col-rest-def { width: 70px; min-width: 70px; max-width: 70px; }
 
 .schedule-table th, .schedule-table td { border: 1px solid var(--border-color); border-left: none; text-align: center; vertical-align: middle; box-sizing: border-box; white-space: nowrap; }
 .schedule-table th:first-child, .schedule-table td:first-child { border-left: 1px solid var(--border-color); }
@@ -1148,6 +1197,21 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 .stat-c { color: #8b5cf6; font-weight: 500; }
 .stat-d { color: #ea3636; font-weight: 600; }
 .stats-mini .zero { color: rgba(239, 68, 68, 0.5); font-weight: 400; }
+
+/* 休息天数列（OFF + CT） */
+.th-rest { text-align: center; background: rgba(148, 163, 184, 0.15); border-left: 2px solid var(--primary); }
+.th-rest .day-num { font-size: 12px; font-weight: 600; color: var(--primary); }
+.th-rest .day-week { font-size: 9px; opacity: 0.7; }
+.td-rest { text-align: center; padding: 4px 4px !important; border-left: 2px solid var(--primary); background: rgba(148, 163, 184, 0.08); cursor: help; }
+.td-rest .rest-total { font-size: 16px; font-weight: 700; line-height: 1.1; }
+.td-rest .rest-detail { font-size: 9px; opacity: 0.75; line-height: 1.2; display: flex; justify-content: center; gap: 4px; }
+.td-rest .rest-off { color: #94a3b8; }
+.td-rest .rest-ct { color: #a855f7; font-weight: 600; }
+.td-rest.rest-low .rest-total { color: #f97316; }
+.td-rest.rest-mid .rest-total { color: var(--text-color); }
+.td-rest.rest-high .rest-total { color: #10b981; }
+.td-rest-sum { background: linear-gradient(180deg, rgba(59,130,246,0.18), rgba(59,130,246,0.08)) !important; border-top: 2px solid var(--primary) !important; }
+.td-rest-sum .rest-total { color: var(--primary); }
 
 /* 班次选择器 */
 .shift-picker-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 9999; }
