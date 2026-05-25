@@ -139,23 +139,34 @@ func PollUntilStable(
 
 			// Degraded → 立即失败（pod 起不来，不等超时）。但仅当「我们这次」的操作已起来
 			// 且 phase 不是 Running 才算（防止 pre-sync 的旧 Degraded 被误读）
+			//
+			// v129: 加陈旧 condition 豁免 —— ArgoCD 报 Degraded 时不立信，先查 active RS
+			// 的 pod 是否真不 Healthy。pod 都 Healthy 时说明 deployment.status.conditions
+			// 残留了之前失败 sync 的旧条件，K8s 实际是 OK 的 → 跳过 fail 路径继续 poll。
+			// 解决 #685 同款误判（撤销失败的 spec 时报失败）。
 			if ourOpStarted && st.Health == "Degraded" && st.OperationPhase != "Running" {
-				msg := "失败"
-				if st.Message != "" {
-					msg = "失败 · " + sanitizeMsg(st.Message)
-				}
-				snaps, detail := captureFailingPodData(ctx, client, appName)
-				if detail != "" {
-					msg = "失败 · " + sanitizeMsg(detail)
-				}
-				return &models.ArgocdAppResult{
-					App:          appName,
-					SyncStatus:   st.SyncStatus,
-					Health:       st.Health,
-					DurationSec:  int(time.Since(start).Seconds()),
-					Msg:          msg,
-					LastPolledAt: time.Now(),
-					FailingPods:  snaps,
+				if isActiveRSPodsAllHealthy(ctx, client, appName) {
+					log.Printf("[poll] app=%s reports Degraded but active RS pods all Healthy "+
+						"(stale deployment.conditions?), keep polling", appName)
+					// 不立即报 fail，等下一个 tick；ArgoCD 通常在新事件触发时刷新 condition
+				} else {
+					msg := "失败"
+					if st.Message != "" {
+						msg = "失败 · " + sanitizeMsg(st.Message)
+					}
+					snaps, detail := captureFailingPodData(ctx, client, appName)
+					if detail != "" {
+						msg = "失败 · " + sanitizeMsg(detail)
+					}
+					return &models.ArgocdAppResult{
+						App:          appName,
+						SyncStatus:   st.SyncStatus,
+						Health:       st.Health,
+						DurationSec:  int(time.Since(start).Seconds()),
+						Msg:          msg,
+						LastPolledAt: time.Now(),
+						FailingPods:  snaps,
+					}
 				}
 			}
 
@@ -329,6 +340,34 @@ func filterPodsByActiveRS(nodes []ResourceNode, activeRS *ResourceNode) []Resour
 		}
 	}
 	return out
+}
+
+// isActiveRSPodsAllHealthy 判 active RS 所有 pod 是否都 Healthy。
+//
+//	v129 用途：ArgoCD app.health = Degraded 时辨别是真不健康还是 deployment.status.conditions 残留。
+//	复用 pickActiveReplicaSet + filterPodsByActiveRS（v127 已加），看 pod.Health。
+//	找不到 active RS（StatefulSet 等）/ 资源树拉失败 / 无 pod → 返 false（让 Degraded 走原 fail 路径，保持兼容）。
+func isActiveRSPodsAllHealthy(ctx context.Context, client *ArgocdClient, appName string) bool {
+	qctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	nodes, err := client.GetAppResourceTree(qctx, appName)
+	if err != nil || len(nodes) == 0 {
+		return false
+	}
+	activeRS := pickActiveReplicaSet(nodes)
+	if activeRS == nil {
+		return false
+	}
+	pods := filterPodsByActiveRS(nodes, activeRS)
+	if len(pods) == 0 {
+		return false
+	}
+	for _, p := range pods {
+		if p.Health != "Healthy" {
+			return false
+		}
+	}
+	return true
 }
 
 // countPods 简单数下 nodes 里 Pod 节点总数（诊断日志用，看过滤前后差异）

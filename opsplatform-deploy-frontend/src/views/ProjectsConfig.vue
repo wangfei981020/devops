@@ -286,8 +286,9 @@
         <div class="field">
           <label>Auto Sync</label>
           <div class="switch-line">
-            <el-switch v-model="envForm.auto_sync" :active-value="1" :inactive-value="0" :disabled="envForm.env_type === 'prod'" />
-            <span class="switch-hint">PROD 强制关闭</span>
+            <el-switch v-model="envForm.auto_sync" :active-value="1" :inactive-value="0"
+              :disabled="envForm.env_type === 'prod' && !auth.isAdmin && !auth.hasButton('prod_auto_sync')" />
+            <span class="switch-hint">{{ autoSyncHint }}</span>
           </div>
         </div>
 
@@ -702,8 +703,11 @@ function openEditEnv(e) {
     argocd_instance_id: e.argocd_instance_id || null,
     lark_bot_id: e.lark_bot_id || null,
     gitlab_repo_id: e.gitlab_repo_id || null,
-    // PROD 后端强制 auto_sync=0，UI 也显示为关（避免显示/实际不一致）
-    auto_sync: envTypeKey(e) === 'prod' ? 0 : e.auto_sync
+    // v130: PROD 后端按 prod_auto_sync 权限决定是否强制 auto_sync=0
+    //   无权限：UI 显示 0（避免显示/实际不一致）
+    //   admin / 有权限：UI 显示 DB 真值
+    auto_sync: (envTypeKey(e) === 'prod' && !auth.isAdmin && !auth.hasButton('prod_auto_sync'))
+      ? 0 : e.auto_sync
   })
   envDlgVis.value = true
 }
@@ -781,8 +785,21 @@ function setVmEnvType(t) {
 function setEnvType(t) {
   if (envDlgIsEdit.value) return
   envForm.env_type = t
-  if (t === 'prod') envForm.auto_sync = 0
+  // v130: 切到 PROD 时默认强制 0，但 admin / 有 prod_auto_sync 按钮权限的用户保持原值
+  if (t === 'prod' && !auth.isAdmin && !auth.hasButton('prod_auto_sync')) {
+    envForm.auto_sync = 0
+  }
 }
+
+// v130: PROD auto_sync 开关旁边的提示文案
+//  PROD + 无权限 → "PROD 默认关闭（需 prod_auto_sync 权限）"
+//  PROD + 有权限 → "已解锁 · 谨慎开启"
+//  非 PROD → 空
+const autoSyncHint = computed(() => {
+  if (envForm.env_type !== 'prod') return ''
+  if (auth.isAdmin || auth.hasButton('prod_auto_sync')) return '已解锁 · 谨慎开启'
+  return 'PROD 默认关闭（需 prod_auto_sync 权限）'
+})
 async function onSaveEnv() {
   if (!envForm.env_type) { ElMessage.warning('请选择环境类型'); return }
   if (!envForm.git_repo.trim()) { ElMessage.warning('请填写 Git Repo URL'); return }

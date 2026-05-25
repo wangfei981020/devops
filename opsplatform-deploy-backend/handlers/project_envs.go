@@ -134,7 +134,9 @@ func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
 	if req.GitBranch == "" {
 		req.GitBranch = "main"
 	}
-	if req.EnvType == models.EnvPROD {
+	// v129: PROD auto_sync 默认强制关，但 admin / 拥有 prod_auto_sync button 权限的用户可放开。
+	// 之前是无条件 = 0；现在改成"无权限才 = 0"。
+	if req.EnvType == models.EnvPROD && !IsAdmin(r) && !HasButton(r, "prod_auto_sync") {
 		req.AutoSync = 0
 	}
 	encLarkSecret, _ := crypto.Encrypt(req.LarkSecret)
@@ -162,7 +164,9 @@ func HandleUpdateProjectEnv(w http.ResponseWriter, r *http.Request) {
 	if !DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.EnvType == models.EnvPROD {
+	// v129: PROD auto_sync 默认强制关，但 admin / 拥有 prod_auto_sync button 权限的用户可放开。
+	// 之前是无条件 = 0；现在改成"无权限才 = 0"。
+	if req.EnvType == models.EnvPROD && !IsAdmin(r) && !HasButton(r, "prod_auto_sync") {
 		req.AutoSync = 0
 	}
 	// gitlab_repo_id 选了则从表里复制 url/default_branch 到 req
