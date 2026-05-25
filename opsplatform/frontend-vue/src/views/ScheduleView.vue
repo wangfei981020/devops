@@ -1116,8 +1116,11 @@ watch(activeTab, (tab) => {
 
 .schedule-table th, .schedule-table td { border: 1px solid var(--border-color); border-left: none; text-align: center; vertical-align: middle; box-sizing: border-box; white-space: nowrap; }
 .schedule-table th:first-child, .schedule-table td:first-child { border-left: 1px solid var(--border-color); }
-.schedule-table thead { position: sticky; top: 0; z-index: 20; }
-.header-row th { background: var(--bg-hover); font-weight: 600; font-size: 12px; height: 50px; }
+/* v566: thead 整体加不透明 bg-card 作底色 + 每个 th 显式不透明背景。
+   原因: var(--bg-hover) 在 dark-mode 下定义成 rgba(255,255,255,0.05) 半透明白,
+   sticky 表头滚动时张三（第一行）的班次徽章会直接透到表头里，跟日期数字重叠. */
+.schedule-table thead { position: sticky; top: 0; z-index: 20; background: var(--bg-card); }
+.header-row th { background: var(--bg-card); font-weight: 600; font-size: 12px; height: 50px; }
 
 /* Sticky 姓名列 - width必须与col-name-def一致 */
 /* Sticky 姓名列 - 深色模式用不透明背景 */
@@ -1149,10 +1152,9 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 
 /* 日期表头 */
 .th-day { padding: 4px 2px !important; width: 38px; min-width: 38px; max-width: 38px; box-sizing: border-box; }
-/* 保证 sticky 表头不透下面员工行（底层 var(--bg-hover) 是不透明的）
-   用分开的 background-color + background-image 写法，避免 background shorthand 在 var() 位置的解析歧义 */
-.th-day.weekend { background-color: var(--bg-hover); background-image: linear-gradient(rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.15)); }
-.th-day.warning { background-color: var(--bg-hover); background-image: linear-gradient(rgba(251, 191, 36, 0.25), rgba(251, 191, 36, 0.25)); }
+/* v566: weekend / warning 也改成 bg-card 底色 (bg-hover 在 dark-mode 是半透明) */
+.th-day.weekend { background-color: var(--bg-card); background-image: linear-gradient(rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.15)); }
+.th-day.warning { background-color: var(--bg-card); background-image: linear-gradient(rgba(251, 191, 36, 0.25), rgba(251, 191, 36, 0.25)); }
 .day-num { font-size: 12px; font-weight: 600; line-height: 1.3; }
 .day-week { font-size: 9px; color: var(--text-muted); line-height: 1.2; }
 
