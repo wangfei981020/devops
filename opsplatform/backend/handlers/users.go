@@ -598,21 +598,11 @@ func UpdateUser(id string, u *models.User) error {
 		return err
 	}
 
-	// 同步 user_roles 表：根据 role code 查找 role_id 并更新关联
-	if u.Role != "" && u.Role != oldUser.Role {
-		// 先删除用户旧的角色关联
-		database.DB.Exec("DELETE FROM user_roles WHERE user_id = ?", id)
-
-		// 根据 role code 查找 role_id
-		var roleID string
-		err = database.DB.QueryRow("SELECT id FROM roles WHERE code = ?", u.Role).Scan(&roleID)
-		if err == nil && roleID != "" {
-			// 插入新的用户角色关联
-			database.DB.Exec(`INSERT INTO user_roles (id, user_id, role_id) VALUES (?, ?, ?)`,
-				fmt.Sprintf("ur_%d", timeNow().UnixNano()), id, roleID)
-		}
-	}
-
+	// 注意: 不在这里同步 user_roles。
+	// user_roles（多角色关联表）是唯一真理，写入权独占交给 rbac.updateUserRoles
+	// (PUT /api/users/:id/roles)。前端「基本信息」保存时会紧跟着调一次该接口
+	// 把完整的多角色数组写入。在此处按 u.Role 单字段 DELETE+INSERT 会把
+	// 用户配置的多角色砍成 1 个。
 	return nil
 }
 

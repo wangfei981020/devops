@@ -36,10 +36,9 @@ func main() {
 		log.Printf("创建默认管理员失败: %v", err)
 	}
 
-	// 同步用户角色到 user_roles 表
-	if err := handlers.SyncUserRoles(); err != nil {
-		log.Printf("同步用户角色失败: %v", err)
-	}
+	// 注意: SyncUserRoles 是一次性的 users.role -> user_roles 迁移工具，
+	// 启动时调用会用旧的 users.role 单字段强制覆盖多角色 user_roles 表，
+	// 导致在 UI 配置的多角色重启后被砍成 1 个。已停用。
 
 	// 创建路由
 	r := mux.NewRouter()
