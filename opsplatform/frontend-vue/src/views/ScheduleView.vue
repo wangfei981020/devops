@@ -96,21 +96,36 @@ const groupedEmployees = computed(() => {
   return groups
 })
 
+// v567: 每日统计 = 所有班次类型（不止 A/B/C/D）
+// 1 号大家都 H -> 显示 "H:8"；普通工作日显示 "A:3 B:2 C:2 OFF:1" 等非零项
 const dailyStats = computed(() => {
   const stats = {}
   daysInMonth.value.forEach(d => {
     const dateStr = d.dateStr
-    stats[dateStr] = { A: 0, B: 0, C: 0, D: 0 }
+    // 初始化所有已知班次为 0
+    const dayStat = {}
+    shiftTypes.value.forEach(t => { dayStat[t.code] = 0 })
+    // 累加员工实际班次
     employees.value.forEach(emp => {
       const shift = emp.shifts?.[dateStr]
-      if (shift === 'A') stats[dateStr].A++
-      else if (shift === 'B') stats[dateStr].B++
-      else if (shift === 'C') stats[dateStr].C++
-      else if (shift === 'D') stats[dateStr].D++
+      if (shift) {
+        // 未在 shiftTypes 里的自定义班次也兜底计数
+        dayStat[shift] = (dayStat[shift] || 0) + 1
+      }
     })
+    stats[dateStr] = dayStat
   })
   return stats
 })
+
+// 给底部"统计"格用：按 shiftTypes 顺序返回 [{code, count, color}, ...]，只含非零
+function dailyStatItems(dateStr) {
+  const s = dailyStats.value[dateStr]
+  if (!s) return []
+  return shiftTypes.value
+    .map(t => ({ code: t.code, count: s[t.code] || 0, color: t.color }))
+    .filter(it => it.count > 0)
+}
 
 // 每个员工本月休息天数：OFF（排班休）+ CT（调休）
 // 大数字 = 总和；小标签拆分 "休N 调M"（M=0 时省略 "调0"）
@@ -782,10 +797,9 @@ watch(activeTab, (tab) => {
               <td class="sticky-role"></td>
               <td v-for="d in daysInMonth" :key="d.dateStr" class="td-stats" :class="{ warning: hasMissingShifts(d.dateStr) }">
                 <div class="stats-mini">
-                  <span class="stat-a" :class="{ zero: dailyStats[d.dateStr]?.A === 0 }">A:{{ dailyStats[d.dateStr]?.A }}</span>
-                  <span class="stat-b" :class="{ zero: dailyStats[d.dateStr]?.B === 0 }">B:{{ dailyStats[d.dateStr]?.B }}</span>
-                  <span class="stat-c" :class="{ zero: dailyStats[d.dateStr]?.C === 0 }">C:{{ dailyStats[d.dateStr]?.C }}</span>
-                  <span class="stat-d" v-if="dailyStats[d.dateStr]?.D > 0">D:{{ dailyStats[d.dateStr]?.D }}</span>
+                  <span v-for="it in dailyStatItems(d.dateStr)" :key="it.code" class="stat-item" :style="{ color: it.color }">
+                    {{ it.code }}:{{ it.count }}
+                  </span>
                 </div>
               </td>
               <td class="td-rest td-rest-sum"
@@ -1196,11 +1210,8 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 .td-stats { font-size: 9px; padding: 4px 2px !important; }
 .td-stats.warning { background: rgba(251, 191, 36, 0.15); }
 .stats-mini { display: flex; flex-direction: column; gap: 1px; line-height: 1.15; }
-.stat-a { color: #3a84ff; font-weight: 500; }
-.stat-b { color: #ff9c01; font-weight: 500; }
-.stat-c { color: #8b5cf6; font-weight: 500; }
-.stat-d { color: #ea3636; font-weight: 600; }
-.stats-mini .zero { color: rgba(239, 68, 68, 0.5); font-weight: 400; }
+/* v567: 班次统计颜色直接用 shiftTypes 的 color (内联 :style) */
+.stats-mini .stat-item { font-weight: 600; white-space: nowrap; }
 
 /* 休息天数列（OFF + CT） */
 .th-rest { text-align: center; background: rgba(148, 163, 184, 0.15); border-left: 2px solid var(--primary); }
