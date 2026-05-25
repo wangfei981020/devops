@@ -205,18 +205,8 @@ watch([currentYear, currentMonth], loadAll)
 
 <template>
   <div class="page-container">
-    <div class="page-header">
-      <div>
-        <h2 class="page-title">排班统计分析</h2>
-        <p class="page-desc">按月查看每个员工的工作 / 休息 / 请假分布，对照应工作天数判定达成。</p>
-      </div>
-      <button v-if="canExport" class="btn btn-primary" @click="exportExcel">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        导出 Excel
-      </button>
-    </div>
-
     <div class="toolbar">
+      <div class="toolbar-left">
       <div class="month-nav">
         <button class="nav-btn" @click="prevMonth">‹</button>
         <span class="month-label">{{ currentYear }}年{{ currentMonth }}月</span>
@@ -230,6 +220,11 @@ watch([currentYear, currentMonth], loadAll)
           <option v-for="g in allGroups" :key="g" :value="g">{{ g }}</option>
         </select>
       </div>
+      </div>
+      <button v-if="canExport" class="btn btn-primary" @click="exportExcel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        导出 Excel
+      </button>
     </div>
 
     <!-- 月度应工作天数配置 -->
@@ -333,10 +328,9 @@ watch([currentYear, currentMonth], loadAll)
 </template>
 
 <style scoped>
-.page-container { padding: 20px; }
-.page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
-.page-title { font-size: 20px; font-weight: 600; margin: 0; }
-.page-desc { font-size: 13px; color: var(--text-secondary); margin: 4px 0 0; }
+/* 改造为 tab 内嵌组件后，外层不再加 page padding（由 ScheduleView 的 tab-content 控制） */
+.page-container { padding: 0; }
+.toolbar-left { display: flex; align-items: center; gap: 16px; flex: 1; }
 
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-color); cursor: pointer; font-size: 13px; transition: all 0.15s; }
 .btn:hover:not(:disabled) { background: var(--bg-hover); }

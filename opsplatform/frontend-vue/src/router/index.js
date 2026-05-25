@@ -20,7 +20,6 @@ const routes = [
       { path: 'audit', name: 'Audit', component: () => import('@/views/AuditView.vue'), meta: { title: '审计日志' } },
       { path: 'api-manage', name: 'ApiManage', component: () => import('@/views/PlaceholderView.vue'), meta: { title: '接口管理' } },
       { path: 'schedule', name: 'Schedule', component: () => import('@/views/ScheduleView.vue'), meta: { title: '排班管理' } },
-      { path: 'schedule-analytics', name: 'ScheduleAnalytics', component: () => import('@/views/ScheduleAnalyticsView.vue'), meta: { title: '排班统计分析' } },
       { path: 'task-pool', name: 'TaskPool', component: () => import('@/views/PlaceholderView.vue'), meta: { title: '任务池' } },
       { path: 'incidents', name: 'Incidents', component: () => import('@/views/PlaceholderView.vue'), meta: { title: '失误记录' } },
       { path: 'duty-records', name: 'DutyRecords', component: () => import('@/views/DutyRecordsView.vue'), meta: { title: '值班记录' } },
