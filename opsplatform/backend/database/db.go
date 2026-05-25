@@ -1558,6 +1558,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_dc_manage_lark_bots", "deploy_center:manage_lark_bots", "[发布中心] Lark 机器人", "允许增删改 Lark 机器人"},
 		{"perm_btn_dc_manage_contacts", "deploy_center:manage_contacts", "[发布中心] 通知人管理", "允许增删改通知人"},
 		{"perm_btn_dc_manage_global", "deploy_center:manage_global", "[发布中心] 全局配置", "允许修改全局凭证/轮询策略"},
+		{"perm_btn_dc_prod_auto_sync", "deploy_center:prod_auto_sync", "[发布中心] PROD Auto Sync", "允许开关 PROD 环境的 Auto Sync（开启后 PROD 提交后自动触发 ArgoCD sync，不再需要手动同步）"},
 	}
 
 	for _, perm := range buttonPermissions {
