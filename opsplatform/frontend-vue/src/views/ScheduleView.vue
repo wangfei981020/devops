@@ -1149,9 +1149,10 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 
 /* 日期表头 */
 .th-day { padding: 4px 2px !important; width: 38px; min-width: 38px; max-width: 38px; box-sizing: border-box; }
-/* 用双层 background 保证 sticky 表头不透下面员工行（底层 var(--bg-hover) 是不透明的） */
-.th-day.weekend { background: linear-gradient(rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.15)), var(--bg-hover); }
-.th-day.warning { background: linear-gradient(rgba(251, 191, 36, 0.25), rgba(251, 191, 36, 0.25)), var(--bg-hover); }
+/* 保证 sticky 表头不透下面员工行（底层 var(--bg-hover) 是不透明的）
+   用分开的 background-color + background-image 写法，避免 background shorthand 在 var() 位置的解析歧义 */
+.th-day.weekend { background-color: var(--bg-hover); background-image: linear-gradient(rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.15)); }
+.th-day.warning { background-color: var(--bg-hover); background-image: linear-gradient(rgba(251, 191, 36, 0.25), rgba(251, 191, 36, 0.25)); }
 .day-num { font-size: 12px; font-weight: 600; line-height: 1.3; }
 .day-week { font-size: 9px; color: var(--text-muted); line-height: 1.2; }
 
