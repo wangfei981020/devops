@@ -127,31 +127,67 @@ function dailyStatItems(dateStr) {
     .filter(it => it.count > 0)
 }
 
-// 每个员工本月休息天数：OFF（排班休）+ CT（调休）
-// 大数字 = 总和；小标签拆分 "休N 调M"（M=0 时省略 "调0"）
-const restStats = computed(() => {
-  const stats = {}
+// v568: 每个员工本月统计分三大类（工作 / 休息 / 请假），每大类下列出非零班次明细
+// 工作 = A + B + C + D + A+ 等非休/请假的所有上班班次
+// 休息 = OD + OFF + H + CT
+// 请假 = PL + SL + AL
+const REST_CODES = ['OD', 'OFF', 'H', 'CT']
+const LEAVE_CODES = ['PL', 'SL', 'AL']
+
+function categorize(code) {
+  if (REST_CODES.includes(code)) return 'rest'
+  if (LEAVE_CODES.includes(code)) return 'leave'
+  return 'work'
+}
+
+const employeeStats = computed(() => {
+  const all = {}
   employees.value.forEach(emp => {
-    let off = 0
-    let ct = 0
+    const stat = {
+      work:  { total: 0, items: [] },
+      rest:  { total: 0, items: [] },
+      leave: { total: 0, items: [] }
+    }
+    const counts = {}
     daysInMonth.value.forEach(d => {
       const shift = emp.shifts?.[d.dateStr]
-      if (shift === 'OFF') off++
-      else if (shift === 'CT') ct++
+      if (shift) counts[shift] = (counts[shift] || 0) + 1
     })
-    stats[emp.id] = { off, ct, total: off + ct }
+    // 按 shiftTypes 顺序输出明细（保持稳定的视觉顺序）
+    shiftTypes.value.forEach(t => {
+      const c = counts[t.code] || 0
+      if (c === 0) return
+      const cat = categorize(t.code)
+      stat[cat].total += c
+      stat[cat].items.push({ code: t.code, name: t.name, count: c, color: t.color })
+    })
+    all[emp.id] = stat
   })
-  return stats
+  return all
 })
 
-const totalRestStats = computed(() => {
-  let off = 0
-  let ct = 0
-  employees.value.forEach(emp => {
-    const s = restStats.value[emp.id]
-    if (s) { off += s.off; ct += s.ct }
+const totalEmployeeStats = computed(() => {
+  const acc = {
+    work:  { total: 0, map: {} },
+    rest:  { total: 0, map: {} },
+    leave: { total: 0, map: {} }
+  }
+  Object.values(employeeStats.value).forEach(s => {
+    for (const cat of ['work', 'rest', 'leave']) {
+      acc[cat].total += s[cat].total
+      s[cat].items.forEach(it => {
+        if (!acc[cat].map[it.code]) {
+          acc[cat].map[it.code] = { code: it.code, name: it.name, count: 0, color: it.color }
+        }
+        acc[cat].map[it.code].count += it.count
+      })
+    }
   })
-  return { off, ct, total: off + ct }
+  const out = {}
+  for (const cat of ['work', 'rest', 'leave']) {
+    out[cat] = { total: acc[cat].total, items: Object.values(acc[cat].map) }
+  }
+  return out
 })
 
 onMounted(() => {
@@ -736,7 +772,7 @@ watch(activeTab, (tab) => {
             <col class="col-name-def">
             <col class="col-role-def">
             <col v-for="d in daysInMonth" :key="'col-'+d.dateStr" class="col-day-def">
-            <col class="col-rest-def">
+            <col class="col-stat-def">
           </colgroup>
           <thead>
             <tr class="header-row">
@@ -746,9 +782,9 @@ watch(activeTab, (tab) => {
                 <div class="day-num">{{ d.day }}</div>
                 <div class="day-week">{{ weekDays[d.weekDay] }}</div>
               </th>
-              <th class="th-rest" title="本月休息天数 = OFF（排班休）+ CT（调休）">
-                <div class="day-num">休息</div>
-                <div class="day-week">本月</div>
+              <th class="th-stat" title="本月统计：工作 / 休息 / 请假 三大类">
+                <div class="day-num">本月统计</div>
+                <div class="day-week">工/休/假</div>
               </th>
             </tr>
           </thead>
@@ -782,13 +818,20 @@ watch(activeTab, (tab) => {
                     {{ emp.shifts[d.dateStr] }}
                   </span>
                 </td>
-                <td class="td-rest" :class="{ 'rest-low': restStats[emp.id]?.total <= 4, 'rest-mid': restStats[emp.id]?.total >= 5 && restStats[emp.id]?.total <= 7, 'rest-high': restStats[emp.id]?.total >= 8 }"
-                    :title="`OFF（排班休）${restStats[emp.id]?.off || 0} 天 + CT（调休）${restStats[emp.id]?.ct || 0} 天`">
-                  <div class="rest-total">{{ restStats[emp.id]?.total || 0 }}</div>
-                  <div class="rest-detail">
-                    <span class="rest-off">休{{ restStats[emp.id]?.off || 0 }}</span>
-                    <span class="rest-ct" v-if="restStats[emp.id]?.ct > 0">调{{ restStats[emp.id].ct }}</span>
-                  </div>
+                <td class="td-stat" :title="`工作 ${employeeStats[emp.id]?.work?.total || 0} + 休息 ${employeeStats[emp.id]?.rest?.total || 0} + 请假 ${employeeStats[emp.id]?.leave?.total || 0} = ${daysInMonth.length}`">
+                  <template v-for="cat in ['work','rest','leave']" :key="cat">
+                    <div class="stat-group" :class="'stat-' + cat">
+                      <div class="stat-head">
+                        <span class="stat-dot"></span>
+                        <span class="stat-cat">{{ {work:'工作',rest:'休息',leave:'请假'}[cat] }}</span>
+                        <span class="stat-total">{{ employeeStats[emp.id]?.[cat]?.total || 0 }}</span>
+                      </div>
+                      <div v-for="it in employeeStats[emp.id]?.[cat]?.items || []" :key="it.code" class="stat-detail">
+                        <span class="detail-name">{{ it.name }}</span>
+                        <span class="detail-count">{{ it.count }}</span>
+                      </div>
+                    </div>
+                  </template>
                 </td>
               </tr>
             </template>
@@ -802,13 +845,21 @@ watch(activeTab, (tab) => {
                   </span>
                 </div>
               </td>
-              <td class="td-rest td-rest-sum"
-                  :title="`全员本月合计：OFF ${totalRestStats.off} 天 + CT ${totalRestStats.ct} 天`">
-                <div class="rest-total">{{ totalRestStats.total }}</div>
-                <div class="rest-detail">
-                  <span class="rest-off">休{{ totalRestStats.off }}</span>
-                  <span class="rest-ct" v-if="totalRestStats.ct > 0">调{{ totalRestStats.ct }}</span>
-                </div>
+              <td class="td-stat td-stat-sum"
+                  :title="`全员合计：工作 ${totalEmployeeStats.work.total} + 休息 ${totalEmployeeStats.rest.total} + 请假 ${totalEmployeeStats.leave.total}`">
+                <template v-for="cat in ['work','rest','leave']" :key="cat">
+                  <div class="stat-group" :class="'stat-' + cat">
+                    <div class="stat-head">
+                      <span class="stat-dot"></span>
+                      <span class="stat-cat">{{ {work:'工作',rest:'休息',leave:'请假'}[cat] }}</span>
+                      <span class="stat-total">{{ totalEmployeeStats[cat].total }}</span>
+                    </div>
+                    <div v-for="it in totalEmployeeStats[cat].items" :key="it.code" class="stat-detail">
+                      <span class="detail-name">{{ it.name }}</span>
+                      <span class="detail-count">{{ it.count }}</span>
+                    </div>
+                  </div>
+                </template>
               </td>
             </tr>
           </tbody>
@@ -1126,7 +1177,7 @@ watch(activeTab, (tab) => {
 .col-name-def { width: 120px; min-width: 120px; max-width: 120px; }
 .col-role-def { width: 80px; min-width: 80px; max-width: 80px; }
 .col-day-def { width: 38px; min-width: 38px; max-width: 38px; }
-.col-rest-def { width: 70px; min-width: 70px; max-width: 70px; }
+.col-stat-def { width: 120px; min-width: 120px; max-width: 120px; }
 
 .schedule-table th, .schedule-table td { border: 1px solid var(--border-color); border-left: none; text-align: center; vertical-align: middle; box-sizing: border-box; white-space: nowrap; }
 .schedule-table th:first-child, .schedule-table td:first-child { border-left: 1px solid var(--border-color); }
@@ -1213,20 +1264,27 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 /* v567: 班次统计颜色直接用 shiftTypes 的 color (内联 :style) */
 .stats-mini .stat-item { font-weight: 600; white-space: nowrap; }
 
-/* 休息天数列（OFF + CT） */
-.th-rest { text-align: center; background: rgba(148, 163, 184, 0.15); border-left: 2px solid var(--primary); }
-.th-rest .day-num { font-size: 12px; font-weight: 600; color: var(--primary); }
-.th-rest .day-week { font-size: 9px; opacity: 0.7; }
-.td-rest { text-align: center; padding: 4px 4px !important; border-left: 2px solid var(--primary); background: rgba(148, 163, 184, 0.08); cursor: help; }
-.td-rest .rest-total { font-size: 16px; font-weight: 700; line-height: 1.1; }
-.td-rest .rest-detail { font-size: 9px; opacity: 0.75; line-height: 1.2; display: flex; justify-content: center; gap: 4px; }
-.td-rest .rest-off { color: #94a3b8; }
-.td-rest .rest-ct { color: #a855f7; font-weight: 600; }
-.td-rest.rest-low .rest-total { color: #f97316; }
-.td-rest.rest-mid .rest-total { color: var(--text-color); }
-.td-rest.rest-high .rest-total { color: #10b981; }
-.td-rest-sum { background: linear-gradient(180deg, rgba(59,130,246,0.18), rgba(59,130,246,0.08)) !important; border-top: 2px solid var(--primary) !important; }
-.td-rest-sum .rest-total { color: var(--primary); }
+/* v568: 本月统计列（工作/休息/请假 三段式） */
+.th-stat { text-align: center; background-color: var(--bg-card); border-left: 2px solid var(--primary); }
+.th-stat .day-num { font-size: 12px; font-weight: 600; color: var(--primary); }
+.th-stat .day-week { font-size: 9px; opacity: 0.7; }
+.td-stat { vertical-align: top; padding: 6px 8px !important; border-left: 2px solid var(--primary); background: rgba(148, 163, 184, 0.08); cursor: help; }
+.td-stat .stat-group { margin-bottom: 5px; }
+.td-stat .stat-group:last-child { margin-bottom: 0; }
+.td-stat .stat-head { display: flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; line-height: 1.2; }
+.td-stat .stat-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
+.stat-group.stat-work .stat-dot { background: #10b981; }
+.stat-group.stat-rest .stat-dot { background: #3a84ff; }
+.stat-group.stat-leave .stat-dot { background: #f59e0b; }
+.stat-group.stat-work .stat-cat { color: #10b981; }
+.stat-group.stat-rest .stat-cat { color: #3a84ff; }
+.stat-group.stat-leave .stat-cat { color: #f59e0b; }
+.td-stat .stat-cat { flex: 1; }
+.td-stat .stat-total { font-size: 13px; font-weight: 700; }
+.td-stat .stat-detail { display: flex; justify-content: space-between; padding-left: 12px; font-size: 10px; line-height: 1.4; color: var(--text-secondary); opacity: 0.85; }
+.td-stat .detail-name { flex: 1; }
+.td-stat .detail-count { font-variant-numeric: tabular-nums; }
+.td-stat-sum { background: linear-gradient(180deg, rgba(59,130,246,0.18), rgba(59,130,246,0.08)) !important; border-top: 2px solid var(--primary) !important; }
 
 /* 班次选择器 */
 .shift-picker-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 9999; }
