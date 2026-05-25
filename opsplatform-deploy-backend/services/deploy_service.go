@@ -414,6 +414,9 @@ type RestartInput struct {
 	GitBranch       string
 	GitRetry        int    // push 冲突自动 pull --rebase 重试次数
 	Operator        string // commit author 后缀
+	// v130 起：跟 update_image 对齐。auto_sync=true 主动调 ArgoCD sync；false 只 git push 等手动同步。
+	// PROD 默认关闭（除非有 prod_auto_sync button 权限）：重启 = 提交 git → 运维到 ArgoCD UI 点 sync。
+	AutoSync        bool
 	ArgocdClient    *ArgocdClient
 	PollIntervalSec int
 	PollTimeoutSec  int
@@ -566,6 +569,25 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 	if len(toPoll) == 0 {
 		res.ArgocdResults = preFail
 		res.Status = models.StatusFailed
+		return res
+	}
+
+	// v130: auto_sync 关 → git push 完毕直接返回 success，不主动调 ArgoCD sync。
+	// 跟 UpdateImage 同款语义（PROD 关 auto_sync 时人工到 ArgoCD UI 点 sync）。
+	// 已 preFail 的模块继续标记失败，其余的标 success "已提交，待手动同步"。
+	if !in.AutoSync {
+		now := time.Now()
+		for _, t := range toPoll {
+			preFail = append(preFail, models.ArgocdAppResult{
+				App:          t.app,
+				SyncStatus:   "Synced",
+				Health:       "Pending",
+				Msg:          "已提交 git，等待手动在 ArgoCD 同步",
+				LastPolledAt: now,
+			})
+		}
+		res.ArgocdResults = preFail
+		res.Status = models.StatusSuccess
 		return res
 	}
 

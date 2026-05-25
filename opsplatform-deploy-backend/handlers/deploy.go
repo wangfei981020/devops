@@ -328,6 +328,7 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 			GitBranch:       p.GitBranch,
 			GitRetry:        gitRetry,
 			Operator:        operator,
+			AutoSync:        p.AutoSync == 1, // v130: 跟 UpdateImage 对齐，受 env.auto_sync 控制
 			ArgocdClient:    services.NewArgocdClient(argoURL, argoToken),
 			PollIntervalSec: pollInterval,
 			PollTimeoutSec:  pollTimeoutMin * 60,
