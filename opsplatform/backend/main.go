@@ -182,6 +182,9 @@ func main() {
 	protected.HandleFunc("/schedule/contacts/{id}", handlers.HandleUpdateContact).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/schedule/contacts/{id}", handlers.HandleDeleteContact).Methods("DELETE", "OPTIONS")
 	protected.HandleFunc("/schedule/reset", handlers.HandleResetSchedule).Methods("POST", "OPTIONS")
+	// v733: 排班月度应工作天数（用于排班统计分析页判定达成/缺勤/超勤）
+	protected.HandleFunc("/schedule/month-target", handlers.HandleGetMonthTarget).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/schedule/month-target", handlers.HandleSetMonthTarget).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/metrics/init", handlers.HandleInitDefaultMetrics).Methods("POST", "OPTIONS")
 
 	// 巡检功能

@@ -423,6 +423,22 @@ func createTables() error {
 		return err
 	}
 
+	// 创建排班月度应工作天数配置表（v733: 排班统计分析功能）
+	// 每月一行，管理员手动填写本月应工作天数（用于统计页"达成 / 缺勤 / 超勤"判定）
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS schedule_month_target (
+			year INT NOT NULL,
+			month INT NOT NULL,
+			expected_work_days INT NOT NULL,
+			updated_by VARCHAR(64) DEFAULT '',
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (year, month)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
 	// 创建联系人电话表
 	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS schedule_contacts (
@@ -1264,6 +1280,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_audit", "menu:audit", "审计日志", "/system/audit", "perm_menu_system", "", 50},
 		{"perm_menu_api", "menu:api", "接口管理", "/system/api", "perm_menu_system", "", 60},
 		{"perm_menu_schedule", "menu:schedule", "排班管理", "/system/schedule", "perm_menu_system", "", 70},
+		{"perm_menu_schedule_analytics", "menu:schedule_analytics", "排班统计分析", "/system/schedule-analytics", "perm_menu_system", "", 75},
 		{"perm_menu_taskpool", "menu:taskpool", "任务池", "/system/taskpool", "perm_menu_system", "", 80},
 		{"perm_menu_incidents", "menu:incidents", "事件记录", "/system/incidents", "perm_menu_system", "", 90},
 		{"perm_menu_duty", "menu:duty", "值班记录", "/system/duty", "perm_menu_system", "", 100},
@@ -1469,6 +1486,10 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_schedule_export", "schedule:export", "[排班管理] 导出Excel", "允许导出排班表"},
 		{"perm_btn_schedule_reset", "schedule:reset", "[排班管理] 重置排班", "允许重置指定月份的排班数据"},
 		{"perm_btn_schedule_edit_shift", "schedule:edit_shift", "[排班管理] 编辑班次", "允许编辑单个班次"},
+
+		// 排班统计分析
+		{"perm_btn_schedule_analytics_export", "schedule_analytics:export", "[排班统计] 导出Excel", "允许导出排班统计 Excel"},
+		{"perm_btn_schedule_analytics_set_target", "schedule_analytics:set_target", "[排班统计] 修改应工作天数", "允许配置每月应工作天数（决定达成/缺勤判定）"},
 
 		// 商户管理
 		{"perm_btn_merchant_create", "merchant:create", "[商户管理] 添加商户", "允许添加新商户"},

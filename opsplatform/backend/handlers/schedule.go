@@ -763,3 +763,92 @@ func HandleDeleteContact(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
+
+// ============================================================
+// v733: 排班月度应工作天数（schedule_month_target）
+// 给排班统计分析页判定 达成/缺勤/超勤 用. 一行/(year,month).
+// ============================================================
+
+type ScheduleMonthTarget struct {
+	Year             int    `json:"year"`
+	Month            int    `json:"month"`
+	ExpectedWorkDays int    `json:"expected_work_days"`
+	UpdatedBy        string `json:"updated_by"`
+	UpdatedAt        string `json:"updated_at"`
+}
+
+// HandleGetMonthTarget GET /api/schedule/month-target?year=Y&month=M
+// 未配置时返回 expected_work_days=0，前端按"未设定"处理.
+func HandleGetMonthTarget(w http.ResponseWriter, r *http.Request) {
+	year, _ := strconv.Atoi(r.URL.Query().Get("year"))
+	month, _ := strconv.Atoi(r.URL.Query().Get("month"))
+	if year == 0 || month < 1 || month > 12 {
+		http.Error(w, "year/month 参数无效", http.StatusBadRequest)
+		return
+	}
+	var t ScheduleMonthTarget
+	var updatedAt time.Time
+	err := database.DB.QueryRow(`
+		SELECT year, month, expected_work_days, updated_by, updated_at
+		FROM schedule_month_target WHERE year=? AND month=?
+	`, year, month).Scan(&t.Year, &t.Month, &t.ExpectedWorkDays, &t.UpdatedBy, &updatedAt)
+	if err != nil {
+		// 没配过：返回零值（前端兜底）
+		t = ScheduleMonthTarget{Year: year, Month: month, ExpectedWorkDays: 0}
+	} else {
+		t.UpdatedAt = updatedAt.Format("2006-01-02 15:04:05")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(t)
+}
+
+// HandleSetMonthTarget PUT /api/schedule/month-target
+// body: { year, month, expected_work_days }
+// 需要 schedule_analytics:set_target 按钮权限（admin 自动放行）.
+func HandleSetMonthTarget(w http.ResponseWriter, r *http.Request) {
+	// 权限校验：HasAnyPermission 内部已对 admin/super_admin 自动放行
+	if !HasAnyPermission(r, "schedule_analytics:set_target") {
+		http.Error(w, "没有修改应工作天数的权限", http.StatusForbidden)
+		return
+	}
+
+	var in ScheduleMonthTarget
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if in.Year < 2000 || in.Year > 2100 || in.Month < 1 || in.Month > 12 {
+		http.Error(w, "year/month 参数无效", http.StatusBadRequest)
+		return
+	}
+	if in.ExpectedWorkDays < 0 || in.ExpectedWorkDays > 31 {
+		http.Error(w, "expected_work_days 必须在 0-31 之间", http.StatusBadRequest)
+		return
+	}
+	operator := r.Header.Get("X-Operator")
+	if operator == "" {
+		operator = "system"
+	}
+	_, err := database.DB.Exec(`
+		INSERT INTO schedule_month_target (year, month, expected_work_days, updated_by)
+		VALUES (?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+			expected_work_days = VALUES(expected_work_days),
+			updated_by = VALUES(updated_by)
+	`, in.Year, in.Month, in.ExpectedWorkDays, operator)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	AddAuditLogFromRequest(r, "修改月度应工作天数",
+		fmt.Sprintf("%04d-%02d", in.Year, in.Month), operator, "", "",
+		fmt.Sprintf("设为 %d 天", in.ExpectedWorkDays))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":             "ok",
+		"year":               in.Year,
+		"month":              in.Month,
+		"expected_work_days": in.ExpectedWorkDays,
+	})
+}

@@ -172,6 +172,7 @@ const menuGroups = [
       { key: 'audit', perm: 'audit', name: '审计日志', path: '/audit' },
       { key: 'api', perm: 'api-manage', name: '接口管理', path: '/api-manage' },
       { key: 'schedule', perm: 'schedule', name: '排班管理', path: '/schedule' },
+      { key: 'schedule_analytics', perm: 'schedule_analytics', name: '排班统计分析', path: '/schedule-analytics' },
       { key: 'taskpool', perm: 'task-pool', name: '任务池', path: '/task-pool' },
       { key: 'incidents', perm: 'incidents', name: '失误记录', path: '/incidents' },
       { key: 'duty', perm: 'duty', name: '值班记录', path: '/duty-records' },
