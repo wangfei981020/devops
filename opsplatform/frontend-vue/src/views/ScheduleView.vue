@@ -13,6 +13,8 @@ const canEditEmployee = computed(() => authStore.hasPermission('schedule:edit_em
 const canDeleteEmployee = computed(() => authStore.hasPermission('schedule:delete_employee'))
 const canBatchSchedule = computed(() => authStore.hasPermission('schedule:batch'))
 const canConfigShift = computed(() => authStore.hasPermission('schedule:config'))
+// v571: 统计分析 tab 权限（super_admin 自动通过；其它角色需要管理员授予 menu:schedule_analytics）
+const canViewAnalytics = computed(() => authStore.hasPermission('menu:schedule_analytics'))
 const canExport = computed(() => authStore.hasPermission('schedule:export'))
 const canReset = computed(() => authStore.hasPermission('schedule:reset'))
 const canEditShift = computed(() => authStore.hasPermission('schedule:edit_shift'))
@@ -656,7 +658,7 @@ watch(activeTab, (tab) => {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
           联系人电话
         </button>
-        <button class="tab-btn" :class="{ active: activeTab === 'stats' }" @click="activeTab = 'stats'">
+        <button v-if="canViewAnalytics" class="tab-btn" :class="{ active: activeTab === 'stats' }" @click="activeTab = 'stats'">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
           统计分析
         </button>
@@ -832,8 +834,8 @@ watch(activeTab, (tab) => {
       </div>
     </template>
 
-    <!-- 统计分析页面 v570: tab 内嵌 -->
-    <template v-if="activeTab === 'stats'">
+    <!-- 统计分析页面 v570: tab 内嵌; v571: 加权限守门（防止从外部 setting activeTab=stats 绕过 tab 按钮显隐） -->
+    <template v-if="activeTab === 'stats' && canViewAnalytics">
       <ScheduleAnalyticsView />
     </template>
 
