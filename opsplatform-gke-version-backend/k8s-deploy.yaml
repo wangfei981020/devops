@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsplatform-gke-version-backend
+  namespace: opsplatform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opsplatform-gke-version-backend
+  template:
+    metadata:
+      labels:
+        app: opsplatform-gke-version-backend
+    spec:
+      containers:
+      - name: backend
+        image: localhost:8070/opsplatform/opsplatform-gke-version-backend:v1
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MYSQL_DSN
+          valueFrom:
+            secretKeyRef:
+              name: gke-version-exporter-mysql
+              key: dsn
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /secrets/key.json
+        volumeMounts:
+        - name: gcp-sa
+          mountPath: /secrets
+          readOnly: true
+        readinessProbe:
+          httpGet: { path: /healthz, port: 8080 }
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: { path: /healthz, port: 8080 }
+          periodSeconds: 30
+      volumes:
+      - name: gcp-sa
+        secret:
+          secretName: gke-version-exporter-sa
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsplatform-gke-version-backend
+  namespace: opsplatform
+  labels:
+    app: opsplatform-gke-version-backend
+spec:
+  selector:
+    app: opsplatform-gke-version-backend
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
