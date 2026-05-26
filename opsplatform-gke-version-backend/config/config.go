@@ -15,7 +15,7 @@ type Config struct {
 func Load() *Config {
 	cfg := &Config{
 		Port:      getenv("PORT", "8080"),
-		MySQLDSN:  getenv("MYSQL_DSN", "root:123123@tcp(mysql-deploy.opsplatform:3306)/gke_version_monitor?parseTime=true&charset=utf8mb4"),
+		MySQLDSN:  getenv("MYSQL_DSN", "root:123456@tcp(mysql-deploy.opsplatform:3306)/gke_version_monitor?parseTime=true&charset=utf8mb4"),
 		SAKeyPath: getenv("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/key.json"),
 	}
 	if _, err := os.Stat(cfg.SAKeyPath); err == nil {
