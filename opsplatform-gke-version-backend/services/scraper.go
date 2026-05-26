@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"opsplatform-gke-version-backend/metrics"
 	"opsplatform-gke-version-backend/models"
 )
 
@@ -91,6 +92,12 @@ func (s *Scraper) ScrapeOne(ctx context.Context, cl *models.Cluster) error {
 	}
 
 	snap := buildSnapshot(cl, info, srv)
+
+	writeClusterMetrics(cl, snap)
+	for _, np := range snap.NodePools {
+		writeNodepoolMetrics(cl, np)
+	}
+
 	return s.saveSnapshot(snap)
 }
 
@@ -226,4 +233,52 @@ func (s *Scraper) saveError(clusterID int, msg string) {
 		VALUES (?, ?, ?)
 		ON DUPLICATE KEY UPDATE last_refreshed_at=VALUES(last_refreshed_at), last_error=VALUES(last_error)
 	`, clusterID, now, msg)
+}
+
+func writeClusterMetrics(cl *models.Cluster, snap *models.ClusterSnapshot) {
+	lbl := []string{cl.ProjectID, cl.Location, cl.Name}
+	metrics.ClusterInfo.WithLabelValues(append(lbl,
+		snap.CurrentVersion, snap.MaxUpgradableVersion, snap.LatestAvailableVersion)...).Set(1)
+	metrics.ClusterCurToMaxBehind.WithLabelValues(lbl...).Set(float64(snap.CurrentToMaxVersionsBehind))
+	metrics.ClusterCurToMaxDiff.WithLabelValues(lbl...).Set(snap.CurrentToMaxVersionDiff)
+	metrics.ClusterMaxToLatestBehind.WithLabelValues(lbl...).Set(float64(snap.MaxToLatestVersionsBehind))
+	metrics.ClusterMaxToLatestDiff.WithLabelValues(lbl...).Set(snap.MaxToLatestVersionDiff)
+	metrics.ClusterCurToLatestBehind.WithLabelValues(lbl...).Set(float64(snap.CurrentToLatestVersionsBehind))
+	metrics.ClusterCurToLatestDiff.WithLabelValues(lbl...).Set(snap.CurrentToLatestVersionDiff)
+	if t, ok := parseDate(snap.StdSupportEnd); ok {
+		metrics.ClusterStdEnd.WithLabelValues(lbl...).Set(float64(t.Unix()))
+	}
+	if t, ok := parseDate(snap.ExtSupportEnd); ok {
+		metrics.ClusterExtEnd.WithLabelValues(lbl...).Set(float64(t.Unix()))
+	}
+	metrics.ExporterLastScrape.WithLabelValues(cl.Name).Set(float64(time.Now().Unix()))
+}
+
+func writeNodepoolMetrics(cl *models.Cluster, np models.NodePoolInfo) {
+	lbl := []string{cl.ProjectID, cl.Location, cl.Name, np.Name}
+	metrics.NodepoolInfo.WithLabelValues(append(lbl,
+		np.CurrentVersion, np.MaxUpgradableVersion, np.LatestAvailableVersion)...).Set(1)
+	metrics.NodepoolCurToMaxBehind.WithLabelValues(lbl...).Set(float64(np.CurrentToMaxVersionsBehind))
+	metrics.NodepoolCurToMaxDiff.WithLabelValues(lbl...).Set(np.CurrentToMaxVersionDiff)
+	metrics.NodepoolMaxToLatestBehind.WithLabelValues(lbl...).Set(float64(np.MaxToLatestVersionsBehind))
+	metrics.NodepoolMaxToLatestDiff.WithLabelValues(lbl...).Set(np.MaxToLatestVersionDiff)
+	metrics.NodepoolCurToLatestBehind.WithLabelValues(lbl...).Set(float64(np.CurrentToLatestVersionsBehind))
+	metrics.NodepoolCurToLatestDiff.WithLabelValues(lbl...).Set(np.CurrentToLatestVersionDiff)
+	if t, ok := parseDate(np.StdSupportEnd); ok {
+		metrics.NodepoolStdEnd.WithLabelValues(lbl...).Set(float64(t.Unix()))
+	}
+	if t, ok := parseDate(np.ExtSupportEnd); ok {
+		metrics.NodepoolExtEnd.WithLabelValues(lbl...).Set(float64(t.Unix()))
+	}
+}
+
+func parseDate(s string) (time.Time, bool) {
+	if s == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
