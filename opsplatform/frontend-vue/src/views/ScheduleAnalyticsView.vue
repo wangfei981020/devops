@@ -47,14 +47,27 @@ const daysInMonth = computed(() => {
 })
 
 const groupFilter = ref('')
+const employeeFilter = ref('')  // v572: 按员工筛选
 const allGroups = computed(() => {
   const s = new Set()
   employees.value.forEach(e => { if (e.group_name) s.add(e.group_name) })
   return Array.from(s)
 })
-const filteredEmployees = computed(() => {
+// 员工下拉的候选 = 当前组别筛选下的员工（切了组别后，原选中的员工若不属于新组则自动清空）
+const allEmployeesInGroup = computed(() => {
   if (!groupFilter.value) return employees.value
   return employees.value.filter(e => e.group_name === groupFilter.value)
+})
+watch(groupFilter, () => {
+  if (employeeFilter.value && !allEmployeesInGroup.value.some(e => e.id === employeeFilter.value)) {
+    employeeFilter.value = ''
+  }
+})
+const filteredEmployees = computed(() => {
+  let list = employees.value
+  if (groupFilter.value) list = list.filter(e => e.group_name === groupFilter.value)
+  if (employeeFilter.value) list = list.filter(e => String(e.id) === String(employeeFilter.value))
+  return list
 })
 
 // 每个员工的三段统计
@@ -218,6 +231,13 @@ watch([currentYear, currentMonth], loadAll)
         <select v-model="groupFilter" class="select">
           <option value="">全部</option>
           <option v-for="g in allGroups" :key="g" :value="g">{{ g }}</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>员工：</label>
+        <select v-model="employeeFilter" class="select">
+          <option value="">全部</option>
+          <option v-for="e in allEmployeesInGroup" :key="e.id" :value="e.id">{{ e.name }}</option>
         </select>
       </div>
       </div>
