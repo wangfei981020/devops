@@ -1672,6 +1672,48 @@ func initDefaultRolesAndPermissions() {
 				"rp_viewer_"+permID, permID)
 		}
 	}
+
+	// ===== 桌台维护记录 · API Key 行级权限改造（2026-05-27） =====
+	// 1) custom_rows 加 source_api_key_id 列
+	if _, err := DB.Exec(`ALTER TABLE custom_rows ADD COLUMN source_api_key_id VARCHAR(36) NULL`); err == nil {
+		log.Printf("[Migration] custom_rows: add column source_api_key_id")
+	}
+	// 2) 建索引
+	if _, err := DB.Exec(`CREATE INDEX idx_custom_rows_source_api_key ON custom_rows(source_api_key_id)`); err == nil {
+		log.Printf("[Migration] custom_rows: add index idx_custom_rows_source_api_key")
+	}
+	// 3) api_keys.name 唯一约束（重名场景下会失败，留日志由运维清理）
+	if _, err := DB.Exec(`ALTER TABLE api_keys ADD UNIQUE KEY uk_api_keys_name (name)`); err == nil {
+		log.Printf("[Migration] api_keys: add unique key uk_api_keys_name")
+	}
+	// 4) 插入两条新权限码
+	DB.Exec(`INSERT IGNORE INTO permissions (id, code, name, type, sort_order, description) VALUES (?, ?, ?, ?, ?, ?)`,
+		"perm_tm_edit_api_record", "table_maintenance:edit_api_record", "编辑 API Key 创建的记录", "button", 100,
+		"允许编辑由 API Key 创建的桌台维护记录")
+	DB.Exec(`INSERT IGNORE INTO permissions (id, code, name, type, sort_order, description) VALUES (?, ?, ?, ?, ?, ?)`,
+		"perm_tm_delete_api_record", "table_maintenance:delete_api_record", "删除 API Key 创建的记录", "button", 101,
+		"允许删除由 API Key 创建的桌台维护记录")
+	// 5) backfill：按 keyName 反查 api_keys.id，填进 source_api_key_id
+	if res, err := DB.Exec(`
+		UPDATE custom_rows r
+		JOIN api_keys k ON r.created_by = CONCAT('apikey:', k.name)
+		SET r.source_api_key_id = k.id
+		WHERE r.created_by LIKE 'apikey:%' AND r.source_api_key_id IS NULL
+	`); err == nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			log.Printf("[Migration] custom_rows backfill source_api_key_id from api_keys: %d rows", n)
+		}
+	}
+	// 6) backfill：apikey 创建但反查不到 key 的，填 sentinel UUID
+	if res, err := DB.Exec(`
+		UPDATE custom_rows
+		SET source_api_key_id = '00000000-0000-0000-0000-000000000000'
+		WHERE created_by LIKE 'apikey:%' AND source_api_key_id IS NULL
+	`); err == nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			log.Printf("[Migration] custom_rows backfill source_api_key_id sentinel: %d rows", n)
+		}
+	}
 }
 
 // Close 关闭数据库连接
