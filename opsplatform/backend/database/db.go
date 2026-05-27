@@ -1686,13 +1686,16 @@ func initDefaultRolesAndPermissions() {
 	if _, err := DB.Exec(`ALTER TABLE api_keys ADD UNIQUE KEY uk_api_keys_name (name)`); err == nil {
 		log.Printf("[Migration] api_keys: add unique key uk_api_keys_name")
 	}
-	// 4) 插入两条新权限码
+	// 4) 插入两条新权限码（name 必须遵循 "[页面名] 动作" 格式，前端 RolesView 按此正则分组）
 	DB.Exec(`INSERT IGNORE INTO permissions (id, code, name, type, sort_order, description) VALUES (?, ?, ?, ?, ?, ?)`,
-		"perm_tm_edit_api_record", "table_maintenance:edit_api_record", "编辑 API Key 创建的记录", "button", 100,
+		"perm_tm_edit_api_record", "table_maintenance:edit_api_record", "[桌台维护] 编辑 API Key 创建的记录", "button", 100,
 		"允许编辑由 API Key 创建的桌台维护记录")
 	DB.Exec(`INSERT IGNORE INTO permissions (id, code, name, type, sort_order, description) VALUES (?, ?, ?, ?, ?, ?)`,
-		"perm_tm_delete_api_record", "table_maintenance:delete_api_record", "删除 API Key 创建的记录", "button", 101,
+		"perm_tm_delete_api_record", "table_maintenance:delete_api_record", "[桌台维护] 删除 API Key 创建的记录", "button", 101,
 		"允许删除由 API Key 创建的桌台维护记录")
+	// 4.1) 若早期版本插入时漏了 [桌台维护] 前缀，回填修正
+	DB.Exec(`UPDATE permissions SET name = '[桌台维护] 编辑 API Key 创建的记录' WHERE code = 'table_maintenance:edit_api_record' AND name NOT LIKE '[%'`)
+	DB.Exec(`UPDATE permissions SET name = '[桌台维护] 删除 API Key 创建的记录' WHERE code = 'table_maintenance:delete_api_record' AND name NOT LIKE '[%'`)
 	// 5) backfill：按 keyName 反查 api_keys.id，填进 source_api_key_id
 	if res, err := DB.Exec(`
 		UPDATE custom_rows r
