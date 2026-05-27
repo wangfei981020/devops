@@ -399,6 +399,36 @@ func HandleDeleteCustomColumn(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleAddCustomRow 添加行数据
+// checkAPIKeyRowAccess 判断 JWT 用户是否有权限改/删 API Key 创建的记录
+// op: "edit" | "delete"
+// 返回: allowed=true 放行；false 时 reason 给前端展示
+func checkAPIKeyRowAccess(r *http.Request, rowID, op string) (allowed bool, reason string) {
+	var srcKey sql.NullString
+	err := database.DB.QueryRow(`SELECT source_api_key_id FROM custom_rows WHERE id = ?`, rowID).Scan(&srcKey)
+	if err != nil {
+		// 查询失败或记录不存在，放行，让后续业务逻辑自然处理（404 等）
+		return true, ""
+	}
+	if !srcKey.Valid {
+		// 平台用户创建，沿用原 update/delete 权限码（不在此处校验）
+		return true, ""
+	}
+	// API Key 创建的记录
+	if r.Header.Get("X-API-Key") != "" {
+		// 调用方是 API Key，已经过 scopes 校验
+		return true, ""
+	}
+	// JWT 用户：必须有专属权限码
+	permCode := "table_maintenance:edit_api_record"
+	if op == "delete" {
+		permCode = "table_maintenance:delete_api_record"
+	}
+	if isAdminOrHasPerm(r, permCode) {
+		return true, ""
+	}
+	return false, "此记录由 API Key 创建，需要权限：" + permCode
+}
+
 func HandleAddCustomRow(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	tableID := vars["id"]
@@ -463,6 +493,11 @@ func HandleUpdateCustomRow(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	rowID := vars["rowId"]
 
+	if allowed, reason := checkAPIKeyRowAccess(r, rowID, "edit"); !allowed {
+		sendError(w, reason, http.StatusForbidden)
+		return
+	}
+
 	var req struct {
 		Data        json.RawMessage `json:"data"`
 		Attachments json.RawMessage `json:"attachments"`
@@ -510,6 +545,11 @@ func HandleUpdateCustomRow(w http.ResponseWriter, r *http.Request) {
 func HandlePatchCustomRow(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	rowID := vars["rowId"]
+
+	if allowed, reason := checkAPIKeyRowAccess(r, rowID, "edit"); !allowed {
+		sendError(w, reason, http.StatusForbidden)
+		return
+	}
 
 	var req struct {
 		Data        map[string]interface{} `json:"data"`
@@ -585,6 +625,12 @@ func HandlePatchCustomRow(w http.ResponseWriter, r *http.Request) {
 func HandleDeleteCustomRow(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	rowID := vars["rowId"]
+
+	if allowed, reason := checkAPIKeyRowAccess(r, rowID, "delete"); !allowed {
+		sendError(w, reason, http.StatusForbidden)
+		return
+	}
+
 	operator := r.Header.Get("X-Operator")
 
 	// 获取表格ID和名称用于日志
