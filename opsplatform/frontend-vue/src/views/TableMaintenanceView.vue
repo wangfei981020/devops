@@ -17,10 +17,27 @@ const currentLanguage = computed(() => appStore.language)
 
 const isSuperAdmin = computed(() => authStore.isSuperAdmin())
 const canCreate = computed(() => isSuperAdmin.value || authStore.hasPermission('table_maintenance:create'))
-const canUpdate = computed(() => isSuperAdmin.value || authStore.hasPermission('table_maintenance:update'))
-const canDelete = computed(() => isSuperAdmin.value || authStore.hasPermission('table_maintenance:delete'))
 const canExport = computed(() => isSuperAdmin.value || authStore.hasPermission('table_maintenance:export'))
 const canUpload = computed(() => isSuperAdmin.value || authStore.hasPermission('table_maintenance:upload'))
+
+// 行级权限：API Key 创建的记录需要专属权限码才能改/删
+function rowEditable(row) {
+  if (isSuperAdmin.value) return true
+  if (row && row.source_api_key_id) {
+    return authStore.hasPermission('table_maintenance:edit_api_record')
+  }
+  return authStore.hasPermission('table_maintenance:update')
+}
+function rowDeletable(row) {
+  if (isSuperAdmin.value) return true
+  if (row && row.source_api_key_id) {
+    return authStore.hasPermission('table_maintenance:delete_api_record')
+  }
+  return authStore.hasPermission('table_maintenance:delete')
+}
+function rowLocked(row) {
+  return !!(row && row.source_api_key_id) && !rowEditable(row)
+}
 
 // 配置选项（项目、现场、桌台、维护类型）- 从全局配置加载
 const projectOptions = ref([])  // 项目列表
@@ -2609,10 +2626,10 @@ async function exportToExcel() {
           <tbody>
             <tr v-if="loading"><td :colspan="visibleColumns.length" class="empty">{{ t('tableMaintenance.table.loading') }}</td></tr>
             <tr v-else-if="filteredRecords.length === 0"><td :colspan="visibleColumns.length" class="empty">{{ t('tableMaintenance.table.empty') }}</td></tr>
-            <tr v-for="r in filteredRecords" :key="r.id" :class="{ selected: selectedIds.includes(r.id) }">
+            <tr v-for="r in filteredRecords" :key="r.id" :class="{ selected: selectedIds.includes(r.id), 'row-locked': rowLocked(r) }">
               <template v-for="col in visibleColumns" :key="col.key">
                 <td v-if="col.type === 'checkbox'">
-                  <input type="checkbox" :checked="selectedIds.includes(r.id)" @change="e => { if (e.target.checked) selectedIds.push(r.id); else selectedIds = selectedIds.filter(i => i !== r.id) }">
+                  <input type="checkbox" :checked="selectedIds.includes(r.id)" :disabled="rowLocked(r)" @change="e => { if (e.target.checked) selectedIds.push(r.id); else selectedIds = selectedIds.filter(i => i !== r.id) }">
                 </td>
                 <td v-else-if="col.type === 'date'">
                   <span class="cell-date">{{ formatDate(r[col.key]) }}</span>
@@ -2704,12 +2721,13 @@ async function exportToExcel() {
                     <button v-if="canCreate" class="action-btn copy-btn" @click="copyRecord(r)" :title="t('tableMaintenance.actions.copy')">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                     </button>
-                    <button v-if="canUpdate" class="action-btn" @click="openEditModal(r)" :title="t('tableMaintenance.actions.edit')">
+                    <button v-if="rowEditable(r)" class="action-btn" @click="openEditModal(r)" :title="t('tableMaintenance.actions.edit')">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     </button>
-                    <button v-if="canDelete" class="action-btn danger" @click="deleteRecord(r)" :title="t('tableMaintenance.actions.delete')">
+                    <button v-if="rowDeletable(r)" class="action-btn danger" @click="deleteRecord(r)" :title="t('tableMaintenance.actions.delete')">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6v14a2,2,0,0,1-2,2H7a2,2,0,0,1-2-2V6M8,6V4a2,2,0,0,1,2-2h4a2,2,0,0,1,2,2v2"/></svg>
                     </button>
+                    <span v-if="rowLocked(r)" class="lock-icon" title="此记录由 API Key 创建，需要权限：编辑/删除 API Key 创建的记录">🔒</span>
                   </div>
                 </td>
                 <td v-else-if="col.type === 'textarea'"><span class="cell-text cell-ellipsis" :title="r[col.key]">{{ r[col.key] || '-' }}</span></td>
@@ -3631,7 +3649,7 @@ async function exportToExcel() {
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" @click="showDetailModal = false">关闭</button>
-            <button v-if="canUpdate" class="btn btn-primary" @click="showDetailModal = false; openEditModal(detailRecord)">编辑</button>
+            <button v-if="detailRecord && rowEditable(detailRecord)" class="btn btn-primary" @click="showDetailModal = false; openEditModal(detailRecord)">编辑</button>
           </div>
         </div>
       </div>
@@ -5299,5 +5317,29 @@ body.light-mode .data-table tr:hover td.sticky-col {
   padding: 48px 24px;
   color: var(--text-muted);
   font-size: 14px;
+}
+
+/* API Key 创建的记录在无权限时锁定 */
+.row-locked {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.03)) !important;
+  opacity: 0.75;
+  cursor: not-allowed;
+}
+.row-locked > td {
+  pointer-events: none;
+}
+.row-locked > td.action-cell {
+  pointer-events: auto;  /* 操作列保留 hover/tooltip */
+}
+.row-locked > td .action-btns > .lock-icon {
+  pointer-events: auto;
+}
+.lock-icon {
+  display: inline-flex;
+  align-items: center;
+  font-size: 14px;
+  margin-left: 4px;
+  color: var(--warning, #f59e0b);
+  cursor: help;
 }
 </style>
