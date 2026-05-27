@@ -340,6 +340,16 @@ func HandleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "名称不能为空", http.StatusBadRequest)
 		return
 	}
+	// 名称查重（与启动迁移加的 UNIQUE KEY 配合，应用层兜底给出友好提示）
+	var dupCount int
+	if err := database.DB.QueryRow(`SELECT COUNT(*) FROM api_keys WHERE name = ?`, strings.TrimSpace(req.Name)).Scan(&dupCount); err != nil {
+		SafeError(w, "查询失败", http.StatusInternalServerError, err)
+		return
+	}
+	if dupCount > 0 {
+		sendError(w, "名称已存在，请换一个", http.StatusBadRequest)
+		return
+	}
 	if strings.TrimSpace(req.Domain) == "" {
 		sendError(w, "业务域不能为空", http.StatusBadRequest)
 		return
