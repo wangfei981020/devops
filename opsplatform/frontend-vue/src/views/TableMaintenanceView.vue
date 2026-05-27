@@ -1916,6 +1916,7 @@ async function loadRecords() {
       id: r.id,
       ...parseData(r.data),
       attachments: parseAttachments(r.attachments),
+      source_api_key_id: r.source_api_key_id,
       created_by: r.created_by || '-',
       created_at: r.created_at,
       updated_at: r.updated_at
