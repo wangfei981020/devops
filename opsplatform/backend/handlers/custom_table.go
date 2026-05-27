@@ -416,6 +416,14 @@ func HandleAddCustomRow(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Format("2006-01-02 15:04:05")
 	createdBy := r.Header.Get("X-Operator")
 
+	// 若调用方是 API Key（中间件已塞 ctxAPIKeyID 到 context），落入 source_api_key_id
+	var sourceAPIKeyID interface{}
+	if v := r.Context().Value(ctxAPIKeyID); v != nil {
+		if s, ok := v.(string); ok && s != "" {
+			sourceAPIKeyID = s
+		}
+	}
+
 	dataStr := "{}"
 	if req.Data != nil {
 		dataStr = string(req.Data)
@@ -426,9 +434,9 @@ func HandleAddCustomRow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err := database.DB.Exec(`
-		INSERT INTO custom_rows (id, table_id, data, attachments, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, id, tableID, dataStr, attachStr, createdBy, now, now)
+		INSERT INTO custom_rows (id, table_id, data, attachments, source_api_key_id, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, tableID, dataStr, attachStr, sourceAPIKeyID, createdBy, now, now)
 
 	if err != nil {
 		SafeError(w, "添加数据失败", http.StatusInternalServerError, err)
