@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -39,13 +40,14 @@ type CustomColumn struct {
 
 // CustomRow 自定义行数据
 type CustomRow struct {
-	ID          string          `json:"id"`
-	TableID     string          `json:"table_id"`
-	Data        json.RawMessage `json:"data"`
-	Attachments json.RawMessage `json:"attachments,omitempty"`
-	CreatedBy   string          `json:"created_by"`
-	CreatedAt   string          `json:"created_at"`
-	UpdatedAt   string          `json:"updated_at"`
+	ID             string          `json:"id"`
+	TableID        string          `json:"table_id"`
+	Data           json.RawMessage `json:"data"`
+	Attachments    json.RawMessage `json:"attachments,omitempty"`
+	SourceAPIKeyID *string         `json:"source_api_key_id"`
+	CreatedBy      string          `json:"created_by"`
+	CreatedAt      string          `json:"created_at"`
+	UpdatedAt      string          `json:"updated_at"`
 }
 
 // HandleGetCustomTables 获取所有自定义表格
@@ -174,7 +176,7 @@ func HandleGetCustomTable(w http.ResponseWriter, r *http.Request) {
 
 	// 获取数据行
 	dataRows, err := database.DB.Query(`
-		SELECT id, table_id, COALESCE(data, '{}'), COALESCE(attachments, '[]'), COALESCE(created_by, ''), created_at, updated_at
+		SELECT id, table_id, COALESCE(data, '{}'), COALESCE(attachments, '[]'), source_api_key_id, COALESCE(created_by, ''), created_at, updated_at
 		FROM custom_rows WHERE table_id = ? ORDER BY created_at DESC
 	`, tableID)
 	if err != nil {
@@ -187,9 +189,14 @@ func HandleGetCustomTable(w http.ResponseWriter, r *http.Request) {
 	for dataRows.Next() {
 		var row CustomRow
 		var dataStr, attachStr string
-		dataRows.Scan(&row.ID, &row.TableID, &dataStr, &attachStr, &row.CreatedBy, &row.CreatedAt, &row.UpdatedAt)
+		var srcKey sql.NullString
+		dataRows.Scan(&row.ID, &row.TableID, &dataStr, &attachStr, &srcKey, &row.CreatedBy, &row.CreatedAt, &row.UpdatedAt)
 		row.Data = json.RawMessage(dataStr)
 		row.Attachments = json.RawMessage(attachStr)
+		if srcKey.Valid {
+			s := srcKey.String
+			row.SourceAPIKeyID = &s
+		}
 		rows = append(rows, row)
 	}
 	if rows == nil {
