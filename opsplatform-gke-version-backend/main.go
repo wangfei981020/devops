@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 	"strconv"
@@ -27,13 +26,6 @@ func main() {
 
 	metrics.MustRegister()
 
-	ctx := context.Background()
-	gcp, err := services.NewGCPClient(ctx)
-	if err != nil {
-		log.Fatalf("gcp client: %v", err)
-	}
-	defer gcp.Close()
-
 	interval := 30 * time.Minute
 	var minutesStr string
 	if err := db.QueryRow(`SELECT v FROM settings WHERE k='scrape_interval_minutes'`).Scan(&minutesStr); err == nil {
@@ -41,7 +33,7 @@ func main() {
 			interval = time.Duration(n) * time.Minute
 		}
 	}
-	scraper := services.NewScraper(db, gcp, interval)
+	scraper := services.NewScraper(db, interval)
 	scraper.Start()
 	defer scraper.Stop()
 

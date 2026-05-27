@@ -55,8 +55,11 @@ func (h *RefreshHandler) Refresh(c *gin.Context) {
 }
 
 func loadCluster(db *sql.DB, id int) (*models.Cluster, error) {
-	row := db.QueryRow(`SELECT id, project_id, location, name, enabled, created_at, updated_at FROM clusters WHERE id=?`, id)
+	row := db.QueryRow(`SELECT id, project_id, location, name, COALESCE(sa_key_json, ''), enabled, created_at, updated_at FROM clusters WHERE id=?`, id)
 	cl := &models.Cluster{}
-	err := row.Scan(&cl.ID, &cl.ProjectID, &cl.Location, &cl.Name, &cl.Enabled, &cl.CreatedAt, &cl.UpdatedAt)
+	err := row.Scan(&cl.ID, &cl.ProjectID, &cl.Location, &cl.Name, &cl.SAKeyJSON, &cl.Enabled, &cl.CreatedAt, &cl.UpdatedAt)
+	if err == nil {
+		cl.HasSAKey = cl.SAKeyJSON != ""
+	}
 	return cl, err
 }

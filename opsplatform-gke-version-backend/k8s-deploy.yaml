@@ -25,22 +25,12 @@ spec:
             secretKeyRef:
               name: gke-version-exporter-mysql
               key: dsn
-        - name: GOOGLE_APPLICATION_CREDENTIALS
-          value: /secrets/key.json
-        volumeMounts:
-        - name: gcp-sa
-          mountPath: /secrets
-          readOnly: true
         readinessProbe:
           httpGet: { path: /healthz, port: 8080 }
           periodSeconds: 10
         livenessProbe:
           httpGet: { path: /healthz, port: 8080 }
           periodSeconds: 30
-      volumes:
-      - name: gcp-sa
-        secret:
-          secretName: gke-version-exporter-sa
 ---
 apiVersion: v1
 kind: Service

@@ -3,13 +3,15 @@ package models
 import "time"
 
 type Cluster struct {
-	ID        int       `json:"id" db:"id"`
-	ProjectID string    `json:"project_id" db:"project_id"`
-	Location  string    `json:"location" db:"location"`
-	Name      string    `json:"name" db:"name"`
-	Enabled   int       `json:"enabled" db:"enabled"`
-	CreatedAt time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+	ID          int       `json:"id" db:"id"`
+	ProjectID   string    `json:"project_id" db:"project_id"`
+	Location    string    `json:"location" db:"location"`
+	Name        string    `json:"name" db:"name"`
+	SAKeyJSON   string    `json:"-" db:"sa_key_json"` // 敏感字段，永不在 JSON 响应里返回
+	HasSAKey    bool      `json:"has_sa_key"`         // 前端用来判断是否已配置
+	Enabled     int       `json:"enabled" db:"enabled"`
+	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
 }
 
 type NodePoolInfo struct {

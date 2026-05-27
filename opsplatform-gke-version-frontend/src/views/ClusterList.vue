@@ -14,6 +14,12 @@
           <router-link :to="`/clusters/${row.id}`">{{ row.name }}</router-link>
         </template>
       </el-table-column>
+      <el-table-column label="SA Key" min-width="100">
+        <template #default="{ row }">
+          <el-tag v-if="row.has_sa_key" type="success" size="small">已配置</el-tag>
+          <el-tag v-else type="danger" size="small">未配置</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="当前版本" min-width="160">
         <template #default="{ row }">{{ row.snapshot?.current_version || '-' }}</template>
       </el-table-column>

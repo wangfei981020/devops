@@ -6,14 +6,26 @@ import (
 
 	container "cloud.google.com/go/container/apiv1"
 	containerpb "cloud.google.com/go/container/apiv1/containerpb"
+	"google.golang.org/api/option"
 )
 
 type GCPClient struct {
 	cm *container.ClusterManagerClient
 }
 
+// NewGCPClient: 使用 Application Default Credentials（ADC）— 主要给本地开发用。
 func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 	c, err := container.NewClusterManagerClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &GCPClient{cm: c}, nil
+}
+
+// NewGCPClientWithJSON: 直接用内存里的 service account JSON 创建 client。
+// 每个被监控的集群在 DB 里存自己的 SA key，scrape 时按需创建。
+func NewGCPClientWithJSON(ctx context.Context, saKeyJSON []byte) (*GCPClient, error) {
+	c, err := container.NewClusterManagerClient(ctx, option.WithCredentialsJSON(saKeyJSON))
 	if err != nil {
 		return nil, err
 	}

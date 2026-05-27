@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -14,17 +15,15 @@ import (
 
 type Scraper struct {
 	db       *sql.DB
-	gcp      *GCPClient
 	mu       sync.RWMutex
 	interval time.Duration
 	ticker   *time.Ticker
 	stop     chan struct{}
 }
 
-func NewScraper(db *sql.DB, gcp *GCPClient, initialInterval time.Duration) *Scraper {
+func NewScraper(db *sql.DB, initialInterval time.Duration) *Scraper {
 	return &Scraper{
 		db:       db,
-		gcp:      gcp,
 		interval: initialInterval,
 		stop:     make(chan struct{}),
 	}
@@ -82,11 +81,20 @@ func (s *Scraper) ScrapeAll(ctx context.Context) {
 }
 
 func (s *Scraper) ScrapeOne(ctx context.Context, cl *models.Cluster) error {
-	srv, err := s.gcp.GetServerConfig(ctx, cl.ProjectID, cl.Location)
+	if cl.SAKeyJSON == "" {
+		return fmt.Errorf("cluster %s/%s/%s has no SA key configured", cl.ProjectID, cl.Location, cl.Name)
+	}
+	gcp, err := NewGCPClientWithJSON(ctx, []byte(cl.SAKeyJSON))
+	if err != nil {
+		return fmt.Errorf("init GCP client: %w", err)
+	}
+	defer gcp.Close()
+
+	srv, err := gcp.GetServerConfig(ctx, cl.ProjectID, cl.Location)
 	if err != nil {
 		return err
 	}
-	info, err := s.gcp.GetCluster(ctx, cl.ProjectID, cl.Location, cl.Name)
+	info, err := gcp.GetCluster(ctx, cl.ProjectID, cl.Location, cl.Name)
 	if err != nil {
 		return err
 	}
@@ -191,7 +199,7 @@ func pickMaxUpgradableNode(currentMaster string, validNode []string) string {
 }
 
 func (s *Scraper) listEnabledClusters() ([]*models.Cluster, error) {
-	rows, err := s.db.Query(`SELECT id, project_id, location, name, enabled, created_at, updated_at FROM clusters WHERE enabled=1`)
+	rows, err := s.db.Query(`SELECT id, project_id, location, name, COALESCE(sa_key_json, ''), enabled, created_at, updated_at FROM clusters WHERE enabled=1`)
 	if err != nil {
 		return nil, err
 	}
@@ -199,9 +207,10 @@ func (s *Scraper) listEnabledClusters() ([]*models.Cluster, error) {
 	out := []*models.Cluster{}
 	for rows.Next() {
 		c := &models.Cluster{}
-		if err := rows.Scan(&c.ID, &c.ProjectID, &c.Location, &c.Name, &c.Enabled, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.Location, &c.Name, &c.SAKeyJSON, &c.Enabled, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
+		c.HasSAKey = c.SAKeyJSON != ""
 		out = append(out, c)
 	}
 	return out, nil

@@ -32,7 +32,9 @@ type clusterWithSnap struct {
 
 func (h *ClustersHandler) List(c *gin.Context) {
 	rows, err := h.DB.Query(`
-		SELECT c.id, c.project_id, c.location, c.name, c.enabled, c.created_at, c.updated_at,
+		SELECT c.id, c.project_id, c.location, c.name,
+		       CASE WHEN c.sa_key_json IS NULL OR c.sa_key_json = '' THEN 0 ELSE 1 END AS has_sa_key,
+		       c.enabled, c.created_at, c.updated_at,
 		       s.current_version, s.max_upgradable_version, s.latest_available_version,
 		       s.current_to_max_versions_behind, s.current_to_max_version_diff,
 		       s.max_to_latest_versions_behind, s.max_to_latest_version_diff,
@@ -56,13 +58,15 @@ func (h *ClustersHandler) List(c *gin.Context) {
 			cmd, mld, cld                         sql.NullFloat64
 			npJSON                                sql.NullString
 			lastRefreshed                         sql.NullTime
+			hasSAKey                              int
 		)
-		if err := rows.Scan(&cw.ID, &cw.ProjectID, &cw.Location, &cw.Name, &cw.Enabled, &cw.CreatedAt, &cw.UpdatedAt,
+		if err := rows.Scan(&cw.ID, &cw.ProjectID, &cw.Location, &cw.Name, &hasSAKey, &cw.Enabled, &cw.CreatedAt, &cw.UpdatedAt,
 			&cur, &maxUp, &latest, &cm, &cmd, &ml, &mld, &cl2, &cld,
 			&std, &ext, &npJSON, &lastRefreshed, &lastErr); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
+		cw.HasSAKey = hasSAKey == 1
 		if cur.Valid {
 			snap := &models.ClusterSnapshot{
 				ClusterID:                     cw.ID,
@@ -94,12 +98,16 @@ func (h *ClustersHandler) List(c *gin.Context) {
 
 func (h *ClustersHandler) Get(c *gin.Context) {
 	id := c.Param("id")
-	row := h.DB.QueryRow(`SELECT id, project_id, location, name, enabled, created_at, updated_at FROM clusters WHERE id=?`, id)
+	row := h.DB.QueryRow(`SELECT id, project_id, location, name,
+		CASE WHEN sa_key_json IS NULL OR sa_key_json = '' THEN 0 ELSE 1 END,
+		enabled, created_at, updated_at FROM clusters WHERE id=?`, id)
 	var cl models.Cluster
-	if err := row.Scan(&cl.ID, &cl.ProjectID, &cl.Location, &cl.Name, &cl.Enabled, &cl.CreatedAt, &cl.UpdatedAt); err != nil {
+	var hasSAKey int
+	if err := row.Scan(&cl.ID, &cl.ProjectID, &cl.Location, &cl.Name, &hasSAKey, &cl.Enabled, &cl.CreatedAt, &cl.UpdatedAt); err != nil {
 		c.JSON(404, gin.H{"error": "not found"})
 		return
 	}
+	cl.HasSAKey = hasSAKey == 1
 	c.JSON(200, cl)
 }
 
@@ -107,6 +115,7 @@ type clusterReq struct {
 	ProjectID string `json:"project_id" binding:"required"`
 	Location  string `json:"location" binding:"required"`
 	Name      string `json:"name" binding:"required"`
+	SAKeyJSON string `json:"sa_key_json"` // 编辑时空字符串=保留原值；创建时空字符串=未配置
 	Enabled   int    `json:"enabled"`
 }
 
@@ -116,8 +125,8 @@ func (h *ClustersHandler) Create(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	res, err := h.DB.Exec(`INSERT INTO clusters (project_id, location, name, enabled) VALUES (?, ?, ?, ?)`,
-		req.ProjectID, req.Location, req.Name, 1)
+	res, err := h.DB.Exec(`INSERT INTO clusters (project_id, location, name, sa_key_json, enabled) VALUES (?, ?, ?, NULLIF(?, ''), ?)`,
+		req.ProjectID, req.Location, req.Name, req.SAKeyJSON, 1)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -133,11 +142,21 @@ func (h *ClustersHandler) Update(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	_, err := h.DB.Exec(`UPDATE clusters SET project_id=?, location=?, name=?, enabled=? WHERE id=?`,
-		req.ProjectID, req.Location, req.Name, req.Enabled, id)
-	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
+	if req.SAKeyJSON == "" {
+		// 空字符串 = 保留原 SA key 不动
+		_, err := h.DB.Exec(`UPDATE clusters SET project_id=?, location=?, name=?, enabled=? WHERE id=?`,
+			req.ProjectID, req.Location, req.Name, req.Enabled, id)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		_, err := h.DB.Exec(`UPDATE clusters SET project_id=?, location=?, name=?, sa_key_json=?, enabled=? WHERE id=?`,
+			req.ProjectID, req.Location, req.Name, req.SAKeyJSON, req.Enabled, id)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	c.JSON(200, gin.H{"ok": true})
 }
