@@ -49,6 +49,9 @@ func main() {
 		log.Printf("创建默认管理员失败: %v", err)
 	}
 
+	// 初始化 API 文档相关权限码
+	handlers.EnsureAPIDocsPermissions(database.DB)
+
 	// 注意: SyncUserRoles 是一次性的 users.role -> user_roles 迁移工具，
 	// 启动时调用会用旧的 users.role 单字段强制覆盖多角色 user_roles 表，
 	// 导致在 UI 配置的多角色重启后被砍成 1 个。已停用。
@@ -294,6 +297,10 @@ func main() {
 	protected.HandleFunc("/permissions/{id}", handlers.HandlePermission).Methods("PUT", "DELETE", "OPTIONS")
 	protected.HandleFunc("/users/{id}/roles", handlers.HandleUserRoles).Methods("GET", "PUT", "OPTIONS")
 	protected.HandleFunc("/my/permissions", handlers.HandleMyPermissions).Methods("GET", "OPTIONS")
+
+	// API 文档门户
+	protected.HandleFunc("/api-docs/domains", handlers.HandleGetAPIDocsDomains).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/api-docs/spec", handlers.HandleGetAPISpec).Methods("GET", "OPTIONS")
 
 	// 任务池
 	protected.HandleFunc("/tasks", handlers.HandleGetTasks).Methods("GET", "OPTIONS")
