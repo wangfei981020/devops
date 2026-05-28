@@ -1,3 +1,16 @@
+// @title           运维平台 · 内部对接 API
+// @version         1.0
+// @description     供内部开发对接的 API Key 接口。所有请求需带 X-API-Key 头。
+// @description     基础 URL: http://<host>/api
+// @termsOfService  内部使用
+// @contact.name    运维平台
+// @license.name    Internal
+// @host            localhost:30081
+// @BasePath        /api
+// @schemes         http https
+// @securityDefinitions.apikey  ApiKeyAuth
+// @in              header
+// @name            X-API-Key
 package main
 
 import (
