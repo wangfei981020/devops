@@ -6,14 +6,16 @@ import (
 )
 
 type Config struct {
-	Port     string
-	MySQLDSN string
+	Port       string // ":8080" 业务端口
+	HealthPort string // ":8088" 健康检查 + Prometheus 指标，与发布系统对齐
+	MySQLDSN   string
 }
 
 func Load() *Config {
 	return &Config{
-		Port:     getenv("PORT", "8080"),
-		MySQLDSN: buildMySQLDSN(),
+		Port:       getenv("PORT", ":8080"),
+		HealthPort: getenv("HEALTH_PORT", ":8088"),
+		MySQLDSN:   buildMySQLDSN(),
 	}
 }
 

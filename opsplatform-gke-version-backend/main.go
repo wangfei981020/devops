@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"opsplatform-gke-version-backend/config"
 	"opsplatform-gke-version-backend/database"
@@ -47,10 +46,11 @@ func main() {
 	sw.Start()
 	defer sw.Stop()
 
+	// health/metrics 独立端口（8088），业务端口 hang 死时仍可探活；与发布系统 deploy-backend 一致
+	go handlers.StartHealthServer(cfg.HealthPort, db)
+
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
-	handlers.RegisterHealth(r)
-	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	api := r.Group("/api")
 	handlers.NewClustersHandler(db).Register(api)
 	handlers.NewRefreshHandler(db, scraper).Register(api)
@@ -61,8 +61,8 @@ func main() {
 	handlers.NewOverviewHandler(db).Register(api)
 	handlers.NewVersionHistoryHandler(db).Register(api)
 
-	log.Printf("listening on :%s", cfg.Port)
-	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
+	log.Printf("listening on %s", cfg.Port)
+	if err := http.ListenAndServe(cfg.Port, r); err != nil {
 		log.Fatal(err)
 	}
 }
