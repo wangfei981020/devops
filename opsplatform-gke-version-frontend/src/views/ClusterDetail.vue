@@ -144,25 +144,88 @@
       <el-empty v-else description="暂无节点池数据" :image-size="80" />
     </section>
 
-    <!-- 版本变更历史：折叠 -->
+    <!-- 升级历史（GCP 真实数据 + 监控期间观察推断） -->
     <section class="section">
-      <el-collapse v-model="historyOpen" class="history-collapse">
-        <el-collapse-item name="history">
+      <div class="section-head">
+        <h2 class="section-title">升级历史</h2>
+        <p class="section-hint">
+          数据源 GCP Container API Operations · 时间精确到秒 ·
+          <span class="source-badge source-snapshot">监控观察</span> 100% 准确，
+          <span class="source-badge source-detail">文本解析</span> 来自 GCP 文案，
+          <span class="source-badge source-empty">-</span> 监控前发生、版本未知
+        </p>
+      </div>
+
+      <div v-if="upgrades.groups.length">
+        <article v-for="g in upgrades.groups" :key="g.target" class="upgrade-group">
+          <div class="ug-head">
+            <div class="ug-title-row">
+              <span class="ug-icon" :class="g.kind">
+                <svg v-if="g.kind === 'master'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M12 6v6l4 2" stroke-linecap="round" />
+                </svg>
+                <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M3 9h18M9 3v18" />
+                </svg>
+              </span>
+              <span class="ug-target">{{ g.kind === 'master' ? '集群控制平面' : '节点池 ' + g.target }}</span>
+            </div>
+            <div class="ug-meta" v-if="g.current_version_since">
+              <span class="muted">当前版本运行</span>
+              <span class="ug-days">{{ g.current_version_days }} 天</span>
+              <span class="muted">·</span>
+              <span class="muted">{{ formatTimeSec(g.current_version_since) }} 起</span>
+            </div>
+            <div class="ug-meta" v-else>
+              <span class="muted">暂无升级事件记录</span>
+            </div>
+          </div>
+
+          <ol class="ug-events" v-if="g.events.length">
+            <li v-for="(ev, idx) in g.events" :key="ev.operation_id" class="ug-event">
+              <span class="ug-dot" :class="ev.status === 'DONE' ? 'dot-done' : 'dot-running'" />
+              <div class="ug-event-body">
+                <div class="ug-line-1">
+                  <span class="ug-time">{{ formatTimeSec(ev.ended_at || ev.started_at) }}</span>
+                  <span v-if="idx === 0 && ev.status === 'DONE'" class="tag-current">最新</span>
+                  <span v-if="ev.status !== 'DONE'" class="tag-status" :class="'status-' + ev.status.toLowerCase()">{{ ev.status }}</span>
+                </div>
+                <div class="ug-line-2">
+                  <code class="ver-mono">{{ ev.from_version || '-' }}</code>
+                  <span class="src-badge" :class="'source-' + ev.from_source">{{ sourceLabel(ev.from_source) }}</span>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="arrow">
+                    <path d="M5 12h14M12 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                  <code class="ver-mono">{{ ev.to_version || '-' }}</code>
+                  <span class="src-badge" :class="'source-' + ev.to_source">{{ sourceLabel(ev.to_source) }}</span>
+                </div>
+                <div class="ug-line-3" v-if="ev.duration_seconds">
+                  <span class="muted">耗时 {{ formatDuration(ev.duration_seconds) }}</span>
+                </div>
+              </div>
+            </li>
+          </ol>
+          <div v-else class="ug-empty">暂无升级事件</div>
+        </article>
+      </div>
+      <el-empty v-else description="暂无升级历史数据（首次纳管 30 分钟内会自动拉取）" :image-size="80" />
+    </section>
+
+    <!-- 监控观察的版本变化（次要，默认收起） -->
+    <section class="section" v-if="hasObservedHistory">
+      <el-collapse v-model="observedOpen" class="history-collapse">
+        <el-collapse-item name="observed">
           <template #title>
             <div class="history-head">
-              <h2 class="section-title inline">版本变更历史</h2>
-              <span class="section-hint inline">起始时间是首次纳管监控的时间，不一定是真实升级时间</span>
+              <h2 class="section-title inline">监控观察记录</h2>
+              <span class="section-hint inline">我们 scrape 到的版本变化（监控期间），起始时间是首次观察时间</span>
             </div>
           </template>
 
           <div class="history-block">
-            <div class="history-subtitle">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 6v6l4 2" stroke-linecap="round" />
-              </svg>
-              集群控制平面
-            </div>
+            <div class="history-subtitle">集群控制平面</div>
             <el-timeline v-if="history.cluster && history.cluster.length">
               <el-timeline-item
                 v-for="(e, idx) in history.cluster"
@@ -174,21 +237,14 @@
                 <div class="history-row">
                   <code class="ver-mono">{{ e.version }}</code>
                   <span v-if="e.current" class="tag-current">当前</span>
-                  <span class="duration">运行 {{ e.duration_days }} 天</span>
+                  <span class="duration">观察 {{ e.duration_days }} 天</span>
                 </div>
               </el-timeline-item>
             </el-timeline>
-            <el-empty v-else description="暂无变更记录" :image-size="60" />
           </div>
 
           <div v-for="(entries, npName) in history.nodepools" :key="npName" class="history-block">
-            <div class="history-subtitle">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <path d="M3 9h18M9 3v18" />
-              </svg>
-              节点池 {{ npName }}
-            </div>
+            <div class="history-subtitle">节点池 {{ npName }}</div>
             <el-timeline>
               <el-timeline-item
                 v-for="(e, idx) in entries"
@@ -200,7 +256,7 @@
                 <div class="history-row">
                   <code class="ver-mono">{{ e.version }}</code>
                   <span v-if="e.current" class="tag-current">当前</span>
-                  <span class="duration">运行 {{ e.duration_days }} 天</span>
+                  <span class="duration">观察 {{ e.duration_days }} 天</span>
                 </div>
               </el-timeline-item>
             </el-timeline>
@@ -246,17 +302,23 @@ import { useRoute } from 'vue-router'
 import { listClusters } from '../api/clusters'
 import { getVersionHistory } from '../api/version_history'
 import { getNodes } from '../api/nodes'
+import { getUpgrades } from '../api/upgrades'
 
 const route = useRoute()
 const loading = ref(false)
 const cluster = ref(null)
 const history = ref({ cluster: [], nodepools: {} })
+const upgrades = ref({ groups: [] })
 const nodesData = ref({ nodepools: [] })
-const historyOpen = ref([]) // 默认收起；点击展开
+const observedOpen = ref([]) // 默认收起；点击展开
 const nodesDialogOpen = ref(false)
 const activeNp = ref(null)
 
 const snap = computed(() => cluster.value?.snapshot)
+const hasObservedHistory = computed(() =>
+  (history.value.cluster && history.value.cluster.length) ||
+  Object.keys(history.value.nodepools || {}).length > 0
+)
 
 // 合并 snap.nodepools（版本/EOL）+ nodesData.nodepools（VM 明细）
 const nodepoolPanels = computed(() => {
@@ -373,6 +435,27 @@ function formatDiff(v) {
   if (v == null) return '-'
   return Number(v).toFixed(4)
 }
+function formatTimeSec(s) {
+  if (!s) return '-'
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return '-'
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+function formatDuration(seconds) {
+  if (!seconds || seconds <= 0) return '-'
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  if (m === 0) return `${s} 秒`
+  if (m < 60) return `${m} 分 ${s} 秒`
+  const h = Math.floor(m / 60)
+  return `${h} 小时 ${m % 60} 分`
+}
+function sourceLabel(src) {
+  if (src === 'snapshot') return '观察'
+  if (src === 'detail') return '解析'
+  return '-'
+}
 
 onMounted(async () => {
   loading.value = true
@@ -380,12 +463,14 @@ onMounted(async () => {
     const all = await listClusters()
     cluster.value = all.find(c => String(c.id) === String(route.params.id))
     if (cluster.value) {
-      const [hist, nodes] = await Promise.all([
+      const [hist, nodes, ups] = await Promise.all([
         getVersionHistory(cluster.value.id),
         getNodes(cluster.value.id).catch(() => ({ nodepools: [] })),
+        getUpgrades(cluster.value.id).catch(() => ({ groups: [] })),
       ])
       history.value = hist
       nodesData.value = nodes
+      upgrades.value = ups
     }
   } finally {
     loading.value = false
@@ -695,6 +780,106 @@ onMounted(async () => {
   .kpi-card { padding: 14px 16px; }
   .kpi-primary { font-size: 18px; }
   .kpi-number { font-size: 22px; }
+}
+
+/* ===== 升级历史（GCP 真实数据） ===== */
+.upgrade-group {
+  background: var(--bg-card, #ffffff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  padding: 16px 18px;
+  margin-bottom: 12px;
+}
+.ug-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed var(--border, #e2e8f0);
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.ug-title-row { display: inline-flex; align-items: center; gap: 8px; }
+.ug-icon { color: var(--text-2, #94a3b8); display: inline-flex; }
+.ug-icon.master { color: #1E40AF; }
+.ug-icon.nodepool { color: #475569; }
+.ug-target { font-weight: 600; font-size: 14px; color: var(--text, #0F172A); }
+.ug-meta { font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+.ug-days {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #1E40AF;
+  font-size: 15px;
+}
+
+.ug-events { list-style: none; padding: 0; margin: 0; }
+.ug-event {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border, #f1f5f9);
+}
+.ug-event:last-child { border-bottom: none; }
+.ug-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+.dot-done { background: #10B981; }
+.dot-running { background: #F59E0B; }
+.ug-event-body { flex: 1; min-width: 0; }
+.ug-line-1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.ug-time {
+  font-family: var(--mono, 'Fira Code', ui-monospace, monospace);
+  color: var(--text, #0F172A);
+  font-weight: 500;
+}
+.ug-line-2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.ug-line-2 .arrow { color: var(--text-2, #94a3b8); margin: 0 2px; }
+.ug-line-3 { font-size: 11px; margin-top: 2px; }
+.ug-empty { color: var(--text-2, #94a3b8); font-size: 13px; padding: 8px 0; }
+
+.tag-status {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.status-running { background: #FEF3C7; color: #92400E; }
+.status-aborting { background: #FEE2E2; color: #991B1B; }
+
+.src-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.source-snapshot { background: #D1FAE5; color: #047857; border-color: #A7F3D0; }
+.source-detail { background: #DBEAFE; color: #1E40AF; border-color: #BFDBFE; }
+.source-empty { background: #F1F5F9; color: #64748B; border-color: #E2E8F0; }
+.source-badge { /* used in section-hint legend */
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin: 0 2px;
+  font-weight: 500;
 }
 
 @media (prefers-reduced-motion: reduce) {

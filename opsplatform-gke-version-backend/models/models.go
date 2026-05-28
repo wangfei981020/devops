@@ -47,6 +47,25 @@ type ClusterSnapshot struct {
 	LastError                     string         `json:"last_error"`
 }
 
+// UpgradeEvent：GKE 真实升级事件（来自 GCP Container API Operations）
+// from_version/to_version 通过 detail 文本（甲）+ version_history 配对（乙）推断
+type UpgradeEvent struct {
+	ID            int64      `json:"id"`
+	ClusterID     int        `json:"cluster_id"`
+	NodepoolName  string     `json:"nodepool_name"` // '' 表示 master 升级
+	OperationID   string     `json:"operation_id"`
+	OperationType string     `json:"operation_type"`
+	FromVersion   string     `json:"from_version"`
+	ToVersion     string     `json:"to_version"`
+	FromSource    string     `json:"from_source"` // snapshot / detail / empty
+	ToSource      string     `json:"to_source"`
+	Status        string     `json:"status"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	EndedAt       *time.Time `json:"ended_at,omitempty"`
+	RawDetail     string     `json:"raw_detail,omitempty"`
+	ScrapedAt     time.Time  `json:"scraped_at"`
+}
+
 // Node：GKE 集群里的一个 VM 实例（一个 node）
 // 数据来源：GCP Compute API；每次 scrape 全量刷新（DELETE+INSERT 事务）
 type Node struct {

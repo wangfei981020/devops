@@ -123,7 +123,29 @@ func (s *Scraper) ScrapeOne(ctx context.Context, cl *models.Cluster) error {
 	if err := s.scrapeNodes(ctx, gcp, cl, info); err != nil {
 		log.Printf("scrape nodes %s/%s/%s: %v", cl.ProjectID, cl.Location, cl.Name, err)
 	}
+
+	// 拉 GCP 真实升级事件（UPGRADE_MASTER + UPGRADE_NODES），UPSERT 到 upgrade_events
+	// 同样单独失败不阻塞主流程
+	if err := s.scrapeUpgradeOps(ctx, gcp, cl); err != nil {
+		log.Printf("scrape upgrade ops %s/%s/%s: %v", cl.ProjectID, cl.Location, cl.Name, err)
+	}
 	return nil
+}
+
+// scrapeUpgradeOps：拉某 location 下所有 UPGRADE_* 操作，按 ClusterName 过滤本集群归属，UPSERT
+func (s *Scraper) scrapeUpgradeOps(ctx context.Context, gcp *GCPClient, cl *models.Cluster) error {
+	ops, err := gcp.ListUpgradeOps(ctx, cl.ProjectID, cl.Location)
+	if err != nil {
+		return err
+	}
+	filtered := make([]UpgradeOp, 0, len(ops))
+	for _, op := range ops {
+		if op.ClusterName != cl.Name {
+			continue
+		}
+		filtered = append(filtered, op)
+	}
+	return UpsertUpgradeEvents(s.db, cl.ID, cl.Name, filtered)
 }
 
 // scrapeNodes：调 Compute API 收集本集群所有节点池下的 VM 创建时间，全量覆盖写入 nodes 表。
