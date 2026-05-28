@@ -52,3 +52,47 @@ type Setting struct {
 	Value     string    `json:"v"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+type NotifyUser struct {
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	LarkID    string    `json:"lark_id"`
+	Remark    string    `json:"remark"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type LarkWebhook struct {
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	URL       string    `json:"url"`
+	Remark    string    `json:"remark"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type AlertRule struct {
+	ID                      int       `json:"id"`
+	Name                    string    `json:"name"`
+	Target                  string    `json:"target"` // cluster | nodepool
+	VersionsBehindThreshold int       `json:"versions_behind_threshold"`
+	EOLDaysThreshold        *int      `json:"eol_days_threshold,omitempty"`
+	ClusterIDs              []int     `json:"cluster_ids"`        // 空 = 全部
+	WebhookID               int       `json:"webhook_id"`
+	MentionUserIDs          []int     `json:"mention_user_ids"`
+	IntervalMinutes         int       `json:"interval_minutes"`
+	Enabled                 int       `json:"enabled"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
+}
+
+type AlertHistory struct {
+	ID             int        `json:"id"`
+	RuleID         int        `json:"rule_id"`
+	ClusterID      int        `json:"cluster_id"`
+	NodepoolName   string     `json:"nodepool_name,omitempty"`
+	VersionsBehind int        `json:"versions_behind"`
+	TriggerTime    time.Time  `json:"trigger_time"`
+	Status         string     `json:"status"`
+	LarkResponse   string     `json:"lark_response,omitempty"`
+}

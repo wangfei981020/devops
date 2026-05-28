@@ -6,9 +6,25 @@
         <div class="brand-n">GKE 版本监控</div>
       </div>
       <nav class="nav">
-        <RouterLink to="/" class="nav-item" active-class="active" exact-active-class="active">
+        <RouterLink to="/" class="nav-item" active-class="active" :class="{ active: $route.path === '/' }">
+          <el-icon class="ico"><DataAnalysis /></el-icon>
+          <span>总览</span>
+        </RouterLink>
+        <RouterLink to="/clusters" class="nav-item" active-class="active">
           <el-icon class="ico"><Files /></el-icon>
           <span>集群列表</span>
+        </RouterLink>
+        <RouterLink to="/alert-rules" class="nav-item" active-class="active">
+          <el-icon class="ico"><Bell /></el-icon>
+          <span>告警规则</span>
+        </RouterLink>
+        <RouterLink to="/lark-webhooks" class="nav-item" active-class="active">
+          <el-icon class="ico"><ChatLineRound /></el-icon>
+          <span>Lark Webhook</span>
+        </RouterLink>
+        <RouterLink to="/notify-users" class="nav-item" active-class="active">
+          <el-icon class="ico"><UserFilled /></el-icon>
+          <span>通知人</span>
         </RouterLink>
         <RouterLink to="/settings" class="nav-item" active-class="active">
           <el-icon class="ico"><Setting /></el-icon>
@@ -28,7 +44,7 @@
   </div>
 </template>
 <script setup>
-import { Files, Setting } from '@element-plus/icons-vue'
+import { Files, Setting, DataAnalysis, Bell, ChatLineRound, UserFilled } from '@element-plus/icons-vue'
 </script>
 <style scoped>
 .app { display: flex; height: 100vh; }

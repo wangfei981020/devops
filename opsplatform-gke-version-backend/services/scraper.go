@@ -14,18 +14,20 @@ import (
 )
 
 type Scraper struct {
-	db       *sql.DB
-	mu       sync.RWMutex
-	interval time.Duration
-	ticker   *time.Ticker
-	stop     chan struct{}
+	db          *sql.DB
+	alertEngine *AlertEngine
+	mu          sync.RWMutex
+	interval    time.Duration
+	ticker      *time.Ticker
+	stop        chan struct{}
 }
 
-func NewScraper(db *sql.DB, initialInterval time.Duration) *Scraper {
+func NewScraper(db *sql.DB, initialInterval time.Duration, alertEngine *AlertEngine) *Scraper {
 	return &Scraper{
-		db:       db,
-		interval: initialInterval,
-		stop:     make(chan struct{}),
+		db:          db,
+		alertEngine: alertEngine,
+		interval:    initialInterval,
+		stop:        make(chan struct{}),
 	}
 }
 
@@ -78,6 +80,9 @@ func (s *Scraper) ScrapeAll(ctx context.Context) {
 			s.saveError(cl.ID, err.Error())
 		}
 	}
+	if s.alertEngine != nil {
+		s.alertEngine.Evaluate()
+	}
 }
 
 func (s *Scraper) ScrapeOne(ctx context.Context, cl *models.Cluster) error {
@@ -108,6 +113,9 @@ func (s *Scraper) ScrapeOne(ctx context.Context, cl *models.Cluster) error {
 
 	return s.saveSnapshot(snap)
 }
+
+// AlertEngine 暴露给 handler 调用（如单集群手动刷新后触发评估）
+func (s *Scraper) AlertEngine() *AlertEngine { return s.alertEngine }
 
 func buildSnapshot(cl *models.Cluster, info *ClusterInfo, srv *ServerConfig) *models.ClusterSnapshot {
 	cur := info.CurrentMasterVersion

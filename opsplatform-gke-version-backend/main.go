@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -33,7 +34,12 @@ func main() {
 			interval = time.Duration(n) * time.Minute
 		}
 	}
-	scraper := services.NewScraper(db, interval)
+	detailURL := os.Getenv("FRONTEND_BASE_URL")
+	if detailURL == "" {
+		detailURL = "http://localhost:30827"
+	}
+	alertEngine := services.NewAlertEngine(db, detailURL)
+	scraper := services.NewScraper(db, interval, alertEngine)
 	scraper.Start()
 	defer scraper.Stop()
 
@@ -49,6 +55,10 @@ func main() {
 	handlers.NewClustersHandler(db).Register(api)
 	handlers.NewRefreshHandler(db, scraper).Register(api)
 	handlers.NewSettingsHandler(db).Register(api)
+	handlers.NewNotifyUsersHandler(db).Register(api)
+	handlers.NewLarkWebhooksHandler(db).Register(api)
+	handlers.NewAlertRulesHandler(db).Register(api)
+	handlers.NewOverviewHandler(db).Register(api)
 
 	log.Printf("listening on :%s", cfg.Port)
 	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {

@@ -50,6 +50,9 @@ func (h *RefreshHandler) Refresh(c *gin.Context) {
 			}
 			_ = h.Scraper.ScrapeOne(context.Background(), cl)
 		}
+		if ae := h.Scraper.AlertEngine(); ae != nil {
+			ae.Evaluate()
+		}
 	}()
 	c.JSON(202, gin.H{"started": req.ClusterIDs})
 }
