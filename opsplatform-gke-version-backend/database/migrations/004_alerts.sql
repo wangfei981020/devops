@@ -1,5 +1,3 @@
-USE gke_version_monitor;
-
 CREATE TABLE IF NOT EXISTS notify_users (
   id         INT AUTO_INCREMENT PRIMARY KEY,
   name       VARCHAR(64) NOT NULL,

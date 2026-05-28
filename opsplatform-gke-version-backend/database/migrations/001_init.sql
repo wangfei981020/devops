@@ -1,6 +1,3 @@
-CREATE DATABASE IF NOT EXISTS gke_version_monitor DEFAULT CHARSET utf8mb4;
-USE gke_version_monitor;
-
 CREATE TABLE IF NOT EXISTS clusters (
   id          INT AUTO_INCREMENT PRIMARY KEY,
   project_id  VARCHAR(64) NOT NULL,
