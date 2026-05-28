@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"log"
 
 	"github.com/gin-gonic/gin"
 	"opsplatform-gke-version-backend/models"
@@ -46,9 +47,15 @@ func (h *RefreshHandler) Refresh(c *gin.Context) {
 		for _, id := range req.ClusterIDs {
 			cl, err := loadCluster(h.DB, id)
 			if err != nil {
+				log.Printf("manual refresh: load cluster id=%d: %v", id, err)
 				continue
 			}
-			_ = h.Scraper.ScrapeOne(context.Background(), cl)
+			if err := h.Scraper.ScrapeOne(context.Background(), cl); err != nil {
+				// 之前这里 err 被丢，导致前端点刷新出错时排查无门；
+				// 现在打日志 + 写 cluster_snapshots.last_error，与周期 ScrapeAll 行为一致
+				log.Printf("manual scrape %s/%s/%s: %v", cl.ProjectID, cl.Location, cl.Name, err)
+				h.Scraper.SaveError(cl.ID, err.Error())
+			}
 		}
 		if ae := h.Scraper.AlertEngine(); ae != nil {
 			ae.Evaluate()

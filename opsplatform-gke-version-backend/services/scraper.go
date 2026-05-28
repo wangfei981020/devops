@@ -249,6 +249,10 @@ func (s *Scraper) saveSnapshot(snap *models.ClusterSnapshot) error {
 	return err
 }
 
+// SaveError 给手动 refresh 路径用：把单集群抓取错误写到 cluster_snapshots.last_error，
+// 便于前端展示和 DB 排查。
+func (s *Scraper) SaveError(clusterID int, msg string) { s.saveError(clusterID, msg) }
+
 func (s *Scraper) saveError(clusterID int, msg string) {
 	now := time.Now()
 	_, _ = s.db.Exec(`
