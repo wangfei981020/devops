@@ -433,6 +433,7 @@ export default {
       tableHierarchyConfig: 'Table Config',
       tableManagement: 'Table Management',
       apiKeys: 'API Keys',
+      apiDocs: 'API Docs',
       assets: 'Assets',
       domains: 'Domains',
       merchants: 'Merchants',

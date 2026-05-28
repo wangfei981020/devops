@@ -27,6 +27,7 @@ const routes = [
       { path: 'table-hierarchy-config', name: 'TableHierarchyConfig', component: () => import('@/views/TableHierarchyConfigView.vue'), meta: { title: '桌台配置' } },
       { path: 'table-management', name: 'TableManagement', component: () => import('@/views/TableManagementView.vue'), meta: { title: '桌台管理' } },
       { path: 'api-keys', name: 'APIKeys', component: () => import('@/views/APIKeyManageView.vue'), meta: { title: 'API Key 管理' } },
+      { path: 'api-docs', name: 'ApiDocs', component: () => import('@/views/ApiDocsView.vue'), meta: { title: '接口文档' } },
       { path: 'assets', name: 'Assets', component: () => import('@/views/PlaceholderView.vue'), meta: { title: '资产管理' } },
       { path: 'domains', name: 'Domains', component: () => import('@/views/DomainsView.vue'), meta: { title: '域名管理' } },
       { path: 'merchants', name: 'Merchants', component: () => import('@/views/MerchantsView.vue'), meta: { title: '商户管理' } },

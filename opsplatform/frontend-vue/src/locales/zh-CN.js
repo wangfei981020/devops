@@ -433,6 +433,7 @@ export default {
       tableHierarchyConfig: '桌台配置',
       tableManagement: '桌台管理',
       apiKeys: 'API Key 管理',
+      apiDocs: '接口文档',
       assets: '资产管理',
       domains: '域名管理',
       merchants: '商户管理',
