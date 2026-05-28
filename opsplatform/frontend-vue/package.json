@@ -13,6 +13,7 @@
     "chart.js": "^4.4.1",
     "file-saver": "^2.0.5",
     "pinia": "^3.0.4",
+    "swagger-ui-dist": "^5.32.6",
     "vue": "^3.5.25",
     "vue-router": "^4.6.4",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
