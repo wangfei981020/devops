@@ -127,6 +127,7 @@ const pathToPermMap = {
   '/table-hierarchy-config': 'table_hierarchy_config',
   '/table-management': 'table_management',
   '/api-keys': 'api_keys',
+  '/api-docs': 'api_docs',
   '/assets': 'assets',
   '/domains': 'domains',
   '/merchants': 'merchants',
