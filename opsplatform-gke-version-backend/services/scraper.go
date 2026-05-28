@@ -111,7 +111,13 @@ func (s *Scraper) ScrapeOne(ctx context.Context, cl *models.Cluster) error {
 		writeNodepoolMetrics(cl, np)
 	}
 
-	return s.saveSnapshot(snap)
+	if err := s.saveSnapshot(snap); err != nil {
+		return err
+	}
+
+	// 检测版本变更并写入 history（集群+每个节点池）
+	RecordTransition(s.db, cl, snap)
+	return nil
 }
 
 // AlertEngine 暴露给 handler 调用（如单集群手动刷新后触发评估）
