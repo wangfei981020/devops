@@ -96,6 +96,7 @@ func touchAPIKeyLastUsed(keyID string) {
 // API Key 允许访问的路径 + method → 所需权限码后缀
 // 权限码最终为 "<domain>:<suffix>"，例如 table_maintenance:create
 var apiKeyRouteMap = []struct {
+	Domain      string // 业务域，用于按域分组生成 API 文档
 	Method      string
 	PathPattern *regexp.Regexp
 	PermSuffix  string
@@ -103,17 +104,17 @@ var apiKeyRouteMap = []struct {
 	HasTableID bool
 }{
 	// 桌台维护/自定义表 行数据
-	{"POST", regexp.MustCompile(`^/api/custom-tables/([^/]+)/rows$`), "create", true},
-	{"PUT", regexp.MustCompile(`^/api/custom-tables/([^/]+)/rows/[^/]+$`), "update", true},
-	{"PATCH", regexp.MustCompile(`^/api/custom-tables/([^/]+)/rows/[^/]+$`), "update", true},
-	{"DELETE", regexp.MustCompile(`^/api/custom-tables/([^/]+)/rows/[^/]+$`), "delete", true},
-	{"GET", regexp.MustCompile(`^/api/custom-tables/([^/]+)$`), "read", true},
+	{"table_maintenance", "POST", regexp.MustCompile(`^/api/custom-tables/([^/]+)/rows$`), "create", true},
+	{"table_maintenance", "PUT", regexp.MustCompile(`^/api/custom-tables/([^/]+)/rows/[^/]+$`), "update", true},
+	{"table_maintenance", "PATCH", regexp.MustCompile(`^/api/custom-tables/([^/]+)/rows/[^/]+$`), "update", true},
+	{"table_maintenance", "DELETE", regexp.MustCompile(`^/api/custom-tables/([^/]+)/rows/[^/]+$`), "delete", true},
+	{"table_maintenance", "GET", regexp.MustCompile(`^/api/custom-tables/([^/]+)$`), "read", true},
 	// 桌台层级配置只读（查询合法 projects/sites/tables/gameTypes）
-	{"GET", regexp.MustCompile(`^/api/hierarchy$`), "read", false},
+	{"table_maintenance", "GET", regexp.MustCompile(`^/api/hierarchy$`), "read", false},
 	// 存储
-	{"POST", regexp.MustCompile(`^/api/storage/upload$`), "upload", false},
-	{"POST", regexp.MustCompile(`^/api/storage/presign/batch$`), "read", false},
-	{"GET", regexp.MustCompile(`^/api/storage/presign$`), "read", false},
+	{"table_maintenance", "POST", regexp.MustCompile(`^/api/storage/upload$`), "upload", false},
+	{"table_maintenance", "POST", regexp.MustCompile(`^/api/storage/presign/batch$`), "read", false},
+	{"table_maintenance", "GET", regexp.MustCompile(`^/api/storage/presign$`), "read", false},
 }
 
 // matchAPIKeyRoute 返回：是否匹配、所需权限后缀、路径中的 tableID（可能为空）
