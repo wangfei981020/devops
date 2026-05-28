@@ -11,7 +11,7 @@
       <el-table-column prop="location" label="区域" min-width="100" />
       <el-table-column label="集群名" min-width="180">
         <template #default="{ row }">
-          <router-link :to="`/clusters/${row.id}`">{{ row.name }}</router-link>
+          <router-link :to="`/clusters/${row.id}`" class="cluster-name-link">{{ row.name }}</router-link>
         </template>
       </el-table-column>
       <el-table-column label="SA Key" min-width="100">
@@ -48,8 +48,9 @@
       <el-table-column label="最后刷新" min-width="160">
         <template #default="{ row }">{{ formatTime(row.snapshot?.last_refreshed_at) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="240" fixed="right">
+      <el-table-column label="操作" width="320" fixed="right">
         <template #default="{ row }">
+          <el-button size="small" type="primary" link @click="$router.push(`/clusters/${row.id}`)">详情</el-button>
           <RefreshButton label="刷新" :cluster-ids="[row.id]" @done="reload" />
           <el-button size="small" @click="$refs.dlg.open(row)">编辑</el-button>
           <el-button size="small" type="danger" @click="onDelete(row)">删除</el-button>
@@ -97,3 +98,14 @@ function formatTime(s) {
 }
 onMounted(() => store.load())
 </script>
+
+<style scoped>
+.cluster-name-link {
+  color: var(--el-color-primary);
+  font-weight: 500;
+  text-decoration: none;
+}
+.cluster-name-link:hover {
+  text-decoration: underline;
+}
+</style>
