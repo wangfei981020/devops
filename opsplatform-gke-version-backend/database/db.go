@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -12,7 +13,7 @@ import (
 	"opsplatform-gke-version-backend/database/migrations"
 )
 
-// Open: 解析 DSN，库不存在则自动 CREATE DATABASE，连接后跑 migration
+// Open: 连接 MySQL（库需用户预先创建），然后自动跑 migration 建表。
 func Open(dsn string) (*sql.DB, error) {
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
@@ -22,15 +23,6 @@ func Open(dsn string) (*sql.DB, error) {
 		return nil, fmt.Errorf("DSN missing dbname")
 	}
 
-	// 用不带 dbname 的 DSN 连一次，自动建库
-	dbName := cfg.DBName
-	cfg.DBName = ""
-	bootDSN := cfg.FormatDSN()
-	if err := ensureDatabase(bootDSN, dbName); err != nil {
-		return nil, fmt.Errorf("ensure database: %w", err)
-	}
-
-	// 正式连接
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, err
@@ -38,29 +30,21 @@ func Open(dsn string) (*sql.DB, error) {
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(30 * time.Minute)
+
 	if err := db.Ping(); err != nil {
+		// 库不存在时给出明确指引
+		if strings.Contains(err.Error(), "Unknown database") {
+			_ = db.Close()
+			return nil, fmt.Errorf("database %q does not exist. Please create it first:\n\n"+
+				"  mysql> CREATE DATABASE `%s` DEFAULT CHARSET utf8mb4;\n\n"+
+				"Underlying error: %w", cfg.DBName, cfg.DBName, err)
+		}
 		return nil, err
 	}
-	log.Printf("MySQL connected (db=%s)", dbName)
+	log.Printf("MySQL connected (db=%s)", cfg.DBName)
 
 	if err := migrations.Run(db); err != nil {
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 	return db, nil
-}
-
-func ensureDatabase(bootDSN, dbName string) error {
-	boot, err := sql.Open("mysql", bootDSN)
-	if err != nil {
-		return err
-	}
-	defer boot.Close()
-	if err := boot.Ping(); err != nil {
-		return fmt.Errorf("ping mysql server: %w", err)
-	}
-	if _, err := boot.Exec(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` DEFAULT CHARSET utf8mb4", dbName)); err != nil {
-		return err
-	}
-	log.Printf("database %s: ensured", dbName)
-	return nil
 }

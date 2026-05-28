@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: backend
-        image: localhost:8070/opsplatform/opsplatform-gke-version-backend:v3
+        image: localhost:8070/opsplatform/opsplatform-gke-version-backend:v4
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
