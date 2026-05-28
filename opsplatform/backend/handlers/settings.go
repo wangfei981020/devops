@@ -59,6 +59,13 @@ func init() {
 
 // HandleGetHierarchy 返回桌台层级配置（只暴露 projects/sites/tables/gameTypes，不含其他敏感设置）
 // 供外部 API Key 对接方查询合法取值
+// @Summary      获取桌台层级配置
+// @Description  返回平台配置的合法 projects/sites/tables/gameTypes，用于客户端字段校验。
+// @Tags         table_maintenance
+// @Produce      json
+// @Success      200  {object}  HierarchyResponse
+// @Security     ApiKeyAuth
+// @Router       /hierarchy [get]
 func HandleGetHierarchy(w http.ResponseWriter, r *http.Request) {
 	var raw string
 	err := database.DB.QueryRow(

@@ -61,6 +61,15 @@ func generateShareCode() string {
 	return hex.EncodeToString(b)
 }
 
+// @Summary      获取预签名 URL（单个）
+// @Description  传 path query 参数，返回可临时直接访问该文件的 URL。
+// @Tags         table_maintenance
+// @Produce      json
+// @Param        path  query     string  true  "文件 path（来自上传响应）"
+// @Success      200   {object}  PresignedURLResponse
+// @Failure      400   {object}  ErrorResponse
+// @Security     ApiKeyAuth
+// @Router       /storage/presign [get]
 func HandleGetPresignedURL(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	if path == "" {
@@ -85,6 +94,16 @@ func HandleGetPresignedURL(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// @Summary      获取预签名 URL（批量）
+// @Description  一次请求获取多个文件的预签名 URL，减少网络往返。
+// @Tags         table_maintenance
+// @Accept       json
+// @Produce      json
+// @Param        body  body      BatchPresignRequest   true  "文件 path 列表"
+// @Success      200   {object}  BatchPresignResponse
+// @Failure      400   {object}  ErrorResponse
+// @Security     ApiKeyAuth
+// @Router       /storage/presign/batch [post]
 func HandleBatchPresignedURL(w http.ResponseWriter, r *http.Request) {
 	var req PresignRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -337,6 +356,17 @@ func HandleDeleteFileShare(w http.ResponseWriter, r *http.Request) {
 
 // HandleStorageUpload 通用文件上传接口
 // 中间件已完成认证（JWT 或 API Key），这里不再检查 userID
+// @Summary      上传文件
+// @Description  multipart/form-data 上传文件，返回 path。把 path 放入记录的截图字段（如 notify_start_screenshot）。
+// @Tags         table_maintenance
+// @Accept       mpfd
+// @Produce      json
+// @Param        file  formData  file              true  "要上传的文件（图片）"
+// @Success      200   {object}  UploadResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      403   {object}  ErrorResponse "API Key 缺少 upload 权限"
+// @Security     ApiKeyAuth
+// @Router       /storage/upload [post]
 func HandleStorageUpload(w http.ResponseWriter, r *http.Request) {
 	err := r.ParseMultipartForm(32 << 20) // 32MB
 	if err != nil {

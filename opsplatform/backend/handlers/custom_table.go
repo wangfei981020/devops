@@ -128,7 +128,16 @@ func HandleCreateCustomTable(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleGetCustomTable 获取单个表格详情（含列和数据）
+// HandleGetCustomTable 获取桌台维护记录列表（包含表结构、列定义、所有行）
+// @Summary      获取桌台维护记录列表
+// @Description  返回表元信息、列定义、所有行数据。响应里每行带 source_api_key_id 字段（标识是哪个 API Key 创建的）。
+// @Tags         table_maintenance
+// @Produce      json
+// @Param        id   path      string  true  "table_id"
+// @Success      200  {object}  GetCustomTableResponse
+// @Failure      403  {object}  ErrorResponse "API Key 缺少 read 权限"
+// @Security     ApiKeyAuth
+// @Router       /custom-tables/{id} [get]
 func HandleGetCustomTable(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	tableID := vars["id"]
@@ -429,6 +438,19 @@ func checkAPIKeyRowAccess(r *http.Request, rowID, op string) (allowed bool, reas
 	return false, "此记录由 API Key 创建，需要权限：" + permCode
 }
 
+// HandleAddCustomRow 创建桌台维护记录
+// @Summary      创建桌台维护记录
+// @Description  通过 API Key 创建一条新的维护记录。截图字段需先调 /storage/upload 拿到 path 再放入 data 中。
+// @Tags         table_maintenance
+// @Accept       json
+// @Produce      json
+// @Param        id   path      string             true  "table_id (固定值：09ccbe4d-fcce-44f2-b689-725894111e80)"
+// @Param        body body      CreateRowRequest   true  "记录内容"
+// @Success      200  {object}  CreateRowResponse
+// @Failure      400  {object}  ErrorResponse "请求参数无效"
+// @Failure      403  {object}  ErrorResponse "API Key 缺少 create 权限"
+// @Security     ApiKeyAuth
+// @Router       /custom-tables/{id}/rows [post]
 func HandleAddCustomRow(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	tableID := vars["id"]
@@ -488,7 +510,20 @@ func HandleAddCustomRow(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleUpdateCustomRow 更新行数据
+// HandleUpdateCustomRow 全量更新桌台维护记录
+// @Summary      全量更新记录（PUT）
+// @Description  PUT 会整体替换 data 字段：未传的子字段会被覆盖为空。如果需要保留原值，请用 PATCH。
+// @Tags         table_maintenance
+// @Accept       json
+// @Produce      json
+// @Param        id      path      string            true  "table_id"
+// @Param        rowId   path      string            true  "记录ID"
+// @Param        body    body      UpdateRowRequest  true  "完整记录内容"
+// @Success      200     {object}  SuccessResponse
+// @Failure      400     {object}  ErrorResponse "请求参数无效"
+// @Failure      403     {object}  ErrorResponse "API Key 缺少 update 权限或行属于其他 API Key"
+// @Security     ApiKeyAuth
+// @Router       /custom-tables/{id}/rows/{rowId} [put]
 func HandleUpdateCustomRow(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	rowID := vars["rowId"]
@@ -541,7 +576,20 @@ func HandleUpdateCustomRow(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{"success": true, "message": "更新成功"})
 }
 
-// HandlePatchCustomRow 部分更新行数据（浅合并 data，只覆盖传入的 key）
+// HandlePatchCustomRow 部分更新桌台维护记录
+// @Summary      部分更新记录（PATCH）
+// @Description  PATCH 会浅合并 data 字段：未传的子字段保留原值，传了的子字段覆盖。**推荐二次编辑用这个**。
+// @Tags         table_maintenance
+// @Accept       json
+// @Produce      json
+// @Param        id      path      string            true  "table_id"
+// @Param        rowId   path      string            true  "记录ID"
+// @Param        body    body      PatchRowRequest   true  "需要更新的字段（只传要改的）"
+// @Success      200     {object}  SuccessResponse
+// @Failure      400     {object}  ErrorResponse
+// @Failure      403     {object}  ErrorResponse
+// @Security     ApiKeyAuth
+// @Router       /custom-tables/{id}/rows/{rowId} [patch]
 func HandlePatchCustomRow(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	rowID := vars["rowId"]
@@ -621,7 +669,16 @@ func HandlePatchCustomRow(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleDeleteCustomRow 删除行数据
+// HandleDeleteCustomRow 删除桌台维护记录
+// @Summary      删除记录
+// @Tags         table_maintenance
+// @Produce      json
+// @Param        id      path      string  true  "table_id"
+// @Param        rowId   path      string  true  "记录ID"
+// @Success      200     {object}  SuccessResponse
+// @Failure      403     {object}  ErrorResponse "API Key 缺少 delete 权限或行属于其他 API Key"
+// @Security     ApiKeyAuth
+// @Router       /custom-tables/{id}/rows/{rowId} [delete]
 func HandleDeleteCustomRow(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	rowID := vars["rowId"]
