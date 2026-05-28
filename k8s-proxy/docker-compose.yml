@@ -1,0 +1,36 @@
+# k8s-port-proxy: 把 Windows host 端口转发到 Docker Desktop K8s 节点 (172.22.0.2)
+# Docker Desktop K8s NodePort 不直接 expose 到 localhost，需要这层 nginx
+# 加新端口：在 nginx.conf 加 server 块 + 在下面 ports 加映射 → docker compose up -d
+services:
+  k8s-port-proxy:
+    image: nginx:alpine
+    container_name: k8s-port-proxy
+    restart: unless-stopped
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - kind   # 必须接到 Docker Desktop K8s 所在的 kind 网络，才能访问 desktop-control-plane (172.22.0.2)
+    ports:
+      # http
+      - "30081:30081"
+      - "30091:30091"
+      - "30900:30900"
+      - "30901:30901"
+      - "30443:30443"   # ArgoCD UI (sandbox)
+      # tcp stream
+      - "30082:30082"
+      - "30083:30083"
+      - "30084:30084"
+      - "30085:30085"
+      - "30086:30086"
+      - "30087:30087"
+      - "30088:30088"
+      - "30089:30089"
+      - "30090:30090"
+      - "30825:30825"
+      - "30826:30826"
+      - "30827:30827"   # opsplatform-gke-version-frontend
+
+networks:
+  kind:
+    external: true
