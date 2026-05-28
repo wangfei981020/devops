@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: localhost:8070/opsplatform/opsplatform-gke-version-frontend:v6
+        image: localhost:8070/opsplatform/opsplatform-gke-version-frontend:v8
         imagePullPolicy: Always
         ports:
         - containerPort: 80

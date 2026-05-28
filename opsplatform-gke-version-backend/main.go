@@ -60,6 +60,7 @@ func main() {
 	handlers.NewAlertRulesHandler(db).Register(api)
 	handlers.NewOverviewHandler(db).Register(api)
 	handlers.NewVersionHistoryHandler(db).Register(api)
+	handlers.NewNodesHandler(db).Register(api)
 
 	log.Printf("listening on %s", cfg.Port)
 	if err := http.ListenAndServe(cfg.Port, r); err != nil {

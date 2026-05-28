@@ -117,7 +117,41 @@ func (s *Scraper) ScrapeOne(ctx context.Context, cl *models.Cluster) error {
 
 	// 检测版本变更并写入 history（集群+每个节点池）
 	RecordTransition(s.db, cl, snap)
+
+	// 拉每个节点池的 VM 创建时间并全量覆盖 nodes 表。
+	// 单独失败不影响 cluster_snapshot 主流程（GCP Compute API 权限可能没给），仅打日志。
+	if err := s.scrapeNodes(ctx, gcp, cl, info); err != nil {
+		log.Printf("scrape nodes %s/%s/%s: %v", cl.ProjectID, cl.Location, cl.Name, err)
+	}
 	return nil
+}
+
+// scrapeNodes：调 Compute API 收集本集群所有节点池下的 VM 创建时间，全量覆盖写入 nodes 表。
+func (s *Scraper) scrapeNodes(ctx context.Context, gcp *GCPClient, cl *models.Cluster, info *ClusterInfo) error {
+	scraped := []scrapedNode{}
+	for _, np := range info.NodePools {
+		igmURLs := np.GetInstanceGroupUrls()
+		if len(igmURLs) == 0 {
+			continue
+		}
+		insts, err := gcp.ListNodepoolInstances(ctx, igmURLs)
+		if err != nil {
+			// 单个节点池失败跳过、继续下一个，避免一个 IGM 权限/网络问题拖垮整个集群
+			log.Printf("nodepool %s: list instances: %v", np.GetName(), err)
+			continue
+		}
+		ver := np.GetVersion()
+		for _, ni := range insts {
+			scraped = append(scraped, scrapedNode{
+				NodepoolName: np.GetName(),
+				NodeName:     ni.Name,
+				Zone:         ni.Zone,
+				Version:      ver,
+				GCPCreatedAt: ni.CreatedAt,
+			})
+		}
+	}
+	return SaveNodes(s.db, cl.ID, scraped)
 }
 
 // AlertEngine 暴露给 handler 调用（如单集群手动刷新后触发评估）

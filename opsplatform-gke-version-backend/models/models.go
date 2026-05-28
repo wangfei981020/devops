@@ -47,6 +47,19 @@ type ClusterSnapshot struct {
 	LastError                     string         `json:"last_error"`
 }
 
+// Node：GKE 集群里的一个 VM 实例（一个 node）
+// 数据来源：GCP Compute API；每次 scrape 全量刷新（DELETE+INSERT 事务）
+type Node struct {
+	ID           int       `json:"id" db:"id"`
+	ClusterID    int       `json:"cluster_id" db:"cluster_id"`
+	NodepoolName string    `json:"nodepool_name" db:"nodepool_name"`
+	NodeName     string    `json:"node_name" db:"node_name"`
+	Zone         string    `json:"zone" db:"zone"`
+	Version      string    `json:"version" db:"version"`
+	GCPCreatedAt time.Time `json:"gcp_created_at" db:"gcp_created_at"`
+	LastSeenAt   time.Time `json:"last_seen_at" db:"last_seen_at"`
+}
+
 type Setting struct {
 	Key       string    `json:"k"`
 	Value     string    `json:"v"`
