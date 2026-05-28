@@ -50,11 +50,14 @@ func dynamicStabilityTicks(intervalSec int) int {
 //	业务事实：5 副本 maxSurge=1 maxUnavailable=0 滚动更新需要 ~150s
 //	30 副本同模式需要 ~900s。固定 180s 超时对多副本服务必失败。
 //	解决：clone 后顺手读 values.yaml 拿副本数，按副本数计算每个 app 的超时。
+// 这些常量只决定 PollUntilStable 的"初始软 deadline"——v131 起进度追踪续命 +
+// 5 分钟停滞快败 + 4 小时硬超时是真正的失败判定逻辑。所以这里给宽一点没坏处：
+// 推进顺利的话 deadline 会一路被续命到 hardDeadline；卡住的话 stagnant timeout 5 分钟会先快败。
 const (
-	restartPerPodSec     = 60      // 重启每 pod 估时（含 readinessProbe initialDelay 30s + 容器启动 + 探针缓冲）
-	updateImagePerPodSec = 90      // 发布每 pod 估时（多预留镜像 pull 时间）
-	timeoutBufferSec     = 120     // 超时硬缓冲（git 拉推 + ArgoCD reconcile 滞后）
-	timeoutCapSec        = 30 * 60 // 单 app timeout 上限 30 分钟（防 typo 把 replicaCount 写成 1000）
+	restartPerPodSec     = 60       // 重启每 pod 估时（含 readinessProbe initialDelay 30s + 容器启动 + 探针缓冲）
+	updateImagePerPodSec = 90       // 发布每 pod 估时
+	timeoutBufferSec     = 300      // 超时硬缓冲（git 拉推 + ArgoCD reconcile 滞后 + 镜像 pull 多副本错峰）
+	timeoutCapSec        = 90 * 60  // 初始 deadline 上限 90 分钟（兜底由 PollUntilStable 内部的 4h hardDeadline 接管）
 )
 
 // readEffectiveReplicas 从 values.yaml 内容推断"实际副本数上限"

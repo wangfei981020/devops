@@ -43,14 +43,53 @@ func PollUntilStable(
 	}
 	consecutiveOK := 0
 	start := time.Now()
+	// 双 deadline 设计（取代旧的固定 deadline）：
+	//   - deadline：动态软 deadline，初始 = timeoutSec；每次 ready 数推进续 60s（最多到 hardDeadline）
+	//   - hardDeadline：硬兜底 4 小时，无论如何不会超过
+	// 这样 100 副本只要在稳步推进就能跑完，pod 起不来的几种致命态在下面的 fail-fast 分支立即返回。
 	deadline := start.Add(time.Duration(timeoutSec) * time.Second)
+	hardDeadline := start.Add(4 * time.Hour)
+	if deadline.After(hardDeadline) {
+		deadline = hardDeadline
+	}
+	// 进度追踪：lastReadyCount 推进时把 deadline 往后推 60s，停滞超过 stagnantTimeout 立即快败
+	const stagnantTimeout = 5 * time.Minute
+	lastReadyCount := -1
+	lastProgressAt := start
 	var last *AppStatus
 	var lastErr error
 	for {
+		now := time.Now()
+		// 硬超时兜底：4 小时铁口直断
+		if now.After(hardDeadline) {
+			snaps, detail := captureFailingPodData(ctx, client, appName)
+			msg := "失败 · 总超时 4 小时（rollout 卡住，请到平台检查）"
+			if detail != "" {
+				msg = "失败 · " + sanitizeMsg(detail)
+			}
+			health := ""
+			if last != nil {
+				health = last.Health
+			}
+			return &models.ArgocdAppResult{
+				App:          appName,
+				SyncStatus:   "Failed",
+				Health:       health,
+				DurationSec:  int(now.Sub(start).Seconds()),
+				Msg:          msg,
+				LastPolledAt: now,
+				FailingPods:  snaps,
+			}
+		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			msg := "失败 · 等待服务部署完成超时（请到对应平台检查 Pod 状态）"
-			if last != nil && last.Message != "" {
+			if lastReadyCount > 0 {
+				// 之前推进过 → 多半是中途停滞
+				msg = "失败 · 进度停滞超时（当前 " +
+					strconv.Itoa(lastReadyCount) + " 个 pod 已就绪，但 " +
+					strconv.Itoa(int(stagnantTimeout/time.Minute)) + " 分钟未继续推进）"
+			} else if last != nil && last.Message != "" {
 				msg = "失败 · " + sanitizeMsg(last.Message)
 			} else if lastErr != nil {
 				msg = "失败 · " + sanitizeMsg(lastErr.Error())
@@ -202,7 +241,8 @@ func PollUntilStable(
 			elapsed := int(time.Since(start).Seconds())
 			if ourOpStarted && elapsed >= 30 &&
 				(elapsed/intervalSec)%3 == 0 {
-				if snaps, detail, fatal := detectFatalPodState(ctx, client, appName); fatal {
+				snaps, detail, fatal, ready, total := inspectActiveRSPods(ctx, client, appName)
+				if fatal {
 					// pod 此刻还活着，立刻把 logs + events 字节抓进 snapshot
 					enrichSnapshotWithLogs(ctx, client, appName, snaps)
 					return &models.ArgocdAppResult{
@@ -213,6 +253,43 @@ func PollUntilStable(
 						Msg:          "失败 · " + sanitizeMsg(detail),
 						LastPolledAt: time.Now(),
 						FailingPods:  snaps,
+					}
+				}
+
+				// === 进度追踪续命 ===
+				// ready 数推进 → 重置停滞计数器 + 把 deadline 往后挪 60s（但不超过硬超时）
+				// 这样 100 副本只要稳步推进就能跑完，不会被固定 timeoutSec 打断
+				if ready > lastReadyCount {
+					log.Printf("[poll] app=%s progress %d → %d / %d ready, refreshing deadline",
+						appName, lastReadyCount, ready, total)
+					lastReadyCount = ready
+					lastProgressAt = now
+					if newDeadline := now.Add(60 * time.Second); newDeadline.After(deadline) {
+						deadline = newDeadline
+					}
+					if deadline.After(hardDeadline) {
+						deadline = hardDeadline
+					}
+				}
+
+				// === 进度停滞快败 ===
+				// 已经有 pod ready 但 5 分钟内没有继续推进 → 后面的 pod 卡住了，快败不等总超时
+				if lastReadyCount > 0 && now.Sub(lastProgressAt) >= stagnantTimeout {
+					stagnantMsg := "失败 · 进度停滞 " + strconv.Itoa(int(stagnantTimeout/time.Minute)) +
+						" 分钟（当前 " + strconv.Itoa(lastReadyCount) + "/" + strconv.Itoa(total) +
+						" pod 就绪，剩余 pod 起不来）"
+					stagSnaps, stagDetail := captureFailingPodData(ctx, client, appName)
+					if stagDetail != "" {
+						stagnantMsg = stagnantMsg + " · " + sanitizeMsg(stagDetail)
+					}
+					return &models.ArgocdAppResult{
+						App:          appName,
+						SyncStatus:   "Failed",
+						Health:       st.Health,
+						DurationSec:  elapsed,
+						Msg:          stagnantMsg,
+						LastPolledAt: now,
+						FailingPods:  stagSnaps,
 					}
 				}
 			}
@@ -475,24 +552,38 @@ func enrichFailureDetail(ctx context.Context, client *ArgocdClient, appName stri
 //	返回 (snapshot, msg, isFatal)。同时把命中的 pod 收进快照供 archive 用。
 //	非 fatal 状态（Pending、Progressing 等）返回 isFatal=false，让 caller 继续等。
 func detectFatalPodState(ctx context.Context, client *ArgocdClient, appName string) ([]models.FailingPodSnapshot, string, bool) {
+	snaps, detail, fatal, _, _ := inspectActiveRSPods(ctx, client, appName)
+	return snaps, detail, fatal
+}
+
+// inspectActiveRSPods 一次 GetAppResourceTree，同时返回：
+//
+//	(1) fatal pod 检测结果（同 detectFatalPodState 老语义）
+//	(2) active RS 的 readyCount + totalCount —— 用于 PollUntilStable 的"进度追踪续命"
+//
+// readyCount = -1 表示资源树拉失败/无 active RS，调用方应忽略统计、不做进度判定。
+func inspectActiveRSPods(ctx context.Context, client *ArgocdClient, appName string) (
+	snaps []models.FailingPodSnapshot, detail string, isFatal bool, readyCount, totalCount int,
+) {
 	qctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	nodes, err := client.GetAppResourceTree(qctx, appName)
 	if err != nil || len(nodes) == 0 {
-		return nil, "", false
+		return nil, "", false, -1, 0
 	}
-	// v127 起：只看本次发布的新 RS 下的 pod（按 createdAt 取最新 ReplicaSet）
-	// 解决"老 RS 残留 crash pod 干扰本次 fail 决策"的误判（m9tzc / zjh 系列案例）。
-	// 找不到 active RS（StatefulSet / 老 ArgoCD 无 createdAt）→ fallback 看所有 pod。
 	activeRS := pickActiveReplicaSet(nodes)
 	pods := filterPodsByActiveRS(nodes, activeRS)
 	if activeRS != nil {
-		log.Printf("[poll] app=%s activeRS=%s (created %s) filtered %d→%d pods (fatal check)",
+		log.Printf("[poll] app=%s activeRS=%s (created %s) filtered %d→%d pods (inspect)",
 			appName, activeRS.Name, activeRS.CreatedAt.Format(time.RFC3339),
 			countPods(nodes), len(pods))
 	}
+	totalCount = len(pods)
 	var failing []ResourceNode
 	for _, n := range pods {
+		if n.Health == "Healthy" {
+			readyCount++
+		}
 		switch n.StatusReason {
 		case "ImagePullBackOff", "ErrImagePull",
 			"CreateContainerConfigError", "InvalidImageName", "RegistryUnavailable":
@@ -505,9 +596,9 @@ func detectFatalPodState(ctx context.Context, client *ArgocdClient, appName stri
 		}
 	}
 	if len(failing) == 0 {
-		return nil, "", false
+		return nil, "", false, readyCount, totalCount
 	}
-	snaps := make([]models.FailingPodSnapshot, 0, len(failing))
+	snaps = make([]models.FailingPodSnapshot, 0, len(failing))
 	for _, p := range failing {
 		snaps = append(snaps, models.FailingPodSnapshot{
 			Name:         p.Name,
@@ -517,7 +608,7 @@ func detectFatalPodState(ctx context.Context, client *ArgocdClient, appName stri
 			RestartCount: p.RestartCount,
 		})
 	}
-	return snaps, formatPodFailureMsg(failing), true
+	return snaps, formatPodFailureMsg(failing), true, readyCount, totalCount
 }
 
 // sanitizeMsg 把任何透传到前端的失败/状态文案里的 "argocd"/"ArgoCD" 字眼清掉。
