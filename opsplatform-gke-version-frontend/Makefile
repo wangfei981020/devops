@@ -1,4 +1,4 @@
-VERSION ?= v1
+VERSION ?= v2
 IMAGE_LOCAL = localhost:8070/opsplatform/opsplatform-gke-version-frontend:$(VERSION)
 IMAGE_HUB   = marks26/opsplatform-gke-version-frontend:$(VERSION)
 
