@@ -9,7 +9,8 @@ const appStore = useAppStore()
 const domains = ref([])
 const currentDomain = ref('')
 const loading = ref(true)
-const tryItWarned = ref(false)
+// 调试开关按域独立存：{ domainCode: bool }
+const debugEnabledByDomain = ref({})
 let swaggerInstance = null
 
 // 按 category 分组（保留 sort_order 内部排序）
@@ -20,12 +21,23 @@ const groupedDomains = computed(() => {
     if (!groups[cat]) groups[cat] = []
     groups[cat].push(d)
   }
-  // 每组内按 sort_order 排序
   for (const cat in groups) {
     groups[cat].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
   }
-  // 转成数组保留出现顺序
   return Object.entries(groups).map(([category, items]) => ({ category, items }))
+})
+
+const currentDomainObj = computed(() =>
+  domains.value.find(d => d.code === currentDomain.value) || null
+)
+
+const canTryCurrent = computed(() => currentDomainObj.value?.can_try_it ?? false)
+
+const debugOn = computed(() => !!debugEnabledByDomain.value[currentDomain.value])
+
+const toggleLabel = computed(() => {
+  if (!canTryCurrent.value) return '调试: 无权限'
+  return debugOn.value ? '调试: 已开启' : '调试: 关闭'
 })
 
 onMounted(async () => {
@@ -43,40 +55,39 @@ onMounted(async () => {
   }
 })
 
-watch(currentDomain, async (newDomain) => {
+async function toggleDebug() {
+  if (!canTryCurrent.value) return
+  if (debugOn.value) {
+    // 关 → 直接关，不弹
+    debugEnabledByDomain.value = { ...debugEnabledByDomain.value, [currentDomain.value]: false }
+    return
+  }
+  // 开 → 先弹警告
+  const ok = await appStore.showConfirm({
+    type: 'warning',
+    title: '开启调试',
+    message: `开启后，"${currentDomainObj.value?.name}" 的所有 Execute 请求会真实写入数据库（创建/修改/删除）。是否继续？`,
+    okText: '我知道了，开启',
+    cancelText: '取消'
+  })
+  if (!ok) return
+  debugEnabledByDomain.value = { ...debugEnabledByDomain.value, [currentDomain.value]: true }
+}
+
+// 切域或开关变化时重新渲染 Swagger UI
+watch([currentDomain, debugOn], async ([newDomain]) => {
   if (!newDomain) return
   await nextTick()
-  const dom = domains.value.find(d => d.code === newDomain)
-  const canTry = dom?.can_try_it ?? false
-
-  // 清掉旧实例
   const container = document.getElementById('swagger-ui-container')
   if (container) container.innerHTML = ''
-
   swaggerInstance = SwaggerUIBundle({
     url: `/api/api-docs/spec?domain=${encodeURIComponent(newDomain)}`,
     dom_id: '#swagger-ui-container',
     deepLinking: false,
     docExpansion: 'list',
     defaultModelsExpandDepth: 1,
-    tryItOutEnabled: canTry,
-    supportedSubmitMethods: canTry ? ['get', 'post', 'put', 'delete', 'patch'] : [],
-    requestInterceptor: async (req) => {
-      if (!tryItWarned.value) {
-        const ok = await appStore.showConfirm({
-          type: 'warning',
-          title: '调试警告',
-          message: '调试请求会真实写入数据库（创建/修改/删除）。是否继续？',
-          okText: '我知道了，继续',
-          cancelText: '取消'
-        })
-        if (!ok) {
-          throw new Error('用户取消了调试请求')
-        }
-        tryItWarned.value = true
-      }
-      return req
-    }
+    tryItOutEnabled: debugOn.value,
+    supportedSubmitMethods: debugOn.value ? ['get', 'post', 'put', 'delete', 'patch'] : []
   })
 }, { immediate: false })
 </script>
@@ -85,7 +96,7 @@ watch(currentDomain, async (newDomain) => {
   <div class="api-docs-page">
     <div class="page-header">
       <h2>接口文档</h2>
-      <p class="page-desc">供内部开发对接的 API Key 接口。从左侧选择业务域，右上角 Authorize 粘贴 API Key 后可在线调试。</p>
+      <p class="page-desc">供内部开发对接的 API Key 接口。从左侧选择业务域，主区右上角 Authorize 粘贴 API Key 后可在线调试。</p>
     </div>
 
     <div v-if="loading" class="empty">加载中...</div>
@@ -93,7 +104,7 @@ watch(currentDomain, async (newDomain) => {
       您当前没有可查看的接口文档权限，请联系管理员授予 <code>menu:api_docs:&lt;域&gt;</code> 权限。
     </div>
     <div v-else class="docs-layout">
-      <!-- 左栏：业务域列表，按 category 分组 -->
+      <!-- 左栏：业务域列表 -->
       <aside class="domain-sidebar">
         <div v-for="group in groupedDomains" :key="group.category" class="domain-group">
           <div class="group-title">
@@ -114,8 +125,23 @@ watch(currentDomain, async (newDomain) => {
         </div>
       </aside>
 
-      <!-- 右侧：Swagger UI -->
+      <!-- 右侧主区 -->
       <main class="swagger-main">
+        <div class="main-toolbar">
+          <div class="domain-title">
+            <strong>{{ currentDomainObj?.name || '' }}</strong>
+            <span v-if="currentDomainObj?.description" class="domain-desc">{{ currentDomainObj.description }}</span>
+          </div>
+          <button
+            class="debug-toggle"
+            :class="{ on: debugOn, off: !debugOn && canTryCurrent, locked: !canTryCurrent }"
+            :disabled="!canTryCurrent"
+            :title="canTryCurrent ? '点击切换调试状态' : '当前业务域无调试权限'"
+            @click="toggleDebug">
+            <span class="dot"></span>
+            <span class="label">{{ toggleLabel }}</span>
+          </button>
+        </div>
         <div id="swagger-ui-container"></div>
       </main>
     </div>
@@ -130,11 +156,10 @@ watch(currentDomain, async (newDomain) => {
 .empty { text-align: center; padding: 48px 24px; color: var(--text-muted); font-size: 14px; }
 .empty code { background: var(--bg-input); padding: 2px 6px; border-radius: 3px; color: var(--text-primary); font-family: Consolas, monospace; }
 
-/* 整体两栏布局 */
 .docs-layout {
   display: flex;
   flex: 1;
-  min-height: 0;  /* 让 flex 子项可以收缩 */
+  min-height: 0;
   gap: 12px;
   border-top: 1px solid var(--border-color);
   padding-top: 12px;
@@ -190,17 +215,6 @@ watch(currentDomain, async (newDomain) => {
   color: white;
   font-weight: 500;
 }
-.domain-list li.active::before {
-  content: '';
-  position: absolute;
-  left: -8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 60%;
-  background: var(--primary);
-  border-radius: 2px;
-}
 .domain-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .readonly-tag {
   font-size: 10px;
@@ -220,10 +234,74 @@ watch(currentDomain, async (newDomain) => {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  background: white;
-  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
 }
-#swagger-ui-container { background: white; border-radius: 6px; min-height: 400px; }
-/* 暗黑模式下 Swagger UI 默认主题对比度低，加白底兜底 */
+
+/* 主区顶部工具栏 */
+.main-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  background: var(--bg-card, white);
+  border: 1px solid var(--border-color);
+  border-radius: 6px 6px 0 0;
+  border-bottom: none;
+  flex-shrink: 0;
+}
+.domain-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.domain-title strong { font-size: 15px; color: var(--text-primary); white-space: nowrap; }
+.domain-desc { font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 调试开关按钮 */
+.debug-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 16px;
+  font-size: 13px;
+  border: 1px solid;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.debug-toggle .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.debug-toggle.off {
+  background: var(--bg-input);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+.debug-toggle.off .dot { background: #9ca3af; }
+.debug-toggle.off:hover { background: var(--bg-hover); }
+.debug-toggle.on {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: #22c55e;
+  color: #16a34a;
+  font-weight: 500;
+}
+.debug-toggle.on .dot { background: #22c55e; box-shadow: 0 0 6px rgba(34, 197, 94, 0.6); }
+.debug-toggle.on:hover { background: rgba(34, 197, 94, 0.2); }
+.debug-toggle.locked {
+  background: var(--bg-input);
+  border-color: var(--border-color);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+.debug-toggle.locked .dot { background: #ef4444; }
+
+#swagger-ui-container {
+  background: white;
+  border: 1px solid var(--border-color);
+  border-radius: 0 0 6px 6px;
+  min-height: 400px;
+  flex: 1;
+}
 :deep(.swagger-ui) { color: #3b4151; }
 </style>
