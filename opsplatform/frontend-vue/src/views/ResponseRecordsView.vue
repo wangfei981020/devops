@@ -134,6 +134,9 @@ onMounted(async () => {
   await loadRecords()
   // v582: 全局键盘监听 — lightbox 显示时左右键切换、Esc 关闭
   window.addEventListener('keydown', onPreviewKey)
+  // v598: 浮动列 scroll 同步
+  await nextTick()
+  attachScrollSync()
 })
 
 watch([startDate, endDate], () => loadRecords())
@@ -353,6 +356,43 @@ function openAdd() {
   form.value = emptyForm()
   showModal.value = true
 }
+// v598: JS 手动同步状态+操作列位置 (彻底放弃 CSS sticky)
+// 监听 .table-wrap 的 scroll 事件，给两列 td/th 设 transform: translateX(scrollLeft)
+// 让它们跟着横向滚动保持在视野最右
+import { nextTick } from 'vue'
+const tableWrapRef = ref(null)
+
+function syncFixedCols() {
+  const wrap = tableWrapRef.value
+  if (!wrap) return
+  // 公式：translateX = scrollLeft - maxScrollLeft
+  // 当 scrollLeft = 0：translateX = -maxScroll，把原生位置（表格最右）拉到视野最右
+  // 当 scrollLeft = maxScroll：translateX = 0，原生位置已在视野最右，无需拉
+  const maxScroll = wrap.scrollWidth - wrap.clientWidth
+  if (maxScroll <= 0) {
+    // 不需要滚动（表格全部可见），重置
+    wrap.querySelectorAll('.data-table .status-col, .data-table .op').forEach(el => { el.style.transform = '' })
+    return
+  }
+  const offset = wrap.scrollLeft - maxScroll
+  const tx = `translateX(${offset}px)`
+  wrap.querySelectorAll('.data-table .status-col, .data-table .op').forEach(el => {
+    el.style.transform = tx
+  })
+}
+
+function attachScrollSync() {
+  const wrap = tableWrapRef.value
+  if (!wrap) return
+  wrap.addEventListener('scroll', syncFixedCols, { passive: true })
+  syncFixedCols()
+}
+
+watch(records, async () => {
+  await nextTick()
+  syncFixedCols()
+}, { deep: true })
+
 // v596: 详情 modal (只读，多人响应在这里看完整信息)
 const showDetailModal = ref(false)
 const detailRecord = ref(null)
@@ -814,7 +854,7 @@ function exportExcel() {
     </div>
 
     <!-- 列表 -->
-    <div v-if="activeTab === 'list'" class="table-wrap">
+    <div v-if="activeTab === 'list'" ref="tableWrapRef" class="table-wrap">
       <table class="data-table">
         <thead>
           <tr>
@@ -1353,26 +1393,32 @@ function exportExcel() {
 }
 .table-wrap .data-table tbody td { background-color: var(--bg-card); }
 .table-wrap .data-table tbody tr:hover td:not(.op) { background-color: var(--bg-hover); }
-/* sticky 操作列：在 grid 容器里 sticky right:0 行为稳定 */
+/* v598: 状态+操作列改成 JS transform 同步 (CSS sticky 在 grid 里 9 次都没修对)
+   关键 CSS:
+   - 浮动列加 will-change: transform 保证 GPU 加速、避免抖动
+   - 不透明 background-color 避免穿透
+   - 高 z-index 盖住经过的列
+   transform 由 JS syncFixedCols() 设 translateX(scrollLeft) 让它跟随横向滚动 */
 .table-wrap .data-table .op {
-  position: sticky; right: 0;
   background-color: var(--bg-card);
   border-left: 1px solid var(--border-color);
   box-shadow: -6px 0 12px rgba(0, 0, 0, 0.15);
   text-align: center;
-  z-index: 2;
+  position: relative;
+  z-index: 20;
+  will-change: transform;
 }
-.table-wrap .data-table thead .op { background-color: var(--bg-hover); z-index: 3; }
+.table-wrap .data-table thead .op { background-color: var(--bg-hover); z-index: 30; }
 .table-wrap .data-table tbody tr:hover .op { background-color: var(--bg-card); }
 
-/* v597: 状态列也 sticky，紧贴在操作列左边 (操作列 110px → 状态列 right:110px) */
 .table-wrap .data-table .status-col {
-  position: sticky; right: 110px;
   background-color: var(--bg-card);
   border-left: 1px solid var(--border-color);
-  z-index: 1;
+  position: relative;
+  z-index: 19;
+  will-change: transform;
 }
-.table-wrap .data-table thead .status-col { background-color: var(--bg-hover); z-index: 2; }
+.table-wrap .data-table thead .status-col { background-color: var(--bg-hover); z-index: 29; }
 .table-wrap .data-table tbody tr:hover .status-col { background-color: var(--bg-card); }
 /* 未响应/未解决 文字徽章 */
 .state-text-bad { color: #ea3636; font-size: 11px; font-weight: 600; }
