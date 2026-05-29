@@ -728,25 +728,26 @@ func createTables() error {
 		('ticket', '工单', '#ff9c01', 5),
 		('other',  '其它', '#94a3b8', 6)`)
 
-	// ========== 响应记录表（v738：员工消息响应度量）==========
-	// 每条记录 = 一次员工响应事件
-	// 时间轴：mentioned_at(T0 艾特) → responded_at(T1 开始响应) → completed_at(T2 处理完)
-	// 响应时长 = T1 - T0；处理时长 = T2 - T1（前端计算，不入库）
+	// ========== 响应记录表（v738：员工消息响应度量；v740：支持多响应人）==========
+	// 每条记录 = 一次任务，可由多个员工响应（responders JSON 数组）
+	// 时间轴：mentioned_at(T0 艾特) → 每个响应人各自的 responded_at(T1) / completed_at(T2)
+	// 老字段 responder/responded_at/completed_at 保留为"首响应人快速查询"，跟 responders[0] 同步
 	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS response_records (
 			id INT AUTO_INCREMENT PRIMARY KEY,
-			responder VARCHAR(64) NOT NULL COMMENT '响应人姓名（关联 schedule_employees.name）',
+			responder VARCHAR(64) NOT NULL COMMENT '首响应人 = responders[0].responder（兼容字段）',
+			responders TEXT COMMENT 'v740: 多响应人 JSON [{responder, responded_at, completed_at}]',
 			message_source VARCHAR(32) NOT NULL DEFAULT 'lark' COMMENT '消息来源 lark/alert/phone/email/ticket/other',
 			message_content TEXT NOT NULL COMMENT '消息内容',
 			mentioned_at DATETIME NOT NULL COMMENT 'T0 艾特/消息发出时间',
-			responded_at DATETIME NOT NULL COMMENT 'T1 员工开始响应时间',
-			completed_at DATETIME DEFAULT NULL COMMENT 'T2 处理完成时间，NULL 表示处理中',
+			responded_at DATETIME NOT NULL COMMENT '首响应时间 = responders[0].responded_at（兼容字段）',
+			completed_at DATETIME DEFAULT NULL COMMENT '末完成时间 = max(responders[*].completed_at)（兼容字段）',
 			has_incident TINYINT(1) DEFAULT 0 COMMENT '是否产生故障',
 			incident_ticket VARCHAR(64) DEFAULT '' COMMENT '故障单号（仅 has_incident=1 时有值）',
 			handle_result TEXT COMMENT '处理结果',
 			remark TEXT COMMENT '备注',
-			attachments TEXT COMMENT '附件 JSON [{name,size,path,preview}]',
-			status VARCHAR(16) DEFAULT 'processing' COMMENT 'processing | completed',
+			attachments TEXT COMMENT '附件 JSON [{name,size,path}]',
+			status VARCHAR(16) DEFAULT 'processing' COMMENT 'processing | completed (所有响应人都填了完成时间)',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			created_by VARCHAR(64) DEFAULT '',
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -759,6 +760,16 @@ func createTables() error {
 	if err != nil {
 		return err
 	}
+	// v740: 旧表升级（IF NOT EXISTS 不支持 ADD COLUMN，用 IGNORE 错误兜底）
+	DB.Exec(`ALTER TABLE response_records ADD COLUMN responders TEXT COMMENT 'v740 多响应人 JSON' AFTER responder`)
+	// v740: 把 responders 为 NULL 的老数据用 responder/responded_at/completed_at 包装成单元素数组
+	DB.Exec(`UPDATE response_records
+		SET responders = JSON_ARRAY(JSON_OBJECT(
+			'responder', responder,
+			'responded_at', DATE_FORMAT(responded_at, '%Y-%m-%d %H:%i:%s'),
+			'completed_at', IFNULL(DATE_FORMAT(completed_at, '%Y-%m-%d %H:%i:%s'), '')
+		))
+		WHERE responders IS NULL OR responders = ''`)
 
 	// ========== 值班记录相关表 ==========
 

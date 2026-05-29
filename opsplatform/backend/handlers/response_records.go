@@ -20,25 +20,63 @@ import (
 // ResponseRecordBucket 响应记录附件专用 bucket（v739：跟桌台维护那套解耦）
 const ResponseRecordBucket = "response-records"
 
+// ResponderEntry v740: 单个响应人的时间记录
+type ResponderEntry struct {
+	Responder   string `json:"responder"`
+	RespondedAt string `json:"responded_at"` // T1
+	CompletedAt string `json:"completed_at"` // T2 - 空字符串表示处理中
+}
+
 // ResponseRecord 员工响应记录
 type ResponseRecord struct {
-	ID             int     `json:"id"`
-	Responder      string  `json:"responder"`
-	MessageSource  string  `json:"message_source"`
-	MessageContent string  `json:"message_content"`
-	MentionedAt    string  `json:"mentioned_at"`            // T0 艾特/消息发出
-	RespondedAt    string  `json:"responded_at"`            // T1 开始响应
-	CompletedAt    *string `json:"completed_at,omitempty"`  // T2 处理完成（可空）
-	HasIncident    int     `json:"has_incident"`
-	IncidentTicket string  `json:"incident_ticket"`
-	HandleResult   string  `json:"handle_result"`
-	Remark         string  `json:"remark"`
-	Attachments    string  `json:"attachments"` // JSON 数组字符串
-	Status         string  `json:"status"`
-	CreatedAt      string  `json:"created_at"`
-	CreatedBy      string  `json:"created_by"`
-	UpdatedAt      string  `json:"updated_at"`
-	UpdatedBy      string  `json:"updated_by"`
+	ID             int              `json:"id"`
+	Responder      string           `json:"responder"`            // 兼容字段：首响应人
+	Responders     []ResponderEntry `json:"responders"`           // v740: 多响应人
+	MessageSource  string           `json:"message_source"`
+	MessageContent string           `json:"message_content"`
+	MentionedAt    string           `json:"mentioned_at"`         // T0 艾特/消息发出
+	RespondedAt    string           `json:"responded_at"`         // 兼容字段：首响应时间
+	CompletedAt    *string          `json:"completed_at,omitempty"`
+	HasIncident    int              `json:"has_incident"`
+	IncidentTicket string           `json:"incident_ticket"`
+	HandleResult   string           `json:"handle_result"`
+	Remark         string           `json:"remark"`
+	Attachments    string           `json:"attachments"`
+	Status         string           `json:"status"`
+	CreatedAt      string           `json:"created_at"`
+	CreatedBy      string           `json:"created_by"`
+	UpdatedAt      string           `json:"updated_at"`
+	UpdatedBy      string           `json:"updated_by"`
+}
+
+// deriveLegacyFields v740: 从 responders 算出兼容字段（首响应人/首响应时间/末完成时间/状态）
+// 返回 (responder, respondedAt, completedAt|nil, status)
+func deriveLegacyFields(responders []ResponderEntry) (string, string, *string, string) {
+	if len(responders) == 0 {
+		return "", "", nil, "processing"
+	}
+	// 找最早的 responded_at
+	first := responders[0]
+	for _, r := range responders[1:] {
+		if r.RespondedAt < first.RespondedAt {
+			first = r
+		}
+	}
+	// 找最晚的 completed_at；任意一个 completed_at 为空 → 整条状态 processing
+	status := "completed"
+	maxCompleted := ""
+	for _, r := range responders {
+		if r.CompletedAt == "" {
+			status = "processing"
+		} else if r.CompletedAt > maxCompleted {
+			maxCompleted = r.CompletedAt
+		}
+	}
+	var completedPtr *string
+	if status == "completed" && maxCompleted != "" {
+		completedPtr = &maxCompleted
+	}
+	return first.Responder, first.RespondedAt, completedPtr, status
 }
 
 const tsLayout = "2006-01-02 15:04:05"
@@ -81,7 +119,22 @@ func HandleListResponseRecords(w http.ResponseWriter, r *http.Request) {
 		args = append(args, like, like, like)
 	}
 
-	sqlStr := "SELECT id, responder, message_source, message_content, mentioned_at, responded_at, completed_at, has_incident, incident_ticket, handle_result, remark, attachments, status, created_at, created_by, updated_at, updated_by FROM response_records WHERE " +
+	// v740: responder 筛选改成搜 responders JSON
+	for i, w := range where {
+		if w == "responder = ?" {
+			where[i] = "responders LIKE ?"
+			// 找到对应的 arg，加上 % 包围
+			argIdx := 0
+			for _, w2 := range where[:i] {
+				argIdx += strings.Count(w2, "?")
+			}
+			if argIdx < len(args) {
+				args[argIdx] = "%\"responder\":\"" + args[argIdx].(string) + "\"%"
+			}
+		}
+	}
+
+	sqlStr := "SELECT id, responder, IFNULL(responders, '[]'), message_source, message_content, mentioned_at, responded_at, completed_at, has_incident, incident_ticket, handle_result, remark, attachments, status, created_at, created_by, updated_at, updated_by FROM response_records WHERE " +
 		strings.Join(where, " AND ") + " ORDER BY mentioned_at DESC"
 
 	rows, err := database.DB.Query(sqlStr, args...)
@@ -94,9 +147,10 @@ func HandleListResponseRecords(w http.ResponseWriter, r *http.Request) {
 	out := []ResponseRecord{}
 	for rows.Next() {
 		var rec ResponseRecord
+		var respondersJSON string
 		var completed sql.NullString
 		var mentioned, responded, created, updated time.Time
-		if err := rows.Scan(&rec.ID, &rec.Responder, &rec.MessageSource, &rec.MessageContent,
+		if err := rows.Scan(&rec.ID, &rec.Responder, &respondersJSON, &rec.MessageSource, &rec.MessageContent,
 			&mentioned, &responded, &completed, &rec.HasIncident, &rec.IncidentTicket,
 			&rec.HandleResult, &rec.Remark, &rec.Attachments, &rec.Status,
 			&created, &rec.CreatedBy, &updated, &rec.UpdatedBy); err != nil {
@@ -106,13 +160,16 @@ func HandleListResponseRecords(w http.ResponseWriter, r *http.Request) {
 		rec.RespondedAt = responded.Format(tsLayout)
 		if completed.Valid {
 			s := completed.String
-			// MySQL driver 返回的是 "2026-05-29 10:00:00" 格式，原样保留
 			rec.CompletedAt = &s
 		}
 		rec.CreatedAt = created.Format(tsLayout)
 		rec.UpdatedAt = updated.Format(tsLayout)
 		if rec.Attachments == "" {
 			rec.Attachments = "[]"
+		}
+		// 解析 responders JSON
+		if respondersJSON != "" && respondersJSON != "[]" {
+			_ = json.Unmarshal([]byte(respondersJSON), &rec.Responders)
 		}
 		out = append(out, rec)
 	}
@@ -122,17 +179,15 @@ func HandleListResponseRecords(w http.ResponseWriter, r *http.Request) {
 }
 
 type responseRecordPayload struct {
-	Responder      string  `json:"responder"`
-	MessageSource  string  `json:"message_source"`
-	MessageContent string  `json:"message_content"`
-	MentionedAt    string  `json:"mentioned_at"`
-	RespondedAt    string  `json:"responded_at"`
-	CompletedAt    *string `json:"completed_at"`
-	HasIncident    int     `json:"has_incident"`
-	IncidentTicket string  `json:"incident_ticket"`
-	HandleResult   string  `json:"handle_result"`
-	Remark         string  `json:"remark"`
-	Attachments    string  `json:"attachments"`
+	Responders     []ResponderEntry `json:"responders"`
+	MessageSource  string           `json:"message_source"`
+	MessageContent string           `json:"message_content"`
+	MentionedAt    string           `json:"mentioned_at"`
+	HasIncident    int              `json:"has_incident"`
+	IncidentTicket string           `json:"incident_ticket"`
+	HandleResult   string           `json:"handle_result"`
+	Remark         string           `json:"remark"`
+	Attachments    string           `json:"attachments"`
 }
 
 // HandleCreateResponseRecord POST /api/response-records
@@ -146,24 +201,32 @@ func HandleCreateResponseRecord(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if p.Responder == "" || p.MessageContent == "" || p.MentionedAt == "" || p.RespondedAt == "" {
-		http.Error(w, "responder / message_content / mentioned_at / responded_at 必填", http.StatusBadRequest)
+	if len(p.Responders) == 0 || p.MessageContent == "" || p.MentionedAt == "" {
+		http.Error(w, "responders / message_content / mentioned_at 必填", http.StatusBadRequest)
 		return
 	}
-	status := "processing"
-	if p.CompletedAt != nil && *p.CompletedAt != "" {
-		status = "completed"
+	// 校验每个响应人字段
+	for i, rr := range p.Responders {
+		if rr.Responder == "" || rr.RespondedAt == "" {
+			http.Error(w, fmt.Sprintf("responders[%d].responder / responded_at 必填", i), http.StatusBadRequest)
+			return
+		}
 	}
 	if p.Attachments == "" {
 		p.Attachments = "[]"
 	}
+
+	// 兼容字段自动派生
+	firstResponder, firstRespondedAt, completedPtr, status := deriveLegacyFields(p.Responders)
+	respondersJSON, _ := json.Marshal(p.Responders)
 	operator := r.Header.Get("X-Operator")
 
 	res, err := database.DB.Exec(`INSERT INTO response_records
-		(responder, message_source, message_content, mentioned_at, responded_at, completed_at,
+		(responder, responders, message_source, message_content, mentioned_at, responded_at, completed_at,
 		 has_incident, incident_ticket, handle_result, remark, attachments, status, created_by, updated_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Responder, p.MessageSource, p.MessageContent, p.MentionedAt, p.RespondedAt, sqlNullTime(p.CompletedAt),
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		firstResponder, string(respondersJSON), p.MessageSource, p.MessageContent, p.MentionedAt,
+		firstRespondedAt, sqlNullTime(completedPtr),
 		p.HasIncident, p.IncidentTicket, p.HandleResult, p.Remark, p.Attachments, status, operator, operator)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -194,20 +257,30 @@ func HandleUpdateResponseRecord(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	status := "processing"
-	if p.CompletedAt != nil && *p.CompletedAt != "" {
-		status = "completed"
+	if len(p.Responders) == 0 {
+		http.Error(w, "至少 1 个响应人", http.StatusBadRequest)
+		return
+	}
+	for i, rr := range p.Responders {
+		if rr.Responder == "" || rr.RespondedAt == "" {
+			http.Error(w, fmt.Sprintf("responders[%d].responder / responded_at 必填", i), http.StatusBadRequest)
+			return
+		}
 	}
 	if p.Attachments == "" {
 		p.Attachments = "[]"
 	}
+
+	firstResponder, firstRespondedAt, completedPtr, status := deriveLegacyFields(p.Responders)
+	respondersJSON, _ := json.Marshal(p.Responders)
 	operator := r.Header.Get("X-Operator")
 
 	_, err = database.DB.Exec(`UPDATE response_records SET
-		responder=?, message_source=?, message_content=?, mentioned_at=?, responded_at=?, completed_at=?,
+		responder=?, responders=?, message_source=?, message_content=?, mentioned_at=?, responded_at=?, completed_at=?,
 		has_incident=?, incident_ticket=?, handle_result=?, remark=?, attachments=?, status=?, updated_by=?
 		WHERE id=?`,
-		p.Responder, p.MessageSource, p.MessageContent, p.MentionedAt, p.RespondedAt, sqlNullTime(p.CompletedAt),
+		firstResponder, string(respondersJSON), p.MessageSource, p.MessageContent, p.MentionedAt,
+		firstRespondedAt, sqlNullTime(completedPtr),
 		p.HasIncident, p.IncidentTicket, p.HandleResult, p.Remark, p.Attachments, status, operator, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
