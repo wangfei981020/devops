@@ -803,13 +803,12 @@ function exportExcel() {
             <th>处理结果</th>
             <th>截图</th>
             <th>状态</th>
-            <th class="op-spacer"></th>
             <th class="op">操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loading"><td colspan="15" class="empty-cell">加载中…</td></tr>
-          <tr v-else-if="records.length === 0"><td colspan="15" class="empty-cell">暂无响应记录</td></tr>
+          <tr v-if="loading"><td class="empty-cell" style="grid-column: 1 / -1">加载中…</td></tr>
+          <tr v-else-if="records.length === 0"><td class="empty-cell" style="grid-column: 1 / -1">暂无响应记录</td></tr>
           <tr v-else v-for="r in records" :key="r.id">
             <td>#{{ r.id }}</td>
             <td>
@@ -874,7 +873,6 @@ function exportExcel() {
               <span v-if="r.status === 'completed'" class="status-completed">✅ 完成</span>
               <span v-else class="status-processing">🟡 处理中</span>
             </td>
-            <td class="op-spacer"></td>
             <td class="op">
               <button v-if="canUpdate" class="icon-btn" @click="openEdit(r)" title="编辑">✏️</button>
               <button v-if="canDelete" class="icon-btn danger" @click="deleteRecord(r)" title="删除">🗑️</button>
@@ -1237,36 +1235,39 @@ function exportExcel() {
 .ov-lbl { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 
 .table-wrap, .stats-panel { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; overflow-x: auto; position: relative; }
-.table-wrap .data-table { min-width: 1500px; border-collapse: separate; border-spacing: 0; }
-/* v592: 所有 td 强制不透明 — 否则 sticky 操作列盖在透明 td 上会出现亚像素重影/文字叠加 */
+/* ============ v595: CSS Grid 重构表格 ============
+   彻底脱离 <table> 的 sticky cell 渲染 bug（之前 v589-v594 改 table 都没修对）
+   保留 HTML 语义（table/thead/tbody/tr/th/td），只把 display 模式从 table-* 改成 block/grid
+   sticky 操作列在 grid 容器里 position:sticky right:0 行为正常 — 不再有"操儆图"重叠
+   列顺序: # / 响应人 / 处理人 / 来源 / 消息内容 / 艾特时间 / 首响应 / 末完成 / 响应明细 / 故障 / 处理结果 / 截图 / 状态 / 操作 */
+.table-wrap .data-table { display: block; min-width: 1910px; }
+.table-wrap .data-table thead,
+.table-wrap .data-table tbody { display: block; }
+.table-wrap .data-table thead tr,
+.table-wrap .data-table tbody tr {
+  display: grid;
+  grid-template-columns: 60px 160px 120px 80px 240px 160px 160px 160px 280px 60px 180px 150px 100px 100px;
+  border-bottom: 1px solid var(--border-color);
+}
+.table-wrap .data-table th,
+.table-wrap .data-table td {
+  display: block;
+  min-width: 0;
+  border-bottom: none;
+}
 .table-wrap .data-table tbody td { background-color: var(--bg-card); }
 .table-wrap .data-table tbody tr:hover td:not(.op) { background-color: var(--bg-hover); }
-/* v594: 加 op-spacer 占位列彻底修 sticky 重影
-   核心思路: table 里加一个 100px 透明 spacer 列在操作列前。
-   sticky 操作列 right:0 盖在 spacer 上 → "截图""状态"列永远在 spacer 左侧
-   不会被 sticky 列遮盖, 不再有"操儆图"重叠 */
-.data-table th.op-spacer, .data-table td.op-spacer {
-  width: 100px; min-width: 100px; max-width: 100px;
-  padding: 0 !important;
-  background-color: var(--bg-card);
-  border: none;
-}
-.data-table tbody tr:hover td.op-spacer { background-color: var(--bg-hover); }
-/* v589-v591: 操作列 sticky 右侧 */
-.data-table th.op, .data-table td.op {
+/* sticky 操作列：在 grid 容器里 sticky right:0 行为稳定 */
+.table-wrap .data-table .op {
   position: sticky; right: 0;
   background-color: var(--bg-card);
   border-left: 1px solid var(--border-color);
-  box-shadow: -6px 0 12px rgba(0, 0, 0, 0.18);
-  width: 100px; min-width: 100px; max-width: 100px;
+  box-shadow: -6px 0 12px rgba(0, 0, 0, 0.15);
   text-align: center;
-  padding: 10px 12px !important;
+  z-index: 2;
 }
-/* v592: z-index 加大避免 table stacking context 嵌套问题 */
-.data-table td.op { z-index: 20; }
-.data-table th.op { z-index: 30; background-color: var(--bg-hover); }
-/* hover 时 sticky 列保持 bg-card 实色，不切换到半透明 bg-hover */
-.data-table tbody tr:hover td.op { background-color: var(--bg-card); }
+.table-wrap .data-table thead .op { background-color: var(--bg-hover); z-index: 3; }
+.table-wrap .data-table tbody tr:hover .op { background-color: var(--bg-card); }
 /* 未响应/未解决 文字徽章 */
 .state-text-bad { color: #ea3636; font-size: 11px; font-weight: 600; }
 .state-text-warn { color: #94a3b8; font-size: 11px; }
