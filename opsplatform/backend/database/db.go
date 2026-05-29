@@ -770,6 +770,12 @@ func createTables() error {
 			'completed_at', IFNULL(DATE_FORMAT(completed_at, '%Y-%m-%d %H:%i:%s'), '')
 		))
 		WHERE responders IS NULL OR responders = ''`)
+	// v743: 给 responders 数组里没有 mentioned_at 字段的老数据补全（拷贝主表 mentioned_at）
+	// MySQL JSON_SET 对每个数组元素加字段（如果已存在则不变）
+	DB.Exec(`UPDATE response_records
+		SET responders = JSON_SET(responders, '$[0].mentioned_at',
+			IFNULL(JSON_UNQUOTE(JSON_EXTRACT(responders, '$[0].mentioned_at')), DATE_FORMAT(mentioned_at, '%Y-%m-%d %H:%i:%s')))
+		WHERE JSON_EXTRACT(responders, '$[0].mentioned_at') IS NULL`)
 
 	// ========== 值班记录相关表 ==========
 

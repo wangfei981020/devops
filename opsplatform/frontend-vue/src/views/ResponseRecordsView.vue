@@ -144,22 +144,58 @@ function durationClass(min, threshold) {
   return 'dur-good'
 }
 
-// v584: 拿 record 的 responders 数组（兼容老数据兜底）
+// v584: 拿 record 的 responders 数组（v743: 每行 mentioned_at 兜底用主表）
 function recResponders(r) {
-  if (r.responders && r.responders.length) return r.responders
-  return [{ responder: r.responder, responded_at: r.responded_at, completed_at: r.completed_at || '' }]
+  const list = (r.responders && r.responders.length)
+    ? r.responders
+    : [{ responder: r.responder, responded_at: r.responded_at, completed_at: r.completed_at || '' }]
+  return list.map(x => ({
+    responder: x.responder,
+    mentioned_at: x.mentioned_at || r.mentioned_at,  // v743: 缺就用主表
+    responded_at: x.responded_at || '',
+    completed_at: x.completed_at || ''
+  }))
 }
 
-// ========= 统计：按 (record × responder) explode 后聚合 =========
+// v743: 每个响应人的状态自动算（4 种 + 晚到提示）
+// 返回 { code, label, emoji, color }
+function responderState(rr, record) {
+  if (!rr.responded_at) {
+    return { code: 'no_reply', label: '未响应', emoji: '🔴', color: '#ea3636' }
+  }
+  if (rr.completed_at) {
+    return { code: 'resolved', label: '已解决', emoji: '🟢', color: '#10b981' }
+  }
+  // responded 但 completed 空：看任务整体状态
+  if (record && record.status === 'processing') {
+    return { code: 'in_progress', label: '处理中', emoji: '🟡', color: '#f97316' }
+  }
+  return { code: 'reply_only', label: '仅响应', emoji: '⚪', color: '#94a3b8' }
+}
+
+// v743: "晚到响应"判定 — 此人响应时间晚于任务里最早的 completed_at
+function isLateResponse(rr, record) {
+  if (!rr.responded_at) return false
+  const earliestDone = recResponders(record).map(x => x.completed_at).filter(Boolean).sort()[0]
+  return earliestDone && rr.responded_at > earliestDone
+}
+
+// ========= 统计：按 (record × responder) explode =========
+// v743 新版：用每人 mentioned_at 算响应时长；增加 noReply、resolved 计数
 const stats = computed(() => {
   const list = records.value
   let respDurs = [], procDurs = []
   let processing = 0, completed = 0
+  let totalResponders = 0, noReplyCount = 0, resolvedCount = 0
   list.forEach(r => {
     recResponders(r).forEach(rr => {
-      const rd = diffMinutes(rr.responded_at, r.mentioned_at)
+      totalResponders++
+      if (!rr.responded_at) { noReplyCount++; return }
+      // v743: 用 rr 自己的 mentioned_at（兜底主表）
+      const rd = diffMinutes(rr.responded_at, rr.mentioned_at)
       if (rd != null && rd >= 0) respDurs.push(rd)
       if (rr.completed_at) {
+        resolvedCount++
         const pd = diffMinutes(rr.completed_at, rr.responded_at)
         if (pd != null && pd >= 0) procDurs.push(pd)
       }
@@ -169,20 +205,25 @@ const stats = computed(() => {
   const incidents = list.filter(r => r.has_incident).length
   const avgResp = respDurs.length ? Math.round(respDurs.reduce((a, b) => a + b, 0) / respDurs.length) : 0
   const avgProc = procDurs.length ? Math.round(procDurs.reduce((a, b) => a + b, 0) / procDurs.length) : 0
-  return { total: list.length, avgResp, avgProc, incidents, processing, completed }
+  const replyRate = totalResponders ? Math.round(((totalResponders - noReplyCount) / totalResponders) * 100) : 0
+  const resolverRate = totalResponders ? Math.round((resolvedCount / totalResponders) * 100) : 0
+  return { total: list.length, avgResp, avgProc, incidents, processing, completed, replyRate, resolverRate, totalResponders, noReplyCount, resolvedCount }
 })
 
-// 按响应人聚合：每个 responder 各算各的
+// 按响应人聚合
 const employeeStats = computed(() => {
   const map = {}
   records.value.forEach(r => {
     recResponders(r).forEach(rr => {
       if (!rr.responder) return
-      if (!map[rr.responder]) map[rr.responder] = { responder: rr.responder, count: 0, respSum: 0, respN: 0, procSum: 0, procN: 0, incidents: 0 }
+      if (!map[rr.responder]) map[rr.responder] = { responder: rr.responder, count: 0, replyN: 0, respSum: 0, respN: 0, procSum: 0, procN: 0, incidents: 0 }
       const s = map[rr.responder]
       s.count++
-      const rd = diffMinutes(rr.responded_at, r.mentioned_at)
-      if (rd != null && rd >= 0) { s.respSum += rd; s.respN++ }
+      if (rr.responded_at) {
+        s.replyN++
+        const rd = diffMinutes(rr.responded_at, rr.mentioned_at)
+        if (rd != null && rd >= 0) { s.respSum += rd; s.respN++ }
+      }
       if (rr.completed_at) {
         const pd = diffMinutes(rr.completed_at, rr.responded_at)
         if (pd != null && pd >= 0) { s.procSum += pd; s.procN++ }
@@ -195,10 +236,17 @@ const employeeStats = computed(() => {
       ...s,
       avgResp: s.respN ? Math.round(s.respSum / s.respN) : 0,
       avgProc: s.procN ? Math.round(s.procSum / s.procN) : 0,
+      replyRate: s.count ? Math.round((s.replyN / s.count) * 100) : 0,
+      resolverRate: s.count ? Math.round((s.procN / s.count) * 100) : 0,
       incidentRate: s.count ? Math.round((s.incidents / s.count) * 100) : 0
     }))
     .sort((a, b) => b.count - a.count)
 })
+
+// 列表"处理人"列：completed_at 非空的人
+function resolvers(r) {
+  return recResponders(r).filter(rr => rr.completed_at).map(rr => rr.responder)
+}
 
 // 列表行用：首响应时间 / 末完成时间
 function firstRespondedAt(r) {
@@ -231,7 +279,8 @@ function emptyForm() {
   const now = formatNow()
   return {
     id: 0,
-    responders: [{ responder: '', responded_at: now, completed_at: '' }], // v584: 多响应人
+    // v584: 多响应人；v743: 每人有自己的 mentioned_at（默认 = 主表）
+    responders: [{ responder: '', mentioned_at: now, responded_at: '', completed_at: '' }],
     message_source: SOURCES.value[0]?.code || 'lark',
     message_content: '',
     mentioned_at: now,
@@ -242,12 +291,12 @@ function emptyForm() {
     attachments: []
   }
 }
-// v584: 响应人行操作
 function addResponderRow() {
-  const last = form.value.responders[form.value.responders.length - 1]
+  // 新行默认 mentioned_at = 主表当前值（用户可改）
   form.value.responders.push({
     responder: '',
-    responded_at: last?.responded_at || formatNow(),
+    mentioned_at: form.value.mentioned_at || formatNow(),
+    responded_at: '',
     completed_at: ''
   })
 }
@@ -288,10 +337,15 @@ function openAdd() {
 }
 function openEdit(r) {
   modalMode.value = 'edit'
-  // v584: 优先用 responders 数组；老数据兜底用单元素
+  // v584/v743: 每人有自己的 mentioned_at；老数据缺就用主表
   const responders = (r.responders && r.responders.length)
-    ? r.responders.map(x => ({ responder: x.responder, responded_at: x.responded_at, completed_at: x.completed_at || '' }))
-    : [{ responder: r.responder, responded_at: r.responded_at, completed_at: r.completed_at || '' }]
+    ? r.responders.map(x => ({
+        responder: x.responder,
+        mentioned_at: x.mentioned_at || r.mentioned_at,
+        responded_at: x.responded_at || '',
+        completed_at: x.completed_at || ''
+      }))
+    : [{ responder: r.responder, mentioned_at: r.mentioned_at, responded_at: r.responded_at, completed_at: r.completed_at || '' }]
   form.value = {
     id: r.id,
     responders,
@@ -307,9 +361,9 @@ function openEdit(r) {
   showModal.value = true
 }
 
-// v584: 每行的响应时长/处理时长（针对单个 responder）
-function rowRespDur(row) { return diffMinutes(row.responded_at, form.value.mentioned_at) }
-function rowProcDur(row) { return row.completed_at ? diffMinutes(row.completed_at, row.responded_at) : null }
+// v743: 每行用自己的 mentioned_at 算时长
+function rowRespDur(row) { return row.responded_at ? diffMinutes(row.responded_at, row.mentioned_at) : null }
+function rowProcDur(row) { return (row.responded_at && row.completed_at) ? diffMinutes(row.completed_at, row.responded_at) : null }
 
 async function saveRecord() {
   if (!form.value.message_content) { appStore.showToast('请填消息内容', 'error'); return }
@@ -317,7 +371,8 @@ async function saveRecord() {
   if (!form.value.responders || form.value.responders.length === 0) { appStore.showToast('至少 1 个响应人', 'error'); return }
   for (const [i, r] of form.value.responders.entries()) {
     if (!r.responder) { appStore.showToast(`第 ${i + 1} 行响应人未选`, 'error'); return }
-    if (!r.responded_at) { appStore.showToast(`第 ${i + 1} 行响应时间必填`, 'error'); return }
+    if (!r.mentioned_at) { appStore.showToast(`第 ${i + 1} 行艾特时间必填`, 'error'); return }
+    // v743: responded_at / completed_at 都可空（空 = 未响应 / 未解决）
   }
   if (form.value.has_incident && !form.value.incident_ticket) { appStore.showToast('勾选故障后请填故障单号', 'error'); return }
 
@@ -327,7 +382,8 @@ async function saveRecord() {
   const payload = {
     responders: form.value.responders.map(r => ({
       responder: r.responder,
-      responded_at: r.responded_at,
+      mentioned_at: r.mentioned_at || form.value.mentioned_at,
+      responded_at: r.responded_at || '',
       completed_at: r.completed_at || ''
     })),
     message_source: form.value.message_source,
@@ -627,12 +683,12 @@ function exportExcel() {
 
     <!-- 概览 -->
     <div class="overview" v-if="activeTab === 'list'">
-      <div class="ov-card"><div class="ov-num">{{ stats.total }}</div><div class="ov-lbl">总响应数</div></div>
+      <div class="ov-card"><div class="ov-num">{{ stats.total }}</div><div class="ov-lbl">总任务数</div></div>
       <div class="ov-card"><div class="ov-num">{{ fmtDuration(stats.avgResp) }}</div><div class="ov-lbl">平均响应时长</div></div>
       <div class="ov-card"><div class="ov-num">{{ fmtDuration(stats.avgProc) }}</div><div class="ov-lbl">平均处理时长</div></div>
+      <div class="ov-card"><div class="ov-num ov-good">{{ stats.replyRate }}%</div><div class="ov-lbl">响应率</div></div>
+      <div class="ov-card"><div class="ov-num">{{ stats.resolverRate }}%</div><div class="ov-lbl">实干率</div></div>
       <div class="ov-card"><div class="ov-num ov-bad">{{ stats.incidents }}</div><div class="ov-lbl">故障次数</div></div>
-      <div class="ov-card"><div class="ov-num ov-warn">{{ stats.processing }}</div><div class="ov-lbl">处理中</div></div>
-      <div class="ov-card"><div class="ov-num ov-good">{{ stats.completed }}</div><div class="ov-lbl">已完成</div></div>
     </div>
 
     <!-- 列表 -->
@@ -642,6 +698,7 @@ function exportExcel() {
           <tr>
             <th>#</th>
             <th>响应人</th>
+            <th>处理人</th>
             <th>来源</th>
             <th>消息内容</th>
             <th>艾特时间</th>
@@ -656,14 +713,24 @@ function exportExcel() {
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loading"><td colspan="13" class="empty-cell">加载中…</td></tr>
-          <tr v-else-if="records.length === 0"><td colspan="13" class="empty-cell">暂无响应记录</td></tr>
+          <tr v-if="loading"><td colspan="14" class="empty-cell">加载中…</td></tr>
+          <tr v-else-if="records.length === 0"><td colspan="14" class="empty-cell">暂无响应记录</td></tr>
           <tr v-else v-for="r in records" :key="r.id">
             <td>#{{ r.id }}</td>
             <td>
               <div class="resp-badges">
-                <span v-for="(rr, i) in recResponders(r)" :key="i" class="resp-badge" :title="`响应 ${rr.responded_at}${rr.completed_at ? ' 完成 ' + rr.completed_at : ' 处理中'}`">{{ rr.responder }}</span>
+                <span v-for="(rr, i) in recResponders(r)" :key="i" class="resp-badge"
+                      :style="{ background: responderState(rr, r).color + '22', color: responderState(rr, r).color }"
+                      :title="`${responderState(rr, r).label}｜艾特 ${rr.mentioned_at}｜响应 ${rr.responded_at || '-'}｜完成 ${rr.completed_at || '-'}`">
+                  {{ responderState(rr, r).emoji }} {{ rr.responder }}
+                </span>
               </div>
+            </td>
+            <td>
+              <div v-if="resolvers(r).length" class="resolver-list">
+                <span v-for="(name, i) in resolvers(r)" :key="i" class="resolver-tag">{{ name }}</span>
+              </div>
+              <span v-else class="muted">-</span>
             </td>
             <td><span class="source-badge" :style="{ background: sourceColor(r.message_source) }">{{ sourceLabel(r.message_source) }}</span></td>
             <td class="msg">
@@ -675,10 +742,15 @@ function exportExcel() {
             <td class="ts">{{ lastCompletedAt(r) || '-' }}</td>
             <td class="resp-detail">
               <div v-for="(rr, i) in recResponders(r)" :key="i" class="resp-line">
+                <span class="resp-state" :style="{ color: responderState(rr, r).color }">{{ responderState(rr, r).emoji }}</span>
                 <span class="resp-name">{{ rr.responder }}</span>
-                <span :class="durationClass(diffMinutes(rr.responded_at, r.mentioned_at), 5)">响 {{ fmtDuration(diffMinutes(rr.responded_at, r.mentioned_at)) }}</span>
-                <span v-if="rr.completed_at" :class="durationClass(diffMinutes(rr.completed_at, rr.responded_at), 60)">处 {{ fmtDuration(diffMinutes(rr.completed_at, rr.responded_at)) }}</span>
-                <span v-else class="muted">进行中</span>
+                <span v-if="rr.responded_at" :class="durationClass(diffMinutes(rr.responded_at, rr.mentioned_at), 5)">
+                  响 {{ fmtDuration(diffMinutes(rr.responded_at, rr.mentioned_at)) }}
+                  <span v-if="isLateResponse(rr, r)" class="late-tag" title="晚于第一个解决人">⚠</span>
+                </span>
+                <span v-if="rr.completed_at" :class="durationClass(diffMinutes(rr.completed_at, rr.responded_at), 60)">
+                  处 {{ fmtDuration(diffMinutes(rr.completed_at, rr.responded_at)) }}
+                </span>
               </div>
             </td>
             <td>{{ r.has_incident ? '⚠是' : '否' }}</td>
@@ -715,19 +787,20 @@ function exportExcel() {
       <table class="data-table">
         <thead>
           <tr>
-            <th>#</th><th>员工</th><th>响应次数</th><th>平均响应</th><th>平均处理</th><th>故障次数</th><th>故障率</th>
+            <th>#</th><th>员工</th><th>参与次数</th><th>响应率</th><th>实干率</th><th>平均响应</th><th>平均处理</th><th>故障次数</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="employeeStats.length === 0"><td colspan="7" class="empty-cell">暂无数据</td></tr>
+          <tr v-if="employeeStats.length === 0"><td colspan="8" class="empty-cell">暂无数据</td></tr>
           <tr v-else v-for="(s, idx) in employeeStats" :key="s.responder">
             <td>{{ idx + 1 }}</td>
             <td>{{ s.responder }}</td>
             <td>{{ s.count }}</td>
+            <td :title="`${s.replyN}/${s.count}`">{{ s.replyRate }}%</td>
+            <td :title="`${s.procN}/${s.count}`">{{ s.resolverRate }}%</td>
             <td>{{ fmtDuration(s.avgResp) }}</td>
             <td>{{ fmtDuration(s.avgProc) }}</td>
             <td>{{ s.incidents }}</td>
-            <td>{{ s.incidentRate }}%</td>
           </tr>
         </tbody>
       </table>
@@ -769,29 +842,38 @@ function exportExcel() {
             <input v-model="form.mentioned_at" class="input sec-input" title="可在此手动编辑到秒" placeholder="YYYY-MM-DD HH:MM:SS">
           </div>
 
-          <!-- v584: 多响应人动态行 -->
+          <!-- v584/v743: 多响应人动态行（每行自己的艾特时间） -->
           <div class="form-row resp-row-head">
             <label>响应人 *</label>
             <div class="resp-rows">
               <div v-for="(rr, idx) in form.responders" :key="idx" class="resp-row">
-                <select v-model="rr.responder" class="select resp-select">
-                  <option value="">请选择</option>
-                  <option v-for="e in employees" :key="e.id" :value="e.name">{{ e.name }} ({{ e.group_name || '-' }})</option>
-                </select>
-                <div class="resp-time-block">
-                  <div class="resp-time-label">响应</div>
-                  <input type="datetime-local" :value="toDtLocal(rr.responded_at)" @input="rr.responded_at = fromDtLocal($event.target.value, rr.responded_at)" class="input dt-input">
-                  <input v-model="rr.responded_at" class="input sec-input" placeholder="HH:MM:SS">
-                  <span class="dur-mini" :class="durationClass(rowRespDur(rr), 5)">{{ fmtDuration(rowRespDur(rr)) }}</span>
+                <div class="resp-row-top">
+                  <select v-model="rr.responder" class="select resp-select">
+                    <option value="">请选择</option>
+                    <option v-for="e in employees" :key="e.id" :value="e.name">{{ e.name }} ({{ e.group_name || '-' }})</option>
+                  </select>
+                  <span class="state-pill" :style="{ background: responderState(rr).color }">{{ responderState(rr).emoji }} {{ responderState(rr).label }}</span>
+                  <button class="btn-link danger sm" @click.stop="removeResponderRow(idx)" :disabled="form.responders.length <= 1">删除</button>
                 </div>
-                <div class="resp-time-block">
-                  <div class="resp-time-label">完成</div>
-                  <input type="datetime-local" :value="toDtLocal(rr.completed_at)" @input="rr.completed_at = fromDtLocal($event.target.value, rr.completed_at)" class="input dt-input">
-                  <input v-model="rr.completed_at" class="input sec-input" placeholder="留空=进行中">
-                  <span v-if="rr.completed_at" class="dur-mini" :class="durationClass(rowProcDur(rr), 60)">{{ fmtDuration(rowProcDur(rr)) }}</span>
-                  <span v-else class="muted">进行中</span>
+                <div class="resp-row-times">
+                  <div class="resp-time-block">
+                    <div class="resp-time-label">艾特</div>
+                    <input type="datetime-local" :value="toDtLocal(rr.mentioned_at)" @input="rr.mentioned_at = fromDtLocal($event.target.value, rr.mentioned_at)" class="input dt-input">
+                    <input v-model="rr.mentioned_at" class="input sec-input" placeholder="HH:MM:SS">
+                  </div>
+                  <div class="resp-time-block">
+                    <div class="resp-time-label">响应</div>
+                    <input type="datetime-local" :value="toDtLocal(rr.responded_at)" @input="rr.responded_at = fromDtLocal($event.target.value, rr.responded_at)" class="input dt-input">
+                    <input v-model="rr.responded_at" class="input sec-input" placeholder="留空=未响应">
+                    <span v-if="rowRespDur(rr) != null" class="dur-mini" :class="durationClass(rowRespDur(rr), 5)">{{ fmtDuration(rowRespDur(rr)) }}</span>
+                  </div>
+                  <div class="resp-time-block">
+                    <div class="resp-time-label">完成</div>
+                    <input type="datetime-local" :value="toDtLocal(rr.completed_at)" @input="rr.completed_at = fromDtLocal($event.target.value, rr.completed_at)" class="input dt-input" :disabled="!rr.responded_at">
+                    <input v-model="rr.completed_at" class="input sec-input" placeholder="留空=未解决" :disabled="!rr.responded_at">
+                    <span v-if="rowProcDur(rr) != null" class="dur-mini" :class="durationClass(rowProcDur(rr), 60)">{{ fmtDuration(rowProcDur(rr)) }}</span>
+                  </div>
                 </div>
-                <button class="btn-link danger sm" @click.stop="removeResponderRow(idx)" :disabled="form.responders.length <= 1">删除</button>
               </div>
               <button class="btn btn-secondary sm" @click.stop="addResponderRow">+ 添加响应人</button>
             </div>
@@ -1031,7 +1113,14 @@ function exportExcel() {
 /* v584: 响应人多行表单 + 列表响应人徽章 + 明细行 */
 .resp-row-head { align-items: flex-start; }
 .resp-rows { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; }
-.resp-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px; background: var(--bg-hover); border-radius: 8px; }
+.resp-row { display: flex; flex-direction: column; gap: 6px; padding: 10px; background: var(--bg-hover); border-radius: 8px; }
+.resp-row-top { display: flex; align-items: center; gap: 8px; }
+.resp-row-times { display: flex; flex-wrap: wrap; gap: 12px; }
+.state-pill { padding: 2px 10px; border-radius: 12px; color: #fff; font-size: 11px; font-weight: 600; flex: 0 0 auto; }
+.resolver-list { display: flex; flex-wrap: wrap; gap: 3px; }
+.resolver-tag { padding: 2px 8px; background: rgba(16, 185, 129, 0.15); color: #10b981; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.resp-state { font-size: 13px; flex: 0 0 auto; }
+.late-tag { color: #f59e0b; font-weight: 600; cursor: help; margin-left: 2px; }
 .resp-select { max-width: 200px; flex: 0 0 auto; }
 .resp-time-block { display: flex; align-items: center; gap: 4px; }
 .resp-time-label { font-size: 11px; color: var(--text-secondary); width: 24px; }

@@ -23,10 +23,12 @@ import (
 const ResponseRecordPrefix = "response-records/"
 
 // ResponderEntry v740: 单个响应人的时间记录
+// v743: 加 MentionedAt 让每人有自己的"被艾特时间"（支持转交场景：第一次艾特张三没回 → 二次艾特李四，李四的响应时长 = 李四回复 − 李四被艾特，不是主表艾特）
 type ResponderEntry struct {
 	Responder   string `json:"responder"`
-	RespondedAt string `json:"responded_at"` // T1
-	CompletedAt string `json:"completed_at"` // T2 - 空字符串表示处理中
+	MentionedAt string `json:"mentioned_at"` // T0 - v743: 每人自己的被艾特时间
+	RespondedAt string `json:"responded_at"` // T1 - 空字符串表示未响应
+	CompletedAt string `json:"completed_at"` // T2 - 空字符串表示未完成（未解决/处理中）
 }
 
 // ResponseRecord 员工响应记录
@@ -51,34 +53,51 @@ type ResponseRecord struct {
 	UpdatedBy      string           `json:"updated_by"`
 }
 
-// deriveLegacyFields v740: 从 responders 算出兼容字段（首响应人/首响应时间/末完成时间/状态）
-// 返回 (responder, respondedAt, completedAt|nil, status)
-func deriveLegacyFields(responders []ResponderEntry) (string, string, *string, string) {
+// deriveLegacyFields v740/v743: 从 responders 算出兼容字段
+// v743 新语义:
+//   - status: 至少 1 人 completed_at 非空 → completed；否则 processing (没人解决 = 还在处理)
+//   - completed_at (主表): 已解决人里最晚的 completed_at；没人解决就 NULL
+//   - responded_at (主表): 最早的非空 responded_at；没人响应就用 fallback (mainMentionedAt)
+//   - responder (主表): 首位响应的人；没人响应就用第一个 responder 名
+//   - mentioned_at 主表用调用方传入的 mainMentionedAt（外部固定，不靠 responders 派生）
+func deriveLegacyFields(responders []ResponderEntry, mainMentionedAt string) (string, string, *string, string) {
 	if len(responders) == 0 {
-		return "", "", nil, "processing"
+		return "", mainMentionedAt, nil, "processing"
 	}
-	// 找最早的 responded_at
-	first := responders[0]
-	for _, r := range responders[1:] {
-		if r.RespondedAt < first.RespondedAt {
-			first = r
+
+	// 1. 找最早响应的人（responded_at 非空里取 min）
+	firstResponder, firstRespondedAt := "", ""
+	for _, r := range responders {
+		if r.RespondedAt == "" {
+			continue
+		}
+		if firstRespondedAt == "" || r.RespondedAt < firstRespondedAt {
+			firstRespondedAt = r.RespondedAt
+			firstResponder = r.Responder
 		}
 	}
-	// 找最晚的 completed_at；任意一个 completed_at 为空 → 整条状态 processing
-	status := "completed"
+	// 没人响应 → 兼容字段降级用首位 responder + mainMentionedAt
+	if firstResponder == "" {
+		firstResponder = responders[0].Responder
+		firstRespondedAt = mainMentionedAt
+	}
+
+	// 2. status: 至少 1 人 completed_at 非空 → completed
+	status := "processing"
 	maxCompleted := ""
 	for _, r := range responders {
-		if r.CompletedAt == "" {
-			status = "processing"
-		} else if r.CompletedAt > maxCompleted {
-			maxCompleted = r.CompletedAt
+		if r.CompletedAt != "" {
+			status = "completed"
+			if r.CompletedAt > maxCompleted {
+				maxCompleted = r.CompletedAt
+			}
 		}
 	}
 	var completedPtr *string
-	if status == "completed" && maxCompleted != "" {
+	if maxCompleted != "" {
 		completedPtr = &maxCompleted
 	}
-	return first.Responder, first.RespondedAt, completedPtr, status
+	return firstResponder, firstRespondedAt, completedPtr, status
 }
 
 const tsLayout = "2006-01-02 15:04:05"
@@ -220,11 +239,16 @@ func HandleCreateResponseRecord(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "responders / message_content / mentioned_at 必填", http.StatusBadRequest)
 		return
 	}
-	// 校验每个响应人字段
+	// v743: responded_at / completed_at 都可空 (空 = 未响应 / 未解决)
+	// 每行至少要有 responder 和 mentioned_at
 	for i, rr := range p.Responders {
-		if rr.Responder == "" || rr.RespondedAt == "" {
-			http.Error(w, fmt.Sprintf("responders[%d].responder / responded_at 必填", i), http.StatusBadRequest)
+		if rr.Responder == "" {
+			http.Error(w, fmt.Sprintf("responders[%d].responder 必填", i), http.StatusBadRequest)
 			return
+		}
+		// mentioned_at 兜底：没填就用主表 mentioned_at
+		if rr.MentionedAt == "" {
+			p.Responders[i].MentionedAt = p.MentionedAt
 		}
 	}
 	if p.Attachments == "" {
@@ -232,7 +256,7 @@ func HandleCreateResponseRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 兼容字段自动派生
-	firstResponder, firstRespondedAt, completedPtr, status := deriveLegacyFields(p.Responders)
+	firstResponder, firstRespondedAt, completedPtr, status := deriveLegacyFields(p.Responders, p.MentionedAt)
 	respondersJSON, _ := json.Marshal(p.Responders)
 	operator := r.Header.Get("X-Operator")
 
@@ -277,16 +301,19 @@ func HandleUpdateResponseRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i, rr := range p.Responders {
-		if rr.Responder == "" || rr.RespondedAt == "" {
-			http.Error(w, fmt.Sprintf("responders[%d].responder / responded_at 必填", i), http.StatusBadRequest)
+		if rr.Responder == "" {
+			http.Error(w, fmt.Sprintf("responders[%d].responder 必填", i), http.StatusBadRequest)
 			return
+		}
+		if rr.MentionedAt == "" {
+			p.Responders[i].MentionedAt = p.MentionedAt
 		}
 	}
 	if p.Attachments == "" {
 		p.Attachments = "[]"
 	}
 
-	firstResponder, firstRespondedAt, completedPtr, status := deriveLegacyFields(p.Responders)
+	firstResponder, firstRespondedAt, completedPtr, status := deriveLegacyFields(p.Responders, p.MentionedAt)
 	respondersJSON, _ := json.Marshal(p.Responders)
 	operator := r.Header.Get("X-Operator")
 
