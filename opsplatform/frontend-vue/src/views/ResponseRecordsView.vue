@@ -134,9 +134,6 @@ onMounted(async () => {
   await loadRecords()
   // v582: 全局键盘监听 — lightbox 显示时左右键切换、Esc 关闭
   window.addEventListener('keydown', onPreviewKey)
-  // v598: 浮动列 scroll 同步
-  await nextTick()
-  attachScrollSync()
 })
 
 watch([startDate, endDate], () => loadRecords())
@@ -356,42 +353,9 @@ function openAdd() {
   form.value = emptyForm()
   showModal.value = true
 }
-// v598: JS 手动同步状态+操作列位置 (彻底放弃 CSS sticky)
-// 监听 .table-wrap 的 scroll 事件，给两列 td/th 设 transform: translateX(scrollLeft)
-// 让它们跟着横向滚动保持在视野最右
-import { nextTick } from 'vue'
+// v599: 状态+操作改成独立浮动面板，table-wrap 只渲染普通数据列
+// 浮动面板用 absolute right:0 永远固定，不需要 JS 同步
 const tableWrapRef = ref(null)
-
-function syncFixedCols() {
-  const wrap = tableWrapRef.value
-  if (!wrap) return
-  // 公式：translateX = scrollLeft - maxScrollLeft
-  // 当 scrollLeft = 0：translateX = -maxScroll，把原生位置（表格最右）拉到视野最右
-  // 当 scrollLeft = maxScroll：translateX = 0，原生位置已在视野最右，无需拉
-  const maxScroll = wrap.scrollWidth - wrap.clientWidth
-  if (maxScroll <= 0) {
-    // 不需要滚动（表格全部可见），重置
-    wrap.querySelectorAll('.data-table .status-col, .data-table .op').forEach(el => { el.style.transform = '' })
-    return
-  }
-  const offset = wrap.scrollLeft - maxScroll
-  const tx = `translateX(${offset}px)`
-  wrap.querySelectorAll('.data-table .status-col, .data-table .op').forEach(el => {
-    el.style.transform = tx
-  })
-}
-
-function attachScrollSync() {
-  const wrap = tableWrapRef.value
-  if (!wrap) return
-  wrap.addEventListener('scroll', syncFixedCols, { passive: true })
-  syncFixedCols()
-}
-
-watch(records, async () => {
-  await nextTick()
-  syncFixedCols()
-}, { deep: true })
 
 // v596: 详情 modal (只读，多人响应在这里看完整信息)
 const showDetailModal = ref(false)
@@ -854,7 +818,9 @@ function exportExcel() {
     </div>
 
     <!-- 列表 -->
-    <div v-if="activeTab === 'list'" ref="tableWrapRef" class="table-wrap">
+    <!-- v599: 外层 wrapper 包住 .table-wrap，浮动面板 absolute 在它最右侧 -->
+    <div v-if="activeTab === 'list'" class="table-container">
+    <div ref="tableWrapRef" class="table-wrap">
       <table class="data-table">
         <thead>
           <tr>
@@ -870,8 +836,6 @@ function exportExcel() {
             <th>故障</th>
             <th>处理结果</th>
             <th>截图</th>
-            <th class="status-col">状态</th>
-            <th class="op">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -939,18 +903,28 @@ function exportExcel() {
               </div>
               <span v-else class="muted">-</span>
             </td>
-            <td class="status-col">
-              <span v-if="r.status === 'completed'" class="status-completed">✅ 完成</span>
-              <span v-else class="status-processing">🟡 处理中</span>
-            </td>
-            <td class="op">
-              <button class="icon-btn" @click="openDetail(r)" title="查看详情">👁️</button>
-              <button v-if="canUpdate" class="icon-btn" @click="openEdit(r)" title="编辑">✏️</button>
-              <button v-if="canDelete" class="icon-btn danger" @click="deleteRecord(r)" title="删除">🗑️</button>
-            </td>
           </tr>
         </tbody>
       </table>
+    </div>
+    <!-- v599: 浮动状态+操作面板，物理上独立于 table，absolute right:0 永远固定在视野最右 -->
+    <div class="floating-cols">
+      <div class="fc-header">
+        <div class="fc-status">状态</div>
+        <div class="fc-op">操作</div>
+      </div>
+      <div v-for="r in records" :key="'fc-' + r.id" class="fc-row">
+        <div class="fc-status">
+          <span v-if="r.status === 'completed'" class="status-completed">✅ 完成</span>
+          <span v-else class="status-processing">🟡 处理中</span>
+        </div>
+        <div class="fc-op">
+          <button class="icon-btn" @click="openDetail(r)" title="查看详情">👁️</button>
+          <button v-if="canUpdate" class="icon-btn" @click="openEdit(r)" title="编辑">✏️</button>
+          <button v-if="canDelete" class="icon-btn danger" @click="deleteRecord(r)" title="删除">🗑️</button>
+        </div>
+      </div>
+    </div>
     </div>
 
     <!-- 统计 -->
@@ -1374,13 +1348,14 @@ function exportExcel() {
    保留 HTML 语义（table/thead/tbody/tr/th/td），只把 display 模式从 table-* 改成 block/grid
    sticky 操作列在 grid 容器里 position:sticky right:0 行为正常 — 不再有"操儆图"重叠
    列顺序: # / 响应人 / 处理人 / 来源 / 消息内容 / 艾特时间 / 首响应 / 末完成 / 响应明细 / 故障 / 处理结果 / 截图 / 状态 / 操作 */
-.table-wrap .data-table { display: block; min-width: 1910px; }
+/* v599: 表格只渲染数据列（状态+操作搬到外面浮动面板）*/
+.table-wrap .data-table { display: block; min-width: 1700px; }
 .table-wrap .data-table thead,
 .table-wrap .data-table tbody { display: block; }
 .table-wrap .data-table thead tr,
 .table-wrap .data-table tbody tr {
   display: grid;
-  grid-template-columns: 60px 180px 130px 80px 220px 160px 160px 160px 230px 60px 160px 140px 100px 110px;
+  grid-template-columns: 60px 180px 130px 80px 220px 160px 160px 160px 230px 60px 160px 140px;
   border-bottom: 1px solid var(--border-color);
   align-items: center;
   min-height: 56px;
@@ -1393,33 +1368,35 @@ function exportExcel() {
 }
 .table-wrap .data-table tbody td { background-color: var(--bg-card); }
 .table-wrap .data-table tbody tr:hover td:not(.op) { background-color: var(--bg-hover); }
-/* v598: 状态+操作列改成 JS transform 同步 (CSS sticky 在 grid 里 9 次都没修对)
-   关键 CSS:
-   - 浮动列加 will-change: transform 保证 GPU 加速、避免抖动
-   - 不透明 background-color 避免穿透
-   - 高 z-index 盖住经过的列
-   transform 由 JS syncFixedCols() 设 translateX(scrollLeft) 让它跟随横向滚动 */
-.table-wrap .data-table .op {
+/* v599: 浮动状态+操作面板 — absolute right:0 永远固定在视野最右
+   物理上独立于 table，不受任何 sticky/transform bug 影响 */
+.table-container { position: relative; }
+.floating-cols {
+  position: absolute;
+  top: 12px;       /* .table-wrap padding */
+  right: 12px;
+  bottom: 12px;
+  width: 220px;    /* 状态 110 + 操作 110 */
   background-color: var(--bg-card);
   border-left: 1px solid var(--border-color);
   box-shadow: -6px 0 12px rgba(0, 0, 0, 0.15);
-  text-align: center;
-  position: relative;
-  z-index: 20;
-  will-change: transform;
+  z-index: 5;
+  pointer-events: none;  /* 让滚动条还能在这块下方拖动 */
 }
-.table-wrap .data-table thead .op { background-color: var(--bg-hover); z-index: 30; }
-.table-wrap .data-table tbody tr:hover .op { background-color: var(--bg-card); }
-
-.table-wrap .data-table .status-col {
-  background-color: var(--bg-card);
-  border-left: 1px solid var(--border-color);
-  position: relative;
-  z-index: 19;
-  will-change: transform;
+.floating-cols > * { pointer-events: auto; }  /* 但 cell 自己可点击 */
+.floating-cols .fc-header,
+.floating-cols .fc-row {
+  display: grid;
+  grid-template-columns: 110px 110px;
+  align-items: center;
+  min-height: 56px;
+  border-bottom: 1px solid var(--border-color);
 }
-.table-wrap .data-table thead .status-col { background-color: var(--bg-hover); z-index: 29; }
-.table-wrap .data-table tbody tr:hover .status-col { background-color: var(--bg-card); }
+.floating-cols .fc-header { background-color: var(--bg-hover); font-weight: 600; color: var(--text-secondary); font-size: 13px; }
+.floating-cols .fc-header > div,
+.floating-cols .fc-row > div { padding: 10px 8px; text-align: center; }
+.floating-cols .fc-row:hover { background-color: var(--bg-hover); }
+.table-container .table-wrap { padding-right: 232px; }  /* 留出空间给浮动面板（含 12px gap）*/
 /* 未响应/未解决 文字徽章 */
 .state-text-bad { color: #ea3636; font-size: 11px; font-weight: 600; }
 .state-text-warn { color: #94a3b8; font-size: 11px; }
