@@ -17,8 +17,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// ResponseRecordBucket 响应记录附件专用 bucket（v739：跟桌台维护那套解耦）
-const ResponseRecordBucket = "response-records"
+// ResponseRecordPrefix v742: 响应记录附件存到主 bucket 的子目录下（不再用独立 bucket）
+// 原因: 生产 MinIO 账号通常按 bucket 配置最小权限 (Resource: arn:aws:s3:::opsplatform/*)，
+// 没有 CreateBucket 权限，所以复用主 bucket + 前缀区分更合理
+const ResponseRecordPrefix = "response-records/"
 
 // ResponderEntry v740: 单个响应人的时间记录
 type ResponderEntry struct {
@@ -491,13 +493,8 @@ func HandleResponseAttachmentUpload(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	// 确保 bucket 存在（启动时已建，这里兜底）
-	if err := store.EnsureBucket(ctx, ResponseRecordBucket); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	fileURL, err := store.UploadTo(ctx, ResponseRecordBucket, objectName, file, fileHeader.Size, contentType)
+	// v742: 走主 bucket + response-records/ 前缀（无需 CreateBucket 权限）
+	fileURL, err := store.Upload(ctx, ResponseRecordPrefix+objectName, file, fileHeader.Size, contentType)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

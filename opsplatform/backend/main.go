@@ -42,16 +42,8 @@ func main() {
 	// 初始化对象存储
 	if err := storage.Init(); err != nil {
 		log.Printf("对象存储初始化警告: %v", err)
-	} else {
-		// v739: 响应记录附件独立 bucket
-		if store := storage.GetStorage(); store != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := store.EnsureBucket(ctx, handlers.ResponseRecordBucket); err != nil {
-				log.Printf("[Storage] 响应记录 bucket 初始化失败: %v", err)
-			}
-		}
 	}
+	// v742: 响应记录附件改存主 bucket 的 response-records/ 子目录，无需独立 bucket
 
 	// 初始化默认管理员
 	if err := handlers.InitDefaultAdmin(); err != nil {
