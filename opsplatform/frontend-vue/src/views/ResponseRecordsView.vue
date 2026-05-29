@@ -76,6 +76,8 @@ onMounted(async () => {
   await loadSources()
   await loadEmployees()
   await loadRecords()
+  // v582: 全局键盘监听 — lightbox 显示时左右键切换、Esc 关闭
+  window.addEventListener('keydown', onPreviewKey)
 })
 
 watch([currentYear, currentMonth], async () => { await loadEmployees(); await loadRecords() })
@@ -246,6 +248,10 @@ async function saveRecord() {
   if (!form.value.mentioned_at || !form.value.responded_at) { appStore.showToast('艾特时间和响应时间必填', 'error'); return }
   if (form.value.has_incident && !form.value.incident_ticket) { appStore.showToast('勾选故障后请填故障单号', 'error'); return }
 
+  // v582: 入库前剥掉 preview (blob URL，下次会话失效)，只存 {name, size, path}
+  const cleanAttachments = (form.value.attachments || []).map(a => ({
+    name: a.name, size: a.size, path: a.path
+  }))
   const payload = {
     responder: form.value.responder,
     message_source: form.value.message_source,
@@ -257,7 +263,7 @@ async function saveRecord() {
     incident_ticket: form.value.incident_ticket,
     handle_result: form.value.handle_result,
     remark: form.value.remark,
-    attachments: JSON.stringify(form.value.attachments || [])
+    attachments: JSON.stringify(cleanAttachments)
   }
 
   try {
@@ -319,18 +325,48 @@ function isImageAttachment(a) {
   return /\.(png|jpg|jpeg|gif|webp|bmp)(\?|$)/i.test(p) || (a.preview && a.preview.startsWith('blob:'))
 }
 function attachmentURL(a) {
-  // 新上传时 preview 是本地 blob URL，加载最快、不走网络；保存后从后端拉只有 path
-  return a.preview || a.path || ''
+  // path 是后端持久 URL (/storage/response-records/xxx.png)，永远有效；
+  // preview 仅在"刚上传后的当前会话"内有效（blob: 协议），刷新就失效 → 别再优先用它
+  if (a.path) return a.path
+  return a.preview || ''
 }
 // 列表里只取图片类型的附件做缩略图
 function imageAttachments(list) {
   return (list || []).filter(isImageAttachment)
 }
-function openPreview(a) {
-  if (!isImageAttachment(a)) return
-  previewURL.value = attachmentURL(a)
+
+// v582: lightbox 多图浏览（参考桌台维护：previewImages 数组 + index + 左右按钮 + 键盘）
+const showPreview = ref(false)
+const previewImages = ref([])
+const previewIndex = ref(0)
+function openPreviewList(attachments, startIdx = 0) {
+  const imgs = imageAttachments(attachments).map(attachmentURL).filter(Boolean)
+  if (imgs.length === 0) return
+  previewImages.value = imgs
+  previewIndex.value = Math.min(startIdx, imgs.length - 1)
+  showPreview.value = true
 }
-function closePreview() { previewURL.value = '' }
+function openPreview(a) {
+  // 单图打开：转成 list 形式
+  openPreviewList([a], 0)
+}
+function closePreview() { showPreview.value = false }
+function prevImage() {
+  if (previewImages.value.length <= 1) return
+  previewIndex.value = (previewIndex.value - 1 + previewImages.value.length) % previewImages.value.length
+}
+function nextImage() {
+  if (previewImages.value.length <= 1) return
+  previewIndex.value = (previewIndex.value + 1) % previewImages.value.length
+}
+function onPreviewKey(e) {
+  if (!showPreview.value) return
+  if (e.key === 'ArrowLeft')      prevImage()
+  else if (e.key === 'ArrowRight') nextImage()
+  else if (e.key === 'Escape')     closePreview()
+}
+// 挂载时绑 keydown
+// keydown 在上面 onMounted 里合并
 
 function onFilePick(e) {
   const files = Array.from(e.target.files || [])
@@ -529,9 +565,12 @@ function exportExcel() {
               <div class="shot-list" v-if="imageAttachments(r.attachments).length">
                 <img v-for="(a, i) in imageAttachments(r.attachments).slice(0, 3)" :key="i"
                      :src="attachmentURL(a)" class="shot-thumb"
-                     :title="a.name + ' (点击放大)'"
-                     @click="openPreview(a)">
-                <span v-if="imageAttachments(r.attachments).length > 3" class="shot-more">+{{ imageAttachments(r.attachments).length - 3 }}</span>
+                     :title="a.name + ' (点击放大，左右键切换)'"
+                     @click="openPreviewList(r.attachments, i)"
+                     @error="e => e.target.style.opacity='0.3'">
+                <span v-if="imageAttachments(r.attachments).length > 3" class="shot-more"
+                      :title="`共 ${imageAttachments(r.attachments).length} 张`"
+                      @click="openPreviewList(r.attachments, 3)">+{{ imageAttachments(r.attachments).length - 3 }}</span>
               </div>
               <span v-else class="muted">-</span>
             </td>
@@ -666,9 +705,9 @@ function exportExcel() {
                 <div v-for="(a, i) in form.attachments" :key="i" class="att-item">
                   <img v-if="isImageAttachment(a)" :src="attachmentURL(a)"
                        class="att-thumb thumb-clickable"
-                       @click.stop="openPreview(a)"
+                       @click.stop="openPreviewList(form.attachments, imageAttachments(form.attachments).indexOf(a))"
                        @error="e => e.target.style.display='none'"
-                       title="点击放大查看">
+                       title="点击放大（左右键切换）">
                   <span v-else class="att-doc-icon">📄</span>
                   <span class="att-name">{{ a.name }}</span>
                   <span class="att-size">{{ Math.round(a.size / 1024) }} KB</span>
@@ -685,10 +724,13 @@ function exportExcel() {
       </div>
     </div>
 
-    <!-- v581: 图片预览 lightbox -->
-    <div v-if="previewURL" class="lightbox" @click="closePreview">
-      <img :src="previewURL" class="lightbox-img" @click.stop>
-      <button class="lightbox-close" @click="closePreview">×</button>
+    <!-- v582: 多图 lightbox（参考桌台维护：上下按钮 + 键盘左右键 + Esc 关闭 + 计数器） -->
+    <div v-if="showPreview" class="lightbox" @click="closePreview">
+      <button v-if="previewImages.length > 1" class="lightbox-nav prev" @click.stop="prevImage" title="上一张（←）">‹</button>
+      <img :src="previewImages[previewIndex]" class="lightbox-img" @click.stop>
+      <button v-if="previewImages.length > 1" class="lightbox-nav next" @click.stop="nextImage" title="下一张（→）">›</button>
+      <div v-if="previewImages.length > 1" class="lightbox-counter">{{ previewIndex + 1 }} / {{ previewImages.length }}</div>
+      <button class="lightbox-close" @click="closePreview" title="关闭（Esc）">×</button>
     </div>
 
     <!-- v581: 来源管理 modal -->
@@ -858,6 +900,11 @@ function exportExcel() {
 .lightbox-img { max-width: 95vw; max-height: 95vh; object-fit: contain; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6); cursor: default; }
 .lightbox-close { position: absolute; top: 20px; right: 30px; background: rgba(255, 255, 255, 0.2); border: none; color: #fff; font-size: 28px; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; }
 .lightbox-close:hover { background: rgba(255, 255, 255, 0.35); }
+.lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 50px; height: 50px; background: rgba(255, 255, 255, 0.15); border: none; color: #fff; font-size: 40px; line-height: 1; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.lightbox-nav:hover { background: rgba(255, 255, 255, 0.35); }
+.lightbox-nav.prev { left: 30px; }
+.lightbox-nav.next { right: 30px; }
+.lightbox-counter { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 6px 14px; background: rgba(255, 255, 255, 0.15); color: #fff; border-radius: 14px; font-size: 13px; font-weight: 600; }
 
 /* v581: 来源管理 */
 .color-dot { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
