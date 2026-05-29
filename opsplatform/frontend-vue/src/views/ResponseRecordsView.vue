@@ -144,16 +144,17 @@ function durationClass(min, threshold) {
   return 'dur-good'
 }
 
-// v584: 拿 record 的 responders 数组（v743: 每行 mentioned_at 兜底用主表）
+// v584: 拿 record 的 responders 数组（v743: 每行 mentioned_at 兜底用主表；v744: note 兼容）
 function recResponders(r) {
   const list = (r.responders && r.responders.length)
     ? r.responders
     : [{ responder: r.responder, responded_at: r.responded_at, completed_at: r.completed_at || '' }]
   return list.map(x => ({
     responder: x.responder,
-    mentioned_at: x.mentioned_at || r.mentioned_at,  // v743: 缺就用主表
+    mentioned_at: x.mentioned_at || r.mentioned_at,
     responded_at: x.responded_at || '',
-    completed_at: x.completed_at || ''
+    completed_at: x.completed_at || '',
+    note: x.note || ''   // v744
   }))
 }
 
@@ -280,7 +281,7 @@ function emptyForm() {
   return {
     id: 0,
     // v584: 多响应人；v743: 每人有自己的 mentioned_at（默认 = 主表）
-    responders: [{ responder: '', mentioned_at: now, responded_at: '', completed_at: '' }],
+    responders: [{ responder: '', mentioned_at: now, responded_at: '', completed_at: '', note: '' }],
     message_source: SOURCES.value[0]?.code || 'lark',
     message_content: '',
     mentioned_at: now,
@@ -292,12 +293,12 @@ function emptyForm() {
   }
 }
 function addResponderRow() {
-  // 新行默认 mentioned_at = 主表当前值（用户可改）
   form.value.responders.push({
     responder: '',
     mentioned_at: form.value.mentioned_at || formatNow(),
     responded_at: '',
-    completed_at: ''
+    completed_at: '',
+    note: ''
   })
 }
 function removeResponderRow(idx) {
@@ -343,9 +344,10 @@ function openEdit(r) {
         responder: x.responder,
         mentioned_at: x.mentioned_at || r.mentioned_at,
         responded_at: x.responded_at || '',
-        completed_at: x.completed_at || ''
+        completed_at: x.completed_at || '',
+        note: x.note || ''
       }))
-    : [{ responder: r.responder, mentioned_at: r.mentioned_at, responded_at: r.responded_at, completed_at: r.completed_at || '' }]
+    : [{ responder: r.responder, mentioned_at: r.mentioned_at, responded_at: r.responded_at, completed_at: r.completed_at || '', note: '' }]
   form.value = {
     id: r.id,
     responders,
@@ -384,7 +386,8 @@ async function saveRecord() {
       responder: r.responder,
       mentioned_at: r.mentioned_at || form.value.mentioned_at,
       responded_at: r.responded_at || '',
-      completed_at: r.completed_at || ''
+      completed_at: r.completed_at || '',
+      note: r.note || ''
     })),
     message_source: form.value.message_source,
     message_content: form.value.message_content,
@@ -612,14 +615,22 @@ async function deleteSource(s) {
 // 导出
 function exportExcel() {
   if (!records.value.length) { appStore.showToast('没有数据可导出', 'info'); return }
-  const headers = ['ID', '响应人', '消息来源', '消息内容', '艾特时间', '响应时间', '完成时间', '响应时长(分)', '处理时长(分)', '是否故障', '故障单号', '处理结果', '状态']
-  const rows = records.value.map(r => [
-    r.id, r.responder, sourceLabel(r.message_source), r.message_content,
-    r.mentioned_at, r.responded_at, r.completed_at || '',
-    diffMinutes(r.responded_at, r.mentioned_at) ?? '',
-    r.completed_at ? (diffMinutes(r.completed_at, r.responded_at) ?? '') : '',
-    r.has_incident ? '是' : '否', r.incident_ticket, r.handle_result, r.status
-  ])
+  const headers = ['ID', '响应人(多人 / 分隔)', '消息来源', '消息内容', '艾特时间', '首响应', '末完成', '响应明细', '是否故障', '故障单号', '处理结果', '状态']
+  const rows = records.value.map(r => {
+    const detail = recResponders(r).map(rr => {
+      const state = responderState(rr, r).label
+      const respDur = rr.responded_at ? fmtDuration(diffMinutes(rr.responded_at, rr.mentioned_at)) : '-'
+      const procDur = rr.completed_at ? fmtDuration(diffMinutes(rr.completed_at, rr.responded_at)) : '-'
+      const note = rr.note || (!rr.responded_at ? '没看消息' : '')
+      return `${rr.responder}[${state}|响${respDur}|处${procDur}${note ? '|' + note : ''}]`
+    }).join(' / ')
+    return [
+      r.id, recResponders(r).map(x => x.responder).join('/'), sourceLabel(r.message_source), r.message_content,
+      r.mentioned_at, firstRespondedAt(r) || '', lastCompletedAt(r) || '',
+      detail,
+      r.has_incident ? '是' : '否', r.incident_ticket, r.handle_result, r.status
+    ]
+  })
   const csv = '﻿' + [headers, ...rows].map(row => row.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
@@ -741,18 +752,23 @@ function exportExcel() {
             <td class="ts">{{ firstRespondedAt(r) || '-' }}</td>
             <td class="ts">{{ lastCompletedAt(r) || '-' }}</td>
             <td class="resp-detail">
-              <div v-for="(rr, i) in recResponders(r)" :key="i" class="resp-line">
-                <span class="resp-state" :style="{ color: responderState(rr, r).color }">{{ responderState(rr, r).emoji }}</span>
-                <span class="resp-name">{{ rr.responder }}</span>
-                <span v-if="rr.responded_at" :class="durationClass(diffMinutes(rr.responded_at, rr.mentioned_at), 5)">
-                  响 {{ fmtDuration(diffMinutes(rr.responded_at, rr.mentioned_at)) }}
-                  <span v-if="isLateResponse(rr, r)" class="late-tag" title="晚于第一个解决人">⚠</span>
-                </span>
-                <span v-else class="state-text-bad">未响应</span>
-                <span v-if="rr.completed_at" :class="durationClass(diffMinutes(rr.completed_at, rr.responded_at), 60)">
-                  处 {{ fmtDuration(diffMinutes(rr.completed_at, rr.responded_at)) }}
-                </span>
-                <span v-else-if="rr.responded_at" class="state-text-warn">未解决</span>
+              <div v-for="(rr, i) in recResponders(r)" :key="i" class="resp-block">
+                <div class="resp-line">
+                  <span class="resp-state" :style="{ color: responderState(rr, r).color }">{{ responderState(rr, r).emoji }}</span>
+                  <span class="resp-name">{{ rr.responder }}</span>
+                  <span v-if="rr.responded_at" :class="durationClass(diffMinutes(rr.responded_at, rr.mentioned_at), 5)">
+                    响 {{ fmtDuration(diffMinutes(rr.responded_at, rr.mentioned_at)) }}
+                    <span v-if="isLateResponse(rr, r)" class="late-tag" title="晚于第一个解决人">⚠</span>
+                  </span>
+                  <span v-else class="state-text-bad">未响应</span>
+                  <span v-if="rr.completed_at" :class="durationClass(diffMinutes(rr.completed_at, rr.responded_at), 60)">
+                    处 {{ fmtDuration(diffMinutes(rr.completed_at, rr.responded_at)) }}
+                  </span>
+                  <span v-else-if="rr.responded_at" class="state-text-warn">未解决</span>
+                </div>
+                <!-- v744: note 展示。空 → 推定 "没看消息" (仅未响应时显示)；非空 → 用户填写的实际原因 -->
+                <div v-if="rr.note" class="resp-note">💬 {{ rr.note }}</div>
+                <div v-else-if="!rr.responded_at" class="resp-note muted">💬 没看消息</div>
               </div>
             </td>
             <td>{{ r.has_incident ? '⚠是' : '否' }}</td>
@@ -875,6 +891,11 @@ function exportExcel() {
                     <input v-model="rr.completed_at" class="input sec-input" placeholder="留空=未解决" :disabled="!rr.responded_at">
                     <span v-if="rowProcDur(rr) != null" class="dur-mini" :class="durationClass(rowProcDur(rr), 60)">{{ fmtDuration(rowProcDur(rr)) }}</span>
                   </div>
+                </div>
+                <!-- v744: 备注/原因 (可选) -->
+                <div class="resp-row-note">
+                  <div class="resp-time-label">备注</div>
+                  <input v-model="rr.note" class="input note-input" :placeholder="rr.responded_at ? '可选：如 我没权限/转交他人...' : '可选：如 在开会/在医院/出差中...'">
                 </div>
               </div>
               <button class="btn btn-secondary sm" @click.stop="addResponderRow">+ 添加响应人</button>
@@ -1142,6 +1163,13 @@ function exportExcel() {
 .resp-row { display: flex; flex-direction: column; gap: 6px; padding: 10px; background: var(--bg-hover); border-radius: 8px; }
 .resp-row-top { display: flex; align-items: center; gap: 8px; }
 .resp-row-times { display: flex; flex-wrap: wrap; gap: 12px; }
+/* v744: 备注行 */
+.resp-row-note { display: flex; align-items: center; gap: 6px; padding-top: 4px; border-top: 1px dashed rgba(148, 163, 184, 0.2); }
+.note-input { flex: 1; min-width: 0; }
+.resp-block { padding: 4px 0; border-bottom: 1px dashed rgba(148, 163, 184, 0.15); }
+.resp-block:last-child { border-bottom: none; }
+.resp-note { font-size: 11px; color: var(--text-secondary); padding-left: 18px; margin-top: 2px; }
+.resp-note.muted { color: var(--text-secondary); opacity: 0.6; }
 .state-pill { padding: 2px 10px; border-radius: 12px; color: #fff; font-size: 11px; font-weight: 600; flex: 0 0 auto; }
 .resolver-list { display: flex; flex-wrap: wrap; gap: 3px; }
 .resolver-tag { padding: 2px 8px; background: rgba(16, 185, 129, 0.15); color: #10b981; border-radius: 10px; font-size: 11px; font-weight: 600; }
