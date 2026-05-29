@@ -748,9 +748,11 @@ function exportExcel() {
                   响 {{ fmtDuration(diffMinutes(rr.responded_at, rr.mentioned_at)) }}
                   <span v-if="isLateResponse(rr, r)" class="late-tag" title="晚于第一个解决人">⚠</span>
                 </span>
+                <span v-else class="state-text-bad">未响应</span>
                 <span v-if="rr.completed_at" :class="durationClass(diffMinutes(rr.completed_at, rr.responded_at), 60)">
                   处 {{ fmtDuration(diffMinutes(rr.completed_at, rr.responded_at)) }}
                 </span>
+                <span v-else-if="rr.responded_at" class="state-text-warn">未解决</span>
               </div>
             </td>
             <td>{{ r.has_incident ? '⚠是' : '否' }}</td>
@@ -1033,8 +1035,19 @@ function exportExcel() {
 .ov-num.ov-bad { color: #ea3636; }
 .ov-lbl { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 
-.table-wrap, .stats-panel { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; overflow-x: auto; }
-.table-wrap .data-table { min-width: 1500px; }
+.table-wrap, .stats-panel { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; overflow-x: auto; position: relative; }
+.table-wrap .data-table { min-width: 1500px; border-collapse: separate; border-spacing: 0; }
+/* v589: 操作列 sticky 右侧；表头 + 数据格都要 sticky 并加阴影 */
+.data-table th.op, .data-table td.op {
+  position: sticky; right: 0; z-index: 2;
+  background: var(--bg-card);
+  box-shadow: -4px 0 8px rgba(0, 0, 0, 0.15);
+}
+.data-table th.op { z-index: 3; background: var(--bg-hover); }
+.data-table tbody tr:hover td.op { background: var(--bg-hover); }
+/* 未响应/未解决 文字徽章 */
+.state-text-bad { color: #ea3636; font-size: 11px; font-weight: 600; }
+.state-text-warn { color: #94a3b8; font-size: 11px; }
 .ts { white-space: nowrap; font-family: monospace; font-size: 12px; color: var(--text-secondary); }
 .result { max-width: 200px; }
 .shot-col { width: 140px; }
