@@ -1372,17 +1372,22 @@ function exportExcel() {
 /* v599: 浮动状态+操作面板 — absolute right:0 永远固定在视野最右
    物理上独立于 table，不受任何 sticky/transform bug 影响 */
 .table-container { position: relative; }
+/* v601: 浮动操作列 — 紧贴 .table-wrap 内框最右，无缝
+   .table-wrap 有 padding:12px，所以浮动面板 right:12px (对齐内边)、
+   bottom:12px (上方滚动条上方)、top:12px (跟卡片头对齐)
+   宽度 110px 跟表格的 padding-right 完全相等，无缝衔接 */
 .floating-cols {
   position: absolute;
   top: 12px;
   right: 12px;
   bottom: 12px;
-  width: 110px;    /* v600: 只有操作列 */
+  width: 110px;
   background-color: var(--bg-card);
   border-left: 1px solid var(--border-color);
   box-shadow: -6px 0 12px rgba(0, 0, 0, 0.15);
   z-index: 5;
   pointer-events: none;
+  overflow: hidden;
 }
 .floating-cols > * { pointer-events: auto; }
 .floating-cols .fc-header,
@@ -1392,12 +1397,14 @@ function exportExcel() {
   align-items: center;
   min-height: 56px;
   border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-card);
 }
 .floating-cols .fc-header { background-color: var(--bg-hover); font-weight: 600; color: var(--text-secondary); font-size: 13px; }
 .floating-cols .fc-header > div,
 .floating-cols .fc-row > div { padding: 10px 8px; text-align: center; }
 .floating-cols .fc-row:hover { background-color: var(--bg-hover); }
-.table-container .table-wrap { padding-right: 122px; }  /* v600: 110 + 12 gap */
+/* 关键: padding-right 必须 = 浮动面板宽度 (110px)，不留 gap，否则表格内容溢出 */
+.table-container .table-wrap { padding-right: 110px; }
 /* 未响应/未解决 文字徽章 */
 .state-text-bad { color: #ea3636; font-size: 11px; font-weight: 600; }
 .state-text-warn { color: #94a3b8; font-size: 11px; }
