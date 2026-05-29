@@ -836,6 +836,7 @@ function exportExcel() {
             <th>故障</th>
             <th>处理结果</th>
             <th>截图</th>
+            <th>状态</th>
           </tr>
         </thead>
         <tbody>
@@ -903,21 +904,20 @@ function exportExcel() {
               </div>
               <span v-else class="muted">-</span>
             </td>
+            <td>
+              <span v-if="r.status === 'completed'" class="status-completed">✅ 完成</span>
+              <span v-else class="status-processing">🟡 处理中</span>
+            </td>
           </tr>
         </tbody>
       </table>
     </div>
-    <!-- v599: 浮动状态+操作面板，物理上独立于 table，absolute right:0 永远固定在视野最右 -->
+    <!-- v599/v600: 仅操作列浮动面板, 永远固定在视野最右 -->
     <div class="floating-cols">
       <div class="fc-header">
-        <div class="fc-status">状态</div>
         <div class="fc-op">操作</div>
       </div>
       <div v-for="r in records" :key="'fc-' + r.id" class="fc-row">
-        <div class="fc-status">
-          <span v-if="r.status === 'completed'" class="status-completed">✅ 完成</span>
-          <span v-else class="status-processing">🟡 处理中</span>
-        </div>
         <div class="fc-op">
           <button class="icon-btn" @click="openDetail(r)" title="查看详情">👁️</button>
           <button v-if="canUpdate" class="icon-btn" @click="openEdit(r)" title="编辑">✏️</button>
@@ -1349,13 +1349,14 @@ function exportExcel() {
    sticky 操作列在 grid 容器里 position:sticky right:0 行为正常 — 不再有"操儆图"重叠
    列顺序: # / 响应人 / 处理人 / 来源 / 消息内容 / 艾特时间 / 首响应 / 末完成 / 响应明细 / 故障 / 处理结果 / 截图 / 状态 / 操作 */
 /* v599: 表格只渲染数据列（状态+操作搬到外面浮动面板）*/
-.table-wrap .data-table { display: block; min-width: 1700px; }
+/* v600: 表格里包含状态列(13)，只把操作列搬出去到浮动面板 */
+.table-wrap .data-table { display: block; min-width: 1800px; }
 .table-wrap .data-table thead,
 .table-wrap .data-table tbody { display: block; }
 .table-wrap .data-table thead tr,
 .table-wrap .data-table tbody tr {
   display: grid;
-  grid-template-columns: 60px 180px 130px 80px 220px 160px 160px 160px 230px 60px 160px 140px;
+  grid-template-columns: 60px 180px 130px 80px 220px 160px 160px 160px 230px 60px 160px 140px 100px;
   border-bottom: 1px solid var(--border-color);
   align-items: center;
   min-height: 56px;
@@ -1373,21 +1374,21 @@ function exportExcel() {
 .table-container { position: relative; }
 .floating-cols {
   position: absolute;
-  top: 12px;       /* .table-wrap padding */
+  top: 12px;
   right: 12px;
   bottom: 12px;
-  width: 220px;    /* 状态 110 + 操作 110 */
+  width: 110px;    /* v600: 只有操作列 */
   background-color: var(--bg-card);
   border-left: 1px solid var(--border-color);
   box-shadow: -6px 0 12px rgba(0, 0, 0, 0.15);
   z-index: 5;
-  pointer-events: none;  /* 让滚动条还能在这块下方拖动 */
+  pointer-events: none;
 }
-.floating-cols > * { pointer-events: auto; }  /* 但 cell 自己可点击 */
+.floating-cols > * { pointer-events: auto; }
 .floating-cols .fc-header,
 .floating-cols .fc-row {
   display: grid;
-  grid-template-columns: 110px 110px;
+  grid-template-columns: 110px;
   align-items: center;
   min-height: 56px;
   border-bottom: 1px solid var(--border-color);
@@ -1396,7 +1397,7 @@ function exportExcel() {
 .floating-cols .fc-header > div,
 .floating-cols .fc-row > div { padding: 10px 8px; text-align: center; }
 .floating-cols .fc-row:hover { background-color: var(--bg-hover); }
-.table-container .table-wrap { padding-right: 232px; }  /* 留出空间给浮动面板（含 12px gap）*/
+.table-container .table-wrap { padding-right: 122px; }  /* v600: 110 + 12 gap */
 /* 未响应/未解决 文字徽章 */
 .state-text-bad { color: #ea3636; font-size: 11px; font-weight: 600; }
 .state-text-warn { color: #94a3b8; font-size: 11px; }
