@@ -11,6 +11,7 @@ import (
 type DomainMeta struct {
 	Code        string `json:"code"`
 	Name        string `json:"name"`
+	Category    string `json:"category"`    // 二级分类（左栏分组用），如：桌台运维 / 调度 / 资源 / 监控
 	Description string `json:"description"`
 	SortOrder   int    `json:"sort_order"`
 }
@@ -22,6 +23,7 @@ var apiDomainMeta = []DomainMeta{
 	{
 		Code:        "table_maintenance",
 		Name:        "桌台维护记录",
+		Category:    "桌台运维",
 		Description: "桌台维护、操作日志、截图等记录的接入接口",
 		SortOrder:   1,
 	},
@@ -63,6 +65,7 @@ func EnsureAPIDocsPermissions(db *sql.DB) {
 type DomainResponseItem struct {
 	Code        string `json:"code"`
 	Name        string `json:"name"`
+	Category    string `json:"category"`
 	Description string `json:"description"`
 	SortOrder   int    `json:"sort_order"`
 	CanTryIt    bool   `json:"can_try_it"`
@@ -108,6 +111,7 @@ func HandleGetAPIDocsDomains(w http.ResponseWriter, r *http.Request) {
 		out = append(out, DomainResponseItem{
 			Code:        d.Code,
 			Name:        d.Name,
+			Category:    d.Category,
 			Description: d.Description,
 			SortOrder:   d.SortOrder,
 			CanTryIt:    canTry,
