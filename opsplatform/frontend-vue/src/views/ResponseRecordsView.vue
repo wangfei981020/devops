@@ -186,10 +186,12 @@ function lastCompletedAt(r) {
 }
 
 const sourceDistribution = computed(() => {
+  // v584 fix: SOURCES 在 v581 改成了 ref（之前是常量数组），这里漏了 .value 导致统计页白屏
+  // 字段也变了：用 s.code 代替老的 s.value
   const total = records.value.length || 1
-  return SOURCES.map(s => ({
+  return SOURCES.value.map(s => ({
     ...s,
-    count: records.value.filter(r => r.message_source === s.value).length
+    count: records.value.filter(r => r.message_source === s.code).length
   })).map(s => ({ ...s, pct: Math.round((s.count / total) * 100) })).filter(s => s.count > 0)
 })
 
@@ -663,7 +665,7 @@ function exportExcel() {
 
       <h3 style="margin-top:24px">来源分布</h3>
       <div class="src-dist">
-        <div v-for="s in sourceDistribution" :key="s.value" class="src-item">
+        <div v-for="s in sourceDistribution" :key="s.code" class="src-item">
           <span class="src-name" :style="{ color: s.color }">{{ s.label }}</span>
           <div class="src-bar"><div class="src-fill" :style="{ width: s.pct + '%', background: s.color }"></div></div>
           <span class="src-pct">{{ s.count }} ({{ s.pct }}%)</span>
