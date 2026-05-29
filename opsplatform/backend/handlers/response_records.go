@@ -468,6 +468,103 @@ func HandleDeleteResponseSource(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }
 
+// ============================ 预设原因 CRUD ============================
+
+type responseReason struct {
+	ID        int    `json:"id"`
+	Label     string `json:"label"`
+	Category  string `json:"category"`
+	SortOrder int    `json:"sort_order"`
+	Status    string `json:"status"`
+}
+
+// HandleListResponseReasons GET /api/response-reasons
+func HandleListResponseReasons(w http.ResponseWriter, r *http.Request) {
+	rows, err := database.DB.Query(`SELECT id, label, category, sort_order, status FROM response_reasons WHERE status='active' ORDER BY category, sort_order, id`)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	out := []responseReason{}
+	for rows.Next() {
+		var s responseReason
+		rows.Scan(&s.ID, &s.Label, &s.Category, &s.SortOrder, &s.Status)
+		out = append(out, s)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// HandleCreateResponseReason POST /api/response-reasons
+func HandleCreateResponseReason(w http.ResponseWriter, r *http.Request) {
+	var s responseReason
+	if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if s.Label == "" {
+		http.Error(w, "label 必填", http.StatusBadRequest)
+		return
+	}
+	if s.Category == "" {
+		s.Category = "all"
+	}
+	res, err := database.DB.Exec(`INSERT INTO response_reasons (label, category, sort_order, status) VALUES (?, ?, ?, 'active')`,
+		s.Label, s.Category, s.SortOrder)
+	if err != nil {
+		if strings.Contains(err.Error(), "Duplicate") {
+			http.Error(w, "label 已存在", http.StatusConflict)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	id, _ := res.LastInsertId()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"id": id})
+}
+
+// HandleUpdateResponseReason PUT /api/response-reasons/{id}
+func HandleUpdateResponseReason(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/response-reasons/")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	var s responseReason
+	if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	_, err = database.DB.Exec(`UPDATE response_reasons SET label=?, category=?, sort_order=? WHERE id=?`,
+		s.Label, s.Category, s.SortOrder, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+// HandleDeleteResponseReason DELETE /api/response-reasons/{id}
+func HandleDeleteResponseReason(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/response-reasons/")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	_, err = database.DB.Exec(`UPDATE response_reasons SET status='disabled' WHERE id=?`, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
 // ============================ 附件上传（独立 bucket） ============================
 
 // HandleResponseAttachmentUpload POST /api/response-records/upload

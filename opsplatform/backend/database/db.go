@@ -703,6 +703,34 @@ func createTables() error {
 		return err
 	}
 
+	// ========== 响应记录预设原因表（v745：admin 自定义未响应/仅响应原因，供下拉选择）==========
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS response_reasons (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			label VARCHAR(64) NOT NULL UNIQUE COMMENT '原因显示文字',
+			category VARCHAR(16) DEFAULT 'all' COMMENT 'no_reply | reply_only | all',
+			sort_order INT DEFAULT 0,
+			status VARCHAR(16) DEFAULT 'active' COMMENT 'active | disabled',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+	// 默认原因。INSERT IGNORE 不覆盖 admin 修改
+	DB.Exec(`INSERT IGNORE INTO response_reasons (label, category, sort_order) VALUES
+		('在开会',         'no_reply',   1),
+		('在医院',         'no_reply',   2),
+		('出差中',         'no_reply',   3),
+		('在路上',         'no_reply',   4),
+		('在加班别的事',   'no_reply',   5),
+		('我没权限',       'reply_only', 10),
+		('转交他人',       'reply_only', 11),
+		('技术不熟',       'reply_only', 12),
+		('已通知开发',     'reply_only', 13),
+		('其他',           'all',        99)`)
+
 	// ========== 响应记录来源配置表（v739：admin 自定义消息来源）==========
 	_, err = DB.Exec(`
 		CREATE TABLE IF NOT EXISTS response_record_sources (
@@ -1604,6 +1632,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_response_delete", "response_record:delete", "[响应记录] 删除记录", "允许删除响应记录"},
 		{"perm_btn_response_export", "response_record:export", "[响应记录] 导出Excel", "允许导出响应记录"},
 		{"perm_btn_response_source_manage", "response_source:manage", "[响应记录] 管理消息来源", "允许增删改自定义消息来源"},
+		{"perm_btn_response_reason_manage", "response_reason:manage", "[响应记录] 管理预设原因", "允许增删改未响应/仅响应的预设原因"},
 
 		// API Key 管理
 		{"perm_btn_api_key_create", "api_key:create", "[API Key] 创建", "允许创建 API Key"},

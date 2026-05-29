@@ -214,6 +214,11 @@ func main() {
 	protected.HandleFunc("/response-record-sources", handlers.HandleCreateResponseSource).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/response-record-sources/{id}", handlers.HandleUpdateResponseSource).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/response-record-sources/{id}", handlers.HandleDeleteResponseSource).Methods("DELETE", "OPTIONS")
+	// v745: 预设原因
+	protected.HandleFunc("/response-reasons", handlers.HandleListResponseReasons).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/response-reasons", handlers.HandleCreateResponseReason).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/response-reasons/{id}", handlers.HandleUpdateResponseReason).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/response-reasons/{id}", handlers.HandleDeleteResponseReason).Methods("DELETE", "OPTIONS")
 	protected.HandleFunc("/metrics/init", handlers.HandleInitDefaultMetrics).Methods("POST", "OPTIONS")
 
 	// 巡检功能

@@ -11,6 +11,7 @@ const canUpdate = computed(() => authStore.hasPermission('response_record:update
 const canDelete = computed(() => authStore.hasPermission('response_record:delete'))
 const canExport = computed(() => authStore.hasPermission('response_record:export'))
 const canManageSources = computed(() => authStore.hasPermission('response_source:manage'))
+const canManageReasons = computed(() => authStore.hasPermission('response_reason:manage'))
 
 // v581: 消息来源从后端 API 拉，admin 可在「来源管理」里增删改
 const SOURCES = ref([])
@@ -22,6 +23,21 @@ async function loadSources() {
     const res = await api.get('/api/response-record-sources')
     SOURCES.value = res.data || []
   } catch (e) { console.error(e) }
+}
+
+// v594: 预设原因
+const REASONS = ref([])
+async function loadReasons() {
+  try {
+    const res = await api.get('/api/response-reasons')
+    REASONS.value = res.data || []
+  } catch (e) { console.error(e) }
+}
+function reasonsFor(rr) {
+  // 给表单的 datalist 选 — 根据当前状态过滤
+  // 未响应 → 显示 no_reply + all；已响应 → 显示 reply_only + all
+  const cat = rr.responded_at ? 'reply_only' : 'no_reply'
+  return REASONS.value.filter(r => r.category === cat || r.category === 'all')
 }
 
 const records = ref([])
@@ -113,6 +129,7 @@ function parseAttachments(s) {
 
 onMounted(async () => {
   await loadSources()
+  await loadReasons()
   await loadEmployees()
   await loadRecords()
   // v582: 全局键盘监听 — lightbox 显示时左右键切换、Esc 关闭
@@ -612,6 +629,71 @@ async function deleteSource(s) {
   } catch (e) { appStore.showToast('删除失败', 'error') }
 }
 
+// v594: 原因管理 modal
+const showReasonModal = ref(false)
+const editingReason = ref(null)
+const reasonForm = ref({ label: '', category: 'no_reply', sort_order: 99 })
+
+function openReasonManage() {
+  showReasonModal.value = true
+  editingReason.value = null
+  resetReasonForm()
+}
+function resetReasonForm() {
+  reasonForm.value = { label: '', category: 'no_reply', sort_order: (REASONS.value.length + 1) }
+}
+function editReason(rs) {
+  editingReason.value = rs
+  reasonForm.value = { label: rs.label, category: rs.category, sort_order: rs.sort_order }
+}
+async function saveReason() {
+  if (!reasonForm.value.label) { appStore.showToast('原因文字必填', 'error'); return }
+  try {
+    if (editingReason.value) {
+      await api.put('/api/response-reasons/' + editingReason.value.id, reasonForm.value)
+    } else {
+      await api.post('/api/response-reasons', reasonForm.value)
+    }
+    await loadReasons()
+    appStore.showToast('保存成功', 'success')
+    editingReason.value = null
+    resetReasonForm()
+  } catch (e) {
+    appStore.showToast('保存失败: ' + (e.response?.data || e.message), 'error')
+  }
+}
+async function deleteReason(rs) {
+  const ok = await appStore.showConfirm({
+    type: 'danger', title: '删除原因',
+    message: `确定删除原因 "${rs.label}" 吗？历史记录里已经填写的原因文字不受影响。`,
+    okText: '删除', cancelText: '取消'
+  })
+  if (!ok) return
+  try {
+    await api.delete('/api/response-reasons/' + rs.id)
+    await loadReasons()
+    appStore.showToast('已删除', 'success')
+  } catch (e) { appStore.showToast('删除失败', 'error') }
+}
+
+// v594: 原因分布统计（按 未响应 / 仅响应 两个 category 聚合）
+function buildReasonDistribution(filterFn, defaultLabel) {
+  const map = {}
+  records.value.forEach(r => {
+    recResponders(r).forEach(rr => {
+      if (!filterFn(rr)) return
+      const label = (rr.note || '').trim() || defaultLabel
+      map[label] = (map[label] || 0) + 1
+    })
+  })
+  const total = Object.values(map).reduce((a, b) => a + b, 0) || 1
+  return Object.entries(map)
+    .map(([label, count]) => ({ label, count, pct: Math.round((count / total) * 100) }))
+    .sort((a, b) => b.count - a.count)
+}
+const noReplyReasons = computed(() => buildReasonDistribution(rr => !rr.responded_at, '没看消息'))
+const replyOnlyReasons = computed(() => buildReasonDistribution(rr => rr.responded_at && !rr.completed_at, '仅签到'))
+
 // 导出
 function exportExcel() {
   if (!records.value.length) { appStore.showToast('没有数据可导出', 'info'); return }
@@ -648,6 +730,7 @@ function exportExcel() {
       <h2>响应记录</h2>
       <div class="header-actions">
         <button v-if="canManageSources" class="btn btn-secondary" @click="openSourceManage">⚙ 来源管理</button>
+        <button v-if="canManageReasons" class="btn btn-secondary" @click="openReasonManage">⚙ 原因管理</button>
         <button v-if="canExport" class="btn btn-secondary" @click="exportExcel">⬇ 导出 Excel</button>
         <button v-if="canCreate" class="btn btn-primary" @click="openAdd">+ 新建响应</button>
       </div>
@@ -720,12 +803,13 @@ function exportExcel() {
             <th>处理结果</th>
             <th>截图</th>
             <th>状态</th>
+            <th class="op-spacer"></th>
             <th class="op">操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loading"><td colspan="14" class="empty-cell">加载中…</td></tr>
-          <tr v-else-if="records.length === 0"><td colspan="14" class="empty-cell">暂无响应记录</td></tr>
+          <tr v-if="loading"><td colspan="15" class="empty-cell">加载中…</td></tr>
+          <tr v-else-if="records.length === 0"><td colspan="15" class="empty-cell">暂无响应记录</td></tr>
           <tr v-else v-for="r in records" :key="r.id">
             <td>#{{ r.id }}</td>
             <td>
@@ -790,6 +874,7 @@ function exportExcel() {
               <span v-if="r.status === 'completed'" class="status-completed">✅ 完成</span>
               <span v-else class="status-processing">🟡 处理中</span>
             </td>
+            <td class="op-spacer"></td>
             <td class="op">
               <button v-if="canUpdate" class="icon-btn" @click="openEdit(r)" title="编辑">✏️</button>
               <button v-if="canDelete" class="icon-btn danger" @click="deleteRecord(r)" title="删除">🗑️</button>
@@ -831,6 +916,43 @@ function exportExcel() {
           <span class="src-pct">{{ s.count }} ({{ s.pct }}%)</span>
         </div>
       </div>
+
+      <!-- v594: 原因分布 -->
+      <h3 style="margin-top:24px">🔴 未响应原因分布</h3>
+      <table class="data-table">
+        <thead><tr><th>原因</th><th>次数</th><th>占比</th></tr></thead>
+        <tbody>
+          <tr v-if="noReplyReasons.length === 0"><td colspan="3" class="empty-cell">暂无</td></tr>
+          <tr v-else v-for="rs in noReplyReasons" :key="rs.label">
+            <td>{{ rs.label }}</td>
+            <td>{{ rs.count }}</td>
+            <td>
+              <div class="src-bar" style="display:inline-block;width:120px;vertical-align:middle">
+                <div class="src-fill" :style="{ width: rs.pct + '%', background: '#ea3636' }"></div>
+              </div>
+              {{ rs.pct }}%
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3 style="margin-top:24px">⚪ 仅响应原因分布</h3>
+      <table class="data-table">
+        <thead><tr><th>原因</th><th>次数</th><th>占比</th></tr></thead>
+        <tbody>
+          <tr v-if="replyOnlyReasons.length === 0"><td colspan="3" class="empty-cell">暂无</td></tr>
+          <tr v-else v-for="rs in replyOnlyReasons" :key="rs.label">
+            <td>{{ rs.label }}</td>
+            <td>{{ rs.count }}</td>
+            <td>
+              <div class="src-bar" style="display:inline-block;width:120px;vertical-align:middle">
+                <div class="src-fill" :style="{ width: rs.pct + '%', background: '#94a3b8' }"></div>
+              </div>
+              {{ rs.pct }}%
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
 
     <!-- 表单 Modal -->
@@ -892,10 +1014,15 @@ function exportExcel() {
                     <span v-if="rowProcDur(rr) != null" class="dur-mini" :class="durationClass(rowProcDur(rr), 60)">{{ fmtDuration(rowProcDur(rr)) }}</span>
                   </div>
                 </div>
-                <!-- v744: 备注/原因 (可选) -->
+                <!-- v744/v594: 原因 (可选 datalist - 下拉选预设 + 可自由输入) -->
                 <div class="resp-row-note">
-                  <div class="resp-time-label">备注</div>
-                  <input v-model="rr.note" class="input note-input" :placeholder="rr.responded_at ? '可选：如 我没权限/转交他人...' : '可选：如 在开会/在医院/出差中...'">
+                  <div class="resp-time-label">原因</div>
+                  <input v-model="rr.note" class="input note-input"
+                         :list="`reasons-${idx}`"
+                         :placeholder="rr.responded_at ? '可选：我没权限/转交他人...' : '可选：在开会/在医院...'">
+                  <datalist :id="`reasons-${idx}`">
+                    <option v-for="rs in reasonsFor(rr)" :key="rs.id" :value="rs.label" />
+                  </datalist>
                 </div>
               </div>
               <button class="btn btn-secondary sm" @click.stop="addResponderRow">+ 添加响应人</button>
@@ -1015,6 +1142,59 @@ function exportExcel() {
         </div>
       </div>
     </div>
+
+    <!-- v594: 原因管理 modal -->
+    <div v-if="showReasonModal" class="modal-mask" @click.self="showReasonModal = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>预设原因管理</h3>
+          <button class="close-btn" @click="showReasonModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <table class="data-table" style="margin-bottom:16px">
+            <thead><tr><th>原因</th><th>适用</th><th>排序</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr v-for="rs in REASONS" :key="rs.id">
+                <td>{{ rs.label }}</td>
+                <td>
+                  <span v-if="rs.category === 'no_reply'" class="cat-pill" style="background:#ea3636">🔴 未响应</span>
+                  <span v-else-if="rs.category === 'reply_only'" class="cat-pill" style="background:#94a3b8">⚪ 仅响应</span>
+                  <span v-else class="cat-pill" style="background:#3a84ff">全部</span>
+                </td>
+                <td>{{ rs.sort_order }}</td>
+                <td>
+                  <button class="icon-btn" @click="editReason(rs)" title="编辑">✏️</button>
+                  <button class="icon-btn danger" @click="deleteReason(rs)" title="删除">🗑️</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h4>{{ editingReason ? '编辑 ' + editingReason.label : '新增原因' }}</h4>
+          <div class="form-row">
+            <label>原因 *</label>
+            <input v-model="reasonForm.label" class="input" placeholder="如 在开会 / 我没权限">
+          </div>
+          <div class="form-row">
+            <label>适用</label>
+            <select v-model="reasonForm.category" class="select">
+              <option value="no_reply">🔴 未响应（适用于没回复的人）</option>
+              <option value="reply_only">⚪ 仅响应（适用于回了但没解决的人）</option>
+              <option value="all">全部</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>排序</label>
+            <input v-model.number="reasonForm.sort_order" type="number" class="input" style="max-width:100px">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button v-if="editingReason" class="btn btn-secondary" @click="editingReason = null; resetReasonForm()">取消编辑</button>
+          <button class="btn btn-secondary" @click="showReasonModal = false">关闭</button>
+          <button class="btn btn-primary" @click="saveReason">💾 {{ editingReason ? '保存' : '添加' }}</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1061,10 +1241,18 @@ function exportExcel() {
 /* v592: 所有 td 强制不透明 — 否则 sticky 操作列盖在透明 td 上会出现亚像素重影/文字叠加 */
 .table-wrap .data-table tbody td { background-color: var(--bg-card); }
 .table-wrap .data-table tbody tr:hover td:not(.op) { background-color: var(--bg-hover); }
-/* v589-v591: 操作列 sticky 右侧
-   必须用 background-color (不是 shorthand) — 否则 var() 在 shorthand 位置可能解析失败 → 透明
-   必须显式 width/min-width — 否则 td 宽度被 sticky 上下文压缩，导致跟左边列贴一起看着像重影
-   必须 border-left 明显分隔 — 阴影在 light 背景下不够明显 */
+/* v594: 加 op-spacer 占位列彻底修 sticky 重影
+   核心思路: table 里加一个 100px 透明 spacer 列在操作列前。
+   sticky 操作列 right:0 盖在 spacer 上 → "截图""状态"列永远在 spacer 左侧
+   不会被 sticky 列遮盖, 不再有"操儆图"重叠 */
+.data-table th.op-spacer, .data-table td.op-spacer {
+  width: 100px; min-width: 100px; max-width: 100px;
+  padding: 0 !important;
+  background-color: var(--bg-card);
+  border: none;
+}
+.data-table tbody tr:hover td.op-spacer { background-color: var(--bg-hover); }
+/* v589-v591: 操作列 sticky 右侧 */
 .data-table th.op, .data-table td.op {
   position: sticky; right: 0;
   background-color: var(--bg-card);
@@ -1202,4 +1390,6 @@ function exportExcel() {
 /* v581: 来源管理 */
 .color-dot { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
 .color-input { width: 50px; height: 32px; padding: 0; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer; }
+/* v594: 原因 category 徽章 */
+.cat-pill { display: inline-block; padding: 2px 10px; border-radius: 10px; color: #fff; font-size: 11px; font-weight: 600; }
 </style>
