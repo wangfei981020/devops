@@ -703,6 +703,38 @@ func createTables() error {
 		return err
 	}
 
+	// ========== 响应记录表（v738：员工消息响应度量）==========
+	// 每条记录 = 一次员工响应事件
+	// 时间轴：mentioned_at(T0 艾特) → responded_at(T1 开始响应) → completed_at(T2 处理完)
+	// 响应时长 = T1 - T0；处理时长 = T2 - T1（前端计算，不入库）
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS response_records (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			responder VARCHAR(64) NOT NULL COMMENT '响应人姓名（关联 schedule_employees.name）',
+			message_source VARCHAR(32) NOT NULL DEFAULT 'lark' COMMENT '消息来源 lark/alert/phone/email/ticket/other',
+			message_content TEXT NOT NULL COMMENT '消息内容',
+			mentioned_at DATETIME NOT NULL COMMENT 'T0 艾特/消息发出时间',
+			responded_at DATETIME NOT NULL COMMENT 'T1 员工开始响应时间',
+			completed_at DATETIME DEFAULT NULL COMMENT 'T2 处理完成时间，NULL 表示处理中',
+			has_incident TINYINT(1) DEFAULT 0 COMMENT '是否产生故障',
+			incident_ticket VARCHAR(64) DEFAULT '' COMMENT '故障单号（仅 has_incident=1 时有值）',
+			handle_result TEXT COMMENT '处理结果',
+			remark TEXT COMMENT '备注',
+			attachments TEXT COMMENT '附件 JSON [{name,size,path,preview}]',
+			status VARCHAR(16) DEFAULT 'processing' COMMENT 'processing | completed',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			created_by VARCHAR(64) DEFAULT '',
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			updated_by VARCHAR(64) DEFAULT '',
+			INDEX idx_rr_responder (responder),
+			INDEX idx_rr_mentioned (mentioned_at),
+			INDEX idx_rr_status (status)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
 	// ========== 值班记录相关表 ==========
 
 	// 值班项目配置表
@@ -1282,7 +1314,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_schedule", "menu:schedule", "排班管理", "/system/schedule", "perm_menu_system", "", 70},
 		{"perm_menu_schedule_analytics", "menu:schedule_analytics", "排班统计分析", "/system/schedule-analytics", "perm_menu_system", "", 75},
 		{"perm_menu_taskpool", "menu:taskpool", "任务池", "/system/taskpool", "perm_menu_system", "", 80},
-		{"perm_menu_incidents", "menu:incidents", "事件记录", "/system/incidents", "perm_menu_system", "", 90},
+		{"perm_menu_incidents", "menu:incidents", "响应记录", "/system/incidents", "perm_menu_system", "", 90},
 		{"perm_menu_duty", "menu:duty", "值班记录", "/system/duty", "perm_menu_system", "", 100},
 		{"perm_menu_duty_projects", "menu:duty_projects", "值班项目", "/system/duty-projects", "perm_menu_system", "", 110},
 		{"perm_menu_table_maintenance", "menu:table_maintenance", "桌台维护记录", "/system/table-maintenance", "perm_menu_system", "", 120},
@@ -1523,6 +1555,12 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_table_maint_export", "table_maintenance:export", "[桌台维护] 导出记录", "允许导出桌台维护记录"},
 		{"perm_btn_table_maint_upload", "table_maintenance:upload", "[桌台维护] 上传附件", "允许上传附件"},
 		{"perm_btn_table_maint_read", "table_maintenance:read", "[桌台维护] 查看记录", "允许查看桌台维护记录"},
+
+		// 响应记录（v738）
+		{"perm_btn_response_create", "response_record:create", "[响应记录] 添加记录", "允许添加响应记录"},
+		{"perm_btn_response_update", "response_record:update", "[响应记录] 编辑记录", "允许编辑响应记录"},
+		{"perm_btn_response_delete", "response_record:delete", "[响应记录] 删除记录", "允许删除响应记录"},
+		{"perm_btn_response_export", "response_record:export", "[响应记录] 导出Excel", "允许导出响应记录"},
 
 		// API Key 管理
 		{"perm_btn_api_key_create", "api_key:create", "[API Key] 创建", "允许创建 API Key"},

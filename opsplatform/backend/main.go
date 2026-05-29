@@ -201,6 +201,12 @@ func main() {
 	// v733: 排班月度应工作天数（用于排班统计分析页判定达成/缺勤/超勤）
 	protected.HandleFunc("/schedule/month-target", handlers.HandleGetMonthTarget).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/schedule/month-target", handlers.HandleSetMonthTarget).Methods("PUT", "OPTIONS")
+
+	// v738: 响应记录（员工消息响应度量）
+	protected.HandleFunc("/response-records", handlers.HandleListResponseRecords).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/response-records", handlers.HandleCreateResponseRecord).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/response-records/{id}", handlers.HandleUpdateResponseRecord).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/response-records/{id}", handlers.HandleDeleteResponseRecord).Methods("DELETE", "OPTIONS")
 	protected.HandleFunc("/metrics/init", handlers.HandleInitDefaultMetrics).Methods("POST", "OPTIONS")
 
 	// 巡检功能

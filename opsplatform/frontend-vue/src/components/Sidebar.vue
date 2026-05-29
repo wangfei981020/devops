@@ -174,7 +174,7 @@ const menuGroups = [
       { key: 'api', perm: 'api-manage', name: '接口管理', path: '/api-manage' },
       { key: 'schedule', perm: 'schedule', name: '排班管理', path: '/schedule' },
       { key: 'taskpool', perm: 'task-pool', name: '任务池', path: '/task-pool' },
-      { key: 'incidents', perm: 'incidents', name: '失误记录', path: '/incidents' },
+      { key: 'incidents', perm: 'incidents', name: '响应记录', path: '/incidents' },
       { key: 'duty', perm: 'duty', name: '值班记录', path: '/duty-records' },
       { key: 'table-maintenance', perm: 'table_maintenance', name: '桌台维护记录', path: '/table-maintenance' },
       { key: 'table-hierarchy-config', perm: 'table_hierarchy_config', name: '桌台配置', path: '/table-hierarchy-config' },

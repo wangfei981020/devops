@@ -427,7 +427,7 @@ export default {
       api: '接口管理',
       schedule: '排班管理',
       taskpool: '任务池',
-      incidents: '失误记录',
+      incidents: '响应记录',
       duty: '值班记录',
       tableMaintenance: '桌台维护记录',
       tableHierarchyConfig: '桌台配置',
