@@ -1372,22 +1372,28 @@ function exportExcel() {
 /* v599: 浮动状态+操作面板 — absolute right:0 永远固定在视野最右
    物理上独立于 table，不受任何 sticky/transform bug 影响 */
 .table-container { position: relative; }
-/* v601: 浮动操作列 — 紧贴 .table-wrap 内框最右，无缝
-   .table-wrap 有 padding:12px，所以浮动面板 right:12px (对齐内边)、
-   bottom:12px (上方滚动条上方)、top:12px (跟卡片头对齐)
-   宽度 110px 跟表格的 padding-right 完全相等，无缝衔接 */
+/* v602: 用 margin-right 真正缩小 .table-wrap (padding-right 在 overflow:auto 容器里被表格内容忽略)
+   .table-wrap 缩小 110px 留位置，浮动面板紧贴在它右边 */
+.table-container { position: relative; }
+.table-container > .table-wrap {
+  margin-right: 110px;
+  border-radius: 10px 0 0 10px;
+  border-right: none;
+}
 .floating-cols {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  bottom: 12px;
+  top: 0; right: 0; bottom: 0;
   width: 110px;
   background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
   border-left: 1px solid var(--border-color);
+  border-radius: 0 10px 10px 0;
   box-shadow: -6px 0 12px rgba(0, 0, 0, 0.15);
   z-index: 5;
-  pointer-events: none;
   overflow: hidden;
+  pointer-events: none;
+  padding-top: 13px;       /* .table-wrap border 1 + padding-top 12 = 13，让 fc-header 跟 thead 对齐 */
+  padding-bottom: 13px;
 }
 .floating-cols > * { pointer-events: auto; }
 .floating-cols .fc-header,
@@ -1403,8 +1409,6 @@ function exportExcel() {
 .floating-cols .fc-header > div,
 .floating-cols .fc-row > div { padding: 10px 8px; text-align: center; }
 .floating-cols .fc-row:hover { background-color: var(--bg-hover); }
-/* 关键: padding-right 必须 = 浮动面板宽度 (110px)，不留 gap，否则表格内容溢出 */
-.table-container .table-wrap { padding-right: 110px; }
 /* 未响应/未解决 文字徽章 */
 .state-text-bad { color: #ea3636; font-size: 11px; font-weight: 600; }
 .state-text-warn { color: #94a3b8; font-size: 11px; }
