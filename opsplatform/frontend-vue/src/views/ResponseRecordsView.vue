@@ -319,9 +319,12 @@ function isImageAttachment(a) {
   return /\.(png|jpg|jpeg|gif|webp|bmp)(\?|$)/i.test(p) || (a.preview && a.preview.startsWith('blob:'))
 }
 function attachmentURL(a) {
-  // path 已经是 "/storage/<bucket>/<obj>" 形式，可直接用
-  if (a.path && a.path.startsWith('/storage/')) return a.path
+  // 新上传时 preview 是本地 blob URL，加载最快、不走网络；保存后从后端拉只有 path
   return a.preview || a.path || ''
+}
+// 列表里只取图片类型的附件做缩略图
+function imageAttachments(list) {
+  return (list || []).filter(isImageAttachment)
 }
 function openPreview(a) {
   if (!isImageAttachment(a)) return
@@ -484,14 +487,25 @@ function exportExcel() {
       <table class="data-table">
         <thead>
           <tr>
-            <th>#</th><th>响应人</th><th>来源</th><th>消息内容</th>
-            <th>艾特时间</th><th>响应时长</th><th>处理时长</th>
-            <th>故障</th><th>状态</th><th class="op">操作</th>
+            <th>#</th>
+            <th>响应人</th>
+            <th>来源</th>
+            <th>消息内容</th>
+            <th>艾特时间</th>
+            <th>响应时间</th>
+            <th>完成时间</th>
+            <th>响应时长</th>
+            <th>处理时长</th>
+            <th>故障</th>
+            <th>处理结果</th>
+            <th>截图</th>
+            <th>状态</th>
+            <th class="op">操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loading"><td colspan="10" class="empty-cell">加载中…</td></tr>
-          <tr v-else-if="records.length === 0"><td colspan="10" class="empty-cell">暂无响应记录</td></tr>
+          <tr v-if="loading"><td colspan="14" class="empty-cell">加载中…</td></tr>
+          <tr v-else-if="records.length === 0"><td colspan="14" class="empty-cell">暂无响应记录</td></tr>
           <tr v-else v-for="r in records" :key="r.id">
             <td>#{{ r.id }}</td>
             <td>{{ r.responder }}</td>
@@ -499,13 +513,10 @@ function exportExcel() {
             <td class="msg">
               <div>{{ r.message_content }}</div>
               <div v-if="r.has_incident" class="incident-tag">⚠ 故障单 {{ r.incident_ticket }}</div>
-              <div v-if="r.attachments.length" class="att-row">
-                <span v-for="(a, i) in r.attachments" :key="i" class="att-chip" :class="{ clickable: isImageAttachment(a) }" :title="a.name" @click="openPreview(a)">
-                  {{ isImageAttachment(a) ? '🖼️' : '📎' }}{{ a.name }}
-                </span>
-              </div>
             </td>
-            <td>{{ r.mentioned_at }}</td>
+            <td class="ts">{{ r.mentioned_at }}</td>
+            <td class="ts">{{ r.responded_at }}</td>
+            <td class="ts">{{ r.completed_at || '-' }}</td>
             <td :class="durationClass(diffMinutes(r.responded_at, r.mentioned_at), 5)">
               {{ fmtDuration(diffMinutes(r.responded_at, r.mentioned_at)) }}
             </td>
@@ -513,6 +524,17 @@ function exportExcel() {
               {{ r.completed_at ? fmtDuration(diffMinutes(r.completed_at, r.responded_at)) : '进行中' }}
             </td>
             <td>{{ r.has_incident ? '⚠是' : '否' }}</td>
+            <td class="result">{{ r.handle_result || '-' }}</td>
+            <td class="shot-col">
+              <div class="shot-list" v-if="imageAttachments(r.attachments).length">
+                <img v-for="(a, i) in imageAttachments(r.attachments).slice(0, 3)" :key="i"
+                     :src="attachmentURL(a)" class="shot-thumb"
+                     :title="a.name + ' (点击放大)'"
+                     @click="openPreview(a)">
+                <span v-if="imageAttachments(r.attachments).length > 3" class="shot-more">+{{ imageAttachments(r.attachments).length - 3 }}</span>
+              </div>
+              <span v-else class="muted">-</span>
+            </td>
             <td>
               <span v-if="r.status === 'completed'" class="status-completed">✅ 完成</span>
               <span v-else class="status-processing">🟡 处理中</span>
@@ -635,16 +657,22 @@ function exportExcel() {
                  @drop.prevent="onDrop"
                  @paste="onPaste"
                  tabindex="0">
-              <div class="upload-hint">📋 点击选文件 / 拖拽到此 / 直接 <kbd>Ctrl+V</kbd> 粘贴截图</div>
-              <input type="file" multiple class="file-input" @change="onFilePick" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.log">
-              <div v-if="uploading" class="muted">上传中...</div>
+              <div class="upload-hint">
+                📋 点击选文件 / 拖拽到此 / 直接 <kbd>Ctrl+V</kbd> 粘贴截图
+                <input type="file" multiple class="file-input" @change="onFilePick" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.log">
+              </div>
+              <div v-if="uploading" class="muted" style="padding:0 12px 8px">上传中...</div>
               <div v-if="form.attachments.length" class="att-list">
                 <div v-for="(a, i) in form.attachments" :key="i" class="att-item">
-                  <img v-if="isImageAttachment(a)" :src="attachmentURL(a)" class="att-thumb thumb-clickable" @click="openPreview(a)" title="点击放大查看">
-                  <span v-else class="att-icon">📎</span>
+                  <img v-if="isImageAttachment(a)" :src="attachmentURL(a)"
+                       class="att-thumb thumb-clickable"
+                       @click.stop="openPreview(a)"
+                       @error="e => e.target.style.display='none'"
+                       title="点击放大查看">
+                  <span v-else class="att-doc-icon">📄</span>
                   <span class="att-name">{{ a.name }}</span>
                   <span class="att-size">{{ Math.round(a.size / 1024) }} KB</span>
-                  <button class="btn-link danger sm" @click="removeAttachment(i)">删除</button>
+                  <button class="btn-link danger sm" @click.stop="removeAttachment(i)">删除</button>
                 </div>
               </div>
             </div>
@@ -750,6 +778,15 @@ function exportExcel() {
 .ov-lbl { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 
 .table-wrap, .stats-panel { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; overflow-x: auto; }
+.table-wrap .data-table { min-width: 1500px; }
+.ts { white-space: nowrap; font-family: monospace; font-size: 12px; color: var(--text-secondary); }
+.result { max-width: 200px; }
+.shot-col { width: 140px; }
+.shot-list { display: flex; gap: 4px; align-items: center; }
+.shot-thumb { width: 32px; height: 32px; object-fit: cover; border-radius: 4px; cursor: zoom-in; border: 1px solid var(--border-color); transition: transform 0.15s; }
+.shot-thumb:hover { transform: scale(1.5); position: relative; z-index: 5; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); }
+.shot-more { font-size: 11px; color: var(--text-secondary); }
+.att-doc-icon { font-size: 28px; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .data-table th, .data-table td { padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--border-color); }
 .data-table th { font-weight: 600; color: var(--text-secondary); background: var(--bg-hover); }
@@ -795,12 +832,13 @@ function exportExcel() {
 .dur-hint { font-size: 12px; padding-top: 8px; min-width: 100px; }
 .muted { color: var(--text-secondary); font-size: 13px; }
 
-.upload-zone { flex: 1; border: 2px dashed var(--border-color); border-radius: 8px; padding: 16px; cursor: pointer; position: relative; outline: none; }
+.upload-zone { flex: 1; border: 2px dashed var(--border-color); border-radius: 8px; padding: 0; outline: none; }
 .upload-zone:hover, .upload-zone:focus, .upload-zone.drag-over { border-color: var(--primary); background: rgba(59, 130, 246, 0.05); }
-.upload-hint { font-size: 13px; color: var(--text-secondary); text-align: center; }
+/* v581.1: input.file-input 只覆盖 hint 区域，不挡住下面的缩略图列表 */
+.upload-hint { position: relative; font-size: 13px; color: var(--text-secondary); text-align: center; padding: 16px; cursor: pointer; }
 .upload-hint kbd { padding: 1px 6px; background: var(--bg-hover); border-radius: 3px; font-family: monospace; }
 .file-input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-.att-list { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.att-list { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 6px; }
 .att-item { display: flex; align-items: center; gap: 10px; padding: 6px; background: var(--bg-hover); border-radius: 6px; font-size: 12px; }
 .att-thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; }
 .thumb-clickable { cursor: zoom-in; transition: transform 0.15s; }
