@@ -42,6 +42,15 @@ func main() {
 	// 初始化对象存储
 	if err := storage.Init(); err != nil {
 		log.Printf("对象存储初始化警告: %v", err)
+	} else {
+		// v739: 响应记录附件独立 bucket
+		if store := storage.GetStorage(); store != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := store.EnsureBucket(ctx, handlers.ResponseRecordBucket); err != nil {
+				log.Printf("[Storage] 响应记录 bucket 初始化失败: %v", err)
+			}
+		}
 	}
 
 	// 初始化默认管理员
@@ -205,8 +214,14 @@ func main() {
 	// v738: 响应记录（员工消息响应度量）
 	protected.HandleFunc("/response-records", handlers.HandleListResponseRecords).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/response-records", handlers.HandleCreateResponseRecord).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/response-records/upload", handlers.HandleResponseAttachmentUpload).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/response-records/{id}", handlers.HandleUpdateResponseRecord).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/response-records/{id}", handlers.HandleDeleteResponseRecord).Methods("DELETE", "OPTIONS")
+	// v739: 自定义消息来源
+	protected.HandleFunc("/response-record-sources", handlers.HandleListResponseSources).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/response-record-sources", handlers.HandleCreateResponseSource).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/response-record-sources/{id}", handlers.HandleUpdateResponseSource).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/response-record-sources/{id}", handlers.HandleDeleteResponseSource).Methods("DELETE", "OPTIONS")
 	protected.HandleFunc("/metrics/init", handlers.HandleInitDefaultMetrics).Methods("POST", "OPTIONS")
 
 	// 巡检功能

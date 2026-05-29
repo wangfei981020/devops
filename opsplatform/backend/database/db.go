@@ -703,6 +703,31 @@ func createTables() error {
 		return err
 	}
 
+	// ========== 响应记录来源配置表（v739：admin 自定义消息来源）==========
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS response_record_sources (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			code VARCHAR(32) NOT NULL UNIQUE COMMENT '业务 code，如 lark/alert/...',
+			label VARCHAR(64) NOT NULL COMMENT '显示名',
+			color VARCHAR(16) DEFAULT '#94a3b8' COMMENT '徽章颜色',
+			sort_order INT DEFAULT 0,
+			status VARCHAR(16) DEFAULT 'active' COMMENT 'active | disabled',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+	// 默认 6 个来源；INSERT IGNORE 不会覆盖 admin 的修改
+	DB.Exec(`INSERT IGNORE INTO response_record_sources (code, label, color, sort_order) VALUES
+		('lark',   'Lark', '#3a84ff', 1),
+		('alert',  '告警', '#ea3636', 2),
+		('phone',  '电话', '#10b981', 3),
+		('email',  '邮件', '#8b5cf6', 4),
+		('ticket', '工单', '#ff9c01', 5),
+		('other',  '其它', '#94a3b8', 6)`)
+
 	// ========== 响应记录表（v738：员工消息响应度量）==========
 	// 每条记录 = 一次员工响应事件
 	// 时间轴：mentioned_at(T0 艾特) → responded_at(T1 开始响应) → completed_at(T2 处理完)
@@ -1561,6 +1586,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_response_update", "response_record:update", "[响应记录] 编辑记录", "允许编辑响应记录"},
 		{"perm_btn_response_delete", "response_record:delete", "[响应记录] 删除记录", "允许删除响应记录"},
 		{"perm_btn_response_export", "response_record:export", "[响应记录] 导出Excel", "允许导出响应记录"},
+		{"perm_btn_response_source_manage", "response_source:manage", "[响应记录] 管理消息来源", "允许增删改自定义消息来源"},
 
 		// API Key 管理
 		{"perm_btn_api_key_create", "api_key:create", "[API Key] 创建", "允许创建 API Key"},

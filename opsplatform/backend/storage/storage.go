@@ -43,6 +43,9 @@ type Storage interface {
 	GetURL(objectName string) string
 	GetPresignedURL(ctx context.Context, objectName string, expires time.Duration) (string, error)
 	GetObjectName(publicURL string) string
+	// v739: 响应记录用独立 bucket
+	EnsureBucket(ctx context.Context, bucket string) error
+	UploadTo(ctx context.Context, bucket, objectName string, reader io.Reader, size int64, contentType string) (string, error)
 }
 
 var defaultStorage Storage
@@ -181,6 +184,45 @@ func (s *MinioStorage) Upload(ctx context.Context, objectName string, reader io.
 	return s.GetURL(objectName), nil
 }
 
+// EnsureBucket 确保给定 bucket 存在；不存在则创建并设公开读策略（v739：响应记录用独立 bucket）
+func (s *MinioStorage) EnsureBucket(ctx context.Context, bucket string) error {
+	exists, err := s.client.BucketExists(ctx, bucket)
+	if err != nil {
+		return fmt.Errorf("检查 bucket %s 失败: %v", bucket, err)
+	}
+	if exists {
+		return nil
+	}
+	if err := s.client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil {
+		return fmt.Errorf("创建 bucket %s 失败: %v", bucket, err)
+	}
+	policy := fmt.Sprintf(`{
+		"Version": "2012-10-17",
+		"Statement": [{
+			"Effect": "Allow",
+			"Principal": {"AWS": ["*"]},
+			"Action": ["s3:GetObject"],
+			"Resource": ["arn:aws:s3:::%s/*"]
+		}]
+	}`, bucket)
+	if err := s.client.SetBucketPolicy(ctx, bucket, policy); err != nil {
+		log.Printf("[Storage] 设置 bucket %s 公开读策略失败: %v", bucket, err)
+	}
+	log.Printf("[Storage] 创建 bucket: %s", bucket)
+	return nil
+}
+
+// UploadTo 上传到指定 bucket，返回相对 URL `/storage/<bucket>/<objectName>`
+func (s *MinioStorage) UploadTo(ctx context.Context, bucket, objectName string, reader io.Reader, size int64, contentType string) (string, error) {
+	_, err := s.client.PutObject(ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
+		ContentType: contentType,
+	})
+	if err != nil {
+		return "", fmt.Errorf("上传到 bucket %s 失败: %v", bucket, err)
+	}
+	return fmt.Sprintf("/storage/%s/%s", bucket, objectName), nil
+}
+
 func (s *MinioStorage) Delete(ctx context.Context, objectName string) error {
 	return s.client.RemoveObject(ctx, s.bucket, objectName, minio.RemoveObjectOptions{})
 }
@@ -270,4 +312,27 @@ func (s *LocalStorage) GetObjectName(publicURL string) string {
 		return strings.TrimPrefix(publicURL, prefix)
 	}
 	return publicURL
+}
+
+// EnsureBucket 本地存储：bucket 即子目录，确保存在即可（v739 兼容 Storage 接口）
+func (s *LocalStorage) EnsureBucket(ctx context.Context, bucket string) error {
+	return os.MkdirAll(filepath.Join(s.basePath, bucket), 0o755)
+}
+
+// UploadTo 本地存储：把 objectName 写入 <basePath>/<bucket>/ 目录
+func (s *LocalStorage) UploadTo(ctx context.Context, bucket, objectName string, reader io.Reader, size int64, contentType string) (string, error) {
+	dir := filepath.Join(s.basePath, bucket)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	dst := filepath.Join(dir, objectName)
+	f, err := os.Create(dst)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, reader); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("/storage/%s/%s", bucket, objectName), nil
 }

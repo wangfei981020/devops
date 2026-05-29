@@ -10,17 +10,19 @@ const canCreate = computed(() => authStore.hasPermission('response_record:create
 const canUpdate = computed(() => authStore.hasPermission('response_record:update'))
 const canDelete = computed(() => authStore.hasPermission('response_record:delete'))
 const canExport = computed(() => authStore.hasPermission('response_record:export'))
+const canManageSources = computed(() => authStore.hasPermission('response_source:manage'))
 
-const SOURCES = [
-  { value: 'lark',   label: 'Lark',     color: '#3a84ff' },
-  { value: 'alert',  label: '告警',     color: '#ea3636' },
-  { value: 'phone',  label: '电话',     color: '#10b981' },
-  { value: 'email',  label: '邮件',     color: '#8b5cf6' },
-  { value: 'ticket', label: '工单',     color: '#ff9c01' },
-  { value: 'other',  label: '其它',     color: '#94a3b8' }
-]
-const sourceLabel = code => SOURCES.find(s => s.value === code)?.label || code
-const sourceColor = code => SOURCES.find(s => s.value === code)?.color || '#94a3b8'
+// v581: 消息来源从后端 API 拉，admin 可在「来源管理」里增删改
+const SOURCES = ref([])
+const sourceLabel = code => SOURCES.value.find(s => s.code === code)?.label || code
+const sourceColor = code => SOURCES.value.find(s => s.code === code)?.color || '#94a3b8'
+
+async function loadSources() {
+  try {
+    const res = await api.get('/api/response-record-sources')
+    SOURCES.value = res.data || []
+  } catch (e) { console.error(e) }
+}
 
 const records = ref([])
 const employees = ref([])
@@ -71,6 +73,7 @@ function parseAttachments(s) {
 }
 
 onMounted(async () => {
+  await loadSources()
   await loadEmployees()
   await loadRecords()
 })
@@ -170,7 +173,7 @@ function emptyForm() {
   return {
     id: 0,
     responder: '',
-    message_source: 'lark',
+    message_source: SOURCES.value[0]?.code || 'lark',
     message_content: '',
     mentioned_at: now,
     responded_at: now,
@@ -187,6 +190,26 @@ function formatNow() {
   const d = new Date()
   const pad = n => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+// ========= v581: datetime-local <-> "YYYY-MM-DD HH:MM:SS" 互转 =========
+// HTML5 datetime-local 用 "YYYY-MM-DDTHH:MM"（精度分钟），后端字段是 "YYYY-MM-DD HH:MM:SS"
+// 用户可在输入框里直接 keyboard 编辑到秒，所以保留秒位
+function toDtLocal(s) {
+  if (!s) return ''
+  // "2026-05-29 10:27:00" -> "2026-05-29T10:27"
+  return s.replace(' ', 'T').slice(0, 16)
+}
+function fromDtLocal(s, original) {
+  if (!s) return ''
+  // datetime-local change 事件给的是 "2026-05-29T10:27" 或 "2026-05-29T10:27:00"
+  let v = s.replace('T', ' ')
+  if (v.length === 16) {
+    // 没秒，保留原 record 的秒数（用户在 picker 里选只到分），默认补 :00
+    const origSec = (original || '').slice(17, 19)
+    v += ':' + (origSec.match(/\d{2}/) ? origSec : '00')
+  }
+  return v
 }
 
 function openAdd() {
@@ -266,7 +289,7 @@ async function deleteRecord(r) {
   } catch (e) { appStore.showToast('删除失败', 'error') }
 }
 
-// ========= 附件 =========
+// ========= 附件（v581: 上传到独立 bucket response-records） =========
 async function uploadFiles(files) {
   uploading.value = true
   try {
@@ -274,10 +297,10 @@ async function uploadFiles(files) {
       if (file.size === 0) continue
       const fd = new FormData()
       fd.append('file', file)
-      const res = await api.post('/api/storage/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      const res = await api.post('/api/response-records/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
       if (res.data?.path) {
         form.value.attachments.push({
-          name: file.name || 'screenshot.png',
+          name: file.name || res.data.name || 'screenshot.png',
           size: file.size,
           path: res.data.path,
           preview: URL.createObjectURL(file)
@@ -288,6 +311,23 @@ async function uploadFiles(files) {
     appStore.showToast('上传失败: ' + (e.response?.data || e.message), 'error')
   } finally { uploading.value = false }
 }
+
+// v581: 图片预览 lightbox
+const previewURL = ref('')
+function isImageAttachment(a) {
+  const p = a.path || a.preview || ''
+  return /\.(png|jpg|jpeg|gif|webp|bmp)(\?|$)/i.test(p) || (a.preview && a.preview.startsWith('blob:'))
+}
+function attachmentURL(a) {
+  // path 已经是 "/storage/<bucket>/<obj>" 形式，可直接用
+  if (a.path && a.path.startsWith('/storage/')) return a.path
+  return a.preview || a.path || ''
+}
+function openPreview(a) {
+  if (!isImageAttachment(a)) return
+  previewURL.value = attachmentURL(a)
+}
+function closePreview() { previewURL.value = '' }
 
 function onFilePick(e) {
   const files = Array.from(e.target.files || [])
@@ -315,7 +355,55 @@ function onPaste(e) {
   }
 }
 function removeAttachment(idx) { form.value.attachments.splice(idx, 1) }
-function attachmentURL(a) { return a.preview || ('/storage/' + a.path) }
+
+// ========= v581: 来源管理 modal =========
+const showSourceModal = ref(false)
+const editingSource = ref(null)
+const sourceForm = ref({ code: '', label: '', color: '#3a84ff', sort_order: 99 })
+
+function openSourceManage() {
+  showSourceModal.value = true
+  editingSource.value = null
+  resetSourceForm()
+}
+function resetSourceForm() {
+  sourceForm.value = { code: '', label: '', color: '#3a84ff', sort_order: (SOURCES.value.length + 1) }
+}
+function editSource(s) {
+  editingSource.value = s
+  sourceForm.value = { code: s.code, label: s.label, color: s.color, sort_order: s.sort_order }
+}
+async function saveSource() {
+  if (!sourceForm.value.code || !sourceForm.value.label) {
+    appStore.showToast('code 和 显示名 必填', 'error'); return
+  }
+  try {
+    if (editingSource.value) {
+      await api.put('/api/response-record-sources/' + editingSource.value.id, sourceForm.value)
+    } else {
+      await api.post('/api/response-record-sources', sourceForm.value)
+    }
+    await loadSources()
+    appStore.showToast('保存成功', 'success')
+    editingSource.value = null
+    resetSourceForm()
+  } catch (e) {
+    appStore.showToast('保存失败: ' + (e.response?.data || e.message), 'error')
+  }
+}
+async function deleteSource(s) {
+  const ok = await appStore.showConfirm({
+    type: 'danger', title: '删除来源',
+    message: `确定删除来源 "${s.label}" 吗？已有的历史记录不会受影响。`,
+    okText: '删除', cancelText: '取消'
+  })
+  if (!ok) return
+  try {
+    await api.delete('/api/response-record-sources/' + s.id)
+    await loadSources()
+    appStore.showToast('已删除', 'success')
+  } catch (e) { appStore.showToast('删除失败', 'error') }
+}
 
 // 导出
 function exportExcel() {
@@ -344,6 +432,7 @@ function exportExcel() {
     <div class="page-header">
       <h2>响应记录</h2>
       <div class="header-actions">
+        <button v-if="canManageSources" class="btn btn-secondary" @click="openSourceManage">⚙ 来源管理</button>
         <button v-if="canExport" class="btn btn-secondary" @click="exportExcel">⬇ 导出 Excel</button>
         <button v-if="canCreate" class="btn btn-primary" @click="openAdd">+ 新建响应</button>
       </div>
@@ -372,7 +461,7 @@ function exportExcel() {
         <label>来源:</label>
         <select v-model="filterSource" class="select">
           <option value="">全部</option>
-          <option v-for="s in SOURCES" :key="s.value" :value="s.value">{{ s.label }}</option>
+          <option v-for="s in SOURCES" :key="s.code" :value="s.code">{{ s.label }}</option>
         </select>
       </div>
       <label class="check"><input type="checkbox" v-model="filterOnlyIncident"> 仅故障</label>
@@ -411,7 +500,9 @@ function exportExcel() {
               <div>{{ r.message_content }}</div>
               <div v-if="r.has_incident" class="incident-tag">⚠ 故障单 {{ r.incident_ticket }}</div>
               <div v-if="r.attachments.length" class="att-row">
-                <span v-for="(a, i) in r.attachments" :key="i" class="att-chip" :title="a.name">📎{{ a.name }}</span>
+                <span v-for="(a, i) in r.attachments" :key="i" class="att-chip" :class="{ clickable: isImageAttachment(a) }" :title="a.name" @click="openPreview(a)">
+                  {{ isImageAttachment(a) ? '🖼️' : '📎' }}{{ a.name }}
+                </span>
               </div>
             </td>
             <td>{{ r.mentioned_at }}</td>
@@ -486,8 +577,8 @@ function exportExcel() {
           <div class="form-row">
             <label>消息来源 *</label>
             <div class="radio-group">
-              <label v-for="s in SOURCES" :key="s.value" class="radio-pill" :class="{ active: form.message_source === s.value }" :style="form.message_source === s.value ? { background: s.color } : {}">
-                <input type="radio" :value="s.value" v-model="form.message_source"> {{ s.label }}
+              <label v-for="s in SOURCES" :key="s.code" class="radio-pill" :class="{ active: form.message_source === s.code }" :style="form.message_source === s.code ? { background: s.color } : {}">
+                <input type="radio" :value="s.code" v-model="form.message_source"> {{ s.label }}
               </label>
             </div>
           </div>
@@ -498,16 +589,21 @@ function exportExcel() {
 
           <div class="form-row">
             <label>艾特时间 *</label>
-            <input v-model="form.mentioned_at" class="input" placeholder="2026-05-29 09:12:00">
+            <input type="datetime-local" :value="toDtLocal(form.mentioned_at)" @input="form.mentioned_at = fromDtLocal($event.target.value, form.mentioned_at)" class="input">
+            <input v-model="form.mentioned_at" class="input sec-input" title="可在此手动编辑到秒" placeholder="YYYY-MM-DD HH:MM:SS">
           </div>
           <div class="form-row">
             <label>响应时间 *</label>
-            <input v-model="form.responded_at" class="input" placeholder="2026-05-29 09:14:00">
+            <input type="datetime-local" :value="toDtLocal(form.responded_at)" @input="form.responded_at = fromDtLocal($event.target.value, form.responded_at)" class="input">
+            <input v-model="form.responded_at" class="input sec-input" title="可在此手动编辑到秒" placeholder="YYYY-MM-DD HH:MM:SS">
             <span class="dur-hint" :class="durationClass(formRespDur, 5)">响应时长: {{ fmtDuration(formRespDur) }}</span>
           </div>
           <div class="form-row">
             <label>完成时间</label>
-            <input v-if="!form.is_processing" v-model="form.completed_at" class="input" placeholder="留空表示处理中">
+            <template v-if="!form.is_processing">
+              <input type="datetime-local" :value="toDtLocal(form.completed_at)" @input="form.completed_at = fromDtLocal($event.target.value, form.completed_at)" class="input">
+              <input v-model="form.completed_at" class="input sec-input" title="可在此手动编辑到秒" placeholder="YYYY-MM-DD HH:MM:SS">
+            </template>
             <span v-else class="muted">处理中...</span>
             <label class="check"><input type="checkbox" v-model="form.is_processing"> 还在处理中</label>
             <span v-if="!form.is_processing" class="dur-hint" :class="durationClass(formProcDur, 60)">处理时长: {{ fmtDuration(formProcDur) }}</span>
@@ -515,7 +611,7 @@ function exportExcel() {
 
           <div class="form-row">
             <label>是否故障</label>
-            <label class="check"><input type="checkbox" :checked="form.has_incident" @change="form.has_incident = $event.target.checked ? 1 : 0"> 这次产生了故障</label>
+            <input type="checkbox" :checked="form.has_incident" @change="form.has_incident = $event.target.checked ? 1 : 0" class="big-check">
           </div>
           <div class="form-row" v-if="form.has_incident">
             <label>故障单号 *</label>
@@ -544,7 +640,8 @@ function exportExcel() {
               <div v-if="uploading" class="muted">上传中...</div>
               <div v-if="form.attachments.length" class="att-list">
                 <div v-for="(a, i) in form.attachments" :key="i" class="att-item">
-                  <img v-if="a.preview || a.path?.match(/\.(png|jpg|jpeg|gif|webp)$/i)" :src="attachmentURL(a)" class="att-thumb">
+                  <img v-if="isImageAttachment(a)" :src="attachmentURL(a)" class="att-thumb thumb-clickable" @click="openPreview(a)" title="点击放大查看">
+                  <span v-else class="att-icon">📎</span>
                   <span class="att-name">{{ a.name }}</span>
                   <span class="att-size">{{ Math.round(a.size / 1024) }} KB</span>
                   <button class="btn-link danger sm" @click="removeAttachment(i)">删除</button>
@@ -556,6 +653,63 @@ function exportExcel() {
         <div class="modal-footer">
           <button class="btn btn-secondary" @click="showModal = false">取消</button>
           <button class="btn btn-primary" @click="saveRecord">💾 保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- v581: 图片预览 lightbox -->
+    <div v-if="previewURL" class="lightbox" @click="closePreview">
+      <img :src="previewURL" class="lightbox-img" @click.stop>
+      <button class="lightbox-close" @click="closePreview">×</button>
+    </div>
+
+    <!-- v581: 来源管理 modal -->
+    <div v-if="showSourceModal" class="modal-mask" @click.self="showSourceModal = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>消息来源管理</h3>
+          <button class="close-btn" @click="showSourceModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <table class="data-table" style="margin-bottom: 16px">
+            <thead><tr><th>code</th><th>显示名</th><th>颜色</th><th>排序</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr v-for="s in SOURCES" :key="s.id">
+                <td><code>{{ s.code }}</code></td>
+                <td><span class="source-badge" :style="{ background: s.color }">{{ s.label }}</span></td>
+                <td><span class="color-dot" :style="{ background: s.color }"></span> {{ s.color }}</td>
+                <td>{{ s.sort_order }}</td>
+                <td>
+                  <button class="icon-btn" @click="editSource(s)" title="编辑">✏️</button>
+                  <button class="icon-btn danger" @click="deleteSource(s)" title="删除">🗑️</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h4>{{ editingSource ? '编辑 ' + editingSource.code : '新增来源' }}</h4>
+          <div class="form-row">
+            <label>code *</label>
+            <input v-model="sourceForm.code" class="input" placeholder="如 wechat / sms / dingtalk" :disabled="!!editingSource">
+          </div>
+          <div class="form-row">
+            <label>显示名 *</label>
+            <input v-model="sourceForm.label" class="input" placeholder="如 企微 / 短信 / 钉钉">
+          </div>
+          <div class="form-row">
+            <label>颜色</label>
+            <input v-model="sourceForm.color" type="color" class="color-input">
+            <input v-model="sourceForm.color" class="input" style="max-width: 120px" placeholder="#3a84ff">
+          </div>
+          <div class="form-row">
+            <label>排序</label>
+            <input v-model.number="sourceForm.sort_order" type="number" class="input" style="max-width: 100px">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button v-if="editingSource" class="btn btn-secondary" @click="editingSource = null; resetSourceForm()">取消编辑</button>
+          <button class="btn btn-secondary" @click="showSourceModal = false">关闭</button>
+          <button class="btn btn-primary" @click="saveSource">💾 {{ editingSource ? '保存' : '添加' }}</button>
         </div>
       </div>
     </div>
@@ -649,6 +803,25 @@ function exportExcel() {
 .att-list { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
 .att-item { display: flex; align-items: center; gap: 10px; padding: 6px; background: var(--bg-hover); border-radius: 6px; font-size: 12px; }
 .att-thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; }
+.thumb-clickable { cursor: zoom-in; transition: transform 0.15s; }
+.thumb-clickable:hover { transform: scale(1.1); }
+.att-icon { font-size: 18px; }
 .att-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .att-size { color: var(--text-secondary); }
+.att-chip.clickable { cursor: zoom-in; }
+.att-chip.clickable:hover { background: var(--primary); color: #fff; }
+
+/* v581: 时间字段：datetime-local + 秒位编辑 */
+.sec-input { max-width: 180px; font-family: monospace; font-size: 12px; }
+.big-check { width: 18px; height: 18px; cursor: pointer; }
+
+/* v581: 图片预览 lightbox */
+.lightbox { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
+.lightbox-img { max-width: 95vw; max-height: 95vh; object-fit: contain; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6); cursor: default; }
+.lightbox-close { position: absolute; top: 20px; right: 30px; background: rgba(255, 255, 255, 0.2); border: none; color: #fff; font-size: 28px; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; }
+.lightbox-close:hover { background: rgba(255, 255, 255, 0.35); }
+
+/* v581: 来源管理 */
+.color-dot { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+.color-input { width: 50px; height: 32px; padding: 0; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer; }
 </style>

@@ -1,15 +1,24 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"opsplatform/database"
+	"opsplatform/storage"
+
+	"github.com/google/uuid"
 )
+
+// ResponseRecordBucket 响应记录附件专用 bucket（v739：跟桌台维护那套解耦）
+const ResponseRecordBucket = "response-records"
 
 // ResponseRecord 员工响应记录
 type ResponseRecord struct {
@@ -241,4 +250,177 @@ func sqlNullTime(s *string) interface{} {
 		return nil
 	}
 	return *s
+}
+
+// ============================ 消息来源 CRUD ============================
+
+type responseSource struct {
+	ID        int    `json:"id"`
+	Code      string `json:"code"`
+	Label     string `json:"label"`
+	Color     string `json:"color"`
+	SortOrder int    `json:"sort_order"`
+	Status    string `json:"status"`
+}
+
+// HandleListResponseSources GET /api/response-record-sources
+func HandleListResponseSources(w http.ResponseWriter, r *http.Request) {
+	rows, err := database.DB.Query(`SELECT id, code, label, color, sort_order, status FROM response_record_sources WHERE status='active' ORDER BY sort_order, id`)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	out := []responseSource{}
+	for rows.Next() {
+		var s responseSource
+		rows.Scan(&s.ID, &s.Code, &s.Label, &s.Color, &s.SortOrder, &s.Status)
+		out = append(out, s)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// HandleCreateResponseSource POST /api/response-record-sources
+func HandleCreateResponseSource(w http.ResponseWriter, r *http.Request) {
+	var s responseSource
+	if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if s.Code == "" || s.Label == "" {
+		http.Error(w, "code 和 label 必填", http.StatusBadRequest)
+		return
+	}
+	if s.Color == "" {
+		s.Color = "#94a3b8"
+	}
+	res, err := database.DB.Exec(`INSERT INTO response_record_sources (code, label, color, sort_order, status) VALUES (?, ?, ?, ?, 'active')`,
+		s.Code, s.Label, s.Color, s.SortOrder)
+	if err != nil {
+		if strings.Contains(err.Error(), "Duplicate") {
+			http.Error(w, "code 已存在", http.StatusConflict)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	id, _ := res.LastInsertId()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"id": id})
+}
+
+// HandleUpdateResponseSource PUT /api/response-record-sources/{id}
+func HandleUpdateResponseSource(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/response-record-sources/")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	var s responseSource
+	if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	_, err = database.DB.Exec(`UPDATE response_record_sources SET label=?, color=?, sort_order=? WHERE id=?`,
+		s.Label, s.Color, s.SortOrder, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+// HandleDeleteResponseSource DELETE /api/response-record-sources/{id}
+func HandleDeleteResponseSource(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/response-record-sources/")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	// 软删除：置 disabled 而非物理删除（保护历史记录的来源码引用）
+	_, err = database.DB.Exec(`UPDATE response_record_sources SET status='disabled' WHERE id=?`, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+// ============================ 附件上传（独立 bucket） ============================
+
+// HandleResponseAttachmentUpload POST /api/response-records/upload
+// 上传到独立 bucket response-records，复用桌台维护的图片白名单 + 10MB 限制
+func HandleResponseAttachmentUpload(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "解析表单失败", http.StatusBadRequest)
+		return
+	}
+	file, fileHeader, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "未选择文件", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	allowedExts := map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true, ".bmp": true,
+		".pdf": true, ".doc": true, ".docx": true, ".xls": true, ".xlsx": true, ".txt": true, ".log": true}
+	contentTypes := map[string]string{
+		".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif",
+		".webp": "image/webp", ".bmp": "image/bmp", ".pdf": "application/pdf",
+		".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		".xls": "application/vnd.ms-excel", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		".txt": "text/plain", ".log": "text/plain",
+	}
+
+	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
+	if !allowedExts[ext] {
+		http.Error(w, fmt.Sprintf("不支持的文件类型: %s", ext), http.StatusBadRequest)
+		return
+	}
+	if fileHeader.Size == 0 {
+		http.Error(w, "文件为空", http.StatusBadRequest)
+		return
+	}
+	if fileHeader.Size > 10*1024*1024 {
+		http.Error(w, "文件超过 10MB", http.StatusBadRequest)
+		return
+	}
+
+	objectName := fmt.Sprintf("%s_%s%s", time.Now().Format("20060102150405"), uuid.New().String()[:8], ext)
+	contentType := contentTypes[ext]
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	store := storage.GetStorage()
+	if store == nil {
+		http.Error(w, "MinIO 未初始化", http.StatusInternalServerError)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	// 确保 bucket 存在（启动时已建，这里兜底）
+	if err := store.EnsureBucket(ctx, ResponseRecordBucket); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	fileURL, err := store.UploadTo(ctx, ResponseRecordBucket, objectName, file, fileHeader.Size, contentType)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"path": fileURL,
+		"name": fileHeader.Filename,
+		"size": fileHeader.Size,
+	})
 }
