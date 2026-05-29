@@ -24,13 +24,15 @@ const ResponseRecordPrefix = "response-records/"
 
 // ResponderEntry v740: 单个响应人的时间记录
 // v743: 加 MentionedAt 让每人有自己的"被艾特时间"（支持转交场景）
-// v744: 加 Note 让 "未响应/仅响应" 状态有解释（在医院/转交他人/没权限等）
+// v744: 加 Note 让 "未响应/仅响应" 状态有解释
+// v746: 拆分 Reason (固定标签从预设选, 能聚合统计) + Note (自由备注, 补充说明)
 type ResponderEntry struct {
 	Responder   string `json:"responder"`
-	MentionedAt string `json:"mentioned_at"` // T0 - v743: 每人自己的被艾特时间
-	RespondedAt string `json:"responded_at"` // T1 - 空字符串表示未响应
-	CompletedAt string `json:"completed_at"` // T2 - 空字符串表示未完成（未解决/处理中）
-	Note        string `json:"note"`         // v744: 备注/原因（可选）。空 = 默认推定"没看消息"
+	MentionedAt string `json:"mentioned_at"` // T0
+	RespondedAt string `json:"responded_at"` // T1 空 = 未响应
+	CompletedAt string `json:"completed_at"` // T2 空 = 未完成
+	Reason      string `json:"reason"`       // v746: 固定原因标签（从 response_reasons 预设选）
+	Note        string `json:"note"`         // v744: 自由备注（可选补充说明）
 }
 
 // ResponseRecord 员工响应记录

@@ -161,7 +161,7 @@ function durationClass(min, threshold) {
   return 'dur-good'
 }
 
-// v584: 拿 record 的 responders 数组（v743: 每行 mentioned_at 兜底用主表；v744: note 兼容）
+// v584: 拿 record 的 responders 数组（v743: 每行 mentioned_at 兜底；v744 note；v746 拆 reason+note）
 function recResponders(r) {
   const list = (r.responders && r.responders.length)
     ? r.responders
@@ -171,7 +171,8 @@ function recResponders(r) {
     mentioned_at: x.mentioned_at || r.mentioned_at,
     responded_at: x.responded_at || '',
     completed_at: x.completed_at || '',
-    note: x.note || ''   // v744
+    reason: x.reason || '',  // v746: 固定标签
+    note: x.note || ''       // 自由备注
   }))
 }
 
@@ -298,7 +299,7 @@ function emptyForm() {
   return {
     id: 0,
     // v584: 多响应人；v743: 每人有自己的 mentioned_at（默认 = 主表）
-    responders: [{ responder: '', mentioned_at: now, responded_at: '', completed_at: '', note: '' }],
+    responders: [{ responder: '', mentioned_at: now, responded_at: '', completed_at: '', reason: '', note: '' }],
     message_source: SOURCES.value[0]?.code || 'lark',
     message_content: '',
     mentioned_at: now,
@@ -315,6 +316,7 @@ function addResponderRow() {
     mentioned_at: form.value.mentioned_at || formatNow(),
     responded_at: '',
     completed_at: '',
+    reason: '',
     note: ''
   })
 }
@@ -394,9 +396,10 @@ function openEdit(r) {
         mentioned_at: x.mentioned_at || r.mentioned_at,
         responded_at: x.responded_at || '',
         completed_at: x.completed_at || '',
+        reason: x.reason || '',
         note: x.note || ''
       }))
-    : [{ responder: r.responder, mentioned_at: r.mentioned_at, responded_at: r.responded_at, completed_at: r.completed_at || '', note: '' }]
+    : [{ responder: r.responder, mentioned_at: r.mentioned_at, responded_at: r.responded_at, completed_at: r.completed_at || '', reason: '', note: '' }]
   form.value = {
     id: r.id,
     responders,
@@ -436,6 +439,7 @@ async function saveRecord() {
       mentioned_at: r.mentioned_at || form.value.mentioned_at,
       responded_at: r.responded_at || '',
       completed_at: r.completed_at || '',
+      reason: r.reason || '',
       note: r.note || ''
     })),
     message_source: form.value.message_source,
@@ -708,13 +712,13 @@ async function deleteReason(rs) {
   } catch (e) { appStore.showToast('删除失败', 'error') }
 }
 
-// v594: 原因分布统计（按 未响应 / 仅响应 两个 category 聚合）
+// v594/v746: 原因分布统计（按 reason 字段聚合，note 不参与统计）
 function buildReasonDistribution(filterFn, defaultLabel) {
   const map = {}
   records.value.forEach(r => {
     recResponders(r).forEach(rr => {
       if (!filterFn(rr)) return
-      const label = (rr.note || '').trim() || defaultLabel
+      const label = (rr.reason || '').trim() || defaultLabel
       map[label] = (map[label] || 0) + 1
     })
   })
@@ -726,6 +730,46 @@ function buildReasonDistribution(filterFn, defaultLabel) {
 const noReplyReasons = computed(() => buildReasonDistribution(rr => !rr.responded_at, '没看消息'))
 const replyOnlyReasons = computed(() => buildReasonDistribution(rr => rr.responded_at && !rr.completed_at, '仅签到'))
 
+// v746: 按员工分原因 — 每个员工的 未响应原因 + 仅响应原因
+const employeeReasonStats = computed(() => {
+  const map = {}
+  records.value.forEach(r => {
+    recResponders(r).forEach(rr => {
+      if (!rr.responder) return
+      if (!map[rr.responder]) {
+        map[rr.responder] = {
+          responder: rr.responder,
+          totalCount: 0,
+          noReply: {}, replyOnly: {}, resolved: 0
+        }
+      }
+      const s = map[rr.responder]
+      s.totalCount++
+      if (!rr.responded_at) {
+        const label = (rr.reason || '').trim() || '没看消息'
+        s.noReply[label] = (s.noReply[label] || 0) + 1
+      } else if (!rr.completed_at) {
+        const label = (rr.reason || '').trim() || '仅签到'
+        s.replyOnly[label] = (s.replyOnly[label] || 0) + 1
+      } else {
+        s.resolved++
+      }
+    })
+  })
+  // 转 noReply / replyOnly 为 [{label, count}] 数组
+  return Object.values(map)
+    .map(s => ({
+      responder: s.responder,
+      totalCount: s.totalCount,
+      noReplyTotal: Object.values(s.noReply).reduce((a, b) => a + b, 0),
+      replyOnlyTotal: Object.values(s.replyOnly).reduce((a, b) => a + b, 0),
+      resolved: s.resolved,
+      noReplyList: Object.entries(s.noReply).map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count),
+      replyOnlyList: Object.entries(s.replyOnly).map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count)
+    }))
+    .sort((a, b) => b.totalCount - a.totalCount)
+})
+
 // 导出
 function exportExcel() {
   if (!records.value.length) { appStore.showToast('没有数据可导出', 'info'); return }
@@ -735,8 +779,9 @@ function exportExcel() {
       const state = responderState(rr, r).label
       const respDur = rr.responded_at ? fmtDuration(diffMinutes(rr.responded_at, rr.mentioned_at)) : '-'
       const procDur = rr.completed_at ? fmtDuration(diffMinutes(rr.completed_at, rr.responded_at)) : '-'
-      const note = rr.note || (!rr.responded_at ? '没看消息' : '')
-      return `${rr.responder}[${state}|响${respDur}|处${procDur}${note ? '|' + note : ''}]`
+      const reason = rr.reason || (!rr.responded_at ? '没看消息' : '')
+      const noteSeg = rr.note ? '|备注:' + rr.note : ''
+      return `${rr.responder}[${state}|响${respDur}|处${procDur}${reason ? '|原因:' + reason : ''}${noteSeg}]`
     }).join(' / ')
     return [
       r.id, recResponders(r).map(x => x.responder).join('/'), sourceLabel(r.message_source), r.message_content,
@@ -877,6 +922,8 @@ function exportExcel() {
                   <span v-else class="state-text-bad">未响应</span>
                   <span v-if="rr.completed_at" :class="durationClass(diffMinutes(rr.completed_at, rr.responded_at), 60)">处 {{ fmtDuration(diffMinutes(rr.completed_at, rr.responded_at)) }}</span>
                   <span v-else-if="rr.responded_at" class="state-text-warn">未解决</span>
+                  <span v-if="rr.reason" class="resp-reason-inline" :title="'原因：' + rr.reason">📌{{ rr.reason }}</span>
+                  <span v-if="rr.note" class="resp-note-inline" :title="'备注：' + rr.note">💬{{ rr.note }}</span>
                 </div>
               </template>
               <template v-else>
@@ -996,6 +1043,35 @@ function exportExcel() {
           </tr>
         </tbody>
       </table>
+
+      <!-- v746: 员工原因分布 -->
+      <h3 style="margin-top:24px">📋 员工原因分布</h3>
+      <div class="emp-reason-grid">
+        <div v-if="employeeReasonStats.length === 0" class="empty-cell" style="grid-column:1/-1">暂无</div>
+        <div v-for="emp in employeeReasonStats" :key="emp.responder" class="emp-reason-card">
+          <div class="erc-head">
+            <span class="erc-name">{{ emp.responder }}</span>
+            <span class="erc-total">参与 {{ emp.totalCount }} 次</span>
+          </div>
+          <div class="erc-body">
+            <div class="erc-block" v-if="emp.noReplyTotal > 0">
+              <div class="erc-label">🔴 未响应 {{ emp.noReplyTotal }} 次</div>
+              <div class="erc-list">
+                <span v-for="rs in emp.noReplyList" :key="rs.label" class="erc-chip">{{ rs.label }} ×{{ rs.count }}</span>
+              </div>
+            </div>
+            <div class="erc-block" v-if="emp.replyOnlyTotal > 0">
+              <div class="erc-label">⚪ 仅响应 {{ emp.replyOnlyTotal }} 次</div>
+              <div class="erc-list">
+                <span v-for="rs in emp.replyOnlyList" :key="rs.label" class="erc-chip">{{ rs.label }} ×{{ rs.count }}</span>
+              </div>
+            </div>
+            <div class="erc-block" v-if="emp.resolved > 0">
+              <div class="erc-label good">🟢 已解决 {{ emp.resolved }} 次</div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 表单 Modal -->
@@ -1057,15 +1133,18 @@ function exportExcel() {
                     <span v-if="rowProcDur(rr) != null" class="dur-mini" :class="durationClass(rowProcDur(rr), 60)">{{ fmtDuration(rowProcDur(rr)) }}</span>
                   </div>
                 </div>
-                <!-- v744/v594: 原因 (可选 datalist - 下拉选预设 + 可自由输入) -->
-                <div class="resp-row-note">
+                <!-- v746: 原因 (固定 select) + 备注 (自由 textarea) 拆开 -->
+                <div class="resp-row-reason">
                   <div class="resp-time-label">原因</div>
-                  <input v-model="rr.note" class="input note-input"
-                         :list="`reasons-${idx}`"
-                         :placeholder="rr.responded_at ? '可选：我没权限/转交他人...' : '可选：在开会/在医院...'">
-                  <datalist :id="`reasons-${idx}`">
-                    <option v-for="rs in reasonsFor(rr)" :key="rs.id" :value="rs.label" />
-                  </datalist>
+                  <select v-model="rr.reason" class="select reason-select">
+                    <option value="">(未填，默认 {{ rr.responded_at ? '仅签到' : '没看消息' }})</option>
+                    <option v-for="rs in reasonsFor(rr)" :key="rs.id" :value="rs.label">{{ rs.label }}</option>
+                  </select>
+                  <span class="reason-hint">↑ 从预设选；用「⚙ 原因管理」添加自定义</span>
+                </div>
+                <div class="resp-row-note">
+                  <div class="resp-time-label">备注</div>
+                  <input v-model="rr.note" class="input note-input" placeholder="可选：补充说明，如「陪父亲做手术」「转给王五处理」...">
                 </div>
               </div>
               <button class="btn btn-secondary sm" @click.stop="addResponderRow">+ 添加响应人</button>
@@ -1164,7 +1243,8 @@ function exportExcel() {
                 <span v-if="rr.completed_at">处理时长 <b :class="durationClass(diffMinutes(rr.completed_at, rr.responded_at), 60)">{{ fmtDuration(diffMinutes(rr.completed_at, rr.responded_at)) }}</b></span>
               </div>
               <div class="drc-note">
-                💬 原因：{{ rr.note || (!rr.responded_at ? '没看消息（默认）' : '-') }}
+                📌 原因：{{ rr.reason || (!rr.responded_at ? '没看消息（默认）' : '-') }}
+                <span v-if="rr.note" class="drc-note-extra">　💬 备注：{{ rr.note }}</span>
               </div>
             </div>
           </div>
@@ -1415,6 +1495,8 @@ function exportExcel() {
 
 /* v596: 响应明细 紧凑视图 (行高统一 56px) */
 .resp-line-compact { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.resp-reason-inline { padding: 1px 6px; background: #fff7ed; color: #c2410c; border: 1px solid #fdba74; border-radius: 8px; font-size: 11px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resp-note-inline { padding: 1px 6px; background: #f1f5f9; color: #475569; border-radius: 8px; font-size: 11px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .resp-summary { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
 .resp-count { padding: 2px 8px; background: var(--bg-hover); border-radius: 10px; font-size: 12px; }
 .resp-total { color: var(--text-secondary); font-size: 12px; font-weight: 400; }
@@ -1513,13 +1595,30 @@ function exportExcel() {
 .resp-row { display: flex; flex-direction: column; gap: 6px; padding: 10px; background: var(--bg-hover); border-radius: 8px; }
 .resp-row-top { display: flex; align-items: center; gap: 8px; }
 .resp-row-times { display: flex; flex-wrap: wrap; gap: 12px; }
-/* v744: 备注行 */
-.resp-row-note { display: flex; align-items: center; gap: 6px; padding-top: 4px; border-top: 1px dashed rgba(148, 163, 184, 0.2); }
+/* v744/v746: 原因 + 备注两行 */
+.resp-row-reason { display: flex; align-items: center; gap: 6px; padding-top: 4px; border-top: 1px dashed rgba(148, 163, 184, 0.2); flex-wrap: wrap; }
+.reason-select { max-width: 240px; }
+.reason-hint { font-size: 11px; color: var(--text-secondary); }
+.resp-row-note { display: flex; align-items: center; gap: 6px; padding-top: 4px; }
 .note-input { flex: 1; min-width: 0; }
 .resp-block { padding: 4px 0; border-bottom: 1px dashed rgba(148, 163, 184, 0.15); }
 .resp-block:last-child { border-bottom: none; }
 .resp-note { font-size: 11px; color: var(--text-secondary); padding-left: 18px; margin-top: 2px; }
 .resp-note.muted { color: var(--text-secondary); opacity: 0.6; }
+.drc-note-extra { margin-left: 8px; }
+
+/* v746: 员工原因分布卡片 */
+.emp-reason-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.emp-reason-card { background: var(--bg-hover); border-radius: 8px; padding: 12px; border-left: 3px solid var(--primary); }
+.erc-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border-color); }
+.erc-name { font-weight: 700; font-size: 14px; }
+.erc-total { font-size: 12px; color: var(--text-secondary); }
+.erc-body { display: flex; flex-direction: column; gap: 8px; }
+.erc-block { font-size: 12px; }
+.erc-label { font-weight: 600; margin-bottom: 4px; }
+.erc-label.good { color: #10b981; }
+.erc-list { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 18px; }
+.erc-chip { padding: 2px 8px; background: var(--bg-card); border-radius: 10px; font-size: 11px; }
 .state-pill { padding: 2px 10px; border-radius: 12px; color: #fff; font-size: 11px; font-weight: 600; flex: 0 0 auto; }
 .resolver-list { display: flex; flex-wrap: wrap; gap: 3px; }
 .resolver-tag { padding: 2px 8px; background: rgba(16, 185, 129, 0.15); color: #10b981; border-radius: 10px; font-size: 11px; font-weight: 600; }
