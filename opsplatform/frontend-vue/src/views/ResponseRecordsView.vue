@@ -1037,6 +1037,9 @@ function exportExcel() {
 
 .table-wrap, .stats-panel { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; overflow-x: auto; position: relative; }
 .table-wrap .data-table { min-width: 1500px; border-collapse: separate; border-spacing: 0; }
+/* v592: 所有 td 强制不透明 — 否则 sticky 操作列盖在透明 td 上会出现亚像素重影/文字叠加 */
+.table-wrap .data-table tbody td { background-color: var(--bg-card); }
+.table-wrap .data-table tbody tr:hover td:not(.op) { background-color: var(--bg-hover); }
 /* v589-v591: 操作列 sticky 右侧
    必须用 background-color (不是 shorthand) — 否则 var() 在 shorthand 位置可能解析失败 → 透明
    必须显式 width/min-width — 否则 td 宽度被 sticky 上下文压缩，导致跟左边列贴一起看着像重影
@@ -1050,8 +1053,9 @@ function exportExcel() {
   text-align: center;
   padding: 10px 12px !important;
 }
-.data-table td.op { z-index: 2; }
-.data-table th.op { z-index: 3; background-color: var(--bg-hover); }
+/* v592: z-index 加大避免 table stacking context 嵌套问题 */
+.data-table td.op { z-index: 20; }
+.data-table th.op { z-index: 30; background-color: var(--bg-hover); }
 /* hover 时 sticky 列保持 bg-card 实色，不切换到半透明 bg-hover */
 .data-table tbody tr:hover td.op { background-color: var(--bg-card); }
 /* 未响应/未解决 文字徽章 */
