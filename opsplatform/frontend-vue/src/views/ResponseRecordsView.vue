@@ -830,7 +830,7 @@ function exportExcel() {
             <th>故障</th>
             <th>处理结果</th>
             <th>截图</th>
-            <th>状态</th>
+            <th class="status-col">状态</th>
             <th class="op">操作</th>
           </tr>
         </thead>
@@ -899,7 +899,7 @@ function exportExcel() {
               </div>
               <span v-else class="muted">-</span>
             </td>
-            <td>
+            <td class="status-col">
               <span v-if="r.status === 'completed'" class="status-completed">✅ 完成</span>
               <span v-else class="status-processing">🟡 处理中</span>
             </td>
@@ -1364,6 +1364,16 @@ function exportExcel() {
 }
 .table-wrap .data-table thead .op { background-color: var(--bg-hover); z-index: 3; }
 .table-wrap .data-table tbody tr:hover .op { background-color: var(--bg-card); }
+
+/* v597: 状态列也 sticky，紧贴在操作列左边 (操作列 110px → 状态列 right:110px) */
+.table-wrap .data-table .status-col {
+  position: sticky; right: 110px;
+  background-color: var(--bg-card);
+  border-left: 1px solid var(--border-color);
+  z-index: 1;
+}
+.table-wrap .data-table thead .status-col { background-color: var(--bg-hover); z-index: 2; }
+.table-wrap .data-table tbody tr:hover .status-col { background-color: var(--bg-card); }
 /* 未响应/未解决 文字徽章 */
 .state-text-bad { color: #ea3636; font-size: 11px; font-weight: 600; }
 .state-text-warn { color: #94a3b8; font-size: 11px; }
