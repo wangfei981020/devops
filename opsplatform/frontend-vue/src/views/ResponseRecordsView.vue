@@ -1037,14 +1037,17 @@ function exportExcel() {
 
 .table-wrap, .stats-panel { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; overflow-x: auto; position: relative; }
 .table-wrap .data-table { min-width: 1500px; border-collapse: separate; border-spacing: 0; }
-/* v589: 操作列 sticky 右侧；表头 + 数据格都要 sticky 并加阴影 */
+/* v589/v590: 操作列 sticky 右侧 — 必须用 background-color (不是 shorthand)
+   否则 background: var(--xxx) 在 shorthand 位置可能解析失败成 transparent → 重影 */
 .data-table th.op, .data-table td.op {
-  position: sticky; right: 0; z-index: 2;
-  background: var(--bg-card);
-  box-shadow: -4px 0 8px rgba(0, 0, 0, 0.15);
+  position: sticky; right: 0;
+  background-color: var(--bg-card);
+  box-shadow: -4px 0 8px rgba(0, 0, 0, 0.12);
 }
-.data-table th.op { z-index: 3; background: var(--bg-hover); }
-.data-table tbody tr:hover td.op { background: var(--bg-hover); }
+.data-table td.op { z-index: 2; }
+.data-table th.op { z-index: 3; background-color: var(--bg-hover); }
+/* hover 时 sticky 列保持不透明 bg-card，不切换到半透明 bg-hover */
+.data-table tbody tr:hover td.op { background-color: var(--bg-card); }
 /* 未响应/未解决 文字徽章 */
 .state-text-bad { color: #ea3636; font-size: 11px; font-weight: 600; }
 .state-text-warn { color: #94a3b8; font-size: 11px; }
