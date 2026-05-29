@@ -96,6 +96,9 @@ async function loadRecords() {
       ...r,
       attachments: parseAttachments(r.attachments)
     }))
+    // v587: 批量预热签名 URL 缓存
+    const allAttachments = records.value.flatMap(r => r.attachments || [])
+    await loadPresignedUrls(allAttachments)
   } catch (e) {
     appStore.showToast('加载失败: ' + (e.response?.data || e.message), 'error')
   } finally {
@@ -376,12 +379,15 @@ async function uploadFiles(files) {
       fd.append('file', file)
       const res = await api.post('/api/response-records/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
       if (res.data?.path) {
-        form.value.attachments.push({
+        const att = {
           name: file.name || res.data.name || 'screenshot.png',
           size: file.size,
           path: res.data.path,
           preview: URL.createObjectURL(file)
-        })
+        }
+        form.value.attachments.push(att)
+        // v587: 单独给这张图取签名 URL，保存后切回列表能立即显示
+        await loadPresignedUrls([att])
       }
     }
   } catch (e) {
@@ -395,11 +401,43 @@ function isImageAttachment(a) {
   const p = a.path || a.preview || ''
   return /\.(png|jpg|jpeg|gif|webp|bmp)(\?|$)/i.test(p) || (a.preview && a.preview.startsWith('blob:'))
 }
+// v587: 抄桌台维护的 presigned URL 模式 — 浏览器不靠 bucket 公开读，
+// 而是用后端签发的临时签名 URL 访问 MinIO。生产 bucket 保持私有。
+const presignedUrlCache = ref({})
+
+async function loadPresignedUrls(attachments) {
+  if (!attachments) return
+  const paths = attachments
+    .filter(a => a && a.path && !presignedUrlCache.value[a.path])
+    .map(a => a.path)
+  if (paths.length === 0) return
+  const BATCH_SIZE = 50
+  try {
+    const batches = []
+    for (let i = 0; i < paths.length; i += BATCH_SIZE) {
+      batches.push(paths.slice(i, i + BATCH_SIZE))
+    }
+    const results = await Promise.all(
+      batches.map(batch => api.post('/api/storage/presign/batch', { paths: batch }))
+    )
+    results.forEach(res => {
+      const urls = res.data?.urls || {}
+      Object.entries(urls).forEach(([path, url]) => {
+        presignedUrlCache.value[path] = url
+      })
+    })
+  } catch (e) {
+    console.error('获取预签名 URL 失败', e)
+  }
+}
+
+function getPresignedUrl(path) {
+  return presignedUrlCache.value[path] || ''
+}
+
 function attachmentURL(a) {
-  // path 是后端持久 URL (/storage/response-records/xxx.png)，永远有效；
-  // preview 仅在"刚上传后的当前会话"内有效（blob: 协议），刷新就失效 → 别再优先用它
-  if (a.path) return a.path
-  return a.preview || ''
+  // 优先用签名 URL（生产合规）；fallback 1：path（本地公开读时直接通）；fallback 2：preview blob
+  return getPresignedUrl(a.path) || a.path || a.preview || ''
 }
 // 列表里只取图片类型的附件做缩略图
 function imageAttachments(list) {
