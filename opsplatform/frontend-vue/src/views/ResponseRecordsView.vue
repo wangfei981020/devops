@@ -353,6 +353,34 @@ function openAdd() {
   form.value = emptyForm()
   showModal.value = true
 }
+// v596: 详情 modal (只读，多人响应在这里看完整信息)
+const showDetailModal = ref(false)
+const detailRecord = ref(null)
+function openDetail(r) {
+  detailRecord.value = r
+  showDetailModal.value = true
+}
+function closeDetail() { showDetailModal.value = false; detailRecord.value = null }
+function editFromDetail() {
+  if (detailRecord.value) {
+    const r = detailRecord.value
+    closeDetail()
+    openEdit(r)
+  }
+}
+
+// v596: 响应明细列紧凑视图 — 状态计数 + 人数
+function responseSummary(r) {
+  const list = recResponders(r)
+  if (list.length === 1) return null // 单人不用汇总，直接显示详细
+  const counts = { resolved: 0, in_progress: 0, reply_only: 0, no_reply: 0 }
+  list.forEach(rr => {
+    const code = responderState(rr, r).code
+    counts[code]++
+  })
+  return { counts, total: list.length }
+}
+
 function openEdit(r) {
   modalMode.value = 'edit'
   // v584/v743: 每人有自己的 mentioned_at；老数据缺就用主表
@@ -835,24 +863,26 @@ function exportExcel() {
             <td class="ts">{{ firstRespondedAt(r) || '-' }}</td>
             <td class="ts">{{ lastCompletedAt(r) || '-' }}</td>
             <td class="resp-detail">
-              <div v-for="(rr, i) in recResponders(r)" :key="i" class="resp-block">
-                <div class="resp-line">
-                  <span class="resp-state" :style="{ color: responderState(rr, r).color }">{{ responderState(rr, r).emoji }}</span>
+              <!-- v596: 单人直接显示详细；多人显示汇总 + 详情按钮，行高永远统一 -->
+              <template v-if="recResponders(r).length === 1">
+                <div v-for="(rr, i) in recResponders(r)" :key="i" class="resp-line-compact">
+                  <span :style="{ color: responderState(rr, r).color }">{{ responderState(rr, r).emoji }}</span>
                   <span class="resp-name">{{ rr.responder }}</span>
-                  <span v-if="rr.responded_at" :class="durationClass(diffMinutes(rr.responded_at, rr.mentioned_at), 5)">
-                    响 {{ fmtDuration(diffMinutes(rr.responded_at, rr.mentioned_at)) }}
-                    <span v-if="isLateResponse(rr, r)" class="late-tag" title="晚于第一个解决人">⚠</span>
-                  </span>
+                  <span v-if="rr.responded_at" :class="durationClass(diffMinutes(rr.responded_at, rr.mentioned_at), 5)">响 {{ fmtDuration(diffMinutes(rr.responded_at, rr.mentioned_at)) }}</span>
                   <span v-else class="state-text-bad">未响应</span>
-                  <span v-if="rr.completed_at" :class="durationClass(diffMinutes(rr.completed_at, rr.responded_at), 60)">
-                    处 {{ fmtDuration(diffMinutes(rr.completed_at, rr.responded_at)) }}
-                  </span>
+                  <span v-if="rr.completed_at" :class="durationClass(diffMinutes(rr.completed_at, rr.responded_at), 60)">处 {{ fmtDuration(diffMinutes(rr.completed_at, rr.responded_at)) }}</span>
                   <span v-else-if="rr.responded_at" class="state-text-warn">未解决</span>
                 </div>
-                <!-- v744: note 展示。空 → 推定 "没看消息" (仅未响应时显示)；非空 → 用户填写的实际原因 -->
-                <div v-if="rr.note" class="resp-note">💬 {{ rr.note }}</div>
-                <div v-else-if="!rr.responded_at" class="resp-note muted">💬 没看消息</div>
-              </div>
+              </template>
+              <template v-else>
+                <div class="resp-summary">
+                  <span v-for="(emoji, code) in { resolved: '🟢', in_progress: '🟡', reply_only: '⚪', no_reply: '🔴' }"
+                        v-show="responseSummary(r)?.counts[code] > 0" :key="code" class="resp-count">
+                    {{ emoji }}×{{ responseSummary(r).counts[code] }}
+                  </span>
+                  <span class="resp-total">({{ responseSummary(r)?.total }} 人)</span>
+                </div>
+              </template>
             </td>
             <td>{{ r.has_incident ? '⚠是' : '否' }}</td>
             <td class="result">{{ r.handle_result || '-' }}</td>
@@ -874,6 +904,7 @@ function exportExcel() {
               <span v-else class="status-processing">🟡 处理中</span>
             </td>
             <td class="op">
+              <button class="icon-btn" @click="openDetail(r)" title="查看详情">👁️</button>
               <button v-if="canUpdate" class="icon-btn" @click="openEdit(r)" title="编辑">✏️</button>
               <button v-if="canDelete" class="icon-btn danger" @click="deleteRecord(r)" title="删除">🗑️</button>
             </td>
@@ -1081,6 +1112,69 @@ function exportExcel() {
       </div>
     </div>
 
+    <!-- v596: 详情 modal (只读, 多人响应在这里看完整信息) -->
+    <div v-if="showDetailModal && detailRecord" class="modal-mask" @click.self="closeDetail">
+      <div class="modal-card" style="width: 720px">
+        <div class="modal-header">
+          <h3>响应记录 #{{ detailRecord.id }} 详情</h3>
+          <button class="close-btn" @click="closeDetail">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="detail-info">
+            <div class="di-row">
+              <span class="di-label">来源</span>
+              <span class="source-badge" :style="{ background: sourceColor(detailRecord.message_source) }">{{ sourceLabel(detailRecord.message_source) }}</span>
+            </div>
+            <div class="di-row"><span class="di-label">艾特时间</span><span class="ts">{{ detailRecord.mentioned_at }}</span></div>
+            <div class="di-row"><span class="di-label">消息内容</span><span>{{ detailRecord.message_content }}</span></div>
+            <div v-if="detailRecord.has_incident" class="di-row"><span class="di-label">故障单号</span><span class="incident-tag">⚠ {{ detailRecord.incident_ticket }}</span></div>
+          </div>
+
+          <h4 style="margin: 16px 0 8px">📋 响应明细 ({{ recResponders(detailRecord).length }} 人)</h4>
+          <div class="detail-responders">
+            <div v-for="(rr, i) in recResponders(detailRecord)" :key="i" class="detail-resp-card">
+              <div class="drc-head">
+                <span class="state-pill" :style="{ background: responderState(rr, detailRecord).color }">
+                  {{ responderState(rr, detailRecord).emoji }} {{ responderState(rr, detailRecord).label }}
+                </span>
+                <span class="drc-name">{{ rr.responder }}</span>
+                <span v-if="isLateResponse(rr, detailRecord)" class="late-tag" title="晚于第一个解决人">⚠ 晚到</span>
+              </div>
+              <div class="drc-times">
+                <span class="drc-tlabel">艾特:</span><span class="ts">{{ rr.mentioned_at }}</span>
+                <span class="drc-tlabel">响应:</span><span class="ts">{{ rr.responded_at || '-' }}</span>
+                <span class="drc-tlabel">完成:</span><span class="ts">{{ rr.completed_at || '-' }}</span>
+              </div>
+              <div class="drc-durs">
+                <span v-if="rr.responded_at">响应时长 <b :class="durationClass(diffMinutes(rr.responded_at, rr.mentioned_at), 5)">{{ fmtDuration(diffMinutes(rr.responded_at, rr.mentioned_at)) }}</b></span>
+                <span v-if="rr.completed_at">处理时长 <b :class="durationClass(diffMinutes(rr.completed_at, rr.responded_at), 60)">{{ fmtDuration(diffMinutes(rr.completed_at, rr.responded_at)) }}</b></span>
+              </div>
+              <div class="drc-note">
+                💬 原因：{{ rr.note || (!rr.responded_at ? '没看消息（默认）' : '-') }}
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-info" style="margin-top: 16px">
+            <div class="di-row"><span class="di-label">处理结果</span><span>{{ detailRecord.handle_result || '-' }}</span></div>
+            <div v-if="detailRecord.remark" class="di-row"><span class="di-label">备注</span><span>{{ detailRecord.remark }}</span></div>
+            <div v-if="imageAttachments(detailRecord.attachments).length" class="di-row">
+              <span class="di-label">截图</span>
+              <div class="shot-list">
+                <img v-for="(a, idx) in imageAttachments(detailRecord.attachments)" :key="idx"
+                     :src="attachmentURL(a)" class="shot-thumb"
+                     @click="openPreviewList(detailRecord.attachments, idx)">
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button v-if="canUpdate" class="btn btn-secondary" @click="editFromDetail">✏️ 编辑</button>
+          <button class="btn btn-primary" @click="closeDetail">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <!-- v582: 多图 lightbox（参考桌台维护：上下按钮 + 键盘左右键 + Esc 关闭 + 计数器） -->
     <div v-if="showPreview" class="lightbox" @click="closePreview">
       <button v-if="previewImages.length > 1" class="lightbox-nav prev" @click.stop="prevImage" title="上一张（←）">‹</button>
@@ -1246,8 +1340,10 @@ function exportExcel() {
 .table-wrap .data-table thead tr,
 .table-wrap .data-table tbody tr {
   display: grid;
-  grid-template-columns: 60px 160px 120px 80px 240px 160px 160px 160px 280px 60px 180px 150px 100px 100px;
+  grid-template-columns: 60px 180px 130px 80px 220px 160px 160px 160px 230px 60px 160px 140px 100px 110px;
   border-bottom: 1px solid var(--border-color);
+  align-items: center;
+  min-height: 56px;
 }
 .table-wrap .data-table th,
 .table-wrap .data-table td {
@@ -1271,6 +1367,26 @@ function exportExcel() {
 /* 未响应/未解决 文字徽章 */
 .state-text-bad { color: #ea3636; font-size: 11px; font-weight: 600; }
 .state-text-warn { color: #94a3b8; font-size: 11px; }
+
+/* v596: 响应明细 紧凑视图 (行高统一 56px) */
+.resp-line-compact { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.resp-summary { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+.resp-count { padding: 2px 8px; background: var(--bg-hover); border-radius: 10px; font-size: 12px; }
+.resp-total { color: var(--text-secondary); font-size: 12px; font-weight: 400; }
+
+/* v596: 详情 modal 卡片 */
+.detail-info { display: flex; flex-direction: column; gap: 6px; padding: 12px; background: var(--bg-hover); border-radius: 8px; }
+.di-row { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
+.di-label { color: var(--text-secondary); min-width: 70px; font-weight: 600; }
+.detail-responders { display: flex; flex-direction: column; gap: 10px; }
+.detail-resp-card { padding: 10px 12px; background: var(--bg-hover); border-radius: 8px; border-left: 3px solid var(--primary); }
+.drc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.drc-name { font-weight: 700; font-size: 14px; }
+.drc-times { display: grid; grid-template-columns: auto 1fr auto 1fr auto 1fr; gap: 4px 8px; align-items: center; font-size: 12px; margin-bottom: 6px; }
+.drc-tlabel { color: var(--text-secondary); }
+.drc-durs { display: flex; gap: 16px; font-size: 12px; margin-bottom: 4px; }
+.drc-durs b { font-size: 13px; padding: 0 4px; }
+.drc-note { font-size: 12px; color: var(--text-secondary); padding-top: 4px; border-top: 1px dashed rgba(148, 163, 184, 0.2); }
 .ts { white-space: nowrap; font-family: monospace; font-size: 12px; color: var(--text-secondary); }
 .result { max-width: 200px; }
 .shot-col { width: 140px; }
