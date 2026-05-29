@@ -92,7 +92,20 @@ func HandleListResponseRecords(w http.ResponseWriter, r *http.Request) {
 	where := []string{"1=1"}
 	args := []interface{}{}
 
-	if year := q.Get("year"); year != "" {
+	// v741: 优先用自定义日期范围 start_date / end_date (YYYY-MM-DD，含两端全天)
+	if start := q.Get("start_date"); start != "" {
+		end := q.Get("end_date")
+		if end == "" {
+			end = start
+		}
+		// 包含 end_date 的全天 → 用 end+1day 作为右开区间
+		endTime, err := time.Parse("2006-01-02", end)
+		if err == nil {
+			where = append(where, "mentioned_at >= ? AND mentioned_at < ?")
+			args = append(args, start+" 00:00:00", endTime.AddDate(0, 0, 1).Format("2006-01-02")+" 00:00:00")
+		}
+	} else if year := q.Get("year"); year != "" {
+		// 老接口兼容: ?year=&month=
 		if month := q.Get("month"); month != "" {
 			y, _ := strconv.Atoi(year)
 			m, _ := strconv.Atoi(month)

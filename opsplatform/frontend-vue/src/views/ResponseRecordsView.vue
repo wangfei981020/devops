@@ -30,17 +30,53 @@ const loading = ref(false)
 
 const activeTab = ref('list')
 
-const today = new Date()
-const currentYear = ref(today.getFullYear())
-const currentMonth = ref(today.getMonth() + 1)
+// v586: 日期范围筛选 (替代之前的"按月")
+function todayStr() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+function monthStartStr(date) {
+  const d = date || new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
+}
+const startDate = ref(monthStartStr())
+const endDate = ref(todayStr())
 const filterResponder = ref('')
 const filterSource = ref('')
 const filterOnlyIncident = ref(false)
 const keyword = ref('')
 
+// 快捷按钮
+function setRange(preset) {
+  const now = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  const fmt = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  if (preset === 'today') {
+    startDate.value = endDate.value = fmt(now)
+  } else if (preset === 'week') {
+    const day = now.getDay() || 7  // 周一为 1
+    const monday = new Date(now); monday.setDate(now.getDate() - (day - 1))
+    startDate.value = fmt(monday); endDate.value = fmt(now)
+  } else if (preset === 'month') {
+    startDate.value = monthStartStr(now); endDate.value = fmt(now)
+  } else if (preset === 'last_month') {
+    const last = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+    const lastEnd = new Date(now.getFullYear(), now.getMonth(), 0)
+    startDate.value = fmt(last); endDate.value = fmt(lastEnd)
+  } else if (preset === '7d') {
+    const d = new Date(now); d.setDate(now.getDate() - 6)
+    startDate.value = fmt(d); endDate.value = fmt(now)
+  } else if (preset === '30d') {
+    const d = new Date(now); d.setDate(now.getDate() - 29)
+    startDate.value = fmt(d); endDate.value = fmt(now)
+  }
+}
+
 async function loadEmployees() {
   try {
-    const res = await api.get(`/api/schedule?year=${currentYear.value}&month=${currentMonth.value}`)
+    // 员工列表用"今天"的月份（不强求跟筛选范围一致，员工不太变）
+    const now = new Date()
+    const res = await api.get(`/api/schedule?year=${now.getFullYear()}&month=${now.getMonth() + 1}`)
     employees.value = (res.data || []).map(e => ({ id: e.id, name: e.name, group_name: e.group_name }))
   } catch (e) { console.error(e) }
 }
@@ -49,8 +85,8 @@ async function loadRecords() {
   loading.value = true
   try {
     const params = new URLSearchParams()
-    params.append('year', currentYear.value)
-    params.append('month', currentMonth.value)
+    if (startDate.value) params.append('start_date', startDate.value)
+    if (endDate.value) params.append('end_date', endDate.value)
     if (filterResponder.value) params.append('responder', filterResponder.value)
     if (filterSource.value) params.append('source', filterSource.value)
     if (filterOnlyIncident.value) params.append('has_incident', '1')
@@ -80,21 +116,8 @@ onMounted(async () => {
   window.addEventListener('keydown', onPreviewKey)
 })
 
-watch([currentYear, currentMonth], async () => { await loadEmployees(); await loadRecords() })
+watch([startDate, endDate], () => loadRecords())
 watch([filterResponder, filterSource, filterOnlyIncident], () => loadRecords())
-
-function prevMonth() {
-  if (currentMonth.value === 1) { currentYear.value--; currentMonth.value = 12 }
-  else currentMonth.value--
-}
-function nextMonth() {
-  if (currentMonth.value === 12) { currentYear.value++; currentMonth.value = 1 }
-  else currentMonth.value++
-}
-function toToday() {
-  currentYear.value = new Date().getFullYear()
-  currentMonth.value = new Date().getMonth() + 1
-}
 
 // ========= 时长计算 =========
 function diffMinutes(t1, t0) {
@@ -508,7 +531,7 @@ function exportExcel() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `响应记录_${currentYear.value}年${currentMonth.value}月.csv`
+  a.download = `响应记录_${startDate.value}_至_${endDate.value}.csv`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -531,11 +554,19 @@ function exportExcel() {
     </div>
 
     <div class="toolbar">
-      <div class="month-nav">
-        <button class="nav-btn" @click="prevMonth">‹</button>
-        <span class="month-label">{{ currentYear }}年{{ currentMonth }}月</span>
-        <button class="nav-btn" @click="nextMonth">›</button>
-        <button class="btn-link" @click="toToday">今天</button>
+      <!-- v586: 日期范围选择器 + 快捷按钮 -->
+      <div class="date-range">
+        <input type="date" v-model="startDate" class="input dt-input">
+        <span class="dash">至</span>
+        <input type="date" v-model="endDate" class="input dt-input">
+      </div>
+      <div class="quick-range">
+        <button class="btn-pill" @click="setRange('today')">今天</button>
+        <button class="btn-pill" @click="setRange('week')">本周</button>
+        <button class="btn-pill" @click="setRange('month')">本月</button>
+        <button class="btn-pill" @click="setRange('last_month')">上月</button>
+        <button class="btn-pill" @click="setRange('7d')">近7天</button>
+        <button class="btn-pill" @click="setRange('30d')">近30天</button>
       </div>
       <div class="filter-group">
         <label>响应人:</label>
@@ -855,9 +886,13 @@ function exportExcel() {
 .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
 
 .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; padding: 12px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; }
-.month-nav { display: flex; align-items: center; gap: 8px; }
-.nav-btn { width: 30px; height: 30px; border: 1px solid var(--border-color); background: transparent; cursor: pointer; border-radius: 6px; color: var(--text-color); }
-.month-label { font-weight: 600; min-width: 100px; text-align: center; }
+/* v586: 日期范围 */
+.date-range { display: flex; align-items: center; gap: 8px; }
+.date-range .dt-input { min-width: 140px; max-width: 150px; }
+.dash { color: var(--text-secondary); font-size: 13px; }
+.quick-range { display: flex; gap: 4px; flex-wrap: wrap; }
+.btn-pill { padding: 4px 10px; background: var(--bg-hover); border: 1px solid var(--border-color); border-radius: 14px; font-size: 12px; cursor: pointer; color: var(--text-color); }
+.btn-pill:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
 .btn-link { background: none; border: none; color: var(--primary); cursor: pointer; font-size: 13px; }
 .btn-link.danger { color: #ea3636; }
 .filter-group { display: flex; align-items: center; gap: 6px; font-size: 13px; }
