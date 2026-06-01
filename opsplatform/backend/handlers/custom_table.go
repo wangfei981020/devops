@@ -13,6 +13,22 @@ import (
 	"opsplatform/database"
 )
 
+// v748: 兼容两种前端写法
+//  - data: {"date":"..."}              ← object，正常
+//  - data: "{\"date\":\"...\"}"        ← stringified（前端 JSON.stringify 多包了一层）
+// 第二种存到 MySQL JSON 列会变成 JSON STRING 而不是 OBJECT，导致 JSON_EXTRACT/$.date 返回 NULL。
+// 这里统一解一层，保证落库始终是 object 文本，避免数据脏化。
+func normalizeJSONField(raw json.RawMessage, fallback string) string {
+	if len(raw) == 0 {
+		return fallback
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return string(raw)
+}
+
 // CustomTable 自定义表格
 type CustomTable struct {
 	ID          string `json:"id"`
@@ -476,14 +492,8 @@ func HandleAddCustomRow(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	dataStr := "{}"
-	if req.Data != nil {
-		dataStr = string(req.Data)
-	}
-	attachStr := "[]"
-	if req.Attachments != nil {
-		attachStr = string(req.Attachments)
-	}
+	dataStr := normalizeJSONField(req.Data, "{}")
+	attachStr := normalizeJSONField(req.Attachments, "[]")
 
 	_, err := database.DB.Exec(`
 		INSERT INTO custom_rows (id, table_id, data, attachments, source_api_key_id, created_by, created_at, updated_at)
@@ -544,14 +554,8 @@ func HandleUpdateCustomRow(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().Format("2006-01-02 15:04:05")
 
-	dataStr := "{}"
-	if req.Data != nil {
-		dataStr = string(req.Data)
-	}
-	attachStr := "[]"
-	if req.Attachments != nil {
-		attachStr = string(req.Attachments)
-	}
+	dataStr := normalizeJSONField(req.Data, "{}")
+	attachStr := normalizeJSONField(req.Attachments, "[]")
 
 	operator := r.Header.Get("X-Operator")
 
@@ -600,8 +604,8 @@ func HandlePatchCustomRow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Data        map[string]interface{} `json:"data"`
-		Attachments json.RawMessage        `json:"attachments"`
+		Data        json.RawMessage `json:"data"`
+		Attachments json.RawMessage `json:"attachments"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "无效的请求", http.StatusBadRequest)
@@ -620,14 +624,26 @@ func HandlePatchCustomRow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// v748: 解 data（兼容前端 stringify 双重编码）
+	var patchData map[string]interface{}
+	if len(req.Data) > 0 {
+		normalized := normalizeJSONField(req.Data, "")
+		if normalized != "" {
+			if err := json.Unmarshal([]byte(normalized), &patchData); err != nil {
+				http.Error(w, "data 字段格式错误", http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
 	// 合并 data（浅合并，传入的 key 覆盖原值）
 	mergedDataStr := currentDataStr
-	if req.Data != nil && len(req.Data) > 0 {
+	if len(patchData) > 0 {
 		var current map[string]interface{}
 		if err := json.Unmarshal([]byte(currentDataStr), &current); err != nil {
 			current = map[string]interface{}{}
 		}
-		for k, v := range req.Data {
+		for k, v := range patchData {
 			current[k] = v
 		}
 		merged, err := json.Marshal(current)
@@ -641,7 +657,7 @@ func HandlePatchCustomRow(w http.ResponseWriter, r *http.Request) {
 	// attachments：若显式传入则替换，未传则保留原值
 	attachStr := currentAttachStr
 	if req.Attachments != nil {
-		attachStr = string(req.Attachments)
+		attachStr = normalizeJSONField(req.Attachments, "[]")
 	}
 
 	now := time.Now().Format("2006-01-02 15:04:05")

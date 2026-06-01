@@ -215,40 +215,54 @@ func createTables() error {
 		log.Printf("创建 custom_rows 表失败: %v", err)
 	}
 
-	// v747: 修复历史数据 UTC 时差 bug —— 前端早期用 new Date().toISOString().slice(0,10)
-	// 在凌晨 0~7:59 创建的记录 date 字段比 start_time 早 1 天。
-	// 按 start_time 反推 date，幂等（已一致的不动）。
+	// v748: 修复历史数据
+	//  step 1) data 列里 string-wrapped JSON 规整成 object（前端 JSON.stringify 多包一层导致）
+	//  step 2) 修 UTC 时差 bug：date 跟 start_time 的日期对不上的行，按 start_time 反推 date
+	// 之前 v747 只跑 step 2，但生产上 step 1 没做导致 JSON_EXTRACT 永远返回 NULL，WHERE 不匹配。
+	if res, err := DB.Exec(`
+		UPDATE custom_rows
+		SET data = CAST(JSON_UNQUOTE(data) AS JSON)
+		WHERE JSON_TYPE(data) = 'STRING'
+	`); err != nil {
+		log.Printf("v748: step1 string→object 失败: %v", err)
+	} else if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("v748: step1 custom_rows.data string→object 规整 %d 行", n)
+	}
+
+	// step 2: 按 start_time 反推 date（带秒格式）
 	if res, err := DB.Exec(`
 		UPDATE custom_rows
 		SET data = JSON_SET(data, '$.date',
 			DATE_FORMAT(STR_TO_DATE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')),
 								   '%Y-%m-%d %H:%i:%s'), '%Y-%m-%d'))
-		WHERE JSON_EXTRACT(data, '$.start_time') IS NOT NULL
+		WHERE JSON_TYPE(data) = 'OBJECT'
+		  AND JSON_EXTRACT(data, '$.start_time') IS NOT NULL
 		  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')) <> ''
 		  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.date')) <>
 			  DATE_FORMAT(STR_TO_DATE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')),
 									 '%Y-%m-%d %H:%i:%s'), '%Y-%m-%d')
-	`); err == nil {
-		if n, _ := res.RowsAffected(); n > 0 {
-			log.Printf("v747: 修复 custom_rows.date 时差 bug %d 行", n)
-		}
+	`); err != nil {
+		log.Printf("v748: step2 (带秒) 失败: %v", err)
+	} else if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("v748: step2 修复 custom_rows.date 时差 bug (带秒) %d 行", n)
 	}
 
-	// 兼容 start_time 只有 'YYYY-MM-DD HH:MM' (无秒) 的旧格式
+	// step 2b: 兼容 start_time 不带秒的格式 'YYYY-MM-DD HH:MM'
 	if res, err := DB.Exec(`
 		UPDATE custom_rows
 		SET data = JSON_SET(data, '$.date',
 			DATE_FORMAT(STR_TO_DATE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')),
 								   '%Y-%m-%d %H:%i'), '%Y-%m-%d'))
-		WHERE JSON_EXTRACT(data, '$.start_time') IS NOT NULL
+		WHERE JSON_TYPE(data) = 'OBJECT'
+		  AND JSON_EXTRACT(data, '$.start_time') IS NOT NULL
 		  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')) <> ''
 		  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.date')) <>
 			  DATE_FORMAT(STR_TO_DATE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')),
 									 '%Y-%m-%d %H:%i'), '%Y-%m-%d')
-	`); err == nil {
-		if n, _ := res.RowsAffected(); n > 0 {
-			log.Printf("v747: 修复 custom_rows.date 时差 bug (无秒格式) %d 行", n)
-		}
+	`); err != nil {
+		log.Printf("v748: step2 (无秒) 失败: %v", err)
+	} else if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("v748: step2 修复 custom_rows.date 时差 bug (无秒) %d 行", n)
 	}
 
 	// 创建审计日志表
