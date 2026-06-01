@@ -895,13 +895,14 @@ var (
 
 // API 速率限制配置
 var apiRateLimitConfig = map[string]int{
-	"/api/login":         10,  // 登录：每分钟10次
-	"/api/mfa/verify":    10,  // MFA验证：每分钟10次
-	"/api/users":         60,  // 用户API：每分钟60次
-	"/api/records":       120, // 记录API：每分钟120次
-	"/api/domains":       120, // 域名API：每分钟120次
-	"/api/audit":         60,  // 审计API：每分钟60次
-	"default":            100, // 默认：每分钟100次
+	"/api/login":                  10,  // 登录：每分钟10次
+	"/api/mfa/verify":             10,  // MFA验证：每分钟10次
+	"/api/users":                  60,  // 用户API：每分钟60次
+	"/api/records":                120, // 记录API：每分钟120次
+	"/api/domains":                120, // 域名API：每分钟120次
+	"/api/audit":                  60,  // 审计API：每分钟60次
+	"/api/storage/presign/batch":  500, // v750: 预签名批量接口，列表加载时单页可能触发多次
+	"default":                     100, // 默认：每分钟100次
 }
 
 // RateLimitMiddleware API 速率限制中间件（优先使用 Redis）

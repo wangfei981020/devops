@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore, useAuthStore } from '@/stores'
 import api from '@/api'
@@ -1928,30 +1928,30 @@ async function loadRecords() {
       created_at: r.created_at,
       updated_at: r.updated_at
     }))
-    // 收集所有附件列的路径，一次性批量获取预签名URL
-    const allAttachments = []
-    for (const r of records.value) {
-      // 基本 attachments 列
-      if (r.attachments?.length) {
-        allAttachments.push(...r.attachments)
-      }
-      // 其他 attachments 类型的列
-      attachmentColumns.value.forEach(col => {
-        const atts = getAttachmentsByKey(r, col.key)
-        if (atts?.length) {
-          allAttachments.push(...atts)
-        }
-      })
-    }
-    if (allAttachments.length > 0) {
-      await loadPresignedUrls(allAttachments)
-    }
+    // v605: 只 presign 当前可见页（watch filteredRecords 接管），
+    // 之前全量 presign 1639 条的 3000+ 张图导致 429。
   } catch (e) {
     records.value = []
   } finally {
     loading.value = false
   }
 }
+
+// v605: 监听当前可见页，按需 presign，缓存命中跳过
+watch(() => filteredRecords.value, async (rows) => {
+  if (!rows?.length) return
+  const visibleAttachments = []
+  for (const r of rows) {
+    if (r.attachments?.length) visibleAttachments.push(...r.attachments)
+    attachmentColumns.value.forEach(col => {
+      const atts = getAttachmentsByKey(r, col.key)
+      if (atts?.length) visibleAttachments.push(...atts)
+    })
+  }
+  if (visibleAttachments.length > 0) {
+    await loadPresignedUrls(visibleAttachments)
+  }
+}, { immediate: false, flush: 'post' })
 
 function parseData(data) {
   if (!data) return {}
@@ -1998,23 +1998,22 @@ async function loadStats() {
 }
 
 async function loadPresignedUrls(attachments) {
+  // v605: 串行 + 大 batch（50→500），避免 Promise.all 并发触发后端 rate limit 429
+  // BATCH_SIZE 受后端 v751 file_share.go HandleBatchPresignedURL 硬限制 ≤ 500
   const paths = attachments.filter(a => a.path && !presignedUrlCache.value[a.path]).map(a => a.path)
   if (paths.length === 0) return
-  const BATCH_SIZE = 50
-  try {
-    const batches = []
-    for (let i = 0; i < paths.length; i += BATCH_SIZE) {
-      batches.push(paths.slice(i, i + BATCH_SIZE))
-    }
-    const results = await Promise.all(batches.map(batch => api.post('/api/storage/presign/batch', { paths: batch })))
-    results.forEach(res => {
+  const BATCH_SIZE = 500
+  for (let i = 0; i < paths.length; i += BATCH_SIZE) {
+    const batch = paths.slice(i, i + BATCH_SIZE)
+    try {
+      const res = await api.post('/api/storage/presign/batch', { paths: batch })
       const urls = res.data?.urls || {}
       Object.entries(urls).forEach(([path, url]) => {
         presignedUrlCache.value[path] = url
       })
-    })
-  } catch (e) {
-    console.error('获取预签名URL失败', e)
+    } catch (e) {
+      console.error('获取预签名URL失败', e)
+    }
   }
 }
 

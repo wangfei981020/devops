@@ -116,8 +116,9 @@ func HandleBatchPresignedURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Paths) > 200 {
-		sendError(w, "一次最多处理200个文件", http.StatusBadRequest)
+	// v751: 单次上限 200→500，每页 100 条 ~300 张图能一次签完，配合前端串行避免 429
+	if len(req.Paths) > 500 {
+		sendError(w, "一次最多处理500个文件", http.StatusBadRequest)
 		return
 	}
 
