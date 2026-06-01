@@ -215,54 +215,64 @@ func createTables() error {
 		log.Printf("创建 custom_rows 表失败: %v", err)
 	}
 
-	// v748: 修复历史数据
-	//  step 1) data 列里 string-wrapped JSON 规整成 object（前端 JSON.stringify 多包一层导致）
-	//  step 2) 修 UTC 时差 bug：date 跟 start_time 的日期对不上的行，按 start_time 反推 date
-	// 之前 v747 只跑 step 2，但生产上 step 1 没做导致 JSON_EXTRACT 永远返回 NULL，WHERE 不匹配。
+	// v749: 修复历史数据
+	//  step 1) data 列里 string-wrapped JSON 规整成 object（前端 JSON.stringify 多包一层）
+	//  step 2) start_time/end_time 把 T 分隔符替换成空格（早期 datetime-local 没 normalize 的遗留数据）
+	//  step 3) 按 start_time 反推 date 修 UTC 时差 bug
+	// 注意 step 3 用 REGEXP 严格过滤，避免 MySQL 8.4 严格模式下 STR_TO_DATE 抛 Error 1411 整批中止。
 	if res, err := DB.Exec(`
 		UPDATE custom_rows
 		SET data = CAST(JSON_UNQUOTE(data) AS JSON)
 		WHERE JSON_TYPE(data) = 'STRING'
 	`); err != nil {
-		log.Printf("v748: step1 string→object 失败: %v", err)
+		log.Printf("v749: step1 string→object 失败: %v", err)
 	} else if n, _ := res.RowsAffected(); n > 0 {
-		log.Printf("v748: step1 custom_rows.data string→object 规整 %d 行", n)
+		log.Printf("v749: step1 custom_rows.data string→object 规整 %d 行", n)
 	}
 
-	// step 2: 按 start_time 反推 date（带秒格式）
+	// step 2a: 归一化 start_time 的 T 分隔符
 	if res, err := DB.Exec(`
 		UPDATE custom_rows
-		SET data = JSON_SET(data, '$.date',
-			DATE_FORMAT(STR_TO_DATE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')),
-								   '%Y-%m-%d %H:%i:%s'), '%Y-%m-%d'))
+		SET data = JSON_SET(data, '$.start_time',
+			REPLACE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')), 'T', ' '))
 		WHERE JSON_TYPE(data) = 'OBJECT'
-		  AND JSON_EXTRACT(data, '$.start_time') IS NOT NULL
-		  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')) <> ''
-		  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.date')) <>
-			  DATE_FORMAT(STR_TO_DATE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')),
-									 '%Y-%m-%d %H:%i:%s'), '%Y-%m-%d')
+		  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')) LIKE '%T%'
 	`); err != nil {
-		log.Printf("v748: step2 (带秒) 失败: %v", err)
+		log.Printf("v749: step2a 归一化 start_time T→空格 失败: %v", err)
 	} else if n, _ := res.RowsAffected(); n > 0 {
-		log.Printf("v748: step2 修复 custom_rows.date 时差 bug (带秒) %d 行", n)
+		log.Printf("v749: step2a 归一化 start_time T→空格 %d 行", n)
 	}
 
-	// step 2b: 兼容 start_time 不带秒的格式 'YYYY-MM-DD HH:MM'
+	// step 2b: 归一化 end_time 的 T 分隔符
+	if res, err := DB.Exec(`
+		UPDATE custom_rows
+		SET data = JSON_SET(data, '$.end_time',
+			REPLACE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.end_time')), 'T', ' '))
+		WHERE JSON_TYPE(data) = 'OBJECT'
+		  AND JSON_EXTRACT(data, '$.end_time') IS NOT NULL
+		  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.end_time')) LIKE '%T%'
+	`); err != nil {
+		log.Printf("v749: step2b 归一化 end_time T→空格 失败: %v", err)
+	} else if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("v749: step2b 归一化 end_time T→空格 %d 行", n)
+	}
+
+	// step 3: 按 start_time 反推 date（REGEXP 严格过滤防 STR_TO_DATE 抛错，兼容带秒/不带秒）
 	if res, err := DB.Exec(`
 		UPDATE custom_rows
 		SET data = JSON_SET(data, '$.date',
 			DATE_FORMAT(STR_TO_DATE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')),
 								   '%Y-%m-%d %H:%i'), '%Y-%m-%d'))
 		WHERE JSON_TYPE(data) = 'OBJECT'
-		  AND JSON_EXTRACT(data, '$.start_time') IS NOT NULL
-		  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')) <> ''
+		  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time'))
+			  REGEXP '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}'
 		  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.date')) <>
 			  DATE_FORMAT(STR_TO_DATE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.start_time')),
 									 '%Y-%m-%d %H:%i'), '%Y-%m-%d')
 	`); err != nil {
-		log.Printf("v748: step2 (无秒) 失败: %v", err)
+		log.Printf("v749: step3 修复 date 失败: %v", err)
 	} else if n, _ := res.RowsAffected(); n > 0 {
-		log.Printf("v748: step2 修复 custom_rows.date 时差 bug (无秒) %d 行", n)
+		log.Printf("v749: step3 修复 custom_rows.date 时差 bug %d 行", n)
 	}
 
 	// 创建审计日志表
