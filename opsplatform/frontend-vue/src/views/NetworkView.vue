@@ -6,6 +6,13 @@ import api from '@/api'
 const appStore = useAppStore()
 const authStore = useAuthStore()
 
+// v604: 本地时区今天日期（避免 UTC 跨天）
+function todayLocal() {
+  const n = new Date()
+  const p = x => String(x).padStart(2, '0')
+  return `${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}`
+}
+
 const isSuperAdmin = computed(() => authStore.isSuperAdmin())
 const canCreate = computed(() => isSuperAdmin.value || authStore.hasPermission('network:create'))
 const canUpdate = computed(() => isSuperAdmin.value || authStore.hasPermission('network:update'))
@@ -398,7 +405,7 @@ async function exportRecords() {
     const res = await api.get(`/api/records/export?${params.toString()}`, { responseType: 'blob' })
     const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob), a = document.createElement('a')
-    a.href = url; a.download = `网络管理_${new Date().toISOString().split('T')[0]}.csv`; a.click()
+    a.href = url; a.download = `网络管理_${todayLocal()}.csv`; a.click()
     URL.revokeObjectURL(url)
     appStore.showToast('导出成功', 'success')
   } catch (e) { appStore.showToast('导出失败', 'error') }

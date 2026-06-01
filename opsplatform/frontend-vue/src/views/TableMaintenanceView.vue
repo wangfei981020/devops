@@ -110,6 +110,13 @@ function translateGameType(gameType) {
   return gameType
 }
 
+// v604: 本地时区今天日期（避免 toISOString 在凌晨 UTC 早 8 小时跨天）
+function todayLocal() {
+  const n = new Date()
+  const p = x => String(x).padStart(2, '0')
+  return `${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}`
+}
+
 const columns = computed(() => [
   { key: 'checkbox', title: '', width: 40, type: 'checkbox' },
   { key: 'date', title: t('tableMaintenance.columns.date'), width: 110, type: 'date' },
@@ -1045,7 +1052,7 @@ function exportStatsToExcel() {
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
   const link = document.createElement('a')
   link.href = URL.createObjectURL(blob)
-  link.download = `${t('tableMaintenance.statsPanel.csvFileName')}_${new Date().toISOString().slice(0, 10)}.csv`
+  link.download = `${t('tableMaintenance.statsPanel.csvFileName')}_${todayLocal()}.csv`
   link.click()
   URL.revokeObjectURL(link.href)
   
@@ -1106,7 +1113,7 @@ function getEmptyForm() {
     } else if (col.type === 'multi-select-projects' || col.type === 'multi-select-sites' || col.type === 'multi-select-tables' || col.type === 'multi-select-game-types') {
       form[col.key] = []
     } else if (col.type === 'date') {
-      form[col.key] = new Date().toISOString().slice(0, 10)
+      form[col.key] = todayLocal()
     } else if (col.type === 'datetime') {
       // 开始时间自动填充当前时间
       if (col.key === 'start_time') {
@@ -1431,7 +1438,7 @@ async function pasteRecords() {
         if (['checkbox', 'actions', 'created_by'].includes(col.key)) return
         if (col.type === 'date') {
           // 日期使用当前日期
-          data[col.key] = new Date().toISOString().slice(0, 10)
+          data[col.key] = todayLocal()
         } else if (col.type === 'attachments') {
           // 附件列（截图等）也要复制
           data[col.key] = copiedRecord.value[col.key] || []
@@ -2435,7 +2442,7 @@ async function exportToExcel() {
   XLSX.utils.book_append_sheet(wb, ws, t('tableMaintenance.statsPanel.csvFileName'))
 
   // 导出为xlsx文件
-  XLSX.writeFile(wb, `${t('tableMaintenance.statsPanel.csvFileName')}_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  XLSX.writeFile(wb, `${t('tableMaintenance.statsPanel.csvFileName')}_${todayLocal()}.xlsx`)
 
   appStore.showToast(t('tableMaintenance.actions.exportSuccess'), 'success')
 }

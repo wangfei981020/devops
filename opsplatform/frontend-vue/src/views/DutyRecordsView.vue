@@ -538,30 +538,36 @@ function getPieOffset(idx) {
   return offset
 }
 
+// v604: 本地时区日期 YYYY-MM-DD（避免 toISOString 在凌晨 UTC 跨天，下同）
+function fmtDateLocal(d) {
+  const p = x => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 // 时间范围预设
 function setTimeRange(preset) {
   timeRangePreset.value = preset
   const now = new Date()
   let start = '', end = ''
-  
+
   switch (preset) {
     case 'today':
-      start = end = now.toISOString().split('T')[0]
+      start = end = fmtDateLocal(now)
       break
     case 'week':
       const weekStart = new Date(now)
       weekStart.setDate(now.getDate() - now.getDay())
-      start = weekStart.toISOString().split('T')[0]
-      end = now.toISOString().split('T')[0]
+      start = fmtDateLocal(weekStart)
+      end = fmtDateLocal(now)
       break
     case 'month':
-      start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
-      end = now.toISOString().split('T')[0]
+      start = fmtDateLocal(new Date(now.getFullYear(), now.getMonth(), 1))
+      end = fmtDateLocal(now)
       break
     case 'quarter':
       const quarterMonth = Math.floor(now.getMonth() / 3) * 3
-      start = new Date(now.getFullYear(), quarterMonth, 1).toISOString().split('T')[0]
-      end = now.toISOString().split('T')[0]
+      start = fmtDateLocal(new Date(now.getFullYear(), quarterMonth, 1))
+      end = fmtDateLocal(now)
       break
     case 'all':
       start = ''
@@ -1393,7 +1399,7 @@ async function exportRecords() {
   XLSX.utils.book_append_sheet(wb, ws, '值班记录')
   
   // 导出为xlsx文件
-  XLSX.writeFile(wb, `值班记录_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  XLSX.writeFile(wb, `值班记录_${fmtDateLocal(new Date())}.xlsx`)
 
   appStore.showToast('导出成功', 'success')
 }

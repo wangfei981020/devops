@@ -518,6 +518,13 @@ async function batchAction(action) {
   }
 }
 
+// v604: 本地时区今天日期（避免 UTC 跨天）
+function todayLocal() {
+  const n = new Date()
+  const p = x => String(x).padStart(2, '0')
+  return `${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}`
+}
+
 // 导出
 async function exportDomains() {
   try {
@@ -525,7 +532,7 @@ async function exportDomains() {
     const url = window.URL.createObjectURL(new Blob([res.data]))
     const link = document.createElement('a')
     link.href = url
-    link.setAttribute('download', `domains_${new Date().toISOString().slice(0, 10)}.xlsx`)
+    link.setAttribute('download', `domains_${todayLocal()}.xlsx`)
     document.body.appendChild(link)
     link.click()
     link.remove()

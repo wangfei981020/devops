@@ -87,8 +87,15 @@ const targetTypes = computed(() => {
   return Array.from(types).sort()
 })
 
+// v604: 本地时区今天日期（避免 UTC 跨天）
+function todayLocal() {
+  const n = new Date()
+  const p = x => String(x).padStart(2, '0')
+  return `${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}`
+}
+
 const stats = computed(() => {
-  const today = new Date().toISOString().split('T')[0]
+  const today = todayLocal()
   const todayLogs = auditLogs.value.filter(l => l.created_at?.startsWith(today))
   const errorLogs = auditLogs.value.filter(l => l.status_code >= 400)
   const avgDuration = auditLogs.value.length > 0 
@@ -333,7 +340,7 @@ async function exportLogs() {
   const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' })
   const link = document.createElement('a')
   link.href = URL.createObjectURL(blob)
-  link.download = `audit-logs-${new Date().toISOString().split('T')[0]}.csv`
+  link.download = `audit-logs-${todayLocal()}.csv`
   link.click()
   appStore.showToast('导出成功', 'success')
 }
