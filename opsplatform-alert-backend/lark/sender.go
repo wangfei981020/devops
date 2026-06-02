@@ -94,6 +94,15 @@ func (s *Sender) SendCard(title, content string, severity string, atUsers []mode
 	case "recovery":
 		headerTemplate = "green"
 		titlePrefix = "✅"
+	case "report":
+		headerTemplate = "green"
+		titlePrefix = ""
+	}
+
+	// Title with optional prefix (no leading space when prefix is empty)
+	titleContent := title
+	if titlePrefix != "" {
+		titleContent = titlePrefix + " " + title
 	}
 
 	card := map[string]interface{}{
@@ -102,7 +111,7 @@ func (s *Sender) SendCard(title, content string, severity string, atUsers []mode
 			"header": map[string]interface{}{
 				"title": map[string]interface{}{
 					"tag":     "plain_text",
-					"content": fmt.Sprintf("%s %s", titlePrefix, title),
+					"content": titleContent,
 				},
 				"template": headerTemplate,
 			},

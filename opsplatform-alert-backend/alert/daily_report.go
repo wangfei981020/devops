@@ -186,7 +186,7 @@ func sendReportCards(rule *models.AlertRule, statsList []domainStats, dateStr, s
 	sent := 0
 	if mode == "merged" {
 		content := renderReportMerged(rule.ReportTemplate, statsList, dateStr, sendTimeStr)
-		if resp, err := sender.SendCard(title, content, "info", atUsers, atAll); err != nil {
+		if resp, err := sender.SendCard(title, content, "report", atUsers, atAll); err != nil {
 			log.Printf("[Report] Rule %d: send merged failed: %v", rule.ID, err)
 			return sent, err
 		} else {
@@ -196,7 +196,7 @@ func sendReportCards(rule *models.AlertRule, statsList []domainStats, dateStr, s
 	} else {
 		for _, s := range statsList {
 			content := renderReportSeparate(rule.ReportTemplate, s)
-			if resp, err := sender.SendCard(title, content, "info", atUsers, atAll); err != nil {
+			if resp, err := sender.SendCard(title, content, "report", atUsers, atAll); err != nil {
 				log.Printf("[Report] Rule %d: send separate (%s) failed: %v", rule.ID, s.Domain, err)
 			} else {
 				log.Printf("[Report] Rule %d: separate report for %s sent, resp=%s", rule.ID, s.Domain, resp)
