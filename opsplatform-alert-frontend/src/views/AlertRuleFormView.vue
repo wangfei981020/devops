@@ -997,6 +997,8 @@ async function muteContainer(containerName, event) {
 }
 
 async function handleTestSend() {
+  syncPromConfig()
+  syncRouteConfig()
   const ds = form.value.data_source_type || 'es'
   if (ds === 'es' && !form.value.es_connection_id) { toast.error('请先选择 ES 连接'); return }
   if (ds === 'loki' && !form.value.loki_connection_id) { toast.error('请先选择 Loki 连接'); return }
@@ -1028,6 +1030,8 @@ async function handleTestSend() {
 }
 
 async function handlePreview() {
+  syncPromConfig()
+  syncRouteConfig()
   const ds = form.value.data_source_type || 'es'
   if (ds === 'es' && !form.value.es_connection_id) {
     toast.error('请先选择 ES 连接')

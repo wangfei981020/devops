@@ -745,16 +745,45 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Performance-alert preview: simulate realtime threshold gating so the
+	// preview reflects what would actually alert. Read-only: unlike the engine's
+	// processPerformanceHit, this writes nothing to Redis and does NOT apply the
+	// "one alert per tid per day" dedup (preview should show all would-alert hits).
+	perfPreview := req.RealtimeEnabled == 1
+
 	var hits []PreviewHit
 	for _, hit := range rawHits {
 		vars := previewExtractFields(hit, req.ExtractFields)
+
+		if perfPreview {
+			lineStr := ""
+			if v, ok := hit["line"].(string); ok {
+				lineStr = v
+			} else if v, ok := hit["message"].(string); ok {
+				lineStr = v
+			}
+			// Mirror engine: exactly one http(s):// URL per log line
+			if strings.Count(lineStr, "http://")+strings.Count(lineStr, "https://") != 1 {
+				continue
+			}
+			cost, err := strconv.Atoi(strings.TrimSpace(fmt.Sprintf("%v", vars["cost_ms"])))
+			if err != nil || cost <= 0 {
+				continue
+			}
+			if req.ThresholdMs > 0 && cost <= req.ThresholdMs {
+				continue // under threshold, would not alert
+			}
+			vars["threshold_ms"] = req.ThresholdMs
+			vars["cost_ms"] = cost
+		}
+
 		rendered := previewRenderTemplate(req.MessageTemplate, vars)
 		hits = append(hits, PreviewHit{Raw: hit, Vars: vars, Rendered: rendered})
 	}
 
 	resp := map[string]interface{}{
 		"total":         total,
-		"hit_count":     len(rawHits),
+		"hit_count":     len(hits),
 		"hits":          hits,
 		"query":         queryStr,
 		"source_name":   sourceName,
