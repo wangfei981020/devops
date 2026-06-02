@@ -475,6 +475,51 @@ func HandleRunAlertRule(w http.ResponseWriter, r *http.Request) {
 	jsonSuccess(w, map[string]string{"message": "规则已触发执行"})
 }
 
+// reportDay resolves the target day (YYYYMMDD) from the request query:
+// "today" (default), "yesterday", or an explicit YYYYMMDD value.
+func reportDay(r *http.Request) string {
+	switch d := r.URL.Query().Get("date"); d {
+	case "yesterday":
+		return time.Now().AddDate(0, 0, -1).Format("20060102")
+	case "", "today":
+		return time.Now().Format("20060102")
+	default:
+		return d
+	}
+}
+
+// HandlePreviewReport renders the daily performance report card(s) for a day without sending.
+func HandlePreviewReport(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.Atoi(mux.Vars(r)["id"])
+	day := reportDay(r)
+	cards, domainCount, err := alert.BuildDailyReportCards(id, day)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "预览失败: "+err.Error())
+		return
+	}
+	jsonSuccess(w, map[string]interface{}{
+		"day":          day,
+		"domain_count": domainCount,
+		"cards":        cards,
+	})
+}
+
+// HandleSendReport aggregates a day's stats and sends the report to Lark immediately.
+func HandleSendReport(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.Atoi(mux.Vars(r)["id"])
+	day := reportDay(r)
+	sent, domainCount, err := alert.SendDailyReportNow(id, day)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "发送失败: "+err.Error())
+		return
+	}
+	jsonSuccess(w, map[string]interface{}{
+		"day":          day,
+		"domain_count": domainCount,
+		"sent":         sent,
+	})
+}
+
 // HandlePreviewAlertRule executes query and renders template without sending to Lark
 func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 	var req models.CreateAlertRuleReq

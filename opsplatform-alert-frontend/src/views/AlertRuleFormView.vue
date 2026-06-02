@@ -476,12 +476,37 @@
           <button type="button" class="btn btn-warning" @click="handleTestSend" :disabled="testSending">
             {{ testSending ? '发送中...' : '测试发送到 Lark' }}
           </button>
+          <button v-if="isEdit && form.report_enabled === 1" type="button" class="btn btn-outline" @click="handlePreviewReport" :disabled="reportPreviewing">
+            {{ reportPreviewing ? '生成中...' : '预览日报' }}
+          </button>
+          <button v-if="isEdit && form.report_enabled === 1" type="button" class="btn btn-warning" @click="handleSendReport" :disabled="reportSending">
+            {{ reportSending ? '发送中...' : '立即发送日报' }}
+          </button>
           <router-link to="/alert-rules" class="btn btn-outline">取消</router-link>
           <button type="submit" class="btn btn-primary" :disabled="submitting">
             {{ submitting ? '保存中...' : (isEdit ? '更新规则' : '创建规则') }}
           </button>
         </div>
       </form>
+    </div>
+
+    <!-- 日报预览 Modal -->
+    <div v-if="reportPreviewData" class="modal-overlay" @click.self="reportPreviewData = null">
+      <div class="modal" style="min-width: 600px; max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column;">
+        <div class="modal-header" style="position: sticky; top: 0; background: var(--bg-card, #fff); z-index: 10; flex-shrink: 0;">
+          <div class="modal-title">日报预览（{{ reportPreviewData.day }} · {{ reportPreviewData.domain_count }} 个域名）</div>
+          <button class="btn-icon" @click="reportPreviewData = null"><X :size="18" /></button>
+        </div>
+        <div style="overflow-y: auto; padding: 4px;">
+          <div v-if="!reportPreviewData.cards || reportPreviewData.cards.length === 0" class="card" style="padding: 16px; color: var(--text-secondary);">
+            该日暂无累计数据。日报需规则先运行并累计当日交易（cost_ms / domain 提取成功）后才有内容。
+          </div>
+          <div v-for="(c, idx) in reportPreviewData.cards" :key="idx" class="card" style="margin-bottom: 8px; padding: 12px;">
+            <div style="font-weight: 600; margin-bottom: 8px;">{{ c.title }}<span v-if="c.domain" class="text-secondary" style="font-weight: 400;"> — {{ c.domain }}</span></div>
+            <pre style="white-space: pre-wrap; font-family: inherit; margin: 0; font-size: 13px;">{{ c.content }}</pre>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Preview Modal -->
@@ -630,6 +655,9 @@ const dialog = useConfirm()
 const previewing = ref(false)
 const previewData = ref(null)
 const testSending = ref(false)
+const reportPreviewing = ref(false)
+const reportSending = ref(false)
+const reportPreviewData = ref(null)
 
 // Mutes
 const mutes = ref([])
@@ -1053,6 +1081,45 @@ async function handlePreview() {
     toast.error('预览失败: ' + (e.response?.data?.message || e.message))
   }
   previewing.value = false
+}
+
+async function handlePreviewReport() {
+  reportPreviewing.value = true
+  try {
+    const res = await api.post(`/alert-rules/${route.params.id}/preview-report`)
+    if (res.code === 0) {
+      reportPreviewData.value = res.data
+      if (!res.data.cards || res.data.cards.length === 0) {
+        toast.info(`${res.data.day} 暂无累计数据（需规则已运行并累计当日交易）`)
+      }
+    } else {
+      toast.error(res.message || '预览日报失败')
+    }
+  } catch (e) {
+    toast.error('预览日报失败: ' + (e.response?.data?.message || e.message))
+  }
+  reportPreviewing.value = false
+}
+
+async function handleSendReport() {
+  const ok = await dialog.confirm({ title: '立即发送日报', message: '将按当日累计数据立即发送性能日报到 Lark，确认？' })
+  if (!ok) return
+  reportSending.value = true
+  try {
+    const res = await api.post(`/alert-rules/${route.params.id}/send-report`)
+    if (res.code === 0) {
+      if (res.data.sent > 0) {
+        toast.success(`已发送 ${res.data.sent} 条日报（${res.data.domain_count} 个域名，${res.data.day}）`)
+      } else {
+        toast.info(`${res.data.day} 暂无累计数据，未发送`)
+      }
+    } else {
+      toast.error(res.message || '发送日报失败')
+    }
+  } catch (e) {
+    toast.error('发送日报失败: ' + (e.response?.data?.message || e.message))
+  }
+  reportSending.value = false
 }
 
 function parseAtNames(atUsersStr) {

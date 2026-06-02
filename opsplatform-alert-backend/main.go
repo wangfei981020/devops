@@ -107,6 +107,8 @@ func main() {
 	protected.HandleFunc("/alert-rules/{id}", handlers.HandleDeleteAlertRule).Methods("DELETE")
 	protected.HandleFunc("/alert-rules/{id}/toggle", handlers.HandleToggleAlertRule).Methods("PUT")
 	protected.HandleFunc("/alert-rules/{id}/run", handlers.HandleRunAlertRule).Methods("POST")
+	protected.HandleFunc("/alert-rules/{id}/preview-report", handlers.HandlePreviewReport).Methods("POST")
+	protected.HandleFunc("/alert-rules/{id}/send-report", handlers.HandleSendReport).Methods("POST")
 	protected.HandleFunc("/alert-rules/preview", handlers.HandlePreviewAlertRule).Methods("POST")
 	protected.HandleFunc("/alert-rules/test-send", handlers.HandleTestSendAlertRule).Methods("POST")
 	protected.HandleFunc("/alert-rules/export", handlers.HandleExportAlertRules).Methods("POST")

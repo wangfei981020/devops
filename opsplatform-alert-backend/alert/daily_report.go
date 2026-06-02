@@ -98,35 +98,31 @@ type domainStats struct {
 	SendTime string `json:"send_time"`
 }
 
-// sendDailyReport aggregates yesterday's per-domain performance stats and pushes Lark card(s).
-// Triggered by cron registered in addReportJob.
-func sendDailyReport(ruleID int) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	rule, err := getRuleByID(ruleID)
-	if err != nil || rule.Status != 1 || rule.ReportEnabled != 1 {
-		log.Printf("[Report] Rule %d: not eligible (err=%v status=%d report_enabled=%d)", ruleID, err, rule.Status, rule.ReportEnabled)
-		return
+// dayToDateStr converts a "20060102" day key to "2006-01-02".
+func dayToDateStr(day string) string {
+	if t, err := time.Parse("20060102", day); err == nil {
+		return t.Format("2006-01-02")
 	}
+	return day
+}
 
-	// Yesterday (report is for the day before now)
-	yesterday := time.Now().AddDate(0, 0, -1).Format("20060102")
-	dateStr := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+// aggregateDailyStats reads accumulated per-domain cost_ms for the given day (YYYYMMDD)
+// from Redis and returns aggregated stats (count/min/avg/max) plus the raw domain list
+// (for cleanup). Read-only: it does not modify Redis.
+func aggregateDailyStats(ctx context.Context, ruleID int, day string) ([]domainStats, []string) {
+	dateStr := dayToDateStr(day)
 	sendTimeStr := time.Now().Format("2006-01-02 15:04:05")
 
-	domainsKey := fmt.Sprintf("alert:daily_stats_domains:%d:%s", rule.ID, yesterday)
+	domainsKey := fmt.Sprintf("alert:daily_stats_domains:%d:%s", ruleID, day)
 	domains, err := database.RDB.SMembers(ctx, domainsKey).Result()
 	if err != nil || len(domains) == 0 {
-		log.Printf("[Report] Rule %d: no domains for %s (err=%v)", rule.ID, yesterday, err)
-		return
+		return nil, domains
 	}
 	sort.Strings(domains)
 
-	// Aggregate per domain
 	statsList := make([]domainStats, 0, len(domains))
 	for _, domain := range domains {
-		statsKey := fmt.Sprintf("alert:daily_stats:%d:%s:%s", rule.ID, yesterday, domain)
+		statsKey := fmt.Sprintf("alert:daily_stats:%d:%s:%s", ruleID, day, domain)
 		values, err := database.RDB.HVals(ctx, statsKey).Result()
 		if err != nil || len(values) == 0 {
 			continue
@@ -165,17 +161,14 @@ func sendDailyReport(ruleID int) {
 			SendTime: sendTimeStr,
 		})
 	}
+	return statsList, domains
+}
 
-	if len(statsList) == 0 {
-		log.Printf("[Report] Rule %d: all domain buckets empty, nothing to send", rule.ID)
-		cleanupReportKeys(ctx, rule.ID, yesterday, domains)
-		return
-	}
-
+// sendReportCards sends aggregated report card(s) to Lark (separate or merged). Returns sent count.
+func sendReportCards(rule *models.AlertRule, statsList []domainStats, dateStr, sendTimeStr string) (int, error) {
 	larkCfg, err := getLarkConfigByID(rule.LarkConfigID)
 	if err != nil {
-		log.Printf("[Report] Rule %d: lark config error: %v", rule.ID, err)
-		return
+		return 0, fmt.Errorf("lark config error: %w", err)
 	}
 	sender := lark.NewSender(*larkCfg)
 	atUsers := resolveAtUsers(rule.AtUsers)
@@ -190,25 +183,117 @@ func sendDailyReport(ruleID int) {
 		mode = "separate"
 	}
 
+	sent := 0
 	if mode == "merged" {
 		content := renderReportMerged(rule.ReportTemplate, statsList, dateStr, sendTimeStr)
 		if resp, err := sender.SendCard(title, content, "info", atUsers, atAll); err != nil {
 			log.Printf("[Report] Rule %d: send merged failed: %v", rule.ID, err)
+			return sent, err
 		} else {
 			log.Printf("[Report] Rule %d: merged report sent, resp=%s", rule.ID, resp)
+			sent++
 		}
 	} else {
-		// separate: one card per domain
 		for _, s := range statsList {
 			content := renderReportSeparate(rule.ReportTemplate, s)
 			if resp, err := sender.SendCard(title, content, "info", atUsers, atAll); err != nil {
 				log.Printf("[Report] Rule %d: send separate (%s) failed: %v", rule.ID, s.Domain, err)
 			} else {
 				log.Printf("[Report] Rule %d: separate report for %s sent, resp=%s", rule.ID, s.Domain, resp)
+				sent++
 			}
 			time.Sleep(300 * time.Millisecond)
 		}
 	}
+	return sent, nil
+}
+
+// ReportCard is a rendered daily-report card (for preview, not sent).
+type ReportCard struct {
+	Title   string `json:"title"`
+	Content string `json:"content"`
+	Domain  string `json:"domain,omitempty"`
+}
+
+// BuildDailyReportCards aggregates the given day (YYYYMMDD) and renders the card(s)
+// WITHOUT sending. Used by the preview endpoint. Read-only.
+func BuildDailyReportCards(ruleID int, day string) ([]ReportCard, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	rule, err := getRuleByID(ruleID)
+	if err != nil {
+		return nil, 0, err
+	}
+	statsList, _ := aggregateDailyStats(ctx, ruleID, day)
+
+	dateStr := dayToDateStr(day)
+	sendTimeStr := time.Now().Format("2006-01-02 15:04:05")
+	title := rule.ReportTitle
+	if title == "" {
+		title = "每日性能报告"
+	}
+	mode := rule.ReportMode
+	if mode == "" {
+		mode = "separate"
+	}
+
+	cards := []ReportCard{}
+	if mode == "merged" {
+		cards = append(cards, ReportCard{Title: title, Content: renderReportMerged(rule.ReportTemplate, statsList, dateStr, sendTimeStr)})
+	} else {
+		for _, s := range statsList {
+			cards = append(cards, ReportCard{Title: title, Content: renderReportSeparate(rule.ReportTemplate, s), Domain: s.Domain})
+		}
+	}
+	return cards, len(statsList), nil
+}
+
+// SendDailyReportNow aggregates the given day (YYYYMMDD) and sends the report immediately.
+// Used by the manual "send now" endpoint. Does NOT clean up Redis keys, so the scheduled
+// report can still run normally afterwards.
+func SendDailyReportNow(ruleID int, day string) (int, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	rule, err := getRuleByID(ruleID)
+	if err != nil {
+		return 0, 0, err
+	}
+	statsList, _ := aggregateDailyStats(ctx, ruleID, day)
+	if len(statsList) == 0 {
+		return 0, 0, nil
+	}
+	dateStr := dayToDateStr(day)
+	sendTimeStr := time.Now().Format("2006-01-02 15:04:05")
+	sent, err := sendReportCards(rule, statsList, dateStr, sendTimeStr)
+	return sent, len(statsList), err
+}
+
+// sendDailyReport aggregates yesterday's per-domain performance stats and pushes Lark card(s).
+// Triggered by cron registered in addReportJob.
+func sendDailyReport(ruleID int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	rule, err := getRuleByID(ruleID)
+	if err != nil || rule.Status != 1 || rule.ReportEnabled != 1 {
+		log.Printf("[Report] Rule %d: not eligible (err=%v status=%d report_enabled=%d)", ruleID, err, rule.Status, rule.ReportEnabled)
+		return
+	}
+
+	// Report is for the day before now
+	yesterday := time.Now().AddDate(0, 0, -1).Format("20060102")
+	statsList, domains := aggregateDailyStats(ctx, ruleID, yesterday)
+	if len(statsList) == 0 {
+		log.Printf("[Report] Rule %d: nothing to send for %s", rule.ID, yesterday)
+		cleanupReportKeys(ctx, rule.ID, yesterday, domains)
+		return
+	}
+
+	dateStr := dayToDateStr(yesterday)
+	sendTimeStr := time.Now().Format("2006-01-02 15:04:05")
+	sendReportCards(rule, statsList, dateStr, sendTimeStr)
 
 	cleanupReportKeys(ctx, rule.ID, yesterday, domains)
 }
