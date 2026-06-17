@@ -1,0 +1,188 @@
+package handlers
+
+import (
+	"database/sql"
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+)
+
+type DomainHandler struct {
+	DB *sql.DB
+}
+
+func NewDomainHandler(db *sql.DB) *DomainHandler { return &DomainHandler{DB: db} }
+
+func (h *DomainHandler) Register(r *gin.RouterGroup) {
+	r.GET("/domains", h.List)
+	r.POST("/domains", h.Create)
+	r.PUT("/domains/:ciid", h.Update)
+	r.DELETE("/domains/:ciid", h.Delete)
+	r.POST("/domains/sync", h.Sync)
+	r.POST("/domains/refresh-all", h.RefreshAll)
+	r.POST("/domains/:ciid/refresh", h.Refresh)
+}
+
+type domainOut struct {
+	CIID          int64  `json:"ci_id"`
+	Name          string `json:"name"`
+	Project       string `json:"project"`
+	Env           string `json:"env"`
+	Module        string `json:"module"`
+	Owner         string `json:"owner"`
+	Status        string `json:"status"`
+	RegistrarID   *int   `json:"registrar_id"`
+	RegistrarName string `json:"registrar_name"`
+	DNSProvider   string `json:"dns_provider"`
+	ExpiryAt      string `json:"expiry_at"`
+	CertExpiryAt  string `json:"cert_expiry_at"`
+	CertCheckMsg  string `json:"cert_check_msg"`
+	CertCount     int    `json:"cert_count"`
+}
+
+func (h *DomainHandler) List(c *gin.Context) {
+	rows, err := h.DB.Query(`
+		SELECT c.id, c.name, c.project, c.env, c.module, c.owner, c.status,
+		       d.registrar_id, COALESCE(reg.name,''), d.dns_provider, d.expiry_at,
+		       d.cert_expiry_at, d.cert_check_msg,
+		       (SELECT COUNT(*) FROM ci_relations r WHERE r.dst_ci_id=c.id AND r.rel_type='protects')
+		FROM cis c
+		JOIN domains d ON d.ci_id=c.id
+		LEFT JOIN registrars reg ON reg.id=d.registrar_id
+		WHERE c.type='domain'
+		ORDER BY c.id DESC`)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	out := []domainOut{}
+	for rows.Next() {
+		var o domainOut
+		var regID sql.NullInt64
+		var exp, certExp sql.NullTime
+		if err := rows.Scan(&o.CIID, &o.Name, &o.Project, &o.Env, &o.Module, &o.Owner, &o.Status,
+			&regID, &o.RegistrarName, &o.DNSProvider, &exp, &certExp, &o.CertCheckMsg, &o.CertCount); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		if regID.Valid {
+			v := int(regID.Int64)
+			o.RegistrarID = &v
+		}
+		if exp.Valid {
+			o.ExpiryAt = exp.Time.Format("2006-01-02")
+		}
+		if certExp.Valid {
+			o.CertExpiryAt = certExp.Time.Format("2006-01-02")
+		}
+		out = append(out, o)
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+type domainIn struct {
+	Name        string            `json:"name"`
+	Project     string            `json:"project"`
+	Env         string            `json:"env"`
+	Module      string            `json:"module"`
+	Owner       string            `json:"owner"`
+	Status      string            `json:"status"`
+	RegistrarID *int              `json:"registrar_id"`
+	DNSProvider string            `json:"dns_provider"`
+	ExpiryAt    string            `json:"expiry_at"` // "2006-01-02" 或空
+	Labels      map[string]string `json:"labels"`
+}
+
+func (h *DomainHandler) Create(c *gin.Context) {
+	var in domainIn
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if in.Status == "" {
+		in.Status = "active"
+	}
+	tx, err := h.DB.Begin()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	res, err := tx.Exec(`INSERT INTO cis (type, name, project, env, module, owner, status) VALUES ('domain', ?, ?, ?, ?, ?, ?)`,
+		in.Name, in.Project, in.Env, in.Module, in.Owner, in.Status)
+	if err != nil {
+		tx.Rollback()
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	ciID, _ := res.LastInsertId()
+	if _, err := tx.Exec(`INSERT INTO domains (ci_id, registrar_id, dns_provider, expiry_at) VALUES (?, ?, ?, NULLIF(?, ''))`,
+		ciID, nullableInt(in.RegistrarID), in.DNSProvider, in.ExpiryAt); err != nil {
+		tx.Rollback()
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	replaceLabelsDB(h.DB, ciID, in.Labels)
+	WriteAudit(h.DB, c, "create_domain", in.Name)
+	c.JSON(201, gin.H{"ci_id": ciID})
+}
+
+func (h *DomainHandler) Update(c *gin.Context) {
+	ciID := c.Param("ciid")
+	var in domainIn
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if _, err := h.DB.Exec(`UPDATE cis SET name=?, project=?, env=?, module=?, owner=?, status=? WHERE id=? AND type='domain'`,
+		in.Name, in.Project, in.Env, in.Module, in.Owner, in.Status, ciID); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if _, err := h.DB.Exec(`UPDATE domains SET registrar_id=?, dns_provider=?, expiry_at=NULLIF(?, '') WHERE ci_id=?`,
+		nullableInt(in.RegistrarID), in.DNSProvider, in.ExpiryAt, ciID); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if in.Labels != nil {
+		if id, err := parseID(ciID); err == nil {
+			replaceLabelsDB(h.DB, id, in.Labels)
+		}
+	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
+func (h *DomainHandler) Delete(c *gin.Context) {
+	ciID := c.Param("ciid")
+	tx, _ := h.DB.Begin()
+	for _, stmt := range []string{
+		`DELETE FROM ci_labels WHERE ci_id=?`,
+		`DELETE FROM domains WHERE ci_id=?`,
+		`DELETE FROM cis WHERE id=? AND type='domain'`,
+	} {
+		if _, err := tx.Exec(stmt, ciID); err != nil {
+			tx.Rollback()
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	_, _ = tx.Exec(`DELETE FROM ci_relations WHERE src_ci_id=? OR dst_ci_id=?`, ciID, ciID)
+	if err := tx.Commit(); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	WriteAudit(h.DB, c, "delete_domain", ciID)
+	c.JSON(200, gin.H{"ok": true})
+}
+
+// Sync 从注册商同步域名：第一期先支持手动录入，自动同步按 provider 接入（迭代）。
+func (h *DomainHandler) Sync(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"synced": 0,
+		"msg":    "自动同步需按注册商 provider 接入，当前请用手动录入；凭据已可配置供证书签发使用",
+	})
+}

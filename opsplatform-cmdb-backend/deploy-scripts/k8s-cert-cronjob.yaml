@@ -1,0 +1,61 @@
+# CMDB 证书自动拉取（K8s 版）——CronJob 每天拉最新证书写入 Secret，工作负载挂载该 Secret。
+# 把 <证书CI_ID> / <deploy_token> / 目标 Secret 名 改成你的。需要给 SA 授权 patch secrets。
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cert-puller
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cert-puller
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cert-puller
+  namespace: default
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: cert-puller }
+subjects:
+  - kind: ServiceAccount
+    name: cert-puller
+    namespace: default
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pull-cert-example
+  namespace: default
+spec:
+  schedule: "0 3 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: cert-puller
+          restartPolicy: OnFailure
+          containers:
+            - name: puller
+              image: bitnami/kubectl:latest
+              env:
+                - { name: CMDB_URL, value: "http://opsplatform-cmdb-backend.opsplatform.svc.cluster.local:8080" }
+                - { name: CERT_ID, value: "<证书CI_ID>" }
+                - { name: TOKEN, value: "<deploy_token>" }
+                - { name: SECRET_NAME, value: "my-tls" }
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  API="$CMDB_URL/api/certs/$CERT_ID/bundle?token=$TOKEN"
+                  curl -fsS "$API&part=fullchain" -o /tmp/tls.crt
+                  curl -fsS "$API&part=key"       -o /tmp/tls.key
+                  kubectl create secret tls "$SECRET_NAME" \
+                    --cert=/tmp/tls.crt --key=/tmp/tls.key \
+                    --dry-run=client -o yaml | kubectl apply -f -
+                  echo "secret $SECRET_NAME updated"

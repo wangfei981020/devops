@@ -1,0 +1,45 @@
+# 注：Secret 在 k8s-secret.yaml（不进 git），先 apply 那个再 apply 本文件
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsplatform-cmdb-backend
+  namespace: opsplatform
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: opsplatform-cmdb-backend }
+  template:
+    metadata:
+      labels: { app: opsplatform-cmdb-backend }
+    spec:
+      containers:
+        - name: backend
+          image: localhost:8070/opsplatform/opsplatform-cmdb-backend:v2
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef: { name: opsplatform-cmdb-secret }
+          ports:
+            - containerPort: 8080
+            - containerPort: 8088
+          readinessProbe:
+            httpGet: { path: /ready, port: 8088 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsplatform-cmdb-backend
+  namespace: opsplatform
+spec:
+  selector: { app: opsplatform-cmdb-backend }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: metrics
+      port: 8088
+      targetPort: 8088

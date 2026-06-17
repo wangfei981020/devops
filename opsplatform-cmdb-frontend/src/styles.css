@@ -1,0 +1,7 @@
+* { box-sizing: border-box; }
+html, body, #app { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+.page { padding: 18px 20px; }
+.mono { font-family: Consolas, Menlo, monospace; }
+.page-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.page-title { font-size: 16px; font-weight: 600; color: #1f2430; }
+.muted { color: #909399; font-size: 12px; }
