@@ -64,7 +64,7 @@ func (h *SyncHandler) Sync(c *gin.Context) {
 		return
 	}
 
-	syncedDomains, syncedRecords := 0, 0
+	syncedDomains, syncedRecords, importedRecords := 0, 0, 0
 	for _, d := range domains {
 		ciID, err := h.upsertDomainCI(d.Name, id, d.ExpiresAt)
 		if err != nil {
@@ -78,7 +78,7 @@ func (h *SyncHandler) Sync(c *gin.Context) {
 			c.JSON(http.StatusTooManyRequests, gin.H{
 				"error": rle.Error(), "rate_limit": rle.Info,
 				"synced_domains": syncedDomains, "synced_records": syncedRecords,
-				"partial": true,
+				"imported_records": importedRecords, "partial": true,
 			})
 			return
 		}
@@ -87,9 +87,10 @@ func (h *SyncHandler) Sync(c *gin.Context) {
 		}
 		h.refreshDNSRecords(ciID, id, recs)
 		syncedRecords += len(recs)
+		importedRecords += h.importBusinessRecords(ciID, recs)
 	}
 	WriteAudit(h.DB, c, "sync_source", c.Param("id"))
-	c.JSON(http.StatusOK, gin.H{"synced_domains": syncedDomains, "synced_records": syncedRecords})
+	c.JSON(http.StatusOK, gin.H{"synced_domains": syncedDomains, "synced_records": syncedRecords, "imported_records": importedRecords})
 }
 
 // DNSRecords 读某域名的厂商原始 DNS 记录（来自同步缓存 dns_records）。
@@ -151,6 +152,53 @@ func (h *SyncHandler) upsertDomainCI(name string, sourceID int, expires *time.Ti
 	_, _ = h.DB.Exec(`INSERT INTO domains (ci_id, registrar_id, expiry_at) VALUES (?, ?, ?)
 		ON DUPLICATE KEY UPDATE registrar_id=VALUES(registrar_id), expiry_at=VALUES(expiry_at)`, ciID, sourceID, exp)
 	return ciID, nil
+}
+
+// importBusinessRecords 把厂商的 A/CNAME 自动导入业务台账(domain_records)。
+// 按 (host, record_type) 聚合：A 多 IP 逗号拼接、CNAME 取值。已存在的只刷厂商字段(源站IP/回源CNAME)，
+// 保留人工填的项目/环境/模块/CDN/证书；不存在的新建。受保护(_acme-challenge/NS)与非 A/CNAME 跳过。
+// 返回新建条数。
+func (h *SyncHandler) importBusinessRecords(ciID int64, recs []dnsource.DNSRecord) int {
+	type biz struct{ host, rtype, originIP, cname string }
+	agg := map[string]*biz{}
+	order := []string{}
+	for _, r := range recs {
+		if (r.Type != "A" && r.Type != "CNAME") || isProtectedRecord(r) {
+			continue
+		}
+		key := r.Name + "|" + r.Type
+		b := agg[key]
+		if b == nil {
+			b = &biz{host: r.Name, rtype: r.Type}
+			agg[key] = b
+			order = append(order, key)
+		}
+		if r.Type == "A" {
+			if b.originIP == "" {
+				b.originIP = r.Data
+			} else {
+				b.originIP += "," + r.Data
+			}
+		} else {
+			b.cname = r.Data
+		}
+	}
+	created := 0
+	for _, key := range order {
+		b := agg[key]
+		var id int64
+		err := h.DB.QueryRow(`SELECT id FROM domain_records WHERE domain_ci_id=? AND host=? AND record_type=?`,
+			ciID, b.host, b.rtype).Scan(&id)
+		if err == sql.ErrNoRows {
+			_, _ = h.DB.Exec(`INSERT INTO domain_records (domain_ci_id, host, record_type, origin_ip, cname, operator)
+				VALUES (?, ?, ?, ?, ?, 'godaddy同步')`, ciID, b.host, b.rtype, b.originIP, b.cname)
+			created++
+		} else if err == nil {
+			// 只刷厂商字段，业务字段(项目/环境/模块/CDN/证书)原样保留
+			_, _ = h.DB.Exec(`UPDATE domain_records SET origin_ip=?, cname=? WHERE id=?`, b.originIP, b.cname, id)
+		}
+	}
+	return created
 }
 
 func (h *SyncHandler) refreshDNSRecords(ciID int64, sourceID int, recs []dnsource.DNSRecord) {

@@ -3,8 +3,10 @@ package handlers
 import (
 	"database/sql"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/net/publicsuffix"
 )
 
 type DomainHandler struct {
@@ -81,6 +83,24 @@ func (h *DomainHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// normalizeDomain 归一到注册域名(eTLD+1)：去空格/转小写/去协议与路径，www.baidu.com → baidu.com。
+func normalizeDomain(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.TrimPrefix(name, "http://")
+	name = strings.TrimPrefix(name, "https://")
+	if i := strings.IndexAny(name, "/:"); i >= 0 {
+		name = name[:i]
+	}
+	name = strings.Trim(name, ".")
+	if name == "" {
+		return ""
+	}
+	if root, err := publicsuffix.EffectiveTLDPlusOne(name); err == nil && root != "" {
+		return root
+	}
+	return name
+}
+
 type domainIn struct {
 	Name        string            `json:"name"`
 	Project     string            `json:"project"`
@@ -98,6 +118,11 @@ func (h *DomainHandler) Create(c *gin.Context) {
 	var in domainIn
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	in.Name = normalizeDomain(in.Name)
+	if in.Name == "" {
+		c.JSON(400, gin.H{"error": "域名不能为空"})
 		return
 	}
 	if in.Status == "" {

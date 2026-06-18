@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/opsplatform-cmdb-backend:v8
+          image: localhost:8070/opsplatform/opsplatform-cmdb-backend:v9
           imagePullPolicy: Always
           envFrom:
             - secretRef: { name: opsplatform-cmdb-secret }

@@ -26,9 +26,8 @@
           <template #default="{ row }">
             <div class="reso">
               <div class="reso-head">
-                <b>解析记录</b><span class="muted" style="margin-left:8px">{{ row.name }} 下纳入管理的解析（项目/环境/模块/CDN/回源/源站，全量原始记录看「DNS 记录」页）</span>
+                <b>解析记录</b><span class="muted" style="margin-left:8px">{{ row.name }} 的 A/CNAME 解析（同步自动导入，业务字段手动补；全量原始记录看「DNS 记录」页）</span>
                 <el-button type="primary" size="small" style="float:right" @click="openAddReso(row)">+ 添加解析</el-button>
-                <el-button size="small" style="float:right; margin-right:8px" @click="openImport(row)">从 DNS 记录纳入</el-button>
               </div>
               <el-table :data="records[row.ci_id] || []" size="small" v-loading="recordLoading[row.ci_id]">
                 <el-table-column label="主机头" min-width="130"><template #default="{ row: r }"><span class="mono">{{ r.host }}</span></template></el-table-column>
@@ -114,21 +113,6 @@
       </el-form>
       <template #footer><el-button @click="rDlg=false">取消</el-button><el-button type="primary" @click="saveReso">保存</el-button></template>
     </el-dialog>
-
-    <!-- 从 DNS 记录纳入 -->
-    <el-dialog v-model="impDlg" title="从 DNS 记录纳入解析" width="640px">
-      <div class="muted" style="margin-bottom:8px">勾选一条已同步的 A / CNAME 记录，自动带出主机头 + 源站IP/回源CNAME，再补业务字段。受保护记录不可纳入。</div>
-      <el-table :data="impRecords" size="small" height="340" v-loading="impLoading">
-        <el-table-column prop="type" label="类型" width="80" />
-        <el-table-column prop="name" label="主机名" min-width="140" />
-        <el-table-column prop="data" label="记录值" min-width="220" show-overflow-tooltip><template #default="{ row: r }"><span class="mono">{{ r.data }}</span></template></el-table-column>
-        <el-table-column label="操作" width="90"><template #default="{ row: r }">
-          <el-button v-if="!r.protected" link type="primary" @click="pickImport(r)">纳入</el-button>
-          <span v-else class="muted">受保护</span>
-        </template></el-table-column>
-      </el-table>
-      <el-empty v-if="!impRecords.length && !impLoading" description="该域名暂无已同步的 A/CNAME 记录，先去「DNS 记录」页从数据源同步" :image-size="50" />
-    </el-dialog>
   </div>
 </template>
 
@@ -137,7 +121,7 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { listDomains, createDomain, updateDomain, deleteDomain, listRegistrars, refreshDomain, refreshAllDomains,
-  listRecords, createRecord, updateRecord, deleteRecord, checkRecordCert, listDnsRecords } from '../api/cmdb'
+  listRecords, createRecord, updateRecord, deleteRecord, checkRecordCert } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
@@ -146,7 +130,6 @@ const records = ref({}), recordLoading = ref({})
 const dlg = ref(false), editing = ref(false), form = ref({})
 const rDlg = ref(false), rEditing = ref(false), rForm = ref({}), rCtx = ref(null)
 const checking = ref({})
-const impDlg = ref(false), impRecords = ref([]), impLoading = ref(false)
 const refreshing = ref({}), refreshingAll = ref(false)
 const f = ref({ keyword: '', registrar: null })
 const query = ref({ keyword: '', registrar: null })
@@ -224,28 +207,6 @@ async function checkCert(row, r) {
     else ElMessage.warning(`${res.fqdn} 检测失败：${res.msg}`)
     loadRecords(row.ci_id)
   } catch (e) { ElMessage.error('检测失败') } finally { checking.value = { ...checking.value, [r.id]: false } }
-}
-
-// 从 DNS 记录纳入
-async function openImport(row) {
-  rCtx.value = row; impDlg.value = true; impLoading.value = true; impRecords.value = []
-  try {
-    const all = await listDnsRecords(row.ci_id)
-    impRecords.value = all.filter((r) => r.type === 'A' || r.type === 'CNAME')
-  } catch (e) { impRecords.value = [] } finally { impLoading.value = false }
-}
-function pickImport(r) {
-  impDlg.value = false
-  rEditing.value = false
-  rForm.value = {
-    host: r.name === '@' ? '@' : r.name,
-    record_type: r.type,
-    project: '', env: '', module: '', cdn_id: null,
-    cname: r.type === 'CNAME' ? r.data : '',
-    origin_ip: r.type === 'A' ? r.data : '',
-    cert_expiry_at: '',
-  }
-  rDlg.value = true
 }
 
 async function refreshOne(row) {

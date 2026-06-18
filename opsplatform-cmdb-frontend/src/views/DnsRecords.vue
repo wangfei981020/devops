@@ -98,7 +98,7 @@ async function doSync() {
   try {
     const r = await syncSource(sourceId.value)
     rl.value = null; partialMsg.value = ''
-    ElMessage.success(`同步完成：${r.synced_domains} 个域名 / ${r.synced_records} 条记录`)
+    ElMessage.success(`同步完成：${r.synced_domains} 个域名 / ${r.synced_records} 条 DNS 记录，自动导入 ${r.imported_records || 0} 条新解析到业务台账`)
     domains.value = await listDomains()
     if (domainCiid.value) loadRecords()
   } catch (e) {
