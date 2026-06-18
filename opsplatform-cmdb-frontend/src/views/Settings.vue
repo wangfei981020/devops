@@ -30,6 +30,26 @@
       </el-table>
     </el-card>
 
+    <!-- 数据源 API 用量 -->
+    <el-card shadow="never" style="margin-bottom:14px">
+      <template #header><b>数据源 API 用量</b><span class="muted" style="margin-left:8px">客户端限流 {{ '50/分钟' }}（GoDaddy 真限 60，留 10 缓冲）</span>
+        <el-button size="small" :icon="Refresh" :loading="usageLoading" style="float:right" @click="loadUsage">刷新用量</el-button></template>
+      <el-table :data="registrars" size="small">
+        <el-table-column prop="name" label="数据源" min-width="140" />
+        <el-table-column prop="provider" label="provider" width="120" />
+        <el-table-column label="本分钟用量" width="160"><template #default="{ row }">
+          <span v-if="usage[row.id]">
+            <b :class="{warn: usage[row.id].minute_used >= usage[row.id].limit}">{{ usage[row.id].minute_used }}</b> / {{ usage[row.id].limit }}
+            <span class="muted">（剩 {{ Math.max(0, usage[row.id].limit - usage[row.id].minute_used) }}）</span>
+          </span>
+          <span v-else class="muted">—</span>
+        </template></el-table-column>
+        <el-table-column label="今日累计" width="100"><template #default="{ row }">{{ usage[row.id]?.today_total ?? '—' }}</template></el-table-column>
+        <el-table-column label="最近一次限流" min-width="160"><template #default="{ row }">{{ usage[row.id]?.last_limited_at || '—' }}</template></el-table-column>
+      </el-table>
+      <div class="muted" style="margin-top:8px">用量为后端进程内计数，进程重启后清零；同步在「域名 / DNS 记录」页触发。</div>
+    </el-card>
+
     <!-- ACME 账户 -->
     <el-card shadow="never">
       <template #header><b>ACME 账户</b><span class="muted" style="margin-left:8px">证书签发的 CA 账户（邮箱单独配）</span>
@@ -77,7 +97,8 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getSettings, updateSettings, listRegistrars, createRegistrar, updateRegistrar, deleteRegistrar, listAcme, createAcme, deleteAcme } from '../api/cmdb'
+import { Refresh } from '@element-plus/icons-vue'
+import { getSettings, updateSettings, listRegistrars, createRegistrar, updateRegistrar, deleteRegistrar, listAcme, createAcme, deleteAcme, sourceUsage } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
@@ -94,11 +115,23 @@ const cfg = ref({})
 const registrars = ref([]), accounts = ref([])
 const regDlg = ref(false), regEdit = ref(false), regForm = ref({ credential: {} })
 const acctDlg = ref(false), acctForm = ref({})
+const usage = ref({}), usageLoading = ref(false)
 
 async function load() {
   cfg.value = await getSettings()
   registrars.value = await listRegistrars()
   accounts.value = await listAcme()
+  loadUsage()
+}
+async function loadUsage() {
+  if (!registrars.value.length) return
+  usageLoading.value = true
+  try {
+    const entries = await Promise.all(registrars.value.map(async (r) => {
+      try { return [r.id, await sourceUsage(r.id)] } catch (e) { return [r.id, null] }
+    }))
+    usage.value = Object.fromEntries(entries.filter(([, v]) => v))
+  } finally { usageLoading.value = false }
 }
 async function saveCfg() { try { await updateSettings(cfg.value); ElMessage.success('已保存') } catch (e) { ElMessage.error('保存失败') } }
 
@@ -124,3 +157,7 @@ async function delAcct(row) {
 }
 onMounted(load)
 </script>
+
+<style scoped>
+.warn { color: #e6a23c; }
+</style>

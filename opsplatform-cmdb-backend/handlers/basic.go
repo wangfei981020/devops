@@ -23,6 +23,10 @@ func (h *BasicHandler) Register(r *gin.RouterGroup) {
 	r.POST("/environments", h.CreateEnv)
 	r.PUT("/environments/:id", h.UpdateEnv)
 	r.DELETE("/environments/:id", h.DeleteEnv)
+	r.GET("/cdns", h.ListCdns)
+	r.POST("/cdns", h.CreateCdn)
+	r.PUT("/cdns/:id", h.UpdateCdn)
+	r.DELETE("/cdns/:id", h.DeleteCdn)
 }
 
 // ---- 项目 ----
@@ -163,6 +167,72 @@ func (h *BasicHandler) UpdateEnv(c *gin.Context) {
 
 func (h *BasicHandler) DeleteEnv(c *gin.Context) {
 	if _, err := h.DB.Exec(`DELETE FROM environments WHERE id=?`, c.Param("id")); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
+// ---- CDN 厂商 ----
+
+func (h *BasicHandler) ListCdns(c *gin.Context) {
+	rows, err := h.DB.Query(`SELECT id, name, sort_order FROM cdns ORDER BY sort_order, id`)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	type cdn struct {
+		ID        int    `json:"id"`
+		Name      string `json:"name"`
+		SortOrder int    `json:"sort_order"`
+	}
+	out := []cdn{}
+	for rows.Next() {
+		var x cdn
+		if rows.Scan(&x.ID, &x.Name, &x.SortOrder) == nil {
+			out = append(out, x)
+		}
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *BasicHandler) CreateCdn(c *gin.Context) {
+	var in struct {
+		Name      string `json:"name"`
+		SortOrder int    `json:"sort_order"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.Name == "" {
+		c.JSON(400, gin.H{"error": "name 必填"})
+		return
+	}
+	res, err := h.DB.Exec(`INSERT INTO cdns (name, sort_order) VALUES (?, ?)`, in.Name, in.SortOrder)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	id, _ := res.LastInsertId()
+	c.JSON(201, gin.H{"id": id})
+}
+
+func (h *BasicHandler) UpdateCdn(c *gin.Context) {
+	var in struct {
+		Name      string `json:"name"`
+		SortOrder int    `json:"sort_order"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if _, err := h.DB.Exec(`UPDATE cdns SET name=?, sort_order=? WHERE id=?`, in.Name, in.SortOrder, c.Param("id")); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
+func (h *BasicHandler) DeleteCdn(c *gin.Context) {
+	if _, err := h.DB.Exec(`DELETE FROM cdns WHERE id=?`, c.Param("id")); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

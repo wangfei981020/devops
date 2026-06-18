@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia'
 import { ElMessageBox } from 'element-plus'
-import { listCITypes, listProjects, listEnvironments } from '../api/cmdb'
+import { listCITypes, listProjects, listEnvironments, listCdns } from '../api/cmdb'
 
 export const useAppStore = defineStore('app', {
-  state: () => ({ ciTypes: [], projects: [], environments: [] }),
+  state: () => ({ ciTypes: [], projects: [], environments: [], cdns: [] }),
   actions: {
     async loadCITypes() {
       try {
@@ -19,7 +19,10 @@ export const useAppStore = defineStore('app', {
     async loadEnvironments() {
       try { this.environments = await listEnvironments() } catch (e) { this.environments = [] }
     },
-    async loadBasics() { await Promise.all([this.loadProjects(), this.loadEnvironments()]) },
+    async loadCdns() {
+      try { this.cdns = await listCdns() } catch (e) { this.cdns = [] }
+    },
+    async loadBasics() { await Promise.all([this.loadProjects(), this.loadEnvironments(), this.loadCdns()]) },
     // 统一二次确认（禁用浏览器原生弹窗）
     showConfirm(message, title = '确认') {
       return ElMessageBox.confirm(message, title, { type: 'warning' })

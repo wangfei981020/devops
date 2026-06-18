@@ -54,6 +54,8 @@ func main() {
 	handlers.NewSettingsHandler(db).Register(api)
 	handlers.NewDashboardHandler(db).Register(api)
 	handlers.NewBasicHandler(db).Register(api)
+	handlers.NewRecordHandler(db).Register(api)
+	handlers.NewSyncHandler(db, cipher).Register(api)
 
 	log.Printf("CMDB backend listening on %s", cfg.Port)
 	if err := http.ListenAndServe(cfg.Port, r); err != nil {

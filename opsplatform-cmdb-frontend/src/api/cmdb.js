@@ -13,7 +13,25 @@ export const listDomains = () => http.get('/domains').then((r) => r.data)
 export const createDomain = (b) => http.post('/domains', b).then((r) => r.data)
 export const updateDomain = (id, b) => http.put('/domains/' + id, b).then((r) => r.data)
 export const deleteDomain = (id) => http.delete('/domains/' + id).then((r) => r.data)
-export const syncDomains = () => http.post('/domains/sync').then((r) => r.data)
+
+// 解析层（域名下挂的解析记录）
+export const listRecords = (ciid) => http.get(`/domains/${ciid}/records`).then((r) => r.data)
+export const createRecord = (ciid, b) => http.post(`/domains/${ciid}/records`, b).then((r) => r.data)
+export const updateRecord = (id, b) => http.put('/records/' + id, b).then((r) => r.data)
+export const deleteRecord = (id) => http.delete('/records/' + id).then((r) => r.data)
+
+// DNS 记录（厂商原始记录缓存，只读）
+export const listDnsRecords = (ciid) => http.get(`/domains/${ciid}/dns-records`).then((r) => r.data)
+
+// 数据源同步 + API 用量（数据源 = 注册商 registrars）
+export const syncSource = (id) => http.post(`/sources/${id}/sync`).then((r) => r.data)
+export const sourceUsage = (id) => http.get(`/sources/${id}/usage`).then((r) => r.data)
+
+// CDN 厂商（基础配置）
+export const listCdns = () => http.get('/cdns').then((r) => r.data)
+export const createCdn = (b) => http.post('/cdns', b).then((r) => r.data)
+export const updateCdn = (id, b) => http.put('/cdns/' + id, b).then((r) => r.data)
+export const deleteCdn = (id) => http.delete('/cdns/' + id).then((r) => r.data)
 
 // 注册商
 export const listRegistrars = () => http.get('/registrars').then((r) => r.data)

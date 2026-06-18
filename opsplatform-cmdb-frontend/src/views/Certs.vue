@@ -80,17 +80,16 @@
           </el-select>
         </el-form-item>
         <el-row :gutter="10">
-          <el-col :span="8"><el-form-item label="项目" label-width="60px">
+          <el-col :span="12"><el-form-item label="项目" label-width="60px">
             <el-select v-model="form.project" filterable clearable placeholder="选择项目" style="width:100%">
               <el-option v-for="p in app.projects" :key="p.id" :label="p.name" :value="p.name" />
             </el-select>
           </el-form-item></el-col>
-          <el-col :span="8"><el-form-item label="环境" label-width="60px">
+          <el-col :span="12"><el-form-item label="环境" label-width="60px">
             <el-select v-model="form.env" clearable placeholder="环境" style="width:100%">
               <el-option v-for="e in app.environments" :key="e.id" :label="e.code" :value="e.code" />
             </el-select>
           </el-form-item></el-col>
-          <el-col :span="8"><el-form-item label="模块" label-width="60px"><el-input v-model="form.module" /></el-form-item></el-col>
         </el-row>
         <el-form-item label="自动续期">
           <el-switch v-model="form.auto_renew" :active-value="1" :inactive-value="0" />

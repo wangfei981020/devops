@@ -22,6 +22,13 @@ func scanCI(s scannable) (models.CI, error) {
 
 func parseID(s string) (int64, error) { return strconv.ParseInt(s, 10, 64) }
 
+// currentUser 取当前登录账号（JWT 中间件写入），用于自动记录操作人。
+func currentUser(c *gin.Context) string {
+	u, _ := c.Get("username")
+	s, _ := u.(string)
+	return s
+}
+
 func nullableInt(p *int) any {
 	if p == nil {
 		return nil

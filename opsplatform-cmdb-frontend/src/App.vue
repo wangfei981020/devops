@@ -51,7 +51,7 @@
 <script setup>
 import { shallowRef, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Odometer, Connection, Lock, Share, DataAnalysis, Grid, Setting, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools } from '@element-plus/icons-vue'
+import { Odometer, Connection, Lock, Share, DataAnalysis, Grid, Setting, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
@@ -65,6 +65,7 @@ const menus = shallowRef([
   { type: 'item', path: '/overview', label: '总览', icon: Odometer },
   { type: 'group', label: '资产管理', icon: Coin, children: [
     { path: '/domains', label: '域名', icon: Connection },
+    { path: '/dns-records', label: 'DNS 记录', icon: List },
     { path: '/certs', label: '证书', icon: Lock },
     { path: '/relations', label: '关系图谱', icon: Share },
   ] },

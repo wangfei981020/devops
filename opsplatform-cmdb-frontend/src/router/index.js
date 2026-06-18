@@ -6,6 +6,7 @@ const routes = [
   { path: '/', redirect: '/overview' },
   { path: '/overview', component: () => import('../views/Overview.vue'), meta: { title: '总览' } },
   { path: '/domains', component: () => import('../views/Domains.vue'), meta: { title: '域名' } },
+  { path: '/dns-records', component: () => import('../views/DnsRecords.vue'), meta: { title: 'DNS 记录' } },
   { path: '/certs', component: () => import('../views/Certs.vue'), meta: { title: '证书' } },
   { path: '/certs/:id', component: () => import('../views/CertDetail.vue'), meta: { title: '证书详情' } },
   { path: '/relations', component: () => import('../views/Relations.vue'), meta: { title: '关系图谱' } },
