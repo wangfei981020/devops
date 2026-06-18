@@ -199,8 +199,8 @@ func (h *SyncHandler) upsertDomainCI(name string, sourceID int, expires *time.Ti
 	if expires != nil {
 		exp = *expires
 	}
-	_, _ = h.DB.Exec(`INSERT INTO domains (ci_id, registrar_id, expiry_at) VALUES (?, ?, ?)
-		ON DUPLICATE KEY UPDATE registrar_id=VALUES(registrar_id), expiry_at=VALUES(expiry_at), stale=0`, ciID, sourceID, exp)
+	_, _ = h.DB.Exec(`INSERT INTO domains (ci_id, registrar_id, expiry_at, origin) VALUES (?, ?, ?, 'sync')
+		ON DUPLICATE KEY UPDATE registrar_id=VALUES(registrar_id), expiry_at=VALUES(expiry_at), stale=0, origin='sync'`, ciID, sourceID, exp)
 	return ciID, nil
 }
 

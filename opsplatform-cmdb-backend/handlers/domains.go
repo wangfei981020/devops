@@ -41,13 +41,14 @@ type domainOut struct {
 	CertCheckMsg  string `json:"cert_check_msg"`
 	CertCount     int    `json:"cert_count"`
 	Stale         bool   `json:"stale"`
+	Origin        string `json:"origin"` // manual=手动录入, sync=数据源同步
 }
 
 func (h *DomainHandler) List(c *gin.Context) {
 	rows, err := h.DB.Query(`
 		SELECT c.id, c.name, c.project, c.env, c.module, c.owner, c.status,
 		       d.registrar_id, COALESCE(reg.name,''), d.dns_provider, d.expiry_at,
-		       d.cert_expiry_at, d.cert_check_msg, d.stale,
+		       d.cert_expiry_at, d.cert_check_msg, d.stale, d.origin,
 		       (SELECT COUNT(*) FROM ci_relations r WHERE r.dst_ci_id=c.id AND r.rel_type='protects')
 		FROM cis c
 		JOIN domains d ON d.ci_id=c.id
@@ -66,7 +67,7 @@ func (h *DomainHandler) List(c *gin.Context) {
 		var exp, certExp sql.NullTime
 		var stale int
 		if err := rows.Scan(&o.CIID, &o.Name, &o.Project, &o.Env, &o.Module, &o.Owner, &o.Status,
-			&regID, &o.RegistrarName, &o.DNSProvider, &exp, &certExp, &o.CertCheckMsg, &stale, &o.CertCount); err != nil {
+			&regID, &o.RegistrarName, &o.DNSProvider, &exp, &certExp, &o.CertCheckMsg, &stale, &o.Origin, &o.CertCount); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
@@ -144,7 +145,7 @@ func (h *DomainHandler) Create(c *gin.Context) {
 		return
 	}
 	ciID, _ := res.LastInsertId()
-	if _, err := tx.Exec(`INSERT INTO domains (ci_id, registrar_id, dns_provider, expiry_at) VALUES (?, ?, ?, NULLIF(?, ''))`,
+	if _, err := tx.Exec(`INSERT INTO domains (ci_id, registrar_id, dns_provider, expiry_at, origin) VALUES (?, ?, ?, NULLIF(?, ''), 'manual')`,
 		ciID, nullableInt(in.RegistrarID), in.DNSProvider, in.ExpiryAt); err != nil {
 		tx.Rollback()
 		c.JSON(500, gin.H{"error": err.Error()})
