@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,6 +20,7 @@ func (h *RecordHandler) Register(r *gin.RouterGroup) {
 	r.POST("/domains/:ciid/records", h.Create)
 	r.PUT("/records/:id", h.Update)
 	r.DELETE("/records/:id", h.Delete)
+	r.POST("/records/:id/check-cert", h.CheckCert)
 }
 
 type recordOut struct {
@@ -83,6 +85,7 @@ type recordIn struct {
 	CdnID      *int   `json:"cdn_id"`
 	Cname      string `json:"cname"`
 	OriginIP   string `json:"origin_ip"`
+	CertExpiry string `json:"cert_expiry_at"` // 手动填的证书到期 "2006-01-02" 或空
 	Project    string `json:"project"`
 	Env        string `json:"env"`
 	Module     string `json:"module"`
@@ -98,9 +101,9 @@ func (h *RecordHandler) Create(c *gin.Context) {
 		in.RecordType = "A"
 	}
 	res, err := h.DB.Exec(`INSERT INTO domain_records
-		(domain_ci_id, host, record_type, cdn_id, cname, origin_ip, project, env, module, operator)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.Param("ciid"), in.Host, in.RecordType, nullableInt(in.CdnID), in.Cname, in.OriginIP,
+		(domain_ci_id, host, record_type, cdn_id, cname, origin_ip, cert_expiry_at, project, env, module, operator)
+		VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?)`,
+		c.Param("ciid"), in.Host, in.RecordType, nullableInt(in.CdnID), in.Cname, in.OriginIP, in.CertExpiry,
 		in.Project, in.Env, in.Module, currentUser(c))
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -118,8 +121,8 @@ func (h *RecordHandler) Update(c *gin.Context) {
 		return
 	}
 	if _, err := h.DB.Exec(`UPDATE domain_records SET host=?, record_type=?, cdn_id=?, cname=?, origin_ip=?,
-		project=?, env=?, module=?, operator=? WHERE id=?`,
-		in.Host, in.RecordType, nullableInt(in.CdnID), in.Cname, in.OriginIP,
+		cert_expiry_at=NULLIF(?, ''), project=?, env=?, module=?, operator=? WHERE id=?`,
+		in.Host, in.RecordType, nullableInt(in.CdnID), in.Cname, in.OriginIP, in.CertExpiry,
 		in.Project, in.Env, in.Module, currentUser(c), c.Param("id")); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -135,4 +138,37 @@ func (h *RecordHandler) Delete(c *gin.Context) {
 	}
 	WriteAudit(h.DB, c, "delete_record", c.Param("id"))
 	c.JSON(200, gin.H{"ok": true})
+}
+
+// CheckCert 连接 该解析的完整域名:443 读线上证书到期，写回 cert_expiry_at。手动填的值会被覆盖。
+func (h *RecordHandler) CheckCert(c *gin.Context) {
+	id := c.Param("id")
+	var host, domain string
+	if err := h.DB.QueryRow(`SELECT r.host, c.name FROM domain_records r JOIN cis c ON c.id=r.domain_ci_id WHERE r.id=?`, id).
+		Scan(&host, &domain); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "解析不存在"})
+		return
+	}
+	fqdn := recordFQDN(host, domain)
+	if t, cmsg := tlsCertExpiry(fqdn); t != nil {
+		_, _ = h.DB.Exec(`UPDATE domain_records SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg='' WHERE id=?`, *t, id)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "fqdn": fqdn, "cert_expiry_at": t.Format("2006-01-02")})
+		return
+	} else {
+		_, _ = h.DB.Exec(`UPDATE domain_records SET cert_check_at=NOW(), cert_check_msg=? WHERE id=?`, truncate(cmsg, 250), id)
+		c.JSON(http.StatusOK, gin.H{"ok": false, "fqdn": fqdn, "msg": cmsg})
+		return
+	}
+}
+
+// recordFQDN 由主机头 + 主域名拼出完整域名。host 为空/@ 即主域名；已含主域名则原样返回。
+func recordFQDN(host, domain string) string {
+	host = strings.TrimSpace(host)
+	if host == "" || host == "@" {
+		return domain
+	}
+	if host == domain || strings.HasSuffix(host, "."+domain) {
+		return host
+	}
+	return host + "." + domain
 }

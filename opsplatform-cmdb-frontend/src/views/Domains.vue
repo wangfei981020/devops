@@ -26,11 +26,12 @@
           <template #default="{ row }">
             <div class="reso">
               <div class="reso-head">
-                <b>解析记录</b><span class="muted" style="margin-left:8px">{{ row.name }} 下的解析（项目/环境/模块/CDN/回源/源站）</span>
+                <b>解析记录</b><span class="muted" style="margin-left:8px">{{ row.name }} 下纳入管理的解析（项目/环境/模块/CDN/回源/源站，全量原始记录看「DNS 记录」页）</span>
                 <el-button type="primary" size="small" style="float:right" @click="openAddReso(row)">+ 添加解析</el-button>
+                <el-button size="small" style="float:right; margin-right:8px" @click="openImport(row)">从 DNS 记录纳入</el-button>
               </div>
               <el-table :data="records[row.ci_id] || []" size="small" v-loading="recordLoading[row.ci_id]">
-                <el-table-column label="主机名" min-width="150"><template #default="{ row: r }"><span class="mono">{{ r.host }}</span><el-tag size="small" type="info" style="margin-left:6px">{{ r.record_type }}</el-tag></template></el-table-column>
+                <el-table-column label="主机头" min-width="130"><template #default="{ row: r }"><span class="mono">{{ r.host }}</span></template></el-table-column>
                 <el-table-column prop="project" label="项目" width="110" />
                 <el-table-column label="环境" width="80"><template #default="{ row: r }"><el-tag v-if="r.env" size="small">{{ r.env }}</el-tag></template></el-table-column>
                 <el-table-column prop="module" label="模块" width="100" />
@@ -42,9 +43,10 @@
                   <el-tooltip v-else-if="r.cert_check_msg" :content="r.cert_check_msg"><span class="muted">检查失败</span></el-tooltip>
                   <span v-else class="muted">—</span>
                 </template></el-table-column>
-                <el-table-column prop="operator" label="操作人" width="100"><template #default="{ row: r }">{{ r.operator || '—' }}</template></el-table-column>
-                <el-table-column prop="updated_at" label="更新时间" width="130" />
-                <el-table-column label="操作" width="120"><template #default="{ row: r }">
+                <el-table-column prop="operator" label="操作人" width="90"><template #default="{ row: r }">{{ r.operator || '—' }}</template></el-table-column>
+                <el-table-column prop="updated_at" label="更新时间" width="125" />
+                <el-table-column label="操作" width="180"><template #default="{ row: r }">
+                  <el-button link type="primary" :loading="checking[r.id]" @click="checkCert(row, r)">检测证书</el-button>
                   <el-button link type="primary" @click="openEditReso(row, r)">编辑</el-button>
                   <el-button link type="danger" @click="delReso(row, r)">删除</el-button>
                 </template></el-table-column>
@@ -87,12 +89,7 @@
     <!-- 解析记录表单 -->
     <el-dialog v-model="rDlg" :title="rEditing?'编辑解析':'添加解析'" width="520px">
       <el-form :model="rForm" label-width="100px">
-        <el-form-item label="主机名">
-          <el-input v-model="rForm.host" placeholder="www / @ / api" style="width:200px" />
-          <el-select v-model="rForm.record_type" style="width:110px; margin-left:8px">
-            <el-option v-for="t in recordTypes" :key="t" :label="t" :value="t" />
-          </el-select>
-        </el-form-item>
+        <el-form-item label="主机头"><el-input v-model="rForm.host" placeholder="www / @ / api" style="width:200px" /></el-form-item>
         <el-form-item label="项目">
           <el-select v-model="rForm.project" filterable clearable placeholder="选择项目" style="width:200px">
             <el-option v-for="p in app.projects" :key="p.id" :label="p.name" :value="p.name" />
@@ -111,8 +108,26 @@
         </el-form-item>
         <el-form-item label="回源 CNAME"><el-input v-model="rForm.cname" placeholder="（可选）CDN 回源 CNAME" /></el-form-item>
         <el-form-item label="源站 IP"><el-input v-model="rForm.origin_ip" placeholder="（可选）源站 IP" /></el-form-item>
+        <el-form-item label="证书到期">
+          <el-date-picker v-model="rForm.cert_expiry_at" type="date" value-format="YYYY-MM-DD" placeholder="可手动填，或保存后点「检测证书」自动读" style="width:240px" />
+        </el-form-item>
       </el-form>
       <template #footer><el-button @click="rDlg=false">取消</el-button><el-button type="primary" @click="saveReso">保存</el-button></template>
+    </el-dialog>
+
+    <!-- 从 DNS 记录纳入 -->
+    <el-dialog v-model="impDlg" title="从 DNS 记录纳入解析" width="640px">
+      <div class="muted" style="margin-bottom:8px">勾选一条已同步的 A / CNAME 记录，自动带出主机头 + 源站IP/回源CNAME，再补业务字段。受保护记录不可纳入。</div>
+      <el-table :data="impRecords" size="small" height="340" v-loading="impLoading">
+        <el-table-column prop="type" label="类型" width="80" />
+        <el-table-column prop="name" label="主机名" min-width="140" />
+        <el-table-column prop="data" label="记录值" min-width="220" show-overflow-tooltip><template #default="{ row: r }"><span class="mono">{{ r.data }}</span></template></el-table-column>
+        <el-table-column label="操作" width="90"><template #default="{ row: r }">
+          <el-button v-if="!r.protected" link type="primary" @click="pickImport(r)">纳入</el-button>
+          <span v-else class="muted">受保护</span>
+        </template></el-table-column>
+      </el-table>
+      <el-empty v-if="!impRecords.length && !impLoading" description="该域名暂无已同步的 A/CNAME 记录，先去「DNS 记录」页从数据源同步" :image-size="50" />
     </el-dialog>
   </div>
 </template>
@@ -122,15 +137,16 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { listDomains, createDomain, updateDomain, deleteDomain, listRegistrars, refreshDomain, refreshAllDomains,
-  listRecords, createRecord, updateRecord, deleteRecord } from '../api/cmdb'
+  listRecords, createRecord, updateRecord, deleteRecord, checkRecordCert, listDnsRecords } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
-const recordTypes = ['A', 'AAAA', 'CNAME']
 const rows = ref([]), registrars = ref([]), loading = ref(false)
-const records = ref({}), recordLoading = ref({}), expanded = ref(new Set())
+const records = ref({}), recordLoading = ref({})
 const dlg = ref(false), editing = ref(false), form = ref({})
 const rDlg = ref(false), rEditing = ref(false), rForm = ref({}), rCtx = ref(null)
+const checking = ref({})
+const impDlg = ref(false), impRecords = ref([]), impLoading = ref(false)
 const refreshing = ref({}), refreshingAll = ref(false)
 const f = ref({ keyword: '', registrar: null })
 const query = ref({ keyword: '', registrar: null })
@@ -184,10 +200,10 @@ async function del(row) {
 }
 
 // 解析记录
-function openAddReso(row) { rCtx.value = row; rEditing.value = false; rForm.value = { host: '', record_type: 'A', project: '', env: '', module: '', cdn_id: null, cname: '', origin_ip: '' }; rDlg.value = true }
-function openEditReso(row, r) { rCtx.value = row; rEditing.value = true; rForm.value = { ...r }; rDlg.value = true }
+function openAddReso(row) { rCtx.value = row; rEditing.value = false; rForm.value = { host: '', record_type: 'A', project: '', env: '', module: '', cdn_id: null, cname: '', origin_ip: '', cert_expiry_at: '' }; rDlg.value = true }
+function openEditReso(row, r) { rCtx.value = row; rEditing.value = true; rForm.value = { ...r, cert_expiry_at: r.cert_expiry_at || '' }; rDlg.value = true }
 async function saveReso() {
-  if (!rForm.value.host) { ElMessage.warning('主机名必填'); return }
+  if (!rForm.value.host) { ElMessage.warning('主机头必填'); return }
   try {
     if (rEditing.value) await updateRecord(rForm.value.id, rForm.value)
     else await createRecord(rCtx.value.ci_id, rForm.value)
@@ -196,9 +212,40 @@ async function saveReso() {
 }
 async function delReso(row, r) {
   try {
-    await app.showConfirm(`删除解析 ${r.host}（${r.record_type}）？`)
+    await app.showConfirm(`删除解析 ${r.host}？`)
     await deleteRecord(r.id); loadRecords(row.ci_id)
   } catch (e) { if (e !== 'cancel') ElMessage.error('删除失败') }
+}
+async function checkCert(row, r) {
+  checking.value = { ...checking.value, [r.id]: true }
+  try {
+    const res = await checkRecordCert(r.id)
+    if (res.ok) ElMessage.success(`${res.fqdn} 证书到期 ${res.cert_expiry_at}`)
+    else ElMessage.warning(`${res.fqdn} 检测失败：${res.msg}`)
+    loadRecords(row.ci_id)
+  } catch (e) { ElMessage.error('检测失败') } finally { checking.value = { ...checking.value, [r.id]: false } }
+}
+
+// 从 DNS 记录纳入
+async function openImport(row) {
+  rCtx.value = row; impDlg.value = true; impLoading.value = true; impRecords.value = []
+  try {
+    const all = await listDnsRecords(row.ci_id)
+    impRecords.value = all.filter((r) => r.type === 'A' || r.type === 'CNAME')
+  } catch (e) { impRecords.value = [] } finally { impLoading.value = false }
+}
+function pickImport(r) {
+  impDlg.value = false
+  rEditing.value = false
+  rForm.value = {
+    host: r.name === '@' ? '@' : r.name,
+    record_type: r.type,
+    project: '', env: '', module: '', cdn_id: null,
+    cname: r.type === 'CNAME' ? r.data : '',
+    origin_ip: r.type === 'A' ? r.data : '',
+    cert_expiry_at: '',
+  }
+  rDlg.value = true
 }
 
 async function refreshOne(row) {
