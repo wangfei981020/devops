@@ -4,7 +4,7 @@
       <span class="page-title">域名</span>
       <div>
         <el-button :icon="Refresh" :loading="refreshingAll" @click="refreshAll">一键刷新到期</el-button>
-        <el-button type="primary" :icon="Plus" @click="openAdd">录入域名</el-button>
+        <span class="muted" style="margin-left:8px">域名从数据源同步，在「DNS 记录」页点「从数据源同步」</span>
       </div>
     </div>
 
@@ -57,7 +57,10 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="name" label="主域名" min-width="200" />
+        <el-table-column label="主域名" min-width="220"><template #default="{ row }">
+          <span :class="{stale: row.stale}">{{ row.name }}</span>
+          <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">厂商已删</el-tag>
+        </template></el-table-column>
         <el-table-column prop="registrar_name" label="数据源/注册商" width="160"><template #default="{ row }">{{ row.registrar_name || '—' }}</template></el-table-column>
         <el-table-column label="域名到期" width="120"><template #default="{ row }"><span :class="{warn: isNear(row.expiry_at)}">{{ row.expiry_at || '—' }}</span></template></el-table-column>
         <el-table-column label="解析数" width="80"><template #default="{ row }">{{ row.reso_count ?? '—' }}</template></el-table-column>
@@ -65,7 +68,7 @@
           <template #default="{ row }">
             <el-tooltip content="刷新域名注册到期(WHOIS) + 主域名证书(连443)"><el-button link type="primary" :loading="refreshing[row.ci_id]" @click="refreshOne(row)">刷到期</el-button></el-tooltip>
             <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" @click="del(row)">删除</el-button>
+            <el-tooltip v-if="row.stale" content="GoDaddy 已无此域名，确认后从台账移除"><el-button link type="danger" @click="del(row)">移除</el-button></el-tooltip>
           </template>
         </el-table-column>
       </el-table>
@@ -74,9 +77,9 @@
     </el-card>
 
     <!-- 主域名表单 -->
-    <el-dialog v-model="dlg" :title="editing?'编辑主域名':'录入主域名'" width="480px">
+    <el-dialog v-model="dlg" title="编辑主域名" width="480px">
       <el-form :model="form" label-width="100px">
-        <el-form-item label="主域名"><el-input v-model="form.name" placeholder="example.com" /></el-form-item>
+        <el-form-item label="主域名"><el-input v-model="form.name" disabled /><span class="muted" style="margin-left:8px">来自同步，不可改</span></el-form-item>
         <el-form-item label="数据源/注册商">
           <el-select v-model="form.registrar_id" clearable placeholder="（可选，签证书 / 同步解析用）" style="width:240px">
             <el-option v-for="r in registrars" :key="r.id" :label="r.name" :value="r.id" />
@@ -125,15 +128,15 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
-import { listDomains, createDomain, updateDomain, deleteDomain, listRegistrars, refreshDomain, refreshAllDomains,
+import { Refresh, Search } from '@element-plus/icons-vue'
+import { listDomains, updateDomain, deleteDomain, listRegistrars, refreshDomain, refreshAllDomains,
   listRecords, updateRecord, deleteRecord, checkRecordCert, syncDomainRecords } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
 const rows = ref([]), registrars = ref([]), loading = ref(false)
 const records = ref({}), recordLoading = ref({})
-const dlg = ref(false), editing = ref(false), form = ref({})
+const dlg = ref(false), form = ref({})
 const rDlg = ref(false), rForm = ref({}), rCtx = ref(null)
 const checking = ref({}), syncingReso = ref({})
 const refreshing = ref({}), refreshingAll = ref(false)
@@ -171,21 +174,19 @@ function onExpand(row, expandedRows) {
   if (open) loadRecords(row.ci_id)
 }
 
-// 主域名
-function openAdd() { editing.value = false; form.value = { name: '', registrar_id: null, dns_provider: '', expiry_at: '' }; dlg.value = true }
-function openEdit(row) { editing.value = true; form.value = { ...row, expiry_at: row.expiry_at || '' }; dlg.value = true }
+// 主域名（来自同步，只编辑元信息，不能手动加；仅失效项可移除）
+function openEdit(row) { form.value = { ...row, expiry_at: row.expiry_at || '' }; dlg.value = true }
 async function save() {
   try {
-    if (editing.value) await updateDomain(form.value.ci_id, form.value)
-    else await createDomain(form.value)
+    await updateDomain(form.value.ci_id, form.value)
     ElMessage.success('已保存'); dlg.value = false; load()
   } catch (e) { ElMessage.error(e.response?.data?.error || '保存失败') }
 }
 async function del(row) {
   try {
-    await app.showConfirm(`确认删除主域名 ${row.name}？其下解析记录一并删除`)
-    await deleteDomain(row.ci_id); ElMessage.success('已删除'); load()
-  } catch (e) { if (e !== 'cancel') ElMessage.error('删除失败') }
+    await app.showConfirm(`该域名 GoDaddy 已无，确认从台账移除 ${row.name}？其下解析记录一并删除`)
+    await deleteDomain(row.ci_id); ElMessage.success('已移除'); load()
+  } catch (e) { if (e !== 'cancel') ElMessage.error('移除失败') }
 }
 
 // 解析记录（来自 GoDaddy 同步，只编辑业务字段）

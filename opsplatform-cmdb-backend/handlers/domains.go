@@ -40,19 +40,20 @@ type domainOut struct {
 	CertExpiryAt  string `json:"cert_expiry_at"`
 	CertCheckMsg  string `json:"cert_check_msg"`
 	CertCount     int    `json:"cert_count"`
+	Stale         bool   `json:"stale"`
 }
 
 func (h *DomainHandler) List(c *gin.Context) {
 	rows, err := h.DB.Query(`
 		SELECT c.id, c.name, c.project, c.env, c.module, c.owner, c.status,
 		       d.registrar_id, COALESCE(reg.name,''), d.dns_provider, d.expiry_at,
-		       d.cert_expiry_at, d.cert_check_msg,
+		       d.cert_expiry_at, d.cert_check_msg, d.stale,
 		       (SELECT COUNT(*) FROM ci_relations r WHERE r.dst_ci_id=c.id AND r.rel_type='protects')
 		FROM cis c
 		JOIN domains d ON d.ci_id=c.id
 		LEFT JOIN registrars reg ON reg.id=d.registrar_id
 		WHERE c.type='domain'
-		ORDER BY c.id DESC`)
+		ORDER BY d.stale, c.id DESC`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -63,11 +64,13 @@ func (h *DomainHandler) List(c *gin.Context) {
 		var o domainOut
 		var regID sql.NullInt64
 		var exp, certExp sql.NullTime
+		var stale int
 		if err := rows.Scan(&o.CIID, &o.Name, &o.Project, &o.Env, &o.Module, &o.Owner, &o.Status,
-			&regID, &o.RegistrarName, &o.DNSProvider, &exp, &certExp, &o.CertCheckMsg, &o.CertCount); err != nil {
+			&regID, &o.RegistrarName, &o.DNSProvider, &exp, &certExp, &o.CertCheckMsg, &stale, &o.CertCount); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
+		o.Stale = stale == 1
 		if regID.Valid {
 			v := int(regID.Int64)
 			o.RegistrarID = &v

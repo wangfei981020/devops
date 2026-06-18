@@ -110,11 +110,13 @@ func (h *SyncHandler) Sync(c *gin.Context) {
 	}
 
 	syncedDomains, syncedRecords, importedRecords := 0, 0, 0
+	present := map[string]bool{}
 	for _, d := range domains {
 		ciID, err := h.upsertDomainCI(d.Name, id, d.ExpiresAt)
 		if err != nil {
 			continue
 		}
+		present[d.Name] = true
 		syncedDomains++
 
 		recs, err := adapter.ListRecords(ctx, d.Name)
@@ -134,8 +136,11 @@ func (h *SyncHandler) Sync(c *gin.Context) {
 		syncedRecords += len(recs)
 		importedRecords += h.importBusinessRecords(ciID, recs)
 	}
+	// 完整拉全后，标记该数据源下 GoDaddy 已不存在的主域名为失效（保留业务信息，人工确认删）
+	staleDomains := h.markStaleDomains(id, present)
 	WriteAudit(h.DB, c, "sync_source", c.Param("id"))
-	c.JSON(http.StatusOK, gin.H{"synced_domains": syncedDomains, "synced_records": syncedRecords, "imported_records": importedRecords})
+	c.JSON(http.StatusOK, gin.H{"synced_domains": syncedDomains, "synced_records": syncedRecords,
+		"imported_records": importedRecords, "stale_domains": staleDomains})
 }
 
 // DNSRecords 读某域名的厂商原始 DNS 记录（来自同步缓存 dns_records）。
@@ -195,8 +200,30 @@ func (h *SyncHandler) upsertDomainCI(name string, sourceID int, expires *time.Ti
 		exp = *expires
 	}
 	_, _ = h.DB.Exec(`INSERT INTO domains (ci_id, registrar_id, expiry_at) VALUES (?, ?, ?)
-		ON DUPLICATE KEY UPDATE registrar_id=VALUES(registrar_id), expiry_at=VALUES(expiry_at)`, ciID, sourceID, exp)
+		ON DUPLICATE KEY UPDATE registrar_id=VALUES(registrar_id), expiry_at=VALUES(expiry_at), stale=0`, ciID, sourceID, exp)
 	return ciID, nil
+}
+
+// markStaleDomains 把某数据源下、本次同步未出现(GoDaddy 已无)的主域名标为失效；返回标记条数。
+func (h *SyncHandler) markStaleDomains(sourceID int, present map[string]bool) int {
+	rows, err := h.DB.Query(`SELECT c.id, c.name FROM cis c JOIN domains d ON d.ci_id=c.id
+		WHERE c.type='domain' AND d.registrar_id=?`, sourceID)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	var stale []int64
+	for rows.Next() {
+		var id int64
+		var name string
+		if rows.Scan(&id, &name) == nil && !present[name] {
+			stale = append(stale, id)
+		}
+	}
+	for _, id := range stale {
+		_, _ = h.DB.Exec(`UPDATE domains SET stale=1 WHERE ci_id=?`, id)
+	}
+	return len(stale)
 }
 
 // importBusinessRecords 把厂商的 A/CNAME 自动导入业务台账(domain_records)。
