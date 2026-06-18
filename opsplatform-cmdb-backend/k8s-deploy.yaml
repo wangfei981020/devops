@@ -16,6 +16,10 @@ spec:
         - name: backend
           image: localhost:8070/opsplatform/opsplatform-cmdb-backend:v14
           imagePullPolicy: Always
+          env:
+            # 泛解析(* CNAME)场景：禁用 lego 跟随 CNAME，让它直接在注册域名 zone 加显式 _acme-challenge TXT 盖过通配
+            - name: LEGO_DISABLE_CNAME_SUPPORT
+              value: "true"
           envFrom:
             - secretRef: { name: opsplatform-cmdb-secret }
           ports:
