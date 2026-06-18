@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,6 +23,57 @@ func (h *RecordHandler) Register(r *gin.RouterGroup) {
 	r.PUT("/records/:id", h.Update)
 	r.DELETE("/records/:id", h.Delete)
 	r.POST("/records/:id/check-cert", h.CheckCert)
+	r.POST("/domains/:ciid/check-all-certs", h.CheckAllCerts)
+}
+
+// CheckAllCerts 一键检测某域名下所有解析的证书到期（并发连 443，限并发 8）。
+func (h *RecordHandler) CheckAllCerts(c *gin.Context) {
+	ciid := c.Param("ciid")
+	var domain string
+	if err := h.DB.QueryRow(`SELECT name FROM cis WHERE id=? AND type='domain'`, ciid).Scan(&domain); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "域名不存在"})
+		return
+	}
+	rows, err := h.DB.Query(`SELECT id, host FROM domain_records WHERE domain_ci_id=?`, ciid)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	type rec struct {
+		id   int64
+		host string
+	}
+	var recs []rec
+	for rows.Next() {
+		var r rec
+		if rows.Scan(&r.id, &r.host) == nil {
+			recs = append(recs, r)
+		}
+	}
+	rows.Close()
+
+	var ok, fail int32
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for _, r := range recs {
+		wg.Add(1)
+		go func(id int64, host string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			fqdn := recordFQDN(host, domain)
+			if t, cmsg := tlsCertExpiry(fqdn); t != nil {
+				_, _ = h.DB.Exec(`UPDATE domain_records SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg='' WHERE id=?`, *t, id)
+				atomic.AddInt32(&ok, 1)
+			} else {
+				_, _ = h.DB.Exec(`UPDATE domain_records SET cert_check_at=NOW(), cert_check_msg=? WHERE id=?`, truncate(cmsg, 250), id)
+				atomic.AddInt32(&fail, 1)
+			}
+		}(r.id, r.host)
+	}
+	wg.Wait()
+	WriteAudit(h.DB, c, "check_all_certs", domain)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "checked": len(recs), "success": ok, "failed": fail})
 }
 
 type recordOut struct {

@@ -26,19 +26,22 @@
           <template #default="{ row }">
             <div class="reso">
               <div class="reso-head">
-                <b>解析记录</b><span class="muted" style="margin-left:8px">{{ row.name }} 的 A/CNAME（从 GoDaddy 同步进来，你只补业务字段；全量原始记录看「DNS 记录」页）</span>
-                <el-button type="primary" size="small" :icon="Refresh" :loading="syncingReso[row.ci_id]" style="float:right" @click="syncReso(row)">从 GoDaddy 同步解析</el-button>
+                <b>解析记录</b>
+                <span class="muted" style="margin-left:8px" v-if="row.origin === 'manual'">手动维护（手动录入的域名不从厂商同步，可增删改）</span>
+                <span class="muted" style="margin-left:8px" v-else>从 GoDaddy 同步进来，只读；证书到期可检测；全量原始记录看「DNS 记录」页</span>
+                <el-button v-if="row.origin === 'manual'" type="primary" size="small" :icon="Plus" style="float:right" @click="openAddReso(row)">添加解析</el-button>
+                <el-button v-else type="primary" size="small" :icon="Refresh" :loading="syncingReso[row.ci_id]" style="float:right" @click="syncReso(row)">从 GoDaddy 同步解析</el-button>
               </div>
-              <el-table :data="records[row.ci_id] || []" size="small" v-loading="recordLoading[row.ci_id]">
+              <el-table :data="records[row.ci_id] || []" size="small" max-height="340" v-loading="recordLoading[row.ci_id]">
                 <el-table-column label="主机头" min-width="150"><template #default="{ row: r }">
                   <span class="mono" :class="{stale: r.stale}">{{ r.host }}</span>
                   <el-tag v-if="r.stale" type="warning" size="small" style="margin-left:6px">厂商已删</el-tag>
                 </template></el-table-column>
-                <el-table-column prop="project" label="项目" width="110" />
-                <el-table-column label="环境" width="80"><template #default="{ row: r }"><el-tag v-if="r.env" size="small">{{ r.env }}</el-tag></template></el-table-column>
-                <el-table-column prop="module" label="模块" width="100" />
-                <el-table-column label="CDN" width="120"><template #default="{ row: r }">{{ r.cdn_name || '—' }}</template></el-table-column>
-                <el-table-column label="回源 CNAME" min-width="160" show-overflow-tooltip><template #default="{ row: r }"><span class="mono">{{ r.cname || '—' }}</span></template></el-table-column>
+                <el-table-column prop="project" label="项目" width="110"><template #default="{ row: r }">{{ r.project || '—' }}</template></el-table-column>
+                <el-table-column label="环境" width="80"><template #default="{ row: r }"><el-tag v-if="r.env" size="small">{{ r.env }}</el-tag><span v-else class="muted">—</span></template></el-table-column>
+                <el-table-column prop="module" label="模块" width="100"><template #default="{ row: r }">{{ r.module || '—' }}</template></el-table-column>
+                <el-table-column label="CDN" width="110"><template #default="{ row: r }">{{ r.cdn_name || '—' }}</template></el-table-column>
+                <el-table-column label="回源" min-width="160" show-overflow-tooltip><template #default="{ row: r }"><span class="mono">{{ r.cname || '—' }}</span></template></el-table-column>
                 <el-table-column label="源站 IP" width="130"><template #default="{ row: r }"><span class="mono">{{ r.origin_ip || '—' }}</span></template></el-table-column>
                 <el-table-column label="证书到期" width="110"><template #default="{ row: r }">
                   <span v-if="r.cert_expiry_at" :class="{warn: isNear(r.cert_expiry_at)}">{{ r.cert_expiry_at }}</span>
@@ -47,13 +50,17 @@
                 </template></el-table-column>
                 <el-table-column prop="operator" label="操作人" width="90"><template #default="{ row: r }">{{ r.operator || '—' }}</template></el-table-column>
                 <el-table-column prop="updated_at" label="更新时间" width="125" />
-                <el-table-column label="操作" width="180"><template #default="{ row: r }">
+                <el-table-column label="操作" width="170" fixed="right"><template #default="{ row: r }">
                   <el-button link type="primary" :loading="checking[r.id]" @click="checkCert(row, r)">检测证书</el-button>
-                  <el-button link type="primary" @click="openEditReso(row, r)">编辑</el-button>
-                  <el-button link type="danger" @click="delReso(row, r)">删除</el-button>
+                  <template v-if="row.origin === 'manual'">
+                    <el-button link type="primary" @click="openEditReso(row, r)">编辑</el-button>
+                    <el-button link type="danger" @click="delReso(row, r)">删除</el-button>
+                  </template>
+                  <el-button v-else-if="r.stale" link type="danger" @click="delReso(row, r)">移除</el-button>
                 </template></el-table-column>
               </el-table>
-              <el-empty v-if="!(records[row.ci_id] && records[row.ci_id].length) && !recordLoading[row.ci_id]" description="还没有解析记录，点右上添加" :image-size="50" />
+              <el-empty v-if="!(records[row.ci_id] && records[row.ci_id].length) && !recordLoading[row.ci_id]"
+                :description="row.origin === 'manual' ? '还没有解析，点右上「添加解析」' : '还没有解析，点右上「从 GoDaddy 同步解析」'" :image-size="50" />
             </div>
           </template>
         </el-table-column>
@@ -61,18 +68,21 @@
           <span :class="{stale: row.stale}">{{ row.name }}</span>
           <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">厂商已删</el-tag>
         </template></el-table-column>
-        <el-table-column label="来源" width="160"><template #default="{ row }">
+        <el-table-column label="来源" width="150"><template #default="{ row }">
           <el-tag v-if="row.origin === 'manual'" type="info" size="small">手动录入</el-tag>
           <el-tag v-else type="success" size="small">{{ row.registrar_name || '同步' }}</el-tag>
         </template></el-table-column>
         <el-table-column label="域名到期" width="120"><template #default="{ row }"><span :class="{warn: isNear(row.expiry_at)}">{{ row.expiry_at || '—' }}</span></template></el-table-column>
         <el-table-column label="解析数" width="80"><template #default="{ row }">{{ row.reso_count ?? '—' }}</template></el-table-column>
-        <el-table-column label="操作" width="190">
+        <el-table-column label="操作" width="250" fixed="right">
           <template #default="{ row }">
             <el-tooltip content="刷新域名注册到期(WHOIS) + 主域名证书(连443)"><el-button link type="primary" :loading="refreshing[row.ci_id]" @click="refreshOne(row)">刷到期</el-button></el-tooltip>
-            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-tooltip v-if="row.stale" content="GoDaddy 已无此域名，确认后从台账移除"><el-button link type="danger" @click="del(row)">移除</el-button></el-tooltip>
-            <el-button v-else-if="row.origin === 'manual'" link type="danger" @click="del(row)">删除</el-button>
+            <el-tooltip content="一键检测该域名下所有解析的证书到期"><el-button link type="primary" :loading="checkingAll[row.ci_id]" @click="checkAllCerts(row)">检测全部证书</el-button></el-tooltip>
+            <template v-if="row.origin === 'manual'">
+              <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+              <el-button link type="danger" @click="del(row)">删除</el-button>
+            </template>
+            <el-tooltip v-else-if="row.stale" content="GoDaddy 已无此域名，确认后从台账移除"><el-button link type="danger" @click="del(row)">移除</el-button></el-tooltip>
           </template>
         </el-table-column>
       </el-table>
@@ -80,7 +90,7 @@
         :total="filteredRows.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
     </el-card>
 
-    <!-- 主域名表单 -->
+    <!-- 主域名表单（仅手动录入/编辑手动域名） -->
     <el-dialog v-model="dlg" :title="editing?'编辑主域名':'录入主域名'" width="480px">
       <el-form :model="form" label-width="100px">
         <el-form-item label="主域名">
@@ -98,12 +108,15 @@
       <template #footer><el-button @click="dlg=false">取消</el-button><el-button type="primary" @click="save">保存</el-button></template>
     </el-dialog>
 
-    <!-- 解析记录表单（只补业务字段，主机头/回源/源站来自 GoDaddy 同步） -->
-    <el-dialog v-model="rDlg" title="编辑解析" width="520px">
+    <!-- 解析记录表单（仅手动域名可增删改，所有字段可填） -->
+    <el-dialog v-model="rDlg" :title="rEditing?'编辑解析':'添加解析'" width="520px">
       <el-form :model="rForm" label-width="100px">
         <el-form-item label="主机头">
-          <el-input v-model="rForm.host" disabled style="width:200px" />
-          <span class="muted" style="margin-left:8px">{{ rForm.record_type }}（来自 GoDaddy）</span>
+          <el-input v-model="rForm.host" placeholder="www / @ / api" style="width:200px" />
+          <el-select v-model="rForm.record_type" style="width:110px; margin-left:8px">
+            <el-option label="A" value="A" />
+            <el-option label="CNAME" value="CNAME" />
+          </el-select>
         </el-form-item>
         <el-form-item label="项目">
           <el-select v-model="rForm.project" filterable clearable placeholder="选择项目" style="width:200px">
@@ -121,8 +134,8 @@
             <el-option v-for="c in app.cdns" :key="c.id" :label="c.name" :value="c.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="回源 CNAME"><el-input v-model="rForm.cname" disabled placeholder="（GoDaddy 同步，CNAME 记录值）" /></el-form-item>
-        <el-form-item label="源站 IP"><el-input v-model="rForm.origin_ip" disabled placeholder="（GoDaddy 同步，A 记录值）" /></el-form-item>
+        <el-form-item label="回源"><el-input v-model="rForm.cname" placeholder="（可选）回源地址 / CNAME" /></el-form-item>
+        <el-form-item label="源站 IP"><el-input v-model="rForm.origin_ip" placeholder="（可选）源站 IP" /></el-form-item>
         <el-form-item label="证书到期">
           <el-date-picker v-model="rForm.cert_expiry_at" type="date" value-format="YYYY-MM-DD" placeholder="可手动填，或保存后点「检测证书」自动读" style="width:240px" />
         </el-form-item>
@@ -137,15 +150,15 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { listDomains, createDomain, updateDomain, deleteDomain, listRegistrars, refreshDomain, refreshAllDomains,
-  listRecords, updateRecord, deleteRecord, checkRecordCert, syncDomainRecords } from '../api/cmdb'
+  listRecords, createRecord, updateRecord, deleteRecord, checkRecordCert, checkAllRecordCerts, syncDomainRecords } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
 const rows = ref([]), registrars = ref([]), loading = ref(false)
 const records = ref({}), recordLoading = ref({})
 const dlg = ref(false), editing = ref(false), form = ref({})
-const rDlg = ref(false), rForm = ref({}), rCtx = ref(null)
-const checking = ref({}), syncingReso = ref({})
+const rDlg = ref(false), rEditing = ref(false), rForm = ref({}), rCtx = ref(null)
+const checking = ref({}), checkingAll = ref({}), syncingReso = ref({})
 const refreshing = ref({}), refreshingAll = ref(false)
 const f = ref({ keyword: '', registrar: null })
 const query = ref({ keyword: '', registrar: null })
@@ -181,7 +194,7 @@ function onExpand(row, expandedRows) {
   if (open) loadRecords(row.ci_id)
 }
 
-// 主域名（手动录入 origin=manual / 同步 origin=sync；同步项不可改名，失效项可移除）
+// 主域名：手动录入(origin=manual)可编辑/删除；同步(origin=sync)只读；失效(stale)可移除
 function openAdd() { editing.value = false; form.value = { name: '', registrar_id: null, dns_provider: '', expiry_at: '' }; dlg.value = true }
 function openEdit(row) { editing.value = true; form.value = { ...row, expiry_at: row.expiry_at || '' }; dlg.value = true }
 async function save() {
@@ -200,11 +213,14 @@ async function del(row) {
   } catch (e) { if (e !== 'cancel') ElMessage.error('删除失败') }
 }
 
-// 解析记录（来自 GoDaddy 同步，只编辑业务字段）
-function openEditReso(row, r) { rCtx.value = row; rForm.value = { ...r, cert_expiry_at: r.cert_expiry_at || '' }; rDlg.value = true }
+// 解析记录：仅手动域名可增删改；同步域名只读（仅检测证书 / 失效可移除）
+function openAddReso(row) { rCtx.value = row; rEditing.value = false; rForm.value = { host: '', record_type: 'A', project: '', env: '', module: '', cdn_id: null, cname: '', origin_ip: '', cert_expiry_at: '' }; rDlg.value = true }
+function openEditReso(row, r) { rCtx.value = row; rEditing.value = true; rForm.value = { ...r, cert_expiry_at: r.cert_expiry_at || '' }; rDlg.value = true }
 async function saveReso() {
+  if (!rForm.value.host) { ElMessage.warning('主机头必填'); return }
   try {
-    await updateRecord(rForm.value.id, rForm.value)
+    if (rEditing.value) await updateRecord(rForm.value.id, rForm.value)
+    else await createRecord(rCtx.value.ci_id, rForm.value)
     ElMessage.success('已保存'); rDlg.value = false; loadRecords(rCtx.value.ci_id)
   } catch (e) { ElMessage.error(e.response?.data?.error || '保存失败') }
 }
@@ -234,6 +250,15 @@ async function checkCert(row, r) {
     else ElMessage.warning(`${res.fqdn} 检测失败：${res.msg}`)
     loadRecords(row.ci_id)
   } catch (e) { ElMessage.error('检测失败') } finally { checking.value = { ...checking.value, [r.id]: false } }
+}
+async function checkAllCerts(row) {
+  checkingAll.value = { ...checkingAll.value, [row.ci_id]: true }
+  try {
+    const r = await checkAllRecordCerts(row.ci_id)
+    ElMessage.success(`检测完成：成功 ${r.success} / 失败 ${r.failed}（共 ${r.checked} 条解析）`)
+    if (records.value[row.ci_id]) loadRecords(row.ci_id)
+  } catch (e) { ElMessage.error(e.response?.data?.error || '检测失败') }
+  finally { checkingAll.value = { ...checkingAll.value, [row.ci_id]: false } }
 }
 
 async function refreshOne(row) {
