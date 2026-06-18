@@ -37,6 +37,7 @@ type recordOut struct {
 	Env          string `json:"env"`
 	Module       string `json:"module"`
 	Operator     string `json:"operator"`
+	Stale        bool   `json:"stale"`
 	UpdatedAt    string `json:"updated_at"`
 }
 
@@ -44,9 +45,9 @@ func (h *RecordHandler) List(c *gin.Context) {
 	rows, err := h.DB.Query(`
 		SELECT r.id, r.host, r.record_type, r.cdn_id, COALESCE(d.name,''),
 		       r.cname, r.origin_ip, r.cert_expiry_at, r.cert_check_msg,
-		       r.project, r.env, r.module, r.operator, r.updated_at
+		       r.project, r.env, r.module, r.operator, r.stale, r.updated_at
 		FROM domain_records r LEFT JOIN cdns d ON d.id=r.cdn_id
-		WHERE r.domain_ci_id=? ORDER BY r.id`, c.Param("ciid"))
+		WHERE r.domain_ci_id=? ORDER BY r.stale, r.id`, c.Param("ciid"))
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -58,12 +59,14 @@ func (h *RecordHandler) List(c *gin.Context) {
 		var cdnID sql.NullInt64
 		var certExp sql.NullTime
 		var updated sql.NullTime
+		var stale int
 		if err := rows.Scan(&o.ID, &o.Host, &o.RecordType, &cdnID, &o.CdnName,
 			&o.Cname, &o.OriginIP, &certExp, &o.CertCheckMsg,
-			&o.Project, &o.Env, &o.Module, &o.Operator, &updated); err != nil {
+			&o.Project, &o.Env, &o.Module, &o.Operator, &stale, &updated); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
+		o.Stale = stale == 1
 		if cdnID.Valid {
 			v := int(cdnID.Int64)
 			o.CdnID = &v

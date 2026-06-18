@@ -20,6 +20,7 @@ export const createRecord = (ciid, b) => http.post(`/domains/${ciid}/records`, b
 export const updateRecord = (id, b) => http.put('/records/' + id, b).then((r) => r.data)
 export const deleteRecord = (id) => http.delete('/records/' + id).then((r) => r.data)
 export const checkRecordCert = (id) => http.post(`/records/${id}/check-cert`).then((r) => r.data)
+export const syncDomainRecords = (ciid) => http.post(`/domains/${ciid}/sync-records`).then((r) => r.data)
 
 // DNS 记录（厂商原始记录缓存，只读）
 export const listDnsRecords = (ciid) => http.get(`/domains/${ciid}/dns-records`).then((r) => r.data)

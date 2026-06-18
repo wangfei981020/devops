@@ -26,11 +26,14 @@
           <template #default="{ row }">
             <div class="reso">
               <div class="reso-head">
-                <b>解析记录</b><span class="muted" style="margin-left:8px">{{ row.name }} 的 A/CNAME 解析（同步自动导入，业务字段手动补；全量原始记录看「DNS 记录」页）</span>
-                <el-button type="primary" size="small" style="float:right" @click="openAddReso(row)">+ 添加解析</el-button>
+                <b>解析记录</b><span class="muted" style="margin-left:8px">{{ row.name }} 的 A/CNAME（从 GoDaddy 同步进来，你只补业务字段；全量原始记录看「DNS 记录」页）</span>
+                <el-button type="primary" size="small" :icon="Refresh" :loading="syncingReso[row.ci_id]" style="float:right" @click="syncReso(row)">从 GoDaddy 同步解析</el-button>
               </div>
               <el-table :data="records[row.ci_id] || []" size="small" v-loading="recordLoading[row.ci_id]">
-                <el-table-column label="主机头" min-width="130"><template #default="{ row: r }"><span class="mono">{{ r.host }}</span></template></el-table-column>
+                <el-table-column label="主机头" min-width="150"><template #default="{ row: r }">
+                  <span class="mono" :class="{stale: r.stale}">{{ r.host }}</span>
+                  <el-tag v-if="r.stale" type="warning" size="small" style="margin-left:6px">厂商已删</el-tag>
+                </template></el-table-column>
                 <el-table-column prop="project" label="项目" width="110" />
                 <el-table-column label="环境" width="80"><template #default="{ row: r }"><el-tag v-if="r.env" size="small">{{ r.env }}</el-tag></template></el-table-column>
                 <el-table-column prop="module" label="模块" width="100" />
@@ -60,7 +63,7 @@
         <el-table-column label="解析数" width="80"><template #default="{ row }">{{ row.reso_count ?? '—' }}</template></el-table-column>
         <el-table-column label="操作" width="190">
           <template #default="{ row }">
-            <el-button link type="primary" :loading="refreshing[row.ci_id]" @click="refreshOne(row)">刷新</el-button>
+            <el-tooltip content="刷新域名注册到期(WHOIS) + 主域名证书(连443)"><el-button link type="primary" :loading="refreshing[row.ci_id]" @click="refreshOne(row)">刷到期</el-button></el-tooltip>
             <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
             <el-button link type="danger" @click="del(row)">删除</el-button>
           </template>
@@ -85,10 +88,13 @@
       <template #footer><el-button @click="dlg=false">取消</el-button><el-button type="primary" @click="save">保存</el-button></template>
     </el-dialog>
 
-    <!-- 解析记录表单 -->
-    <el-dialog v-model="rDlg" :title="rEditing?'编辑解析':'添加解析'" width="520px">
+    <!-- 解析记录表单（只补业务字段，主机头/回源/源站来自 GoDaddy 同步） -->
+    <el-dialog v-model="rDlg" title="编辑解析" width="520px">
       <el-form :model="rForm" label-width="100px">
-        <el-form-item label="主机头"><el-input v-model="rForm.host" placeholder="www / @ / api" style="width:200px" /></el-form-item>
+        <el-form-item label="主机头">
+          <el-input v-model="rForm.host" disabled style="width:200px" />
+          <span class="muted" style="margin-left:8px">{{ rForm.record_type }}（来自 GoDaddy）</span>
+        </el-form-item>
         <el-form-item label="项目">
           <el-select v-model="rForm.project" filterable clearable placeholder="选择项目" style="width:200px">
             <el-option v-for="p in app.projects" :key="p.id" :label="p.name" :value="p.name" />
@@ -105,8 +111,8 @@
             <el-option v-for="c in app.cdns" :key="c.id" :label="c.name" :value="c.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="回源 CNAME"><el-input v-model="rForm.cname" placeholder="（可选）CDN 回源 CNAME" /></el-form-item>
-        <el-form-item label="源站 IP"><el-input v-model="rForm.origin_ip" placeholder="（可选）源站 IP" /></el-form-item>
+        <el-form-item label="回源 CNAME"><el-input v-model="rForm.cname" disabled placeholder="（GoDaddy 同步，CNAME 记录值）" /></el-form-item>
+        <el-form-item label="源站 IP"><el-input v-model="rForm.origin_ip" disabled placeholder="（GoDaddy 同步，A 记录值）" /></el-form-item>
         <el-form-item label="证书到期">
           <el-date-picker v-model="rForm.cert_expiry_at" type="date" value-format="YYYY-MM-DD" placeholder="可手动填，或保存后点「检测证书」自动读" style="width:240px" />
         </el-form-item>
@@ -121,15 +127,15 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { listDomains, createDomain, updateDomain, deleteDomain, listRegistrars, refreshDomain, refreshAllDomains,
-  listRecords, createRecord, updateRecord, deleteRecord, checkRecordCert } from '../api/cmdb'
+  listRecords, updateRecord, deleteRecord, checkRecordCert, syncDomainRecords } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
 const rows = ref([]), registrars = ref([]), loading = ref(false)
 const records = ref({}), recordLoading = ref({})
 const dlg = ref(false), editing = ref(false), form = ref({})
-const rDlg = ref(false), rEditing = ref(false), rForm = ref({}), rCtx = ref(null)
-const checking = ref({})
+const rDlg = ref(false), rForm = ref({}), rCtx = ref(null)
+const checking = ref({}), syncingReso = ref({})
 const refreshing = ref({}), refreshingAll = ref(false)
 const f = ref({ keyword: '', registrar: null })
 const query = ref({ keyword: '', registrar: null })
@@ -182,22 +188,31 @@ async function del(row) {
   } catch (e) { if (e !== 'cancel') ElMessage.error('删除失败') }
 }
 
-// 解析记录
-function openAddReso(row) { rCtx.value = row; rEditing.value = false; rForm.value = { host: '', record_type: 'A', project: '', env: '', module: '', cdn_id: null, cname: '', origin_ip: '', cert_expiry_at: '' }; rDlg.value = true }
-function openEditReso(row, r) { rCtx.value = row; rEditing.value = true; rForm.value = { ...r, cert_expiry_at: r.cert_expiry_at || '' }; rDlg.value = true }
+// 解析记录（来自 GoDaddy 同步，只编辑业务字段）
+function openEditReso(row, r) { rCtx.value = row; rForm.value = { ...r, cert_expiry_at: r.cert_expiry_at || '' }; rDlg.value = true }
 async function saveReso() {
-  if (!rForm.value.host) { ElMessage.warning('主机头必填'); return }
   try {
-    if (rEditing.value) await updateRecord(rForm.value.id, rForm.value)
-    else await createRecord(rCtx.value.ci_id, rForm.value)
+    await updateRecord(rForm.value.id, rForm.value)
     ElMessage.success('已保存'); rDlg.value = false; loadRecords(rCtx.value.ci_id)
   } catch (e) { ElMessage.error(e.response?.data?.error || '保存失败') }
 }
 async function delReso(row, r) {
   try {
-    await app.showConfirm(`删除解析 ${r.host}？`)
+    await app.showConfirm(r.stale ? `该解析 GoDaddy 已删除，确认从台账移除 ${r.host}？` : `删除解析 ${r.host}？`)
     await deleteRecord(r.id); loadRecords(row.ci_id)
   } catch (e) { if (e !== 'cancel') ElMessage.error('删除失败') }
+}
+async function syncReso(row) {
+  syncingReso.value = { ...syncingReso.value, [row.ci_id]: true }
+  try {
+    const r = await syncDomainRecords(row.ci_id)
+    ElMessage.success(`同步完成：${r.synced_records} 条 DNS / 新导入 ${r.imported_records} 条`)
+    loadRecords(row.ci_id)
+  } catch (e) {
+    const info = e.response?.data?.rate_limit
+    if (info) ElMessage.warning(`已限流，${info.retry_after_seconds}s 后重试（窗口 ${info.window}）`)
+    else ElMessage.error(e.response?.data?.error || '同步失败')
+  } finally { syncingReso.value = { ...syncingReso.value, [row.ci_id]: false } }
 }
 async function checkCert(row, r) {
   checking.value = { ...checking.value, [r.id]: true }
@@ -229,4 +244,5 @@ onMounted(load)
 .reso { padding: 8px 16px 14px; background: #fafbfc; }
 .reso-head { margin-bottom: 8px; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+.stale { text-decoration: line-through; color: #b0b3bb; }
 </style>

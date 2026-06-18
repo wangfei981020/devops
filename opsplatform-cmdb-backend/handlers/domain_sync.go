@@ -29,6 +29,51 @@ func (h *SyncHandler) Register(r *gin.RouterGroup) {
 	r.POST("/sources/:id/sync", h.Sync)
 	r.GET("/sources/:id/usage", h.Usage)
 	r.GET("/domains/:ciid/dns-records", h.DNSRecords)
+	r.POST("/domains/:ciid/sync-records", h.SyncDomainRecords)
+}
+
+// SyncDomainRecords 单个域名从其绑定数据源拉 A/CNAME，刷 DNS 记录缓存 + 导入/更新业务台账。
+func (h *SyncHandler) SyncDomainRecords(c *gin.Context) {
+	ciid := c.Param("ciid")
+	var name string
+	var sourceID sql.NullInt64
+	if err := h.DB.QueryRow(`SELECT c.name, d.registrar_id FROM cis c JOIN domains d ON d.ci_id=c.id
+		WHERE c.id=? AND c.type='domain'`, ciid).Scan(&name, &sourceID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "域名不存在"})
+		return
+	}
+	if !sourceID.Valid {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "该域名未绑定数据源，请先在「编辑」里选择数据源/注册商"})
+		return
+	}
+	id := int(sourceID.Int64)
+	provider, cred, err := LoadCredential(h.DB, h.Cipher, id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "数据源凭据读取失败"})
+		return
+	}
+	adapter, err := dnsource.NewAdapter(provider, cred, dnsource.LimiterFor(id))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	recs, err := adapter.ListRecords(ctx, name)
+	if rle := asRateLimit(err); rle != nil {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": rle.Error(), "rate_limit": rle.Info})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	ciIDInt, _ := parseID(ciid)
+	h.refreshDNSRecords(ciIDInt, id, recs)
+	imported := h.importBusinessRecords(ciIDInt, recs)
+	WriteAudit(h.DB, c, "sync_domain_records", name)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "synced_records": len(recs), "imported_records": imported})
 }
 
 // Usage 某数据源的 API 客户端限流用量。
@@ -184,8 +229,10 @@ func (h *SyncHandler) importBusinessRecords(ciID int64, recs []dnsource.DNSRecor
 		}
 	}
 	created := 0
+	present := map[string]bool{}
 	for _, key := range order {
 		b := agg[key]
+		present[b.host+"|"+b.rtype] = true
 		var id int64
 		err := h.DB.QueryRow(`SELECT id FROM domain_records WHERE domain_ci_id=? AND host=? AND record_type=?`,
 			ciID, b.host, b.rtype).Scan(&id)
@@ -194,8 +241,24 @@ func (h *SyncHandler) importBusinessRecords(ciID int64, recs []dnsource.DNSRecor
 				VALUES (?, ?, ?, ?, ?, 'godaddy同步')`, ciID, b.host, b.rtype, b.originIP, b.cname)
 			created++
 		} else if err == nil {
-			// 只刷厂商字段，业务字段(项目/环境/模块/CDN/证书)原样保留
-			_, _ = h.DB.Exec(`UPDATE domain_records SET origin_ip=?, cname=? WHERE id=?`, b.originIP, b.cname, id)
+			// 只刷厂商字段，业务字段(项目/环境/模块/CDN/证书)原样保留；重新出现则取消失效标记
+			_, _ = h.DB.Exec(`UPDATE domain_records SET origin_ip=?, cname=?, stale=0 WHERE id=?`, b.originIP, b.cname, id)
+		}
+	}
+	// 厂商已删除：本次未出现的 A/CNAME 标为失效（保留业务字段，由人工确认后删）
+	rows, err := h.DB.Query(`SELECT id, host, record_type FROM domain_records WHERE domain_ci_id=? AND record_type IN ('A','CNAME')`, ciID)
+	if err == nil {
+		defer rows.Close()
+		var stale []int64
+		for rows.Next() {
+			var id int64
+			var host, rtype string
+			if rows.Scan(&id, &host, &rtype) == nil && !present[host+"|"+rtype] {
+				stale = append(stale, id)
+			}
+		}
+		for _, id := range stale {
+			_, _ = h.DB.Exec(`UPDATE domain_records SET stale=1 WHERE id=?`, id)
 		}
 	}
 	return created
