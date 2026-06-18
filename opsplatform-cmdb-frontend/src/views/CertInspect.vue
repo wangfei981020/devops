@@ -97,14 +97,19 @@ const enriched = computed(() => rows.value.map((r) => {
   return { ...r, _st: st, _days: r.expiry_at ? daysTo(r.expiry_at) : null }
 }))
 const counts = computed(() => {
-  const c = { all: enriched.value.length }
+  const c = { all: 0 }
   for (const s of statusTabs) if (s.v !== 'all') c[s.v] = 0
-  for (const r of enriched.value) c[r._st] = (c[r._st] || 0) + 1
+  for (const r of enriched.value) {
+    c[r._st] = (c[r._st] || 0) + 1
+    if (r._st !== 'ignored') c.all++ // 「全部」不含已忽略
+  }
   return c
 })
 const filtered = computed(() => {
   let list = enriched.value
-  if (statusFilter.value !== 'all') list = list.filter((r) => r._st === statusFilter.value)
+  // 「全部」= 未忽略的巡检项；已忽略的只在「已忽略」tab 看
+  if (statusFilter.value === 'all') list = list.filter((r) => r._st !== 'ignored')
+  else list = list.filter((r) => r._st === statusFilter.value)
   if (keyword.value) { const k = keyword.value.toLowerCase(); list = list.filter((r) => r.fqdn.toLowerCase().includes(k) || r.domain.toLowerCase().includes(k)) }
   // 排序：有到期日的按到期排，无到期日(失败/未检测)排最后
   list = [...list].sort((a, b) => {
