@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	"archive/zip"
+	"bytes"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -317,12 +320,12 @@ func (h *CertHandler) Revoke(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true})
 }
 
-// Download 登录态下载证书（fullchain + 解密私钥）。
+// Download 登录态下载证书：打包成 zip（fullchain.pem + chain.pem + privkey.pem），用户自行解压。
 func (h *CertHandler) Download(c *gin.Context) {
 	id := c.Param("id")
-	var cert, chain, keyEnc string
-	err := h.DB.QueryRow(`SELECT COALESCE(cert_pem,''), COALESCE(chain_pem,''), COALESCE(key_pem_enc,'') FROM certificates WHERE ci_id=?`, id).
-		Scan(&cert, &chain, &keyEnc)
+	var cn, cert, chain, keyEnc string
+	err := h.DB.QueryRow(`SELECT cn, COALESCE(cert_pem,''), COALESCE(chain_pem,''), COALESCE(key_pem_enc,'') FROM certificates WHERE ci_id=?`, id).
+		Scan(&cn, &cert, &chain, &keyEnc)
 	if err != nil {
 		c.JSON(404, gin.H{"error": "not found"})
 		return
@@ -331,8 +334,33 @@ func (h *CertHandler) Download(c *gin.Context) {
 	if keyEnc != "" {
 		key, _ = h.Cipher.Decrypt(keyEnc)
 	}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, f := range []struct{ name, body string }{
+		{"fullchain.pem", cert},
+		{"chain.pem", chain},
+		{"privkey.pem", key},
+	} {
+		if f.body == "" {
+			continue
+		}
+		w, werr := zw.Create(f.name)
+		if werr != nil {
+			c.JSON(500, gin.H{"error": werr.Error()})
+			return
+		}
+		_, _ = w.Write([]byte(f.body))
+	}
+	if err := zw.Close(); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
 	WriteAudit(h.DB, c, "download_cert", id)
-	c.JSON(http.StatusOK, gin.H{"fullchain": cert, "chain": chain, "key": key})
+	fname := strings.NewReplacer("*", "_", "/", "_", " ", "_").Replace(cn) + ".zip"
+	c.Header("Content-Disposition", `attachment; filename="`+fname+`"`)
+	c.Data(http.StatusOK, "application/zip", buf.Bytes())
 }
 
 func (h *CertHandler) runIssue(certCIID, domainCIID int64, acctID int, staging bool, action string) {

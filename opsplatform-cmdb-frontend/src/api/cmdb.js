@@ -53,7 +53,7 @@ export const applyCert = (b) => http.post('/certs', b).then((r) => r.data)
 export const renewCert = (id) => http.post(`/certs/${id}/renew`).then((r) => r.data)
 export const certDnsReady = (id) => http.post(`/certs/${id}/dns-ready`).then((r) => r.data)
 export const revokeCert = (id) => http.delete('/certs/' + id).then((r) => r.data)
-export const downloadCert = (id) => http.get(`/certs/${id}/download`).then((r) => r.data)
+export const downloadCert = (id) => http.get(`/certs/${id}/download`, { responseType: 'blob' }).then((r) => r.data)
 
 // ACME 账户
 export const listAcme = () => http.get('/acme-accounts').then((r) => r.data)

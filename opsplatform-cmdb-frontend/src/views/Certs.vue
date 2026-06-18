@@ -162,16 +162,13 @@ async function revoke(row) {
 }
 async function download(row) {
   try {
-    const d = await downloadCert(row.ci_id)
-    saveFile(`${row.cn}.fullchain.pem`, d.fullchain)
-    saveFile(`${row.cn}.key.pem`, d.key)
-    ElMessage.success('已下载 fullchain + key')
+    const blob = await downloadCert(row.ci_id)
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${row.cn.replace(/\*/g, '_')}.zip`
+    a.click(); URL.revokeObjectURL(a.href)
+    ElMessage.success('已下载证书 zip')
   } catch (e) { ElMessage.error('下载失败') }
-}
-function saveFile(name, content) {
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(new Blob([content || ''], { type: 'application/x-pem-file' }))
-  a.download = name; a.click(); URL.revokeObjectURL(a.href)
 }
 const statusType = (s) => ({ active: 'success', pending: 'warning', await_dns: 'warning', expiring: 'warning', expired: 'danger', error: 'danger' }[s] || 'info')
 const statusLabel = (s) => ({ active: '有效', pending: '签发中', await_dns: '待加DNS', expiring: '将到期', expired: '已过期', error: '失败' }[s] || s)
