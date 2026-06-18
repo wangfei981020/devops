@@ -26,6 +26,10 @@ export const syncDomainRecords = (ciid) => http.post(`/domains/${ciid}/sync-reco
 // DNS 记录（厂商原始记录缓存，只读）
 export const listDnsRecords = (ciid) => http.get(`/domains/${ciid}/dns-records`).then((r) => r.data)
 
+// 证书巡检（跨所有域名的线上证书 + ACME 签发）
+export const listCertInspect = () => http.get('/cert-inspect').then((r) => r.data)
+export const recordCertIgnore = (id, b) => http.put(`/records/${id}/cert-ignore`, b).then((r) => r.data)
+
 // 数据源同步 + API 用量（数据源 = 注册商 registrars）
 export const syncSource = (id) => http.post(`/sources/${id}/sync`).then((r) => r.data)
 export const sourceUsage = (id) => http.get(`/sources/${id}/usage`).then((r) => r.data)

@@ -43,7 +43,7 @@
                 <el-table-column label="CDN" width="110"><template #default="{ row: r }">{{ r.cdn_name || '—' }}</template></el-table-column>
                 <el-table-column label="回源" min-width="160" show-overflow-tooltip><template #default="{ row: r }"><span class="mono">{{ r.cname || '—' }}</span></template></el-table-column>
                 <el-table-column label="源站 IP" width="130"><template #default="{ row: r }"><span class="mono">{{ r.origin_ip || '—' }}</span></template></el-table-column>
-                <el-table-column label="证书到期" width="110"><template #default="{ row: r }">
+                <el-table-column label="证书到期" width="130" sortable :sort-method="sortByCertExpiry"><template #default="{ row: r }">
                   <span v-if="r.cert_expiry_at" :class="{warn: isNear(r.cert_expiry_at)}">{{ r.cert_expiry_at }}</span>
                   <el-tooltip v-else-if="r.cert_check_msg" :content="r.cert_check_msg"><span class="muted">检查失败</span></el-tooltip>
                   <span v-else class="muted">—</span>
@@ -72,7 +72,7 @@
           <el-tag v-if="row.origin === 'manual'" type="info" size="small">手动录入</el-tag>
           <el-tag v-else type="success" size="small">{{ row.registrar_name || '同步' }}</el-tag>
         </template></el-table-column>
-        <el-table-column label="域名到期" width="120"><template #default="{ row }"><span :class="{warn: isNear(row.expiry_at)}">{{ row.expiry_at || '—' }}</span></template></el-table-column>
+        <el-table-column label="域名到期" width="130" sortable :sort-method="sortByDomainExpiry"><template #default="{ row }"><span :class="{warn: isNear(row.expiry_at)}">{{ row.expiry_at || '—' }}</span></template></el-table-column>
         <el-table-column label="解析数" width="80"><template #default="{ row }">{{ row.reso_count ?? '—' }}</template></el-table-column>
         <el-table-column label="操作" width="250" fixed="right">
           <template #default="{ row }">
@@ -272,6 +272,19 @@ async function refreshAll() {
   catch (e) { ElMessage.error('刷新失败') } finally { refreshingAll.value = false }
 }
 function isNear(d) { if (!d) return false; return (new Date(d) - Date.now()) / 86400000 < 30 }
+// 列排序：无到期日（空/检查失败）排最后
+function sortByCertExpiry(a, b) {
+  if (!a.cert_expiry_at && !b.cert_expiry_at) return 0
+  if (!a.cert_expiry_at) return 1
+  if (!b.cert_expiry_at) return -1
+  return new Date(a.cert_expiry_at) - new Date(b.cert_expiry_at)
+}
+function sortByDomainExpiry(a, b) {
+  if (!a.expiry_at && !b.expiry_at) return 0
+  if (!a.expiry_at) return 1
+  if (!b.expiry_at) return -1
+  return new Date(a.expiry_at) - new Date(b.expiry_at)
+}
 onMounted(load)
 </script>
 

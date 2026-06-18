@@ -2,8 +2,10 @@
   <div class="page">
     <div class="page-head"><span class="page-title">总览</span></div>
     <el-row :gutter="14">
-      <el-col :span="6" v-for="c in cards" :key="c.label">
-        <el-card shadow="never"><div class="stat"><div class="num" :style="{color:c.color}">{{ c.num }}</div><div class="lbl">{{ c.label }}</div></div></el-card>
+      <el-col :span="6" v-for="c in cards" :key="c.label" style="margin-bottom:14px">
+        <el-card shadow="never" :class="{clickable: c.to}" @click="c.to && $router.push(c.to)">
+          <div class="stat"><div class="num" :style="{color:c.color}">{{ c.num }}</div><div class="lbl">{{ c.label }}</div></div>
+        </el-card>
       </el-col>
     </el-row>
 
@@ -40,13 +42,18 @@ const cards = computed(() => [
   { label: '配置项', num: data.value.ci_total || 0, color: '#1f2430' },
   { label: '域名', num: data.value.domain_total || 0, color: '#3b82f6' },
   { label: '证书', num: data.value.cert_total || 0, color: '#10b981' },
-  { label: '30天内到期', num: (data.value.expiring || []).length, color: '#e6a23c' },
+  { label: '30天内到期(域名/证书)', num: (data.value.expiring || []).length, color: '#e6a23c' },
+  { label: '证书快到期(线上)', num: data.value.online_cert_expiring || 0, color: '#e6a23c', to: '/cert-inspect' },
+  { label: '证书已过期(线上)', num: data.value.online_cert_expired || 0, color: '#f56c6c', to: '/cert-inspect' },
+  { label: '证书检测失败', num: data.value.online_cert_failed || 0, color: '#909399', to: '/cert-inspect' },
 ])
 onMounted(async () => { try { data.value = await dashboard() } catch (e) {} })
 </script>
 
 <style scoped>
 .stat { text-align: center; padding: 8px; }
+.clickable { cursor: pointer; transition: box-shadow .15s; }
+.clickable:hover { box-shadow: 0 2px 12px rgba(0,0,0,.1); }
 .num { font-size: 28px; font-weight: 700; }
 .lbl { color: #909399; font-size: 13px; margin-top: 4px; }
 </style>
