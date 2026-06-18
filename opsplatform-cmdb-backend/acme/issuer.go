@@ -9,11 +9,13 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/challenge"
+	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/challenge/http01"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
@@ -69,8 +71,38 @@ type IssueResult struct {
 	NotAfter      time.Time
 }
 
+// loggingProvider 包装真实 DNS-01 provider，把每次写/删 TXT 的目标 zone、
+// EffectiveFQDN、TXT 值与底层写入返回打到日志，用于排查"自动签发 LE 查不到 TXT(403)"。
+type loggingProvider struct {
+	inner challenge.Provider
+}
+
+func (l *loggingProvider) Present(domain, token, keyAuth string) error {
+	info := dns01.GetChallengeInfo(domain, keyAuth)
+	zone, zerr := dns01.FindZoneByFqdn(info.EffectiveFQDN)
+	log.Printf("[acme][present] domain=%s effectiveFQDN=%s txtValue=%s -> FindZone=%q zoneErr=%v",
+		domain, info.EffectiveFQDN, info.Value, zone, zerr)
+	err := l.inner.Present(domain, token, keyAuth)
+	log.Printf("[acme][present] domain=%s 底层 provider 写入返回 err=%v", domain, err)
+	return err
+}
+
+func (l *loggingProvider) CleanUp(domain, token, keyAuth string) error {
+	err := l.inner.CleanUp(domain, token, keyAuth)
+	log.Printf("[acme][cleanup] domain=%s err=%v", domain, err)
+	return err
+}
+
+func (l *loggingProvider) Timeout() (timeout, interval time.Duration) {
+	if t, ok := l.inner.(challenge.ProviderTimeout); ok {
+		return t.Timeout()
+	}
+	return 2 * time.Minute, 4 * time.Second
+}
+
 // Issue 执行一次 ACME 签发。
 func Issue(req IssueRequest) (*IssueResult, error) {
+	log.Printf("[acme] 开始签发 domains=%v challenge=%q caDir=%s dnsProvider=%q", req.Domains, req.Challenge, req.CADir, req.DNSProvider)
 	key, accountPEM, err := loadOrGenKey(req.AccountKeyPEM)
 	if err != nil {
 		return nil, err
@@ -100,7 +132,7 @@ func Issue(req IssueRequest) (*IssueResult, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := client.Challenge.SetDNS01Provider(p); err != nil {
+		if err := client.Challenge.SetDNS01Provider(&loggingProvider{inner: p}); err != nil {
 			return nil, err
 		}
 	}
@@ -113,6 +145,7 @@ func Issue(req IssueRequest) (*IssueResult, error) {
 
 	res, err := client.Certificate.Obtain(certificate.ObtainRequest{Domains: req.Domains, Bundle: true})
 	if err != nil {
+		log.Printf("[acme] Obtain 失败 domains=%v: %+v", req.Domains, err)
 		return nil, fmt.Errorf("obtain: %w", err)
 	}
 
