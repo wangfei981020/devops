@@ -335,12 +335,15 @@ func (h *CertHandler) Download(c *gin.Context) {
 		key, _ = h.Cipher.Decrypt(keyEnc)
 	}
 
+	// 文件名前缀 = CN 去掉通配 *.，如 *.k8s-g32-uat.com -> k8s-g32-uat.com
+	base := strings.NewReplacer("/", "_", " ", "_").Replace(strings.TrimPrefix(cn, "*."))
+
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	for _, f := range []struct{ name, body string }{
-		{"fullchain.pem", cert},
-		{"chain.pem", chain},
-		{"privkey.pem", key},
+		{base + ".crt", cert}, // fullchain：证书 + 中间 CA 链
+		{base + ".key", key},  // 私钥
+		{"chain.pem", chain},  // 中间 CA 链（单独文件，沿用原名）
 	} {
 		if f.body == "" {
 			continue
@@ -358,8 +361,7 @@ func (h *CertHandler) Download(c *gin.Context) {
 	}
 
 	WriteAudit(h.DB, c, "download_cert", id)
-	fname := strings.NewReplacer("*", "_", "/", "_", " ", "_").Replace(cn) + ".zip"
-	c.Header("Content-Disposition", `attachment; filename="`+fname+`"`)
+	c.Header("Content-Disposition", `attachment; filename="`+base+`.zip"`)
 	c.Data(http.StatusOK, "application/zip", buf.Bytes())
 }
 

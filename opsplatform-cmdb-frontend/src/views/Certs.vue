@@ -165,7 +165,7 @@ async function download(row) {
     const blob = await downloadCert(row.ci_id)
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `${row.cn.replace(/\*/g, '_')}.zip`
+    a.download = `${row.cn.replace(/^\*\./, '')}.zip`
     a.click(); URL.revokeObjectURL(a.href)
     ElMessage.success('已下载证书 zip')
   } catch (e) { ElMessage.error('下载失败') }
