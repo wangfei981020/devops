@@ -36,13 +36,15 @@
         <el-table-column label="忽略原因" min-width="160" show-overflow-tooltip><template #default="{ row }">
           <span v-if="row.ignored" class="muted">{{ row.ignore_reason || '—' }}</span>
         </template></el-table-column>
-        <el-table-column label="操作" width="180" fixed="right"><template #default="{ row }">
-          <template v-if="row.kind==='online'">
-            <el-button v-if="!row.ignored" link type="info" @click="openIgnore(row)">忽略</el-button>
-            <el-button v-else link type="primary" @click="unignore(row)">取消忽略</el-button>
-            <el-button link type="primary" @click="$router.push('/domains')">去域名页</el-button>
-          </template>
-          <el-button v-else link type="primary" @click="$router.push('/certs')">去证书页</el-button>
+        <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }">
+          <div style="display:flex;gap:8px;align-items:center">
+            <template v-if="row.kind==='online'">
+              <el-tooltip v-if="!row.ignored" content="忽略"><el-button link type="info" :icon="Hide" @click="openIgnore(row)" /></el-tooltip>
+              <el-tooltip v-else content="取消忽略"><el-button link type="primary" :icon="View" @click="unignore(row)" /></el-tooltip>
+              <el-tooltip content="去域名页"><el-button link type="primary" :icon="Link" @click="$router.push('/domains')" /></el-tooltip>
+            </template>
+            <el-tooltip v-else content="去证书页"><el-button link type="primary" :icon="Link" @click="$router.push('/certs')" /></el-tooltip>
+          </div>
         </template></el-table-column>
       </el-table>
       <el-pagination v-model:current-page="page" v-model:page-size="size" :page-sizes="[20,50,100,200]"
@@ -62,7 +64,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh, Search, Sort } from '@element-plus/icons-vue'
+import { Refresh, Search, Sort, Hide, View, Link } from '@element-plus/icons-vue'
 import { listCertInspect, recordCertIgnore } from '../api/cmdb'
 
 const ST = {

@@ -1,7 +1,26 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 * { box-sizing: border-box; }
-html, body, #app { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+html, body, #app { margin: 0; height: 100%; font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif; -webkit-font-smoothing: antialiased; }
+body { color: #18181b; background: #fafafa; font-feature-settings: "cv11"; }
+.mono { font-family: 'JetBrains Mono', Consolas, Menlo, monospace; }
+
+/* 禁了 preflight，补最小 reset（不动 a/ul，避免影响 Element Plus 组件） */
+h1, h2, h3, h4, h5, p, figure { margin: 0; }
+
+/* 旧页面遗留工具类——逐页改造期间与 Tailwind 共存，避免改造未完成的页面错版 */
 .page { padding: 18px 20px; }
-.mono { font-family: Consolas, Menlo, monospace; }
 .page-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .page-title { font-size: 16px; font-weight: 600; color: #1f2430; }
 .muted { color: #909399; font-size: 12px; }
+
+/* 细滚动条 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 4px; }
+
+/* 表格操作列：清掉 Element Plus 图标按钮默认的 margin/padding，让 flex gap(8px) 真正控制紧凑间距 */
+td .el-button.is-link { padding: 0; height: auto; }
+td .el-button.is-link + .el-button.is-link { margin-left: 0; }

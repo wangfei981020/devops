@@ -4,10 +4,8 @@
 
     <!-- 通用设置 -->
     <el-card shadow="never" style="margin-bottom:14px">
-      <template #header><b>通知与指标</b></template>
+      <template #header><b>指标导出</b><span class="muted" style="margin-left:8px">飞书通知 / 到期提醒 / 通知人 已移到「通知」页</span></template>
       <el-form :model="cfg" label-width="160px" style="max-width:760px">
-        <el-form-item label="飞书 Webhook"><el-input v-model="cfg.feishu_webhook" placeholder="飞书自定义机器人 webhook" /></el-form-item>
-        <el-form-item label="到期提醒天数"><el-input v-model="cfg.remind_days" placeholder="30,15,7,1" /><span class="muted" style="margin-left:8px">逗号分隔</span></el-form-item>
         <el-form-item label="可导出 label 白名单">
           <el-input v-model="cfg.export_label_whitelist" placeholder="project,env,module,name,ca,registrar,team" />
           <div class="muted">只有列入白名单的自定义 label 才会进 Prometheus（控高基数，防 VM 写爆）</div>
@@ -24,8 +22,13 @@
         <el-table-column prop="name" label="名称" min-width="140" />
         <el-table-column prop="provider" label="provider" width="140" />
         <el-table-column label="凭据" width="90"><template #default="{ row }"><el-tag size="small" :type="row.has_cred?'success':'info'">{{ row.has_cred?'已配':'未配' }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="140">
-          <template #default="{ row }"><el-button link type="primary" @click="editReg(row)">编辑</el-button><el-button link type="danger" @click="delReg(row)">删除</el-button></template>
+        <el-table-column label="操作" width="100" fixed="right">
+          <template #default="{ row }">
+            <div style="display:flex;gap:8px;align-items:center">
+              <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="editReg(row)" /></el-tooltip>
+              <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delReg(row)" /></el-tooltip>
+            </div>
+          </template>
         </el-table-column>
       </el-table>
     </el-card>
@@ -58,7 +61,7 @@
         <el-table-column prop="email" label="邮箱" min-width="200" />
         <el-table-column prop="ca" label="CA" width="140" />
         <el-table-column label="已注册" width="90"><template #default="{ row }"><el-tag size="small" :type="row.registered?'success':'info'">{{ row.registered?'是':'待签发' }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="100"><template #default="{ row }"><el-button link type="danger" @click="delAcct(row)">删除</el-button></template></el-table-column>
+        <el-table-column label="操作" width="80" fixed="right"><template #default="{ row }"><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delAcct(row)" /></el-tooltip></template></el-table-column>
       </el-table>
     </el-card>
 
@@ -97,7 +100,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Edit, Delete } from '@element-plus/icons-vue'
 import { getSettings, updateSettings, listRegistrars, createRegistrar, updateRegistrar, deleteRegistrar, listAcme, createAcme, deleteAcme, sourceUsage } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
@@ -133,7 +136,7 @@ async function loadUsage() {
     usage.value = Object.fromEntries(entries.filter(([, v]) => v))
   } finally { usageLoading.value = false }
 }
-async function saveCfg() { try { await updateSettings(cfg.value); ElMessage.success('已保存') } catch (e) { ElMessage.error('保存失败') } }
+async function saveCfg() { try { await updateSettings({ export_label_whitelist: cfg.value.export_label_whitelist || '' }); ElMessage.success('已保存') } catch (e) { ElMessage.error('保存失败') } }
 
 function openReg() { regEdit.value = false; regForm.value = { name: '', provider: 'dnspod', credential: {}, enabled: 1 }; regDlg.value = true }
 function editReg(row) { regEdit.value = true; regForm.value = { ...row, credential: {}, enabled: 1 }; regDlg.value = true }

@@ -50,13 +50,15 @@
                 </template></el-table-column>
                 <el-table-column prop="operator" label="操作人" width="90"><template #default="{ row: r }">{{ r.operator || '—' }}</template></el-table-column>
                 <el-table-column prop="updated_at" label="更新时间" width="125" />
-                <el-table-column label="操作" width="170" fixed="right"><template #default="{ row: r }">
-                  <el-button link type="primary" :loading="checking[r.id]" @click="checkCert(row, r)">检测证书</el-button>
-                  <template v-if="row.origin === 'manual'">
-                    <el-button link type="primary" @click="openEditReso(row, r)">编辑</el-button>
-                    <el-button link type="danger" @click="delReso(row, r)">删除</el-button>
-                  </template>
-                  <el-button v-else-if="r.stale" link type="danger" @click="delReso(row, r)">移除</el-button>
+                <el-table-column label="操作" width="124" fixed="right"><template #default="{ row: r }">
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <el-tooltip content="检测证书"><el-button link type="primary" :loading="checking[r.id]" :icon="CircleCheck" @click="checkCert(row, r)" /></el-tooltip>
+                    <template v-if="row.origin === 'manual'">
+                      <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEditReso(row, r)" /></el-tooltip>
+                      <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delReso(row, r)" /></el-tooltip>
+                    </template>
+                    <el-tooltip v-else-if="r.stale" content="移除（厂商已删）"><el-button link type="danger" :icon="Delete" @click="delReso(row, r)" /></el-tooltip>
+                  </div>
                 </template></el-table-column>
               </el-table>
               <el-empty v-if="!(records[row.ci_id] && records[row.ci_id].length) && !recordLoading[row.ci_id]"
@@ -74,15 +76,17 @@
         </template></el-table-column>
         <el-table-column label="域名到期" width="130" sortable :sort-method="sortByDomainExpiry"><template #default="{ row }"><span :class="{warn: isNear(row.expiry_at)}">{{ row.expiry_at || '—' }}</span></template></el-table-column>
         <el-table-column label="解析数" width="80"><template #default="{ row }">{{ row.reso_count ?? '—' }}</template></el-table-column>
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
-            <el-tooltip content="刷新域名注册到期(WHOIS) + 主域名证书(连443)"><el-button link type="primary" :loading="refreshing[row.ci_id]" @click="refreshOne(row)">刷到期</el-button></el-tooltip>
-            <el-tooltip content="一键检测该域名下所有解析的证书到期"><el-button link type="primary" :loading="checkingAll[row.ci_id]" @click="checkAllCerts(row)">检测全部证书</el-button></el-tooltip>
-            <template v-if="row.origin === 'manual'">
-              <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-              <el-button link type="danger" @click="del(row)">删除</el-button>
-            </template>
-            <el-tooltip v-else-if="row.stale" content="GoDaddy 已无此域名，确认后从台账移除"><el-button link type="danger" @click="del(row)">移除</el-button></el-tooltip>
+            <div style="display:flex;gap:8px;align-items:center">
+              <el-tooltip content="刷到期（WHOIS+443）"><el-button link type="primary" :loading="refreshing[row.ci_id]" :icon="Refresh" @click="refreshOne(row)" /></el-tooltip>
+              <el-tooltip content="检测全部证书"><el-button link type="primary" :loading="checkingAll[row.ci_id]" :icon="CircleCheck" @click="checkAllCerts(row)" /></el-tooltip>
+              <template v-if="row.origin === 'manual'">
+                <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEdit(row)" /></el-tooltip>
+                <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="del(row)" /></el-tooltip>
+              </template>
+              <el-tooltip v-else-if="row.stale" content="移除（厂商已删）"><el-button link type="danger" :icon="Delete" @click="del(row)" /></el-tooltip>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -148,7 +152,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search, CircleCheck, Edit, Delete } from '@element-plus/icons-vue'
 import { listDomains, createDomain, updateDomain, deleteDomain, listRegistrars, refreshDomain, refreshAllDomains,
   listRecords, createRecord, updateRecord, deleteRecord, checkRecordCert, checkAllRecordCerts, syncDomainRecords } from '../api/cmdb'
 import { useAppStore } from '../stores/app'

@@ -10,7 +10,7 @@
         <el-table-column prop="name" label="项目名" min-width="160" />
         <el-table-column prop="remark" label="备注" min-width="220" />
         <el-table-column prop="sort_order" label="排序" width="80" />
-        <el-table-column label="操作" width="140"><template #default="{ row }"><el-button link type="primary" @click="openProj(row)">编辑</el-button><el-button link type="danger" @click="delProj(row)">删除</el-button></template></el-table-column>
+        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><div style="display:flex;gap:8px;align-items:center"><el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openProj(row)" /></el-tooltip><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delProj(row)" /></el-tooltip></div></template></el-table-column>
       </el-table>
       <el-empty v-if="!projects.length" description="还没有项目，点右上添加" :image-size="60" />
     </el-card>
@@ -23,7 +23,7 @@
         <el-table-column label="环境" width="150"><template #default="{ row }"><el-tag :type="row.tag_type" size="small">{{ row.code }}</el-tag></template></el-table-column>
         <el-table-column prop="name" label="名称" min-width="160" />
         <el-table-column prop="sort_order" label="排序" width="80" />
-        <el-table-column label="操作" width="140"><template #default="{ row }"><el-button link type="primary" @click="openEnv(row)">编辑</el-button><el-button link type="danger" @click="delEnv(row)">删除</el-button></template></el-table-column>
+        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><div style="display:flex;gap:8px;align-items:center"><el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEnv(row)" /></el-tooltip><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delEnv(row)" /></el-tooltip></div></template></el-table-column>
       </el-table>
     </el-card>
 
@@ -34,7 +34,7 @@
       <el-table :data="cdns" size="small">
         <el-table-column prop="name" label="CDN 名称" min-width="200" />
         <el-table-column prop="sort_order" label="排序" width="80" />
-        <el-table-column label="操作" width="140"><template #default="{ row }"><el-button link type="primary" @click="openCdn(row)">编辑</el-button><el-button link type="danger" @click="delCdn(row)">删除</el-button></template></el-table-column>
+        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><div style="display:flex;gap:8px;align-items:center"><el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openCdn(row)" /></el-tooltip><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delCdn(row)" /></el-tooltip></div></template></el-table-column>
       </el-table>
       <el-empty v-if="!cdns.length" description="还没有 CDN，点右上添加" :image-size="60" />
     </el-card>
@@ -71,6 +71,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Edit, Delete } from '@element-plus/icons-vue'
 import { listProjects, createProject, updateProject, deleteProject, listEnvironments, createEnvironment, updateEnvironment, deleteEnvironment, listCdns, createCdn, updateCdn, deleteCdn } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 

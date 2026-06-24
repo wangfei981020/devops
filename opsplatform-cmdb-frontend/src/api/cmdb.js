@@ -55,6 +55,17 @@ export const certDnsReady = (id) => http.post(`/certs/${id}/dns-ready`).then((r)
 export const revokeCert = (id) => http.delete('/certs/' + id).then((r) => r.data)
 export const downloadCert = (id) => http.get(`/certs/${id}/download`, { responseType: 'blob' }).then((r) => r.data)
 
+// 定时任务
+export const listScheduledTasks = () => http.get('/scheduled-tasks').then((r) => r.data)
+export const updateScheduledTask = (key, data) => http.put(`/scheduled-tasks/${key}`, data).then((r) => r.data)
+export const runScheduledTask = (key) => http.post(`/scheduled-tasks/${key}/run`).then((r) => r.data)
+
+// 通知
+export const listNotifyUsers = () => http.get('/notify-users').then((r) => r.data)
+export const createNotifyUser = (data) => http.post('/notify-users', data).then((r) => r.data)
+export const deleteNotifyUser = (id) => http.delete(`/notify-users/${id}`).then((r) => r.data)
+export const testNotify = () => http.post('/notify/test').then((r) => r.data)
+
 // ACME 账户
 export const listAcme = () => http.get('/acme-accounts').then((r) => r.data)
 export const createAcme = (b) => http.post('/acme-accounts', b).then((r) => r.data)

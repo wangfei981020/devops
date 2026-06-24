@@ -36,12 +36,14 @@
         <el-table-column label="状态" width="110"><template #default="{ row }">
           <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
         </template></el-table-column>
-        <el-table-column label="操作" min-width="220">
+        <el-table-column label="操作" width="148" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="$router.push('/certs/'+row.ci_id)">详情</el-button>
-            <el-button link type="primary" @click="renew(row)">续期</el-button>
-            <el-button link type="primary" :disabled="row.status!=='active'" @click="download(row)">下载</el-button>
-            <el-button link type="danger" @click="revoke(row)">吊销</el-button>
+            <div style="display:flex;gap:8px;align-items:center">
+              <el-tooltip content="详情"><el-button link type="primary" :icon="View" @click="$router.push('/certs/'+row.ci_id)" /></el-tooltip>
+              <el-tooltip content="续期"><el-button link type="primary" :icon="Refresh" @click="renew(row)" /></el-tooltip>
+              <el-tooltip content="下载证书"><el-button link type="primary" :icon="Download" :disabled="row.status!=='active'" @click="download(row)" /></el-tooltip>
+              <el-tooltip content="吊销"><el-button link type="danger" :icon="Delete" @click="revoke(row)" /></el-tooltip>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -108,7 +110,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search, View, Download, Delete } from '@element-plus/icons-vue'
 import { listCerts, applyCert, renewCert, revokeCert, downloadCert, listDomains, listAcme } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 

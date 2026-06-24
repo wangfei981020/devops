@@ -52,6 +52,8 @@ func main() {
 	handlers.NewDomainHandler(db).Register(api)
 	handlers.NewCertHandler(db, cipher).Register(api)
 	handlers.NewSettingsHandler(db).Register(api)
+	handlers.NewSchedHandler(db).Register(api)
+	handlers.NewNotifyHandler(db).Register(api)
 	handlers.NewDashboardHandler(db).Register(api)
 	handlers.NewBasicHandler(db).Register(api)
 	handlers.NewRecordHandler(db).Register(api)

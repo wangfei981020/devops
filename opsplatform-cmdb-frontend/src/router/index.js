@@ -15,6 +15,8 @@ const routes = [
   { path: '/basic', component: () => import('../views/Basic.vue'), meta: { title: '基础配置' } },
   { path: '/models', component: () => import('../views/Models.vue'), meta: { title: '模型管理' } },
   { path: '/settings', component: () => import('../views/Settings.vue'), meta: { title: '设置' } },
+  { path: '/cron', component: () => import('../views/Cron.vue'), meta: { title: '定时任务' } },
+  { path: '/notify', component: () => import('../views/Notify.vue'), meta: { title: '通知' } },
 ]
 
 const router = createRouter({ history: createWebHistory(), routes })
