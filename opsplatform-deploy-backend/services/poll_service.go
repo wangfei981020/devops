@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -54,6 +55,9 @@ func PollUntilStable(
 	}
 	// 进度追踪：lastReadyCount 推进时把 deadline 往后推 60s，停滞超过 stagnantTimeout 立即快败
 	const stagnantTimeout = 5 * time.Minute
+	// v132: 发布头 degradedGraceSec 秒内的 Degraded 不立即判败 —— 此刻新 RS 可能还没出现在
+	// 资源树，Degraded 多半来自上一次发布残留的老崩溃 Pod（见 #1417 niuniu 误判）。
+	const degradedGraceSec = 30
 	lastReadyCount := -1
 	lastProgressAt := start
 	var last *AppStatus
@@ -71,6 +75,7 @@ func PollUntilStable(
 			if last != nil {
 				health = last.Health
 			}
+			logFailDecision(ctx, client, appName, "HARD_TIMEOUT", last, int(now.Sub(start).Seconds()))
 			return &models.ArgocdAppResult{
 				App:          appName,
 				SyncStatus:   "Failed",
@@ -103,6 +108,7 @@ func PollUntilStable(
 			if last != nil {
 				health = last.Health
 			}
+			logFailDecision(ctx, client, appName, "SOFT_TIMEOUT", last, int(time.Since(start).Seconds()))
 			return &models.ArgocdAppResult{
 				App:          appName,
 				SyncStatus:   "Failed",
@@ -123,8 +129,12 @@ func PollUntilStable(
 		ourOpStarted := false
 		if err == nil && st != nil {
 			ourOpStarted = syncStartedAt.IsZero() || isOurOperationStarted(st, syncStartedAt)
+			// v132: 不再强求 SyncStatus=="Synced"。挂 HPA 的服务 live 副本数会被 HPA 改得跟
+			// git 不一致 → ArgoCD 永久 OutOfSync，但本次 sync 操作其实已 Succeeded、工作负载也
+			// Healthy，发布是成功的。强求 Synced 会把这类服务永远判失败（见 #1422 gateway 误判）。
+			// 成功判据收敛为：我们这次操作已起 + 操作 Succeeded（或无操作态）+ 工作负载 Healthy。
 			isStableTick = ourOpStarted &&
-				st.SyncStatus == "Synced" && st.Health == "Healthy" &&
+				st.Health == "Healthy" &&
 				(st.OperationPhase == "" || st.OperationPhase == "Succeeded")
 		}
 
@@ -184,7 +194,13 @@ func PollUntilStable(
 			// 残留了之前失败 sync 的旧条件，K8s 实际是 OK 的 → 跳过 fail 路径继续 poll。
 			// 解决 #685 同款误判（撤销失败的 spec 时报失败）。
 			if ourOpStarted && st.Health == "Degraded" && st.OperationPhase != "Running" {
-				if isActiveRSPodsAllHealthy(ctx, client, appName) {
+				degradedElapsed := int(time.Since(start).Seconds())
+				if degradedElapsed < degradedGraceSec {
+					// v132: 发布头 30s 新 RS 可能还没在资源树出现，此刻 Degraded 多半源自上一次
+					// 发布残留的老崩溃 Pod。给新 RS 一个出现的宽限，不立即判败（修 #1417 niuniu）。
+					log.Printf("[poll] app=%s Degraded within first %ds, grace (likely stale/old-RS pod), keep polling",
+						appName, degradedGraceSec)
+				} else if isActiveRSPodsAllHealthy(ctx, client, appName) {
 					log.Printf("[poll] app=%s reports Degraded but active RS pods all Healthy "+
 						"(stale deployment.conditions?), keep polling", appName)
 					// 不立即报 fail，等下一个 tick；ArgoCD 通常在新事件触发时刷新 condition
@@ -197,6 +213,7 @@ func PollUntilStable(
 					if detail != "" {
 						msg = "失败 · " + sanitizeMsg(detail)
 					}
+					logFailDecision(ctx, client, appName, "DEGRADED", st, degradedElapsed)
 					return &models.ArgocdAppResult{
 						App:          appName,
 						SyncStatus:   st.SyncStatus,
@@ -219,6 +236,7 @@ func PollUntilStable(
 				if detail != "" {
 					msg = "失败 · " + sanitizeMsg(detail)
 				}
+				logFailDecision(ctx, client, appName, "OP_FAILED", st, int(time.Since(start).Seconds()))
 				return &models.ArgocdAppResult{
 					App:          appName,
 					SyncStatus:   "Failed",
@@ -245,6 +263,7 @@ func PollUntilStable(
 				if fatal {
 					// pod 此刻还活着，立刻把 logs + events 字节抓进 snapshot
 					enrichSnapshotWithLogs(ctx, client, appName, snaps)
+					logFailDecision(ctx, client, appName, "POD_FATAL", st, elapsed)
 					return &models.ArgocdAppResult{
 						App:          appName,
 						SyncStatus:   "Failed",
@@ -273,8 +292,11 @@ func PollUntilStable(
 				}
 
 				// === 进度停滞快败 ===
-				// 已经有 pod ready 但 5 分钟内没有继续推进 → 后面的 pod 卡住了，快败不等总超时
-				if lastReadyCount > 0 && now.Sub(lastProgressAt) >= stagnantTimeout {
+				// 已经有 pod ready 但 5 分钟内没有继续推进 → 后面的 pod 卡住了，快败不等总超时。
+				// v132: 仅当高水位就绪数仍未达期望总数（lastReadyCount < total，真有 pod 没起来）
+				// 才算停滞；lastReadyCount==total 是"已全部就绪=完成"，不是停滞 —— 修 5/5 误判
+				// （HPA 服务全就绪却因 OutOfSync 凑不满稳定窗口，被当成"剩余 pod 起不来"砍掉）。
+				if lastReadyCount > 0 && lastReadyCount < total && now.Sub(lastProgressAt) >= stagnantTimeout {
 					stagnantMsg := "失败 · 进度停滞 " + strconv.Itoa(int(stagnantTimeout/time.Minute)) +
 						" 分钟（当前 " + strconv.Itoa(lastReadyCount) + "/" + strconv.Itoa(total) +
 						" pod 就绪，剩余 pod 起不来）"
@@ -282,6 +304,7 @@ func PollUntilStable(
 					if stagDetail != "" {
 						stagnantMsg = stagnantMsg + " · " + sanitizeMsg(stagDetail)
 					}
+					logFailDecision(ctx, client, appName, "STAGNATION", st, elapsed)
 					return &models.ArgocdAppResult{
 						App:          appName,
 						SyncStatus:   "Failed",
@@ -299,9 +322,12 @@ func PollUntilStable(
 			if isStableTick {
 				consecutiveOK++
 				if consecutiveOK >= stabilityTicks {
+					// v132: 归一为 "Synced"。此刻真实 SyncStatus 可能是 OutOfSync（HPA 漂移），
+					// 但本次发布判定为成功，统一回 Synced 让下游分类（通知/整体状态：
+					// deploy_service okCount + notify_builder）一致认成功，避免"判成功但通知失败"。
 					return &models.ArgocdAppResult{
 						App:          appName,
-						SyncStatus:   st.SyncStatus,
+						SyncStatus:   "Synced",
 						Health:       st.Health,
 						DurationSec:  int(time.Since(start).Seconds()),
 						Msg:          "",
@@ -456,6 +482,79 @@ func countPods(nodes []ResourceNode) int {
 		}
 	}
 	return c
+}
+
+// logFailDecision 在每条判败出口前打一行结构化诊断，把本次判定用到的全部输入定格下来。
+//
+//	branch: 判败分支（HARD_TIMEOUT / SOFT_TIMEOUT / DEGRADED / OP_FAILED / POD_FATAL / STAGNATION）
+//	relaxed_would_pass=true 表示：按 v132 放宽判据（本次 sync 操作 Succeeded + Health Healthy
+//	  + active RS 全部 Pod 就绪）本应成功 —— 即这是一次误判。上线后只要
+//	  `grep 'relaxed_would_pass=true'` 就能一抓一个准，无需再回放截图反推。
+//	fail 是终态且不频繁，这里多打一次 resource-tree 拉取换取"判败必有据"，值。
+func logFailDecision(ctx context.Context, client *ArgocdClient, appName, branch string, st *AppStatus, elapsed int) {
+	syncStatus, health, opPhase := "-", "-", "-"
+	if st != nil {
+		if st.SyncStatus != "" {
+			syncStatus = st.SyncStatus
+		}
+		if st.Health != "" {
+			health = st.Health
+		}
+		if st.OperationPhase != "" {
+			opPhase = st.OperationPhase
+		}
+	}
+	activeRSName, ready, total := "-", 0, 0
+	allReady := false
+	var podParts []string
+	qctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	nodes, err := client.GetAppResourceTree(qctx, appName)
+	cancel()
+	if err == nil && len(nodes) > 0 {
+		activeRS := pickActiveReplicaSet(nodes)
+		if activeRS != nil {
+			activeRSName = activeRS.Name
+		}
+		pods := filterPodsByActiveRS(nodes, activeRS)
+		total = len(pods)
+		for _, p := range pods {
+			if p.Health == "Healthy" {
+				ready++
+			}
+			rc := p.RestartCount
+			if rc == "" {
+				rc = "0"
+			}
+			reason := p.StatusReason
+			if reason == "" {
+				reason = p.Health
+			}
+			if reason == "" {
+				reason = "?"
+			}
+			podParts = append(podParts, fmt.Sprintf("%s:%s/r%s", shortPodName(p.Name), reason, rc))
+		}
+		allReady = total > 0 && ready == total
+	}
+	// relaxed_would_pass 用真实 st 算（不用上面被替换成 "-" 的展示串）
+	relaxedWouldPass := false
+	if st != nil {
+		relaxedWouldPass = st.Health == "Healthy" &&
+			(st.OperationPhase == "" || st.OperationPhase == "Succeeded") &&
+			allReady
+	}
+	log.Printf("[fail-decision] app=%s branch=%s elapsed=%ds syncStatus=%s health=%s opPhase=%s "+
+		"activeRS=%s ready=%d/%d pods=[%s] relaxed_would_pass=%v",
+		appName, branch, elapsed, syncStatus, health, opPhase,
+		activeRSName, ready, total, strings.Join(podParts, " "), relaxedWouldPass)
+}
+
+// shortPodName 取 pod 名最后一段（去掉 deployment-rshash- 前缀），让 [fail-decision] 行短一点
+func shortPodName(name string) string {
+	if i := strings.LastIndex(name, "-"); i >= 0 && i+1 < len(name) {
+		return name[i+1:]
+	}
+	return name
 }
 
 // snapshotFailingPods 仅抓 metadata（不拉日志/事件），用于不需要归档的轻量场景
