@@ -20,8 +20,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  BACKEND_IMAGE_NAME: ${{ github.repository }}/backend
-  FRONTEND_IMAGE_NAME: ${{ github.repository }}/frontend
+  BACKEND_IMAGE_NAME: opsplatform-video-manager-backend
+  FRONTEND_IMAGE_NAME: opsplatform-video-manager-frontend
 
 jobs:
   build-backend:

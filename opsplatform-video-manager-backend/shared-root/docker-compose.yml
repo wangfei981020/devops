@@ -33,8 +33,9 @@ services:
         max-file: "3"
 
   backend:
+    image: localhost:8070/opsplatform/opsplatform-video-manager-backend:latest
     build:
-      context: ./backend
+      context: ..
       dockerfile: Dockerfile
     container_name: video-manager-backend
     environment:
@@ -80,8 +81,9 @@ services:
       start_period: 10s
 
   frontend:
+    image: localhost:8070/opsplatform/opsplatform-video-manager-frontend:latest
     build:
-      context: ./frontend
+      context: ../../opsplatform-video-manager-frontend
       dockerfile: Dockerfile
     container_name: video-manager-frontend
     ports:
