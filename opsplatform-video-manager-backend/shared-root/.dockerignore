@@ -1,0 +1,65 @@
+# Copyright (c) 2025 kk
+#
+# This software is released under the MIT License.
+# https://opensource.org/licenses/MIT
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+!README.md
+docs/
+openspec/
+
+# Development files
+.env
+.env.*
+!.env.prod.example
+docker-compose.yml
+docker-compose.override.yml
+docker-compose.override.yml.example
+Makefile
+Rakefile
+push.rb
+deploy.sh
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backend specific
+backend/tmp/
+backend/*.log
+backend/.air.toml
+backend/Dockerfile.dev
+
+# Frontend specific
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/Dockerfile.dev
+frontend/*.log
+
+# Test files
+*_test.go
+*_test.ts
+*_test.tsx
+test/
+tests/
+__tests__/
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib

@@ -1,0 +1,276 @@
+/* Copyright (c) 2025 kk
+ *
+ * This software is released under the MIT License.
+ * https://opensource.org/licenses/MIT */
+
+:root {
+  --vm-bg: #e8edf3;
+  --vm-surface: #ffffff;
+  --vm-border: rgba(15, 23, 42, 0.08);
+  --vm-text: #0f172a;
+  --vm-muted: #64748b;
+  --vm-accent: #0d9488;
+  --vm-accent-soft: rgba(13, 148, 136, 0.12);
+  --vm-sidebar: #0c1222;
+  --vm-card-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 4px 14px rgba(15, 23, 42, 0.06);
+  --vm-card-shadow-hover:
+    0 4px 20px rgba(15, 23, 42, 0.1);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family:
+    'Plus Jakarta Sans',
+    'Noto Sans SC',
+    'PingFang SC',
+    'Microsoft YaHei',
+    system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--vm-bg);
+  color: var(--vm-text);
+}
+
+code {
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Monaco, Consolas, monospace;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.04);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.45);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(71, 85, 105, 0.65);
+}
+
+/* ----- Page layout helpers ----- */
+.vm-page {
+  max-width: 100%;
+}
+
+.vm-page-title {
+  font-size: 1.375rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--vm-text);
+  margin: 0;
+  line-height: 1.25;
+}
+
+.vm-page-head {
+  margin-bottom: 1.25rem;
+}
+
+.vm-page-desc {
+  margin: 0.35rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--vm-muted);
+  font-weight: 500;
+}
+
+.vm-toolbar-panel {
+  margin-bottom: 1rem;
+  padding: 1rem 1.125rem;
+  background: var(--vm-surface);
+  border: 1px solid var(--vm-border);
+  border-radius: 12px;
+  box-shadow: var(--vm-card-shadow);
+}
+
+.vm-stat-row .ant-card {
+  border: 1px solid var(--vm-border);
+  border-radius: 12px;
+  box-shadow: var(--vm-card-shadow);
+  background: var(--vm-surface);
+  transition:
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.vm-stat-row .ant-card:hover {
+  box-shadow: var(--vm-card-shadow-hover);
+  border-color: rgba(13, 148, 136, 0.22);
+}
+
+.vm-panel-card.ant-card {
+  border: 1px solid var(--vm-border);
+  border-radius: 12px;
+  box-shadow: var(--vm-card-shadow);
+  overflow: hidden;
+}
+
+.vm-panel-card .ant-card-head {
+  border-bottom-color: var(--vm-border);
+  font-weight: 600;
+}
+
+/* Dashboard stat strips */
+.vm-dash-stat {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--vm-border) !important;
+  border-radius: 12px !important;
+  background: var(--vm-surface) !important;
+  box-shadow: var(--vm-card-shadow);
+  transition:
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.vm-dash-stat:hover {
+  box-shadow: var(--vm-card-shadow-hover);
+  border-color: rgba(13, 148, 136, 0.2) !important;
+}
+
+.vm-dash-stat::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 12px 12px 0 0;
+  background: var(--vm-dash-strip, linear-gradient(90deg, #0d9488, #2dd4bf));
+}
+
+.vm-dash-stat .ant-statistic-title {
+  color: var(--vm-muted) !important;
+  font-weight: 500;
+  font-size: 0.8125rem !important;
+}
+
+.vm-dash-stat .ant-statistic-content {
+  color: var(--vm-text) !important;
+}
+
+.vm-dash-strip-teal {
+  --vm-dash-strip: linear-gradient(90deg, #0d9488, #14b8a6);
+}
+.vm-dash-strip-sky {
+  --vm-dash-strip: linear-gradient(90deg, #0284c7, #38bdf8);
+}
+.vm-dash-strip-violet {
+  --vm-dash-strip: linear-gradient(90deg, #7c3aed, #a78bfa);
+}
+.vm-dash-strip-emerald {
+  --vm-dash-strip: linear-gradient(90deg, #059669, #34d399);
+}
+.vm-dash-strip-amber {
+  --vm-dash-strip: linear-gradient(90deg, #d97706, #fbbf24);
+}
+.vm-dash-strip-rose {
+  --vm-dash-strip: linear-gradient(90deg, #e11d48, #fb7185);
+}
+.vm-dash-strip-slate {
+  --vm-dash-strip: linear-gradient(90deg, #334155, #64748b);
+}
+
+.vm-dash-stat-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--vm-accent-soft);
+  color: var(--vm-accent);
+  font-size: 20px;
+}
+
+/* Side menu — selection bar */
+.vm-sider-menu.ant-menu-dark.ant-menu-inline .ant-menu-item-selected {
+  border-left: 3px solid #2dd4bf !important;
+  padding-left: calc(24px - 3px) !important;
+}
+
+.vm-login-bg {
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(45, 212, 191, 0.18), transparent 55%),
+    radial-gradient(900px 500px at -10% 110%, rgba(2, 132, 199, 0.14), transparent 50%),
+    linear-gradient(165deg, #0c1222 0%, #111a2e 45%, #0f172a 100%);
+}
+
+/* Ant Design: tone down global card hover (tables live inside cards) */
+.ant-table-wrapper {
+  border-radius: 8px;
+}
+
+/* Ensure fixed action columns don't bleed underlying row content on hover */
+.ant-table-wrapper .ant-table-cell-fix-left,
+.ant-table-wrapper .ant-table-cell-fix-right {
+  z-index: 3;
+  background: #fff !important;
+  background-clip: padding-box;
+  overflow: hidden;
+}
+
+.ant-table-wrapper .ant-table-cell-fix-left-first,
+.ant-table-wrapper .ant-table-cell-fix-left-last,
+.ant-table-wrapper .ant-table-cell-fix-right-first,
+.ant-table-wrapper .ant-table-cell-fix-right-last {
+  background: #fff !important;
+}
+
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell-fix-left,
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell-fix-right {
+  background: #fafafa !important;
+}
+
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell-fix-left-first,
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell-fix-left-last,
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell-fix-right-first,
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell-fix-right-last {
+  background: #fafafa !important;
+}
+
+/* Endpoints page: force action column above status text */
+.ant-table-wrapper .vm-endpoints-status-col {
+  position: relative;
+  z-index: 1;
+}
+
+.ant-table-wrapper .vm-endpoints-action-col.ant-table-cell-fix-right,
+.ant-table-wrapper .vm-endpoints-action-col.ant-table-cell-fix-right-first,
+.ant-table-wrapper .vm-endpoints-action-col.ant-table-cell-fix-right-last {
+  position: sticky;
+  z-index: 4 !important;
+  background: #fff !important;
+}
+
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row:hover > td.vm-endpoints-action-col {
+  background: #fafafa !important;
+}
+
+.ant-table-wrapper .vm-endpoints-action-inner {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  padding: 0 2px;
+  background: inherit;
+}
+
+.ant-modal-header {
+  margin-bottom: 0;
+}

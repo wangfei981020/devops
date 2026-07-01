@@ -1,0 +1,150 @@
+# Copyright (c) 2025 kk
+#
+# This software is released under the MIT License.
+# https://opensource.org/licenses/MIT
+
+# Environment variables
+.env
+.env.*
+!.env.example
+!.env.prod.example
+.env.local
+.env.prod
+.env.development
+.env.production
+.env.test
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.settings/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.vite/
+frontend/.cache/
+frontend/.temp/
+frontend/.tmp/
+frontend/*.local
+frontend/coverage/
+frontend/.nyc_output/
+
+# Backend
+backend/tmp/
+backend/temp/
+backend/*.exe
+backend/*.dll
+backend/*.so
+backend/*.dylib
+backend/video-manager
+backend/video-manager.exe
+backend/coverage/
+backend/*.test
+backend/.air.toml.local
+
+# Go specific
+backend/vendor/
+backend/*.sum.bak
+backend/.go/
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+*.dll
+*.bin
+build/
+out/
+target/
+
+# Docker
+docker-compose.override.yml
+.docker/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+postgres_data/
+postgres_data_prod/
+
+# Test files
+coverage/
+.nyc_output/
+*.coverprofile
+*.out
+*.test
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+
+# Documentation build
+docs/_build/
+site/
+
+# Package manager lock files (optional - uncomment if you want to ignore)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# Deployment scripts with sensitive data
+deploy.sh.local
+deploy-prod.sh.local
+
+# Backup files
+*.backup
+*.old
+backup/
+backups/
+
+# Swagger generated files (optional - uncomment if you want to ignore generated docs)
+# backend/docs/swagger.json
+# backend/docs/swagger.yaml
+
+# Air hot reload
+.air.toml.local
+
+# Local development overrides
+docker-compose.override.yml.local
+config.yml
+t.rb
+
+cursor

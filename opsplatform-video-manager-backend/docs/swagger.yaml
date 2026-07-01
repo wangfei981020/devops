@@ -1,0 +1,2274 @@
+basePath: /
+definitions:
+  models.CDNLine:
+    properties:
+      code:
+        description: 代码 (原 name)
+        type: string
+      created_at:
+        type: string
+      id:
+        type: integer
+      name:
+        description: 名称 (原 display_name)
+        type: string
+      provider:
+        $ref: '#/definitions/models.CDNProvider'
+      provider_id:
+        type: integer
+      updated_at:
+        type: string
+    type: object
+  models.CDNProvider:
+    properties:
+      code:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  models.ChangePasswordRequest:
+    properties:
+      new_password:
+        minLength: 6
+        type: string
+      old_password:
+        minLength: 1
+        type: string
+    required:
+    - new_password
+    - old_password
+    type: object
+  models.CreateCDNLineRequest:
+    properties:
+      code:
+        description: 代码
+        maxLength: 255
+        minLength: 1
+        type: string
+      name:
+        description: 名称
+        maxLength: 255
+        minLength: 1
+        type: string
+      provider_id:
+        type: integer
+    required:
+    - code
+    - name
+    - provider_id
+    type: object
+  models.CreateCDNProviderRequest:
+    properties:
+      code:
+        maxLength: 100
+        minLength: 1
+        type: string
+      name:
+        maxLength: 255
+        minLength: 1
+        type: string
+    required:
+    - code
+    - name
+    type: object
+  models.CreateDomainRequest:
+    properties:
+      name:
+        maxLength: 255
+        minLength: 1
+        type: string
+    required:
+    - name
+    type: object
+  models.CreateStreamPathRequest:
+    properties:
+      full_path:
+        maxLength: 500
+        minLength: 1
+        type: string
+      stream_id:
+        type: integer
+      table_id:
+        maxLength: 255
+        minLength: 1
+        type: string
+    required:
+    - full_path
+    - stream_id
+    - table_id
+    type: object
+  models.CreateStreamRequest:
+    properties:
+      code:
+        maxLength: 100
+        minLength: 1
+        type: string
+      name:
+        maxLength: 255
+        minLength: 1
+        type: string
+      provider_id:
+        description: 'Optional: NULL means match all providers'
+        type: integer
+    required:
+    - code
+    - name
+    type: object
+  models.CreateTokenRequest:
+    properties:
+      expires_in:
+        description: Expiration time in seconds (ignored if never_expire is true)
+        type: integer
+      name:
+        description: Token name/description
+        maxLength: 255
+        minLength: 1
+        type: string
+      never_expire:
+        description: If true, token never expires
+        type: boolean
+    required:
+    - name
+    type: object
+  models.CreateUserRequest:
+    properties:
+      is_admin:
+        type: boolean
+      password:
+        minLength: 6
+        type: string
+      username:
+        maxLength: 255
+        minLength: 1
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  models.CreateVideoStreamEndpointRequest:
+    properties:
+      domain_id:
+        type: integer
+      line_id:
+        type: integer
+      provider_id:
+        type: integer
+      status:
+        type: integer
+      stream_id:
+        type: integer
+      stream_path_id:
+        type: integer
+    required:
+    - domain_id
+    - line_id
+    - provider_id
+    - stream_id
+    - stream_path_id
+    type: object
+  models.Domain:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  models.LoginRequest:
+    properties:
+      password:
+        minLength: 1
+        type: string
+      username:
+        maxLength: 255
+        minLength: 1
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  models.LoginResponse:
+    properties:
+      is_admin:
+        type: boolean
+      token:
+        type: string
+      username:
+        type: string
+    type: object
+  models.OIDCSettingsResponse:
+    properties:
+      client_id:
+        type: string
+      enabled:
+        type: boolean
+      frontend_success_url:
+        type: string
+      has_client_secret:
+        type: boolean
+      issuer_url:
+        type: string
+      redirect_url:
+        type: string
+      scopes:
+        type: string
+    type: object
+  models.Stream:
+    properties:
+      code:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      provider:
+        $ref: '#/definitions/models.CDNProvider'
+      provider_id:
+        description: NULL means match all providers
+        type: integer
+      updated_at:
+        type: string
+    type: object
+  models.StreamPath:
+    properties:
+      created_at:
+        type: string
+      full_path:
+        type: string
+      id:
+        type: integer
+      series:
+        description: derived from table_id, e.g. L001 -> "L系列"
+        type: string
+      stream:
+        $ref: '#/definitions/models.Stream'
+      stream_id:
+        type: integer
+      table_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  models.StreamPathImportResult:
+    properties:
+      created:
+        type: integer
+      errors:
+        items:
+          $ref: '#/definitions/models.StreamPathImportRowError'
+        type: array
+      updated:
+        type: integer
+    type: object
+  models.StreamPathImportRowError:
+    properties:
+      line:
+        type: integer
+      message:
+        type: string
+      table_id:
+        type: string
+    type: object
+  models.Token:
+    properties:
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      never_expire:
+        type: boolean
+      updated_at:
+        type: string
+      user_id:
+        type: integer
+    type: object
+  models.UpdateCDNLineRequest:
+    properties:
+      code:
+        description: 代码
+        maxLength: 255
+        minLength: 1
+        type: string
+      name:
+        description: 名称
+        maxLength: 255
+        minLength: 1
+        type: string
+      provider_id:
+        type: integer
+    required:
+    - code
+    - name
+    - provider_id
+    type: object
+  models.UpdateCDNProviderRequest:
+    properties:
+      code:
+        maxLength: 100
+        minLength: 1
+        type: string
+      name:
+        maxLength: 255
+        minLength: 1
+        type: string
+    required:
+    - code
+    - name
+    type: object
+  models.UpdateDomainRequest:
+    properties:
+      name:
+        maxLength: 255
+        minLength: 1
+        type: string
+    required:
+    - name
+    type: object
+  models.UpdateOIDCSettingsRequest:
+    properties:
+      clear_client_secret:
+        type: boolean
+      client_id:
+        type: string
+      client_secret:
+        type: string
+      enabled:
+        type: boolean
+      frontend_success_url:
+        type: string
+      issuer_url:
+        type: string
+      redirect_url:
+        type: string
+      scopes:
+        type: string
+    type: object
+  models.UpdateStreamPathRequest:
+    properties:
+      full_path:
+        maxLength: 500
+        minLength: 1
+        type: string
+      stream_id:
+        type: integer
+      table_id:
+        maxLength: 255
+        minLength: 1
+        type: string
+    required:
+    - full_path
+    - stream_id
+    - table_id
+    type: object
+  models.UpdateStreamRequest:
+    properties:
+      code:
+        maxLength: 100
+        minLength: 1
+        type: string
+      name:
+        maxLength: 255
+        minLength: 1
+        type: string
+      provider_id:
+        description: 'Optional: NULL means match all providers'
+        type: integer
+    required:
+    - code
+    - name
+    type: object
+  models.UpdateUserRequest:
+    properties:
+      is_admin:
+        type: boolean
+      username:
+        maxLength: 255
+        minLength: 1
+        type: string
+    required:
+    - username
+    type: object
+  models.UpdateVideoStreamEndpointRequest:
+    properties:
+      domain_id:
+        type: integer
+      line_id:
+        type: integer
+      provider_id:
+        type: integer
+      status:
+        type: integer
+      stream_id:
+        type: integer
+      stream_path_id:
+        type: integer
+    required:
+    - domain_id
+    - line_id
+    - provider_id
+    - stream_id
+    - stream_path_id
+    type: object
+  models.User:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: integer
+      is_admin:
+        type: boolean
+      updated_at:
+        type: string
+      username:
+        type: string
+    type: object
+  models.VideoStreamEndpoint:
+    properties:
+      created_at:
+        type: string
+      domain:
+        $ref: '#/definitions/models.Domain'
+      domain_id:
+        type: integer
+      full_url:
+        type: string
+      id:
+        type: integer
+      line:
+        $ref: '#/definitions/models.CDNLine'
+      line_id:
+        type: integer
+      provider:
+        $ref: '#/definitions/models.CDNProvider'
+      provider_id:
+        type: integer
+      resolution:
+        type: string
+      status:
+        type: integer
+      stream:
+        $ref: '#/definitions/models.Stream'
+      stream_id:
+        type: integer
+      stream_path:
+        $ref: '#/definitions/models.StreamPath'
+      stream_path_id:
+        type: integer
+      updated_at:
+        type: string
+    type: object
+  response.Response:
+    properties:
+      code:
+        type: integer
+      data: {}
+      message:
+        type: string
+    type: object
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: Video Manager API Documentation
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: http://swagger.io/terms/
+  title: Video Manager API
+  version: "1.0"
+paths:
+  /api/auth/change-password:
+    post:
+      consumes:
+      - application/json
+      description: Change user password
+      parameters:
+      - description: Password change request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ChangePasswordRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Change password
+      tags:
+      - auth
+  /api/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticate user and return JWT token
+      parameters:
+      - description: Login credentials
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.LoginResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: User login
+      tags:
+      - auth
+  /api/auth/me:
+    get:
+      description: Get current authenticated user information
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  type: object
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get current user
+      tags:
+      - auth
+  /api/auth/oidc/callback:
+    get:
+      description: Handle OIDC callback, create/login local user as non-admin, then
+        redirect to frontend login
+      parameters:
+      - description: OIDC authorization code
+        in: query
+        name: code
+        required: true
+        type: string
+      - description: OIDC state
+        in: query
+        name: state
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "302":
+          description: Redirect to frontend with token
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: OIDC login callback
+      tags:
+      - auth
+  /api/auth/oidc/login:
+    get:
+      description: Redirect to OIDC provider for SSO login
+      produces:
+      - application/json
+      responses:
+        "302":
+          description: Redirect to OIDC provider
+          schema:
+            type: string
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: OIDC login redirect
+      tags:
+      - auth
+  /api/auth/token-info:
+    get:
+      description: Get current JWT token information including expiration time
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  type: object
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get token information
+      tags:
+      - auth
+  /api/auth/tokens:
+    get:
+      description: Get all tokens created by the current user
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/models.Token'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get all tokens
+      tags:
+      - auth
+    post:
+      consumes:
+      - application/json
+      description: Create a new JWT token with custom expiration
+      parameters:
+      - description: Token creation request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreateTokenRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.LoginResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Create token
+      tags:
+      - auth
+  /api/auth/tokens/{id}:
+    delete:
+      description: Delete a token by ID (only if it belongs to the current user)
+      parameters:
+      - description: Token ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete token
+      tags:
+      - auth
+  /api/cdn-lines:
+    get:
+      description: Retrieve all CDN lines, optionally filtered by provider ID
+      parameters:
+      - description: Filter by provider ID
+        in: query
+        name: provider_id
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/models.CDNLine'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get all CDN lines
+      tags:
+      - cdn-lines
+    post:
+      consumes:
+      - application/json
+      description: Create a new CDN line with the provided information
+      parameters:
+      - description: CDN Line information
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreateCDNLineRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.CDNLine'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Create a new CDN line
+      tags:
+      - cdn-lines
+  /api/cdn-lines/{id}:
+    delete:
+      description: Delete a CDN line by its ID. This will also delete associated video
+        stream endpoints.
+      parameters:
+      - description: Line ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete a CDN line
+      tags:
+      - cdn-lines
+    get:
+      description: Retrieve a CDN line by its ID
+      parameters:
+      - description: Line ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.CDNLine'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get CDN line by ID
+      tags:
+      - cdn-lines
+    put:
+      consumes:
+      - application/json
+      description: Update an existing CDN line by its ID
+      parameters:
+      - description: Line ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Updated CDN Line information
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.UpdateCDNLineRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.CDNLine'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Update a CDN line
+      tags:
+      - cdn-lines
+  /api/cdn-providers:
+    get:
+      description: Retrieve all CDN providers
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/models.CDNProvider'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get all CDN providers
+      tags:
+      - cdn-providers
+    post:
+      consumes:
+      - application/json
+      description: Create a new CDN provider with the provided information
+      parameters:
+      - description: CDN Provider information
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreateCDNProviderRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.CDNProvider'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Create a new CDN provider
+      tags:
+      - cdn-providers
+  /api/cdn-providers/{id}:
+    delete:
+      description: Delete a CDN provider by its ID. This will also delete associated
+        CDN lines and video stream endpoints.
+      parameters:
+      - description: Provider ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete a CDN provider
+      tags:
+      - cdn-providers
+    get:
+      description: Retrieve a CDN provider by its ID
+      parameters:
+      - description: Provider ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.CDNProvider'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get CDN provider by ID
+      tags:
+      - cdn-providers
+    put:
+      consumes:
+      - application/json
+      description: Update an existing CDN provider by its ID
+      parameters:
+      - description: Provider ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Updated CDN Provider information
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.UpdateCDNProviderRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.CDNProvider'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Update a CDN provider
+      tags:
+      - cdn-providers
+  /api/cdn-providers/{id}/lines:
+    get:
+      description: Retrieve all CDN lines associated with a specific provider
+      parameters:
+      - description: Provider ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/models.CDNLine'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get CDN lines by provider
+      tags:
+      - cdn-providers
+  /api/domains:
+    get:
+      description: Retrieve all domains
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/models.Domain'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get all domains
+      tags:
+      - domains
+    post:
+      consumes:
+      - application/json
+      description: Create a new domain with the provided information
+      parameters:
+      - description: Domain information
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreateDomainRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.Domain'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Create a new domain
+      tags:
+      - domains
+  /api/domains/{id}:
+    delete:
+      description: Delete a domain by its ID. This will also delete associated video
+        stream endpoints.
+      parameters:
+      - description: Domain ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete a domain
+      tags:
+      - domains
+    get:
+      description: Retrieve a domain by its ID
+      parameters:
+      - description: Domain ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.Domain'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get domain by ID
+      tags:
+      - domains
+    put:
+      consumes:
+      - application/json
+      description: Update an existing domain by its ID
+      parameters:
+      - description: Domain ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Updated domain information
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.UpdateDomainRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.Domain'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Update a domain
+      tags:
+      - domains
+  /api/stats:
+    get:
+      description: Retrieve comprehensive system statistics including counts of providers,
+        lines, domains, streams, stream paths, endpoints, and various aggregations
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Statistics object containing counts and aggregations
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  type: object
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get system statistics
+      tags:
+      - stats
+  /api/stream-paths:
+    get:
+      description: Retrieve all stream paths, optionally filtered by stream ID
+      parameters:
+      - description: Filter by stream ID
+        in: query
+        name: stream_id
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/models.StreamPath'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get all stream paths
+      tags:
+      - stream-paths
+    post:
+      consumes:
+      - application/json
+      description: Create a new stream path with the provided information
+      parameters:
+      - description: Stream Path information
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreateStreamPathRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.StreamPath'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Create a new stream path
+      tags:
+      - stream-paths
+  /api/stream-paths/{id}:
+    delete:
+      description: Delete a stream path by its ID. This will also delete associated
+        video stream endpoints.
+      parameters:
+      - description: Stream Path ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete a stream path
+      tags:
+      - stream-paths
+    get:
+      description: Retrieve a stream path by its ID
+      parameters:
+      - description: Stream Path ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.StreamPath'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get stream path by ID
+      tags:
+      - stream-paths
+    put:
+      consumes:
+      - application/json
+      description: Update an existing stream path by its ID
+      parameters:
+      - description: Stream Path ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Updated stream path information
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.UpdateStreamPathRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.StreamPath'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Update a stream path
+      tags:
+      - stream-paths
+  /api/stream-paths/import:
+    post:
+      consumes:
+      - multipart/form-data
+      description: 'CSV columns: 桌台号(table_id), 路径(full_path), 流区域 or stream_id. UTF-8
+        with optional BOM.'
+      parameters:
+      - description: CSV file
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.StreamPathImportResult'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Import stream paths from CSV
+      tags:
+      - stream-paths
+  /api/stream-regions:
+    get:
+      description: Retrieve all streams
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/models.Stream'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get all streams
+      tags:
+      - stream-regions
+    post:
+      consumes:
+      - application/json
+      description: Create a new stream with the provided information
+      parameters:
+      - description: Stream information
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreateStreamRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.Stream'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Create a new stream
+      tags:
+      - stream-regions
+  /api/stream-regions/{id}:
+    delete:
+      description: Delete a stream by its ID. This will also delete associated stream
+        paths and video stream endpoints.
+      parameters:
+      - description: Stream ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete a stream
+      tags:
+      - stream-regions
+    get:
+      description: Retrieve a stream by its ID
+      parameters:
+      - description: Stream ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.Stream'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get stream by ID
+      tags:
+      - stream-regions
+    put:
+      consumes:
+      - application/json
+      description: Update an existing stream by its ID
+      parameters:
+      - description: Stream ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Updated stream information
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.UpdateStreamRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.Stream'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Update a stream
+      tags:
+      - stream-regions
+  /api/system-settings/oidc:
+    get:
+      description: Retrieve OIDC SSO configuration (admin only)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.OIDCSettingsResponse'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get OIDC settings
+      tags:
+      - system-settings
+    put:
+      consumes:
+      - application/json
+      description: Update OIDC SSO configuration (admin only)
+      parameters:
+      - description: OIDC settings request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.UpdateOIDCSettingsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Update OIDC settings
+      tags:
+      - system-settings
+  /api/users:
+    get:
+      description: Retrieve all users (admin only)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/models.User'
+                  type: array
+              type: object
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get all users
+      tags:
+      - users
+    post:
+      consumes:
+      - application/json
+      description: Create a new user (admin only)
+      parameters:
+      - description: Create user request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreateUserRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.User'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Create user
+      tags:
+      - users
+  /api/users/{id}:
+    delete:
+      description: Delete a user (admin only)
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete user
+      tags:
+      - users
+    put:
+      consumes:
+      - application/json
+      description: Update username and role for a user (admin only)
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Update user request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.UpdateUserRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.User'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Update user
+      tags:
+      - users
+  /api/video-stream-endpoints:
+    get:
+      description: Retrieve all video stream endpoints, optionally filtered by line_id,
+        domain_id, stream_id, provider_id, status, or table_id
+      parameters:
+      - description: Filter by line ID
+        in: query
+        name: line_id
+        type: integer
+      - description: Filter by domain ID
+        in: query
+        name: domain_id
+        type: integer
+      - description: Filter by stream ID
+        in: query
+        name: stream_id
+        type: integer
+      - description: Filter by provider ID
+        in: query
+        name: provider_id
+        type: integer
+      - description: Filter by status (0=disabled, 1=enabled)
+        in: query
+        name: status
+        type: integer
+      - description: Filter by table ID (桌台号)
+        in: query
+        name: table_id
+        type: string
+      - description: Filter by resolution (普清, 高清, 超清)
+        in: query
+        name: resolution
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/models.VideoStreamEndpoint'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get all video stream endpoints
+      tags:
+      - video-stream-endpoints
+    post:
+      consumes:
+      - application/json
+      description: Create a new video stream endpoint with the provided information
+      parameters:
+      - description: Video Stream Endpoint information
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreateVideoStreamEndpointRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.VideoStreamEndpoint'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Create a new video stream endpoint
+      tags:
+      - video-stream-endpoints
+  /api/video-stream-endpoints/{id}:
+    delete:
+      description: Delete a video stream endpoint by its ID
+      parameters:
+      - description: Endpoint ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete a video stream endpoint
+      tags:
+      - video-stream-endpoints
+    get:
+      description: Retrieve a video stream endpoint by its ID
+      parameters:
+      - description: Endpoint ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.VideoStreamEndpoint'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Get video stream endpoint by ID
+      tags:
+      - video-stream-endpoints
+    put:
+      consumes:
+      - application/json
+      description: Update an existing video stream endpoint by its ID
+      parameters:
+      - description: Endpoint ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Updated video stream endpoint information
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.UpdateVideoStreamEndpointRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.VideoStreamEndpoint'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Update a video stream endpoint
+      tags:
+      - video-stream-endpoints
+  /api/video-stream-endpoints/{id}/status:
+    patch:
+      consumes:
+      - application/json
+      description: Update the status (enabled/disabled) of a video stream endpoint
+      parameters:
+      - description: Endpoint ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Status (0=disabled, 1=enabled)
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            status:
+              type: integer
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Update video stream endpoint status
+      tags:
+      - video-stream-endpoints
+  /api/video-stream-endpoints/{id}/test-resolution:
+    post:
+      description: Test the video stream URL and automatically detect resolution,
+        then update the endpoint
+      parameters:
+      - description: Endpoint ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  properties:
+                    resolution:
+                      type: string
+                  type: object
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Test video stream and detect resolution
+      tags:
+      - video-stream-endpoints
+  /api/video-stream-endpoints/generate:
+    post:
+      description: Automatically generate all video stream endpoints based on all
+        combinations of CDN lines, domains, and stream paths. This will delete all
+        existing endpoints and regenerate them.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Response contains message and count
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  type: object
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Generate all video stream endpoints
+      tags:
+      - video-stream-endpoints
+securityDefinitions:
+  BearerAuth:
+    description: Type "Bearer" followed by a space and JWT token.
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
