@@ -66,7 +66,7 @@
     </el-card>
 
     <!-- 注册商弹窗 -->
-    <el-dialog v-model="regDlg" :title="regEdit?'编辑注册商':'添加注册商'" width="500px">
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="regDlg" :title="regEdit?'编辑注册商':'添加注册商'" width="500px">
       <el-form :model="regForm" label-width="100px">
         <el-form-item label="名称"><el-input v-model="regForm.name" placeholder="如 dnspod-生产" /></el-form-item>
         <el-form-item label="provider">
@@ -82,7 +82,7 @@
     </el-dialog>
 
     <!-- ACME 账户弹窗 -->
-    <el-dialog v-model="acctDlg" title="添加 ACME 账户" width="460px">
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="acctDlg" title="添加 ACME 账户" width="460px">
       <el-form :model="acctForm" label-width="80px">
         <el-form-item label="邮箱"><el-input v-model="acctForm.email" placeholder="可选，用飞书提醒可不填" /></el-form-item>
         <el-form-item label="CA">

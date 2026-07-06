@@ -51,7 +51,7 @@
         :total="filtered.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
     </el-card>
 
-    <el-dialog v-model="igDlg" title="忽略证书巡检" width="460px">
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="igDlg" title="忽略证书巡检" width="460px">
       <div class="muted" style="margin-bottom:10px">{{ igRow?.fqdn }} —— 标记为不需要证书，将从「快到期/检测失败」中排除，可在「已忽略」里查看。</div>
       <el-form label-width="70px">
         <el-form-item label="原因"><el-input v-model="igReason" type="textarea" :rows="2" placeholder="如：内网解析 / 邮件 MX / 纯跳转，无需证书" /></el-form-item>

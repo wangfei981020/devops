@@ -39,7 +39,7 @@
       <el-empty v-if="!cdns.length" description="还没有 CDN，点右上添加" :image-size="60" />
     </el-card>
 
-    <el-dialog v-model="cDlg" :title="cEdit?'编辑 CDN':'添加 CDN'" width="440px">
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="cDlg" :title="cEdit?'编辑 CDN':'添加 CDN'" width="440px">
       <el-form :model="cForm" label-width="80px">
         <el-form-item label="CDN 名称"><el-input v-model="cForm.name" placeholder="如 阿里云CDN" /></el-form-item>
         <el-form-item label="排序"><el-input-number v-model="cForm.sort_order" :min="0" /></el-form-item>
@@ -47,7 +47,7 @@
       <template #footer><el-button @click="cDlg=false">取消</el-button><el-button type="primary" @click="saveCdn">保存</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="pDlg" :title="pEdit?'编辑项目':'添加项目'" width="440px">
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="pDlg" :title="pEdit?'编辑项目':'添加项目'" width="440px">
       <el-form :model="pForm" label-width="70px">
         <el-form-item label="项目名"><el-input v-model="pForm.name" /></el-form-item>
         <el-form-item label="备注"><el-input v-model="pForm.remark" /></el-form-item>
@@ -57,7 +57,7 @@
       <template #footer><el-button @click="pDlg=false">取消</el-button><el-button type="primary" @click="saveProj">保存</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="eDlg" :title="eEdit?'编辑环境':'添加环境'" width="440px">
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="eDlg" :title="eEdit?'编辑环境':'添加环境'" width="440px">
       <el-form :model="eForm" label-width="80px">
         <el-form-item label="代码"><el-input v-model="eForm.code" placeholder="PROD / UAT / ..." :disabled="eEdit" /></el-form-item>
         <el-form-item label="名称"><el-input v-model="eForm.name" /></el-form-item>

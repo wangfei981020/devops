@@ -4,6 +4,8 @@
       <span class="page-title">域名（主机头台账）</span>
       <div>
         <el-button v-if="selected.length" type="warning" :icon="EditPen" @click="openBulk">批量设置（{{ selected.length }}）</el-button>
+        <el-button :icon="Download" @click="exportCsv">导出Excel</el-button>
+        <el-button type="warning" :icon="Operation" @click="openAssign">批量分配</el-button>
         <el-button :icon="Refresh" :loading="syncingAll" @click="syncAll">从 GoDaddy 同步</el-button>
         <el-button type="primary" :icon="Plus" @click="openAdd">录入解析</el-button>
       </div>
@@ -77,7 +79,7 @@
     </el-card>
 
     <!-- 编辑解析（业务字段 + 回源/源站；域名只读） -->
-    <el-dialog v-model="dlg" :title="editing ? '编辑解析' : '录入解析'" width="520px">
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="dlg" :title="editing ? '编辑解析' : '录入解析'" width="520px">
       <el-form :model="form" label-width="96px">
         <el-form-item v-if="!editing" label="主域名">
           <el-select v-model="form.domain_ci_id" filterable placeholder="选择主域名" style="width:260px">
@@ -121,7 +123,7 @@
     </el-dialog>
 
     <!-- 批量设置项目/环境/模块（只改勾选的字段，留空的不动） -->
-    <el-dialog v-model="bDlg" title="批量设置" width="480px">
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="bDlg" title="批量设置" width="480px">
       <div class="muted" style="margin-bottom:12px">对选中的 {{ selected.length }} 条解析统一设置。只改打开开关的字段，关闭的保持原值不动。</div>
       <el-form :model="bForm" label-width="72px">
         <el-form-item label="项目">
@@ -144,8 +146,63 @@
       <template #footer><el-button @click="bDlg=false">取消</el-button><el-button type="primary" @click="saveBulk">应用到 {{ selected.length }} 条</el-button></template>
     </el-dialog>
 
+    <!-- 批量分配：项目/环境选一次，多个模块各带一批域名（完整 FQDN 精确匹配，找不到跳过） -->
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="aDlg" title="批量分配" width="660px">
+      <template v-if="!aResult">
+        <div style="display:flex;gap:20px;align-items:center;margin-bottom:10px">
+          <div>项目
+            <el-select v-model="aForm.project" filterable clearable placeholder="选择项目" style="width:190px">
+              <el-option v-for="p in app.projects" :key="p.id" :label="p.name" :value="p.name" />
+            </el-select>
+          </div>
+          <div>环境
+            <el-select v-model="aForm.env" clearable placeholder="选择环境" style="width:150px">
+              <el-option v-for="e in app.environments" :key="e.id" :label="e.code" :value="e.code" />
+            </el-select>
+          </div>
+          <span class="muted">整批统一</span>
+        </div>
+        <div class="muted" style="margin-bottom:8px">每个模块各配一批域名（完整 FQDN，一行一个 或 逗号分隔）；项目/环境留空则不改</div>
+        <div v-for="(b, i) in aForm.blocks" :key="i" class="assign-block">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span>模块</span>
+            <el-input v-model="b.module" placeholder="如 门户 / 交易（留空则不改模块）" style="width:220px" />
+            <span class="muted">已识别 {{ countDomains(b.domains) }} 个</span>
+            <el-button v-if="aForm.blocks.length > 1" link type="danger" :icon="Delete" style="margin-left:auto" @click="aForm.blocks.splice(i, 1)">删除</el-button>
+          </div>
+          <el-input v-model="b.domains" type="textarea" :rows="3" placeholder="www.sync-shop.com&#10;m.sync-shop.com" />
+        </div>
+        <div style="margin-top:10px">
+          <el-button :icon="Plus" @click="aForm.blocks.push({ module: '', domains: '' })">添加模块</el-button>
+          <span class="muted" style="margin-left:12px">合计 {{ aForm.blocks.length }} 模块 / {{ totalAssignDomains }} 域名</span>
+        </div>
+      </template>
+      <template v-else>
+        <el-result icon="success" :title="`成功更新 ${aResult.updated} 条`"
+          :sub-title="`项目=${aForm.project || '（不改）'}　环境=${aForm.env || '（不改）'}`">
+          <template #extra>
+            <div v-if="aResult.groups.length" class="muted">{{ aResult.groups.map(g => `${g.module} ${g.count} 条`).join('　·　') }}</div>
+          </template>
+        </el-result>
+        <el-alert v-if="aResult.notFound.length" type="warning" :closable="false"
+          :title="`${aResult.notFound.length} 个未找到，已跳过（台账里没有这些 FQDN）`" style="margin-top:8px">
+          <div class="mono" style="white-space:pre-line;max-height:160px;overflow:auto">{{ aResult.notFound.join('\n') }}</div>
+        </el-alert>
+      </template>
+      <template #footer>
+        <template v-if="!aResult">
+          <el-button @click="aDlg = false">取消</el-button>
+          <el-button type="primary" :loading="assigning" :disabled="!totalAssignDomains" @click="applyAssign">应用（{{ totalAssignDomains }} 条）</el-button>
+        </template>
+        <template v-else>
+          <el-button @click="resetAssign">继续分配</el-button>
+          <el-button type="primary" @click="aDlg = false; load()">完成关闭</el-button>
+        </template>
+      </template>
+    </el-dialog>
+
     <!-- 查看详情（只读，长字段全展开） -->
-    <el-dialog v-model="dDlg" title="解析详情" width="560px">
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="dDlg" title="解析详情" width="560px">
       <el-descriptions v-if="detail" :column="1" border size="small">
         <el-descriptions-item label="域名"><span class="mono detail-val">{{ detail.fqdn }}</span></el-descriptions-item>
         <el-descriptions-item label="主机头 / 类型"><span class="mono">{{ detail.host || '@' }}</span> / {{ detail.record_type }}</el-descriptions-item>
@@ -181,7 +238,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation } from '@element-plus/icons-vue'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, deleteRecord, checkRecordCert,
   syncDomainRecords, listDomains, listRegistrars } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
@@ -193,6 +250,7 @@ const dlg = ref(false), editing = ref(false), form = ref({})
 const selected = ref([])
 const bDlg = ref(false), bForm = ref({})
 const dDlg = ref(false), detail = ref(null)
+const aDlg = ref(false), aForm = ref({ project: '', env: '', blocks: [{ module: '', domains: '' }] }), aResult = ref(null), assigning = ref(false)
 const synced = computed(() => editing.value && form.value.origin && form.value.origin !== 'manual')
 const f = ref({ keyword: '', project: null, env: null, module: null, source: null })
 const query = ref({ ...f.value })
@@ -295,6 +353,51 @@ async function saveBulk() {
     const r = await bulkUpdateRecords(payload)
     ElMessage.success(`已批量更新 ${r.updated} 条`); bDlg.value = false; load()
   } catch (e) { ElMessage.error(e.response?.data?.error || '批量设置失败') }
+}
+// —— 批量分配：项目/环境统一，多个模块块各带一批 FQDN，完整精确匹配 ——
+function parseDomains(s) { return (s || '').split(/[\n,;，；]+/).map((x) => x.trim().toLowerCase()).filter(Boolean) }
+function countDomains(s) { return parseDomains(s).length }
+const totalAssignDomains = computed(() => aForm.value.blocks.reduce((n, b) => n + countDomains(b.domains), 0))
+function openAssign() { aForm.value = { project: '', env: '', blocks: [{ module: '', domains: '' }] }; aResult.value = null; aDlg.value = true }
+function resetAssign() { aForm.value = { project: '', env: '', blocks: [{ module: '', domains: '' }] }; aResult.value = null }
+async function applyAssign() {
+  const fqdnMap = new Map(rows.value.map((r) => [r.fqdn.toLowerCase(), r.id]))
+  const groups = [], notFound = []
+  let updated = 0
+  assigning.value = true
+  try {
+    for (const b of aForm.value.blocks) {
+      const doms = parseDomains(b.domains)
+      if (!doms.length) continue
+      const ids = []
+      for (const d of doms) { const id = fqdnMap.get(d); if (id) ids.push(id); else notFound.push(d) }
+      const payload = { ids }
+      if (aForm.value.project) payload.project = aForm.value.project
+      if (aForm.value.env) payload.env = aForm.value.env
+      if (b.module) payload.module = b.module
+      if (!ids.length || (payload.project === undefined && payload.env === undefined && payload.module === undefined)) continue
+      const r = await bulkUpdateRecords(payload)
+      updated += r.updated || 0
+      groups.push({ module: b.module || '(未设模块)', count: r.updated || 0 })
+    }
+    aResult.value = { updated, groups, notFound: [...new Set(notFound)] }
+  } catch (e) { ElMessage.error(e.response?.data?.error || '批量分配失败') }
+  finally { assigning.value = false }
+}
+// 导出当前筛选结果为 CSV（Excel 可直接打开，UTF-8 BOM 防中文乱码）
+function exportCsv() {
+  const headers = ['项目', '环境', '模块', '域名', 'CDN厂商', '回源CNAME', '源站IP', '证书到期', '来源', '操作人', '更新时间']
+  const esc = (v) => { v = (v == null ? '' : String(v)); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v }
+  const lines = [headers.join(',')]
+  for (const r of filteredRows.value) {
+    lines.push([r.project, r.env, r.module, r.fqdn, r.cdn_name, r.cname, r.origin_ip, r.cert_expiry_at,
+      r.origin === 'manual' ? '手动录入' : (r.source_name || '同步'), r.operator, r.updated_at].map(esc).join(','))
+  }
+  const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = 'cmdb-主机头台账.csv'; a.click()
+  URL.revokeObjectURL(url)
 }
 async function checkCert(row) {
   checking.value = { ...checking.value, [row.id]: true }

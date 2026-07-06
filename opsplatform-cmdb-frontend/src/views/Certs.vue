@@ -52,7 +52,7 @@
     </el-card>
 
     <!-- 申请证书向导 -->
-    <el-dialog v-model="dlg" title="申请证书" width="600px">
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="dlg" title="申请证书" width="600px">
       <el-form :model="form" label-width="110px">
         <el-form-item label="主域名 CN"><el-input v-model="form.cn" placeholder="example.com 或 *.example.com" /></el-form-item>
         <el-form-item label="SAN（可选）">
