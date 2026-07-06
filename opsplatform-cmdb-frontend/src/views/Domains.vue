@@ -149,6 +149,10 @@
     <!-- 批量分配：项目/环境选一次，多个模块各带一批域名（完整 FQDN 精确匹配，找不到跳过） -->
     <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="aDlg" title="批量分配" width="660px">
       <template v-if="!aResult">
+        <el-radio-group v-model="aMode" size="small" style="margin-bottom:12px">
+          <el-radio-button label="paste">两列粘贴（服务名 + 域名）</el-radio-button>
+          <el-radio-button label="blocks">分模块填</el-radio-button>
+        </el-radio-group>
         <div style="display:flex;gap:20px;align-items:center;margin-bottom:10px">
           <div>项目
             <el-select v-model="aForm.project" filterable clearable placeholder="选择项目" style="width:190px">
@@ -162,6 +166,17 @@
           </div>
           <span class="muted">整批统一</span>
         </div>
+
+        <!-- 两列粘贴 -->
+        <template v-if="aMode === 'paste'">
+          <div class="muted" style="margin-bottom:6px">粘贴两列（逗号 或 空格/Tab 分隔均可，一行一个）：<b>左列 = 模块</b>（原样用），<b>右列 = 域名</b>（完整 FQDN 精确匹配）</div>
+          <el-input v-model="pasteText" type="textarea" :rows="10"
+            placeholder="dragon-tiger-game-frontend,dragon-tiger.k8s-g32-uat.com&#10;lobby-game-frontend,lobby-game.k8s-g32-uat.com&#10;（kubectl 那种空格对齐的也能直接贴）" />
+          <span class="muted">识别 {{ parsedPaste.length }} 行有效（{{ new Set(parsedPaste.map(x => x.module)).size }} 个模块）</span>
+        </template>
+
+        <!-- 分模块填 -->
+        <template v-else>
         <div class="muted" style="margin-bottom:8px">每个模块各配一批域名（完整 FQDN，一行一个 或 逗号分隔）；项目/环境留空则不改</div>
         <div v-for="(b, i) in aForm.blocks" :key="i" class="assign-block">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
@@ -176,6 +191,7 @@
           <el-button :icon="Plus" @click="aForm.blocks.push({ module: '', domains: '' })">添加模块</el-button>
           <span class="muted" style="margin-left:12px">合计 {{ aForm.blocks.length }} 模块 / {{ totalAssignDomains }} 域名</span>
         </div>
+        </template>
       </template>
       <template v-else>
         <el-result icon="success" :title="`成功更新 ${aResult.updated} 条`"
@@ -186,6 +202,9 @@
         </el-result>
         <el-alert v-if="aResult.notFound.length" type="warning" :closable="false"
           :title="`${aResult.notFound.length} 个未找到，已跳过（台账里没有这些 FQDN）`" style="margin-top:8px">
+          <div style="display:flex;justify-content:flex-end;margin-bottom:4px">
+            <el-button size="small" :icon="CopyDocument" @click="copyNotFound">复制未找到（{{ aResult.notFound.length }}）</el-button>
+          </div>
           <div class="mono" style="white-space:pre-line;max-height:160px;overflow:auto">{{ aResult.notFound.join('\n') }}</div>
         </el-alert>
       </template>
@@ -238,7 +257,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument } from '@element-plus/icons-vue'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, deleteRecord, checkRecordCert,
   syncDomainRecords, listDomains, listRegistrars } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
@@ -251,6 +270,7 @@ const selected = ref([])
 const bDlg = ref(false), bForm = ref({})
 const dDlg = ref(false), detail = ref(null)
 const aDlg = ref(false), aForm = ref({ project: '', env: '', blocks: [{ module: '', domains: '' }] }), aResult = ref(null), assigning = ref(false)
+const aMode = ref('paste'), pasteText = ref('')
 const synced = computed(() => editing.value && form.value.origin && form.value.origin !== 'manual')
 const f = ref({ keyword: '', project: null, env: null, module: null, source: null })
 const query = ref({ ...f.value })
@@ -357,16 +377,51 @@ async function saveBulk() {
 // —— 批量分配：项目/环境统一，多个模块块各带一批 FQDN，完整精确匹配 ——
 function parseDomains(s) { return (s || '').split(/[\n,;，；]+/).map((x) => x.trim().toLowerCase()).filter(Boolean) }
 function countDomains(s) { return parseDomains(s).length }
-const totalAssignDomains = computed(() => aForm.value.blocks.reduce((n, b) => n + countDomains(b.domains), 0))
-function openAssign() { aForm.value = { project: '', env: '', blocks: [{ module: '', domains: '' }] }; aResult.value = null; aDlg.value = true }
-function resetAssign() { aForm.value = { project: '', env: '', blocks: [{ module: '', domains: '' }] }; aResult.value = null }
+// 两列粘贴：每行「服务名<空白>域名」→ 左列=模块(原样)，右列=FQDN
+const parsedPaste = computed(() => (pasteText.value || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+  const parts = l.split(/[,，\s]+/).filter(Boolean) // 逗号(中英)/Tab/空格 任意分隔
+  if (parts.length < 2) return null
+  return { module: parts[0], fqdn: parts[parts.length - 1].toLowerCase() }
+}).filter(Boolean))
+const totalAssignDomains = computed(() => aMode.value === 'paste'
+  ? parsedPaste.value.length
+  : aForm.value.blocks.reduce((n, b) => n + countDomains(b.domains), 0))
+// 统一成 [{module, domains(换行拼接)}]，两种模式共用应用逻辑
+function assignGroups() {
+  if (aMode.value === 'paste') {
+    const map = new Map()
+    for (const { module, fqdn } of parsedPaste.value) {
+      if (!map.has(module)) map.set(module, [])
+      map.get(module).push(fqdn)
+    }
+    return [...map.entries()].map(([module, domains]) => ({ module, domains: domains.join('\n') }))
+  }
+  return aForm.value.blocks
+}
+function openAssign() { aForm.value = { project: '', env: '', blocks: [{ module: '', domains: '' }] }; pasteText.value = ''; aResult.value = null; aDlg.value = true }
+function resetAssign() { aForm.value = { project: '', env: '', blocks: [{ module: '', domains: '' }] }; pasteText.value = ''; aResult.value = null }
+async function copyNotFound() {
+  const list = aResult.value?.notFound || []
+  const text = list.join('\n')
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success(`已复制 ${list.length} 个未找到域名`)
+  } catch (e) {
+    const ta = document.createElement('textarea')
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'
+    document.body.appendChild(ta); ta.select()
+    try { document.execCommand('copy'); ElMessage.success(`已复制 ${list.length} 个未找到域名`) }
+    catch (e2) { ElMessage.error('复制失败，请手动选中') }
+    document.body.removeChild(ta)
+  }
+}
 async function applyAssign() {
   const fqdnMap = new Map(rows.value.map((r) => [r.fqdn.toLowerCase(), r.id]))
   const groups = [], notFound = []
   let updated = 0
   assigning.value = true
   try {
-    for (const b of aForm.value.blocks) {
+    for (const b of assignGroups()) {
       const doms = parseDomains(b.domains)
       if (!doms.length) continue
       const ids = []
