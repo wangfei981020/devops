@@ -3,7 +3,9 @@
     <div class="page-head">
       <span class="page-title">域名（主机头台账）</span>
       <div>
-        <el-button v-if="selected.length" type="warning" :icon="EditPen" @click="openBulk">批量设置（{{ selected.length }}）</el-button>
+        <el-button v-if="selected.length && statusView !== 'ignored'" type="warning" :icon="EditPen" @click="openBulk">批量设置（{{ selected.length }}）</el-button>
+        <el-button v-if="selected.length && statusView !== 'ignored'" :icon="Hide" @click="openIgnore(selected)">批量忽略（{{ selected.length }}）</el-button>
+        <el-button v-if="selected.length && statusView === 'ignored'" type="success" :icon="View" @click="doUnignore(selected)">取消忽略（{{ selected.length }}）</el-button>
         <el-button :icon="Download" @click="exportCsv">导出Excel</el-button>
         <el-button type="warning" :icon="Operation" @click="openAssign">批量分配</el-button>
         <el-button :icon="Refresh" :loading="syncingAll" @click="syncAll">从 GoDaddy 同步</el-button>
@@ -26,6 +28,11 @@
         <el-select v-model="f.source" clearable placeholder="数据源" style="width:150px">
           <el-option v-for="r in registrars" :key="r.id" :label="r.name" :value="r.name" />
         </el-select>
+        <el-select v-model="statusView" style="width:120px" @change="onStatusChange">
+          <el-option label="正常" value="normal" />
+          <el-option label="已忽略" value="ignored" />
+          <el-option label="全部" value="all" />
+        </el-select>
         <el-button type="primary" :icon="Search" @click="doSearch">搜索</el-button>
         <el-button @click="resetFilter">重置</el-button>
         <span class="muted" style="margin-left:auto">共 {{ filteredRows.length }} / {{ rows.length }} 条主机头</span>
@@ -33,7 +40,7 @@
     </el-card>
 
     <el-card shadow="never">
-      <el-table :data="pagedRows" size="small" row-key="id" v-loading="loading" :default-sort="{ prop: 'project' }"
+      <el-table ref="tableRef" :data="pagedRows" size="small" row-key="id" v-loading="loading" :default-sort="{ prop: 'project' }"
         @selection-change="(v) => selected = v">
         <el-table-column type="selection" width="42" reserve-selection />
         <el-table-column prop="project" label="项目" width="130" sortable><template #default="{ row }">
@@ -46,8 +53,11 @@
         </template></el-table-column>
         <el-table-column prop="module" label="模块" width="120"><template #default="{ row }">{{ row.module || '—' }}</template></el-table-column>
         <el-table-column prop="fqdn" label="域名" min-width="230" sortable show-overflow-tooltip><template #default="{ row }">
-          <span class="mono" :class="{ stale: row.stale }">{{ row.fqdn }}</span>
+          <span class="mono" :class="{ stale: row.stale, ignored: row.ignored }">{{ row.fqdn }}</span>
           <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">厂商已删</el-tag>
+          <el-tooltip v-if="row.ignored" :disabled="!row.ignore_reason" :content="row.ignore_reason">
+            <el-tag type="info" size="small" style="margin-left:6px">已忽略</el-tag>
+          </el-tooltip>
         </template></el-table-column>
         <el-table-column prop="cdn_name" label="CDN厂商" width="120" show-overflow-tooltip><template #default="{ row }">
           <span v-if="row.cdn_name">{{ row.cdn_name }}</span><span v-else class="muted">—</span>
@@ -63,11 +73,13 @@
             <el-tag :type="certState(row).type" size="small" effect="light">{{ certState(row).text }}</el-tag>
           </el-tooltip>
         </template></el-table-column>
-        <el-table-column label="操作" width="146" fixed="right"><template #default="{ row }">
+        <el-table-column label="操作" width="172" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
             <el-tooltip content="查看详情"><el-button link type="primary" :icon="View" @click="openDetail(row)" /></el-tooltip>
             <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEdit(row)" /></el-tooltip>
             <el-tooltip content="检测证书"><el-button link type="primary" :loading="checking[row.id]" :icon="CircleCheck" @click="checkCert(row)" /></el-tooltip>
+            <el-tooltip v-if="!row.ignored" content="忽略"><el-button link type="warning" :icon="Hide" @click="openIgnore([row])" /></el-tooltip>
+            <el-tooltip v-else content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="doUnignore([row])" /></el-tooltip>
             <el-tooltip v-if="row.origin === 'manual' || row.stale" :content="row.stale ? '移除（厂商已删）' : '删除'">
               <el-button link type="danger" :icon="Delete" @click="del(row)" />
             </el-tooltip>
@@ -220,6 +232,15 @@
       </template>
     </el-dialog>
 
+    <!-- 忽略主机头（单条/批量共用，原因可选） -->
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="igDlg" title="忽略主机头" width="480px">
+      <div class="muted" style="margin-bottom:12px">将 {{ igRows.length }} 条主机头标为「忽略」：默认不再展示，也不计入证书巡检 / 总览统计。可随时在「已忽略」里恢复。</div>
+      <el-form label-width="60px">
+        <el-form-item label="原因"><el-input v-model="igReason" placeholder="（可选）如 已下线 / 项目未使用" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="igDlg=false">取消</el-button><el-button type="primary" @click="confirmIgnore">确认忽略</el-button></template>
+    </el-dialog>
+
     <!-- 查看详情（只读，长字段全展开） -->
     <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="dDlg" title="解析详情" width="560px">
       <el-descriptions v-if="detail" :column="1" border size="small">
@@ -257,8 +278,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument } from '@element-plus/icons-vue'
-import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, deleteRecord, checkRecordCert,
+import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft } from '@element-plus/icons-vue'
+import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgnoreRecords, deleteRecord, checkRecordCert,
   syncDomainRecords, listDomains, listRegistrars } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
@@ -266,7 +287,9 @@ const app = useAppStore()
 const rows = ref([]), allDomains = ref([]), registrars = ref([]), loading = ref(false)
 const checking = ref({}), syncingAll = ref(false)
 const dlg = ref(false), editing = ref(false), form = ref({})
-const selected = ref([])
+const selected = ref([]), tableRef = ref()
+const statusView = ref('normal') // normal=未忽略 / ignored / all
+const igDlg = ref(false), igRows = ref([]), igReason = ref('')
 const bDlg = ref(false), bForm = ref({})
 const dDlg = ref(false), detail = ref(null)
 const aDlg = ref(false), aForm = ref({ project: '', env: '', blocks: [{ module: '', domains: '' }] }), aResult = ref(null), assigning = ref(false)
@@ -319,7 +342,7 @@ function resetFilter() { f.value = { keyword: '', project: null, env: null, modu
 async function load() {
   loading.value = true
   try {
-    rows.value = await listAllRecords()
+    rows.value = await listAllRecords(statusView.value)
     allDomains.value = await listDomains()
     registrars.value = await listRegistrars()
     app.loadBasics()
@@ -353,6 +376,20 @@ async function del(row) {
     await app.showConfirm(row.stale ? `该解析 GoDaddy 已删除，确认从台账移除 ${row.fqdn}？` : `删除解析 ${row.fqdn}？`)
     await deleteRecord(row.id); ElMessage.success('已删除'); load()
   } catch (e) { if (e !== 'cancel') ElMessage.error('删除失败') }
+}
+function onStatusChange() { currentPage.value = 1; tableRef.value?.clearSelection(); load() }
+function openIgnore(list) { igRows.value = list; igReason.value = ''; igDlg.value = true }
+async function confirmIgnore() {
+  try {
+    const r = await bulkIgnoreRecords({ ids: igRows.value.map((x) => x.id), ignored: true, reason: igReason.value })
+    ElMessage.success(`已忽略 ${r.updated} 条`); igDlg.value = false; tableRef.value?.clearSelection(); load()
+  } catch (e) { ElMessage.error(e.response?.data?.error || '忽略失败') }
+}
+async function doUnignore(list) {
+  try {
+    const r = await bulkIgnoreRecords({ ids: list.map((x) => x.id), ignored: false })
+    ElMessage.success(`已取消忽略 ${r.updated} 条`); tableRef.value?.clearSelection(); load()
+  } catch (e) { ElMessage.error(e.response?.data?.error || '操作失败') }
 }
 function openDetail(row) { detail.value = row; dDlg.value = true }
 function editFromDetail() { dDlg.value = false; openEdit(detail.value) }
@@ -489,5 +526,6 @@ onMounted(load)
 .filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 .stale { text-decoration: line-through; color: #b0b3bb; }
+.ignored { color: #b0b3bb; }
 .detail-val { word-break: break-all; }
 </style>

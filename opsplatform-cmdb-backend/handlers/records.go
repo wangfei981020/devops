@@ -24,6 +24,7 @@ func (h *RecordHandler) Register(r *gin.RouterGroup) {
 	r.POST("/domains/:ciid/records", h.Create)
 	r.PUT("/records/:id", h.Update)
 	r.POST("/records/bulk-update", h.BulkUpdate) // 批量设项目/环境/模块
+	r.POST("/records/bulk-ignore", h.BulkIgnore) // 批量忽略/取消忽略
 	r.DELETE("/records/:id", h.Delete)
 	r.POST("/records/:id/check-cert", h.CheckCert)
 	r.POST("/domains/:ciid/check-all-certs", h.CheckAllCerts)
@@ -48,23 +49,33 @@ type flatRecordOut struct {
 	Operator     string `json:"operator"`
 	Origin       string `json:"origin"`      // 所属主域名来源：manual/sync
 	SourceName   string `json:"source_name"` // 数据源/注册商名（GoDaddy 等）
+	Ignored      bool   `json:"ignored"`
+	IgnoreReason string `json:"ignore_reason"`
 	Stale        bool   `json:"stale"`
 	UpdatedAt    string `json:"updated_at"`
 }
 
 // ListAll 拉平所有域名下的解析记录：一行一个「主机头.域名」，供主机头台账页展示。
+// status: 默认(空/normal)只返回未忽略；ignored=只返回已忽略；all=全部。
 func (h *RecordHandler) ListAll(c *gin.Context) {
+	ignoredCond := "AND r.ignored=0"
+	switch c.Query("status") {
+	case "ignored":
+		ignoredCond = "AND r.ignored=1"
+	case "all":
+		ignoredCond = ""
+	}
 	rows, err := h.DB.Query(`
 		SELECT r.id, r.domain_ci_id, c.name, r.host, r.record_type, r.cdn_id, COALESCE(cd.name,''),
 		       r.cname, r.origin_ip, r.cert_expiry_at, r.cert_check_msg,
 		       r.project, r.env, r.module, r.operator,
-		       COALESCE(d.origin,''), COALESCE(reg.name,''), r.stale, r.updated_at
+		       COALESCE(d.origin,''), COALESCE(reg.name,''), r.ignored, r.ignore_reason, r.stale, r.updated_at
 		FROM domain_records r
 		JOIN cis c ON c.id=r.domain_ci_id
 		LEFT JOIN domains d ON d.ci_id=r.domain_ci_id
 		LEFT JOIN cdns cd ON cd.id=r.cdn_id
 		LEFT JOIN registrars reg ON reg.id=d.registrar_id
-		WHERE c.type='domain'
+		WHERE c.type='domain' ` + ignoredCond + `
 		ORDER BY r.project, c.name, r.host`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -76,14 +87,15 @@ func (h *RecordHandler) ListAll(c *gin.Context) {
 		var o flatRecordOut
 		var cdnID sql.NullInt64
 		var certExp, updated sql.NullTime
-		var stale int
+		var stale, ignored int
 		if err := rows.Scan(&o.ID, &o.DomainCIID, &o.Domain, &o.Host, &o.RecordType, &cdnID, &o.CdnName,
 			&o.Cname, &o.OriginIP, &certExp, &o.CertCheckMsg,
-			&o.Project, &o.Env, &o.Module, &o.Operator, &o.Origin, &o.SourceName, &stale, &updated); err != nil {
+			&o.Project, &o.Env, &o.Module, &o.Operator, &o.Origin, &o.SourceName, &ignored, &o.IgnoreReason, &stale, &updated); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 		o.Stale = stale == 1
+		o.Ignored = ignored == 1
 		o.FQDN = recordFQDN(o.Host, o.Domain)
 		if cdnID.Valid {
 			v := int(cdnID.Int64)
@@ -306,6 +318,43 @@ func (h *RecordHandler) BulkUpdate(c *gin.Context) {
 	}
 	n, _ := res.RowsAffected()
 	WriteAudit(h.DB, c, "bulk_update_records", "count="+strconv.FormatInt(n, 10))
+	c.JSON(http.StatusOK, gin.H{"ok": true, "updated": n})
+}
+
+// BulkIgnore 批量忽略/取消忽略主机头。ignored=true 标忽略(可带原因)，false 取消。
+func (h *RecordHandler) BulkIgnore(c *gin.Context) {
+	var in struct {
+		IDs     []int64 `json:"ids"`
+		Ignored bool    `json:"ignored"`
+		Reason  string  `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || len(in.IDs) == 0 {
+		c.JSON(400, gin.H{"error": "ids 必填"})
+		return
+	}
+	ph := make([]string, len(in.IDs))
+	args := []any{}
+	ig := 0
+	if in.Ignored {
+		ig = 1
+	}
+	args = append(args, ig, in.Reason)
+	for i, id := range in.IDs {
+		ph[i] = "?"
+		args = append(args, id)
+	}
+	q := "UPDATE domain_records SET ignored=?, ignore_reason=? WHERE id IN (" + strings.Join(ph, ",") + ")"
+	res, err := h.DB.Exec(q, args...)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	n, _ := res.RowsAffected()
+	action := "ignore_records"
+	if !in.Ignored {
+		action = "unignore_records"
+	}
+	WriteAudit(h.DB, c, action, "count="+strconv.FormatInt(n, 10))
 	c.JSON(http.StatusOK, gin.H{"ok": true, "updated": n})
 }
 

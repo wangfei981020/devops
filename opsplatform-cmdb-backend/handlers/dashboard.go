@@ -39,9 +39,9 @@ func (h *DashboardHandler) Get(c *gin.Context) {
 		"cert_active":  count(`SELECT COUNT(*) FROM certificates WHERE status='active'`),
 		"cert_expired": count(`SELECT COUNT(*) FROM certificates WHERE status='active' AND expiry_at < NOW()`),
 		// 线上检测证书（解析记录），未忽略
-		"online_cert_expiring": count(`SELECT COUNT(*) FROM domain_records WHERE cert_ignored=0 AND cert_expiry_at IS NOT NULL AND cert_expiry_at >= NOW() AND cert_expiry_at < DATE_ADD(NOW(), INTERVAL 30 DAY)`),
-		"online_cert_expired":  count(`SELECT COUNT(*) FROM domain_records WHERE cert_ignored=0 AND cert_expiry_at IS NOT NULL AND cert_expiry_at < NOW()`),
-		"online_cert_failed":   count(`SELECT COUNT(*) FROM domain_records WHERE cert_ignored=0 AND cert_expiry_at IS NULL AND cert_check_msg<>''`),
+		"online_cert_expiring": count(`SELECT COUNT(*) FROM domain_records WHERE ignored=0 AND cert_ignored=0 AND cert_expiry_at IS NOT NULL AND cert_expiry_at >= NOW() AND cert_expiry_at < DATE_ADD(NOW(), INTERVAL 30 DAY)`),
+		"online_cert_expired":  count(`SELECT COUNT(*) FROM domain_records WHERE ignored=0 AND cert_ignored=0 AND cert_expiry_at IS NOT NULL AND cert_expiry_at < NOW()`),
+		"online_cert_failed":   count(`SELECT COUNT(*) FROM domain_records WHERE ignored=0 AND cert_ignored=0 AND cert_expiry_at IS NULL AND cert_check_msg<>''`),
 	}
 
 	// 按环境分布

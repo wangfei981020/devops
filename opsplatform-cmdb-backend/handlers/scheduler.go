@@ -128,7 +128,7 @@ func refreshAllExpiryCore(db *sql.DB) string {
 
 // inspectAllExpiryCore 逐条连 443 检测所有域名下所有解析记录的证书到期。
 func inspectAllExpiryCore(db *sql.DB) string {
-	rows, err := db.Query(`SELECT r.id, r.host, c.name FROM domain_records r JOIN cis c ON c.id=r.domain_ci_id WHERE c.type='domain'`)
+	rows, err := db.Query(`SELECT r.id, r.host, c.name FROM domain_records r JOIN cis c ON c.id=r.domain_ci_id WHERE c.type='domain' AND r.ignored=0`)
 	if err != nil {
 		return "查询解析失败: " + err.Error()
 	}

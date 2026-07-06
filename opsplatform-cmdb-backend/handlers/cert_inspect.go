@@ -38,7 +38,8 @@ func (h *CertInspectHandler) List(c *gin.Context) {
 	// 线上检测证书（来自解析记录）
 	rows, err := h.DB.Query(`
 		SELECT r.id, r.domain_ci_id, r.host, c.name, r.cert_expiry_at, r.cert_check_msg, r.cert_ignored, r.cert_ignore_reason
-		FROM domain_records r JOIN cis c ON c.id=r.domain_ci_id`)
+		FROM domain_records r JOIN cis c ON c.id=r.domain_ci_id
+		WHERE r.ignored=0`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
