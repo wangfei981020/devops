@@ -1,4 +1,5 @@
-FROM node:22-alpine AS build
+# 多架构：前端编译产物(dist)与架构无关，构建层固定跑本机架构（免 QEMU），只有 nginx 运行层按目标架构
+FROM --platform=$BUILDPLATFORM node:22-alpine AS build
 ARG VERSION=dev
 ENV VITE_APP_VERSION=$VERSION
 WORKDIR /src

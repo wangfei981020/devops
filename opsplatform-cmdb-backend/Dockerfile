@@ -1,9 +1,11 @@
-FROM golang:1.26-alpine AS build
+# 多架构：构建层固定跑在本机架构，用 GOOS/GOARCH 交叉编译出目标架构二进制（免 QEMU）
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/cmdb-backend .
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/cmdb-backend .
 
 FROM alpine:3.21
 RUN apk upgrade --no-cache && \
