@@ -268,8 +268,10 @@ func (h *SyncHandler) importBusinessRecords(ciID int64, recs []dnsource.DNSRecor
 				VALUES (?, ?, ?, ?, ?, 'godaddy同步')`, ciID, b.host, b.rtype, b.originIP, b.cname)
 			created++
 		} else if err == nil {
-			// 只刷厂商字段，业务字段(项目/环境/模块/CDN/证书)原样保留；重新出现则取消失效标记
-			_, _ = h.DB.Exec(`UPDATE domain_records SET origin_ip=?, cname=?, stale=0 WHERE id=?`, b.originIP, b.cname, id)
+			// 只刷厂商字段，业务字段(项目/环境/模块/CDN/证书)原样保留；重新出现则取消失效标记。
+			// origin_ip：同步值为空(CNAME 记录)时保留人工手填的源站IP，非空(A 记录)才用厂商值覆盖。
+			_, _ = h.DB.Exec(`UPDATE domain_records SET origin_ip=IF(?='', origin_ip, ?), cname=?, stale=0 WHERE id=?`,
+				b.originIP, b.originIP, b.cname, id)
 		}
 	}
 	// 厂商已删除：本次未出现的 A/CNAME 标为失效（保留业务字段，由人工确认后删）

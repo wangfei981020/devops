@@ -32,7 +32,7 @@ func (h *BasicHandler) Register(r *gin.RouterGroup) {
 // ---- 项目 ----
 
 func (h *BasicHandler) ListProjects(c *gin.Context) {
-	rows, err := h.DB.Query(`SELECT id, name, remark, sort_order FROM projects ORDER BY sort_order, id`)
+	rows, err := h.DB.Query(`SELECT id, name, remark, color, sort_order FROM projects ORDER BY sort_order, id`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -42,12 +42,13 @@ func (h *BasicHandler) ListProjects(c *gin.Context) {
 		ID        int    `json:"id"`
 		Name      string `json:"name"`
 		Remark    string `json:"remark"`
+		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
 	}
 	out := []p{}
 	for rows.Next() {
 		var x p
-		if rows.Scan(&x.ID, &x.Name, &x.Remark, &x.SortOrder) == nil {
+		if rows.Scan(&x.ID, &x.Name, &x.Remark, &x.Color, &x.SortOrder) == nil {
 			out = append(out, x)
 		}
 	}
@@ -58,13 +59,14 @@ func (h *BasicHandler) CreateProject(c *gin.Context) {
 	var in struct {
 		Name      string `json:"name"`
 		Remark    string `json:"remark"`
+		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil || in.Name == "" {
 		c.JSON(400, gin.H{"error": "name 必填"})
 		return
 	}
-	res, err := h.DB.Exec(`INSERT INTO projects (name, remark, sort_order) VALUES (?, ?, ?)`, in.Name, in.Remark, in.SortOrder)
+	res, err := h.DB.Exec(`INSERT INTO projects (name, remark, color, sort_order) VALUES (?, ?, ?, ?)`, in.Name, in.Remark, in.Color, in.SortOrder)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -77,13 +79,14 @@ func (h *BasicHandler) UpdateProject(c *gin.Context) {
 	var in struct {
 		Name      string `json:"name"`
 		Remark    string `json:"remark"`
+		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := h.DB.Exec(`UPDATE projects SET name=?, remark=?, sort_order=? WHERE id=?`, in.Name, in.Remark, in.SortOrder, c.Param("id")); err != nil {
+	if _, err := h.DB.Exec(`UPDATE projects SET name=?, remark=?, color=?, sort_order=? WHERE id=?`, in.Name, in.Remark, in.Color, in.SortOrder, c.Param("id")); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -101,7 +104,7 @@ func (h *BasicHandler) DeleteProject(c *gin.Context) {
 // ---- 环境 ----
 
 func (h *BasicHandler) ListEnvs(c *gin.Context) {
-	rows, err := h.DB.Query(`SELECT id, code, name, tag_type, sort_order FROM environments ORDER BY sort_order, id`)
+	rows, err := h.DB.Query(`SELECT id, code, name, tag_type, color, sort_order FROM environments ORDER BY sort_order, id`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -112,12 +115,13 @@ func (h *BasicHandler) ListEnvs(c *gin.Context) {
 		Code      string `json:"code"`
 		Name      string `json:"name"`
 		TagType   string `json:"tag_type"`
+		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
 	}
 	out := []e{}
 	for rows.Next() {
 		var x e
-		if rows.Scan(&x.ID, &x.Code, &x.Name, &x.TagType, &x.SortOrder) == nil {
+		if rows.Scan(&x.ID, &x.Code, &x.Name, &x.TagType, &x.Color, &x.SortOrder) == nil {
 			out = append(out, x)
 		}
 	}
@@ -129,6 +133,7 @@ func (h *BasicHandler) CreateEnv(c *gin.Context) {
 		Code      string `json:"code"`
 		Name      string `json:"name"`
 		TagType   string `json:"tag_type"`
+		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil || in.Code == "" {
@@ -138,7 +143,7 @@ func (h *BasicHandler) CreateEnv(c *gin.Context) {
 	if in.TagType == "" {
 		in.TagType = "info"
 	}
-	res, err := h.DB.Exec(`INSERT INTO environments (code, name, tag_type, sort_order) VALUES (?, ?, ?, ?)`, in.Code, in.Name, in.TagType, in.SortOrder)
+	res, err := h.DB.Exec(`INSERT INTO environments (code, name, tag_type, color, sort_order) VALUES (?, ?, ?, ?, ?)`, in.Code, in.Name, in.TagType, in.Color, in.SortOrder)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -152,13 +157,14 @@ func (h *BasicHandler) UpdateEnv(c *gin.Context) {
 		Code      string `json:"code"`
 		Name      string `json:"name"`
 		TagType   string `json:"tag_type"`
+		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := h.DB.Exec(`UPDATE environments SET code=?, name=?, tag_type=?, sort_order=? WHERE id=?`, in.Code, in.Name, in.TagType, in.SortOrder, c.Param("id")); err != nil {
+	if _, err := h.DB.Exec(`UPDATE environments SET code=?, name=?, tag_type=?, color=?, sort_order=? WHERE id=?`, in.Code, in.Name, in.TagType, in.Color, in.SortOrder, c.Param("id")); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

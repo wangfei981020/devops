@@ -15,9 +15,11 @@ export const updateDomain = (id, b) => http.put('/domains/' + id, b).then((r) =>
 export const deleteDomain = (id) => http.delete('/domains/' + id).then((r) => r.data)
 
 // 解析层（域名下挂的解析记录）
+export const listAllRecords = () => http.get('/records').then((r) => r.data) // 拉平：主机头台账
 export const listRecords = (ciid) => http.get(`/domains/${ciid}/records`).then((r) => r.data)
 export const createRecord = (ciid, b) => http.post(`/domains/${ciid}/records`, b).then((r) => r.data)
 export const updateRecord = (id, b) => http.put('/records/' + id, b).then((r) => r.data)
+export const bulkUpdateRecords = (b) => http.post('/records/bulk-update', b).then((r) => r.data) // 批量设项目/环境/模块
 export const deleteRecord = (id) => http.delete('/records/' + id).then((r) => r.data)
 export const checkRecordCert = (id) => http.post(`/records/${id}/check-cert`).then((r) => r.data)
 export const checkAllRecordCerts = (ciid) => http.post(`/domains/${ciid}/check-all-certs`).then((r) => r.data)

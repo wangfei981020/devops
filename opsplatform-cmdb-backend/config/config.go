@@ -26,7 +26,7 @@ func Load() *Config {
 // buildDSN 从 MYSQL_* 拼 DSN；默认连本地 mysql-deploy 的 cmdb 库。
 func buildDSN() string {
 	h := getenv("MYSQL_HOST", "127.0.0.1")
-	p := getenv("MYSQL_PORT", "13307")
+	p := getenv("MYSQL_PORT", "3306")
 	u := getenv("MYSQL_USER", "cmdb_user")
 	pw := os.Getenv("MYSQL_PASSWORD")
 	db := getenv("MYSQL_DATABASE", "cmdb")

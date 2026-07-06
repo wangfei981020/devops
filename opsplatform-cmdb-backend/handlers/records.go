@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,12 +19,85 @@ type RecordHandler struct {
 func NewRecordHandler(db *sql.DB) *RecordHandler { return &RecordHandler{DB: db} }
 
 func (h *RecordHandler) Register(r *gin.RouterGroup) {
+	r.GET("/records", h.ListAll) // 拉平：跨所有域名的主机头台账
 	r.GET("/domains/:ciid/records", h.List)
 	r.POST("/domains/:ciid/records", h.Create)
 	r.PUT("/records/:id", h.Update)
+	r.POST("/records/bulk-update", h.BulkUpdate) // 批量设项目/环境/模块
 	r.DELETE("/records/:id", h.Delete)
 	r.POST("/records/:id/check-cert", h.CheckCert)
 	r.POST("/domains/:ciid/check-all-certs", h.CheckAllCerts)
+}
+
+type flatRecordOut struct {
+	ID           int64  `json:"id"`
+	DomainCIID   int64  `json:"domain_ci_id"`
+	Domain       string `json:"domain"`
+	FQDN         string `json:"fqdn"`
+	Host         string `json:"host"`
+	RecordType   string `json:"record_type"`
+	CdnID        *int   `json:"cdn_id"`
+	CdnName      string `json:"cdn_name"`
+	Cname        string `json:"cname"`
+	OriginIP     string `json:"origin_ip"`
+	CertExpiryAt string `json:"cert_expiry_at"`
+	CertCheckMsg string `json:"cert_check_msg"`
+	Project      string `json:"project"`
+	Env          string `json:"env"`
+	Module       string `json:"module"`
+	Operator     string `json:"operator"`
+	Origin       string `json:"origin"`      // 所属主域名来源：manual/sync
+	SourceName   string `json:"source_name"` // 数据源/注册商名（GoDaddy 等）
+	Stale        bool   `json:"stale"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+// ListAll 拉平所有域名下的解析记录：一行一个「主机头.域名」，供主机头台账页展示。
+func (h *RecordHandler) ListAll(c *gin.Context) {
+	rows, err := h.DB.Query(`
+		SELECT r.id, r.domain_ci_id, c.name, r.host, r.record_type, r.cdn_id, COALESCE(cd.name,''),
+		       r.cname, r.origin_ip, r.cert_expiry_at, r.cert_check_msg,
+		       r.project, r.env, r.module, r.operator,
+		       COALESCE(d.origin,''), COALESCE(reg.name,''), r.stale, r.updated_at
+		FROM domain_records r
+		JOIN cis c ON c.id=r.domain_ci_id
+		LEFT JOIN domains d ON d.ci_id=r.domain_ci_id
+		LEFT JOIN cdns cd ON cd.id=r.cdn_id
+		LEFT JOIN registrars reg ON reg.id=d.registrar_id
+		WHERE c.type='domain'
+		ORDER BY r.project, c.name, r.host`)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	out := []flatRecordOut{}
+	for rows.Next() {
+		var o flatRecordOut
+		var cdnID sql.NullInt64
+		var certExp, updated sql.NullTime
+		var stale int
+		if err := rows.Scan(&o.ID, &o.DomainCIID, &o.Domain, &o.Host, &o.RecordType, &cdnID, &o.CdnName,
+			&o.Cname, &o.OriginIP, &certExp, &o.CertCheckMsg,
+			&o.Project, &o.Env, &o.Module, &o.Operator, &o.Origin, &o.SourceName, &stale, &updated); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		o.Stale = stale == 1
+		o.FQDN = recordFQDN(o.Host, o.Domain)
+		if cdnID.Valid {
+			v := int(cdnID.Int64)
+			o.CdnID = &v
+		}
+		if certExp.Valid {
+			o.CertExpiryAt = certExp.Time.Format("2006-01-02")
+		}
+		if updated.Valid {
+			o.UpdatedAt = updated.Time.Format("2006-01-02 15:04")
+		}
+		out = append(out, o)
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // CheckAllCerts 一键检测某域名下所有解析的证书到期（并发连 443，限并发 8）。
@@ -185,6 +259,54 @@ func (h *RecordHandler) Update(c *gin.Context) {
 	}
 	WriteAudit(h.DB, c, "update_record", in.Host)
 	c.JSON(200, gin.H{"ok": true})
+}
+
+// BulkUpdate 批量设置选中解析的业务字段（项目/环境/模块）。只更新请求里显式给出的字段，未给出的不动。
+func (h *RecordHandler) BulkUpdate(c *gin.Context) {
+	var in struct {
+		IDs     []int64 `json:"ids"`
+		Project *string `json:"project"`
+		Env     *string `json:"env"`
+		Module  *string `json:"module"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || len(in.IDs) == 0 {
+		c.JSON(400, gin.H{"error": "ids 必填"})
+		return
+	}
+	sets := []string{}
+	args := []any{}
+	if in.Project != nil {
+		sets = append(sets, "project=?")
+		args = append(args, *in.Project)
+	}
+	if in.Env != nil {
+		sets = append(sets, "env=?")
+		args = append(args, *in.Env)
+	}
+	if in.Module != nil {
+		sets = append(sets, "module=?")
+		args = append(args, *in.Module)
+	}
+	if len(sets) == 0 {
+		c.JSON(400, gin.H{"error": "至少选择一个要设置的字段"})
+		return
+	}
+	sets = append(sets, "operator=?")
+	args = append(args, currentUser(c))
+	ph := make([]string, len(in.IDs))
+	for i, id := range in.IDs {
+		ph[i] = "?"
+		args = append(args, id)
+	}
+	q := "UPDATE domain_records SET " + strings.Join(sets, ", ") + " WHERE id IN (" + strings.Join(ph, ",") + ")"
+	res, err := h.DB.Exec(q, args...)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	n, _ := res.RowsAffected()
+	WriteAudit(h.DB, c, "bulk_update_records", "count="+strconv.FormatInt(n, 10))
+	c.JSON(http.StatusOK, gin.H{"ok": true, "updated": n})
 }
 
 func (h *RecordHandler) Delete(c *gin.Context) {
