@@ -73,6 +73,11 @@ export const createCloudAccount = (b) => http.post('/cloud-accounts', b).then((r
 export const updateCloudAccount = (id, b) => http.put(`/cloud-accounts/${id}`, b).then((r) => r.data)
 export const deleteCloudAccount = (id) => http.delete(`/cloud-accounts/${id}`).then((r) => r.data)
 export const syncCloudAccount = (id) => http.post(`/cloud-accounts/${id}/sync`).then((r) => r.data)
+// 云项目（凭据在这一层）
+export const createCloudProject = (accountId, b) => http.post(`/cloud-accounts/${accountId}/projects`, b).then((r) => r.data)
+export const updateCloudProject = (pid, b) => http.put(`/cloud-projects/${pid}`, b).then((r) => r.data)
+export const deleteCloudProject = (pid) => http.delete(`/cloud-projects/${pid}`).then((r) => r.data)
+export const syncCloudProject = (pid) => http.post(`/cloud-projects/${pid}/sync`).then((r) => r.data)
 export const listCloudRates = () => http.get('/cloud-price-rates').then((r) => r.data)
 export const updateCloudRate = (id, b) => http.put(`/cloud-price-rates/${id}`, b).then((r) => r.data)
 

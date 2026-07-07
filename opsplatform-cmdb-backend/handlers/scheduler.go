@@ -40,6 +40,7 @@ func StartScheduler(db *sql.DB, cipher *crypto.Cipher) {
 		"remind":         func() (string, []string, bool) { remindExpiry(db); return "已按阈值发送到期提醒", nil, true },
 		"inspect":        func() (string, []string, bool) { return inspectAllCertsCore(db) },
 		"dns_sync":       func() (string, []string, bool) { return dnsSyncCore(db, cipher) },
+		"host_sync":      func() (string, []string, bool) { return SyncAllHostProjects(db, cipher) },
 	}
 	sched.reload()
 }

@@ -22,7 +22,6 @@
     <el-card shadow="never">
       <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column label="项目" min-width="130"><template #default="{ row }">{{ row.project_name || row.project }}</template></el-table-column>
-        <el-table-column label="项目ID" width="150"><template #default="{ row }"><span class="mono">{{ row.project }}</span></template></el-table-column>
         <el-table-column prop="zone" label="区域" width="130" />
         <el-table-column label="实例名" min-width="150"><template #default="{ row }">
           <span :class="{ stale: row.stale }">{{ row.name }}</span>
@@ -97,37 +96,77 @@
       <template #footer><el-button @click="dDlg=false">关闭</el-button></template>
     </el-dialog>
 
-    <!-- 云账号管理 -->
-    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="acctDlg" title="云账号" width="720px">
+    <!-- 云账号管理（账号=分组，展开看其下多个 project，凭据在 project 层） -->
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="acctDlg" title="云账号" width="820px">
+      <div class="muted" style="margin-bottom:10px">账号是业务分组；<b>凭据配在项目层</b>——同一账号下每个 GCP project 一份 service account。展开账号管理其下项目。</div>
       <div style="text-align:right;margin-bottom:10px"><el-button type="primary" size="small" :icon="Plus" @click="openAcctForm()">添加云账号</el-button></div>
-      <el-table :data="accounts" size="small">
-        <el-table-column prop="name" label="名称" width="130" />
-        <el-table-column label="provider" width="90"><template #default="{ row }"><el-tag size="small">{{ row.provider }}</el-tag></template></el-table-column>
-        <el-table-column prop="projects" label="项目" min-width="180" show-overflow-tooltip />
-        <el-table-column label="最近同步" width="140"><template #default="{ row }">{{ row.last_sync_at || '—' }}</template></el-table-column>
-        <el-table-column label="操作" width="180" fixed="right"><template #default="{ row }">
+      <el-table :data="accounts" size="small" row-key="id">
+        <el-table-column type="expand">
+          <template #default="{ row: acc }">
+            <div style="padding:6px 16px 12px">
+              <div style="display:flex;align-items:center;margin-bottom:8px">
+                <b>项目（每个 project 独立凭据）</b>
+                <el-button size="small" :icon="Plus" style="margin-left:auto" @click="openProjForm(acc)">添加项目</el-button>
+              </div>
+              <el-table :data="acc.projects" size="small">
+                <el-table-column prop="name" label="自定义名" min-width="110" />
+                <el-table-column label="project ID" min-width="150"><template #default="{ row: p }"><span class="mono">{{ p.project_id }}</span></template></el-table-column>
+                <el-table-column label="凭据" width="80"><template #default="{ row: p }">
+                  <el-tag :type="p.has_cred?'success':'info'" size="small">{{ p.has_cred?'已配':'未配' }}</el-tag>
+                </template></el-table-column>
+                <el-table-column label="主机" width="60" align="right"><template #default="{ row: p }">{{ p.host_count }}</template></el-table-column>
+                <el-table-column label="最近同步" width="130"><template #default="{ row: p }">
+                  {{ p.last_sync_at || '—' }}
+                  <div v-if="p.last_result" class="muted" style="font-size:11px">{{ p.last_result }}</div>
+                </template></el-table-column>
+                <el-table-column label="操作" width="150"><template #default="{ row: p }">
+                  <div style="display:flex;gap:4px;align-items:center">
+                    <el-button link type="primary" :icon="Refresh" :loading="syncing['p'+p.id]" @click="syncProj(p)">同步</el-button>
+                    <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openProjForm(acc, p)" /></el-tooltip>
+                    <el-tooltip content="删除（连主机）"><el-button link type="danger" :icon="Delete" @click="delProj(p)" /></el-tooltip>
+                  </div>
+                </template></el-table-column>
+              </el-table>
+              <el-empty v-if="!acc.projects.length" description="还没有项目，点右上「添加项目」并配置凭据" :image-size="40" />
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="账号名" min-width="130" />
+        <el-table-column label="厂商" width="80"><template #default="{ row }"><el-tag size="small">{{ row.provider }}</el-tag></template></el-table-column>
+        <el-table-column label="项目数" width="80" align="right"><template #default="{ row }">{{ row.projects.length }}</template></el-table-column>
+        <el-table-column label="操作" width="220" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:6px;align-items:center">
-            <el-button link type="primary" :icon="Refresh" :loading="syncing[row.id]" @click="syncAcct(row)">同步</el-button>
-            <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openAcctForm(row)" /></el-tooltip>
-            <el-tooltip content="删除（连主机）"><el-button link type="danger" :icon="Delete" @click="delAcct(row)" /></el-tooltip>
+            <el-button link type="primary" :icon="Refresh" :loading="syncing['a'+row.id]" @click="syncAcct(row)">同步全部</el-button>
+            <el-tooltip content="编辑账号"><el-button link type="primary" :icon="Edit" @click="openAcctForm(row)" /></el-tooltip>
+            <el-tooltip content="删除（连项目和主机）"><el-button link type="danger" :icon="Delete" @click="delAcct(row)" /></el-tooltip>
           </div>
         </template></el-table-column>
       </el-table>
       <el-empty v-if="!accounts.length" description="还没有云账号，点右上添加" :image-size="50" />
     </el-dialog>
 
-    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="acctForm.dlg" :title="acctForm.id?'编辑云账号':'添加云账号'" width="560px">
+    <!-- 账号表单（分组：名称 + 计费集） -->
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="acctForm.dlg" :title="acctForm.id?'编辑云账号':'添加云账号'" width="500px">
       <el-form :model="acctForm" label-width="120px">
-        <el-form-item label="名称"><el-input v-model="acctForm.name" placeholder="如 GCP-主账号" style="width:260px" /></el-form-item>
-        <el-form-item label="项目(逗号分隔)"><el-input v-model="acctForm.projects" placeholder="g32-prod,g32-uat" style="width:320px" /></el-form-item>
-        <el-form-item label="SA JSON 凭据">
-          <el-input v-model="acctForm.cred_json" type="textarea" :rows="4" :placeholder="acctForm.id ? '留空=不改凭据' : 'service account JSON key（只读权限 compute.viewer 即可）'" />
-        </el-form-item>
+        <el-form-item label="账号名"><el-input v-model="acctForm.name" placeholder="如 公司GCP" style="width:260px" /></el-form-item>
         <el-form-item label="BigQuery账单集">
-          <el-input v-model="acctForm.billing_export_dataset" placeholder="（预留，二期真实账单用，可留空）" style="width:320px" />
+          <el-input v-model="acctForm.billing_export_dataset" placeholder="（预留，二期真实账单用，可留空）" style="width:300px" />
         </el-form-item>
       </el-form>
       <template #footer><el-button @click="acctForm.dlg=false">取消</el-button><el-button type="primary" @click="saveAcct">保存</el-button></template>
+    </el-dialog>
+
+    <!-- 项目表单（凭据在这层） -->
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="projForm.dlg" :title="projForm.id?'编辑项目':'添加项目'" width="560px">
+      <el-form :model="projForm" label-width="110px">
+        <el-form-item label="归属账号"><span>{{ projForm.accountName }}</span></el-form-item>
+        <el-form-item label="自定义名"><el-input v-model="projForm.name" placeholder="如 生产 / 测试（主机列表显示这个）" style="width:320px" /></el-form-item>
+        <el-form-item label="project ID"><el-input v-model="projForm.project_id" placeholder="g32-prod-8821" style="width:320px" /></el-form-item>
+        <el-form-item label="SA JSON 凭据">
+          <el-input v-model="projForm.cred_json" type="textarea" :rows="4" :placeholder="projForm.id ? '留空=不改凭据' : '该 project 的 service account JSON key（只读 compute.viewer 即可）'" />
+        </el-form-item>
+      </el-form>
+      <template #footer><el-button @click="projForm.dlg=false">取消</el-button><el-button type="primary" @click="saveProj">保存</el-button></template>
     </el-dialog>
 
     <!-- 成本费率 -->
@@ -149,7 +188,8 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, View, Refresh, Edit, Delete, Plus, Money, Cloudy } from '@element-plus/icons-vue'
 import { listHosts, getHost, listCloudAccounts, createCloudAccount, updateCloudAccount, deleteCloudAccount,
-  syncCloudAccount, listCloudRates, updateCloudRate } from '../api/cmdb'
+  syncCloudAccount, createCloudProject, updateCloudProject, deleteCloudProject, syncCloudProject,
+  listCloudRates, updateCloudRate } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
@@ -159,6 +199,7 @@ const page = ref(1), size = ref(10)
 const dDlg = ref(false), detail = ref(null), detailCiid = ref(null), asOf = ref('')
 const acctDlg = ref(false), accounts = ref([]), syncing = ref({})
 const acctForm = ref({ dlg: false })
+const projForm = ref({ dlg: false })
 const rateDlg = ref(false), rateForm = ref({}), rateId = ref(null)
 
 function gb(mb) { return mb ? Math.round(mb / 1024 * 10) / 10 : 0 }
@@ -189,28 +230,58 @@ async function openDetail(row) { detailCiid.value = row.ci_id; asOf.value = ''; 
 async function reloadDetail() { if (detailCiid.value) detail.value = await getHost(detailCiid.value, asOf.value || undefined) }
 
 async function openAccounts() { accounts.value = await listCloudAccounts(); acctDlg.value = true }
+async function refreshAccounts() { accounts.value = await listCloudAccounts() }
 function openAcctForm(row) {
   acctForm.value = row
-    ? { dlg: true, id: row.id, name: row.name, projects: row.projects, cred_json: '', billing_export_dataset: row.billing_export_dataset }
-    : { dlg: true, id: null, name: '', projects: '', cred_json: '', billing_export_dataset: '' }
+    ? { dlg: true, id: row.id, name: row.name, billing_export_dataset: row.billing_export_dataset }
+    : { dlg: true, id: null, name: '', billing_export_dataset: '' }
 }
 async function saveAcct() {
-  if (!acctForm.value.name) { ElMessage.warning('名称必填'); return }
+  if (!acctForm.value.name) { ElMessage.warning('账号名必填'); return }
   try {
-    const b = { name: acctForm.value.name, projects: acctForm.value.projects, cred_json: acctForm.value.cred_json, billing_export_dataset: acctForm.value.billing_export_dataset }
+    const b = { name: acctForm.value.name, billing_export_dataset: acctForm.value.billing_export_dataset }
     acctForm.value.id ? await updateCloudAccount(acctForm.value.id, b) : await createCloudAccount({ ...b, provider: 'gcp' })
-    ElMessage.success('已保存'); acctForm.value.dlg = false; accounts.value = await listCloudAccounts()
+    ElMessage.success('已保存'); acctForm.value.dlg = false; refreshAccounts()
   } catch (e) { ElMessage.error(e.response?.data?.error || '失败') }
 }
 async function delAcct(row) {
-  try { await app.showConfirm(`删除云账号 ${row.name}？其下同步来的主机一并清除`); await deleteCloudAccount(row.id); accounts.value = await listCloudAccounts(); load() }
+  try { await app.showConfirm(`删除云账号 ${row.name}？其下项目和同步来的主机一并清除`); await deleteCloudAccount(row.id); refreshAccounts(); load() }
   catch (e) { if (e !== 'cancel') ElMessage.error('失败') }
 }
 async function syncAcct(row) {
-  syncing.value = { ...syncing.value, [row.id]: true }
-  try { const r = await syncCloudAccount(row.id); ElMessage.success(`同步完成：${r.synced} 台，失效 ${r.stale}`); accounts.value = await listCloudAccounts(); load() }
+  syncing.value = { ...syncing.value, ['a' + row.id]: true }
+  try {
+    const r = await syncCloudAccount(row.id)
+    if (r.failures && r.failures.length) ElMessage.warning(`同步 ${r.synced} 台，${r.failures.length} 个项目失败：${r.failures[0]}`)
+    else ElMessage.success(`同步完成：${r.synced} 台，失效 ${r.stale}`)
+    refreshAccounts(); load()
+  } catch (e) { ElMessage.error(e.response?.data?.error || '同步失败') }
+  finally { syncing.value = { ...syncing.value, ['a' + row.id]: false } }
+}
+
+// 项目（凭据层）
+function openProjForm(acc, p) {
+  projForm.value = p
+    ? { dlg: true, id: p.id, accountId: acc.id, accountName: acc.name, name: p.name, project_id: p.project_id, cred_json: '' }
+    : { dlg: true, id: null, accountId: acc.id, accountName: acc.name, name: '', project_id: '', cred_json: '' }
+}
+async function saveProj() {
+  if (!projForm.value.project_id) { ElMessage.warning('project ID 必填'); return }
+  try {
+    const b = { name: projForm.value.name, project_id: projForm.value.project_id, cred_json: projForm.value.cred_json }
+    projForm.value.id ? await updateCloudProject(projForm.value.id, b) : await createCloudProject(projForm.value.accountId, b)
+    ElMessage.success('已保存'); projForm.value.dlg = false; refreshAccounts()
+  } catch (e) { ElMessage.error(e.response?.data?.error || '失败') }
+}
+async function delProj(p) {
+  try { await app.showConfirm(`删除项目 ${p.name}（${p.project_id}）？其下同步来的主机一并清除`); await deleteCloudProject(p.id); refreshAccounts(); load() }
+  catch (e) { if (e !== 'cancel') ElMessage.error('失败') }
+}
+async function syncProj(p) {
+  syncing.value = { ...syncing.value, ['p' + p.id]: true }
+  try { const r = await syncCloudProject(p.id); ElMessage.success(`同步完成：${r.synced} 台，失效 ${r.stale}`); refreshAccounts(); load() }
   catch (e) { ElMessage.error(e.response?.data?.error || '同步失败') }
-  finally { syncing.value = { ...syncing.value, [row.id]: false } }
+  finally { syncing.value = { ...syncing.value, ['p' + p.id]: false } }
 }
 
 async function openRates() {

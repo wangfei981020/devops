@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,11 +29,15 @@ func (h *HostHandler) Register(r *gin.RouterGroup) {
 	r.POST("/cloud-accounts", h.CreateAccount)
 	r.PUT("/cloud-accounts/:id", h.UpdateAccount)
 	r.DELETE("/cloud-accounts/:id", h.DeleteAccount)
-	r.POST("/cloud-accounts/:id/sync", h.Sync)
+	r.POST("/cloud-accounts/:id/sync", h.SyncAccount)      // 同步账号下所有 project
+	r.POST("/cloud-accounts/:id/projects", h.CreateProject)
+	r.PUT("/cloud-projects/:pid", h.UpdateProject)
+	r.DELETE("/cloud-projects/:pid", h.DeleteProject)
+	r.POST("/cloud-projects/:pid/sync", h.SyncProject) // 同步指定 project
 	r.GET("/cloud-price-rates", h.ListRates)
 	r.PUT("/cloud-price-rates/:id", h.UpdateRate)
-	r.GET("/hosts", h.ListHosts)         // 只读
-	r.GET("/hosts/:ciid", h.HostDetail)  // 只读
+	r.GET("/hosts", h.ListHosts)        // 只读
+	r.GET("/hosts/:ciid", h.HostDetail) // 只读
 }
 
 // ---------- 费率 ----------
@@ -105,31 +110,72 @@ func (h *HostHandler) UpdateRate(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true})
 }
 
-// ---------- 云账号 ----------
+// ---------- 云账号（分组层：name/provider/billing，无凭据） ----------
 
 func (h *HostHandler) ListAccounts(c *gin.Context) {
-	rows, err := h.DB.Query(`SELECT id, name, provider, projects, billing_export_dataset, last_sync_at, last_result FROM cloud_accounts ORDER BY id`)
+	// 各 project 的主机数
+	hostCnt := map[int]int{}
+	if crows, _ := h.DB.Query(`SELECT p.id, COUNT(hh.ci_id)
+		FROM cloud_account_projects p
+		LEFT JOIN hosts hh ON hh.cloud_account_id=p.account_id AND hh.project=p.project_id AND hh.stale=0
+		GROUP BY p.id`); crows != nil {
+		for crows.Next() {
+			var pid, n int
+			if crows.Scan(&pid, &n) == nil {
+				hostCnt[pid] = n
+			}
+		}
+		crows.Close()
+	}
+	// 项目按账号归组
+	type projOut struct {
+		ID         int    `json:"id"`
+		Name       string `json:"name"`
+		ProjectID  string `json:"project_id"`
+		HasCred    bool   `json:"has_cred"`
+		LastSyncAt string `json:"last_sync_at"`
+		LastResult string `json:"last_result"`
+		HostCount  int    `json:"host_count"`
+	}
+	projByAcct := map[int][]projOut{}
+	if prows, _ := h.DB.Query(`SELECT id, account_id, name, project_id, COALESCE(cred_enc,''), last_sync_at, last_result
+		FROM cloud_account_projects ORDER BY id`); prows != nil {
+		for prows.Next() {
+			var p projOut
+			var aid int
+			var enc string
+			var ls sql.NullTime
+			if prows.Scan(&p.ID, &aid, &p.Name, &p.ProjectID, &enc, &ls, &p.LastResult) == nil {
+				p.HasCred = enc != ""
+				p.HostCount = hostCnt[p.ID]
+				if ls.Valid {
+					p.LastSyncAt = ls.Time.Format("2006-01-02 15:04")
+				}
+				projByAcct[aid] = append(projByAcct[aid], p)
+			}
+		}
+		prows.Close()
+	}
+	rows, err := h.DB.Query(`SELECT id, name, provider, billing_export_dataset FROM cloud_accounts ORDER BY id`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	defer rows.Close()
 	type acct struct {
-		ID          int    `json:"id"`
-		Name        string `json:"name"`
-		Provider    string `json:"provider"`
-		Projects    string `json:"projects"`
-		BillingDS   string `json:"billing_export_dataset"`
-		LastSyncAt  string `json:"last_sync_at"`
-		LastResult  string `json:"last_result"`
+		ID        int       `json:"id"`
+		Name      string    `json:"name"`
+		Provider  string    `json:"provider"`
+		BillingDS string    `json:"billing_export_dataset"`
+		Projects  []projOut `json:"projects"`
 	}
 	out := []acct{}
 	for rows.Next() {
 		var a acct
-		var ls sql.NullTime
-		if rows.Scan(&a.ID, &a.Name, &a.Provider, &a.Projects, &a.BillingDS, &ls, &a.LastResult) == nil {
-			if ls.Valid {
-				a.LastSyncAt = ls.Time.Format("2006-01-02 15:04")
+		if rows.Scan(&a.ID, &a.Name, &a.Provider, &a.BillingDS) == nil {
+			a.Projects = projByAcct[a.ID]
+			if a.Projects == nil {
+				a.Projects = []projOut{}
 			}
 			out = append(out, a)
 		}
@@ -141,8 +187,6 @@ func (h *HostHandler) CreateAccount(c *gin.Context) {
 	var in struct {
 		Name      string `json:"name"`
 		Provider  string `json:"provider"`
-		Projects  string `json:"projects"`
-		CredJSON  string `json:"cred_json"`
 		BillingDS string `json:"billing_export_dataset"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil || in.Name == "" {
@@ -152,17 +196,8 @@ func (h *HostHandler) CreateAccount(c *gin.Context) {
 	if in.Provider == "" {
 		in.Provider = "gcp"
 	}
-	enc := ""
-	if in.CredJSON != "" {
-		e, err := h.Cipher.Encrypt(in.CredJSON)
-		if err != nil {
-			c.JSON(500, gin.H{"error": "凭据加密失败"})
-			return
-		}
-		enc = e
-	}
-	if _, err := h.DB.Exec(`INSERT INTO cloud_accounts (name, provider, projects, cred_enc, billing_export_dataset) VALUES (?, ?, ?, ?, ?)`,
-		in.Name, in.Provider, in.Projects, enc, in.BillingDS); err != nil {
+	if _, err := h.DB.Exec(`INSERT INTO cloud_accounts (name, provider, billing_export_dataset) VALUES (?, ?, ?)`,
+		in.Name, in.Provider, in.BillingDS); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -173,34 +208,28 @@ func (h *HostHandler) CreateAccount(c *gin.Context) {
 func (h *HostHandler) UpdateAccount(c *gin.Context) {
 	var in struct {
 		Name      string `json:"name"`
-		Projects  string `json:"projects"`
-		CredJSON  string `json:"cred_json"` // 空=不改凭据
 		BillingDS string `json:"billing_export_dataset"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := h.DB.Exec(`UPDATE cloud_accounts SET name=?, projects=?, billing_export_dataset=? WHERE id=?`,
-		in.Name, in.Projects, in.BillingDS, c.Param("id")); err != nil {
+	if _, err := h.DB.Exec(`UPDATE cloud_accounts SET name=?, billing_export_dataset=? WHERE id=?`,
+		in.Name, in.BillingDS, c.Param("id")); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
-	}
-	if in.CredJSON != "" {
-		if e, err := h.Cipher.Encrypt(in.CredJSON); err == nil {
-			_, _ = h.DB.Exec(`UPDATE cloud_accounts SET cred_enc=? WHERE id=?`, e, c.Param("id"))
-		}
 	}
 	c.JSON(200, gin.H{"ok": true})
 }
 
 func (h *HostHandler) DeleteAccount(c *gin.Context) {
-	// 删账号：其下主机一并清（只读同步来的，无业务数据）
+	// 删账号：其下 project + 主机一并清（只读同步来的，无业务数据）
 	tx, _ := h.DB.Begin()
 	id := c.Param("id")
 	_, _ = tx.Exec(`DELETE hd FROM host_disks hd JOIN hosts h ON h.ci_id=hd.host_ci_id WHERE h.cloud_account_id=?`, id)
 	_, _ = tx.Exec(`DELETE c FROM cis c JOIN hosts h ON h.ci_id=c.id WHERE h.cloud_account_id=?`, id)
 	_, _ = tx.Exec(`DELETE FROM hosts WHERE cloud_account_id=?`, id)
+	_, _ = tx.Exec(`DELETE FROM cloud_account_projects WHERE account_id=?`, id)
 	_, _ = tx.Exec(`DELETE FROM cloud_accounts WHERE id=?`, id)
 	if err := tx.Commit(); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -209,66 +238,210 @@ func (h *HostHandler) DeleteAccount(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true})
 }
 
-// loadAccountCred 取账号 provider + 解密后的 SA JSON + projects 列表
-func (h *HostHandler) loadAccountCred(id string) (provider, credJSON string, projects []string, err error) {
-	var enc, projStr string
-	err = h.DB.QueryRow(`SELECT provider, COALESCE(cred_enc,''), projects FROM cloud_accounts WHERE id=?`, id).Scan(&provider, &enc, &projStr)
-	if err != nil {
+// ---------- 云项目（凭据在这一层：name/project_id/cred） ----------
+
+func (h *HostHandler) CreateProject(c *gin.Context) {
+	var in struct {
+		Name      string `json:"name"`
+		ProjectID string `json:"project_id"`
+		CredJSON  string `json:"cred_json"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.ProjectID == "" {
+		c.JSON(400, gin.H{"error": "project_id 必填"})
 		return
 	}
-	if enc != "" {
-		credJSON, err = h.Cipher.Decrypt(enc)
+	if in.Name == "" {
+		in.Name = in.ProjectID
+	}
+	enc := ""
+	if in.CredJSON != "" {
+		e, err := h.Cipher.Encrypt(in.CredJSON)
 		if err != nil {
+			c.JSON(500, gin.H{"error": "凭据加密失败"})
 			return
 		}
+		enc = e
 	}
-	for _, p := range strings.Split(projStr, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			projects = append(projects, p)
-		}
+	if _, err := h.DB.Exec(`INSERT INTO cloud_account_projects (account_id, name, project_id, cred_enc) VALUES (?, ?, ?, ?)`,
+		c.Param("id"), in.Name, in.ProjectID, enc); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
 	}
-	return
+	WriteAudit(h.DB, c, "add_cloud_project", in.ProjectID)
+	c.JSON(201, gin.H{"ok": true})
 }
 
-// Sync 从云账号同步主机（只读拉取，upsert；该账号下 GCP 已无的标 stale）。
-func (h *HostHandler) Sync(c *gin.Context) {
-	id := c.Param("id")
-	provider, credJSON, projects, err := h.loadAccountCred(id)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "云账号不存在或凭据读取失败"})
+func (h *HostHandler) UpdateProject(c *gin.Context) {
+	var in struct {
+		Name      string `json:"name"`
+		ProjectID string `json:"project_id"`
+		CredJSON  string `json:"cred_json"` // 空=不改凭据
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.ProjectID == "" {
+		c.JSON(400, gin.H{"error": "project_id 必填"})
 		return
 	}
-	if credJSON == "" || len(projects) == 0 {
-		c.JSON(400, gin.H{"error": "请先在云账号里填 service account JSON 和要同步的 project"})
+	if in.Name == "" {
+		in.Name = in.ProjectID
+	}
+	if _, err := h.DB.Exec(`UPDATE cloud_account_projects SET name=?, project_id=? WHERE id=?`,
+		in.Name, in.ProjectID, c.Param("pid")); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	adapter, err := cloudsource.NewAdapter(provider, credJSON)
-	if err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
+	if in.CredJSON != "" {
+		if e, err := h.Cipher.Encrypt(in.CredJSON); err == nil {
+			_, _ = h.DB.Exec(`UPDATE cloud_account_projects SET cred_enc=? WHERE id=?`, e, c.Param("pid"))
+		}
+	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
+func (h *HostHandler) DeleteProject(c *gin.Context) {
+	pid := c.Param("pid")
+	var accountID int
+	var projectID string
+	if h.DB.QueryRow(`SELECT account_id, project_id FROM cloud_account_projects WHERE id=?`, pid).Scan(&accountID, &projectID) != nil {
+		c.JSON(404, gin.H{"error": "项目不存在"})
 		return
+	}
+	tx, _ := h.DB.Begin()
+	_, _ = tx.Exec(`DELETE hd FROM host_disks hd JOIN hosts h ON h.ci_id=hd.host_ci_id WHERE h.cloud_account_id=? AND h.project=?`, accountID, projectID)
+	_, _ = tx.Exec(`DELETE c FROM cis c JOIN hosts h ON h.ci_id=c.id WHERE h.cloud_account_id=? AND h.project=?`, accountID, projectID)
+	_, _ = tx.Exec(`DELETE FROM hosts WHERE cloud_account_id=? AND project=?`, accountID, projectID)
+	_, _ = tx.Exec(`DELETE FROM cloud_account_projects WHERE id=?`, pid)
+	if err := tx.Commit(); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
+// ---------- 同步 ----------
+
+// SyncProject 同步指定 project（只读拉取，upsert；该 project 下 GCP 已无的标 stale）。
+func (h *HostHandler) SyncProject(c *gin.Context) {
+	pid, _ := strconv.ParseInt(c.Param("pid"), 10, 64)
+	name, synced, stale, err := h.syncOneProject(pid)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	WriteAudit(h.DB, c, "sync_cloud_project", name)
+	c.JSON(http.StatusOK, gin.H{"project": name, "synced": synced, "stale": stale})
+}
+
+// SyncAccount 同步账号下所有 project（各用各自凭据，依次跑；单个失败不影响其它）。
+func (h *HostHandler) SyncAccount(c *gin.Context) {
+	rows, err := h.DB.Query(`SELECT id FROM cloud_account_projects WHERE account_id=? ORDER BY id`, c.Param("id"))
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	var pids []int64
+	for rows.Next() {
+		var id int64
+		if rows.Scan(&id) == nil {
+			pids = append(pids, id)
+		}
+	}
+	rows.Close()
+	if len(pids) == 0 {
+		c.JSON(400, gin.H{"error": "该账号下还没有项目，请先添加项目并配置凭据"})
+		return
+	}
+	totalSynced, totalStale := 0, 0
+	var fails []string
+	for _, pid := range pids {
+		name, synced, stale, err := h.syncOneProject(pid)
+		if err != nil {
+			fails = append(fails, name+"："+err.Error())
+			continue
+		}
+		totalSynced += synced
+		totalStale += stale
+	}
+	WriteAudit(h.DB, c, "sync_cloud_account", c.Param("id"))
+	c.JSON(http.StatusOK, gin.H{"synced": totalSynced, "stale": totalStale, "failures": fails})
+}
+
+// syncOneProject 同步单个 project 行：解密该 project 凭据 → 列实例 → upsert → 标 stale → 记结果。
+func (h *HostHandler) syncOneProject(pid int64) (name string, synced, stale int, err error) {
+	var accountID int
+	var provider, projectID, enc string
+	err = h.DB.QueryRow(`SELECT p.name, p.account_id, p.project_id, COALESCE(p.cred_enc,''), COALESCE(a.provider,'gcp')
+		FROM cloud_account_projects p LEFT JOIN cloud_accounts a ON a.id=p.account_id WHERE p.id=?`, pid).
+		Scan(&name, &accountID, &projectID, &enc, &provider)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("项目不存在")
+	}
+	if enc == "" {
+		return name, 0, 0, fmt.Errorf("该项目还没配置 service account 凭据")
+	}
+	credJSON, e := h.Cipher.Decrypt(enc)
+	if e != nil {
+		return name, 0, 0, fmt.Errorf("凭据解密失败")
+	}
+	adapter, e := cloudsource.NewAdapter(provider, credJSON)
+	if e != nil {
+		return name, 0, 0, e
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	insts, err := adapter.ListInstances(ctx, projects)
-	if err != nil {
-		_, _ = h.DB.Exec(`UPDATE cloud_accounts SET last_sync_at=NOW(), last_result=? WHERE id=?`, truncate(err.Error(), 250), id)
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
+	insts, e := adapter.ListInstances(ctx, projectID)
+	if e != nil {
+		_, _ = h.DB.Exec(`UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`, truncate(e.Error(), 250), pid)
+		return name, 0, 0, e
 	}
 	present := map[string]bool{}
 	for _, in := range insts {
 		present[in.InstanceID] = true
-		h.upsertHost(id, in)
+		h.upsertHost(accountID, name, in)
 	}
-	// 标记 GCP 已无的为 stale
-	stale := h.markStaleHosts(id, present)
-	_, _ = h.DB.Exec(`UPDATE cloud_accounts SET last_sync_at=NOW(), last_result=? WHERE id=?`,
-		truncate("同步 "+strconv.Itoa(len(insts))+" 台，失效 "+strconv.Itoa(stale), 250), id)
-	WriteAudit(h.DB, c, "sync_cloud_account", id)
-	c.JSON(http.StatusOK, gin.H{"synced": len(insts), "stale": stale})
+	stale = h.markStaleHosts(accountID, projectID, present)
+	_, _ = h.DB.Exec(`UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`,
+		truncate(fmt.Sprintf("同步 %d 台，失效 %d", len(insts), stale), 250), pid)
+	return name, len(insts), stale, nil
 }
 
-func (h *HostHandler) upsertHost(accountID string, in cloudsource.Instance) {
+// SyncAllHostProjects 供定时任务(host_sync)调用：同步所有账号所有 project，返回摘要+失败明细+是否成功。
+func SyncAllHostProjects(db *sql.DB, cipher *crypto.Cipher) (string, []string, bool) {
+	h := &HostHandler{DB: db, Cipher: cipher}
+	rows, err := db.Query(`SELECT id FROM cloud_account_projects ORDER BY id`)
+	if err != nil {
+		return "查询云项目失败: " + err.Error(), nil, false
+	}
+	var pids []int64
+	for rows.Next() {
+		var id int64
+		if rows.Scan(&id) == nil {
+			pids = append(pids, id)
+		}
+	}
+	rows.Close()
+	if len(pids) == 0 {
+		return "没有配置云项目，跳过", nil, true
+	}
+	totalSynced, totalStale := 0, 0
+	var failures []string
+	for _, pid := range pids {
+		name, synced, stale, err := h.syncOneProject(pid)
+		if err != nil {
+			failures = append(failures, name+"："+truncate(err.Error(), 150))
+			continue
+		}
+		totalSynced += synced
+		totalStale += stale
+	}
+	ok := !(totalSynced == 0 && len(failures) == len(pids)) // 全部项目都失败才算失败
+	msg := fmt.Sprintf("同步 %d 台主机（%d 个项目），失效 %d", totalSynced, len(pids), totalStale)
+	if len(failures) > 0 {
+		msg += fmt.Sprintf("，%d/%d 个项目失败", len(failures), len(pids))
+	}
+	return msg, failures, ok
+}
+
+func (h *HostHandler) upsertHost(accountID int, projName string, in cloudsource.Instance) {
 	total := 0
 	for _, d := range in.Disks {
 		total += d.SizeGB
@@ -296,7 +469,7 @@ func (h *HostHandler) upsertHost(accountID string, in cloudsource.Instance) {
 	}
 	_, _ = h.DB.Exec(`UPDATE hosts SET project=?, project_name=?, zone=?, region=?, machine_type=?, vcpu=?, mem_mb=?, disk_total_gb=?,
 		internal_ip=?, external_ip=?, status=?, os=?, labels=?, self_link=?, gcp_created_at=?, stale=0, synced_at=NOW() WHERE ci_id=?`,
-		in.Project, in.ProjectName, in.Zone, in.Region, in.MachineType, in.VCPU, in.MemMB, total,
+		in.Project, projName, in.Zone, in.Region, in.MachineType, in.VCPU, in.MemMB, total,
 		in.InternalIP, in.ExternalIP, in.Status, in.OS, string(labelsJSON), in.SelfLink, created, ciID)
 	// 磁盘：全删重插
 	_, _ = h.DB.Exec(`DELETE FROM host_disks WHERE host_ci_id=?`, ciID)
@@ -310,8 +483,9 @@ func (h *HostHandler) upsertHost(accountID string, in cloudsource.Instance) {
 	}
 }
 
-func (h *HostHandler) markStaleHosts(accountID string, present map[string]bool) int {
-	rows, err := h.DB.Query(`SELECT ci_id, instance_id FROM hosts WHERE cloud_account_id=?`, accountID)
+// markStaleHosts 把该 (账号, project) 下 GCP 已无的实例标 stale（只影响这个 project，不碰其它 project）。
+func (h *HostHandler) markStaleHosts(accountID int, projectID string, present map[string]bool) int {
+	rows, err := h.DB.Query(`SELECT ci_id, instance_id FROM hosts WHERE cloud_account_id=? AND project=?`, accountID, projectID)
 	if err != nil {
 		return 0
 	}

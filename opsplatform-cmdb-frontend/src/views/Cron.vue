@@ -104,6 +104,7 @@ const desc = {
   auto_renew: '扫描到期前 30 天的证书自动重签。',
   remind: '按到期提醒阈值命中则推 Lark。',
   dns_sync: '从所有数据源全量同步 DNS 记录到缓存。',
+  host_sync: '同步所有云账号所有 project 的主机（各用各自凭据）。',
 }
 const tasks = ref([]), groups = ref([]), users = ref([]), loading = ref(false)
 const running = ref({})
