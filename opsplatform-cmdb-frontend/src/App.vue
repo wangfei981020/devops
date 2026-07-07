@@ -51,7 +51,7 @@
 <script setup>
 import { shallowRef, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Odometer, Connection, Lock, Share, DataAnalysis, Grid, Setting, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell } from '@element-plus/icons-vue'
+import { Odometer, Connection, Lock, Share, DataAnalysis, Grid, Setting, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
@@ -66,6 +66,7 @@ const menus = shallowRef([
   { type: 'group', label: '资产管理', icon: Coin, children: [
     { path: '/domains', label: '域名', icon: Connection },
     { path: '/dns-records', label: 'DNS 记录', icon: List },
+    { path: '/hosts', label: '主机', icon: Monitor },
     { path: '/certs', label: '证书', icon: Lock },
     { path: '/cert-inspect', label: '到期巡检', icon: CircleCheck },
     { path: '/relations', label: '关系图谱', icon: Share },
@@ -76,6 +77,7 @@ const menus = shallowRef([
     { path: '/models', label: '模型管理', icon: Grid },
     { path: '/notify', label: '通知', icon: Bell },
     { path: '/cron', label: '定时任务', icon: Clock },
+    { path: '/task-runs', label: '执行记录', icon: Tickets },
     { path: '/settings', label: '设置', icon: Setting },
   ] },
 ])

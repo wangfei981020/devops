@@ -7,6 +7,7 @@ const routes = [
   { path: '/overview', component: () => import('../views/Overview.vue'), meta: { title: '总览' } },
   { path: '/domains', component: () => import('../views/Domains.vue'), meta: { title: '域名' } },
   { path: '/dns-records', component: () => import('../views/DnsRecords.vue'), meta: { title: 'DNS 记录' } },
+  { path: '/hosts', component: () => import('../views/Hosts.vue'), meta: { title: '主机' } },
   { path: '/certs', component: () => import('../views/Certs.vue'), meta: { title: '证书' } },
   { path: '/cert-inspect', component: () => import('../views/CertInspect.vue'), meta: { title: '到期巡检' } },
   { path: '/certs/:id', component: () => import('../views/CertDetail.vue'), meta: { title: '证书详情' } },
@@ -16,6 +17,7 @@ const routes = [
   { path: '/models', component: () => import('../views/Models.vue'), meta: { title: '模型管理' } },
   { path: '/settings', component: () => import('../views/Settings.vue'), meta: { title: '设置' } },
   { path: '/cron', component: () => import('../views/Cron.vue'), meta: { title: '定时任务' } },
+  { path: '/task-runs', component: () => import('../views/TaskRuns.vue'), meta: { title: '执行记录' } },
   { path: '/notify', component: () => import('../views/Notify.vue'), meta: { title: '通知' } },
 ]
 

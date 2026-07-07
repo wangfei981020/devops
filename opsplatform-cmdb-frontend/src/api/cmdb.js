@@ -62,8 +62,20 @@ export const downloadCert = (id) => http.get(`/certs/${id}/download`, { response
 export const listScheduledTasks = () => http.get('/scheduled-tasks').then((r) => r.data)
 export const updateScheduledTask = (key, data) => http.put(`/scheduled-tasks/${key}`, data).then((r) => r.data)
 export const runScheduledTask = (key) => http.post(`/scheduled-tasks/${key}/run`).then((r) => r.data)
+export const listTaskRuns = (params) => http.get('/task-runs', { params }).then((r) => r.data)
 
 // 通知
+// 云主机（GCP，只读）
+export const listHosts = () => http.get('/hosts').then((r) => r.data)
+export const getHost = (ciid, asOf) => http.get(`/hosts/${ciid}`, { params: asOf ? { as_of: asOf } : {} }).then((r) => r.data)
+export const listCloudAccounts = () => http.get('/cloud-accounts').then((r) => r.data)
+export const createCloudAccount = (b) => http.post('/cloud-accounts', b).then((r) => r.data)
+export const updateCloudAccount = (id, b) => http.put(`/cloud-accounts/${id}`, b).then((r) => r.data)
+export const deleteCloudAccount = (id) => http.delete(`/cloud-accounts/${id}`).then((r) => r.data)
+export const syncCloudAccount = (id) => http.post(`/cloud-accounts/${id}/sync`).then((r) => r.data)
+export const listCloudRates = () => http.get('/cloud-price-rates').then((r) => r.data)
+export const updateCloudRate = (id, b) => http.put(`/cloud-price-rates/${id}`, b).then((r) => r.data)
+
 export const listLarkGroups = () => http.get('/lark-groups').then((r) => r.data)
 export const createLarkGroup = (b) => http.post('/lark-groups', b).then((r) => r.data)
 export const updateLarkGroup = (id, b) => http.put(`/lark-groups/${id}`, b).then((r) => r.data)

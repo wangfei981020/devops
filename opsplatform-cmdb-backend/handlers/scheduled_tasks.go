@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +21,82 @@ func (h *SchedHandler) Register(r *gin.RouterGroup) {
 	r.GET("/scheduled-tasks", h.List)
 	r.PUT("/scheduled-tasks/:key", h.Update)
 	r.POST("/scheduled-tasks/:key/run", h.Run)
+	r.GET("/task-runs", h.RunLogs)
+}
+
+// RunLogs 定时任务执行历史（执行记录页）。支持 task_key / status / days 过滤 + 分页。
+func (h *SchedHandler) RunLogs(c *gin.Context) {
+	where := []string{"1=1"}
+	args := []any{}
+	if k := c.Query("task_key"); k != "" {
+		where = append(where, "task_key=?")
+		args = append(args, k)
+	}
+	if s := c.Query("status"); s != "" {
+		where = append(where, "status=?")
+		args = append(args, s)
+	}
+	if d := c.Query("days"); d != "" {
+		if n, err := strconv.Atoi(d); err == nil && n > 0 {
+			where = append(where, "finished_at >= DATE_SUB(NOW(), INTERVAL ? DAY)")
+			args = append(args, n)
+		}
+	}
+	cond := strings.Join(where, " AND ")
+
+	var total int
+	_ = h.DB.QueryRow(`SELECT COUNT(*) FROM task_run_logs WHERE `+cond, args...).Scan(&total)
+
+	limit := 20
+	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 && l <= 200 {
+		limit = l
+	}
+	offset := 0
+	if o, err := strconv.Atoi(c.Query("offset")); err == nil && o > 0 {
+		offset = o
+	}
+
+	rows, err := h.DB.Query(`SELECT id, task_key, name, status, summary, failures, trigger_by, duration_ms,
+		notify_state, notify_group, notify_at, started_at, finished_at
+		FROM task_run_logs WHERE `+cond+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	type runOut struct {
+		ID          int64    `json:"id"`
+		TaskKey     string   `json:"task_key"`
+		Name        string   `json:"name"`
+		Status      string   `json:"status"`
+		Summary     string   `json:"summary"`
+		Failures    []string `json:"failures"`
+		TriggerBy   string   `json:"trigger_by"`
+		DurationMs  int      `json:"duration_ms"`
+		NotifyState string   `json:"notify_state"`
+		NotifyGroup string   `json:"notify_group"`
+		NotifyAt    string   `json:"notify_at"`
+		FinishedAt  string   `json:"finished_at"`
+	}
+	list := []runOut{}
+	for rows.Next() {
+		var o runOut
+		var failJSON sql.NullString
+		var fin sql.NullTime
+		if rows.Scan(&o.ID, &o.TaskKey, &o.Name, &o.Status, &o.Summary, &failJSON, &o.TriggerBy, &o.DurationMs,
+			&o.NotifyState, &o.NotifyGroup, &o.NotifyAt, new(sql.NullTime), &fin) != nil {
+			continue
+		}
+		o.Failures = []string{}
+		if failJSON.Valid && failJSON.String != "" {
+			_ = json.Unmarshal([]byte(failJSON.String), &o.Failures)
+		}
+		if fin.Valid {
+			o.FinishedAt = fin.Time.Format("2006-01-02 15:04:05")
+		}
+		list = append(list, o)
+	}
+	c.JSON(http.StatusOK, gin.H{"total": total, "items": list})
 }
 
 func (h *SchedHandler) List(c *gin.Context) {
