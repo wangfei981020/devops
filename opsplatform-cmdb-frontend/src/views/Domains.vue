@@ -51,19 +51,20 @@
     </el-card>
 
     <el-card shadow="never">
-      <el-table ref="tableRef" :data="pagedRows" size="small" row-key="id" v-loading="loading" :default-sort="{ prop: 'project' }"
+      <el-table ref="tableRef" :data="pagedRows" size="small" row-key="id" v-loading="loading"
+        :default-sort="{ prop: 'project', order: 'ascending' }" @sort-change="onSort"
         @selection-change="(v) => selected = v">
         <el-table-column type="selection" width="42" reserve-selection />
-        <el-table-column prop="project" label="项目" width="130" sortable><template #default="{ row }">
+        <el-table-column prop="project" label="项目" width="130" sortable="custom"><template #default="{ row }">
           <el-tag v-if="row.project" size="small" effect="plain" :style="tagStyle(projectColor(row.project))">{{ row.project }}</el-tag>
           <span v-else class="muted">—</span>
         </template></el-table-column>
-        <el-table-column prop="env" label="环境" width="100" sortable><template #default="{ row }">
+        <el-table-column prop="env" label="环境" width="100" sortable="custom"><template #default="{ row }">
           <el-tag v-if="row.env" size="small" effect="plain" :style="tagStyle(envColor(row.env))">{{ row.env }}</el-tag>
           <span v-else class="muted">—</span>
         </template></el-table-column>
-        <el-table-column prop="module" label="模块" width="120"><template #default="{ row }">{{ row.module || '—' }}</template></el-table-column>
-        <el-table-column prop="fqdn" label="域名" min-width="230" sortable show-overflow-tooltip><template #default="{ row }">
+        <el-table-column prop="module" label="模块" width="120" sortable="custom"><template #default="{ row }">{{ row.module || '—' }}</template></el-table-column>
+        <el-table-column prop="fqdn" label="域名" min-width="230" sortable="custom" show-overflow-tooltip><template #default="{ row }">
           <span class="mono" :class="{ stale: row.stale, ignored: row.ignored }">{{ row.fqdn }}</span>
           <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">厂商已删</el-tag>
           <el-tooltip v-if="row.ignored" :disabled="!row.ignore_reason" :content="row.ignore_reason">
@@ -80,7 +81,7 @@
         <el-table-column label="源站IP" min-width="150" show-overflow-tooltip><template #default="{ row }">
           <span class="mono">{{ row.origin_ip || '—' }}</span>
         </template></el-table-column>
-        <el-table-column label="证书到期" width="140" sortable :sort-method="sortByCertExpiry"><template #default="{ row }">
+        <el-table-column prop="cert_expiry_at" label="证书到期" width="140" sortable="custom"><template #default="{ row }">
           <el-tooltip :disabled="!row.cert_check_msg" :content="row.cert_check_msg">
             <el-tag :type="certState(row).type" size="small" effect="light">{{ certState(row).text }}</el-tag>
           </el-tooltip>
@@ -114,8 +115,8 @@
       </div>
     </el-card>
     <el-card shadow="never">
-      <el-table :data="domPaged" size="small" row-key="ci_id" v-loading="loading">
-        <el-table-column label="主域名" min-width="220"><template #default="{ row }">
+      <el-table :data="domPaged" size="small" row-key="ci_id" v-loading="loading" @sort-change="onDomSort">
+        <el-table-column prop="name" label="主域名" min-width="220" sortable="custom"><template #default="{ row }">
           <span :class="{ stale: row.stale }">{{ row.name }}</span>
           <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">厂商已删</el-tag>
         </template></el-table-column>
@@ -123,7 +124,7 @@
           <el-tag v-if="row.origin === 'manual'" type="info" size="small">手动录入</el-tag>
           <el-tag v-else type="success" size="small">{{ row.registrar_name || '同步' }}</el-tag>
         </template></el-table-column>
-        <el-table-column label="域名到期" width="150" sortable :sort-method="(a, b) => sortByDate(a.expiry_at, b.expiry_at)"><template #default="{ row }">
+        <el-table-column prop="expiry_at" label="域名到期" width="150" sortable="custom"><template #default="{ row }">
           <span v-if="row.expiry_at" :class="expiryClass(row.expiry_at)">{{ row.expiry_at }}</span>
           <span v-else class="muted">—</span>
         </template></el-table-column>
@@ -371,7 +372,7 @@ const selected = ref([]), tableRef = ref()
 const statusView = ref('normal') // normal=未忽略 / ignored / all
 const tab = ref('records') // records=主机头台账 / domains=主域名
 // 主域名 tab
-const domKeyword = ref(''), domQuery = ref(''), domPage = ref(1), domPageSize = ref(20)
+const domKeyword = ref(''), domQuery = ref(''), domPage = ref(1), domPageSize = ref(10)
 const domDlg = ref(false), domEditing = ref(false), domForm = ref({})
 const refreshingAll = ref(false), refreshingDom = ref({})
 const igDlg = ref(false), igRows = ref([]), igReason = ref('')
@@ -382,7 +383,7 @@ const aMode = ref('paste'), pasteText = ref('')
 const synced = computed(() => editing.value && form.value.origin && form.value.origin !== 'manual')
 const f = ref({ keyword: '', project: null, env: null, module: null, source: null })
 const query = ref({ ...f.value })
-const currentPage = ref(1), pageSize = ref(20)
+const currentPage = ref(1), pageSize = ref(10)
 
 // —— 配色：项目/环境优先用「基础配置」里配的颜色，没配则按名字 hash 出冷色（红橙只留给证书告警）——
 const COOL = ['#3b7dd8', '#5b8ff9', '#269a99', '#5ad8a6', '#6dc8ec', '#9270ca', '#5d7092', '#0e7a6e', '#7d5fd6', '#2f9e8f', '#3d76c9', '#417ec0']
@@ -417,9 +418,28 @@ const filteredRows = computed(() => rows.value.filter((r) => {
     (!q.module || r.module === q.module) &&
     (!q.source || r.source_name === q.source)
 }))
+// 外部排序：对全量 filteredRows 先排序，再分页（避免 el-table 只排当前页）
+const sortState = ref({ prop: 'project', order: 'ascending' })
+function onSort({ prop, order }) { sortState.value = { prop, order } }
+function sortList(list, prop, order) {
+  if (!prop || !order) return list
+  const dir = order === 'ascending' ? 1 : -1
+  const isDate = prop === 'cert_expiry_at' || prop === 'expiry_at'
+  return [...list].sort((a, b) => {
+    const av = a[prop], bv = b[prop]
+    if (isDate) { // 空到期日永远排最后，不受升降序影响
+      if (!av && !bv) return 0
+      if (!av) return 1
+      if (!bv) return -1
+      return dir * (new Date(av) - new Date(bv))
+    }
+    return dir * String(av || '').localeCompare(String(bv || ''), 'zh')
+  })
+}
+const sortedRows = computed(() => sortList(filteredRows.value, sortState.value.prop, sortState.value.order))
 const pagedRows = computed(() => {
   const s = (currentPage.value - 1) * pageSize.value
-  return filteredRows.value.slice(s, s + pageSize.value)
+  return sortedRows.value.slice(s, s + pageSize.value)
 })
 function doSearch() { query.value = { ...f.value }; currentPage.value = 1 }
 function resetFilter() { f.value = { keyword: '', project: null, env: null, module: null, source: null }; query.value = { ...f.value }; currentPage.value = 1 }
@@ -432,9 +452,12 @@ const resoCountMap = computed(() => {
 })
 const domFiltered = computed(() => allDomains.value.filter((d) =>
   !domQuery.value || d.name.toLowerCase().includes(domQuery.value.toLowerCase())))
+const domSortState = ref({ prop: '', order: null })
+function onDomSort({ prop, order }) { domSortState.value = { prop, order } }
+const domSorted = computed(() => sortList(domFiltered.value, domSortState.value.prop, domSortState.value.order))
 const domPaged = computed(() => {
   const s = (domPage.value - 1) * domPageSize.value
-  return domFiltered.value.slice(s, s + domPageSize.value)
+  return domSorted.value.slice(s, s + domPageSize.value)
 })
 function doDomSearch() { domQuery.value = domKeyword.value; domPage.value = 1 }
 function sortByDate(a, b) { if (!a && !b) return 0; if (!a) return 1; if (!b) return -1; return new Date(a) - new Date(b) }
