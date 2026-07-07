@@ -40,6 +40,8 @@ type domainOut struct {
 	CertExpiryAt  string `json:"cert_expiry_at"`
 	CertCheckMsg  string `json:"cert_check_msg"`
 	CertCount     int    `json:"cert_count"`
+	DnsCount      int    `json:"dns_count"`    // 厂商原始 DNS 记录条数（DNS 记录页展开用）
+	LastSynced    string `json:"last_synced"`  // 最近一次 DNS 同步时间
 	Stale         bool   `json:"stale"`
 	Origin        string `json:"origin"` // manual=手动录入, sync=数据源同步
 }
@@ -49,7 +51,9 @@ func (h *DomainHandler) List(c *gin.Context) {
 		SELECT c.id, c.name, c.project, c.env, c.module, c.owner, c.status,
 		       d.registrar_id, COALESCE(reg.name,''), d.dns_provider, d.expiry_at,
 		       d.cert_expiry_at, d.cert_check_msg, d.stale, d.origin,
-		       (SELECT COUNT(*) FROM ci_relations r WHERE r.dst_ci_id=c.id AND r.rel_type='protects')
+		       (SELECT COUNT(*) FROM ci_relations r WHERE r.dst_ci_id=c.id AND r.rel_type='protects'),
+		       (SELECT COUNT(*) FROM dns_records dr WHERE dr.domain_ci_id=c.id),
+		       (SELECT MAX(dr.synced_at) FROM dns_records dr WHERE dr.domain_ci_id=c.id)
 		FROM cis c
 		JOIN domains d ON d.ci_id=c.id
 		LEFT JOIN registrars reg ON reg.id=d.registrar_id
@@ -64,14 +68,18 @@ func (h *DomainHandler) List(c *gin.Context) {
 	for rows.Next() {
 		var o domainOut
 		var regID sql.NullInt64
-		var exp, certExp sql.NullTime
+		var exp, certExp, lastSync sql.NullTime
 		var stale int
 		if err := rows.Scan(&o.CIID, &o.Name, &o.Project, &o.Env, &o.Module, &o.Owner, &o.Status,
-			&regID, &o.RegistrarName, &o.DNSProvider, &exp, &certExp, &o.CertCheckMsg, &stale, &o.Origin, &o.CertCount); err != nil {
+			&regID, &o.RegistrarName, &o.DNSProvider, &exp, &certExp, &o.CertCheckMsg, &stale, &o.Origin, &o.CertCount,
+			&o.DnsCount, &lastSync); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 		o.Stale = stale == 1
+		if lastSync.Valid {
+			o.LastSynced = lastSync.Time.Format("2006-01-02 15:04")
+		}
 		if regID.Valid {
 			v := int(regID.Int64)
 			o.RegistrarID = &v

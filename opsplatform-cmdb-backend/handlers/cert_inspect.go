@@ -63,6 +63,27 @@ func (h *CertInspectHandler) List(c *gin.Context) {
 	}
 	rows.Close()
 
+	// 域名注册到期（WHOIS）
+	drows, err := h.DB.Query(`SELECT c.id, c.name, d.expiry_at FROM cis c JOIN domains d ON d.ci_id=c.id WHERE c.type='domain' AND d.stale=0`)
+	if err == nil {
+		for drows.Next() {
+			var it certInspectItem
+			var name string
+			var exp sql.NullTime
+			if drows.Scan(&it.DomainCIID, &name, &exp) != nil {
+				continue
+			}
+			it.Kind = "domain"
+			it.FQDN = name
+			it.Domain = name
+			if exp.Valid {
+				it.ExpiryAt = exp.Time.Format("2006-01-02")
+			}
+			out = append(out, it)
+		}
+		drows.Close()
+	}
+
 	// ACME 签发证书
 	arows, err := h.DB.Query(`SELECT cert.ci_id, c.name, cert.cn, cert.expiry_at
 		FROM certificates cert JOIN cis c ON c.id=cert.ci_id WHERE cert.status='active'`)

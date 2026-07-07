@@ -1,12 +1,18 @@
 <template>
   <div class="page">
     <div class="page-head">
-      <span class="page-title">证书巡检</span>
+      <span class="page-title">到期巡检</span>
       <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </div>
 
     <el-card shadow="never" style="margin-bottom:12px">
       <div class="filter">
+        <el-select v-model="kindFilter" size="small" style="width:130px">
+          <el-option label="全部类型" value="all" />
+          <el-option label="域名注册" value="domain" />
+          <el-option label="线上证书" value="online" />
+          <el-option label="ACME证书" value="acme" />
+        </el-select>
         <el-radio-group v-model="statusFilter" size="small">
           <el-radio-button v-for="s in statusTabs" :key="s.v" :value="s.v">{{ s.l }}（{{ counts[s.v] }}）</el-radio-button>
         </el-radio-group>
@@ -21,10 +27,10 @@
       <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column label="完整域名" min-width="220"><template #default="{ row }"><span class="mono">{{ row.fqdn }}</span></template></el-table-column>
         <el-table-column prop="domain" label="所属主域名" min-width="160" />
-        <el-table-column label="类型" width="100"><template #default="{ row }">
-          <el-tag size="small" :type="row.kind==='acme'?'success':'info'">{{ row.kind==='acme'?'ACME签发':'线上检测' }}</el-tag>
+        <el-table-column label="类型" width="110"><template #default="{ row }">
+          <el-tag size="small" :type="KIND[row.kind].tag">{{ KIND[row.kind].l }}</el-tag>
         </template></el-table-column>
-        <el-table-column label="证书到期" width="120"><template #default="{ row }">{{ row.expiry_at || '—' }}</template></el-table-column>
+        <el-table-column label="到期" width="120"><template #default="{ row }">{{ row.expiry_at || '—' }}</template></el-table-column>
         <el-table-column label="剩余" width="100"><template #default="{ row }">
           <span v-if="row._st==='ok' || row._st==='expiring'" :style="{color: row._days<=7?'#f56c6c':(row._days<=30?'#e6a23c':'#67c23a'), fontWeight:600}">{{ row._days }} 天</span>
           <span v-else-if="row._st==='expired'" style="color:#f56c6c; font-weight:600">已过期 {{ -row._days }} 天</span>
@@ -43,6 +49,7 @@
               <el-tooltip v-else content="取消忽略"><el-button link type="primary" :icon="View" @click="unignore(row)" /></el-tooltip>
               <el-tooltip content="去域名页"><el-button link type="primary" :icon="Link" @click="$router.push('/domains')" /></el-tooltip>
             </template>
+            <el-tooltip v-else-if="row.kind==='domain'" content="去域名页"><el-button link type="primary" :icon="Link" @click="$router.push('/domains')" /></el-tooltip>
             <el-tooltip v-else content="去证书页"><el-button link type="primary" :icon="Link" @click="$router.push('/certs')" /></el-tooltip>
           </div>
         </template></el-table-column>
@@ -67,6 +74,11 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Search, Sort, Hide, View, Link } from '@element-plus/icons-vue'
 import { listCertInspect, recordCertIgnore } from '../api/cmdb'
 
+const KIND = {
+  domain: { l: '域名注册', tag: 'primary' },
+  online: { l: '线上证书', tag: 'info' },
+  acme:   { l: 'ACME证书', tag: 'success' },
+}
 const ST = {
   ok:        { l: '正常',     tag: 'success' },
   expiring:  { l: '30天内到期', tag: 'warning' },
@@ -81,7 +93,7 @@ const statusTabs = [
 ]
 
 const rows = ref([]), loading = ref(false)
-const statusFilter = ref('all'), keyword = ref(''), sortAsc = ref(true)
+const statusFilter = ref('all'), kindFilter = ref('all'), keyword = ref(''), sortAsc = ref(true)
 const page = ref(1), size = ref(50)
 const igDlg = ref(false), igRow = ref(null), igReason = ref('')
 
@@ -102,6 +114,7 @@ const counts = computed(() => {
   const c = { all: 0 }
   for (const s of statusTabs) if (s.v !== 'all') c[s.v] = 0
   for (const r of enriched.value) {
+    if (kindFilter.value !== 'all' && r.kind !== kindFilter.value) continue
     c[r._st] = (c[r._st] || 0) + 1
     if (r._st !== 'ignored') c.all++ // 「全部」不含已忽略
   }
@@ -109,6 +122,7 @@ const counts = computed(() => {
 })
 const filtered = computed(() => {
   let list = enriched.value
+  if (kindFilter.value !== 'all') list = list.filter((r) => r.kind === kindFilter.value)
   // 「全部」= 未忽略的巡检项；已忽略的只在「已忽略」tab 看
   if (statusFilter.value === 'all') list = list.filter((r) => r._st !== 'ignored')
   else list = list.filter((r) => r._st === statusFilter.value)

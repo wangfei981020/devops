@@ -1,8 +1,8 @@
 <template>
   <div class="page">
     <div class="page-head">
-      <span class="page-title">域名（主机头台账）</span>
-      <div>
+      <span class="page-title">域名</span>
+      <div v-if="tab === 'records'">
         <el-button v-if="selected.length && statusView !== 'ignored'" type="warning" :icon="EditPen" @click="openBulk">批量设置（{{ selected.length }}）</el-button>
         <el-button v-if="selected.length && statusView !== 'ignored'" :icon="Hide" @click="openIgnore(selected)">批量忽略（{{ selected.length }}）</el-button>
         <el-button v-if="selected.length && statusView === 'ignored'" type="success" :icon="View" @click="doUnignore(selected)">取消忽略（{{ selected.length }}）</el-button>
@@ -11,11 +11,22 @@
         <el-button :icon="Refresh" :loading="syncingAll" @click="syncAll">从 GoDaddy 同步</el-button>
         <el-button type="primary" :icon="Plus" @click="openAdd">录入解析</el-button>
       </div>
+      <div v-else>
+        <el-button :icon="Refresh" :loading="refreshingAll" @click="refreshAllDom">刷新到期</el-button>
+        <el-button type="primary" :icon="Plus" @click="openAddDomain">录入域名</el-button>
+      </div>
     </div>
 
+    <el-tabs v-model="tab" class="lvl-tabs">
+      <el-tab-pane label="业务域名" name="records" />
+      <el-tab-pane label="主域名" name="domains" />
+    </el-tabs>
+
+    <!-- ================= 业务域名（解析层，一行一个 FQDN） ================= -->
+    <template v-if="tab === 'records'">
     <el-card shadow="never" style="margin-bottom:12px">
       <div class="filter">
-        <el-input v-model="f.keyword" placeholder="搜索 主机头/域名" clearable :prefix-icon="Search" style="width:200px" @keyup.enter="doSearch" />
+        <el-input v-model="f.keyword" placeholder="搜索 业务域名" clearable :prefix-icon="Search" style="width:200px" @keyup.enter="doSearch" />
         <el-select v-model="f.project" clearable placeholder="项目" style="width:150px">
           <el-option v-for="p in projectOptions" :key="p" :label="p" :value="p" />
         </el-select>
@@ -35,7 +46,7 @@
         </el-select>
         <el-button type="primary" :icon="Search" @click="doSearch">搜索</el-button>
         <el-button @click="resetFilter">重置</el-button>
-        <span class="muted" style="margin-left:auto">共 {{ filteredRows.length }} / {{ rows.length }} 条主机头</span>
+        <span class="muted" style="margin-left:auto">共 {{ filteredRows.length }} / {{ rows.length }} 条业务域名</span>
       </div>
     </el-card>
 
@@ -60,7 +71,8 @@
           </el-tooltip>
         </template></el-table-column>
         <el-table-column prop="cdn_name" label="CDN厂商" width="120" show-overflow-tooltip><template #default="{ row }">
-          <span v-if="row.cdn_name">{{ row.cdn_name }}</span><span v-else class="muted">—</span>
+          <el-tag v-if="row.cdn_name" size="small" effect="plain" :style="tagStyle(hashColor(row.cdn_name))">{{ row.cdn_name }}</el-tag>
+          <span v-else class="muted">—</span>
         </template></el-table-column>
         <el-table-column label="回源CNAME" min-width="180" show-overflow-tooltip><template #default="{ row }">
           <span class="mono">{{ row.cname || '—' }}</span>
@@ -89,6 +101,68 @@
       <el-pagination v-model:current-page="currentPage" v-model:page-size="pageSize" :page-sizes="[10,20,50,100]"
         :total="filteredRows.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
     </el-card>
+    </template>
+
+    <!-- ================= 主域名（唯一，一行一个域名） ================= -->
+    <template v-else>
+    <el-card shadow="never" style="margin-bottom:12px">
+      <div class="filter">
+        <el-input v-model="domKeyword" placeholder="搜索主域名" clearable :prefix-icon="Search" style="width:220px" @keyup.enter="doDomSearch" />
+        <el-button type="primary" :icon="Search" @click="doDomSearch">搜索</el-button>
+        <el-button @click="domKeyword=''; doDomSearch()">重置</el-button>
+        <span class="muted" style="margin-left:auto">共 {{ domFiltered.length }} 个主域名</span>
+      </div>
+    </el-card>
+    <el-card shadow="never">
+      <el-table :data="domPaged" size="small" row-key="ci_id" v-loading="loading">
+        <el-table-column label="主域名" min-width="220"><template #default="{ row }">
+          <span :class="{ stale: row.stale }">{{ row.name }}</span>
+          <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">厂商已删</el-tag>
+        </template></el-table-column>
+        <el-table-column label="来源" width="160"><template #default="{ row }">
+          <el-tag v-if="row.origin === 'manual'" type="info" size="small">手动录入</el-tag>
+          <el-tag v-else type="success" size="small">{{ row.registrar_name || '同步' }}</el-tag>
+        </template></el-table-column>
+        <el-table-column label="域名到期" width="150" sortable :sort-method="(a, b) => sortByDate(a.expiry_at, b.expiry_at)"><template #default="{ row }">
+          <span v-if="row.expiry_at" :class="expiryClass(row.expiry_at)">{{ row.expiry_at }}</span>
+          <span v-else class="muted">—</span>
+        </template></el-table-column>
+        <el-table-column label="解析数" width="100"><template #default="{ row }">
+          <el-button link type="primary" @click="jumpToRecords(row)">{{ resoCountMap[row.ci_id] || 0 }}</el-button>
+        </template></el-table-column>
+        <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }">
+          <div style="display:flex;gap:8px;align-items:center">
+            <el-tooltip content="刷到期（WHOIS+443）"><el-button link type="primary" :loading="refreshingDom[row.ci_id]" :icon="Refresh" @click="refreshOneDom(row)" /></el-tooltip>
+            <template v-if="row.origin === 'manual'">
+              <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEditDomain(row)" /></el-tooltip>
+              <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
+            </template>
+            <el-tooltip v-else-if="row.stale" content="移除（厂商已删）"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
+          </div>
+        </template></el-table-column>
+      </el-table>
+      <el-pagination v-model:current-page="domPage" v-model:page-size="domPageSize" :page-sizes="[10,20,50,100]"
+        :total="domFiltered.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
+    </el-card>
+    </template>
+
+    <!-- 主域名表单（录入/编辑手动主域名） -->
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="domDlg" :title="domEditing ? '编辑主域名' : '录入主域名'" width="480px">
+      <el-form :model="domForm" label-width="110px">
+        <el-form-item label="主域名">
+          <el-input v-model="domForm.name" :disabled="domEditing" placeholder="example.com（自动归一到注册域名）" style="width:240px" />
+          <span v-if="domEditing" class="muted" style="margin-left:8px">不可改</span>
+        </el-form-item>
+        <el-form-item label="数据源/注册商">
+          <el-select v-model="domForm.registrar_id" clearable placeholder="（可选，签证书/同步解析用）" style="width:240px">
+            <el-option v-for="r in registrars" :key="r.id" :label="r.name" :value="r.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="DNS provider"><el-input v-model="domForm.dns_provider" placeholder="godaddy/aliyun/cloudflare（可选）" /></el-form-item>
+        <el-form-item label="域名到期"><el-date-picker v-model="domForm.expiry_at" type="date" value-format="YYYY-MM-DD" placeholder="域名注册到期日" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="domDlg=false">取消</el-button><el-button type="primary" @click="saveDomain">保存</el-button></template>
+    </el-dialog>
 
     <!-- 编辑解析（业务字段 + 回源/源站；域名只读） -->
     <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="dlg" :title="editing ? '编辑解析' : '录入解析'" width="520px">
@@ -153,6 +227,12 @@
         <el-form-item label="模块">
           <el-switch v-model="bForm.setModule" style="margin-right:10px" />
           <el-input v-model="bForm.module" :disabled="!bForm.setModule" placeholder="模块" style="width:240px" />
+        </el-form-item>
+        <el-form-item label="CDN">
+          <el-switch v-model="bForm.setCdn" style="margin-right:10px" />
+          <el-select v-model="bForm.cdn_id" :disabled="!bForm.setCdn" clearable placeholder="选择 CDN（清空=设为无）" style="width:240px">
+            <el-option v-for="c in app.cdns" :key="c.id" :label="c.name" :value="c.id" />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer><el-button @click="bDlg=false">取消</el-button><el-button type="primary" @click="saveBulk">应用到 {{ selected.length }} 条</el-button></template>
@@ -232,9 +312,9 @@
       </template>
     </el-dialog>
 
-    <!-- 忽略主机头（单条/批量共用，原因可选） -->
-    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="igDlg" title="忽略主机头" width="480px">
-      <div class="muted" style="margin-bottom:12px">将 {{ igRows.length }} 条主机头标为「忽略」：默认不再展示，也不计入证书巡检 / 总览统计。可随时在「已忽略」里恢复。</div>
+    <!-- 忽略业务域名（单条/批量共用，原因可选） -->
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="igDlg" title="忽略业务域名" width="480px">
+      <div class="muted" style="margin-bottom:12px">将 {{ igRows.length }} 条业务域名标为「忽略」：默认不再展示，也不计入证书巡检 / 总览统计。可随时在「已忽略」里恢复。</div>
       <el-form label-width="60px">
         <el-form-item label="原因"><el-input v-model="igReason" placeholder="（可选）如 已下线 / 项目未使用" /></el-form-item>
       </el-form>
@@ -280,7 +360,7 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft } from '@element-plus/icons-vue'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgnoreRecords, deleteRecord, checkRecordCert,
-  syncDomainRecords, listDomains, listRegistrars } from '../api/cmdb'
+  syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
@@ -289,6 +369,11 @@ const checking = ref({}), syncingAll = ref(false)
 const dlg = ref(false), editing = ref(false), form = ref({})
 const selected = ref([]), tableRef = ref()
 const statusView = ref('normal') // normal=未忽略 / ignored / all
+const tab = ref('records') // records=主机头台账 / domains=主域名
+// 主域名 tab
+const domKeyword = ref(''), domQuery = ref(''), domPage = ref(1), domPageSize = ref(20)
+const domDlg = ref(false), domEditing = ref(false), domForm = ref({})
+const refreshingAll = ref(false), refreshingDom = ref({})
 const igDlg = ref(false), igRows = ref([]), igReason = ref('')
 const bDlg = ref(false), bForm = ref({})
 const dDlg = ref(false), detail = ref(null)
@@ -338,6 +423,49 @@ const pagedRows = computed(() => {
 })
 function doSearch() { query.value = { ...f.value }; currentPage.value = 1 }
 function resetFilter() { f.value = { keyword: '', project: null, env: null, module: null, source: null }; query.value = { ...f.value }; currentPage.value = 1 }
+
+// —— 主域名 tab ——
+const resoCountMap = computed(() => {
+  const m = {}
+  for (const r of rows.value) m[r.domain_ci_id] = (m[r.domain_ci_id] || 0) + 1
+  return m
+})
+const domFiltered = computed(() => allDomains.value.filter((d) =>
+  !domQuery.value || d.name.toLowerCase().includes(domQuery.value.toLowerCase())))
+const domPaged = computed(() => {
+  const s = (domPage.value - 1) * domPageSize.value
+  return domFiltered.value.slice(s, s + domPageSize.value)
+})
+function doDomSearch() { domQuery.value = domKeyword.value; domPage.value = 1 }
+function sortByDate(a, b) { if (!a && !b) return 0; if (!a) return 1; if (!b) return -1; return new Date(a) - new Date(b) }
+function expiryClass(d) { if (!d) return ''; const days = (new Date(d) - Date.now()) / 86400000; return days < 0 ? 'exp-red' : (days < 30 ? 'exp-orange' : '') }
+function jumpToRecords(row) { tab.value = 'records'; f.value = { keyword: row.name, project: null, env: null, module: null, source: null }; query.value = { ...f.value }; currentPage.value = 1 }
+function openAddDomain() { domEditing.value = false; domForm.value = { name: '', registrar_id: null, dns_provider: '', expiry_at: '' }; domDlg.value = true }
+function openEditDomain(row) { domEditing.value = true; domForm.value = { ...row, expiry_at: row.expiry_at || '' }; domDlg.value = true }
+async function saveDomain() {
+  try {
+    if (domEditing.value) await updateDomain(domForm.value.ci_id, domForm.value)
+    else await createDomain(domForm.value)
+    ElMessage.success('已保存'); domDlg.value = false; load()
+  } catch (e) { ElMessage.error(e.response?.data?.error || '保存失败') }
+}
+async function delDomain(row) {
+  try {
+    await app.showConfirm(row.stale ? `该域名 GoDaddy 已无，确认从台账移除 ${row.name}？其下解析一并删除`
+      : `确认删除手动录入的域名 ${row.name}？其下解析一并删除`)
+    await deleteDomain(row.ci_id); ElMessage.success('已删除'); load()
+  } catch (e) { if (e !== 'cancel') ElMessage.error('删除失败') }
+}
+async function refreshOneDom(row) {
+  refreshingDom.value = { ...refreshingDom.value, [row.ci_id]: true }
+  try { const r = await refreshDomain(row.ci_id); ElMessage.success(r.msg || '已刷新'); await load() }
+  catch (e) { ElMessage.error('刷新失败') } finally { refreshingDom.value = { ...refreshingDom.value, [row.ci_id]: false } }
+}
+async function refreshAllDom() {
+  refreshingAll.value = true
+  try { const r = await refreshAllDomains(); ElMessage.success(`已刷新 ${r.count} 个域名的到期时间`); await load() }
+  catch (e) { ElMessage.error('刷新失败') } finally { refreshingAll.value = false }
+}
 
 async function load() {
   loading.value = true
@@ -394,7 +522,7 @@ async function doUnignore(list) {
 function openDetail(row) { detail.value = row; dDlg.value = true }
 function editFromDetail() { dDlg.value = false; openEdit(detail.value) }
 function openBulk() {
-  bForm.value = { setProject: false, project: '', setEnv: false, env: '', setModule: false, module: '' }
+  bForm.value = { setProject: false, project: '', setEnv: false, env: '', setModule: false, module: '', setCdn: false, cdn_id: null }
   bDlg.value = true
 }
 async function saveBulk() {
@@ -403,7 +531,8 @@ async function saveBulk() {
   if (b.setProject) payload.project = b.project || ''
   if (b.setEnv) payload.env = b.env || ''
   if (b.setModule) payload.module = b.module || ''
-  if (payload.project === undefined && payload.env === undefined && payload.module === undefined) {
+  if (b.setCdn) { payload.set_cdn = true; payload.cdn_id = b.cdn_id ?? null }
+  if (payload.project === undefined && payload.env === undefined && payload.module === undefined && !payload.set_cdn) {
     ElMessage.warning('请至少打开一个要设置的字段'); return
   }
   try {
@@ -488,7 +617,7 @@ function exportCsv() {
   const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  a.href = url; a.download = 'cmdb-主机头台账.csv'; a.click()
+  a.href = url; a.download = 'cmdb-业务域名.csv'; a.click()
   URL.revokeObjectURL(url)
 }
 async function checkCert(row) {
@@ -528,4 +657,8 @@ onMounted(load)
 .stale { text-decoration: line-through; color: #b0b3bb; }
 .ignored { color: #b0b3bb; }
 .detail-val { word-break: break-all; }
+.exp-red { color: #f56c6c; font-weight: 600; }
+.exp-orange { color: #e6a23c; font-weight: 600; }
+.lvl-tabs { margin-top: -6px; margin-bottom: 4px; }
+.lvl-tabs :deep(.el-tabs__header) { margin-bottom: 0; }
 </style>

@@ -67,7 +67,7 @@ const menus = shallowRef([
     { path: '/domains', label: '域名', icon: Connection },
     { path: '/dns-records', label: 'DNS 记录', icon: List },
     { path: '/certs', label: '证书', icon: Lock },
-    { path: '/cert-inspect', label: '证书巡检', icon: CircleCheck },
+    { path: '/cert-inspect', label: '到期巡检', icon: CircleCheck },
     { path: '/relations', label: '关系图谱', icon: Share },
   ] },
   { type: 'item', path: '/dashboard', label: '展示台', icon: DataAnalysis },

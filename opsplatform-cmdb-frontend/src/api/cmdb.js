@@ -64,6 +64,11 @@ export const updateScheduledTask = (key, data) => http.put(`/scheduled-tasks/${k
 export const runScheduledTask = (key) => http.post(`/scheduled-tasks/${key}/run`).then((r) => r.data)
 
 // 通知
+export const listLarkGroups = () => http.get('/lark-groups').then((r) => r.data)
+export const createLarkGroup = (b) => http.post('/lark-groups', b).then((r) => r.data)
+export const updateLarkGroup = (id, b) => http.put(`/lark-groups/${id}`, b).then((r) => r.data)
+export const deleteLarkGroup = (id) => http.delete(`/lark-groups/${id}`).then((r) => r.data)
+export const testLarkGroup = (id) => http.post(`/lark-groups/${id}/test`).then((r) => r.data)
 export const listNotifyUsers = () => http.get('/notify-users').then((r) => r.data)
 export const createNotifyUser = (data) => http.post('/notify-users', data).then((r) => r.data)
 export const deleteNotifyUser = (id) => http.delete(`/notify-users/${id}`).then((r) => r.data)

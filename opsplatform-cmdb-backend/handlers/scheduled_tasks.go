@@ -21,36 +21,59 @@ func (h *SchedHandler) Register(r *gin.RouterGroup) {
 }
 
 func (h *SchedHandler) List(c *gin.Context) {
-	rows, err := h.DB.Query(`SELECT task_key, name, enabled, schedule, last_run_at, last_result FROM scheduled_tasks ORDER BY task_key`)
+	rows, err := h.DB.Query(`SELECT task_key, name, enabled, schedule, last_run_at, last_result, last_ok,
+		notify_enabled, lark_group_id, notify_when FROM scheduled_tasks ORDER BY task_key`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	defer rows.Close()
 	type taskOut struct {
-		Key        string `json:"task_key"`
-		Name       string `json:"name"`
-		Enabled    int    `json:"enabled"`
-		Schedule   string `json:"schedule"`
-		LastRunAt  string `json:"last_run_at"`
-		LastResult string `json:"last_result"`
-		NextRunAt  string `json:"next_run_at"`
+		Key           string `json:"task_key"`
+		Name          string `json:"name"`
+		Enabled       int    `json:"enabled"`
+		Schedule      string `json:"schedule"`
+		LastRunAt     string `json:"last_run_at"`
+		LastResult    string `json:"last_result"`
+		LastOk        int    `json:"last_ok"`
+		NextRunAt     string `json:"next_run_at"`
+		NotifyEnabled int    `json:"notify_enabled"`
+		LarkGroupID   *int   `json:"lark_group_id"`
+		NotifyWhen    string `json:"notify_when"`
+		AtUserIDs     []int  `json:"at_user_ids"`
 	}
 	out := []taskOut{}
 	now := time.Now()
 	for rows.Next() {
 		var t taskOut
 		var lastRun sql.NullTime
-		if rows.Scan(&t.Key, &t.Name, &t.Enabled, &t.Schedule, &lastRun, &t.LastResult) != nil {
+		var groupID sql.NullInt64
+		if rows.Scan(&t.Key, &t.Name, &t.Enabled, &t.Schedule, &lastRun, &t.LastResult, &t.LastOk,
+			&t.NotifyEnabled, &groupID, &t.NotifyWhen) != nil {
 			continue
 		}
 		if lastRun.Valid {
 			t.LastRunAt = lastRun.Time.Format("2006-01-02 15:04")
 		}
+		if groupID.Valid {
+			v := int(groupID.Int64)
+			t.LarkGroupID = &v
+		}
 		if t.Enabled == 1 {
 			if sc, err := cron.ParseStandard(t.Schedule); err == nil {
 				t.NextRunAt = sc.Next(now).Format("2006-01-02 15:04")
 			}
+		}
+		t.AtUserIDs = []int{}
+		urows, _ := h.DB.Query(`SELECT user_id FROM task_notify_users WHERE task_key=?`, t.Key)
+		if urows != nil {
+			for urows.Next() {
+				var uid int
+				if urows.Scan(&uid) == nil {
+					t.AtUserIDs = append(t.AtUserIDs, uid)
+				}
+			}
+			urows.Close()
 		}
 		out = append(out, t)
 	}
@@ -60,8 +83,12 @@ func (h *SchedHandler) List(c *gin.Context) {
 func (h *SchedHandler) Update(c *gin.Context) {
 	key := c.Param("key")
 	var in struct {
-		Enabled  *int    `json:"enabled"`
-		Schedule *string `json:"schedule"`
+		Enabled       *int    `json:"enabled"`
+		Schedule      *string `json:"schedule"`
+		NotifyEnabled *int    `json:"notify_enabled"`
+		LarkGroupID   *int    `json:"lark_group_id"`
+		NotifyWhen    *string `json:"notify_when"`
+		AtUserIDs     *[]int  `json:"at_user_ids"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
@@ -81,6 +108,21 @@ func (h *SchedHandler) Update(c *gin.Context) {
 		if _, err := h.DB.Exec(`UPDATE scheduled_tasks SET enabled=? WHERE task_key=?`, *in.Enabled, key); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
+		}
+	}
+	if in.NotifyEnabled != nil {
+		_, _ = h.DB.Exec(`UPDATE scheduled_tasks SET notify_enabled=? WHERE task_key=?`, *in.NotifyEnabled, key)
+	}
+	if in.LarkGroupID != nil {
+		_, _ = h.DB.Exec(`UPDATE scheduled_tasks SET lark_group_id=? WHERE task_key=?`, nullableInt(in.LarkGroupID), key)
+	}
+	if in.NotifyWhen != nil {
+		_, _ = h.DB.Exec(`UPDATE scheduled_tasks SET notify_when=? WHERE task_key=?`, *in.NotifyWhen, key)
+	}
+	if in.AtUserIDs != nil {
+		_, _ = h.DB.Exec(`DELETE FROM task_notify_users WHERE task_key=?`, key)
+		for _, uid := range *in.AtUserIDs {
+			_, _ = h.DB.Exec(`INSERT IGNORE INTO task_notify_users (task_key, user_id) VALUES (?, ?)`, key, uid)
 		}
 	}
 	ReloadScheduler()

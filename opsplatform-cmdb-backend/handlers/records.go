@@ -280,6 +280,8 @@ func (h *RecordHandler) BulkUpdate(c *gin.Context) {
 		Project *string `json:"project"`
 		Env     *string `json:"env"`
 		Module  *string `json:"module"`
+		SetCdn  bool    `json:"set_cdn"`
+		CdnID   *int    `json:"cdn_id"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil || len(in.IDs) == 0 {
 		c.JSON(400, gin.H{"error": "ids 必填"})
@@ -298,6 +300,10 @@ func (h *RecordHandler) BulkUpdate(c *gin.Context) {
 	if in.Module != nil {
 		sets = append(sets, "module=?")
 		args = append(args, *in.Module)
+	}
+	if in.SetCdn {
+		sets = append(sets, "cdn_id=?")
+		args = append(args, nullableInt(in.CdnID))
 	}
 	if len(sets) == 0 {
 		c.JSON(400, gin.H{"error": "至少选择一个要设置的字段"})

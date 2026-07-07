@@ -54,6 +54,7 @@ func main() {
 	handlers.NewSettingsHandler(db).Register(api)
 	handlers.NewSchedHandler(db).Register(api)
 	handlers.NewNotifyHandler(db).Register(api)
+	handlers.NewLarkGroupHandler(db).Register(api)
 	handlers.NewDashboardHandler(db).Register(api)
 	handlers.NewBasicHandler(db).Register(api)
 	handlers.NewRecordHandler(db).Register(api)

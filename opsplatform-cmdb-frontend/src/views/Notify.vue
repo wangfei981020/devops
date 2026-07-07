@@ -2,20 +2,31 @@
   <div class="page">
     <div class="page-head"><span class="page-title">通知</span></div>
 
-    <!-- 机器人配置 -->
+    <!-- Lark 群 -->
     <el-card shadow="never" style="margin-bottom:14px">
-      <template #header><b>飞书 / Lark 机器人</b></template>
-      <el-form label-width="110px" style="max-width:760px">
-        <el-form-item label="Webhook">
-          <el-input v-model="cfg.feishu_webhook" placeholder="飞书自定义机器人 webhook 地址" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" @click="saveCfg">保存</el-button>
-          <el-button :icon="Promotion" :loading="testing" @click="test">发送测试</el-button>
-          <span class="muted" style="margin-left:10px">测试会用当前 webhook + 通知人 @ 发一条到群里</span>
-        </el-form-item>
-      </el-form>
+      <template #header><b>Lark 群</b><span class="muted" style="margin-left:8px">定时任务按群发通知，可加多个</span>
+        <el-button type="primary" size="small" style="float:right" @click="openGroup()">+ 添加群</el-button></template>
+      <el-table :data="groups" size="small">
+        <el-table-column prop="name" label="群名" width="180" />
+        <el-table-column prop="webhook" label="Webhook" min-width="320" show-overflow-tooltip><template #default="{ row }"><span class="mono">{{ row.webhook }}</span></template></el-table-column>
+        <el-table-column label="操作" width="170" fixed="right"><template #default="{ row }">
+          <div style="display:flex;gap:8px;align-items:center">
+            <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openGroup(row)" /></el-tooltip>
+            <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delGroup(row)" /></el-tooltip>
+            <el-button link type="primary" :icon="Promotion" :loading="testingG[row.id]" @click="testGroup(row)">测试</el-button>
+          </div>
+        </template></el-table-column>
+      </el-table>
+      <el-empty v-if="!groups.length" description="还没有 Lark 群，点右上添加" :image-size="50" />
     </el-card>
+
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="gDlg" :title="gEdit?'编辑群':'添加群'" width="560px">
+      <el-form :model="gForm" label-width="90px">
+        <el-form-item label="群名"><el-input v-model="gForm.name" placeholder="如 运维群 / 证书群" style="width:240px" /></el-form-item>
+        <el-form-item label="Webhook"><el-input v-model="gForm.webhook" placeholder="飞书自定义机器人 webhook 地址" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="gDlg=false">取消</el-button><el-button type="primary" @click="saveGroup">保存</el-button></template>
+    </el-dialog>
 
     <!-- 通知人 -->
     <el-card shadow="never" style="margin-bottom:14px">
@@ -56,13 +67,16 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Delete, Promotion } from '@element-plus/icons-vue'
-import { getSettings, updateSettings, listNotifyUsers, createNotifyUser, deleteNotifyUser, testNotify } from '../api/cmdb'
+import { Plus, Delete, Promotion, Edit } from '@element-plus/icons-vue'
+import { getSettings, updateSettings, listNotifyUsers, createNotifyUser, deleteNotifyUser,
+  listLarkGroups, createLarkGroup, updateLarkGroup, deleteLarkGroup, testLarkGroup } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
-const cfg = ref({}), users = ref([]), testing = ref(false)
+const cfg = ref({}), users = ref([])
 const nu = ref({ name: '', open_id: '' })
+const groups = ref([]), testingG = ref({})
+const gDlg = ref(false), gEdit = ref(false), gForm = ref({})
 // 事件开关，settings 没存按默认（续期成功默认关，其余开）
 const ev = ref({ notify_cert_expiring: '1', notify_renew_success: '0', notify_renew_fail: '1', notify_domain_expiring: '1' })
 
@@ -70,12 +84,32 @@ async function load() {
   cfg.value = await getSettings()
   for (const k in ev.value) if (cfg.value[k] !== undefined && cfg.value[k] !== '') ev.value[k] = cfg.value[k]
   users.value = await listNotifyUsers()
+  groups.value = await listLarkGroups()
 }
 async function saveCfg() {
   try {
-    await updateSettings({ feishu_webhook: cfg.value.feishu_webhook || '', remind_days: cfg.value.remind_days || '', ...ev.value })
+    await updateSettings({ remind_days: cfg.value.remind_days || '', ...ev.value })
     ElMessage.success('已保存')
   } catch (e) { ElMessage.error('保存失败') }
+}
+// Lark 群
+function openGroup(row) { gEdit.value = !!row; gForm.value = row ? { ...row } : { name: '', webhook: '' }; gDlg.value = true }
+async function saveGroup() {
+  if (!gForm.value.name || !gForm.value.webhook) { ElMessage.warning('群名和 webhook 必填'); return }
+  try {
+    gEdit.value ? await updateLarkGroup(gForm.value.id, gForm.value) : await createLarkGroup(gForm.value)
+    ElMessage.success('已保存'); gDlg.value = false; groups.value = await listLarkGroups()
+  } catch (e) { ElMessage.error(e.response?.data?.error || '失败') }
+}
+async function delGroup(row) {
+  try { await app.showConfirm(`删除群 ${row.name}？引用它的任务将不发通知`); await deleteLarkGroup(row.id); groups.value = await listLarkGroups() }
+  catch (e) { if (e !== 'cancel') ElMessage.error('失败') }
+}
+async function testGroup(row) {
+  testingG.value = { ...testingG.value, [row.id]: true }
+  try { const r = await testLarkGroup(row.id); ElMessage.success(r.msg || '已发送') }
+  catch (e) { ElMessage.error(e.response?.data?.error || '发送失败') }
+  finally { testingG.value = { ...testingG.value, [row.id]: false } }
 }
 async function addUser() {
   if (!nu.value.name || !nu.value.open_id) { ElMessage.warning('姓名和 open_id 必填'); return }
@@ -86,11 +120,9 @@ async function delUser(row) {
   try { await app.showConfirm(`删除通知人 ${row.name}？`); await deleteNotifyUser(row.id); users.value = await listNotifyUsers() }
   catch (e) { if (e !== 'cancel') ElMessage.error('失败') }
 }
-async function test() {
-  testing.value = true
-  try { const r = await testNotify(); ElMessage.success(r.msg || '已发送') }
-  catch (e) { ElMessage.error(e.response?.data?.error || '发送失败') }
-  finally { testing.value = false }
-}
 onMounted(load)
 </script>
+
+<style scoped>
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+</style>
