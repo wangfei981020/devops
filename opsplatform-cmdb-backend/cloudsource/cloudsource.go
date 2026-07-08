@@ -35,11 +35,78 @@ type Instance struct {
 	SelfLink    string
 	CreatedAt   *time.Time
 	Disks       []Disk
+	// GCP 同步自带的只读技术字段
+	Hostname           string
+	VPC                string
+	Subnet             string
+	NetworkTags        []string
+	Preemptible        bool // 抢占式/Spot（会被回收）
+	Image              string
+	CPUPlatform        string
+	DeletionProtection bool
+	ServiceAccounts    []string
 }
 
-// Adapter 云资源适配接口。ListInstances 只列该 adapter 所持凭据对应的单个 project。
+// ---- 网络资源（VPC/子网/防火墙/静态IP/负载均衡）----
+
+type Network struct {
+	Name     string
+	Mode     string // auto/custom
+	SelfLink string
+}
+type Subnet struct {
+	Name     string
+	Network  string // 所属 VPC 名
+	Region   string
+	CIDR     string
+	Gateway  string
+	SelfLink string
+}
+type Firewall struct {
+	Name         string
+	Network      string
+	Direction    string // INGRESS/EGRESS
+	Priority     int
+	Action       string // allow/deny
+	Protocols    string // "tcp:22,80;udp:53"
+	SourceRanges string
+	TargetTags   string
+	Disabled     bool
+	SelfLink     string
+}
+type Address struct {
+	Name     string
+	Address  string
+	Type     string // EXTERNAL/INTERNAL
+	Status   string // IN_USE/RESERVED
+	Region   string // 'global' 或区域
+	Users    string // 绑定的资源
+	SelfLink string
+}
+type LoadBalancer struct {
+	Name      string
+	Scheme    string // EXTERNAL/INTERNAL/...
+	VIP       string
+	PortRange string
+	Protocol  string
+	Target    string
+	Region    string // 'global' 或区域
+	SelfLink  string
+}
+
+// NetworkResources 一个 project 的全部网络资源
+type NetworkResources struct {
+	Networks      []Network
+	Subnets       []Subnet
+	Firewalls     []Firewall
+	Addresses     []Address
+	LoadBalancers []LoadBalancer
+}
+
+// Adapter 云资源适配接口。各方法只处理该 adapter 所持凭据对应的单个 project。
 type Adapter interface {
 	ListInstances(ctx context.Context, projectID string) ([]Instance, error)
+	ListNetwork(ctx context.Context, projectID string) (*NetworkResources, error)
 }
 
 // NewAdapter 按 provider + 该 project 的 service account JSON 凭据构造 adapter。

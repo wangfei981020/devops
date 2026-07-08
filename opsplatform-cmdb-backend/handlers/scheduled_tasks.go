@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +23,38 @@ func (h *SchedHandler) Register(r *gin.RouterGroup) {
 	r.PUT("/scheduled-tasks/:key", h.Update)
 	r.POST("/scheduled-tasks/:key/run", h.Run)
 	r.GET("/task-runs", h.RunLogs)
+	r.POST("/task-runs/:id/retry-failures", h.RetryFailures)
+}
+
+// RetryFailures 只重试某次执行的失败项（读该记录 failures 的 target，生成一条 trigger=retry 的新记录）。
+func (h *SchedHandler) RetryFailures(c *gin.Context) {
+	id := c.Param("id")
+	var taskKey string
+	var failJSON sql.NullString
+	if h.DB.QueryRow(`SELECT task_key, failures FROM task_run_logs WHERE id=?`, id).Scan(&taskKey, &failJSON) != nil {
+		c.JSON(404, gin.H{"error": "执行记录不存在"})
+		return
+	}
+	var fails []TaskFailure
+	if failJSON.Valid && failJSON.String != "" {
+		_ = json.Unmarshal([]byte(failJSON.String), &fails)
+	}
+	var targets []string
+	for _, f := range fails {
+		if f.Target != "" {
+			targets = append(targets, f.Target)
+		}
+	}
+	if len(targets) == 0 {
+		c.JSON(400, gin.H{"error": "该记录没有可重试的失败项"})
+		return
+	}
+	if !RunTaskRetry(taskKey, targets) {
+		c.JSON(400, gin.H{"error": "该任务不支持重试"})
+		return
+	}
+	WriteAudit(h.DB, c, "retry_task_failures", taskKey)
+	c.JSON(200, gin.H{"ok": true, "msg": fmt.Sprintf("已触发重试 %d 项，稍后刷新看新记录", len(targets))})
 }
 
 // RunLogs 定时任务执行历史（执行记录页）。支持 task_key / status / days 过滤 + 分页。
@@ -57,7 +90,7 @@ func (h *SchedHandler) RunLogs(c *gin.Context) {
 	}
 
 	rows, err := h.DB.Query(`SELECT id, task_key, name, status, summary, failures, trigger_by, duration_ms,
-		notify_state, notify_group, notify_at, started_at, finished_at
+		notify_state, notify_group, notify_at, progress, started_at, finished_at
 		FROM task_run_logs WHERE `+cond+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -65,33 +98,38 @@ func (h *SchedHandler) RunLogs(c *gin.Context) {
 	}
 	defer rows.Close()
 	type runOut struct {
-		ID          int64    `json:"id"`
-		TaskKey     string   `json:"task_key"`
-		Name        string   `json:"name"`
-		Status      string   `json:"status"`
-		Summary     string   `json:"summary"`
-		Failures    []string `json:"failures"`
-		TriggerBy   string   `json:"trigger_by"`
-		DurationMs  int      `json:"duration_ms"`
-		NotifyState string   `json:"notify_state"`
-		NotifyGroup string   `json:"notify_group"`
-		NotifyAt    string   `json:"notify_at"`
-		FinishedAt  string   `json:"finished_at"`
+		ID          int64         `json:"id"`
+		TaskKey     string        `json:"task_key"`
+		Name        string        `json:"name"`
+		Status      string        `json:"status"`
+		Summary     string        `json:"summary"`
+		Failures    []TaskFailure `json:"failures"`
+		TriggerBy   string        `json:"trigger_by"`
+		DurationMs  int           `json:"duration_ms"`
+		NotifyState string        `json:"notify_state"`
+		NotifyGroup string        `json:"notify_group"`
+		NotifyAt    string        `json:"notify_at"`
+		Progress    string        `json:"progress"`
+		StartedAt   string        `json:"started_at"`
+		FinishedAt  string        `json:"finished_at"`
 	}
 	list := []runOut{}
 	for rows.Next() {
 		var o runOut
 		var failJSON sql.NullString
-		var fin sql.NullTime
+		var started, fin sql.NullTime
 		if rows.Scan(&o.ID, &o.TaskKey, &o.Name, &o.Status, &o.Summary, &failJSON, &o.TriggerBy, &o.DurationMs,
-			&o.NotifyState, &o.NotifyGroup, &o.NotifyAt, new(sql.NullTime), &fin) != nil {
+			&o.NotifyState, &o.NotifyGroup, &o.NotifyAt, &o.Progress, &started, &fin) != nil {
 			continue
 		}
-		o.Failures = []string{}
+		o.Failures = []TaskFailure{}
 		if failJSON.Valid && failJSON.String != "" {
-			_ = json.Unmarshal([]byte(failJSON.String), &o.Failures)
+			_ = json.Unmarshal([]byte(failJSON.String), &o.Failures) // 老格式(字符串数组)会解析失败→空，可接受
 		}
-		if fin.Valid {
+		if started.Valid {
+			o.StartedAt = started.Time.Format("2006-01-02 15:04:05")
+		}
+		if fin.Valid && o.Status != "running" {
 			o.FinishedAt = fin.Time.Format("2006-01-02 15:04:05")
 		}
 		list = append(list, o)

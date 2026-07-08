@@ -21,12 +21,24 @@ import (
 
 // Scheduler 用 cron 调度可配置定时任务（scheduled_tasks 表）。
 // 任务可在前端开关 / 改频率 / 立即运行；改配置后热重载。
+// TaskFailure 单条失败明细（target=失败对象，可用于重试；reason=具体原因）。
+type TaskFailure struct {
+	Target string `json:"target"`
+	Reason string `json:"reason"`
+}
+
+// ProgressFn 进度回调：done=已处理，total=总数。核心函数边跑边上报，前端实时看进度。
+type ProgressFn func(done, total int)
+
+// taskFn 核心函数签名：prog 上报进度；targets 非空=只处理这些对象（重试用），nil=全量。
+type taskFn func(prog ProgressFn, targets []string) (string, []TaskFailure, bool)
+
 type Scheduler struct {
 	db     *sql.DB
 	cipher *crypto.Cipher
 	mu     sync.Mutex
 	cron   *cron.Cron
-	funcs  map[string]func() (string, []string, bool) // task_key -> 执行函数，返回(结果摘要, 失败明细, 是否成功)
+	funcs  map[string]taskFn
 }
 
 var sched *Scheduler // 全局单例，供 API 热重载 / 立即运行
@@ -34,13 +46,13 @@ var sched *Scheduler // 全局单例，供 API 热重载 / 立即运行
 // StartScheduler 初始化调度器并按 scheduled_tasks 注册 cron。非阻塞（cron 在后台 goroutine）。
 func StartScheduler(db *sql.DB, cipher *crypto.Cipher) {
 	sched = &Scheduler{db: db, cipher: cipher}
-	sched.funcs = map[string]func() (string, []string, bool){
-		"refresh_expiry": func() (string, []string, bool) { return refreshAllWhoisCore(db) },
-		"auto_renew":     func() (string, []string, bool) { renewDue(db, cipher); return "已扫描并触发到期前 30 天证书续期", nil, true },
-		"remind":         func() (string, []string, bool) { remindExpiry(db); return "已按阈值发送到期提醒", nil, true },
-		"inspect":        func() (string, []string, bool) { return inspectAllCertsCore(db) },
-		"dns_sync":       func() (string, []string, bool) { return dnsSyncCore(db, cipher) },
-		"host_sync":      func() (string, []string, bool) { return SyncAllHostProjects(db, cipher) },
+	sched.funcs = map[string]taskFn{
+		"refresh_expiry": func(p ProgressFn, t []string) (string, []TaskFailure, bool) { return refreshAllWhoisCore(db, p, t) },
+		"auto_renew":     func(ProgressFn, []string) (string, []TaskFailure, bool) { renewDue(db, cipher); return "已扫描并触发到期前 30 天证书续期", nil, true },
+		"remind":         func(ProgressFn, []string) (string, []TaskFailure, bool) { remindExpiry(db); return "已按阈值发送到期提醒", nil, true },
+		"inspect":        func(p ProgressFn, t []string) (string, []TaskFailure, bool) { return inspectAllCertsCore(db, p, t) },
+		"dns_sync":       func(ProgressFn, []string) (string, []TaskFailure, bool) { return dnsSyncCore(db, cipher) },
+		"host_sync":      func(ProgressFn, []string) (string, []TaskFailure, bool) { return SyncAllHostProjects(db, cipher) },
 	}
 	sched.reload()
 }
@@ -52,12 +64,21 @@ func ReloadScheduler() {
 	}
 }
 
-// RunTaskNow 立即异步跑一次指定任务（供 API「立即运行」调用）。
+// RunTaskNow 立即异步全量跑一次指定任务（供 API「立即运行」调用）。
 func RunTaskNow(key string) bool {
 	if sched == nil || sched.funcs[key] == nil {
 		return false
 	}
-	go sched.run(key, "manual")
+	go sched.run(key, "manual", nil)
+	return true
+}
+
+// RunTaskRetry 只重试指定失败对象（供 API「重试失败项」调用），生成一条 trigger=retry 的新记录。
+func RunTaskRetry(key string, targets []string) bool {
+	if sched == nil || sched.funcs[key] == nil {
+		return false
+	}
+	go sched.run(key, "retry", targets)
 	return true
 }
 
@@ -83,30 +104,34 @@ func (s *Scheduler) reload() {
 			continue
 		}
 		k := key
-		if _, err := s.cron.AddFunc(schedule, func() { s.run(k, "cron") }); err != nil {
+		if _, err := s.cron.AddFunc(schedule, func() { s.run(k, "cron", nil) }); err != nil {
 			log.Printf("scheduler add %s (%q): %v", key, schedule, err)
 		}
 	}
 	s.cron.Start()
 }
 
-func (s *Scheduler) run(key, trigger string) {
+func (s *Scheduler) run(key, trigger string, targets []string) {
 	fn := s.funcs[key]
 	if fn == nil {
 		return
 	}
 	start := time.Now()
+	runID := s.startRunLog(key, trigger, start) // 先写「运行中」记录，前端可实时看进度/耗时
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("scheduler task %s panic: %v", key, r)
 			msg := fmt.Sprintf("panic: %v", r)
 			_, _ = s.db.Exec(`UPDATE scheduled_tasks SET last_run_at=NOW(), last_result=?, last_ok=0 WHERE task_key=?`, msg, key)
 			ns, ng, na := sendTaskNotify(s.db, key, "fail", msg)
-			s.writeRunLog(key, "fail", msg, nil, trigger, start, ns, ng, na)
+			s.finishRunLog(runID, "fail", msg, nil, start, ns, ng, na)
 		}
 	}()
-	log.Printf("[cron] 运行任务 %s", key)
-	result, failures, ok := fn()
+	log.Printf("[cron] 运行任务 %s (%s)", key, trigger)
+	prog := func(done, total int) {
+		_, _ = s.db.Exec(`UPDATE task_run_logs SET progress=? WHERE id=?`, fmt.Sprintf("%d/%d", done, total), runID)
+	}
+	result, failures, ok := fn(prog, targets)
 	status := "ok"
 	if !ok {
 		status = "fail"
@@ -119,13 +144,24 @@ func (s *Scheduler) run(key, trigger string) {
 	}
 	_, _ = s.db.Exec(`UPDATE scheduled_tasks SET last_run_at=NOW(), last_result=?, last_ok=? WHERE task_key=?`, truncate(result, 250), okv, key)
 	ns, ng, na := sendTaskNotify(s.db, key, status, result)
-	s.writeRunLog(key, status, result, failures, trigger, start, ns, ng, na)
+	s.finishRunLog(runID, status, result, failures, start, ns, ng, na)
 }
 
-// writeRunLog 每次任务执行完写一条历史（不覆盖），并做 90 天保留清理。
-func (s *Scheduler) writeRunLog(key, status, summary string, failures []string, trigger string, start time.Time, notifyState, notifyGroup, notifyAt string) {
+// startRunLog 任务开跑先插一条 running 记录，返回 id。
+func (s *Scheduler) startRunLog(key, trigger string, start time.Time) int64 {
 	var name string
 	_ = s.db.QueryRow(`SELECT name FROM scheduled_tasks WHERE task_key=?`, key).Scan(&name)
+	res, err := s.db.Exec(`INSERT INTO task_run_logs (task_key, name, status, trigger_by, started_at, finished_at)
+		VALUES (?,?, 'running', ?, ?, ?)`, key, name, trigger, start, start)
+	if err != nil {
+		return 0
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
+// finishRunLog 任务跑完把 running 记录更新为终态（含失败明细/通知投递/耗时）。
+func (s *Scheduler) finishRunLog(runID int64, status, summary string, failures []TaskFailure, start time.Time, notifyState, notifyGroup, notifyAt string) {
 	var failJSON any
 	if len(failures) > 0 {
 		if b, err := json.Marshal(failures); err == nil {
@@ -133,19 +169,23 @@ func (s *Scheduler) writeRunLog(key, status, summary string, failures []string, 
 		}
 	}
 	dur := int(time.Since(start).Milliseconds())
-	_, _ = s.db.Exec(`INSERT INTO task_run_logs
-		(task_key, name, status, summary, failures, trigger_by, duration_ms, notify_state, notify_group, notify_at, started_at, finished_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())`,
-		key, name, status, truncate(summary, 250), failJSON, trigger, dur, notifyState, notifyGroup, notifyAt, start)
+	_, _ = s.db.Exec(`UPDATE task_run_logs SET status=?, summary=?, failures=?, duration_ms=?, notify_state=?, notify_group=?, notify_at=?, progress='', finished_at=NOW() WHERE id=?`,
+		status, truncate(summary, 250), failJSON, dur, notifyState, notifyGroup, notifyAt, runID)
 	// 保留策略：只留 90 天历史
 	_, _ = s.db.Exec(`DELETE FROM task_run_logs WHERE finished_at < DATE_SUB(NOW(), INTERVAL 90 DAY)`)
 }
 
 // ---- 任务核心函数 ----
 
-// refreshAllWhoisCore 刷新所有域名的注册到期(WHOIS)。只管注册到期，不碰证书（证书由 inspect 统一）。
-func refreshAllWhoisCore(db *sql.DB) (string, []string, bool) {
-	rows, err := db.Query(`SELECT c.id, c.name FROM cis c JOIN domains d ON d.ci_id=c.id WHERE c.type='domain' AND d.stale=0`)
+// refreshAllWhoisCore 刷新域名注册到期。
+// 关键优化：**数据源(origin=sync)域名跳过**——它们的到期日由 DNS 同步维护（GoDaddy API 权威值）；
+// 只对 origin=manual 或到期日为空的域名走 RDAP→WHOIS。查询链路 domainExpiry，失败自动退避重试≤3 次。
+// targets 非空=只刷这些域名（重试用）。prog 上报进度。
+func refreshAllWhoisCore(db *sql.DB, prog ProgressFn, targets []string) (string, []TaskFailure, bool) {
+	// 只查数据源覆盖不到的：手动录入，或(不知何故)没有到期日的
+	q := `SELECT c.id, c.name FROM cis c JOIN domains d ON d.ci_id=c.id
+		WHERE c.type='domain' AND d.stale=0 AND (d.origin='manual' OR d.expiry_at IS NULL)`
+	rows, err := db.Query(q)
 	if err != nil {
 		return "查询域名失败: " + err.Error(), nil, false
 	}
@@ -154,28 +194,75 @@ func refreshAllWhoisCore(db *sql.DB) (string, []string, bool) {
 		name string
 	}
 	var items []item
+	tgSet := map[string]bool{}
+	for _, t := range targets {
+		tgSet[t] = true
+	}
 	for rows.Next() {
 		var it item
 		if rows.Scan(&it.id, &it.name) == nil {
-			items = append(items, it)
+			if len(targets) == 0 || tgSet[it.name] {
+				items = append(items, it)
+			}
 		}
 	}
 	rows.Close()
-	n := 0
-	var failures []string
-	for _, it := range items {
-		if t := whoisExpiry(it.name); t != nil {
-			_, _ = db.Exec(`UPDATE domains SET expiry_at=? WHERE ci_id=?`, *t, it.id)
-			n++
-		} else {
-			failures = append(failures, it.name+"：WHOIS 未返回到期时间（超时/限流/该后缀不支持）")
-		}
+
+	total := len(items)
+	if total == 0 {
+		return "没有需要 WHOIS 的域名（数据源域名到期日由同步维护）", nil, true
 	}
-	return fmt.Sprintf("已刷新 %d/%d 个域名的注册到期(WHOIS)", n, len(items)), failures, true
+	var mu sync.Mutex
+	var failures []TaskFailure
+	var done int32
+	n := int32(0)
+	sem := make(chan struct{}, 6) // 并发 6，防慢查询拖垮整体
+	var wg sync.WaitGroup
+	for _, it := range items {
+		wg.Add(1)
+		go func(it item) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			t, reason := expiryWithRetry(it.name, 3) // 自动退避重试最多 3 次
+			if t != nil {
+				_, _ = db.Exec(`UPDATE domains SET expiry_at=? WHERE ci_id=?`, *t, it.id) // 成功才更新；失败保留旧值
+				atomic.AddInt32(&n, 1)
+			} else {
+				mu.Lock()
+				failures = append(failures, TaskFailure{Target: it.name, Reason: reason})
+				mu.Unlock()
+			}
+			if prog != nil {
+				prog(int(atomic.AddInt32(&done, 1)), total)
+			}
+		}(it)
+	}
+	wg.Wait()
+	return fmt.Sprintf("已刷新 %d/%d 个域名的注册到期（数据源域名已跳过）", n, total), failures, true
 }
 
-// inspectAllCertsCore 连 443 检测所有证书到期：主域名(domains) + 所有业务域名解析(domain_records)，统一一处。
-func inspectAllCertsCore(db *sql.DB) (string, []string, bool) {
+// expiryWithRetry 查到期日，失败自动退避重试最多 maxRetry 次（2s→4s→8s）。
+func expiryWithRetry(domain string, maxRetry int) (*time.Time, string) {
+	backoff := 2 * time.Second
+	var reason string
+	for attempt := 0; attempt <= maxRetry; attempt++ {
+		var t *time.Time
+		t, reason = domainExpiry(domain)
+		if t != nil {
+			return t, ""
+		}
+		if attempt < maxRetry {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	return nil, reason
+}
+
+// inspectAllCertsCore 连 443 检测证书到期：主域名(domains) + 所有业务域名解析(domain_records)。
+// targets 非空=只检测这些 fqdn（重试用）。prog 上报进度。
+func inspectAllCertsCore(db *sql.DB, prog ProgressFn, targetList []string) (string, []TaskFailure, bool) {
 	type target struct {
 		id     int64
 		fqdn   string
@@ -205,10 +292,25 @@ func inspectAllCertsCore(db *sql.DB) (string, []string, bool) {
 		}
 		rrows.Close()
 	}
+	// 重试：只保留指定 fqdn
+	if len(targetList) > 0 {
+		want := map[string]bool{}
+		for _, t := range targetList {
+			want[t] = true
+		}
+		var filtered []target
+		for _, t := range targets {
+			if want[t.fqdn] {
+				filtered = append(filtered, t)
+			}
+		}
+		targets = filtered
+	}
+	total := len(targets)
 
-	var ok, fail int32
+	var ok, fail, done int32
 	var fmu sync.Mutex
-	var failures []string
+	var failures []TaskFailure
 	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
 	for _, t := range targets {
@@ -232,17 +334,20 @@ func inspectAllCertsCore(db *sql.DB) (string, []string, bool) {
 				}
 				atomic.AddInt32(&fail, 1)
 				fmu.Lock()
-				failures = append(failures, tg.fqdn+"："+truncate(cmsg, 120))
+				failures = append(failures, TaskFailure{Target: tg.fqdn, Reason: truncate(cmsg, 120)})
 				fmu.Unlock()
+			}
+			if prog != nil {
+				prog(int(atomic.AddInt32(&done, 1)), total)
 			}
 		}(t)
 	}
 	wg.Wait()
-	return fmt.Sprintf("检测 %d 张证书（主域名+业务域名），成功 %d / 失败 %d", len(targets), ok, fail), failures, true
+	return fmt.Sprintf("检测 %d 张证书（主域名+业务域名），成功 %d / 失败 %d", total, ok, fail), failures, true
 }
 
 // dnsSyncCore 定时全量同步所有数据源的 DNS 记录（复用 SyncHandler 的方法）。
-func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []string, bool) {
+func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool) {
 	sh := NewSyncHandler(db, cipher)
 	rows, err := db.Query(`SELECT id, name FROM registrars`)
 	if err != nil {
@@ -264,24 +369,24 @@ func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []string, bool) {
 		return "没有配置数据源，跳过", nil, true
 	}
 	totalD, totalR, totalImp := 0, 0, 0
-	var failures []string
+	var failures []TaskFailure
 	for _, s := range srcs {
 		id := s.id
 		provider, cred, err := LoadCredential(db, cipher, id)
 		if err != nil {
-			failures = append(failures, s.name+"：读取凭据失败")
+			failures = append(failures, TaskFailure{Target: s.name, Reason: "读取凭据失败"})
 			continue
 		}
 		adapter, err := dnsource.NewAdapter(provider, cred, dnsource.LimiterFor(id))
 		if err != nil {
-			failures = append(failures, s.name+"：初始化适配器失败："+truncate(err.Error(), 120))
+			failures = append(failures, TaskFailure{Target: s.name, Reason: "初始化适配器失败：" + truncate(err.Error(), 120)})
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		domains, err := adapter.ListDomains(ctx)
 		if err != nil {
 			cancel()
-			failures = append(failures, s.name+"：列域名失败："+truncate(err.Error(), 120))
+			failures = append(failures, TaskFailure{Target: s.name, Reason: "列域名失败：" + truncate(err.Error(), 120)})
 			continue
 		}
 		present := map[string]bool{}

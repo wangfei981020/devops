@@ -63,6 +63,7 @@ export const listScheduledTasks = () => http.get('/scheduled-tasks').then((r) =>
 export const updateScheduledTask = (key, data) => http.put(`/scheduled-tasks/${key}`, data).then((r) => r.data)
 export const runScheduledTask = (key) => http.post(`/scheduled-tasks/${key}/run`).then((r) => r.data)
 export const listTaskRuns = (params) => http.get('/task-runs', { params }).then((r) => r.data)
+export const retryTaskRunFailures = (id) => http.post(`/task-runs/${id}/retry-failures`).then((r) => r.data)
 
 // 通知
 // 云主机（GCP，只读）
@@ -78,8 +79,22 @@ export const createCloudProject = (accountId, b) => http.post(`/cloud-accounts/$
 export const updateCloudProject = (pid, b) => http.put(`/cloud-projects/${pid}`, b).then((r) => r.data)
 export const deleteCloudProject = (pid) => http.delete(`/cloud-projects/${pid}`).then((r) => r.data)
 export const syncCloudProject = (pid) => http.post(`/cloud-projects/${pid}/sync`).then((r) => r.data)
-export const listCloudRates = () => http.get('/cloud-price-rates').then((r) => r.data)
-export const updateCloudRate = (id, b) => http.put(`/cloud-price-rates/${id}`, b).then((r) => r.data)
+// 成本费率（分档）
+// 云网络资源（多云，当前 GCP）
+export const listCloudIps = () => http.get('/cloud-ips').then((r) => r.data)
+export const listCloudNetworks = () => http.get('/cloud-networks').then((r) => r.data)
+export const listCloudSubnets = () => http.get('/cloud-subnets').then((r) => r.data)
+export const listCloudFirewalls = () => http.get('/cloud-firewalls').then((r) => r.data)
+export const listCloudLoadBalancers = () => http.get('/cloud-loadbalancers').then((r) => r.data)
+
+export const listComputeRates = () => http.get('/cloud-compute-rates').then((r) => r.data)
+export const createComputeRate = (b) => http.post('/cloud-compute-rates', b).then((r) => r.data)
+export const updateComputeRate = (id, b) => http.put(`/cloud-compute-rates/${id}`, b).then((r) => r.data)
+export const deleteComputeRate = (id) => http.delete(`/cloud-compute-rates/${id}`).then((r) => r.data)
+export const listDiskRates = () => http.get('/cloud-disk-rates').then((r) => r.data)
+export const createDiskRate = (b) => http.post('/cloud-disk-rates', b).then((r) => r.data)
+export const updateDiskRate = (id, b) => http.put(`/cloud-disk-rates/${id}`, b).then((r) => r.data)
+export const deleteDiskRate = (id) => http.delete(`/cloud-disk-rates/${id}`).then((r) => r.data)
 
 export const listLarkGroups = () => http.get('/lark-groups').then((r) => r.data)
 export const createLarkGroup = (b) => http.post('/lark-groups', b).then((r) => r.data)

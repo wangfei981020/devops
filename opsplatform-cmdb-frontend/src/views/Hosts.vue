@@ -12,6 +12,7 @@
     <el-card shadow="never" style="margin-bottom:12px">
       <div class="filter">
         <el-input v-model="f.kw" placeholder="搜索 实例名/IP" clearable :prefix-icon="Search" style="width:200px" />
+        <el-select v-model="f.provider" clearable placeholder="厂商" style="width:120px"><el-option v-for="p in opts.provider" :key="p" :label="plabel(p)" :value="p" /></el-select>
         <el-select v-model="f.project" clearable placeholder="项目" style="width:150px"><el-option v-for="p in opts.project" :key="p" :label="p" :value="p" /></el-select>
         <el-select v-model="f.zone" clearable placeholder="区域" style="width:150px"><el-option v-for="z in opts.zone" :key="z" :label="z" :value="z" /></el-select>
         <el-select v-model="f.status" clearable placeholder="状态" style="width:130px"><el-option v-for="s in opts.status" :key="s" :label="s" :value="s" /></el-select>
@@ -21,11 +22,13 @@
 
     <el-card shadow="never">
       <el-table :data="paged" size="small" v-loading="loading">
-        <el-table-column label="项目" min-width="130"><template #default="{ row }">{{ row.project_name || row.project }}</template></el-table-column>
-        <el-table-column prop="zone" label="区域" width="130" />
-        <el-table-column label="实例名" min-width="150"><template #default="{ row }">
+        <el-table-column label="厂商" width="80"><template #default="{ row }"><el-tag :style="providerStyle(row.provider)" size="small">{{ plabel(row.provider) }}</el-tag></template></el-table-column>
+        <el-table-column label="项目" min-width="120"><template #default="{ row }"><el-tag :style="projectStyle(projName(row))" size="small">{{ projName(row) }}</el-tag></template></el-table-column>
+        <el-table-column label="区域" width="130"><template #default="{ row }"><el-tag :style="regionStyle(row.zone)" size="small">{{ row.zone }}</el-tag></template></el-table-column>
+        <el-table-column label="实例名" min-width="170"><template #default="{ row }">
           <span :class="{ stale: row.stale }">{{ row.name }}</span>
           <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">已删</el-tag>
+          <el-tooltip v-if="row.preemptible" content="抢占式/Spot 实例：价格低但 GCP 可随时回收，勿跑关键有状态服务"><el-tag type="warning" size="small" effect="dark" style="margin-left:6px">Spot</el-tag></el-tooltip>
         </template></el-table-column>
         <el-table-column label="CPU" width="70" align="right"><template #default="{ row }">{{ row.vcpu }}核</template></el-table-column>
         <el-table-column label="内存" width="80" align="right"><template #default="{ row }">{{ gb(row.mem_mb) }}G</template></el-table-column>
@@ -51,16 +54,34 @@
           <el-descriptions-item label="项目">{{ detail.host.project_name || detail.host.project }}</el-descriptions-item>
           <el-descriptions-item label="项目ID"><span class="mono">{{ detail.host.project }}</span></el-descriptions-item>
           <el-descriptions-item label="实例名">{{ detail.host.name }}</el-descriptions-item>
+          <el-descriptions-item label="主机名">{{ detail.host.hostname || '—' }}</el-descriptions-item>
           <el-descriptions-item label="区域">{{ detail.host.zone }}</el-descriptions-item>
           <el-descriptions-item label="状态"><el-tag :type="stTag(detail.host.status)" size="small">{{ stLabel(detail.host.status) }}</el-tag></el-descriptions-item>
           <el-descriptions-item label="CPU">{{ detail.host.vcpu }} vCPU</el-descriptions-item>
           <el-descriptions-item label="内存">{{ gb(detail.host.mem_mb) }} GB</el-descriptions-item>
           <el-descriptions-item label="机型">{{ detail.host.machine_type }}</el-descriptions-item>
+          <el-descriptions-item label="CPU平台">{{ detail.host.cpu_platform || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="镜像">{{ detail.host.image || '—' }}</el-descriptions-item>
           <el-descriptions-item label="操作系统">{{ detail.host.os || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="内网IP"><span class="mono">{{ detail.host.internal_ip || '—' }}</span></el-descriptions-item>
-          <el-descriptions-item label="外网IP"><span class="mono">{{ detail.host.external_ip || '—' }}</span></el-descriptions-item>
+          <el-descriptions-item label="计费形态">
+            <el-tag v-if="detail.host.preemptible" type="warning" size="small" effect="dark">抢占式/Spot</el-tag>
+            <span v-else>标准</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="删除保护">{{ detail.host.deletion_protection ? '✅ 已开' : '未开' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ detail.host.gcp_created_at || '—' }}</el-descriptions-item>
           <el-descriptions-item label="云账号">{{ detail.host.account_name }}</el-descriptions-item>
+          <el-descriptions-item label="内网IP"><span class="mono">{{ detail.host.internal_ip || '—' }}</span></el-descriptions-item>
+          <el-descriptions-item label="外网IP"><span class="mono">{{ detail.host.external_ip || '—' }}</span></el-descriptions-item>
+          <el-descriptions-item label="VPC">{{ detail.host.vpc || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="子网">{{ detail.host.subnet || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="防火墙标签" :span="2">
+            <el-tag v-for="t in detail.host.network_tags" :key="t" size="small" effect="plain" style="margin:2px 4px 2px 0">{{ t }}</el-tag>
+            <span v-if="!detail.host.network_tags || !detail.host.network_tags.length" class="muted">—</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="服务账号" :span="2">
+            <span v-if="detail.host.service_accounts && detail.host.service_accounts.length" class="mono">{{ detail.host.service_accounts.join('、') }}</span>
+            <span v-else class="muted">—</span>
+          </el-descriptions-item>
           <el-descriptions-item label="标签" :span="2">
             <el-tag v-for="(v,k) in detail.host.labels" :key="k" size="small" style="margin:2px 4px 2px 0">{{ k }}:{{ v }}</el-tag>
             <span v-if="!detail.host.labels || !Object.keys(detail.host.labels).length" class="muted">—</span>
@@ -83,6 +104,10 @@
 
         <h4 class="sec">💰 成本估算（USD · 目录价）　<el-date-picker v-model="asOf" type="date" size="small" value-format="YYYY-MM-DD" placeholder="累计到" style="width:150px" @change="reloadDetail" /></h4>
         <el-descriptions :column="3" border size="small">
+          <el-descriptions-item label="命中费率" :span="3">
+            <span class="mono">{{ detail.rate_matched }}</span>
+            <span class="muted" style="margin-left:8px">vCPU ${{ detail.rate_vcpu_hour }}/h · 内存 ${{ detail.rate_ram_gb_hour }}/GB/h</span>
+          </el-descriptions-item>
           <el-descriptions-item label="时价">${{ detail.cost_hourly }}/h</el-descriptions-item>
           <el-descriptions-item label="日均">${{ detail.host.cost_daily }}/天</el-descriptions-item>
           <el-descriptions-item label="本月估">${{ detail.host.cost_month }}</el-descriptions-item>
@@ -169,16 +194,59 @@
       <template #footer><el-button @click="projForm.dlg=false">取消</el-button><el-button type="primary" @click="saveProj">保存</el-button></template>
     </el-dialog>
 
-    <!-- 成本费率 -->
-    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="rateDlg" title="成本费率（USD·目录价估算）" width="480px">
-      <div class="muted" style="margin-bottom:12px">用于估算主机成本，可按 GCP 官方目录价调整。停机主机只计磁盘费。</div>
-      <el-form :model="rateForm" label-width="150px">
-        <el-form-item label="vCPU 每小时($)"><el-input-number v-model="rateForm.vcpu_hour_usd" :precision="6" :step="0.001" :controls="false" style="width:160px" /></el-form-item>
-        <el-form-item label="内存 GB 每小时($)"><el-input-number v-model="rateForm.ram_gb_hour_usd" :precision="6" :step="0.001" :controls="false" style="width:160px" /></el-form-item>
-        <el-form-item label="SSD盘 GB/月($)"><el-input-number v-model="rateForm.disk_ssd_gb_month" :precision="6" :step="0.01" :controls="false" style="width:160px" /></el-form-item>
-        <el-form-item label="标准盘 GB/月($)"><el-input-number v-model="rateForm.disk_std_gb_month" :precision="6" :step="0.01" :controls="false" style="width:160px" /></el-form-item>
+    <!-- 成本费率（分档：计算费率 + 磁盘费率） -->
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="rateDlg" title="成本费率（USD · 目录价估算）" width="760px">
+      <div class="muted" style="margin-bottom:10px">
+        主机按自己的<b>「区域 + 机型族」</b>命中计算费率、<b>「区域 + 磁盘类型」</b>命中磁盘费率，命中不到用 <code>default</code> 兜底。
+        <span style="color:#e6a23c">⚠️ us-central1 为官方确认价；asia-east1/asia-east2 为保守溢价估算（偏高），请对照 GCP 控制台核对后改，改过即标「已核对」。</span>
+      </div>
+      <el-tabs v-model="rateTab">
+        <el-tab-pane label="计算费率（vCPU + 内存）" name="compute">
+          <div style="text-align:right;margin-bottom:8px"><el-button size="small" :icon="Plus" @click="openRateForm('compute')">添加档位</el-button></div>
+          <el-table :data="computeRates" size="small" max-height="380">
+            <el-table-column prop="region" label="区域" min-width="120" />
+            <el-table-column prop="machine_family" label="机型族" width="100" />
+            <el-table-column label="vCPU/时($)" width="130"><template #default="{ row }"><span class="mono">{{ row.vcpu_hour_usd }}</span></template></el-table-column>
+            <el-table-column label="内存GB/时($)" width="130"><template #default="{ row }"><span class="mono">{{ row.ram_gb_hour_usd }}</span></template></el-table-column>
+            <el-table-column label="来源" width="100"><template #default="{ row }"><el-tag size="small" :type="noteType(row.note)" effect="plain">{{ noteLabel(row.note) }}</el-tag></template></el-table-column>
+            <el-table-column label="操作" width="90"><template #default="{ row }">
+              <el-button link type="primary" :icon="Edit" @click="openRateForm('compute', row)" />
+              <el-button v-if="row.region!=='default'" link type="danger" :icon="Delete" @click="delRate('compute', row)" />
+            </template></el-table-column>
+          </el-table>
+        </el-tab-pane>
+        <el-tab-pane label="磁盘费率" name="disk">
+          <div style="text-align:right;margin-bottom:8px"><el-button size="small" :icon="Plus" @click="openRateForm('disk')">添加档位</el-button></div>
+          <el-table :data="diskRates" size="small" max-height="380">
+            <el-table-column prop="region" label="区域" min-width="120" />
+            <el-table-column prop="disk_type" label="磁盘类型" width="130" />
+            <el-table-column label="GB/月($)" width="130"><template #default="{ row }"><span class="mono">{{ row.gb_month_usd }}</span></template></el-table-column>
+            <el-table-column label="来源" width="100"><template #default="{ row }"><el-tag size="small" :type="noteType(row.note)" effect="plain">{{ noteLabel(row.note) }}</el-tag></template></el-table-column>
+            <el-table-column label="操作" width="90"><template #default="{ row }">
+              <el-button link type="primary" :icon="Edit" @click="openRateForm('disk', row)" />
+              <el-button v-if="row.region!=='default'" link type="danger" :icon="Delete" @click="delRate('disk', row)" />
+            </template></el-table-column>
+          </el-table>
+        </el-tab-pane>
+      </el-tabs>
+      <template #footer><el-button @click="rateDlg=false">关闭</el-button></template>
+    </el-dialog>
+
+    <!-- 费率行 编辑/添加 -->
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="rateForm.dlg" :title="rateForm.id?'编辑费率':'添加费率'" width="440px">
+      <el-form :model="rateForm" label-width="110px">
+        <el-form-item label="区域"><el-input v-model="rateForm.region" :disabled="!!rateForm.id" placeholder="如 asia-east1 / default" style="width:220px" /></el-form-item>
+        <template v-if="rateForm.kind==='compute'">
+          <el-form-item label="机型族"><el-input v-model="rateForm.machine_family" :disabled="!!rateForm.id" placeholder="e2 / n2 / c2 / custom / default" style="width:220px" /></el-form-item>
+          <el-form-item label="vCPU/时($)"><el-input-number v-model="rateForm.vcpu_hour_usd" :precision="6" :step="0.001" :controls="false" style="width:160px" /></el-form-item>
+          <el-form-item label="内存GB/时($)"><el-input-number v-model="rateForm.ram_gb_hour_usd" :precision="6" :step="0.001" :controls="false" style="width:160px" /></el-form-item>
+        </template>
+        <template v-else>
+          <el-form-item label="磁盘类型"><el-input v-model="rateForm.disk_type" :disabled="!!rateForm.id" placeholder="pd-ssd / pd-balanced / pd-standard / default" style="width:220px" /></el-form-item>
+          <el-form-item label="GB/月($)"><el-input-number v-model="rateForm.gb_month_usd" :precision="6" :step="0.01" :controls="false" style="width:160px" /></el-form-item>
+        </template>
       </el-form>
-      <template #footer><el-button @click="rateDlg=false">取消</el-button><el-button type="primary" @click="saveRate">保存</el-button></template>
+      <template #footer><el-button @click="rateForm.dlg=false">取消</el-button><el-button type="primary" @click="saveRate">保存</el-button></template>
     </el-dialog>
   </div>
 </template>
@@ -189,18 +257,21 @@ import { ElMessage } from 'element-plus'
 import { Search, View, Refresh, Edit, Delete, Plus, Money, Cloudy } from '@element-plus/icons-vue'
 import { listHosts, getHost, listCloudAccounts, createCloudAccount, updateCloudAccount, deleteCloudAccount,
   syncCloudAccount, createCloudProject, updateCloudProject, deleteCloudProject, syncCloudProject,
-  listCloudRates, updateCloudRate } from '../api/cmdb'
+  listComputeRates, createComputeRate, updateComputeRate, deleteComputeRate,
+  listDiskRates, createDiskRate, updateDiskRate, deleteDiskRate } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { providerLabel as plabel, providerStyle, projectStyle, regionStyle } from '../utils/cloud'
 
 const app = useAppStore()
 const rows = ref([]), loading = ref(false)
-const f = ref({ kw: '', project: null, zone: null, status: null })
+const f = ref({ kw: '', provider: null, project: null, zone: null, status: null })
 const page = ref(1), size = ref(10)
 const dDlg = ref(false), detail = ref(null), detailCiid = ref(null), asOf = ref('')
 const acctDlg = ref(false), accounts = ref([]), syncing = ref({})
 const acctForm = ref({ dlg: false })
 const projForm = ref({ dlg: false })
-const rateDlg = ref(false), rateForm = ref({}), rateId = ref(null)
+const rateDlg = ref(false), rateTab = ref('compute'), computeRates = ref([]), diskRates = ref([])
+const rateForm = ref({ dlg: false })
 
 function gb(mb) { return mb ? Math.round(mb / 1024 * 10) / 10 : 0 }
 function stLabel(s) { return ({ RUNNING: '运行', TERMINATED: '停止', STOPPING: '停止中', PROVISIONING: '创建中', STAGING: '启动中' }[s] || s || '—') }
@@ -208,6 +279,7 @@ function stTag(s) { return s === 'RUNNING' ? 'success' : (s === 'TERMINATED' || 
 
 const projName = (r) => r.project_name || r.project
 const opts = computed(() => ({
+  provider: [...new Set(rows.value.map((r) => r.provider).filter(Boolean))].sort(),
   project: [...new Set(rows.value.map(projName).filter(Boolean))].sort(),
   zone: [...new Set(rows.value.map((r) => r.zone).filter(Boolean))].sort(),
   status: [...new Set(rows.value.map((r) => r.status).filter(Boolean))].sort(),
@@ -215,6 +287,7 @@ const opts = computed(() => ({
 const filtered = computed(() => rows.value.filter((r) => {
   const kw = f.value.kw?.toLowerCase()
   return (!kw || r.name.toLowerCase().includes(kw) || (r.internal_ip || '').includes(kw) || (r.external_ip || '').includes(kw)) &&
+    (!f.value.provider || r.provider === f.value.provider) &&
     (!f.value.project || projName(r) === f.value.project) &&
     (!f.value.zone || r.zone === f.value.zone) &&
     (!f.value.status || r.status === f.value.status)
@@ -284,16 +357,40 @@ async function syncProj(p) {
   finally { syncing.value = { ...syncing.value, ['p' + p.id]: false } }
 }
 
-async function openRates() {
-  const list = await listCloudRates()
-  const r = list[0] || {}
-  rateId.value = r.id
-  rateForm.value = { vcpu_hour_usd: r.vcpu_hour_usd, ram_gb_hour_usd: r.ram_gb_hour_usd, disk_ssd_gb_month: r.disk_ssd_gb_month, disk_std_gb_month: r.disk_std_gb_month }
-  rateDlg.value = true
+function noteLabel(n) { return ({ official: '官方确认', estimate: '估算待核对', confirmed: '已核对', manual: '手填', fallback: '兜底' }[n] || n || '—') }
+function noteType(n) { return n === 'official' || n === 'confirmed' ? 'success' : (n === 'estimate' ? 'warning' : 'info') }
+async function refreshRates() { computeRates.value = await listComputeRates(); diskRates.value = await listDiskRates() }
+async function openRates() { await refreshRates(); rateTab.value = 'compute'; rateDlg.value = true }
+function openRateForm(kind, row) {
+  if (kind === 'compute') {
+    rateForm.value = row
+      ? { dlg: true, kind, id: row.id, region: row.region, machine_family: row.machine_family, vcpu_hour_usd: row.vcpu_hour_usd, ram_gb_hour_usd: row.ram_gb_hour_usd }
+      : { dlg: true, kind, id: null, region: '', machine_family: '', vcpu_hour_usd: 0, ram_gb_hour_usd: 0 }
+  } else {
+    rateForm.value = row
+      ? { dlg: true, kind, id: row.id, region: row.region, disk_type: row.disk_type, gb_month_usd: row.gb_month_usd }
+      : { dlg: true, kind, id: null, region: '', disk_type: '', gb_month_usd: 0 }
+  }
 }
 async function saveRate() {
-  try { await updateCloudRate(rateId.value, rateForm.value); ElMessage.success('已保存，成本会按新费率重算'); rateDlg.value = false; load() }
-  catch (e) { ElMessage.error('失败') }
+  const rf = rateForm.value
+  try {
+    if (rf.kind === 'compute') {
+      const b = { region: rf.region, machine_family: rf.machine_family, vcpu_hour_usd: rf.vcpu_hour_usd, ram_gb_hour_usd: rf.ram_gb_hour_usd }
+      rf.id ? await updateComputeRate(rf.id, b) : await createComputeRate(b)
+    } else {
+      const b = { region: rf.region, disk_type: rf.disk_type, gb_month_usd: rf.gb_month_usd }
+      rf.id ? await updateDiskRate(rf.id, b) : await createDiskRate(b)
+    }
+    ElMessage.success('已保存，成本按新费率重算'); rateForm.value.dlg = false; refreshRates(); load()
+  } catch (e) { ElMessage.error(e.response?.data?.error || '失败') }
+}
+async function delRate(kind, row) {
+  try {
+    await app.showConfirm(`删除费率 ${row.region} / ${kind === 'compute' ? row.machine_family : row.disk_type}？`)
+    kind === 'compute' ? await deleteComputeRate(row.id) : await deleteDiskRate(row.id)
+    refreshRates(); load()
+  } catch (e) { if (e !== 'cancel') ElMessage.error('失败') }
 }
 onMounted(load)
 </script>

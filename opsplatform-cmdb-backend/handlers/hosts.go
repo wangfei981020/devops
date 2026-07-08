@@ -34,79 +34,236 @@ func (h *HostHandler) Register(r *gin.RouterGroup) {
 	r.PUT("/cloud-projects/:pid", h.UpdateProject)
 	r.DELETE("/cloud-projects/:pid", h.DeleteProject)
 	r.POST("/cloud-projects/:pid/sync", h.SyncProject) // 同步指定 project
-	r.GET("/cloud-price-rates", h.ListRates)
-	r.PUT("/cloud-price-rates/:id", h.UpdateRate)
+	r.GET("/cloud-compute-rates", h.ListComputeRates)
+	r.POST("/cloud-compute-rates", h.CreateComputeRate)
+	r.PUT("/cloud-compute-rates/:id", h.UpdateComputeRate)
+	r.DELETE("/cloud-compute-rates/:id", h.DeleteComputeRate)
+	r.GET("/cloud-disk-rates", h.ListDiskRates)
+	r.POST("/cloud-disk-rates", h.CreateDiskRate)
+	r.PUT("/cloud-disk-rates/:id", h.UpdateDiskRate)
+	r.DELETE("/cloud-disk-rates/:id", h.DeleteDiskRate)
 	r.GET("/hosts", h.ListHosts)        // 只读
 	r.GET("/hosts/:ciid", h.HostDetail) // 只读
 }
 
-// ---------- 费率 ----------
+// ---------- 费率（分档：区域×机型族 计算费率 + 区域×磁盘类型 磁盘费率）----------
 
-type priceRate struct {
-	vcpuHour, ramGbHour, ssdMonth, stdMonth float64
+// familyOf 从机型名取机型族：e2-medium→e2、n2-highmem-8→n2、custom-8-32768→custom。
+func familyOf(machineType string) string {
+	if i := strings.Index(machineType, "-"); i > 0 {
+		return machineType[:i]
+	}
+	if machineType == "" {
+		return "default"
+	}
+	return machineType
 }
 
-func (h *HostHandler) rate() priceRate {
-	var r priceRate
-	_ = h.DB.QueryRow(`SELECT vcpu_hour_usd, ram_gb_hour_usd, disk_ssd_gb_month, disk_std_gb_month
-		FROM cloud_price_rates WHERE provider='gcp' AND region='default' AND machine_family='default' LIMIT 1`).
-		Scan(&r.vcpuHour, &r.ramGbHour, &r.ssdMonth, &r.stdMonth)
-	return r
+// rateCache 一次加载全部费率，按 region|key 查，命中不到回退 default。
+type rateCache struct {
+	compute map[string][2]float64 // "region|family" -> {vcpuHour, ramGbHour}
+	disk    map[string]float64    // "region|disktype" -> gbMonth
 }
 
-// estHourly 估算每小时成本(USD)。停机(非 RUNNING)只算磁盘；运行算 vCPU+内存+磁盘。
-func estHourly(vcpu, memMB int, ssdGB, stdGB int, status string, r priceRate) float64 {
+func (h *HostHandler) loadRates() *rateCache {
+	rc := &rateCache{compute: map[string][2]float64{}, disk: map[string]float64{}}
+	if rows, _ := h.DB.Query(`SELECT region, machine_family, vcpu_hour_usd, ram_gb_hour_usd FROM cloud_compute_rates WHERE provider='gcp'`); rows != nil {
+		for rows.Next() {
+			var region, family string
+			var v, r float64
+			if rows.Scan(&region, &family, &v, &r) == nil {
+				rc.compute[region+"|"+family] = [2]float64{v, r}
+			}
+		}
+		rows.Close()
+	}
+	if rows, _ := h.DB.Query(`SELECT region, disk_type, gb_month_usd FROM cloud_disk_rates WHERE provider='gcp'`); rows != nil {
+		for rows.Next() {
+			var region, dtype string
+			var g float64
+			if rows.Scan(&region, &dtype, &g) == nil {
+				rc.disk[region+"|"+dtype] = g
+			}
+		}
+		rows.Close()
+	}
+	return rc
+}
+
+// computeRate 取 (region, family) 计算费率，回退 default/default。返回单价 + 命中标识。
+func (rc *rateCache) computeRate(region, family string) (vcpuHour, ramGbHour float64, matched string) {
+	if v, ok := rc.compute[region+"|"+family]; ok {
+		return v[0], v[1], region + "/" + family
+	}
+	if v, ok := rc.compute["default|default"]; ok {
+		return v[0], v[1], "default"
+	}
+	return 0, 0, "无"
+}
+
+// diskRate 取 (region, diskType) 磁盘单价(GB/月)，回退 default/diskType 再回退 default/default。
+func (rc *rateCache) diskRate(region, dtype string) float64 {
+	if g, ok := rc.disk[region+"|"+dtype]; ok {
+		return g
+	}
+	if g, ok := rc.disk["default|"+dtype]; ok {
+		return g
+	}
+	if g, ok := rc.disk["default|default"]; ok {
+		return g
+	}
+	return 0
+}
+
+type diskRow struct {
+	Type   string
+	SizeGB int
+}
+
+// hostHourly 估算每小时成本(USD)。停机(非 RUNNING)只算磁盘；运行算 vCPU+内存+磁盘。
+func (rc *rateCache) hostHourly(region, family string, vcpu, memMB int, status string, disks []diskRow) (hourly, vcpuHour, ramGbHour float64, matched string) {
+	vcpuHour, ramGbHour, matched = rc.computeRate(region, family)
 	compute := 0.0
 	if status == "RUNNING" {
-		compute = float64(vcpu)*r.vcpuHour + (float64(memMB)/1024.0)*r.ramGbHour
+		compute = float64(vcpu)*vcpuHour + (float64(memMB)/1024.0)*ramGbHour
 	}
-	disk := float64(ssdGB)*r.ssdMonth/730.0 + float64(stdGB)*r.stdMonth/730.0
-	return compute + disk
+	disk := 0.0
+	for _, d := range disks {
+		disk += float64(d.SizeGB) * rc.diskRate(region, d.Type) / 730.0
+	}
+	return compute + disk, vcpuHour, ramGbHour, matched
 }
 
-func (h *HostHandler) ListRates(c *gin.Context) {
-	rows, err := h.DB.Query(`SELECT id, provider, region, machine_family, vcpu_hour_usd, ram_gb_hour_usd, disk_ssd_gb_month, disk_std_gb_month FROM cloud_price_rates ORDER BY id`)
+// ---- 计算费率 CRUD ----
+
+func (h *HostHandler) ListComputeRates(c *gin.Context) {
+	rows, err := h.DB.Query(`SELECT id, region, machine_family, vcpu_hour_usd, ram_gb_hour_usd, note FROM cloud_compute_rates WHERE provider='gcp' ORDER BY region, machine_family`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	defer rows.Close()
 	type rt struct {
-		ID          int     `json:"id"`
-		Provider    string  `json:"provider"`
-		Region      string  `json:"region"`
-		Family      string  `json:"machine_family"`
-		VcpuHour    float64 `json:"vcpu_hour_usd"`
-		RamGbHour   float64 `json:"ram_gb_hour_usd"`
-		SsdMonth    float64 `json:"disk_ssd_gb_month"`
-		StdMonth    float64 `json:"disk_std_gb_month"`
+		ID        int     `json:"id"`
+		Region    string  `json:"region"`
+		Family    string  `json:"machine_family"`
+		VcpuHour  float64 `json:"vcpu_hour_usd"`
+		RamGbHour float64 `json:"ram_gb_hour_usd"`
+		Note      string  `json:"note"`
 	}
 	out := []rt{}
 	for rows.Next() {
 		var x rt
-		if rows.Scan(&x.ID, &x.Provider, &x.Region, &x.Family, &x.VcpuHour, &x.RamGbHour, &x.SsdMonth, &x.StdMonth) == nil {
+		if rows.Scan(&x.ID, &x.Region, &x.Family, &x.VcpuHour, &x.RamGbHour, &x.Note) == nil {
 			out = append(out, x)
 		}
 	}
 	c.JSON(http.StatusOK, out)
 }
 
-func (h *HostHandler) UpdateRate(c *gin.Context) {
+func (h *HostHandler) CreateComputeRate(c *gin.Context) {
+	var in struct {
+		Region    string  `json:"region"`
+		Family    string  `json:"machine_family"`
+		VcpuHour  float64 `json:"vcpu_hour_usd"`
+		RamGbHour float64 `json:"ram_gb_hour_usd"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.Region == "" || in.Family == "" {
+		c.JSON(400, gin.H{"error": "区域和机型族必填"})
+		return
+	}
+	if _, err := h.DB.Exec(`INSERT INTO cloud_compute_rates (provider,region,machine_family,vcpu_hour_usd,ram_gb_hour_usd,note) VALUES ('gcp',?,?,?,?,'manual')`,
+		in.Region, in.Family, in.VcpuHour, in.RamGbHour); err != nil {
+		c.JSON(500, gin.H{"error": "该区域+机型族已存在或写入失败"})
+		return
+	}
+	c.JSON(201, gin.H{"ok": true})
+}
+
+func (h *HostHandler) UpdateComputeRate(c *gin.Context) {
 	var in struct {
 		VcpuHour  float64 `json:"vcpu_hour_usd"`
 		RamGbHour float64 `json:"ram_gb_hour_usd"`
-		SsdMonth  float64 `json:"disk_ssd_gb_month"`
-		StdMonth  float64 `json:"disk_std_gb_month"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := h.DB.Exec(`UPDATE cloud_price_rates SET vcpu_hour_usd=?, ram_gb_hour_usd=?, disk_ssd_gb_month=?, disk_std_gb_month=? WHERE id=?`,
-		in.VcpuHour, in.RamGbHour, in.SsdMonth, in.StdMonth, c.Param("id")); err != nil {
+	// 人工改过的标 confirmed（不再是 estimate 待核对）
+	if _, err := h.DB.Exec(`UPDATE cloud_compute_rates SET vcpu_hour_usd=?, ram_gb_hour_usd=?, note='confirmed' WHERE id=?`,
+		in.VcpuHour, in.RamGbHour, c.Param("id")); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
+func (h *HostHandler) DeleteComputeRate(c *gin.Context) {
+	_, _ = h.DB.Exec(`DELETE FROM cloud_compute_rates WHERE id=?`, c.Param("id"))
+	c.JSON(200, gin.H{"ok": true})
+}
+
+// ---- 磁盘费率 CRUD ----
+
+func (h *HostHandler) ListDiskRates(c *gin.Context) {
+	rows, err := h.DB.Query(`SELECT id, region, disk_type, gb_month_usd, note FROM cloud_disk_rates WHERE provider='gcp' ORDER BY region, disk_type`)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	type rt struct {
+		ID       int     `json:"id"`
+		Region   string  `json:"region"`
+		DiskType string  `json:"disk_type"`
+		GbMonth  float64 `json:"gb_month_usd"`
+		Note     string  `json:"note"`
+	}
+	out := []rt{}
+	for rows.Next() {
+		var x rt
+		if rows.Scan(&x.ID, &x.Region, &x.DiskType, &x.GbMonth, &x.Note) == nil {
+			out = append(out, x)
+		}
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *HostHandler) CreateDiskRate(c *gin.Context) {
+	var in struct {
+		Region   string  `json:"region"`
+		DiskType string  `json:"disk_type"`
+		GbMonth  float64 `json:"gb_month_usd"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.Region == "" || in.DiskType == "" {
+		c.JSON(400, gin.H{"error": "区域和磁盘类型必填"})
+		return
+	}
+	if _, err := h.DB.Exec(`INSERT INTO cloud_disk_rates (provider,region,disk_type,gb_month_usd,note) VALUES ('gcp',?,?,?,'manual')`,
+		in.Region, in.DiskType, in.GbMonth); err != nil {
+		c.JSON(500, gin.H{"error": "该区域+磁盘类型已存在或写入失败"})
+		return
+	}
+	c.JSON(201, gin.H{"ok": true})
+}
+
+func (h *HostHandler) UpdateDiskRate(c *gin.Context) {
+	var in struct {
+		GbMonth float64 `json:"gb_month_usd"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if _, err := h.DB.Exec(`UPDATE cloud_disk_rates SET gb_month_usd=?, note='confirmed' WHERE id=?`, in.GbMonth, c.Param("id")); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
+func (h *HostHandler) DeleteDiskRate(c *gin.Context) {
+	_, _ = h.DB.Exec(`DELETE FROM cloud_disk_rates WHERE id=?`, c.Param("id"))
 	c.JSON(200, gin.H{"ok": true})
 }
 
@@ -399,13 +556,17 @@ func (h *HostHandler) syncOneProject(pid int64) (name string, synced, stale int,
 		h.upsertHost(accountID, name, in)
 	}
 	stale = h.markStaleHosts(accountID, projectID, present)
+	// 顺带同步该 project 的网络资源（VPC/子网/防火墙/静态IP/负载均衡）
+	if nr, e := adapter.ListNetwork(ctx, projectID); e == nil {
+		SyncProjectNetwork(h.DB, provider, accountID, projectID, nr)
+	}
 	_, _ = h.DB.Exec(`UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`,
 		truncate(fmt.Sprintf("同步 %d 台，失效 %d", len(insts), stale), 250), pid)
 	return name, len(insts), stale, nil
 }
 
 // SyncAllHostProjects 供定时任务(host_sync)调用：同步所有账号所有 project，返回摘要+失败明细+是否成功。
-func SyncAllHostProjects(db *sql.DB, cipher *crypto.Cipher) (string, []string, bool) {
+func SyncAllHostProjects(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool) {
 	h := &HostHandler{DB: db, Cipher: cipher}
 	rows, err := db.Query(`SELECT id FROM cloud_account_projects ORDER BY id`)
 	if err != nil {
@@ -423,11 +584,11 @@ func SyncAllHostProjects(db *sql.DB, cipher *crypto.Cipher) (string, []string, b
 		return "没有配置云项目，跳过", nil, true
 	}
 	totalSynced, totalStale := 0, 0
-	var failures []string
+	var failures []TaskFailure
 	for _, pid := range pids {
 		name, synced, stale, err := h.syncOneProject(pid)
 		if err != nil {
-			failures = append(failures, name+"："+truncate(err.Error(), 150))
+			failures = append(failures, TaskFailure{Target: name, Reason: truncate(err.Error(), 150)})
 			continue
 		}
 		totalSynced += synced
@@ -467,10 +628,21 @@ func (h *HostHandler) upsertHost(accountID int, projName string, in cloudsource.
 	} else {
 		_, _ = h.DB.Exec(`UPDATE cis SET name=? WHERE id=?`, in.Name, ciID)
 	}
+	preempt, delProt := 0, 0
+	if in.Preemptible {
+		preempt = 1
+	}
+	if in.DeletionProtection {
+		delProt = 1
+	}
 	_, _ = h.DB.Exec(`UPDATE hosts SET project=?, project_name=?, zone=?, region=?, machine_type=?, vcpu=?, mem_mb=?, disk_total_gb=?,
-		internal_ip=?, external_ip=?, status=?, os=?, labels=?, self_link=?, gcp_created_at=?, stale=0, synced_at=NOW() WHERE ci_id=?`,
+		internal_ip=?, external_ip=?, status=?, os=?, labels=?, self_link=?, gcp_created_at=?,
+		hostname=?, vpc=?, subnet=?, network_tags=?, preemptible=?, image=?, cpu_platform=?, deletion_protection=?, service_accounts=?,
+		stale=0, synced_at=NOW() WHERE ci_id=?`,
 		in.Project, projName, in.Zone, in.Region, in.MachineType, in.VCPU, in.MemMB, total,
-		in.InternalIP, in.ExternalIP, in.Status, in.OS, string(labelsJSON), in.SelfLink, created, ciID)
+		in.InternalIP, in.ExternalIP, in.Status, in.OS, string(labelsJSON), in.SelfLink, created,
+		in.Hostname, in.VPC, in.Subnet, strings.Join(in.NetworkTags, ","), preempt, in.Image, in.CPUPlatform, delProt, strings.Join(in.ServiceAccounts, ","),
+		ciID)
 	// 磁盘：全删重插
 	_, _ = h.DB.Exec(`DELETE FROM host_disks WHERE host_ci_id=?`, ciID)
 	for _, d := range in.Disks {
@@ -530,8 +702,19 @@ type hostOut struct {
 	OS          string            `json:"os"`
 	Labels      map[string]string `json:"labels"`
 	AccountName string            `json:"account_name"`
+	Provider    string            `json:"provider"`
 	Stale       bool              `json:"stale"`
 	CreatedAt   string            `json:"gcp_created_at"`
+	// GCP 只读技术字段
+	Hostname           string   `json:"hostname"`
+	VPC                string   `json:"vpc"`
+	Subnet             string   `json:"subnet"`
+	NetworkTags        []string `json:"network_tags"`
+	Preemptible        bool     `json:"preemptible"`
+	Image              string   `json:"image"`
+	CPUPlatform        string   `json:"cpu_platform"`
+	DeletionProtection bool     `json:"deletion_protection"`
+	ServiceAccounts    []string `json:"service_accounts"`
 	// 成本估算（USD）
 	CostDaily  float64 `json:"cost_daily"`
 	CostMonth  float64 `json:"cost_month"`
@@ -540,10 +723,9 @@ type hostOut struct {
 }
 
 func (h *HostHandler) ListHosts(c *gin.Context) {
-	rate := h.rate()
-	// 各主机 SSD/标准盘容量（用于成本）
-	ssd := map[int64]int{}
-	std := map[int64]int{}
+	rc := h.loadRates()
+	// 各主机磁盘明细（类型+容量，用于按区域×磁盘类型算成本）
+	hostDisks := map[int64][]diskRow{}
 	drows, _ := h.DB.Query(`SELECT host_ci_id, type, size_gb FROM host_disks`)
 	if drows != nil {
 		for drows.Next() {
@@ -551,17 +733,13 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 			var typ string
 			var sz int
 			if drows.Scan(&ci, &typ, &sz) == nil {
-				if strings.Contains(typ, "ssd") {
-					ssd[ci] += sz
-				} else {
-					std[ci] += sz
-				}
+				hostDisks[ci] = append(hostDisks[ci], diskRow{Type: typ, SizeGB: sz})
 			}
 		}
 		drows.Close()
 	}
 	rows, err := h.DB.Query(`SELECT c.id, c.name, h.project, h.project_name, h.zone, h.region, h.machine_type, h.vcpu, h.mem_mb, h.disk_total_gb,
-		h.internal_ip, h.external_ip, h.status, h.os, h.labels, h.stale, h.gcp_created_at, COALESCE(ca.name,'')
+		h.internal_ip, h.external_ip, h.status, h.os, h.labels, h.stale, h.gcp_created_at, h.preemptible, h.provider, COALESCE(ca.name,'')
 		FROM cis c JOIN hosts h ON h.ci_id=c.id LEFT JOIN cloud_accounts ca ON ca.id=h.cloud_account_id
 		WHERE c.type='host' ORDER BY h.project, c.name`)
 	if err != nil {
@@ -575,17 +753,18 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 		var o hostOut
 		var labels sql.NullString
 		var created sql.NullTime
-		var stale int
+		var stale, preempt int
 		if rows.Scan(&o.CIID, &o.Name, &o.Project, &o.ProjectName, &o.Zone, &o.Region, &o.MachineType, &o.VCPU, &o.MemMB, &o.DiskTotalGB,
-			&o.InternalIP, &o.ExternalIP, &o.Status, &o.OS, &labels, &stale, &created, &o.AccountName); err != nil {
+			&o.InternalIP, &o.ExternalIP, &o.Status, &o.OS, &labels, &stale, &created, &preempt, &o.Provider, &o.AccountName); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 		o.Stale = stale == 1
+		o.Preemptible = preempt == 1
 		if labels.Valid && labels.String != "" {
 			_ = json.Unmarshal([]byte(labels.String), &o.Labels)
 		}
-		hourly := estHourly(o.VCPU, o.MemMB, ssd[o.CIID], std[o.CIID], o.Status, rate)
+		hourly, _, _, _ := rc.hostHourly(o.Region, familyOf(o.MachineType), o.VCPU, o.MemMB, o.Status, hostDisks[o.CIID])
 		o.CostDaily = round2(hourly * 24)
 		o.CostMonth = round2(hourly * 730)
 		o.CostSource = "estimate"
@@ -604,18 +783,25 @@ func (h *HostHandler) HostDetail(c *gin.Context) {
 	var o hostOut
 	var labels sql.NullString
 	var created sql.NullTime
-	var stale int
+	var stale, preempt, delProt int
+	var tags, sas string
 	err := h.DB.QueryRow(`SELECT c.id, c.name, h.project, h.project_name, h.zone, h.region, h.machine_type, h.vcpu, h.mem_mb, h.disk_total_gb,
-		h.internal_ip, h.external_ip, h.status, h.os, h.labels, h.stale, h.gcp_created_at, COALESCE(ca.name,'')
+		h.internal_ip, h.external_ip, h.status, h.os, h.labels, h.stale, h.gcp_created_at, COALESCE(ca.name,''),
+		h.hostname, h.vpc, h.subnet, h.network_tags, h.preemptible, h.image, h.cpu_platform, h.deletion_protection, h.service_accounts
 		FROM cis c JOIN hosts h ON h.ci_id=c.id LEFT JOIN cloud_accounts ca ON ca.id=h.cloud_account_id
 		WHERE c.id=? AND c.type='host'`, ciid).
 		Scan(&o.CIID, &o.Name, &o.Project, &o.ProjectName, &o.Zone, &o.Region, &o.MachineType, &o.VCPU, &o.MemMB, &o.DiskTotalGB,
-			&o.InternalIP, &o.ExternalIP, &o.Status, &o.OS, &labels, &stale, &created, &o.AccountName)
+			&o.InternalIP, &o.ExternalIP, &o.Status, &o.OS, &labels, &stale, &created, &o.AccountName,
+			&o.Hostname, &o.VPC, &o.Subnet, &tags, &preempt, &o.Image, &o.CPUPlatform, &delProt, &sas)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "主机不存在"})
 		return
 	}
 	o.Stale = stale == 1
+	o.Preemptible = preempt == 1
+	o.DeletionProtection = delProt == 1
+	o.NetworkTags = splitNonEmpty(tags)
+	o.ServiceAccounts = splitNonEmpty(sas)
 	if labels.Valid && labels.String != "" {
 		_ = json.Unmarshal([]byte(labels.String), &o.Labels)
 	}
@@ -627,7 +813,6 @@ func (h *HostHandler) HostDetail(c *gin.Context) {
 		IsBoot bool   `json:"is_boot"`
 	}
 	disks := []disk{}
-	ssdGB, stdGB := 0, 0
 	drows, _ := h.DB.Query(`SELECT name, size_gb, type, is_boot FROM host_disks WHERE host_ci_id=? ORDER BY is_boot DESC, id`, ciid)
 	if drows != nil {
 		for drows.Next() {
@@ -635,11 +820,6 @@ func (h *HostHandler) HostDetail(c *gin.Context) {
 			var boot int
 			if drows.Scan(&d.Name, &d.SizeGB, &d.Type, &boot) == nil {
 				d.IsBoot = boot == 1
-				if strings.Contains(d.Type, "ssd") {
-					ssdGB += d.SizeGB
-				} else {
-					stdGB += d.SizeGB
-				}
 				disks = append(disks, d)
 			}
 		}
@@ -667,9 +847,14 @@ func (h *HostHandler) HostDetail(c *gin.Context) {
 			rrows.Close()
 		}
 	}
-	// 成本
-	rate := h.rate()
-	hourly := estHourly(o.VCPU, o.MemMB, ssdGB, stdGB, o.Status, rate)
+	// 成本（按 区域×机型族 + 区域×磁盘类型 分档）
+	rc := h.loadRates()
+	var drs []diskRow
+	for _, d := range disks {
+		drs = append(drs, diskRow{Type: d.Type, SizeGB: d.SizeGB})
+	}
+	family := familyOf(o.MachineType)
+	hourly, vcpuHour, ramGbHour, matched := rc.hostHourly(o.Region, family, o.VCPU, o.MemMB, o.Status, drs)
 	o.CostDaily = round2(hourly * 24)
 	o.CostMonth = round2(hourly * 730)
 	o.CostSource = "estimate"
@@ -688,7 +873,19 @@ func (h *HostHandler) HostDetail(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"host": o, "disks": disks, "related_domains": related,
 		"cost_hourly": round4(hourly), "as_of": asOf.Format("2006-01-02"),
+		"rate_matched": matched, "rate_vcpu_hour": round4(vcpuHour), "rate_ram_gb_hour": round4(ramGbHour), "rate_family": family,
 	})
+}
+
+// splitNonEmpty 逗号分隔转 []string，去空；空串返回空切片（前端渲染友好）。
+func splitNonEmpty(s string) []string {
+	out := []string{}
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func round2(f float64) float64 { return float64(int64(f*100+0.5)) / 100 }

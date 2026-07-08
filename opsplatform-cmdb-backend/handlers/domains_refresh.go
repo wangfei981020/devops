@@ -3,7 +3,8 @@ package handlers
 import (
 	"crypto/tls"
 	"database/sql"
-	"fmt"
+	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -28,41 +29,24 @@ func (h *DomainHandler) Refresh(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "msg": msg})
 }
 
-// RefreshAll 一键刷新所有域名的到期时间。
+// RefreshAll 一键刷新域名注册到期。与定时任务 refresh_expiry 完全一致：
+// 数据源(origin=sync)域名跳过（到期日由 DNS 同步维护）、只刷 manual/无到期日域名、RDAP→WHOIS+自动重试。
+// 证书到期请走「到期巡检」；单个域名的「刷到期」按钮仍会同时刷注册+证书（Refresh）。
 func (h *DomainHandler) RefreshAll(c *gin.Context) {
-	rows, err := h.DB.Query(`SELECT c.id, c.name FROM cis c JOIN domains d ON d.ci_id=c.id WHERE c.type='domain'`)
-	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	type item struct {
-		id   int64
-		name string
-	}
-	var items []item
-	for rows.Next() {
-		var it item
-		if rows.Scan(&it.id, &it.name) == nil {
-			items = append(items, it)
-		}
-	}
-	rows.Close()
-	for _, it := range items {
-		refreshOneDomain(h.DB, it.id, it.name)
-	}
-	WriteAudit(h.DB, c, "refresh_domain_all", fmt.Sprintf("%d 个", len(items)))
-	c.JSON(http.StatusOK, gin.H{"ok": true, "count": len(items)})
+	msg, failures, _ := refreshAllWhoisCore(h.DB, nil, nil)
+	WriteAudit(h.DB, c, "refresh_domain_all", msg)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "msg": msg, "failures": failures})
 }
 
 func refreshOneDomain(db *sql.DB, ciid any, name string) string {
 	var msgs []string
 
-	// ① 域名注册到期（WHOIS）
-	if t := whoisExpiry(name); t != nil {
+	// ① 域名注册到期（RDAP 优先，WHOIS 兜底）
+	if t, reason := domainExpiry(name); t != nil {
 		_, _ = db.Exec(`UPDATE domains SET expiry_at=? WHERE ci_id=?`, *t, ciid)
 		msgs = append(msgs, "域名到期 "+t.Format("2006-01-02"))
 	} else {
-		msgs = append(msgs, "WHOIS 未取到注册到期")
+		msgs = append(msgs, "注册到期未取到："+reason)
 	}
 
 	// ② 线上 HTTPS 证书到期（连 443）
@@ -76,24 +60,93 @@ func refreshOneDomain(db *sql.DB, ciid any, name string) string {
 	return strings.Join(msgs, "；")
 }
 
-// whoisExpiry 查询域名注册到期时间。WHOIS 只认主域名(eTLD+1)，自动去掉 www 等子域。
-func whoisExpiry(domain string) *time.Time {
+// domainExpiry 查域名注册到期：RDAP 优先（结构化、限流宽松），WHOIS 兜底；只认主域名(eTLD+1)。
+// 返回到期时间 + 失败原因（成功时原因为空）。
+func domainExpiry(domain string) (*time.Time, string) {
 	root, err := publicsuffix.EffectiveTLDPlusOne(domain)
 	if err != nil || root == "" {
 		root = domain
 	}
-	raw, err := whois.Whois(root)
+	// ① RDAP
+	if t := rdapExpiry(root); t != nil {
+		return t, ""
+	}
+	// ② WHOIS 兜底
+	return whoisExpiryReason(root)
+}
+
+// rdapExpiry 通过 rdap.org 聚合入口查到期日（RFC 7482，events[expiration]）；尽力而为，失败返回 nil。
+func rdapExpiry(root string) *time.Time {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", "https://rdap.org/domain/"+root, nil)
 	if err != nil {
 		return nil
+	}
+	req.Header.Set("Accept", "application/rdap+json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil
+	}
+	var data struct {
+		Events []struct {
+			Action string `json:"eventAction"`
+			Date   string `json:"eventDate"`
+		} `json:"events"`
+	}
+	if json.Unmarshal(body, &data) != nil {
+		return nil
+	}
+	for _, e := range data.Events {
+		if e.Action == "expiration" {
+			if t, err := time.Parse(time.RFC3339, e.Date); err == nil {
+				return &t
+			}
+		}
+	}
+	return nil
+}
+
+// whoisExpiryReason WHOIS 查到期日，带 10s 超时；失败返回具体原因。
+func whoisExpiryReason(root string) (*time.Time, string) {
+	client := whois.NewClient()
+	client.SetTimeout(10 * time.Second)
+	raw, err := client.Whois(root)
+	if err != nil {
+		return nil, whoisReason(err.Error())
 	}
 	parsed, err := whoisparser.Parse(raw)
 	if err != nil {
-		return nil
+		return nil, whoisReason(err.Error())
 	}
 	if parsed.Domain != nil && parsed.Domain.ExpirationDateInTime != nil {
-		return parsed.Domain.ExpirationDateInTime
+		return parsed.Domain.ExpirationDateInTime, ""
 	}
-	return nil
+	return nil, "RDAP/WHOIS 查到响应但无到期字段"
+}
+
+// whoisReason 把底层错误归类成人话原因。
+func whoisReason(errMsg string) string {
+	m := strings.ToLower(errMsg)
+	switch {
+	case strings.Contains(m, "timeout") || strings.Contains(m, "deadline") || strings.Contains(m, "timed out"):
+		return "RDAP/WHOIS 查询超时（10s）"
+	case strings.Contains(m, "rate") || strings.Contains(m, "limit") || strings.Contains(m, "quota") || strings.Contains(m, "denied") || strings.Contains(m, "refused"):
+		return "WHOIS 服务器限流/拒绝"
+	case strings.Contains(m, "no whois") || strings.Contains(m, "not found") || strings.Contains(m, "no such"):
+		return "该后缀无 WHOIS 服务器"
+	case strings.Contains(m, "no data") || strings.Contains(m, "parse"):
+		return "RDAP/WHOIS 查到响应但无到期字段"
+	default:
+		return "RDAP/WHOIS 查询失败：" + truncate(errMsg, 80)
+	}
 }
 
 // tlsCertExpiry 连接 domain:443 读线上证书的到期时间。

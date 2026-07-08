@@ -51,7 +51,7 @@
 <script setup>
 import { shallowRef, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Odometer, Connection, Lock, Share, DataAnalysis, Grid, Setting, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets } from '@element-plus/icons-vue'
+import { Odometer, Connection, Lock, Share, DataAnalysis, Grid, Setting, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets, Cloudy, Location, Sort } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
@@ -63,10 +63,16 @@ function toggle() { collapsed.value = !collapsed.value; localStorage.setItem('cm
 
 const menus = shallowRef([
   { type: 'item', path: '/overview', label: '总览', icon: Odometer },
+  { type: 'group', label: '云资源', icon: Cloudy, children: [
+    { path: '/hosts', label: '主机', icon: Monitor },
+    { path: '/cloud-ips', label: 'IP 地址', icon: Location },
+    { path: '/cloud-networks', label: 'VPC 网络', icon: Share },
+    { path: '/cloud-firewalls', label: '防火墙', icon: Lock },
+    { path: '/cloud-lbs', label: '负载均衡', icon: Sort },
+  ] },
   { type: 'group', label: '资产管理', icon: Coin, children: [
     { path: '/domains', label: '域名', icon: Connection },
     { path: '/dns-records', label: 'DNS 记录', icon: List },
-    { path: '/hosts', label: '主机', icon: Monitor },
     { path: '/certs', label: '证书', icon: Lock },
     { path: '/cert-inspect', label: '到期巡检', icon: CircleCheck },
     { path: '/relations', label: '关系图谱', icon: Share },

@@ -8,11 +8,15 @@
         <el-button v-if="selected.length && statusView === 'ignored'" type="success" :icon="View" @click="doUnignore(selected)">取消忽略（{{ selected.length }}）</el-button>
         <el-button :icon="Download" @click="exportCsv">导出Excel</el-button>
         <el-button type="warning" :icon="Operation" @click="openAssign">批量分配</el-button>
-        <el-button :icon="Refresh" :loading="syncingAll" @click="syncAll">从 GoDaddy 同步</el-button>
+        <el-tooltip content="只刷库里已有域名的 DNS 解析；发现新域名请去「DNS 记录」页点右上「从数据源同步」" placement="top">
+          <el-button :icon="Refresh" :loading="syncingAll" @click="syncAll">刷新已有域名的解析</el-button>
+        </el-tooltip>
         <el-button type="primary" :icon="Plus" @click="openAdd">录入解析</el-button>
       </div>
       <div v-else>
-        <el-button :icon="Refresh" :loading="refreshingAll" @click="refreshAllDom">刷新到期</el-button>
+        <el-tooltip content="只刷注册到期：数据源域名由同步维护(跳过)，仅查手动录入域名(RDAP→WHOIS+重试)；证书到期见「到期巡检」" placement="top">
+          <el-button :icon="Refresh" :loading="refreshingAll" @click="refreshAllDom">刷新到期</el-button>
+        </el-tooltip>
         <el-button type="primary" :icon="Plus" @click="openAddDomain">录入域名</el-button>
       </div>
     </div>
@@ -486,8 +490,12 @@ async function refreshOneDom(row) {
 }
 async function refreshAllDom() {
   refreshingAll.value = true
-  try { const r = await refreshAllDomains(); ElMessage.success(`已刷新 ${r.count} 个域名的到期时间`); await load() }
-  catch (e) { ElMessage.error('刷新失败') } finally { refreshingAll.value = false }
+  try {
+    const r = await refreshAllDomains()
+    if (r.failures && r.failures.length) ElMessage.warning(`${r.msg}（${r.failures.length} 项失败，详见执行记录）`)
+    else ElMessage.success(r.msg || '已刷新')
+    await load()
+  } catch (e) { ElMessage.error('刷新失败') } finally { refreshingAll.value = false }
 }
 
 async function load() {

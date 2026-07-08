@@ -61,6 +61,7 @@ func main() {
 	handlers.NewSyncHandler(db, cipher).Register(api)
 	handlers.NewCertInspectHandler(db).Register(api)
 	handlers.NewHostHandler(db, cipher).Register(api)
+	handlers.NewNetworkHandler(db).Register(api)
 
 	log.Printf("CMDB backend listening on %s", cfg.Port)
 	if err := http.ListenAndServe(cfg.Port, r); err != nil {
