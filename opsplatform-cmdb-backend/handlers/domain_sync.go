@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,21 @@ import (
 	"opsplatform-cmdb-backend/crypto"
 	"opsplatform-cmdb-backend/dnsource"
 )
+
+// dnsMigratedFromGoDaddy 查域名权威 NS：若能查到且都不是 GoDaddy(domaincontrol.com)，
+// 说明域名 DNS 解析已迁到别处（GoDaddy 拉不到记录）。查不到 NS 时保守返回 false（不武断判迁移）。
+func dnsMigratedFromGoDaddy(domain string) bool {
+	nss, err := net.LookupNS(domain)
+	if err != nil || len(nss) == 0 {
+		return false
+	}
+	for _, ns := range nss {
+		if strings.Contains(strings.ToLower(ns.Host), "domaincontrol.com") {
+			return false // 仍托管在 GoDaddy
+		}
+	}
+	return true
+}
 
 // SyncHandler 域名数据源同步（厂商 → DB）+ DNS 记录缓存读取 + API 用量。
 type SyncHandler struct {
@@ -88,6 +104,11 @@ func (h *SyncHandler) SyncDomainRecords(c *gin.Context) {
 	ciIDInt, _ := parseID(ciid)
 	h.refreshDNSRecords(ciIDInt, id, recs)
 	imported := h.importBusinessRecords(ciIDInt, recs)
+	migrated := 0
+	if len(recs) == 0 && dnsMigratedFromGoDaddy(name) {
+		migrated = 1
+	}
+	_, _ = h.DB.Exec(`UPDATE domains SET last_synced_at=NOW(), dns_migrated=? WHERE ci_id=?`, migrated, ciIDInt)
 	WriteAudit(h.DB, c, "sync_domain_records", name)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "synced_records": len(recs), "imported_records": imported})
 }
@@ -166,6 +187,13 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 		if err == nil {
 			h.refreshDNSRecords(ciID, id, recs)
 			imp := h.importBusinessRecords(ciID, recs)
+			// 无论有无记录都记同步时刻（0 记录也算已同步，避免误报"未同步"）
+			// 记录 0 条时查权威 NS：若已不指向 GoDaddy，说明域名还在账户但 DNS 迁走了。
+			migrated := 0
+			if len(recs) == 0 && dnsMigratedFromGoDaddy(d.Name) {
+				migrated = 1
+			}
+			_, _ = h.DB.Exec(`UPDATE domains SET last_synced_at=NOW(), dns_migrated=? WHERE ci_id=?`, migrated, ciID)
 			syncMu.Lock()
 			st.Synced++
 			st.Records += len(recs)

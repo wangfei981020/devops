@@ -62,19 +62,27 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="主域名" min-width="220"><template #default="{ row }">
+        <el-table-column label="主域名" min-width="240"><template #default="{ row }">
           <span :class="{ stale: row.stale }">{{ row.name }}</span>
-          <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">厂商已删</el-tag>
+          <el-tag v-if="row.stale" type="danger" size="small" style="margin-left:6px">已移出账号</el-tag>
+          <el-tag v-else-if="row.dns_migrated" size="small" style="margin-left:6px;background:#7a5c8a;color:#fff;border-color:#7a5c8a">DNS已迁移</el-tag>
         </template></el-table-column>
-        <el-table-column label="来源" width="160"><template #default="{ row }">
+        <el-table-column label="来源" width="130"><template #default="{ row }">
           <el-tag v-if="row.origin === 'manual'" type="info" size="small">手动录入</el-tag>
           <el-tag v-else type="success" size="small">{{ row.registrar_name || '同步' }}</el-tag>
         </template></el-table-column>
-        <el-table-column label="最近同步" width="180"><template #default="{ row }">
+        <el-table-column label="域名到期" width="150"><template #default="{ row }">
+          <template v-if="row.expiry_at">
+            <span :class="expiryClass(row.expiry_at)">{{ row.expiry_at }}</span>
+            <el-tag v-if="isExpired(row.expiry_at)" type="danger" size="small" style="margin-left:6px">已过期</el-tag>
+          </template>
+          <span v-else class="muted">—</span>
+        </template></el-table-column>
+        <el-table-column label="最近同步" width="170"><template #default="{ row }">
           <span v-if="domStale(row)" class="exp-orange">{{ row.last_synced || '未同步' }} ⚠️</span>
           <span v-else :class="{ muted: !row.last_synced }">{{ row.last_synced || '—' }}</span>
         </template></el-table-column>
-        <el-table-column label="记录数" width="90"><template #default="{ row }">
+        <el-table-column label="记录数" width="80"><template #default="{ row }">
           <span :class="{ muted: !row.dns_count }">{{ row.dns_count || 0 }}</span>
         </template></el-table-column>
         <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }">
@@ -107,12 +115,14 @@ const types = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'CAA', 'SRV']
 const TYPE_COLOR = { A: '#3b7dd8', AAAA: '#5b7fd6', CNAME: '#2f9e8f', MX: '#6dc8ec', TXT: '#9270ca', NS: '#5d7092', CAA: '#0e7a6e', SRV: '#909399' }
 function typeStyle(t) { const c = TYPE_COLOR[t] || '#909399'; return { color: c, borderColor: c + '66', background: c + '14' } }
 
-// 数据源同步的域名，最近同步超 24h 或从未同步 = 过期
+// 数据源同步的域名，最近同步超 24h 或从未同步 = 需同步。已移出账号(stale)的不再催同步。
 function domStale(d) {
-  if (d.origin === 'manual') return false
+  if (d.origin === 'manual' || d.stale) return false
   if (!d.last_synced) return true
   return (Date.now() - new Date(d.last_synced.replace(' ', 'T')).getTime()) > 24 * 3600 * 1000
 }
+function isExpired(d) { return d && new Date(d) < new Date() }
+function expiryClass(d) { if (!d) return ''; const days = (new Date(d) - Date.now()) / 86400000; return days < 0 ? 'exp-red' : (days < 30 ? 'exp-orange' : '') }
 const staleCount = computed(() => domains.value.filter(domStale).length)
 async function syncOne(row) {
   syncingOne.value = { ...syncingOne.value, [row.ci_id]: true }
@@ -166,23 +176,24 @@ async function loadDomains() {
   loading.value = true
   try { domains.value = await listDomains(); ensureState() } catch (e) {} finally { loading.value = false }
 }
-// 全量同步：后台异步 + 轮询进度
+// 全量同步：后台异步 + 轮询进度。点击瞬间置灰(防连点)+立即查一次状态。
 async function doSync() {
   if (!sourceId.value) { ElMessage.warning('先选数据源'); return }
+  if (syncing.value) return // 防连点
+  syncing.value = true      // 点击瞬间置灰、立即显示"同步中"
+  prog.value = { total: 0, done: 0, imported_records: 0 }
   try {
     await syncSource(sourceId.value) // 202：已在后台启动
-    syncing.value = true
-    prog.value = { total: 0, done: 0, imported_records: 0 }
     ElMessage.success('已在后台同步，完成后自动刷新')
     pollStatus(sourceId.value)
   } catch (e) {
-    if (e.response?.status === 409) { syncing.value = true; pollStatus(sourceId.value) } // 已在同步中，接着轮询
-    else ElMessage.error(e.response?.data?.error || '同步启动失败')
+    if (e.response?.status === 409) { pollStatus(sourceId.value) } // 已在同步中，接着轮询
+    else { syncing.value = false; ElMessage.error(e.response?.data?.error || '同步启动失败') }
   }
 }
 function pollStatus(id) {
   if (pollTimer) clearInterval(pollTimer)
-  pollTimer = setInterval(async () => {
+  const tick = async () => {
     try {
       const s = await syncSourceStatus(id)
       prog.value = { total: s.total || 0, done: s.done || 0, imported_records: s.imported_records || 0 }
@@ -190,10 +201,12 @@ function pollStatus(id) {
         clearInterval(pollTimer); pollTimer = null; syncing.value = false
         recMap.value = {}; await loadDomains()
         if (s.error) ElMessage.error('同步出错：' + s.error)
-        else ElMessage.success(`同步完成：${s.synced_domains} 个域名 / ${s.synced_records} 条 DNS 记录，导入 ${s.imported_records || 0} 条解析，标记失效 ${s.stale_domains || 0} 个`)
+        else if (s.started) ElMessage.success(`同步完成：${s.synced_domains} 个域名 / ${s.synced_records} 条 DNS 记录，导入 ${s.imported_records || 0} 条解析，标记失效 ${s.stale_domains || 0} 个`)
       }
     } catch (e) {}
-  }, 2500)
+  }
+  tick() // 立即查一次，进度不等 2.5s
+  pollTimer = setInterval(tick, 2500)
 }
 onMounted(async () => {
   sources.value = await listRegistrars(); await loadDomains()
@@ -212,4 +225,5 @@ onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
 .stale { text-decoration: line-through; color: #b0b3bb; }
 .muted { color: #909399; }
 .exp-orange { color: #e6a23c; font-weight: 600; }
+.exp-red { color: #f56c6c; font-weight: 600; }
 </style>

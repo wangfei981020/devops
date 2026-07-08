@@ -30,24 +30,44 @@ async function load() {
 function render() {
   if (!chartEl.value) return
   if (!chart) chart = echarts.init(chartEl.value)
-  const nodeMap = {}
+  // 按 类型|名称 合并同名节点（多张同名证书合并成一个，去掉堆叠）
+  const nodeMap = {}   // key -> node，key=type|name
+  const degree = {}    // key -> 连接数
+  const linkSet = new Set()
   const links = []
+  const keyOf = (type, name) => type + '|' + name
   for (const e of edges.value) {
-    nodeMap[e.src_ci_id] = { id: String(e.src_ci_id), name: e.src_name, category: e.src_type }
-    nodeMap[e.dst_ci_id] = { id: String(e.dst_ci_id), name: e.dst_name, category: e.dst_type }
-    links.push({ source: String(e.src_ci_id), target: String(e.dst_ci_id), label: { show: true, formatter: e.rel_type } })
+    const sk = keyOf(e.src_type, e.src_name), dk = keyOf(e.dst_type, e.dst_name)
+    if (!nodeMap[sk]) nodeMap[sk] = { id: sk, name: e.src_name, category: e.src_type, count: 0 }
+    if (!nodeMap[dk]) nodeMap[dk] = { id: dk, name: e.dst_name, category: e.dst_type, count: 0 }
+    nodeMap[sk].count++
+    const lk = sk + '>' + dk + '>' + e.rel_type
+    if (!linkSet.has(lk)) {
+      linkSet.add(lk)
+      links.push({ source: sk, target: dk, label: { show: true, formatter: e.rel_type } })
+      degree[sk] = (degree[sk] || 0) + 1
+      degree[dk] = (degree[dk] || 0) + 1
+    }
   }
+  const data = Object.values(nodeMap).map(n => ({
+    id: n.id,
+    name: n.count > 1 && n.category === 'certificate' ? `${n.name} ×${n.count}` : n.name, // 同名证书标数量
+    category: n.category === 'certificate' ? 0 : 1,
+    symbolSize: Math.min(64, 30 + (degree[n.id] || 1) * 7), // 连接越多越大
+  }))
   chart.setOption({
     tooltip: {},
     legend: [{ data: ['certificate', 'domain'], top: 8 }],
     series: [{
       type: 'graph', layout: 'force', roam: true, draggable: true,
-      force: { repulsion: 220, edgeLength: 140 },
-      label: { show: true, position: 'right' },
+      force: { repulsion: 520, edgeLength: 190, gravity: 0.05, friction: 0.3 }, // 拉大间距不重叠
+      label: { show: true, position: 'right', fontSize: 12 },
+      labelLayout: { hideOverlap: true }, // 标签重叠时自动隐藏
+      emphasis: { focus: 'adjacency', lineStyle: { width: 3 } },
       categories: [{ name: 'certificate' }, { name: 'domain' }],
-      data: Object.values(nodeMap).map(n => ({ ...n, symbolSize: 38, category: n.category === 'certificate' ? 0 : 1 })),
+      data,
       links,
-      lineStyle: { color: '#aaa', curveness: 0.1 },
+      lineStyle: { color: '#bbb', curveness: 0.12 },
     }],
   })
   chart.resize()

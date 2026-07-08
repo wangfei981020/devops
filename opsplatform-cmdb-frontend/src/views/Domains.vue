@@ -70,7 +70,7 @@
         <el-table-column prop="module" label="模块" width="120" sortable="custom"><template #default="{ row }">{{ row.module || '—' }}</template></el-table-column>
         <el-table-column prop="fqdn" label="域名" min-width="230" sortable="custom" show-overflow-tooltip><template #default="{ row }">
           <span class="mono" :class="{ stale: row.stale, ignored: row.ignored }">{{ row.fqdn }}</span>
-          <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">厂商已删</el-tag>
+          <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">已移出账号</el-tag>
           <el-tooltip v-if="row.ignored" :disabled="!row.ignore_reason" :content="row.ignore_reason">
             <el-tag type="info" size="small" style="margin-left:6px">已忽略</el-tag>
           </el-tooltip>
@@ -97,7 +97,7 @@
             <el-tooltip content="检测证书"><el-button link type="primary" :loading="checking[row.id]" :icon="CircleCheck" @click="checkCert(row)" /></el-tooltip>
             <el-tooltip v-if="!row.ignored" content="忽略"><el-button link type="warning" :icon="Hide" @click="openIgnore([row])" /></el-tooltip>
             <el-tooltip v-else content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="doUnignore([row])" /></el-tooltip>
-            <el-tooltip v-if="row.origin === 'manual' || row.stale" :content="row.stale ? '移除（厂商已删）' : '删除'">
+            <el-tooltip v-if="row.origin === 'manual' || row.stale" :content="row.stale ? '移除（已移出账号）' : '删除'">
               <el-button link type="danger" :icon="Delete" @click="del(row)" />
             </el-tooltip>
           </div>
@@ -120,16 +120,20 @@
     </el-card>
     <el-card shadow="never">
       <el-table :data="domPaged" size="small" row-key="ci_id" v-loading="loading" @sort-change="onDomSort">
-        <el-table-column prop="name" label="主域名" min-width="220" sortable="custom"><template #default="{ row }">
+        <el-table-column prop="name" label="主域名" min-width="240" sortable="custom"><template #default="{ row }">
           <span :class="{ stale: row.stale }">{{ row.name }}</span>
-          <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">厂商已删</el-tag>
+          <el-tag v-if="row.stale" type="danger" size="small" style="margin-left:6px">已移出账号</el-tag>
+          <el-tag v-else-if="row.dns_migrated" size="small" style="margin-left:6px;background:#7a5c8a;color:#fff;border-color:#7a5c8a">DNS已迁移</el-tag>
         </template></el-table-column>
-        <el-table-column label="来源" width="160"><template #default="{ row }">
+        <el-table-column label="来源" width="140"><template #default="{ row }">
           <el-tag v-if="row.origin === 'manual'" type="info" size="small">手动录入</el-tag>
           <el-tag v-else type="success" size="small">{{ row.registrar_name || '同步' }}</el-tag>
         </template></el-table-column>
-        <el-table-column prop="expiry_at" label="域名到期" width="150" sortable="custom"><template #default="{ row }">
-          <span v-if="row.expiry_at" :class="expiryClass(row.expiry_at)">{{ row.expiry_at }}</span>
+        <el-table-column prop="expiry_at" label="域名到期" width="160" sortable="custom"><template #default="{ row }">
+          <template v-if="row.expiry_at">
+            <span :class="expiryClass(row.expiry_at)">{{ row.expiry_at }}</span>
+            <el-tag v-if="isExpired(row.expiry_at)" type="danger" size="small" style="margin-left:6px">已过期</el-tag>
+          </template>
           <span v-else class="muted">—</span>
         </template></el-table-column>
         <el-table-column label="解析数" width="100"><template #default="{ row }">
@@ -142,7 +146,7 @@
               <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEditDomain(row)" /></el-tooltip>
               <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
             </template>
-            <el-tooltip v-else-if="row.stale" content="移除（厂商已删）"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
+            <el-tooltip v-else-if="row.stale" content="移除（已移出账号）"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
           </div>
         </template></el-table-column>
       </el-table>
@@ -350,7 +354,7 @@
         <el-descriptions-item label="来源">
           <el-tag v-if="detail.origin === 'manual'" type="info" size="small">手动录入</el-tag>
           <span v-else>{{ detail.source_name || '同步' }}</span>
-          <el-tag v-if="detail.stale" type="warning" size="small" style="margin-left:6px">厂商已删</el-tag>
+          <el-tag v-if="detail.stale" type="warning" size="small" style="margin-left:6px">已移出账号</el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="操作人">{{ detail.operator || '—' }}</el-descriptions-item>
         <el-descriptions-item label="更新时间">{{ detail.updated_at || '—' }}</el-descriptions-item>
@@ -466,6 +470,7 @@ const domPaged = computed(() => {
 function doDomSearch() { domQuery.value = domKeyword.value; domPage.value = 1 }
 function sortByDate(a, b) { if (!a && !b) return 0; if (!a) return 1; if (!b) return -1; return new Date(a) - new Date(b) }
 function expiryClass(d) { if (!d) return ''; const days = (new Date(d) - Date.now()) / 86400000; return days < 0 ? 'exp-red' : (days < 30 ? 'exp-orange' : '') }
+function isExpired(d) { return d && new Date(d) < new Date() }
 function jumpToRecords(row) { tab.value = 'records'; f.value = { keyword: row.name, project: null, env: null, module: null, source: null }; query.value = { ...f.value }; currentPage.value = 1 }
 function openAddDomain() { domEditing.value = false; domForm.value = { name: '', registrar_id: null, dns_provider: '', expiry_at: '' }; domDlg.value = true }
 function openEditDomain(row) { domEditing.value = true; domForm.value = { ...row, expiry_at: row.expiry_at || '' }; domDlg.value = true }
