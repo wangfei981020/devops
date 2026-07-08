@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -23,6 +24,36 @@ func (h *DomainHandler) Register(r *gin.RouterGroup) {
 	r.POST("/domains/sync", h.Sync)
 	r.POST("/domains/refresh-all", h.RefreshAll)
 	r.POST("/domains/:ciid/refresh", h.Refresh)
+	r.POST("/domains/bulk-ignore", h.BulkIgnore) // 忽略/取消忽略主域名（忽略后同步跳过、不报未同步）
+}
+
+// BulkIgnore 批量忽略/取消忽略主域名。ignored=1 忽略(可带原因)，=0 取消。
+func (h *DomainHandler) BulkIgnore(c *gin.Context) {
+	var in struct {
+		CIIDs   []int64 `json:"ci_ids"`
+		Ignored int     `json:"ignored"`
+		Reason  string  `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || len(in.CIIDs) == 0 {
+		c.JSON(400, gin.H{"error": "ci_ids 必填"})
+		return
+	}
+	ph := make([]string, len(in.CIIDs))
+	args := []any{in.Ignored, in.Reason}
+	for i, id := range in.CIIDs {
+		ph[i] = "?"
+		args = append(args, id)
+	}
+	if _, err := h.DB.Exec(`UPDATE domains SET ignored=?, ignore_reason=? WHERE ci_id IN (`+strings.Join(ph, ",")+`)`, args...); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	act := "ignore_domain"
+	if in.Ignored == 0 {
+		act = "unignore_domain"
+	}
+	WriteAudit(h.DB, c, act, fmt.Sprintf("%d 个", len(in.CIIDs)))
+	c.JSON(200, gin.H{"ok": true, "count": len(in.CIIDs)})
 }
 
 type domainOut struct {
@@ -44,7 +75,9 @@ type domainOut struct {
 	LastSynced    string `json:"last_synced"`  // 最近一次同步时刻（独立记录，0 记录也算已同步）
 	Stale         bool   `json:"stale"`
 	DnsMigrated   bool   `json:"dns_migrated"` // 域名还在数据源账户但 DNS 已迁走(NS 非 GoDaddy)
-	Origin        string `json:"origin"`       // manual=手动录入, sync=数据源同步
+	Ignored       bool   `json:"ignored"`
+	IgnoreReason  string `json:"ignore_reason"`
+	Origin        string `json:"origin"` // manual=手动录入, sync=数据源同步
 }
 
 func (h *DomainHandler) List(c *gin.Context) {
@@ -54,7 +87,7 @@ func (h *DomainHandler) List(c *gin.Context) {
 		       d.cert_expiry_at, d.cert_check_msg, d.stale, d.origin,
 		       (SELECT COUNT(*) FROM ci_relations r WHERE r.dst_ci_id=c.id AND r.rel_type='protects'),
 		       (SELECT COUNT(*) FROM dns_records dr WHERE dr.domain_ci_id=c.id),
-		       d.last_synced_at, d.dns_migrated
+		       d.last_synced_at, d.dns_migrated, d.ignored, d.ignore_reason
 		FROM cis c
 		JOIN domains d ON d.ci_id=c.id
 		LEFT JOIN registrars reg ON reg.id=d.registrar_id
@@ -70,15 +103,16 @@ func (h *DomainHandler) List(c *gin.Context) {
 		var o domainOut
 		var regID sql.NullInt64
 		var exp, certExp, lastSync sql.NullTime
-		var stale, migrated int
+		var stale, migrated, ignored int
 		if err := rows.Scan(&o.CIID, &o.Name, &o.Project, &o.Env, &o.Module, &o.Owner, &o.Status,
 			&regID, &o.RegistrarName, &o.DNSProvider, &exp, &certExp, &o.CertCheckMsg, &stale, &o.Origin, &o.CertCount,
-			&o.DnsCount, &lastSync, &migrated); err != nil {
+			&o.DnsCount, &lastSync, &migrated, &ignored, &o.IgnoreReason); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 		o.Stale = stale == 1
 		o.DnsMigrated = migrated == 1
+		o.Ignored = ignored == 1
 		if lastSync.Valid {
 			o.LastSynced = lastSync.Time.Format("2006-01-02 15:04")
 		}

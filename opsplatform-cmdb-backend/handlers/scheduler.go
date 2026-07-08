@@ -49,7 +49,7 @@ func StartScheduler(db *sql.DB, cipher *crypto.Cipher) {
 	sched.funcs = map[string]taskFn{
 		"refresh_expiry": func(p ProgressFn, t []string) (string, []TaskFailure, bool) { return refreshAllWhoisCore(db, p, t) },
 		"auto_renew":     func(ProgressFn, []string) (string, []TaskFailure, bool) { renewDue(db, cipher); return "已扫描并触发到期前 30 天证书续期", nil, true },
-		"remind":         func(ProgressFn, []string) (string, []TaskFailure, bool) { remindExpiry(db); return "已按阈值发送到期提醒", nil, true },
+		"remind":         func(ProgressFn, []string) (string, []TaskFailure, bool) { return remindExpiry(db), nil, true },
 		"inspect":        func(p ProgressFn, t []string) (string, []TaskFailure, bool) { return inspectAllCertsCore(db, p, t) },
 		"dns_sync":       func(ProgressFn, []string) (string, []TaskFailure, bool) { return dnsSyncCore(db, cipher) },
 		"host_sync":      func(ProgressFn, []string) (string, []TaskFailure, bool) { return SyncAllHostProjects(db, cipher) },
@@ -389,8 +389,12 @@ func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool
 			failures = append(failures, TaskFailure{Target: s.name, Reason: "列域名失败：" + truncate(err.Error(), 120)})
 			continue
 		}
+		ignoredSet := sh.ignoredDomainSet(id) // 已忽略的域名定时同步也跳过
 		present := map[string]bool{}
 		for _, d := range domains {
+			if ignoredSet[d.Name] {
+				continue
+			}
 			ciID, err := sh.upsertDomainCI(d.Name, id, d.ExpiresAt)
 			if err != nil {
 				continue
@@ -404,6 +408,12 @@ func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool
 			sh.refreshDNSRecords(ciID, id, recs)
 			totalR += len(recs)
 			totalImp += sh.importBusinessRecords(ciID, recs)
+			// 无论几条都记同步时刻；0 条时查 NS 判断 DNS 是否迁走（与手动同步一致）
+			migrated := 0
+			if len(recs) == 0 && dnsMigratedFromGoDaddy(d.Name) {
+				migrated = 1
+			}
+			_, _ = db.Exec(`UPDATE domains SET last_synced_at=NOW(), dns_migrated=? WHERE ci_id=?`, migrated, ciID)
 		}
 		sh.markStaleDomains(id, present)
 		cancel()
@@ -553,10 +563,11 @@ func taskWebhook(db *sql.DB, taskKey string) string {
 }
 
 // remindExpiry 证书/域名到期前命中阈值天数时发飞书提醒
-func remindExpiry(db *sql.DB) {
+// remindExpiry 命中阈值天数的证书/域名逐条发 Lark，并返回汇总摘要（列出具体项；无到期项写"正常"）。
+func remindExpiry(db *sql.DB) string {
 	webhook := taskWebhook(db, "remind")
 	if webhook == "" {
-		return
+		return "未配置 Lark 群，跳过"
 	}
 	thresholds := map[int]bool{}
 	for _, s := range strings.Split(getSetting(db, "remind_days"), ",") {
@@ -565,9 +576,10 @@ func remindExpiry(db *sql.DB) {
 		}
 	}
 	if len(thresholds) == 0 {
-		return
+		return "未配置提醒阈值(remind_days)，跳过"
 	}
 
+	var items []string
 	// 证书
 	crows, _ := db.Query(`
 		SELECT t.cn, DATEDIFF(t.expiry_at, NOW())
@@ -578,6 +590,7 @@ func remindExpiry(db *sql.DB) {
 			var days int
 			if crows.Scan(&cn, &days) == nil && thresholds[days] {
 				notifyEvent(db, webhook, "remind", "notify_cert_expiring", fmt.Sprintf("⚠️ 证书 %s 还有 %d 天到期，请关注续期", cn, days))
+				items = append(items, fmt.Sprintf("证书 %s(%d天)", cn, days))
 			}
 		}
 		crows.Close()
@@ -594,10 +607,16 @@ func remindExpiry(db *sql.DB) {
 			var days int
 			if drows.Scan(&name, &days) == nil && thresholds[days] {
 				notifyEvent(db, webhook, "remind", "notify_domain_expiring", fmt.Sprintf("⚠️ 域名 %s 还有 %d 天到期，请到注册商续费", name, days))
+				items = append(items, fmt.Sprintf("域名 %s(%d天)", name, days))
 			}
 		}
 		drows.Close()
 	}
+
+	if len(items) == 0 {
+		return "正常：无临近到期项(阈值 " + getSetting(db, "remind_days") + " 天)"
+	}
+	return fmt.Sprintf("提醒 %d 项：%s", len(items), strings.Join(items, "、"))
 }
 
 // notifyEvent 按事件开关决定是否发送；发送时 @ 通知人（阶段②增强）。

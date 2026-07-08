@@ -23,15 +23,25 @@
 
     <el-card shadow="never" style="margin-bottom:12px">
       <div class="filter">
-        <el-input v-model="domKeyword" placeholder="搜索主域名" clearable :prefix-icon="Search" style="width:220px" @keyup.enter="doDomSearch" />
+        <el-input v-model="domKeyword" placeholder="搜索主域名" clearable :prefix-icon="Search" style="width:200px" @keyup.enter="doDomSearch" />
+        <el-select v-model="domView" style="width:130px" @change="domPage=1">
+          <el-option label="活跃" value="active" />
+          <el-option label="异常" value="abnormal" />
+          <el-option label="已忽略" value="ignored" />
+          <el-option label="全部" value="all" />
+        </el-select>
         <el-button type="primary" :icon="Search" @click="doDomSearch">搜索</el-button>
         <el-button @click="domKeyword=''; doDomSearch()">重置</el-button>
+        <el-button v-if="selectedDoms.length && domView!=='ignored'" type="warning" :icon="Hide" @click="ignoreDoms(selectedDoms)">批量忽略（{{ selectedDoms.length }}）</el-button>
+        <el-button v-if="selectedDoms.length && domView==='ignored'" type="success" @click="unignoreDoms(selectedDoms)">取消忽略（{{ selectedDoms.length }}）</el-button>
         <span class="muted" style="margin-left:auto">共 {{ domFiltered.length }} 个域名</span>
       </div>
     </el-card>
 
     <el-card shadow="never">
-      <el-table :data="domPaged" size="small" row-key="ci_id" v-loading="loading" @expand-change="onExpand">
+      <el-table :data="domPaged" size="small" row-key="ci_id" v-loading="loading" @expand-change="onExpand"
+        @selection-change="(v) => selectedDoms = v">
+        <el-table-column type="selection" width="42" reserve-selection />
         <el-table-column type="expand">
           <template #default="{ row }">
             <div class="reso" v-loading="recLoading[row.ci_id]">
@@ -62,8 +72,9 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="主域名" min-width="240"><template #default="{ row }">
-          <span :class="{ stale: row.stale }">{{ row.name }}</span>
+        <el-table-column label="主域名" min-width="250"><template #default="{ row }">
+          <span :class="{ stale: row.stale || row.ignored }">{{ row.name }}</span>
+          <el-tooltip v-if="row.ignored" :disabled="!row.ignore_reason" :content="row.ignore_reason"><el-tag type="info" size="small" style="margin-left:6px">已忽略</el-tag></el-tooltip>
           <el-tag v-if="row.stale" type="danger" size="small" style="margin-left:6px">已移出账号</el-tag>
           <el-tag v-else-if="row.dns_migrated" size="small" style="margin-left:6px;background:#7a5c8a;color:#fff;border-color:#7a5c8a">DNS已迁移</el-tag>
         </template></el-table-column>
@@ -85,11 +96,14 @@
         <el-table-column label="记录数" width="80"><template #default="{ row }">
           <span :class="{ muted: !row.dns_count }">{{ row.dns_count || 0 }}</span>
         </template></el-table-column>
-        <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }">
-          <el-tooltip v-if="row.origin !== 'manual'" content="从数据源同步这个域名">
-            <el-button link type="primary" :icon="Refresh" :loading="syncingOne[row.ci_id]" @click="syncOne(row)">同步</el-button>
-          </el-tooltip>
-          <span v-else class="muted">无需同步</span>
+        <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }">
+          <div style="display:flex;gap:8px;align-items:center">
+            <el-tooltip v-if="row.origin !== 'manual' && !row.ignored" content="从数据源同步这个域名">
+              <el-button link type="primary" :icon="Refresh" :loading="syncingOne[row.ci_id]" @click="syncOne(row)">同步</el-button>
+            </el-tooltip>
+            <el-tooltip v-if="!row.ignored" content="忽略（同步跳过、不报未同步）"><el-button link type="warning" :icon="Hide" @click="ignoreDoms([row])" /></el-tooltip>
+            <el-tooltip v-else content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="unignoreDoms([row])" /></el-tooltip>
+          </div>
         </template></el-table-column>
       </el-table>
       <el-pagination v-model:current-page="domPage" v-model:page-size="domPageSize" :page-sizes="[10,20,50,100]"
@@ -100,30 +114,52 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Refresh, Search } from '@element-plus/icons-vue'
-import { listDomains, listRegistrars, listDnsRecords, syncSource, syncSourceStatus, syncDomainRecords } from '../api/cmdb'
-
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Refresh, Search, Hide, RefreshLeft } from '@element-plus/icons-vue'
+import { listDomains, listRegistrars, listDnsRecords, syncSource, syncSourceStatus, syncDomainRecords, bulkIgnoreDomains } from '../api/cmdb'
 const sources = ref([]), domains = ref([]), loading = ref(false)
 const sourceId = ref(null)
 const syncing = ref(false)
 const prog = ref({ total: 0, done: 0, imported_records: 0 })
 const syncingOne = ref({})
+const domView = ref('active'), selectedDoms = ref([])
 let pollTimer = null
 const types = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'CAA', 'SRV']
 // DNS 记录类型固定配色（冷色/中性，红橙留给到期告警）
 const TYPE_COLOR = { A: '#3b7dd8', AAAA: '#5b7fd6', CNAME: '#2f9e8f', MX: '#6dc8ec', TXT: '#9270ca', NS: '#5d7092', CAA: '#0e7a6e', SRV: '#909399' }
 function typeStyle(t) { const c = TYPE_COLOR[t] || '#909399'; return { color: c, borderColor: c + '66', background: c + '14' } }
 
-// 数据源同步的域名，最近同步超 24h 或从未同步 = 需同步。已移出账号(stale)的不再催同步。
+// 数据源同步的域名，最近同步超 24h 或从未同步 = 需同步。已移出账号/已忽略的不再催同步。
 function domStale(d) {
-  if (d.origin === 'manual' || d.stale) return false
+  if (d.origin === 'manual' || d.stale || d.ignored) return false
   if (!d.last_synced) return true
   return (Date.now() - new Date(d.last_synced.replace(' ', 'T')).getTime()) > 24 * 3600 * 1000
 }
 function isExpired(d) { return d && new Date(d) < new Date() }
 function expiryClass(d) { if (!d) return ''; const days = (new Date(d) - Date.now()) / 86400000; return days < 0 ? 'exp-red' : (days < 30 ? 'exp-orange' : '') }
+// 域名状态：ignored=已忽略；abnormal=已过期/已移出账号/DNS已迁移；否则活跃
+function isAbnormal(d) { return d.stale || d.dns_migrated || isExpired(d.expiry_at) }
 const staleCount = computed(() => domains.value.filter(domStale).length)
+
+async function ignoreDoms(rows) {
+  let reason = ''
+  try {
+    const r = await ElMessageBox.prompt('忽略原因（可留空）', `忽略 ${rows.length} 个域名`, {
+      inputPlaceholder: '如：已下线 / 已迁走 / 不再使用', confirmButtonText: '忽略', cancelButtonText: '取消', closeOnClickModal: false,
+    })
+    reason = r.value || ''
+  } catch (e) { return } // 取消
+  try {
+    await bulkIgnoreDomains(rows.map((r) => r.ci_id), 1, reason)
+    ElMessage.success(`已忽略 ${rows.length} 个（同步将跳过）`); selectedDoms.value = []; await loadDomains()
+  } catch (e) { ElMessage.error(e.response?.data?.error || '失败') }
+}
+async function unignoreDoms(rows) {
+  try {
+    await bulkIgnoreDomains(rows.map((r) => r.ci_id), 0, '')
+    ElMessage.success(`已取消忽略 ${rows.length} 个`); selectedDoms.value = []; await loadDomains()
+  } catch (e) { ElMessage.error(e.response?.data?.error || '失败') }
+}
 async function syncOne(row) {
   syncingOne.value = { ...syncingOne.value, [row.ci_id]: true }
   try {
@@ -138,7 +174,13 @@ async function syncOne(row) {
 
 // 主域名列表筛选/分页
 const domKeyword = ref(''), domQuery = ref(''), domPage = ref(1), domPageSize = ref(20)
-const domFiltered = computed(() => domains.value.filter((d) => !domQuery.value || d.name.toLowerCase().includes(domQuery.value.toLowerCase())))
+const domFiltered = computed(() => domains.value.filter((d) => {
+  if (domQuery.value && !d.name.toLowerCase().includes(domQuery.value.toLowerCase())) return false
+  if (domView.value === 'ignored') return d.ignored
+  if (domView.value === 'active') return !d.ignored && !isAbnormal(d)
+  if (domView.value === 'abnormal') return !d.ignored && isAbnormal(d)
+  return true // all
+}))
 const domPaged = computed(() => { const s = (domPage.value - 1) * domPageSize.value; return domFiltered.value.slice(s, s + domPageSize.value) })
 function doDomSearch() { domQuery.value = domKeyword.value; domPage.value = 1 }
 

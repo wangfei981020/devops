@@ -173,8 +173,15 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 	st.Total = len(domains)
 	syncMu.Unlock()
 
+	ignoredSet := h.ignoredDomainSet(id) // 已忽略的域名同步时跳过
 	present := map[string]bool{}
 	for _, d := range domains {
+		if ignoredSet[d.Name] {
+			syncMu.Lock()
+			st.Done++
+			syncMu.Unlock()
+			continue
+		}
 		ciID, err := h.upsertDomainCI(d.Name, id, d.ExpiresAt)
 		if err != nil {
 			syncMu.Lock()
@@ -295,10 +302,28 @@ func (h *SyncHandler) upsertDomainCI(name string, sourceID int, expires *time.Ti
 	return ciID, nil
 }
 
+// ignoredDomainSet 取某数据源下被忽略的主域名名集合（同步时跳过）。
+func (h *SyncHandler) ignoredDomainSet(sourceID int) map[string]bool {
+	set := map[string]bool{}
+	rows, err := h.DB.Query(`SELECT c.name FROM cis c JOIN domains d ON d.ci_id=c.id
+		WHERE c.type='domain' AND d.registrar_id=? AND d.ignored=1`, sourceID)
+	if err != nil {
+		return set
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			set[n] = true
+		}
+	}
+	return set
+}
+
 // markStaleDomains 把某数据源下、本次同步未出现(GoDaddy 已无)的主域名标为失效；返回标记条数。
 func (h *SyncHandler) markStaleDomains(sourceID int, present map[string]bool) int {
 	rows, err := h.DB.Query(`SELECT c.id, c.name FROM cis c JOIN domains d ON d.ci_id=c.id
-		WHERE c.type='domain' AND d.registrar_id=?`, sourceID)
+		WHERE c.type='domain' AND d.registrar_id=? AND d.ignored=0`, sourceID)
 	if err != nil {
 		return 0
 	}

@@ -36,6 +36,7 @@ export const recordCertIgnore = (id, b) => http.put(`/records/${id}/cert-ignore`
 // 数据源同步 + API 用量（数据源 = 注册商 registrars）
 export const syncSource = (id) => http.post(`/sources/${id}/sync`).then((r) => r.data)
 export const syncSourceStatus = (id) => http.get(`/sources/${id}/sync-status`).then((r) => r.data)
+export const bulkIgnoreDomains = (ci_ids, ignored, reason) => http.post('/domains/bulk-ignore', { ci_ids, ignored, reason }).then((r) => r.data)
 export const sourceUsage = (id) => http.get(`/sources/${id}/usage`).then((r) => r.data)
 
 // CDN 厂商（基础配置）
