@@ -99,7 +99,7 @@
         </el-form-item>
         <el-form-item label="LE Staging">
           <el-switch v-model="form.staging" />
-          <span class="muted" style="margin-left:10px">首次测试建议开（不受正式限速），通后再关</span>
+          <span class="muted" style="margin-left:10px">默认关=正式环境（浏览器信任）；仅首次调试/试限速时手动开（开=测试环境，签出的证书浏览器不信任，不能实际用）</span>
         </el-form-item>
       </el-form>
       <template #footer><el-button @click="dlg=false">取消</el-button><el-button type="primary" :loading="submitting" @click="submit">提交签发</el-button></template>
@@ -143,7 +143,7 @@ async function load() {
   try { rows.value = await listCerts(); app.loadBasics() } catch (e) {} finally { loading.value = false }
 }
 async function openApply() {
-  form.value = { cn: '', sans: [], domain_ci_id: null, challenge: 'dns-01', ca: 'letsencrypt', acme_account_id: null, project: '', env: '', module: '', auto_renew: 1, renew_days: 30, staging: true }
+  form.value = { cn: '', sans: [], domain_ci_id: null, challenge: 'dns-01', ca: 'letsencrypt', acme_account_id: null, project: '', env: '', module: '', auto_renew: 1, renew_days: 30, staging: false }
   domains.value = await listDomains(); accounts.value = await listAcme(); app.loadBasics()
   dlg.value = true
 }

@@ -94,10 +94,10 @@ func (l *loggingProvider) CleanUp(domain, token, keyAuth string) error {
 }
 
 func (l *loggingProvider) Timeout() (timeout, interval time.Duration) {
-	if t, ok := l.inner.(challenge.ProviderTimeout); ok {
-		return t.Timeout()
-	}
-	return 2 * time.Minute, 4 * time.Second
+	// 强制 5 分钟传播等待 + 每 10s 轮询：GoDaddy 传播慢且各节点不均匀，
+	// Let's Encrypt 正式环境多点验证对传播很敏感，给足时间让 TXT 同步到所有权威节点再让 CA 验证。
+	// 不再沿用底层 provider 的默认(GoDaddy 仅 2 分钟)，避免 _acme-challenge NXDOMAIN。
+	return 5 * time.Minute, 10 * time.Second
 }
 
 // Issue 执行一次 ACME 签发。
