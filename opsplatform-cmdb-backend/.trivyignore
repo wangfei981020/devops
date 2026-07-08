@@ -1,0 +1,4 @@
+# GO-2026-5932: golang.org/x/crypto/openpgp 子包已停止维护的信息类告示（非 CVE，无修复版本）。
+# 本项目仅使用 golang.org/x/crypto/bcrypt（handlers/auth.go 密码哈希），未 import openpgp。
+# govulncheck 符号级复核确认不可达：No vulnerabilities found。v0.53.0 已为最新版，无版本可升。
+GO-2026-5932

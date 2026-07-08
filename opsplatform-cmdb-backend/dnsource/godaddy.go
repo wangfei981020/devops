@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -43,23 +44,38 @@ func (a *GoDaddy) do(ctx context.Context, path string, out any) error {
 }
 
 func (a *GoDaddy) ListDomains(ctx context.Context) ([]Domain, error) {
-	var raw []struct {
-		Domain  string `json:"domain"`
-		Status  string `json:"status"`
-		Expires string `json:"expires"`
-	}
-	if err := a.do(ctx, "/v1/domains?limit=1000&statuses=ACTIVE", &raw); err != nil {
-		return nil, err
-	}
-	out := make([]Domain, 0, len(raw))
-	for _, d := range raw {
-		dm := Domain{Name: d.Domain, Status: d.Status}
-		if d.Expires != "" {
-			if t, err := time.Parse(time.RFC3339, d.Expires); err == nil {
-				dm.ExpiresAt = &t
-			}
+	// 拉账户下**全部状态**的域名（不再限 ACTIVE，否则新注册/待验证等中间态域名会被漏掉）。
+	// GoDaddy 列表按域名字母序、游标(marker)翻页：每页取 limit 条，marker=上页最后一个域名，
+	// 直到某页不足 limit 即为最后一页。
+	const pageSize = 1000
+	out := make([]Domain, 0, pageSize)
+	marker := ""
+	for {
+		path := fmt.Sprintf("/v1/domains?limit=%d", pageSize)
+		if marker != "" {
+			path += "&marker=" + url.QueryEscape(marker)
 		}
-		out = append(out, dm)
+		var raw []struct {
+			Domain  string `json:"domain"`
+			Status  string `json:"status"`
+			Expires string `json:"expires"`
+		}
+		if err := a.do(ctx, path, &raw); err != nil {
+			return nil, err
+		}
+		for _, d := range raw {
+			dm := Domain{Name: d.Domain, Status: d.Status}
+			if d.Expires != "" {
+				if t, err := time.Parse(time.RFC3339, d.Expires); err == nil {
+					dm.ExpiresAt = &t
+				}
+			}
+			out = append(out, dm)
+		}
+		if len(raw) < pageSize {
+			break // 最后一页
+		}
+		marker = raw[len(raw)-1].Domain
 	}
 	return out, nil
 }
