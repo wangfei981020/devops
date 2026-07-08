@@ -22,8 +22,9 @@ const godaddyBase = "https://api.godaddy.com"
 var gdClient = &http.Client{Timeout: 15 * time.Second}
 
 func (a *GoDaddy) do(ctx context.Context, path string, out any) error {
-	if err := a.lim.Allow(); err != nil {
-		return err // *RateLimitError，未真正打 GoDaddy
+	// 撞客户端限流时节流等待（不再直接失败），让全量同步能完整跑完；仍守住 50/分钟不打爆 GoDaddy。
+	if err := a.lim.Wait(ctx); err != nil {
+		return err // 仅 ctx 取消/超时才返回
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, godaddyBase+path, nil)
 	req.Header.Set("Authorization", fmt.Sprintf("sso-key %s:%s", a.key, a.secret))

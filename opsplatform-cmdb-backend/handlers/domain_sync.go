@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -27,10 +28,25 @@ func NewSyncHandler(db *sql.DB, cipher *crypto.Cipher) *SyncHandler {
 
 func (h *SyncHandler) Register(r *gin.RouterGroup) {
 	r.POST("/sources/:id/sync", h.Sync)
+	r.GET("/sources/:id/sync-status", h.SyncStatus)
 	r.GET("/sources/:id/usage", h.Usage)
 	r.GET("/domains/:ciid/dns-records", h.DNSRecords)
 	r.POST("/domains/:ciid/sync-records", h.SyncDomainRecords)
 }
+
+// ---- 全量同步的后台状态（进程内，按数据源 id）----
+type syncState struct {
+	Running                            bool
+	Total, Done, Synced, Records, Imp  int
+	Stale                              int
+	Err                                string
+	StartedAt, FinishedAt              time.Time
+}
+
+var (
+	syncMu    sync.Mutex
+	syncStore = map[int]*syncState{}
+)
 
 // SyncDomainRecords 单个域名从其绑定数据源拉 A/CNAME，刷 DNS 记录缓存 + 导入/更新业务台账。
 func (h *SyncHandler) SyncDomainRecords(c *gin.Context) {
@@ -83,8 +99,18 @@ func (h *SyncHandler) Usage(c *gin.Context) {
 }
 
 // Sync 同步某数据源：拉域名 + 每个域名的 DNS 记录，写入/更新 DB（受客户端限流）。
+// Sync 全量同步一个数据源：改为**后台异步**（域名多、限流节流下需 1-2 分钟，避免 HTTP 超时/429）。
+// 立即返回 202，前端轮询 sync-status 看进度。
 func (h *SyncHandler) Sync(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+	syncMu.Lock()
+	if st := syncStore[id]; st != nil && st.Running {
+		syncMu.Unlock()
+		c.JSON(http.StatusConflict, gin.H{"error": "该数据源正在同步中，请稍候"})
+		return
+	}
+	syncMu.Unlock()
+
 	provider, cred, err := LoadCredential(h.DB, h.Cipher, id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "数据源不存在或凭据读取失败"})
@@ -95,52 +121,89 @@ func (h *SyncHandler) Sync(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	st := &syncState{Running: true, StartedAt: time.Now()}
+	syncMu.Lock()
+	syncStore[id] = st
+	syncMu.Unlock()
+	WriteAudit(h.DB, c, "sync_source", c.Param("id"))
+	go h.runSync(id, adapter, st)
+	c.JSON(http.StatusAccepted, gin.H{"ok": true, "running": true, "msg": "已在后台同步，域名较多约 1-2 分钟，完成后自动刷新"})
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+// runSync 后台跑全量同步：限流节流(Wait)下完整拉全部域名+记录，最后 markStale。
+func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
+	defer func() {
+		syncMu.Lock()
+		st.Running = false
+		st.FinishedAt = time.Now()
+		syncMu.Unlock()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	domains, err := adapter.ListDomains(ctx)
-	if rle := asRateLimit(err); rle != nil {
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": rle.Error(), "rate_limit": rle.Info})
-		return
-	}
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		syncMu.Lock()
+		st.Err = err.Error()
+		syncMu.Unlock()
 		return
 	}
+	syncMu.Lock()
+	st.Total = len(domains)
+	syncMu.Unlock()
 
-	syncedDomains, syncedRecords, importedRecords := 0, 0, 0
 	present := map[string]bool{}
 	for _, d := range domains {
 		ciID, err := h.upsertDomainCI(d.Name, id, d.ExpiresAt)
 		if err != nil {
+			syncMu.Lock()
+			st.Done++
+			syncMu.Unlock()
 			continue
 		}
 		present[d.Name] = true
-		syncedDomains++
-
 		recs, err := adapter.ListRecords(ctx, d.Name)
-		if rle := asRateLimit(err); rle != nil {
-			// 撞客户端限流：停在这，返回已同步部分 + 限流信息
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error": rle.Error(), "rate_limit": rle.Info,
-				"synced_domains": syncedDomains, "synced_records": syncedRecords,
-				"imported_records": importedRecords, "partial": true,
-			})
-			return
+		if err == nil {
+			h.refreshDNSRecords(ciID, id, recs)
+			imp := h.importBusinessRecords(ciID, recs)
+			syncMu.Lock()
+			st.Synced++
+			st.Records += len(recs)
+			st.Imp += imp
+			syncMu.Unlock()
 		}
-		if err != nil {
-			continue // 单域名 DNS 拉取失败跳过
-		}
-		h.refreshDNSRecords(ciID, id, recs)
-		syncedRecords += len(recs)
-		importedRecords += h.importBusinessRecords(ciID, recs)
+		syncMu.Lock()
+		st.Done++
+		syncMu.Unlock()
 	}
-	// 完整拉全后，标记该数据源下 GoDaddy 已不存在的主域名为失效（保留业务信息，人工确认删）
-	staleDomains := h.markStaleDomains(id, present)
-	WriteAudit(h.DB, c, "sync_source", c.Param("id"))
-	c.JSON(http.StatusOK, gin.H{"synced_domains": syncedDomains, "synced_records": syncedRecords,
-		"imported_records": importedRecords, "stale_domains": staleDomains})
+	// 完整拉全后才标记：该数据源下 GoDaddy 已不存在的主域名标失效（保留业务信息，人工确认删）
+	stale := h.markStaleDomains(id, present)
+	syncMu.Lock()
+	st.Stale = stale
+	syncMu.Unlock()
+}
+
+// SyncStatus 查某数据源后台同步进度（前端轮询）。
+func (h *SyncHandler) SyncStatus(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	syncMu.Lock()
+	st := syncStore[id]
+	if st == nil {
+		syncMu.Unlock()
+		c.JSON(http.StatusOK, gin.H{"running": false, "started": false})
+		return
+	}
+	out := gin.H{
+		"running": st.Running, "started": true,
+		"total": st.Total, "done": st.Done,
+		"synced_domains": st.Synced, "synced_records": st.Records, "imported_records": st.Imp,
+		"stale_domains": st.Stale, "error": st.Err,
+	}
+	if !st.FinishedAt.IsZero() {
+		out["finished_at"] = st.FinishedAt.Format("2006-01-02 15:04:05")
+	}
+	syncMu.Unlock()
+	c.JSON(http.StatusOK, out)
 }
 
 // DNSRecords 读某域名的厂商原始 DNS 记录（来自同步缓存 dns_records）。

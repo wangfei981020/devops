@@ -99,6 +99,37 @@ func (l *Limiter) Allow() error {
 	return nil
 }
 
+// Wait 申请一次调用配额；撞限则**阻塞等到下一分钟窗口**再放行（节流不失败，用于后台全量同步）。
+// 仍不超过 limit/分钟（守住 GoDaddy 真限制），可被 ctx 取消。
+func (l *Limiter) Wait(ctx context.Context) error {
+	for {
+		l.mu.Lock()
+		now := time.Now()
+		min := now.Unix() / 60
+		if min != l.curMinute {
+			l.curMinute = min
+			l.count = 0
+		}
+		if d := now.Format("2006-01-02"); d != l.todayDate {
+			l.todayDate = d
+			l.todayCount = 0
+		}
+		if l.count < l.limit {
+			l.count++
+			l.todayCount++
+			l.mu.Unlock()
+			return nil
+		}
+		l.mu.Unlock()
+		sleep := time.Until(time.Unix((min+1)*60, 0)) + 100*time.Millisecond
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(sleep):
+		}
+	}
+}
+
 // Stats 当前用量（给 API 用量卡片）
 type Stats struct {
 	MinuteUsed int    `json:"minute_used"`

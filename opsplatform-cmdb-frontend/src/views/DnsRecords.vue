@@ -6,16 +6,15 @@
         <el-select v-model="sourceId" placeholder="数据源" style="width:170px">
           <el-option v-for="s in sources" :key="s.id" :label="`${s.name}（${s.provider}）`" :value="s.id" />
         </el-select>
-        <el-button type="primary" :icon="Refresh" :loading="syncing" :disabled="countdown>0" @click="doSync">
-          {{ countdown>0 ? `限流中 ${countdown}s` : '从数据源同步' }}
+        <el-button type="primary" :icon="Refresh" :loading="syncing" @click="doSync">
+          {{ syncing ? `同步中 ${prog.done}/${prog.total || '…'}` : '从数据源同步' }}
         </el-button>
       </div>
     </div>
 
-    <el-alert v-if="rl" type="warning" :closable="false" show-icon style="margin-bottom:12px">
+    <el-alert v-if="syncing" type="info" :closable="false" show-icon style="margin-bottom:12px">
       <template #title>
-        已达客户端限流：本分钟已用 {{ rl.used }}/{{ rl.limit }}（窗口 {{ rl.window }}）。
-        <b>{{ countdown }}s</b> 后可重试（{{ rl.retry_at }}）。{{ partialMsg }}
+        后台同步中（域名较多，限流下约 1-2 分钟）：已处理 <b>{{ prog.done }}/{{ prog.total || '…' }}</b> 个域名 · 导入 {{ prog.imported_records || 0 }} 条解析。完成后自动刷新。
       </template>
     </el-alert>
 
@@ -95,14 +94,14 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
-import { listDomains, listRegistrars, listDnsRecords, syncSource, syncDomainRecords } from '../api/cmdb'
+import { listDomains, listRegistrars, listDnsRecords, syncSource, syncSourceStatus, syncDomainRecords } from '../api/cmdb'
 
 const sources = ref([]), domains = ref([]), loading = ref(false)
 const sourceId = ref(null)
 const syncing = ref(false)
-const rl = ref(null), countdown = ref(0), partialMsg = ref('')
+const prog = ref({ total: 0, done: 0, imported_records: 0 })
 const syncingOne = ref({})
-let timer = null
+let pollTimer = null
 const types = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'CAA', 'SRV']
 // DNS 记录类型固定配色（冷色/中性，红橙留给到期告警）
 const TYPE_COLOR = { A: '#3b7dd8', AAAA: '#5b7fd6', CNAME: '#2f9e8f', MX: '#6dc8ec', TXT: '#9270ca', NS: '#5d7092', CAA: '#0e7a6e', SRV: '#909399' }
@@ -123,9 +122,7 @@ async function syncOne(row) {
     const m = { ...recMap.value }; delete m[row.ci_id]; recMap.value = m // 清缓存，展开时重拉
     await loadDomains()
   } catch (e) {
-    const info = e.response?.data?.rate_limit
-    if (info) ElMessage.warning(`已限流，${info.retry_after_seconds}s 后重试`)
-    else ElMessage.error(e.response?.data?.error || '同步失败')
+    ElMessage.error(e.response?.data?.error || '同步失败')
   } finally { syncingOne.value = { ...syncingOne.value, [row.ci_id]: false } }
 }
 
@@ -165,36 +162,47 @@ function onExpand(row, expandedRows) {
   if (open && !recMap.value[row.ci_id]) loadRecords(row.ci_id)
 }
 
-function startCountdown(secs) {
-  countdown.value = secs
-  if (timer) clearInterval(timer)
-  timer = setInterval(() => { countdown.value -= 1; if (countdown.value <= 0) { clearInterval(timer); timer = null; rl.value = null } }, 1000)
-}
 async function loadDomains() {
   loading.value = true
   try { domains.value = await listDomains(); ensureState() } catch (e) {} finally { loading.value = false }
 }
+// 全量同步：后台异步 + 轮询进度
 async function doSync() {
   if (!sourceId.value) { ElMessage.warning('先选数据源'); return }
-  syncing.value = true
   try {
-    const r = await syncSource(sourceId.value)
-    rl.value = null; partialMsg.value = ''
-    ElMessage.success(`同步完成：${r.synced_domains} 个域名 / ${r.synced_records} 条 DNS 记录，自动导入 ${r.imported_records || 0} 条新解析到业务台账`)
-    recMap.value = {} // 同步后清缓存，展开时重新拉
-    await loadDomains()
+    await syncSource(sourceId.value) // 202：已在后台启动
+    syncing.value = true
+    prog.value = { total: 0, done: 0, imported_records: 0 }
+    ElMessage.success('已在后台同步，完成后自动刷新')
+    pollStatus(sourceId.value)
   } catch (e) {
-    const info = e.response?.data?.rate_limit
-    if (info) {
-      rl.value = info
-      partialMsg.value = e.response?.data?.partial ? `已同步部分：${e.response.data.synced_domains} 域名 / ${e.response.data.synced_records} 记录。` : ''
-      startCountdown(info.retry_after_seconds || 60)
-      if (e.response?.data?.partial) { recMap.value = {}; await loadDomains() }
-    } else ElMessage.error(e.response?.data?.error || '同步失败')
-  } finally { syncing.value = false }
+    if (e.response?.status === 409) { syncing.value = true; pollStatus(sourceId.value) } // 已在同步中，接着轮询
+    else ElMessage.error(e.response?.data?.error || '同步启动失败')
+  }
 }
-onMounted(async () => { sources.value = await listRegistrars(); await loadDomains() })
-onBeforeUnmount(() => { if (timer) clearInterval(timer) })
+function pollStatus(id) {
+  if (pollTimer) clearInterval(pollTimer)
+  pollTimer = setInterval(async () => {
+    try {
+      const s = await syncSourceStatus(id)
+      prog.value = { total: s.total || 0, done: s.done || 0, imported_records: s.imported_records || 0 }
+      if (!s.running) {
+        clearInterval(pollTimer); pollTimer = null; syncing.value = false
+        recMap.value = {}; await loadDomains()
+        if (s.error) ElMessage.error('同步出错：' + s.error)
+        else ElMessage.success(`同步完成：${s.synced_domains} 个域名 / ${s.synced_records} 条 DNS 记录，导入 ${s.imported_records || 0} 条解析，标记失效 ${s.stale_domains || 0} 个`)
+      }
+    } catch (e) {}
+  }, 2500)
+}
+onMounted(async () => {
+  sources.value = await listRegistrars(); await loadDomains()
+  // 若某数据源正在后台同步（比如刷新了页面），恢复进度显示
+  for (const s of sources.value) {
+    try { const st = await syncSourceStatus(s.id); if (st.running) { sourceId.value = s.id; syncing.value = true; pollStatus(s.id); break } } catch (e) {}
+  }
+})
+onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
 </script>
 
 <style scoped>
