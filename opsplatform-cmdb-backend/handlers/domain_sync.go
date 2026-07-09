@@ -182,7 +182,15 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 			syncMu.Unlock()
 			continue
 		}
-		ciID, err := h.upsertDomainCI(d.Name, id, d.ExpiresAt)
+		if isDomainGone(d.Status) {
+			// 已转出/取消：不计 present、不重置 stale，直接标已移出账号并记状态，交由灰显+人工移除
+			h.markDomainGone(d.Name, id, d.Status)
+			syncMu.Lock()
+			st.Done++
+			syncMu.Unlock()
+			continue
+		}
+		ciID, err := h.upsertDomainCI(d.Name, id, d.ExpiresAt, d.Status)
 		if err != nil {
 			syncMu.Lock()
 			st.Done++
@@ -281,7 +289,40 @@ func (h *SyncHandler) DNSRecords(c *gin.Context) {
 
 // ---- helpers ----
 
-func (h *SyncHandler) upsertDomainCI(name string, sourceID int, expires *time.Time) (int64, error) {
+// goneDomainStatuses GoDaddy 返回但已不再属于本账户(转出/取消/没收等)的状态。
+// 这些状态的域名 API 仍会返回一段时间，需当作"已移出账号"处理，而不是正常活跃域名。
+// 说明：EXPIRED / 赎回期不列入(仍需到期提醒)；PENDING_TRANSFER/AWAITING_TRANSFER_AUTH 是转入/授权中，属活跃。
+var goneDomainStatuses = map[string]bool{
+	"TRANSFERRED":               true,
+	"USER_TRANSFER_OUT":         true,
+	"CANCELLED":                 true,
+	"CONFISCATED":               true,
+	"EXCLUDED":                  true,
+	"FAILED":                    true,
+	"NAME_CANNOT_BE_REGISTERED": true,
+}
+
+// isDomainGone 判断数据源状态是否表示"已移出账号"(转出/取消/没收)。
+func isDomainGone(status string) bool {
+	s := strings.ToUpper(strings.TrimSpace(status))
+	if s == "" {
+		return false
+	}
+	if goneDomainStatuses[s] {
+		return true
+	}
+	return strings.Contains(s, "TRANSFER_OUT") // 兜底：任何"转出"变体
+}
+
+// markDomainGone 把已存在的域名标记为移出账号(stale=1)并记下数据源状态；不重置 stale、不碰业务信息。
+// 域名首次出现即为消亡态(库里还没有)时无需处理——本就没纳管，不显示。
+func (h *SyncHandler) markDomainGone(name string, sourceID int, status string) {
+	_, _ = h.DB.Exec(`UPDATE domains d JOIN cis c ON c.id=d.ci_id
+		SET d.stale=1, d.source_status=?
+		WHERE c.type='domain' AND c.name=? AND d.registrar_id=? AND d.ignored=0`, status, name, sourceID)
+}
+
+func (h *SyncHandler) upsertDomainCI(name string, sourceID int, expires *time.Time, status string) (int64, error) {
 	var ciID int64
 	err := h.DB.QueryRow(`SELECT id FROM cis WHERE type='domain' AND name=?`, name).Scan(&ciID)
 	if err == sql.ErrNoRows {
@@ -297,8 +338,8 @@ func (h *SyncHandler) upsertDomainCI(name string, sourceID int, expires *time.Ti
 	if expires != nil {
 		exp = *expires
 	}
-	_, _ = h.DB.Exec(`INSERT INTO domains (ci_id, registrar_id, expiry_at, origin) VALUES (?, ?, ?, 'sync')
-		ON DUPLICATE KEY UPDATE registrar_id=VALUES(registrar_id), expiry_at=VALUES(expiry_at), stale=0, origin='sync'`, ciID, sourceID, exp)
+	_, _ = h.DB.Exec(`INSERT INTO domains (ci_id, registrar_id, expiry_at, origin, source_status) VALUES (?, ?, ?, 'sync', ?)
+		ON DUPLICATE KEY UPDATE registrar_id=VALUES(registrar_id), expiry_at=VALUES(expiry_at), stale=0, origin='sync', source_status=VALUES(source_status)`, ciID, sourceID, exp, status)
 	return ciID, nil
 }
 

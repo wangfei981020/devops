@@ -6,7 +6,7 @@
     <el-card shadow="never" style="margin-bottom:14px">
       <template #header><b>Lark 群</b><span class="muted" style="margin-left:8px">定时任务按群发通知，可加多个</span>
         <el-button type="primary" size="small" style="float:right" @click="openGroup()">+ 添加群</el-button></template>
-      <el-table :data="groups" size="small">
+      <el-table :data="gPaged" size="small">
         <el-table-column prop="name" label="群名" width="180" />
         <el-table-column prop="webhook" label="Webhook" min-width="320" show-overflow-tooltip><template #default="{ row }"><span class="mono">{{ row.webhook }}</span></template></el-table-column>
         <el-table-column label="操作" width="170" fixed="right"><template #default="{ row }">
@@ -17,6 +17,8 @@
           </div>
         </template></el-table-column>
       </el-table>
+      <el-pagination v-if="groups.length > gSize" v-model:current-page="gPage" v-model:page-size="gSize" :page-sizes="[10,20,50,100]"
+        :total="groups.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
       <el-empty v-if="!groups.length" description="还没有 Lark 群，点右上添加" :image-size="50" />
     </el-card>
 
@@ -36,13 +38,15 @@
         <el-form-item label="open_id"><el-input v-model="nu.open_id" placeholder="ou_xxxxxxxx" style="width:260px" /></el-form-item>
         <el-button type="primary" :icon="Plus" @click="addUser">添加</el-button>
       </el-form>
-      <el-table :data="users" size="small">
+      <el-table :data="uPaged" size="small">
         <el-table-column prop="name" label="姓名" width="160" />
         <el-table-column prop="open_id" label="open_id" min-width="260" />
         <el-table-column label="操作" width="80" fixed="right"><template #default="{ row }">
           <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delUser(row)" /></el-tooltip>
         </template></el-table-column>
       </el-table>
+      <el-pagination v-if="users.length > uSize" v-model:current-page="uPage" v-model:page-size="uSize" :page-sizes="[10,20,50,100]"
+        :total="users.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
       <el-empty v-if="!users.length" description="还没有通知人，告警将不 @ 人" :image-size="50" />
     </el-card>
 
@@ -71,11 +75,14 @@ import { Plus, Delete, Promotion, Edit } from '@element-plus/icons-vue'
 import { getSettings, updateSettings, listNotifyUsers, createNotifyUser, deleteNotifyUser,
   listLarkGroups, createLarkGroup, updateLarkGroup, deleteLarkGroup, testLarkGroup } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { usePaged } from '../composables/usePaged'
 
 const app = useAppStore()
 const cfg = ref({}), users = ref([])
 const nu = ref({ name: '', open_id: '' })
 const groups = ref([]), testingG = ref({})
+const { page: gPage, size: gSize, paged: gPaged } = usePaged(groups)
+const { page: uPage, size: uSize, paged: uPaged } = usePaged(users)
 const gDlg = ref(false), gEdit = ref(false), gForm = ref({})
 // 事件开关，settings 没存按默认（续期成功默认关，其余开）
 const ev = ref({ notify_cert_expiring: '1', notify_renew_success: '0', notify_renew_fail: '1', notify_domain_expiring: '1' })

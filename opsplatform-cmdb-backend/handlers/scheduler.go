@@ -396,7 +396,11 @@ func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool
 			if ignoredSet[d.Name] {
 				continue
 			}
-			ciID, err := sh.upsertDomainCI(d.Name, id, d.ExpiresAt)
+			if isDomainGone(d.Status) {
+				sh.markDomainGone(d.Name, id, d.Status)
+				continue
+			}
+			ciID, err := sh.upsertDomainCI(d.Name, id, d.ExpiresAt, d.Status)
 			if err != nil {
 				continue
 			}

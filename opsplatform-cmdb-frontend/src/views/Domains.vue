@@ -124,7 +124,9 @@
         <el-table-column prop="name" label="主域名" min-width="250" sortable="custom"><template #default="{ row }">
           <span :class="{ stale: row.stale || row.ignored }">{{ row.name }}</span>
           <el-tooltip v-if="row.ignored" :disabled="!row.ignore_reason" :content="row.ignore_reason"><el-tag type="info" size="small" style="margin-left:6px">已忽略</el-tag></el-tooltip>
-          <el-tag v-if="row.stale" type="danger" size="small" style="margin-left:6px">已移出账号</el-tag>
+          <el-tooltip v-if="row.stale" :disabled="!row.source_status" :content="'数据源状态：' + row.source_status">
+            <el-tag type="danger" size="small" style="margin-left:6px">已移出账号{{ row.source_status ? '（' + row.source_status + '）' : '' }}</el-tag>
+          </el-tooltip>
           <el-tag v-else-if="row.dns_migrated" size="small" style="margin-left:6px;background:#7a5c8a;color:#fff;border-color:#7a5c8a">DNS已迁移</el-tag>
         </template></el-table-column>
         <el-table-column label="来源" width="140"><template #default="{ row }">

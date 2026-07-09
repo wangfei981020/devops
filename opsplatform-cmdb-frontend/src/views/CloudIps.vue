@@ -15,7 +15,7 @@
         <span class="grow" />
         <span class="muted">共 {{ filtered.length }} 个 · 🔴闲置 {{ idleCount }}</span>
       </div>
-      <el-table :data="filtered" size="small" v-loading="loading">
+      <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column label="厂商" width="90"><template #default="{ row }"><el-tag :style="providerStyle(row.provider)" size="small">{{ plabel(row.provider) }}</el-tag></template></el-table-column>
         <el-table-column label="项目" min-width="100"><template #default="{ row }"><el-tag v-if="row.project" :style="projectStyle(row.project)" size="small">{{ row.project }}</el-tag><span v-else class="muted">—</span></template></el-table-column>
         <el-table-column label="区域" width="130"><template #default="{ row }"><el-tag v-if="row.region" :style="regionStyle(row.region)" size="small">{{ row.region }}</el-tag><span v-else class="muted">—</span></template></el-table-column>
@@ -29,6 +29,8 @@
           <el-tag v-else type="success" size="small" effect="plain">使用中</el-tag>
         </template></el-table-column>
       </el-table>
+      <el-pagination v-model:current-page="page" v-model:page-size="size" :page-sizes="[10,20,50,100]"
+        :total="filtered.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
     </el-card>
   </div>
 </template>
@@ -39,6 +41,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { listCloudIps } from '../api/cmdb'
 import { providerLabel as plabel, providerStyle, projectStyle, regionStyle, typeStyle } from '../utils/cloud'
+import { usePaged } from '../composables/usePaged'
 
 const rows = ref([]), loading = ref(false)
 const kw = ref(''), fp = ref(null), fk = ref(null), onlyIdle = ref(false)
@@ -53,6 +56,7 @@ const filtered = computed(() => rows.value.filter((r) => {
     (!fp.value || r.provider === fp.value) && (!fk.value || r.kind === fk.value) &&
     (!onlyIdle.value || r.idle)
 }))
+const { page, size, paged } = usePaged(filtered)
 const idleCount = computed(() => rows.value.filter((r) => r.idle).length)
 function kindType(k) { return k.includes('VIP') ? 'warning' : k.includes('外网') ? 'primary' : 'info' }
 

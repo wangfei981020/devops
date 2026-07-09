@@ -77,7 +77,8 @@ type domainOut struct {
 	DnsMigrated   bool   `json:"dns_migrated"` // 域名还在数据源账户但 DNS 已迁走(NS 非 GoDaddy)
 	Ignored       bool   `json:"ignored"`
 	IgnoreReason  string `json:"ignore_reason"`
-	Origin        string `json:"origin"` // manual=手动录入, sync=数据源同步
+	SourceStatus  string `json:"source_status"` // 数据源(GoDaddy)返回的域名状态，如 ACTIVE/TRANSFERRED
+	Origin        string `json:"origin"`        // manual=手动录入, sync=数据源同步
 }
 
 func (h *DomainHandler) List(c *gin.Context) {
@@ -87,7 +88,7 @@ func (h *DomainHandler) List(c *gin.Context) {
 		       d.cert_expiry_at, d.cert_check_msg, d.stale, d.origin,
 		       (SELECT COUNT(*) FROM ci_relations r WHERE r.dst_ci_id=c.id AND r.rel_type='protects'),
 		       (SELECT COUNT(*) FROM dns_records dr WHERE dr.domain_ci_id=c.id),
-		       d.last_synced_at, d.dns_migrated, d.ignored, d.ignore_reason
+		       d.last_synced_at, d.dns_migrated, d.ignored, d.ignore_reason, d.source_status
 		FROM cis c
 		JOIN domains d ON d.ci_id=c.id
 		LEFT JOIN registrars reg ON reg.id=d.registrar_id
@@ -106,7 +107,7 @@ func (h *DomainHandler) List(c *gin.Context) {
 		var stale, migrated, ignored int
 		if err := rows.Scan(&o.CIID, &o.Name, &o.Project, &o.Env, &o.Module, &o.Owner, &o.Status,
 			&regID, &o.RegistrarName, &o.DNSProvider, &exp, &certExp, &o.CertCheckMsg, &stale, &o.Origin, &o.CertCount,
-			&o.DnsCount, &lastSync, &migrated, &ignored, &o.IgnoreReason); err != nil {
+			&o.DnsCount, &lastSync, &migrated, &ignored, &o.IgnoreReason, &o.SourceStatus); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}

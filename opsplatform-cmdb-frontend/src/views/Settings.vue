@@ -18,7 +18,7 @@
     <el-card shadow="never" style="margin-bottom:14px">
       <template #header><b>注册商 / DNS 凭据</b><span class="muted" style="margin-left:8px">证书 DNS-01 验证复用这些凭据</span>
         <el-button type="primary" size="small" style="float:right" @click="openReg">+ 添加注册商</el-button></template>
-      <el-table :data="registrars" size="small">
+      <el-table :data="rPaged" size="small">
         <el-table-column prop="name" label="名称" min-width="140" />
         <el-table-column prop="provider" label="provider" width="140" />
         <el-table-column label="凭据" width="90"><template #default="{ row }"><el-tag size="small" :type="row.has_cred?'success':'info'">{{ row.has_cred?'已配':'未配' }}</el-tag></template></el-table-column>
@@ -31,6 +31,8 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination v-if="registrars.length > rSize" v-model:current-page="rPage" v-model:page-size="rSize" :page-sizes="[10,20,50,100]"
+        :total="registrars.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
     </el-card>
 
     <!-- 数据源 API 用量 -->
@@ -57,12 +59,14 @@
     <el-card shadow="never">
       <template #header><b>ACME 账户</b><span class="muted" style="margin-left:8px">证书签发的 CA 账户（邮箱单独配）</span>
         <el-button type="primary" size="small" style="float:right" @click="openAcct">+ 添加账户</el-button></template>
-      <el-table :data="accounts" size="small">
+      <el-table :data="aPaged" size="small">
         <el-table-column prop="email" label="邮箱" min-width="200" />
         <el-table-column prop="ca" label="CA" width="140" />
         <el-table-column label="已注册" width="90"><template #default="{ row }"><el-tag size="small" :type="row.registered?'success':'info'">{{ row.registered?'是':'待签发' }}</el-tag></template></el-table-column>
         <el-table-column label="操作" width="80" fixed="right"><template #default="{ row }"><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delAcct(row)" /></el-tooltip></template></el-table-column>
       </el-table>
+      <el-pagination v-if="accounts.length > aSize" v-model:current-page="aPage" v-model:page-size="aSize" :page-sizes="[10,20,50,100]"
+        :total="accounts.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
     </el-card>
 
     <!-- 注册商弹窗 -->
@@ -103,6 +107,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Edit, Delete } from '@element-plus/icons-vue'
 import { getSettings, updateSettings, listRegistrars, createRegistrar, updateRegistrar, deleteRegistrar, listAcme, createAcme, deleteAcme, sourceUsage } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { usePaged } from '../composables/usePaged'
 
 const app = useAppStore()
 const providers = ['godaddy', 'dnspod', 'aliyun', 'cloudflare', 'tencent']
@@ -116,6 +121,8 @@ const credFields = {
 
 const cfg = ref({})
 const registrars = ref([]), accounts = ref([])
+const { page: rPage, size: rSize, paged: rPaged } = usePaged(registrars)
+const { page: aPage, size: aSize, paged: aPaged } = usePaged(accounts)
 const regDlg = ref(false), regEdit = ref(false), regForm = ref({ credential: {} })
 const acctDlg = ref(false), acctForm = ref({})
 const usage = ref({}), usageLoading = ref(false)

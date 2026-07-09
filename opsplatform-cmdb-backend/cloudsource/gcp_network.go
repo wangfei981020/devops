@@ -124,6 +124,9 @@ func (g *GCP) ListNetwork(ctx context.Context, projectID string) (*NetworkResour
 		})
 	})
 
+	// 追溯 LB 后端实例（best-effort，失败不影响上面的结果）
+	g.resolveLBBackends(ctx, svc, projectID, nr.LoadBalancers, lim)
+
 	return nr, nil
 }
 

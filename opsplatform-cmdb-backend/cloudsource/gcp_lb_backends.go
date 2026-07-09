@@ -1,0 +1,239 @@
+package cloudsource
+
+import (
+	"context"
+	"strings"
+
+	compute "google.golang.org/api/compute/v1"
+)
+
+// resolveLBBackends 尽力把每个转发规则追溯到后端实例（option A：实例名 + 实例组 + zone）。
+// 覆盖：L4 网络LB(targetPool→instances)、L4 内部LB(backendService→实例组)、L7(target*Proxy→urlMap→backendService→实例组)。
+// 全程防御式：任何一跳失败只影响该 LB 的后端为空，绝不影响 LB 本身与其它网络资源的同步。
+func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, projectID string, lbs []LoadBalancer, lim *limiter) {
+	if len(lbs) == 0 {
+		return
+	}
+	pools := map[string][]string{}          // targetPool selfLink -> 实例URL
+	bsGroups := map[string][]string{}       // backendService selfLink -> 实例组URL
+	proxyURLMap := map[string]string{}      // http/https proxy selfLink -> urlMap URL
+	proxyService := map[string]string{}     // tcp/ssl proxy selfLink -> backendService URL
+	urlMapServices := map[string][]string{} // urlMap selfLink -> backendService URL 列表
+	groupInstances := map[string][]string{} // 实例组URL -> 实例URL（懒加载缓存）
+
+	// targetPools（区域+全局，aggregated 覆盖）
+	_ = g.retry(ctx, lim, func() error {
+		return svc.TargetPools.AggregatedList(projectID).Pages(ctx, func(page *compute.TargetPoolAggregatedList) error {
+			for _, sc := range page.Items {
+				for _, tp := range sc.TargetPools {
+					pools[tp.SelfLink] = tp.Instances
+				}
+			}
+			return nil
+		})
+	})
+	// backendServices（aggregated 含区域+全局）
+	_ = g.retry(ctx, lim, func() error {
+		return svc.BackendServices.AggregatedList(projectID).Pages(ctx, func(page *compute.BackendServiceAggregatedList) error {
+			for _, sc := range page.Items {
+				for _, bs := range sc.BackendServices {
+					var groups []string
+					for _, b := range bs.Backends {
+						if b.Group != "" {
+							groups = append(groups, b.Group)
+						}
+					}
+					bsGroups[bs.SelfLink] = groups
+				}
+			}
+			return nil
+		})
+	})
+	// urlMaps（aggregated 含区域+全局）
+	_ = g.retry(ctx, lim, func() error {
+		return svc.UrlMaps.AggregatedList(projectID).Pages(ctx, func(page *compute.UrlMapsAggregatedList) error {
+			for _, sc := range page.Items {
+				for _, um := range sc.UrlMaps {
+					var svcs []string
+					if um.DefaultService != "" {
+						svcs = append(svcs, um.DefaultService)
+					}
+					for _, pm := range um.PathMatchers {
+						if pm.DefaultService != "" {
+							svcs = append(svcs, pm.DefaultService)
+						}
+						for _, pr := range pm.PathRules {
+							if pr.Service != "" {
+								svcs = append(svcs, pr.Service)
+							}
+						}
+					}
+					urlMapServices[um.SelfLink] = svcs
+				}
+			}
+			return nil
+		})
+	})
+	// target http/https proxies -> urlMap
+	_ = g.retry(ctx, lim, func() error {
+		return svc.TargetHttpProxies.AggregatedList(projectID).Pages(ctx, func(page *compute.TargetHttpProxyAggregatedList) error {
+			for _, sc := range page.Items {
+				for _, p := range sc.TargetHttpProxies {
+					proxyURLMap[p.SelfLink] = p.UrlMap
+				}
+			}
+			return nil
+		})
+	})
+	_ = g.retry(ctx, lim, func() error {
+		return svc.TargetHttpsProxies.AggregatedList(projectID).Pages(ctx, func(page *compute.TargetHttpsProxyAggregatedList) error {
+			for _, sc := range page.Items {
+				for _, p := range sc.TargetHttpsProxies {
+					proxyURLMap[p.SelfLink] = p.UrlMap
+				}
+			}
+			return nil
+		})
+	})
+	// target tcp/ssl proxies（全局）-> backendService
+	_ = g.retry(ctx, lim, func() error {
+		return svc.TargetTcpProxies.List(projectID).Pages(ctx, func(page *compute.TargetTcpProxyList) error {
+			for _, p := range page.Items {
+				proxyService[p.SelfLink] = p.Service
+			}
+			return nil
+		})
+	})
+	_ = g.retry(ctx, lim, func() error {
+		return svc.TargetSslProxies.List(projectID).Pages(ctx, func(page *compute.TargetSslProxyList) error {
+			for _, p := range page.Items {
+				proxyService[p.SelfLink] = p.Service
+			}
+			return nil
+		})
+	})
+
+	// 实例组 -> 实例（懒加载，只查被 LB 引用到的组，zonal 与 regional 都支持）
+	membersOf := func(groupURL string) []string {
+		if v, ok := groupInstances[groupURL]; ok {
+			return v
+		}
+		scope, kind := scopeOfURL(groupURL) // kind: zone/region
+		name := lastSeg(groupURL)
+		var insts []string
+		if scope != "" && name != "" {
+			if kind == "region" {
+				_ = g.retry(ctx, lim, func() error {
+					return svc.RegionInstanceGroups.ListInstances(projectID, scope, name, &compute.RegionInstanceGroupsListInstancesRequest{}).Pages(ctx, func(page *compute.RegionInstanceGroupsListInstances) error {
+						for _, it := range page.Items {
+							insts = append(insts, it.Instance)
+						}
+						return nil
+					})
+				})
+			} else {
+				_ = g.retry(ctx, lim, func() error {
+					return svc.InstanceGroups.ListInstances(projectID, scope, name, &compute.InstanceGroupsListInstancesRequest{}).Pages(ctx, func(page *compute.InstanceGroupsListInstances) error {
+						for _, it := range page.Items {
+							insts = append(insts, it.Instance)
+						}
+						return nil
+					})
+				})
+			}
+		}
+		groupInstances[groupURL] = insts
+		return insts
+	}
+
+	for i := range lbs {
+		lb := &lbs[i]
+		seen := map[string]bool{}
+		var backends []LBBackend
+		addInstance := func(instURL, groupURL string) {
+			name := lastSeg(instURL)
+			if name == "" || seen[name] {
+				return
+			}
+			seen[name] = true
+			scope, _ := scopeOfURL(instURL)
+			backends = append(backends, LBBackend{Instance: name, Group: lastSeg(groupURL), Zone: scope})
+		}
+
+		// lb.Target 存的是 lastSeg（名字），按名字在各 map 里反查其关联的
+		// targetPool / backendService selfLink（单 project 内名字唯一，足够）。
+		var poolURLs, serviceURLs []string
+		classifyTarget(lb.Target, pools, bsGroups, proxyURLMap, proxyService, urlMapServices, &poolURLs, &serviceURLs)
+
+		for _, purl := range poolURLs {
+			for _, inst := range pools[purl] {
+				addInstance(inst, "")
+			}
+		}
+		for _, surl := range serviceURLs {
+			for _, gp := range bsGroups[surl] {
+				for _, inst := range membersOf(gp) {
+					addInstance(inst, gp)
+				}
+			}
+		}
+		lb.Backends = backends
+	}
+}
+
+// classifyTarget 按 target 名字在各 map 里反查，产出关联的 targetPool / backendService 的 selfLink 列表。
+func classifyTarget(target string,
+	pools, bsGroups map[string][]string,
+	proxyURLMap, proxyService map[string]string,
+	urlMapServices map[string][]string,
+	outPools, outServices *[]string) {
+	if target == "" {
+		return
+	}
+	// 1) 直接命中 targetPool
+	for sl := range pools {
+		if lastSeg(sl) == target {
+			*outPools = append(*outPools, sl)
+		}
+	}
+	// 2) 直接命中 backendService
+	for sl := range bsGroups {
+		if lastSeg(sl) == target {
+			*outServices = append(*outServices, sl)
+		}
+	}
+	// 3) http/https proxy -> urlMap -> services
+	for sl, um := range proxyURLMap {
+		if lastSeg(sl) == target {
+			for _, svcURL := range urlMapServices[um] {
+				*outServices = append(*outServices, svcURL)
+			}
+		}
+	}
+	// 4) tcp/ssl proxy -> service
+	for sl, svcURL := range proxyService {
+		if lastSeg(sl) == target && svcURL != "" {
+			*outServices = append(*outServices, svcURL)
+		}
+	}
+}
+
+// scopeOfURL 从 GCP 资源 URL 里取 zone 或 region 名，kind 返回 "zone"/"region"/""。
+func scopeOfURL(u string) (scope, kind string) {
+	if i := strings.Index(u, "/zones/"); i >= 0 {
+		rest := u[i+len("/zones/"):]
+		return firstSeg(rest), "zone"
+	}
+	if i := strings.Index(u, "/regions/"); i >= 0 {
+		rest := u[i+len("/regions/"):]
+		return firstSeg(rest), "region"
+	}
+	return "", ""
+}
+
+func firstSeg(s string) string {
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}

@@ -15,7 +15,7 @@
         <span class="grow" />
         <span class="muted">共 {{ filtered.length }} 条 · <span style="color:#f56c6c">🔴高危 {{ riskCount }}</span></span>
       </div>
-      <el-table :data="filtered" size="small" v-loading="loading" :row-class-name="rowCls">
+      <el-table :data="paged" size="small" v-loading="loading" :row-class-name="rowCls">
         <el-table-column label="厂商" width="80"><template #default="{ row }"><el-tag :style="providerStyle(row.provider)" size="small">{{ plabel(row.provider) }}</el-tag></template></el-table-column>
         <el-table-column label="项目" min-width="100"><template #default="{ row }"><el-tag v-if="row.project" :style="projectStyle(row.project)" size="small">{{ row.project }}</el-tag><span v-else class="muted">—</span></template></el-table-column>
         <el-table-column label="规则名" min-width="160"><template #default="{ row }">
@@ -31,6 +31,8 @@
         <el-table-column label="目标标签" min-width="120"><template #default="{ row }">{{ row.target_tags || '—' }}</template></el-table-column>
         <el-table-column label="动作" width="80"><template #default="{ row }"><el-tag :type="row.action==='allow' ? 'success' : 'danger'" size="small" effect="plain">{{ row.action==='allow' ? '允许' : '拒绝' }}</el-tag></template></el-table-column>
       </el-table>
+      <el-pagination v-model:current-page="page" v-model:page-size="size" :page-sizes="[10,20,50,100]"
+        :total="filtered.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
     </el-card>
   </div>
 </template>
@@ -41,6 +43,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { listCloudFirewalls } from '../api/cmdb'
 import { providerLabel as plabel, providerStyle, projectStyle, typeStyle } from '../utils/cloud'
+import { usePaged } from '../composables/usePaged'
 
 const rows = ref([]), loading = ref(false)
 const fp = ref(null), fnet = ref(null), fdir = ref(null), onlyRisk = ref(false)
@@ -52,6 +55,7 @@ const opts = computed(() => ({
 const filtered = computed(() => rows.value.filter((r) =>
   (!fp.value || r.provider === fp.value) && (!fnet.value || r.network === fnet.value) &&
   (!fdir.value || r.direction === fdir.value) && (!onlyRisk.value || r.high_risk)))
+const { page, size, paged } = usePaged(filtered)
 const riskCount = computed(() => rows.value.filter((r) => r.high_risk).length)
 function rowCls({ row }) { return row.high_risk ? 'risk-row' : '' }
 

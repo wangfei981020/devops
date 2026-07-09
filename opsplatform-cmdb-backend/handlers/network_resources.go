@@ -97,11 +97,16 @@ func SyncProjectNetwork(db *sql.DB, provider string, accountID int, project stri
 		_, _ = db.Exec(`INSERT INTO cloud_addresses (provider,cloud_account_id,project,name,address,addr_type,status,region,users,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,NOW())`,
 			provider, accountID, project, a.Name, a.Address, a.Type, a.Status, a.Region, a.Users, a.SelfLink)
 	}
-	// 负载均衡
+	// 负载均衡 + 后端成员
 	_, _ = db.Exec(`DELETE FROM cloud_loadbalancers WHERE cloud_account_id=? AND project=?`, accountID, project)
+	_, _ = db.Exec(`DELETE FROM cloud_lb_backends WHERE cloud_account_id=? AND project=?`, accountID, project)
 	for _, l := range nr.LoadBalancers {
 		_, _ = db.Exec(`INSERT INTO cloud_loadbalancers (provider,cloud_account_id,project,name,scheme,vip,port_range,protocol,target,region,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())`,
 			provider, accountID, project, l.Name, l.Scheme, l.VIP, l.PortRange, l.Protocol, l.Target, l.Region, l.SelfLink)
+		for _, b := range l.Backends {
+			_, _ = db.Exec(`INSERT INTO cloud_lb_backends (cloud_account_id,project,lb_name,instance,group_name,zone,synced_at) VALUES (?,?,?,?,?,?,NOW())`,
+				accountID, project, l.Name, b.Instance, b.Group, b.Zone)
+		}
 	}
 }
 
@@ -207,7 +212,26 @@ func (h *NetworkHandler) ListAddresses(c *gin.Context) {
 }
 
 func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
-	rows, err := h.DB.Query(`SELECT provider, cloud_account_id, project, name, scheme, vip, port_range, protocol, target, region FROM cloud_loadbalancers ORDER BY provider, name`)
+	// 预取所有后端成员（LEFT JOIN 主机表取内网IP），按 账号/项目/LB 分组
+	backends := map[string][]gin.H{}
+	if brows, _ := h.DB.Query(`
+		SELECT b.cloud_account_id, b.project, b.lb_name, b.instance, b.group_name, b.zone, COALESCE(h.internal_ip,'')
+		FROM cloud_lb_backends b
+		LEFT JOIN cis c ON c.type='host' AND c.name=b.instance
+		LEFT JOIN hosts h ON h.ci_id=c.id AND h.project=b.project AND h.stale=0
+		ORDER BY b.instance`); brows != nil {
+		for brows.Next() {
+			var aid int
+			var project, lb, inst, grp, zone, ip string
+			if brows.Scan(&aid, &project, &lb, &inst, &grp, &zone, &ip) == nil {
+				key := itoa(aid) + "/" + project + "/" + lb
+				backends[key] = append(backends[key], gin.H{"instance": inst, "group": grp, "zone": zone, "internal_ip": ip})
+			}
+		}
+		brows.Close()
+	}
+
+	rows, err := h.DB.Query(`SELECT id, provider, cloud_account_id, project, name, scheme, vip, port_range, protocol, target, region, self_link FROM cloud_loadbalancers ORDER BY provider, name`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -216,11 +240,16 @@ func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 	pn := h.projNames()
 	out := []gin.H{}
 	for rows.Next() {
-		var provider, project, name, scheme, vip, port, protocol, target, region string
-		var aid int
-		if rows.Scan(&provider, &aid, &project, &name, &scheme, &vip, &port, &protocol, &target, &region) == nil {
-			out = append(out, gin.H{"provider": provider, "project": pn[itoa(aid)+"/"+project], "name": name,
-				"scheme": scheme, "vip": vip, "port_range": port, "protocol": protocol, "target": target, "region": region})
+		var provider, project, name, scheme, vip, port, protocol, target, region, selfLink string
+		var id, aid int
+		if rows.Scan(&id, &provider, &aid, &project, &name, &scheme, &vip, &port, &protocol, &target, &region, &selfLink) == nil {
+			bs := backends[itoa(aid)+"/"+project+"/"+name]
+			if bs == nil {
+				bs = []gin.H{}
+			}
+			out = append(out, gin.H{"id": id, "provider": provider, "project": pn[itoa(aid)+"/"+project], "name": name,
+				"scheme": scheme, "vip": vip, "port_range": port, "protocol": protocol, "target": target, "region": region,
+				"self_link": selfLink, "backends": bs})
 		}
 	}
 	c.JSON(http.StatusOK, out)

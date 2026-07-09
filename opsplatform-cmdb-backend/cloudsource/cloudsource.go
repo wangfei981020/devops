@@ -92,6 +92,14 @@ type LoadBalancer struct {
 	Target    string
 	Region    string // 'global' 或区域
 	SelfLink  string
+	Backends  []LBBackend // 后端成员（实例），best-effort 追溯
+}
+
+// LBBackend 负载均衡追溯到的一个后端实例
+type LBBackend struct {
+	Instance string // 实例名
+	Group    string // 所属实例组名
+	Zone     string // 实例组所在 zone/region
 }
 
 // NetworkResources 一个 project 的全部网络资源

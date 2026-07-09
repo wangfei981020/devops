@@ -12,7 +12,7 @@
         <span class="grow" />
         <span class="muted">共 {{ filtered.length }} 个 VPC · {{ subnets.length }} 个子网</span>
       </div>
-      <el-table :data="filtered" size="small" v-loading="loading" row-key="key">
+      <el-table :data="paged" size="small" v-loading="loading" row-key="key">
         <el-table-column type="expand">
           <template #default="{ row }">
             <div style="padding:6px 20px 12px">
@@ -33,6 +33,8 @@
         <el-table-column label="子网数" width="80" align="right"><template #default="{ row }">{{ row.subnet_count }}</template></el-table-column>
         <el-table-column label="防火墙规则" width="100" align="right"><template #default="{ row }">{{ row.firewall_count }}</template></el-table-column>
       </el-table>
+      <el-pagination v-model:current-page="page" v-model:page-size="size" :page-sizes="[10,20,50,100]"
+        :total="filtered.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
     </el-card>
   </div>
 </template>
@@ -43,12 +45,14 @@ import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { listCloudNetworks, listCloudSubnets } from '../api/cmdb'
 import { providerLabel as plabel, providerStyle, projectStyle, regionStyle, typeStyle } from '../utils/cloud'
+import { usePaged } from '../composables/usePaged'
 
 const rows = ref([]), subnets = ref([]), loading = ref(false), fp = ref(null)
 
 const providers = computed(() => [...new Set(rows.value.map((r) => r.provider))].filter(Boolean))
 const filtered = computed(() => rows.value.filter((r) => !fp.value || r.provider === fp.value)
   .map((r) => ({ ...r, key: r.provider + '/' + r.project_id + '/' + r.name })))
+const { page, size, paged } = usePaged(filtered)
 function subnetsOf(row) { return subnets.value.filter((s) => s.network === row.name && s.project === row.project) }
 
 async function load() {
