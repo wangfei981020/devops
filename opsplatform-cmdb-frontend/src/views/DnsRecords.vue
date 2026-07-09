@@ -23,14 +23,24 @@
 
     <el-card shadow="never" style="margin-bottom:12px">
       <div class="filter">
-        <el-input v-model="domKeyword" placeholder="搜索主域名" clearable :prefix-icon="Search" style="width:200px" @keyup.enter="doDomSearch" />
-        <el-select v-model="domView" style="width:160px" @change="domPage=1">
-          <el-option v-for="o in viewOptions" :key="o.value" :label="`${o.label}（${o.count}）`" :value="o.value" />
+        <el-input v-model="df.kw.value" placeholder="搜索主域名" clearable :prefix-icon="Search" style="width:180px" @keyup.enter="doDomSearch" />
+        <el-select v-model="df.view.value" style="width:150px" @change="domPage=1">
+          <el-option v-for="o in df.viewOptions.value" :key="o.value" :label="`${o.label}（${o.count}）`" :value="o.value" />
+        </el-select>
+        <el-select v-model="df.src.value" clearable placeholder="来源" style="width:130px" @change="domPage=1">
+          <el-option v-for="s in df.sourceOptions.value" :key="s" :label="s" :value="s">
+            <span :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: registrarColor(s), marginRight:'6px' }" />{{ s }}
+          </el-option>
+        </el-select>
+        <el-select v-model="df.expiry.value" clearable placeholder="到期" style="width:120px" @change="domPage=1">
+          <el-option label="🔴 已过期" value="expired" />
+          <el-option label="🟠 30天内" value="soon" />
+          <el-option label="🟢 正常" value="normal" />
         </el-select>
         <el-button type="primary" :icon="Search" @click="doDomSearch">搜索</el-button>
-        <el-button @click="domKeyword=''; doDomSearch()">重置</el-button>
-        <el-button v-if="selectedDoms.length && domView!=='ignored'" type="warning" :icon="Hide" @click="ignoreDoms(selectedDoms)">批量忽略（{{ selectedDoms.length }}）</el-button>
-        <el-button v-if="selectedDoms.length && domView==='ignored'" type="success" @click="unignoreDoms(selectedDoms)">取消忽略（{{ selectedDoms.length }}）</el-button>
+        <el-button @click="resetDomFilter">重置</el-button>
+        <el-button v-if="selectedDoms.length && df.view.value!=='ignored'" type="warning" :icon="Hide" @click="ignoreDoms(selectedDoms)">批量忽略（{{ selectedDoms.length }}）</el-button>
+        <el-button v-if="selectedDoms.length && df.view.value==='ignored'" type="success" @click="unignoreDoms(selectedDoms)">取消忽略（{{ selectedDoms.length }}）</el-button>
         <span class="muted" style="margin-left:auto">共 {{ domFiltered.length }} 个域名</span>
       </div>
     </el-card>
@@ -116,13 +126,14 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search, Hide, RefreshLeft } from '@element-plus/icons-vue'
 import { listDomains, listRegistrars, listDnsRecords, syncSource, syncSourceStatus, syncDomainRecords, bulkIgnoreDomains } from '../api/cmdb'
-import { registrarStyle, domainCatLabel, domainCatStyle, DOMAIN_CAT_ORDER } from '../utils/cloud'
+import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
+import { useDomainFilter } from '../composables/useDomainFilter'
 const sources = ref([]), domains = ref([]), loading = ref(false)
 const sourceId = ref(null)
 const syncing = ref(false)
 const prog = ref({ total: 0, done: 0, imported_records: 0 })
 const syncingOne = ref({})
-const domView = ref('active'), selectedDoms = ref([])
+const selectedDoms = ref([])
 let pollTimer = null
 const types = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'CAA', 'SRV']
 // DNS 记录类型固定配色（冷色/中性，红橙留给到期告警）
@@ -172,38 +183,13 @@ async function syncOne(row) {
   } finally { syncingOne.value = { ...syncingOne.value, [row.ci_id]: false } }
 }
 
-// 主域名列表筛选/分页
-const domKeyword = ref(''), domQuery = ref(''), domPage = ref(1), domPageSize = ref(20)
-// 异常汇总：非活跃、非待激活、非已忽略的都算异常
-const ABNORMAL_CATS = ['dns_migrated', 'expired', 'transferred_out', 'cancelled', 'ownership', 'removed', 'unknown']
-const domFiltered = computed(() => domains.value.filter((d) => {
-  if (domQuery.value && !d.name.toLowerCase().includes(domQuery.value.toLowerCase())) return false
-  const cat = d.category || 'active'
-  if (domView.value === 'all') return true
-  if (domView.value === 'abnormal') return ABNORMAL_CATS.includes(cat)
-  return cat === domView.value
-}))
-// 各分类计数（用于下拉显示数量）
-const catCounts = computed(() => {
-  const m = {}
-  for (const d of domains.value) { const c = d.category || 'active'; m[c] = (m[c] || 0) + 1 }
-  m.all = domains.value.length
-  m.abnormal = domains.value.filter((d) => ABNORMAL_CATS.includes(d.category || 'active')).length
-  return m
-})
-// 下拉选项：活跃/待激活 + 异常汇总 + 各异常态 + 已忽略 + 全部，只列存在的
-const viewOptions = computed(() => {
-  const cc = catCounts.value
-  const opts = [{ value: 'active', label: '活跃' }, { value: 'pending', label: '待激活' }, { value: 'abnormal', label: '异常' }]
-  for (const c of DOMAIN_CAT_ORDER) {
-    if (['active', 'pending', 'ignored'].includes(c)) continue
-    if (cc[c]) opts.push({ value: c, label: domainCatLabel(c) })
-  }
-  opts.push({ value: 'ignored', label: '已忽略' }, { value: 'all', label: '全部' })
-  return opts.filter((o, i, arr) => arr.findIndex((x) => x.value === o.value) === i).map((o) => ({ ...o, count: cc[o.value] || 0 }))
-})
+// 主域名列表筛选/分页（状态/来源/到期/关键词 统一筛选）
+const domPage = ref(1), domPageSize = ref(20)
+const df = useDomainFilter(domains)
+const domFiltered = df.filtered
 const domPaged = computed(() => { const s = (domPage.value - 1) * domPageSize.value; return domFiltered.value.slice(s, s + domPageSize.value) })
-function doDomSearch() { domQuery.value = domKeyword.value; domPage.value = 1 }
+function doDomSearch() { df.doSearch(); domPage.value = 1 }
+function resetDomFilter() { df.reset(); domPage.value = 1 }
 
 // 每个域名的 DNS 记录（懒加载）+ 各自的筛选/分页状态
 const recMap = ref({}), recLoading = ref({}), recState = ref({})

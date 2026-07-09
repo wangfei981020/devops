@@ -113,9 +113,22 @@
     <template v-else>
     <el-card shadow="never" style="margin-bottom:12px">
       <div class="filter">
-        <el-input v-model="domKeyword" placeholder="搜索主域名" clearable :prefix-icon="Search" style="width:220px" @keyup.enter="doDomSearch" />
+        <el-input v-model="df.kw.value" placeholder="搜索主域名" clearable :prefix-icon="Search" style="width:200px" @keyup.enter="doDomSearch" />
+        <el-select v-model="df.view.value" style="width:150px" @change="domPage=1">
+          <el-option v-for="o in df.viewOptions.value" :key="o.value" :label="`${o.label}（${o.count}）`" :value="o.value" />
+        </el-select>
+        <el-select v-model="df.src.value" clearable placeholder="来源" style="width:140px" @change="domPage=1">
+          <el-option v-for="s in df.sourceOptions.value" :key="s" :label="s" :value="s">
+            <span :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: registrarColor(s), marginRight:'6px' }" />{{ s }}
+          </el-option>
+        </el-select>
+        <el-select v-model="df.expiry.value" clearable placeholder="到期" style="width:130px" @change="domPage=1">
+          <el-option label="🔴 已过期" value="expired" />
+          <el-option label="🟠 30天内" value="soon" />
+          <el-option label="🟢 正常" value="normal" />
+        </el-select>
         <el-button type="primary" :icon="Search" @click="doDomSearch">搜索</el-button>
-        <el-button @click="domKeyword=''; doDomSearch()">重置</el-button>
+        <el-button @click="resetDomFilter">重置</el-button>
         <span class="muted" style="margin-left:auto">共 {{ domFiltered.length }} 个主域名</span>
       </div>
     </el-card>
@@ -375,7 +388,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, InfoFilled } from '@element-plus/icons-vue'
-import { registrarStyle, domainCatLabel, domainCatStyle } from '../utils/cloud'
+import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
+import { useDomainFilter } from '../composables/useDomainFilter'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgnoreRecords, deleteRecord, checkRecordCert,
   syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains, bulkIgnoreDomains } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
@@ -388,7 +402,8 @@ const selected = ref([]), tableRef = ref()
 const statusView = ref('normal') // normal=未忽略 / ignored / all
 const tab = ref('records') // records=主机头台账 / domains=主域名
 // 主域名 tab
-const domKeyword = ref(''), domQuery = ref(''), domPage = ref(1), domPageSize = ref(10)
+const domPage = ref(1), domPageSize = ref(10)
+const df = useDomainFilter(allDomains) // 状态/来源/到期/关键词 统一筛选
 const domDlg = ref(false), domEditing = ref(false), domForm = ref({})
 const refreshingAll = ref(false), refreshingDom = ref({})
 const igDlg = ref(false), igRows = ref([]), igReason = ref('')
@@ -466,8 +481,7 @@ const resoCountMap = computed(() => {
   for (const r of rows.value) m[r.domain_ci_id] = (m[r.domain_ci_id] || 0) + 1
   return m
 })
-const domFiltered = computed(() => allDomains.value.filter((d) =>
-  !domQuery.value || d.name.toLowerCase().includes(domQuery.value.toLowerCase())))
+const domFiltered = df.filtered
 const domSortState = ref({ prop: '', order: null })
 function onDomSort({ prop, order }) { domSortState.value = { prop, order } }
 const domSorted = computed(() => sortList(domFiltered.value, domSortState.value.prop, domSortState.value.order))
@@ -475,7 +489,8 @@ const domPaged = computed(() => {
   const s = (domPage.value - 1) * domPageSize.value
   return domSorted.value.slice(s, s + domPageSize.value)
 })
-function doDomSearch() { domQuery.value = domKeyword.value; domPage.value = 1 }
+function doDomSearch() { df.doSearch(); domPage.value = 1 }
+function resetDomFilter() { df.reset(); domPage.value = 1 }
 function sortByDate(a, b) { if (!a && !b) return 0; if (!a) return 1; if (!b) return -1; return new Date(a) - new Date(b) }
 function expiryClass(d) { if (!d) return ''; const days = (new Date(d) - Date.now()) / 86400000; return days < 0 ? 'exp-red' : (days < 30 ? 'exp-orange' : '') }
 function isExpired(d) { return d && new Date(d) < new Date() }

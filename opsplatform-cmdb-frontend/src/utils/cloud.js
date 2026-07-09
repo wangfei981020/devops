@@ -38,10 +38,11 @@ const REGISTRAR = {
   godaddy: '#4CAF50', dnspod: '#1E88E5', aliyun: '#ff6a00', cloudflare: '#F6821F',
   namecheap: '#D4202C', tencent: '#13b5b1', name: '#0f4c81', 'google-domains': '#4285f4',
 }
-export function registrarStyle(name) {
+export function registrarColor(name) {
   const k = String(name || '').toLowerCase()
-  return solid(REGISTRAR[k] || hashPick(name, PROJECT_POOL))
+  return REGISTRAR[k] || hashPick(name, PROJECT_POOL)
 }
+export function registrarStyle(name) { return solid(registrarColor(name)) }
 
 // ---- 域名状态分类（展示标签 + 颜色 + 下拉筛选）----
 const DOMAIN_CAT = {
