@@ -14,12 +14,15 @@ spec:
     spec:
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/opsplatform-cmdb-backend:v48
+          image: localhost:8070/opsplatform/opsplatform-cmdb-backend:v49
           imagePullPolicy: IfNotPresent
           env:
             # 泛解析(* CNAME)场景：禁用 lego 跟随 CNAME，让它直接在注册域名 zone 加显式 _acme-challenge TXT 盖过通配
             - name: LEGO_DISABLE_CNAME_SUPPORT
               value: "true"
+            # 统一显示马尼拉时间（Go time.Now()/格式化；配合 DSN time_zone='+08:00'）
+            - name: TZ
+              value: "Asia/Manila"
           envFrom:
             - secretRef: { name: opsplatform-cmdb-secret }
           ports:

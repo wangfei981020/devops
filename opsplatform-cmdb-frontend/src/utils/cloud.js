@@ -32,3 +32,31 @@ export function providerStyle(p) { return solid(PROVIDER[p] || '#8896a5') }
 export function projectStyle(name) { return solid(PROJECT_FIXED[name] || hashPick(name, PROJECT_POOL)) }
 export function regionStyle(name) { return outline(hashPick(name, REGION_POOL)) }
 export function typeStyle(name) { return outline(hashPick(name, TYPE_POOL)) }
+
+// ---- 域名来源/注册商（品牌色，实底；未知按名 hash）----
+const REGISTRAR = {
+  godaddy: '#4CAF50', dnspod: '#1E88E5', aliyun: '#ff6a00', cloudflare: '#F6821F',
+  namecheap: '#D4202C', tencent: '#13b5b1', name: '#0f4c81', 'google-domains': '#4285f4',
+}
+export function registrarStyle(name) {
+  const k = String(name || '').toLowerCase()
+  return solid(REGISTRAR[k] || hashPick(name, PROJECT_POOL))
+}
+
+// ---- 域名状态分类（展示标签 + 颜色 + 下拉筛选）----
+const DOMAIN_CAT = {
+  active: { label: '活跃', hex: '#52c41a', kind: 'solid' },
+  pending: { label: '待激活', hex: '#1677ff', kind: 'solid' },
+  dns_migrated: { label: 'DNS已迁移', hex: '#7a5c8a', kind: 'solid' },
+  expired: { label: '已过期', hex: '#fa8c16', kind: 'outline' },
+  transferred_out: { label: '已转出', hex: '#8c8c8c', kind: 'outline' },
+  cancelled: { label: '已取消', hex: '#8c8c8c', kind: 'outline' },
+  ownership: { label: '已过户', hex: '#8c8c8c', kind: 'outline' },
+  removed: { label: '已移出账号', hex: '#595959', kind: 'solid' },
+  ignored: { label: '已忽略', hex: '#bfbfbf', kind: 'outline' },
+  unknown: { label: '未知', hex: '#fa541c', kind: 'outline' },
+}
+export function domainCatLabel(c) { return (DOMAIN_CAT[c] || {}).label || c || '—' }
+export function domainCatStyle(c) { const m = DOMAIN_CAT[c] || { hex: '#8896a5', kind: 'outline' }; return m.kind === 'solid' ? solid(m.hex) : outline(m.hex) }
+// 下拉筛选顺序：活跃/待激活 在前，异常态在后
+export const DOMAIN_CAT_ORDER = ['active', 'pending', 'dns_migrated', 'expired', 'transferred_out', 'cancelled', 'ownership', 'removed', 'ignored', 'unknown']

@@ -398,7 +398,11 @@ func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool
 			}
 			if isDomainGone(d.Status) {
 				sh.markDomainGone(d.Name, id, d.Status)
+				log.Printf("[domain-sync] 域名 %s 判为已移出账号（GoDaddy status=%s）", d.Name, d.Status)
 				continue
+			}
+			if !isDomainActive(d.Status) && !isDomainPending(d.Status) {
+				log.Printf("[domain-sync] WARN 域名 %s 状态未识别（GoDaddy status=%s），暂按活跃处理", d.Name, d.Status)
 			}
 			ciID, err := sh.upsertDomainCI(d.Name, id, d.ExpiresAt, d.Status)
 			if err != nil {
@@ -408,17 +412,19 @@ func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool
 			totalD++
 			recs, err := adapter.ListRecords(ctx, d.Name)
 			if err != nil {
-				continue
+				log.Printf("[domain-sync] WARN 域名 %s 拉解析记录失败: %v", d.Name, err)
+			} else {
+				sh.refreshDNSRecords(ciID, id, recs)
+				totalR += len(recs)
+				totalImp += sh.importBusinessRecords(ciID, recs)
+				migrated := 0
+				if len(recs) == 0 && dnsMigratedFromGoDaddy(d.Name) {
+					migrated = 1
+				}
+				_, _ = db.Exec(`UPDATE domains SET dns_migrated=? WHERE ci_id=?`, migrated, ciID)
 			}
-			sh.refreshDNSRecords(ciID, id, recs)
-			totalR += len(recs)
-			totalImp += sh.importBusinessRecords(ciID, recs)
-			// 无论几条都记同步时刻；0 条时查 NS 判断 DNS 是否迁走（与手动同步一致）
-			migrated := 0
-			if len(recs) == 0 && dnsMigratedFromGoDaddy(d.Name) {
-				migrated = 1
-			}
-			_, _ = db.Exec(`UPDATE domains SET last_synced_at=NOW(), dns_migrated=? WHERE ci_id=?`, migrated, ciID)
+			// 扫到就更新同步时刻（records 成败都更）
+			_, _ = db.Exec(`UPDATE domains SET last_synced_at=NOW() WHERE ci_id=?`, ciID)
 		}
 		sh.markStaleDomains(id, present)
 		cancel()

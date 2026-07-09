@@ -24,11 +24,8 @@
     <el-card shadow="never" style="margin-bottom:12px">
       <div class="filter">
         <el-input v-model="domKeyword" placeholder="搜索主域名" clearable :prefix-icon="Search" style="width:200px" @keyup.enter="doDomSearch" />
-        <el-select v-model="domView" style="width:130px" @change="domPage=1">
-          <el-option label="活跃" value="active" />
-          <el-option label="异常" value="abnormal" />
-          <el-option label="已忽略" value="ignored" />
-          <el-option label="全部" value="all" />
+        <el-select v-model="domView" style="width:160px" @change="domPage=1">
+          <el-option v-for="o in viewOptions" :key="o.value" :label="`${o.label}（${o.count}）`" :value="o.value" />
         </el-select>
         <el-button type="primary" :icon="Search" @click="doDomSearch">搜索</el-button>
         <el-button @click="domKeyword=''; doDomSearch()">重置</el-button>
@@ -72,15 +69,17 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="主域名" min-width="250"><template #default="{ row }">
-          <span :class="{ stale: row.stale || row.ignored }">{{ row.name }}</span>
-          <el-tooltip v-if="row.ignored" :disabled="!row.ignore_reason" :content="row.ignore_reason"><el-tag type="info" size="small" style="margin-left:6px">已忽略</el-tag></el-tooltip>
-          <el-tag v-if="row.stale" type="danger" size="small" style="margin-left:6px">已移出账号</el-tag>
-          <el-tag v-else-if="row.dns_migrated" size="small" style="margin-left:6px;background:#7a5c8a;color:#fff;border-color:#7a5c8a">DNS已迁移</el-tag>
+        <el-table-column label="主域名" min-width="230"><template #default="{ row }">
+          <span :class="{ stale: row.category !== 'active' && row.category !== 'pending' }">{{ row.name }}</span>
         </template></el-table-column>
-        <el-table-column label="来源" width="130"><template #default="{ row }">
+        <el-table-column label="状态" width="120"><template #default="{ row }">
+          <el-tooltip :disabled="!row.source_status" :content="'GoDaddy 状态：' + row.source_status">
+            <el-tag size="small" :style="domainCatStyle(row.category)">{{ domainCatLabel(row.category) }}</el-tag>
+          </el-tooltip>
+        </template></el-table-column>
+        <el-table-column label="来源" width="120"><template #default="{ row }">
           <el-tag v-if="row.origin === 'manual'" type="info" size="small">手动录入</el-tag>
-          <el-tag v-else type="success" size="small">{{ row.registrar_name || '同步' }}</el-tag>
+          <el-tag v-else size="small" :style="registrarStyle(row.registrar_name)">{{ row.registrar_name || '同步' }}</el-tag>
         </template></el-table-column>
         <el-table-column label="域名到期" width="150"><template #default="{ row }">
           <template v-if="row.expiry_at">
@@ -117,6 +116,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search, Hide, RefreshLeft } from '@element-plus/icons-vue'
 import { listDomains, listRegistrars, listDnsRecords, syncSource, syncSourceStatus, syncDomainRecords, bulkIgnoreDomains } from '../api/cmdb'
+import { registrarStyle, domainCatLabel, domainCatStyle, DOMAIN_CAT_ORDER } from '../utils/cloud'
 const sources = ref([]), domains = ref([]), loading = ref(false)
 const sourceId = ref(null)
 const syncing = ref(false)
@@ -174,13 +174,34 @@ async function syncOne(row) {
 
 // 主域名列表筛选/分页
 const domKeyword = ref(''), domQuery = ref(''), domPage = ref(1), domPageSize = ref(20)
+// 异常汇总：非活跃、非待激活、非已忽略的都算异常
+const ABNORMAL_CATS = ['dns_migrated', 'expired', 'transferred_out', 'cancelled', 'ownership', 'removed', 'unknown']
 const domFiltered = computed(() => domains.value.filter((d) => {
   if (domQuery.value && !d.name.toLowerCase().includes(domQuery.value.toLowerCase())) return false
-  if (domView.value === 'ignored') return d.ignored
-  if (domView.value === 'active') return !d.ignored && !isAbnormal(d)
-  if (domView.value === 'abnormal') return !d.ignored && isAbnormal(d)
-  return true // all
+  const cat = d.category || 'active'
+  if (domView.value === 'all') return true
+  if (domView.value === 'abnormal') return ABNORMAL_CATS.includes(cat)
+  return cat === domView.value
 }))
+// 各分类计数（用于下拉显示数量）
+const catCounts = computed(() => {
+  const m = {}
+  for (const d of domains.value) { const c = d.category || 'active'; m[c] = (m[c] || 0) + 1 }
+  m.all = domains.value.length
+  m.abnormal = domains.value.filter((d) => ABNORMAL_CATS.includes(d.category || 'active')).length
+  return m
+})
+// 下拉选项：活跃/待激活 + 异常汇总 + 各异常态 + 已忽略 + 全部，只列存在的
+const viewOptions = computed(() => {
+  const cc = catCounts.value
+  const opts = [{ value: 'active', label: '活跃' }, { value: 'pending', label: '待激活' }, { value: 'abnormal', label: '异常' }]
+  for (const c of DOMAIN_CAT_ORDER) {
+    if (['active', 'pending', 'ignored'].includes(c)) continue
+    if (cc[c]) opts.push({ value: c, label: domainCatLabel(c) })
+  }
+  opts.push({ value: 'ignored', label: '已忽略' }, { value: 'all', label: '全部' })
+  return opts.filter((o, i, arr) => arr.findIndex((x) => x.value === o.value) === i).map((o) => ({ ...o, count: cc[o.value] || 0 }))
+})
 const domPaged = computed(() => { const s = (domPage.value - 1) * domPageSize.value; return domFiltered.value.slice(s, s + domPageSize.value) })
 function doDomSearch() { domQuery.value = domKeyword.value; domPage.value = 1 }
 

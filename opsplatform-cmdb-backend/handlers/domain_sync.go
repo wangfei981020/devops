@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -183,15 +184,21 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 			continue
 		}
 		if isDomainGone(d.Status) {
-			// 已转出/取消：不计 present、不重置 stale，直接标已移出账号并记状态，交由灰显+人工移除
+			// 已转出/取消/过户：不计 present、不重置 stale，直接标已移出账号并记状态，交由灰显+人工移除
 			h.markDomainGone(d.Name, id, d.Status)
+			log.Printf("[domain-sync] 域名 %s 判为已移出账号（GoDaddy status=%s）", d.Name, d.Status)
 			syncMu.Lock()
 			st.Done++
 			syncMu.Unlock()
 			continue
 		}
+		// 未识别状态（既非活跃/待激活，也不在移出清单）——暂按活跃保留，但打 WARN，便于补分类
+		if !isDomainActive(d.Status) && !isDomainPending(d.Status) {
+			log.Printf("[domain-sync] WARN 域名 %s 状态未识别（GoDaddy status=%s），暂按活跃处理，请确认是否应判移出", d.Name, d.Status)
+		}
 		ciID, err := h.upsertDomainCI(d.Name, id, d.ExpiresAt, d.Status)
 		if err != nil {
+			log.Printf("[domain-sync] WARN 域名 %s upsert 失败: %v", d.Name, err)
 			syncMu.Lock()
 			st.Done++
 			syncMu.Unlock()
@@ -199,22 +206,25 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 		}
 		present[d.Name] = true
 		recs, err := adapter.ListRecords(ctx, d.Name)
-		if err == nil {
+		if err != nil {
+			log.Printf("[domain-sync] WARN 域名 %s 拉解析记录失败（可能转出中/DNS已迁走）: %v", d.Name, err)
+		} else {
 			h.refreshDNSRecords(ciID, id, recs)
 			imp := h.importBusinessRecords(ciID, recs)
-			// 无论有无记录都记同步时刻（0 记录也算已同步，避免误报"未同步"）
 			// 记录 0 条时查权威 NS：若已不指向 GoDaddy，说明域名还在账户但 DNS 迁走了。
 			migrated := 0
 			if len(recs) == 0 && dnsMigratedFromGoDaddy(d.Name) {
 				migrated = 1
 			}
-			_, _ = h.DB.Exec(`UPDATE domains SET last_synced_at=NOW(), dns_migrated=? WHERE ci_id=?`, migrated, ciID)
+			_, _ = h.DB.Exec(`UPDATE domains SET dns_migrated=? WHERE ci_id=?`, migrated, ciID)
 			syncMu.Lock()
 			st.Synced++
 			st.Records += len(recs)
 			st.Imp += imp
 			syncMu.Unlock()
 		}
+		// 只要这次扫到了就更新同步时刻（不管 records 成败），消除假"24h未同步"
+		_, _ = h.DB.Exec(`UPDATE domains SET last_synced_at=NOW() WHERE ci_id=?`, ciID)
 		syncMu.Lock()
 		st.Done++
 		syncMu.Unlock()
@@ -289,20 +299,23 @@ func (h *SyncHandler) DNSRecords(c *gin.Context) {
 
 // ---- helpers ----
 
-// goneDomainStatuses GoDaddy 返回但已不再属于本账户(转出/取消/没收等)的状态。
+// goneDomainStatuses GoDaddy 返回但已不再属于本账户(转出/取消/过户/没收等)的状态。
 // 这些状态的域名 API 仍会返回一段时间，需当作"已移出账号"处理，而不是正常活跃域名。
-// 说明：EXPIRED / 赎回期不列入(仍需到期提醒)；PENDING_TRANSFER/AWAITING_TRANSFER_AUTH 是转入/授权中，属活跃。
+// 实测(csc5002)真实值：TRANSFERRED_OUT / CANCELLED / UPDATED_OWNERSHIP。
 var goneDomainStatuses = map[string]bool{
+	"TRANSFERRED_OUT":           true, // 已转出（实测真实值）
 	"TRANSFERRED":               true,
 	"USER_TRANSFER_OUT":         true,
 	"CANCELLED":                 true,
+	"CANCELLED_REDEEMABLE":      true,
+	"UPDATED_OWNERSHIP":         true, // 已过户（所有权变更走了）
 	"CONFISCATED":               true,
 	"EXCLUDED":                  true,
 	"FAILED":                    true,
 	"NAME_CANNOT_BE_REGISTERED": true,
 }
 
-// isDomainGone 判断数据源状态是否表示"已移出账号"(转出/取消/没收)。
+// isDomainGone 判断数据源状态是否表示"已移出账号"(转出/取消/过户/没收)。
 func isDomainGone(status string) bool {
 	s := strings.ToUpper(strings.TrimSpace(status))
 	if s == "" {
@@ -311,7 +324,52 @@ func isDomainGone(status string) bool {
 	if goneDomainStatuses[s] {
 		return true
 	}
-	return strings.Contains(s, "TRANSFER_OUT") // 兜底：任何"转出"变体
+	return strings.Contains(s, "TRANSFER") && strings.Contains(s, "OUT") // 兜底：任何"转出"变体(TRANSFER_OUT / TRANSFERRED_OUT)
+}
+
+// isDomainPending 待激活/在途状态(新买待验证、DNS 未激活等)——仍算在管，单独归类，不判移出。
+func isDomainPending(status string) bool {
+	s := strings.ToUpper(strings.TrimSpace(status))
+	return strings.HasPrefix(s, "PENDING") || strings.HasPrefix(s, "AWAITING")
+}
+
+// isDomainActive 明确的活跃状态。空(手动录入)也按活跃。
+func isDomainActive(status string) bool {
+	s := strings.ToUpper(strings.TrimSpace(status))
+	return s == "" || s == "ACTIVE"
+}
+
+// domainCategory 综合各字段算出展示分类，前端据此上色/筛选。
+func domainCategory(sourceStatus string, stale, dnsMigrated, ignored, expiryPast bool) string {
+	if ignored {
+		return "ignored"
+	}
+	s := strings.ToUpper(strings.TrimSpace(sourceStatus))
+	if stale {
+		switch {
+		case strings.Contains(s, "TRANSFER") && strings.Contains(s, "OUT"), s == "TRANSFERRED":
+			return "transferred_out"
+		case s == "CANCELLED" || s == "CANCELLED_REDEEMABLE":
+			return "cancelled"
+		case s == "UPDATED_OWNERSHIP":
+			return "ownership"
+		default:
+			return "removed" // 从 GoDaddy 列表彻底消失 / 其它移出
+		}
+	}
+	if dnsMigrated {
+		return "dns_migrated"
+	}
+	if expiryPast {
+		return "expired"
+	}
+	if isDomainPending(s) {
+		return "pending"
+	}
+	if isDomainActive(s) {
+		return "active"
+	}
+	return "unknown"
 }
 
 // markDomainGone 把已存在的域名标记为移出账号(stale=1)并记下数据源状态；不重置 stale、不碰业务信息。

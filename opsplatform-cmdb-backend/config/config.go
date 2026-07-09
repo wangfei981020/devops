@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 )
 
@@ -30,7 +31,10 @@ func buildDSN() string {
 	u := getenv("MYSQL_USER", "cmdb_user")
 	pw := os.Getenv("MYSQL_PASSWORD")
 	db := getenv("MYSQL_DATABASE", "cmdb")
-	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local", u, pw, h, p, db)
+	// loc=Local：驱动按容器时区(TZ=Asia/Manila)解析 DATETIME；
+	// time_zone='+08:00'：让 MySQL 会话 NOW() 按马尼拉(UTC+8)返回，存/读一致。
+	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local&time_zone=%s",
+		u, pw, h, p, db, url.QueryEscape("'+08:00'"))
 }
 
 func getenv(k, def string) string {

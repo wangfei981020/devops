@@ -121,17 +121,18 @@
     </el-card>
     <el-card shadow="never">
       <el-table :data="domPaged" size="small" row-key="ci_id" v-loading="loading" @sort-change="onDomSort">
-        <el-table-column prop="name" label="主域名" min-width="250" sortable="custom"><template #default="{ row }">
-          <span :class="{ stale: row.stale || row.ignored }">{{ row.name }}</span>
-          <el-tooltip v-if="row.ignored" :disabled="!row.ignore_reason" :content="row.ignore_reason"><el-tag type="info" size="small" style="margin-left:6px">已忽略</el-tag></el-tooltip>
-          <el-tooltip v-if="row.stale" :disabled="!row.source_status" :content="'数据源状态：' + row.source_status">
-            <el-tag type="danger" size="small" style="margin-left:6px">已移出账号{{ row.source_status ? '（' + row.source_status + '）' : '' }}</el-tag>
-          </el-tooltip>
-          <el-tag v-else-if="row.dns_migrated" size="small" style="margin-left:6px;background:#7a5c8a;color:#fff;border-color:#7a5c8a">DNS已迁移</el-tag>
+        <el-table-column prop="name" label="主域名" min-width="220" sortable="custom"><template #default="{ row }">
+          <span :class="{ stale: row.category !== 'active' && row.category !== 'pending' }">{{ row.name }}</span>
+          <el-tooltip v-if="row.ignored && row.ignore_reason" :content="row.ignore_reason"><el-icon style="margin-left:4px;color:#909399;vertical-align:middle"><InfoFilled /></el-icon></el-tooltip>
         </template></el-table-column>
-        <el-table-column label="来源" width="140"><template #default="{ row }">
+        <el-table-column label="状态" width="120"><template #default="{ row }">
+          <el-tooltip :disabled="!row.source_status" :content="'GoDaddy 状态：' + row.source_status">
+            <el-tag size="small" :style="domainCatStyle(row.category)">{{ domainCatLabel(row.category) }}</el-tag>
+          </el-tooltip>
+        </template></el-table-column>
+        <el-table-column label="来源" width="130"><template #default="{ row }">
           <el-tag v-if="row.origin === 'manual'" type="info" size="small">手动录入</el-tag>
-          <el-tag v-else type="success" size="small">{{ row.registrar_name || '同步' }}</el-tag>
+          <el-tag v-else size="small" :style="registrarStyle(row.registrar_name)">{{ row.registrar_name || '同步' }}</el-tag>
         </template></el-table-column>
         <el-table-column prop="expiry_at" label="域名到期" width="160" sortable="custom"><template #default="{ row }">
           <template v-if="row.expiry_at">
@@ -373,7 +374,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, InfoFilled } from '@element-plus/icons-vue'
+import { registrarStyle, domainCatLabel, domainCatStyle } from '../utils/cloud'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgnoreRecords, deleteRecord, checkRecordCert,
   syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains, bulkIgnoreDomains } from '../api/cmdb'
 import { useAppStore } from '../stores/app'

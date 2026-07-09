@@ -2,6 +2,7 @@ package cloudsource
 
 import (
 	"context"
+	"log"
 	"strings"
 
 	compute "google.golang.org/api/compute/v1"
@@ -15,14 +16,21 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 		return
 	}
 	pools := map[string][]string{}          // targetPool selfLink -> 实例URL
-	bsGroups := map[string][]string{}       // backendService selfLink -> 实例组URL
+	bsGroups := map[string][]string{}       // backendService selfLink -> 实例组/NEG URL
 	proxyURLMap := map[string]string{}      // http/https proxy selfLink -> urlMap URL
 	proxyService := map[string]string{}     // tcp/ssl proxy selfLink -> backendService URL
 	urlMapServices := map[string][]string{} // urlMap selfLink -> backendService URL 列表
-	groupInstances := map[string][]string{} // 实例组URL -> 实例URL（懒加载缓存）
+	groupInstances := map[string][]string{} // 实例组/NEG URL -> 实例名（懒加载缓存）
+
+	// try 包一层：失败不中断，但打日志（不再静默吞错）
+	try := func(label string, fn func() error) {
+		if err := g.retry(ctx, lim, fn); err != nil {
+			log.Printf("[lb-backend] WARN 项目 %s 拉取 %s 失败: %v", projectID, label, err)
+		}
+	}
 
 	// targetPools（区域+全局，aggregated 覆盖）
-	_ = g.retry(ctx, lim, func() error {
+	try("targetPools", func() error {
 		return svc.TargetPools.AggregatedList(projectID).Pages(ctx, func(page *compute.TargetPoolAggregatedList) error {
 			for _, sc := range page.Items {
 				for _, tp := range sc.TargetPools {
@@ -33,7 +41,7 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 		})
 	})
 	// backendServices（aggregated 含区域+全局）
-	_ = g.retry(ctx, lim, func() error {
+	try("backendServices", func() error {
 		return svc.BackendServices.AggregatedList(projectID).Pages(ctx, func(page *compute.BackendServiceAggregatedList) error {
 			for _, sc := range page.Items {
 				for _, bs := range sc.BackendServices {
@@ -50,7 +58,7 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 		})
 	})
 	// urlMaps（aggregated 含区域+全局）
-	_ = g.retry(ctx, lim, func() error {
+	try("urlMaps", func() error {
 		return svc.UrlMaps.AggregatedList(projectID).Pages(ctx, func(page *compute.UrlMapsAggregatedList) error {
 			for _, sc := range page.Items {
 				for _, um := range sc.UrlMaps {
@@ -75,7 +83,7 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 		})
 	})
 	// target http/https proxies -> urlMap
-	_ = g.retry(ctx, lim, func() error {
+	try("targetHttpProxies", func() error {
 		return svc.TargetHttpProxies.AggregatedList(projectID).Pages(ctx, func(page *compute.TargetHttpProxyAggregatedList) error {
 			for _, sc := range page.Items {
 				for _, p := range sc.TargetHttpProxies {
@@ -85,7 +93,7 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 			return nil
 		})
 	})
-	_ = g.retry(ctx, lim, func() error {
+	try("targetHttpsProxies", func() error {
 		return svc.TargetHttpsProxies.AggregatedList(projectID).Pages(ctx, func(page *compute.TargetHttpsProxyAggregatedList) error {
 			for _, sc := range page.Items {
 				for _, p := range sc.TargetHttpsProxies {
@@ -96,7 +104,7 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 		})
 	})
 	// target tcp/ssl proxies（全局）-> backendService
-	_ = g.retry(ctx, lim, func() error {
+	try("targetTcpProxies", func() error {
 		return svc.TargetTcpProxies.List(projectID).Pages(ctx, func(page *compute.TargetTcpProxyList) error {
 			for _, p := range page.Items {
 				proxyService[p.SelfLink] = p.Service
@@ -104,7 +112,7 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 			return nil
 		})
 	})
-	_ = g.retry(ctx, lim, func() error {
+	try("targetSslProxies", func() error {
 		return svc.TargetSslProxies.List(projectID).Pages(ctx, func(page *compute.TargetSslProxyList) error {
 			for _, p := range page.Items {
 				proxyService[p.SelfLink] = p.Service
@@ -113,7 +121,8 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 		})
 	})
 
-	// 实例组 -> 实例（懒加载，只查被 LB 引用到的组，zonal 与 regional 都支持）
+	// membersOf：实例组/NEG -> 实例名（懒加载，只查被 LB 引用到的）。
+	// 支持：zonal/regional 实例组 + zonal NEG（GKE 容器原生后端常用；GCE_VM 端点带实例名）。
 	membersOf := func(groupURL string) []string {
 		if v, ok := groupInstances[groupURL]; ok {
 			return v
@@ -121,26 +130,52 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 		scope, kind := scopeOfURL(groupURL) // kind: zone/region
 		name := lastSeg(groupURL)
 		var insts []string
-		if scope != "" && name != "" {
+		switch {
+		case scope == "" || name == "":
+			// 无法解析 scope，跳过
+		case strings.Contains(groupURL, "/networkEndpointGroups/"):
+			// NEG：列端点，取 GCE_VM 型端点的实例名（serverless/PSC/互联网型无实例）
 			if kind == "region" {
-				_ = g.retry(ctx, lim, func() error {
-					return svc.RegionInstanceGroups.ListInstances(projectID, scope, name, &compute.RegionInstanceGroupsListInstancesRequest{}).Pages(ctx, func(page *compute.RegionInstanceGroupsListInstances) error {
-						for _, it := range page.Items {
-							insts = append(insts, it.Instance)
+				try("regionNEG "+name, func() error {
+					return svc.RegionNetworkEndpointGroups.ListNetworkEndpoints(projectID, scope, name).Pages(ctx, func(page *compute.NetworkEndpointGroupsListNetworkEndpoints) error {
+						for _, e := range page.Items {
+							if e.NetworkEndpoint != nil && e.NetworkEndpoint.Instance != "" {
+								insts = append(insts, e.NetworkEndpoint.Instance)
+							}
 						}
 						return nil
 					})
 				})
 			} else {
-				_ = g.retry(ctx, lim, func() error {
-					return svc.InstanceGroups.ListInstances(projectID, scope, name, &compute.InstanceGroupsListInstancesRequest{}).Pages(ctx, func(page *compute.InstanceGroupsListInstances) error {
-						for _, it := range page.Items {
-							insts = append(insts, it.Instance)
+				try("zonalNEG "+name, func() error {
+					return svc.NetworkEndpointGroups.ListNetworkEndpoints(projectID, scope, name, &compute.NetworkEndpointGroupsListEndpointsRequest{}).Pages(ctx, func(page *compute.NetworkEndpointGroupsListNetworkEndpoints) error {
+						for _, e := range page.Items {
+							if e.NetworkEndpoint != nil && e.NetworkEndpoint.Instance != "" {
+								insts = append(insts, e.NetworkEndpoint.Instance)
+							}
 						}
 						return nil
 					})
 				})
 			}
+		case kind == "region":
+			try("regionInstanceGroup "+name, func() error {
+				return svc.RegionInstanceGroups.ListInstances(projectID, scope, name, &compute.RegionInstanceGroupsListInstancesRequest{}).Pages(ctx, func(page *compute.RegionInstanceGroupsListInstances) error {
+					for _, it := range page.Items {
+						insts = append(insts, it.Instance)
+					}
+					return nil
+				})
+			})
+		default:
+			try("instanceGroup "+name, func() error {
+				return svc.InstanceGroups.ListInstances(projectID, scope, name, &compute.InstanceGroupsListInstancesRequest{}).Pages(ctx, func(page *compute.InstanceGroupsListInstances) error {
+					for _, it := range page.Items {
+						insts = append(insts, it.Instance)
+					}
+					return nil
+				})
+			})
 		}
 		groupInstances[groupURL] = insts
 		return insts
@@ -156,7 +191,11 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 				return
 			}
 			seen[name] = true
+			// 实例组成员的 instURL 带 zone；NEG 成员是裸实例名(无 zone)，退回用组/NEG 的 zone
 			scope, _ := scopeOfURL(instURL)
+			if scope == "" {
+				scope, _ = scopeOfURL(groupURL)
+			}
 			backends = append(backends, LBBackend{Instance: name, Group: lastSeg(groupURL), Zone: scope})
 		}
 
@@ -178,6 +217,11 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 			}
 		}
 		lb.Backends = backends
+		// 有 target 却一个后端都没追到 → 打日志，便于排查（服务型后端/未知类型/权限等）
+		if len(backends) == 0 && lb.Target != "" {
+			log.Printf("[lb-backend] WARN LB %s (project=%s, target=%s) 未追溯到后端实例：命中 targetPool=%d backendService=%d（可能是无实例后端/服务型NEG，或状态不支持）",
+				lb.Name, projectID, lb.Target, len(poolURLs), len(serviceURLs))
+		}
 	}
 }
 

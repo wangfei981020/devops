@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/net/publicsuffix"
@@ -77,7 +78,8 @@ type domainOut struct {
 	DnsMigrated   bool   `json:"dns_migrated"` // 域名还在数据源账户但 DNS 已迁走(NS 非 GoDaddy)
 	Ignored       bool   `json:"ignored"`
 	IgnoreReason  string `json:"ignore_reason"`
-	SourceStatus  string `json:"source_status"` // 数据源(GoDaddy)返回的域名状态，如 ACTIVE/TRANSFERRED
+	SourceStatus  string `json:"source_status"` // 数据源(GoDaddy)返回的域名状态，如 ACTIVE/TRANSFERRED_OUT
+	Category      string `json:"category"`      // 展示分类：active/pending/dns_migrated/expired/transferred_out/cancelled/ownership/removed/ignored/unknown
 	Origin        string `json:"origin"`        // manual=手动录入, sync=数据源同步
 }
 
@@ -121,9 +123,11 @@ func (h *DomainHandler) List(c *gin.Context) {
 			v := int(regID.Int64)
 			o.RegistrarID = &v
 		}
+		expiryPast := exp.Valid && exp.Time.Before(time.Now())
 		if exp.Valid {
 			o.ExpiryAt = exp.Time.Format("2006-01-02")
 		}
+		o.Category = domainCategory(o.SourceStatus, o.Stale, o.DnsMigrated, o.Ignored, expiryPast)
 		if certExp.Valid {
 			o.CertExpiryAt = certExp.Time.Format("2006-01-02")
 		}
