@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -29,7 +30,8 @@ func (h *HostHandler) Register(r *gin.RouterGroup) {
 	r.POST("/cloud-accounts", h.CreateAccount)
 	r.PUT("/cloud-accounts/:id", h.UpdateAccount)
 	r.DELETE("/cloud-accounts/:id", h.DeleteAccount)
-	r.POST("/cloud-accounts/:id/sync", h.SyncAccount)      // 同步账号下所有 project
+	r.POST("/cloud-accounts/:id/sync", h.SyncAccount)          // 同步账号下所有 project（后台异步）
+	r.GET("/cloud-accounts/:id/sync-status", h.SyncStatus)     // 主机同步进度轮询
 	r.POST("/cloud-accounts/:id/projects", h.CreateProject)
 	r.PUT("/cloud-projects/:pid", h.UpdateProject)
 	r.DELETE("/cloud-projects/:pid", h.DeleteProject)
@@ -476,21 +478,80 @@ func (h *HostHandler) DeleteProject(c *gin.Context) {
 
 // ---------- 同步 ----------
 
-// SyncProject 同步指定 project（只读拉取，upsert；该 project 下 GCP 已无的标 stale）。
-func (h *HostHandler) SyncProject(c *gin.Context) {
-	pid, _ := strconv.ParseInt(c.Param("pid"), 10, 64)
-	name, synced, stale, err := h.syncOneProject(pid)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
-	}
-	WriteAudit(h.DB, c, "sync_cloud_project", name)
-	c.JSON(http.StatusOK, gin.H{"project": name, "synced": synced, "stale": stale})
+// ---- 主机同步的后台状态（进程内，按云账号 id）----
+type hostSyncState struct {
+	Running               bool
+	Total, Done           int // 实例总数 / 已写入
+	Synced, Stale         int
+	Err                   string
+	StartedAt, FinishedAt time.Time
 }
 
-// SyncAccount 同步账号下所有 project（各用各自凭据，依次跑；单个失败不影响其它）。
+var (
+	hostSyncMu    sync.Mutex
+	hostSyncStore = map[int]*hostSyncState{}
+)
+
+func hsSet(st *hostSyncState, f func(*hostSyncState)) {
+	if st == nil {
+		return
+	}
+	hostSyncMu.Lock()
+	f(st)
+	hostSyncMu.Unlock()
+}
+
+// startHostSync 起一个账号级同步状态；已在跑返回 nil。
+func (h *HostHandler) startHostSync(accountID int) *hostSyncState {
+	hostSyncMu.Lock()
+	defer hostSyncMu.Unlock()
+	if st := hostSyncStore[accountID]; st != nil && st.Running {
+		return nil
+	}
+	st := &hostSyncState{Running: true, StartedAt: time.Now()}
+	hostSyncStore[accountID] = st
+	return st
+}
+
+func (h *HostHandler) finishHostSync(st *hostSyncState, errMsg string) {
+	hostSyncMu.Lock()
+	st.Running = false
+	st.FinishedAt = time.Now()
+	if errMsg != "" {
+		st.Err = errMsg
+	}
+	hostSyncMu.Unlock()
+}
+
+// SyncProject 同步指定 project（后台异步 + 进度；主机多约 1-3 分钟，避免 HTTP 超时误报失败）。
+func (h *HostHandler) SyncProject(c *gin.Context) {
+	pid, _ := strconv.ParseInt(c.Param("pid"), 10, 64)
+	var accountID int
+	if h.DB.QueryRow(`SELECT account_id FROM cloud_account_projects WHERE id=?`, pid).Scan(&accountID) != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "项目不存在"})
+		return
+	}
+	st := h.startHostSync(accountID)
+	if st == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "该账号正在同步中，请稍候"})
+		return
+	}
+	WriteAudit(h.DB, c, "sync_cloud_project", strconv.FormatInt(pid, 10))
+	go func() {
+		_, _, _, err := h.syncOneProject(pid, st)
+		e := ""
+		if err != nil {
+			e = err.Error()
+		}
+		h.finishHostSync(st, e)
+	}()
+	c.JSON(http.StatusAccepted, gin.H{"ok": true, "running": true, "msg": "已在后台同步，主机多约 1-3 分钟，完成后自动刷新"})
+}
+
+// SyncAccount 后台异步同步账号下所有 project（各用各自凭据，依次跑；单个失败不影响其它）。
 func (h *HostHandler) SyncAccount(c *gin.Context) {
-	rows, err := h.DB.Query(`SELECT id FROM cloud_account_projects WHERE account_id=? ORDER BY id`, c.Param("id"))
+	accountID, _ := strconv.Atoi(c.Param("id"))
+	rows, err := h.DB.Query(`SELECT id FROM cloud_account_projects WHERE account_id=? ORDER BY id`, accountID)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -507,23 +568,43 @@ func (h *HostHandler) SyncAccount(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "该账号下还没有项目，请先添加项目并配置凭据"})
 		return
 	}
-	totalSynced, totalStale := 0, 0
-	var fails []string
-	for _, pid := range pids {
-		name, synced, stale, err := h.syncOneProject(pid)
-		if err != nil {
-			fails = append(fails, name+"："+err.Error())
-			continue
-		}
-		totalSynced += synced
-		totalStale += stale
+	st := h.startHostSync(accountID)
+	if st == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "该账号正在同步中，请稍候"})
+		return
 	}
 	WriteAudit(h.DB, c, "sync_cloud_account", c.Param("id"))
-	c.JSON(http.StatusOK, gin.H{"synced": totalSynced, "stale": totalStale, "failures": fails})
+	go func() {
+		var errs []string
+		for _, pid := range pids {
+			if _, _, _, err := h.syncOneProject(pid, st); err != nil {
+				errs = append(errs, err.Error())
+			}
+		}
+		h.finishHostSync(st, strings.Join(errs, "；"))
+	}()
+	c.JSON(http.StatusAccepted, gin.H{"ok": true, "running": true, "msg": "已在后台同步，主机多约 1-3 分钟，完成后自动刷新"})
 }
 
-// syncOneProject 同步单个 project 行：解密该 project 凭据 → 列实例 → upsert → 标 stale → 记结果。
-func (h *HostHandler) syncOneProject(pid int64) (name string, synced, stale int, err error) {
+// SyncStatus 查某云账号后台同步进度（前端轮询）。
+func (h *HostHandler) SyncStatus(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	hostSyncMu.Lock()
+	st := hostSyncStore[id]
+	if st == nil {
+		hostSyncMu.Unlock()
+		c.JSON(http.StatusOK, gin.H{"running": false, "started": false})
+		return
+	}
+	out := gin.H{"running": st.Running, "started": true, "total": st.Total, "done": st.Done,
+		"synced": st.Synced, "stale": st.Stale, "error": st.Err}
+	hostSyncMu.Unlock()
+	c.JSON(http.StatusOK, out)
+}
+
+// syncOneProject 同步单个 project 行：解密凭据 → 列实例 → 逐台 upsert(报进度) → 标 stale → 网络资源。
+// st 非空时边跑边更新进度（后台异步用）；scheduler 全量同步传 nil。
+func (h *HostHandler) syncOneProject(pid int64, st *hostSyncState) (name string, synced, stale int, err error) {
 	var accountID int
 	var provider, projectID, enc string
 	err = h.DB.QueryRow(`SELECT p.name, p.account_id, p.project_id, COALESCE(p.cred_enc,''), COALESCE(a.provider,'gcp')
@@ -543,23 +624,26 @@ func (h *HostHandler) syncOneProject(pid int64) (name string, synced, stale int,
 	if e != nil {
 		return name, 0, 0, e
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute) // 上千台也够
 	defer cancel()
 	insts, e := adapter.ListInstances(ctx, projectID)
 	if e != nil {
 		_, _ = h.DB.Exec(`UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`, truncate(e.Error(), 250), pid)
 		return name, 0, 0, e
 	}
+	hsSet(st, func(s *hostSyncState) { s.Total += len(insts) })
 	present := map[string]bool{}
 	for _, in := range insts {
 		present[in.InstanceID] = true
 		h.upsertHost(accountID, name, in)
+		hsSet(st, func(s *hostSyncState) { s.Done++ })
 	}
 	stale = h.markStaleHosts(accountID, projectID, present)
 	// 顺带同步该 project 的网络资源（VPC/子网/防火墙/静态IP/负载均衡）
 	if nr, e := adapter.ListNetwork(ctx, projectID); e == nil {
 		SyncProjectNetwork(h.DB, provider, accountID, projectID, nr)
 	}
+	hsSet(st, func(s *hostSyncState) { s.Synced += len(insts); s.Stale += stale })
 	_, _ = h.DB.Exec(`UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`,
 		truncate(fmt.Sprintf("同步 %d 台，失效 %d", len(insts), stale), 250), pid)
 	return name, len(insts), stale, nil
@@ -586,7 +670,7 @@ func SyncAllHostProjects(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailu
 	totalSynced, totalStale := 0, 0
 	var failures []TaskFailure
 	for _, pid := range pids {
-		name, synced, stale, err := h.syncOneProject(pid)
+		name, synced, stale, err := h.syncOneProject(pid, nil)
 		if err != nil {
 			failures = append(failures, TaskFailure{Target: name, Reason: truncate(err.Error(), 150)})
 			continue

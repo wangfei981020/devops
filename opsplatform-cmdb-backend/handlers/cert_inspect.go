@@ -63,8 +63,8 @@ func (h *CertInspectHandler) List(c *gin.Context) {
 	}
 	rows.Close()
 
-	// 域名注册到期（WHOIS）
-	drows, err := h.DB.Query(`SELECT c.id, c.name, d.expiry_at FROM cis c JOIN domains d ON d.ci_id=c.id WHERE c.type='domain' AND d.stale=0`)
+	// 域名注册到期（WHOIS）——已忽略的主域名不纳入巡检
+	drows, err := h.DB.Query(`SELECT c.id, c.name, d.expiry_at FROM cis c JOIN domains d ON d.ci_id=c.id WHERE c.type='domain' AND d.stale=0 AND d.ignored=0`)
 	if err == nil {
 		for drows.Next() {
 			var it certInspectItem

@@ -14,6 +14,7 @@
         <el-button type="primary" :icon="Plus" @click="openAdd">录入解析</el-button>
       </div>
       <div v-else>
+        <el-button v-if="expiredDomains.length" type="warning" :icon="Hide" @click="ignoreExpired">一键忽略已过期（{{ expiredDomains.length }}）</el-button>
         <el-tooltip content="只刷注册到期：数据源域名由同步维护(跳过)，仅查手动录入域名(RDAP→WHOIS+重试)；证书到期见「到期巡检」" placement="top">
           <el-button :icon="Refresh" :loading="refreshingAll" @click="refreshAllDom">刷新到期</el-button>
         </el-tooltip>
@@ -148,6 +149,8 @@
               <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
             </template>
             <el-tooltip v-else-if="row.stale" content="移除（已移出账号）"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
+            <el-tooltip v-if="!row.ignored" content="忽略"><el-button link type="warning" :icon="Hide" @click="ignoreDomains([row], true)" /></el-tooltip>
+            <el-tooltip v-else content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="ignoreDomains([row], false)" /></el-tooltip>
           </div>
         </template></el-table-column>
       </el-table>
@@ -370,7 +373,7 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft } from '@element-plus/icons-vue'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgnoreRecords, deleteRecord, checkRecordCert,
-  syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains } from '../api/cmdb'
+  syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains, bulkIgnoreDomains } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
@@ -472,6 +475,24 @@ function doDomSearch() { domQuery.value = domKeyword.value; domPage.value = 1 }
 function sortByDate(a, b) { if (!a && !b) return 0; if (!a) return 1; if (!b) return -1; return new Date(a) - new Date(b) }
 function expiryClass(d) { if (!d) return ''; const days = (new Date(d) - Date.now()) / 86400000; return days < 0 ? 'exp-red' : (days < 30 ? 'exp-orange' : '') }
 function isExpired(d) { return d && new Date(d) < new Date() }
+// 已过期且未忽略、未移出账号的主域名——用于「一键忽略已过期」
+const expiredDomains = computed(() => allDomains.value.filter((d) => !d.ignored && !d.stale && isExpired(d.expiry_at)))
+async function ignoreExpired() {
+  const list = expiredDomains.value
+  if (!list.length) return
+  try {
+    await app.showConfirm(`将 ${list.length} 个已过期主域名标为「忽略」？忽略后不再展示、不计入到期巡检和总览统计，可随时恢复`)
+    const r = await bulkIgnoreDomains(list.map((d) => d.ci_id), 1, '已过期')
+    ElMessage.success(`已忽略 ${r.count ?? list.length} 个`); load()
+  } catch (e) { if (e !== 'cancel') ElMessage.error(e.response?.data?.error || '忽略失败') }
+}
+async function ignoreDomains(list, ignored) {
+  try {
+    if (ignored) await app.showConfirm(`忽略主域名 ${list.map((d) => d.name).join('、')}？忽略后不再展示、不计入到期巡检和总览统计，可随时恢复`)
+    const r = await bulkIgnoreDomains(list.map((d) => d.ci_id), ignored ? 1 : 0, ignored ? '手动忽略' : '')
+    ElMessage.success(ignored ? `已忽略 ${r.count ?? list.length} 个` : `已取消忽略 ${r.count ?? list.length} 个`); load()
+  } catch (e) { if (e !== 'cancel') ElMessage.error(e.response?.data?.error || '操作失败') }
+}
 function jumpToRecords(row) { tab.value = 'records'; f.value = { keyword: row.name, project: null, env: null, module: null, source: null }; query.value = { ...f.value }; currentPage.value = 1 }
 function openAddDomain() { domEditing.value = false; domForm.value = { name: '', registrar_id: null, dns_provider: '', expiry_at: '' }; domDlg.value = true }
 function openEditDomain(row) { domEditing.value = true; domForm.value = { ...row, expiry_at: row.expiry_at || '' }; domDlg.value = true }

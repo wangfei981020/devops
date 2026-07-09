@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -269,7 +270,7 @@ func inspectAllCertsCore(db *sql.DB, prog ProgressFn, targetList []string) (stri
 		isMain bool // true=写 domains 表，false=写 domain_records 表
 	}
 	var targets []target
-	drows, err := db.Query(`SELECT c.id, c.name FROM cis c JOIN domains d ON d.ci_id=c.id WHERE c.type='domain' AND d.stale=0`)
+	drows, err := db.Query(`SELECT c.id, c.name FROM cis c JOIN domains d ON d.ci_id=c.id WHERE c.type='domain' AND d.stale=0 AND d.ignored=0`)
 	if err != nil {
 		return "查询域名失败: " + err.Error(), nil, false
 	}
@@ -281,7 +282,7 @@ func inspectAllCertsCore(db *sql.DB, prog ProgressFn, targetList []string) (stri
 		}
 	}
 	drows.Close()
-	rrows, err := db.Query(`SELECT r.id, r.host, c.name FROM domain_records r JOIN cis c ON c.id=r.domain_ci_id WHERE c.type='domain' AND r.ignored=0`)
+	rrows, err := db.Query(`SELECT r.id, r.host, c.name FROM domain_records r JOIN cis c ON c.id=r.domain_ci_id JOIN domains dd ON dd.ci_id=r.domain_ci_id WHERE c.type='domain' AND r.ignored=0 AND dd.ignored=0`)
 	if err == nil {
 		for rrows.Next() {
 			var id int64
@@ -562,61 +563,112 @@ func taskWebhook(db *sql.DB, taskKey string) string {
 	return webhook
 }
 
-// remindExpiry 证书/域名到期前命中阈值天数时发飞书提醒
-// remindExpiry 命中阈值天数的证书/域名逐条发 Lark，并返回汇总摘要（列出具体项；无到期项写"正常"）。
+type remindItem struct {
+	name   string
+	days   int
+	expiry string // 到期日 YYYY-MM-DD
+}
+
+// remindDot 按剩余天数给严重度色点：🔴≤7 / 🟠≤15 / 🟡其它
+func remindDot(days int) string {
+	switch {
+	case days <= 7:
+		return "🔴"
+	case days <= 15:
+		return "🟠"
+	default:
+		return "🟡"
+	}
+}
+
+// remindExpiry 证书/域名到期前命中阈值天数时发飞书提醒。
+// 逐条单发 Lark（带色点+到期日），并返回一张按「证书/域名」分组、组内按剩余天数升序的多行汇总摘要。
 func remindExpiry(db *sql.DB) string {
 	webhook := taskWebhook(db, "remind")
 	if webhook == "" {
 		return "未配置 Lark 群，跳过"
 	}
 	thresholds := map[int]bool{}
+	var thList []int
 	for _, s := range strings.Split(getSetting(db, "remind_days"), ",") {
-		if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && !thresholds[n] {
 			thresholds[n] = true
+			thList = append(thList, n)
 		}
 	}
 	if len(thresholds) == 0 {
 		return "未配置提醒阈值(remind_days)，跳过"
 	}
+	sort.Ints(thList)
+	thDisplay := make([]string, len(thList))
+	for i, n := range thList {
+		thDisplay[i] = strconv.Itoa(n)
+	}
 
-	var items []string
+	var certs, doms []remindItem
 	// 证书
 	crows, _ := db.Query(`
-		SELECT t.cn, DATEDIFF(t.expiry_at, NOW())
+		SELECT t.cn, DATEDIFF(t.expiry_at, NOW()), DATE_FORMAT(t.expiry_at,'%Y-%m-%d')
 		FROM certificates t WHERE t.expiry_at IS NOT NULL`)
 	if crows != nil {
 		for crows.Next() {
-			var cn string
-			var days int
-			if crows.Scan(&cn, &days) == nil && thresholds[days] {
-				notifyEvent(db, webhook, "remind", "notify_cert_expiring", fmt.Sprintf("⚠️ 证书 %s 还有 %d 天到期，请关注续期", cn, days))
-				items = append(items, fmt.Sprintf("证书 %s(%d天)", cn, days))
+			var it remindItem
+			if crows.Scan(&it.name, &it.days, &it.expiry) == nil && thresholds[it.days] {
+				notifyEvent(db, webhook, "remind", "notify_cert_expiring",
+					fmt.Sprintf("%s 证书 %s 还有 %d 天到期（%s），请关注续期", remindDot(it.days), it.name, it.days, it.expiry))
+				certs = append(certs, it)
 			}
 		}
 		crows.Close()
 	}
 
-	// 域名
+	// 域名（已忽略 / 已移出账号的不提醒）
 	drows, _ := db.Query(`
-		SELECT c.name, DATEDIFF(d.expiry_at, NOW())
+		SELECT c.name, DATEDIFF(d.expiry_at, NOW()), DATE_FORMAT(d.expiry_at,'%Y-%m-%d')
 		FROM cis c JOIN domains d ON d.ci_id=c.id
-		WHERE c.type='domain' AND d.expiry_at IS NOT NULL`)
+		WHERE c.type='domain' AND d.expiry_at IS NOT NULL AND COALESCE(d.ignored,0)=0 AND COALESCE(d.stale,0)=0`)
 	if drows != nil {
 		for drows.Next() {
-			var name string
-			var days int
-			if drows.Scan(&name, &days) == nil && thresholds[days] {
-				notifyEvent(db, webhook, "remind", "notify_domain_expiring", fmt.Sprintf("⚠️ 域名 %s 还有 %d 天到期，请到注册商续费", name, days))
-				items = append(items, fmt.Sprintf("域名 %s(%d天)", name, days))
+			var it remindItem
+			if drows.Scan(&it.name, &it.days, &it.expiry) == nil && thresholds[it.days] {
+				notifyEvent(db, webhook, "remind", "notify_domain_expiring",
+					fmt.Sprintf("%s 域名 %s 还有 %d 天到期（%s），请到注册商续费", remindDot(it.days), it.name, it.days, it.expiry))
+				doms = append(doms, it)
 			}
 		}
 		drows.Close()
 	}
 
-	if len(items) == 0 {
-		return "正常：无临近到期项(阈值 " + getSetting(db, "remind_days") + " 天)"
+	total := len(certs) + len(doms)
+	if total == 0 {
+		return "正常：无临近到期项(阈值 " + strings.Join(thDisplay, "/") + " 天)"
 	}
-	return fmt.Sprintf("提醒 %d 项：%s", len(items), strings.Join(items, "、"))
+	sort.SliceStable(certs, func(i, j int) bool { return certs[i].days < certs[j].days })
+	sort.SliceStable(doms, func(i, j int) bool { return doms[i].days < doms[j].days })
+
+	// 汇总卡：命中 N 项 —— 证书 x · 域名 y（阈值 …天）+ 分组多行
+	var counts []string
+	if len(certs) > 0 {
+		counts = append(counts, fmt.Sprintf("证书 %d", len(certs)))
+	}
+	if len(doms) > 0 {
+		counts = append(counts, fmt.Sprintf("域名 %d", len(doms)))
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "命中 %d 项 —— %s（阈值 %s 天）", total, strings.Join(counts, " · "), strings.Join(thDisplay, "/"))
+	if len(certs) > 0 {
+		b.WriteString("\n\n证书")
+		for _, it := range certs {
+			fmt.Fprintf(&b, "\n%s %s 还有 %d 天到期（%s）", remindDot(it.days), it.name, it.days, it.expiry)
+		}
+	}
+	if len(doms) > 0 {
+		b.WriteString("\n\n域名")
+		for _, it := range doms {
+			fmt.Fprintf(&b, "\n%s %s 还有 %d 天到期（%s）", remindDot(it.days), it.name, it.days, it.expiry)
+		}
+	}
+	return b.String()
 }
 
 // notifyEvent 按事件开关决定是否发送；发送时 @ 通知人（阶段②增强）。

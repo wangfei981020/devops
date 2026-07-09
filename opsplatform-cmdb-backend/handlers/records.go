@@ -75,7 +75,7 @@ func (h *RecordHandler) ListAll(c *gin.Context) {
 		LEFT JOIN domains d ON d.ci_id=r.domain_ci_id
 		LEFT JOIN cdns cd ON cd.id=r.cdn_id
 		LEFT JOIN registrars reg ON reg.id=d.registrar_id
-		WHERE c.type='domain' ` + ignoredCond + `
+		WHERE c.type='domain' AND COALESCE(d.ignored,0)=0 ` + ignoredCond + `
 		ORDER BY r.project, c.name, r.host`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
