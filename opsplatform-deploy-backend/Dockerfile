@@ -11,7 +11,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/deploy-backend .
 # alpine:3.22 修 nghttp2 CVE-2026-27135 (1.64.0 → 1.68.1)
 FROM alpine:3.22
 RUN apk upgrade --no-cache && \
-    apk add --no-cache git ca-certificates tzdata && \
+    apk add --no-cache git ca-certificates tzdata helm && \
     ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 WORKDIR /app
 COPY --from=builder /out/deploy-backend /app/deploy-backend

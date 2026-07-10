@@ -11,7 +11,10 @@ const routes = [
     children: [
       { path: 'dashboard', component: () => import('../views/DashboardView.vue'), meta: { title: '发布概览', menuKey: 'dashboard' } },
       { path: 'deploy', component: () => import('../views/DeployConsole.vue'), meta: { title: '部署控制台', menuKey: 'console' } },
+      { path: 'orchestration', component: () => import('../views/ServiceOrchestration.vue'), meta: { title: '服务编排', menuKey: 'orchestration' } },
       { path: 'projects', component: () => import('../views/ProjectsConfig.vue'), meta: { title: '项目配置', menuKey: 'projects' } },
+      { path: 'templates', component: () => import('../views/TemplateLibrary.vue'), meta: { title: '模板库', menuKey: 'templates' } },
+      { path: 'environments', component: () => import('../views/EnvironmentManage.vue'), meta: { title: '环境管理', menuKey: 'environments' } },
       { path: 'history', component: () => import('../views/DeploymentHistory.vue'), meta: { title: '发布历史', menuKey: 'history' } },
       { path: 'settings', component: () => import('../views/SystemSettings.vue'), meta: { title: '系统设置', menuKey: 'settings' } },
     ],

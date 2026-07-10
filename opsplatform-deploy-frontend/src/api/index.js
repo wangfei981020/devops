@@ -134,6 +134,26 @@ export const testProjectEnvGit = (body) => http.post('/project-envs/test-git', b
 export const testProjectEnvArgocd = (body) => http.post('/project-envs/test-argocd', body || {})
 export const scanModules = (id) => http.post(`/project-envs/${id}/scan-modules`)
 
+// 服务编排（Service Orchestration）
+export const listTemplates = (params) => http.get('/orchestration/templates', { params })
+export const createTemplate = (data) => http.post('/orchestration/templates', data)
+export const updateTemplate = (id, data) => http.put(`/orchestration/templates/${id}`, data)
+export const deleteTemplate = (id) => http.delete(`/orchestration/templates/${id}`)
+// prefill body = { template_id, target_env_id, module_name } → { values_yaml, suggest_namespace, ... }
+export const prefillModule = (body) => http.post('/orchestration/prefill', body)
+// preview/submit body = { template_id, target_env_id, module_name, namespace, values_yaml, disable }
+export const previewModule = (body) => http.post('/orchestration/preview', body)
+export const submitModule = (body) => http.post('/orchestration/submit', body)
+// batch body = { template_id, target_env_id, disable, rows: [{module_name, namespace}] }
+export const batchPreviewModules = (body) => http.post('/orchestration/batch-preview', body)
+export const batchSubmitModules = (body) => http.post('/orchestration/batch-submit', body)
+
+// 可配置环境（dev/test/uat/prod）
+export const listEnvironments = () => http.get('/environments')
+export const createEnvironment = (data) => http.post('/environments', data)
+export const updateEnvironment = (name, data) => http.put(`/environments/${name}`, data)
+export const deleteEnvironment = (name) => http.delete(`/environments/${name}`)
+
 // Modules
 export const listModules = (projectEnvID) => http.get('/modules', { params: { project_env_id: projectEnvID } })
 export const getModuleTagHistory = (id, limit = 10) => http.get(`/modules/${id}/tag-history`, { params: { limit } })

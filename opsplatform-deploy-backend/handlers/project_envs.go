@@ -103,6 +103,16 @@ func applyGitlabRepo(req *projectEnvReq) error {
 	return nil
 }
 
+// isConfiguredEnvType 校验 env_type 已在 deploy_environment（环境管理）中启用配置。
+func isConfiguredEnvType(t string) bool {
+	if t == "" {
+		return false
+	}
+	var cnt int
+	_ = database.DB.QueryRow(`SELECT COUNT(*) FROM deploy_environment WHERE name=? AND enabled=1`, t).Scan(&cnt)
+	return cnt > 0
+}
+
 func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
 	var req projectEnvReq
 	if !DecodeJSON(w, r, &req) {
@@ -112,8 +122,8 @@ func HandleCreateProjectEnv(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40001, "name: "+err.Error())
 		return
 	}
-	if req.EnvType != models.EnvUAT && req.EnvType != models.EnvPROD {
-		JSONError(w, 40001, "env_type 必须是 uat 或 prod")
+	if !isConfiguredEnvType(req.EnvType) {
+		JSONError(w, 40001, "env_type 未在「环境管理」中配置，请先添加该环境（dev/test/uat/prod…）")
 		return
 	}
 	// gitlab_repo_id 选了则从表里复制 url/default_branch 到 req

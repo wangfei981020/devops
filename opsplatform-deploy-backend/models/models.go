@@ -256,3 +256,34 @@ const (
 	StatusNoChange = "no_change"
 	StatusCanceled = "canceled" // 用户在等待中点了"取消等待"，git 改动已 push、ArgoCD 在自己同步，仅停 deploy-center 这边的轮询
 )
+
+// OrchestrationTemplate 参照模板：指向 git 里某个样板服务（存指针，运行时拷当前最新）
+type OrchestrationTemplate struct {
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Project     string    `json:"project"`      // 绑定项目；空=全局可用
+	ModuleType  string    `json:"module_type"`  // "frontend" | "backend"
+	SrcEnv      string    `json:"src_env"`      // 样板所在 project_env.name
+	SrcService  string    `json:"src_service"`  // 样板服务目录名（chart_base_path 下）
+	Description string    `json:"description"`
+	Config      string    `json:"config,omitempty"` // 预留 JSON：推导规则/默认覆盖
+	Enabled     int       `json:"enabled"`
+	CreatedBy   string    `json:"created_by"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// DeployEnvironment 可配置环境（dev/test/uat/prod…），每环境独立权限档
+type DeployEnvironment struct {
+	Name           string    `json:"name"`
+	DisplayName    string    `json:"display_name"`
+	PermissionCode string    `json:"permission_code"` // 如 submit_uat / submit_dev
+	SortOrder      int       `json:"sort_order"`
+	Enabled        int       `json:"enabled"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+const (
+	ModuleTypeFrontend = "frontend"
+	ModuleTypeBackend  = "backend"
+)

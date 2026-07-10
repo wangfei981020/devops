@@ -108,6 +108,30 @@ func main() {
 	// 取消等待：handler 内部判定权限（操作发起人 OR admin）
 	protected.HandleFunc("/deployments/{id}/cancel", handlers.HandleCancelDeployment).Methods("POST", "OPTIONS")
 
+	// ========== 服务编排：模板库 + 新增模块 ==========
+	// 读 + 预填 + 预览（登录即可）；提交在 handler 内按环境权限 submit_<env> 放行
+	protected.HandleFunc("/orchestration/templates", handlers.HandleListTemplates).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/orchestration/prefill", handlers.HandlePrefillModule).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/orchestration/preview", handlers.HandlePreviewModule).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/orchestration/submit", handlers.HandleSubmitModule).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/orchestration/batch-preview", handlers.HandleBatchPreview).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/orchestration/batch-submit", handlers.HandleBatchSubmit).Methods("POST", "OPTIONS")
+
+	// 模板 CRUD —— manage_templates 权限
+	mt := protected.PathPrefix("").Subrouter()
+	mt.Use(handlers.RequireButton("manage_templates"))
+	mt.HandleFunc("/orchestration/templates", handlers.HandleCreateTemplate).Methods("POST", "OPTIONS")
+	mt.HandleFunc("/orchestration/templates/{id}", handlers.HandleUpdateTemplate).Methods("PUT", "OPTIONS")
+	mt.HandleFunc("/orchestration/templates/{id}", handlers.HandleDeleteTemplate).Methods("DELETE", "OPTIONS")
+
+	// 环境列表（读）+ 环境 CRUD（manage_projects 权限）
+	protected.HandleFunc("/environments", handlers.HandleListEnvironments).Methods("GET", "OPTIONS")
+	me := protected.PathPrefix("").Subrouter()
+	me.Use(handlers.RequireButton("manage_projects"))
+	me.HandleFunc("/environments", handlers.HandleCreateEnvironment).Methods("POST", "OPTIONS")
+	me.HandleFunc("/environments/{name}", handlers.HandleUpdateEnvironment).Methods("PUT", "OPTIONS")
+	me.HandleFunc("/environments/{name}", handlers.HandleDeleteEnvironment).Methods("DELETE", "OPTIONS")
+
 	// ========== 按钮权限分组：每组 admin 自动放行，portal 用户按勾选授权 ==========
 	// ① manage_global — 全局凭证 + GitLab 仓库登记
 	mg := protected.PathPrefix("").Subrouter()

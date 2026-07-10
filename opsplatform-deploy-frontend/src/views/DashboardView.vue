@@ -27,8 +27,7 @@
           <span class="main">{{ stats.kpi?.envs_total || 0 }}</span>
         </div>
         <div class="k-sub">
-          <span v-if="auth.hasAnyUatEnv" class="tag uat">UAT {{ stats.kpi?.envs_uat || 0 }}</span>
-          <span v-if="auth.hasAnyProdEnv" class="tag prod">PROD {{ stats.kpi?.envs_prod || 0 }}</span>
+          <span v-for="e in (stats.kpi?.envs_by_type || [])" :key="e.type" class="tag" :class="e.type">{{ e.type.toUpperCase() }} {{ e.count }}</span>
         </div>
       </div>
 
@@ -350,6 +349,9 @@ onMounted(() => {
 .tag { display: inline-flex; padding: 2px 8px; border-radius: 99px; font: 500 11px var(--mono); background: var(--bg-hover); color: var(--text-2); }
 .tag.uat { background: #ecfdf5; color: #059669; }
 .tag.prod { background: #fef2f2; color: #dc2626; }
+.tag.dev { background: #eff6ff; color: #2563eb; }
+.tag.test { background: #fffbeb; color: #d97706; }
+.tag.lpt { background: #f5f3ff; color: #7c3aed; }
 .tag.ok { background: #ecfdf5; color: #059669; }
 .tag.fail { background: #fef2f2; color: #dc2626; }
 

@@ -10,11 +10,17 @@ import (
 	"opsplatform-deploy-backend/database"
 )
 
+type envTypeCount struct {
+	Type  string `json:"type"`
+	Count int    `json:"count"`
+}
+
 type kpi struct {
-	Projects              int `json:"projects"`
-	EnvsTotal             int `json:"envs_total"`
-	EnvsUAT               int `json:"envs_uat"`
-	EnvsPROD              int `json:"envs_prod"`
+	Projects              int            `json:"projects"`
+	EnvsTotal             int            `json:"envs_total"`
+	EnvsUAT               int            `json:"envs_uat"`
+	EnvsPROD              int            `json:"envs_prod"`
+	EnvsByType            []envTypeCount `json:"envs_by_type"` // 每种环境单独统计(dev/test/uat/prod…)
 	K8sModulesTotal       int `json:"k8s_modules_total"`
 	VmServicesTotal       int `json:"vm_services_total"`
 	Deployments24h        int `json:"deployments_24h"`
@@ -60,6 +66,70 @@ func inClause(ids []int64) (string, []interface{}) {
 		args[i] = id
 	}
 	return ph, args
+}
+
+// countEnvsByType 按环境类型分组统计 K8s + VM 环境（dev/test/uat/prod… 各一档），
+// 顺序按 deploy_environment.sort_order，未配的排后面。尊重 enforce/可见 id 过滤。
+func countEnvsByType(enforce bool, k8sIDs, vmIDs []int64) []envTypeCount {
+	m := map[string]int{}
+	group := func(table string, ids []int64) {
+		q := "SELECT LOWER(env_type), COUNT(*) FROM " + table
+		var rows *sql.Rows
+		var err error
+		if !enforce {
+			rows, err = database.DB.Query(q + " GROUP BY LOWER(env_type)")
+		} else {
+			if len(ids) == 0 {
+				return
+			}
+			ph, args := inClause(ids)
+			rows, err = database.DB.Query(q+" WHERE id IN ("+ph+") GROUP BY LOWER(env_type)", args...)
+		}
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var t string
+			var n int
+			if rows.Scan(&t, &n) == nil && t != "" {
+				m[t] += n
+			}
+		}
+	}
+	group("project_env", k8sIDs)
+	group("vm_project_env", vmIDs)
+
+	order := map[string]int{}
+	if rows, err := database.DB.Query(`SELECT LOWER(name), sort_order FROM deploy_environment`); err == nil {
+		for rows.Next() {
+			var n string
+			var so int
+			if rows.Scan(&n, &so) == nil {
+				order[n] = so
+			}
+		}
+		rows.Close()
+	}
+	out := make([]envTypeCount, 0, len(m))
+	for t, c := range m {
+		out = append(out, envTypeCount{Type: t, Count: c})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		oi, ok1 := order[out[i].Type]
+		oj, ok2 := order[out[j].Type]
+		if !ok1 {
+			oi = 9999
+		}
+		if !ok2 {
+			oj = 9999
+		}
+		if oi != oj {
+			return oi < oj
+		}
+		return out[i].Type < out[j].Type
+	})
+	return out
 }
 
 // HandleDashboardStats: GET /api/dashboard/stats
@@ -130,13 +200,15 @@ func HandleDashboardStats(w http.ResponseWriter, r *http.Request) {
 			`SELECT COUNT(*) FROM `+table+` WHERE id IN (`+ph+`) AND `+where, args...).Scan(&n)
 		return n
 	}
-	// K8s env_type 是小写 enum('uat','prod')；VM 是大写 enum('LPT','UAT','PROD')，业务上 LPT 算 UAT
+	// K8s env_type 已放开为任意环境（dev/test/uat/prod…）；VM 是 enum('LPT','UAT','PROD')。
 	k.EnvsTotal = countEnvs("project_env", k8sIDs, "1=1") +
 		countEnvs("vm_project_env", vmIDs, "1=1")
 	k.EnvsUAT = countEnvs("project_env", k8sIDs, "env_type='uat'") +
 		countEnvs("vm_project_env", vmIDs, "env_type IN ('UAT','LPT')")
 	k.EnvsPROD = countEnvs("project_env", k8sIDs, "env_type='prod'") +
 		countEnvs("vm_project_env", vmIDs, "env_type='PROD'")
+	// 每种环境单独统计：dev/test/uat/prod… 各自一档，不再把 dev/test 混进 uat
+	k.EnvsByType = countEnvsByType(enforce, k8sIDs, vmIDs)
 
 	/* ---------- K8s 模块数 / VM 服务数（拆两个 KPI 卡） ---------- */
 	countByEnvFK := func(table, fk string, ids []int64) int {

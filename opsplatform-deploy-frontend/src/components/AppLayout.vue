@@ -21,6 +21,7 @@
           </div>
           <template v-if="grp.publish">
             <RouterLink v-if="auth.hasMenu('console')" to="/deploy" class="sub-item" active-class="active">部署控制台</RouterLink>
+            <RouterLink v-if="auth.hasMenu('orchestration')" to="/orchestration" class="sub-item" active-class="active">服务编排</RouterLink>
             <RouterLink v-if="auth.hasMenu('history')" to="/history" class="sub-item" active-class="active">发布历史</RouterLink>
           </template>
         </div>
@@ -33,6 +34,8 @@
           </div>
           <template v-if="grp.config">
             <RouterLink v-if="auth.hasMenu('projects')" to="/projects" class="sub-item" active-class="active">项目配置</RouterLink>
+            <RouterLink v-if="auth.hasMenu('templates')" to="/templates" class="sub-item" active-class="active">模板库</RouterLink>
+            <RouterLink v-if="auth.hasMenu('environments')" to="/environments" class="sub-item" active-class="active">环境管理</RouterLink>
             <RouterLink v-if="auth.hasMenu('settings')" to="/settings" class="sub-item" active-class="active">系统设置</RouterLink>
           </template>
         </div>
@@ -103,8 +106,8 @@ const grpRaw = JSON.parse(localStorage.getItem('deploy_sidebar_groups') || '{"pu
 const grp = reactive(grpRaw)
 watch(grp, (v) => localStorage.setItem('deploy_sidebar_groups', JSON.stringify(v)), { deep: true })
 
-const showPublishGroup = computed(() => auth.hasMenu('console') || auth.hasMenu('history'))
-const showConfigGroup = computed(() => auth.hasMenu('projects') || auth.hasMenu('settings'))
+const showPublishGroup = computed(() => auth.hasMenu('console') || auth.hasMenu('orchestration') || auth.hasMenu('history'))
+const showConfigGroup = computed(() => auth.hasMenu('projects') || auth.hasMenu('templates') || auth.hasMenu('environments') || auth.hasMenu('settings'))
 
 async function onCommand(cmd) {
   if (cmd === 'logout') {
