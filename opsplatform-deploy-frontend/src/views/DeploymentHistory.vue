@@ -135,7 +135,14 @@
                     <el-icon class="ib-ico"><Warning /></el-icon>
                     <div class="ib-body">
                       <div class="ib-title">发布被中断，服务未受影响</div>
-                      <pre class="ib-msg">{{ row.error_msg || '后端重启导致本次发布在提交前被中断，服务还是原版本。请点「重试」重新发布。' }}</pre>
+                      <pre class="ib-msg">{{ row.status_note || '后端重启导致本次发布在提交前被中断，服务还是原版本。请点「重试」重新发布。' }}</pre>
+                    </div>
+                  </div>
+                  <!-- 其它带说明的（如后端重启后自动对账恢复成功）：蓝色信息条，不是错误 -->
+                  <div v-else-if="row.status_note" class="info-banner">
+                    <el-icon class="ib-ico"><InfoFilled /></el-icon>
+                    <div class="ib-body">
+                      <pre class="ib-msg">{{ row.status_note }}</pre>
                     </div>
                   </div>
 
@@ -322,7 +329,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from
 import PodLogsModal from '../components/PodLogsModal.vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
-import { Search, ArrowRight, Warning } from '@element-plus/icons-vue'
+import { Search, ArrowRight, Warning, InfoFilled } from '@element-plus/icons-vue'
 import { listDeployments, listProjectEnvs, listVmProjectEnvs, getDeployment, cancelDeployment, retryDeployment, fetchVmArchivedLog } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import RollbackDialog from '../components/RollbackDialog.vue'
@@ -1010,6 +1017,15 @@ onUnmounted(() => {
 .interrupt-banner .ib-ico { color: #ea580c; font-size: 18px; margin-top: 1px; flex-shrink: 0; }
 .interrupt-banner .ib-title { font-weight: 600; color: #9a3412; font-size: 13px; margin-bottom: 4px; }
 .interrupt-banner .ib-msg { margin: 0; white-space: pre-wrap; font-size: 12px; color: #7c2d12; line-height: 1.6; font-family: inherit; }
+
+/* 信息说明条：蓝色，用于"后端重启后自动对账恢复"这类说明（不是错误） */
+.info-banner {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px;
+  padding: 10px 14px; margin-bottom: 14px;
+}
+.info-banner .ib-ico { color: #2563eb; font-size: 17px; margin-top: 1px; flex-shrink: 0; }
+.info-banner .ib-msg { margin: 0; white-space: pre-wrap; font-size: 12px; color: #1e40af; line-height: 1.6; font-family: inherit; }
 
 .mod-chip {
   display: inline-block;

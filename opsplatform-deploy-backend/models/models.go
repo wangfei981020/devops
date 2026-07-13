@@ -219,8 +219,11 @@ type Deployment struct {
 	ArgocdResults   []ArgocdAppResult `json:"argocd_results"`
 	LarkNotify      string            `json:"lark_notify"` // success|failed|skipped
 	Operator        string            `json:"operator"`
-	Status          string            `json:"status"` // pending|success|partial|failed|no_change|canceled
+	Status          string            `json:"status"` // pending|success|partial|failed|no_change|canceled|interrupted
 	ErrorMsg        string            `json:"error_msg"`
+	// StatusNote 给人看的干净说明（对账/中断/自愈等），列表接口不脱敏；
+	// 跟 ErrorMsg 分开：ErrorMsg 放真失败的技术细节，对非 admin 脱敏。
+	StatusNote string `json:"status_note"`
 	DurationSec     int               `json:"duration_sec"`
 	CreatedAt       time.Time         `json:"created_at"`
 

@@ -124,7 +124,7 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 
 	args2 := append(append([]interface{}{}, args...), pageSize, (page-1)*pageSize)
 	rows, err := database.DB.Query(`SELECT id, project_env_id, action, ref_deployment_id, module_names, changes,
-		git_commit, git_commit_url, argocd_results, lark_notify, operator, status, IFNULL(error_msg,''), duration_sec, created_at,
+		git_commit, git_commit_url, argocd_results, lark_notify, operator, status, IFNULL(error_msg,''), IFNULL(status_note,''), duration_sec, created_at,
 		vm_task_map
 		FROM deployment `+where+` ORDER BY created_at DESC LIMIT ? OFFSET ?`, args2...)
 	if err != nil {
@@ -138,13 +138,13 @@ func HandleListDeployments(w http.ResponseWriter, r *http.Request) {
 		var d models.Deployment
 		var mnames, changes, argoResults, vmTaskMap []byte
 		_ = rows.Scan(&d.ID, &d.ProjectEnvID, &d.Action, &d.RefDeploymentID, &mnames, &changes, &d.GitCommit, &d.GitCommitURL,
-			&argoResults, &d.LarkNotify, &d.Operator, &d.Status, &d.ErrorMsg, &d.DurationSec, &d.CreatedAt,
+			&argoResults, &d.LarkNotify, &d.Operator, &d.Status, &d.ErrorMsg, &d.StatusNote, &d.DurationSec, &d.CreatedAt,
 			&vmTaskMap)
 		_ = jsonUnmarshalImpl(mnames, &d.ModuleNames)
 		_ = jsonUnmarshalImpl(changes, &d.Changes)
 		_ = jsonUnmarshalImpl(argoResults, &d.ArgocdResults)
 		_ = jsonUnmarshalImpl(vmTaskMap, &d.VmTaskMap)
-		// error_msg 可能含 git stderr / 文件路径等，非 admin 脱敏
+		// error_msg 可能含 git stderr / 文件路径等，非 admin 脱敏；status_note 是干净说明，不脱敏
 		if !isAdmin && d.ErrorMsg != "" {
 			d.ErrorMsg = "（失败详情已隐藏，请联系管理员查看）"
 		}
@@ -258,11 +258,11 @@ func HandleGetDeployment(w http.ResponseWriter, r *http.Request) {
 	var targetType string
 	var mnames, changes, argoResults, vmTaskMap []byte
 	err := database.DB.QueryRow(`SELECT id, project_env_id, action, ref_deployment_id, module_names, changes,
-		git_commit, git_commit_url, argocd_results, lark_notify, operator, status, IFNULL(error_msg,''), duration_sec, created_at,
+		git_commit, git_commit_url, argocd_results, lark_notify, operator, status, IFNULL(error_msg,''), IFNULL(status_note,''), duration_sec, created_at,
 		IFNULL(target_type,'k8s'), vm_task_map
 		FROM deployment WHERE id=?`, id).
 		Scan(&d.ID, &d.ProjectEnvID, &d.Action, &d.RefDeploymentID, &mnames, &changes, &d.GitCommit, &d.GitCommitURL,
-			&argoResults, &d.LarkNotify, &d.Operator, &d.Status, &d.ErrorMsg, &d.DurationSec, &d.CreatedAt,
+			&argoResults, &d.LarkNotify, &d.Operator, &d.Status, &d.ErrorMsg, &d.StatusNote, &d.DurationSec, &d.CreatedAt,
 			&targetType, &vmTaskMap)
 	if err != nil {
 		JSONError(w, 40400, "deployment not found")

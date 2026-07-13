@@ -122,6 +122,7 @@ func reconcileAfterPush(o orphanDeploy, p *models.ProjectEnv) {
 
 	client := services.NewArgocdClient(argoURL, argoToken)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	statuses := map[string]*services.AppStatus{}
 	allHealthy := true
 	for _, app := range apps {
 		st, err := client.GetAppStatus(ctx, app)
@@ -129,16 +130,51 @@ func reconcileAfterPush(o orphanDeploy, p *models.ProjectEnv) {
 			allHealthy = false
 			break
 		}
+		statuses[app] = st
 	}
 	cancel()
 
 	if allHealthy {
-		markReconcileSuccess(o.id, "后端重启后对账：ArgoCD 已 Synced + Healthy，服务发布成功。")
+		// 刷新同步结果快照为 Synced+Healthy（消掉重启前残留的 Progressing/等待 Pod 就绪），
+		// 说明走 status_note（不脱敏），成功不再挂"错误信息"。
+		fresh := refreshResultsHealthy(o.argoRaw, apps, statuses, "后端重启后对账确认已就绪")
+		markReconcileSuccessRefresh(o.id,
+			"此发布曾因后端重启中断，已由系统自动对账确认服务就绪、判定成功。", fresh)
 		return
 	}
 	// 还在滚动 / 状态未定 → 后台续 poll 收尾
 	log.Printf("[reconcile] dep=%d 已提交但未稳定，挂后台续 poll %d 个 app", o.id, len(apps))
 	resumePollAfterRestart(o.id, p, apps, argoURL, argoToken)
+}
+
+// refreshResultsHealthy 把旧的 argocd_results 快照按 app 覆写成当前 Synced+Healthy + note，
+// 保留原有的 DurationSec 等字段；旧快照里没有的 app 补一条。
+func refreshResultsHealthy(argoRaw string, apps []string, statuses map[string]*services.AppStatus, note string) []models.ArgocdAppResult {
+	var old []models.ArgocdAppResult
+	_ = jsonUnmarshalImpl([]byte(argoRaw), &old)
+	byApp := map[string]models.ArgocdAppResult{}
+	for _, r := range old {
+		byApp[r.App] = r
+	}
+	out := make([]models.ArgocdAppResult, 0, len(apps))
+	for _, app := range apps {
+		r := byApp[app] // 零值也没关系
+		r.App = app
+		r.SyncStatus = "Synced"
+		r.Health = "Healthy"
+		if st := statuses[app]; st != nil {
+			if st.SyncStatus != "" {
+				r.SyncStatus = st.SyncStatus
+			}
+			if st.Health != "" {
+				r.Health = st.Health
+			}
+		}
+		r.Msg = note
+		r.LastPolledAt = time.Now()
+		out = append(out, r)
+	}
+	return out
 }
 
 // resumePollAfterRestart 重新接管一次 poll：对每个 app 用零 syncStartedAt 跑 PollUntilStable
@@ -175,16 +211,17 @@ func resumePollAfterRestart(depID int64, p *models.ProjectEnv, apps []string, ar
 		}
 		failed := collectFailedApps(results)
 		status := models.StatusSuccess
-		note := "后端重启后自动接管跟踪：服务发布成功。"
+		note := "此发布曾因后端重启中断，已由系统自动接管跟踪、确认服务就绪，判定成功。"
 		if len(results) > 0 && len(failed) == len(results) {
 			status = models.StatusFailed
-			note = "后端重启后接管跟踪：ArgoCD 判定发布失败，请查看同步结果与 Pod 日志。"
+			note = "此发布曾因后端重启中断，系统接管跟踪后 ArgoCD 判定发布失败，请查看同步结果与 Pod 日志。"
 		} else if len(failed) > 0 {
 			status = models.StatusPartial
-			note = "后端重启后接管跟踪：部分模块发布失败，请查看同步结果。"
+			note = "此发布曾因后端重启中断，系统接管跟踪后部分模块失败，请查看同步结果。"
 		}
+		// 说明走 status_note（不脱敏）；失败的技术细节仍在 argocd_results 各行的消息里。
 		_, _ = database.DB.Exec(
-			`UPDATE deployment SET argocd_results=?, status=?, error_msg=CONCAT('[对账] ', ?) WHERE id=?`,
+			`UPDATE deployment SET argocd_results=?, status=?, status_note=? WHERE id=?`,
 			marshalJSON(results), status, note, depID)
 		ArchiveFailedPodLogs(depID, p, collectFailingPodsByApp(results))
 	})
@@ -299,7 +336,7 @@ func acquireForRerun(envName string, mods []string, depID int64, operator string
 // resetForRerun 把记录清成干净的 pending，重新走一遍流水线。
 func resetForRerun(depID int64) {
 	_, _ = database.DB.Exec(
-		`UPDATE deployment SET status='pending', error_msg='', argocd_results=NULL, duration_sec=NULL WHERE id=?`, depID)
+		`UPDATE deployment SET status='pending', error_msg='', status_note='', argocd_results=NULL, duration_sec=NULL WHERE id=?`, depID)
 }
 
 // pendingFromChanges 从 changes JSON（[{module,to_tag}]）重建 module→目标tag。
@@ -397,17 +434,28 @@ func HandleRetryDeployment(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, map[string]interface{}{"deployment_id": o.id, "status": "pending"})
 }
 
-func markInterrupted(depID int64, msg string) {
-	_, _ = database.DB.Exec(`UPDATE deployment SET status='interrupted', error_msg=? WHERE id=?`, msg, depID)
+// 以下 mark* 的"说明"一律写 status_note（干净、不脱敏）；error_msg 只留给真失败的技术细节。
+
+func markInterrupted(depID int64, note string) {
+	_, _ = database.DB.Exec(`UPDATE deployment SET status='interrupted', status_note=?, error_msg='' WHERE id=?`, note, depID)
 	log.Printf("[reconcile] dep=%d → interrupted（提交前中断，服务未受影响，需重试）", depID)
 }
 
-func markReconcileFailed(depID int64, msg string) {
-	_, _ = database.DB.Exec(`UPDATE deployment SET status='failed', error_msg=? WHERE id=?`, msg, depID)
+func markReconcileFailed(depID int64, note string) {
+	_, _ = database.DB.Exec(`UPDATE deployment SET status='failed', status_note=? WHERE id=?`, note, depID)
 	log.Printf("[reconcile] dep=%d → failed", depID)
 }
 
-func markReconcileSuccess(depID int64, msg string) {
-	_, _ = database.DB.Exec(`UPDATE deployment SET status='success', error_msg=? WHERE id=?`, msg, depID)
+func markReconcileSuccess(depID int64, note string) {
+	// 成功不再往 error_msg 塞说明（否则前端会当"错误信息"展示 + 非 admin 被脱敏）
+	_, _ = database.DB.Exec(`UPDATE deployment SET status='success', status_note=?, error_msg='' WHERE id=?`, note, depID)
 	log.Printf("[reconcile] dep=%d → success", depID)
+}
+
+// markReconcileSuccessRefresh 判成功的同时刷新同步结果快照（消掉重启前残留的 Progressing）。
+func markReconcileSuccessRefresh(depID int64, note string, results []models.ArgocdAppResult) {
+	_, _ = database.DB.Exec(
+		`UPDATE deployment SET status='success', status_note=?, error_msg='', argocd_results=? WHERE id=?`,
+		note, marshalJSON(results), depID)
+	log.Printf("[reconcile] dep=%d → success（已刷新同步结果快照）", depID)
 }
