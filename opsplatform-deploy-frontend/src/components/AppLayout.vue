@@ -22,6 +22,7 @@
           <template v-if="grp.publish">
             <RouterLink v-if="auth.hasMenu('console')" to="/deploy" class="sub-item" active-class="active">部署控制台</RouterLink>
             <RouterLink v-if="auth.hasMenu('orchestration')" to="/orchestration" class="sub-item" active-class="active">服务编排</RouterLink>
+            <RouterLink v-if="auth.hasMenu('orchestration')" to="/orchestration-history" class="sub-item" active-class="active">新增历史</RouterLink>
             <RouterLink v-if="auth.hasMenu('history')" to="/history" class="sub-item" active-class="active">发布历史</RouterLink>
           </template>
         </div>

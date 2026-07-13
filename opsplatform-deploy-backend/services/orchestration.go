@@ -136,6 +136,72 @@ func EnsureGlobalLabels(content []byte) []byte {
 	return content
 }
 
+// SetImageRepository 把 values 里 image.repository 设成推导出的仓库地址（预填时用）。
+// 只在存在 image.repository 时生效；解析失败原样返回，不阻断预填。repo 为空则不改。
+func SetImageRepository(content []byte, repo string) []byte {
+	if repo == "" {
+		return content
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil || len(root.Content) == 0 {
+		return content
+	}
+	n, err := findMappingKey(root.Content[0], "image", "repository")
+	if err != nil {
+		return content // 没有 image.repository，原样
+	}
+	n.Value = repo
+	n.Tag = "!!str"
+	if out, e := encodeYAML(&root); e == nil {
+		return out
+	}
+	return content
+}
+
+// SetImageTag 把 values 里 image.tag 设成指定值（预填自动带最新 tag 用；tag 为 "" 则清空）。
+// 只在存在 image.tag 时生效；强制字符串，避免 1.28 被当浮点。
+func SetImageTag(content []byte, tag string) []byte {
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil || len(root.Content) == 0 {
+		return content
+	}
+	n, err := findMappingKey(root.Content[0], "image", "tag")
+	if err != nil {
+		return content
+	}
+	n.Value = tag
+	n.Tag = "!!str"
+	n.Style = yaml.DoubleQuotedStyle // 让空/纯数字 tag 也稳定序列化
+	if out, e := encodeYAML(&root); e == nil {
+		return out
+	}
+	return content
+}
+
+// GetImageRepoTag 从 values 读 image.repository / image.tag。
+func GetImageRepoTag(content []byte) (repo, tag string) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil || len(root.Content) == 0 {
+		return "", ""
+	}
+	if n, e := findMappingKey(root.Content[0], "image", "repository"); e == nil {
+		repo = strings.TrimSpace(n.Value)
+	}
+	if n, e := findMappingKey(root.Content[0], "image", "tag"); e == nil {
+		tag = strings.TrimSpace(n.Value)
+	}
+	return
+}
+
+// HarborDomain 从全局 harbor_url 取出纯域名（去掉 https:// 前缀和尾部 /）。
+// 例：https://harbor.slileisure.com/ → harbor.slileisure.com
+func HarborDomain(harborURL string) string {
+	s := strings.TrimSpace(harborURL)
+	s = strings.TrimPrefix(s, "https://")
+	s = strings.TrimPrefix(s, "http://")
+	return strings.TrimRight(s, "/")
+}
+
 // DeriveImageRepository 从模块名推导镜像仓库路径。
 // 约定：模块名带项目前缀 "<project>-"，镜像路径去掉前缀。
 // 例：harborBase=harbor.slileisure.com, project=g32, module=g32-baccarat-settle-backend

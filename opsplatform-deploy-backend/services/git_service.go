@@ -304,17 +304,57 @@ func (g *GitService) AcquireCheckout(ctx context.Context, envName, repoURL, bran
 		return nil, err
 	}
 	authURL := injectToken(repoURL, g.User, g.Token())
-	// 浅克隆单分支：只取分支 tip，大仓库也快
-	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", "--single-branch", "--branch", branch, authURL, dir)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		_ = os.RemoveAll(dir)
-		return nil, fmt.Errorf("git clone: %w\n%s", err, ScrubSecrets(out))
+	cachePath := g.RepoPath(envName)
+	// 优先从本地热缓存克隆（大仓库关键提速）：
+	//   缓存由扫描调度/预填保持热(每几分钟 fetch)。用 --local 硬链接对象——瞬间完成、
+	//   不重下整个大仓库、且硬链接能扛住缓存被 git gc（inode 引用计数保住对象）。
+	//   然后只从远端拉本分支几分钟的增量并对齐。缓存不存在(冷)则回退远端浅克隆。
+	useCache := false
+	if fi, serr := os.Stat(filepath.Join(cachePath, ".git")); serr == nil && fi.IsDir() {
+		useCache = true
+	}
+	var cloneErr error
+	if useCache {
+		cloneErr = g.checkoutFromCache(ctx, dir, cachePath, authURL, branch)
+		if cloneErr != nil {
+			// 缓存路径异常 → 回退远端浅克隆，不阻断
+			_ = os.RemoveAll(dir)
+			dir, err = os.MkdirTemp(workRoot, sanitizeName(envName)+"-")
+			if err != nil {
+				return nil, err
+			}
+			useCache = false
+		}
+	}
+	if !useCache {
+		out, e := exec.CommandContext(ctx, "git", "clone", "--depth", "1", "--single-branch", "--branch", branch, authURL, dir).CombinedOutput()
+		if e != nil {
+			_ = os.RemoveAll(dir)
+			return nil, fmt.Errorf("git clone: %w\n%s", e, ScrubSecrets(out))
+		}
 	}
 	if err := g.configRepo(ctx, dir); err != nil {
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
 	return &Checkout{g: g, Dir: dir, envName: envName, repoURL: repoURL, branch: branch}, nil
+}
+
+// checkoutFromCache 从本地热缓存硬链接克隆(瞬间) + 从远端拉本分支增量对齐到最新。
+func (g *GitService) checkoutFromCache(ctx context.Context, dir, cachePath, authURL, branch string) error {
+	steps := [][]string{
+		// --local 硬链接缓存对象；--no-checkout 先不铺工作树，等对齐远端最新再铺(只铺一次)
+		{"clone", "--local", "--no-checkout", cachePath, dir},
+		{"-C", dir, "remote", "set-url", "origin", authURL},
+		{"-C", dir, "fetch", "--depth", "1", "origin", branch},
+		{"-C", dir, "checkout", "-B", branch, "FETCH_HEAD"},
+	}
+	for _, args := range steps {
+		if out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("git %v: %w\n%s", args[0], err, ScrubSecrets(out))
+		}
+	}
+	return nil
 }
 
 // Release 删掉临时工作区。多次调用安全（清空 Dir 防重复删）。

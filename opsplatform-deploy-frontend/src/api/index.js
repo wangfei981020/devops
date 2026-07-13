@@ -150,6 +150,8 @@ export const batchSubmitModules = (body) => http.post('/orchestration/batch-subm
 
 // 项目参数：更新某项目环境的 ingress 网关名
 export const updateEnvGateway = (id, ingress_gateway) => http.put(`/orchestration/env-gateway/${id}`, { ingress_gateway })
+export const updateEnvHarbor = (id, harbor_project) => http.put(`/orchestration/env-harbor/${id}`, { harbor_project })
+export const listOrchTasks = () => http.get('/orchestration/tasks')
 
 // 可配置环境（dev/test/uat/prod）
 export const listEnvironments = () => http.get('/environments')

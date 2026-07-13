@@ -14,10 +14,16 @@
           <el-tag size="small" :type="row.env_type === 'prod' ? 'danger' : 'success'" style="margin-left:8px">{{ (row.env_type || '').toUpperCase() }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="ingress 网关名" min-width="360">
+      <el-table-column label="ingress 网关名" min-width="320">
         <template #default="{ row }">
           <code v-if="row.ingress_gateway">{{ row.ingress_gateway }}</code>
           <span v-else class="unset">未配置</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="Harbor 项目" min-width="200">
+        <template #default="{ row }">
+          <code v-if="row.harbor_project">{{ row.harbor_project }}</code>
+          <span v-else class="unset">未配置（默认用 {{ projName(row) }}）</span>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="100">
@@ -33,6 +39,10 @@
         <el-form-item label="ingress 网关名">
           <el-input v-model="gateway" placeholder="如 istio-system/g66-uat-istio-ingressgateway-extra" />
           <div class="form-hint">新增模块部署到 {{ editing?.name }} 时，网关名自动带出这个值（仍可手改）</div>
+        </el-form-item>
+        <el-form-item label="Harbor 项目">
+          <el-input v-model="harbor" :placeholder="`留空=用项目名 ${projName(editing)}`" />
+          <div class="form-hint">镜像仓库 = 全局 Harbor 域名 / 这里的项目 / 服务名；留空自动用项目名，预填后仍可手改</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -54,10 +64,19 @@ const dialog = ref(false)
 const saving = ref(false)
 const editing = ref(null)
 const gateway = ref('')
+const harbor = ref('')
+
+// 项目名 = 环境名去掉 -env 后缀（跟后端一致），用于 Harbor 项目默认值提示
+function projName(row) {
+  if (!row?.name) return ''
+  const t = row.env_type ? `-${row.env_type}` : ''
+  return t && row.name.endsWith(t) ? row.name.slice(0, -t.length) : row.name
+}
 
 function openEdit(row) {
   editing.value = row
   gateway.value = row.ingress_gateway || ''
+  harbor.value = row.harbor_project || ''
   dialog.value = true
 }
 
@@ -65,7 +84,9 @@ async function save() {
   saving.value = true
   try {
     await api.updateEnvGateway(editing.value.id, gateway.value.trim())
+    await api.updateEnvHarbor(editing.value.id, harbor.value.trim())
     editing.value.ingress_gateway = gateway.value.trim()
+    editing.value.harbor_project = harbor.value.trim()
     dialog.value = false
     ElMessage.success('已保存')
   } finally {

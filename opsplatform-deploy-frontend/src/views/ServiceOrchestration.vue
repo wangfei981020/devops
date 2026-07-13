@@ -83,6 +83,8 @@
           <ul class="changed"><li v-for="f in preview.changed_files" :key="f"><code>{{ f }}</code></li></ul>
           <div class="hint">🔒 提交抢环境写锁 + 硬同步远端，不覆盖别人</div>
         </div>
+        <el-alert v-if="imageMissing" type="error" :closable="false" class="submitted" show-icon
+          title="⛔ Harbor 缺少镜像" :description="imageMissingMsg" />
         <el-alert v-if="submitted" type="success" :closable="false" class="submitted"
           :title="`已提交 commit ${submitted.commit_sha}`" show-icon />
       </el-form>
@@ -187,11 +189,14 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as api from '../api'
 import ValuesEditor from '../components/ValuesEditor.vue'
 import CodeEditor from '../components/CodeEditor.vue'
 import { CircleCloseFilled } from '@element-plus/icons-vue'
+
+const router = useRouter()
 
 function cmName(p) { return (p || '').split('/').pop() }
 
@@ -232,10 +237,13 @@ const preview = ref(null)
 const submitted = ref(null)
 
 const canPrefill = computed(() => envId.value && form.value.templateId && form.value.moduleName.trim())
-const canPreview = computed(() => canPrefill.value && form.value.namespace.trim() && form.value.valuesYaml.trim())
-const canSubmit = computed(() => preview.value && (preview.value.helm_ok || preview.value.helm_skipped))
+const imageMissing = ref(false)
+const imageMissingMsg = ref('')
+// 缺镜像时：helm 预览 + 确认提交都禁用
+const canPreview = computed(() => canPrefill.value && form.value.namespace.trim() && form.value.valuesYaml.trim() && !imageMissing.value)
+const canSubmit = computed(() => preview.value && (preview.value.helm_ok || preview.value.helm_skipped) && !imageMissing.value)
 
-function resetPreview() { preview.value = null; submitted.value = null }
+function resetPreview() { preview.value = null; submitted.value = null; imageMissing.value = false; imageMissingMsg.value = '' }
 
 function openAdd() {
   form.value = { templateId: null, moduleName: '', namespace: '', valuesYaml: '', disable: false }
@@ -268,7 +276,10 @@ async function doPrefill() {
     cmTab.value = configmaps.value[0]?.path || ''
     if (!form.value.namespace) form.value.namespace = r.suggest_namespace || ''
     resetPreview()
-    ElMessage.success('已带出样板 values.yaml，请复核后编辑')
+    imageMissing.value = !!r.image_missing
+    imageMissingMsg.value = r.image_missing_msg || ''
+    if (imageMissing.value) ElMessage.warning('Harbor 缺少该镜像，请先同步后再新增')
+    else ElMessage.success('已带出样板 values.yaml，请复核后编辑')
   } finally { prefilling.value = false }
 }
 
@@ -284,9 +295,10 @@ async function doSubmit() {
   } catch { return }
   submitting.value = true
   try {
-    submitted.value = await api.submitModule(reqBody())
-    ElMessage.success('提交成功')
-    await loadModules()
+    await api.submitModule(reqBody())
+    addDialog.value = false
+    ElMessage.success('已提交，后台执行中——去「新增历史」看结果')
+    router.push('/orchestration-history')
   } finally { submitting.value = false }
 }
 
@@ -384,9 +396,10 @@ async function doBatchSubmit() {
   } catch { return }
   batchSubmitting.value = true
   try {
-    batchSubmitted.value = await api.batchSubmitModules(batchBody())
-    ElMessage.success('批量提交成功')
-    await loadModules()
+    await api.batchSubmitModules(batchBody())
+    batchDialog.value = false
+    ElMessage.success('已提交，后台执行中——去「新增历史」看结果')
+    router.push('/orchestration-history')
   } finally { batchSubmitting.value = false }
 }
 

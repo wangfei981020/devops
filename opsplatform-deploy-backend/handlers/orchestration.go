@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"opsplatform-deploy-backend/database"
@@ -30,6 +31,25 @@ func HandleUpdateEnvGateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	Audit(r, "orchestration.env_gateway.update", "project_env", strconv.FormatInt(id, 10), nil)
+	JSONSuccess(w, nil)
+}
+
+// PUT /api/orchestration/env-harbor/{id} —— 更新某项目环境的 Harbor 项目名（「项目参数」页用）。
+// 留空=新增模块时自动用项目名。
+func HandleUpdateEnvHarbor(w http.ResponseWriter, r *http.Request) {
+	id := ParseID(mux.Vars(r)["id"])
+	var req struct {
+		HarborProject string `json:"harbor_project"`
+	}
+	if !DecodeJSON(w, r, &req) {
+		return
+	}
+	if _, err := database.DB.Exec(`UPDATE project_env SET harbor_project=? WHERE id=?`,
+		strings.TrimSpace(req.HarborProject), id); err != nil {
+		InternalErr(w, r, err)
+		return
+	}
+	Audit(r, "orchestration.env_harbor.update", "project_env", strconv.FormatInt(id, 10), nil)
 	JSONSuccess(w, nil)
 }
 
@@ -62,13 +82,91 @@ func scanConfigmaps(gs *services.GitService, srcEnv, chartBasePath, srcService s
 
 // ============ 新增模块（服务编排）：预填 / 预览 / 提交 ============
 
+// deriveImageRepoForEnv 推导镜像仓库：<全局harbor域名>/<Harbor项目(留空=项目名)>/<服务名>。
+// 服务名 = 模块名去掉项目前缀（项目名从环境名去 -env 后缀推）。
+// 没配全局 harbor 域名 → 返回空，调用方保留模板原值。
+func deriveImageRepoForEnv(dst *models.ProjectEnv, moduleName string) string {
+	var harborURL string
+	_ = database.DB.QueryRow(`SELECT IFNULL(harbor_url,'') FROM global_config WHERE id=1`).Scan(&harborURL)
+	domain := services.HarborDomain(harborURL)
+	if domain == "" {
+		return ""
+	}
+	project := strings.TrimSuffix(dst.Name, "-"+dst.EnvType) // 项目名，如 g66
+	harborProject := strings.TrimSpace(dst.HarborProject)
+	if harborProject == "" {
+		harborProject = project // 留空=用项目名
+	}
+	svc := strings.TrimPrefix(moduleName, project+"-") // 去项目前缀得服务名
+	return fmt.Sprintf("%s/%s/%s", domain, harborProject, svc)
+}
+
+// harborImageStatus 查 Harbor 该镜像仓库有没有镜像 + 最新 tag。
+//   checked=false：Harbor 未配置 / 连不上 → 调用方应跳过硬卡（别把人卡死）。
+//   missing=true：Harbor 里这个仓库没有任何镜像。latest：有镜像时的最新 tag（按推送时间）。
+func harborImageStatus(ctx context.Context, imageRepo string) (checked, missing bool, latest string) {
+	hc := getHarborClient()
+	if hc == nil || imageRepo == "" {
+		return false, false, ""
+	}
+	_, projectRepo, ok := services.SplitImageRepoForHarbor(imageRepo)
+	if !ok {
+		return false, false, ""
+	}
+	c, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	res, err := hc.ListTags(c, projectRepo, 1, 1)
+	if err != nil {
+		return false, false, "" // 连不上 → 不硬卡
+	}
+	if len(res.Tags) == 0 {
+		return true, true, ""
+	}
+	return true, false, res.Tags[0].Name
+}
+
+// missingImageMsg 缺镜像的统一文案。
+func missingImageMsg(moduleName, envType string) string {
+	return fmt.Sprintf("需要先同步当前模块 %s 到 %s 的 harbor", moduleName, envType)
+}
+
+// verifyImageForSubmit 提交兜底：校验 values 里的 image.repository:tag 在 Harbor 存在。
+//   返回 error 表示应拦截提交（缺镜像/缺 tag）；nil 表示放行（含 Harbor 未配/连不上时跳过）。
+func verifyImageForSubmit(valuesYAML []byte, moduleName, envType string) error {
+	hc := getHarborClient()
+	if hc == nil {
+		return nil // Harbor 未配 → 跳过校验
+	}
+	repo, tag := services.GetImageRepoTag(valuesYAML)
+	if repo == "" {
+		return nil // 没有 image.repository（非标准模板）→ 不管
+	}
+	_, projectRepo, ok := services.SplitImageRepoForHarbor(repo)
+	if !ok {
+		return nil
+	}
+	if tag == "" {
+		return fmt.Errorf("%s", missingImageMsg(moduleName, envType))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	exists, err := hc.VerifyTag(ctx, projectRepo, tag)
+	if err != nil {
+		return nil // 连不上 Harbor → 跳过不卡
+	}
+	if !exists {
+		return fmt.Errorf("%s", missingImageMsg(moduleName, envType))
+	}
+	return nil
+}
+
 // loadEnvGit 只取 git 坐标（不加密字段），供编排使用。
 func loadEnvGit(where string, arg interface{}) (*models.ProjectEnv, error) {
 	var p models.ProjectEnv
 	err := database.DB.QueryRow(
-		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,'')
+		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,''), IFNULL(harbor_project,'')
 		 FROM project_env WHERE `+where, arg).
-		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway)
+		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway, &p.HarborProject)
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +274,22 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 	if f, err := services.ApplyEnvIngress(filled, dst.IngressGateway); err == nil {
 		filled = f
 	}
+	// 镜像仓库自动推导：全局 harbor 域名 / 该环境 Harbor 项目(留空=项目名) / 服务名。
+	// 只是智能默认值，用户可在编辑器里手动改；没配全局 harbor 域名则保留模板原值。
+	imageMissing := false
+	imageRepo := ""
+	if repo := deriveImageRepoForEnv(dst, req.ModuleName); repo != "" {
+		filled = services.SetImageRepository(filled, repo)
+		imageRepo = repo
+		// 查 Harbor：有镜像→自动填最新 tag（同"更新服务"取推送时间最新）；缺镜像→清空 tag + 标记 missing
+		checked, missing, latest := harborImageStatus(ctx, repo)
+		if checked && missing {
+			imageMissing = true
+			filled = services.SetImageTag(filled, "")
+		} else if checked && latest != "" {
+			filled = services.SetImageTag(filled, latest)
+		}
+	}
 	// 缺 global.labels 就补，避免 web.labels 渲染 nil
 	filled = services.EnsureGlobalLabels(filled)
 	// 扫 templates/ 下的 configmap（多个，按文件名前端做 tab），同样令牌替换
@@ -188,6 +302,14 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 		"suggest_namespace": dst.Name,
 		"target_chart_path": spec.TargetChartBasePath + "/" + req.ModuleName,
 		"apps_file":         spec.TargetChartBasePath + "-apps/values.yaml",
+		"image_repository":  imageRepo,
+		"image_missing":     imageMissing, // true=Harbor 缺该镜像 → 前端红字禁止提交/预览
+		"image_missing_msg": func() string {
+			if imageMissing {
+				return missingImageMsg(req.ModuleName, dst.EnvType)
+			}
+			return ""
+		}(),
 	})
 }
 
@@ -282,20 +404,34 @@ func HandleSubmitModule(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40300, "没有向环境 "+dst.EnvType+" 提交的权限（需 "+perm+"）")
 		return
 	}
-	operator := UsernameFromCtx(r)
-	msg := fmt.Sprintf("feat(%s): add module %s", dst.Name, spec.ModuleName)
-	gs := getGitService()
-	ctx, cancel := services.GitCtx(context.Background(), 180)
-	defer cancel()
-	res, err := gs.SubmitNewModule(ctx, spec, operator, msg)
-	if err != nil {
+	// 缺镜像硬卡：Harbor 里没有该 image.repository:tag 就禁止提交（Harbor 未配/连不上则跳过）
+	if err := verifyImageForSubmit(spec.ValuesYAML, spec.ModuleName, dst.EnvType); err != nil {
 		JSONError(w, 40001, err.Error())
 		return
 	}
+	operator := UsernameFromCtx(r)
+	msg := fmt.Sprintf("feat(%s): add module %s", dst.Name, spec.ModuleName)
+	// 后台异步执行：立即建任务返回，clone+helm+commit+push 在 goroutine 里跑，结果去「新增历史」看。
+	taskID, err := insertOrchTask(dst.ID, dst.Name, spec.ModuleName, "single", operator)
+	if err != nil {
+		JSONError(w, 50000, "创建任务失败: "+err.Error())
+		return
+	}
 	Audit(r, "orchestration.add_module", "module", spec.ModuleName, map[string]interface{}{
-		"env": dst.Name, "commit": res.CommitSHA, "disable": spec.Disable,
+		"env": dst.Name, "task_id": taskID, "disable": spec.Disable,
 	})
-	JSONSuccess(w, res)
+	InflightTrack(func() {
+		gs := getGitService()
+		ctx, cancel := services.GitCtx(context.Background(), 300)
+		defer cancel()
+		res, serr := gs.SubmitNewModule(ctx, spec, operator, msg)
+		if serr != nil {
+			updateOrchTaskFailed(taskID, serr.Error())
+			return
+		}
+		updateOrchTaskSuccess(taskID, res.CommitSHA, res.CommitURL)
+	})
+	JSONSuccess(w, map[string]interface{}{"task_id": taskID, "status": "pending"})
 }
 
 // ============ 批量新增 ============
@@ -363,6 +499,17 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 			if f, err := services.ApplyEnvIngress(vals, dst.IngressGateway); err == nil {
 				vals = f
 			}
+			if repo := deriveImageRepoForEnv(dst, name); repo != "" {
+				vals = services.SetImageRepository(vals, repo)
+				// 有镜像→带最新 tag；缺镜像→清空(提交时会被硬卡)
+				if checked, missing, latest := harborImageStatus(context.Background(), repo); checked {
+					if missing {
+						vals = services.SetImageTag(vals, "")
+					} else if latest != "" {
+						vals = services.SetImageTag(vals, latest)
+					}
+				}
+			}
 			vals = services.EnsureGlobalLabels(vals)
 		}
 		// configmap：自定义了用它，否则按模板派生（令牌替换），保证前端批量的 configmap 令牌也对
@@ -422,20 +569,44 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40300, "没有向环境 "+dst.EnvType+" 提交的权限（需 "+perm+"）")
 		return
 	}
+	// 缺镜像硬卡：任一行的镜像在 Harbor 缺失就禁止整批提交
+	for _, rr := range rows {
+		if err := verifyImageForSubmit(rr.ValuesYAML, rr.ModuleName, dst.EnvType); err != nil {
+			JSONError(w, 40001, err.Error())
+			return
+		}
+	}
 	operator := UsernameFromCtx(r)
 	msg := fmt.Sprintf("feat(%s): add %d modules (orchestration batch)", dst.Name, len(rows))
-	gs := getGitService()
-	ctx, cancel := services.GitCtx(context.Background(), 600)
-	defer cancel()
-	res, err := gs.SubmitBatch(ctx, base, rows, operator, msg)
+	modNames := make([]string, 0, len(rows))
+	for _, rr := range rows {
+		modNames = append(modNames, rr.ModuleName)
+	}
+	summary := fmt.Sprintf("批量 %d 个: %s", len(rows), strings.Join(modNames, ","))
+	taskID, err := insertOrchTask(dst.ID, dst.Name, summary, "batch", operator)
 	if err != nil {
-		JSONError(w, 40001, err.Error())
+		JSONError(w, 50000, "创建任务失败: "+err.Error())
 		return
 	}
 	Audit(r, "orchestration.add_batch", "module", fmt.Sprintf("%d modules", len(rows)), map[string]interface{}{
-		"env": dst.Name, "commit": res.CommitSHA, "all_ok": res.AllOK,
+		"env": dst.Name, "task_id": taskID,
 	})
-	JSONSuccess(w, res)
+	InflightTrack(func() {
+		gs := getGitService()
+		ctx, cancel := services.GitCtx(context.Background(), 600)
+		defer cancel()
+		res, serr := gs.SubmitBatch(ctx, base, rows, operator, msg)
+		if serr != nil {
+			updateOrchTaskFailed(taskID, serr.Error())
+			return
+		}
+		if !res.AllOK {
+			updateOrchTaskFailed(taskID, "部分模块 helm 校验未通过，未提交（请在批量预览里查看具体行）")
+			return
+		}
+		updateOrchTaskSuccess(taskID, res.CommitSHA, res.CommitURL)
+	})
+	JSONSuccess(w, map[string]interface{}{"task_id": taskID, "status": "pending"})
 }
 
 // envPermissionCode 查 deploy_environment.permission_code，回退 submit_<env>。

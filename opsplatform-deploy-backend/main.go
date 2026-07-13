@@ -44,6 +44,8 @@ func main() {
 	log.Printf("并发闸已启用：同时最多 %d 个 git/helm 重活（DEPLOY_CONCURRENCY）", cfg.DeployConcurrency)
 	// 启动对账：收拾上次进程重启时遗留的孤儿 pending 发布（放后台，ArgoCD 查询可能慢，别挡启动）
 	go handlers.ReconcileOrphanedDeploys("startup")
+	// 开机预热 git 缓存：覆盖"全新环境/空卷第一次"冷启动（正常重启缓存在 PVC 上不丢）
+	go handlers.WarmAllEnvCaches()
 
 	go startHealthServer(cfg.HealthPort)
 	go startScanScheduler()
@@ -125,6 +127,7 @@ func main() {
 	protected.HandleFunc("/orchestration/submit", handlers.HandleSubmitModule).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/orchestration/batch-preview", handlers.HandleBatchPreview).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/orchestration/batch-submit", handlers.HandleBatchSubmit).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/orchestration/tasks", handlers.HandleListOrchTasks).Methods("GET", "OPTIONS")
 
 	// 模板 CRUD —— manage_templates 权限
 	mt := protected.PathPrefix("").Subrouter()
@@ -140,8 +143,9 @@ func main() {
 	me.HandleFunc("/environments", handlers.HandleCreateEnvironment).Methods("POST", "OPTIONS")
 	me.HandleFunc("/environments/{name}", handlers.HandleUpdateEnvironment).Methods("PUT", "OPTIONS")
 	me.HandleFunc("/environments/{name}", handlers.HandleDeleteEnvironment).Methods("DELETE", "OPTIONS")
-	// 项目参数：更新某环境的 ingress 网关名
+	// 项目参数：更新某环境的 ingress 网关名 / Harbor 项目
 	me.HandleFunc("/orchestration/env-gateway/{id}", handlers.HandleUpdateEnvGateway).Methods("PUT", "OPTIONS")
+	me.HandleFunc("/orchestration/env-harbor/{id}", handlers.HandleUpdateEnvHarbor).Methods("PUT", "OPTIONS")
 
 	// ========== 按钮权限分组：每组 admin 自动放行，portal 用户按勾选授权 ==========
 	// ① manage_global — 全局凭证 + GitLab 仓库登记
