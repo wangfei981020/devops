@@ -34,6 +34,10 @@ type ModuleSpec struct {
 	SrcBranch        string
 	SrcChartBasePath string
 	SrcService       string
+
+	// 用户编辑过的 configmap（相对模块目录的路径，如 "templates/configmap.yaml" → 新内容）；
+	// 写文件时用这里的内容覆盖，其余 templates 文件仍原样照抄。
+	ConfigMaps map[string]string
 }
 
 // PreviewResult 预览：不提交，返回将改动的文件 + helm 校验结果。
@@ -153,10 +157,10 @@ func (g *GitService) writeModuleFiles(spec ModuleSpec) error {
 			return err
 		}
 		var content []byte
-		switch rel {
-		case "values.yaml":
+		switch {
+		case rel == "values.yaml":
 			content = spec.ValuesYAML
-		case "Chart.yaml":
+		case rel == "Chart.yaml":
 			raw, err := os.ReadFile(p)
 			if err != nil {
 				return err
@@ -165,6 +169,8 @@ func (g *GitService) writeModuleFiles(spec ModuleSpec) error {
 			if err != nil {
 				return err
 			}
+		case spec.ConfigMaps[rel] != "": // 用户编辑过的 configmap，用新内容
+			content = []byte(spec.ConfigMaps[rel])
 		default:
 			content, err = os.ReadFile(p)
 			if err != nil {
@@ -282,6 +288,7 @@ type BatchRow struct {
 	ModuleName string
 	Namespace  string
 	ValuesYAML []byte
+	ConfigMaps map[string]string // 相对模块目录路径 → 内容（可空）
 }
 
 // BatchRowResult 每行的校验结果。
@@ -316,6 +323,7 @@ func (g *GitService) runBatch(ctx context.Context, base ModuleSpec, rows []Batch
 		spec.ModuleName = row.ModuleName
 		spec.Namespace = row.Namespace
 		spec.ValuesYAML = row.ValuesYAML
+		spec.ConfigMaps = row.ConfigMaps
 		rr := BatchRowResult{ModuleName: row.ModuleName}
 		if err := g.writeModuleFiles(spec); err != nil {
 			rr.Error = err.Error()

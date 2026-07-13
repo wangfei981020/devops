@@ -47,9 +47,19 @@
         <el-form-item label="namespace" required>
           <el-input v-model="form.namespace" placeholder="如 g32-base / g32-bet-settle" style="width: 420px" @input="resetPreview" />
         </el-form-item>
-        <el-form-item label="values.yaml">
-          <el-input v-model="form.valuesYaml" type="textarea" :rows="14" class="yaml-editor"
-            placeholder="点『预填』带出样板（令牌已替换），可直接编辑" @input="resetPreview" />
+        <el-form-item label="配置">
+          <div v-if="form.valuesYaml" style="width:100%">
+            <ValuesEditor ref="editorRef" :modelValue="form.valuesYaml" :moduleType="selectedTemplateType" />
+          </div>
+          <span v-else class="hint">先填模块名并点「预填 values.yaml」，再在此用 表单/YAML 配置</span>
+        </el-form-item>
+        <el-form-item v-if="configmaps.length" label="ConfigMap">
+          <el-tabs v-model="cmTab" type="border-card" style="width:100%">
+            <el-tab-pane v-for="cm in configmaps" :key="cm.path" :label="cmName(cm.path)" :name="cm.path">
+              <CodeEditor v-model="cm.content" />
+            </el-tab-pane>
+          </el-tabs>
+          <div class="hint">自动从 templates/ 扫出的 configmap（多个按文件名分 tab），改里面的配置值；helm 变量 {{ }} 别动</div>
         </el-form-item>
         <el-form-item label="ArgoCD">
           <el-switch v-model="form.disable" :active-value="true" :inactive-value="false"
@@ -60,7 +70,14 @@
           <el-alert v-if="preview.helm_skipped" type="warning" :closable="false" title="helm 未安装，跳过渲染校验" />
           <el-alert v-else :type="preview.helm_ok ? 'success' : 'error'" :closable="false"
             :title="preview.helm_ok ? 'helm 渲染校验通过 ✓' : 'helm 渲染校验失败 ✗（已阻止提交）'" />
-          <pre v-if="!preview.helm_ok && !preview.helm_skipped" class="helm-err">{{ preview.helm_output }}</pre>
+          <div v-if="!preview.helm_ok && !preview.helm_skipped" class="err-card">
+            <div class="err-head">
+              <el-icon><CircleCloseFilled /></el-icon>
+              <span>helm 渲染校验失败</span>
+              <el-button link type="primary" class="err-copy" @click="copyErr(preview.helm_output)">复制报错</el-button>
+            </div>
+            <pre class="err-body">{{ preview.helm_output }}</pre>
+          </div>
           <div class="changed-title">将提交的改动（{{ (preview.changed_files || []).length }}）：</div>
           <ul class="changed"><li v-for="f in preview.changed_files" :key="f"><code>{{ f }}</code></li></ul>
           <div class="hint">🔒 提交抢环境写锁 + 硬同步远端，不覆盖别人</div>
@@ -98,14 +115,21 @@
             <el-table-column label="namespace" width="180">
               <template #default="{ row }"><el-input v-model="row.namespace" size="small" @input="resetBatch" /></template>
             </el-table-column>
-            <el-table-column label="校验" width="90">
+            <el-table-column label="配置" width="90">
+              <template #default="{ row }">
+                <el-button link type="primary" :disabled="!batch.templateId || !row.module_name.trim()" @click="openRowConfig(row)">
+                  {{ row.values_yaml ? '已改·配置' : '配置' }}
+                </el-button>
+              </template>
+            </el-table-column>
+            <el-table-column label="校验" width="80">
               <template #default="{ row }">
                 <el-tag v-if="rowStatus(row.module_name)" :type="rowStatus(row.module_name).ok ? 'success' : 'danger'" size="small">
                   {{ rowStatus(row.module_name).ok ? '通过' : '失败' }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="" width="50">
+            <el-table-column label="" width="44">
               <template #default="{ $index }"><el-button link type="danger" @click="batch.rows.splice($index, 1)">×</el-button></template>
             </el-table-column>
           </el-table>
@@ -118,11 +142,14 @@
         <div v-if="batchResult" class="preview-box">
           <el-alert :type="batchResult.all_ok ? 'success' : 'error'" :closable="false"
             :title="batchResult.all_ok ? `全部通过 ✓（共 ${batchResult.rows.length} 个模块，${batchResult.changed_files} 个文件）` : '有行未通过，已阻止提交（见清单红标）'" />
-          <ul class="changed">
-            <li v-for="row in batchResult.rows.filter(r => r.error)" :key="row.module_name">
-              <code>{{ row.module_name }}</code>：{{ row.error.slice(0, 120) }}
-            </li>
-          </ul>
+          <div v-for="row in batchResult.rows.filter(r => r.error)" :key="row.module_name" class="err-card">
+            <div class="err-head">
+              <el-icon><CircleCloseFilled /></el-icon>
+              <span>{{ row.module_name }} 校验失败</span>
+              <el-button link type="primary" class="err-copy" @click="copyErr(row.error)">复制报错</el-button>
+            </div>
+            <pre class="err-body">{{ row.error }}</pre>
+          </div>
         </div>
         <el-alert v-if="batchSubmitted" type="success" :closable="false" class="submitted"
           :title="`已提交 commit ${batchSubmitted.commit_sha}（${batchSubmitted.rows.length} 个模块）`" show-icon />
@@ -134,6 +161,26 @@
         <el-button type="success" :disabled="!canBatchSubmit" :loading="batchSubmitting" @click="doBatchSubmit">确认批量提交</el-button>
       </template>
     </el-dialog>
+
+    <!-- 批量·单行配置弹窗 -->
+    <el-dialog v-model="rowDialog" :title="`配置模块 ${rowEditing?.module_name || ''}`" width="820px" :close-on-click-modal="false" top="5vh" append-to-body>
+      <div v-if="rowYaml" v-loading="rowLoading">
+        <ValuesEditor ref="rowEditorRef" :modelValue="rowYaml" :moduleType="selectedBatchTemplateType" />
+        <div v-if="rowConfigmaps.length" class="cm-block">
+          <div class="cm-title">ConfigMap</div>
+          <el-tabs v-model="rowCmTab" type="border-card">
+            <el-tab-pane v-for="cm in rowConfigmaps" :key="cm.path" :label="cmName(cm.path)" :name="cm.path">
+              <CodeEditor v-model="cm.content" />
+            </el-tab-pane>
+          </el-tabs>
+        </div>
+      </div>
+      <div v-else v-loading="rowLoading" style="min-height:80px">加载模板中…</div>
+      <template #footer>
+        <el-button @click="rowDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveRowConfig">保存该模块配置</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -141,6 +188,15 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as api from '../api'
+import ValuesEditor from '../components/ValuesEditor.vue'
+import CodeEditor from '../components/CodeEditor.vue'
+import { CircleCloseFilled } from '@element-plus/icons-vue'
+
+function cmName(p) { return (p || '').split('/').pop() }
+
+function copyErr(text) {
+  navigator.clipboard?.writeText(text || '').then(() => ElMessage.success('已复制报错')).catch(() => {})
+}
 
 const envs = ref([])
 const templates = ref([])
@@ -163,7 +219,11 @@ async function loadModules() {
 
 // ---- 新增模块弹窗 ----
 const addDialog = ref(false)
+const editorRef = ref(null)
 const form = ref({ templateId: null, moduleName: '', namespace: '', valuesYaml: '', disable: true })
+const configmaps = ref([]) // [{path, content}]，前端服务才有；prefill 带出
+const cmTab = ref('')
+const selectedTemplateType = computed(() => templates.value.find(t => t.id === form.value.templateId)?.module_type || 'backend')
 const prefilling = ref(false)
 const previewing = ref(false)
 const submitting = ref(false)
@@ -178,17 +238,22 @@ function resetPreview() { preview.value = null; submitted.value = null }
 
 function openAdd() {
   form.value = { templateId: null, moduleName: '', namespace: '', valuesYaml: '', disable: true }
+  configmaps.value = []
+  cmTab.value = ''
   resetPreview()
   addDialog.value = true
 }
 
 function reqBody() {
+  // 从 ValuesEditor 取最终 YAML（表单模式会把字段写回、保留原顺序；YAML 模式取原文）
+  const yaml = editorRef.value?.getYaml?.() || form.value.valuesYaml
   return {
     template_id: form.value.templateId,
     target_env_id: envId.value,
     module_name: form.value.moduleName.trim(),
     namespace: form.value.namespace.trim(),
-    values_yaml: form.value.valuesYaml,
+    values_yaml: yaml,
+    configmaps: configmaps.value.map(c => ({ path: c.path, content: c.content })),
     disable: form.value.disable,
   }
 }
@@ -198,6 +263,8 @@ async function doPrefill() {
   try {
     const r = await api.prefillModule({ template_id: form.value.templateId, target_env_id: envId.value, module_name: form.value.moduleName.trim() })
     form.value.valuesYaml = r.values_yaml || ''
+    configmaps.value = (r.configmaps || []).map(c => ({ ...c }))
+    cmTab.value = configmaps.value[0]?.path || ''
     if (!form.value.namespace) form.value.namespace = r.suggest_namespace || ''
     resetPreview()
     ElMessage.success('已带出样板 values.yaml，请复核后编辑')
@@ -233,6 +300,47 @@ const batchSubmitting = ref(false)
 const validRows = computed(() => batch.value.rows.filter(r => r.module_name.trim() && r.namespace.trim()))
 const canBatchPreview = computed(() => batch.value.templateId && validRows.value.length > 0)
 const canBatchSubmit = computed(() => batchResult.value && batchResult.value.all_ok)
+const selectedBatchTemplateType = computed(() => templates.value.find(t => t.id === batch.value.templateId)?.module_type || 'backend')
+
+// 批量·单行配置弹窗
+const rowDialog = ref(false)
+const rowEditorRef = ref(null)
+const rowEditing = ref(null)
+const rowYaml = ref('')
+const rowConfigmaps = ref([])
+const rowCmTab = ref('')
+const rowLoading = ref(false)
+
+async function openRowConfig(row) {
+  rowEditing.value = row
+  rowDialog.value = true
+  rowYaml.value = ''
+  rowConfigmaps.value = []
+  // 已改过就用已存的；否则拉该模块的派生预填
+  if (row.values_yaml) {
+    rowYaml.value = row.values_yaml
+    rowConfigmaps.value = (row.configmaps || []).map(c => ({ ...c }))
+    rowCmTab.value = rowConfigmaps.value[0]?.path || ''
+    return
+  }
+  rowLoading.value = true
+  try {
+    const r = await api.prefillModule({ template_id: batch.value.templateId, target_env_id: envId.value, module_name: row.module_name.trim() })
+    rowYaml.value = r.values_yaml || ''
+    rowConfigmaps.value = (r.configmaps || []).map(c => ({ ...c }))
+    rowCmTab.value = rowConfigmaps.value[0]?.path || ''
+  } finally { rowLoading.value = false }
+}
+
+function saveRowConfig() {
+  if (rowEditing.value && rowEditorRef.value) {
+    rowEditing.value.values_yaml = rowEditorRef.value.getYaml()
+    rowEditing.value.configmaps = rowConfigmaps.value.map(c => ({ path: c.path, content: c.content }))
+    resetBatch()
+    ElMessage.success('已保存该模块配置')
+  }
+  rowDialog.value = false
+}
 
 function resetBatch() { batchResult.value = null; batchSubmitted.value = null }
 function rowStatus(name) {
@@ -259,7 +367,7 @@ function batchBody() {
     template_id: batch.value.templateId,
     target_env_id: envId.value,
     disable: batch.value.disable,
-    rows: validRows.value.map(r => ({ module_name: r.module_name.trim(), namespace: r.namespace.trim() })),
+    rows: validRows.value.map(r => ({ module_name: r.module_name.trim(), namespace: r.namespace.trim(), values_yaml: r.values_yaml || '', configmaps: r.configmaps || [] })),
   }
 }
 
@@ -294,10 +402,15 @@ onMounted(async () => {
 .head-left h2 { margin: 0; font-size: 18px; }
 .yaml-editor :deep(textarea) { font-family: 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.5; }
 .preview-box { margin: 8px 0 0 110px; padding: 12px 14px; background: var(--el-fill-color-light); border-radius: 8px; }
-.helm-err { background: #1e1e1e; color: #ff8080; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; }
+.err-card { margin: 8px 0; border: 1px solid #fbc4c4; border-radius: 8px; overflow: hidden; background: #fff5f5; }
+.err-head { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: #fde2e2; color: #c0392b; font-weight: 600; font-size: 13px; }
+.err-head .err-copy { margin-left: auto; }
+.err-body { margin: 0; padding: 10px 12px; background: #1e1e1e; color: #ff9b9b; overflow-x: auto; font-size: 12px; line-height: 1.5; white-space: pre-wrap; font-family: 'Menlo', 'Consolas', monospace; max-height: 260px; }
 .changed-title { font-weight: 600; margin: 8px 0 4px; }
 .changed { margin: 0; padding-left: 18px; }
 .changed code { font-size: 12px; }
 .hint { color: #909399; font-size: 12px; margin-top: 6px; }
 .submitted { margin: 10px 0 0 110px; }
+.cm-block { margin-top: 12px; }
+.cm-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; color: var(--el-color-primary); }
 </style>

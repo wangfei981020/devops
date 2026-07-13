@@ -4,12 +4,41 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"opsplatform-deploy-backend/database"
 	"opsplatform-deploy-backend/models"
 	"opsplatform-deploy-backend/services"
 )
+
+// cmItem 一个 configmap 文件：相对模块目录的路径 + 内容
+type cmItem struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// scanConfigmaps 扫样板服务 templates/ 下 kind: ConfigMap 的文件，令牌替换后返回（前端做 tab 展示）。
+func scanConfigmaps(gs *services.GitService, srcEnv, chartBasePath, srcService string, replace func([]byte) []byte) []cmItem {
+	dir := filepath.Join(gs.RepoPath(srcEnv), chartBasePath, srcService, "templates")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []cmItem
+	for _, e := range entries {
+		if e.IsDir() || (!strings.HasSuffix(e.Name(), ".yaml") && !strings.HasSuffix(e.Name(), ".yml")) {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil || !strings.Contains(string(raw), "kind: ConfigMap") {
+			continue
+		}
+		out = append(out, cmItem{Path: "templates/" + e.Name(), Content: string(replace(raw))})
+	}
+	return out
+}
 
 // ============ 新增模块（服务编排）：预填 / 预览 / 提交 ============
 
@@ -123,10 +152,14 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filled := prefillValues(raw, srcEnv, dst, spec.SrcService, req.ModuleName)
+	// 扫 templates/ 下的 configmap（多个，按文件名前端做 tab），同样令牌替换
+	cms := scanConfigmaps(gs, srcEnv.Name, spec.SrcChartBasePath, spec.SrcService,
+		func(b []byte) []byte { return prefillValues(b, srcEnv, dst, spec.SrcService, req.ModuleName) })
 
 	JSONSuccess(w, map[string]interface{}{
 		"values_yaml":       string(filled),
-		"suggest_namespace": dst.Name, // 默认给项目环境 namespace，用户可改 g32-base 等
+		"configmaps":        cms, // [] 表示没有（后端服务通常没有）
+		"suggest_namespace": dst.Name,
 		"target_chart_path": spec.TargetChartBasePath + "/" + req.ModuleName,
 		"apps_file":         spec.TargetChartBasePath + "-apps/values.yaml",
 	})
@@ -135,10 +168,25 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 type moduleAddReq struct {
 	TemplateID  int64  `json:"template_id"`
 	TargetEnvID int64  `json:"target_env_id"`
-	ModuleName  string `json:"module_name"`
-	Namespace   string `json:"namespace"`
-	ValuesYAML  string `json:"values_yaml"`
-	Disable     *bool  `json:"disable"` // 默认 true（安全预演，app-of-apps 先不生成）
+	ModuleName  string   `json:"module_name"`
+	Namespace   string   `json:"namespace"`
+	ValuesYAML  string   `json:"values_yaml"`
+	Configmaps  []cmItem `json:"configmaps"` // 用户编辑过的 configmap（可空）
+	Disable     *bool    `json:"disable"`    // 默认 true（安全预演，app-of-apps 先不生成）
+}
+
+// cmMap 把 []cmItem 转成 path→content
+func cmMap(items []cmItem) map[string]string {
+	if len(items) == 0 {
+		return nil
+	}
+	m := map[string]string{}
+	for _, it := range items {
+		if strings.TrimSpace(it.Path) != "" {
+			m[it.Path] = it.Content
+		}
+	}
+	return m
 }
 
 func (req *moduleAddReq) toSpec(w http.ResponseWriter) (services.ModuleSpec, *models.ProjectEnv, bool) {
@@ -162,6 +210,7 @@ func (req *moduleAddReq) toSpec(w http.ResponseWriter) (services.ModuleSpec, *mo
 		return services.ModuleSpec{}, nil, false
 	}
 	spec.ValuesYAML = []byte(req.ValuesYAML)
+	spec.ConfigMaps = cmMap(req.Configmaps)
 	disable := true // 默认安全预演
 	if req.Disable != nil {
 		disable = *req.Disable
@@ -230,8 +279,10 @@ type batchReq struct {
 	TargetEnvID int64 `json:"target_env_id"`
 	Disable     *bool `json:"disable"`
 	Rows        []struct {
-		ModuleName string `json:"module_name"`
-		Namespace  string `json:"namespace"`
+		ModuleName string   `json:"module_name"`
+		Namespace  string   `json:"namespace"`
+		ValuesYAML string   `json:"values_yaml"` // 用户在「配置」里自定义了就带上；空=按模板派生
+		Configmaps []cmItem `json:"configmaps"`  // 同上，空=派生
 	} `json:"rows"`
 }
 
@@ -279,10 +330,23 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 			JSONError(w, 40001, "namespace 必填（模块 "+name+"）")
 			return base, nil, nil, false
 		}
+		// 用户在「配置」里自定义了 values 就用它，否则按模板派生预填
+		vals := []byte(r.ValuesYAML)
+		if strings.TrimSpace(r.ValuesYAML) == "" {
+			vals = prefillValues(raw, src, dst, base.SrcService, name)
+		}
+		// configmap：自定义了用它，否则按模板派生（令牌替换），保证前端批量的 configmap 令牌也对
+		cms := cmMap(r.Configmaps)
+		if cms == nil {
+			derived := scanConfigmaps(gs, src.Name, base.SrcChartBasePath, base.SrcService,
+				func(b []byte) []byte { return prefillValues(b, src, dst, base.SrcService, name) })
+			cms = cmMap(derived)
+		}
 		rows = append(rows, services.BatchRow{
 			ModuleName: name,
 			Namespace:  ns,
-			ValuesYAML: prefillValues(raw, src, dst, base.SrcService, name),
+			ValuesYAML: vals,
+			ConfigMaps: cms,
 		})
 	}
 	if len(rows) == 0 {
