@@ -55,51 +55,69 @@ type SubmitResult struct {
 	PreviewResult
 }
 
-// PreviewNewModule 在目标 env 的锁下：硬同步 → 生成文件 → helm 校验 → 算 diff → 丢弃（不提交）。
+// PreviewNewModule 独立浅克隆目标 → 生成文件 → helm 校验 → 算 diff → 丢弃（不提交）。
 func (g *GitService) PreviewNewModule(ctx context.Context, spec ModuleSpec) (*PreviewResult, error) {
-	g.Locks.Acquire(spec.TargetEnv)
-	defer g.Locks.Release(spec.TargetEnv)
+	_, releaseGate, gerr := AcquireHeavy(ctx)
+	if gerr != nil {
+		return nil, fmt.Errorf("gate: %w", gerr)
+	}
+	defer releaseGate()
+	st := NewStageTimer("orch-preview", spec.ModuleName, spec.TargetEnv, "")
+	defer st.Done()
 
-	if err := g.stageNewModule(ctx, spec); err != nil {
-		_ = g.discardWorktree(ctx, spec.TargetEnv, spec.TargetBranch)
+	tc, srcDir, cleanupSrc, err := g.openModuleCheckout(ctx, spec, st)
+	if err != nil {
 		return nil, err
 	}
-	res, err := g.inspectStaged(ctx, spec)
-	// 预览结束一律丢弃工作区改动，保持 cache 干净
-	_ = g.discardWorktree(ctx, spec.TargetEnv, spec.TargetBranch)
+	defer tc.Release()
+	defer cleanupSrc()
+
+	if err := writeModuleFilesAt(tc.Dir, srcDir, spec); err != nil {
+		return nil, err
+	}
+	st.Mark("edit")
+	res, err := inspectStagedAt(ctx, tc.Dir, spec)
+	st.Mark("helm_template")
 	if err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-// SubmitNewModule 在目标 env 的锁下：硬同步 → 生成文件 → helm 校验(不过不提交) → commit → 安全 push。
+// SubmitNewModule 独立浅克隆目标 → 生成文件 → helm 校验(不过不提交) → commit → push(冲突重放)。
 func (g *GitService) SubmitNewModule(ctx context.Context, spec ModuleSpec, operator, commitMsg string) (*SubmitResult, error) {
-	g.Locks.Acquire(spec.TargetEnv)
-	defer g.Locks.Release(spec.TargetEnv)
+	_, releaseGate, gerr := AcquireHeavy(ctx)
+	if gerr != nil {
+		return nil, fmt.Errorf("gate: %w", gerr)
+	}
+	defer releaseGate()
+	st := NewStageTimer("orchestrate", spec.ModuleName, spec.TargetEnv, operator)
+	defer st.Done()
 
-	if err := g.stageNewModule(ctx, spec); err != nil {
-		_ = g.discardWorktree(ctx, spec.TargetEnv, spec.TargetBranch)
+	tc, srcDir, cleanupSrc, err := g.openModuleCheckout(ctx, spec, st)
+	if err != nil {
 		return nil, err
 	}
-	preview, err := g.inspectStaged(ctx, spec)
+	defer tc.Release()
+	defer cleanupSrc()
+
+	if err := writeModuleFilesAt(tc.Dir, srcDir, spec); err != nil {
+		return nil, err
+	}
+	st.Mark("edit")
+	preview, err := inspectStagedAt(ctx, tc.Dir, spec)
+	st.Mark("helm_template")
 	if err != nil {
-		_ = g.discardWorktree(ctx, spec.TargetEnv, spec.TargetBranch)
 		return nil, err
 	}
 	if !preview.HelmOK && !preview.HelmSkipped {
-		_ = g.discardWorktree(ctx, spec.TargetEnv, spec.TargetBranch)
 		return nil, fmt.Errorf("helm 校验未通过，已阻止提交：\n%s", preview.HelmOutput)
 	}
-	sha, err := g.CommitAll(ctx, spec.TargetEnv, operator, commitMsg)
+
+	// push 冲突时：reset 到远端最新 + 重新生成本模块文件（AppendAppsEntry 查重幂等，不覆盖别人）
+	reapply := func() error { return writeModuleFilesAt(tc.Dir, srcDir, spec) }
+	sha, err := tc.CommitPushReapply(ctx, operator, commitMsg, 5, reapply, st)
 	if err != nil {
-		_ = g.discardWorktree(ctx, spec.TargetEnv, spec.TargetBranch)
-		return nil, err
-	}
-	if sha == "" {
-		return nil, fmt.Errorf("没有产生任何改动（模块可能已存在）")
-	}
-	if err := g.safePush(ctx, spec.TargetEnv, spec.TargetBranch, 3); err != nil {
 		return nil, err
 	}
 	return &SubmitResult{
@@ -109,50 +127,56 @@ func (g *GitService) SubmitNewModule(ctx context.Context, spec ModuleSpec, opera
 	}, nil
 }
 
-// stageNewModule 硬同步目标(+来源)后，把新模块文件写进目标 clone 的工作区（不 commit）。
-func (g *GitService) stageNewModule(ctx context.Context, spec ModuleSpec) error {
-	if err := g.ensureRepos(ctx, spec); err != nil {
-		return err
+// openModuleCheckout 开目标仓库的隔离浅克隆，并解析样板目录路径。
+//
+//	样板与目标同仓库 → 直接从目标 checkout 里读；不同仓库 → 单独浅克隆样板（只读，用完删）。
+//	返回：目标 checkout、样板服务目录绝对路径、样板清理函数。
+func (g *GitService) openModuleCheckout(ctx context.Context, spec ModuleSpec, st *StageTimer) (tc *Checkout, srcDir string, cleanupSrc func(), err error) {
+	tc, err = g.AcquireCheckout(ctx, spec.TargetEnv, spec.TargetRepoURL, spec.TargetBranch)
+	if err != nil {
+		return nil, "", func() {}, fmt.Errorf("克隆目标仓库失败: %w", err)
 	}
-	return g.writeModuleFiles(spec)
-}
-
-// ensureRepos 硬同步目标(+来源)仓库到远端最新（批量时只需调一次）。
-func (g *GitService) ensureRepos(ctx context.Context, spec ModuleSpec) error {
-	if err := g.EnsureClone(ctx, spec.TargetEnv, spec.TargetRepoURL, spec.TargetBranch); err != nil {
-		return fmt.Errorf("同步目标仓库失败: %w", err)
-	}
-	if spec.SrcEnv != spec.TargetEnv {
-		if err := g.EnsureClone(ctx, spec.SrcEnv, spec.SrcRepoURL, spec.SrcBranch); err != nil {
-			return fmt.Errorf("同步样板仓库失败: %w", err)
+	st.Mark("git_clone")
+	cleanupSrc = func() {}
+	if spec.SrcRepoURL == spec.TargetRepoURL && spec.SrcBranch == spec.TargetBranch {
+		// 同仓库同分支：样板就在目标 checkout 里
+		srcDir = filepath.Join(tc.Dir, spec.SrcChartBasePath, spec.SrcService)
+	} else {
+		sc, serr := g.AcquireCheckout(ctx, spec.SrcEnv, spec.SrcRepoURL, spec.SrcBranch)
+		if serr != nil {
+			tc.Release()
+			return nil, "", func() {}, fmt.Errorf("克隆样板仓库失败: %w", serr)
 		}
+		srcDir = filepath.Join(sc.Dir, spec.SrcChartBasePath, spec.SrcService)
+		cleanupSrc = sc.Release
+		st.Mark("git_clone_src")
 	}
-	return nil
+	return tc, srcDir, cleanupSrc, nil
 }
 
-// writeModuleFiles 把一个模块的文件写进已同步的工作区（拷目录+改Chart名+写values+追加-apps），不 clone/不 commit。
-// 批量时循环调用：每次追加到同一份工作区，-apps 条目顺序累加。
-func (g *GitService) writeModuleFiles(spec ModuleSpec) error {
-	srcDir := filepath.Join(g.RepoPath(spec.SrcEnv), spec.SrcChartBasePath, spec.SrcService)
-	if st, err := os.Stat(srcDir); err != nil || !st.IsDir() {
+// writeModuleFilesAt 把一个模块的文件写进目标工作区（拷样板目录+改Chart名+写values+追加-apps）。
+//
+//	targetDir：目标仓库 checkout 根目录；srcServiceDir：样板服务目录绝对路径。
+//	纯文件操作，可被 push 冲突重放（reset 后目标模块目录不存在 → 查重通过 → 幂等）。
+func writeModuleFilesAt(targetDir, srcServiceDir string, spec ModuleSpec) error {
+	if st, err := os.Stat(srcServiceDir); err != nil || !st.IsDir() {
 		return fmt.Errorf("样板服务目录不存在: %s/%s", spec.SrcChartBasePath, spec.SrcService)
 	}
 	targetRel := filepath.Join(spec.TargetChartBasePath, spec.ModuleName)
 
-	// 目标模块目录已存在 → 拦下，不覆盖
-	if _, err := os.Stat(filepath.Join(g.RepoPath(spec.TargetEnv), targetRel)); err == nil {
+	// 目标模块目录已存在 → 拦下，不覆盖（同名模块被他人抢先添加时也走这里）
+	if _, err := os.Stat(filepath.Join(targetDir, targetRel)); err == nil {
 		return fmt.Errorf("目标已存在模块目录 %s，请勿重复新增", targetRel)
 	}
 
-	// 逐文件拷贝：values.yaml 用请求内容；Chart.yaml 改 name；其余照抄
-	err := filepath.Walk(srcDir, func(p string, info os.FileInfo, werr error) error {
+	err := filepath.Walk(srcServiceDir, func(p string, info os.FileInfo, werr error) error {
 		if werr != nil {
 			return werr
 		}
 		if info.IsDir() {
 			return nil
 		}
-		rel, err := filepath.Rel(srcDir, p)
+		rel, err := filepath.Rel(srcServiceDir, p)
 		if err != nil {
 			return err
 		}
@@ -169,7 +193,7 @@ func (g *GitService) writeModuleFiles(spec ModuleSpec) error {
 			if err != nil {
 				return err
 			}
-		case spec.ConfigMaps[rel] != "": // 用户编辑过的 configmap，用新内容
+		case spec.ConfigMaps[rel] != "":
 			content = []byte(spec.ConfigMaps[rel])
 		default:
 			content, err = os.ReadFile(p)
@@ -177,7 +201,11 @@ func (g *GitService) writeModuleFiles(spec ModuleSpec) error {
 				return err
 			}
 		}
-		return g.WriteFile(spec.TargetEnv, filepath.Join(targetRel, rel), content)
+		full := filepath.Join(targetDir, targetRel, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(full, content, 0o644)
 	})
 	if err != nil {
 		return fmt.Errorf("拷贝样板目录失败: %w", err)
@@ -185,7 +213,8 @@ func (g *GitService) writeModuleFiles(spec ModuleSpec) error {
 
 	// 追加 -apps 条目
 	appsRel := spec.TargetChartBasePath + "-apps/values.yaml"
-	appsContent, err := g.ReadFile(spec.TargetEnv, appsRel)
+	appsAbs := filepath.Join(targetDir, appsRel)
+	appsContent, err := os.ReadFile(appsAbs)
 	if err != nil {
 		return fmt.Errorf("读取 %s 失败: %w", appsRel, err)
 	}
@@ -198,16 +227,15 @@ func (g *GitService) writeModuleFiles(spec ModuleSpec) error {
 	if err != nil {
 		return err
 	}
-	return g.WriteFile(spec.TargetEnv, appsRel, newApps)
+	return os.WriteFile(appsAbs, newApps, 0o644)
 }
 
-// inspectStaged 计算改动文件清单 + 跑 helm 校验（新模块 chart 目录）。
-func (g *GitService) inspectStaged(ctx context.Context, spec ModuleSpec) (*PreviewResult, error) {
-	path := g.RepoPath(spec.TargetEnv)
-	if out, err := exec.CommandContext(ctx, "git", "-C", path, "add", "-A").CombinedOutput(); err != nil {
+// inspectStagedAt 计算改动文件清单 + 跑 helm 校验（新模块 chart 目录），在指定工作区。
+func inspectStagedAt(ctx context.Context, targetDir string, spec ModuleSpec) (*PreviewResult, error) {
+	if out, err := exec.CommandContext(ctx, "git", "-C", targetDir, "add", "-A").CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("git add: %w\n%s", err, out)
 	}
-	out, err := exec.CommandContext(ctx, "git", "-C", path, "diff", "--cached", "--name-only").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "git", "-C", targetDir, "diff", "--cached", "--name-only").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("git diff: %w\n%s", err, out)
 	}
@@ -217,10 +245,9 @@ func (g *GitService) inspectStaged(ctx context.Context, spec ModuleSpec) (*Previ
 			files = append(files, l)
 		}
 	}
-
 	res := &PreviewResult{ChangedFiles: files}
 	ok, skipped, helmOut := helmTemplateCheck(ctx,
-		filepath.Join(path, spec.TargetChartBasePath, spec.ModuleName),
+		filepath.Join(targetDir, spec.TargetChartBasePath, spec.ModuleName),
 		spec.ModuleName, spec.Namespace)
 	res.HelmOK, res.HelmSkipped, res.HelmOutput = ok, skipped, helmOut
 	return res, nil
@@ -293,43 +320,6 @@ func copyChartWithoutTests(src string) (string, error) {
 	return tmp, nil
 }
 
-// discardWorktree 丢弃工作区所有改动，恢复到远端最新（预览后 / 失败后清场）。
-func (g *GitService) discardWorktree(ctx context.Context, envName, branch string) error {
-	path := g.RepoPath(envName)
-	for _, args := range [][]string{
-		{"-C", path, "reset", "--hard", "HEAD"},
-		{"-C", path, "clean", "-fd"},
-	} {
-		if out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("git %v: %w\n%s", args, err, out)
-		}
-	}
-	return nil
-}
-
-// safePush 推当前分支；冲突用真 rebase 把本地提交重放到远端最新之上，不丢提交。
-func (g *GitService) safePush(ctx context.Context, envName, branch string, retries int) error {
-	if retries <= 0 {
-		retries = 3
-	}
-	path := g.RepoPath(envName)
-	for attempt := 1; attempt <= retries; attempt++ {
-		out, err := exec.CommandContext(ctx, "git", "-C", path, "push", "origin", branch).CombinedOutput()
-		if err == nil {
-			return nil
-		}
-		lower := strings.ToLower(string(out))
-		if !strings.Contains(lower, "rejected") && !strings.Contains(lower, "non-fast-forward") {
-			return fmt.Errorf("git push: %w\n%s", err, ScrubSecrets(out))
-		}
-		// 真 rebase：把我们的提交重放到 origin/branch 最新之上
-		if rout, rerr := exec.CommandContext(ctx, "git", "-C", path, "pull", "--rebase", "origin", branch).CombinedOutput(); rerr != nil {
-			_, _ = exec.CommandContext(ctx, "git", "-C", path, "rebase", "--abort").CombinedOutput()
-			return fmt.Errorf("推送冲突且 rebase 失败（可能有人同时改了同一文件）: %w\n%s", rerr, ScrubSecrets(rout))
-		}
-	}
-	return fmt.Errorf("git push: 超过 %d 次重试仍失败", retries)
-}
 
 // ============ 批量新增 ============
 
@@ -358,41 +348,64 @@ type BatchResult struct {
 	CommitURL    string           `json:"commit_url,omitempty"`
 }
 
-// runBatch 同步一次 → 循环生成每行 + 逐行 helm 校验 → 全绿才一次性提交，否则丢弃。
+// runBatch 独立浅克隆一次 → 循环生成每行 + 逐行 helm 校验 → 全绿才一次性提交(冲突重放)，否则丢弃。
 func (g *GitService) runBatch(ctx context.Context, base ModuleSpec, rows []BatchRow, commit bool, operator, msg string) (*BatchResult, error) {
-	g.Locks.Acquire(base.TargetEnv)
-	defer g.Locks.Release(base.TargetEnv)
+	_, releaseGate, gerr := AcquireHeavy(ctx)
+	if gerr != nil {
+		return nil, fmt.Errorf("gate: %w", gerr)
+	}
+	defer releaseGate()
+	st := NewStageTimer("batch", base.TargetEnv, base.TargetEnv, operator)
+	defer st.Done()
 
-	if err := g.ensureRepos(ctx, base); err != nil {
+	tc, srcDir, cleanupSrc, err := g.openModuleCheckout(ctx, base, st)
+	if err != nil {
 		return nil, err
 	}
+	defer tc.Release()
+	defer cleanupSrc()
+
+	// writeAll：把所有行写进工作区（供首次生成 + 冲突重放复用）。返回逐行错误。
+	writeAll := func() []BatchRowResult {
+		rowResults := make([]BatchRowResult, 0, len(rows))
+		for _, row := range rows {
+			spec := base
+			spec.ModuleName = row.ModuleName
+			spec.Namespace = row.Namespace
+			spec.ValuesYAML = row.ValuesYAML
+			spec.ConfigMaps = row.ConfigMaps
+			rr := BatchRowResult{ModuleName: row.ModuleName}
+			if werr := writeModuleFilesAt(tc.Dir, srcDir, spec); werr != nil {
+				rr.Error = werr.Error()
+			}
+			rowResults = append(rowResults, rr)
+		}
+		return rowResults
+	}
+
 	res := &BatchResult{AllOK: true}
-	path := g.RepoPath(base.TargetEnv)
-	for _, row := range rows {
-		spec := base
-		spec.ModuleName = row.ModuleName
-		spec.Namespace = row.Namespace
-		spec.ValuesYAML = row.ValuesYAML
-		spec.ConfigMaps = row.ConfigMaps
-		rr := BatchRowResult{ModuleName: row.ModuleName}
-		if err := g.writeModuleFiles(spec); err != nil {
-			rr.Error = err.Error()
+	rowResults := writeAll()
+	st.Mark("edit")
+	// 逐行 helm 校验
+	for i := range rowResults {
+		if rowResults[i].Error != "" {
 			res.AllOK = false
-			res.Rows = append(res.Rows, rr)
 			continue
 		}
 		ok, skipped, out := helmTemplateCheck(ctx,
-			filepath.Join(path, base.TargetChartBasePath, row.ModuleName), row.ModuleName, row.Namespace)
-		rr.HelmOK, rr.HelmSkipped = ok, skipped
+			filepath.Join(tc.Dir, base.TargetChartBasePath, rows[i].ModuleName), rows[i].ModuleName, rows[i].Namespace)
+		rowResults[i].HelmOK, rowResults[i].HelmSkipped = ok, skipped
 		if !ok && !skipped {
-			rr.Error = out
+			rowResults[i].Error = out
 			res.AllOK = false
 		}
-		res.Rows = append(res.Rows, rr)
 	}
+	res.Rows = rowResults
+	st.Mark("helm_template")
+
 	// 统计改动文件数
-	_, _ = exec.CommandContext(ctx, "git", "-C", path, "add", "-A").CombinedOutput()
-	out, _ := exec.CommandContext(ctx, "git", "-C", path, "diff", "--cached", "--name-only").CombinedOutput()
+	_, _ = exec.CommandContext(ctx, "git", "-C", tc.Dir, "add", "-A").CombinedOutput()
+	out, _ := exec.CommandContext(ctx, "git", "-C", tc.Dir, "diff", "--cached", "--name-only").CombinedOutput()
 	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if strings.TrimSpace(l) != "" {
 			res.ChangedFiles++
@@ -400,21 +413,24 @@ func (g *GitService) runBatch(ctx context.Context, base ModuleSpec, rows []Batch
 	}
 
 	if !commit || !res.AllOK {
-		_ = g.discardWorktree(ctx, base.TargetEnv, base.TargetBranch)
-		return res, nil
+		return res, nil // 预览 / 有失败 → 不提交，checkout defer 释放即丢弃
 	}
-	sha, err := g.CommitAll(ctx, base.TargetEnv, operator, msg)
+	// 冲突重放：reset 后重写所有行
+	reapply := func() error {
+		rr := writeAll()
+		for _, r := range rr {
+			if r.Error != "" {
+				return fmt.Errorf("重放失败: %s", r.Error)
+			}
+		}
+		return nil
+	}
+	sha, err := tc.CommitPushReapply(ctx, operator, msg, 5, reapply, st)
 	if err != nil {
-		_ = g.discardWorktree(ctx, base.TargetEnv, base.TargetBranch)
 		return nil, err
 	}
-	if sha != "" {
-		if err := g.safePush(ctx, base.TargetEnv, base.TargetBranch, 3); err != nil {
-			return nil, err
-		}
-		res.CommitSHA = sha
-		res.CommitURL = CommitURL(base.TargetRepoURL, sha)
-	}
+	res.CommitSHA = sha
+	res.CommitURL = CommitURL(base.TargetRepoURL, sha)
 	return res, nil
 }
 

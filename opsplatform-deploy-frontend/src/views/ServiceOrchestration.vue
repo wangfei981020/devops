@@ -63,7 +63,8 @@
         </el-form-item>
         <el-form-item label="ArgoCD">
           <el-switch v-model="form.disable" :active-value="true" :inactive-value="false"
-            active-text="disable:true 安全预演（先不生成 Application）" />
+            active-text="disable:true 安全预演（先不生成 Application）"
+            inactive-text="关闭=直接部署（生成 Application，默认）" />
         </el-form-item>
 
         <div v-if="preview" class="preview-box">
@@ -136,7 +137,7 @@
           <el-button link type="primary" @click="batch.rows.push({ module_name: '', namespace: '' })">+ 加一行</el-button>
         </el-form-item>
         <el-form-item label="ArgoCD">
-          <el-switch v-model="batch.disable" :active-value="true" :inactive-value="false" active-text="disable:true 安全预演" />
+          <el-switch v-model="batch.disable" :active-value="true" :inactive-value="false" active-text="disable:true 安全预演" inactive-text="关闭=直接部署（默认）" />
         </el-form-item>
 
         <div v-if="batchResult" class="preview-box">
@@ -220,7 +221,7 @@ async function loadModules() {
 // ---- 新增模块弹窗 ----
 const addDialog = ref(false)
 const editorRef = ref(null)
-const form = ref({ templateId: null, moduleName: '', namespace: '', valuesYaml: '', disable: true })
+const form = ref({ templateId: null, moduleName: '', namespace: '', valuesYaml: '', disable: false })
 const configmaps = ref([]) // [{path, content}]，前端服务才有；prefill 带出
 const cmTab = ref('')
 const selectedTemplateType = computed(() => templates.value.find(t => t.id === form.value.templateId)?.module_type || 'backend')
@@ -237,7 +238,7 @@ const canSubmit = computed(() => preview.value && (preview.value.helm_ok || prev
 function resetPreview() { preview.value = null; submitted.value = null }
 
 function openAdd() {
-  form.value = { templateId: null, moduleName: '', namespace: '', valuesYaml: '', disable: true }
+  form.value = { templateId: null, moduleName: '', namespace: '', valuesYaml: '', disable: false }
   configmaps.value = []
   cmTab.value = ''
   resetPreview()
@@ -291,7 +292,7 @@ async function doSubmit() {
 
 // ---- 批量新增 ----
 const batchDialog = ref(false)
-const batch = ref({ templateId: null, paste: '', disable: true, rows: [] })
+const batch = ref({ templateId: null, paste: '', disable: false, rows: [] })
 const batchResult = ref(null)
 const batchSubmitted = ref(null)
 const batchPreviewing = ref(false)
@@ -350,7 +351,7 @@ function rowStatus(name) {
 }
 
 function openBatch() {
-  batch.value = { templateId: null, paste: '', disable: true, rows: [] }
+  batch.value = { templateId: null, paste: '', disable: false, rows: [] }
   resetBatch()
   batchDialog.value = true
 }

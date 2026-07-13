@@ -43,11 +43,21 @@ spec:
             # 必须和 opsplatform backend 的同名 env 一致
             - name: DEPLOY_CENTER_INTERNAL_TOKEN
               value: "opsplatform-deploy-internal-2026-please-rotate"
+            # 并发闸：同时进行的 git/helm 重活上限（防 100 并发发布/新增 OOM）。
+            # 每个并行的 helm/git 峰值 ~100-200MB；12 * 200MB ≈ 2.4G，配合 4Gi limit 稳。
+            # 调大更快但更吃内存/CPU；调小更省但排队更久。改这个值即可，不用改代码。
+            - name: DEPLOY_CONCURRENCY
+              value: "12"
           volumeMounts:
             - { name: cache, mountPath: /app/git-cache }
           resources:
-            requests: { cpu: 500m, memory: 512Mi }
-            limits:   { cpu: "1",  memory: 1Gi }
+            # 单副本（架构要求：进程内 git 缓存 + 隔离 checkout + 内存锁）。
+            # 100 并发靠"并发闸(DEPLOY_CONCURRENCY) + 隔离浅克隆"扛，不是靠多副本。
+            # 实测：100 并发新增模块峰值内存仅 ~250Mi（每 op clone 171ms/helm 37ms，很轻），
+            # 瓶颈是同 env 共享 -apps 文件的 push 串行(I/O)，不吃 CPU/内存。
+            # 故 request 给足调度基线，limit 留大 headroom（真实大 chart + 并发 poll 更吃内存）。
+            requests: { cpu: "1",  memory: 1Gi }
+            limits:   { cpu: "4",  memory: 3Gi }
           livenessProbe:
             httpGet: { path: /health, port: metrics }
             initialDelaySeconds: 10

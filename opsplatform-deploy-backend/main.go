@@ -17,6 +17,7 @@ import (
 	"opsplatform-deploy-backend/database"
 	"opsplatform-deploy-backend/database/migrations"
 	"opsplatform-deploy-backend/handlers"
+	"opsplatform-deploy-backend/services"
 )
 
 func main() {
@@ -36,6 +37,11 @@ func main() {
 		log.Fatalf("run migrations: %v", err)
 	}
 	warnIfDefaultAdmin()
+	// 清掉上次崩溃遗留的隔离工作区临时目录
+	services.CleanWorkRoot(cfg.GitCacheDir)
+	// 并发闸：限制同时进行的 git/helm 重活数，防 100 并发发布/新增时 OOM
+	services.InitHeavyGate(cfg.DeployConcurrency)
+	log.Printf("并发闸已启用：同时最多 %d 个 git/helm 重活（DEPLOY_CONCURRENCY）", cfg.DeployConcurrency)
 	// 启动对账：收拾上次进程重启时遗留的孤儿 pending 发布（放后台，ArgoCD 查询可能慢，别挡启动）
 	go handlers.ReconcileOrphanedDeploys("startup")
 

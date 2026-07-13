@@ -237,7 +237,7 @@ func (req *moduleAddReq) toSpec(w http.ResponseWriter) (services.ModuleSpec, *mo
 	}
 	spec.ValuesYAML = []byte(req.ValuesYAML)
 	spec.ConfigMaps = cmMap(req.Configmaps)
-	disable := true // 默认安全预演
+	disable := false // 默认直接部署（helm 校验兜底）；显式传 true 才安全预演
 	if req.Disable != nil {
 		disable = *req.Disable
 	}
@@ -339,7 +339,7 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 	if req.Disable != nil {
 		base.Disable = *req.Disable
 	} else {
-		base.Disable = true
+		base.Disable = false // 默认直接部署
 	}
 	var rows []services.BatchRow
 	for _, r := range req.Rows {

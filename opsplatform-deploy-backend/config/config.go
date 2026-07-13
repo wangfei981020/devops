@@ -14,6 +14,9 @@ type Config struct {
 	AESKey      string // base64 decoded -> 32 bytes
 	CORSOrigin  string // "*"
 	GitCacheDir string // "/app/git-cache" (本地调试用 ./git-cache)
+	// DeployConcurrency 并发闸名额：同时进行的 git/helm 重活上限，防 100 并发起太多子进程 OOM。
+	// 建议 = min(可用 CPU 核数*2, 内存能容纳的并行 helm/git 数)。默认 12。
+	DeployConcurrency int
 
 	// 认证 / SSO
 	JWTSecret       string // JWT HS256 签名密钥
@@ -35,7 +38,8 @@ func Load() *Config {
 		MySQLDSN:    buildMySQLDSN(),
 		AESKey:      getEnv("AES_KEY", ""),
 		CORSOrigin:  getEnv("CORS_ORIGIN", ""),
-		GitCacheDir: getEnv("GIT_CACHE_DIR", "./git-cache"),
+		GitCacheDir:       getEnv("GIT_CACHE_DIR", "./git-cache"),
+		DeployConcurrency: MustInt(getEnv("DEPLOY_CONCURRENCY", "12"), 12),
 
 		JWTSecret:       getEnv("JWT_SECRET", ""),
 		SessionTimeout:  sessionTimeout,

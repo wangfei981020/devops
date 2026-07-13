@@ -219,86 +219,100 @@ type UpdateImageResult struct {
 
 func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *UpdateImageResult {
 	res := &UpdateImageResult{}
-	d.Git.Locks.Acquire(in.ProjectEnvName)
-	defer d.Git.Locks.Release(in.ProjectEnvName)
+	ids := make([]string, 0, len(in.Pending))
+	for k := range in.Pending {
+		ids = append(ids, k)
+	}
+	st := NewStageTimer("deploy", strings.Join(ids, ","), in.ProjectEnvName, in.Operator)
+	defer st.Done()
 
-	gctx, cancel := GitCtx(ctx, 120)
+	// git clone+编辑+push 的时间预算（poll 不占这个 ctx）
+	gctx, cancel := GitCtx(ctx, 300)
 	defer cancel()
-	if err := d.Git.EnsureClone(gctx, in.ProjectEnvName, in.GitRepo, in.GitBranch); err != nil {
-		res.Err = fmt.Errorf("git pull: %w", err)
+
+	// 并发闸：防 100 并发起太多 git/helm 子进程 OOM
+	_, releaseGate, gerr := AcquireHeavy(gctx)
+	if gerr != nil {
+		res.Err = fmt.Errorf("gate: %w", gerr)
 		res.Status = models.StatusFailed
 		return res
 	}
-
-	for name, newTag := range in.Pending {
-		m, ok := in.Modules[name]
-		if !ok {
-			res.NotFound = append(res.NotFound, name)
-			continue
+	gateReleased := false
+	releaseGateOnce := func() {
+		if !gateReleased {
+			gateReleased = true
+			releaseGate()
 		}
-		raw, err := d.Git.ReadFile(in.ProjectEnvName, m.ChartRelPath)
-		if err != nil {
-			res.NotFound = append(res.NotFound, name)
-			continue
-		}
-		newContent, changed, err := UpdateImageTag(raw, newTag)
-		if err != nil {
-			res.Err = fmt.Errorf("yaml edit %s: %w", name, err)
-			res.Status = models.StatusFailed
-			return res
-		}
-		if !changed {
-			res.Skipped = append(res.Skipped, name)
-			continue
-		}
-		if err := d.Git.WriteFile(in.ProjectEnvName, m.ChartRelPath, newContent); err != nil {
-			res.Err = fmt.Errorf("write %s: %w", name, err)
-			res.Status = models.StatusFailed
-			return res
-		}
-		res.Changes = append(res.Changes, models.Change{Module: name, FromTag: m.CurrentTag, ToTag: newTag})
 	}
+	defer releaseGateOnce()
+	st.Mark("gate_wait")
 
-	if len(res.Changes) == 0 {
-		res.Status = models.StatusNoChange
-		return res
-	}
-
-	modNames := []string{}
-	for _, c := range res.Changes {
-		modNames = append(modNames, c.Module)
-	}
-	msg := fmt.Sprintf("[deploy-center] update image: %s by %s\n\nvia deploy-center",
-		strings.Join(modNames, ","), in.Operator)
-	sha, err := d.Git.CommitAll(gctx, in.ProjectEnvName, in.Operator, msg)
+	// 独立浅克隆（隔离工作区）——同 env 并发互不干扰
+	c, err := d.Git.AcquireCheckout(gctx, in.ProjectEnvName, in.GitRepo, in.GitBranch)
 	if err != nil {
-		res.Err = fmt.Errorf("commit: %w", err)
+		res.Err = fmt.Errorf("git clone: %w", err)
 		res.Status = models.StatusFailed
 		return res
 	}
-	if sha == "" {
+	defer c.Release()
+	st.Mark("git_clone")
+
+	// 语义改动：读每个模块 values → 改 tag → 写回。可被 push 冲突重放（幂等：每次基于当前工作区重算）
+	var changes []models.Change
+	var notFound, skipped []string
+	edit := func() (bool, error) {
+		changes = changes[:0]
+		notFound = nil
+		skipped = nil
+		for name, newTag := range in.Pending {
+			m, ok := in.Modules[name]
+			if !ok {
+				notFound = append(notFound, name)
+				continue
+			}
+			raw, rerr := c.ReadFile(m.ChartRelPath)
+			if rerr != nil {
+				notFound = append(notFound, name)
+				continue
+			}
+			newContent, ch, eerr := UpdateImageTag(raw, newTag)
+			if eerr != nil {
+				return false, fmt.Errorf("yaml edit %s: %w", name, eerr)
+			}
+			if !ch {
+				skipped = append(skipped, name)
+				continue
+			}
+			if werr := c.WriteFile(m.ChartRelPath, newContent); werr != nil {
+				return false, fmt.Errorf("write %s: %w", name, werr)
+			}
+			changes = append(changes, models.Change{Module: name, FromTag: m.CurrentTag, ToTag: newTag})
+		}
+		return len(changes) > 0, nil
+	}
+
+	msg := fmt.Sprintf("[deploy-center] update image: %s by %s\n\nvia deploy-center",
+		strings.Join(ids, ","), in.Operator)
+	sha, changed, cerr := c.CommitAndPush(gctx, in.Operator, msg, in.GitRetry, edit, st)
+	res.Changes = changes
+	res.NotFound = notFound
+	res.Skipped = skipped
+	if cerr != nil {
+		res.Err = cerr
+		res.Status = models.StatusFailed
+		return res
+	}
+	if !changed {
 		res.Status = models.StatusNoChange
 		return res
 	}
 	res.GitCommit = sha
 	res.GitCommitURL = CommitURL(in.GitRepo, sha)
-
-	if err := d.Git.Push(gctx, in.ProjectEnvName, in.GitBranch, in.GitRetry); err != nil {
-		res.Err = fmt.Errorf("push: %w", err)
-		res.Status = models.StatusFailed
-		return res
-	}
 	// push 成功 → 立即把 git_commit 落库(before/after-push 判定信号)
 	if in.OnCommitted != nil {
 		in.OnCommitted(res.GitCommit, res.GitCommitURL)
 	}
 
-	if !in.AutoSync {
-		res.Status = models.StatusSuccess
-		return res
-	}
-
-	// 有界并发池并行 sync + poll，与 Restart 保持一致的体验
 	interval := in.PollIntervalSec
 	if interval <= 0 {
 		interval = 5
@@ -312,23 +326,20 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 	if limit <= 0 {
 		limit = 10
 	}
-	// ArgoCD app name 优先用 module.argocd_app_name（scan 时按 helm 模板解析的真值）；
-	// 空时 fallback 到老的 module-projectEnvName 拼法（兼容未重扫的项目）。
-	// 跟 Restart 流程一致 (line 451+)。否则 g32 这种 helm 用 {{ $.Values.global.env }}
-	// 的项目，sync API 用错名 → ArgoCD 报"app not found"。
 	peNameLower := strings.ToLower(in.ProjectEnvName)
 	type syncJob struct {
 		module     string
 		app        string
-		timeoutSec int // 按副本数动态算（含镜像 pull 缓冲）
+		timeoutSec int
 	}
 	jobs := make([]syncJob, 0, len(res.Changes))
-	for _, c := range res.Changes {
+	for _, ch := range res.Changes {
 		var replicas int
 		var appName string
-		if m, ok := in.Modules[c.Module]; ok {
+		if m, ok := in.Modules[ch.Module]; ok {
 			if m.ChartRelPath != "" {
-				if vb, _ := d.Git.ReadFile(in.ProjectEnvName, m.ChartRelPath); len(vb) > 0 {
+				// 在释放工作区前，从隔离克隆里读副本数算超时
+				if vb, _ := c.ReadFile(m.ChartRelPath); len(vb) > 0 {
 					replicas = readEffectiveReplicas(vb)
 				}
 			}
@@ -337,16 +348,26 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 			}
 		}
 		if appName == "" {
-			appName = strings.ToLower(c.Module) + "-" + peNameLower
+			appName = strings.ToLower(ch.Module) + "-" + peNameLower
 		}
 		if replicas <= 0 {
 			replicas = 1
 		}
 		jobs = append(jobs, syncJob{
-			module:     c.Module,
+			module:     ch.Module,
 			app:        appName,
 			timeoutSec: computeAppTimeout(replicas, updateImagePerPodSec, configTimeout),
 		})
+	}
+
+	// poll 不占 git/helm 名额，也不再持有任何 env 锁 → 释放工作区 + 并发闸，让别人接着上
+	releaseGateOnce()
+	c.Release()
+	st.Mark("git_done")
+
+	if !in.AutoSync {
+		res.Status = models.StatusSuccess
+		return res
 	}
 
 	res.ArgocdResults = RunBoundedConcurrent(ctx, jobs, limit,
@@ -463,30 +484,52 @@ type RestartResult struct {
 func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartResult {
 	res := &RestartResult{}
 
-	d.Git.Locks.Acquire(in.ProjectEnvName)
-	defer d.Git.Locks.Release(in.ProjectEnvName)
+	st := NewStageTimer("restart", strings.Join(in.ModuleNames, ","), in.ProjectEnvName, in.Operator)
+	defer st.Done()
 
-	gctx, cancel := GitCtx(ctx, 120)
+	gctx, cancel := GitCtx(ctx, 300)
 	defer cancel()
 
-	// Step 1: clone or pull
-	if err := d.Git.EnsureClone(gctx, in.ProjectEnvName, in.GitRepo, in.GitBranch); err != nil {
-		res.Err = fmt.Errorf("git pull: %w", err)
-		res.Status = models.StatusFailed
-		// 把所有模块标为失败，给前端可见
+	failAllModules := func(reason string) {
 		for _, name := range in.ModuleNames {
 			app := name
 			if m, ok := in.Modules[name]; ok && m.ArgocdApp != "" {
 				app = m.ArgocdApp
 			}
 			res.ArgocdResults = append(res.ArgocdResults, models.ArgocdAppResult{
-				App: app, SyncStatus: "Failed",
-				Msg:          "失败 · 拉取仓库出错 · " + sanitizeMsg(err.Error()),
-				LastPolledAt: time.Now(),
+				App: app, SyncStatus: "Failed", Msg: reason, LastPolledAt: time.Now(),
 			})
 		}
+	}
+
+	// 并发闸
+	_, releaseGate, gerr := AcquireHeavy(gctx)
+	if gerr != nil {
+		res.Err = fmt.Errorf("gate: %w", gerr)
+		res.Status = models.StatusFailed
+		failAllModules("失败 · 系统繁忙（并发闸取消）")
 		return res
 	}
+	gateReleased := false
+	releaseGateOnce := func() {
+		if !gateReleased {
+			gateReleased = true
+			releaseGate()
+		}
+	}
+	defer releaseGateOnce()
+	st.Mark("gate_wait")
+
+	// 独立浅克隆隔离工作区
+	c, err := d.Git.AcquireCheckout(gctx, in.ProjectEnvName, in.GitRepo, in.GitBranch)
+	if err != nil {
+		res.Err = fmt.Errorf("git clone: %w", err)
+		res.Status = models.StatusFailed
+		failAllModules("失败 · 拉取仓库出错 · " + sanitizeMsg(err.Error()))
+		return res
+	}
+	defer c.Release()
+	st.Mark("git_clone")
 
 	// Step 2: 每个模块改 templates/deployment.yaml 的 manual restart at <ts>
 	type triggered struct {
@@ -503,82 +546,76 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 	if configTimeout <= 0 {
 		configTimeout = 180
 	}
-	for _, name := range in.ModuleNames {
-		m, ok := in.Modules[name]
-		if !ok {
-			preFail = append(preFail, models.ArgocdAppResult{
-				App: name, SyncStatus: "Failed", Msg: "失败 · 模块未在系统中登记，请先扫描",
-				LastPolledAt: time.Now(),
-			})
-			continue
+	// 语义改动（可被 push 冲突重放，幂等：每次基于当前工作区重算）
+	edit := func() (bool, error) {
+		toPoll = nil
+		preFail = nil
+		changedModules = nil
+		for _, name := range in.ModuleNames {
+			m, ok := in.Modules[name]
+			if !ok {
+				preFail = append(preFail, models.ArgocdAppResult{
+					App: name, SyncStatus: "Failed", Msg: "失败 · 模块未在系统中登记，请先扫描",
+					LastPolledAt: time.Now(),
+				})
+				continue
+			}
+			deployRel := strings.Replace(m.ChartRelPath, "values.yaml", "templates/deployment.yaml", 1)
+			raw, rerr := c.ReadFile(deployRel)
+			if rerr != nil {
+				preFail = append(preFail, models.ArgocdAppResult{
+					App: m.ArgocdApp, SyncStatus: "Failed",
+					Msg:          "失败 · 读取部署配置失败（模板目录可能异常）· " + sanitizeMsg(rerr.Error()),
+					LastPolledAt: time.Now(),
+				})
+				continue
+			}
+			newContent, replaced := replaceRestartTimestamp(raw, newTs)
+			if !replaced {
+				preFail = append(preFail, models.ArgocdAppResult{
+					App: m.ArgocdApp, SyncStatus: "Failed",
+					Msg:          "失败 · 模板配置缺少重启标记，无法触发重启（请联系运维）",
+					LastPolledAt: time.Now(),
+				})
+				continue
+			}
+			if werr := c.WriteFile(deployRel, newContent); werr != nil {
+				preFail = append(preFail, models.ArgocdAppResult{
+					App: m.ArgocdApp, SyncStatus: "Failed",
+					Msg:          "失败 · 写入配置失败 · " + sanitizeMsg(werr.Error()),
+					LastPolledAt: time.Now(),
+				})
+				continue
+			}
+			changedModules = append(changedModules, name)
+			ns := m.Namespace
+			if ns == "" {
+				ns = in.Namespace
+			}
+			valuesRaw, _ := c.ReadFile(m.ChartRelPath)
+			replicas := readEffectiveReplicas(valuesRaw)
+			appTimeout := computeAppTimeout(replicas, restartPerPodSec, configTimeout)
+			toPoll = append(toPoll, triggered{app: m.ArgocdApp, mod: name, ns: ns, timeoutSec: appTimeout})
 		}
-		// chart 目录下的 templates/deployment.yaml
-		// m.ChartRelPath 形如 charts/g32-uat/<module>/values.yaml
-		deployRel := strings.Replace(m.ChartRelPath, "values.yaml", "templates/deployment.yaml", 1)
-		raw, err := d.Git.ReadFile(in.ProjectEnvName, deployRel)
-		if err != nil {
-			preFail = append(preFail, models.ArgocdAppResult{
-				App: m.ArgocdApp, SyncStatus: "Failed",
-				Msg:          "失败 · 读取部署配置失败（模板目录可能异常）· " + sanitizeMsg(err.Error()),
-				LastPolledAt: time.Now(),
-			})
-			continue
-		}
-		newContent, replaced := replaceRestartTimestamp(raw, newTs)
-		if !replaced {
-			preFail = append(preFail, models.ArgocdAppResult{
-				App: m.ArgocdApp, SyncStatus: "Failed",
-				Msg:          "失败 · 模板配置缺少重启标记，无法触发重启（请联系运维）",
-				LastPolledAt: time.Now(),
-			})
-			continue
-		}
-		if err := d.Git.WriteFile(in.ProjectEnvName, deployRel, newContent); err != nil {
-			preFail = append(preFail, models.ArgocdAppResult{
-				App: m.ArgocdApp, SyncStatus: "Failed",
-				Msg:          "失败 · 写入配置失败 · " + sanitizeMsg(err.Error()),
-				LastPolledAt: time.Now(),
-			})
-			continue
-		}
-		changedModules = append(changedModules, name)
-		ns := m.Namespace
-		if ns == "" {
-			ns = in.Namespace
-		}
-		// 副本数感知：读同目录 values.yaml 算这个 app 应该等多久
-		valuesRaw, _ := d.Git.ReadFile(in.ProjectEnvName, m.ChartRelPath)
-		replicas := readEffectiveReplicas(valuesRaw)
-		appTimeout := computeAppTimeout(replicas, restartPerPodSec, configTimeout)
-		toPoll = append(toPoll, triggered{app: m.ArgocdApp, mod: name, ns: ns, timeoutSec: appTimeout})
+		return len(changedModules) > 0, nil
 	}
 
-	// Step 3: commit + push（一次提交包所有改动，atomic）
-	if len(changedModules) > 0 {
-		commitMsg := fmt.Sprintf("[deploy-center] restart %d modules: %s by %s\n\nrestartedAt: %s\nvia deploy-center",
-			len(changedModules), strings.Join(changedModules, ","), in.Operator, newTs)
-		sha, err := d.Git.CommitAll(gctx, in.ProjectEnvName, in.Operator, commitMsg)
-		if err != nil {
-			res.Err = fmt.Errorf("commit: %w", err)
-			res.Status = models.StatusFailed
-			res.ArgocdResults = preFail
-			return res
-		}
-		// sha == "" 极端情况：1 秒内连点两次重启，时间戳相同 → 没 diff
-		// 这种情况下不 push、不调 sync，但仍算 no-op 成功（前端静默）
-		if sha != "" {
-			res.GitCommit = sha
-			res.GitCommitURL = CommitURL(in.GitRepo, sha)
-			if err := d.Git.Push(gctx, in.ProjectEnvName, in.GitBranch, in.GitRetry); err != nil {
-				res.Err = fmt.Errorf("push: %w", err)
-				res.Status = models.StatusFailed
-				res.ArgocdResults = preFail
-				return res
-			}
-			// push 成功 → 立即落 git_commit(before/after-push 判定信号)
-			if in.OnCommitted != nil {
-				in.OnCommitted(res.GitCommit, res.GitCommitURL)
-			}
+	// Step 3: commit + push（隔离工作区 + push 冲突重放）
+	commitMsg := fmt.Sprintf("[deploy-center] restart modules: %s by %s\n\nrestartedAt: %s\nvia deploy-center",
+		strings.Join(in.ModuleNames, ","), in.Operator, newTs)
+	sha, changed, cerr := c.CommitAndPush(gctx, in.Operator, commitMsg, in.GitRetry, edit, st)
+	if cerr != nil {
+		res.Err = cerr
+		res.Status = models.StatusFailed
+		res.ArgocdResults = preFail
+		return res
+	}
+	// changed==false 可能是 1 秒内连点两次重启时间戳相同（没 diff）；toPoll 非空则仍继续 poll
+	if changed {
+		res.GitCommit = sha
+		res.GitCommitURL = CommitURL(in.GitRepo, sha)
+		if in.OnCommitted != nil {
+			in.OnCommitted(res.GitCommit, res.GitCommitURL)
 		}
 	}
 
@@ -588,6 +625,11 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 		res.Status = models.StatusFailed
 		return res
 	}
+
+	// poll 不占 git/helm 名额，也不再持锁 → 释放工作区 + 并发闸
+	releaseGateOnce()
+	c.Release()
+	st.Mark("git_done")
 
 	// v130: auto_sync 关 → git push 完毕直接返回 success，不主动调 ArgoCD sync。
 	// 跟 UpdateImage 同款语义（PROD 关 auto_sync 时人工到 ArgoCD UI 点 sync）。

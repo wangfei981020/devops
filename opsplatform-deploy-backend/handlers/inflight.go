@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+
+	"opsplatform-deploy-backend/services"
 )
 
 // inflight tracker：滚动升级时让 preStop 知道还有多少异步发布任务在跑，
@@ -109,9 +111,13 @@ func HandleInternalDrain(w http.ResponseWriter, r *http.Request) {
 //
 //	preStop hook 轮询直到 count == 0 才退出，让 K8s 才发 SIGTERM。
 func HandleInternalInflight(w http.ResponseWriter, r *http.Request) {
+	gateInFlight, gateWaiting, gateCap := services.GateStats()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"count":    InflightCount(),
-		"draining": IsDraining(),
+		"count":         InflightCount(),
+		"draining":      IsDraining(),
+		"gate_inflight": gateInFlight, // 正在跑的 git/helm 重活
+		"gate_waiting":  gateWaiting,  // 排队等名额的
+		"gate_cap":      gateCap,      // 名额上限
 	})
 }
