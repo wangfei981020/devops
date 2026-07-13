@@ -53,6 +53,25 @@ func HandleUpdateEnvHarbor(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, nil)
 }
 
+// PUT /api/orchestration/env-domain/{id} —— 更新某项目环境的域名后缀（「项目参数」页用）。
+// 留空=新增前端模块时域名不自动带出。
+func HandleUpdateEnvDomain(w http.ResponseWriter, r *http.Request) {
+	id := ParseID(mux.Vars(r)["id"])
+	var req struct {
+		DomainSuffix string `json:"domain_suffix"`
+	}
+	if !DecodeJSON(w, r, &req) {
+		return
+	}
+	if _, err := database.DB.Exec(`UPDATE project_env SET domain_suffix=? WHERE id=?`,
+		strings.TrimSpace(req.DomainSuffix), id); err != nil {
+		InternalErr(w, r, err)
+		return
+	}
+	Audit(r, "orchestration.env_domain.update", "project_env", strconv.FormatInt(id, 10), nil)
+	JSONSuccess(w, nil)
+}
+
 // cmItem 一个 configmap 文件：相对模块目录的路径 + 内容
 type cmItem struct {
 	Path    string `json:"path"`
@@ -81,6 +100,20 @@ func scanConfigmaps(gs *services.GitService, srcEnv, chartBasePath, srcService s
 }
 
 // ============ 新增模块（服务编排）：预填 / 预览 / 提交 ============
+
+// deriveDomainForEnv 推导前端模块的访问域名：<模块名去-frontend>.<环境域名后缀>。
+//   只对 -frontend 模块生效；域名后缀没配 → 返回空（域名保持空，不瞎拼）。
+func deriveDomainForEnv(dst *models.ProjectEnv, moduleName string) string {
+	suffix := strings.TrimSpace(dst.DomainSuffix)
+	if suffix == "" {
+		return ""
+	}
+	if !strings.HasSuffix(moduleName, "-frontend") {
+		return "" // 只有前端模块才自动带域名
+	}
+	prefix := strings.TrimSuffix(moduleName, "-frontend") // g66-301game-frontend → g66-301game
+	return prefix + "." + strings.TrimLeft(suffix, ".")
+}
 
 // deriveImageRepoForEnv 推导镜像仓库：<全局harbor域名>/<Harbor项目(留空=项目名)>/<服务名>。
 // 服务名 = 模块名去掉项目前缀（项目名从环境名去 -env 后缀推）。
@@ -164,9 +197,9 @@ func verifyImageForSubmit(valuesYAML []byte, moduleName, envType string) error {
 func loadEnvGit(where string, arg interface{}) (*models.ProjectEnv, error) {
 	var p models.ProjectEnv
 	err := database.DB.QueryRow(
-		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,''), IFNULL(harbor_project,'')
+		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), IFNULL(domain_suffix,'')
 		 FROM project_env WHERE `+where, arg).
-		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway, &p.HarborProject)
+		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway, &p.HarborProject, &p.DomainSuffix)
 	if err != nil {
 		return nil, err
 	}
@@ -270,9 +303,13 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filled := prefillValues(raw, srcEnv, dst, spec.SrcService, req.ModuleName)
-	// 网关名按目标环境自动带出、域名默认清空（一个模板跨项目复用）
+	// 网关名按目标环境自动带出、域名先清空（一个模板跨项目复用）
 	if f, err := services.ApplyEnvIngress(filled, dst.IngressGateway); err == nil {
 		filled = f
+	}
+	// 前端模块访问域名自动带出：<模块名去-frontend>.<环境域名后缀>（没配后缀则保持空，可手改）
+	if domain := deriveDomainForEnv(dst, req.ModuleName); domain != "" {
+		filled = services.SetIngressHost(filled, domain)
 	}
 	// 镜像仓库自动推导：全局 harbor 域名 / 该环境 Harbor 项目(留空=项目名) / 服务名。
 	// 只是智能默认值，用户可在编辑器里手动改；没配全局 harbor 域名则保留模板原值。
@@ -498,6 +535,9 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 			vals = prefillValues(raw, src, dst, base.SrcService, name)
 			if f, err := services.ApplyEnvIngress(vals, dst.IngressGateway); err == nil {
 				vals = f
+			}
+			if domain := deriveDomainForEnv(dst, name); domain != "" {
+				vals = services.SetIngressHost(vals, domain)
 			}
 			if repo := deriveImageRepoForEnv(dst, name); repo != "" {
 				vals = services.SetImageRepository(vals, repo)

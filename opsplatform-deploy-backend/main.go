@@ -146,6 +146,7 @@ func main() {
 	// 项目参数：更新某环境的 ingress 网关名 / Harbor 项目
 	me.HandleFunc("/orchestration/env-gateway/{id}", handlers.HandleUpdateEnvGateway).Methods("PUT", "OPTIONS")
 	me.HandleFunc("/orchestration/env-harbor/{id}", handlers.HandleUpdateEnvHarbor).Methods("PUT", "OPTIONS")
+	me.HandleFunc("/orchestration/env-domain/{id}", handlers.HandleUpdateEnvDomain).Methods("PUT", "OPTIONS")
 
 	// ========== 按钮权限分组：每组 admin 自动放行，portal 用户按勾选授权 ==========
 	// ① manage_global — 全局凭证 + GitLab 仓库登记

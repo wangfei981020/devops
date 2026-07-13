@@ -20,10 +20,16 @@
           <span v-else class="unset">未配置</span>
         </template>
       </el-table-column>
-      <el-table-column label="Harbor 项目" min-width="200">
+      <el-table-column label="Harbor 项目" min-width="160">
         <template #default="{ row }">
           <code v-if="row.harbor_project">{{ row.harbor_project }}</code>
           <span v-else class="unset">未配置（默认用 {{ projName(row) }}）</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="域名后缀" min-width="180">
+        <template #default="{ row }">
+          <code v-if="row.domain_suffix">{{ row.domain_suffix }}</code>
+          <span v-else class="unset">未配置（域名留空）</span>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="100">
@@ -43,6 +49,10 @@
         <el-form-item label="Harbor 项目">
           <el-input v-model="harbor" :placeholder="`留空=用项目名 ${projName(editing)}`" />
           <div class="form-hint">镜像仓库 = 全局 Harbor 域名 / 这里的项目 / 服务名；留空自动用项目名，预填后仍可手改</div>
+        </el-form-item>
+        <el-form-item label="域名后缀">
+          <el-input v-model="domain" placeholder="如 uat.slileisure.com" />
+          <div class="form-hint">前端模块(-frontend)访问域名自动带出 = 模块名去 -frontend + . + 这里的后缀；留空=域名不自动带，预填后仍可手改</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -65,6 +75,7 @@ const saving = ref(false)
 const editing = ref(null)
 const gateway = ref('')
 const harbor = ref('')
+const domain = ref('')
 
 // 项目名 = 环境名去掉 -env 后缀（跟后端一致），用于 Harbor 项目默认值提示
 function projName(row) {
@@ -77,6 +88,7 @@ function openEdit(row) {
   editing.value = row
   gateway.value = row.ingress_gateway || ''
   harbor.value = row.harbor_project || ''
+  domain.value = row.domain_suffix || ''
   dialog.value = true
 }
 
@@ -85,8 +97,10 @@ async function save() {
   try {
     await api.updateEnvGateway(editing.value.id, gateway.value.trim())
     await api.updateEnvHarbor(editing.value.id, harbor.value.trim())
+    await api.updateEnvDomain(editing.value.id, domain.value.trim())
     editing.value.ingress_gateway = gateway.value.trim()
     editing.value.harbor_project = harbor.value.trim()
+    editing.value.domain_suffix = domain.value.trim()
     dialog.value = false
     ElMessage.success('已保存')
   } finally {

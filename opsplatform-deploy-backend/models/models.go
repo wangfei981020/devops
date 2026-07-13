@@ -55,6 +55,7 @@ type ProjectEnv struct {
 	AutoSync         int       `json:"auto_sync"`
 	IngressGateway   string    `json:"ingress_gateway"` // 该环境的 istio 网关名，新增模块时自动带出
 	HarborProject    string    `json:"harbor_project"`  // 该环境的 Harbor 项目名，留空=自动用项目名；推导镜像仓库用
+	DomainSuffix     string    `json:"domain_suffix"`   // 该环境的域名后缀，如 uat.slileisure.com；前端模块访问域名自动带出用
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }

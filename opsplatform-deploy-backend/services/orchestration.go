@@ -105,6 +105,31 @@ func ApplyEnvIngress(content []byte, gatewayName string) ([]byte, error) {
 	return encodeYAML(&root)
 }
 
+// SetIngressHost 把 ingressGateway.host 设成 [host]（预填自动带出访问域名用）。
+// 只在存在 ingressGateway.host 时生效；host 为空则清空（保持原"域名默认空"行为）。
+func SetIngressHost(content []byte, host string) []byte {
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil || len(root.Content) == 0 {
+		return content
+	}
+	h, err := findMappingKey(root.Content[0], "ingressGateway", "host")
+	if err != nil {
+		return content // 没有 ingressGateway.host（非前端/无 ingress 模板）→ 原样
+	}
+	h.Kind = yaml.SequenceNode
+	h.Tag = "!!seq"
+	h.Style = yaml.FlowStyle
+	if host == "" {
+		h.Content = nil
+	} else {
+		h.Content = []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: host}}
+	}
+	if out, e := encodeYAML(&root); e == nil {
+		return out
+	}
+	return content
+}
+
 // EnsureGlobalLabels 兜底：values 里没有 global.labels 就补一个 global: { labels: {} }。
 // 因为服务的 helper(如 web.labels)会读 .Values.global.labels，而部署时不注入 global，
 // 缺这行就 nil pointer。已有则原样不动。global 段插在最前(跟工作正常的服务一致)。

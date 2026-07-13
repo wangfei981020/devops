@@ -21,7 +21,7 @@ func HandleListProjectEnvs(w http.ResponseWriter, r *http.Request) {
 	allowedNames, enforce := AllowedEnvNames(r)
 	baseSQL := `SELECT id, name, display_name, env_type, git_repo, git_branch,
 		chart_base_path, namespace, IFNULL(argocd_url,''), IFNULL(argocd_token,''), argocd_instance_id,
-		lark_webhook, lark_secret, lark_bot_id, gitlab_repo_id, auto_sync, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), created_at, updated_at
+		lark_webhook, lark_secret, lark_bot_id, gitlab_repo_id, auto_sync, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), IFNULL(domain_suffix,''), created_at, updated_at
 		FROM project_env`
 	var rows *sql.Rows
 	var err error
@@ -51,7 +51,7 @@ func HandleListProjectEnvs(w http.ResponseWriter, r *http.Request) {
 		var p models.ProjectEnv
 		_ = rows.Scan(&p.ID, &p.Name, &p.DisplayName, &p.EnvType, &p.GitRepo, &p.GitBranch,
 			&p.ChartBasePath, &p.Namespace, &p.ArgocdURL, &p.ArgocdToken, &p.ArgocdInstanceID,
-			&p.LarkWebhook, &p.LarkSecret, &p.LarkBotID, &p.GitlabRepoID, &p.AutoSync, &p.IngressGateway, &p.HarborProject, &p.CreatedAt, &p.UpdatedAt)
+			&p.LarkWebhook, &p.LarkSecret, &p.LarkBotID, &p.GitlabRepoID, &p.AutoSync, &p.IngressGateway, &p.HarborProject, &p.DomainSuffix, &p.CreatedAt, &p.UpdatedAt)
 		p.ArgocdToken = maskToken(p.ArgocdToken)
 		p.LarkSecret = maskToken(p.LarkSecret)
 		list = append(list, p)
@@ -454,11 +454,11 @@ func loadProjectEnvRaw(id int64) (*models.ProjectEnv, error) {
 	var p models.ProjectEnv
 	err := database.DB.QueryRow(`SELECT id, name, display_name, env_type, git_repo, git_branch,
 		chart_base_path, namespace, IFNULL(argocd_url,''), IFNULL(argocd_token,''), argocd_instance_id,
-		lark_webhook, lark_secret, lark_bot_id, gitlab_repo_id, auto_sync, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), created_at, updated_at
+		lark_webhook, lark_secret, lark_bot_id, gitlab_repo_id, auto_sync, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), IFNULL(domain_suffix,''), created_at, updated_at
 		FROM project_env WHERE id=?`, id).
 		Scan(&p.ID, &p.Name, &p.DisplayName, &p.EnvType, &p.GitRepo, &p.GitBranch,
 			&p.ChartBasePath, &p.Namespace, &p.ArgocdURL, &p.ArgocdToken, &p.ArgocdInstanceID,
-			&p.LarkWebhook, &p.LarkSecret, &p.LarkBotID, &p.GitlabRepoID, &p.AutoSync, &p.IngressGateway, &p.HarborProject, &p.CreatedAt, &p.UpdatedAt)
+			&p.LarkWebhook, &p.LarkSecret, &p.LarkBotID, &p.GitlabRepoID, &p.AutoSync, &p.IngressGateway, &p.HarborProject, &p.DomainSuffix, &p.CreatedAt, &p.UpdatedAt)
 	return &p, err
 }
 
