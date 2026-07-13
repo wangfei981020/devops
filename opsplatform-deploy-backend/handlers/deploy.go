@@ -196,7 +196,8 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 		refID = &req.RefDeploymentID
 	}
 
-	depID, err := insertPendingDeployment(req.ProjectEnvID, action, refID, modNamesJSON, getOperator(r))
+	depID, err := insertPendingDeploymentWithIntent(req.ProjectEnvID, action, refID, modNamesJSON, getOperator(r),
+		buildIntendedChanges(pending, modules))
 	if err != nil {
 		JSONError(w, 50000, "insert deployment: "+err.Error())
 		return
@@ -282,8 +283,8 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40300, "PROD 重启需要 submit_prod 权限")
 		return
 	}
-	argoURL, argoToken, err := ResolveArgocdForEnv(p)
-	if err != nil {
+	// 提前校验 ArgoCD 配置存在（fail-fast）；真正用到时 runRestartAsync 内部再解析一次
+	if _, _, err := ResolveArgocdForEnv(p); err != nil {
 		JSONError(w, 40001, err.Error())
 		return
 	}
@@ -311,46 +312,7 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 	gitRetry, pollInterval, pollTimeoutMin := loadPollCfg()
 	InflightTrack(func() {
 		defer ReleaseModuleLocks(p.Name, req.ModuleNames)
-		start := time.Now()
-		// 单 app 动态 timeout 上限是 30 分钟（services.timeoutCapSec），父 ctx 留 35 分钟够用
-		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
-		defer cancel()
-		// 注册到 cancel 表：用户点「取消等待」时调 cancel() 让 PollUntilStable 立刻退出
-		RegisterCancel(depID, cancel)
-		defer UnregisterCancel(depID)
-		ds := services.NewDeployService(getGitService())
-		res := ds.Restart(ctx, services.RestartInput{
-			ProjectEnvName:  p.Name,
-			Namespace:       p.Namespace,
-			Modules:         modules,
-			ModuleNames:     req.ModuleNames,
-			GitRepo:         p.GitRepo,
-			GitBranch:       p.GitBranch,
-			GitRetry:        gitRetry,
-			Operator:        operator,
-			AutoSync:        p.AutoSync == 1, // v130: 跟 UpdateImage 对齐，受 env.auto_sync 控制
-			ArgocdClient:    services.NewArgocdClient(argoURL, argoToken),
-			PollIntervalSec: pollInterval,
-			PollTimeoutSec:  pollTimeoutMin * 60,
-			// OnProgress 在 concurrent.go 的锁内调用；snapshot 在这里立刻序列化（离开栈后就不再引用）
-			OnProgress: func(snapshot []models.ArgocdAppResult) {
-				progJSON := marshalJSON(snapshot)
-				_, _ = database.DB.Exec(
-					`UPDATE deployment SET argocd_results=? WHERE id=?`,
-					progJSON, depID)
-			},
-		})
-		argoJSON := marshalJSON(res.ArgocdResults)
-		errMsg := ""
-		if res.Err != nil {
-			errMsg = res.Err.Error()
-		}
-		_, _ = database.DB.Exec(
-			`UPDATE deployment SET argocd_results=?, git_commit=?, git_commit_url=?, status=?, error_msg=?, duration_sec=? WHERE id=?`,
-			argoJSON, res.GitCommit, res.GitCommitURL, res.Status, errMsg,
-			int(time.Since(start).Seconds()), depID)
-		ArchiveFailedPodLogs(depID, p, collectFailingPodsByApp(res.ArgocdResults))
-		sendRestartNotify(p, depID, operator, modules, res)
+		runRestartAsync(depID, p, req.ModuleNames, modules, gitRetry, pollInterval, pollTimeoutMin, operator)
 	})
 
 	Audit(r, "deploy.restart", "project_env", p.Name, map[string]interface{}{
@@ -464,7 +426,8 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 
 	modNamesJSON := marshalJSON(keysOf(pending))
 	ref := req.RefDeploymentID
-	depID, err := insertPendingDeployment(peID, models.ActionRollback, &ref, modNamesJSON, getOperator(r))
+	depID, err := insertPendingDeploymentWithIntent(peID, models.ActionRollback, &ref, modNamesJSON, getOperator(r),
+		buildIntendedChanges(pending, modules))
 	if err != nil {
 		JSONError(w, 50000, "insert deployment: "+err.Error())
 		return
@@ -572,12 +535,35 @@ func keysOf(m map[string]string) []string {
 }
 
 func insertPendingDeployment(peID int64, action string, refID *int64, modNamesJSON []byte, operator string) (int64, error) {
-	res, err := database.DB.Exec(`INSERT INTO deployment (project_env_id, action, ref_deployment_id, module_names, operator, status)
-		VALUES (?, ?, ?, ?, ?, 'pending')`, peID, action, refID, modNamesJSON, operator)
+	return insertPendingDeploymentWithIntent(peID, action, refID, modNamesJSON, operator, nil)
+}
+
+// insertPendingDeploymentWithIntent 在 insert 时就把"意图 changes"(module→目标 tag)落库。
+//
+//	为什么：正常流程 changes/git_commit 只在发布全部结束时才写(见 runUpdateImageAsync 末尾)。
+//	一旦发布中途后端重启，孤儿记录里 changes 是空的，重跑就不知道该发哪个 tag。
+//	所以这里先把目标 tag 落进 changes(FromTag=当前, ToTag=目标)，供「重启前中断」的自动重跑/重试用；
+//	正常结束时末尾的 UPDATE 会用真实结果覆盖它。restart 无 tag 意图，传 nil 即可。
+func insertPendingDeploymentWithIntent(peID int64, action string, refID *int64, modNamesJSON []byte, operator string, intended []models.Change) (int64, error) {
+	var changesJSON []byte
+	if len(intended) > 0 {
+		changesJSON = marshalJSON(intended)
+	}
+	res, err := database.DB.Exec(`INSERT INTO deployment (project_env_id, action, ref_deployment_id, module_names, operator, status, changes)
+		VALUES (?, ?, ?, ?, ?, 'pending', ?)`, peID, action, refID, modNamesJSON, operator, changesJSON)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+// buildIntendedChanges 从 pending(module→目标tag) + modules(取当前tag) 组装意图 changes
+func buildIntendedChanges(pending map[string]string, modules map[string]services.Module) []models.Change {
+	out := make([]models.Change, 0, len(pending))
+	for name, tag := range pending {
+		out = append(out, models.Change{Module: name, FromTag: modules[name].CurrentTag, ToTag: tag})
+	}
+	return out
 }
 
 // preflightFilterPending submit 前实时跑三方预检，把不通过的模块从 pending map 里剔除
@@ -687,6 +673,10 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 				`UPDATE deployment SET argocd_results=? WHERE id=?`,
 				progJSON, depID)
 		},
+		OnCommitted: func(sha, url string) {
+			_, _ = database.DB.Exec(
+				`UPDATE deployment SET git_commit=?, git_commit_url=? WHERE id=?`, sha, url, depID)
+		},
 	})
 	changesJSON := marshalJSON(res.Changes)
 	argoJSON := marshalJSON(res.ArgocdResults)
@@ -704,6 +694,55 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 
 	ArchiveFailedPodLogs(depID, p, collectFailingPodsByApp(res.ArgocdResults))
 	sendUpdateImageNotify(p, depID, operator, opLabel, modules, res)
+}
+
+// runRestartAsync 后台跑完整的重启流水线。从 HandleRestart 抽出，供「重启前中断」的
+// 自动重跑 / 用户点重试复用。调用方负责 InflightTrack 包裹 + 抢/放模块锁。
+func runRestartAsync(depID int64, p *models.ProjectEnv, moduleNames []string, modules map[string]services.Module,
+	gitRetry, pollInterval, pollTimeoutMin int, operator string) {
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
+	defer cancel()
+	RegisterCancel(depID, cancel)
+	defer UnregisterCancel(depID)
+
+	var argoClient *services.ArgocdClient
+	if argoURL, argoToken, err := ResolveArgocdForEnv(p); err == nil && argoURL != "" {
+		argoClient = services.NewArgocdClient(argoURL, argoToken)
+	}
+	ds := services.NewDeployService(getGitService())
+	res := ds.Restart(ctx, services.RestartInput{
+		ProjectEnvName:  p.Name,
+		Namespace:       p.Namespace,
+		Modules:         modules,
+		ModuleNames:     moduleNames,
+		GitRepo:         p.GitRepo,
+		GitBranch:       p.GitBranch,
+		GitRetry:        gitRetry,
+		Operator:        operator,
+		AutoSync:        p.AutoSync == 1,
+		ArgocdClient:    argoClient,
+		PollIntervalSec: pollInterval,
+		PollTimeoutSec:  pollTimeoutMin * 60,
+		OnProgress: func(snapshot []models.ArgocdAppResult) {
+			progJSON := marshalJSON(snapshot)
+			_, _ = database.DB.Exec(`UPDATE deployment SET argocd_results=? WHERE id=?`, progJSON, depID)
+		},
+		OnCommitted: func(sha, url string) {
+			_, _ = database.DB.Exec(`UPDATE deployment SET git_commit=?, git_commit_url=? WHERE id=?`, sha, url, depID)
+		},
+	})
+	argoJSON := marshalJSON(res.ArgocdResults)
+	errMsg := ""
+	if res.Err != nil {
+		errMsg = res.Err.Error()
+	}
+	_, _ = database.DB.Exec(
+		`UPDATE deployment SET argocd_results=?, git_commit=?, git_commit_url=?, status=?, error_msg=?, duration_sec=? WHERE id=?`,
+		argoJSON, res.GitCommit, res.GitCommitURL, res.Status, errMsg,
+		int(time.Since(start).Seconds()), depID)
+	ArchiveFailedPodLogs(depID, p, collectFailingPodsByApp(res.ArgocdResults))
+	sendRestartNotify(p, depID, operator, modules, res)
 }
 
 // collectFailingPodsByApp 把 ArgocdResults 里的 FailingPods 快照按 app 分组

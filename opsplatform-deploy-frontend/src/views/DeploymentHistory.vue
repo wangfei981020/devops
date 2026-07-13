@@ -44,6 +44,7 @@
           <option value="partial">部分成功</option>
           <option value="failed">失败</option>
           <option value="pending">进行中</option>
+          <option value="interrupted">已中断·需重发</option>
           <option value="no_change">无变化</option>
         </select>
       </div>
@@ -128,6 +129,15 @@
             <tr v-if="expanded[i]" class="detail-row">
               <td :colspan="8">
                 <div class="detail-wrap">
+
+                  <!-- 已中断（提交前后端重启）：橙色友好提示，跟"真失败"区分开 -->
+                  <div v-if="row.status === 'interrupted'" class="interrupt-banner">
+                    <el-icon class="ib-ico"><Warning /></el-icon>
+                    <div class="ib-body">
+                      <div class="ib-title">发布被中断，服务未受影响</div>
+                      <pre class="ib-msg">{{ row.error_msg || '后端重启导致本次发布在提交前被中断，服务还是原版本。请点「重试」重新发布。' }}</pre>
+                    </div>
+                  </div>
 
                   <!-- VM 行专属：服务表（含版本+主机+per-service 日志按钮）；不显示 K8s 那套 Tag/同步结果 -->
                   <template v-if="isVmAction(row.action)">
@@ -223,7 +233,7 @@
                     </table>
                   </div>
 
-                  <div v-if="row.error_msg" class="section">
+                  <div v-if="row.error_msg && row.status !== 'interrupted'" class="section">
                     <div class="sec-lbl">错误信息</div>
                     <pre class="err-msg">{{ row.error_msg }}</pre>
                   </div>
@@ -235,6 +245,13 @@
                       :disabled="cancelingIds.has(row.id)"
                       @click.stop="onCancelRow(row)">
                       {{ cancelingIds.has(row.id) ? '取消中…' : '取消等待' }}
+                    </button>
+                    <button
+                      v-if="!isVmAction(row.action) && ['failed','interrupted'].includes(row.status) && (auth.isAdmin || row.operator === auth.user?.username)"
+                      :class="['sm', row.status === 'interrupted' ? 'btn-primary' : 'btn-cancel']"
+                      :disabled="retryingIds.has(row.id)"
+                      @click.stop="onRetryRow(row)">
+                      {{ retryingIds.has(row.id) ? '重试中…' : (row.status === 'interrupted' ? '重试发布' : '重试') }}
                     </button>
                     <button
                       v-if="row.action !== 'restart' && !isVmAction(row.action) && ['success','partial','failed'].includes(row.status) && (auth.isAdmin || auth.hasButton('rollback'))"
@@ -306,7 +323,7 @@ import PodLogsModal from '../components/PodLogsModal.vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { Search, ArrowRight, Warning } from '@element-plus/icons-vue'
-import { listDeployments, listProjectEnvs, listVmProjectEnvs, getDeployment, cancelDeployment, fetchVmArchivedLog } from '../api'
+import { listDeployments, listProjectEnvs, listVmProjectEnvs, getDeployment, cancelDeployment, retryDeployment, fetchVmArchivedLog } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import RollbackDialog from '../components/RollbackDialog.vue'
 import { useAuthStore } from '../stores/auth'
@@ -412,7 +429,7 @@ function vmServiceStatusLabel(s) {
   }[s] || s || '—'
 }
 function statusLabel(s) {
-  return { success: '成功', partial: '部分成功', failed: '失败', pending: '进行中', no_change: '无变化', canceled: '已取消' }[s] || s
+  return { success: '成功', partial: '部分成功', failed: '失败', pending: '进行中', no_change: '无变化', canceled: '已取消', interrupted: '已中断·需重发' }[s] || s
 }
 
 const kpis = ref([
@@ -470,7 +487,7 @@ let tickTimer = null
 
 function isParentTerminal(row) {
   const s = (row?.status || '').toLowerCase()
-  return s === 'success' || s === 'failed' || s === 'partial' || s === 'no_change'
+  return s === 'success' || s === 'failed' || s === 'partial' || s === 'no_change' || s === 'canceled' || s === 'interrupted'
 }
 function isTerminal(r) {
   const h = (r.health || '').toLowerCase()
@@ -719,6 +736,36 @@ async function onCancelRow(row) {
   }
 }
 
+// 重试：对 failed / interrupted 的发布用原记录的意图重新发一次
+//   interrupted（提交前中断）= 服务其实没变化，重试就是补发这次
+//   failed（真失败）= 修好后想再发一次
+const retryingIds = reactive(new Set())
+async function onRetryRow(row) {
+  if (retryingIds.has(row.id)) return
+  const isInterrupted = row.status === 'interrupted'
+  const message = isInterrupted
+    ? '本次发布在提交前被中断，服务并未受到影响（还是原版本）。\n重试会用本次的目标版本重新发布一遍。\n\n确认重试？'
+    : '将用本次的模块与目标版本重新发布一遍。\n\n确认重试？'
+  try {
+    await ElMessageBox.confirm(message, isInterrupted ? '重试发布（服务未受影响）' : '确认重试发布？', {
+      type: 'warning',
+      confirmButtonText: '重试',
+      cancelButtonText: '取消',
+      autofocus: false,
+    })
+  } catch (_) { return }
+  retryingIds.add(row.id)
+  try {
+    await retryDeployment(row.id)
+    ElMessage.success('已重新发起，正在进行中')
+    await doSearch()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || e.message || '重试失败')
+  } finally {
+    retryingIds.delete(row.id)
+  }
+}
+
 onMounted(async () => {
   // K8s 和 VM 环境都要拉，前端按 row.action 是否 vm_ 前缀判断走哪个 detail 块
   // env id 是不同表的，但加载到同一数组按 _kind 区分；envName/envType 通过 id 在数组里找
@@ -952,6 +999,17 @@ onUnmounted(() => {
 .btn-cancel:hover:not(:disabled) { color: #dc2626; border-color: #fca5a5; background: #fef2f2; }
 .btn-cancel:disabled { opacity: .5; cursor: not-allowed; }
 .status-tag.no_change { background: var(--bg-hover); color: var(--text-2); }
+.status-tag.interrupted { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+
+/* 已中断提示条：橙色，跟红色"失败"区分——服务未受影响 */
+.interrupt-banner {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px;
+  padding: 12px 14px; margin-bottom: 14px;
+}
+.interrupt-banner .ib-ico { color: #ea580c; font-size: 18px; margin-top: 1px; flex-shrink: 0; }
+.interrupt-banner .ib-title { font-weight: 600; color: #9a3412; font-size: 13px; margin-bottom: 4px; }
+.interrupt-banner .ib-msg { margin: 0; white-space: pre-wrap; font-size: 12px; color: #7c2d12; line-height: 1.6; font-family: inherit; }
 
 .mod-chip {
   display: inline-block;

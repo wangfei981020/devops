@@ -176,6 +176,8 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 	if f, err := services.ApplyEnvIngress(filled, dst.IngressGateway); err == nil {
 		filled = f
 	}
+	// 缺 global.labels 就补，避免 web.labels 渲染 nil
+	filled = services.EnsureGlobalLabels(filled)
 	// 扫 templates/ 下的 configmap（多个，按文件名前端做 tab），同样令牌替换
 	cms := scanConfigmaps(gs, srcEnv.Name, spec.SrcChartBasePath, spec.SrcService,
 		func(b []byte) []byte { return prefillValues(b, srcEnv, dst, spec.SrcService, req.ModuleName) })
@@ -361,6 +363,7 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 			if f, err := services.ApplyEnvIngress(vals, dst.IngressGateway); err == nil {
 				vals = f
 			}
+			vals = services.EnsureGlobalLabels(vals)
 		}
 		// configmap：自定义了用它，否则按模板派生（令牌替换），保证前端批量的 configmap 令牌也对
 		cms := cmMap(r.Configmaps)

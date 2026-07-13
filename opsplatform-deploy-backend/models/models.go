@@ -256,6 +256,10 @@ const (
 	StatusFailed   = "failed"
 	StatusNoChange = "no_change"
 	StatusCanceled = "canceled" // 用户在等待中点了"取消等待"，git 改动已 push、ArgoCD 在自己同步，仅停 deploy-center 这边的轮询
+	// StatusInterrupted 发布还没 push 到 git，后端就重启了 → 服务实际没变化。
+	// 期间已有别人对同模块发过更新版本 → 不覆盖，标此状态，前端橙色提示「服务未受影响，请重试」。
+	// 跟 failed 区分：failed=已部署但不健康(要排查)；interrupted=根本没发生(一键重试即可)。
+	StatusInterrupted = "interrupted"
 )
 
 // OrchestrationTemplate 参照模板：指向 git 里某个样板服务（存指针，运行时拷当前最新）

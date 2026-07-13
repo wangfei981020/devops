@@ -105,6 +105,37 @@ func ApplyEnvIngress(content []byte, gatewayName string) ([]byte, error) {
 	return encodeYAML(&root)
 }
 
+// EnsureGlobalLabels 兜底：values 里没有 global.labels 就补一个 global: { labels: {} }。
+// 因为服务的 helper(如 web.labels)会读 .Values.global.labels，而部署时不注入 global，
+// 缺这行就 nil pointer。已有则原样不动。global 段插在最前(跟工作正常的服务一致)。
+func EnsureGlobalLabels(content []byte) []byte {
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil || len(root.Content) == 0 {
+		return content
+	}
+	doc := root.Content[0]
+	if doc.Kind != yaml.MappingNode {
+		return content
+	}
+	if _, err := findMappingKey(doc, "global", "labels"); err == nil {
+		return content // 已有 global.labels
+	}
+	labelsKey := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "labels"}
+	labelsVal := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Style: yaml.FlowStyle}
+	if g, err := findMappingKey(doc, "global"); err == nil && g.Kind == yaml.MappingNode {
+		g.Content = append(g.Content, labelsKey, labelsVal) // global 存在但缺 labels
+	} else {
+		globalKey := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "global"}
+		globalVal := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		globalVal.Content = append(globalVal.Content, labelsKey, labelsVal)
+		doc.Content = append([]*yaml.Node{globalKey, globalVal}, doc.Content...) // 插最前
+	}
+	if out, err := encodeYAML(&root); err == nil {
+		return out
+	}
+	return content
+}
+
 // DeriveImageRepository 从模块名推导镜像仓库路径。
 // 约定：模块名带项目前缀 "<project>-"，镜像路径去掉前缀。
 // 例：harborBase=harbor.slileisure.com, project=g32, module=g32-baccarat-settle-backend

@@ -200,6 +200,10 @@ type UpdateImageInput struct {
 	ConcurrentLimit int
 	// OnProgress 可选：每个 app 轮询中间态/完成时回调，传入当前完整快照供渐进式写 DB。
 	OnProgress func(snapshot []models.ArgocdAppResult)
+	// OnCommitted 可选：git push 成功那一刻立即回调（sha, url）。
+	// 让上层第一时间把 git_commit 落库——这样发布中途重启时，DB 里有没有 git_commit
+	// 就是"push 之前 / 之后被中断"的判定信号：空=没推(可自动重跑)，有=已推(查 ArgoCD 对账)。
+	OnCommitted func(sha, url string)
 }
 
 type UpdateImageResult struct {
@@ -283,6 +287,10 @@ func (d *DeployService) UpdateImage(ctx context.Context, in UpdateImageInput) *U
 		res.Err = fmt.Errorf("push: %w", err)
 		res.Status = models.StatusFailed
 		return res
+	}
+	// push 成功 → 立即把 git_commit 落库(before/after-push 判定信号)
+	if in.OnCommitted != nil {
+		in.OnCommitted(res.GitCommit, res.GitCommitURL)
 	}
 
 	if !in.AutoSync {
@@ -427,6 +435,8 @@ type RestartInput struct {
 	// OnProgress 可选：每个 app 轮询完成时回调，传入当前快照供渐进式写 DB。
 	// 调用方法内部已上锁，回调函数可直接读取 snapshot；但请勿持有引用到锁外。
 	OnProgress func(snapshot []models.ArgocdAppResult)
+	// OnCommitted 可选：git push 成功那一刻立即回调（sha, url），供上层第一时间落 git_commit。
+	OnCommitted func(sha, url string)
 }
 
 type RestartResult struct {
@@ -564,6 +574,10 @@ func (d *DeployService) Restart(ctx context.Context, in RestartInput) *RestartRe
 				res.Status = models.StatusFailed
 				res.ArgocdResults = preFail
 				return res
+			}
+			// push 成功 → 立即落 git_commit(before/after-push 判定信号)
+			if in.OnCommitted != nil {
+				in.OnCommitted(res.GitCommit, res.GitCommitURL)
 			}
 		}
 	}

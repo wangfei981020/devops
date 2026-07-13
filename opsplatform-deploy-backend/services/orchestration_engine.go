@@ -232,7 +232,15 @@ func helmTemplateCheck(ctx context.Context, chartDir, releaseName, namespace str
 	if _, err := exec.LookPath("helm"); err != nil {
 		return false, true, "helm CLI 未安装，跳过渲染校验"
 	}
-	args := []string{"template", releaseName, chartDir, "--skip-tests"} // 跳过 helm test 钩子(templates/tests/*)
+	// 物理排除 templates/tests/ 再渲染：--skip-tests 只在渲染「之后」过滤输出，test 钩子仍会被渲染，
+	// 而 test 钩子常引用「从未定义、部署时也不注入」的 .Values.global.*（ArgoCD 不部署 test 钩子，
+	// 所以真实部署不炸）。校验排除它，跟 ArgoCD 一致。test 文件照常提交进 git，只是不参与校验。
+	renderDir := chartDir
+	if tmp, err := copyChartWithoutTests(chartDir); err == nil {
+		renderDir = tmp
+		defer os.RemoveAll(tmp)
+	}
+	args := []string{"template", releaseName, renderDir, "--skip-tests"}
 	if namespace != "" {
 		args = append(args, "--namespace", namespace)
 	}
@@ -241,6 +249,48 @@ func helmTemplateCheck(ctx context.Context, chartDir, releaseName, namespace str
 		return false, false, string(out)
 	}
 	return true, false, ""
+}
+
+// copyChartWithoutTests 把 chart 目录拷到临时目录、去掉 templates/tests/，返回临时目录路径（调用方负责删）。
+func copyChartWithoutTests(src string) (string, error) {
+	tmp, err := os.MkdirTemp("", "orch-chart-")
+	if err != nil {
+		return "", err
+	}
+	testsRel := filepath.Join("templates", "tests")
+	err = filepath.Walk(src, func(p string, info os.FileInfo, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		// 跳过 templates/tests 及其下所有内容
+		if rel == testsRel || strings.HasPrefix(rel, testsRel+string(os.PathSeparator)) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		dst := filepath.Join(tmp, rel)
+		if info.IsDir() {
+			return os.MkdirAll(dst, 0o755)
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, data, 0o644)
+	})
+	if err != nil {
+		os.RemoveAll(tmp)
+		return "", err
+	}
+	return tmp, nil
 }
 
 // discardWorktree 丢弃工作区所有改动，恢复到远端最新（预览后 / 失败后清场）。

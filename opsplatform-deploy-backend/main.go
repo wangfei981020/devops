@@ -36,10 +36,12 @@ func main() {
 		log.Fatalf("run migrations: %v", err)
 	}
 	warnIfDefaultAdmin()
-	cleanupZombiePending()
+	// 启动对账：收拾上次进程重启时遗留的孤儿 pending 发布（放后台，ArgoCD 查询可能慢，别挡启动）
+	go handlers.ReconcileOrphanedDeploys("startup")
 
 	go startHealthServer(cfg.HealthPort)
 	go startScanScheduler()
+	go startReconcileScheduler()
 
 	handlers.SetConfig(cfg)
 	handlers.StartSessionCleaner()
@@ -107,6 +109,7 @@ func main() {
 	protected.HandleFunc("/deploy/rollback", handlers.HandleRollback).Methods("POST", "OPTIONS")
 	// 取消等待：handler 内部判定权限（操作发起人 OR admin）
 	protected.HandleFunc("/deployments/{id}/cancel", handlers.HandleCancelDeployment).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/deployments/{id}/retry", handlers.HandleRetryDeployment).Methods("POST", "OPTIONS")
 
 	// ========== 服务编排：模板库 + 新增模块 ==========
 	// 读 + 预填 + 预览（登录即可）；提交在 handler 内按环境权限 submit_<env> 放行
@@ -266,25 +269,16 @@ func main() {
 	log.Println("api server stopped, bye")
 }
 
-// cleanupZombiePending：启动时把上次崩溃/重启遗留的 pending 任务标记成 unknown。
+// startReconcileScheduler 每 2 分钟对账一次孤儿 pending 发布。
 //
-//	判定条件：status='pending' AND created_at < NOW()-10min。正常发布几十秒最多几分钟，
-//	超过 10 分钟还 pending 一定是上次进程异常退出留下的"僵尸"。
-//	已经 push 的 git commit 物理存在，ArgoCD 也会继续同步；只是 deployment 表里需要标个状态。
-func cleanupZombiePending() {
-	res, err := database.DB.Exec(`
-		UPDATE deployment
-		   SET status='unknown',
-		       error_msg=CONCAT(IFNULL(error_msg,''),
-		                ' [auto] backend restarted while job was pending; check git/argocd manually')
-		 WHERE status='pending'
-		   AND created_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)`)
-	if err != nil {
-		log.Printf("⚠ cleanupZombiePending: %v", err)
-		return
-	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		log.Printf("⚠ cleaned up %d zombie pending deployments (backend was restarted while they were running)", n)
+//	启动对账只在进程刚起来时跑一次；这里的定时兜底捡漏——比如某个跟踪 goroutine
+//	因异常退出（非重启）留下的 pending，或启动时 ArgoCD 短暂不可达没对上的。
+//	只收拾超过 reconcileGrace 且当前进程没在跟的记录，不会误伤正常在跑的长发布。
+func startReconcileScheduler() {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		handlers.ReconcileOrphanedDeploys("periodic")
 	}
 }
 

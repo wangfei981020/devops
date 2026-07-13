@@ -41,6 +41,13 @@ func UnregisterCancel(deploymentID int64) {
 	inflightCancels.Delete(deploymentID)
 }
 
+// IsTracked 该 deployment 是否有本进程内活着的发布 goroutine 在跟（cancel 已注册）。
+// 定时对账用它跳过"本进程正在正常跑"的发布，只收拾真正的孤儿。
+func IsTracked(deploymentID int64) bool {
+	_, ok := inflightCancels.Load(deploymentID)
+	return ok
+}
+
 // CancelDeployment 触发对应 deployment 的 cancel；不存在返回 false（任务可能已结束）
 func CancelDeployment(deploymentID int64) bool {
 	v, ok := inflightCancels.LoadAndDelete(deploymentID)
