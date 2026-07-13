@@ -36,6 +36,7 @@
             <RouterLink v-if="auth.hasMenu('projects')" to="/projects" class="sub-item" active-class="active">项目配置</RouterLink>
             <RouterLink v-if="auth.hasMenu('templates')" to="/templates" class="sub-item" active-class="active">模板库</RouterLink>
             <RouterLink v-if="auth.hasMenu('environments')" to="/environments" class="sub-item" active-class="active">环境管理</RouterLink>
+            <RouterLink v-if="auth.hasMenu('envparams')" to="/env-params" class="sub-item" active-class="active">项目参数</RouterLink>
             <RouterLink v-if="auth.hasMenu('settings')" to="/settings" class="sub-item" active-class="active">系统设置</RouterLink>
           </template>
         </div>
@@ -107,7 +108,7 @@ const grp = reactive(grpRaw)
 watch(grp, (v) => localStorage.setItem('deploy_sidebar_groups', JSON.stringify(v)), { deep: true })
 
 const showPublishGroup = computed(() => auth.hasMenu('console') || auth.hasMenu('orchestration') || auth.hasMenu('history'))
-const showConfigGroup = computed(() => auth.hasMenu('projects') || auth.hasMenu('templates') || auth.hasMenu('environments') || auth.hasMenu('settings'))
+const showConfigGroup = computed(() => auth.hasMenu('projects') || auth.hasMenu('templates') || auth.hasMenu('environments') || auth.hasMenu('envparams') || auth.hasMenu('settings'))
 
 async function onCommand(cmd) {
   if (cmd === 'logout') {

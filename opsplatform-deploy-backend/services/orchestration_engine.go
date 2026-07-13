@@ -232,7 +232,7 @@ func helmTemplateCheck(ctx context.Context, chartDir, releaseName, namespace str
 	if _, err := exec.LookPath("helm"); err != nil {
 		return false, true, "helm CLI 未安装，跳过渲染校验"
 	}
-	args := []string{"template", releaseName, chartDir}
+	args := []string{"template", releaseName, chartDir, "--skip-tests"} // 跳过 helm test 钩子(templates/tests/*)
 	if namespace != "" {
 		args = append(args, "--namespace", namespace)
 	}

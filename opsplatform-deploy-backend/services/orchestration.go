@@ -75,6 +75,36 @@ func AppendAppsEntry(appsContent []byte, e AppsEntry) ([]byte, error) {
 	return encodeYAML(&root)
 }
 
+// ApplyEnvIngress 预填时：把 ingressGateway.name 设为目标环境配的网关名、host 清空(域名默认留空)。
+// 只在 values 里存在 ingressGateway 时生效（后端无 ingress 则原样返回）。gateway 为空则不改 name。
+func ApplyEnvIngress(content []byte, gatewayName string) ([]byte, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil {
+		return content, nil // 解析不了就原样返回，不阻断预填
+	}
+	if len(root.Content) == 0 {
+		return content, nil
+	}
+	ig, err := findMappingKey(root.Content[0], "ingressGateway")
+	if err != nil || ig.Kind != yaml.MappingNode {
+		return content, nil // 没有 ingressGateway，原样
+	}
+	if gatewayName != "" {
+		if n, e := findMappingKey(root.Content[0], "ingressGateway", "name"); e == nil {
+			n.Value = gatewayName
+			n.Tag = "!!str"
+		}
+	}
+	// 域名默认留空：host 置为空序列
+	if h, e := findMappingKey(root.Content[0], "ingressGateway", "host"); e == nil {
+		h.Kind = yaml.SequenceNode
+		h.Tag = "!!seq"
+		h.Content = nil
+		h.Style = yaml.FlowStyle
+	}
+	return encodeYAML(&root)
+}
+
 // DeriveImageRepository 从模块名推导镜像仓库路径。
 // 约定：模块名带项目前缀 "<project>-"，镜像路径去掉前缀。
 // 例：harborBase=harbor.slileisure.com, project=g32, module=g32-baccarat-settle-backend

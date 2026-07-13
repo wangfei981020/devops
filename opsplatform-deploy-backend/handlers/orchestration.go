@@ -6,12 +6,32 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/gorilla/mux"
 	"opsplatform-deploy-backend/database"
 	"opsplatform-deploy-backend/models"
 	"opsplatform-deploy-backend/services"
 )
+
+// PUT /api/orchestration/env-gateway/{id} —— 更新某项目环境的 ingress 网关名（「项目参数」页用）。
+func HandleUpdateEnvGateway(w http.ResponseWriter, r *http.Request) {
+	id := ParseID(mux.Vars(r)["id"])
+	var req struct {
+		IngressGateway string `json:"ingress_gateway"`
+	}
+	if !DecodeJSON(w, r, &req) {
+		return
+	}
+	if _, err := database.DB.Exec(`UPDATE project_env SET ingress_gateway=? WHERE id=?`,
+		strings.TrimSpace(req.IngressGateway), id); err != nil {
+		InternalErr(w, r, err)
+		return
+	}
+	Audit(r, "orchestration.env_gateway.update", "project_env", strconv.FormatInt(id, 10), nil)
+	JSONSuccess(w, nil)
+}
 
 // cmItem 一个 configmap 文件：相对模块目录的路径 + 内容
 type cmItem struct {
@@ -46,9 +66,9 @@ func scanConfigmaps(gs *services.GitService, srcEnv, chartBasePath, srcService s
 func loadEnvGit(where string, arg interface{}) (*models.ProjectEnv, error) {
 	var p models.ProjectEnv
 	err := database.DB.QueryRow(
-		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path
+		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,'')
 		 FROM project_env WHERE `+where, arg).
-		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath)
+		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +172,10 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filled := prefillValues(raw, srcEnv, dst, spec.SrcService, req.ModuleName)
+	// 网关名按目标环境自动带出、域名默认清空（一个模板跨项目复用）
+	if f, err := services.ApplyEnvIngress(filled, dst.IngressGateway); err == nil {
+		filled = f
+	}
 	// 扫 templates/ 下的 configmap（多个，按文件名前端做 tab），同样令牌替换
 	cms := scanConfigmaps(gs, srcEnv.Name, spec.SrcChartBasePath, spec.SrcService,
 		func(b []byte) []byte { return prefillValues(b, srcEnv, dst, spec.SrcService, req.ModuleName) })
@@ -334,6 +358,9 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 		vals := []byte(r.ValuesYAML)
 		if strings.TrimSpace(r.ValuesYAML) == "" {
 			vals = prefillValues(raw, src, dst, base.SrcService, name)
+			if f, err := services.ApplyEnvIngress(vals, dst.IngressGateway); err == nil {
+				vals = f
+			}
 		}
 		// configmap：自定义了用它，否则按模板派生（令牌替换），保证前端批量的 configmap 令牌也对
 		cms := cmMap(r.Configmaps)

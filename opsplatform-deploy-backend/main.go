@@ -131,6 +131,8 @@ func main() {
 	me.HandleFunc("/environments", handlers.HandleCreateEnvironment).Methods("POST", "OPTIONS")
 	me.HandleFunc("/environments/{name}", handlers.HandleUpdateEnvironment).Methods("PUT", "OPTIONS")
 	me.HandleFunc("/environments/{name}", handlers.HandleDeleteEnvironment).Methods("DELETE", "OPTIONS")
+	// 项目参数：更新某环境的 ingress 网关名
+	me.HandleFunc("/orchestration/env-gateway/{id}", handlers.HandleUpdateEnvGateway).Methods("PUT", "OPTIONS")
 
 	// ========== 按钮权限分组：每组 admin 自动放行，portal 用户按勾选授权 ==========
 	// ① manage_global — 全局凭证 + GitLab 仓库登记

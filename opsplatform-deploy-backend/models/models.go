@@ -53,6 +53,7 @@ type ProjectEnv struct {
 	LarkBotID        *int64    `json:"lark_bot_id"`
 	GitlabRepoID     *int64    `json:"gitlab_repo_id"`
 	AutoSync         int       `json:"auto_sync"`
+	IngressGateway   string    `json:"ingress_gateway"` // 该环境的 istio 网关名，新增模块时自动带出
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }

@@ -15,6 +15,7 @@ const routes = [
       { path: 'projects', component: () => import('../views/ProjectsConfig.vue'), meta: { title: '项目配置', menuKey: 'projects' } },
       { path: 'templates', component: () => import('../views/TemplateLibrary.vue'), meta: { title: '模板库', menuKey: 'templates' } },
       { path: 'environments', component: () => import('../views/EnvironmentManage.vue'), meta: { title: '环境管理', menuKey: 'environments' } },
+      { path: 'env-params', component: () => import('../views/EnvParams.vue'), meta: { title: '项目参数', menuKey: 'envparams' } },
       { path: 'history', component: () => import('../views/DeploymentHistory.vue'), meta: { title: '发布历史', menuKey: 'history' } },
       { path: 'settings', component: () => import('../views/SystemSettings.vue'), meta: { title: '系统设置', menuKey: 'settings' } },
     ],

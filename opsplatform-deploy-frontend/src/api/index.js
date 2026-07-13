@@ -148,6 +148,9 @@ export const submitModule = (body) => http.post('/orchestration/submit', body)
 export const batchPreviewModules = (body) => http.post('/orchestration/batch-preview', body)
 export const batchSubmitModules = (body) => http.post('/orchestration/batch-submit', body)
 
+// 项目参数：更新某项目环境的 ingress 网关名
+export const updateEnvGateway = (id, ingress_gateway) => http.put(`/orchestration/env-gateway/${id}`, { ingress_gateway })
+
 // 可配置环境（dev/test/uat/prod）
 export const listEnvironments = () => http.get('/environments')
 export const createEnvironment = (data) => http.post('/environments', data)
