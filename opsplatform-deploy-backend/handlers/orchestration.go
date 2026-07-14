@@ -149,6 +149,7 @@ func scanConfigmaps(gs *services.GitService, srcEnv, chartBasePath, srcService s
 func HandleDeriveModules(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		TargetEnvID int64    `json:"target_env_id"`
+		TemplateID  int64    `json:"template_id"` // 用来判模板是否开 ingress(决定要不要带域名)
 		ModuleNames []string `json:"module_names"`
 	}
 	if !DecodeJSON(w, r, &req) {
@@ -165,9 +166,13 @@ func HandleDeriveModules(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := services.GitCtx(r.Context(), 30)
 	defer cancel()
+	// 读模板样板 values，判断是否开了对外访问（决定域名列要不要带）
+	ingressEnabled := templateIngressEnabled(ctx, req.TemplateID)
+
 	type modOut struct {
 		ModuleName      string `json:"module_name"`
-		ImageRepository string `json:"image_repository"`
+		ImageRepository string `json:"image_repository"` // 完整(带域名)
+		ImageShort      string `json:"image_short"`      // 项目/服务(界面显示)
 		LatestTag       string `json:"latest_tag"`
 		ImageMissing    bool   `json:"image_missing"`
 		Domain          string `json:"domain"`
@@ -178,9 +183,10 @@ func HandleDeriveModules(w http.ResponseWriter, r *http.Request) {
 		if name == "" {
 			continue
 		}
-		m := modOut{ModuleName: name, ImageRepository: deriveImageRepoForEnv(dst, name), Domain: deriveDomainForEnv(dst, name)}
-		if m.ImageRepository != "" {
-			if checked, missing, latest := harborImageStatus(ctx, m.ImageRepository); checked {
+		repo := deriveImageRepoForEnv(dst, name)
+		m := modOut{ModuleName: name, ImageRepository: repo, ImageShort: harborShortRepo(repo), Domain: deriveDomainForEnv(dst, name, ingressEnabled)}
+		if repo != "" {
+			if checked, missing, latest := harborImageStatus(ctx, repo); checked {
 				m.ImageMissing = missing
 				m.LatestTag = latest
 			}
@@ -194,18 +200,64 @@ func HandleDeriveModules(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// deriveDomainForEnv 推导前端模块的访问域名：<模块名去-frontend>.<环境域名后缀>。
-//   只对 -frontend 模块生效；域名后缀没配 → 返回空（域名保持空，不瞎拼）。
-func deriveDomainForEnv(dst *models.ProjectEnv, moduleName string) string {
+// templateIngressEnabled 读模板样板服务 values.yaml，判断是否开了对外访问(ingressGateway)。
+func templateIngressEnabled(ctx context.Context, templateID int64) bool {
+	if templateID <= 0 {
+		return false
+	}
+	tpl, err := LoadTemplate(templateID)
+	if err != nil {
+		return false
+	}
+	src, err := loadEnvGit("name=?", tpl.SrcEnv)
+	if err != nil {
+		return false
+	}
+	gs := getGitService()
+	if err := gs.EnsureClone(ctx, src.Name, src.GitRepo, src.GitBranch); err != nil {
+		return false
+	}
+	raw, err := gs.ReadFile(src.Name, src.ChartBasePath+"/"+tpl.SrcService+"/values.yaml")
+	if err != nil {
+		return false
+	}
+	return services.IngressEnabled(raw)
+}
+
+// deriveDomainForEnv 推导访问域名：<模块名去 -frontend/-backend 后缀>.<环境域名后缀>。
+//   ingressEnabled=模板是否开了对外访问(ingressGateway.enabled)——开了才带域名(前端/后端都算)。
+//   域名后缀没配 → 返回空。
+func deriveDomainForEnv(dst *models.ProjectEnv, moduleName string, ingressEnabled bool) string {
 	suffix := strings.TrimSpace(dst.DomainSuffix)
-	if suffix == "" {
+	if suffix == "" || !ingressEnabled {
 		return ""
 	}
-	if !strings.HasSuffix(moduleName, "-frontend") {
-		return "" // 只有前端模块才自动带域名
+	return stripTypeSuffix(moduleName) + "." + strings.TrimLeft(suffix, ".")
+}
+
+// stripTypeSuffix 去掉模块名的 -frontend/-backend 后缀，得域名前缀。
+func stripTypeSuffix(m string) string {
+	for _, s := range []string{"-frontend", "-backend"} {
+		if strings.HasSuffix(m, s) {
+			return strings.TrimSuffix(m, s)
+		}
 	}
-	prefix := strings.TrimSuffix(moduleName, "-frontend") // g66-301game-frontend → g66-301game
-	return prefix + "." + strings.TrimLeft(suffix, ".")
+	return m
+}
+
+// ingressEnabledFromValues 判断模板 values 是否开了对外访问：
+//   有 ingressGateway 且 enabled 不为 false → true（前端一般 true；后端配了 ingress 也 true）。
+func ingressEnabledFromValues(raw []byte) bool {
+	return services.IngressEnabled(raw)
+}
+
+// harborShortRepo 去掉镜像仓库的域名前缀，只留 项目/服务（界面显示用）。
+//   harbor.slileisure.com/g32/301game-frontend → g32/301game-frontend
+func harborShortRepo(full string) string {
+	if i := strings.Index(full, "/"); i >= 0 {
+		return full[i+1:]
+	}
+	return full
 }
 
 // deriveImageRepoForEnv 推导镜像仓库：<全局harbor域名>/<Harbor项目(留空=项目名)>/<服务名>。
@@ -400,14 +452,15 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 	if f, err := services.ApplyEnvIngress(filled, dst.IngressGateway); err == nil {
 		filled = f
 	}
-	// 前端模块访问域名自动带出：<模块名去-frontend>.<环境域名后缀>（没配后缀则保持空，可手改）
-	if domain := deriveDomainForEnv(dst, req.ModuleName); domain != "" {
+	// 访问域名自动带出：模板开了 ingress(前端/后端ingress) → <模块名去后缀>.<域名后缀>（可手改）
+	if domain := deriveDomainForEnv(dst, req.ModuleName, ingressEnabledFromValues(raw)); domain != "" {
 		filled = services.SetIngressHost(filled, domain)
 	}
 	// 镜像仓库自动推导：全局 harbor 域名 / 该环境 Harbor 项目(留空=项目名) / 服务名。
 	// 只是智能默认值，用户可在编辑器里手动改；没配全局 harbor 域名则保留模板原值。
 	imageMissing := false
 	imageRepo := ""
+	latestTag := ""
 	if repo := deriveImageRepoForEnv(dst, req.ModuleName); repo != "" {
 		filled = services.SetImageRepository(filled, repo)
 		imageRepo = repo
@@ -417,6 +470,7 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 			imageMissing = true
 			filled = services.SetImageTag(filled, "")
 		} else if checked && latest != "" {
+			latestTag = latest
 			filled = services.SetImageTag(filled, latest)
 		}
 	}
@@ -434,7 +488,10 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 		"target_chart_path": spec.TargetChartBasePath + "/" + req.ModuleName,
 		"apps_file":         spec.TargetChartBasePath + "-apps/values.yaml",
 		"image_repository":  imageRepo,
-		"image_missing":     imageMissing, // true=Harbor 缺该镜像 → 前端红字禁止提交/预览
+		"image_short":       harborShortRepo(imageRepo),                                          // 去域名短显示：g32/301game-frontend
+		"latest_tag":        latestTag,                                                            // 自动带出的最新 tag（缺镜像为空）
+		"domain":            deriveDomainForEnv(dst, req.ModuleName, ingressEnabledFromValues(raw)), // 访问域名（无 ingress/无后缀为空）
+		"image_missing":     imageMissing,                                                         // true=Harbor 缺该镜像 → 前端红字禁止提交/预览
 		"image_missing_msg": func() string {
 			if imageMissing {
 				return missingImageMsg(req.ModuleName, dst.EnvType)
@@ -568,8 +625,9 @@ func HandleSubmitModule(w http.ResponseWriter, r *http.Request) {
 			finishOrchTask(taskID, "success", "已提交（预演 disable:true，未部署）", nil, dur(start))
 			return
 		}
-		// 真部署 → 轮询新模块的 ArgoCD app 到 Synced+Healthy
-		deployAndPollNewModule(taskID, envID, spec.ModuleName, spec.Namespace, start)
+		// 真部署 → 轮询新模块的 ArgoCD app 到 Synced+Healthy，成功/失败发 Lark
+		_, version := services.GetImageRepoTag(spec.ValuesYAML)
+		deployAndPollNewModule(taskID, envID, operator, spec.ModuleName, spec.Namespace, version, start)
 	})
 	JSONSuccess(w, map[string]interface{}{"task_id": taskID, "status": "pending"})
 }
@@ -638,7 +696,7 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 			if f, err := services.ApplyEnvIngress(vals, dst.IngressGateway); err == nil {
 				vals = f
 			}
-			if domain := deriveDomainForEnv(dst, name); domain != "" {
+			if domain := deriveDomainForEnv(dst, name, ingressEnabledFromValues(raw)); domain != "" {
 				vals = services.SetIngressHost(vals, domain)
 			}
 			if repo := deriveImageRepoForEnv(dst, name); repo != "" {
@@ -751,12 +809,17 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		setOrchTaskCommit(taskID, res.CommitSHA, res.CommitURL)
-		// 批量含多个 app，不逐个轮询——提交成功即完成，部署状态到 ArgoCD 看（或按需扩展）
-		note := "已提交，ArgoCD 将部署这些模块，请到 ArgoCD 查看状态"
 		if disable {
-			note = "已提交（预演 disable:true，未部署）"
+			finishOrchTask(taskID, "success", "已提交（预演 disable:true，未部署）", nil, dur(start))
+			return
 		}
-		finishOrchTask(taskID, "success", note, nil, dur(start))
+		// 真部署 → 逐个轮询每个新模块的 ArgoCD 部署，聚合后发 Lark（拆成功/失败）
+		mods := make([]newModDeploy, 0, len(rows))
+		for _, rr := range rows {
+			_, ver := services.GetImageRepoTag(rr.ValuesYAML)
+			mods = append(mods, newModDeploy{Module: rr.ModuleName, Namespace: rr.Namespace, Version: ver})
+		}
+		deployAndPollBatch(taskID, dst.ID, operator, mods, start)
 	})
 	JSONSuccess(w, map[string]interface{}{"task_id": taskID, "status": "pending"})
 }

@@ -50,6 +50,19 @@
             <el-option v-for="n in nsOptionsSingle" :key="n" :label="n" :value="n" />
           </el-select>
         </el-form-item>
+        <el-form-item v-if="imgPreview" label="镜像/域名">
+          <div class="img-preview">
+            <span class="ip-cell"><span class="ip-k">Harbor 项目</span><code>{{ imgPreview.short || '—' }}</code></span>
+            <span class="ip-cell"><span class="ip-k">tag</span>
+              <code v-if="imgPreview.tag">{{ imgPreview.tag }}</code>
+              <span v-else class="miss">缺镜像</span>
+            </span>
+            <span class="ip-cell"><span class="ip-k">域名</span>
+              <code v-if="imgPreview.domain">{{ imgPreview.domain }}</code>
+              <span v-else class="ip-none">无</span>
+            </span>
+          </div>
+        </el-form-item>
         <el-form-item label="配置">
           <div v-if="form.valuesYaml" style="width:100%">
             <ValuesEditor ref="editorRef" :modelValue="form.valuesYaml" :moduleType="selectedTemplateType" />
@@ -114,46 +127,57 @@
           <el-button style="margin-left: 10px" @click="parsePaste">解析成行</el-button>
         </el-form-item>
         <el-form-item label="模块清单">
+          <div v-if="batch.rows.length" class="ns-batch-bar">
+            namespace 批量设
+            <el-select v-model="nsBatchSet" size="small" filterable allow-create default-first-option placeholder="选/输" style="width:180px;margin:0 8px">
+              <el-option v-for="n in nsOptions" :key="n" :label="n" :value="n" />
+            </el-select>
+            <el-button size="small" @click="applyNsToAll">应用到全部</el-button>
+            <span class="ns-hint">Harbor 域名 harbor 全局配置，不在每行重复</span>
+          </div>
           <el-table :data="batch.rows" border size="small" style="width: 100%">
-            <el-table-column label="模块名" min-width="200">
+            <el-table-column label="模块名" min-width="180">
               <template #default="{ row }"><el-input v-model="row.module_name" size="small" @input="resetBatch" @change="deriveRow(row)" /></template>
             </el-table-column>
-            <el-table-column label="namespace" width="160">
+            <el-table-column label="namespace" width="150">
               <template #default="{ row }">
                 <el-select v-model="row.namespace" size="small" filterable allow-create default-first-option placeholder="选/输" style="width:100%" @change="resetBatch">
                   <el-option v-for="n in nsOptions" :key="n" :label="n" :value="n" />
                 </el-select>
               </template>
             </el-table-column>
-            <el-table-column label="镜像仓库（自动）" min-width="220">
-              <template #default="{ row }"><span class="mono ellip" :title="row.image_repository">{{ row.image_repository || '—' }}</span></template>
+            <el-table-column label="Harbor 项目" min-width="180">
+              <template #default="{ row }"><span class="mono ellip" :title="row.image_short">{{ row.image_short || '—' }}</span></template>
             </el-table-column>
-            <el-table-column label="版本tag" width="100">
+            <el-table-column label="tag" width="92">
               <template #default="{ row }">
-                <span v-if="row.image_missing" class="miss" title="Harbor 缺该镜像，提交会被拦">⚠ 缺镜像</span>
+                <span v-if="row.image_missing" class="miss" title="Harbor 缺该镜像，提交会被拦">缺镜像</span>
                 <span v-else class="mono">{{ row.latest_tag || '—' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="配置" width="86">
+            <el-table-column label="域名" min-width="170">
+              <template #default="{ row }"><span class="mono ellip" :title="row.domain">{{ row.domain || '—' }}</span></template>
+            </el-table-column>
+            <el-table-column label="配置" width="80">
               <template #default="{ row }">
                 <el-button link type="primary" :disabled="!batch.templateId || !row.module_name.trim()" @click="openRowConfig(row)">
-                  {{ row.values_yaml ? '已改·配置' : '配置' }}
+                  {{ row.values_yaml ? '已改' : '配置' }}
                 </el-button>
               </template>
             </el-table-column>
-            <el-table-column label="校验" width="66">
+            <el-table-column label="校验" width="62">
               <template #default="{ row }">
                 <el-tag v-if="rowStatus(row.module_name)" :type="rowStatus(row.module_name).ok ? 'success' : 'danger'" size="small">
                   {{ rowStatus(row.module_name).ok ? '通过' : '失败' }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="" width="40">
+            <el-table-column label="" width="38">
               <template #default="{ $index }"><el-button link type="danger" @click="batch.rows.splice($index, 1)">×</el-button></template>
             </el-table-column>
           </el-table>
-          <el-button link type="primary" @click="batch.rows.push({ module_name: '', namespace: nsOptions[0] || '' })">+ 加一行</el-button>
-          <span class="ns-hint">namespace 自动填默认，点开可选列表或手输；镜像仓库/tag 自动带出，「配置」可选（不配也自动派生）</span>
+          <el-button link type="primary" @click="batch.rows.push({ module_name: '', namespace: nsBatchSet || nsOptions[0] || '' })">+ 加一行</el-button>
+          <span class="ns-hint">Harbor项目/tag/域名 自动派生只读；缺镜像会被拦；「配置」可选（不配也自动派生）</span>
         </el-form-item>
         <el-form-item label="ArgoCD">
           <el-switch v-model="batch.disable" :active-value="true" :inactive-value="false" active-text="disable:true 安全预演" inactive-text="关闭=直接部署（默认）" />
@@ -256,6 +280,8 @@ const submitted = ref(null)
 const canPrefill = computed(() => envId.value && form.value.templateId && form.value.moduleName.trim())
 const imageMissing = ref(false)
 const imageMissingMsg = ref('')
+// 预填后的镜像/域名短显示（Harbor项目/tag/域名），只读展示，避免看长串完整地址
+const imgPreview = ref(null) // { short, tag, domain }
 // 缺镜像时：helm 预览 + 确认提交都禁用
 const canPreview = computed(() => canPrefill.value && form.value.namespace.trim() && form.value.valuesYaml.trim() && !imageMissing.value)
 const canSubmit = computed(() => preview.value && (preview.value.helm_ok || preview.value.helm_skipped) && !imageMissing.value)
@@ -268,6 +294,7 @@ function openAdd() {
   cmTab.value = ''
   lastPrefilledName.value = ''
   nsOptionsSingle.value = []
+  imgPreview.value = null
   resetPreview()
   addDialog.value = true
 }
@@ -297,6 +324,7 @@ async function doPrefill() {
     if (!form.value.namespace) form.value.namespace = r.suggest_namespace || ''
     lastPrefilledName.value = form.value.moduleName.trim()
     resetPreview()
+    imgPreview.value = { short: r.image_short || '', tag: r.latest_tag || '', domain: r.domain || '' }
     imageMissing.value = !!r.image_missing
     imageMissingMsg.value = r.image_missing_msg || ''
     if (imageMissing.value) ElMessage.warning('Harbor 缺少该镜像，请先同步后再新增')
@@ -400,29 +428,38 @@ function openBatch() {
 
 const nsOptions = ref([])
 
+const nsBatchSet = ref('')
+
+// namespace 批量设：一键把上面选的 namespace 应用到所有行
+function applyNsToAll() {
+  if (!nsBatchSet.value) return
+  batch.value.rows.forEach(r => { r.namespace = nsBatchSet.value })
+}
+
 async function parsePaste() {
   const names = batch.value.paste.split('\n').map(s => s.trim()).filter(Boolean)
   if (!names.length) { batch.value.rows = []; return }
   let derived = null
-  try { derived = await api.deriveModules({ target_env_id: envId.value, module_names: names }) } catch { /* 派生失败不阻断，只是不带预览 */ }
+  try { derived = await api.deriveModules({ target_env_id: envId.value, template_id: batch.value.templateId, module_names: names }) } catch { /* 派生失败不阻断 */ }
   nsOptions.value = derived?.namespaces || []
   const defNs = derived?.default_namespace || (envs.value.find(e => e.id === envId.value)?.name || '')
+  nsBatchSet.value = defNs
   const dmap = {}
   ;(derived?.modules || []).forEach(m => { dmap[m.module_name] = m })
   batch.value.rows = names.map(n => {
     const d = dmap[n] || {}
-    return { module_name: n, namespace: defNs, image_repository: d.image_repository || '', latest_tag: d.latest_tag || '', image_missing: !!d.image_missing, domain: d.domain || '' }
+    return { module_name: n, namespace: defNs, image_short: d.image_short || '', latest_tag: d.latest_tag || '', image_missing: !!d.image_missing, domain: d.domain || '' }
   })
   resetBatch()
 }
 
-// 编辑某行模块名后重新派生该行的镜像仓库/tag/域名
+// 编辑某行模块名后重新派生该行的镜像/tag/域名
 async function deriveRow(row) {
   const name = (row.module_name || '').trim()
   if (!name || !envId.value) return
   try {
-    const d = (await api.deriveModules({ target_env_id: envId.value, module_names: [name] }))?.modules?.[0] || {}
-    row.image_repository = d.image_repository || ''
+    const d = (await api.deriveModules({ target_env_id: envId.value, template_id: batch.value.templateId, module_names: [name] }))?.modules?.[0] || {}
+    row.image_short = d.image_short || ''
     row.latest_tag = d.latest_tag || ''
     row.image_missing = !!d.image_missing
     row.domain = d.domain || ''
@@ -482,6 +519,11 @@ onMounted(async () => {
 .mono { font-family: var(--mono, monospace); font-size: 12px; }
 .ellip { display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .miss { color: #dc2626; font-weight: 600; }
+.img-preview { display: flex; gap: 22px; flex-wrap: wrap; align-items: center; padding: 8px 12px; background: var(--el-fill-color-light); border-radius: 6px; }
+.ip-cell { display: inline-flex; align-items: center; gap: 8px; }
+.ip-k { color: #909399; font-size: 12px; }
+.ip-cell code { background: var(--el-fill-color); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+.ip-none { color: #c0c4cc; font-size: 12px; }
 .submitted { margin: 10px 0 0 110px; }
 .cm-block { margin-top: 12px; }
 .cm-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; color: var(--el-color-primary); }

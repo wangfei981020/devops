@@ -105,6 +105,23 @@ func ApplyEnvIngress(content []byte, gatewayName string) ([]byte, error) {
 	return encodeYAML(&root)
 }
 
+// IngressEnabled 判断 values 是否开了对外访问：有 ingressGateway 且 enabled 不为 "false" → true。
+// (前端模板一般 enabled:true；后端配了 ingressGateway 也算；无 ingressGateway → false)
+func IngressEnabled(content []byte) bool {
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil || len(root.Content) == 0 {
+		return false
+	}
+	ig, err := findMappingKey(root.Content[0], "ingressGateway")
+	if err != nil || ig.Kind != yaml.MappingNode {
+		return false // 没有 ingressGateway
+	}
+	if en, e := findMappingKey(root.Content[0], "ingressGateway", "enabled"); e == nil {
+		return strings.TrimSpace(en.Value) != "false"
+	}
+	return true // 有 ingressGateway 但没写 enabled → 视为开
+}
+
 // SetIngressHost 把 ingressGateway.host 设成 [host]（预填自动带出访问域名用）。
 // 只在存在 ingressGateway.host 时生效；host 为空则清空（保持原"域名默认空"行为）。
 func SetIngressHost(content []byte, host string) []byte {

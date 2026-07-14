@@ -14,46 +14,178 @@ import (
 	"opsplatform-deploy-backend/services"
 )
 
-// 新增模块真部署后，跟发布一样轮询新模块的 ArgoCD app 到 Synced+Healthy，结果写进 orchestration_task。
+// 新增模块真部署后，跟发布一样轮询新模块的 ArgoCD app 到 Synced+Healthy，结果写进 orchestration_task；
+// 真部署有结果(成功/失败)时发 Lark(复用发布卡片，标题"新增模块")。预演/未开自动同步不发。
 //
-// 跟普通发布不同：新增比发布多一层 app-of-apps——git 提交后，根 app 要先同步、把这个新 Application
-// 生成出来，再等它起来。所以流程是：best-effort 触发根 app 同步 → 等子 app 出现 → 同步子 app + 轮询到稳定。
+// 比普通发布多一层 app-of-apps：git 提交后，根 app 要先同步生成子 Application，再等它起来。
 
-// deployAndPollNewModule 在 git 提交成功后调用（disable=false 真部署时）。start 是整个任务起点，用于算总耗时。
-func deployAndPollNewModule(taskID, envID int64, moduleName, namespace string, start time.Time) {
+// newModDeploy 一个待轮询部署的新模块。
+type newModDeploy struct {
+	Module    string
+	Namespace string
+	Version   string // image.tag，用于 Lark 卡片版本号
+	App       string // ArgoCD app 名
+}
+
+// ---------- 单个 ----------
+
+func deployAndPollNewModule(taskID, envID int64, operator, moduleName, namespace, version string, start time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 	defer cancel()
-
 	p, err := LoadProjectEnvDecrypted(envID)
 	if err != nil {
 		finishOrchTask(taskID, "success", "已提交（环境信息加载失败，无法自动跟踪部署状态，请到 ArgoCD 查看）", nil, dur(start))
 		return
 	}
 	gs := getGitService()
-	suffix := gs.ResolveAppNameSuffix(p.Name, p.ChartBasePath)
-	appName := strings.ToLower(moduleName) + "-" + suffix
+	appName := strings.ToLower(moduleName) + "-" + gs.ResolveAppNameSuffix(p.Name, p.ChartBasePath)
 	setOrchTaskApp(taskID, appName, namespace)
 
-	argoURL, argoToken, aerr := ResolveArgocdForEnv(p)
-	if aerr != nil || argoURL == "" {
-		finishOrchTask(taskID, "success", "已提交（未配置 ArgoCD，无法自动跟踪部署状态）", nil, dur(start))
+	client, skipNote := argocdClientForDeploy(p)
+	if client == nil {
+		finishOrchTask(taskID, "success", skipNote, nil, dur(start)) // 无 argocd/未开自动同步 → 已提交，不发 Lark
 		return
 	}
-	if p.AutoSync != 1 {
-		finishOrchTask(taskID, "success",
-			"已提交，该环境未开自动同步——请到 ArgoCD 手动同步，或点「重试」触发部署", nil, dur(start))
-		return
-	}
-	client := services.NewArgocdClient(argoURL, argoToken)
-	pollModuleApp(ctx, client, p, appName, taskID, start, true)
+	m := newModDeploy{Module: moduleName, Namespace: namespace, Version: version, App: appName}
+	pollAndFinishModule(ctx, client, p, taskID, operator, m, start, true)
 }
 
-// pollModuleApp 触发 + 轮询单个模块 app 到稳定，渐进式写 argocd_results，终态写状态。
-//
-//	waitAppear=true：先 best-effort 触发根 app 同步 + 等子 app 出现（新增场景，app 可能还没生成）。
-//	                 重试时也用 true（可能上次根没同步出来）。
-func pollModuleApp(ctx context.Context, client *services.ArgocdClient, p *models.ProjectEnv, appName string, taskID int64, start time.Time, waitAppear bool) {
+// argocdClientForDeploy 返回可跟踪部署的 argocd client；不满足(无配置/未开自动同步)返回 nil + 说明。
+func argocdClientForDeploy(p *models.ProjectEnv) (*services.ArgocdClient, string) {
+	argoURL, argoToken, aerr := ResolveArgocdForEnv(p)
+	if aerr != nil || argoURL == "" {
+		return nil, "已提交（未配置 ArgoCD，无法自动跟踪部署状态）"
+	}
+	if p.AutoSync != 1 {
+		return nil, "已提交，该环境未开自动同步——请到 ArgoCD 手动同步，或点「重试」触发部署"
+	}
+	return services.NewArgocdClient(argoURL, argoToken), ""
+}
+
+// pollAndFinishModule 触发+轮询单模块到稳定，写任务终态 + 发 Lark(真部署结果)。
+func pollAndFinishModule(ctx context.Context, client *services.ArgocdClient, p *models.ProjectEnv, taskID int64, operator string, m newModDeploy, start time.Time, waitAppear bool) {
+	setOrchTaskArgocd(taskID, marshalJSON([]models.ArgocdAppResult{{
+		App: m.App, SyncStatus: "Syncing", Health: "Progressing",
+		Msg: "正在触发同步 / 等待 ArgoCD 生成 Application", LastPolledAt: time.Now(),
+	}}))
+	if waitAppear {
+		syncRootApp(ctx, client, p.Name)
+		if !waitAppAppear(ctx, client, m.App, 3*time.Minute) {
+			msg := "失败 · 等待 ArgoCD 生成 Application 超时（请检查 app-of-apps 根应用是否已同步）"
+			r := models.ArgocdAppResult{App: m.App, SyncStatus: "Failed", Msg: msg, DurationSec: dur(start), LastPolledAt: time.Now()}
+			finishOrchTask(taskID, "failed", msg, marshalJSON([]models.ArgocdAppResult{r}), dur(start))
+			log.Printf("⚠ [orch-fail] task=%d env=%s app=%s 等待 Application 超时", taskID, p.Name, m.App)
+			sendOrchNotify(p, operator, nil, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, FailMsg: msg}})
+			return
+		}
+	}
+	r := pollAppToStable(ctx, client, m.App, func(t *models.ArgocdAppResult) {
+		setOrchTaskArgocd(taskID, marshalJSON([]models.ArgocdAppResult{*t}))
+	})
+	ok := r != nil && strings.EqualFold(r.SyncStatus, "Synced") && strings.EqualFold(r.Health, "Healthy")
+	status, note := "success", "服务已部署（Synced + Healthy）"
+	if !ok {
+		status = "failed"
+		note = "服务部署未就绪"
+		if r != nil && r.Msg != "" {
+			note = "服务部署未就绪 · " + r.Msg
+		}
+		log.Printf("⚠ [orch-fail] task=%d env=%s app=%s 部署未就绪: %s", taskID, p.Name, m.App, note)
+	}
+	var results []models.ArgocdAppResult
+	if r != nil {
+		results = []models.ArgocdAppResult{*r}
+	}
+	finishOrchTask(taskID, status, note, marshalJSON(results), dur(start))
+	if ok {
+		sendOrchNotify(p, operator, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version}}, nil)
+	} else {
+		fm := ""
+		if r != nil {
+			fm = r.Msg
+		}
+		sendOrchNotify(p, operator, nil, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, FailMsg: fm}})
+	}
+}
+
+// ---------- 批量 ----------
+
+func deployAndPollBatch(taskID, envID int64, operator string, mods []newModDeploy, start time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+	p, err := LoadProjectEnvDecrypted(envID)
+	if err != nil {
+		finishOrchTask(taskID, "success", "已提交（环境信息加载失败，无法自动跟踪部署状态）", nil, dur(start))
+		return
+	}
+	gs := getGitService()
+	suffix := gs.ResolveAppNameSuffix(p.Name, p.ChartBasePath)
+	for i := range mods {
+		mods[i].App = strings.ToLower(mods[i].Module) + "-" + suffix
+	}
+	client, skipNote := argocdClientForDeploy(p)
+	if client == nil {
+		finishOrchTask(taskID, "success", skipNote, nil, dur(start))
+		return
+	}
+	// 根同步一次生成所有子 Application
+	syncRootApp(ctx, client, p.Name)
+
 	_, interval, timeoutMin := loadPollCfg()
+	limit := 8
+	// 每个模块并发：等 app 出现 → 轮询到稳定
+	results := services.RunBoundedConcurrent(ctx, mods, limit,
+		func(c context.Context, m newModDeploy, publish func(models.ArgocdAppResult)) models.ArgocdAppResult {
+			publish(models.ArgocdAppResult{App: m.App, SyncStatus: "Syncing", Health: "Progressing", Msg: "等待 ArgoCD 生成 Application", LastPolledAt: time.Now()})
+			if !waitAppAppear(c, client, m.App, 3*time.Minute) {
+				return models.ArgocdAppResult{App: m.App, SyncStatus: "Failed", Msg: "失败 · 等待 Application 生成超时", LastPolledAt: time.Now()}
+			}
+			return *pollAppToStableCfg(c, client, m.App, interval, timeoutMin, func(t *models.ArgocdAppResult) { publish(*t) })
+		},
+		func(_ int, snapshot []models.ArgocdAppResult) { setOrchTaskArgocd(taskID, marshalJSON(snapshot)) },
+	)
+
+	// 聚合 + Lark（拆成功/失败两组）
+	var successes, faileds []deployNotifyItem
+	okN := 0
+	for i, r := range results {
+		item := deployNotifyItem{Module: mods[i].Module, Namespace: mods[i].Namespace, ToTag: mods[i].Version}
+		if strings.EqualFold(r.SyncStatus, "Synced") && strings.EqualFold(r.Health, "Healthy") {
+			successes = append(successes, item)
+			okN++
+		} else {
+			item.FailMsg = r.Msg
+			faileds = append(faileds, item)
+		}
+	}
+	status, note := "success", fmt.Sprintf("%d 个模块已部署", okN)
+	if okN == 0 {
+		status, note = "failed", "所有模块部署未就绪"
+	} else if okN < len(mods) {
+		status, note = "failed", fmt.Sprintf("%d/%d 个模块部署未就绪", len(mods)-okN, len(mods))
+	}
+	if status != "success" {
+		log.Printf("⚠ [orch-fail] task=%d env=%s 批量部署: %s", taskID, p.Name, note)
+	}
+	finishOrchTask(taskID, status, note, marshalJSON(results), dur(start))
+	sendOrchNotify(p, operator, successes, faileds)
+}
+
+// ---------- 共用轮询原语 ----------
+
+func syncRootApp(ctx context.Context, client *services.ArgocdClient, envName string) {
+	rootApp := strings.ToLower(envName) + "-apps" // app-of-apps 根 app 名约定 <env>-apps
+	c, cancel := context.WithTimeout(ctx, 20*time.Second)
+	_ = client.Sync(c, rootApp) // best-effort，失败(名字不对/已自动同步)不影响
+	cancel()
+}
+
+func pollAppToStable(ctx context.Context, client *services.ArgocdClient, appName string, onTick func(*models.ArgocdAppResult)) *models.ArgocdAppResult {
+	_, interval, timeoutMin := loadPollCfg()
+	return pollAppToStableCfg(ctx, client, appName, interval, timeoutMin, onTick)
+}
+
+func pollAppToStableCfg(ctx context.Context, client *services.ArgocdClient, appName string, interval, timeoutMin int, onTick func(*models.ArgocdAppResult)) *models.ArgocdAppResult {
 	if interval <= 0 {
 		interval = 10
 	}
@@ -64,57 +196,13 @@ func pollModuleApp(ctx context.Context, client *services.ArgocdClient, p *models
 	if ticks < 1 {
 		ticks = 1
 	}
-	publish := func(r *models.ArgocdAppResult) {
-		setOrchTaskArgocd(taskID, marshalJSON([]models.ArgocdAppResult{*r}))
-	}
-	publish(&models.ArgocdAppResult{
-		App: appName, SyncStatus: "Syncing", Health: "Progressing",
-		Msg: "正在触发同步 / 等待 ArgoCD 生成 Application", LastPolledAt: time.Now(),
-	})
-
-	if waitAppear {
-		// best-effort 触发 app-of-apps 根同步，让新 Application 尽快生成（根 app 名约定 <env>-apps）
-		rootApp := strings.ToLower(p.Name) + "-apps"
-		sctx, scancel := context.WithTimeout(ctx, 20*time.Second)
-		_ = client.Sync(sctx, rootApp)
-		scancel()
-		// 等子 app 在 ArgoCD 出现
-		if !waitAppAppear(ctx, client, appName, 3*time.Minute) {
-			log.Printf("⚠ [orch-fail] task=%d env=%s app=%s 等待 ArgoCD 生成 Application 超时", taskID, p.Name, appName)
-			r := models.ArgocdAppResult{
-				App: appName, SyncStatus: "Failed",
-				Msg:          "失败 · 等待 ArgoCD 生成 Application 超时（请检查 app-of-apps 根应用是否已同步）",
-				DurationSec:  dur(start), LastPolledAt: time.Now(),
-			}
-			finishOrchTask(taskID, "failed", r.Msg, marshalJSON([]models.ArgocdAppResult{r}), dur(start))
-			return
-		}
-	}
-
-	// 触发子 app 同步 + 轮询到稳定（用发布同款动态稳定窗口 + 超时）
 	syncStartedAt := time.Now()
 	_ = client.Sync(ctx, appName)
 	select {
 	case <-time.After(2 * time.Second):
 	case <-ctx.Done():
 	}
-	r := services.PollUntilStable(ctx, client, appName, interval, timeoutMin*60, syncStartedAt, ticks,
-		func(t *models.ArgocdAppResult) { publish(t) })
-
-	status, note := "success", "服务已部署（Synced + Healthy）"
-	if r == nil || !(strings.EqualFold(r.SyncStatus, "Synced") && strings.EqualFold(r.Health, "Healthy")) {
-		status = "failed"
-		note = "服务部署未就绪"
-		if r != nil && r.Msg != "" {
-			note = "服务部署未就绪 · " + r.Msg
-		}
-		log.Printf("⚠ [orch-fail] task=%d env=%s app=%s 部署未就绪: %s", taskID, p.Name, appName, note)
-	}
-	var results []models.ArgocdAppResult
-	if r != nil {
-		results = []models.ArgocdAppResult{*r}
-	}
-	finishOrchTask(taskID, status, note, marshalJSON(results), dur(start))
+	return services.PollUntilStable(ctx, client, appName, interval, timeoutMin*60, syncStartedAt, ticks, onTick)
 }
 
 // waitAppAppear 轮询直到 ArgoCD 里该 app 出现（app-of-apps 生成它需要点时间）。
@@ -138,15 +226,57 @@ func waitAppAppear(ctx context.Context, client *services.ArgocdClient, appName s
 
 func dur(start time.Time) int { return int(time.Since(start).Seconds()) }
 
+// ---------- Lark（复用发布卡片，标题"新增模块"）----------
+
+func sendOrchNotify(p *models.ProjectEnv, operator string, successes, faileds []deployNotifyItem) {
+	if len(successes) == 0 && len(faileds) == 0 {
+		return
+	}
+	webhook, secret := resolveLarkTarget(p)
+	if webhook == "" {
+		return
+	}
+	atID := LookupContactLarkID(operator)
+	linkLabel, linkURL := "", ""
+	if u := orchDetailURL(); u != "" {
+		linkLabel, linkURL = "查看新增历史", u
+	}
+	send := func(kind string, items []deployNotifyItem) {
+		if len(items) == 0 {
+			return
+		}
+		title, color, body := buildDeployNotifyBody("新增模块", operator, atID, kind, p.Name, p.EnvType, items)
+		c, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		if err := services.SendLarkCardWithRetry(c, webhook, secret, title, body, color, linkLabel, linkURL); err != nil {
+			log.Printf("orch lark send failed: env=%s kind=%s err=%v", p.Name, kind, err)
+		}
+		cancel()
+	}
+	send("success", successes)
+	send("fail", faileds)
+}
+
+func orchDetailURL() string {
+	var base string
+	_ = database.DB.QueryRow(`SELECT IFNULL(deploy_center_base_url,'') FROM global_config WHERE id=1`).Scan(&base)
+	base = strings.TrimRight(base, "/")
+	if base == "" {
+		return ""
+	}
+	return base + "/orchestration-history"
+}
+
+// ---------- 重试 ----------
+
 // HandleRetryOrchTask POST /api/orchestration/tasks/{id}/retry —— 手动重新触发 ArgoCD 同步 + 轮询。
 func HandleRetryOrchTask(w http.ResponseWriter, r *http.Request) {
 	id := ParseID(mux.Vars(r)["id"])
 	var t orchTaskRow
 	var disable int
 	err := database.DB.QueryRow(
-		`SELECT id, project_env_id, module_name, kind, disable, IFNULL(app_name,''), IFNULL(namespace,'')
+		`SELECT id, project_env_id, module_name, kind, disable, IFNULL(app_name,''), IFNULL(namespace,''), IFNULL(operator,'')
 		   FROM orchestration_task WHERE id=?`, id).
-		Scan(&t.ID, &t.ProjectEnvID, &t.ModuleName, &t.Kind, &disable, &t.AppName, &t.Namespace)
+		Scan(&t.ID, &t.ProjectEnvID, &t.ModuleName, &t.Kind, &disable, &t.AppName, &t.Namespace, &t.Operator)
 	if err != nil {
 		JSONError(w, 40400, "任务不存在")
 		return
@@ -183,9 +313,8 @@ func HandleRetryOrchTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	appName := t.AppName
-	if appName == "" { // 老任务没存 app 名 → 重新推导
-		gs := getGitService()
-		appName = strings.ToLower(t.ModuleName) + "-" + gs.ResolveAppNameSuffix(p.Name, p.ChartBasePath)
+	if appName == "" {
+		appName = strings.ToLower(t.ModuleName) + "-" + getGitService().ResolveAppNameSuffix(p.Name, p.ChartBasePath)
 	}
 	resetOrchTaskForRetry(t.ID)
 	InflightTrack(func() {
@@ -195,7 +324,8 @@ func HandleRetryOrchTask(w http.ResponseWriter, r *http.Request) {
 		RegisterCancel(t.ID, cancel)
 		defer UnregisterCancel(t.ID)
 		client := services.NewArgocdClient(argoURL, argoToken)
-		pollModuleApp(ctx, client, p, appName, t.ID, start, true)
+		m := newModDeploy{Module: t.ModuleName, Namespace: t.Namespace, App: appName}
+		pollAndFinishModule(ctx, client, p, t.ID, t.Operator, m, start, true)
 	})
 	Audit(r, "orchestration.task_retry", "orchestration_task", fmt.Sprintf("%d", t.ID), map[string]interface{}{"app": appName})
 	JSONSuccess(w, map[string]interface{}{"task_id": t.ID, "status": "pending"})
