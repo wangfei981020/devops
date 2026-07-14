@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"opsplatform-deploy-backend/database"
@@ -77,12 +79,74 @@ type orchTaskRow struct {
 	CreatedAt     time.Time                `json:"created_at"`
 }
 
-// HandleListOrchTasks GET /api/orchestration/tasks —— 新增历史列表（最近 200 条，按环境权限过滤）。
+// HandleListOrchTasks GET /api/orchestration/tasks —— 新增历史列表（筛选 + 分页 + 环境权限）。
+//
+//	参数：env(env_name 精确) / kind(single|batch) / status(pending|success|failed) /
+//	  operator(模糊) / module(module_name 模糊) / time_from / time_to / page / page_size。
+//	权限：非 admin 按 AllowedEnvIDs 过滤（project_env_id IN，挪进 SQL——替代旧的"取 200 条内存逐条过滤"，
+//	  否则分页 total 会不准）。返回 {list, total}。
 func HandleListOrchTasks(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	where := " WHERE 1=1"
+	var args []interface{}
+	if v := strings.TrimSpace(q.Get("env")); v != "" {
+		where += " AND env_name = ?"
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(q.Get("kind")); v != "" {
+		where += " AND kind = ?"
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(q.Get("status")); v != "" {
+		where += " AND status = ?"
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(q.Get("operator")); v != "" {
+		where += " AND operator LIKE ?"
+		args = append(args, "%"+v+"%")
+	}
+	if v := strings.TrimSpace(q.Get("module")); v != "" {
+		where += " AND module_name LIKE ?"
+		args = append(args, "%"+v+"%")
+	}
+	if v := strings.TrimSpace(q.Get("time_from")); v != "" {
+		where += " AND created_at >= ?"
+		args = append(args, v)
+	}
+	if v := strings.TrimSpace(q.Get("time_to")); v != "" {
+		where += " AND created_at <= ?"
+		args = append(args, v)
+	}
+	// 环境权限：非 admin 只看 AllowedEnvIDs（enforce=false 时是 admin，不加过滤）
+	if ids, enforce := AllowedEnvIDs(r); enforce {
+		if len(ids) == 0 {
+			JSONSuccess(w, map[string]interface{}{"list": []orchTaskRow{}, "total": 0})
+			return
+		}
+		ph := strings.Repeat("?,", len(ids))
+		where += " AND project_env_id IN (" + ph[:len(ph)-1] + ")"
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+
+	page, _ := strconv.Atoi(q.Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(q.Get("page_size"))
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 20
+	}
+
+	var total int64
+	_ = database.DB.QueryRow("SELECT COUNT(*) FROM orchestration_task"+where, args...).Scan(&total)
+
+	args2 := append(append([]interface{}{}, args...), pageSize, (page-1)*pageSize)
 	rows, err := database.DB.Query(`SELECT id, project_env_id, env_name, module_name, kind, operator, status,
 		IFNULL(commit_sha,''), IFNULL(commit_url,''), IFNULL(error_msg,''), IFNULL(argocd_results,''),
 		duration_sec, disable, IFNULL(app_name,''), IFNULL(namespace,''), created_at
-		FROM orchestration_task ORDER BY id DESC LIMIT 200`)
+		FROM orchestration_task`+where+` ORDER BY id DESC LIMIT ? OFFSET ?`, args2...)
 	if err != nil {
 		InternalErr(w, r, err)
 		return
@@ -98,9 +162,6 @@ func HandleListOrchTasks(w http.ResponseWriter, r *http.Request) {
 			&t.DurationSec, &disable, &t.AppName, &t.Namespace, &t.CreatedAt); err != nil {
 			continue
 		}
-		if !IsEnvIDAllowed(r, t.ProjectEnvID) {
-			continue
-		}
 		t.Disable = disable == 1
 		_ = jsonUnmarshalImpl([]byte(argoRaw), &t.ArgocdResults)
 		if t.ArgocdResults == nil {
@@ -108,5 +169,5 @@ func HandleListOrchTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		list = append(list, t)
 	}
-	JSONSuccess(w, map[string]interface{}{"list": list})
+	JSONSuccess(w, map[string]interface{}{"list": list, "total": total})
 }

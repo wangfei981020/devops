@@ -13,7 +13,14 @@
       </div>
     </div>
 
-    <el-table :data="modules" border stripe v-loading="loadingMods" empty-text="选择环境后显示其模块（新增的模块提交后会被扫描进来）">
+    <div v-if="envId" class="mod-filter">
+      <el-input v-model="modQuery" placeholder="搜索模块名 / 镜像 / namespace" clearable style="width:300px" @input="modPage = 1">
+        <template #prefix><el-icon><Search /></el-icon></template>
+      </el-input>
+      <span class="mod-count">共 {{ filteredModules.length }} 个模块</span>
+    </div>
+
+    <el-table :data="pagedModules" border stripe v-loading="loadingMods" empty-text="选择环境后显示其模块（新增的模块提交后会被扫描进来）">
       <el-table-column label="模块" prop="name" min-width="260" />
       <el-table-column label="镜像仓库" prop="image_repository" min-width="240" show-overflow-tooltip />
       <el-table-column label="当前 tag" prop="current_tag" min-width="180" show-overflow-tooltip />
@@ -26,6 +33,12 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <div v-if="filteredModules.length" class="pager-bar">
+      <el-pagination background layout="total, sizes, prev, pager, next"
+        :total="filteredModules.length" :page-size="modPageSize" :current-page="modPage" :page-sizes="[10, 20, 50, 100]"
+        @size-change="s => { modPageSize = s; modPage = 1 }" @current-change="p => modPage = p" />
+    </div>
 
     <!-- 新增模块弹窗 -->
     <el-dialog v-model="addDialog" title="新增模块" width="820px" :close-on-click-modal="false" top="5vh">
@@ -235,7 +248,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import * as api from '../api'
 import ValuesEditor from '../components/ValuesEditor.vue'
 import CodeEditor from '../components/CodeEditor.vue'
-import { CircleCloseFilled } from '@element-plus/icons-vue'
+import { CircleCloseFilled, Search } from '@element-plus/icons-vue'
 
 const router = useRouter()
 
@@ -251,12 +264,30 @@ const envId = ref(null)
 const modules = ref([])
 const loadingMods = ref(false)
 
+// 模块列表：本地搜索 + 分页（modules 一次性拿全，前端过滤/切页；默认 10 条/页）
+const modQuery = ref('')
+const modPage = ref(1)
+const modPageSize = ref(10)
+const filteredModules = computed(() => {
+  const q = modQuery.value.trim().toLowerCase()
+  if (!q) return modules.value
+  return modules.value.filter(m =>
+    (m.name || '').toLowerCase().includes(q) ||
+    (m.image_repository || '').toLowerCase().includes(q) ||
+    (m.namespace || '').toLowerCase().includes(q))
+})
+const pagedModules = computed(() => {
+  const s = (modPage.value - 1) * modPageSize.value
+  return filteredModules.value.slice(s, s + modPageSize.value)
+})
+
 const curEnvLabel = computed(() => {
   const e = envs.value.find(x => x.id === envId.value)
   return e ? `${e.name}（${e.env_type}）` : ''
 })
 
 async function loadModules() {
+  modQuery.value = ''; modPage.value = 1 // 切环境重置搜索/翻页
   if (!envId.value) { modules.value = []; return }
   loadingMods.value = true
   try { modules.value = (await api.listModules(envId.value)) || [] }
@@ -514,6 +545,9 @@ onMounted(async () => {
 .changed-title { font-weight: 600; margin: 8px 0 4px; }
 .changed { margin: 0; padding-left: 18px; }
 .changed code { font-size: 12px; }
+.mod-filter { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.mod-count { color: #909399; font-size: 13px; }
+.pager-bar { display: flex; justify-content: flex-end; margin-top: 14px; }
 .hint { color: #909399; font-size: 12px; margin-top: 6px; }
 .ns-hint { color: #909399; font-size: 12px; margin-left: 10px; }
 .mono { font-family: var(--mono, monospace); font-size: 12px; }

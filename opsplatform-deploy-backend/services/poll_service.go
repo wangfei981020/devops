@@ -43,6 +43,7 @@ func PollUntilStable(
 		stabilityTicks = 1
 	}
 	consecutiveOK := 0
+	lastHpaHint := "" // v155(B+C): 最近一次核对到的 HPA 暂态提示，判成功时带进 Msg
 	start := time.Now()
 	// 双 deadline 设计（取代旧的固定 deadline）：
 	//   - deadline：动态软 deadline，初始 = timeoutSec；每次 ready 数推进续 60s（最多到 hardDeadline）
@@ -88,6 +89,11 @@ func PollUntilStable(
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			// v155(B+C) 到点回光：超时判败前再核对一次核心资源，已 Healthy 就判成功
+			// （救掉"到点前一刻工作负载才就绪、或只被 HPA 暂态拖住"的误报）。
+			if pass := tryLastMinutePass(ctx, client, appName, start); pass != nil {
+				return pass
+			}
 			msg := "失败 · 等待服务部署完成超时（请到对应平台检查 Pod 状态）"
 			if lastReadyCount > 0 {
 				// 之前推进过 → 多半是中途停滞
@@ -132,10 +138,22 @@ func PollUntilStable(
 			// v132: 不再强求 SyncStatus=="Synced"。挂 HPA 的服务 live 副本数会被 HPA 改得跟
 			// git 不一致 → ArgoCD 永久 OutOfSync，但本次 sync 操作其实已 Succeeded、工作负载也
 			// Healthy，发布是成功的。强求 Synced 会把这类服务永远判失败（见 #1422 gateway 误判）。
-			// 成功判据收敛为：我们这次操作已起 + 操作 Succeeded（或无操作态）+ 工作负载 Healthy。
-			isStableTick = ourOpStarted &&
-				st.Health == "Healthy" &&
-				(st.OperationPhase == "" || st.OperationPhase == "Succeeded")
+			opOK := st.OperationPhase == "" || st.OperationPhase == "Succeeded"
+			// v155(B+C): 成功判据从「app 级聚合 health」下沉到「核心资源」。
+			// app 级 Health 会被 HPA 启动期暂态(FailedGetScale 找不到 deployment /
+			// FailedGetResourceMetric 拿不到指标)拖成非 Healthy，导致工作负载其实已就绪却永远
+			// 凑不满稳定窗口、最终超时误判失败。
+			//   快路径：app 级已 Healthy → 直接算稳定（零额外开销）。
+			//   慢路径：app 非 Healthy 但本次操作已成功 → 拉资源树核对「核心工作负载/网络资源」；
+			//     核心全 Healthy 就算稳定，HPA 等附属的暂态只拼提示(lastHpaHint)、不否决成功。
+			if ourOpStarted && opOK {
+				if st.Health == "Healthy" {
+					isStableTick = true
+				} else if coreHealthy, coreDegraded, hint, treeOK := evaluateCoreHealth(ctx, client, appName); treeOK && coreHealthy && !coreDegraded {
+					isStableTick = true
+					lastHpaHint = hint
+				}
+			}
 		}
 
 		// 上报当前 tick 状态（无论查询成功或失败），让上层能够实时看到状态推进
@@ -297,6 +315,10 @@ func PollUntilStable(
 				// 才算停滞；lastReadyCount==total 是"已全部就绪=完成"，不是停滞 —— 修 5/5 误判
 				// （HPA 服务全就绪却因 OutOfSync 凑不满稳定窗口，被当成"剩余 pod 起不来"砍掉）。
 				if lastReadyCount > 0 && lastReadyCount < total && now.Sub(lastProgressAt) >= stagnantTimeout {
+					// v155(B+C) 停滞判败前也回光一判：核心资源已 Healthy 就判成功
+					if pass := tryLastMinutePass(ctx, client, appName, start); pass != nil {
+						return pass
+					}
 					stagnantMsg := "失败 · 进度停滞 " + strconv.Itoa(int(stagnantTimeout/time.Minute)) +
 						" 分钟（当前 " + strconv.Itoa(lastReadyCount) + "/" + strconv.Itoa(total) +
 						" pod 就绪，剩余 pod 起不来）"
@@ -325,12 +347,15 @@ func PollUntilStable(
 					// v132: 归一为 "Synced"。此刻真实 SyncStatus 可能是 OutOfSync（HPA 漂移），
 					// 但本次发布判定为成功，统一回 Synced 让下游分类（通知/整体状态：
 					// deploy_service okCount + notify_builder）一致认成功，避免"判成功但通知失败"。
+					// v155(B+C): Health 归一 "Healthy"（判成功=核心资源健康；此刻 st.Health 可能被
+					// HPA 暂态拖成 Degraded，直接透传会让 UI 出现"Synced/Degraded/已就绪"的矛盾）。
+					// Msg 带上 HPA 暂态提示（无则空）。
 					return &models.ArgocdAppResult{
 						App:          appName,
 						SyncStatus:   "Synced",
-						Health:       st.Health,
+						Health:       "Healthy",
 						DurationSec:  int(time.Since(start).Seconds()),
-						Msg:          "",
+						Msg:          lastHpaHint,
 						LastPolledAt: time.Now(),
 					}
 				}
@@ -471,6 +496,87 @@ func isActiveRSPodsAllHealthy(ctx context.Context, client *ArgocdClient, appName
 		}
 	}
 	return true
+}
+
+// evaluateCoreHealth 拉资源树，判定「核心资源」是否全 Healthy，并识别 HPA 暂态提示（v155 B+C）。
+//
+//	核心资源（决定成功/失败）：Deployment / StatefulSet / DaemonSet / Ingress。
+//	  - 工作负载(Deploy/STS/DS)：必须至少出现一个、且全部 Healthy。
+//	  - Ingress：有 health 且非 Healthy 才算未就绪（很多环境 Ingress 无 health，空则不阻塞）。
+//	  - Service：ArgoCD 通常不给 health，跳过（不阻塞）。
+//	附属资源 HorizontalPodAutoscaler：非核心，其 Degraded/Progressing 不否决成功；仅当它非
+//	  Healthy 时按 HealthMsg 里有没有 "metric" 拼一句提示（FailedGetResourceMetric→指标待就位；
+//	  FailedGetScale 等→待生效）。
+//
+// 返回：
+//
+//	coreHealthy  核心工作负载/网络资源都就绪（判成功的主依据）
+//	coreDegraded 核心资源里有 Degraded（真失败信号，回光时不放行）
+//	hpaHint      HPA 暂态提示文案（无则空）
+//	ok           资源树拉取成功（false 时调用方应忽略本次核对、按原路径走）
+func evaluateCoreHealth(ctx context.Context, client *ArgocdClient, appName string) (coreHealthy, coreDegraded bool, hpaHint string, ok bool) {
+	qctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	nodes, err := client.GetAppResourceTree(qctx, appName)
+	if err != nil || len(nodes) == 0 {
+		return false, false, "", false
+	}
+	workloadSeen := false
+	workloadAllHealthy := true
+	for _, n := range nodes {
+		switch n.Kind {
+		case "Deployment", "StatefulSet", "DaemonSet":
+			workloadSeen = true
+			if n.Health != "Healthy" {
+				workloadAllHealthy = false
+			}
+			if n.Health == "Degraded" {
+				coreDegraded = true
+			}
+		case "Ingress":
+			if n.Health != "" && n.Health != "Healthy" {
+				workloadAllHealthy = false
+				if n.Health == "Degraded" {
+					coreDegraded = true
+				}
+			}
+		case "HorizontalPodAutoscaler":
+			if n.Health != "" && n.Health != "Healthy" {
+				hpaHint = hpaHintFromMsg(n.HealthMsg)
+			}
+		}
+	}
+	coreHealthy = workloadSeen && workloadAllHealthy
+	return coreHealthy, coreDegraded, hpaHint, true
+}
+
+// hpaHintFromMsg 按 HPA 的 health.message 分两态提示（不出现"自愈"字样）。
+//
+//	含 metric（FailedGetResourceMetric：拿不到 CPU/内存指标）→ 指标待就位；
+//	其他（FailedGetScale 找不到伸缩目标等）→ 待生效。
+func hpaHintFromMsg(msg string) string {
+	if strings.Contains(strings.ToLower(msg), "metric") {
+		return "已就绪 · HPA 指标待就位"
+	}
+	return "已就绪 · HPA 待生效"
+}
+
+// tryLastMinutePass 到点回光（v155 B+C）：超时/停滞判败前调它，核心资源已 Healthy 就返回成功结果，
+// 否则返回 nil（让调用方继续走原判败逻辑）。核心资源有 Degraded（真坏）时不放行。
+func tryLastMinutePass(ctx context.Context, client *ArgocdClient, appName string, start time.Time) *models.ArgocdAppResult {
+	coreHealthy, coreDegraded, hint, ok := evaluateCoreHealth(ctx, client, appName)
+	if !ok || !coreHealthy || coreDegraded {
+		return nil
+	}
+	log.Printf("[poll] app=%s last-minute pass: core resources Healthy at deadline, treat as success (hpaHint=%q)", appName, hint)
+	return &models.ArgocdAppResult{
+		App:          appName,
+		SyncStatus:   "Synced",
+		Health:       "Healthy",
+		DurationSec:  int(time.Since(start).Seconds()),
+		Msg:          hint,
+		LastPolledAt: time.Now(),
+	}
 }
 
 // countPods 简单数下 nodes 里 Pod 节点总数（诊断日志用，看过滤前后差异）

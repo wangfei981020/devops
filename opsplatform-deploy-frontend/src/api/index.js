@@ -154,7 +154,7 @@ export const updateEnvHarbor = (id, harbor_project) => http.put(`/orchestration/
 export const updateEnvDomain = (id, domain_suffix) => http.put(`/orchestration/env-domain/${id}`, { domain_suffix })
 export const updateEnvNamespaces = (id, default_namespaces) => http.put(`/orchestration/env-namespaces/${id}`, { default_namespaces })
 export const deriveModules = (body) => http.post('/orchestration/derive', body)
-export const listOrchTasks = () => http.get('/orchestration/tasks')
+export const listOrchTasks = (params) => http.get('/orchestration/tasks', { params })
 export const retryOrchTask = (id) => http.post(`/orchestration/tasks/${id}/retry`)
 export const getOrchTaskPods = (id, app) => http.get(`/orchestration/tasks/${id}/pods`, { params: { app } })
 export const getOrchTaskPodLogs = (id, params) => http.get(`/orchestration/tasks/${id}/pod-logs`, { params })

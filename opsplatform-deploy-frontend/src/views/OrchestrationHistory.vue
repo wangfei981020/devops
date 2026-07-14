@@ -8,6 +8,28 @@
       <el-button :loading="loading" @click="load">刷新</el-button>
     </div>
 
+    <!-- 筛选栏（对齐发布历史）-->
+    <div class="filter-bar">
+      <el-select v-model="filter.env" placeholder="环境" clearable filterable style="width:150px">
+        <el-option v-for="n in envOptions" :key="n" :label="n" :value="n" />
+      </el-select>
+      <el-select v-model="filter.kind" placeholder="类型" clearable style="width:110px">
+        <el-option label="单个" value="single" />
+        <el-option label="批量" value="batch" />
+      </el-select>
+      <el-select v-model="filter.status" placeholder="状态" clearable style="width:120px">
+        <el-option label="进行中" value="pending" />
+        <el-option label="成功" value="success" />
+        <el-option label="失败" value="failed" />
+      </el-select>
+      <el-input v-model="filter.operator" placeholder="操作人" clearable style="width:130px" @keyup.enter="doSearch" />
+      <el-input v-model="filter.module" placeholder="模块名（模糊）" clearable style="width:200px" @keyup.enter="doSearch" />
+      <el-date-picker v-model="filter.time_from" type="datetime" placeholder="起始时间" value-format="YYYY-MM-DD HH:mm:ss" style="width:180px" />
+      <el-date-picker v-model="filter.time_to" type="datetime" placeholder="结束时间" value-format="YYYY-MM-DD HH:mm:ss" style="width:180px" />
+      <el-button type="primary" @click="doSearch">查询</el-button>
+      <el-button @click="doReset">重置</el-button>
+    </div>
+
     <el-table :data="list" border stripe v-loading="loading" row-key="id">
       <el-table-column type="expand">
         <template #default="{ row }">
@@ -53,6 +75,12 @@
       </template></el-table-column>
     </el-table>
 
+    <div class="pager-bar">
+      <el-pagination background layout="total, sizes, prev, pager, next"
+        :total="total" :page-size="pageSize" :current-page="page" :page-sizes="[10, 20, 50, 100]"
+        @size-change="onSizeChange" @current-change="onPageChange" />
+    </div>
+
     <!-- pod 日志弹窗 -->
     <el-dialog v-model="logDlg.show" :title="`Pod 日志 · ${logDlg.app}`" width="900px" :close-on-click-modal="false" top="6vh">
       <div class="log-bar">
@@ -78,6 +106,27 @@ const loading = ref(false)
 const retrying = reactive(new Set())
 let timer = null
 
+// 筛选 + 分页（对齐发布历史；默认 10 条/页）
+const filter = reactive({ env: '', kind: '', status: '', operator: '', module: '', time_from: '', time_to: '' })
+const envOptions = ref([])
+const page = ref(1)
+const pageSize = ref(10)
+const total = ref(0)
+
+function doSearch() { page.value = 1; load() }
+function doReset() {
+  Object.assign(filter, { env: '', kind: '', status: '', operator: '', module: '', time_from: '', time_to: '' })
+  page.value = 1
+  load()
+}
+function onSizeChange(s) { pageSize.value = s; page.value = 1; load() }
+function onPageChange(p) { page.value = p; load() }
+
+async function loadEnvs() {
+  const es = (await api.listProjectEnvs()) || []
+  envOptions.value = es.filter(e => e.git_repo !== undefined).map(e => e.name)
+}
+
 function fmtTime(t) { return t ? dayjs(t).format('YYYY-MM-DD HH:mm') : '—' }
 function statusLabel(s) { return { pending: '进行中', success: '成功', failed: '失败' }[s] || s }
 function statusType(s) { return { pending: '', success: 'success', failed: 'danger' }[s] || 'info' }
@@ -89,7 +138,18 @@ function canRetry(row) { return row.kind === 'single' && !row.disable && (row.st
 async function load() {
   loading.value = true
   try {
-    list.value = (await api.listOrchTasks())?.list || []
+    const params = { page: page.value, page_size: pageSize.value }
+    if (filter.env) params.env = filter.env
+    if (filter.kind) params.kind = filter.kind
+    if (filter.status) params.status = filter.status
+    if (filter.operator.trim()) params.operator = filter.operator.trim()
+    if (filter.module.trim()) params.module = filter.module.trim()
+    if (filter.time_from) params.time_from = filter.time_from
+    if (filter.time_to) params.time_to = filter.time_to
+    const r = await api.listOrchTasks(params)
+    list.value = r?.list || []
+    total.value = r?.total || 0
+    // 当前页有进行中的任务 → 用「当前筛选+当前页」轮询自动刷新到终态
     if (list.value.some(t => t.status === 'pending')) startPoll(); else stopPoll()
   } finally { loading.value = false }
 }
@@ -134,7 +194,7 @@ async function loadLogs() {
   } finally { logDlg.loading = false }
 }
 
-onMounted(load)
+onMounted(() => { loadEnvs(); load() })
 onUnmounted(stopPoll)
 </script>
 
@@ -142,6 +202,8 @@ onUnmounted(stopPoll)
 .oh-page { padding: 16px 20px; }
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; }
 .page-head h2 { margin: 0 0 4px; font-size: 18px; }
+.filter-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+.pager-bar { display: flex; justify-content: flex-end; margin-top: 14px; }
 .sub { color: #909399; font-size: 13px; margin: 0 0 16px; max-width: 900px; }
 .mono, code { font-family: var(--mono, monospace); font-size: 12.5px; }
 .commit { font-family: var(--mono, monospace); color: var(--el-color-primary); text-decoration: none; }

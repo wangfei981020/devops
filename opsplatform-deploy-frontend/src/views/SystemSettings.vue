@@ -323,7 +323,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="u in users" :key="u.id">
+              <tr v-for="u in pagedUsers" :key="u.id">
                 <td class="mono"><b>{{ u.username }}</b></td>
                 <td>{{ u.display_name || '—' }}</td>
                 <td>
@@ -348,6 +348,11 @@
               </tr>
             </tbody>
           </table>
+          <div v-if="authStore.isAdmin && users.length" class="pager-bar">
+            <el-pagination background layout="total, sizes, prev, pager, next"
+              :total="users.length" :page-size="usersPageSize" :current-page="usersPage" :page-sizes="[10, 20, 50, 100]"
+              @size-change="s => { usersPageSize = s; usersPage = 1 }" @current-change="p => usersPage = p" />
+          </div>
         </div>
       </div>
 
@@ -375,7 +380,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="c in contacts" :key="c.id">
+              <tr v-for="c in pagedContacts" :key="c.id">
                 <td class="mono"><b>{{ c.name }}</b></td>
                 <td class="mono">{{ c.lark_id || '—' }}</td>
                 <td>{{ c.remark || '—' }}</td>
@@ -389,6 +394,11 @@
               </tr>
             </tbody>
           </table>
+          <div v-if="contacts.length" class="pager-bar">
+            <el-pagination background layout="total, sizes, prev, pager, next"
+              :total="contacts.length" :page-size="contactsPageSize" :current-page="contactsPage" :page-sizes="[10, 20, 50, 100]"
+              @size-change="s => { contactsPageSize = s; contactsPage = 1 }" @current-change="p => contactsPage = p" />
+          </div>
         </div>
       </div>
 
@@ -957,6 +967,19 @@ const gc = reactive({
 })
 const users = ref([])
 const contacts = ref([])
+// 用户/通知人：本地分页（一次拿全，前端切页；默认 10 条/页）
+const usersPage = ref(1)
+const usersPageSize = ref(10)
+const pagedUsers = computed(() => {
+  const s = (usersPage.value - 1) * usersPageSize.value
+  return users.value.slice(s, s + usersPageSize.value)
+})
+const contactsPage = ref(1)
+const contactsPageSize = ref(10)
+const pagedContacts = computed(() => {
+  const s = (contactsPage.value - 1) * contactsPageSize.value
+  return contacts.value.slice(s, s + contactsPageSize.value)
+})
 const larkBots = ref([])
 const argoInstances = ref([])
 const gitlabRepos = ref([])
@@ -1150,6 +1173,7 @@ const userDlg = reactive({ vis: false, isEdit: false, editingID: null, form: { u
 async function loadUsers() {
   if (!authStore.isAdmin) return
   users.value = (await listUsers()) || []
+  usersPage.value = 1
 }
 function openUserCreate() {
   userDlg.isEdit = false; userDlg.editingID = null
@@ -1203,7 +1227,7 @@ const contactDlg = reactive({
   form: { name: '', lark_id: '', remark: '' },
   batchText: '',
 })
-async function loadContacts() { contacts.value = (await listContacts()) || [] }
+async function loadContacts() { contacts.value = (await listContacts()) || []; contactsPage.value = 1 }
 function openContactCreate() {
   contactDlg.isEdit = false; contactDlg.editingID = null
   contactDlg.mode = 'single'
@@ -1530,6 +1554,7 @@ onMounted(loadOverview)
 .tbl tr:hover td { background: var(--bg-hover); }
 .tbl .mono { font-family: var(--mono); font-size: 12px; }
 .tbl .empty-row { text-align: center; color: var(--text-3); padding: 40px 20px; font-size: 12.5px; }
+.pager-bar { display: flex; justify-content: flex-end; padding: 12px; }
 
 .add-btn { display: flex; align-items: center; gap: 4px; background: var(--primary); color: #fff; border: none; padding: 7px 14px; border-radius: 5px; font: 500 12.5px var(--body); cursor: pointer; }
 .add-btn:hover { background: var(--primary-dark); }
