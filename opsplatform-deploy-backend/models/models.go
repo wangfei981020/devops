@@ -56,6 +56,7 @@ type ProjectEnv struct {
 	IngressGateway   string    `json:"ingress_gateway"` // 该环境的 istio 网关名，新增模块时自动带出
 	HarborProject    string    `json:"harbor_project"`  // 该环境的 Harbor 项目名，留空=自动用项目名；推导镜像仓库用
 	DomainSuffix     string    `json:"domain_suffix"`   // 该环境的域名后缀，如 uat.slileisure.com；前端模块访问域名自动带出用
+	DefaultNamespaces string   `json:"default_namespaces"` // 该环境可用 namespace 列表(换行/逗号分隔)，第一个作默认；新增模块下拉/自动填用
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }

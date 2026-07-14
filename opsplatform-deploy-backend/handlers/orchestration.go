@@ -73,6 +73,47 @@ func HandleUpdateEnvDomain(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, nil)
 }
 
+// PUT /api/orchestration/env-namespaces/{id} —— 更新某项目环境的 namespace 列表（「项目参数」页用）。
+func HandleUpdateEnvNamespaces(w http.ResponseWriter, r *http.Request) {
+	id := ParseID(mux.Vars(r)["id"])
+	var req struct {
+		DefaultNamespaces string `json:"default_namespaces"`
+	}
+	if !DecodeJSON(w, r, &req) {
+		return
+	}
+	if _, err := database.DB.Exec(`UPDATE project_env SET default_namespaces=? WHERE id=?`,
+		strings.TrimSpace(req.DefaultNamespaces), id); err != nil {
+		InternalErr(w, r, err)
+		return
+	}
+	Audit(r, "orchestration.env_namespaces.update", "project_env", strconv.FormatInt(id, 10), nil)
+	JSONSuccess(w, nil)
+}
+
+// parseNamespaces 把配置的 namespace 列表(换行/逗号/空格分隔)拆成去重的切片。
+func parseNamespaces(raw string) []string {
+	f := func(c rune) bool { return c == '\n' || c == '\r' || c == ',' || c == ' ' || c == '\t' }
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range strings.FieldsFunc(raw, f) {
+		s = strings.TrimSpace(s)
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// defaultNamespaceForEnv 该环境新增模块的默认 namespace：配了列表用第一个，否则用环境名。
+func defaultNamespaceForEnv(p *models.ProjectEnv) string {
+	if ns := parseNamespaces(p.DefaultNamespaces); len(ns) > 0 {
+		return ns[0]
+	}
+	return p.Name
+}
+
 // cmItem 一个 configmap 文件：相对模块目录的路径 + 内容
 type cmItem struct {
 	Path    string `json:"path"`
@@ -101,6 +142,57 @@ func scanConfigmaps(gs *services.GitService, srcEnv, chartBasePath, srcService s
 }
 
 // ============ 新增模块（服务编排）：预填 / 预览 / 提交 ============
+
+// HandleDeriveModules POST /api/orchestration/derive —— 轻量派生（不碰 git）：
+// 给一批模块名，返回每个的 镜像仓库/最新tag/是否缺镜像/域名 + 该环境 namespace 列表 + 默认 namespace。
+// 批量表格「解析成行」时调，用来自动填 namespace + 只读展示镜像仓库/tag。
+func HandleDeriveModules(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TargetEnvID int64    `json:"target_env_id"`
+		ModuleNames []string `json:"module_names"`
+	}
+	if !DecodeJSON(w, r, &req) {
+		return
+	}
+	dst, err := loadEnvGit("id=?", req.TargetEnvID)
+	if err != nil {
+		JSONError(w, 40400, "目标环境不存在")
+		return
+	}
+	if !IsEnvIDAllowed(r, dst.ID) {
+		JSONError(w, 40300, "无权访问该环境")
+		return
+	}
+	ctx, cancel := services.GitCtx(r.Context(), 30)
+	defer cancel()
+	type modOut struct {
+		ModuleName      string `json:"module_name"`
+		ImageRepository string `json:"image_repository"`
+		LatestTag       string `json:"latest_tag"`
+		ImageMissing    bool   `json:"image_missing"`
+		Domain          string `json:"domain"`
+	}
+	mods := make([]modOut, 0, len(req.ModuleNames))
+	for _, name := range req.ModuleNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		m := modOut{ModuleName: name, ImageRepository: deriveImageRepoForEnv(dst, name), Domain: deriveDomainForEnv(dst, name)}
+		if m.ImageRepository != "" {
+			if checked, missing, latest := harborImageStatus(ctx, m.ImageRepository); checked {
+				m.ImageMissing = missing
+				m.LatestTag = latest
+			}
+		}
+		mods = append(mods, m)
+	}
+	JSONSuccess(w, map[string]interface{}{
+		"namespaces":        parseNamespaces(dst.DefaultNamespaces),
+		"default_namespace": defaultNamespaceForEnv(dst),
+		"modules":           mods,
+	})
+}
 
 // deriveDomainForEnv 推导前端模块的访问域名：<模块名去-frontend>.<环境域名后缀>。
 //   只对 -frontend 模块生效；域名后缀没配 → 返回空（域名保持空，不瞎拼）。
@@ -198,9 +290,9 @@ func verifyImageForSubmit(valuesYAML []byte, moduleName, envType string) error {
 func loadEnvGit(where string, arg interface{}) (*models.ProjectEnv, error) {
 	var p models.ProjectEnv
 	err := database.DB.QueryRow(
-		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), IFNULL(domain_suffix,'')
+		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), IFNULL(domain_suffix,''), IFNULL(default_namespaces,'')
 		 FROM project_env WHERE `+where, arg).
-		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway, &p.HarborProject, &p.DomainSuffix)
+		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway, &p.HarborProject, &p.DomainSuffix, &p.DefaultNamespaces)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +429,8 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, map[string]interface{}{
 		"values_yaml":       string(filled),
 		"configmaps":        cms, // [] 表示没有（后端服务通常没有）
-		"suggest_namespace": dst.Name,
+		"suggest_namespace": defaultNamespaceForEnv(dst),
+		"namespaces":        parseNamespaces(dst.DefaultNamespaces), // 下拉可选列表
 		"target_chart_path": spec.TargetChartBasePath + "/" + req.ModuleName,
 		"apps_file":         spec.TargetChartBasePath + "-apps/values.yaml",
 		"image_repository":  imageRepo,
@@ -536,8 +629,7 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 			return base, nil, nil, false
 		}
 		if ns == "" {
-			JSONError(w, 40001, "namespace 必填（模块 "+name+"）")
-			return base, nil, nil, false
+			ns = defaultNamespaceForEnv(dst) // 空则回落环境默认 namespace（前端一般已自动填）
 		}
 		// 用户在「配置」里自定义了 values 就用它，否则按模板派生预填
 		vals := []byte(r.ValuesYAML)

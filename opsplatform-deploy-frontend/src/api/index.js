@@ -152,6 +152,8 @@ export const batchSubmitModules = (body) => http.post('/orchestration/batch-subm
 export const updateEnvGateway = (id, ingress_gateway) => http.put(`/orchestration/env-gateway/${id}`, { ingress_gateway })
 export const updateEnvHarbor = (id, harbor_project) => http.put(`/orchestration/env-harbor/${id}`, { harbor_project })
 export const updateEnvDomain = (id, domain_suffix) => http.put(`/orchestration/env-domain/${id}`, { domain_suffix })
+export const updateEnvNamespaces = (id, default_namespaces) => http.put(`/orchestration/env-namespaces/${id}`, { default_namespaces })
+export const deriveModules = (body) => http.post('/orchestration/derive', body)
 export const listOrchTasks = () => http.get('/orchestration/tasks')
 export const retryOrchTask = (id) => http.post(`/orchestration/tasks/${id}/retry`)
 export const getOrchTaskPods = (id, app) => http.get(`/orchestration/tasks/${id}/pods`, { params: { app } })

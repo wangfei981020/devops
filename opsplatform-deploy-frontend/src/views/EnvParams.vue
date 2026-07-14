@@ -26,10 +26,18 @@
           <span v-else class="unset">未配置（默认用 {{ projName(row) }}）</span>
         </template>
       </el-table-column>
-      <el-table-column label="域名后缀" min-width="180">
+      <el-table-column label="域名后缀" min-width="170">
         <template #default="{ row }">
           <code v-if="row.domain_suffix">{{ row.domain_suffix }}</code>
           <span v-else class="unset">未配置（域名留空）</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="namespace（可配多个）" min-width="200">
+        <template #default="{ row }">
+          <span v-if="nsList(row).length">
+            <el-tag v-for="(n, i) in nsList(row)" :key="n" size="small" :type="i === 0 ? 'primary' : 'info'" style="margin:1px 3px 1px 0">{{ n }}</el-tag>
+          </span>
+          <span v-else class="unset">未配置（默认用 {{ row.name }}）</span>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="100">
@@ -54,6 +62,10 @@
           <el-input v-model="domain" placeholder="如 uat.slileisure.com" />
           <div class="form-hint">前端模块(-frontend)访问域名自动带出 = 模块名去 -frontend + . + 这里的后缀；留空=域名不自动带，预填后仍可手改</div>
         </el-form-item>
+        <el-form-item label="namespace 列表">
+          <el-input v-model="namespaces" type="textarea" :rows="4" :placeholder="`一行一个（可配多个），第一个作默认。留空=用环境名 ${editing?.name}`" />
+          <div class="form-hint">新增模块时 namespace 自动填第一个，可下拉从这里选、也可手输列表外的</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
@@ -76,6 +88,12 @@ const editing = ref(null)
 const gateway = ref('')
 const harbor = ref('')
 const domain = ref('')
+const namespaces = ref('')
+
+// 把配置的 namespace 原文拆成数组（换行/逗号/空格分隔），供展示
+function nsList(row) {
+  return (row?.default_namespaces || '').split(/[\n,\s]+/).map(s => s.trim()).filter(Boolean)
+}
 
 // 项目名 = 环境名去掉 -env 后缀（跟后端一致），用于 Harbor 项目默认值提示
 function projName(row) {
@@ -89,6 +107,7 @@ function openEdit(row) {
   gateway.value = row.ingress_gateway || ''
   harbor.value = row.harbor_project || ''
   domain.value = row.domain_suffix || ''
+  namespaces.value = row.default_namespaces || ''
   dialog.value = true
 }
 
@@ -98,9 +117,11 @@ async function save() {
     await api.updateEnvGateway(editing.value.id, gateway.value.trim())
     await api.updateEnvHarbor(editing.value.id, harbor.value.trim())
     await api.updateEnvDomain(editing.value.id, domain.value.trim())
+    await api.updateEnvNamespaces(editing.value.id, namespaces.value.trim())
     editing.value.ingress_gateway = gateway.value.trim()
     editing.value.harbor_project = harbor.value.trim()
     editing.value.domain_suffix = domain.value.trim()
+    editing.value.default_namespaces = namespaces.value.trim()
     dialog.value = false
     ElMessage.success('已保存')
   } finally {

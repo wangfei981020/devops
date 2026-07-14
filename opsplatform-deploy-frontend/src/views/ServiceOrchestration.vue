@@ -41,11 +41,14 @@
           </el-select>
         </el-form-item>
         <el-form-item label="模块名" required>
-          <el-input v-model="form.moduleName" placeholder="完整模块名，如 g32-baccarat-settle-backend" style="width: 420px" @input="resetPreview" />
-          <el-button style="margin-left: 10px" :disabled="!canPrefill" :loading="prefilling" @click="doPrefill">预填 values.yaml</el-button>
+          <el-input v-model="form.moduleName" placeholder="完整模块名，如 g32-baccarat-settle-backend" style="width: 420px" @input="resetPreview" @change="autoPrefill" />
+          <el-button style="margin-left: 10px" :disabled="!canPrefill" :loading="prefilling" @click="doPrefill">预填 values.yaml（刷新）</el-button>
+          <span class="ns-hint">填完模块名失焦即自动预填</span>
         </el-form-item>
         <el-form-item label="namespace" required>
-          <el-input v-model="form.namespace" placeholder="如 g32-base / g32-bet-settle" style="width: 420px" @input="resetPreview" />
+          <el-select v-model="form.namespace" filterable allow-create default-first-option placeholder="选/输 namespace" style="width: 420px" @change="resetPreview">
+            <el-option v-for="n in nsOptionsSingle" :key="n" :label="n" :value="n" />
+          </el-select>
         </el-form-item>
         <el-form-item label="配置">
           <div v-if="form.valuesYaml" style="width:100%">
@@ -97,7 +100,7 @@
     </el-dialog>
 
     <!-- 批量新增弹窗 -->
-    <el-dialog v-model="batchDialog" title="批量新增模块" width="880px" :close-on-click-modal="false" top="5vh">
+    <el-dialog v-model="batchDialog" title="批量新增模块" width="1060px" :close-on-click-modal="false" top="5vh">
       <el-form label-width="110px">
         <el-form-item label="目标环境"><span>{{ curEnvLabel }}</span></el-form-item>
         <el-form-item label="参照模板" required>
@@ -111,32 +114,46 @@
           <el-button style="margin-left: 10px" @click="parsePaste">解析成行</el-button>
         </el-form-item>
         <el-form-item label="模块清单">
-          <el-table :data="batch.rows" border size="small" style="width: 640px">
-            <el-table-column label="模块名" min-width="260">
-              <template #default="{ row }"><el-input v-model="row.module_name" size="small" @input="resetBatch" /></template>
+          <el-table :data="batch.rows" border size="small" style="width: 100%">
+            <el-table-column label="模块名" min-width="200">
+              <template #default="{ row }"><el-input v-model="row.module_name" size="small" @input="resetBatch" @change="deriveRow(row)" /></template>
             </el-table-column>
-            <el-table-column label="namespace" width="180">
-              <template #default="{ row }"><el-input v-model="row.namespace" size="small" @input="resetBatch" /></template>
+            <el-table-column label="namespace" width="160">
+              <template #default="{ row }">
+                <el-select v-model="row.namespace" size="small" filterable allow-create default-first-option placeholder="选/输" style="width:100%" @change="resetBatch">
+                  <el-option v-for="n in nsOptions" :key="n" :label="n" :value="n" />
+                </el-select>
+              </template>
             </el-table-column>
-            <el-table-column label="配置" width="90">
+            <el-table-column label="镜像仓库（自动）" min-width="220">
+              <template #default="{ row }"><span class="mono ellip" :title="row.image_repository">{{ row.image_repository || '—' }}</span></template>
+            </el-table-column>
+            <el-table-column label="版本tag" width="100">
+              <template #default="{ row }">
+                <span v-if="row.image_missing" class="miss" title="Harbor 缺该镜像，提交会被拦">⚠ 缺镜像</span>
+                <span v-else class="mono">{{ row.latest_tag || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="配置" width="86">
               <template #default="{ row }">
                 <el-button link type="primary" :disabled="!batch.templateId || !row.module_name.trim()" @click="openRowConfig(row)">
                   {{ row.values_yaml ? '已改·配置' : '配置' }}
                 </el-button>
               </template>
             </el-table-column>
-            <el-table-column label="校验" width="80">
+            <el-table-column label="校验" width="66">
               <template #default="{ row }">
                 <el-tag v-if="rowStatus(row.module_name)" :type="rowStatus(row.module_name).ok ? 'success' : 'danger'" size="small">
                   {{ rowStatus(row.module_name).ok ? '通过' : '失败' }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="" width="44">
+            <el-table-column label="" width="40">
               <template #default="{ $index }"><el-button link type="danger" @click="batch.rows.splice($index, 1)">×</el-button></template>
             </el-table-column>
           </el-table>
-          <el-button link type="primary" @click="batch.rows.push({ module_name: '', namespace: '' })">+ 加一行</el-button>
+          <el-button link type="primary" @click="batch.rows.push({ module_name: '', namespace: nsOptions[0] || '' })">+ 加一行</el-button>
+          <span class="ns-hint">namespace 自动填默认，点开可选列表或手输；镜像仓库/tag 自动带出，「配置」可选（不配也自动派生）</span>
         </el-form-item>
         <el-form-item label="ArgoCD">
           <el-switch v-model="batch.disable" :active-value="true" :inactive-value="false" active-text="disable:true 安全预演" inactive-text="关闭=直接部署（默认）" />
@@ -249,6 +266,8 @@ function openAdd() {
   form.value = { templateId: null, moduleName: '', namespace: '', valuesYaml: '', disable: false }
   configmaps.value = []
   cmTab.value = ''
+  lastPrefilledName.value = ''
+  nsOptionsSingle.value = []
   resetPreview()
   addDialog.value = true
 }
@@ -274,13 +293,24 @@ async function doPrefill() {
     form.value.valuesYaml = r.values_yaml || ''
     configmaps.value = (r.configmaps || []).map(c => ({ ...c }))
     cmTab.value = configmaps.value[0]?.path || ''
+    nsOptionsSingle.value = r.namespaces || []
     if (!form.value.namespace) form.value.namespace = r.suggest_namespace || ''
+    lastPrefilledName.value = form.value.moduleName.trim()
     resetPreview()
     imageMissing.value = !!r.image_missing
     imageMissingMsg.value = r.image_missing_msg || ''
     if (imageMissing.value) ElMessage.warning('Harbor 缺少该镜像，请先同步后再新增')
     else ElMessage.success('已带出样板 values.yaml，请复核后编辑')
   } finally { prefilling.value = false }
+}
+
+// 填完模块名失焦 → 自动预填（模板已选、名字变了才触发；改了模块名本就该重新预填）
+const lastPrefilledName = ref('')
+const nsOptionsSingle = ref([])
+async function autoPrefill() {
+  const name = form.value.moduleName.trim()
+  if (!canPrefill.value || !name || name === lastPrefilledName.value) return
+  await doPrefill()
 }
 
 async function doPreview() {
@@ -368,11 +398,35 @@ function openBatch() {
   batchDialog.value = true
 }
 
-function parsePaste() {
+const nsOptions = ref([])
+
+async function parsePaste() {
   const names = batch.value.paste.split('\n').map(s => s.trim()).filter(Boolean)
-  const ns = envs.value.find(e => e.id === envId.value)?.name || ''
-  batch.value.rows = names.map(n => ({ module_name: n, namespace: ns }))
+  if (!names.length) { batch.value.rows = []; return }
+  let derived = null
+  try { derived = await api.deriveModules({ target_env_id: envId.value, module_names: names }) } catch { /* 派生失败不阻断，只是不带预览 */ }
+  nsOptions.value = derived?.namespaces || []
+  const defNs = derived?.default_namespace || (envs.value.find(e => e.id === envId.value)?.name || '')
+  const dmap = {}
+  ;(derived?.modules || []).forEach(m => { dmap[m.module_name] = m })
+  batch.value.rows = names.map(n => {
+    const d = dmap[n] || {}
+    return { module_name: n, namespace: defNs, image_repository: d.image_repository || '', latest_tag: d.latest_tag || '', image_missing: !!d.image_missing, domain: d.domain || '' }
+  })
   resetBatch()
+}
+
+// 编辑某行模块名后重新派生该行的镜像仓库/tag/域名
+async function deriveRow(row) {
+  const name = (row.module_name || '').trim()
+  if (!name || !envId.value) return
+  try {
+    const d = (await api.deriveModules({ target_env_id: envId.value, module_names: [name] }))?.modules?.[0] || {}
+    row.image_repository = d.image_repository || ''
+    row.latest_tag = d.latest_tag || ''
+    row.image_missing = !!d.image_missing
+    row.domain = d.domain || ''
+  } catch { /* 忽略 */ }
 }
 
 function batchBody() {
@@ -424,6 +478,10 @@ onMounted(async () => {
 .changed { margin: 0; padding-left: 18px; }
 .changed code { font-size: 12px; }
 .hint { color: #909399; font-size: 12px; margin-top: 6px; }
+.ns-hint { color: #909399; font-size: 12px; margin-left: 10px; }
+.mono { font-family: var(--mono, monospace); font-size: 12px; }
+.ellip { display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.miss { color: #dc2626; font-weight: 600; }
 .submitted { margin: 10px 0 0 110px; }
 .cm-block { margin-top: 12px; }
 .cm-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; color: var(--el-color-primary); }

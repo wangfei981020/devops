@@ -123,6 +123,7 @@ func main() {
 	// 读 + 预填 + 预览（登录即可）；提交在 handler 内按环境权限 submit_<env> 放行
 	protected.HandleFunc("/orchestration/templates", handlers.HandleListTemplates).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/orchestration/prefill", handlers.HandlePrefillModule).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/orchestration/derive", handlers.HandleDeriveModules).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/orchestration/preview", handlers.HandlePreviewModule).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/orchestration/submit", handlers.HandleSubmitModule).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/orchestration/batch-preview", handlers.HandleBatchPreview).Methods("POST", "OPTIONS")
@@ -150,6 +151,7 @@ func main() {
 	me.HandleFunc("/orchestration/env-gateway/{id}", handlers.HandleUpdateEnvGateway).Methods("PUT", "OPTIONS")
 	me.HandleFunc("/orchestration/env-harbor/{id}", handlers.HandleUpdateEnvHarbor).Methods("PUT", "OPTIONS")
 	me.HandleFunc("/orchestration/env-domain/{id}", handlers.HandleUpdateEnvDomain).Methods("PUT", "OPTIONS")
+	me.HandleFunc("/orchestration/env-namespaces/{id}", handlers.HandleUpdateEnvNamespaces).Methods("PUT", "OPTIONS")
 
 	// ========== 按钮权限分组：每组 admin 自动放行，portal 用户按勾选授权 ==========
 	// ① manage_global — 全局凭证 + GitLab 仓库登记
