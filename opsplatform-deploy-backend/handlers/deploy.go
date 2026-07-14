@@ -688,6 +688,10 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 		WHERE id=?`,
 		changesJSON, res.GitCommit, res.GitCommitURL, argoJSON, res.Status, errMsg, int(time.Since(start).Seconds()), depID)
 
+	if res.Status == models.StatusFailed || res.Status == models.StatusPartial {
+		log.Printf("⚠ [deploy-fail] dep=%d env=%s op=%s status=%s modules=%v err=%q", depID, p.Name, opLabel, res.Status, keysOf(pending), errMsg)
+	}
+
 	for _, c := range res.Changes {
 		_, _ = database.DB.Exec(`UPDATE module SET current_tag=? WHERE project_env_id=? AND name=?`, c.ToTag, p.ID, c.Module)
 	}
@@ -741,6 +745,9 @@ func runRestartAsync(depID int64, p *models.ProjectEnv, moduleNames []string, mo
 		`UPDATE deployment SET argocd_results=?, git_commit=?, git_commit_url=?, status=?, error_msg=?, duration_sec=? WHERE id=?`,
 		argoJSON, res.GitCommit, res.GitCommitURL, res.Status, errMsg,
 		int(time.Since(start).Seconds()), depID)
+	if res.Status == models.StatusFailed || res.Status == models.StatusPartial {
+		log.Printf("⚠ [deploy-fail] dep=%d env=%s op=restart status=%s modules=%v err=%q", depID, p.Name, res.Status, moduleNames, errMsg)
+	}
 	ArchiveFailedPodLogs(depID, p, collectFailingPodsByApp(res.ArgocdResults))
 	sendRestartNotify(p, depID, operator, modules, res)
 }

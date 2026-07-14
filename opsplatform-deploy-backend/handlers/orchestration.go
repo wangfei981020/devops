@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -448,8 +449,8 @@ func HandleSubmitModule(w http.ResponseWriter, r *http.Request) {
 	}
 	operator := UsernameFromCtx(r)
 	msg := fmt.Sprintf("feat(%s): add module %s", dst.Name, spec.ModuleName)
-	// 后台异步执行：立即建任务返回，clone+helm+commit+push 在 goroutine 里跑，结果去「新增历史」看。
-	taskID, err := insertOrchTask(dst.ID, dst.Name, spec.ModuleName, "single", operator)
+	// 后台异步执行：立即建任务返回。git(clone+helm+commit+push) → 真部署则轮询 ArgoCD 新 app 到就绪。
+	taskID, err := insertOrchTask(dst.ID, dst.Name, spec.ModuleName, "single", operator, spec.Disable)
 	if err != nil {
 		JSONError(w, 50000, "创建任务失败: "+err.Error())
 		return
@@ -457,16 +458,25 @@ func HandleSubmitModule(w http.ResponseWriter, r *http.Request) {
 	Audit(r, "orchestration.add_module", "module", spec.ModuleName, map[string]interface{}{
 		"env": dst.Name, "task_id": taskID, "disable": spec.Disable,
 	})
+	envID := dst.ID
 	InflightTrack(func() {
+		start := time.Now()
 		gs := getGitService()
-		ctx, cancel := services.GitCtx(context.Background(), 300)
-		defer cancel()
-		res, serr := gs.SubmitNewModule(ctx, spec, operator, msg)
+		gctx, cancel := services.GitCtx(context.Background(), 300)
+		res, serr := gs.SubmitNewModule(gctx, spec, operator, msg)
+		cancel()
 		if serr != nil {
+			log.Printf("⚠ [orch-fail] task=%d env=%s module=%s git/helm 阶段失败: %v", taskID, dst.Name, spec.ModuleName, serr)
 			updateOrchTaskFailed(taskID, serr.Error())
 			return
 		}
-		updateOrchTaskSuccess(taskID, res.CommitSHA, res.CommitURL)
+		setOrchTaskCommit(taskID, res.CommitSHA, res.CommitURL)
+		if spec.Disable {
+			finishOrchTask(taskID, "success", "已提交（预演 disable:true，未部署）", nil, dur(start))
+			return
+		}
+		// 真部署 → 轮询新模块的 ArgoCD app 到 Synced+Healthy
+		deployAndPollNewModule(taskID, envID, spec.ModuleName, spec.Namespace, start)
 	})
 	JSONSuccess(w, map[string]interface{}{"task_id": taskID, "status": "pending"})
 }
@@ -623,7 +633,8 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 		modNames = append(modNames, rr.ModuleName)
 	}
 	summary := fmt.Sprintf("批量 %d 个: %s", len(rows), strings.Join(modNames, ","))
-	taskID, err := insertOrchTask(dst.ID, dst.Name, summary, "batch", operator)
+	disable := req.Disable != nil && *req.Disable
+	taskID, err := insertOrchTask(dst.ID, dst.Name, summary, "batch", operator, disable)
 	if err != nil {
 		JSONError(w, 50000, "创建任务失败: "+err.Error())
 		return
@@ -632,19 +643,28 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 		"env": dst.Name, "task_id": taskID,
 	})
 	InflightTrack(func() {
+		start := time.Now()
 		gs := getGitService()
 		ctx, cancel := services.GitCtx(context.Background(), 600)
 		defer cancel()
 		res, serr := gs.SubmitBatch(ctx, base, rows, operator, msg)
 		if serr != nil {
+			log.Printf("⚠ [orch-fail] task=%d env=%s 批量 git/helm 阶段失败: %v", taskID, dst.Name, serr)
 			updateOrchTaskFailed(taskID, serr.Error())
 			return
 		}
 		if !res.AllOK {
+			log.Printf("⚠ [orch-fail] task=%d env=%s 批量部分模块 helm 校验未通过", taskID, dst.Name)
 			updateOrchTaskFailed(taskID, "部分模块 helm 校验未通过，未提交（请在批量预览里查看具体行）")
 			return
 		}
-		updateOrchTaskSuccess(taskID, res.CommitSHA, res.CommitURL)
+		setOrchTaskCommit(taskID, res.CommitSHA, res.CommitURL)
+		// 批量含多个 app，不逐个轮询——提交成功即完成，部署状态到 ArgoCD 看（或按需扩展）
+		note := "已提交，ArgoCD 将部署这些模块，请到 ArgoCD 查看状态"
+		if disable {
+			note = "已提交（预演 disable:true，未部署）"
+		}
+		finishOrchTask(taskID, "success", note, nil, dur(start))
 	})
 	JSONSuccess(w, map[string]interface{}{"task_id": taskID, "status": "pending"})
 }

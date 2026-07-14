@@ -128,6 +128,9 @@ func main() {
 	protected.HandleFunc("/orchestration/batch-preview", handlers.HandleBatchPreview).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/orchestration/batch-submit", handlers.HandleBatchSubmit).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/orchestration/tasks", handlers.HandleListOrchTasks).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/orchestration/tasks/{id}/retry", handlers.HandleRetryOrchTask).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/orchestration/tasks/{id}/pods", handlers.HandleGetOrchTaskPods).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/orchestration/tasks/{id}/pod-logs", handlers.HandleGetOrchTaskPodLogs).Methods("GET", "OPTIONS")
 
 	// 模板 CRUD —— manage_templates 权限
 	mt := protected.PathPrefix("").Subrouter()

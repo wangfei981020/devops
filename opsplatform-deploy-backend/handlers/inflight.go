@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 
@@ -80,9 +82,9 @@ func InflightTrack(job func()) {
 		defer func() {
 			// goroutine panic 不能拖垮 wg 计数；recover 避免 leak
 			if r := recover(); r != nil {
-				// 业务侧的 RecoverMiddleware 只兜 HTTP 请求；这里是裸 goroutine，需要单独 recover
-				// 不重新 panic，避免影响其它 in-flight 任务
-				_ = r
+				// 业务侧的 RecoverMiddleware 只兜 HTTP 请求；这里是裸 goroutine，需要单独 recover。
+				// ⚠ 必须打日志+堆栈——否则生产后台任务崩了完全无感、无从排查。
+				log.Printf("⚠ [panic] inflight goroutine panicked: %v\n%s", r, debug.Stack())
 			}
 		}()
 		job()

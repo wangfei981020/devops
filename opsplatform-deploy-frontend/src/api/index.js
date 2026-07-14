@@ -153,6 +153,9 @@ export const updateEnvGateway = (id, ingress_gateway) => http.put(`/orchestratio
 export const updateEnvHarbor = (id, harbor_project) => http.put(`/orchestration/env-harbor/${id}`, { harbor_project })
 export const updateEnvDomain = (id, domain_suffix) => http.put(`/orchestration/env-domain/${id}`, { domain_suffix })
 export const listOrchTasks = () => http.get('/orchestration/tasks')
+export const retryOrchTask = (id) => http.post(`/orchestration/tasks/${id}/retry`)
+export const getOrchTaskPods = (id, app) => http.get(`/orchestration/tasks/${id}/pods`, { params: { app } })
+export const getOrchTaskPodLogs = (id, params) => http.get(`/orchestration/tasks/${id}/pod-logs`, { params })
 
 // 可配置环境（dev/test/uat/prod）
 export const listEnvironments = () => http.get('/environments')

@@ -223,6 +223,9 @@ func resumePollAfterRestart(depID int64, p *models.ProjectEnv, apps []string, ar
 		_, _ = database.DB.Exec(
 			`UPDATE deployment SET argocd_results=?, status=?, status_note=? WHERE id=?`,
 			marshalJSON(results), status, note, depID)
+		if status != models.StatusSuccess {
+			log.Printf("⚠ [deploy-fail] dep=%d 接管跟踪后判定 %s: %s", depID, status, note)
+		}
 		ArchiveFailedPodLogs(depID, p, collectFailingPodsByApp(results))
 	})
 }
@@ -443,7 +446,7 @@ func markInterrupted(depID int64, note string) {
 
 func markReconcileFailed(depID int64, note string) {
 	_, _ = database.DB.Exec(`UPDATE deployment SET status='failed', status_note=? WHERE id=?`, note, depID)
-	log.Printf("[reconcile] dep=%d → failed", depID)
+	log.Printf("⚠ [deploy-fail] dep=%d → failed (reconcile): %s", depID, note)
 }
 
 func markReconcileSuccess(depID int64, note string) {
