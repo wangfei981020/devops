@@ -64,16 +64,86 @@
           </el-select>
         </el-form-item>
         <el-form-item v-if="imgPreview" label="镜像/域名">
-          <div class="img-preview">
-            <span class="ip-cell"><span class="ip-k">Harbor 项目</span><code>{{ imgPreview.short || '—' }}</code></span>
-            <span class="ip-cell"><span class="ip-k">tag</span>
-              <code v-if="imgPreview.tag">{{ imgPreview.tag }}</code>
-              <span v-else class="miss">缺镜像</span>
-            </span>
-            <span class="ip-cell"><span class="ip-k">域名</span>
-              <code v-if="imgPreview.domain">{{ imgPreview.domain }}</code>
-              <span v-else class="ip-none">无</span>
-            </span>
+          <table class="kv-table">
+            <tbody>
+              <tr>
+                <td class="kv-k">镜像</td>
+                <td>
+                  <code v-if="imgPreview.full">{{ imgPreview.full }}</code>
+                  <span v-else class="ip-none">—</span>
+                  <el-button v-if="imgPreview.full" link type="primary" size="small" style="margin-left:8px" @click="copyText(imgPreview.full)">复制</el-button>
+                </td>
+              </tr>
+              <tr>
+                <td class="kv-k">tag</td>
+                <td><code v-if="imgPreview.tag">{{ imgPreview.tag }}</code><span v-else class="miss">缺镜像</span></td>
+              </tr>
+              <tr>
+                <td class="kv-k">域名</td>
+                <td><code v-if="imgPreview.domain">{{ imgPreview.domain }}</code><span v-else class="ip-none">无</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </el-form-item>
+        <el-form-item v-if="secretRefs && (secretRefs.existing.length || secretRefs.pending.length)" label="密钥">
+          <div class="sec-box">
+            <div class="sec-head">
+              <span class="sec-src">依赖的密钥 · 内容存 z-kv-secrets
+                <span v-if="!secretRefs.zkv_found" class="miss">（z-kv-secrets 路径未找到，去「项目参数」配）</span>
+              </span>
+              <el-radio-group v-model="secMode" size="small" @change="onSecModeChange">
+                <el-radio-button label="form">表单</el-radio-button>
+                <el-radio-button label="yaml">YAML</el-radio-button>
+              </el-radio-group>
+            </div>
+
+            <!-- 表单模式 -->
+            <template v-if="secMode === 'form'">
+              <!-- 已存在（复用） -->
+              <div v-if="secretRefs.existing.length" class="sec-grp">
+                <el-tag v-for="n in secretRefs.existing" :key="n" size="small" type="success" style="margin:2px 4px 2px 0">✓ {{ n }} · 复用</el-tag>
+              </div>
+              <!-- 缺失 / 手动新增：可填 -->
+              <div v-for="(p, pi) in secretRefs.pending" :key="pi" class="sec-pending">
+                <div class="sec-ph">
+                  <b>{{ p.name || '（未命名）' }}</b>
+                  <el-tag size="small" :type="p.manual ? 'info' : 'warning'">{{ p.manual ? '手动新增' : '缺失 · 待新建' }}</el-tag>
+                  <el-select v-model="p.type" size="small" style="width:120px" @change="onTypeChange(p)">
+                    <el-option label="TiDB" value="tidb" />
+                    <el-option label="普通 Opaque" value="opaque" />
+                  </el-select>
+                  <span class="sec-ns">namespace: {{ p.namespace }}</span>
+                  <el-button v-if="p.manual" link type="danger" size="small" @click="secretRefs.pending.splice(pi, 1)">移除</el-button>
+                </div>
+                <div v-if="p.manual" class="sec-row"><span class="sec-k">名称 <b class="req">*</b></span>
+                  <el-input v-model="p.name" size="small" placeholder="如 g32-xxx-config-secret" style="width:280px" /></div>
+                <template v-if="p.type === 'tidb'">
+                  <div class="sec-row"><span class="sec-k">database <b class="req">*</b></span>
+                    <el-input v-model="p.database" size="small" placeholder="如 g66_xxx_game" style="width:280px" /></div>
+                  <div v-for="(kv, i) in p.extra" :key="i" class="sec-row">
+                    <el-input v-model="kv.key" size="small" placeholder="键" style="width:180px" />
+                    <el-input v-model="kv.value" size="small" placeholder="值" style="width:280px;margin:0 6px" />
+                    <el-button link type="danger" size="small" @click="p.extra.splice(i, 1)">×</el-button>
+                  </div>
+                  <el-button link type="primary" size="small" @click="p.extra.push({ key: '', value: '' })">+ 额外字段</el-button>
+                </template>
+                <template v-else>
+                  <div v-for="(kv, i) in p.extra" :key="i" class="sec-row">
+                    <el-input v-model="kv.key" size="small" placeholder="键" style="width:180px" />
+                    <el-input v-model="kv.value" size="small" placeholder="值" style="width:280px;margin:0 6px" />
+                    <el-button link type="danger" size="small" @click="p.extra.splice(i, 1)">×</el-button>
+                  </div>
+                  <el-button link type="primary" size="small" @click="p.extra.push({ key: '', value: '' })">+ 键值对</el-button>
+                </template>
+              </div>
+              <el-button link type="primary" size="small" style="margin-top:6px" @click="addManualSecret">+ 新增密钥</el-button>
+            </template>
+
+            <!-- YAML 模式 -->
+            <template v-else>
+              <div class="sec-src" style="margin-bottom:6px">直接编辑将追加到 z-kv-secrets 的片段（只含新增项；提交时按段并入）</div>
+              <CodeEditor v-model="secYaml" />
+            </template>
           </div>
         </el-form-item>
         <el-form-item label="配置">
@@ -257,6 +327,9 @@ function cmName(p) { return (p || '').split('/').pop() }
 function copyErr(text) {
   navigator.clipboard?.writeText(text || '').then(() => ElMessage.success('已复制报错')).catch(() => {})
 }
+function copyText(text) {
+  navigator.clipboard?.writeText(text || '').then(() => ElMessage.success('已复制')).catch(() => {})
+}
 
 const envs = ref([])
 const templates = ref([])
@@ -313,9 +386,13 @@ const imageMissing = ref(false)
 const imageMissingMsg = ref('')
 // 预填后的镜像/域名短显示（Harbor项目/tag/域名），只读展示，避免看长串完整地址
 const imgPreview = ref(null) // { short, tag, domain }
-// 缺镜像时：helm 预览 + 确认提交都禁用
-const canPreview = computed(() => canPrefill.value && form.value.namespace.trim() && form.value.valuesYaml.trim() && !imageMissing.value)
-const canSubmit = computed(() => preview.value && (preview.value.helm_ok || preview.value.helm_skipped) && !imageMissing.value)
+// 后端专属密钥分类（已存在复用 / 待新建填内容），来自 prefill 的 secret_refs
+const secretRefs = ref(null) // { zkv_path, zkv_found, existing[], pending[{name,type,namespace,database,extra[],use_data,manual}] }
+const secMode = ref('form')  // 表单 / YAML 双模式
+const secYaml = ref('')      // YAML 模式：将追加到 z-kv-secrets 的片段
+// 缺镜像 / 专属密钥 database 没填全时：helm 预览 + 确认提交都禁用
+const canPreview = computed(() => canPrefill.value && form.value.namespace.trim() && form.value.valuesYaml.trim() && !imageMissing.value && pendingTidbFilled.value)
+const canSubmit = computed(() => preview.value && (preview.value.helm_ok || preview.value.helm_skipped) && !imageMissing.value && pendingTidbFilled.value)
 
 function resetPreview() { preview.value = null; submitted.value = null; imageMissing.value = false; imageMissingMsg.value = '' }
 
@@ -326,6 +403,7 @@ function openAdd() {
   lastPrefilledName.value = ''
   nsOptionsSingle.value = []
   imgPreview.value = null
+  secretRefs.value = null
   resetPreview()
   addDialog.value = true
 }
@@ -340,8 +418,60 @@ function reqBody() {
     namespace: form.value.namespace.trim(),
     values_yaml: yaml,
     configmaps: configmaps.value.map(c => ({ path: c.path, content: c.content })),
+    ...(secMode.value === 'yaml'
+      ? { new_secrets_yaml: secYaml.value }
+      : {
+        new_secrets: (secretRefs.value?.pending || []).map(p => ({
+          name: (p.name || '').trim(), type: p.type, namespace: p.namespace,
+          database: (p.database || '').trim(),
+          extra: (p.extra || []).filter(kv => (kv.key || '').trim()),
+        })),
+      }),
     disable: form.value.disable,
   }
+}
+
+// 密钥填写合法性：表单模式下每条要有 name，tidb 要有 database；YAML 模式不卡（helm 校验兜底）
+const pendingTidbFilled = computed(() => {
+  if (secMode.value === 'yaml') return true
+  return (secretRefs.value?.pending || []).every(p =>
+    (p.name || '').trim() && (p.type !== 'tidb' || (p.database || '').trim()))
+})
+
+function onTypeChange(p) {
+  // tidb ↔ opaque 切换时重置字段
+  if (p.type === 'tidb') { p.extra = [{ key: 'TIDB_PWDSALT', value: '' }, { key: 'TIDB_PWDCRYPT', value: '' }] }
+  else { p.database = ''; p.extra = [] }
+}
+function addManualSecret() {
+  secretRefs.value.pending.push({
+    name: '', type: 'opaque', namespace: form.value.namespace || '', database: '',
+    extra: [], manual: true,
+  })
+}
+// 表单 → YAML 片段（切到 YAML 模式时生成一次，供用户直接改）
+function genSecYaml(pending) {
+  const tidbs = pending.filter(p => p.type === 'tidb')
+  const plains = pending.filter(p => p.type === 'opaque')
+  let out = ''
+  if (tidbs.length) {
+    out += 'tidbSecrets:\n'
+    for (const p of tidbs) {
+      out += `  - name: ${p.name}\n    namespace: ${p.namespace}\n    database: ${p.database || ''}\n    extraStringData:\n`
+      for (const kv of (p.extra || [])) if ((kv.key || '').trim()) out += `      ${kv.key}: ${kv.value}\n`
+    }
+  }
+  if (plains.length) {
+    out += 'secrets:\n'
+    for (const p of plains) {
+      out += `  - name: ${p.name}\n    namespace: ${p.namespace}\n    type: Opaque\n    stringData:\n`
+      for (const kv of (p.extra || [])) if ((kv.key || '').trim()) out += `      ${kv.key}: ${kv.value}\n`
+    }
+  }
+  return out
+}
+function onSecModeChange(m) {
+  if (m === 'yaml') secYaml.value = genSecYaml(secretRefs.value?.pending || [])
 }
 
 async function doPrefill() {
@@ -355,7 +485,11 @@ async function doPrefill() {
     if (!form.value.namespace) form.value.namespace = r.suggest_namespace || ''
     lastPrefilledName.value = form.value.moduleName.trim()
     resetPreview()
-    imgPreview.value = { short: r.image_short || '', tag: r.latest_tag || '', domain: r.domain || '' }
+    imgPreview.value = { full: r.image_repository || '', short: r.image_short || '', tag: r.latest_tag || '', domain: r.domain || '' }
+    secMode.value = 'form'; secYaml.value = ''
+    const sr = r.secret_refs || null
+    if (sr) (sr.pending || []).forEach(p => { p.manual = false; p.extra = p.extra || [] })
+    secretRefs.value = sr
     imageMissing.value = !!r.image_missing
     imageMissingMsg.value = r.image_missing_msg || ''
     if (imageMissing.value) ElMessage.warning('Harbor 缺少该镜像，请先同步后再新增')
@@ -553,11 +687,25 @@ onMounted(async () => {
 .mono { font-family: var(--mono, monospace); font-size: 12px; }
 .ellip { display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .miss { color: #dc2626; font-weight: 600; }
-.img-preview { display: flex; gap: 22px; flex-wrap: wrap; align-items: center; padding: 8px 12px; background: var(--el-fill-color-light); border-radius: 6px; }
-.ip-cell { display: inline-flex; align-items: center; gap: 8px; }
-.ip-k { color: #909399; font-size: 12px; }
-.ip-cell code { background: var(--el-fill-color); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+.kv-table { border-collapse: collapse; background: var(--el-fill-color-light); border-radius: 6px; overflow: hidden; }
+.kv-table td { padding: 6px 12px; border-bottom: 1px solid var(--el-border-color-lighter); font-size: 13px; vertical-align: middle; }
+.kv-table tr:last-child td { border-bottom: none; }
+.kv-table .kv-k { color: #909399; font-size: 12px; white-space: nowrap; width: 90px; background: var(--el-fill-color); }
+.kv-table code { background: var(--el-fill-color); padding: 1px 6px; border-radius: 4px; font-size: 12px; word-break: break-all; }
 .ip-none { color: #c0c4cc; font-size: 12px; }
+.sec-box { width: 100%; padding: 10px 12px; background: var(--el-fill-color-light); border-radius: 6px; }
+.sec-src { font-size: 12px; color: #909399; margin-bottom: 8px; }
+.sec-grp { margin-top: 6px; }
+.sec-lbl { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.sec-lbl.ok { color: #16a34a; }
+.sec-lbl.warn { color: #d97706; }
+.sec-pending { border: 1px dashed var(--el-border-color); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+.sec-ph { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.sec-ns { color: #909399; font-size: 12px; }
+.sec-row { display: flex; align-items: center; margin: 4px 0; }
+.sec-k { width: 100px; color: #606266; font-size: 12px; }
+.sec-k .req { color: #dc2626; }
+.sec-warn { color: #d97706; font-size: 12px; }
 .submitted { margin: 10px 0 0 110px; }
 .cm-block { margin-top: 12px; }
 .cm-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; color: var(--el-color-primary); }

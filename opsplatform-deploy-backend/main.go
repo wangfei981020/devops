@@ -152,6 +152,7 @@ func main() {
 	me.HandleFunc("/orchestration/env-harbor/{id}", handlers.HandleUpdateEnvHarbor).Methods("PUT", "OPTIONS")
 	me.HandleFunc("/orchestration/env-domain/{id}", handlers.HandleUpdateEnvDomain).Methods("PUT", "OPTIONS")
 	me.HandleFunc("/orchestration/env-namespaces/{id}", handlers.HandleUpdateEnvNamespaces).Methods("PUT", "OPTIONS")
+	me.HandleFunc("/orchestration/env-zkv-path/{id}", handlers.HandleUpdateEnvZkvPath).Methods("PUT", "OPTIONS")
 
 	// ========== 按钮权限分组：每组 admin 自动放行，portal 用户按勾选授权 ==========
 	// ① manage_global — 全局凭证 + GitLab 仓库登记

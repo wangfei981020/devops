@@ -40,6 +40,12 @@
           <span v-else class="unset">未配置（默认用 {{ row.name }}）</span>
         </template>
       </el-table-column>
+      <el-table-column label="z-kv-secrets 路径" min-width="220">
+        <template #default="{ row }">
+          <code v-if="row.zkv_secrets_path">{{ row.zkv_secrets_path }}</code>
+          <span v-else class="unset">自动推（{{ autoZkv(row) }}）</span>
+        </template>
+      </el-table-column>
       <el-table-column label="操作" width="100">
         <template #default="{ row }">
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
@@ -66,6 +72,10 @@
           <el-input v-model="namespaces" type="textarea" :rows="4" :placeholder="`一行一个（可配多个），第一个作默认。留空=用环境名 ${editing?.name}`" />
           <div class="form-hint">新增模块时 namespace 自动填第一个，可下拉从这里选、也可手输列表外的</div>
         </el-form-item>
+        <el-form-item label="z-kv-secrets 路径">
+          <el-input v-model="zkvPath" :placeholder="`留空=自动推 ${autoZkv(editing)}`" />
+          <div class="form-hint">后端 secret 集中定义处（专属 secret 追加到这）。默认自动推 &lt;chart目录&gt;/z-kv-secrets；历史遗留共用的（如 g33 复用 g32）填 charts/g32-uat/z-kv-secrets</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
@@ -89,10 +99,17 @@ const gateway = ref('')
 const harbor = ref('')
 const domain = ref('')
 const namespaces = ref('')
+const zkvPath = ref('')
 
 // 把配置的 namespace 原文拆成数组（换行/逗号/空格分隔），供展示
 function nsList(row) {
   return (row?.default_namespaces || '').split(/[\n,\s]+/).map(s => s.trim()).filter(Boolean)
+}
+
+// z-kv-secrets 自动推导默认路径 = <chart_base_path>/z-kv-secrets（跟后端一致，展示用）
+function autoZkv(row) {
+  const base = (row?.chart_base_path || '').replace(/\/+$/, '')
+  return base ? `${base}/z-kv-secrets` : 'charts/<环境>/z-kv-secrets'
 }
 
 // 项目名 = 环境名去掉 -env 后缀（跟后端一致），用于 Harbor 项目默认值提示
@@ -108,6 +125,7 @@ function openEdit(row) {
   harbor.value = row.harbor_project || ''
   domain.value = row.domain_suffix || ''
   namespaces.value = row.default_namespaces || ''
+  zkvPath.value = row.zkv_secrets_path || ''
   dialog.value = true
 }
 
@@ -118,10 +136,12 @@ async function save() {
     await api.updateEnvHarbor(editing.value.id, harbor.value.trim())
     await api.updateEnvDomain(editing.value.id, domain.value.trim())
     await api.updateEnvNamespaces(editing.value.id, namespaces.value.trim())
+    await api.updateEnvZkvPath(editing.value.id, zkvPath.value.trim())
     editing.value.ingress_gateway = gateway.value.trim()
     editing.value.harbor_project = harbor.value.trim()
     editing.value.domain_suffix = domain.value.trim()
     editing.value.default_namespaces = namespaces.value.trim()
+    editing.value.zkv_secrets_path = zkvPath.value.trim()
     dialog.value = false
     ElMessage.success('已保存')
   } finally {

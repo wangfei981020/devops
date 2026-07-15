@@ -91,6 +91,87 @@ func HandleUpdateEnvNamespaces(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, nil)
 }
 
+// PUT /api/orchestration/env-zkv-path/{id} —— 更新某项目环境的 z-kv-secrets 路径（「项目参数」页用）。
+func HandleUpdateEnvZkvPath(w http.ResponseWriter, r *http.Request) {
+	id := ParseID(mux.Vars(r)["id"])
+	var req struct {
+		ZkvSecretsPath string `json:"zkv_secrets_path"`
+	}
+	if !DecodeJSON(w, r, &req) {
+		return
+	}
+	if _, err := database.DB.Exec(`UPDATE project_env SET zkv_secrets_path=? WHERE id=?`,
+		strings.TrimSpace(req.ZkvSecretsPath), id); err != nil {
+		InternalErr(w, r, err)
+		return
+	}
+	Audit(r, "orchestration.env_zkv_path.update", "project_env", strconv.FormatInt(id, 10), nil)
+	JSONSuccess(w, nil)
+}
+
+// zkvSecretsPathForEnv 该环境 z-kv-secrets 的 chart 路径：配了用配的；留空=自动推 <chart_base_path>/z-kv-secrets。
+func zkvSecretsPathForEnv(p *models.ProjectEnv) string {
+	if s := strings.TrimSpace(p.ZkvSecretsPath); s != "" {
+		return s
+	}
+	return strings.TrimRight(p.ChartBasePath, "/") + "/z-kv-secrets"
+}
+
+// pendingSecret 一条「引用了但 z-kv 里还没有」的 secret —— 需用户填内容后追加到 z-kv-secrets。
+type pendingSecret struct {
+	Name      string        `json:"name"`
+	Type      string        `json:"type"`      // "tidb" | "opaque"
+	Namespace string        `json:"namespace"` // 建议=模块 namespace（提交时带进 secret 条目）
+	Database  string        `json:"database"`  // tidb 用，默认空
+	Extra     []services.KV `json:"extra"`     // tidb 默认带 TIDB_PWDSALT/PWDCRYPT（复用环境公共）
+}
+
+// secretRefsOut 预填时返回给前端的「密钥引用分类」。
+type secretRefsOut struct {
+	ZkvPath  string          `json:"zkv_path"`  // z-kv-secrets/values.yaml 完整路径（展示用）
+	ZkvFound bool            `json:"zkv_found"` // 路径是否找到 & 可读
+	Existing []string        `json:"existing"`  // 引用且已存在（复用，不填）
+	Pending  []pendingSecret `json:"pending"`   // 引用但缺（需填内容 → 追加到 z-kv）
+}
+
+// buildSecretRefs 扫服务 values 的 extraEnvVars，对照目标环境 z-kv-secrets 现有内容分「已存在/待新建」。
+// 非后端(无 extraEnvVars) → 返回空壳（前端不显示密钥区）。
+func buildSecretRefs(ctx context.Context, gs *services.GitService, dst *models.ProjectEnv, serviceValues []byte) secretRefsOut {
+	out := secretRefsOut{ZkvPath: zkvSecretsPathForEnv(dst) + "/values.yaml", Existing: []string{}, Pending: []pendingSecret{}}
+	refs := services.ExtraEnvVarNames(serviceValues)
+	if len(refs) == 0 {
+		return out
+	}
+	var salt, crypt string
+	existset := map[string]bool{}
+	zkvPath := zkvSecretsPathForEnv(dst)
+	if err := gs.EnsureClone(ctx, dst.Name, dst.GitRepo, dst.GitBranch); err == nil {
+		if raw, err := gs.ReadFile(dst.Name, zkvPath+"/values.yaml"); err == nil {
+			out.ZkvFound = true
+			for _, n := range services.ZkvSecretNames(raw) {
+				existset[n] = true
+			}
+			salt, crypt = services.ZkvTidbDefaults(raw)
+		}
+	}
+	log.Printf("[orch] secret 分类 env=%s zkv=%s found=%v refs=%d existing=%d",
+		dst.Name, zkvPath, out.ZkvFound, len(refs), len(existset))
+	nsSuggest := defaultNamespaceForEnv(dst)
+	for _, ref := range refs {
+		if existset[ref] {
+			out.Existing = append(out.Existing, ref)
+			continue
+		}
+		p := pendingSecret{Name: ref, Namespace: nsSuggest, Type: "opaque"}
+		if strings.HasSuffix(ref, "-tidb-secret") {
+			p.Type = "tidb"
+			p.Extra = []services.KV{{Key: "TIDB_PWDSALT", Value: salt}, {Key: "TIDB_PWDCRYPT", Value: crypt}}
+		}
+		out.Pending = append(out.Pending, p)
+	}
+	return out
+}
+
 // parseNamespaces 把配置的 namespace 列表(换行/逗号/空格分隔)拆成去重的切片。
 func parseNamespaces(raw string) []string {
 	f := func(c rune) bool { return c == '\n' || c == '\r' || c == ',' || c == ' ' || c == '\t' }
@@ -342,9 +423,9 @@ func verifyImageForSubmit(valuesYAML []byte, moduleName, envType string) error {
 func loadEnvGit(where string, arg interface{}) (*models.ProjectEnv, error) {
 	var p models.ProjectEnv
 	err := database.DB.QueryRow(
-		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), IFNULL(domain_suffix,''), IFNULL(default_namespaces,'')
+		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), IFNULL(domain_suffix,''), IFNULL(default_namespaces,''), IFNULL(zkv_secrets_path,'')
 		 FROM project_env WHERE `+where, arg).
-		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway, &p.HarborProject, &p.DomainSuffix, &p.DefaultNamespaces)
+		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway, &p.HarborProject, &p.DomainSuffix, &p.DefaultNamespaces, &p.ZkvSecretsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -476,6 +557,8 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 	}
 	// 缺 global.labels 就补，避免 web.labels 渲染 nil
 	filled = services.EnsureGlobalLabels(filled)
+	// 后端专属密钥分类：服务 extraEnvVars 引用 vs 目标环境 z-kv-secrets 现有（已存在复用 / 待新建填内容）
+	secretRefs := buildSecretRefs(ctx, gs, dst, filled)
 	// 扫 templates/ 下的 configmap（多个，按文件名前端做 tab），同样令牌替换
 	cms := scanConfigmaps(gs, srcEnv.Name, spec.SrcChartBasePath, spec.SrcService,
 		func(b []byte) []byte { return prefillValues(b, srcEnv, dst, spec.SrcService, req.ModuleName) })
@@ -487,6 +570,7 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 		"namespaces":        parseNamespaces(dst.DefaultNamespaces), // 下拉可选列表
 		"target_chart_path": spec.TargetChartBasePath + "/" + req.ModuleName,
 		"apps_file":         spec.TargetChartBasePath + "-apps/values.yaml",
+		"secret_refs":       secretRefs, // 后端专属密钥分类（已存在复用 / 待新建填内容）
 		"image_repository":  imageRepo,
 		"image_short":       harborShortRepo(imageRepo),                                          // 去域名短显示：g32/301game-frontend
 		"latest_tag":        latestTag,                                                            // 自动带出的最新 tag（缺镜像为空）
@@ -504,11 +588,22 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 type moduleAddReq struct {
 	TemplateID  int64  `json:"template_id"`
 	TargetEnvID int64  `json:"target_env_id"`
-	ModuleName  string   `json:"module_name"`
-	Namespace   string   `json:"namespace"`
-	ValuesYAML  string   `json:"values_yaml"`
-	Configmaps  []cmItem `json:"configmaps"` // 用户编辑过的 configmap（可空）
-	Disable     *bool    `json:"disable"`    // 默认 true（安全预演，app-of-apps 先不生成）
+	ModuleName  string          `json:"module_name"`
+	Namespace   string          `json:"namespace"`
+	ValuesYAML  string          `json:"values_yaml"`
+	Configmaps    []cmItem       `json:"configmaps"`      // 用户编辑过的 configmap（可空）
+	NewSecrets    []newSecretReq `json:"new_secrets"`     // 表单模式：待新建 secret（tidb / opaque）
+	NewSecretsYAML string        `json:"new_secrets_yaml"` // YAML 模式：直接编辑的片段（非空时优先）
+	Disable       *bool          `json:"disable"`         // 默认 true（安全预演，app-of-apps 先不生成）
+}
+
+// newSecretReq 前端提交的一条待新建 secret（tidb 或 普通 Opaque）。
+type newSecretReq struct {
+	Name      string        `json:"name"`
+	Type      string        `json:"type"` // tidb | opaque
+	Namespace string        `json:"namespace"`
+	Database  string        `json:"database"` // tidb 用
+	Extra     []services.KV `json:"extra"`    // tidb=extraStringData / opaque=键值对(明文 stringData)
 }
 
 // cmMap 把 []cmItem 转成 path→content
@@ -547,6 +642,34 @@ func (req *moduleAddReq) toSpec(w http.ResponseWriter) (services.ModuleSpec, *mo
 	}
 	spec.ValuesYAML = []byte(req.ValuesYAML)
 	spec.ConfigMaps = cmMap(req.Configmaps)
+	// 后端专属密钥：往目标环境 z-kv-secrets 追加（路径按项目参数配/自动推）
+	spec.ZkvSecretsPath = zkvSecretsPathForEnv(dst)
+	if strings.TrimSpace(req.NewSecretsYAML) != "" {
+		// YAML 模式：整段片段交给引擎并入（helm 校验兜底格式）
+		spec.NewSecretsYAML = req.NewSecretsYAML
+	} else {
+		for _, s := range req.NewSecrets {
+			name := strings.TrimSpace(s.Name)
+			ns := strings.TrimSpace(s.Namespace)
+			if ns == "" {
+				ns = req.Namespace // 默认跟随模块 namespace
+			}
+			switch s.Type {
+			case "tidb":
+				if strings.TrimSpace(s.Database) == "" {
+					JSONError(w, 40001, fmt.Sprintf("专属密钥 %s 的 database 必填", name))
+					return services.ModuleSpec{}, nil, false
+				}
+				spec.NewTidbSecrets = append(spec.NewTidbSecrets, services.TidbSecretEntry{
+					Name: name, Namespace: ns, Database: strings.TrimSpace(s.Database), Extra: s.Extra,
+				})
+			case "opaque":
+				spec.NewPlainSecrets = append(spec.NewPlainSecrets, services.PlainSecretEntry{
+					Name: name, Namespace: ns, Type: "Opaque", KVs: s.Extra,
+				})
+			}
+		}
+	}
 	disable := false // 默认直接部署（helm 校验兜底）；显式传 true 才安全预演
 	if req.Disable != nil {
 		disable = *req.Disable

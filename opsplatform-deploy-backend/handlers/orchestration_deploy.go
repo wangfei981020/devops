@@ -70,6 +70,7 @@ func pollAndFinishModule(ctx context.Context, client *services.ArgocdClient, p *
 	}}))
 	if waitAppear {
 		syncRootApp(ctx, client, p.Name)
+		bestEffortSyncZkv(ctx, client, p) // 先推 z-kv-secrets，让新专属 secret 尽快就绪
 		if !waitAppAppear(ctx, client, m.App, 3*time.Minute) {
 			msg := "失败 · 等待 ArgoCD 生成 Application 超时（请检查 app-of-apps 根应用是否已同步）"
 			r := models.ArgocdAppResult{App: m.App, SyncStatus: "Failed", Msg: msg, DurationSec: dur(start), LastPolledAt: time.Now()}
@@ -130,6 +131,7 @@ func deployAndPollBatch(taskID, envID int64, operator string, mods []newModDeplo
 	}
 	// 根同步一次生成所有子 Application
 	syncRootApp(ctx, client, p.Name)
+	bestEffortSyncZkv(ctx, client, p) // 先推 z-kv-secrets，让新专属 secret 尽快就绪
 
 	_, interval, timeoutMin := loadPollCfg()
 	limit := 8
@@ -172,6 +174,18 @@ func deployAndPollBatch(taskID, envID int64, operator string, mods []newModDeplo
 }
 
 // ---------- 共用轮询原语 ----------
+
+// bestEffortSyncZkv 后端新增了专属 secret 时，先推一把 z-kv-secrets 应用，让新 Secret 尽快就绪，
+// 再等服务 app（服务 pod 引用 secret，secret 先到能少一轮 CreateContainerConfigError）。
+// 名字约定 z-kv-secrets-<suffix>；跨环境共用/名字不符时 Sync 失败无害（B+C 轮询对 secret 短暂缺失也能容忍）。
+func bestEffortSyncZkv(ctx context.Context, client *services.ArgocdClient, p *models.ProjectEnv) {
+	suffix := getGitService().ResolveAppNameSuffix(p.Name, p.ChartBasePath)
+	zkvApp := "z-kv-secrets-" + suffix
+	c, cancel := context.WithTimeout(ctx, 20*time.Second)
+	_ = client.Sync(c, zkvApp)
+	cancel()
+	log.Printf("[orch] best-effort synced z-kv-secrets app=%s (env=%s)", zkvApp, p.Name)
+}
 
 func syncRootApp(ctx context.Context, client *services.ArgocdClient, envName string) {
 	rootApp := strings.ToLower(envName) + "-apps" // app-of-apps 根 app 名约定 <env>-apps

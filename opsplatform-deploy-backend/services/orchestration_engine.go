@@ -38,6 +38,15 @@ type ModuleSpec struct {
 	// 用户编辑过的 configmap（相对模块目录的路径，如 "templates/configmap.yaml" → 新内容）；
 	// 写文件时用这里的内容覆盖，其余 templates 文件仍原样照抄。
 	ConfigMaps map[string]string
+
+	// 后端专属密钥：待追加到 z-kv-secrets 的 secret（用户在新增界面填的内容）。
+	// ZkvSecretsPath = 该环境 z-kv-secrets chart 路径（可跨环境共用，如 charts/g32-uat/z-kv-secrets）。
+	// 表单模式：NewTidbSecrets(tidbSecrets 段) + NewPlainSecrets(secrets 段)。
+	// YAML 模式：NewSecretsYAML（用户直接编辑的片段，含 tidbSecrets:/secrets: 列表）——非空时优先用它。
+	ZkvSecretsPath  string
+	NewTidbSecrets  []TidbSecretEntry
+	NewPlainSecrets []PlainSecretEntry
+	NewSecretsYAML  string
 }
 
 // PreviewResult 预览：不提交，返回将改动的文件 + helm 校验结果。
@@ -227,7 +236,42 @@ func writeModuleFilesAt(targetDir, srcServiceDir string, spec ModuleSpec) error 
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(appsAbs, newApps, 0o644)
+	if err := os.WriteFile(appsAbs, newApps, 0o644); err != nil {
+		return err
+	}
+
+	// 后端专属密钥：往 z-kv-secrets/values.yaml 追加（可跨环境共用的文件；同名查重幂等，冲突重放不重复）。
+	hasSecrets := len(spec.NewTidbSecrets) > 0 || len(spec.NewPlainSecrets) > 0 || strings.TrimSpace(spec.NewSecretsYAML) != ""
+	if hasSecrets && spec.ZkvSecretsPath != "" {
+		zkvAbs := filepath.Join(targetDir, spec.ZkvSecretsPath, "values.yaml")
+		zkvContent, err := os.ReadFile(zkvAbs)
+		if err != nil {
+			return fmt.Errorf("读取 z-kv-secrets values.yaml 失败(%s): %w", spec.ZkvSecretsPath, err)
+		}
+		if strings.TrimSpace(spec.NewSecretsYAML) != "" {
+			// YAML 模式：整段片段并入
+			zkvContent, err = AppendSecretsFromYAML(zkvContent, []byte(spec.NewSecretsYAML))
+			if err != nil {
+				return err
+			}
+		} else {
+			// 表单模式：tidb + 普通分别追加
+			for _, e := range spec.NewTidbSecrets {
+				if zkvContent, err = AppendTidbSecret(zkvContent, e); err != nil {
+					return err
+				}
+			}
+			for _, e := range spec.NewPlainSecrets {
+				if zkvContent, err = AppendPlainSecret(zkvContent, e); err != nil {
+					return err
+				}
+			}
+		}
+		if err := os.WriteFile(zkvAbs, zkvContent, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // inspectStagedAt 计算改动文件清单 + 跑 helm 校验（新模块 chart 目录），在指定工作区。
