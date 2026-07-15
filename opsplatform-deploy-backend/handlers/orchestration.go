@@ -109,6 +109,27 @@ func HandleUpdateEnvZkvPath(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, nil)
 }
 
+// allProjectPrefixes 收集所有已登记项目名（project_env 去 -env 后缀），供跨项目 secret 改前缀用。
+func allProjectPrefixes() map[string]bool {
+	set := map[string]bool{}
+	rows, err := database.DB.Query(`SELECT name, env_type FROM project_env`)
+	if err != nil {
+		return set
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, envType string
+		if rows.Scan(&name, &envType) != nil {
+			continue
+		}
+		proj := strings.TrimSuffix(name, "-"+envType)
+		if proj != "" {
+			set[proj] = true
+		}
+	}
+	return set
+}
+
 // zkvSecretsPathForEnv 该环境 z-kv-secrets 的 chart 路径：配了用配的；留空=自动推 <chart_base_path>/z-kv-secrets。
 func zkvSecretsPathForEnv(p *models.ProjectEnv) string {
 	if s := strings.TrimSpace(p.ZkvSecretsPath); s != "" {
@@ -557,6 +578,8 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 	}
 	// 缺 global.labels 就补，避免 web.labels 渲染 nil
 	filled = services.EnsureGlobalLabels(filled)
+	// 跨项目复用模板：把 extraEnvVars 引用的 secret 名的项目前缀换成目标项目（含别项目前缀，如 g33→g50）
+	filled = services.RenameSecretRefs(filled, allProjectPrefixes(), strings.TrimSuffix(dst.Name, "-"+dst.EnvType))
 	// 后端专属密钥分类：服务 extraEnvVars 引用 vs 目标环境 z-kv-secrets 现有（已存在复用 / 待新建填内容）
 	secretRefs := buildSecretRefs(ctx, gs, dst, filled)
 	// 扫 templates/ 下的 configmap（多个，按文件名前端做 tab），同样令牌替换

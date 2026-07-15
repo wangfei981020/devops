@@ -89,7 +89,9 @@
           <div class="sec-box">
             <div class="sec-head">
               <span class="sec-src">依赖的密钥 · 内容存 z-kv-secrets
-                <span v-if="!secretRefs.zkv_found" class="miss">（z-kv-secrets 路径未找到，去「项目参数」配）</span>
+                <span v-if="!secretRefs.zkv_found" class="miss">· z-kv-secrets 还不存在
+                  <el-button link type="primary" size="small" @click="$router.push('/env-params')">去初始化</el-button>
+                </span>
               </span>
               <el-radio-group v-model="secMode" size="small" @change="onSecModeChange">
                 <el-radio-button label="form">表单</el-radio-button>

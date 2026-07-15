@@ -64,6 +64,10 @@ func (req *templateReq) normalize() {
 	req.SrcEnv = strings.TrimSpace(req.SrcEnv)
 	req.SrcService = strings.TrimSpace(req.SrcService)
 	req.Description = strings.TrimSpace(req.Description)
+	// z-kv 模板源目录固定 z-kv-secrets（整份密钥 chart）
+	if req.ModuleType == models.ModuleTypeZkv {
+		req.SrcService = "z-kv-secrets"
+	}
 }
 
 func (req *templateReq) validate(w http.ResponseWriter) bool {
@@ -71,8 +75,8 @@ func (req *templateReq) validate(w http.ResponseWriter) bool {
 		JSONError(w, 40001, "name: "+err.Error())
 		return false
 	}
-	if req.ModuleType != models.ModuleTypeFrontend && req.ModuleType != models.ModuleTypeBackend {
-		JSONError(w, 40001, "module_type 必须是 frontend 或 backend")
+	if req.ModuleType != models.ModuleTypeFrontend && req.ModuleType != models.ModuleTypeBackend && req.ModuleType != models.ModuleTypeZkv {
+		JSONError(w, 40001, "module_type 必须是 frontend / backend / zkv")
 		return false
 	}
 	if req.SrcEnv == "" || req.SrcService == "" {

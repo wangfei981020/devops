@@ -298,4 +298,5 @@ type DeployEnvironment struct {
 const (
 	ModuleTypeFrontend = "frontend"
 	ModuleTypeBackend  = "backend"
+	ModuleTypeZkv      = "zkv" // z-kv-secrets 模板：整份密钥 chart，供新项目初始化复制
 )

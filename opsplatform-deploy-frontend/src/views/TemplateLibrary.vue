@@ -15,8 +15,8 @@
       <el-table-column label="模块名（样板服务）" prop="src_service" min-width="240" />
       <el-table-column label="类型" width="90">
         <template #default="{ row }">
-          <el-tag :type="row.module_type === 'frontend' ? 'warning' : 'success'" size="small">
-            {{ row.module_type === 'frontend' ? '前端' : '后端' }}
+          <el-tag :type="row.module_type === 'frontend' ? 'warning' : (row.module_type === 'zkv' ? 'info' : 'success')" size="small">
+            {{ row.module_type === 'frontend' ? '前端' : (row.module_type === 'zkv' ? 'z-kv' : '后端') }}
           </el-tag>
         </template>
       </el-table-column>
@@ -43,7 +43,9 @@
           <el-radio-group v-model="form.module_type">
             <el-radio label="backend">后端</el-radio>
             <el-radio label="frontend">前端</el-radio>
+            <el-radio label="zkv">z-kv-secrets</el-radio>
           </el-radio-group>
+          <div v-if="form.module_type === 'zkv'" class="form-hint">整份密钥 chart，供新项目「初始化 z-kv-secrets」时复制</div>
         </el-form-item>
         <el-form-item label="样板环境" required>
           <el-select v-model="form.src_env" placeholder="样板服务所在项目环境" filterable style="width: 100%">
@@ -51,7 +53,8 @@
           </el-select>
         </el-form-item>
         <el-form-item label="样板服务" required>
-          <el-input v-model="form.src_service" placeholder="chart_base_path 下的服务目录名" />
+          <el-input v-if="form.module_type !== 'zkv'" v-model="form.src_service" placeholder="chart_base_path 下的服务目录名" />
+          <el-input v-else model-value="z-kv-secrets" disabled placeholder="z-kv-secrets（固定）" />
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" />
@@ -86,6 +89,7 @@ function openTpl(row) {
 
 async function save() {
   const f = form.value
+  if (f.module_type === 'zkv') f.src_service = 'z-kv-secrets' // zkv 类型源目录固定
   if (!f.name.trim() || !f.src_env || !f.src_service.trim()) {
     ElMessage.warning('模板名 / 样板环境 / 样板服务 必填')
     return

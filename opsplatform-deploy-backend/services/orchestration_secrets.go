@@ -121,6 +121,96 @@ func ExtraEnvVarNames(content []byte) []string {
 	return names
 }
 
+// RenameSecretRefs 把服务 values 的 extraEnvVars 里引用的 secret 名的「项目前缀」换成目标项目前缀。
+// 跨项目复用模板时用：模板样板来自 g32，secret 名带 g32-；换到 g50 环境要变 g50-nacos-secret。
+//   knownProjects: 所有已登记项目名集合（project_env 去 -env 后缀）。
+//   规则：secret 名第一段(第一个 '-' 前)命中 knownProjects 且 != dstProj → 换成 dstProj；
+//        无项目前缀的(encyrpt-salt)、已是目标前缀的，不动。用 yaml.Node 精准改每个 name，不误伤别处。
+func RenameSecretRefs(content []byte, knownProjects map[string]bool, dstProj string) []byte {
+	if dstProj == "" {
+		return content
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil || len(root.Content) == 0 {
+		return content
+	}
+	seq, err := findMappingKey(root.Content[0], "extraEnvVars")
+	if err != nil || seq.Kind != yaml.SequenceNode {
+		return content
+	}
+	changed := false
+	for _, item := range seq.Content {
+		if item.Kind != yaml.MappingNode {
+			continue
+		}
+		n, e := findMappingKey(item, "name")
+		if e != nil {
+			continue
+		}
+		name := strings.TrimSpace(n.Value)
+		i := strings.Index(name, "-")
+		if i <= 0 {
+			continue
+		}
+		if prefix := name[:i]; prefix != dstProj && knownProjects[prefix] {
+			n.Value = dstProj + name[i:]
+			changed = true
+		}
+	}
+	if !changed {
+		return content
+	}
+	if out, e := encodeYAML(&root); e == nil {
+		return out
+	}
+	return content
+}
+
+// RenameZkvSecretNames 初始化 z-kv-secrets 时用：把 secrets:/tidbSecrets: 两段里每条的 name 项目前缀
+// 换成目标项目前缀（key/value 不动）。规则同 RenameSecretRefs：第一段命中 knownProjects 且 != dstProj → 换。
+func RenameZkvSecretNames(content []byte, knownProjects map[string]bool, dstProj string) []byte {
+	if dstProj == "" {
+		return content
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil || len(root.Content) == 0 {
+		return content
+	}
+	doc := root.Content[0]
+	changed := false
+	for _, seg := range []string{"secrets", "tidbSecrets"} {
+		seq, err := findMappingKey(doc, seg)
+		if err != nil || seq.Kind != yaml.SequenceNode {
+			continue
+		}
+		for _, item := range seq.Content {
+			if item.Kind != yaml.MappingNode {
+				continue
+			}
+			n, e := findMappingKey(item, "name")
+			if e != nil {
+				continue
+			}
+			name := strings.TrimSpace(n.Value)
+			i := strings.Index(name, "-")
+			if i <= 0 {
+				continue
+			}
+			if prefix := name[:i]; prefix != dstProj && knownProjects[prefix] {
+				n.Value = dstProj + name[i:]
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return content
+	}
+	if out, e := encodeYAML(&root); e == nil {
+		return out
+	}
+	return content
+}
+
 // AppendTidbSecret 往 z-kv-secrets values 的 tidbSecrets: 段追加一条（保序/保注释，同名查重不覆盖）。
 func AppendTidbSecret(content []byte, e TidbSecretEntry) ([]byte, error) {
 	var root yaml.Node
