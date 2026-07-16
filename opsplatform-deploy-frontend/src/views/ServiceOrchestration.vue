@@ -167,6 +167,11 @@
             active-text="disable:true 安全预演（先不生成 Application）"
             inactive-text="关闭=直接部署（生成 Application，默认）" />
         </el-form-item>
+        <!-- [debug-skip-img] 临时调试开关，测完删 -->
+        <el-form-item label="镜像校验">
+          <el-switch v-model="skipImg" :active-value="true" :inactive-value="false" />
+          <span class="skip-img-hint">跳过缺镜像校验（⚠ 仅测试用，正常发布勿开）</span>
+        </el-form-item>
 
         <div v-if="preview" class="preview-box">
           <el-alert v-if="preview.helm_skipped" type="warning" :closable="false" title="helm 未安装，跳过渲染校验" />
@@ -266,6 +271,11 @@
         </el-form-item>
         <el-form-item label="ArgoCD">
           <el-switch v-model="batch.disable" :active-value="true" :inactive-value="false" active-text="disable:true 安全预演" inactive-text="关闭=直接部署（默认）" />
+        </el-form-item>
+        <!-- [debug-skip-img] 临时调试开关，测完删 -->
+        <el-form-item label="镜像校验">
+          <el-switch v-model="batchSkipImg" :active-value="true" :inactive-value="false" />
+          <span class="skip-img-hint">跳过缺镜像校验（⚠ 仅测试用，正常发布勿开）</span>
         </el-form-item>
 
         <div v-if="batchResult" class="preview-box">
@@ -386,6 +396,7 @@ const submitted = ref(null)
 const canPrefill = computed(() => envId.value && form.value.templateId && form.value.moduleName.trim())
 const imageMissing = ref(false)
 const imageMissingMsg = ref('')
+const skipImg = ref(false) // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
 // 预填后的镜像/域名短显示（Harbor项目/tag/域名），只读展示，避免看长串完整地址
 const imgPreview = ref(null) // { short, tag, domain }
 // 后端专属密钥分类（已存在复用 / 待新建填内容），来自 prefill 的 secret_refs
@@ -393,8 +404,9 @@ const secretRefs = ref(null) // { zkv_path, zkv_found, existing[], pending[{name
 const secMode = ref('form')  // 表单 / YAML 双模式
 const secYaml = ref('')      // YAML 模式：将追加到 z-kv-secrets 的片段
 // 缺镜像 / 专属密钥 database 没填全时：helm 预览 + 确认提交都禁用
-const canPreview = computed(() => canPrefill.value && form.value.namespace.trim() && form.value.valuesYaml.trim() && !imageMissing.value && pendingTidbFilled.value)
-const canSubmit = computed(() => preview.value && (preview.value.helm_ok || preview.value.helm_skipped) && !imageMissing.value && pendingTidbFilled.value)
+// [debug-skip-img] skipImg 勾上时跳过缺镜像拦截（测完删）
+const canPreview = computed(() => canPrefill.value && form.value.namespace.trim() && form.value.valuesYaml.trim() && (!imageMissing.value || skipImg.value) && pendingTidbFilled.value)
+const canSubmit = computed(() => preview.value && (preview.value.helm_ok || preview.value.helm_skipped) && (!imageMissing.value || skipImg.value) && pendingTidbFilled.value)
 
 function resetPreview() { preview.value = null; submitted.value = null; imageMissing.value = false; imageMissingMsg.value = '' }
 
@@ -406,6 +418,7 @@ function openAdd() {
   nsOptionsSingle.value = []
   imgPreview.value = null
   secretRefs.value = null
+  skipImg.value = false // [debug-skip-img] 测完删
   resetPreview()
   addDialog.value = true
 }
@@ -430,6 +443,7 @@ function reqBody() {
         })),
       }),
     disable: form.value.disable,
+    skip_image_check: skipImg.value, // [debug-skip-img] 测完删
   }
 }
 
@@ -530,6 +544,7 @@ async function doSubmit() {
 // ---- 批量新增 ----
 const batchDialog = ref(false)
 const batch = ref({ templateId: null, paste: '', disable: false, rows: [] })
+const batchSkipImg = ref(false) // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
 const batchResult = ref(null)
 const batchSubmitted = ref(null)
 const batchPreviewing = ref(false)
@@ -589,6 +604,7 @@ function rowStatus(name) {
 
 function openBatch() {
   batch.value = { templateId: null, paste: '', disable: false, rows: [] }
+  batchSkipImg.value = false // [debug-skip-img] 测完删
   resetBatch()
   batchDialog.value = true
 }
@@ -638,6 +654,7 @@ function batchBody() {
     template_id: batch.value.templateId,
     target_env_id: envId.value,
     disable: batch.value.disable,
+    skip_image_check: batchSkipImg.value, // [debug-skip-img] 测完删
     rows: validRows.value.map(r => ({ module_name: r.module_name.trim(), namespace: r.namespace.trim(), values_yaml: r.values_yaml || '', configmaps: r.configmaps || [] })),
   }
 }
@@ -695,6 +712,7 @@ onMounted(async () => {
 .kv-table .kv-k { color: #909399; font-size: 12px; white-space: nowrap; width: 90px; background: var(--el-fill-color); }
 .kv-table code { background: var(--el-fill-color); padding: 1px 6px; border-radius: 4px; font-size: 12px; word-break: break-all; }
 .ip-none { color: #c0c4cc; font-size: 12px; }
+.skip-img-hint { margin-left: 10px; color: #d97706; font-size: 12px; } /* [debug-skip-img] 测完删 */
 .sec-box { width: 100%; padding: 10px 12px; background: var(--el-fill-color-light); border-radius: 6px; }
 .sec-src { font-size: 12px; color: #909399; margin-bottom: 8px; }
 .sec-grp { margin-top: 6px; }

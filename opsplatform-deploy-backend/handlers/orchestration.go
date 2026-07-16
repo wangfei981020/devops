@@ -617,6 +617,7 @@ type moduleAddReq struct {
 	Configmaps    []cmItem       `json:"configmaps"`      // 用户编辑过的 configmap（可空）
 	NewSecrets    []newSecretReq `json:"new_secrets"`     // 表单模式：待新建 secret（tidb / opaque）
 	NewSecretsYAML string        `json:"new_secrets_yaml"` // YAML 模式：直接编辑的片段（非空时优先）
+	SkipImageCheck bool          `json:"skip_image_check"` // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
 	Disable       *bool          `json:"disable"`         // 默认 true（安全预演，app-of-apps 先不生成）
 }
 
@@ -739,9 +740,12 @@ func HandleSubmitModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 缺镜像硬卡：Harbor 里没有该 image.repository:tag 就禁止提交（Harbor 未配/连不上则跳过）
-	if err := verifyImageForSubmit(spec.ValuesYAML, spec.ModuleName, dst.EnvType); err != nil {
-		JSONError(w, 40001, err.Error())
-		return
+	// [debug-skip-img] 临时调试开关勾上时跳过（测完删）
+	if !req.SkipImageCheck {
+		if err := verifyImageForSubmit(spec.ValuesYAML, spec.ModuleName, dst.EnvType); err != nil {
+			JSONError(w, 40001, err.Error())
+			return
+		}
 	}
 	operator := UsernameFromCtx(r)
 	msg := fmt.Sprintf("feat(%s): add module %s", dst.Name, spec.ModuleName)
@@ -781,9 +785,10 @@ func HandleSubmitModule(w http.ResponseWriter, r *http.Request) {
 // ============ 批量新增 ============
 
 type batchReq struct {
-	TemplateID  int64 `json:"template_id"`
-	TargetEnvID int64 `json:"target_env_id"`
-	Disable     *bool `json:"disable"`
+	TemplateID     int64 `json:"template_id"`
+	TargetEnvID    int64 `json:"target_env_id"`
+	Disable        *bool `json:"disable"`
+	SkipImageCheck bool  `json:"skip_image_check"` // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
 	Rows        []struct {
 		ModuleName string   `json:"module_name"`
 		Namespace  string   `json:"namespace"`
@@ -916,10 +921,13 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 缺镜像硬卡：任一行的镜像在 Harbor 缺失就禁止整批提交
-	for _, rr := range rows {
-		if err := verifyImageForSubmit(rr.ValuesYAML, rr.ModuleName, dst.EnvType); err != nil {
-			JSONError(w, 40001, err.Error())
-			return
+	// [debug-skip-img] 临时调试开关勾上时跳过（测完删）
+	if !req.SkipImageCheck {
+		for _, rr := range rows {
+			if err := verifyImageForSubmit(rr.ValuesYAML, rr.ModuleName, dst.EnvType); err != nil {
+				JSONError(w, 40001, err.Error())
+				return
+			}
 		}
 	}
 	operator := UsernameFromCtx(r)
