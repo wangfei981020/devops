@@ -78,12 +78,24 @@
                 <td class="kv-k">tag</td>
                 <td><code v-if="imgPreview.tag">{{ imgPreview.tag }}</code><span v-else class="miss">缺镜像</span></td>
               </tr>
-              <tr>
-                <td class="kv-k">域名</td>
-                <td><code v-if="imgPreview.domain">{{ imgPreview.domain }}</code><span v-else class="ip-none">无</span></td>
-              </tr>
             </tbody>
           </table>
+        </el-form-item>
+        <!-- 域名：所有环境可配多个；生产按数量生成占位域名(平均分到主域名)再手改 -->
+        <el-form-item v-if="ingressEnabled" label="域名">
+          <div class="dom-box">
+            <div v-if="isProdEnv" class="dom-gen">
+              生成 <el-input-number v-model="domCount" :min="1" :max="20" size="small" style="width:110px" /> 个
+              <span class="dom-primary">主域名：{{ primaryDomains.length ? primaryDomains.join('、') : '未配置(去项目参数配主域名)' }}</span>
+              <el-button size="small" :disabled="!primaryDomains.length" @click="genProdDomains">生成</el-button>
+              <div class="dom-tip">⚠ 主机头 xxx 是占位，请手动改成实际主机头（随机自动生成后期做）</div>
+            </div>
+            <div v-for="(d, i) in domains" :key="i" class="dom-row">
+              <el-input v-model="domains[i]" size="small" style="width:360px" placeholder="如 xxx.dragontiger-game.com" />
+              <el-button link type="danger" size="small" @click="domains.splice(i, 1)">×</el-button>
+            </div>
+            <el-button link type="primary" size="small" @click="domains.push('')">+ 加域名</el-button>
+          </div>
         </el-form-item>
         <el-form-item v-if="secretRefs && (secretRefs.existing.length || secretRefs.pending.length)" label="密钥">
           <div class="sec-box">
@@ -399,8 +411,26 @@ const imageMissingMsg = ref('')
 const skipImg = ref(false) // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
 // 预填后的镜像/域名短显示（Harbor项目/tag/域名），只读展示，避免看长串完整地址
 const imgPreview = ref(null) // { short, tag, domain }
+// 访问域名（所有环境可配多个；生产按数量生成占位）
+const domains = ref([])          // 当前域名列表（可加删改）
+const primaryDomains = ref([])   // 项目参数配的主域名列表（生产生成用）
+const isProdEnv = ref(false)     // 目标环境是否 prod
+const ingressEnabled = ref(false)// 模板是否开 ingress（开了才显示域名区）
+const domCount = ref(1)          // 生产：要生成几个域名
 // 后端专属密钥分类（已存在复用 / 待新建填内容），来自 prefill 的 secret_refs
 const secretRefs = ref(null) // { zkv_path, zkv_found, existing[], pending[{name,type,namespace,database,extra[],use_data,manual}] }
+
+// 生产：把 domCount 个域名平均分配到多个主域名（轮流），主机头 xxx1..N 占位
+function genProdDomains() {
+  const pd = primaryDomains.value
+  if (!pd.length) return
+  const out = []
+  for (let i = 0; i < domCount.value; i++) {
+    const dom = String(pd[i % pd.length]).replace(/^\.+/, '')
+    out.push(`xxx${i + 1}.${dom}`)
+  }
+  domains.value = out
+}
 const secMode = ref('form')  // 表单 / YAML 双模式
 const secYaml = ref('')      // YAML 模式：将追加到 z-kv-secrets 的片段
 // 缺镜像 / 专属密钥 database 没填全时：helm 预览 + 确认提交都禁用
@@ -418,6 +448,7 @@ function openAdd() {
   nsOptionsSingle.value = []
   imgPreview.value = null
   secretRefs.value = null
+  domains.value = []; primaryDomains.value = []; isProdEnv.value = false; ingressEnabled.value = false; domCount.value = 1
   skipImg.value = false // [debug-skip-img] 测完删
   resetPreview()
   addDialog.value = true
@@ -442,6 +473,7 @@ function reqBody() {
           extra: (p.extra || []).filter(kv => (kv.key || '').trim()),
         })),
       }),
+    domains: domains.value.map(d => (d || '').trim()).filter(Boolean), // 访问域名(覆盖 values host)
     disable: form.value.disable,
     skip_image_check: skipImg.value, // [debug-skip-img] 测完删
   }
@@ -501,7 +533,13 @@ async function doPrefill() {
     if (!form.value.namespace) form.value.namespace = r.suggest_namespace || ''
     lastPrefilledName.value = form.value.moduleName.trim()
     resetPreview()
-    imgPreview.value = { full: r.image_repository || '', short: r.image_short || '', tag: r.latest_tag || '', domain: r.domain || '' }
+    imgPreview.value = { full: r.image_repository || '', short: r.image_short || '', tag: r.latest_tag || '' }
+    // 域名：非生产带出自动单个；生产为空(点生成)。主域名列表 + 是否生产 + 是否开 ingress
+    domains.value = (r.domains || []).slice()
+    primaryDomains.value = r.primary_domains || []
+    isProdEnv.value = !!r.is_prod
+    ingressEnabled.value = !!r.ingress_enabled
+    domCount.value = 1
     secMode.value = 'form'; secYaml.value = ''
     const sr = r.secret_refs || null
     if (sr) (sr.pending || []).forEach(p => { p.manual = false; p.extra = p.extra || [] })
@@ -713,6 +751,11 @@ onMounted(async () => {
 .kv-table code { background: var(--el-fill-color); padding: 1px 6px; border-radius: 4px; font-size: 12px; word-break: break-all; }
 .ip-none { color: #c0c4cc; font-size: 12px; }
 .skip-img-hint { margin-left: 10px; color: #d97706; font-size: 12px; } /* [debug-skip-img] 测完删 */
+.dom-box { width: 100%; }
+.dom-gen { padding: 8px 10px; background: var(--el-fill-color-light); border-radius: 6px; margin-bottom: 8px; }
+.dom-primary { margin: 0 10px; color: #606266; font-size: 12px; }
+.dom-tip { color: #d97706; font-size: 12px; margin-top: 4px; }
+.dom-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
 .sec-box { width: 100%; padding: 10px 12px; background: var(--el-fill-color-light); border-radius: 6px; }
 .sec-src { font-size: 12px; color: #909399; margin-bottom: 8px; }
 .sec-grp { margin-top: 6px; }

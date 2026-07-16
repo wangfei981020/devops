@@ -23,13 +23,14 @@ import (
 type newModDeploy struct {
 	Module    string
 	Namespace string
-	Version   string // image.tag，用于 Lark 卡片版本号
-	App       string // ArgoCD app 名
+	Version   string   // image.tag，用于 Lark 卡片版本号
+	Domains   []string // 访问域名（前端模块才有），Lark 卡片列出
+	App       string   // ArgoCD app 名
 }
 
 // ---------- 单个 ----------
 
-func deployAndPollNewModule(taskID, envID int64, operator, moduleName, namespace, version string, start time.Time) {
+func deployAndPollNewModule(taskID, envID int64, operator, moduleName, namespace, version string, domains []string, start time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 	defer cancel()
 	p, err := LoadProjectEnvDecrypted(envID)
@@ -46,7 +47,7 @@ func deployAndPollNewModule(taskID, envID int64, operator, moduleName, namespace
 		finishOrchTask(taskID, "success", skipNote, nil, dur(start)) // 无 argocd/未开自动同步 → 已提交，不发 Lark
 		return
 	}
-	m := newModDeploy{Module: moduleName, Namespace: namespace, Version: version, App: appName}
+	m := newModDeploy{Module: moduleName, Namespace: namespace, Version: version, Domains: domains, App: appName}
 	pollAndFinishModule(ctx, client, p, taskID, operator, m, start, true)
 }
 
@@ -76,7 +77,7 @@ func pollAndFinishModule(ctx context.Context, client *services.ArgocdClient, p *
 			r := models.ArgocdAppResult{App: m.App, SyncStatus: "Failed", Msg: msg, DurationSec: dur(start), LastPolledAt: time.Now()}
 			finishOrchTask(taskID, "failed", msg, marshalJSON([]models.ArgocdAppResult{r}), dur(start))
 			log.Printf("⚠ [orch-fail] task=%d env=%s app=%s 等待 Application 超时", taskID, p.Name, m.App)
-			sendOrchNotify(p, operator, nil, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, FailMsg: msg}})
+			sendOrchNotify(p, operator, nil, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, Domains: m.Domains, FailMsg: msg}})
 			return
 		}
 	}
@@ -99,13 +100,13 @@ func pollAndFinishModule(ctx context.Context, client *services.ArgocdClient, p *
 	}
 	finishOrchTask(taskID, status, note, marshalJSON(results), dur(start))
 	if ok {
-		sendOrchNotify(p, operator, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version}}, nil)
+		sendOrchNotify(p, operator, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, Domains: m.Domains}}, nil)
 	} else {
 		fm := ""
 		if r != nil {
 			fm = r.Msg
 		}
-		sendOrchNotify(p, operator, nil, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, FailMsg: fm}})
+		sendOrchNotify(p, operator, nil, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, Domains: m.Domains, FailMsg: fm}})
 	}
 }
 
@@ -151,7 +152,7 @@ func deployAndPollBatch(taskID, envID int64, operator string, mods []newModDeplo
 	var successes, faileds []deployNotifyItem
 	okN := 0
 	for i, r := range results {
-		item := deployNotifyItem{Module: mods[i].Module, Namespace: mods[i].Namespace, ToTag: mods[i].Version}
+		item := deployNotifyItem{Module: mods[i].Module, Namespace: mods[i].Namespace, ToTag: mods[i].Version, Domains: mods[i].Domains}
 		if strings.EqualFold(r.SyncStatus, "Synced") && strings.EqualFold(r.Health, "Healthy") {
 			successes = append(successes, item)
 			okN++

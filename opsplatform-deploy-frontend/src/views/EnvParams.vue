@@ -26,9 +26,11 @@
           <span v-else class="unset">未配置（默认用 {{ projName(row) }}）</span>
         </template>
       </el-table-column>
-      <el-table-column label="域名后缀" min-width="170">
+      <el-table-column label="主域名（可配多个）" min-width="200">
         <template #default="{ row }">
-          <code v-if="row.domain_suffix">{{ row.domain_suffix }}</code>
+          <span v-if="domList(row).length">
+            <el-tag v-for="(d, i) in domList(row)" :key="d" size="small" :type="i === 0 ? 'primary' : 'info'" style="margin:1px 3px 1px 0">{{ d }}</el-tag>
+          </span>
           <span v-else class="unset">未配置（域名留空）</span>
         </template>
       </el-table-column>
@@ -76,9 +78,9 @@
           <el-input v-model="harbor" :placeholder="`留空=用项目名 ${projName(editing)}`" />
           <div class="form-hint">镜像仓库 = 全局 Harbor 域名 / 这里的项目 / 服务名；留空自动用项目名，预填后仍可手改</div>
         </el-form-item>
-        <el-form-item label="域名后缀">
-          <el-input v-model="domain" placeholder="如 uat.slileisure.com" />
-          <div class="form-hint">前端模块(-frontend)访问域名自动带出 = 模块名去 -frontend + . + 这里的后缀；留空=域名不自动带，预填后仍可手改</div>
+        <el-form-item label="主域名">
+          <el-input v-model="domain" type="textarea" :rows="3" placeholder="一行一个（可配多个），如 uat.slileisure.com / dragontiger-game.com" />
+          <div class="form-hint">非生产：访问域名 = 模块名去 -frontend + . + 第一个主域名（自动带）。生产：新增时按数量把域名平均分配到这些主域名生成占位（xxx1.主域名…）再手改。留空=域名不自动带。</div>
         </el-form-item>
         <el-form-item label="namespace 列表">
           <el-input v-model="namespaces" type="textarea" :rows="4" :placeholder="`一行一个（可配多个），第一个作默认。留空=用环境名 ${editing?.name}`" />
@@ -170,6 +172,10 @@ const zkvPath = ref('')
 // 把配置的 namespace 原文拆成数组（换行/逗号/空格分隔），供展示
 function nsList(row) {
   return (row?.default_namespaces || '').split(/[\n,\s]+/).map(s => s.trim()).filter(Boolean)
+}
+// 主域名列表（domain_suffix 现在存多个，换行/逗号/空格分隔）
+function domList(row) {
+  return (row?.domain_suffix || '').split(/[\n,\s]+/).map(s => s.trim()).filter(Boolean)
 }
 
 // z-kv-secrets 自动推导默认路径 = <chart_base_path>/z-kv-secrets（跟后端一致，展示用）

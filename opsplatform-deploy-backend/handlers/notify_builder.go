@@ -22,11 +22,12 @@ import (
 // =========================================================================
 
 type deployNotifyItem struct {
-	Module    string // 容器名（模块名）
-	Namespace string // k8s namespace（来自 module.namespace，扫描时从 apps/values.yaml 读）
-	FromTag   string // 旧 tag；restart 不适用
-	ToTag     string // 新 tag（restart 就填当前 tag）
-	FailMsg   string // 失败原因，只对 failed 组有意义
+	Module    string   // 容器名（模块名）
+	Namespace string   // k8s namespace（来自 module.namespace，扫描时从 apps/values.yaml 读）
+	FromTag   string   // 旧 tag；restart 不适用
+	ToTag     string   // 新 tag（restart 就填当前 tag）
+	Domains   []string // 访问域名（前端模块才有；多个逐行列，空则不显示这段）
+	FailMsg   string   // 失败原因，只对 failed 组有意义
 }
 
 // buildDeployNotifyBody 构造**单一类型** Lark 卡片正文（要么纯成功 / 跳过 / 失败之一）。
@@ -98,6 +99,13 @@ func buildDeployNotifyBody(
 				fmt.Fprintf(&sb, "   **版本号**: %s（当前版本相同，跳过）\n", it.ToTag)
 			} else {
 				fmt.Fprintf(&sb, "   **版本号**: %s\n", it.ToTag)
+			}
+		}
+		// 访问域名（前端模块才有；多个逐行列，无则不显示这段）
+		if len(it.Domains) > 0 {
+			fmt.Fprintf(&sb, "   **域名**: %s\n", it.Domains[0])
+			for _, d := range it.Domains[1:] {
+				fmt.Fprintf(&sb, "         %s\n", d)
 			}
 		}
 		sb.WriteString("\n")

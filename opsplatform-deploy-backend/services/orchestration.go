@@ -147,6 +147,53 @@ func SetIngressHost(content []byte, host string) []byte {
 	return content
 }
 
+// SetIngressHosts 把 ingressGateway.host 设成多条（域名支持多个）。空列表则清空。
+// 只在存在 ingressGateway.host 时生效（非前端/无 ingress 模板原样返回）。用块状序列（一行一个）。
+func SetIngressHosts(content []byte, hosts []string) []byte {
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil || len(root.Content) == 0 {
+		return content
+	}
+	h, err := findMappingKey(root.Content[0], "ingressGateway", "host")
+	if err != nil {
+		return content
+	}
+	h.Kind = yaml.SequenceNode
+	h.Tag = "!!seq"
+	h.Style = 0 // 块状（一行一个），多域名更好读
+	h.Content = nil
+	for _, host := range hosts {
+		host = strings.TrimSpace(host)
+		if host == "" {
+			continue
+		}
+		h.Content = append(h.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: host})
+	}
+	if out, e := encodeYAML(&root); e == nil {
+		return out
+	}
+	return content
+}
+
+// GetIngressHosts 读 ingressGateway.host 的所有域名（Lark 卡片显示用）。无则返回 nil。
+func GetIngressHosts(content []byte) []string {
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil || len(root.Content) == 0 {
+		return nil
+	}
+	h, err := findMappingKey(root.Content[0], "ingressGateway", "host")
+	if err != nil || h.Kind != yaml.SequenceNode {
+		return nil
+	}
+	var out []string
+	for _, n := range h.Content {
+		if v := strings.TrimSpace(n.Value); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // EnsureGlobalLabels 兜底：values 里没有 global.labels 就补一个 global: { labels: {} }。
 // 因为服务的 helper(如 web.labels)会读 .Values.global.labels，而部署时不注入 global，
 // 缺这行就 nil pointer。已有则原样不动。global 段插在最前(跟工作正常的服务一致)。

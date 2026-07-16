@@ -330,11 +330,12 @@ func templateIngressEnabled(ctx context.Context, templateID int64) bool {
 //   ingressEnabled=模板是否开了对外访问(ingressGateway.enabled)——开了才带域名(前端/后端都算)。
 //   域名后缀没配 → 返回空。
 func deriveDomainForEnv(dst *models.ProjectEnv, moduleName string, ingressEnabled bool) string {
-	suffix := strings.TrimSpace(dst.DomainSuffix)
-	if suffix == "" || !ingressEnabled {
+	doms := parseNamespaces(dst.DomainSuffix) // 主域名列表(多个)，同 namespace 格式(换行/逗号)
+	if len(doms) == 0 || !ingressEnabled {
 		return ""
 	}
-	return stripTypeSuffix(moduleName) + "." + strings.TrimLeft(suffix, ".")
+	// 非生产：取第一个主域名推 <模块名去后缀>.<主域名>（生产走「按数量生成占位」，不在这自动推）
+	return stripTypeSuffix(moduleName) + "." + strings.TrimLeft(doms[0], ".")
 }
 
 // stripTypeSuffix 去掉模块名的 -frontend/-backend 后缀，得域名前缀。
@@ -554,10 +555,15 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 	if f, err := services.ApplyEnvIngress(filled, dst.IngressGateway); err == nil {
 		filled = f
 	}
-	// 访问域名自动带出：模板开了 ingress(前端/后端ingress) → <模块名去后缀>.<域名后缀>（可手改）
-	if domain := deriveDomainForEnv(dst, req.ModuleName, ingressEnabledFromValues(raw)); domain != "" {
-		filled = services.SetIngressHost(filled, domain)
+	// 访问域名：非生产自动带 <模块名去后缀>.<第一个主域名> 单个；生产留空（前端按数量生成占位再手改）。
+	isProd := dst.EnvType == "prod"
+	domains := []string{}
+	if !isProd {
+		if domain := deriveDomainForEnv(dst, req.ModuleName, ingressEnabledFromValues(raw)); domain != "" {
+			domains = []string{domain}
+		}
 	}
+	filled = services.SetIngressHosts(filled, domains)
 	// 镜像仓库自动推导：全局 harbor 域名 / 该环境 Harbor 项目(留空=项目名) / 服务名。
 	// 只是智能默认值，用户可在编辑器里手动改；没配全局 harbor 域名则保留模板原值。
 	imageMissing := false
@@ -597,7 +603,10 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 		"image_repository":  imageRepo,
 		"image_short":       harborShortRepo(imageRepo),                                          // 去域名短显示：g32/301game-frontend
 		"latest_tag":        latestTag,                                                            // 自动带出的最新 tag（缺镜像为空）
-		"domain":            deriveDomainForEnv(dst, req.ModuleName, ingressEnabledFromValues(raw)), // 访问域名（无 ingress/无后缀为空）
+		"domains":           domains,                                        // 访问域名列表(非生产自动带1个/生产空)；前端可加删改
+		"primary_domains":   parseNamespaces(dst.DomainSuffix),              // 主域名列表(生产按数量生成占位域名用)
+		"is_prod":           isProd,                                         // 生产环境：前端走"按数量生成占位域名"
+		"ingress_enabled":   ingressEnabledFromValues(raw),                  // 模板是否开 ingress(开了才有域名)
 		"image_missing":     imageMissing,                                                         // true=Harbor 缺该镜像 → 前端红字禁止提交/预览
 		"image_missing_msg": func() string {
 			if imageMissing {
@@ -617,6 +626,7 @@ type moduleAddReq struct {
 	Configmaps    []cmItem       `json:"configmaps"`      // 用户编辑过的 configmap（可空）
 	NewSecrets    []newSecretReq `json:"new_secrets"`     // 表单模式：待新建 secret（tidb / opaque）
 	NewSecretsYAML string        `json:"new_secrets_yaml"` // YAML 模式：直接编辑的片段（非空时优先）
+	Domains       []string       `json:"domains"`         // 访问域名列表（前端域名区编辑后的，覆盖 values 的 ingressGateway.host）
 	SkipImageCheck bool          `json:"skip_image_check"` // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
 	Disable       *bool          `json:"disable"`         // 默认 true（安全预演，app-of-apps 先不生成）
 }
@@ -665,6 +675,8 @@ func (req *moduleAddReq) toSpec(w http.ResponseWriter) (services.ModuleSpec, *mo
 		return services.ModuleSpec{}, nil, false
 	}
 	spec.ValuesYAML = []byte(req.ValuesYAML)
+	// 域名区编辑后的访问域名覆盖进 values 的 ingressGateway.host（多条；无 ingress 的模板原样不变）
+	spec.ValuesYAML = services.SetIngressHosts(spec.ValuesYAML, req.Domains)
 	spec.ConfigMaps = cmMap(req.Configmaps)
 	// 后端专属密钥：往目标环境 z-kv-secrets 追加（路径按项目参数配/自动推）
 	spec.ZkvSecretsPath = zkvSecretsPathForEnv(dst)
@@ -777,7 +789,8 @@ func HandleSubmitModule(w http.ResponseWriter, r *http.Request) {
 		}
 		// 真部署 → 轮询新模块的 ArgoCD app 到 Synced+Healthy，成功/失败发 Lark
 		_, version := services.GetImageRepoTag(spec.ValuesYAML)
-		deployAndPollNewModule(taskID, envID, operator, spec.ModuleName, spec.Namespace, version, start)
+		domains := services.GetIngressHosts(spec.ValuesYAML) // 前端模块的访问域名，Lark 卡片列出
+		deployAndPollNewModule(taskID, envID, operator, spec.ModuleName, spec.Namespace, version, domains, start)
 	})
 	JSONSuccess(w, map[string]interface{}{"task_id": taskID, "status": "pending"})
 }
@@ -847,8 +860,11 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 			if f, err := services.ApplyEnvIngress(vals, dst.IngressGateway); err == nil {
 				vals = f
 			}
-			if domain := deriveDomainForEnv(dst, name, ingressEnabledFromValues(raw)); domain != "" {
-				vals = services.SetIngressHost(vals, domain)
+			// 域名：非生产自动带单个；生产留空（批量生产域名先留空，需要在配置里手填/后续做）
+			if dst.EnvType != "prod" {
+				if domain := deriveDomainForEnv(dst, name, ingressEnabledFromValues(raw)); domain != "" {
+					vals = services.SetIngressHosts(vals, []string{domain})
+				}
 			}
 			if repo := deriveImageRepoForEnv(dst, name); repo != "" {
 				vals = services.SetImageRepository(vals, repo)
@@ -971,7 +987,7 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 		mods := make([]newModDeploy, 0, len(rows))
 		for _, rr := range rows {
 			_, ver := services.GetImageRepoTag(rr.ValuesYAML)
-			mods = append(mods, newModDeploy{Module: rr.ModuleName, Namespace: rr.Namespace, Version: ver})
+			mods = append(mods, newModDeploy{Module: rr.ModuleName, Namespace: rr.Namespace, Version: ver, Domains: services.GetIngressHosts(rr.ValuesYAML)})
 		}
 		deployAndPollBatch(taskID, dst.ID, operator, mods, start)
 	})
