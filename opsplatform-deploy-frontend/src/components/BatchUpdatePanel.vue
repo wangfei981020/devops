@@ -219,7 +219,7 @@ base-client-backend:20260416020000-99"
         <div v-if="!isRollback" class="extra-at">
           <span class="ea-label">额外艾特</span>
           <el-select v-model="extraAt" multiple filterable placeholder="选通知人（可留空）" size="small" style="min-width:280px">
-            <el-option v-for="c in atContactsWithLark" :key="c.lark_id" :label="`${c.name}（${c.lark_id}）`" :value="c.lark_id" />
+            <el-option v-for="c in atContactsWithLark" :key="c.lark_id" :label="c.name" :value="c.lark_id" />
           </el-select>
           <span v-if="envFixedAtNames.length" class="ea-fixed">已固定艾特：{{ envFixedAtNames.join('、') }}（自动带）</span>
         </div>

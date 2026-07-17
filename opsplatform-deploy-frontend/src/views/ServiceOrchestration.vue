@@ -176,7 +176,7 @@
         </el-form-item>
         <el-form-item label="额外艾特">
           <el-select v-model="extraAt" multiple filterable placeholder="选通知人（可留空）" style="width:100%">
-            <el-option v-for="c in atContactsWithLark" :key="c.lark_id" :label="`${c.name}（${c.lark_id}）`" :value="c.lark_id" />
+            <el-option v-for="c in atContactsWithLark" :key="c.lark_id" :label="c.name" :value="c.lark_id" />
           </el-select>
           <div class="hint" v-if="envFixedAt.length">已固定艾特：{{ envFixedAt.map(atName).join('、') }}（项目参数配的，自动带）</div>
           <div class="hint">发布后 Lark 一并艾特这些人（你自己会自动艾特，不用选）</div>

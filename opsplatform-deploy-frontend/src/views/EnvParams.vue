@@ -96,7 +96,7 @@
         </el-form-item>
         <el-form-item label="固定艾特人">
           <el-select v-model="atLarks" multiple filterable placeholder="选通知人（可多个）" style="width:100%">
-            <el-option v-for="c in contactsWithLark" :key="c.lark_id" :label="`${c.name}（${c.lark_id}）`" :value="c.lark_id" />
+            <el-option v-for="c in contactsWithLark" :key="c.lark_id" :label="c.name" :value="c.lark_id" />
           </el-select>
           <div class="form-hint">新增模块到 {{ editing?.name }} 时，Lark 自动艾特这些人（另加操作人、新增时临时选的）。选项来自「系统设置→通知人」</div>
         </el-form-item>
