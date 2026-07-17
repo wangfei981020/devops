@@ -321,7 +321,7 @@ func rerunDeployment(o orphanDeploy, p *models.ProjectEnv, opLabel string) bool 
 	gitRetry, interval, timeoutMin := loadPollCfg()
 	InflightTrack(func() {
 		defer ReleaseModuleLocks(p.Name, moduleNames)
-		runUpdateImageAsync(o.id, p, pending, modules, gitRetry, interval, timeoutMin, nil, operator, opLabel)
+		runUpdateImageAsync(o.id, p, pending, modules, gitRetry, interval, timeoutMin, nil, operator, opLabel, nil) // 自动重跑：只带环境固定艾特
 	})
 	return true
 }

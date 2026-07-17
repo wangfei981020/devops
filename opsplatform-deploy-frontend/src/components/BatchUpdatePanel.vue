@@ -214,7 +214,16 @@ base-client-backend:20260416020000-99"
 
     <!-- 提交条 -->
     <div class="exec" v-if="diff.length">
-      <div class="exec-info"></div>
+      <div class="exec-info">
+        <!-- 额外艾特（发布才有；回滚不带）-->
+        <div v-if="!isRollback" class="extra-at">
+          <span class="ea-label">额外艾特</span>
+          <el-select v-model="extraAt" multiple filterable placeholder="选通知人（可留空）" size="small" style="min-width:280px">
+            <el-option v-for="c in atContactsWithLark" :key="c.lark_id" :label="`${c.name}（${c.lark_id}）`" :value="c.lark_id" />
+          </el-select>
+          <span v-if="envFixedAtNames.length" class="ea-fixed">已固定艾特：{{ envFixedAtNames.join('、') }}（自动带）</span>
+        </div>
+      </div>
       <button
         v-if="canSubmit"
         :class="['cta', isProd ? 'danger' : (isRollback ? 'warn' : 'success')]"
@@ -236,11 +245,20 @@ base-client-backend:20260416020000-99"
 import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { Upload, ArrowRight } from '@element-plus/icons-vue'
-import { previewImage, updateImage, listHarborTags, refreshArgocdAppCache } from '../api'
+import { previewImage, updateImage, listHarborTags, refreshArgocdAppCache, listContacts } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useDeploymentsStore } from '../stores/deployments'
 
 const props = defineProps(['projectEnv', 'modules', 'rollbackMode'])
+
+// 额外艾特（发布临时）+ 环境固定艾特（项目参数配的，只读展示）
+const extraAt = ref([])
+const atContacts = ref([])
+const atContactsWithLark = computed(() => atContacts.value.filter(c => c.lark_id))
+const envFixedAtNames = computed(() => {
+  const ids = (props.projectEnv?.at_lark_ids || '').split(/[\n,\s]+/).map(s => s.trim()).filter(Boolean)
+  return ids.map(id => atContacts.value.find(c => c.lark_id === id)?.name || id)
+})
 const emit = defineEmits(['done', 'rollback-consumed'])
 const auth = useAuthStore()
 const deployments = useDeploymentsStore()
@@ -431,13 +449,14 @@ function copyPrecheck(items) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   // 进面板时拉一次 ArgoCD 校验缓存（异步，不阻塞）
   if (props.projectEnv?.id) {
     refreshArgocdAppCache(props.projectEnv.id).then(r => {
       argocdCacheAt.value = r.refresh_at || Math.floor(Date.now() / 1000)
     }).catch(() => { /* 静默失败 */ })
   }
+  atContacts.value = (await listContacts().catch(() => [])) || []
 })
 
 const isRollback = computed(() => !!props.rollbackMode)
@@ -594,6 +613,7 @@ async function onSubmit() {
   try {
     const payload = { project_env_id: props.projectEnv.id, changes }
     if (rbMode) payload.ref_deployment_id = props.rollbackMode.refDeploymentID
+    else payload.at_lark_ids = extraAt.value // 发布：本次临时额外艾特人（回滚不带）
     let r
     try {
       r = await updateImage(payload)
@@ -794,6 +814,9 @@ function handleLockConflict(err) {
   border-bottom-left-radius: var(--radius); border-bottom-right-radius: var(--radius);
 }
 .exec-info { font-size: 12.5px; color: #166534; }
+.extra-at { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ea-label { color: #606266; font-size: 12.5px; white-space: nowrap; }
+.ea-fixed { color: #909399; font-size: 12px; }
 .exec-info b { color: #14532d; font-family: var(--mono); font-weight: 600; }
 
 .cta {

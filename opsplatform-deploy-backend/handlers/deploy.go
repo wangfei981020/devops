@@ -131,6 +131,7 @@ type updateImageReq struct {
 	ProjectEnvID    int64               `json:"project_env_id"`
 	Changes         []map[string]string `json:"changes"` // [{module,tag}, ...]
 	RefDeploymentID int64               `json:"ref_deployment_id,omitempty"`
+	AtLarkIDs       []string            `json:"at_lark_ids"` // 本次临时额外艾特人（发布弹窗选的通知人）
 	// 传了 ref_deployment_id 表示"来自某次发布的回滚"；此时 action 记 rollback，
 	// tag 仍以前端 textarea 里的为准（用户可以在回滚基础上改 tag）
 }
@@ -221,9 +222,10 @@ func HandleUpdateImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tempAt := req.AtLarkIDs // 本次临时额外艾特人
 	InflightTrack(func() {
 		defer ReleaseModuleLocks(p.Name, moduleNames)
-		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, refID, op, opLabel)
+		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, refID, op, opLabel, tempAt)
 	})
 
 	// 把改动详情 (module → 新 tag) 全部写进审计；前端展开能看到具体改了哪几个模块
@@ -450,7 +452,7 @@ func HandleRollback(w http.ResponseWriter, r *http.Request) {
 
 	InflightTrack(func() {
 		defer ReleaseModuleLocks(p.Name, moduleNames)
-		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, &ref, op, "回滚")
+		runUpdateImageAsync(depID, p, pending, modules, retry, interval, timeoutMin, &ref, op, "回滚", nil) // 回滚只带环境固定艾特，无临时选
 	})
 
 	rollbackChanges := make([]map[string]string, 0, len(pending))
@@ -614,7 +616,7 @@ func preflightFilterPending(ctx context.Context, p *models.ProjectEnv,
 //
 //	opLabel: Lark 通知标题用 —— "发布" 或 "回滚"
 func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]string, modules map[string]services.Module,
-	gitRetry, pollInterval, pollTimeoutMin int, _refDepID *int64, operator, opLabel string) {
+	gitRetry, pollInterval, pollTimeoutMin int, _refDepID *int64, operator, opLabel string, tempAt []string) {
 	start := time.Now()
 	// 单 app 动态 timeout 上限是 30 分钟（services.timeoutCapSec），父 ctx 留 35 分钟够用
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
@@ -697,7 +699,7 @@ func runUpdateImageAsync(depID int64, p *models.ProjectEnv, pending map[string]s
 	}
 
 	ArchiveFailedPodLogs(depID, p, collectFailingPodsByApp(res.ArgocdResults))
-	sendUpdateImageNotify(p, depID, operator, opLabel, modules, res)
+	sendUpdateImageNotify(p, depID, operator, opLabel, tempAt, modules, res)
 }
 
 // runRestartAsync 后台跑完整的重启流水线。从 HandleRestart 抽出，供「重启前中断」的
@@ -831,17 +833,23 @@ func larkColorForStatus(status string) (color, title string) {
 //	**partial 场景拆成两张卡发送**（一张绿成功 + 一张红失败），其它纯成功/纯失败/无变更
 //	照常一张。所有卡都 @ 操作人，方便 cesar 这种业务负责人在 lark 群里被定位。
 func sendUpdateImageNotify(p *models.ProjectEnv, depID int64, operator, opLabel string,
-	modules map[string]services.Module, res *services.UpdateImageResult) {
+	tempAt []string, modules map[string]services.Module, res *services.UpdateImageResult) {
 	webhook, secret := resolveLarkTarget(p)
 	if webhook == "" {
 		log.Printf("lark skip: dep=%d no webhook configured (project_env=%s)", depID, p.Name)
 		_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, "skipped", depID)
 		return
 	}
-	atID := LookupContactLarkID(operator)
+	// 艾特 = 操作人 + 项目参数固定的 + 本次临时选的，去重
+	atIDs := mergeAtIDs(operator, p.AtLarkIDs, tempAt)
 	successes, skippeds, faileds := buildUpdateNotifyItems(modules, res)
-	sendCardSets(p, depID, operator, opLabel, atID, webhook, secret, res.GitCommitURL,
+	sendCardSets(p, depID, operator, opLabel, atIDs, webhook, secret, res.GitCommitURL,
 		successes, skippeds, faileds)
+}
+
+// mergeAtIDs 合并 操作人 + 环境固定艾特(项目参数) + 临时艾特，去重去空。
+func mergeAtIDs(operator, fixedRaw string, tempAt []string) []string {
+	return dedupNonEmpty(append(append([]string{LookupContactLarkID(operator)}, parseNamespaces(fixedRaw)...), tempAt...))
 }
 
 func sendRestartNotify(p *models.ProjectEnv, depID int64, operator string,
@@ -852,9 +860,10 @@ func sendRestartNotify(p *models.ProjectEnv, depID int64, operator string,
 		_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, "skipped", depID)
 		return
 	}
-	atID := LookupContactLarkID(operator)
+	// 重启：艾特 操作人 + 环境固定的（无临时选入口）
+	atIDs := mergeAtIDs(operator, p.AtLarkIDs, nil)
 	successes, faileds := buildRestartNotifyItems(modules, res)
-	sendCardSets(p, depID, operator, "重启", atID, webhook, secret, "",
+	sendCardSets(p, depID, operator, "重启", atIDs, webhook, secret, "",
 		successes, nil, faileds)
 }
 
@@ -862,7 +871,7 @@ func sendRestartNotify(p *models.ProjectEnv, depID int64, operator string,
 //   - 全部三组都为空 → 不发
 //   - 只有一组非空 → 发 1 张该类型卡
 //   - 多组非空 → 拆开发多张（先成功，后跳过，最后失败）
-func sendCardSets(p *models.ProjectEnv, depID int64, operator, opLabel, atID,
+func sendCardSets(p *models.ProjectEnv, depID int64, operator, opLabel string, atIDs []string,
 	webhook, secret, gitCommitURL string,
 	successes, skippeds, faileds []deployNotifyItem) {
 	type setEntry struct {
@@ -894,7 +903,7 @@ func sendCardSets(p *models.ProjectEnv, depID int64, operator, opLabel, atID,
 
 	anyFail := false
 	for _, s := range sets {
-		title, color, body := buildDeployNotifyBody(opLabel, operator, []string{atID}, s.kind, p.Name, p.EnvType, s.items)
+		title, color, body := buildDeployNotifyBody(opLabel, operator, atIDs, s.kind, p.Name, p.EnvType, s.items)
 		// 用带重试版：3 次 attempt，每次 10s + 1s/2s 退避，外层留 40s 总预算
 		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 		err := services.SendLarkCardWithRetry(ctx, webhook, secret, title, body, color, linkLabel, linkURL)
