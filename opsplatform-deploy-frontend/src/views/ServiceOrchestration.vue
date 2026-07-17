@@ -174,6 +174,13 @@
           </el-tabs>
           <div class="hint">自动从 templates/ 扫出的 configmap（多个按文件名分 tab），改里面的配置值；helm 变量 {{ }} 别动</div>
         </el-form-item>
+        <el-form-item label="额外艾特">
+          <el-select v-model="extraAt" multiple filterable placeholder="选通知人（可留空）" style="width:100%">
+            <el-option v-for="c in atContactsWithLark" :key="c.lark_id" :label="`${c.name}（${c.lark_id}）`" :value="c.lark_id" />
+          </el-select>
+          <div class="hint" v-if="envFixedAt.length">已固定艾特：{{ envFixedAt.map(atName).join('、') }}（项目参数配的，自动带）</div>
+          <div class="hint">发布后 Lark 一并艾特这些人（你自己会自动艾特，不用选）</div>
+        </el-form-item>
         <el-form-item label="ArgoCD">
           <el-switch v-model="form.disable" :active-value="true" :inactive-value="false"
             active-text="disable:true 安全预演（先不生成 Application）"
@@ -409,6 +416,12 @@ const canPrefill = computed(() => envId.value && form.value.templateId && form.v
 const imageMissing = ref(false)
 const imageMissingMsg = ref('')
 const skipImg = ref(false) // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
+// 额外艾特（临时）+ 环境固定艾特（只读展示）
+const extraAt = ref([])       // 本次临时选的 lark_id 列表
+const envFixedAt = ref([])    // 该环境固定艾特人 lark_id（prefill 带出，只读）
+const atContacts = ref([])    // 通知人列表
+const atContactsWithLark = computed(() => atContacts.value.filter(c => c.lark_id))
+function atName(larkId) { return atContacts.value.find(c => c.lark_id === larkId)?.name || larkId }
 // 预填后的镜像/域名短显示（Harbor项目/tag/域名），只读展示，避免看长串完整地址
 const imgPreview = ref(null) // { short, tag, domain }
 // 访问域名（所有环境可配多个；生产按数量生成占位）
@@ -449,6 +462,7 @@ function openAdd() {
   imgPreview.value = null
   secretRefs.value = null
   domains.value = []; primaryDomains.value = []; isProdEnv.value = false; ingressEnabled.value = false; domCount.value = 1
+  extraAt.value = []; envFixedAt.value = []
   skipImg.value = false // [debug-skip-img] 测完删
   resetPreview()
   addDialog.value = true
@@ -474,6 +488,7 @@ function reqBody() {
         })),
       }),
     domains: domains.value.map(d => (d || '').trim()).filter(Boolean), // 访问域名(覆盖 values host)
+    at_lark_ids: extraAt.value, // 临时额外艾特人
     disable: form.value.disable,
     skip_image_check: skipImg.value, // [debug-skip-img] 测完删
   }
@@ -540,6 +555,7 @@ async function doPrefill() {
     isProdEnv.value = !!r.is_prod
     ingressEnabled.value = !!r.ingress_enabled
     domCount.value = 1
+    envFixedAt.value = r.env_at_lark_ids || [] // 该环境固定艾特人（只读展示）
     secMode.value = 'form'; secYaml.value = ''
     const sr = r.secret_refs || null
     if (sr) (sr.pending || []).forEach(p => { p.manual = false; p.extra = p.extra || [] })
@@ -719,6 +735,7 @@ async function doBatchSubmit() {
 onMounted(async () => {
   envs.value = (await api.listProjectEnvs()) || []
   templates.value = (await api.listTemplates()) || []
+  atContacts.value = (await api.listContacts()) || []
 })
 </script>
 

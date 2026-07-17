@@ -42,6 +42,14 @@
           <span v-else class="unset">未配置（默认用 {{ row.name }}）</span>
         </template>
       </el-table-column>
+      <el-table-column label="固定艾特人" min-width="160">
+        <template #default="{ row }">
+          <span v-if="atNames(row).length">
+            <el-tag v-for="n in atNames(row)" :key="n" size="small" type="warning" style="margin:1px 3px 1px 0">{{ n }}</el-tag>
+          </span>
+          <span v-else class="unset">未配置</span>
+        </template>
+      </el-table-column>
       <el-table-column label="z-kv-secrets" min-width="280">
         <template #default="{ row }">
           <div>
@@ -60,7 +68,7 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="100">
+      <el-table-column label="操作" width="100" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
         </template>
@@ -85,6 +93,12 @@
         <el-form-item label="namespace 列表">
           <el-input v-model="namespaces" type="textarea" :rows="4" :placeholder="`一行一个（可配多个），第一个作默认。留空=用环境名 ${editing?.name}`" />
           <div class="form-hint">新增模块时 namespace 自动填第一个，可下拉从这里选、也可手输列表外的</div>
+        </el-form-item>
+        <el-form-item label="固定艾特人">
+          <el-select v-model="atLarks" multiple filterable placeholder="选通知人（可多个）" style="width:100%">
+            <el-option v-for="c in contactsWithLark" :key="c.lark_id" :label="`${c.name}（${c.lark_id}）`" :value="c.lark_id" />
+          </el-select>
+          <div class="form-hint">新增模块到 {{ editing?.name }} 时，Lark 自动艾特这些人（另加操作人、新增时临时选的）。选项来自「系统设置→通知人」</div>
         </el-form-item>
         <el-form-item label="z-kv-secrets 路径">
           <el-input v-model="zkvPath" :placeholder="`留空=自动推 ${autoZkv(editing)}`" />
@@ -152,7 +166,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { parse, stringify } from 'yaml'
 import CodeEditor from '../components/CodeEditor.vue'
@@ -168,6 +182,15 @@ const harbor = ref('')
 const domain = ref('')
 const namespaces = ref('')
 const zkvPath = ref('')
+const atLarks = ref([]) // 固定艾特人（lark_id 列表）
+const contacts = ref([]) // 通知人列表
+const contactsWithLark = computed(() => contacts.value.filter(c => c.lark_id))
+
+// 该环境固定艾特人的展示名（lark_id → name）
+function atNames(row) {
+  const ids = (row?.at_lark_ids || '').split(/[\n,\s]+/).map(s => s.trim()).filter(Boolean)
+  return ids.map(id => contacts.value.find(c => c.lark_id === id)?.name || id)
+}
 
 // 把配置的 namespace 原文拆成数组（换行/逗号/空格分隔），供展示
 function nsList(row) {
@@ -198,6 +221,7 @@ function openEdit(row) {
   domain.value = row.domain_suffix || ''
   namespaces.value = row.default_namespaces || ''
   zkvPath.value = row.zkv_secrets_path || ''
+  atLarks.value = (row.at_lark_ids || '').split(/[\n,\s]+/).map(s => s.trim()).filter(Boolean)
   dialog.value = true
 }
 
@@ -209,11 +233,14 @@ async function save() {
     await api.updateEnvDomain(editing.value.id, domain.value.trim())
     await api.updateEnvNamespaces(editing.value.id, namespaces.value.trim())
     await api.updateEnvZkvPath(editing.value.id, zkvPath.value.trim())
+    const atStr = atLarks.value.join('\n')
+    await api.updateEnvAtLarks(editing.value.id, atStr)
     editing.value.ingress_gateway = gateway.value.trim()
     editing.value.harbor_project = harbor.value.trim()
     editing.value.domain_suffix = domain.value.trim()
     editing.value.default_namespaces = namespaces.value.trim()
     editing.value.zkv_secrets_path = zkvPath.value.trim()
+    editing.value.at_lark_ids = atStr
     dialog.value = false
     ElMessage.success('已保存')
   } finally {
@@ -323,6 +350,7 @@ async function load() {
   try {
     // 只列 K8s 项目环境（VM 没有 ingress 网关）
     envs.value = ((await api.listProjectEnvs()) || []).filter(e => e.git_repo !== undefined)
+    contacts.value = (await api.listContacts()) || []
   } finally {
     loading.value = false
   }

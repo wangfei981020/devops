@@ -130,6 +130,24 @@ func allProjectPrefixes() map[string]bool {
 	return set
 }
 
+// PUT /api/orchestration/env-at-larks/{id} —— 更新某项目环境的固定艾特人（Lark ID 列表，「项目参数」页用）。
+func HandleUpdateEnvAtLarks(w http.ResponseWriter, r *http.Request) {
+	id := ParseID(mux.Vars(r)["id"])
+	var req struct {
+		AtLarkIDs string `json:"at_lark_ids"`
+	}
+	if !DecodeJSON(w, r, &req) {
+		return
+	}
+	if _, err := database.DB.Exec(`UPDATE project_env SET at_lark_ids=? WHERE id=?`,
+		strings.TrimSpace(req.AtLarkIDs), id); err != nil {
+		InternalErr(w, r, err)
+		return
+	}
+	Audit(r, "orchestration.env_at_larks.update", "project_env", strconv.FormatInt(id, 10), nil)
+	JSONSuccess(w, nil)
+}
+
 // zkvSecretsPathForEnv 该环境 z-kv-secrets 的 chart 路径：配了用配的；留空=自动推 <chart_base_path>/z-kv-secrets。
 func zkvSecretsPathForEnv(p *models.ProjectEnv) string {
 	if s := strings.TrimSpace(p.ZkvSecretsPath); s != "" {
@@ -445,9 +463,9 @@ func verifyImageForSubmit(valuesYAML []byte, moduleName, envType string) error {
 func loadEnvGit(where string, arg interface{}) (*models.ProjectEnv, error) {
 	var p models.ProjectEnv
 	err := database.DB.QueryRow(
-		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), IFNULL(domain_suffix,''), IFNULL(default_namespaces,''), IFNULL(zkv_secrets_path,'')
+		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), IFNULL(domain_suffix,''), IFNULL(default_namespaces,''), IFNULL(zkv_secrets_path,''), IFNULL(at_lark_ids,'')
 		 FROM project_env WHERE `+where, arg).
-		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway, &p.HarborProject, &p.DomainSuffix, &p.DefaultNamespaces, &p.ZkvSecretsPath)
+		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway, &p.HarborProject, &p.DomainSuffix, &p.DefaultNamespaces, &p.ZkvSecretsPath, &p.AtLarkIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -607,6 +625,7 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 		"primary_domains":   parseNamespaces(dst.DomainSuffix),              // 主域名列表(生产按数量生成占位域名用)
 		"is_prod":           isProd,                                         // 生产环境：前端走"按数量生成占位域名"
 		"ingress_enabled":   ingressEnabledFromValues(raw),                  // 模板是否开 ingress(开了才有域名)
+		"env_at_lark_ids":   parseNamespaces(dst.AtLarkIDs),                 // 该环境固定艾特人(Lark ID)，弹窗只读展示
 		"image_missing":     imageMissing,                                                         // true=Harbor 缺该镜像 → 前端红字禁止提交/预览
 		"image_missing_msg": func() string {
 			if imageMissing {
@@ -627,6 +646,7 @@ type moduleAddReq struct {
 	NewSecrets    []newSecretReq `json:"new_secrets"`     // 表单模式：待新建 secret（tidb / opaque）
 	NewSecretsYAML string        `json:"new_secrets_yaml"` // YAML 模式：直接编辑的片段（非空时优先）
 	Domains       []string       `json:"domains"`         // 访问域名列表（前端域名区编辑后的，覆盖 values 的 ingressGateway.host）
+	AtLarkIDs     []string       `json:"at_lark_ids"`     // 本次临时额外艾特人的 Lark ID（新增弹窗选的通知人）
 	SkipImageCheck bool          `json:"skip_image_check"` // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
 	Disable       *bool          `json:"disable"`         // 默认 true（安全预演，app-of-apps 先不生成）
 }
@@ -771,6 +791,7 @@ func HandleSubmitModule(w http.ResponseWriter, r *http.Request) {
 		"env": dst.Name, "task_id": taskID, "disable": spec.Disable,
 	})
 	envID := dst.ID
+	tempAt := req.AtLarkIDs // 本次临时额外艾特人
 	InflightTrack(func() {
 		start := time.Now()
 		gs := getGitService()
@@ -790,7 +811,7 @@ func HandleSubmitModule(w http.ResponseWriter, r *http.Request) {
 		// 真部署 → 轮询新模块的 ArgoCD app 到 Synced+Healthy，成功/失败发 Lark
 		_, version := services.GetImageRepoTag(spec.ValuesYAML)
 		domains := services.GetIngressHosts(spec.ValuesYAML) // 前端模块的访问域名，Lark 卡片列出
-		deployAndPollNewModule(taskID, envID, operator, spec.ModuleName, spec.Namespace, version, domains, start)
+		deployAndPollNewModule(taskID, envID, operator, spec.ModuleName, spec.Namespace, version, domains, tempAt, start)
 	})
 	JSONSuccess(w, map[string]interface{}{"task_id": taskID, "status": "pending"})
 }
@@ -800,8 +821,9 @@ func HandleSubmitModule(w http.ResponseWriter, r *http.Request) {
 type batchReq struct {
 	TemplateID     int64 `json:"template_id"`
 	TargetEnvID    int64 `json:"target_env_id"`
-	Disable        *bool `json:"disable"`
-	SkipImageCheck bool  `json:"skip_image_check"` // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
+	Disable        *bool    `json:"disable"`
+	AtLarkIDs      []string `json:"at_lark_ids"`      // 本次临时额外艾特人的 Lark ID
+	SkipImageCheck bool     `json:"skip_image_check"` // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
 	Rows        []struct {
 		ModuleName string   `json:"module_name"`
 		Namespace  string   `json:"namespace"`
@@ -962,6 +984,7 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 	Audit(r, "orchestration.add_batch", "module", fmt.Sprintf("%d modules", len(rows)), map[string]interface{}{
 		"env": dst.Name, "task_id": taskID,
 	})
+	tempAt := req.AtLarkIDs // 本次临时额外艾特人
 	InflightTrack(func() {
 		start := time.Now()
 		gs := getGitService()
@@ -989,7 +1012,7 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 			_, ver := services.GetImageRepoTag(rr.ValuesYAML)
 			mods = append(mods, newModDeploy{Module: rr.ModuleName, Namespace: rr.Namespace, Version: ver, Domains: services.GetIngressHosts(rr.ValuesYAML)})
 		}
-		deployAndPollBatch(taskID, dst.ID, operator, mods, start)
+		deployAndPollBatch(taskID, dst.ID, operator, mods, tempAt, start)
 	})
 	JSONSuccess(w, map[string]interface{}{"task_id": taskID, "status": "pending"})
 }

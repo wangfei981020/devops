@@ -30,7 +30,7 @@ type newModDeploy struct {
 
 // ---------- 单个 ----------
 
-func deployAndPollNewModule(taskID, envID int64, operator, moduleName, namespace, version string, domains []string, start time.Time) {
+func deployAndPollNewModule(taskID, envID int64, operator, moduleName, namespace, version string, domains, tempAt []string, start time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 	defer cancel()
 	p, err := LoadProjectEnvDecrypted(envID)
@@ -48,7 +48,7 @@ func deployAndPollNewModule(taskID, envID int64, operator, moduleName, namespace
 		return
 	}
 	m := newModDeploy{Module: moduleName, Namespace: namespace, Version: version, Domains: domains, App: appName}
-	pollAndFinishModule(ctx, client, p, taskID, operator, m, start, true)
+	pollAndFinishModule(ctx, client, p, taskID, operator, m, tempAt, start, true)
 }
 
 // argocdClientForDeploy 返回可跟踪部署的 argocd client；不满足(无配置/未开自动同步)返回 nil + 说明。
@@ -64,7 +64,7 @@ func argocdClientForDeploy(p *models.ProjectEnv) (*services.ArgocdClient, string
 }
 
 // pollAndFinishModule 触发+轮询单模块到稳定，写任务终态 + 发 Lark(真部署结果)。
-func pollAndFinishModule(ctx context.Context, client *services.ArgocdClient, p *models.ProjectEnv, taskID int64, operator string, m newModDeploy, start time.Time, waitAppear bool) {
+func pollAndFinishModule(ctx context.Context, client *services.ArgocdClient, p *models.ProjectEnv, taskID int64, operator string, m newModDeploy, tempAt []string, start time.Time, waitAppear bool) {
 	setOrchTaskArgocd(taskID, marshalJSON([]models.ArgocdAppResult{{
 		App: m.App, SyncStatus: "Syncing", Health: "Progressing",
 		Msg: "正在触发同步 / 等待 ArgoCD 生成 Application", LastPolledAt: time.Now(),
@@ -77,7 +77,7 @@ func pollAndFinishModule(ctx context.Context, client *services.ArgocdClient, p *
 			r := models.ArgocdAppResult{App: m.App, SyncStatus: "Failed", Msg: msg, DurationSec: dur(start), LastPolledAt: time.Now()}
 			finishOrchTask(taskID, "failed", msg, marshalJSON([]models.ArgocdAppResult{r}), dur(start))
 			log.Printf("⚠ [orch-fail] task=%d env=%s app=%s 等待 Application 超时", taskID, p.Name, m.App)
-			sendOrchNotify(p, operator, nil, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, Domains: m.Domains, FailMsg: msg}})
+			sendOrchNotify(p, operator, tempAt, nil, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, Domains: m.Domains, FailMsg: msg}})
 			return
 		}
 	}
@@ -100,19 +100,19 @@ func pollAndFinishModule(ctx context.Context, client *services.ArgocdClient, p *
 	}
 	finishOrchTask(taskID, status, note, marshalJSON(results), dur(start))
 	if ok {
-		sendOrchNotify(p, operator, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, Domains: m.Domains}}, nil)
+		sendOrchNotify(p, operator, tempAt, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, Domains: m.Domains}}, nil)
 	} else {
 		fm := ""
 		if r != nil {
 			fm = r.Msg
 		}
-		sendOrchNotify(p, operator, nil, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, Domains: m.Domains, FailMsg: fm}})
+		sendOrchNotify(p, operator, tempAt, nil, []deployNotifyItem{{Module: m.Module, Namespace: m.Namespace, ToTag: m.Version, Domains: m.Domains, FailMsg: fm}})
 	}
 }
 
 // ---------- 批量 ----------
 
-func deployAndPollBatch(taskID, envID int64, operator string, mods []newModDeploy, start time.Time) {
+func deployAndPollBatch(taskID, envID int64, operator string, mods []newModDeploy, tempAt []string, start time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 	p, err := LoadProjectEnvDecrypted(envID)
@@ -171,7 +171,7 @@ func deployAndPollBatch(taskID, envID int64, operator string, mods []newModDeplo
 		log.Printf("⚠ [orch-fail] task=%d env=%s 批量部署: %s", taskID, p.Name, note)
 	}
 	finishOrchTask(taskID, status, note, marshalJSON(results), dur(start))
-	sendOrchNotify(p, operator, successes, faileds)
+	sendOrchNotify(p, operator, tempAt, successes, faileds)
 }
 
 // ---------- 共用轮询原语 ----------
@@ -243,7 +243,7 @@ func dur(start time.Time) int { return int(time.Since(start).Seconds()) }
 
 // ---------- Lark（复用发布卡片，标题"新增模块"）----------
 
-func sendOrchNotify(p *models.ProjectEnv, operator string, successes, faileds []deployNotifyItem) {
+func sendOrchNotify(p *models.ProjectEnv, operator string, tempAtLarkIDs []string, successes, faileds []deployNotifyItem) {
 	if len(successes) == 0 && len(faileds) == 0 {
 		return
 	}
@@ -251,7 +251,8 @@ func sendOrchNotify(p *models.ProjectEnv, operator string, successes, faileds []
 	if webhook == "" {
 		return
 	}
-	atID := LookupContactLarkID(operator)
+	// 艾特 = 操作人 + 项目参数固定的 + 本次临时选的，去重
+	atIDs := dedupNonEmpty(append(append([]string{LookupContactLarkID(operator)}, parseNamespaces(p.AtLarkIDs)...), tempAtLarkIDs...))
 	linkLabel, linkURL := "", ""
 	if u := orchDetailURL(); u != "" {
 		linkLabel, linkURL = "查看新增历史", u
@@ -260,7 +261,7 @@ func sendOrchNotify(p *models.ProjectEnv, operator string, successes, faileds []
 		if len(items) == 0 {
 			return
 		}
-		title, color, body := buildDeployNotifyBody("新增模块", operator, atID, kind, p.Name, p.EnvType, items)
+		title, color, body := buildDeployNotifyBody("新增模块", operator, atIDs, kind, p.Name, p.EnvType, items)
 		c, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 		if err := services.SendLarkCardWithRetry(c, webhook, secret, title, body, color, linkLabel, linkURL); err != nil {
 			log.Printf("orch lark send failed: env=%s kind=%s err=%v", p.Name, kind, err)
@@ -269,6 +270,20 @@ func sendOrchNotify(p *models.ProjectEnv, operator string, successes, faileds []
 	}
 	send("success", successes)
 	send("fail", faileds)
+}
+
+// dedupNonEmpty 去空去重（保序），艾特列表用。
+func dedupNonEmpty(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func orchDetailURL() string {
@@ -340,7 +355,7 @@ func HandleRetryOrchTask(w http.ResponseWriter, r *http.Request) {
 		defer UnregisterCancel(t.ID)
 		client := services.NewArgocdClient(argoURL, argoToken)
 		m := newModDeploy{Module: t.ModuleName, Namespace: t.Namespace, App: appName}
-		pollAndFinishModule(ctx, client, p, t.ID, t.Operator, m, start, true)
+		pollAndFinishModule(ctx, client, p, t.ID, t.Operator, m, parseNamespaces(p.AtLarkIDs), start, true) // 重试：临时艾特无法恢复，带上环境固定的
 	})
 	Audit(r, "orchestration.task_retry", "orchestration_task", fmt.Sprintf("%d", t.ID), map[string]interface{}{"app": appName})
 	JSONSuccess(w, map[string]interface{}{"task_id": t.ID, "status": "pending"})

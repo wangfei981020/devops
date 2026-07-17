@@ -43,7 +43,7 @@ type deployNotifyItem struct {
 //
 // 失败原因（FailMsg）已从卡片移除，运维同学要看详情按"查看发布详情"按钮跳前端。
 func buildDeployNotifyBody(
-	opLabel, operator, atLarkID, kind, envName, envType string,
+	opLabel, operator string, atLarkIDs []string, kind, envName, envType string,
 	items []deployNotifyItem,
 ) (title, color, body string) {
 	n := len(items)
@@ -111,15 +111,15 @@ func buildDeployNotifyBody(
 		sb.WriteString("\n")
 	}
 
-	// 一律 @ 操作人（不论成功失败，都让责任人知道）
-	if atLarkID != "" {
-		switch kind {
-		case "fail":
-			fmt.Fprintf(&sb, `<at id="%s"></at> 请检查失败模块`, atLarkID)
-		case "skip":
-			fmt.Fprintf(&sb, `<at id="%s"></at>`, atLarkID)
-		default:
-			fmt.Fprintf(&sb, `<at id="%s"></at>`, atLarkID)
+	// 一律 @ 操作人 + 固定/临时艾特人（不论成功失败，都让相关人知道）
+	if len(atLarkIDs) > 0 {
+		for _, id := range atLarkIDs {
+			if id != "" {
+				fmt.Fprintf(&sb, `<at id="%s"></at> `, id)
+			}
+		}
+		if kind == "fail" {
+			sb.WriteString("请检查失败模块")
 		}
 	}
 

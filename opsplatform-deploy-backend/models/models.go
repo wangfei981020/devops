@@ -58,6 +58,7 @@ type ProjectEnv struct {
 	DomainSuffix     string    `json:"domain_suffix"`   // 该环境的域名后缀，如 uat.slileisure.com；前端模块访问域名自动带出用
 	DefaultNamespaces string   `json:"default_namespaces"` // 该环境可用 namespace 列表(换行/逗号分隔)，第一个作默认；新增模块下拉/自动填用
 	ZkvSecretsPath   string    `json:"zkv_secrets_path"` // 后端 secret 集中处 z-kv-secrets 的 chart 路径；留空=自动推 <chart_base_path>/z-kv-secrets
+	AtLarkIDs        string    `json:"at_lark_ids"`      // 固定艾特人的 Lark ID 列表(一行一个)；新增模块通知自动 @
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
