@@ -300,13 +300,23 @@ const menuGroups = [
 // 权限变化计数，用于强制触发重新计算
 const permissionsKey = computed(() => Object.keys(permissions.value).length)
 
+// 未实现的占位页(路由指向 PlaceholderView)——从菜单隐藏，避免点进去全是"开发中"
+const PLACEHOLDER_PATHS = new Set([
+  '/api-manage', '/task-pool', '/assets', '/metrics', '/alerts', '/alert-rules',
+  '/alert-notify', '/dashboard-screen', '/clusters', '/workloads', '/configmaps',
+  '/storage', '/terminal', '/tickets', '/workflow', '/sla', '/ticket-template',
+  '/jobs', '/crontab', '/inspection', '/self-healing', '/anomaly', '/root-cause',
+  '/predict', '/smart-alert', '/capacity', '/deploy', '/change', '/rollback',
+  '/log-query', '/log-analysis', '/log-alert', '/vault', '/secrets',
+  '/certificates', '/datasources'
+])
+
 const filteredMenuGroups = computed(() => {
   // 依赖 permissionsKey 确保权限变化时重新计算
   const _key = permissionsKey.value
-  console.log('[Sidebar] 重新计算菜单, 权限数量:', _key)
   return menuGroups.map(group => ({
     ...group,
-    items: group.items.filter(item => canShowItem(item))
+    items: group.items.filter(item => canShowItem(item) && !PLACEHOLDER_PATHS.has(item.path))
   })).filter(group => group.items.length > 0 && hasMenuGroup(group.key))
 })
 

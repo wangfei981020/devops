@@ -75,7 +75,9 @@ const daysInMonth = computed(() => {
   const year = currentYear.value
   const month = currentMonth.value
   const totalDays = new Date(year, month, 0).getDate()
-  
+  const now = new Date()
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+
   for (let day = 1; day <= totalDays; day++) {
     const date = new Date(year, month - 1, day)
     const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
@@ -83,7 +85,8 @@ const daysInMonth = computed(() => {
       day,
       dateStr,
       weekDay: date.getDay(),
-      isWeekend: date.getDay() === 0 || date.getDay() === 6
+      isWeekend: date.getDay() === 0 || date.getDay() === 6,
+      isToday: dateStr === todayStr
     })
   }
   return days
@@ -97,6 +100,15 @@ const groupedEmployees = computed(() => {
     groups[group].push(emp)
   })
   return groups
+})
+
+// 已有组别选项（供添加/编辑员工时下拉选择，也可手输新组名）
+const groupOptions = computed(() => {
+  const set = new Set()
+  employees.value.forEach(emp => {
+    if (emp.group_name) set.add(emp.group_name)
+  })
+  return [...set].sort()
 })
 
 // v567: 每日统计 = 所有班次类型（不止 A/B/C/D）
@@ -723,7 +735,7 @@ watch(activeTab, (tab) => {
             <tr class="header-row">
               <th class="sticky-name">姓名</th>
               <th class="sticky-role">职位</th>
-              <th v-for="d in daysInMonth" :key="d.dateStr" class="th-day" :class="{ weekend: d.isWeekend, warning: hasMissingShifts(d.dateStr) }">
+              <th v-for="d in daysInMonth" :key="d.dateStr" class="th-day" :class="{ weekend: d.isWeekend, warning: hasMissingShifts(d.dateStr), today: d.isToday }">
                 <div class="day-num">{{ d.day }}</div>
                 <div class="day-week">{{ weekDays[d.weekDay] }}</div>
               </th>
@@ -731,7 +743,7 @@ watch(activeTab, (tab) => {
           </thead>
           <tbody>
             <template v-for="(groupEmps, groupName) in groupedEmployees" :key="groupName">
-              <tr class="group-row" v-if="Object.keys(groupedEmployees).length > 1">
+              <tr class="group-row">
                 <td :colspan="daysInMonth.length + 2" class="group-cell">{{ groupName }}</td>
               </tr>
               <tr v-for="emp in groupEmps" :key="emp.id" class="employee-row" 
@@ -754,7 +766,7 @@ watch(activeTab, (tab) => {
                   </div>
                 </td>
                 <td class="sticky-role td-role">{{ emp.role || '运维工程师' }}</td>
-                <td v-for="d in daysInMonth" :key="d.dateStr" class="td-shift" :class="{ weekend: d.isWeekend, clickable: canEditShift }" @click="canEditShift && openShiftPicker(emp, d.dateStr, $event)">
+                <td v-for="d in daysInMonth" :key="d.dateStr" class="td-shift" :class="{ weekend: d.isWeekend, clickable: canEditShift, today: d.isToday }" @click="canEditShift && openShiftPicker(emp, d.dateStr, $event)">
                   <span v-if="emp.shifts?.[d.dateStr]" class="shift-badge" :style="getShiftStyle(emp.shifts[d.dateStr])" :title="getShiftInfo(emp.shifts[d.dateStr])?.name + ' ' + getShiftInfo(emp.shifts[d.dateStr])?.time">
                     {{ emp.shifts[d.dateStr] }}
                   </span>
@@ -764,7 +776,7 @@ watch(activeTab, (tab) => {
             <tr class="stats-row">
               <td class="sticky-name stats-label">统计</td>
               <td class="sticky-role"></td>
-              <td v-for="d in daysInMonth" :key="d.dateStr" class="td-stats" :class="{ warning: hasMissingShifts(d.dateStr) }">
+              <td v-for="d in daysInMonth" :key="d.dateStr" class="td-stats" :class="{ warning: hasMissingShifts(d.dateStr), today: d.isToday }">
                 <div class="stats-mini">
                   <span v-for="it in dailyStatItems(d.dateStr)" :key="it.code" class="stat-item" :style="{ color: it.color }">
                     {{ it.code }}:{{ it.count }}
@@ -875,6 +887,13 @@ watch(activeTab, (tab) => {
           <form class="modal-form" @submit.prevent="saveEmployee">
             <div class="modal-body">
               <div class="form-group"><label>姓名 *</label><input type="text" class="form-input" v-model="employeeForm.name" placeholder="员工姓名" required /></div>
+              <div class="form-group">
+                <label>组别</label>
+                <input type="text" class="form-input" v-model="employeeForm.group_name" list="schedule-group-options" placeholder="选择已有组别或输入新组名" />
+                <datalist id="schedule-group-options">
+                  <option v-for="g in groupOptions" :key="g" :value="g" />
+                </datalist>
+              </div>
               <div class="form-group"><label>职位</label><input type="text" class="form-input" v-model="employeeForm.role" placeholder="运维工程师" /></div>
             </div>
             <div class="modal-footer">
@@ -1077,7 +1096,6 @@ watch(activeTab, (tab) => {
 .legend-code { padding: 2px 6px; border-radius: 4px; font-weight: 700; color: white; font-size: 10px; min-width: 18px; text-align: center; }
 .legend-name { font-weight: 500; color: var(--text-primary); white-space: nowrap; }
 .legend-time { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
-.legend-duty { font-size: 9px; color: #ef4444; font-weight: 600; background: rgba(239,68,68,0.1); padding: 1px 4px; border-radius: 3px; }
 .legend-duty { background: #ef4444; color: white; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
 
 .schedule-container { flex: 1; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
@@ -1132,10 +1150,19 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 /* 日期表头 */
 .th-day { padding: 4px 2px !important; width: 38px; min-width: 38px; max-width: 38px; box-sizing: border-box; }
 /* v566: weekend / warning 也改成 bg-card 底色 (bg-hover 在 dark-mode 是半透明) */
-.th-day.weekend { background-color: var(--bg-card); background-image: linear-gradient(rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.15)); }
-.th-day.warning { background-color: var(--bg-card); background-image: linear-gradient(rgba(251, 191, 36, 0.25), rgba(251, 191, 36, 0.25)); }
-.day-num { font-size: 12px; font-weight: 600; line-height: 1.3; }
-.day-week { font-size: 9px; color: var(--text-muted); line-height: 1.2; }
+/* 周末改柔和中性(不再用红);红/琥珀只留给缺班告警 */
+.th-day.weekend { background-color: var(--bg-card); background-image: linear-gradient(rgba(100, 116, 139, 0.10), rgba(100, 116, 139, 0.10)); }
+.th-day.warning { background-color: var(--bg-card); background-image: linear-gradient(rgba(251, 191, 36, 0.25), rgba(251, 191, 36, 0.25)); box-shadow: inset 0 -2px 0 rgba(251, 191, 36, 0.7); }
+.day-num { font-size: 12.5px; font-weight: 600; line-height: 1.3; }
+.day-week { font-size: 10px; color: var(--text-muted); line-height: 1.2; }
+
+/* 今天高亮列(优先级高于周末/告警) */
+.th-day.today { background-color: var(--bg-card); background-image: linear-gradient(rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0.18)); color: var(--primary); box-shadow: inset 0 -2px 0 var(--primary); }
+.th-day.today .day-week { color: var(--primary); }
+.th-day.today .day-num::after { content: '今天'; display: block; font-size: 8.5px; font-weight: 700; letter-spacing: .04em; }
+.td-shift.today { background: rgba(59, 130, 246, 0.06); box-shadow: inset 1px 0 0 rgba(59,130,246,.35), inset -1px 0 0 rgba(59,130,246,.35); }
+.td-shift.today:hover { background: rgba(59, 130, 246, 0.15) !important; }
+.td-stats.today { background: rgba(59, 130, 246, 0.10); }
 
 .employee-row td { background: var(--bg-card); }
 .employee-row:hover td { background: var(--bg-hover); }
@@ -1166,9 +1193,10 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 
 .td-shift { height: 40px; cursor: pointer; transition: background 0.15s; padding: 4px 2px !important; }
 .td-shift:hover { background: rgba(59, 130, 246, 0.15) !important; }
-.td-shift.weekend { background: rgba(239, 68, 68, 0.06); }
+.td-shift.weekend { background: rgba(100, 116, 139, 0.05); }
 
-.shift-badge { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 24px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+/* 班次徽章:圆角+内描边+轻投影,更有质感 */
+.shift-badge { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 24px; border-radius: 7px; font-size: 11px; font-weight: 700; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.28), 0 1px 1.5px rgba(15,23,42,0.18); }
 
 .stats-row td { background: linear-gradient(180deg, rgba(59,130,246,0.12), rgba(59,130,246,0.05)); border-top: 2px solid var(--primary) !important; }
 .stats-label { font-size: 12px; font-weight: 600; text-align: center !important; color: var(--primary); }
