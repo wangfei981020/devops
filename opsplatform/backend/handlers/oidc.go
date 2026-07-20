@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -511,7 +512,61 @@ func exchangeToken(config *OIDCConfig, code string, tokenURL string) (*TokenResp
 		return nil, err
 	}
 
+	// [调试] 打印 token 响应的完整结构，用于确认 IdP 到底下发了哪些字段
+	// (access_token / refresh_token 只留长度，不打印明文)
+	logRawJSON("token响应", body, "access_token", "refresh_token", "id_token")
+
+	// [调试] 解开 id_token 的 payload —— app_roles 等自定义 claim 很可能在这里，
+	// 而当前代码完全不解析 id_token，不打出来就无从判断
+	if tokenResp.IDToken != "" {
+		if payload, err := decodeJWTPayload(tokenResp.IDToken); err != nil {
+			log.Printf("[OIDC][调试] id_token payload 解析失败: %v", err)
+		} else {
+			log.Printf("[OIDC][调试] id_token payload: %s", payload)
+		}
+	} else {
+		log.Printf("[OIDC][调试] 本次响应不含 id_token")
+	}
+
 	return &tokenResp, nil
+}
+
+// logRawJSON 打印 JSON 原文，把 maskKeys 指定的字段替换成 <len=N> 避免明文泄露
+// 仅用于排查 IdP 下发字段，键名保留、值脱敏
+func logRawJSON(label string, body []byte, maskKeys ...string) {
+	var m map[string]interface{}
+	if err := json.Unmarshal(body, &m); err != nil {
+		log.Printf("[OIDC][调试] %s 不是合法 JSON: %s", label, string(body))
+		return
+	}
+	for _, k := range maskKeys {
+		if v, ok := m[k]; ok {
+			if s, ok := v.(string); ok {
+				m[k] = fmt.Sprintf("<len=%d>", len(s))
+			}
+		}
+	}
+	pretty, _ := json.Marshal(m)
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	log.Printf("[OIDC][调试] %s 字段列表: %v", label, keys)
+	log.Printf("[OIDC][调试] %s 内容: %s", label, string(pretty))
+}
+
+// decodeJWTPayload 只做 base64 解码取出 payload，不验签
+// 用途仅限排查 IdP 下发了哪些 claim
+func decodeJWTPayload(token string) (string, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("不是合法的 JWT (段数=%d)", len(parts))
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 // getUserInfo 获取用户信息
@@ -536,6 +591,11 @@ func getUserInfo(userinfoURL string, accessToken string) (*UserInfo, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("获取用户信息失败: %s", string(body))
 	}
+
+	// [调试] userinfo 原文 —— UserInfo 结构体只声明了 6 个字段，
+	// IdP 多下发的 claim (app_roles/groups/roles 等) 会被 Unmarshal 静默丢弃，
+	// 所以必须在反序列化之前打印原文
+	logRawJSON("userinfo响应", body)
 
 	var userInfo UserInfo
 	if err := json.Unmarshal(body, &userInfo); err != nil {
