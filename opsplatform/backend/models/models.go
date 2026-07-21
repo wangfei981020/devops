@@ -38,6 +38,16 @@ type User struct {
 	Language    string `json:"language"`             // 用户界面语言: zh-CN, en-US
 	AuthSource  string `json:"auth_source"`          // 认证来源: local, sso
 	CreatedAt   string `json:"created_at"`
+	// Roles 用户的全部角色(来自 user_roles 表, 非落库字段)。
+	// 列表页展示多角色用; role 单字段仅作 legacy 兼容
+	Roles []UserRoleBrief `json:"roles,omitempty"`
+}
+
+// UserRoleBrief 用户角色概要, 供用户列表展示多角色
+type UserRoleBrief struct {
+	Code   string `json:"code"`
+	Name   string `json:"name"`
+	Source string `json:"source"` // manual=手动配置, sso=SSO 同步
 }
 
 // AuditLog 审计日志

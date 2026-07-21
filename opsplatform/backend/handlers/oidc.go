@@ -4,7 +4,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -422,6 +421,10 @@ func HandleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 每次登录都按 app_roles 重新同步角色 —— 老用户同样要走。
+	// 原先命中 oidc_sub 就直接 return，IdP 侧改了组这边永远不生效
+	syncAppRoles(user.ID, userInfo.AppRoles)
+
 	// 生成JWT token
 	token, expiresAt, err := GenerateToken(user.ID, user.Username, user.Role)
 	if err != nil {
@@ -475,6 +478,9 @@ type UserInfo struct {
 	Email             string `json:"email"`
 	EmailVerified     bool   `json:"email_verified"`
 	Picture           string `json:"picture"`
+	// AppRoles: IdP 下发的组/角色, 形如 ["infra_team"]
+	// 需要在 SSO 配置的 Scopes 里申请 app_roles 才会下发, 否则为空
+	AppRoles []string `json:"app_roles"`
 }
 
 // exchangeToken 交换授权码获取token
@@ -512,61 +518,7 @@ func exchangeToken(config *OIDCConfig, code string, tokenURL string) (*TokenResp
 		return nil, err
 	}
 
-	// [调试] 打印 token 响应的完整结构，用于确认 IdP 到底下发了哪些字段
-	// (access_token / refresh_token 只留长度，不打印明文)
-	logRawJSON("token响应", body, "access_token", "refresh_token", "id_token")
-
-	// [调试] 解开 id_token 的 payload —— app_roles 等自定义 claim 很可能在这里，
-	// 而当前代码完全不解析 id_token，不打出来就无从判断
-	if tokenResp.IDToken != "" {
-		if payload, err := decodeJWTPayload(tokenResp.IDToken); err != nil {
-			log.Printf("[OIDC][调试] id_token payload 解析失败: %v", err)
-		} else {
-			log.Printf("[OIDC][调试] id_token payload: %s", payload)
-		}
-	} else {
-		log.Printf("[OIDC][调试] 本次响应不含 id_token")
-	}
-
 	return &tokenResp, nil
-}
-
-// logRawJSON 打印 JSON 原文，把 maskKeys 指定的字段替换成 <len=N> 避免明文泄露
-// 仅用于排查 IdP 下发字段，键名保留、值脱敏
-func logRawJSON(label string, body []byte, maskKeys ...string) {
-	var m map[string]interface{}
-	if err := json.Unmarshal(body, &m); err != nil {
-		log.Printf("[OIDC][调试] %s 不是合法 JSON: %s", label, string(body))
-		return
-	}
-	for _, k := range maskKeys {
-		if v, ok := m[k]; ok {
-			if s, ok := v.(string); ok {
-				m[k] = fmt.Sprintf("<len=%d>", len(s))
-			}
-		}
-	}
-	pretty, _ := json.Marshal(m)
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	log.Printf("[OIDC][调试] %s 字段列表: %v", label, keys)
-	log.Printf("[OIDC][调试] %s 内容: %s", label, string(pretty))
-}
-
-// decodeJWTPayload 只做 base64 解码取出 payload，不验签
-// 用途仅限排查 IdP 下发了哪些 claim
-func decodeJWTPayload(token string) (string, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return "", fmt.Errorf("不是合法的 JWT (段数=%d)", len(parts))
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
 }
 
 // getUserInfo 获取用户信息
@@ -592,11 +544,6 @@ func getUserInfo(userinfoURL string, accessToken string) (*UserInfo, error) {
 		return nil, fmt.Errorf("获取用户信息失败: %s", string(body))
 	}
 
-	// [调试] userinfo 原文 —— UserInfo 结构体只声明了 6 个字段，
-	// IdP 多下发的 claim (app_roles/groups/roles 等) 会被 Unmarshal 静默丢弃，
-	// 所以必须在反序列化之前打印原文
-	logRawJSON("userinfo响应", body)
-
 	var userInfo UserInfo
 	if err := json.Unmarshal(body, &userInfo); err != nil {
 		return nil, err
@@ -605,10 +552,110 @@ func getUserInfo(userinfoURL string, accessToken string) (*UserInfo, error) {
 	return &userInfo, nil
 }
 
+// syncAppRoles 按 IdP 下发的 app_roles 同步用户角色
+//
+// 规则(与需求逐条对应):
+//  1. 组名按原样匹配 roles.code，不做大小写转换
+//  2. 本地没有该角色 -> 自动创建，只挂欢迎页权限，之后由管理员手动调整
+//  3. 本地已有该角色 -> 直接复用，权限一律不动(已经配好的不能被覆盖)
+//  4. 一个用户可有多个组，全部挂上
+//  5. 只操作 source='sso' 的关联，管理员手动配的(source='manual')永不触碰
+//  6. SSO 侧已移除的组：不删记录，只打 sso_removed_at 标记备注
+func syncAppRoles(userID string, appRoles []string) {
+	if len(appRoles) == 0 {
+		// 没拿到组信息属于异常，必须留痕：可能是 Scopes 没配 app_roles，
+		// 也可能是 IdP 侧没给这个用户分配组
+		log.Printf("[OIDC][角色同步] WARN 用户 %s 的 app_roles 为空，本次不做任何角色变更"+
+			"(检查 SSO 配置的 Scopes 是否包含 app_roles，以及 IdP 侧是否给该用户分配了组)", userID)
+		return
+	}
+
+	log.Printf("[OIDC][角色同步] 用户 %s 的 app_roles = %v", userID, appRoles)
+
+	syncedRoleIDs := make([]string, 0, len(appRoles))
+
+	for _, groupName := range appRoles {
+		if groupName == "" {
+			continue
+		}
+
+		// 1) 按原样精确匹配已有角色
+		var roleID string
+		err := database.DB.QueryRow(`SELECT id FROM roles WHERE code = ? LIMIT 1`, groupName).Scan(&roleID)
+
+		if err == nil && roleID != "" {
+			log.Printf("[OIDC][角色同步] 组 %q 命中已有角色 (id=%s)，复用其权限配置", groupName, roleID)
+		} else {
+			// 2) 本地没有 -> 新建，只给欢迎页权限
+			roleID = uuid.New().String()
+			_, createErr := database.DB.Exec(`
+				INSERT INTO roles (id, code, name, description, is_system, status, source, created_at, updated_at)
+				VALUES (?, ?, ?, ?, 0, 'active', 'sso', NOW(), NOW())
+			`, roleID, groupName, groupName, fmt.Sprintf("SSO 自动创建 (app_roles: %s)，默认仅有欢迎页权限，请按需配置", groupName))
+			if createErr != nil {
+				log.Printf("[OIDC][角色同步] ERROR 创建角色 %q 失败: %v", groupName, createErr)
+				continue
+			}
+
+			// 只挂欢迎页权限
+			_, permErr := database.DB.Exec(`
+				INSERT IGNORE INTO role_permissions (id, role_id, permission_id)
+				SELECT ?, ?, id FROM permissions WHERE code = 'menu:welcome'
+			`, "rp_sso_"+roleID, roleID)
+			if permErr != nil {
+				log.Printf("[OIDC][角色同步] WARN 角色 %q 挂欢迎页权限失败: %v", groupName, permErr)
+			}
+
+			log.Printf("[OIDC][角色同步] 组 %q 本地不存在，已自动创建角色 (id=%s，仅欢迎页权限)", groupName, roleID)
+		}
+
+		syncedRoleIDs = append(syncedRoleIDs, roleID)
+
+		// 3) 挂到用户身上。已存在则复活(清掉 sso_removed_at)，
+		//    但绝不把 source=manual 的记录改成 sso —— 手动配的优先级更高
+		urID := "ur_sso_" + uuid.New().String()
+		if _, err := database.DB.Exec(`
+			INSERT INTO user_roles (id, user_id, role_id, source, created_at)
+			VALUES (?, ?, ?, 'sso', NOW())
+			ON DUPLICATE KEY UPDATE sso_removed_at = NULL
+		`, urID, userID, roleID); err != nil {
+			log.Printf("[OIDC][角色同步] ERROR 用户 %s 关联角色 %q 失败: %v", userID, groupName, err)
+		}
+	}
+
+	// 4) SSO 侧已移除的组：只标记不删除
+	if len(syncedRoleIDs) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(syncedRoleIDs)), ",")
+		args := []interface{}{userID}
+		for _, id := range syncedRoleIDs {
+			args = append(args, id)
+		}
+		query := fmt.Sprintf(`
+			UPDATE user_roles SET sso_removed_at = NOW()
+			WHERE user_id = ? AND source = 'sso' AND sso_removed_at IS NULL
+			  AND role_id NOT IN (%s)
+		`, placeholders)
+		if res, err := database.DB.Exec(query, args...); err == nil {
+			if n, _ := res.RowsAffected(); n > 0 {
+				log.Printf("[OIDC][角色同步] 用户 %s 有 %d 个角色已在 SSO 侧移除，已标记 sso_removed_at (记录保留)", userID, n)
+			}
+		} else {
+			log.Printf("[OIDC][角色同步] WARN 标记已移除角色失败: %v", err)
+		}
+	}
+}
+
 // findOrCreateOIDCUser 查找或创建OIDC用户
-// 只通过 OIDC sub 匹配用户，不匹配用户名/邮箱，避免误绑定现有用户
+//
+// 匹配顺序:
+//  1. 按 oidc_sub 精确匹配(已绑定过的用户)
+//  2. 按用户名匹配(username 列是 utf8mb4_unicode_ci 大小写不敏感,
+//     所以新 SSO 发大写 Cesar 会自动命中老的小写 cesar) ——
+//     命中且是 SSO 账号则复用并绑定新 sub, 角色/权限/发布记录全保留;
+//     命中的是本地账号(auth_source=local)则不复用, 避免 SSO 顶掉本地管理员
+//  3. 都没有 -> 用小写用户名新建
 func findOrCreateOIDCUser(config *OIDCConfig, userInfo *UserInfo) (*models.User, error) {
-	// 确定用户名：优先 preferred_username，其次 email，最后 sub
+	// 确定用户名：优先 preferred_username，其次 email，最后 sub。统一转小写存储
 	username := userInfo.PreferredUsername
 	if username == "" {
 		username = userInfo.Email
@@ -616,13 +663,14 @@ func findOrCreateOIDCUser(config *OIDCConfig, userInfo *UserInfo) (*models.User,
 	if username == "" {
 		username = userInfo.Sub
 	}
+	username = strings.ToLower(username)
 
 	log.Printf("[OIDC] 查找用户，sub=%s, username=%s, email=%s", userInfo.Sub, username, userInfo.Email)
 
-	// 只通过 OIDC sub 查找用户
+	// 1) 按 OIDC sub 查找已绑定用户
 	var user models.User
 	err := database.DB.QueryRow(`
-		SELECT id, username, display_name, email, role, status, mfa_enabled, COALESCE(mfa_secret, '') 
+		SELECT id, username, display_name, email, role, status, mfa_enabled, COALESCE(mfa_secret, '')
 		FROM users WHERE oidc_sub = ?
 	`, userInfo.Sub).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Email, &user.Role, &user.Status, &user.MFAEnabled, &user.MFASecret)
 
@@ -631,62 +679,62 @@ func findOrCreateOIDCUser(config *OIDCConfig, userInfo *UserInfo) (*models.User,
 		return &user, nil
 	}
 
-	// 用户不存在，检查是否允许自动注册
+	// 2) sub 没命中：按用户名找已有账号(collation 保证大小写不敏感)。
+	//    命中且是 SSO 账号 -> 复用并把新 sub 绑上去, 保留其全部角色/权限。
+	//    这解决了「换 SSO 后 sub 变了, 同一个人被拆成两个账号」的问题
+	var existingAuthSource string
+	uErr := database.DB.QueryRow(`
+		SELECT id, username, display_name, email, role, status, mfa_enabled, COALESCE(mfa_secret, ''), COALESCE(auth_source, 'local')
+		FROM users WHERE username = ?
+	`, username).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Email, &user.Role, &user.Status, &user.MFAEnabled, &user.MFASecret, &existingAuthSource)
+
+	if uErr == nil {
+		if existingAuthSource == "sso" {
+			// 复用老 SSO 账号：把当前 sub 绑上去(换 SSO 后 sub 会变)
+			if _, e := database.DB.Exec(`UPDATE users SET oidc_sub = ? WHERE id = ?`, userInfo.Sub, user.ID); e != nil {
+				log.Printf("[OIDC] WARN 复用账号时更新 oidc_sub 失败: %v", e)
+			}
+			log.Printf("[OIDC] 按用户名复用已有 SSO 账号: %s (ID: %s)，已绑定新 sub", user.Username, user.ID)
+			return &user, nil
+		}
+		// 命中的是本地账号：拒绝自动绑定, 避免 SSO 顶掉本地账号(如 admin)
+		log.Printf("[OIDC] WARN 用户名 %q 已被本地账号占用(auth_source=%s)，拒绝 SSO 自动绑定", username, existingAuthSource)
+		return nil, fmt.Errorf("用户名 %q 已被本地账号占用，无法通过 SSO 登录，请管理员处理", username)
+	}
+
+	// 3) 用户不存在，检查是否允许自动注册
 	if !config.AutoRegister {
 		log.Printf("[OIDC] 用户不存在且未启用自动注册: sub=%s", userInfo.Sub)
 		return nil, fmt.Errorf("用户不存在且未启用自动注册")
 	}
 
-	// 检查用户名是否已存在（避免冲突）
-	var existingCount int
-	database.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE username = ?`, username).Scan(&existingCount)
-	if existingCount > 0 {
-		// 用户名已存在，添加后缀
-		username = fmt.Sprintf("%s_sso_%s", username, userInfo.Sub[:8])
-		log.Printf("[OIDC] 用户名已存在，使用新用户名: %s", username)
-	}
-
-	// 创建新用户
+	// 创建新用户(用户名已转小写)
 	newID := uuid.New().String()
 	displayName := userInfo.Name
 	if displayName == "" {
 		displayName = username
 	}
 
-	log.Printf("[OIDC] 创建新用户: username=%s, role=%s", username, config.DefaultRole)
+	log.Printf("[OIDC] 创建新用户: username=%s (角色完全由 app_roles 决定, 不再挂默认角色)", username)
 
+	// role 单字段留空 —— 角色完全交给随后的 syncAppRoles 按 app_roles 处理。
+	// 不再硬塞 oidc_default_role(IT): SSO 传了什么组就用什么, 没传就零角色(仅欢迎页)
 	_, err = database.DB.Exec(`
 		INSERT INTO users (id, username, display_name, email, password, role, status, oidc_sub, auth_source, created_at, updated_at)
-		VALUES (?, ?, ?, ?, '', ?, 'active', ?, 'sso', NOW(), NOW())
-	`, newID, username, displayName, userInfo.Email, config.DefaultRole, userInfo.Sub)
+		VALUES (?, ?, ?, ?, '', '', 'active', ?, 'sso', NOW(), NOW())
+	`, newID, username, displayName, userInfo.Email, userInfo.Sub)
 
 	if err != nil {
 		return nil, fmt.Errorf("创建用户失败: %v", err)
 	}
 
-	// 查找默认角色的 ID 并插入 user_roles 关联
-	var roleID string
-	roleErr := database.DB.QueryRow(`SELECT id FROM roles WHERE code = ? OR name = ? LIMIT 1`, config.DefaultRole, config.DefaultRole).Scan(&roleID)
-	if roleErr == nil && roleID != "" {
-		userRoleID := fmt.Sprintf("ur_oidc_%d", time.Now().UnixNano())
-		_, insertErr := database.DB.Exec(`INSERT INTO user_roles (id, user_id, role_id) VALUES (?, ?, ?)`, userRoleID, newID, roleID)
-		if insertErr != nil {
-			log.Printf("[OIDC] 插入用户角色关联失败: %v", insertErr)
-		} else {
-			log.Printf("[OIDC] 用户角色关联成功: user_id=%s, role_id=%s", newID, roleID)
-		}
-	} else {
-		log.Printf("[OIDC] 未找到默认角色 '%s': %v", config.DefaultRole, roleErr)
-	}
-
-	log.Printf("[OIDC] 新用户创建成功: ID=%s, username=%s", newID, username)
+	log.Printf("[OIDC] 新用户创建成功: ID=%s, username=%s (角色待 syncAppRoles 同步)", newID, username)
 
 	return &models.User{
 		ID:          newID,
 		Username:    username,
 		DisplayName: displayName,
 		Email:       userInfo.Email,
-		Role:        config.DefaultRole,
 		Status:      "active",
 	}, nil
 }

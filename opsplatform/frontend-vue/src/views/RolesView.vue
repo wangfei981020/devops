@@ -490,6 +490,9 @@ function formatDate(str) {
               <span class="type-badge-new" :class="role.is_system ? 'system' : 'custom'">
                 {{ role.is_system ? '系统' : '自定义' }}
               </span>
+              <span v-if="role.source === 'sso'" class="type-badge-new sso" title="由 SSO 的 app_roles 自动创建，默认只有欢迎页权限">
+                SSO
+              </span>
             </td>
             <td>
               <span class="status-badge-new" :class="role.status === 'active' ? 'enabled' : 'disabled'">
@@ -869,6 +872,8 @@ td { font-size: 0.875rem; color: var(--text-primary); }
 }
 .type-badge-new.system { background: rgba(139, 92, 246, 0.1); color: #8b5cf6; }
 .type-badge-new.custom { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
+/* SSO 自动创建的角色：与「系统/自定义」并排显示，标明来源 */
+.type-badge-new.sso { background: rgba(16, 185, 129, 0.12); color: #10b981; margin-left: 4px; }
 .status-badge-new {
   display: inline-block;
   padding: 4px 10px;

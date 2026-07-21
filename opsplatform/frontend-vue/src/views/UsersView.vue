@@ -23,6 +23,12 @@ const showUserModal = ref(false)
 const userModalMode = ref('add')
 const userEditTab = ref('basic')
 const showUserPassword = ref(false)
+// SSO 侧已移除但本地保留的角色 code 集合（打开用户弹窗时填充）
+const ssoRemovedCodes = ref(new Set())
+
+// 列表页「+N」角色折叠：当前悬停展开的用户 id
+const hoveredRolesUser = ref(null)
+
 const userForm = ref({
   id: '',
   username: '',
@@ -139,6 +145,10 @@ async function openUserModal(mode, user = null) {
       const idToCode = {}
       roles.value.forEach(r => { idToCode[r.id] = r.code })
       userForm.value.role_codes = list.map(ur => idToCode[ur.role_id]).filter(Boolean)
+      // SSO 侧已移除的角色：关联记录保留，这里标出来供管理员判断是否手动清理
+      ssoRemovedCodes.value = new Set(
+        list.filter(ur => ur.sso_removed_at).map(ur => idToCode[ur.role_id]).filter(Boolean)
+      )
       // 兜底：如果一个角色都没（老数据），用 legacy role 单字段补上
       if (userForm.value.role_codes.length === 0 && user.role) {
         userForm.value.role_codes = [user.role]
@@ -384,7 +394,27 @@ function formatDate(str) {
           <tbody>
             <tr v-for="u in filteredUsers" :key="u.id">
               <td><div class="user-info"><span class="name">{{ u.display_name || u.username }}<span v-if="u.auth_source === 'sso'" class="auth-badge sso" title="SSO 账号">SSO</span><span v-else class="auth-badge local" title="本地账号">本地</span></span><span class="email">{{ u.email || u.username }}</span></div></td>
-              <td><span class="role-badge" :class="u.role === 'super_admin' || u.role === 'admin' ? 'admin' : ''">{{ getRoleName(u.role) }}</span></td>
+              <td>
+                <!-- 零角色：整格只显示一个提示标（不分来源，所有用户都标） -->
+                <span v-if="!(u.roles && u.roles.length)" class="role-tag none" title="该用户未分配任何角色，当前仅有欢迎页权限">⚠ 无角色·仅欢迎页</span>
+                <!-- 有角色：前 3 个直接显示，超出折叠成「+N」悬停展开 -->
+                <span v-else class="role-tags">
+                  <span v-for="r in u.roles.slice(0, 3)" :key="r.code"
+                    class="role-tag" :class="r.source === 'sso' ? 'sso' : 'manual'"
+                    :title="(r.source === 'sso' ? 'SSO 同步' : '手动配置') + '：' + r.name">{{ r.name }}</span>
+                  <span v-if="u.roles.length > 3" class="role-tag more" @mouseenter="hoveredRolesUser = u.id" @mouseleave="hoveredRolesUser = null">
+                    +{{ u.roles.length - 3 }}
+                    <div v-if="hoveredRolesUser === u.id" class="role-popover">
+                      <div class="role-popover-title">全部 {{ u.roles.length }} 个角色</div>
+                      <div v-for="r in u.roles" :key="r.code" class="role-popover-item">
+                        <span class="dot" :class="r.source === 'sso' ? 'sso' : 'manual'"></span>
+                        <span class="rp-name">{{ r.name }}</span>
+                        <span class="rp-src">{{ r.source === 'sso' ? 'SSO' : '手动' }}</span>
+                      </div>
+                    </div>
+                  </span>
+                </span>
+              </td>
               <td><span class="status-cell"><span class="status-dot" :class="u.status"></span>{{ u.status === 'active' ? '活跃' : '禁用' }}</span></td>
               <td><span class="mfa-badge" :class="u.mfa_bound ? 'bound' : 'unbound'"><svg v-if="u.mfa_bound" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>{{ u.mfa_bound ? '已绑定' : '未启用' }}</span></td>
               <td class="date">{{ formatDate(u.updated_at || u.created_at) }}</td>
@@ -470,6 +500,8 @@ function formatDate(str) {
                             @change="toggleUserRole(r.code, $event.target.checked)" />
                           <span class="role-chip-name">{{ r.name }}</span>
                           <span class="role-chip-code">{{ r.code }}</span>
+                          <span v-if="ssoRemovedCodes.has(r.code)" class="role-chip-removed"
+                            title="SSO 侧已不再下发该组，关联未删除，可按需手动取消">SSO 已移除</span>
                         </label>
                       </div>
                     </div>
@@ -624,6 +656,26 @@ function formatDate(str) {
 .auth-badge.sso { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
 .role-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
 .role-badge.admin { background: rgba(139, 92, 246, 0.1); color: #8b5cf6; }
+
+/* 多角色标签：前 3 个平铺，超出折叠 */
+.role-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.role-tag { display: inline-block; padding: 3px 9px; border-radius: 20px; font-size: 0.72rem; white-space: nowrap; }
+/* SSO 同步的=蓝，手动配的=灰，无角色=琥珀 */
+.role-tag.sso { background: rgba(16, 185, 129, 0.12); color: #059669; }
+.role-tag.manual { background: rgba(100, 116, 139, 0.12); color: #475569; }
+.role-tag.none { background: rgba(251, 191, 36, 0.15); color: #b45309; font-weight: 600; }
+.role-tag.more { position: relative; cursor: default; background: rgba(59, 130, 246, 0.12); color: #3b82f6; font-weight: 600; }
+/* 悬停展开的全部角色浮层 */
+.role-popover { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 180px;
+  background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15,23,42,0.18); padding: 8px; }
+.role-popover-title { font-size: 0.72rem; color: var(--text-muted); padding: 2px 4px 6px; border-bottom: 1px solid var(--border-color); margin-bottom: 4px; }
+.role-popover-item { display: flex; align-items: center; gap: 6px; padding: 3px 4px; font-size: 0.78rem; }
+.role-popover-item .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.role-popover-item .dot.sso { background: #059669; }
+.role-popover-item .dot.manual { background: #64748b; }
+.role-popover-item .rp-name { flex: 1; color: var(--text-primary); white-space: nowrap; }
+.role-popover-item .rp-src { font-size: 0.68rem; color: var(--text-muted); }
 .status-cell { display: flex; align-items: center; gap: 6px; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; }
 .status-dot.active { background: #22c55e; }
@@ -789,6 +841,11 @@ function formatDate(str) {
 }
 .user-edit-modal .role-chip.on .role-chip-code { background: rgba(59,130,246,.15); color: #1d4ed8; }
 .user-edit-modal .role-chip.on.admin .role-chip-code { background: rgba(139,92,246,.15); color: #6d28d9; }
+/* SSO 已移除：琥珀色提示，关联仍保留，由管理员决定是否取消勾选 */
+.user-edit-modal .role-chip-removed {
+  font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 4px;
+  background: rgba(251,191,36,.18); color: #b45309; white-space: nowrap;
+}
 .user-edit-modal .form-group.full-width { width: 100%; }
 .user-edit-modal .section-divider .hint {
   font-weight: 400; font-size: 12px; color: #94a3b8;

@@ -181,8 +181,44 @@ func HandleGetUsers(w http.ResponseWriter, r *http.Request) {
 		u.MFASecret = "" // 不返回 MFA 密钥
 	}
 
+	// 批量填充每个用户的全部角色(user_roles N:N)，供列表页多角色展示。
+	// 一次查询全表关联，避免逐用户查的 N+1；手动配的(manual)排在 SSO 前面，
+	// 前端「前 3 个 + 折叠」时优先露出管理员特意配的角色
+	fillUserRoles(users)
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(users)
+}
+
+// fillUserRoles 给一批用户填充 Roles 字段(全部角色)
+func fillUserRoles(users []*models.User) {
+	if len(users) == 0 {
+		return
+	}
+	rows, err := database.DB.Query(`
+		SELECT ur.user_id, r.code, r.name, COALESCE(ur.source, 'manual')
+		FROM user_roles ur
+		JOIN roles r ON ur.role_id = r.id
+		ORDER BY (COALESCE(ur.source,'manual') = 'sso'), r.name
+	`)
+	if err != nil {
+		log.Printf("[用户列表] 填充多角色失败: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	byUser := make(map[string][]models.UserRoleBrief)
+	for rows.Next() {
+		var uid string
+		var b models.UserRoleBrief
+		if err := rows.Scan(&uid, &b.Code, &b.Name, &b.Source); err != nil {
+			continue
+		}
+		byUser[uid] = append(byUser[uid], b)
+	}
+	for _, u := range users {
+		u.Roles = byUser[u.ID]
+	}
 }
 
 // HandleCreateUser 创建用户

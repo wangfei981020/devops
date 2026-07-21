@@ -25,6 +25,10 @@ type Role struct {
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
 	UserCount   int    `json:"user_count,omitempty"`
+	// Source: manual=管理员手动创建, sso=SSO app_roles 自动创建
+	Source string `json:"source"`
+	// SSORemovedAt: 该组已在 SSO 侧移除的时间; 记录不删除, 仅作备注
+	SSORemovedAt string `json:"sso_removed_at,omitempty"`
 }
 
 // Permission 权限
@@ -50,6 +54,10 @@ type UserRole struct {
 	RoleID    string `json:"role_id"`
 	RoleName  string `json:"role_name,omitempty"`
 	CreatedAt string `json:"created_at"`
+	// Source: manual=手动分配, sso=SSO app_roles 同步
+	Source string `json:"source"`
+	// SSORemovedAt: SSO 侧已不再下发该组的时间; 关联不删除, 仅备注
+	SSORemovedAt string `json:"sso_removed_at,omitempty"`
 }
 
 // ========== 角色管理 ==========
@@ -69,7 +77,8 @@ func HandleRoles(w http.ResponseWriter, r *http.Request) {
 func getRoles(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`
 		SELECT r.id, r.code, r.name, r.description, r.is_system, r.status, r.created_at, r.updated_at,
-			   (SELECT COUNT(*) FROM user_roles WHERE role_id = r.id) as user_count
+			   (SELECT COUNT(*) FROM user_roles WHERE role_id = r.id) as user_count,
+			   COALESCE(r.source, 'manual') as source
 		FROM roles r
 		ORDER BY r.is_system DESC, r.created_at
 	`)
@@ -85,7 +94,7 @@ func getRoles(w http.ResponseWriter, r *http.Request) {
 		var role Role
 		var createdAt, updatedAt time.Time
 		var isSystem int
-		err := rows.Scan(&role.ID, &role.Code, &role.Name, &role.Description, &isSystem, &role.Status, &createdAt, &updatedAt, &role.UserCount)
+		err := rows.Scan(&role.ID, &role.Code, &role.Name, &role.Description, &isSystem, &role.Status, &createdAt, &updatedAt, &role.UserCount, &role.Source)
 		if err != nil {
 			log.Printf("扫描角色失败: %v", err)
 			continue
@@ -504,7 +513,8 @@ func HandleUserRoles(w http.ResponseWriter, r *http.Request) {
 
 func getUserRoles(w http.ResponseWriter, r *http.Request, userID string) {
 	rows, err := database.DB.Query(`
-		SELECT ur.id, ur.user_id, ur.role_id, r.name as role_name, ur.created_at
+		SELECT ur.id, ur.user_id, ur.role_id, r.name as role_name, ur.created_at,
+			   COALESCE(ur.source, 'manual') as source, ur.sso_removed_at
 		FROM user_roles ur
 		JOIN roles r ON ur.role_id = r.id
 		WHERE ur.user_id = ?
@@ -519,13 +529,108 @@ func getUserRoles(w http.ResponseWriter, r *http.Request, userID string) {
 	for rows.Next() {
 		var ur UserRole
 		var createdAt time.Time
-		rows.Scan(&ur.ID, &ur.UserID, &ur.RoleID, &ur.RoleName, &createdAt)
+		var ssoRemovedAt sql.NullTime
+		rows.Scan(&ur.ID, &ur.UserID, &ur.RoleID, &ur.RoleName, &createdAt, &ur.Source, &ssoRemovedAt)
 		ur.CreatedAt = createdAt.Format("2006-01-02 15:04:05")
+		if ssoRemovedAt.Valid {
+			ur.SSORemovedAt = ssoRemovedAt.Time.Format("2006-01-02 15:04:05")
+		}
 		userRoles = append(userRoles, ur)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(userRoles)
+}
+
+// SSORoleItem 查角色接口的单条角色
+type SSORoleItem struct {
+	Code         string `json:"code"`
+	Name         string `json:"name"`
+	Source       string `json:"source"`                   // manual=手动配置, sso=SSO 同步
+	SSORemovedAt string `json:"sso_removed_at,omitempty"` // 非空=该组已在 SSO 侧移除
+}
+
+// SSORolesResponse 查角色接口返回体
+type SSORolesResponse struct {
+	UserID      string        `json:"user_id"`
+	Username    string        `json:"username"`
+	DisplayName string        `json:"display_name"`
+	Email       string        `json:"email"`
+	AuthSource  string        `json:"auth_source"` // local / sso
+	RoleCount   int           `json:"role_count"`
+	Roles       []SSORoleItem `json:"roles"`
+	Note        string        `json:"note,omitempty"` // 零角色时的说明
+}
+
+// HandleQueryUserRoles 按用户名/邮箱查询用户的全部角色(含来源、SSO 移除状态)
+// 常驻只读接口, 供 curl 排查 SSO 角色同步用。走 protected 组, 支持 X-API-Key 或 JWT。
+//
+//	GET /api/user-roles?username=cesar
+//	GET /api/user-roles?email=cesar@solidleisure.com
+func HandleQueryUserRoles(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	email := strings.TrimSpace(r.URL.Query().Get("email"))
+	if username == "" && email == "" {
+		http.Error(w, "请提供 username 或 email 参数", http.StatusBadRequest)
+		return
+	}
+
+	// 定位用户。username 精确匹配；也支持 email。SSO 用户名可能带 _sso_ 后缀,
+	// 所以额外允许「username 是前缀」的模糊匹配,方便直接查 cesar 而不用记全后缀
+	var resp SSORolesResponse
+	var err error
+	if username != "" {
+		err = database.DB.QueryRow(`
+			SELECT id, username, display_name, COALESCE(email,''), COALESCE(auth_source,'local')
+			FROM users WHERE username = ? OR username LIKE CONCAT(?, '\_sso\_%') ORDER BY username LIMIT 1
+		`, username, username).Scan(&resp.UserID, &resp.Username, &resp.DisplayName, &resp.Email, &resp.AuthSource)
+	} else {
+		err = database.DB.QueryRow(`
+			SELECT id, username, display_name, COALESCE(email,''), COALESCE(auth_source,'local')
+			FROM users WHERE email = ? LIMIT 1
+		`, email).Scan(&resp.UserID, &resp.Username, &resp.DisplayName, &resp.Email, &resp.AuthSource)
+	}
+	if err == sql.ErrNoRows {
+		http.Error(w, "未找到该用户", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "查询失败", http.StatusInternalServerError)
+		return
+	}
+
+	// 查全部角色, 手动的排 SSO 前面
+	rows, qErr := database.DB.Query(`
+		SELECT r.code, r.name, COALESCE(ur.source,'manual'), ur.sso_removed_at
+		FROM user_roles ur JOIN roles r ON ur.role_id = r.id
+		WHERE ur.user_id = ?
+		ORDER BY (COALESCE(ur.source,'manual') = 'sso'), r.name
+	`, resp.UserID)
+	if qErr != nil {
+		http.Error(w, "查询角色失败", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	resp.Roles = []SSORoleItem{}
+	for rows.Next() {
+		var it SSORoleItem
+		var removed sql.NullTime
+		if err := rows.Scan(&it.Code, &it.Name, &it.Source, &removed); err != nil {
+			continue
+		}
+		if removed.Valid {
+			it.SSORemovedAt = removed.Time.Format("2006-01-02 15:04:05")
+		}
+		resp.Roles = append(resp.Roles, it)
+	}
+	resp.RoleCount = len(resp.Roles)
+	if resp.RoleCount == 0 {
+		resp.Note = "该用户未分配任何角色，当前仅有欢迎页权限"
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(resp)
 }
 
 func updateUserRoles(w http.ResponseWriter, r *http.Request, userID string) {
@@ -538,10 +643,13 @@ func updateUserRoles(w http.ResponseWriter, r *http.Request, userID string) {
 	// 删除原有角色
 	database.DB.Exec("DELETE FROM user_roles WHERE user_id = ?", userID)
 
-	// 添加新角色
+	// 添加新角色。
+	// 注意语义：管理员在界面上保存过一次之后，这些关联一律变成 source='manual'，
+	// 即「管理员接管」——后续 SSO 同步不再动它们，SSO 移除也不会再打标记。
+	// 这是刻意的：手动配置优先级高于 SSO 同步。
 	for _, roleID := range roleIDs {
 		database.DB.Exec(`
-			INSERT INTO user_roles (id, user_id, role_id) VALUES (?, ?, ?)
+			INSERT INTO user_roles (id, user_id, role_id, source) VALUES (?, ?, ?, 'manual')
 		`, uuid.New().String(), userID, roleID)
 	}
 

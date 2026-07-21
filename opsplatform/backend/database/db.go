@@ -1887,6 +1887,28 @@ func initDefaultRolesAndPermissions() {
 			log.Printf("[Migration] custom_rows backfill source_api_key_id sentinel: %d rows", n)
 		}
 	}
+
+	// ===== SSO app_roles 角色同步（2026-07-20） =====
+	// SSO 下发 app_roles: ["infra_team"] (字符串数组, id_token 与 userinfo 均有)
+	// 登录时按组名同步角色, 需要区分「SSO 同步来的」与「管理员手动配的」:
+	//   - source=sso    : 每次登录重新同步, SSO 移除时打 sso_removed_at 标记(不删记录)
+	//   - source=manual : 永不被同步逻辑触碰, 保证手动配置不被覆盖
+	if _, err := DB.Exec(`ALTER TABLE roles ADD COLUMN source VARCHAR(16) DEFAULT 'manual'`); err == nil {
+		log.Printf("[Migration] roles: add column source")
+	}
+	if _, err := DB.Exec(`ALTER TABLE roles ADD COLUMN sso_removed_at DATETIME NULL`); err == nil {
+		log.Printf("[Migration] roles: add column sso_removed_at")
+	}
+	if _, err := DB.Exec(`ALTER TABLE user_roles ADD COLUMN source VARCHAR(16) DEFAULT 'manual'`); err == nil {
+		log.Printf("[Migration] user_roles: add column source")
+	}
+	if _, err := DB.Exec(`ALTER TABLE user_roles ADD COLUMN sso_removed_at DATETIME NULL`); err == nil {
+		log.Printf("[Migration] user_roles: add column sso_removed_at")
+	}
+	// 存量数据一律视为手动配置 —— 绝不能让首次上线的同步逻辑把管理员配好的角色当成
+	// 「SSO 已移除」而打上标记
+	DB.Exec(`UPDATE roles SET source = 'manual' WHERE source IS NULL OR source = ''`)
+	DB.Exec(`UPDATE user_roles SET source = 'manual' WHERE source IS NULL OR source = ''`)
 }
 
 // Close 关闭数据库连接

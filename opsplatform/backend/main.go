@@ -314,6 +314,8 @@ func main() {
 	protected.HandleFunc("/permissions", handlers.HandlePermissions).Methods("GET", "POST", "OPTIONS")
 	protected.HandleFunc("/permissions/{id}", handlers.HandlePermission).Methods("PUT", "DELETE", "OPTIONS")
 	protected.HandleFunc("/users/{id}/roles", handlers.HandleUserRoles).Methods("GET", "PUT", "OPTIONS")
+	// 按用户名/邮箱查角色(含来源+SSO移除状态), 供 curl 排查 SSO 同步, 支持 X-API-Key
+	protected.HandleFunc("/user-roles", handlers.HandleQueryUserRoles).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/my/permissions", handlers.HandleMyPermissions).Methods("GET", "OPTIONS")
 
 	// API 文档门户

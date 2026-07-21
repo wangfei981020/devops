@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: localhost:8070/opsplatform-dev/frontend-vue:v608
+        image: localhost:8070/opsplatform-dev/frontend-vue:v610
         imagePullPolicy: IfNotPresent  # v606 起为多架构(amd64+arm64)：GKE 取 amd64，本地 arm64 原生
         ports:
         - containerPort: 80
