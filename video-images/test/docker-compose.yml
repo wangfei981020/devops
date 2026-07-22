@@ -1,0 +1,31 @@
+# 本地测试用 RTMP 源: SRS + 两路 testsrc 推流(仅测试,不进 Helm/生产)
+# 生成端(k8s)通过 host.docker.internal:1935 拉流
+services:
+  srs:
+    image: ossrs/srs:5
+    container_name: video-images-srs
+    ports:
+      - "1935:1935"   # RTMP(供 k8s 生成端 host.docker.internal 访问)
+      - "1985:1985"   # HTTP API
+      - "8080:8080"   # HTTP server
+    restart: unless-stopped
+
+  pusher1:
+    image: jrottenberg/ffmpeg:6.1-alpine
+    container_name: video-images-pusher1
+    depends_on: [srs]
+    command: >
+      -re -f lavfi -i testsrc=size=640x480:rate=15
+      -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -g 30
+      -f flv rtmp://srs/live/teststream
+    restart: unless-stopped
+
+  pusher2:
+    image: jrottenberg/ffmpeg:6.1-alpine
+    container_name: video-images-pusher2
+    depends_on: [srs]
+    command: >
+      -re -f lavfi -i testsrc2=size=640x480:rate=15
+      -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -g 30
+      -f flv rtmp://srs/live/teststream2
+    restart: unless-stopped

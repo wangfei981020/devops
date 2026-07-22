@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: video-images-web
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: video-images-web
+spec:
+  type: {{ .Values.web.service.type }}
+  selector:
+    app: video-images-web
+  ports:
+    - name: http
+      port: {{ .Values.web.service.port }}
+      targetPort: 80
+      {{- if eq .Values.web.service.type "NodePort" }}
+      nodePort: {{ .Values.web.service.nodePort }}
+      {{- end }}
+    - name: gallery            # 内网 VS 把画廊域名转发到本服务的这个端口
+      port: 8090
+      targetPort: 8090

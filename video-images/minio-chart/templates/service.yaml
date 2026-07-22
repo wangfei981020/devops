@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: devops-minio
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: devops-minio
+spec:
+  type: ClusterIP
+  selector:
+    app: devops-minio
+  ports:
+    - name: api
+      port: {{ .Values.service.apiPort }}
+      targetPort: 9000
+    - name: console
+      port: {{ .Values.service.consolePort }}
+      targetPort: 9001

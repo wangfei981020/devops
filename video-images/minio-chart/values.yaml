@@ -1,0 +1,36 @@
+# devops-minio: 共享对象存储(standalone 单实例)
+image: minio/minio:latest
+mcImage: minio/mc:latest
+
+# 私有仓库(Harbor/marks26)拉取密钥;公开镜像可留空 []
+# 例: imagePullSecrets: [{ name: harbor-pull }]
+imagePullSecrets: []
+
+rootUser: admin
+rootPassword: Admin@2026
+
+# 租户:每个 app 一个私有桶 + 一对最小权限账号(writer 仅本桶RW / reader 仅本桶RO)。
+# provisioning 集中在这里用 root 完成,租户应用不接触 root。
+# ⚠️ 口令要和对应 app 的 writer/reader Secret 一致;生产用 --set 传入,别提交明文。
+tenants:
+  - bucket: video-images
+    writerUser: video-images-writer
+    writerPassword: ViWriter@2026
+    readerUser: video-images-reader
+    readerPassword: ViReader@2026
+
+storage:
+  size: 20Gi
+  storageClassName: ""   # 留空用集群默认(docker-desktop 为 hostpath)
+
+service:
+  apiPort: 9000
+  consolePort: 9001
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi

@@ -1,0 +1,37 @@
+# 生成端 metrics Service(ClusterIP,仅集群内,供 Prometheus 抓取,不暴露公网)
+apiVersion: v1
+kind: Service
+metadata:
+  name: video-images-generator-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: video-images-generator
+    prometheus: video-images
+spec:
+  type: ClusterIP
+  clusterIP: None            # headless,解析到每个分片 pod,便于逐 pod 抓取
+  selector:
+    app: video-images-generator
+  ports:
+    - name: metrics
+      port: 8088
+      targetPort: 8088
+{{- if .Values.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: video-images-generator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.serviceMonitor.labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: video-images-generator
+      prometheus: video-images
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+{{- end }}

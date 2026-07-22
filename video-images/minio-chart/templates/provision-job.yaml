@@ -1,0 +1,77 @@
+{{- if .Values.tenants }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: devops-minio-provision
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app: devops-minio-provision
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: {{ .Values.mcImage }}
+          # 口令全走【环境变量】,绝不拼进 shell 命令 —— 否则含 $ 的口令会被 shell 吃掉(改残)
+          env:
+            - { name: ROOT_USER, valueFrom: { secretKeyRef: { name: devops-minio-auth, key: root-user } } }
+            - { name: ROOT_PASS, valueFrom: { secretKeyRef: { name: devops-minio-auth, key: root-password } } }
+            {{- range $i, $t := .Values.tenants }}
+            - { name: T{{ $i }}_WPASS, value: {{ $t.writerPassword | quote }} }
+            - { name: T{{ $i }}_RPASS, value: {{ $t.readerPassword | quote }} }
+            {{- end }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              echo "等待 MinIO 就绪..."
+              until mc alias set m http://devops-minio:{{ .Values.service.apiPort }} "$ROOT_USER" "$ROOT_PASS" >/dev/null 2>&1; do
+                echo "  未就绪,2s 后重试"; sleep 2
+              done
+              # 策略【先删后建】确保内容每次更新到位(mc policy create 遇已存在不会更新)
+              upsert_policy() { # $1=策略名 $2=json文件 $3=用户
+                mc admin policy detach m "$1" --user "$3" 2>/dev/null || true
+                mc admin policy remove m "$1" 2>/dev/null || true
+                mc admin policy create m "$1" "$2"
+              }
+              {{- range $i, $t := .Values.tenants }}
+
+              echo "=== 租户: {{ $t.bucket }} ==="
+              B={{ $t.bucket }}
+              mc mb --ignore-existing m/$B
+              mc anonymous set none m/$B || true
+              cat >/tmp/$B-rw.json <<EOF
+              { "Version":"2012-10-17","Statement":[
+                {"Effect":"Allow","Action":["s3:GetBucketLocation","s3:ListBucket"],"Resource":["arn:aws:s3:::$B"]},
+                {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::$B/*"]}
+              ]}
+              EOF
+              cat >/tmp/$B-ro.json <<EOF
+              { "Version":"2012-10-17","Statement":[
+                {"Effect":"Allow","Action":["s3:GetBucketLocation","s3:ListBucket"],"Resource":["arn:aws:s3:::$B"]},
+                {"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::$B/*"]}
+              ]}
+              EOF
+              # 账号 upsert:口令用【环境变量 $T{{ $i }}_WPASS】,不拼进命令,$ 安全
+              mc admin user add m "{{ $t.writerUser }}" "$T{{ $i }}_WPASS"
+              mc admin user add m "{{ $t.readerUser }}" "$T{{ $i }}_RPASS"
+              upsert_policy $B-rw /tmp/$B-rw.json "{{ $t.writerUser }}"
+              upsert_policy $B-ro /tmp/$B-ro.json "{{ $t.readerUser }}"
+              mc admin policy attach m $B-rw --user "{{ $t.writerUser }}"
+              mc admin policy attach m $B-ro --user "{{ $t.readerUser }}"
+              echo "OK: $B 私有 + writer(RW) + reader(RO,含 ListBucket)"
+              {{- end }}
+
+              echo "全部租户 provisioning 完成"
+{{- end }}

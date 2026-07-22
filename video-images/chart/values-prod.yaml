@@ -1,0 +1,86 @@
+
+## 流列表:直接改 templates/streams-configmap.yaml 里内联的 config.ini(不用 --set-file)。
+imagePullSecrets:
+  - name: ops-harbor-login-secret
+
+generator:
+  image: harbor.slileisure.com/devops/video-images-generator:v9
+  replicas: 2                # 现 ~30 路 → 2 片(~15/片);涨到几百上千再加(~20-25 路/片)
+  mode: snapshot             # 方案A:直连直播源 + snapshot(省~10×带宽,护住 30M 源带宽)
+  fps: "1/30"                # persistent 用;生产 30 秒刷新
+  jpegQuality: 5             # JPEG 质量(2~5)
+  skipNonKeyframe: true      # persistent: 只解关键帧省 CPU
+  startStaggerMs: 150        # 启动错峰
+  snapshot:
+    intervalSeconds: 30        # 每路 30 秒抓一帧
+    maxConcurrency: 4          # ⭐控制峰值带宽:峰值≈maxConcurrency×源码率。30M 源+conver已占用,先保守设4;
+                               # 按"(30M − conver已用)÷源码率"上调。这个值你可随时改 values 生效
+    timeoutSeconds: 15
+  reconcileSeconds: 5
+  uploadSeconds: 5
+  uploadSettleSeconds: 2       # 文件静置≥2s才上传,躲开 ffmpeg 原地覆写窗口(防半张/花屏图)
+  healthSeconds: 30          # 健康检查周期
+  staleSeconds: 90           # 图多久没更新算卡住(~3× 刷新周期)
+  graceSeconds: 60           # 刚启动出图宽限
+  cleanupSeconds: 300        # 分片0 清理已禁用/删除流的孤儿老图
+  imagesVolumeMedium: ""
+  resources:                 # 实测 28 路才 196MB,1Gi 足够(还是 Guaranteed QoS 抗驱逐)
+    requests:
+      cpu: "1"
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 1Gi
+
+minio:
+  endpoint: devops-minio.devops.svc.cluster.local:9000   # MinIO 在 devops 命名空间
+  bucket: video-images
+  useSSL: false
+  writerUser: video-images-writer
+  writerPassword: CHANGE_ME_writer
+  readerUser: video-images-reader
+  readerPassword: CHANGE_ME_reader
+
+web:
+  image: harbor.slileisure.com/devops/video-images-web:v7
+  replicas: 2
+  cacheTtlSeconds: 30
+  galleryStaleSeconds: 300   # 画廊超 5 分钟没更新标红
+  listCacheSeconds: 10
+  negCacheSeconds: 10        # 404 负缓存 TTL:反复请求缺图的流/坏URL 时不穿透打 MinIO
+  publicBaseUrl: ""          # 画廊"外网"点击链接域名;留空则用 ingressGateway.host[0](https://)
+  cors:                      # 公网图片 CORS,照搬原 nginx(可改)
+    allowOrigin: "*"
+    timingAllowOrigin: "*"
+    allowMethods: "GET, POST, OPTIONS, DELETE"
+    allowHeaders: "reqid, nid, host, x-real-ip, x-forwarded-ip, event-type, event-id, accept, content-type"
+  service:
+    type: ClusterIP          # 图片走公网 Istio;画廊走内网 VS(你自己配到 8090 端口)
+    port: 80
+  resources:                 # 缓存代理:内存主要是 Go 运行时+并发缓冲(磁盘缓存走 emptyDir 不算内存)
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  labels:
+    release: prometheus      # ← 改成你们 Prometheus 选 ServiceMonitor 的实际标签
+
+ingressGateway:
+  enabled: true
+  name: istio-system/改成你的-ingressgateway   # 复用已有 Gateway(namespace/name)
+  host:                                        # CF 回源指向的域名,支持多个
+    - video-images.改成你的域名1
+    # - video-images.改成你的域名2             # 多域名就加行
+  matchPrefix:
+    - "/"
+  port: 80
+
+pdb:
+  minAvailable: 1

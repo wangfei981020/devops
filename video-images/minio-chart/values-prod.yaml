@@ -1,0 +1,42 @@
+## devops-minio 生产 values —— 覆盖 chart 默认
+## 用法:
+##   helm upgrade --install devops-minio ./minio-chart -n devops --create-namespace \
+##     -f values-prod.yaml \
+##     --set rootPassword=... \
+##     --set tenants[0].writerPassword=... --set tenants[0].readerPassword=...
+## ⚠️ 口令别提交明文,用 --set 传入。口令须与 video-images 的 writer/reader 一致。
+
+# 镜像(集群拉不了 dockerhub,镜像到自己 Harbor)
+image: harbor.slileisure.com/devops/minio:latest
+mcImage: harbor.slileisure.com/devops/mc:latest
+
+# 私有仓库拉取密钥
+imagePullSecrets:
+  - name: ops-harbor-login-secret
+
+rootUser: admin
+rootPassword: CHANGE_ME_root        # 用 --set 传入
+
+# 租户:每 app 一私有桶 + writer(RW)/reader(RO,含ListBucket)。口令须与 video-images 一致。
+tenants:
+  - bucket: video-images
+    writerUser: video-images-writer
+    writerPassword: CHANGE_ME_writer  # 用 --set tenants[0].writerPassword= 传入
+    readerUser: video-images-reader
+    readerPassword: CHANGE_ME_reader  # 用 --set tenants[0].readerPassword= 传入
+
+storage:
+  size: 5Gi
+  storageClassName: premium-rwo       # 你集群的 StorageClass(注意 Delete 回收;迁真实数据考虑 pd-ssd Retain)
+
+service:
+  apiPort: 9000
+  consolePort: 9001
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi

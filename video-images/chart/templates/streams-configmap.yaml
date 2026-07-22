@@ -1,0 +1,18 @@
+# 流列表 —— 内容直接内联在本模板 data.config.ini 里(不进 values、不用 --set-file)。
+# 增删流/改地址:直接改下面的内容,然后 helm upgrade(或 ArgoCD sync)。
+# 生成端每 5 秒热加载,改完 ~1 分钟内自动生效,只影响增删的那路流,其它不动、无需重启。
+# 格式与生产 config.ini 一致:; 开头整行 = 被禁用的流(跳过)。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-streams
+  namespace: {{ .Release.Namespace }}
+data:
+  config.ini: |
+    [cluster_local]
+    input_domain=rtmp://host.docker.internal:1935
+    input_vhost=
+    output_path=/data/images
+    01=/live/teststream filename=TEST001
+    02=/live/teststream2 filename=TEST002
+    ;03=/live/disabled filename=TEST003

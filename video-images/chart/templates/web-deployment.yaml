@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: video-images-web
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: video-images-web
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      app: video-images-web
+  template:
+    metadata:
+      labels:
+        app: video-images-web
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: web
+          image: {{ .Values.web.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 80 }        # 公网:仅图片
+            - { name: gallery, containerPort: 8090 }    # 内网:画廊看板(内网 VS 转发到这)
+          env:
+            - { name: LISTEN, value: ":80" }
+            - { name: ADMIN_LISTEN, value: ":8090" }
+            - { name: MINIO_ENDPOINT, value: {{ .Values.minio.endpoint | quote }} }
+            - { name: MINIO_BUCKET, value: {{ .Values.minio.bucket | quote }} }
+            - { name: MINIO_USE_SSL, value: "{{ .Values.minio.useSSL }}" }
+            - { name: CACHE_DIR, value: /var/cache/video-images }
+            - { name: CACHE_TTL_SECONDS, value: "{{ .Values.web.cacheTtlSeconds }}" }
+            - { name: GALLERY_STALE_SECONDS, value: "{{ .Values.web.galleryStaleSeconds }}" }
+            - { name: LIST_CACHE_SECONDS, value: "{{ .Values.web.listCacheSeconds }}" }
+            - { name: NEG_CACHE_SECONDS, value: "{{ .Values.web.negCacheSeconds }}" }
+            - { name: CONFIG_FILE, value: /etc/video-images/config.ini }  # 画廊读配置显示失败流
+            # 画廊"外网"链接的公网域名:优先 web.publicBaseUrl,否则复用 ingressGateway.host[0]
+            {{- $pub := .Values.web.publicBaseUrl }}
+            {{- if and (not $pub) .Values.ingressGateway.host }}
+            {{- $pub = printf "https://%s" (index .Values.ingressGateway.host 0) }}
+            {{- end }}
+            - { name: PUBLIC_BASE_URL, value: {{ $pub | quote }} }
+            # CORS(照搬原 nginx,可在 values 改)
+            - { name: CORS_ALLOW_ORIGIN, value: {{ .Values.web.cors.allowOrigin | quote }} }
+            - { name: CORS_TIMING_ORIGIN, value: {{ .Values.web.cors.timingAllowOrigin | quote }} }
+            - { name: CORS_ALLOW_METHODS, value: {{ .Values.web.cors.allowMethods | quote }} }
+            - { name: CORS_ALLOW_HEADERS, value: {{ .Values.web.cors.allowHeaders | quote }} }
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: video-images-minio-reader, key: access-key }
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: video-images-minio-reader, key: secret-key }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 80 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 80 }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          volumeMounts:
+            - { name: cache, mountPath: /var/cache/video-images }
+            - { name: config, mountPath: /etc/video-images, readOnly: true }
+      volumes:
+        - name: cache
+          emptyDir: {}
+        - name: config                          # 同生成端那份流列表 ConfigMap
+          configMap:
+            name: {{ .Release.Name }}-streams

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: video-images
+description: SRS 直播流抽帧缩略图服务(分片生成端 + nginx 缓存回源 MinIO)
+type: application
+version: 0.1.0
+appVersion: "v1"

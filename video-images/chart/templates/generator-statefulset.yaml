@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: video-images-generator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: video-images-generator
+spec:
+  serviceName: video-images-generator
+  replicas: {{ .Values.generator.replicas }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: video-images-generator
+  template:
+    metadata:
+      labels:
+        app: video-images-generator
+      # 注:生成端每 5 秒热加载 config.ini,故此处【不】加 checksum 注解触发滚动重启
+      # (改流只影响增删的那一路,其它流不动;若加重启注解则每次改流会重启整片)。
+      # 若你想要"改配置即滚动重启"(同你 nginx 那套),在此加 annotations,
+      # 值用 include streams-configmap.yaml 再 sha256sum 即可。
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: generator
+          image: {{ .Values.generator.image }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - { name: TOTAL_SHARDS, value: "{{ .Values.generator.replicas }}" }
+            - { name: MODE, value: {{ .Values.generator.mode | quote }} }
+            - { name: FFMPEG_FPS, value: {{ .Values.generator.fps | quote }} }
+            - { name: JPEG_QUALITY, value: "{{ .Values.generator.jpegQuality }}" }
+            - { name: SKIP_NONKEY, value: "{{ .Values.generator.skipNonKeyframe }}" }
+            - { name: START_STAGGER_MS, value: "{{ .Values.generator.startStaggerMs }}" }
+            - { name: SNAPSHOT_SECONDS, value: "{{ .Values.generator.snapshot.intervalSeconds }}" }
+            - { name: SNAPSHOT_MAX_CONCURRENCY, value: "{{ .Values.generator.snapshot.maxConcurrency }}" }
+            - { name: SNAPSHOT_TIMEOUT_SECONDS, value: "{{ .Values.generator.snapshot.timeoutSeconds }}" }
+            - { name: METRICS_ADDR, value: ":8088" }
+            - { name: CLEANUP_SECONDS, value: "{{ .Values.generator.cleanupSeconds }}" }
+            - { name: RECONCILE_SECONDS, value: "{{ .Values.generator.reconcileSeconds }}" }
+            - { name: UPLOAD_SECONDS, value: "{{ .Values.generator.uploadSeconds }}" }
+            - { name: UPLOAD_SETTLE_SECONDS, value: "{{ .Values.generator.uploadSettleSeconds }}" }
+            - { name: HEALTH_SECONDS, value: "{{ .Values.generator.healthSeconds }}" }
+            - { name: STALE_SECONDS, value: "{{ .Values.generator.staleSeconds }}" }
+            - { name: GRACE_SECONDS, value: "{{ .Values.generator.graceSeconds }}" }
+            - { name: CONFIG_FILE, value: /etc/video-images/config.ini }
+            - { name: OUTPUT_DIR, value: /data/images }
+            - { name: MINIO_ENDPOINT, value: {{ .Values.minio.endpoint | quote }} }
+            - { name: MINIO_BUCKET, value: {{ .Values.minio.bucket | quote }} }
+            - { name: MINIO_USE_SSL, value: "{{ .Values.minio.useSSL }}" }
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: video-images-minio-writer
+                  key: access-key
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: video-images-minio-writer
+                  key: secret-key
+          ports:
+            - { name: metrics, containerPort: 8088 }
+          livenessProbe:            # 进程卡死时自愈:metrics/healthz 无响应即重启
+            httpGet: { path: /healthz, port: 8088 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.generator.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/video-images }
+            - { name: images, mountPath: /data/images }
+      affinity:                     # 尽量把分片散到不同节点,单节点挂不会端掉一大片流
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: video-images-generator
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}-streams
+        - name: images
+          emptyDir:
+            {{- if .Values.generator.imagesVolumeMedium }}
+            medium: {{ .Values.generator.imagesVolumeMedium }}
+            {{- end }}

@@ -1,0 +1,88 @@
+## video-images —— 生成端(分片)+ Go 服务代理(缓存回源 MinIO)
+## 默认值面向【本地 docker-desktop 测试】。生产用 values-prod.yaml 覆盖。
+
+# 私有仓库(Harbor/marks26)拉取密钥;本地公开镜像留空 []
+# 例: imagePullSecrets: [{ name: harbor-pull }]
+imagePullSecrets: []
+
+generator:
+  image: localhost:8070/opsplatform/video-images-generator:v9
+  replicas: 2                # 本地 2 片; 生产按 ~20-25 路/片 扩(1000 路 → ~40)
+  mode: persistent           # persistent=常驻ffmpeg(最实时) | snapshot=每N秒抓一帧就断(省~10×带宽)
+  fps: "1/5"                 # persistent 用; 本地测试快点; 生产 1/10(10s)或 1/30(30s)
+  jpegQuality: 5             # JPEG 质量(-q:v,越小越清晰,2~5 合适;比 PNG 小 3-5×)
+  skipNonKeyframe: true      # persistent: 只解关键帧,省解码 CPU
+  startStaggerMs: 150        # 启动错峰:每路 ffmpeg 起动间隔,避免瞬间 CPU/连接尖峰
+  snapshot:                  # snapshot 模式参数
+    intervalSeconds: 30      # 每路多久抓一帧
+    maxConcurrency: 8        # 同时最多几路在抓(限并发,别一次性连爆 SRS)
+    timeoutSeconds: 15       # 单次抓帧超时(连不上就放弃本轮)
+  reconcileSeconds: 5
+  uploadSeconds: 2
+  healthSeconds: 30          # 健康检查周期
+  staleSeconds: 90           # 输出图多久没更新算"卡住"(生产设约 3× 刷新周期)
+  graceSeconds: 60           # 刚启动的流留多久出图宽限
+  cleanupSeconds: 300        # 分片0 每隔多久清理一次"配置里已删/禁用的流"的孤儿老图
+  imagesVolumeMedium: ""     # 留空=节点盘; "Memory"=内存盘(会占用内存 limit)
+  resources:                 # 本地小配置; 生产: mem request=limit 按 ~150Mi/路
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi          # mem request=limit → Guaranteed QoS,抗驱逐
+
+# 连接共享 devops-minio(独立 namespace)。桶私有,双账号最小权限。
+# 桶/用户/策略由 devops-minio 侧 provisioning 创建;本应用【无 root】。
+minio:
+  endpoint: devops-minio.devops-minio.svc.cluster.local:9000
+  bucket: video-images
+  useSSL: false
+  # writer: 生成端上传(RW 仅限本桶)—— 口令须与 devops-minio tenant 一致
+  writerUser: video-images-writer
+  writerPassword: ViWriter@2026
+  # reader: 服务代理只读(RO 仅限本桶)—— 口令须与 devops-minio tenant 一致
+  readerUser: video-images-reader
+  readerPassword: ViReader@2026
+
+web:
+  image: localhost:8070/opsplatform/video-images-web:v7   # 自建 Go 服务代理(双端口)
+  replicas: 2
+  cacheTtlSeconds: 30        # 图片本地缓存 TTL,匹配抽帧周期
+  galleryStaleSeconds: 300   # 画廊里图多久没更新标红(=5分钟,与你定的一致)
+  listCacheSeconds: 10       # 画廊列表缓存,避免频繁 List 压 MinIO
+  publicBaseUrl: ""          # 画廊"外网"链接域名;留空则用 ingressGateway.host[0](https://)
+  cors:                      # 公网图片 CORS,照搬原 nginx(可改)
+    allowOrigin: "*"
+    timingAllowOrigin: "*"
+    allowMethods: "GET, POST, OPTIONS, DELETE"
+    allowHeaders: "reqid, nid, host, x-real-ip, x-forwarded-ip, event-type, event-id, accept, content-type"
+  service:
+    type: NodePort           # 本地用 NodePort 验证; 生产走 Istio 时改 ClusterIP
+    port: 80
+    nodePort: 30840
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+# Prometheus ServiceMonitor(生成端 metrics :8088;仅集群内,不公网)
+serviceMonitor:
+  enabled: false             # 本地关;生产开
+  interval: 30s
+  labels:                    # 改成你们 Prometheus 选 ServiceMonitor 的标签(常见 release: kube-prometheus-stack)
+    release: prometheus
+
+pdb:
+  minAvailable: 1
+
+# Istio 入口(生产;CF 回源到已有 Gateway,按域名路由到本服务)。沿用你们标准约定。
+ingressGateway:
+  enabled: false                                     # 本地 false;生产 true
+  name: istio-system/uat-istio-ingressgateway-extra  # 复用已有 Gateway(namespace/name)
+  host:                                              # 支持多个域名,一行一个
+    - video-images.example.com
+  matchPrefix:
+    - "/"
+  port: 80
+
+# 流列表不在这里 —— 见 templates/streams-configmap.yaml,内容直接内联在那个 ConfigMap 里

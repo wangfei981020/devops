@@ -1,0 +1,5 @@
+# GO-2026-5932: golang.org/x/crypto/openpgp 子包"无人维护"通告(UNKNOWN,无修复版本)。
+# 由 minio-go 间接引入,但本项目未使用 openpgp。
+# 已用 govulncheck 做可达性分析确认: "modules you require, but your code doesn't appear to call"。
+# 因此豁免。其余真实可达漏洞(如 crypto/tls GO-2026-5856)通过 go1.26.5 编译已修复,不在此豁免。
+GO-2026-5932

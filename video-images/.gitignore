@@ -1,0 +1,5 @@
+# 编译产物(镜像内构建,勿入库)
+generator/video-images-generator
+web/video-images-web
+# 软测输出
+test/soak-*.csv

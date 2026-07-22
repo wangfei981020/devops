@@ -1,0 +1,3 @@
+# GO-2026-5932: golang.org/x/crypto/openpgp 无人维护通告(UNKNOWN,无修复版本)。
+# 由 minio-go 间接引入,本项目未使用 openpgp;govulncheck 已证不可达。豁免。
+GO-2026-5932

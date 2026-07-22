@@ -1,0 +1,32 @@
+{{- if .Values.ingressGateway.enabled }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: video-images-web
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app: video-images-web
+spec:
+  gateways:
+    - {{ .Values.ingressGateway.name | quote }}   # 复用已有 Gateway,不自建
+  hosts:
+    {{- range .Values.ingressGateway.host }}       # 支持多个域名
+    - {{ . | quote }}
+    {{- end }}
+  http:
+    - match:
+        {{- range .Values.ingressGateway.matchPrefix }}
+        - uri:
+            prefix: {{ . | quote }}
+        {{- end }}
+      route:
+        - destination:
+            host: video-images-web.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.web.service.port }}
+      retries:
+        attempts: 3                                # 最大重试次数
+        perTryTimeout: 60s                         # 每次重试超时
+        retryOn: 5xx,connect-failure,refused-stream # 触发重试的条件
+      timeout: 180s                                # 请求超时
+{{- end }}
