@@ -50,6 +50,12 @@
           <span v-else class="unset">未配置</span>
         </template>
       </el-table-column>
+      <el-table-column label="密钥前缀" min-width="150">
+        <template #default="{ row }">
+          <code v-if="row.secret_prefix">{{ row.secret_prefix }}</code>
+          <span v-else class="unset">自动（→ {{ autoSecretPrefix(row) }}）</span>
+        </template>
+      </el-table-column>
       <el-table-column label="z-kv-secrets" min-width="280">
         <template #default="{ row }">
           <div>
@@ -103,6 +109,10 @@
         <el-form-item label="z-kv-secrets 路径">
           <el-input v-model="zkvPath" :placeholder="`留空=自动推 ${autoZkv(editing)}`" />
           <div class="form-hint">后端 secret 集中定义处（专属 secret 追加到这）。默认自动推 &lt;chart目录&gt;/z-kv-secrets；历史遗留共用的（如 g33 复用 g32）填 charts/g32-uat/z-kv-secrets</div>
+        </el-form-item>
+        <el-form-item label="密钥前缀">
+          <el-input v-model="secretPrefix" :placeholder="`留空=按项目名自动 ${autoSecretPrefix(editing)}`" />
+          <div class="form-hint">新增模块换密钥前缀用。留空=项目名去后缀转小写（正规项目都留空）。历史特例整体复用别人的（如 g33 复用 g32）填 g32，密钥保持 g32-*；将来迁移出来清空即可</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -182,6 +192,7 @@ const harbor = ref('')
 const domain = ref('')
 const namespaces = ref('')
 const zkvPath = ref('')
+const secretPrefix = ref('')
 const atLarks = ref([]) // 固定艾特人（lark_id 列表）
 const contacts = ref([]) // 通知人列表
 const contactsWithLark = computed(() => contacts.value.filter(c => c.lark_id))
@@ -214,6 +225,11 @@ function projName(row) {
   return t && row.name.endsWith(t) ? row.name.slice(0, -t.length) : row.name
 }
 
+// 密钥前缀自动值 = 项目名转小写（跟后端 effectivePrefix 一致），留空时展示/占位用
+function autoSecretPrefix(row) {
+  return projName(row).toLowerCase()
+}
+
 function openEdit(row) {
   editing.value = row
   gateway.value = row.ingress_gateway || ''
@@ -221,6 +237,7 @@ function openEdit(row) {
   domain.value = row.domain_suffix || ''
   namespaces.value = row.default_namespaces || ''
   zkvPath.value = row.zkv_secrets_path || ''
+  secretPrefix.value = row.secret_prefix || ''
   atLarks.value = (row.at_lark_ids || '').split(/[\n,\s]+/).map(s => s.trim()).filter(Boolean)
   dialog.value = true
 }
@@ -233,6 +250,8 @@ async function save() {
     await api.updateEnvDomain(editing.value.id, domain.value.trim())
     await api.updateEnvNamespaces(editing.value.id, namespaces.value.trim())
     await api.updateEnvZkvPath(editing.value.id, zkvPath.value.trim())
+    const prefix = secretPrefix.value.trim().toLowerCase()
+    await api.updateEnvSecretPrefix(editing.value.id, prefix)
     const atStr = atLarks.value.join('\n')
     await api.updateEnvAtLarks(editing.value.id, atStr)
     editing.value.ingress_gateway = gateway.value.trim()
@@ -240,6 +259,7 @@ async function save() {
     editing.value.domain_suffix = domain.value.trim()
     editing.value.default_namespaces = namespaces.value.trim()
     editing.value.zkv_secrets_path = zkvPath.value.trim()
+    editing.value.secret_prefix = prefix
     editing.value.at_lark_ids = atStr
     dialog.value = false
     ElMessage.success('已保存')

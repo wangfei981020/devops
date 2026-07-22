@@ -73,7 +73,7 @@ func HandleZkvPreview(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40400, "样板 z-kv-secrets/values.yaml 不存在: "+src.ChartBasePath)
 		return
 	}
-	dstProj := strings.TrimSuffix(dst.Name, "-"+dst.EnvType)
+	dstProj := effectivePrefix(dst)
 	renamed := services.RenameZkvSecretNames(raw, allProjectPrefixes(), dstProj)
 	// 目标是否已存在（存在则不该重复初始化）
 	exists := false

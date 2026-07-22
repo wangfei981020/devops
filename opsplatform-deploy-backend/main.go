@@ -153,6 +153,7 @@ func main() {
 	me.HandleFunc("/orchestration/env-domain/{id}", handlers.HandleUpdateEnvDomain).Methods("PUT", "OPTIONS")
 	me.HandleFunc("/orchestration/env-namespaces/{id}", handlers.HandleUpdateEnvNamespaces).Methods("PUT", "OPTIONS")
 	me.HandleFunc("/orchestration/env-zkv-path/{id}", handlers.HandleUpdateEnvZkvPath).Methods("PUT", "OPTIONS")
+	me.HandleFunc("/orchestration/env-secret-prefix/{id}", handlers.HandleUpdateEnvSecretPrefix).Methods("PUT", "OPTIONS")
 	me.HandleFunc("/orchestration/env-at-larks/{id}", handlers.HandleUpdateEnvAtLarks).Methods("PUT", "OPTIONS")
 	// z-kv-secrets 初始化（新项目从 zkv 模板复制一份）
 	me.HandleFunc("/orchestration/zkv-status/{id}", handlers.HandleZkvStatus).Methods("GET", "OPTIONS")

@@ -109,7 +109,27 @@ func HandleUpdateEnvZkvPath(w http.ResponseWriter, r *http.Request) {
 	JSONSuccess(w, nil)
 }
 
+// PUT /api/orchestration/env-secret-prefix/{id} —— 更新某项目环境的密钥前缀覆盖（「项目参数」页用）。
+// 留空=按项目名自动转小写；填了=固定用它(如 g33 复用 g32 填 g32，密钥保持 g32-*)。存小写，去空白。
+func HandleUpdateEnvSecretPrefix(w http.ResponseWriter, r *http.Request) {
+	id := ParseID(mux.Vars(r)["id"])
+	var req struct {
+		SecretPrefix string `json:"secret_prefix"`
+	}
+	if !DecodeJSON(w, r, &req) {
+		return
+	}
+	prefix := strings.ToLower(strings.TrimSpace(req.SecretPrefix))
+	if _, err := database.DB.Exec(`UPDATE project_env SET secret_prefix=? WHERE id=?`, prefix, id); err != nil {
+		InternalErr(w, r, err)
+		return
+	}
+	Audit(r, "orchestration.env_secret_prefix.update", "project_env", strconv.FormatInt(id, 10), nil)
+	JSONSuccess(w, nil)
+}
+
 // allProjectPrefixes 收集所有已登记项目名（project_env 去 -env 后缀），供跨项目 secret 改前缀用。
+// 一律转小写：secret 名（k8s 资源名）都是小写，项目名可能存成大写(如 G32-uat)，不转小写会匹配不上。
 func allProjectPrefixes() map[string]bool {
 	set := map[string]bool{}
 	rows, err := database.DB.Query(`SELECT name, env_type FROM project_env`)
@@ -122,12 +142,21 @@ func allProjectPrefixes() map[string]bool {
 		if rows.Scan(&name, &envType) != nil {
 			continue
 		}
-		proj := strings.TrimSuffix(name, "-"+envType)
+		proj := strings.ToLower(strings.TrimSuffix(name, "-"+envType))
 		if proj != "" {
 			set[proj] = true
 		}
 	}
 	return set
+}
+
+// effectivePrefix 该环境的「密钥项目前缀」：配了 secret_prefix 用配的(历史特例，如 g33 复用 g32 填 g32)，
+// 否则 = 项目名去环境后缀再转小写(G50-uat → g50、pa-re-uat → pa-re)。跨项目复用换密钥前缀时的目标前缀。
+func effectivePrefix(p *models.ProjectEnv) string {
+	if s := strings.ToLower(strings.TrimSpace(p.SecretPrefix)); s != "" {
+		return s
+	}
+	return strings.ToLower(strings.TrimSuffix(p.Name, "-"+p.EnvType))
 }
 
 // PUT /api/orchestration/env-at-larks/{id} —— 更新某项目环境的固定艾特人（Lark ID 列表，「项目参数」页用）。
@@ -463,9 +492,9 @@ func verifyImageForSubmit(valuesYAML []byte, moduleName, envType string) error {
 func loadEnvGit(where string, arg interface{}) (*models.ProjectEnv, error) {
 	var p models.ProjectEnv
 	err := database.DB.QueryRow(
-		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), IFNULL(domain_suffix,''), IFNULL(default_namespaces,''), IFNULL(zkv_secrets_path,''), IFNULL(at_lark_ids,'')
+		`SELECT id, name, env_type, git_repo, git_branch, chart_base_path, IFNULL(ingress_gateway,''), IFNULL(harbor_project,''), IFNULL(domain_suffix,''), IFNULL(default_namespaces,''), IFNULL(zkv_secrets_path,''), IFNULL(at_lark_ids,''), IFNULL(secret_prefix,'')
 		 FROM project_env WHERE `+where, arg).
-		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway, &p.HarborProject, &p.DomainSuffix, &p.DefaultNamespaces, &p.ZkvSecretsPath, &p.AtLarkIDs)
+		Scan(&p.ID, &p.Name, &p.EnvType, &p.GitRepo, &p.GitBranch, &p.ChartBasePath, &p.IngressGateway, &p.HarborProject, &p.DomainSuffix, &p.DefaultNamespaces, &p.ZkvSecretsPath, &p.AtLarkIDs, &p.SecretPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -477,8 +506,9 @@ func loadEnvGit(where string, arg interface{}) (*models.ProjectEnv, error) {
 // 这是"建议值"，用户会在编辑器里复核（模式 B）。
 func prefillValues(raw []byte, srcEnv, dstEnv *models.ProjectEnv, srcService, moduleName string) []byte {
 	s := string(raw)
-	srcProj := strings.TrimSuffix(srcEnv.Name, "-"+srcEnv.EnvType)
-	dstProj := strings.TrimSuffix(dstEnv.Name, "-"+dstEnv.EnvType)
+	// 项目段一律走 effectivePrefix：转小写(匹配小写的 secret 名) + 支持前缀覆盖(g33 复用 g32 时目标仍是 g32，不误换)
+	srcProj := effectivePrefix(srcEnv)
+	dstProj := effectivePrefix(dstEnv)
 	if srcService != "" && srcService != moduleName {
 		s = strings.ReplaceAll(s, srcService, moduleName)
 	}
@@ -603,7 +633,7 @@ func HandlePrefillModule(w http.ResponseWriter, r *http.Request) {
 	// 缺 global.labels 就补，避免 web.labels 渲染 nil
 	filled = services.EnsureGlobalLabels(filled)
 	// 跨项目复用模板：把 extraEnvVars 引用的 secret 名的项目前缀换成目标项目（含别项目前缀，如 g33→g50）
-	filled = services.RenameSecretRefs(filled, allProjectPrefixes(), strings.TrimSuffix(dst.Name, "-"+dst.EnvType))
+	filled = services.RenameSecretRefs(filled, allProjectPrefixes(), effectivePrefix(dst))
 	// 后端专属密钥分类：服务 extraEnvVars 引用 vs 目标环境 z-kv-secrets 现有（已存在复用 / 待新建填内容）
 	secretRefs := buildSecretRefs(ctx, gs, dst, filled)
 	// 扫 templates/ 下的 configmap（多个，按文件名前端做 tab），同样令牌替换

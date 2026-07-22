@@ -154,6 +154,7 @@ export const updateEnvHarbor = (id, harbor_project) => http.put(`/orchestration/
 export const updateEnvDomain = (id, domain_suffix) => http.put(`/orchestration/env-domain/${id}`, { domain_suffix })
 export const updateEnvNamespaces = (id, default_namespaces) => http.put(`/orchestration/env-namespaces/${id}`, { default_namespaces })
 export const updateEnvZkvPath = (id, zkv_secrets_path) => http.put(`/orchestration/env-zkv-path/${id}`, { zkv_secrets_path })
+export const updateEnvSecretPrefix = (id, secret_prefix) => http.put(`/orchestration/env-secret-prefix/${id}`, { secret_prefix })
 export const updateEnvAtLarks = (id, at_lark_ids) => http.put(`/orchestration/env-at-larks/${id}`, { at_lark_ids })
 export const zkvStatus = (id) => http.get(`/orchestration/zkv-status/${id}`)
 export const zkvPreview = (body) => http.post('/orchestration/zkv-preview', body)
