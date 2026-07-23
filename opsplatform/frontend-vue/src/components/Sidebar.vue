@@ -171,9 +171,7 @@ const menuGroups = [
       { key: 'roles', perm: 'roles', name: '角色管理', path: '/roles' },
       { key: 'permissions', perm: 'permissions', name: '权限配置', path: '/permissions' },
       { key: 'audit', perm: 'audit', name: '审计日志', path: '/audit' },
-      { key: 'api', perm: 'api-manage', name: '接口管理', path: '/api-manage' },
       { key: 'schedule', perm: 'schedule', name: '排班管理', path: '/schedule' },
-      { key: 'taskpool', perm: 'task-pool', name: '任务池', path: '/task-pool' },
       { key: 'incidents', perm: 'incidents', name: '响应记录', path: '/incidents' },
       { key: 'duty', perm: 'duty', name: '值班记录', path: '/duty-records' },
       { key: 'table-maintenance', perm: 'table_maintenance', name: '桌台维护记录', path: '/table-maintenance' },
@@ -188,7 +186,6 @@ const menuGroups = [
     name: '资源管理',
     icon: 'resource',
     items: [
-      { key: 'assets', perm: 'assets', name: '资产管理', path: '/assets' },
       { key: 'domains', perm: 'domains', name: '域名管理', path: '/domains' },
       { key: 'merchants', perm: 'merchants', name: '商户管理', path: '/merchants' },
       { key: 'network', perm: 'network', name: '网络管理', path: '/network' },
@@ -197,99 +194,10 @@ const menuGroups = [
     ]
   },
   {
-    key: 'monitor',
-    name: '监控告警',
-    icon: 'monitor',
-    items: [
-      { key: 'metrics', perm: 'metrics', name: '指标监控', path: '/metrics' },
-      { key: 'alerts', perm: 'alerts', name: '告警管理', path: '/alerts' },
-      { key: 'alertrules', perm: 'alert-rules', name: '告警规则', path: '/alert-rules' },
-      { key: 'alertnotify', perm: 'alert-notify', name: '通知配置', path: '/alert-notify' },
-      { key: 'dashboard', perm: 'dashboard-screen', name: '大屏展示', path: '/dashboard-screen' }
-    ]
-  },
-  {
-    key: 'k8s',
-    name: 'K8S运维',
-    icon: 'k8s',
-    items: [
-      { key: 'clusters', perm: 'clusters', name: '集群管理', path: '/clusters' },
-      { key: 'workloads', perm: 'workloads', name: '工作负载', path: '/workloads' },
-      { key: 'configmaps', perm: 'configmaps', name: '配置管理', path: '/configmaps' },
-      { key: 'storage', perm: 'storage', name: '存储管理', path: '/storage' },
-      { key: 'terminal', perm: 'terminal', name: '容器终端', path: '/terminal' }
-    ]
-  },
-  {
-    key: 'ticket',
-    name: '工单系统',
-    icon: 'ticket',
-    items: [
-      { key: 'tickets', perm: 'tickets', name: '工单管理', path: '/tickets' },
-      { key: 'workflow', perm: 'workflow', name: '流程引擎', path: '/workflow' },
-      { key: 'sla', perm: 'sla', name: 'SLA管理', path: '/sla' },
-      { key: 'tickettemplate', perm: 'ticket-template', name: '工单模板', path: '/ticket-template' }
-    ]
-  },
-  {
-    key: 'automation',
-    name: '自动化运维',
-    icon: 'automation',
-    items: [
-      { key: 'jobs', perm: 'jobs', name: '作业平台', path: '/jobs' },
-      { key: 'crontab', perm: 'crontab', name: '定时任务', path: '/crontab' },
-      { key: 'inspection', perm: 'inspection', name: '自动巡检', path: '/inspection' },
-      { key: 'selfhealing', perm: 'self-healing', name: '自愈策略', path: '/self-healing' }
-    ]
-  },
-  {
-    key: 'aiops',
-    name: '智能运维',
-    icon: 'aiops',
-    items: [
-      { key: 'anomaly', perm: 'anomaly', name: '异常检测', path: '/anomaly' },
-      { key: 'rootcause', perm: 'root-cause', name: '根因分析', path: '/root-cause' },
-      { key: 'predict', perm: 'predict', name: '故障预测', path: '/predict' },
-      { key: 'smartalert', perm: 'smart-alert', name: '智能告警', path: '/smart-alert' },
-      { key: 'capacity', perm: 'capacity', name: '容量预测', path: '/capacity' }
-    ]
-  },
-  {
-    key: 'release',
-    name: '变更发布',
-    icon: 'release',
-    items: [
-      { key: 'deploy', perm: 'deploy', name: '发布管理', path: '/deploy' },
-      { key: 'change', perm: 'change', name: '变更管理', path: '/change' },
-      { key: 'rollback', perm: 'rollback', name: '回滚管理', path: '/rollback' }
-    ]
-  },
-  {
-    key: 'logs',
-    name: '日志服务',
-    icon: 'logs',
-    items: [
-      { key: 'logquery', perm: 'log-query', name: '日志查询', path: '/log-query' },
-      { key: 'loganalysis', perm: 'log-analysis', name: '日志分析', path: '/log-analysis' },
-      { key: 'logalert', perm: 'log-alert', name: '日志告警', path: '/log-alert' }
-    ]
-  },
-  {
-    key: 'security',
-    name: '安全工具',
-    icon: 'security',
-    items: [
-      { key: 'vault', perm: 'vault', name: '密码库', path: '/vault' },
-      { key: 'secrets', perm: 'secrets', name: '密钥管理', path: '/secrets' },
-      { key: 'certificates', perm: 'certificates', name: '证书管理', path: '/certificates' }
-    ]
-  },
-  {
     key: 'settings',
     name: '系统设置',
     icon: 'settings',
     items: [
-      { key: 'datasources', perm: 'datasources', name: '数据源配置', path: '/datasources' },
       { key: 'sysparams', perm: 'sys-params', name: '系统参数', path: '/sys-params' },
       { key: 'sso-config', perm: 'sso-config', name: 'SSO配置', path: '/sso-config', adminOnly: true },
       { key: 'apps-manage', perm: 'apps-manage', name: '应用管理', path: '/apps-manage', adminOnly: true }

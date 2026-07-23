@@ -643,6 +643,13 @@ func UpdateUser(id string, u *models.User) error {
 }
 
 func DeleteUser(id string) error {
+	// 先清用户的关联数据，避免删用户后留下孤儿行（角色/会话/令牌/设置）。
+	// 注意：个人保险库 vault_* 不清（保留，功能待下线）；审计日志类保留做追溯。
+	for _, tbl := range []string{"user_roles", "sessions", "csrf_tokens", "user_settings"} {
+		if _, err := database.DB.Exec("DELETE FROM "+tbl+" WHERE user_id=?", id); err != nil {
+			log.Printf("[DeleteUser] 清理 %s 失败(user_id=%s): %v", tbl, id, err)
+		}
+	}
 	_, err := database.DB.Exec("DELETE FROM users WHERE id=?", id)
 	return err
 }

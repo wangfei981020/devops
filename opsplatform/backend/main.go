@@ -311,6 +311,7 @@ func main() {
 	protected.HandleFunc("/roles", handlers.HandleRoles).Methods("GET", "POST", "OPTIONS")
 	protected.HandleFunc("/roles/{id}", handlers.HandleRole).Methods("GET", "PUT", "DELETE", "OPTIONS")
 	protected.HandleFunc("/roles/{id}/permissions", handlers.HandleRolePermissions).Methods("GET", "PUT", "OPTIONS")
+	protected.HandleFunc("/roles/{id}/members", handlers.HandleRoleMembers).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/permissions", handlers.HandlePermissions).Methods("GET", "POST", "OPTIONS")
 	protected.HandleFunc("/permissions/{id}", handlers.HandlePermission).Methods("PUT", "DELETE", "OPTIONS")
 	protected.HandleFunc("/users/{id}/roles", handlers.HandleUserRoles).Methods("GET", "PUT", "OPTIONS")

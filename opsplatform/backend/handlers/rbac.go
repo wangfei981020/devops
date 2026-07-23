@@ -77,7 +77,8 @@ func HandleRoles(w http.ResponseWriter, r *http.Request) {
 func getRoles(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.DB.Query(`
 		SELECT r.id, r.code, r.name, r.description, r.is_system, r.status, r.created_at, r.updated_at,
-			   (SELECT COUNT(*) FROM user_roles WHERE role_id = r.id) as user_count,
+			   (SELECT COUNT(*) FROM user_roles ur JOIN users u ON ur.user_id = u.id
+				WHERE ur.role_id = r.id AND ur.sso_removed_at IS NULL) as user_count,
 			   COALESCE(r.source, 'manual') as source
 		FROM roles r
 		ORDER BY r.is_system DESC, r.created_at
@@ -230,9 +231,10 @@ func deleteRole(w http.ResponseWriter, r *http.Request, roleID string) {
 		return
 	}
 
-	// 检查是否有用户使用此角色
+	// 检查是否有用户使用此角色（只算真实在职有效成员，孤儿/软删除不算）
 	var userCount int
-	database.DB.QueryRow("SELECT COUNT(*) FROM user_roles WHERE role_id = ?", roleID).Scan(&userCount)
+	database.DB.QueryRow(`SELECT COUNT(*) FROM user_roles ur JOIN users u ON ur.user_id = u.id
+		WHERE ur.role_id = ? AND ur.sso_removed_at IS NULL`, roleID).Scan(&userCount)
 	if userCount > 0 {
 		http.Error(w, "该角色下还有用户，请先移除用户", http.StatusBadRequest)
 		return
@@ -271,6 +273,46 @@ func HandleRolePermissions(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// HandleRoleMembers GET /api/roles/{id}/members —— 列出某角色下的成员（仅在职有效成员，
+// 已删用户的孤儿行、SSO 已移除的软删除行都不算，口径与角色列表人数一致）。
+func HandleRoleMembers(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.URL.Path, "/") // /api/roles/{id}/members
+	if len(parts) < 5 {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	roleID := parts[len(parts)-2]
+	rows, err := database.DB.Query(`
+		SELECT u.username, COALESCE(u.display_name, ''), COALESCE(ur.source, 'manual'), ur.created_at
+		FROM user_roles ur JOIN users u ON ur.user_id = u.id
+		WHERE ur.role_id = ? AND ur.sso_removed_at IS NULL
+		ORDER BY ur.created_at`, roleID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type member struct {
+		Username    string `json:"username"`
+		DisplayName string `json:"display_name"`
+		Source      string `json:"source"`
+		JoinedAt    string `json:"joined_at"`
+	}
+	members := []member{}
+	for rows.Next() {
+		var m member
+		var createdAt time.Time
+		if rows.Scan(&m.Username, &m.DisplayName, &m.Source, &createdAt) != nil {
+			continue
+		}
+		m.JoinedAt = createdAt.Format("2006-01-02 15:04:05")
+		members = append(members, m)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(members)
 }
 
 func getRolePermissions(w http.ResponseWriter, r *http.Request, roleID string) {

@@ -28,6 +28,34 @@ const showRolePermissionModal = ref(false)
 const selectedRole = ref(null)
 const selectedRolePermissions = ref({})
 
+// 角色成员查看（点人数打开）
+const showMembersModal = ref(false)
+const membersRole = ref(null)
+const membersList = ref([])
+const membersLoading = ref(false)
+const membersSearch = ref('')
+const filteredMembers = computed(() => {
+  const q = membersSearch.value.trim().toLowerCase()
+  if (!q) return membersList.value
+  return membersList.value.filter(m =>
+    (m.username || '').toLowerCase().includes(q) || (m.display_name || '').toLowerCase().includes(q))
+})
+async function openMembersModal(role) {
+  membersRole.value = role
+  membersSearch.value = ''
+  membersList.value = []
+  showMembersModal.value = true
+  membersLoading.value = true
+  try {
+    const res = await api.get('/api/roles/' + role.id + '/members')
+    membersList.value = Array.isArray(res.data) ? res.data : []
+  } catch (e) {
+    console.error('加载角色成员失败:', e)
+  } finally {
+    membersLoading.value = false
+  }
+}
+
 // 发布中心环境权限（与菜单/按钮/数据/API 权限并列的第 5 类）
 // 双层 AND 语义：env 必须同时在 envs 集合 + 其所属 project 在 projects 集合，才生效
 const deployEnvs = ref([])                  // [{id, name, env_type}]
@@ -478,13 +506,13 @@ function formatDate(str) {
             <td>{{ role.name }}</td>
             <td class="desc-cell">{{ role.description || '-' }}</td>
             <td>
-              <span class="user-count-badge">
+              <button class="user-count-badge clickable" @click="openMembersModal(role)" title="查看成员">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
                   <circle cx="12" cy="7" r="4"/>
                 </svg>
                 {{ role.user_count || 0 }}
-              </span>
+              </button>
             </td>
             <td>
               <span class="type-badge-new" :class="role.is_system ? 'system' : 'custom'">
@@ -730,6 +758,41 @@ function formatDate(str) {
         </div>
       </div>
     </Teleport>
+
+    <!-- 角色成员查看（点人数打开） -->
+    <Teleport to="body">
+      <div v-if="showMembersModal" class="roles-modal-overlay show">
+        <div class="roles-modal">
+          <div class="modal-header">
+            <h3>角色成员 · {{ membersRole?.name }}<span class="members-count-hint">（有效成员 {{ membersList.length }} 人）</span></h3>
+            <button class="modal-close" @click="showMembersModal = false">×</button>
+          </div>
+          <div class="modal-body">
+            <input v-model="membersSearch" class="members-search" placeholder="搜索用户名 / 姓名" />
+            <div v-if="membersLoading" class="members-empty">加载中…</div>
+            <div v-else-if="!filteredMembers.length" class="members-empty">
+              {{ membersList.length ? '没有匹配的成员' : '该角色暂无有效成员' }}
+            </div>
+            <table v-else class="members-table">
+              <thead>
+                <tr><th>用户名</th><th>姓名</th><th>来源</th><th>加入时间</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="m in filteredMembers" :key="m.username">
+                  <td>{{ m.username }}</td>
+                  <td>{{ m.display_name || '-' }}</td>
+                  <td><span class="src-tag" :class="m.source">{{ m.source === 'sso' ? 'SSO' : '手动' }}</span></td>
+                  <td class="date-cell">{{ m.joined_at }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-default" @click="showMembersModal = false">关闭</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -863,6 +926,30 @@ td { font-size: 0.875rem; color: var(--text-primary); }
   font-size: 0.8125rem;
 }
 .user-count-badge svg { width: 14px; height: 14px; }
+.user-count-badge.clickable {
+  border: none;
+  cursor: pointer;
+  color: var(--primary-color, #2563eb);
+  transition: background 0.15s;
+}
+.user-count-badge.clickable:hover { background: var(--primary-light, #dbeafe); }
+.members-count-hint { font-size: 0.8125rem; color: var(--text-secondary); font-weight: normal; margin-left: 6px; }
+.members-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 0.875rem;
+}
+.members-empty { padding: 32px; text-align: center; color: var(--text-secondary); }
+.members-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.members-table th, .members-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border-color, #f0f0f0); }
+.members-table th { color: var(--text-secondary); font-weight: 500; }
+.src-tag { padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; }
+.src-tag.sso { background: #dbeafe; color: #2563eb; }
+.src-tag.manual { background: #f3f4f6; color: #6b7280; }
 .type-badge-new {
   display: inline-block;
   padding: 4px 10px;

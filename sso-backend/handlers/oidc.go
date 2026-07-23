@@ -309,6 +309,10 @@ func HandleToken(w http.ResponseWriter, r *http.Request) {
 	// Generate ID Token (RS256 JWT)
 	now := time.Now()
 	expiry := time.Duration(client.TokenExpiry) * time.Second
+	roleCodes, _ := database.GetUserRoleCodes(user.ID) // 下发给接入应用做角色同步(app_roles)
+	if roleCodes == nil {
+		roleCodes = []string{}
+	}
 	idToken := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"iss":                config.Issuer,
 		"sub":                user.ID,
@@ -318,6 +322,7 @@ func HandleToken(w http.ResponseWriter, r *http.Request) {
 		"name":               user.DisplayName,
 		"email":              user.Email,
 		"preferred_username": user.Username,
+		"app_roles":          roleCodes,
 	})
 	idToken.Header["kid"] = "key-1"
 
@@ -373,12 +378,17 @@ func HandleUserInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	roleCodes, _ := database.GetUserRoleCodes(user.ID) // app_roles：接入应用(如 opsplatform)据此同步角色
+	if roleCodes == nil {
+		roleCodes = []string{}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"sub":                user.ID,
 		"name":               user.DisplayName,
 		"email":              user.Email,
 		"preferred_username": user.Username,
+		"app_roles":          roleCodes,
 	})
 }
 

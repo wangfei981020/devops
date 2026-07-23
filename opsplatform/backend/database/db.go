@@ -1556,8 +1556,12 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_deploy_center", "menu:deploy_center", "发布中心", "/deploy-center", "", "deploy_center", 15},
 		{"perm_menu_deploy_center_dashboard", "menu:deploy_center_dashboard", "发布概览", "/deploy-center/dashboard", "perm_menu_deploy_center", "", 5},
 		{"perm_menu_deploy_center_console", "menu:deploy_center_console", "部署控制台", "/deploy-center/console", "perm_menu_deploy_center", "", 10},
+		{"perm_menu_deploy_center_orchestration", "menu:deploy_center_orchestration", "服务编排", "/deploy-center/orchestration", "perm_menu_deploy_center", "", 12},
 		{"perm_menu_deploy_center_projects", "menu:deploy_center_projects", "项目配置", "/deploy-center/projects", "perm_menu_deploy_center", "", 20},
 		{"perm_menu_deploy_center_history", "menu:deploy_center_history", "发布历史", "/deploy-center/history", "perm_menu_deploy_center", "", 30},
+		{"perm_menu_deploy_center_templates", "menu:deploy_center_templates", "模板库", "/deploy-center/templates", "perm_menu_deploy_center", "", 32},
+		{"perm_menu_deploy_center_environments", "menu:deploy_center_environments", "环境管理", "/deploy-center/environments", "perm_menu_deploy_center", "", 34},
+		{"perm_menu_deploy_center_envparams", "menu:deploy_center_envparams", "项目参数", "/deploy-center/envparams", "perm_menu_deploy_center", "", 36},
 		{"perm_menu_deploy_center_settings", "menu:deploy_center_settings", "系统设置", "/deploy-center/settings", "perm_menu_deploy_center", "", 40},
 
 		// 探测平台（外部应用权限）
@@ -1744,6 +1748,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_dc_restart", "deploy_center:restart", "[发布中心] 重启服务", "允许通过 ArgoCD 重启服务"},
 		{"perm_btn_dc_rollback", "deploy_center:rollback", "[发布中心] 回滚发布", "允许回滚到历史版本"},
 		{"perm_btn_dc_scan_modules", "deploy_center:scan_modules", "[发布中心] 扫描模块", "允许触发 Git 扫描重建模块列表"},
+		{"perm_btn_dc_manage_templates", "deploy_center:manage_templates", "[发布中心] 模板库管理", "允许增删改服务编排模板"},
 		{"perm_btn_dc_manage_projects", "deploy_center:manage_projects", "[发布中心] 项目环境管理", "允许增删改项目和环境"},
 		{"perm_btn_dc_manage_argocd", "deploy_center:manage_argocd", "[发布中心] ArgoCD 实例", "允许增删改 ArgoCD 实例"},
 		{"perm_btn_dc_manage_lark_bots", "deploy_center:manage_lark_bots", "[发布中心] Lark 机器人", "允许增删改 Lark 机器人"},
@@ -1909,6 +1914,15 @@ func initDefaultRolesAndPermissions() {
 	// 「SSO 已移除」而打上标记
 	DB.Exec(`UPDATE roles SET source = 'manual' WHERE source IS NULL OR source = ''`)
 	DB.Exec(`UPDATE user_roles SET source = 'manual' WHERE source IS NULL OR source = ''`)
+
+	// 一次性清理孤儿：历史上删用户只删了 users 表、没清 user_roles，残留行会让角色人数虚高。
+	// 只删「user_id 已不在 users 表」的行，绝对安全（对应用户已不存在）。
+	if res, err := DB.Exec(`DELETE ur FROM user_roles ur
+		LEFT JOIN users u ON ur.user_id = u.id WHERE u.id IS NULL`); err == nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			log.Printf("[Migration] user_roles: 清理已删用户的孤儿行 %d 条", n)
+		}
+	}
 }
 
 // Close 关闭数据库连接
