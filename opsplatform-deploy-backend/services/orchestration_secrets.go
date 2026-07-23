@@ -97,6 +97,59 @@ func ZkvTidbDefaults(content []byte) (salt, crypt string) {
 	return
 }
 
+// ZkvTidbKeySchema 扫 z-kv 现有 tidbSecrets，汇总它们 extraStringData 的 key 集合，作为「新 tidb 密钥」的字段模板。
+// 每个 key 的默认值：所有出现该 key 的条目里值都一样 → 用那个值(环境公共，如 UAT 的 salt/crypt 预填)；
+// 值不一致(生产每模块不同的账号/盐/密文) → 留空等填。用于按现有密钥自动识别字段，不硬编码 key 名。
+// z-kv 里一条 tidb 都没有(全新环境) → 返回 nil，调用方兜底给基础字段。
+func ZkvTidbKeySchema(content []byte) []KV {
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil || len(root.Content) == 0 {
+		return nil
+	}
+	seq, err := findMappingKey(root.Content[0], "tidbSecrets")
+	if err != nil || seq.Kind != yaml.SequenceNode {
+		return nil
+	}
+	order := []string{}
+	distinct := map[string]map[string]bool{} // key → 出现过的不同值集合
+	count := map[string]int{}                 // key → 出现在几条 tidb 里
+	first := map[string]string{}              // key → 首次见到的值
+	total := 0
+	for _, item := range seq.Content {
+		if item.Kind != yaml.MappingNode {
+			continue
+		}
+		esd, e := findMappingKey(item, "extraStringData")
+		if e != nil || esd.Kind != yaml.MappingNode {
+			continue
+		}
+		total++
+		for i := 0; i+1 < len(esd.Content); i += 2 {
+			k := esd.Content[i].Value
+			v := strings.TrimSpace(esd.Content[i+1].Value)
+			if _, seen := distinct[k]; !seen {
+				distinct[k] = map[string]bool{}
+				order = append(order, k)
+				first[k] = v
+			}
+			distinct[k][v] = true
+			count[k]++
+		}
+	}
+	out := make([]KV, 0, len(order))
+	for _, k := range order {
+		if count[k] != total {
+			continue // 只把「每条 tidb 都有」的 key 当标准字段；只有部分有的(如某服务专属 token)不进默认模板
+		}
+		def := ""
+		if len(distinct[k]) == 1 { // 所有条目该 key 值一致 → 环境公共，预填默认值
+			def = first[k]
+		}
+		out = append(out, KV{Key: k, Value: def})
+	}
+	return out
+}
+
 // ExtraEnvVarNames 读后端服务 values.yaml 里 extraEnvVars 引用的 secret 名列表。
 func ExtraEnvVarNames(content []byte) []string {
 	var root yaml.Node

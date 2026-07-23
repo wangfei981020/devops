@@ -283,6 +283,53 @@
           <el-button link type="primary" @click="batch.rows.push({ module_name: '', namespace: nsBatchSet || nsOptions[0] || '' })">+ 加一行</el-button>
           <span class="ns-hint">Harbor项目/tag/域名 自动派生只读；缺镜像会被拦；「配置」可选（不配也自动派生）</span>
         </el-form-item>
+        <!-- 待新建密钥：解析成行时就算好；字段按现有 tidb 密钥自动识别，每条 database + 字段各模块独立填 -->
+        <el-form-item v-if="batchPendingTidb.length || batchPendingOpaque.length" label="依赖密钥">
+          <div class="batch-sec-box">
+            <div class="batch-sec-head">待新建（提交时一起建进 z-kv-secrets）<span class="batch-sec-auto">字段按本环境现有 tidb 密钥自动识别；值一致的已预填、不一致的留空</span></div>
+            <template v-if="batchPendingOwn.length">
+              <div class="batch-sec-grp">每个模块专属（一模块一套账号/库）</div>
+              <div v-for="p in batchPendingOwn" :key="p.name" class="batch-sec-card">
+                <div class="batch-sec-cardhead">
+                  <span class="batch-sec-mod">{{ p.modules[0] }} →</span> <b>{{ p.name }}</b>
+                  <span class="batch-sec-k">database <b class="req">*</b></span>
+                  <el-input v-if="batchSecretFills[p.name]" v-model="batchSecretFills[p.name].database" size="small" placeholder="如 g50_xxx_game" style="width:200px" />
+                  <el-button v-if="batchSecretFills[p.name]" link size="small" @click="batchSecretFills[p.name].open = !batchSecretFills[p.name].open">{{ batchSecretFills[p.name].open ? '收起字段 ▴' : `字段 (${batchSecretFills[p.name].fields.length}) ▾` }}</el-button>
+                </div>
+                <div v-if="batchSecretFills[p.name] && batchSecretFills[p.name].open" class="batch-sec-fields">
+                  <div v-for="(kv, i) in batchSecretFills[p.name].fields" :key="i" class="batch-sec-frow">
+                    <el-input v-model="kv.key" size="small" placeholder="key" style="width:180px" />
+                    <el-input v-model="kv.value" size="small" placeholder="value（值一致的已自动预填）" style="width:320px;margin:0 6px" />
+                    <el-button link type="danger" size="small" @click="batchSecretFills[p.name].fields.splice(i, 1)">×</el-button>
+                  </div>
+                  <el-button link type="primary" size="small" @click="addFillField(p.name)">+ 额外字段</el-button>
+                </div>
+              </div>
+            </template>
+            <template v-if="batchPendingShared.length">
+              <div class="batch-sec-grp">环境共享（被多个模块引用，只建一次）</div>
+              <div v-for="p in batchPendingShared" :key="p.name" class="batch-sec-card">
+                <div class="batch-sec-cardhead">
+                  <b>{{ p.name }}</b><el-tag size="small" type="warning" style="margin:0 8px">共享</el-tag>
+                  <span class="batch-sec-k">database <b class="req">*</b></span>
+                  <el-input v-if="batchSecretFills[p.name]" v-model="batchSecretFills[p.name].database" size="small" placeholder="如 g50_uid" style="width:200px" />
+                  <el-button v-if="batchSecretFills[p.name]" link size="small" @click="batchSecretFills[p.name].open = !batchSecretFills[p.name].open">{{ batchSecretFills[p.name].open ? '收起字段 ▴' : `字段 (${batchSecretFills[p.name].fields.length}) ▾` }}</el-button>
+                </div>
+                <div v-if="batchSecretFills[p.name] && batchSecretFills[p.name].open" class="batch-sec-fields">
+                  <div v-for="(kv, i) in batchSecretFills[p.name].fields" :key="i" class="batch-sec-frow">
+                    <el-input v-model="kv.key" size="small" placeholder="key" style="width:180px" />
+                    <el-input v-model="kv.value" size="small" placeholder="value" style="width:320px;margin:0 6px" />
+                    <el-button link type="danger" size="small" @click="batchSecretFills[p.name].fields.splice(i, 1)">×</el-button>
+                  </div>
+                  <el-button link type="primary" size="small" @click="addFillField(p.name)">+ 额外字段</el-button>
+                </div>
+              </div>
+            </template>
+            <div v-if="batchPendingOpaque.length" class="batch-sec-warn">
+              ⚠ 还有普通 Opaque 待新建：{{ batchPendingOpaque.map(p => p.name).join('、') }} —— 请到对应模块「配置」的 YAML 模式手填后再提交
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item label="ArgoCD">
           <el-switch v-model="batch.disable" :active-value="true" :inactive-value="false" active-text="disable:true 安全预演" inactive-text="关闭=直接部署（默认）" />
         </el-form-item>
@@ -297,29 +344,6 @@
               <el-button link type="primary" class="err-copy" @click="copyErr(row.error)">复制报错</el-button>
             </div>
             <pre class="err-body">{{ row.error }}</pre>
-          </div>
-        </div>
-        <!-- 待新建密钥（批量）：预览后列出，tidb 和 uid 都列出来，各填 database；salt/crypt 自动 -->
-        <div v-if="batchResult && (batchPendingTidb.length || batchPendingOpaque.length)" class="batch-sec-box">
-          <div class="batch-sec-head">依赖密钥 · 待新建（提交时一起建进 z-kv-secrets）<span class="batch-sec-auto">salt/crypt 自动复用现有 ✓</span></div>
-          <template v-if="batchPendingShared.length">
-            <div class="batch-sec-grp">环境共享（各模块都引用，只建一次）</div>
-            <div v-for="p in batchPendingShared" :key="p.name" class="batch-sec-row">
-              <b>{{ p.name }}</b><el-tag size="small" type="warning" style="margin:0 8px">TiDB</el-tag>
-              <span class="batch-sec-k">database <b class="req">*</b></span>
-              <el-input v-model="batchSecretDb[p.name]" size="small" placeholder="如 g50_uid" style="width:240px" />
-            </div>
-          </template>
-          <template v-if="batchPendingOwn.length">
-            <div class="batch-sec-grp">每个模块专属（一模块一个库）</div>
-            <div v-for="p in batchPendingOwn" :key="p.name" class="batch-sec-row">
-              <span class="batch-sec-mod">{{ p.modules[0] }} →</span> <b>{{ p.name }}</b>
-              <span class="batch-sec-k">database <b class="req">*</b></span>
-              <el-input v-model="batchSecretDb[p.name]" size="small" placeholder="如 g50_xxx_game" style="width:240px" />
-            </div>
-          </template>
-          <div v-if="batchPendingOpaque.length" class="batch-sec-warn">
-            ⚠ 还有普通 Opaque 待新建：{{ batchPendingOpaque.map(p => p.name).join('、') }} —— 请到对应模块「配置」的 YAML 模式手填后再提交
           </div>
         </div>
         <el-alert v-if="batchSubmitted" type="success" :closable="false" class="submitted"
@@ -615,15 +639,31 @@ const batchSubmitting = ref(false)
 const validRows = computed(() => batch.value.rows.filter(r => r.module_name.trim() && r.namespace.trim()))
 const canBatchPreview = computed(() => batch.value.templateId && validRows.value.length > 0)
 
-// 批量·待新建密钥（预览后返回）：secret 名 → database 输入
-const batchSecretDb = ref({})
-const batchPending = computed(() => batchResult.value?.pending_secrets || [])
-const batchPendingTidb = computed(() => batchPending.value.filter(p => p.type === 'tidb'))
+// 批量·待新建密钥（解析成行时就算好返回）：secret 名 → { database, fields:[{key,value}], open }
+// fields 的 key 由后端按现有 tidb 密钥自动识别；值一致的预填、不一致的留空，逐模块独立编辑。
+const batchSecretFills = ref({})
+const batchPendingList = ref([]) // 来自 deriveModules 的 pending_secrets（解析成行/改行名时刷新）
+const batchPendingTidb = computed(() => batchPendingList.value.filter(p => p.type === 'tidb'))
 const batchPendingShared = computed(() => batchPendingTidb.value.filter(p => (p.modules?.length || 0) > 1)) // uid 等环境共享
 const batchPendingOwn = computed(() => batchPendingTidb.value.filter(p => (p.modules?.length || 0) <= 1))   // 模块专属
-const batchPendingOpaque = computed(() => batchPending.value.filter(p => p.type !== 'tidb'))
-const batchTidbFilled = computed(() => batchPendingTidb.value.every(p => (batchSecretDb.value[p.name] || '').trim()))
+const batchPendingOpaque = computed(() => batchPendingList.value.filter(p => p.type !== 'tidb'))
+const batchTidbFilled = computed(() => batchPendingTidb.value.every(p => (batchSecretFills.value[p.name]?.database || '').trim()))
+// 预览是纯 helm 门禁；提交要 helm 全绿 + 所有待新建 tidb 的 database 都填了
 const canBatchSubmit = computed(() => batchResult.value && batchResult.value.all_ok && batchTidbFilled.value)
+
+// 按 pending 初始化/合并每条待新建 tidb 的填写状态（保留已填的值，去掉不再需要的）
+function syncBatchFills() {
+  const next = {}
+  for (const p of batchPendingTidb.value) {
+    const old = batchSecretFills.value[p.name]
+    next[p.name] = old || { database: '', open: false, fields: (p.fields || []).map(f => ({ key: f.key, value: f.value || '' })) }
+  }
+  batchSecretFills.value = next
+}
+function addFillField(name) {
+  const f = batchSecretFills.value[name]
+  if (f) f.fields.push({ key: '', value: '' })
+}
 const selectedBatchTemplateType = computed(() => templates.value.find(t => t.id === batch.value.templateId)?.module_type || 'backend')
 
 // 批量·单行配置弹窗
@@ -675,7 +715,8 @@ function rowStatus(name) {
 
 function openBatch() {
   batch.value = { templateId: null, paste: '', disable: false, rows: [] }
-  batchSecretDb.value = {}
+  batchSecretFills.value = {}
+  batchPendingList.value = []
   resetBatch()
   batchDialog.value = true
 }
@@ -704,19 +745,26 @@ async function parsePaste() {
     const d = dmap[n] || {}
     return { module_name: n, namespace: defNs, image_short: d.image_short || '', latest_tag: d.latest_tag || '', image_missing: !!d.image_missing, domain: d.domain || '' }
   })
+  batchPendingList.value = derived?.pending_secrets || [] // 解析成行时就带出待新建密钥
+  syncBatchFills()
   resetBatch()
 }
 
-// 编辑某行模块名后重新派生该行的镜像/tag/域名
+// 编辑某行模块名后重新派生该行的镜像/tag/域名 + 全表刷新待新建密钥（名字变→密钥名变）
 async function deriveRow(row) {
   const name = (row.module_name || '').trim()
   if (!name || !envId.value) return
   try {
-    const d = (await api.deriveModules({ target_env_id: envId.value, template_id: batch.value.templateId, module_names: [name] }))?.modules?.[0] || {}
+    const names = validRows.value.map(r => r.module_name.trim())
+    const res = await api.deriveModules({ target_env_id: envId.value, template_id: batch.value.templateId, module_names: names })
+    const d = (res?.modules || []).find(m => m.module_name === name) || {}
     row.image_short = d.image_short || ''
     row.latest_tag = d.latest_tag || ''
     row.image_missing = !!d.image_missing
     row.domain = d.domain || ''
+    batchPendingList.value = res?.pending_secrets || []
+    syncBatchFills()
+    resetBatch()
   } catch { /* 忽略 */ }
 }
 
@@ -726,7 +774,10 @@ function batchBody() {
     target_env_id: envId.value,
     disable: batch.value.disable,
     rows: validRows.value.map(r => ({ module_name: r.module_name.trim(), namespace: r.namespace.trim(), values_yaml: r.values_yaml || '', configmaps: r.configmaps || [] })),
-    secret_databases: batchSecretDb.value,
+    secret_fills: batchPendingTidb.value.map(p => {
+      const f = batchSecretFills.value[p.name] || { database: '', fields: [] }
+      return { name: p.name, database: (f.database || '').trim(), fields: (f.fields || []).filter(x => x.key.trim()).map(x => ({ key: x.key.trim(), value: x.value })) }
+    }),
   }
 }
 
@@ -763,11 +814,15 @@ onMounted(async () => {
 .head-left h2 { margin: 0; font-size: 18px; }
 .yaml-editor :deep(textarea) { font-family: 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.5; }
 .preview-box { margin: 8px 0 0 110px; padding: 12px 14px; background: var(--el-fill-color-light); border-radius: 8px; }
-.batch-sec-box { margin: 10px 0 0 110px; padding: 12px 14px; background: #fffdf5; border: 1px solid #f0e0b0; border-radius: 8px; }
+.batch-sec-box { width: 100%; padding: 12px 14px; background: #fffdf5; border: 1px solid #f0e0b0; border-radius: 8px; box-sizing: border-box; }
 .batch-sec-head { font-weight: 600; margin-bottom: 8px; }
 .batch-sec-auto { margin-left: 10px; color: #16a34a; font-size: 12px; font-weight: normal; }
 .batch-sec-grp { margin: 10px 0 4px; color: #6b7280; font-size: 12px; border-top: 1px dashed #e5d9a8; padding-top: 8px; }
 .batch-sec-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 13px; }
+.batch-sec-card { padding: 6px 0; border-bottom: 1px dashed #eee; }
+.batch-sec-cardhead { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.batch-sec-fields { margin: 6px 0 6px 18px; padding-left: 10px; border-left: 2px solid #f0e0b0; }
+.batch-sec-frow { display: flex; align-items: center; padding: 2px 0; }
 .batch-sec-mod { color: #2563eb; }
 .batch-sec-k { margin-left: auto; color: #6b7280; }
 .batch-sec-k .req { color: #ef4444; }
