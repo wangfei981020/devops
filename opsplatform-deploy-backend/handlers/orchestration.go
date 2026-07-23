@@ -357,28 +357,28 @@ func HandleDeriveModules(w http.ResponseWriter, r *http.Request) {
 		"default_namespace": defaultNamespaceForEnv(dst),
 		"modules":           mods,
 		// 解析成行时就把「待新建密钥」算出来（派生每模块 values → 对照 z-kv），前端立刻显示填 database。
-		"pending_secrets": derivePendingSecrets(ctx, dst, req.TemplateID, req.ModuleNames),
+		"secret_refs": derivePendingSecrets(ctx, dst, req.TemplateID, req.ModuleNames),
 	})
 }
 
-// derivePendingSecrets 解析成行用：按批量口径派生每个模块的 values(prefillValues) → 对照目标环境 z-kv
-// 算出待新建密钥(去重，带引用它的模块)。best-effort：模板/仓库读不到就返回空，不影响解析。
-func derivePendingSecrets(ctx context.Context, dst *models.ProjectEnv, templateID int64, names []string) []batchPendingSecret {
+// derivePendingSecrets 解析成行用：按批量口径派生每个模块的 values(prefillValues + 换前缀) → 对照目标环境
+// z-kv 分「已存在(复用)/待新建(带归属模块/字段)」。best-effort：模板/仓库读不到就返回空，不影响解析。
+func derivePendingSecrets(ctx context.Context, dst *models.ProjectEnv, templateID int64, names []string) batchSecretsOut {
 	base, tpl, _, err := buildSpec(templateID, dst.ID, "", "")
 	if err != nil {
-		return nil
+		return batchSecretsOut{}
 	}
 	src, err := loadEnvGit("name=?", tpl.SrcEnv)
 	if err != nil {
-		return nil
+		return batchSecretsOut{}
 	}
 	gs := getGitService()
 	if err := gs.EnsureClone(ctx, src.Name, src.GitRepo, src.GitBranch); err != nil {
-		return nil
+		return batchSecretsOut{}
 	}
 	raw, err := gs.ReadFile(src.Name, base.SrcChartBasePath+"/"+base.SrcService+"/values.yaml")
 	if err != nil {
-		return nil
+		return batchSecretsOut{}
 	}
 	rows := make([]services.BatchRow, 0, len(names))
 	for _, name := range names {
@@ -386,10 +386,13 @@ func derivePendingSecrets(ctx context.Context, dst *models.ProjectEnv, templateI
 		if name == "" {
 			continue
 		}
+		vals := prefillValues(raw, src, dst, base.SrcService, name)
+		// 跟单个一致：把 extraEnvVars 里任意已知项目前缀(g32/g33…)统一换成目标项目(g50)
+		vals = services.RenameSecretRefs(vals, allProjectPrefixes(), effectivePrefix(dst))
 		rows = append(rows, services.BatchRow{
 			ModuleName: name,
 			Namespace:  defaultNamespaceForEnv(dst),
-			ValuesYAML: prefillValues(raw, src, dst, base.SrcService, name),
+			ValuesYAML: vals,
 		})
 	}
 	return collectBatchPending(ctx, gs, dst, rows)
@@ -906,16 +909,17 @@ type batchReq struct {
 	} `json:"rows"`
 }
 
-// batchSecretFill 前端填的一条待新建 tidb 密钥内容：名字 + database + 字段 KV（字段按现有 tidb 自动识别）。
+// batchSecretFill 前端填的一条待新建密钥内容：名字 + 类型 + database(tidb) + 字段/键值对 KV。
 type batchSecretFill struct {
 	Name     string        `json:"name"`
+	Type     string        `json:"type"` // tidb | opaque
 	Database string        `json:"database"`
 	Fields   []services.KV `json:"fields"`
 }
 
 // batchPendingSecret 批量新增里一条「引用了但目标环境 z-kv 还没有」的待新建密钥（跨行汇总去重）。
-// Modules = 引用它的模块列表：>1（各模块都引用，如 uid）=环境共享，只建一次；=1=模块专属。
-// Fields = tidb 密钥的字段模板（按现有 tidb 自动识别 key；值一致预填、不一致留空），前端据此渲染可编辑表单。
+// Modules = 引用它的模块列表：=1=模块专属(挂该模块名下)；>1=多模块同名引用=环境共享，只建一次。
+// Fields = tidb 密钥的字段模板（按现有 tidb 自动识别 key；值一致预填、不一致留空）；opaque 为空(前端自己加键值对)。
 type batchPendingSecret struct {
 	Name      string        `json:"name"`
 	Type      string        `json:"type"`      // tidb | opaque
@@ -924,9 +928,15 @@ type batchPendingSecret struct {
 	Fields    []services.KV `json:"fields,omitempty"`
 }
 
-// collectBatchPending 读一次目标环境 z-kv，扫每行 values 的 extraEnvVars，汇总去重出「待新建」密钥，
-// 并给 tidb 密钥附上「按现有 tidb 自动识别的字段模板」。
-func collectBatchPending(ctx context.Context, gs *services.GitService, dst *models.ProjectEnv, rows []services.BatchRow) (pending []batchPendingSecret) {
+// batchSecretsOut 批量的密钥分类：已存在(复用) + 待新建(带归属模块/类型/字段)。
+type batchSecretsOut struct {
+	Existing []string             `json:"existing"`
+	Pending  []batchPendingSecret `json:"pending"`
+}
+
+// collectBatchPending 读一次目标环境 z-kv，扫每行 values 的 extraEnvVars，分「已存在(复用)/待新建」，
+// 待新建带归属模块 + tidb 自动识别字段。前提：rows 的 values 已经过 RenameSecretRefs 换成目标前缀。
+func collectBatchPending(ctx context.Context, gs *services.GitService, dst *models.ProjectEnv, rows []services.BatchRow) batchSecretsOut {
 	existset := map[string]bool{}
 	var tidbSchema []services.KV
 	if err := gs.EnsureClone(ctx, dst.Name, dst.GitRepo, dst.GitBranch); err == nil {
@@ -937,12 +947,18 @@ func collectBatchPending(ctx context.Context, gs *services.GitService, dst *mode
 			tidbSchema = services.ZkvTidbKeySchema(raw)
 		}
 	}
+	out := batchSecretsOut{Existing: []string{}, Pending: []batchPendingSecret{}}
+	existSeen := map[string]bool{}
 	order := []string{}
 	byName := map[string]*batchPendingSecret{}
 	for _, row := range rows {
 		for _, ref := range services.ExtraEnvVarNames(row.ValuesYAML) {
 			if existset[ref] {
-				continue // 已存在 → 复用，不列
+				if !existSeen[ref] { // 已存在 → 复用（去重列出）
+					existSeen[ref] = true
+					out.Existing = append(out.Existing, ref)
+				}
+				continue
 			}
 			p := byName[ref]
 			if p == nil {
@@ -961,34 +977,34 @@ func collectBatchPending(ctx context.Context, gs *services.GitService, dst *mode
 		}
 	}
 	for _, n := range order {
-		pending = append(pending, *byName[n])
+		out.Pending = append(out.Pending, *byName[n])
 	}
-	return pending
+	return out
 }
 
 // buildBatch 解析请求 → base spec + 每行(模块名/namespace/派生values)。每行 values 用模板派生预填。
-func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []services.BatchRow, *models.ProjectEnv, []batchPendingSecret, bool) {
+func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []services.BatchRow, *models.ProjectEnv, batchSecretsOut, bool) {
 	base, tpl, dst, err := buildSpec(req.TemplateID, req.TargetEnvID, "", "")
 	if err != nil {
 		JSONError(w, 40001, err.Error())
-		return base, nil, nil, nil, false
+		return base, nil, nil, batchSecretsOut{}, false
 	}
 	src, err := loadEnvGit("name=?", tpl.SrcEnv)
 	if err != nil {
 		JSONError(w, 40001, "样板环境不存在")
-		return base, nil, nil, nil, false
+		return base, nil, nil, batchSecretsOut{}, false
 	}
 	gs := getGitService()
 	ctx, cancel := services.GitCtx(context.Background(), 60)
 	defer cancel()
 	if err := gs.EnsureClone(ctx, src.Name, src.GitRepo, src.GitBranch); err != nil {
 		InternalErr(w, nil, fmt.Errorf("同步样板仓库失败: %w", err))
-		return base, nil, nil, nil, false
+		return base, nil, nil, batchSecretsOut{}, false
 	}
 	raw, err := gs.ReadFile(src.Name, base.SrcChartBasePath+"/"+base.SrcService+"/values.yaml")
 	if err != nil {
 		JSONError(w, 40400, "样板 values.yaml 不存在")
-		return base, nil, nil, nil, false
+		return base, nil, nil, batchSecretsOut{}, false
 	}
 	if req.Disable != nil {
 		base.Disable = *req.Disable
@@ -1004,7 +1020,7 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 		}
 		if err := validModuleName(name); err != nil {
 			JSONError(w, 40001, err.Error())
-			return base, nil, nil, nil, false
+			return base, nil, nil, batchSecretsOut{}, false
 		}
 		if ns == "" {
 			ns = defaultNamespaceForEnv(dst) // 空则回落环境默认 namespace（前端一般已自动填）
@@ -1034,6 +1050,8 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 				}
 			}
 			vals = services.EnsureGlobalLabels(vals)
+			// 跟单个一致：extraEnvVars 里任意已知项目前缀(g32/g33…)统一换成目标项目(g50)
+			vals = services.RenameSecretRefs(vals, allProjectPrefixes(), effectivePrefix(dst))
 		}
 		// configmap：自定义了用它，否则按模板派生（令牌替换），保证前端批量的 configmap 令牌也对
 		cms := cmMap(r.Configmaps)
@@ -1051,30 +1069,48 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 	}
 	if len(rows) == 0 {
 		JSONError(w, 40001, "没有有效的模块行")
-		return base, nil, nil, nil, false
+		return base, nil, nil, batchSecretsOut{}, false
 	}
-	// 待新建密钥（批量）：汇总去重各行引用但 z-kv 里没有的密钥；把填了 database 的 tidb 密钥挂到
-	// base.NewTidbSecrets（每行写 z-kv 幂等去重，环境共享的 uid 只会落一条）。字段值由前端逐条填(secret_fills)。
-	pending := collectBatchPending(ctx, gs, dst, rows)
+	// 待新建密钥（批量）：分类 → 按前端逐条填(secret_fills)挂到 base.NewTidbSecrets/NewPlainSecrets
+	// （每行写 z-kv 幂等去重，多模块同名的只会落一条）。tidb 走 tidbSecrets 段、opaque 走 secrets 段。
+	secretsOut := collectBatchPending(ctx, gs, dst, rows)
 	base.ZkvSecretsPath = zkvSecretsPathForEnv(dst)
 	fillByName := map[string]batchSecretFill{}
 	for _, f := range req.SecretFills {
 		fillByName[f.Name] = f
 	}
-	for _, p := range pending {
-		if p.Type != "tidb" {
-			continue
-		}
+	for _, p := range secretsOut.Pending {
 		f := fillByName[p.Name]
-		db := strings.TrimSpace(f.Database)
-		if db == "" {
-			continue // 预览阶段没填 / 提交时由调用方校验
+		if p.Type == "tidb" {
+			db := strings.TrimSpace(f.Database)
+			if db == "" {
+				continue // 预览阶段没填 / 提交时由调用方校验
+			}
+			base.NewTidbSecrets = append(base.NewTidbSecrets, services.TidbSecretEntry{
+				Name: p.Name, Namespace: p.Namespace, Database: db, Extra: f.Fields,
+			})
+		} else {
+			kvs := nonEmptyKVs(f.Fields)
+			if len(kvs) == 0 {
+				continue // opaque 没填键值对就先不建（可后续在配置里补）
+			}
+			base.NewPlainSecrets = append(base.NewPlainSecrets, services.PlainSecretEntry{
+				Name: p.Name, Namespace: p.Namespace, Type: "Opaque", KVs: kvs,
+			})
 		}
-		base.NewTidbSecrets = append(base.NewTidbSecrets, services.TidbSecretEntry{
-			Name: p.Name, Namespace: p.Namespace, Database: db, Extra: f.Fields,
-		})
 	}
-	return base, rows, dst, pending, true
+	return base, rows, dst, secretsOut, true
+}
+
+// nonEmptyKVs 去掉 key 为空的键值对（前端可能留空行）。
+func nonEmptyKVs(kvs []services.KV) []services.KV {
+	out := make([]services.KV, 0, len(kvs))
+	for _, kv := range kvs {
+		if strings.TrimSpace(kv.Key) != "" {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // POST /api/orchestration/batch-preview
@@ -1083,7 +1119,7 @@ func HandleBatchPreview(w http.ResponseWriter, r *http.Request) {
 	if !DecodeJSON(w, r, &req) {
 		return
 	}
-	base, rows, _, pending, ok := buildBatch(req, w)
+	base, rows, _, secretsOut, ok := buildBatch(req, w)
 	if !ok {
 		return
 	}
@@ -1095,12 +1131,12 @@ func HandleBatchPreview(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40001, err.Error())
 		return
 	}
-	// 带上「待新建密钥」清单（去重，含引用它的模块）供前端填 database；沿用 BatchResult 的字段名不变。
+	// 带上密钥分类（复用 + 待新建，含归属模块/字段）；沿用 BatchResult 的字段名不变。
 	JSONSuccess(w, map[string]interface{}{
-		"rows":            res.Rows,
-		"changed_files":   res.ChangedFiles,
-		"all_ok":          res.AllOK,
-		"pending_secrets": pending,
+		"rows":          res.Rows,
+		"changed_files": res.ChangedFiles,
+		"all_ok":        res.AllOK,
+		"secret_refs":   secretsOut,
 	})
 }
 
@@ -1110,7 +1146,7 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 	if !DecodeJSON(w, r, &req) {
 		return
 	}
-	base, rows, dst, pending, ok := buildBatch(req, w)
+	base, rows, dst, secretsOut, ok := buildBatch(req, w)
 	if !ok {
 		return
 	}
@@ -1119,7 +1155,7 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 	for _, f := range req.SecretFills {
 		fillDB[f.Name] = strings.TrimSpace(f.Database)
 	}
-	for _, p := range pending {
+	for _, p := range secretsOut.Pending {
 		if p.Type == "tidb" && fillDB[p.Name] == "" {
 			JSONError(w, 40001, "待新建密钥 "+p.Name+" 需填写 database（批量密钥区）")
 			return
