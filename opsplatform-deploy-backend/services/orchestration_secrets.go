@@ -150,6 +150,50 @@ func ZkvTidbKeySchema(content []byte) []KV {
 	return out
 }
 
+// ZkvTidbSuffixSet 扫 z-kv 现有 tidbSecrets，收集它们名字的「后两段后缀」(如 tidb-secret、uid-secret)。
+// 用来判「待新建密钥是 tidb 还是 opaque」：待新建名的后缀命中这个集合 → tidb（不硬编码后缀，读模板）。
+// 例：z-kv 里有 g50-plaza-uid-secret / g50-newpay-tidb-secret → 集合 {uid-secret, tidb-secret}。
+func ZkvTidbSuffixSet(content []byte) map[string]bool {
+	set := map[string]bool{}
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil || len(root.Content) == 0 {
+		return set
+	}
+	seq, err := findMappingKey(root.Content[0], "tidbSecrets")
+	if err != nil || seq.Kind != yaml.SequenceNode {
+		return set
+	}
+	for _, item := range seq.Content {
+		if item.Kind != yaml.MappingNode {
+			continue
+		}
+		if n, e := findMappingKey(item, "name"); e == nil {
+			if s := secretNameSuffix2(strings.TrimSpace(n.Value)); s != "" {
+				set[s] = true
+			}
+		}
+	}
+	return set
+}
+
+// ClassifyTidb 判断一个待新建 secret 名是不是 tidb：以 -tidb-secret 结尾(兜底)，或后缀命中现有 tidbSecrets 后缀集
+// (读 z-kv 模板，如 uid-secret)。命中→tidb；否则→opaque。
+func ClassifyTidb(name string, tidbSuffixes map[string]bool) bool {
+	if strings.HasSuffix(name, "-tidb-secret") {
+		return true
+	}
+	return tidbSuffixes[secretNameSuffix2(name)]
+}
+
+// secretNameSuffix2 取 secret 名的后两段(以 - 连)：g50-xxx-uid-secret → uid-secret；不足两段用整名。
+func secretNameSuffix2(name string) string {
+	parts := strings.Split(name, "-")
+	if len(parts) < 2 {
+		return name
+	}
+	return parts[len(parts)-2] + "-" + parts[len(parts)-1]
+}
+
 // ExtraEnvVarNames 读后端服务 values.yaml 里 extraEnvVars 引用的 secret 名列表。
 func ExtraEnvVarNames(content []byte) []string {
 	var root yaml.Node
@@ -369,6 +413,32 @@ func AppendPlainSecret(content []byte, e PlainSecretEntry) ([]byte, error) {
 
 // AppendSecretsFromYAML 用于「YAML 模式」：把用户编辑的片段（含 tidbSecrets:/secrets: 列表）
 // 直接把每个列表项节点并入 z-kv-secrets 对应段（保留原样格式，同名查重）。
+// ValidateSecretsYAMLFragment 校验 YAML 模式粘的片段：能解析 + 至少有 tidbSecrets: 或 secrets: 一段。
+// 只认这两段（其余键并入时本就忽略），预览阶段就报错，别等提交。
+func ValidateSecretsYAMLFragment(fragment []byte) error {
+	if len(strings.TrimSpace(string(fragment))) == 0 {
+		return nil
+	}
+	var frag yaml.Node
+	if err := yaml.Unmarshal(fragment, &frag); err != nil {
+		return fmt.Errorf("密钥 YAML 解析失败: %w", err)
+	}
+	if len(frag.Content) == 0 {
+		return fmt.Errorf("密钥 YAML 为空")
+	}
+	doc := frag.Content[0]
+	has := false
+	for _, seg := range []string{"tidbSecrets", "secrets"} {
+		if seq, err := findMappingKey(doc, seg); err == nil && seq.Kind == yaml.SequenceNode && len(seq.Content) > 0 {
+			has = true
+		}
+	}
+	if !has {
+		return fmt.Errorf("密钥 YAML 里没有 tidbSecrets: 或 secrets: 列表（只认这两段）")
+	}
+	return nil
+}
+
 func AppendSecretsFromYAML(zkvContent, fragment []byte) ([]byte, error) {
 	var frag yaml.Node
 	if err := yaml.Unmarshal(fragment, &frag); err != nil {

@@ -212,6 +212,7 @@ func buildSecretRefs(ctx context.Context, gs *services.GitService, dst *models.P
 	}
 	var tidbSchema []services.KV // 现有 tidb 密钥的字段模板（自动识别 key；值一致的预填、不一致的留空）
 	existset := map[string]bool{}
+	tidbSuffixes := map[string]bool{}
 	zkvPath := zkvSecretsPathForEnv(dst)
 	if err := gs.EnsureClone(ctx, dst.Name, dst.GitRepo, dst.GitBranch); err == nil {
 		if raw, err := gs.ReadFile(dst.Name, zkvPath+"/values.yaml"); err == nil {
@@ -220,6 +221,7 @@ func buildSecretRefs(ctx context.Context, gs *services.GitService, dst *models.P
 				existset[n] = true
 			}
 			tidbSchema = services.ZkvTidbKeySchema(raw)
+			tidbSuffixes = services.ZkvTidbSuffixSet(raw)
 		}
 	}
 	log.Printf("[orch] secret 分类 env=%s zkv=%s found=%v refs=%d existing=%d tidb字段=%d",
@@ -231,7 +233,7 @@ func buildSecretRefs(ctx context.Context, gs *services.GitService, dst *models.P
 			continue
 		}
 		p := pendingSecret{Name: ref, Namespace: nsSuggest, Type: "opaque"}
-		if strings.HasSuffix(ref, "-tidb-secret") {
+		if services.ClassifyTidb(ref, tidbSuffixes) { // 按 z-kv 现有 tidbSecrets 后缀识别(含 uid-secret)
 			p.Type = "tidb"
 			p.Extra = tidbKeySchemaOrDefault(tidbSchema)
 		}
@@ -898,9 +900,10 @@ type batchReq struct {
 	TargetEnvID    int64 `json:"target_env_id"`
 	Disable        *bool    `json:"disable"`
 	AtLarkIDs      []string `json:"at_lark_ids"`      // 本次临时额外艾特人的 Lark ID
-	// 待新建 tidb 密钥的填写内容（每条：名字 + database + 字段 KV，字段按现有 tidb 自动识别）。
-	// 预览阶段可空（只用来算待新建清单）；提交时每条待新建 tidb 都必须有 database。
+	// 表单模式：待新建密钥逐条填的内容（名字+类型+database+字段/键值对）。
 	SecretFills []batchSecretFill `json:"secret_fills"`
+	// YAML 模式：直接粘的 z-kv secrets/tidbSecrets 片段（非空时优先，跳过表单）。
+	SecretsYAML string `json:"secrets_yaml"`
 	Rows        []struct {
 		ModuleName string   `json:"module_name"`
 		Namespace  string   `json:"namespace"`
@@ -909,12 +912,14 @@ type batchReq struct {
 	} `json:"rows"`
 }
 
-// batchSecretFill 前端填的一条待新建密钥内容：名字 + 类型 + database(tidb) + 字段/键值对 KV。
+// batchSecretFill 前端填的一条待新建密钥内容：名字 + 类型 + namespace + database(tidb) + 字段/键值对 KV。
+// 既覆盖检测到的待新建，也覆盖用户「+新增密钥」手动加的（手动的不在 collectBatchPending 里）。
 type batchSecretFill struct {
-	Name     string        `json:"name"`
-	Type     string        `json:"type"` // tidb | opaque
-	Database string        `json:"database"`
-	Fields   []services.KV `json:"fields"`
+	Name      string        `json:"name"`
+	Type      string        `json:"type"` // tidb | opaque
+	Namespace string        `json:"namespace"`
+	Database  string        `json:"database"`
+	Fields    []services.KV `json:"fields"`
 }
 
 // batchPendingSecret 批量新增里一条「引用了但目标环境 z-kv 还没有」的待新建密钥（跨行汇总去重）。
@@ -939,12 +944,14 @@ type batchSecretsOut struct {
 func collectBatchPending(ctx context.Context, gs *services.GitService, dst *models.ProjectEnv, rows []services.BatchRow) batchSecretsOut {
 	existset := map[string]bool{}
 	var tidbSchema []services.KV
+	tidbSuffixes := map[string]bool{}
 	if err := gs.EnsureClone(ctx, dst.Name, dst.GitRepo, dst.GitBranch); err == nil {
 		if raw, err := gs.ReadFile(dst.Name, zkvSecretsPathForEnv(dst)+"/values.yaml"); err == nil {
 			for _, n := range services.ZkvSecretNames(raw) {
 				existset[n] = true
 			}
 			tidbSchema = services.ZkvTidbKeySchema(raw)
+			tidbSuffixes = services.ZkvTidbSuffixSet(raw)
 		}
 	}
 	out := batchSecretsOut{Existing: []string{}, Pending: []batchPendingSecret{}}
@@ -963,7 +970,7 @@ func collectBatchPending(ctx context.Context, gs *services.GitService, dst *mode
 			p := byName[ref]
 			if p == nil {
 				typ := "opaque"
-				if strings.HasSuffix(ref, "-tidb-secret") {
+				if services.ClassifyTidb(ref, tidbSuffixes) { // 按 z-kv 现有 tidbSecrets 后缀识别(含 uid-secret)
 					typ = "tidb"
 				}
 				p = &batchPendingSecret{Name: ref, Type: typ, Namespace: row.Namespace}
@@ -1075,27 +1082,36 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 	// （每行写 z-kv 幂等去重，多模块同名的只会落一条）。tidb 走 tidbSecrets 段、opaque 走 secrets 段。
 	secretsOut := collectBatchPending(ctx, gs, dst, rows)
 	base.ZkvSecretsPath = zkvSecretsPathForEnv(dst)
-	fillByName := map[string]batchSecretFill{}
-	for _, f := range req.SecretFills {
-		fillByName[f.Name] = f
+	// YAML 模式：直接把整段并入 z-kv（跳过表单逐条）。
+	if strings.TrimSpace(req.SecretsYAML) != "" {
+		base.NewSecretsYAML = req.SecretsYAML
+		return base, rows, dst, secretsOut, true
 	}
-	for _, p := range secretsOut.Pending {
-		f := fillByName[p.Name]
-		if p.Type == "tidb" {
+	// 表单模式：逐条 secret_fills 拼（既含检测到的，也含「+新增密钥」手动加的）。类型/database/字段/ns 都以填的为准。
+	defNs := defaultNamespaceForEnv(dst)
+	for _, f := range req.SecretFills {
+		if strings.TrimSpace(f.Name) == "" {
+			continue
+		}
+		ns := strings.TrimSpace(f.Namespace)
+		if ns == "" {
+			ns = defNs
+		}
+		if f.Type == "tidb" {
 			db := strings.TrimSpace(f.Database)
 			if db == "" {
-				continue // 预览阶段没填 / 提交时由调用方校验
+				continue // 预览没填 / 提交时由调用方校验
 			}
 			base.NewTidbSecrets = append(base.NewTidbSecrets, services.TidbSecretEntry{
-				Name: p.Name, Namespace: p.Namespace, Database: db, Extra: f.Fields,
+				Name: f.Name, Namespace: ns, Database: db, Extra: nonEmptyKVs(f.Fields),
 			})
 		} else {
 			kvs := nonEmptyKVs(f.Fields)
 			if len(kvs) == 0 {
-				continue // opaque 没填键值对就先不建（可后续在配置里补）
+				continue // opaque 没填键值对就先不建
 			}
 			base.NewPlainSecrets = append(base.NewPlainSecrets, services.PlainSecretEntry{
-				Name: p.Name, Namespace: p.Namespace, Type: "Opaque", KVs: kvs,
+				Name: f.Name, Namespace: ns, Type: "Opaque", KVs: kvs,
 			})
 		}
 	}
@@ -1117,6 +1133,10 @@ func nonEmptyKVs(kvs []services.KV) []services.KV {
 func HandleBatchPreview(w http.ResponseWriter, r *http.Request) {
 	var req batchReq
 	if !DecodeJSON(w, r, &req) {
+		return
+	}
+	if err := services.ValidateSecretsYAMLFragment([]byte(req.SecretsYAML)); err != nil {
+		JSONError(w, 40001, err.Error())
 		return
 	}
 	base, rows, _, secretsOut, ok := buildBatch(req, w)
@@ -1146,19 +1166,22 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 	if !DecodeJSON(w, r, &req) {
 		return
 	}
+	if err := services.ValidateSecretsYAMLFragment([]byte(req.SecretsYAML)); err != nil {
+		JSONError(w, 40001, err.Error())
+		return
+	}
 	base, rows, dst, secretsOut, ok := buildBatch(req, w)
 	if !ok {
 		return
 	}
-	// 待新建的 tidb 密钥必须都填了 database 才能提交（其余字段值由前端 secret_fills 逐条带上）。
-	fillDB := map[string]string{}
-	for _, f := range req.SecretFills {
-		fillDB[f.Name] = strings.TrimSpace(f.Database)
-	}
-	for _, p := range secretsOut.Pending {
-		if p.Type == "tidb" && fillDB[p.Name] == "" {
-			JSONError(w, 40001, "待新建密钥 "+p.Name+" 需填写 database（批量密钥区）")
-			return
+	_ = secretsOut
+	// 待新建的 tidb 密钥必须都填了 database 才能提交（YAML 模式跳过；逐条 fill 校验，含手动新增）。
+	if strings.TrimSpace(req.SecretsYAML) == "" {
+		for _, f := range req.SecretFills {
+			if f.Type == "tidb" && strings.TrimSpace(f.Name) != "" && strings.TrimSpace(f.Database) == "" {
+				JSONError(w, 40001, "待新建密钥 "+f.Name+" 需填写 database（批量密钥区）")
+				return
+			}
 		}
 	}
 	perm := envPermissionCode(dst.EnvType)

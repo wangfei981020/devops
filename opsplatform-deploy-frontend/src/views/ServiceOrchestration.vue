@@ -290,34 +290,64 @@
             <div v-if="batchExisting.length" class="batch-sec-reuse">
               <el-tag v-for="n in batchExisting" :key="n" size="small" type="success" style="margin:2px 4px 2px 0">✓ {{ n }} · 复用</el-tag>
             </div>
-            <!-- 待新建 · 按模块/共享分组 -->
+            <!-- 待新建 · 表单/YAML 双模式 -->
             <template v-if="batchPendingList.length">
-              <div class="batch-sec-head">待新建（提交时建进 z-kv-secrets）<span class="batch-sec-auto">前缀已按目标环境替换；tidb 字段按现有密钥自动识别</span></div>
-              <div v-for="sec in batchSecretSections" :key="sec.key" class="batch-sec-group">
-                <div class="batch-sec-grp">{{ sec.title }}</div>
-                <div v-for="p in sec.secrets" :key="p.name" class="batch-sec-card">
-                  <div class="batch-sec-cardhead">
-                    <b>{{ p.name }}</b>
-                    <el-tag size="small" :type="p.type === 'tidb' ? 'warning' : 'info'" style="margin:0 8px">{{ p.type === 'tidb' ? 'TiDB' : 'Opaque' }}</el-tag>
-                    <span class="batch-sec-ns">ns: {{ p.namespace }}</span>
-                    <span v-if="sec.shared" class="batch-sec-ns">· 被 {{ p.modules.join('、') }} 共用</span>
-                    <template v-if="p.type === 'tidb' && batchSecretFills[p.name]">
-                      <span class="batch-sec-k">database <b class="req">*</b></span>
-                      <el-input v-model="batchSecretFills[p.name].database" size="small" placeholder="如 g50_xxx_game" style="width:180px" />
-                    </template>
-                    <el-button v-if="batchSecretFills[p.name]" link size="small" :style="p.type === 'tidb' ? '' : 'margin-left:auto'" @click="batchSecretFills[p.name].open = !batchSecretFills[p.name].open">{{ batchSecretFills[p.name].open ? '收起 ▴' : `${p.type === 'tidb' ? '字段' : '键值对'} (${batchSecretFills[p.name].fields.length}) ▾` }}</el-button>
-                  </div>
-                  <div v-if="batchSecretFills[p.name] && batchSecretFills[p.name].open" class="batch-sec-fields">
-                    <div v-for="(kv, i) in batchSecretFills[p.name].fields" :key="i" class="batch-sec-frow">
-                      <el-input v-model="kv.key" size="small" placeholder="key" style="width:180px" />
-                      <el-input v-model="kv.value" size="small" placeholder="value" style="width:320px;margin:0 6px" />
-                      <el-button link type="danger" size="small" @click="batchSecretFills[p.name].fields.splice(i, 1)">×</el-button>
+              <div class="batch-sec-head">
+                待新建（提交时建进 z-kv-secrets）<span class="batch-sec-auto">前缀已换；类型/字段按现有 tidb 密钥自动识别，可手改</span>
+                <el-radio-group v-model="batchSecMode" size="small" style="margin-left:12px" @change="onBatchSecModeChange">
+                  <el-radio-button label="form">表单</el-radio-button>
+                  <el-radio-button label="yaml">YAML</el-radio-button>
+                </el-radio-group>
+              </div>
+              <!-- 表单模式：按模块分组卡片 -->
+              <template v-if="batchSecMode === 'form'">
+                <div v-for="sec in batchSecretSections" :key="sec.key" class="batch-sec-group">
+                  <div class="batch-sec-grp">{{ sec.title }}</div>
+                  <div v-for="p in sec.secrets" :key="p.name" class="batch-sec-card">
+                    <div class="batch-sec-cardhead" v-if="batchSecretFills[p.name]">
+                      <b>{{ p.name }}</b>
+                      <el-select v-model="batchSecretFills[p.name].type" size="small" style="width:104px;margin:0 8px" @change="onBatchTypeChange(p.name)">
+                        <el-option label="TiDB" value="tidb" />
+                        <el-option label="普通 Opaque" value="opaque" />
+                      </el-select>
+                      <span class="batch-sec-ns">ns: {{ p.namespace }}</span>
+                      <span v-if="sec.shared" class="batch-sec-ns">· 被 {{ p.modules.join('、') }} 共用</span>
+                      <template v-if="batchSecretFills[p.name].type === 'tidb'">
+                        <span class="batch-sec-k">database <b class="req">*</b></span>
+                        <el-input v-model="batchSecretFills[p.name].database" size="small" placeholder="如 g50_xxx_game" style="width:180px" />
+                      </template>
+                      <el-button link size="small" :style="batchSecretFills[p.name].type === 'tidb' ? '' : 'margin-left:auto'" @click="batchSecretFills[p.name].open = !batchSecretFills[p.name].open">{{ batchSecretFills[p.name].open ? '收起 ▴' : `${batchSecretFills[p.name].type === 'tidb' ? '字段' : '键值对'} (${batchSecretFills[p.name].fields.length}) ▾` }}</el-button>
                     </div>
-                    <el-button link type="primary" size="small" @click="addFillField(p.name)">+ {{ p.type === 'tidb' ? '额外字段' : '键值对' }}</el-button>
-                    <span v-if="p.type !== 'tidb' && !batchSecretFills[p.name].fields.length" class="batch-sec-ns">（opaque 无固定模板，按需加键值对）</span>
+                    <div v-if="batchSecretFills[p.name] && batchSecretFills[p.name].open" class="batch-sec-fields">
+                      <div v-for="(kv, i) in batchSecretFills[p.name].fields" :key="i" class="batch-sec-frow">
+                        <el-input v-model="kv.key" size="small" placeholder="key" style="width:180px" />
+                        <el-input v-model="kv.value" size="small" placeholder="value" style="width:320px;margin:0 6px" />
+                        <el-button link type="danger" size="small" @click="batchSecretFills[p.name].fields.splice(i, 1)">×</el-button>
+                      </div>
+                      <el-button link type="primary" size="small" @click="addFillField(p.name)">+ {{ batchSecretFills[p.name].type === 'tidb' ? '额外字段' : '键值对' }}</el-button>
+                    </div>
                   </div>
                 </div>
-              </div>
+                <!-- + 新增密钥：手动加模板没引用的 -->
+                <div class="batch-sec-add">
+                  <span class="batch-sec-grp" style="margin:0">+ 新增密钥</span>
+                  <el-input v-model="addSecName" size="small" placeholder="密钥名（如 g50-xxx-config-secret）" style="width:260px" />
+                  <el-select v-model="addSecType" size="small" style="width:104px">
+                    <el-option label="TiDB" value="tidb" />
+                    <el-option label="普通 Opaque" value="opaque" />
+                  </el-select>
+                  <el-select v-model="addSecOwner" size="small" style="width:190px" placeholder="归属">
+                    <el-option label="环境共享" value="" />
+                    <el-option v-for="r in validRows" :key="r.module_name" :label="'模块 ' + r.module_name.trim()" :value="r.module_name.trim()" />
+                  </el-select>
+                  <el-button size="small" type="primary" @click="addManualBatchSecret">加</el-button>
+                </div>
+              </template>
+              <!-- YAML 模式：直接粘 tidbSecrets/secrets 片段 -->
+              <template v-else>
+                <div class="batch-sec-auto" style="margin:6px 0">直接编辑将整段并入 z-kv-secrets（含 tidbSecrets:/secrets: 列表；生产每模块差异值可从别处拷）</div>
+                <CodeEditor v-model="batchSecretsYaml" />
+              </template>
             </template>
           </div>
         </el-form-item>
@@ -378,6 +408,7 @@ import * as api from '../api'
 import ValuesEditor from '../components/ValuesEditor.vue'
 import CodeEditor from '../components/CodeEditor.vue'
 import { CircleCloseFilled, Search } from '@element-plus/icons-vue'
+import { stringify as yamlStringify } from 'yaml'
 
 const router = useRouter()
 
@@ -635,6 +666,8 @@ const canBatchPreview = computed(() => batch.value.templateId && validRows.value
 const batchSecretFills = ref({})
 const batchExisting = ref([])    // 复用（已存在，不用填）
 const batchPendingList = ref([]) // 待新建（解析成行/改行名时刷新）
+const batchSecMode = ref('form') // 密钥区模式：form 逐条卡片 / yaml 直接粘片段
+const batchSecretsYaml = ref('') // YAML 模式内容（提交时整段并入 z-kv）
 // 按归属分组：模块专属(只被1个模块引用)挂到该模块框；多模块同名引用=共享单列
 const batchModuleGroups = computed(() => {
   const order = validRows.value.map(r => r.module_name.trim())
@@ -650,22 +683,81 @@ const batchSecretSections = computed(() => {
   return secs
 })
 const batchPendingTidb = computed(() => batchPendingList.value.filter(p => p.type === 'tidb'))
-const batchTidbFilled = computed(() => batchPendingTidb.value.every(p => (batchSecretFills.value[p.name]?.database || '').trim()))
-// 预览是纯 helm 门禁；提交要 helm 全绿 + 所有待新建 tidb 的 database 都填了
-const canBatchSubmit = computed(() => batchResult.value && batchResult.value.all_ok && batchTidbFilled.value)
+// tidb 判定以下拉(fill.type)为准
+const batchTidbFilled = computed(() => batchPendingList.value.every(p => {
+  const f = batchSecretFills.value[p.name]
+  return (f?.type || p.type) !== 'tidb' || (f?.database || '').trim()
+}))
+// 预览是纯 helm 门禁；提交要 helm 全绿 +（表单模式）tidb 都填了 database
+const canBatchSubmit = computed(() => batchResult.value && batchResult.value.all_ok && (batchSecMode.value === 'yaml' || batchTidbFilled.value))
 
 // 按 pending 初始化/合并每条待新建密钥的填写状态（保留已填的值，去掉不再需要的）
 function syncBatchFills() {
   const next = {}
   for (const p of batchPendingList.value) {
     const old = batchSecretFills.value[p.name]
-    next[p.name] = old || { type: p.type, database: '', open: p.type === 'tidb', fields: (p.fields || []).map(f => ({ key: f.key, value: f.value || '' })) }
+    next[p.name] = old || { type: p.type, namespace: p.namespace, database: '', open: p.type === 'tidb', fields: (p.fields || []).map(f => ({ key: f.key, value: f.value || '' })) }
   }
   batchSecretFills.value = next
 }
 function addFillField(name) {
   const f = batchSecretFills.value[name]
   if (f) f.fields.push({ key: '', value: '' })
+}
+// 类型下拉切到 tidb 且没字段时，用识别出的模板/默认 salt-crypt 兜底铺上
+function onBatchTypeChange(name) {
+  const f = batchSecretFills.value[name]
+  if (!f || f.type !== 'tidb') return
+  f.open = true
+  if (!f.fields.length) {
+    const schema = batchPendingList.value.find(x => x.name === name)?.fields || []
+    f.fields = schema.length ? schema.map(s => ({ key: s.key, value: s.value || '' }))
+      : [{ key: 'TIDB_PWDSALT', value: '' }, { key: 'TIDB_PWDCRYPT', value: '' }]
+  }
+}
+
+// 由当前「待新建 + 已填字段」生成 z-kv 片段脚手架（YAML 模式起点，带预填值）
+function scaffoldFromForm() {
+  const tidb = [], plain = []
+  for (const p of batchPendingList.value) {
+    const f = batchSecretFills.value[p.name] || {}
+    const kvs = (f.fields || []).filter(x => x.key && x.key.trim())
+    if ((f.type || p.type) === 'tidb') {
+      const esd = {}; kvs.forEach(x => { esd[x.key.trim()] = x.value || '' })
+      tidb.push({ name: p.name, namespace: f.namespace || p.namespace, database: f.database || '', extraStringData: esd })
+    } else {
+      const sd = {}; kvs.forEach(x => { sd[x.key.trim()] = x.value || '' })
+      plain.push({ name: p.name, namespace: f.namespace || p.namespace, type: 'Opaque', stringData: sd })
+    }
+  }
+  const obj = {}
+  if (tidb.length) obj.tidbSecrets = tidb
+  if (plain.length) obj.secrets = plain
+  return Object.keys(obj).length ? yamlStringify(obj) : ''
+}
+// 切到 YAML：仅当编辑器还空时铺一次脚手架（bug: 不覆盖你已改/已加的内容）
+function onBatchSecModeChange(mode) {
+  if (mode === 'yaml' && !batchSecretsYaml.value.trim()) batchSecretsYaml.value = scaffoldFromForm()
+}
+
+// 「+新增密钥」：手动加一条模板没引用的待新建密钥
+const addSecName = ref('')
+const addSecType = ref('tidb')
+const addSecOwner = ref('') // 模块名 / '' 表示环境共享
+function addManualBatchSecret() {
+  const name = addSecName.value.trim()
+  if (!name) { ElMessage.warning('填密钥名'); return }
+  if (batchPendingList.value.some(p => p.name === name) || batchExisting.value.includes(name)) {
+    ElMessage.warning('该密钥名已在列表里'); return
+  }
+  const modules = addSecOwner.value ? [addSecOwner.value] : validRows.value.map(r => r.module_name.trim())
+  const ns = addSecOwner.value
+    ? (batch.value.rows.find(r => r.module_name.trim() === addSecOwner.value)?.namespace || nsBatchSet.value)
+    : nsBatchSet.value
+  batchPendingList.value.push({ name, type: addSecType.value, namespace: ns, modules, fields: [], manual: true })
+  syncBatchFills()
+  if (addSecType.value === 'tidb') onBatchTypeChange(name)
+  addSecName.value = ''; resetBatch()
 }
 const selectedBatchTemplateType = computed(() => templates.value.find(t => t.id === batch.value.templateId)?.module_type || 'backend')
 
@@ -721,6 +813,9 @@ function openBatch() {
   batchSecretFills.value = {}
   batchPendingList.value = []
   batchExisting.value = []
+  batchSecMode.value = 'form'
+  batchSecretsYaml.value = ''
+  addSecName.value = ''; addSecType.value = 'tidb'; addSecOwner.value = ''
   resetBatch()
   batchDialog.value = true
 }
@@ -781,9 +876,10 @@ function batchBody() {
     disable: batch.value.disable,
     rows: validRows.value.map(r => ({ module_name: r.module_name.trim(), namespace: r.namespace.trim(), values_yaml: r.values_yaml || '', configmaps: r.configmaps || [] })),
     secret_fills: batchPendingList.value.map(p => {
-      const f = batchSecretFills.value[p.name] || { database: '', fields: [] }
-      return { name: p.name, type: p.type, database: (f.database || '').trim(), fields: (f.fields || []).filter(x => x.key.trim()).map(x => ({ key: x.key.trim(), value: x.value })) }
+      const f = batchSecretFills.value[p.name] || { type: p.type, namespace: p.namespace, database: '', fields: [] }
+      return { name: p.name, type: f.type || p.type, namespace: f.namespace || p.namespace, database: (f.database || '').trim(), fields: (f.fields || []).filter(x => x.key.trim()).map(x => ({ key: x.key.trim(), value: x.value })) }
     }),
+    secrets_yaml: batchSecMode.value === 'yaml' ? batchSecretsYaml.value : '',
   }
 }
 
@@ -829,6 +925,7 @@ onMounted(async () => {
 .batch-sec-group { margin-top: 6px; }
 .batch-sec-ns { color: #9ca3af; font-size: 12px; margin-left: 8px; }
 .batch-sec-card { padding: 6px 0 6px 10px; border-bottom: 1px dashed #eee; border-left: 2px solid #eef; margin-left: 4px; }
+.batch-sec-add { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed #e5d9a8; }
 .batch-sec-cardhead { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .batch-sec-fields { margin: 6px 0 6px 18px; padding-left: 10px; border-left: 2px solid #f0e0b0; }
 .batch-sec-frow { display: flex; align-items: center; padding: 2px 0; }
