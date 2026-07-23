@@ -1,0 +1,4 @@
+# GO-2026-5932: golang.org/x/crypto/openpgp 子包"不再维护"告警(UNKNOWN 级,无补丁版本)。
+# 本服务只用 x/crypto/bcrypt 与 x/crypto/pbkdf2,未 import openpgp,不受影响。
+# Trivy 按模块级告警误报整个 x/crypto,故此放行。
+GO-2026-5932
