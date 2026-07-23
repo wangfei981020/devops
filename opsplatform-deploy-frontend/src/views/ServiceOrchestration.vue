@@ -186,11 +186,6 @@
             active-text="disable:true 安全预演（先不生成 Application）"
             inactive-text="关闭=直接部署（生成 Application，默认）" />
         </el-form-item>
-        <!-- [debug-skip-img] 临时调试开关，测完删 -->
-        <el-form-item label="镜像校验">
-          <el-switch v-model="skipImg" :active-value="true" :inactive-value="false" />
-          <span class="skip-img-hint">跳过缺镜像校验（⚠ 仅测试用，正常发布勿开）</span>
-        </el-form-item>
 
         <div v-if="preview" class="preview-box">
           <el-alert v-if="preview.helm_skipped" type="warning" :closable="false" title="helm 未安装，跳过渲染校验" />
@@ -291,11 +286,6 @@
         <el-form-item label="ArgoCD">
           <el-switch v-model="batch.disable" :active-value="true" :inactive-value="false" active-text="disable:true 安全预演" inactive-text="关闭=直接部署（默认）" />
         </el-form-item>
-        <!-- [debug-skip-img] 临时调试开关，测完删 -->
-        <el-form-item label="镜像校验">
-          <el-switch v-model="batchSkipImg" :active-value="true" :inactive-value="false" />
-          <span class="skip-img-hint">跳过缺镜像校验（⚠ 仅测试用，正常发布勿开）</span>
-        </el-form-item>
 
         <div v-if="batchResult" class="preview-box">
           <el-alert :type="batchResult.all_ok ? 'success' : 'error'" :closable="false"
@@ -307,6 +297,29 @@
               <el-button link type="primary" class="err-copy" @click="copyErr(row.error)">复制报错</el-button>
             </div>
             <pre class="err-body">{{ row.error }}</pre>
+          </div>
+        </div>
+        <!-- 待新建密钥（批量）：预览后列出，tidb 和 uid 都列出来，各填 database；salt/crypt 自动 -->
+        <div v-if="batchResult && (batchPendingTidb.length || batchPendingOpaque.length)" class="batch-sec-box">
+          <div class="batch-sec-head">依赖密钥 · 待新建（提交时一起建进 z-kv-secrets）<span class="batch-sec-auto">salt/crypt 自动复用现有 ✓</span></div>
+          <template v-if="batchPendingShared.length">
+            <div class="batch-sec-grp">环境共享（各模块都引用，只建一次）</div>
+            <div v-for="p in batchPendingShared" :key="p.name" class="batch-sec-row">
+              <b>{{ p.name }}</b><el-tag size="small" type="warning" style="margin:0 8px">TiDB</el-tag>
+              <span class="batch-sec-k">database <b class="req">*</b></span>
+              <el-input v-model="batchSecretDb[p.name]" size="small" placeholder="如 g50_uid" style="width:240px" />
+            </div>
+          </template>
+          <template v-if="batchPendingOwn.length">
+            <div class="batch-sec-grp">每个模块专属（一模块一个库）</div>
+            <div v-for="p in batchPendingOwn" :key="p.name" class="batch-sec-row">
+              <span class="batch-sec-mod">{{ p.modules[0] }} →</span> <b>{{ p.name }}</b>
+              <span class="batch-sec-k">database <b class="req">*</b></span>
+              <el-input v-model="batchSecretDb[p.name]" size="small" placeholder="如 g50_xxx_game" style="width:240px" />
+            </div>
+          </template>
+          <div v-if="batchPendingOpaque.length" class="batch-sec-warn">
+            ⚠ 还有普通 Opaque 待新建：{{ batchPendingOpaque.map(p => p.name).join('、') }} —— 请到对应模块「配置」的 YAML 模式手填后再提交
           </div>
         </div>
         <el-alert v-if="batchSubmitted" type="success" :closable="false" class="submitted"
@@ -415,7 +428,6 @@ const submitted = ref(null)
 const canPrefill = computed(() => envId.value && form.value.templateId && form.value.moduleName.trim())
 const imageMissing = ref(false)
 const imageMissingMsg = ref('')
-const skipImg = ref(false) // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
 // 额外艾特（临时）+ 环境固定艾特（只读展示）
 const extraAt = ref([])       // 本次临时选的 lark_id 列表
 const envFixedAt = ref([])    // 该环境固定艾特人 lark_id（prefill 带出，只读）
@@ -447,9 +459,8 @@ function genProdDomains() {
 const secMode = ref('form')  // 表单 / YAML 双模式
 const secYaml = ref('')      // YAML 模式：将追加到 z-kv-secrets 的片段
 // 缺镜像 / 专属密钥 database 没填全时：helm 预览 + 确认提交都禁用
-// [debug-skip-img] skipImg 勾上时跳过缺镜像拦截（测完删）
-const canPreview = computed(() => canPrefill.value && form.value.namespace.trim() && form.value.valuesYaml.trim() && (!imageMissing.value || skipImg.value) && pendingTidbFilled.value)
-const canSubmit = computed(() => preview.value && (preview.value.helm_ok || preview.value.helm_skipped) && (!imageMissing.value || skipImg.value) && pendingTidbFilled.value)
+const canPreview = computed(() => canPrefill.value && form.value.namespace.trim() && form.value.valuesYaml.trim() && !imageMissing.value && pendingTidbFilled.value)
+const canSubmit = computed(() => preview.value && (preview.value.helm_ok || preview.value.helm_skipped) && !imageMissing.value && pendingTidbFilled.value)
 
 function resetPreview() { preview.value = null; submitted.value = null; imageMissing.value = false; imageMissingMsg.value = '' }
 
@@ -463,7 +474,6 @@ function openAdd() {
   secretRefs.value = null
   domains.value = []; primaryDomains.value = []; isProdEnv.value = false; ingressEnabled.value = false; domCount.value = 1
   extraAt.value = []; envFixedAt.value = []
-  skipImg.value = false // [debug-skip-img] 测完删
   resetPreview()
   addDialog.value = true
 }
@@ -490,7 +500,6 @@ function reqBody() {
     domains: domains.value.map(d => (d || '').trim()).filter(Boolean), // 访问域名(覆盖 values host)
     at_lark_ids: extraAt.value, // 临时额外艾特人
     disable: form.value.disable,
-    skip_image_check: skipImg.value, // [debug-skip-img] 测完删
   }
 }
 
@@ -598,7 +607,6 @@ async function doSubmit() {
 // ---- 批量新增 ----
 const batchDialog = ref(false)
 const batch = ref({ templateId: null, paste: '', disable: false, rows: [] })
-const batchSkipImg = ref(false) // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
 const batchResult = ref(null)
 const batchSubmitted = ref(null)
 const batchPreviewing = ref(false)
@@ -606,7 +614,16 @@ const batchSubmitting = ref(false)
 
 const validRows = computed(() => batch.value.rows.filter(r => r.module_name.trim() && r.namespace.trim()))
 const canBatchPreview = computed(() => batch.value.templateId && validRows.value.length > 0)
-const canBatchSubmit = computed(() => batchResult.value && batchResult.value.all_ok)
+
+// 批量·待新建密钥（预览后返回）：secret 名 → database 输入
+const batchSecretDb = ref({})
+const batchPending = computed(() => batchResult.value?.pending_secrets || [])
+const batchPendingTidb = computed(() => batchPending.value.filter(p => p.type === 'tidb'))
+const batchPendingShared = computed(() => batchPendingTidb.value.filter(p => (p.modules?.length || 0) > 1)) // uid 等环境共享
+const batchPendingOwn = computed(() => batchPendingTidb.value.filter(p => (p.modules?.length || 0) <= 1))   // 模块专属
+const batchPendingOpaque = computed(() => batchPending.value.filter(p => p.type !== 'tidb'))
+const batchTidbFilled = computed(() => batchPendingTidb.value.every(p => (batchSecretDb.value[p.name] || '').trim()))
+const canBatchSubmit = computed(() => batchResult.value && batchResult.value.all_ok && batchTidbFilled.value)
 const selectedBatchTemplateType = computed(() => templates.value.find(t => t.id === batch.value.templateId)?.module_type || 'backend')
 
 // 批量·单行配置弹窗
@@ -658,7 +675,7 @@ function rowStatus(name) {
 
 function openBatch() {
   batch.value = { templateId: null, paste: '', disable: false, rows: [] }
-  batchSkipImg.value = false // [debug-skip-img] 测完删
+  batchSecretDb.value = {}
   resetBatch()
   batchDialog.value = true
 }
@@ -708,8 +725,8 @@ function batchBody() {
     template_id: batch.value.templateId,
     target_env_id: envId.value,
     disable: batch.value.disable,
-    skip_image_check: batchSkipImg.value, // [debug-skip-img] 测完删
     rows: validRows.value.map(r => ({ module_name: r.module_name.trim(), namespace: r.namespace.trim(), values_yaml: r.values_yaml || '', configmaps: r.configmaps || [] })),
+    secret_databases: batchSecretDb.value,
   }
 }
 
@@ -746,6 +763,15 @@ onMounted(async () => {
 .head-left h2 { margin: 0; font-size: 18px; }
 .yaml-editor :deep(textarea) { font-family: 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.5; }
 .preview-box { margin: 8px 0 0 110px; padding: 12px 14px; background: var(--el-fill-color-light); border-radius: 8px; }
+.batch-sec-box { margin: 10px 0 0 110px; padding: 12px 14px; background: #fffdf5; border: 1px solid #f0e0b0; border-radius: 8px; }
+.batch-sec-head { font-weight: 600; margin-bottom: 8px; }
+.batch-sec-auto { margin-left: 10px; color: #16a34a; font-size: 12px; font-weight: normal; }
+.batch-sec-grp { margin: 10px 0 4px; color: #6b7280; font-size: 12px; border-top: 1px dashed #e5d9a8; padding-top: 8px; }
+.batch-sec-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 13px; }
+.batch-sec-mod { color: #2563eb; }
+.batch-sec-k { margin-left: auto; color: #6b7280; }
+.batch-sec-k .req { color: #ef4444; }
+.batch-sec-warn { margin-top: 10px; color: #d97706; font-size: 12px; }
 .err-card { margin: 8px 0; border: 1px solid #fbc4c4; border-radius: 8px; overflow: hidden; background: #fff5f5; }
 .err-head { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: #fde2e2; color: #c0392b; font-weight: 600; font-size: 13px; }
 .err-head .err-copy { margin-left: auto; }
@@ -767,7 +793,6 @@ onMounted(async () => {
 .kv-table .kv-k { color: #909399; font-size: 12px; white-space: nowrap; width: 90px; background: var(--el-fill-color); }
 .kv-table code { background: var(--el-fill-color); padding: 1px 6px; border-radius: 4px; font-size: 12px; word-break: break-all; }
 .ip-none { color: #c0c4cc; font-size: 12px; }
-.skip-img-hint { margin-left: 10px; color: #d97706; font-size: 12px; } /* [debug-skip-img] 测完删 */
 .dom-box { width: 100%; }
 .dom-gen { padding: 8px 10px; background: var(--el-fill-color-light); border-radius: 6px; margin-bottom: 8px; }
 .dom-primary { margin: 0 10px; color: #606266; font-size: 12px; }

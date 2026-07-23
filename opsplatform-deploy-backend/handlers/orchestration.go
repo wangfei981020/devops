@@ -677,7 +677,6 @@ type moduleAddReq struct {
 	NewSecretsYAML string        `json:"new_secrets_yaml"` // YAML 模式：直接编辑的片段（非空时优先）
 	Domains       []string       `json:"domains"`         // 访问域名列表（前端域名区编辑后的，覆盖 values 的 ingressGateway.host）
 	AtLarkIDs     []string       `json:"at_lark_ids"`     // 本次临时额外艾特人的 Lark ID（新增弹窗选的通知人）
-	SkipImageCheck bool          `json:"skip_image_check"` // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
 	Disable       *bool          `json:"disable"`         // 默认 true（安全预演，app-of-apps 先不生成）
 }
 
@@ -802,12 +801,9 @@ func HandleSubmitModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 缺镜像硬卡：Harbor 里没有该 image.repository:tag 就禁止提交（Harbor 未配/连不上则跳过）
-	// [debug-skip-img] 临时调试开关勾上时跳过（测完删）
-	if !req.SkipImageCheck {
-		if err := verifyImageForSubmit(spec.ValuesYAML, spec.ModuleName, dst.EnvType); err != nil {
-			JSONError(w, 40001, err.Error())
-			return
-		}
+	if err := verifyImageForSubmit(spec.ValuesYAML, spec.ModuleName, dst.EnvType); err != nil {
+		JSONError(w, 40001, err.Error())
+		return
 	}
 	operator := UsernameFromCtx(r)
 	msg := fmt.Sprintf("feat(%s): add module %s", dst.Name, spec.ModuleName)
@@ -853,7 +849,9 @@ type batchReq struct {
 	TargetEnvID    int64 `json:"target_env_id"`
 	Disable        *bool    `json:"disable"`
 	AtLarkIDs      []string `json:"at_lark_ids"`      // 本次临时额外艾特人的 Lark ID
-	SkipImageCheck bool     `json:"skip_image_check"` // [debug-skip-img] 临时调试开关：跳过缺镜像校验，测完删
+	// 待新建 tidb 密钥名 → database（批量新增填；salt/crypt 后端自动复用现有）。
+	// 预览阶段可空（只用来算待新建清单）；提交时每条待新建 tidb 都必须有。
+	SecretDatabases map[string]string `json:"secret_databases"`
 	Rows        []struct {
 		ModuleName string   `json:"module_name"`
 		Namespace  string   `json:"namespace"`
@@ -862,29 +860,75 @@ type batchReq struct {
 	} `json:"rows"`
 }
 
+// batchPendingSecret 批量新增里一条「引用了但目标环境 z-kv 还没有」的待新建密钥（跨行汇总去重）。
+// Modules = 引用它的模块列表：>1（各模块都引用，如 uid）=环境共享，只建一次；=1=模块专属。
+type batchPendingSecret struct {
+	Name      string   `json:"name"`
+	Type      string   `json:"type"`      // tidb | opaque
+	Namespace string   `json:"namespace"` // 首个引用它的模块的 namespace
+	Modules   []string `json:"modules"`
+}
+
+// collectBatchPending 读一次目标环境 z-kv，扫每行 values 的 extraEnvVars，汇总去重出「待新建」密钥 + 环境公共 salt/crypt。
+func collectBatchPending(ctx context.Context, gs *services.GitService, dst *models.ProjectEnv, rows []services.BatchRow) (pending []batchPendingSecret, salt, crypt string) {
+	existset := map[string]bool{}
+	if err := gs.EnsureClone(ctx, dst.Name, dst.GitRepo, dst.GitBranch); err == nil {
+		if raw, err := gs.ReadFile(dst.Name, zkvSecretsPathForEnv(dst)+"/values.yaml"); err == nil {
+			for _, n := range services.ZkvSecretNames(raw) {
+				existset[n] = true
+			}
+			salt, crypt = services.ZkvTidbDefaults(raw)
+		}
+	}
+	order := []string{}
+	byName := map[string]*batchPendingSecret{}
+	for _, row := range rows {
+		for _, ref := range services.ExtraEnvVarNames(row.ValuesYAML) {
+			if existset[ref] {
+				continue // 已存在 → 复用，不列
+			}
+			p := byName[ref]
+			if p == nil {
+				typ := "opaque"
+				if strings.HasSuffix(ref, "-tidb-secret") {
+					typ = "tidb"
+				}
+				p = &batchPendingSecret{Name: ref, Type: typ, Namespace: row.Namespace}
+				byName[ref] = p
+				order = append(order, ref)
+			}
+			p.Modules = append(p.Modules, row.ModuleName)
+		}
+	}
+	for _, n := range order {
+		pending = append(pending, *byName[n])
+	}
+	return pending, salt, crypt
+}
+
 // buildBatch 解析请求 → base spec + 每行(模块名/namespace/派生values)。每行 values 用模板派生预填。
-func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []services.BatchRow, *models.ProjectEnv, bool) {
+func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []services.BatchRow, *models.ProjectEnv, []batchPendingSecret, bool) {
 	base, tpl, dst, err := buildSpec(req.TemplateID, req.TargetEnvID, "", "")
 	if err != nil {
 		JSONError(w, 40001, err.Error())
-		return base, nil, nil, false
+		return base, nil, nil, nil, false
 	}
 	src, err := loadEnvGit("name=?", tpl.SrcEnv)
 	if err != nil {
 		JSONError(w, 40001, "样板环境不存在")
-		return base, nil, nil, false
+		return base, nil, nil, nil, false
 	}
 	gs := getGitService()
 	ctx, cancel := services.GitCtx(context.Background(), 60)
 	defer cancel()
 	if err := gs.EnsureClone(ctx, src.Name, src.GitRepo, src.GitBranch); err != nil {
 		InternalErr(w, nil, fmt.Errorf("同步样板仓库失败: %w", err))
-		return base, nil, nil, false
+		return base, nil, nil, nil, false
 	}
 	raw, err := gs.ReadFile(src.Name, base.SrcChartBasePath+"/"+base.SrcService+"/values.yaml")
 	if err != nil {
 		JSONError(w, 40400, "样板 values.yaml 不存在")
-		return base, nil, nil, false
+		return base, nil, nil, nil, false
 	}
 	if req.Disable != nil {
 		base.Disable = *req.Disable
@@ -900,7 +944,7 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 		}
 		if err := validModuleName(name); err != nil {
 			JSONError(w, 40001, err.Error())
-			return base, nil, nil, false
+			return base, nil, nil, nil, false
 		}
 		if ns == "" {
 			ns = defaultNamespaceForEnv(dst) // 空则回落环境默认 namespace（前端一般已自动填）
@@ -947,9 +991,26 @@ func buildBatch(req batchReq, w http.ResponseWriter) (services.ModuleSpec, []ser
 	}
 	if len(rows) == 0 {
 		JSONError(w, 40001, "没有有效的模块行")
-		return base, nil, nil, false
+		return base, nil, nil, nil, false
 	}
-	return base, rows, dst, true
+	// 待新建密钥（批量）：汇总去重各行引用但 z-kv 里没有的密钥；把填了 database 的 tidb 密钥挂到
+	// base.NewTidbSecrets（每行写 z-kv 幂等去重，环境共享的 uid 只会落一条）。salt/crypt 自动复用现有。
+	pending, salt, crypt := collectBatchPending(ctx, gs, dst, rows)
+	base.ZkvSecretsPath = zkvSecretsPathForEnv(dst)
+	for _, p := range pending {
+		if p.Type != "tidb" {
+			continue
+		}
+		db := strings.TrimSpace(req.SecretDatabases[p.Name])
+		if db == "" {
+			continue // 预览阶段没填 / 提交时由调用方校验
+		}
+		base.NewTidbSecrets = append(base.NewTidbSecrets, services.TidbSecretEntry{
+			Name: p.Name, Namespace: p.Namespace, Database: db,
+			Extra: []services.KV{{Key: "TIDB_PWDSALT", Value: salt}, {Key: "TIDB_PWDCRYPT", Value: crypt}},
+		})
+	}
+	return base, rows, dst, pending, true
 }
 
 // POST /api/orchestration/batch-preview
@@ -958,7 +1019,7 @@ func HandleBatchPreview(w http.ResponseWriter, r *http.Request) {
 	if !DecodeJSON(w, r, &req) {
 		return
 	}
-	base, rows, _, ok := buildBatch(req, w)
+	base, rows, _, pending, ok := buildBatch(req, w)
 	if !ok {
 		return
 	}
@@ -970,7 +1031,13 @@ func HandleBatchPreview(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, 40001, err.Error())
 		return
 	}
-	JSONSuccess(w, res)
+	// 带上「待新建密钥」清单（去重，含引用它的模块）供前端填 database；沿用 BatchResult 的字段名不变。
+	JSONSuccess(w, map[string]interface{}{
+		"rows":            res.Rows,
+		"changed_files":   res.ChangedFiles,
+		"all_ok":          res.AllOK,
+		"pending_secrets": pending,
+	})
 }
 
 // POST /api/orchestration/batch-submit
@@ -979,9 +1046,16 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 	if !DecodeJSON(w, r, &req) {
 		return
 	}
-	base, rows, dst, ok := buildBatch(req, w)
+	base, rows, dst, pending, ok := buildBatch(req, w)
 	if !ok {
 		return
+	}
+	// 待新建的 tidb 密钥必须都填了 database 才能提交（salt/crypt 后端自动，无需填）。
+	for _, p := range pending {
+		if p.Type == "tidb" && strings.TrimSpace(req.SecretDatabases[p.Name]) == "" {
+			JSONError(w, 40001, "待新建密钥 "+p.Name+" 需填写 database（批量密钥区）")
+			return
+		}
 	}
 	perm := envPermissionCode(dst.EnvType)
 	if !HasButton(r, perm) {
@@ -989,13 +1063,10 @@ func HandleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 缺镜像硬卡：任一行的镜像在 Harbor 缺失就禁止整批提交
-	// [debug-skip-img] 临时调试开关勾上时跳过（测完删）
-	if !req.SkipImageCheck {
-		for _, rr := range rows {
-			if err := verifyImageForSubmit(rr.ValuesYAML, rr.ModuleName, dst.EnvType); err != nil {
-				JSONError(w, 40001, err.Error())
-				return
-			}
+	for _, rr := range rows {
+		if err := verifyImageForSubmit(rr.ValuesYAML, rr.ModuleName, dst.EnvType); err != nil {
+			JSONError(w, 40001, err.Error())
+			return
 		}
 	}
 	operator := UsernameFromCtx(r)
