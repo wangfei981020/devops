@@ -533,27 +533,25 @@ func buildCnameOriginResolver(db *sql.DB) func(string) (string, string) {
 		}
 		rrows.Close()
 	}
-	var resolve func(string, int) string
-	resolve = func(fqdn string, depth int) string {
+	// 沿 CNAME 链逐跳解析（≤6 跳）：每个节点先看 A 记录(解析优先)，没 A 就跟 CNAME 往下(可能拿到下游 A/规则)，
+	// 下游拿不到再看本节点有没有规则(规则兜底)。这样规则配在链上任意一环都能被上游继承。
+	var resolve func(string, int) (string, string)
+	resolve = func(fqdn string, depth int) (string, string) {
 		if depth < 0 {
-			return ""
+			return "", ""
 		}
-		if ips := aIdx[fqdn]; len(ips) > 0 {
-			return strings.Join(ips, ",")
+		if ips := aIdx[fqdn]; len(ips) > 0 { // ① 本节点有 A 记录 → 解析（最真实）
+			return strings.Join(ips, ","), "解析"
 		}
-		if tgt, ok := cIdx[fqdn]; ok && tgt != fqdn {
-			return resolve(tgt, depth-1)
+		if tgt, ok := cIdx[fqdn]; ok && tgt != fqdn { // ② 跟 CNAME 往下（优先找到真实 A/下游规则）
+			if ip, src := resolve(tgt, depth-1); ip != "" {
+				return ip, src
+			}
 		}
-		return ""
-	}
-	return func(cname string) (string, string) {
-		key := normFQDN(cname)
-		if ip := resolve(key, 3); ip != "" { // ② DNS 解析最真实，优先
-			return ip, "解析"
-		}
-		if ip, ok := ruleIdx[key]; ok { // ③ 规则兜底
+		if ip, ok := ruleIdx[fqdn]; ok { // ③ 本节点有规则 → 规则兜底
 			return ip, "规则"
 		}
 		return "", ""
 	}
+	return func(cname string) (string, string) { return resolve(normFQDN(cname), 6) }
 }
