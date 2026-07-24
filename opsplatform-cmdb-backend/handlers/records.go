@@ -28,6 +28,66 @@ func (h *RecordHandler) Register(r *gin.RouterGroup) {
 	r.DELETE("/records/:id", h.Delete)
 	r.POST("/records/:id/check-cert", h.CheckCert)
 	r.POST("/domains/:ciid/check-all-certs", h.CheckAllCerts)
+	// 源站映射规则（回源CNAME → 源站IP）
+	r.GET("/origin-rules", h.ListOriginRules)
+	r.POST("/origin-rules", h.UpsertOriginRule)
+	r.DELETE("/origin-rules/:id", h.DeleteOriginRule)
+}
+
+// ListOriginRules 列出源站映射规则 + 每条"用到 N 条"（有多少业务解析回源到这个 CNAME）。
+func (h *RecordHandler) ListOriginRules(c *gin.Context) {
+	rows, err := h.DB.Query(`SELECT r.id, r.cname, r.origin_ip,
+			(SELECT COUNT(*) FROM domain_records dr WHERE LOWER(dr.cname)=LOWER(r.cname)) AS used,
+			DATE_FORMAT(r.updated_at,'%Y-%m-%d %H:%i')
+		FROM origin_ip_rules r ORDER BY used DESC, r.cname`)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	type ruleOut struct {
+		ID        int64  `json:"id"`
+		Cname     string `json:"cname"`
+		OriginIP  string `json:"origin_ip"`
+		Used      int    `json:"used"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	out := []ruleOut{}
+	for rows.Next() {
+		var o ruleOut
+		if rows.Scan(&o.ID, &o.Cname, &o.OriginIP, &o.Used, &o.UpdatedAt) == nil {
+			out = append(out, o)
+		}
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// UpsertOriginRule 新增/更新一条规则（按 cname 唯一，upsert）。
+func (h *RecordHandler) UpsertOriginRule(c *gin.Context) {
+	var in struct {
+		Cname    string `json:"cname"`
+		OriginIP string `json:"origin_ip"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || strings.TrimSpace(in.Cname) == "" {
+		c.JSON(400, gin.H{"error": "回源 CNAME 必填"})
+		return
+	}
+	if _, err := h.DB.Exec(`INSERT INTO origin_ip_rules (cname, origin_ip) VALUES (?, ?)
+		ON DUPLICATE KEY UPDATE origin_ip=VALUES(origin_ip)`, strings.TrimSpace(in.Cname), strings.TrimSpace(in.OriginIP)); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	WriteAudit(h.DB, c, "origin_rule_upsert", in.Cname)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// DeleteOriginRule 删除一条规则。
+func (h *RecordHandler) DeleteOriginRule(c *gin.Context) {
+	if _, err := h.DB.Exec(`DELETE FROM origin_ip_rules WHERE id=?`, c.Param("id")); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 type flatRecordOut struct {
@@ -40,9 +100,10 @@ type flatRecordOut struct {
 	CdnID        *int   `json:"cdn_id"`
 	CdnName      string `json:"cdn_name"`
 	Cname        string `json:"cname"`
-	OriginIP     string `json:"origin_ip"`
-	AutoOriginIP string `json:"auto_origin_ip"` // 手填 origin_ip 为空时，由回源 CNAME 在已同步 DNS 里解析出的推测源站IP（不落库，仅展示）
-	CertExpiryAt string `json:"cert_expiry_at"`
+	OriginIP      string `json:"origin_ip"`
+	AutoOriginIP  string `json:"auto_origin_ip"`  // 手填 origin_ip 为空时的推测源站IP（不落库，仅展示）：DNS 解析优先，查不到用映射规则兜底
+	AutoOriginSrc string `json:"auto_origin_src"` // 推测来源：解析(DNS查A记录) / 规则(源站映射) / 空
+	CertExpiryAt  string `json:"cert_expiry_at"`
 	CertCheckMsg string `json:"cert_check_msg"`
 	Project      string `json:"project"`
 	Env          string `json:"env"`
@@ -99,9 +160,9 @@ func (h *RecordHandler) ListAll(c *gin.Context) {
 		o.Stale = stale == 1
 		o.Ignored = ignored == 1
 		o.FQDN = recordFQDN(o.Host, o.Domain)
-		// 手填源站IP为空且有回源CNAME时，从已同步 DNS 解析出推测源站IP（不落库，仅展示，手填优先）
+		// 手填源站IP为空且有回源CNAME时，推测源站IP（不落库，仅展示，手填优先）：DNS解析优先，查不到用规则兜底
 		if o.OriginIP == "" && o.Cname != "" {
-			o.AutoOriginIP = resolveOrigin(o.Cname)
+			o.AutoOriginIP, o.AutoOriginSrc = resolveOrigin(o.Cname)
 		}
 		if cdnID.Valid {
 			v := int(cdnID.Int64)
@@ -437,10 +498,10 @@ func normFQDN(s string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(s), "."))
 }
 
-// buildCnameOriginResolver 从 dns_records 建全局「FQDN → A记录IP / CNAME目标」索引，
-// 返回一个把回源 CNAME 往下解析（跟随 CNAME 链最多 3 跳）找到背后 A 记录的函数：
-// 命中返回逗号拼的 IP（多 A），找不到（外部 CDN / 未同步）返回空串。跨所有已管域名匹配。
-func buildCnameOriginResolver(db *sql.DB) func(string) string {
+// buildCnameOriginResolver 从 dns_records 建全局「FQDN → A记录IP / CNAME目标」索引 + origin_ip_rules 映射规则，
+// 返回一个推测源站IP 的函数：回源 CNAME 先跟随 CNAME 链(≤3跳)找 A 记录(命中→"解析")；
+// 查不到再用映射规则兜底(命中→"规则")；都没有返回("", "")。跨所有已管域名匹配。
+func buildCnameOriginResolver(db *sql.DB) func(string) (string, string) {
 	aIdx := map[string][]string{} // fqdn -> A 记录 IP 列表
 	cIdx := map[string]string{}    // fqdn -> CNAME 目标 fqdn
 	rows, err := db.Query(`SELECT dr.type, dr.name, c.name, dr.data
@@ -461,6 +522,17 @@ func buildCnameOriginResolver(db *sql.DB) func(string) string {
 		}
 		rows.Close()
 	}
+	ruleIdx := map[string]string{} // 回源CNAME(归一化) -> 源站IP（映射规则兜底）
+	rrows, rerr := db.Query(`SELECT cname, origin_ip FROM origin_ip_rules WHERE origin_ip<>''`)
+	if rerr == nil {
+		for rrows.Next() {
+			var cname, ip string
+			if rrows.Scan(&cname, &ip) == nil {
+				ruleIdx[normFQDN(cname)] = ip
+			}
+		}
+		rrows.Close()
+	}
 	var resolve func(string, int) string
 	resolve = func(fqdn string, depth int) string {
 		if depth < 0 {
@@ -474,5 +546,14 @@ func buildCnameOriginResolver(db *sql.DB) func(string) string {
 		}
 		return ""
 	}
-	return func(cname string) string { return resolve(normFQDN(cname), 3) }
+	return func(cname string) (string, string) {
+		key := normFQDN(cname)
+		if ip := resolve(key, 3); ip != "" { // ② DNS 解析最真实，优先
+			return ip, "解析"
+		}
+		if ip, ok := ruleIdx[key]; ok { // ③ 规则兜底
+			return ip, "规则"
+		}
+		return "", ""
+	}
 }

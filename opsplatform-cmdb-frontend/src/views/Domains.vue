@@ -7,6 +7,7 @@
         <el-button v-if="selected.length && statusView !== 'ignored'" :icon="Hide" @click="openIgnore(selected)">批量忽略（{{ selected.length }}）</el-button>
         <el-button v-if="selected.length && statusView === 'ignored'" type="success" :icon="View" @click="doUnignore(selected)">取消忽略（{{ selected.length }}）</el-button>
         <el-button :icon="Download" @click="exportCsv">导出Excel</el-button>
+        <el-button :icon="Connection" @click="openRules">源站映射</el-button>
         <el-button type="warning" :icon="Operation" @click="openAssign">批量分配</el-button>
         <el-tooltip content="只刷库里已有域名的 DNS 解析；发现新域名请去「DNS 记录」页点右上「从数据源同步」" placement="top">
           <el-button :icon="Refresh" :loading="syncingAll" @click="syncAll">刷新已有域名的解析</el-button>
@@ -86,15 +87,18 @@
         <el-table-column label="回源CNAME" min-width="180" show-overflow-tooltip><template #default="{ row }">
           <span class="mono">{{ row.cname || '—' }}</span>
         </template></el-table-column>
-        <el-table-column label="源站IP" min-width="170" show-overflow-tooltip><template #default="{ row }">
+        <el-table-column label="源站IP" min-width="180" show-overflow-tooltip><template #default="{ row }">
           <span v-if="row.origin_ip" class="mono">{{ row.origin_ip }}</span>
           <span v-else-if="row.auto_origin_ip" class="mono">
             {{ row.auto_origin_ip }}
-            <el-tooltip content="由回源 CNAME 在已同步 DNS 里解析得到；手填后以手填为准" placement="top">
-              <el-tag size="small" type="info" effect="plain" style="margin-left:4px">自动</el-tag>
+            <el-tooltip :content="row.auto_origin_src === '规则' ? '来自源站映射规则（DNS 查不到时兜底）' : '由回源 CNAME 在已同步 DNS 里解析 A 记录得到'" placement="top">
+              <el-tag size="small" :type="row.auto_origin_src === '规则' ? 'warning' : 'info'" effect="plain" style="margin-left:4px">自动·{{ row.auto_origin_src }}</el-tag>
             </el-tooltip>
           </span>
-          <span v-else class="mono">—</span>
+          <span v-else class="mono">
+            —
+            <el-button v-if="row.cname" link type="primary" size="small" style="margin-left:4px" @click="openRuleFor(row)">+ 配源站</el-button>
+          </span>
         </template></el-table-column>
         <el-table-column prop="cert_expiry_at" label="证书到期" width="140" sortable="custom"><template #default="{ row }">
           <el-tooltip :disabled="!row.cert_check_msg" :content="row.cert_check_msg">
@@ -291,6 +295,36 @@
       <template #footer><el-button @click="bDlg=false">取消</el-button><el-button type="primary" @click="saveBulk">应用到 {{ selected.length }} 条</el-button></template>
     </el-dialog>
 
+    <!-- 源站映射规则管理（回源CNAME → 源站IP，全局） -->
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="rulesDlg" title="源站映射（回源CNAME → 源站IP）" width="640px">
+      <div class="muted" style="margin-bottom:10px">优先级：手填 &gt; DNS 解析 &gt; 本规则。规则只兜底 DNS 查不到的（如外部真 CDN）。一个回源 CNAME 一条。</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <el-input v-model="ruleForm.cname" placeholder="回源 CNAME" style="flex:1" />
+        <el-input v-model="ruleForm.origin_ip" placeholder="源站IP（多个逗号分隔）" style="width:220px" />
+        <el-button type="primary" :icon="Plus" @click="saveRule">保存</el-button>
+      </div>
+      <el-table :data="rules" size="small" max-height="360" v-loading="rulesLoading">
+        <el-table-column label="回源 CNAME" prop="cname" min-width="220" show-overflow-tooltip />
+        <el-table-column label="源站IP" prop="origin_ip" min-width="150" show-overflow-tooltip />
+        <el-table-column label="用到" width="80"><template #default="{ row }"><el-tag size="small" type="info" effect="plain">{{ row.used }} 条</el-tag></template></el-table-column>
+        <el-table-column label="操作" width="100"><template #default="{ row }">
+          <el-button link type="primary" :icon="Edit" @click="editRule(row)" />
+          <el-button link type="danger" :icon="Delete" @click="removeRule(row)" />
+        </template></el-table-column>
+      </el-table>
+      <template #footer><el-button @click="rulesDlg=false">关闭</el-button></template>
+    </el-dialog>
+
+    <!-- 行内「+配源站」：为某条记录的回源 CNAME 快速配规则 -->
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="ruleOneDlg" title="配置源站映射" width="480px">
+      <el-form label-width="90px">
+        <el-form-item label="回源 CNAME"><span class="mono">{{ ruleForm.cname }}</span></el-form-item>
+        <el-form-item label="源站IP"><el-input v-model="ruleForm.origin_ip" placeholder="源站IP（多个逗号分隔）" /></el-form-item>
+      </el-form>
+      <div class="muted" style="font-size:12px">保存后：所有回源到「{{ ruleForm.cname }}」的记录，源站IP 空的都会自动显示此值（标「自动·规则」）；DNS 能查到 A 记录的仍以解析为准。</div>
+      <template #footer><el-button @click="ruleOneDlg=false">取消</el-button><el-button type="primary" @click="saveRuleOne">保存规则</el-button></template>
+    </el-dialog>
+
     <!-- 批量分配：项目/环境选一次，多个模块各带一批域名（完整 FQDN 精确匹配，找不到跳过） -->
     <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="aDlg" title="批量分配" width="660px">
       <template v-if="!aResult">
@@ -411,11 +445,12 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, InfoFilled } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, InfoFilled, Connection } from '@element-plus/icons-vue'
 import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
 import { useDomainFilter } from '../composables/useDomainFilter'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgnoreRecords, deleteRecord, checkRecordCert,
-  syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains, bulkIgnoreDomains } from '../api/cmdb'
+  syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains, bulkIgnoreDomains,
+  listOriginRules, upsertOriginRule, deleteOriginRule } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
@@ -634,6 +669,34 @@ function editFromDetail() { dDlg.value = false; openEdit(detail.value) }
 function openBulk() {
   bForm.value = { setProject: false, project: '', setEnv: false, env: '', setModule: false, module: '', setCdn: false, cdn_id: null, setCname: false, cname: '', setOriginIP: false, origin_ip: '' }
   bDlg.value = true
+}
+
+// —— 源站映射规则 ——
+const rulesDlg = ref(false), ruleOneDlg = ref(false), rulesLoading = ref(false)
+const rules = ref([])
+const ruleForm = ref({ cname: '', origin_ip: '' })
+async function loadRules() {
+  rulesLoading.value = true
+  try { rules.value = await listOriginRules() } catch (e) { rules.value = [] } finally { rulesLoading.value = false }
+}
+function openRules() { ruleForm.value = { cname: '', origin_ip: '' }; rulesDlg.value = true; loadRules() }
+function editRule(row) { ruleForm.value = { cname: row.cname, origin_ip: row.origin_ip } }
+async function saveRule() {
+  if (!ruleForm.value.cname.trim()) { ElMessage.warning('回源 CNAME 必填'); return }
+  try { await upsertOriginRule({ cname: ruleForm.value.cname.trim(), origin_ip: ruleForm.value.origin_ip.trim() })
+    ElMessage.success('已保存'); ruleForm.value = { cname: '', origin_ip: '' }; loadRules(); load() }
+  catch (e) { ElMessage.error(e.response?.data?.error || '保存失败') }
+}
+async function removeRule(row) {
+  try { await app.showConfirm(`删除规则「${row.cname} → ${row.origin_ip}」？回源到它的记录源站IP 将回到空/DNS解析`)
+    await deleteOriginRule(row.id); ElMessage.success('已删除'); loadRules(); load() }
+  catch (e) { if (e !== 'cancel') ElMessage.error(e.response?.data?.error || '删除失败') }
+}
+function openRuleFor(row) { ruleForm.value = { cname: row.cname, origin_ip: '' }; ruleOneDlg.value = true }
+async function saveRuleOne() {
+  try { await upsertOriginRule({ cname: ruleForm.value.cname.trim(), origin_ip: ruleForm.value.origin_ip.trim() })
+    ElMessage.success('已保存规则'); ruleOneDlg.value = false; load() }
+  catch (e) { ElMessage.error(e.response?.data?.error || '保存失败') }
 }
 async function saveBulk() {
   const b = bForm.value

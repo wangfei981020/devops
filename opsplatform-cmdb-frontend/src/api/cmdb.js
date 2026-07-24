@@ -25,6 +25,10 @@ export const deleteRecord = (id) => http.delete('/records/' + id).then((r) => r.
 export const checkRecordCert = (id) => http.post(`/records/${id}/check-cert`).then((r) => r.data)
 export const checkAllRecordCerts = (ciid) => http.post(`/domains/${ciid}/check-all-certs`).then((r) => r.data)
 export const syncDomainRecords = (ciid) => http.post(`/domains/${ciid}/sync-records`).then((r) => r.data)
+// 源站映射规则（回源CNAME → 源站IP）
+export const listOriginRules = () => http.get('/origin-rules').then((r) => r.data)
+export const upsertOriginRule = (b) => http.post('/origin-rules', b).then((r) => r.data)
+export const deleteOriginRule = (id) => http.delete('/origin-rules/' + id).then((r) => r.data)
 
 // DNS 记录（厂商原始记录缓存，只读）
 export const listDnsRecords = (ciid) => http.get(`/domains/${ciid}/dns-records`).then((r) => r.data)
