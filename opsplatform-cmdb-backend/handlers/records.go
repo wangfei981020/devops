@@ -109,10 +109,11 @@ type flatRecordOut struct {
 	Env          string `json:"env"`
 	Module       string `json:"module"`
 	Operator     string `json:"operator"`
-	Origin        string `json:"origin"`         // 所属主域名来源：manual/sync
-	SourceName    string `json:"source_name"`    // 数据源/注册商名（GoDaddy 等）
-	ProjectStatus string `json:"project_status"` // 所属项目的生命周期状态（顺着 project 关联）
-	DomainStatus  string `json:"domain_status"`  // 所属主域名的生命周期状态
+	Origin       string `json:"origin"`        // 所属主域名来源：manual/sync
+	SourceName   string `json:"source_name"`   // 数据源/注册商名（GoDaddy 等）
+	DomainStatus string `json:"domain_status"` // 所属主域名的生命周期状态
+	DomainStale  bool   `json:"domain_stale"`  // 所属主域名是否已移出账号/过户（stale）
+	DomainGone   string `json:"domain_gone"`   // 主域名失效标签：已过户/已移出账号/已取消/已失效（stale 时）
 	Ignored      bool   `json:"ignored"`
 	IgnoreReason string `json:"ignore_reason"`
 	Stale        bool   `json:"stale"`
@@ -122,26 +123,28 @@ type flatRecordOut struct {
 // ListAll 拉平所有域名下的解析记录：一行一个「主机头.域名」，供主机头台账页展示。
 // status: 默认(空/normal)只返回未忽略；ignored=只返回已忽略；all=全部。
 func (h *RecordHandler) ListAll(c *gin.Context) {
-	ignoredCond := "AND r.ignored=0"
+	// status: normal(默认)=未忽略且主域名未忽略未移出 / ignored=记录已忽略 / stale=主域名已移出账号(过户/转出) / all=全部
+	cond := "AND COALESCE(d.ignored,0)=0 AND COALESCE(d.stale,0)=0 AND r.ignored=0"
 	switch c.Query("status") {
 	case "ignored":
-		ignoredCond = "AND r.ignored=1"
+		cond = "AND COALESCE(d.ignored,0)=0 AND r.ignored=1"
+	case "stale":
+		cond = "AND COALESCE(d.ignored,0)=0 AND COALESCE(d.stale,0)=1"
 	case "all":
-		ignoredCond = ""
+		cond = ""
 	}
 	rows, err := h.DB.Query(`
 		SELECT r.id, r.domain_ci_id, c.name, r.host, r.record_type, r.cdn_id, COALESCE(cd.name,''),
 		       r.cname, r.origin_ip, r.cert_expiry_at, r.cert_check_msg,
 		       r.project, r.env, r.module, r.operator,
 		       COALESCE(d.origin,''), COALESCE(reg.name,''), r.ignored, r.ignore_reason, r.stale, r.updated_at,
-		       COALESCE(p.status,''), COALESCE(d.status,'')
+		       COALESCE(d.status,''), COALESCE(d.stale,0), COALESCE(d.source_status,'')
 		FROM domain_records r
 		JOIN cis c ON c.id=r.domain_ci_id
 		LEFT JOIN domains d ON d.ci_id=r.domain_ci_id
 		LEFT JOIN cdns cd ON cd.id=r.cdn_id
 		LEFT JOIN registrars reg ON reg.id=d.registrar_id
-		LEFT JOIN projects p ON p.name=r.project
-		WHERE c.type='domain' AND COALESCE(d.ignored,0)=0 ` + ignoredCond + `
+		WHERE c.type='domain' ` + cond + `
 		ORDER BY r.project, c.name, r.host`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -154,16 +157,21 @@ func (h *RecordHandler) ListAll(c *gin.Context) {
 		var o flatRecordOut
 		var cdnID sql.NullInt64
 		var certExp, updated sql.NullTime
-		var stale, ignored int
+		var stale, ignored, domStale int
+		var srcStatus string
 		if err := rows.Scan(&o.ID, &o.DomainCIID, &o.Domain, &o.Host, &o.RecordType, &cdnID, &o.CdnName,
 			&o.Cname, &o.OriginIP, &certExp, &o.CertCheckMsg,
 			&o.Project, &o.Env, &o.Module, &o.Operator, &o.Origin, &o.SourceName, &ignored, &o.IgnoreReason, &stale, &updated,
-			&o.ProjectStatus, &o.DomainStatus); err != nil {
+			&o.DomainStatus, &domStale, &srcStatus); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 		o.Stale = stale == 1
 		o.Ignored = ignored == 1
+		o.DomainStale = domStale == 1
+		if o.DomainStale {
+			o.DomainGone = domainGoneLabel(srcStatus)
+		}
 		o.FQDN = recordFQDN(o.Host, o.Domain)
 		// 手填源站IP为空且有回源CNAME时，推测源站IP（不落库，仅展示，手填优先）：DNS解析优先，查不到用规则兜底
 		if o.OriginIP == "" && o.Cname != "" {
@@ -496,6 +504,21 @@ func recordFQDN(host, domain string) string {
 		return host
 	}
 	return host + "." + domain
+}
+
+// domainGoneLabel 主域名已移出账号(stale)时，按 GoDaddy source_status 给中文标签。
+func domainGoneLabel(sourceStatus string) string {
+	s := strings.ToUpper(strings.TrimSpace(sourceStatus))
+	switch {
+	case strings.Contains(s, "OWNERSHIP"):
+		return "已过户"
+	case strings.Contains(s, "TRANSFER"):
+		return "已移出账号"
+	case strings.Contains(s, "CANCEL"):
+		return "已取消"
+	default:
+		return "已失效"
+	}
 }
 
 // normFQDN 归一化：去空白、末尾点、转小写，用于回源 CNAME 与 A 记录的 FQDN 匹配。

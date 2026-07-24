@@ -6,6 +6,7 @@
         <el-button v-if="selected.length && statusView !== 'ignored'" type="warning" :icon="EditPen" @click="openBulk">批量设置（{{ selected.length }}）</el-button>
         <el-button v-if="selected.length && statusView !== 'ignored'" :icon="Hide" @click="openIgnore(selected)">批量忽略（{{ selected.length }}）</el-button>
         <el-button v-if="selected.length && statusView === 'ignored'" type="success" :icon="View" @click="doUnignore(selected)">取消忽略（{{ selected.length }}）</el-button>
+        <el-button v-if="selected.length" :icon="Close" @click="clearSel">清空选择（{{ selected.length }}）</el-button>
         <el-button :icon="Download" @click="exportCsv">导出Excel</el-button>
         <el-button :icon="Connection" @click="openRules">源站映射</el-button>
         <el-button type="warning" :icon="Operation" @click="openAssign">批量分配</el-button>
@@ -63,9 +64,10 @@
             <span :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: s.color, marginRight:'6px' }" />{{ s.label }}
           </el-option>
         </el-select>
-        <el-select v-model="statusView" style="width:110px" @change="onStatusChange">
+        <el-select v-model="statusView" style="width:130px" @change="onStatusChange">
           <el-option label="正常" value="normal" />
           <el-option label="已忽略" value="ignored" />
+          <el-option label="已移出/过户" value="stale" />
           <el-option label="全部" value="all" />
         </el-select>
         <el-button type="primary" :icon="Search" @click="doSearch">搜索</el-button>
@@ -86,12 +88,14 @@
         :default-sort="{ prop: 'project', order: 'ascending' }" @sort-change="onSort"
         @selection-change="(v) => selected = v">
         <el-table-column type="selection" width="42" reserve-selection />
-        <el-table-column prop="project" label="项目" width="150" sortable="custom"><template #default="{ row }">
-          <el-tag v-if="row.project" size="small" effect="plain" :style="tagStyle(projectColor(row.project))">{{ row.project }}</el-tag>
+        <el-table-column prop="project" label="项目" width="170" sortable="custom"><template #default="{ row }">
+          <template v-if="projList(row.project).length">
+            <span v-for="p in projList(row.project)" :key="p" style="display:inline-flex;align-items:center;margin-right:4px">
+              <el-tag size="small" effect="plain" :style="tagStyle(projectColor(p))">{{ p }}</el-tag>
+              <el-tooltip v-if="projStatus(p)" :content="p + ' 项目状态：' + projStatus(p)"><span :style="dotStyle(app.statusColor(projStatus(p)))" /></el-tooltip>
+            </span>
+          </template>
           <span v-else class="muted">—</span>
-          <el-tooltip v-if="row.project_status" :content="'项目状态：' + row.project_status">
-            <span :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: app.statusColor(row.project_status), marginLeft:'5px', verticalAlign:'middle' }" />
-          </el-tooltip>
         </template></el-table-column>
         <el-table-column prop="env" label="环境" width="100" sortable="custom"><template #default="{ row }">
           <el-tag v-if="row.env" size="small" effect="plain" :style="tagStyle(envColor(row.env))">{{ row.env }}</el-tag>
@@ -99,8 +103,9 @@
         </template></el-table-column>
         <el-table-column prop="module" label="模块" width="120" sortable="custom"><template #default="{ row }">{{ row.module || '—' }}</template></el-table-column>
         <el-table-column prop="fqdn" label="域名" min-width="230" sortable="custom" show-overflow-tooltip><template #default="{ row }">
-          <span class="mono" :class="{ stale: row.stale, ignored: row.ignored }">{{ row.fqdn }}</span>
-          <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">已移出账号</el-tag>
+          <span class="mono" :class="{ stale: row.stale || row.domain_stale, ignored: row.ignored }">{{ row.fqdn }}</span>
+          <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">解析已移出</el-tag>
+          <el-tag v-if="row.domain_stale" type="danger" size="small" style="margin-left:6px">主域名{{ row.domain_gone }}</el-tag>
           <el-tag v-if="row.domain_status" size="small" effect="plain" :style="tagStyle(app.statusColor(row.domain_status))" style="margin-left:6px">{{ row.domain_status }}</el-tag>
           <el-tooltip v-if="row.ignored" :disabled="!row.ignore_reason" :content="row.ignore_reason">
             <el-tag type="info" size="small" style="margin-left:6px">已忽略</el-tag>
@@ -159,8 +164,10 @@
         <el-collapse-item v-for="g in pagedGroups" :key="g.key" :name="g.key">
           <template #title>
             <div style="display:flex;align-items:center;gap:8px;flex:1;flex-wrap:wrap">
-              <el-tag v-if="g.project" size="small" effect="plain" :style="tagStyle(projectColor(g.project))">{{ g.project }}</el-tag>
-              <span v-if="g.project_status" :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: app.statusColor(g.project_status) }" :title="'项目状态：'+g.project_status" />
+              <span v-for="p in projList(g.project)" :key="p" style="display:inline-flex;align-items:center">
+                <el-tag size="small" effect="plain" :style="tagStyle(projectColor(p))">{{ p }}</el-tag>
+                <span v-if="projStatus(p)" :style="dotStyle(app.statusColor(projStatus(p)))" :title="p+' 项目状态：'+projStatus(p)" />
+              </span>
               <el-tag v-if="g.env" size="small" effect="plain" :style="tagStyle(envColor(g.env))">{{ g.env }}</el-tag>
               <b style="font-size:13px">{{ g.module || '（无模块）' }}</b>
               <span class="muted">{{ g.count }} 域名</span>
@@ -340,7 +347,7 @@
           <span v-if="synced" class="muted" style="margin-left:8px">同步来的，域名/回源CNAME 只读，可改业务字段</span>
         </el-form-item>
         <el-form-item label="项目">
-          <el-select v-model="form.project" filterable clearable placeholder="选择项目" style="width:260px">
+          <el-select v-model="formProjectArr" multiple filterable clearable collapse-tags collapse-tags-tooltip placeholder="可选多个项目（共享域名）" style="width:260px">
             <el-option v-for="p in app.projects" :key="p.id" :label="p.name" :value="p.name" />
           </el-select>
         </el-form-item>
@@ -373,7 +380,7 @@
       <el-form :model="bForm" label-width="72px">
         <el-form-item label="项目">
           <el-switch v-model="bForm.setProject" style="margin-right:10px" />
-          <el-select v-model="bForm.project" :disabled="!bForm.setProject" filterable clearable placeholder="选择项目" style="width:240px">
+          <el-select v-model="bForm.project" :disabled="!bForm.setProject" multiple filterable clearable collapse-tags collapse-tags-tooltip placeholder="可选多个（共享域名）；留空=清除" style="width:240px">
             <el-option v-for="p in app.projects" :key="p.id" :label="p.name" :value="p.name" />
           </el-select>
         </el-form-item>
@@ -524,7 +531,8 @@
         <el-descriptions-item label="域名"><span class="mono detail-val">{{ detail.fqdn }}</span></el-descriptions-item>
         <el-descriptions-item label="主机头 / 类型"><span class="mono">{{ detail.host || '@' }}</span> / {{ detail.record_type }}</el-descriptions-item>
         <el-descriptions-item label="项目">
-          <el-tag v-if="detail.project" size="small" effect="plain" :style="tagStyle(projectColor(detail.project))">{{ detail.project }}</el-tag>
+          <el-tag v-for="p in projList(detail.project)" :key="p" size="small" effect="plain" :style="tagStyle(projectColor(p))" style="margin-right:4px">{{ p }}</el-tag>
+          <span v-if="!projList(detail.project).length" class="muted">—</span>
           <span v-else class="muted">—</span>
         </el-descriptions-item>
         <el-descriptions-item label="环境">
@@ -555,7 +563,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, InfoFilled, Connection, ArrowDown } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, InfoFilled, Connection, ArrowDown, Close } from '@element-plus/icons-vue'
 import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
 import { useDomainFilter } from '../composables/useDomainFilter'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgnoreRecords, deleteRecord, checkRecordCert,
@@ -567,6 +575,8 @@ const app = useAppStore()
 const rows = ref([]), allDomains = ref([]), registrars = ref([]), loading = ref(false)
 const checking = ref({}), syncingAll = ref(false)
 const dlg = ref(false), editing = ref(false), form = ref({})
+// 编辑表单：项目多选(数组) ↔ form.project(逗号字符串)
+const formProjectArr = computed({ get: () => projList(form.value.project), set: (v) => { form.value.project = (v || []).join(',') } })
 const selected = ref([]), tableRef = ref()
 const statusView = ref('normal') // normal=未忽略 / ignored / all
 const tab = ref('records') // records=主机头台账 / domains=主域名
@@ -590,6 +600,10 @@ const COOL = ['#3b7dd8', '#5b8ff9', '#269a99', '#5ad8a6', '#6dc8ec', '#9270ca', 
 function hashColor(s) { if (!s) return '#909399'; let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return COOL[h % COOL.length] }
 const ENV_MAP = { PROD: '#3b7dd8', PRD: '#3b7dd8', 生产: '#3b7dd8', UAT: '#269a99', SIT: '#5d7092', PRE: '#9270ca', DEV: '#5ad8a6', 开发: '#5ad8a6', TEST: '#6dc8ec', 测试: '#6dc8ec' }
 function projectColor(name) { const p = app.projects.find((x) => x.name === name); return (p && p.color) || hashColor(name) }
+// 多项目：project 字段逗号分隔存多个项目
+function projList(s) { return (s || '').split(/[,，]/).map((x) => x.trim()).filter(Boolean) }
+function projStatus(name) { const p = app.projects.find((x) => x.name === name); return (p && p.status) || '' }
+function dotStyle(color) { return { display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: color, marginLeft: '4px', verticalAlign: 'middle' } }
 function envColor(e) { if (!e) return '#909399'; const env = app.environments.find((x) => x.code === e); if (env && env.color) return env.color; return ENV_MAP[e.toUpperCase()] || ENV_MAP[e] || hashColor(e) }
 function tagStyle(color) { return { color, borderColor: color + '66', background: color + '14' } }
 // 证书到期：语义告警色（过期红 / 快到期橙 / 正常绿 / 未检测·失败灰）
@@ -606,7 +620,7 @@ function certState(r) {
 
 const distinct = (key) => [...new Set(rows.value.map((r) => r[key]).filter(Boolean))].sort()
 const domainOptions = computed(() => distinct('domain'))
-const projectOptions = computed(() => distinct('project'))
+const projectOptions = computed(() => [...new Set(rows.value.flatMap((r) => projList(r.project)))].sort()) // 多项目：拆分成单个项目
 const envOptions = computed(() => distinct('env'))
 const moduleOptions = computed(() => distinct('module'))
 
@@ -617,11 +631,11 @@ const filteredRows = computed(() => rows.value.filter((r) => {
       (r.module || '').toLowerCase().includes(kw) || (r.cname || '').toLowerCase().includes(kw) ||
       (r.origin_ip || '').toLowerCase().includes(kw) || (r.auto_origin_ip || '').toLowerCase().includes(kw)) &&
     (!q.domain || r.domain === q.domain) &&
-    (!q.project || (q.project === '__none__' ? !r.project : r.project === q.project)) &&
+    (!q.project || (q.project === '__none__' ? !r.project : projList(r.project).includes(q.project))) &&
     (!q.env || (q.env === '__none__' ? !r.env : r.env === q.env)) &&
     (!q.module || (q.module === '__none__' ? !r.module : r.module === q.module)) &&
     (!q.source || r.source_name === q.source) &&
-    (!q.pstatus || r.project_status === q.pstatus)
+    (!q.pstatus || projList(r.project).some((p) => projStatus(p) === q.pstatus))
 }))
 // 外部排序：对全量 filteredRows 先排序，再分页（避免 el-table 只排当前页）
 const sortState = ref({ prop: 'project', order: 'ascending' })
@@ -660,7 +674,7 @@ const moduleGroups = computed(() => {
   for (const r of sortedRows.value) {
     const key = `${r.project || ''}|${r.env || ''}|${r.module || ''}`
     let g = map.get(key)
-    if (!g) { g = { key, project: r.project, env: r.env, module: r.module, project_status: r.project_status, rows: [] }; map.set(key, g) }
+    if (!g) { g = { key, project: r.project, env: r.env, module: r.module, rows: [] }; map.set(key, g) }
     g.rows.push(r)
   }
   return [...map.values()].map((g) => {
@@ -819,7 +833,7 @@ async function doUnignore(list) {
 function openDetail(row) { detail.value = row; dDlg.value = true }
 function editFromDetail() { dDlg.value = false; openEdit(detail.value) }
 function openBulk() {
-  bForm.value = { setProject: false, project: '', setEnv: false, env: '', setModule: false, module: '', setCdn: false, cdn_id: null, setCname: false, cname: '', setOriginIP: false, origin_ip: '' }
+  bForm.value = { setProject: false, project: [], setEnv: false, env: '', setModule: false, module: '', setCdn: false, cdn_id: null, setCname: false, cname: '', setOriginIP: false, origin_ip: '' }
   bDlg.value = true
 }
 
@@ -853,7 +867,7 @@ async function saveRuleOne() {
 async function saveBulk() {
   const b = bForm.value
   const payload = { ids: selected.value.map((r) => r.id) }
-  if (b.setProject) payload.project = b.project || ''
+  if (b.setProject) payload.project = (b.project || []).join(',')
   if (b.setEnv) payload.env = b.env || ''
   if (b.setModule) payload.module = b.module || ''
   if (b.setCdn) { payload.set_cdn = true; payload.cdn_id = b.cdn_id ?? null }
@@ -864,9 +878,11 @@ async function saveBulk() {
   }
   try {
     const r = await bulkUpdateRecords(payload)
-    ElMessage.success(`已批量更新 ${r.updated} 条`); bDlg.value = false; load()
+    ElMessage.success(`已批量更新 ${r.updated} 条`); bDlg.value = false; tableRef.value?.clearSelection(); load()
   } catch (e) { ElMessage.error(e.response?.data?.error || '批量设置失败') }
 }
+// 无条件清空选择（含 reserve-selection 跨页/跨筛选记着的），解决"取消全选跨筛选点不动"
+function clearSel() { tableRef.value?.clearSelection(); selected.value = [] }
 // —— 批量分配：项目/环境统一，多个模块块各带一批 FQDN，完整精确匹配 ——
 function parseDomains(s) { return (s || '').split(/[\n,;，；]+/).map((x) => x.trim().toLowerCase()).filter(Boolean) }
 function countDomains(s) { return parseDomains(s).length }

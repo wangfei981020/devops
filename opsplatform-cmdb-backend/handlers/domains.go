@@ -273,6 +273,8 @@ func (h *DomainHandler) Delete(c *gin.Context) {
 	ciID := c.Param("ciid")
 	tx, _ := h.DB.Begin()
 	for _, stmt := range []string{
+		`DELETE FROM domain_records WHERE domain_ci_id=?`, // 级联删业务解析（否则孤儿数据）
+		`DELETE FROM dns_records WHERE domain_ci_id=?`,    // 级联删厂商原始记录
 		`DELETE FROM ci_labels WHERE ci_id=?`,
 		`DELETE FROM domains WHERE ci_id=?`,
 		`DELETE FROM cis WHERE id=? AND type='domain'`,
