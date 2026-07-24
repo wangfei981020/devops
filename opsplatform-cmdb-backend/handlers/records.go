@@ -109,8 +109,10 @@ type flatRecordOut struct {
 	Env          string `json:"env"`
 	Module       string `json:"module"`
 	Operator     string `json:"operator"`
-	Origin       string `json:"origin"`      // 所属主域名来源：manual/sync
-	SourceName   string `json:"source_name"` // 数据源/注册商名（GoDaddy 等）
+	Origin        string `json:"origin"`         // 所属主域名来源：manual/sync
+	SourceName    string `json:"source_name"`    // 数据源/注册商名（GoDaddy 等）
+	ProjectStatus string `json:"project_status"` // 所属项目的生命周期状态（顺着 project 关联）
+	DomainStatus  string `json:"domain_status"`  // 所属主域名的生命周期状态
 	Ignored      bool   `json:"ignored"`
 	IgnoreReason string `json:"ignore_reason"`
 	Stale        bool   `json:"stale"`
@@ -131,12 +133,14 @@ func (h *RecordHandler) ListAll(c *gin.Context) {
 		SELECT r.id, r.domain_ci_id, c.name, r.host, r.record_type, r.cdn_id, COALESCE(cd.name,''),
 		       r.cname, r.origin_ip, r.cert_expiry_at, r.cert_check_msg,
 		       r.project, r.env, r.module, r.operator,
-		       COALESCE(d.origin,''), COALESCE(reg.name,''), r.ignored, r.ignore_reason, r.stale, r.updated_at
+		       COALESCE(d.origin,''), COALESCE(reg.name,''), r.ignored, r.ignore_reason, r.stale, r.updated_at,
+		       COALESCE(p.status,''), COALESCE(d.status,'')
 		FROM domain_records r
 		JOIN cis c ON c.id=r.domain_ci_id
 		LEFT JOIN domains d ON d.ci_id=r.domain_ci_id
 		LEFT JOIN cdns cd ON cd.id=r.cdn_id
 		LEFT JOIN registrars reg ON reg.id=d.registrar_id
+		LEFT JOIN projects p ON p.name=r.project
 		WHERE c.type='domain' AND COALESCE(d.ignored,0)=0 ` + ignoredCond + `
 		ORDER BY r.project, c.name, r.host`)
 	if err != nil {
@@ -153,7 +157,8 @@ func (h *RecordHandler) ListAll(c *gin.Context) {
 		var stale, ignored int
 		if err := rows.Scan(&o.ID, &o.DomainCIID, &o.Domain, &o.Host, &o.RecordType, &cdnID, &o.CdnName,
 			&o.Cname, &o.OriginIP, &certExp, &o.CertCheckMsg,
-			&o.Project, &o.Env, &o.Module, &o.Operator, &o.Origin, &o.SourceName, &ignored, &o.IgnoreReason, &stale, &updated); err != nil {
+			&o.Project, &o.Env, &o.Module, &o.Operator, &o.Origin, &o.SourceName, &ignored, &o.IgnoreReason, &stale, &updated,
+			&o.ProjectStatus, &o.DomainStatus); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}

@@ -9,6 +9,20 @@
       </el-col>
     </el-row>
 
+    <el-card shadow="never" style="margin-top:14px" v-if="projStats.length || domStats.length">
+      <template #header><span style="font-weight:600">生命周期概览</span></template>
+      <div class="stat-row">
+        <span class="stat-title">项目：</span>
+        <el-tag v-for="s in projStats" :key="s.label" size="small" effect="plain" :style="chip(s.color)" style="margin-right:8px" class="clk" @click="$router.push('/domains')">{{ s.label }} {{ s.n }}</el-tag>
+        <el-tag v-if="projNone" size="small" type="info" style="margin-right:8px">未设置 {{ projNone }}</el-tag>
+      </div>
+      <div class="stat-row" style="margin-top:8px">
+        <span class="stat-title">主域名：</span>
+        <el-tag v-for="s in domStats" :key="s.label" size="small" effect="plain" :style="chip(s.color)" style="margin-right:8px" class="clk" @click="$router.push('/domains')">{{ s.label }} {{ s.n }}</el-tag>
+        <el-tag v-if="domNone" size="small" type="info" style="margin-right:8px">未设置 {{ domNone }}</el-tag>
+      </div>
+    </el-card>
+
     <el-card shadow="never" style="margin-top:14px">
       <template #header><span style="font-weight:600">⚠ 30 天内到期（点进处理）</span></template>
       <el-table :data="expiring" size="small">
@@ -34,10 +48,19 @@
 
 <script setup>
 import { ref, onMounted, computed } from 'vue'
-import { dashboard } from '../api/cmdb'
+import { dashboard, listDomains } from '../api/cmdb'
+import { useAppStore } from '../stores/app'
 
+const app = useAppStore()
 const data = ref({})
+const domains = ref([])
+function chip(c) { return c ? { color: c, borderColor: c + '66', background: c + '14' } : {} }
 const expiring = computed(() => data.value.expiring || [])
+// 项目状态统计（按字典顺序，只列有的）
+const projStats = computed(() => app.projectStatuses.map((s) => ({ label: s.label, color: s.color, n: app.projects.filter((p) => p.status === s.label).length })).filter((x) => x.n > 0))
+const projNone = computed(() => app.projects.filter((p) => !p.status).length)
+const domStats = computed(() => app.domainStatuses.map((s) => ({ label: s.label, color: s.color, n: domains.value.filter((d) => d.life_status === s.label).length })).filter((x) => x.n > 0))
+const domNone = computed(() => domains.value.filter((d) => !d.life_status && !d.ignored).length)
 const cards = computed(() => [
   { label: '配置项', num: data.value.ci_total || 0, color: '#1f2430' },
   { label: '域名', num: data.value.domain_total || 0, color: '#3b82f6' },
@@ -47,7 +70,10 @@ const cards = computed(() => [
   { label: '证书已过期(线上)', num: data.value.online_cert_expired || 0, color: '#f56c6c', to: '/cert-inspect' },
   { label: '证书检测失败', num: data.value.online_cert_failed || 0, color: '#909399', to: '/cert-inspect' },
 ])
-onMounted(async () => { try { data.value = await dashboard() } catch (e) {} })
+onMounted(async () => {
+  try { data.value = await dashboard() } catch (e) {}
+  try { app.loadProjects(); app.loadStatuses(); domains.value = await listDomains() } catch (e) {}
+})
 </script>
 
 <style scoped>
@@ -56,4 +82,7 @@ onMounted(async () => { try { data.value = await dashboard() } catch (e) {} })
 .clickable:hover { box-shadow: 0 2px 12px rgba(0,0,0,.1); }
 .num { font-size: 28px; font-weight: 700; }
 .lbl { color: #909399; font-size: 13px; margin-top: 4px; }
+.stat-row { display: flex; align-items: center; flex-wrap: wrap; }
+.stat-title { color: #606266; font-size: 13px; margin-right: 8px; min-width: 56px; }
+.clk { cursor: pointer; }
 </style>

@@ -27,12 +27,96 @@ func (h *BasicHandler) Register(r *gin.RouterGroup) {
 	r.POST("/cdns", h.CreateCdn)
 	r.PUT("/cdns/:id", h.UpdateCdn)
 	r.DELETE("/cdns/:id", h.DeleteCdn)
+	// 生命周期状态字典（可自定义）：scope=project/domain
+	r.GET("/lifecycle-statuses", h.ListStatuses)
+	r.POST("/lifecycle-statuses", h.CreateStatus)
+	r.PUT("/lifecycle-statuses/:id", h.UpdateStatus)
+	r.DELETE("/lifecycle-statuses/:id", h.DeleteStatus)
+}
+
+// ---- 生命周期状态字典 ----
+
+func (h *BasicHandler) ListStatuses(c *gin.Context) {
+	scope := c.Query("scope")
+	q := `SELECT id, scope, label, color, sort_order FROM lifecycle_statuses`
+	args := []any{}
+	if scope != "" {
+		q += ` WHERE scope=?`
+		args = append(args, scope)
+	}
+	q += ` ORDER BY scope, sort_order, id`
+	rows, err := h.DB.Query(q, args...)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	type s struct {
+		ID        int    `json:"id"`
+		Scope     string `json:"scope"`
+		Label     string `json:"label"`
+		Color     string `json:"color"`
+		SortOrder int    `json:"sort_order"`
+	}
+	out := []s{}
+	for rows.Next() {
+		var x s
+		if rows.Scan(&x.ID, &x.Scope, &x.Label, &x.Color, &x.SortOrder) == nil {
+			out = append(out, x)
+		}
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *BasicHandler) CreateStatus(c *gin.Context) {
+	var in struct {
+		Scope     string `json:"scope"`
+		Label     string `json:"label"`
+		Color     string `json:"color"`
+		SortOrder int    `json:"sort_order"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.Label == "" || (in.Scope != "project" && in.Scope != "domain") {
+		c.JSON(400, gin.H{"error": "scope(project/domain) 与 label 必填"})
+		return
+	}
+	res, err := h.DB.Exec(`INSERT INTO lifecycle_statuses (scope, label, color, sort_order) VALUES (?, ?, ?, ?)`, in.Scope, in.Label, in.Color, in.SortOrder)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	id, _ := res.LastInsertId()
+	c.JSON(201, gin.H{"id": id})
+}
+
+func (h *BasicHandler) UpdateStatus(c *gin.Context) {
+	var in struct {
+		Label     string `json:"label"`
+		Color     string `json:"color"`
+		SortOrder int    `json:"sort_order"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if _, err := h.DB.Exec(`UPDATE lifecycle_statuses SET label=?, color=?, sort_order=? WHERE id=?`, in.Label, in.Color, in.SortOrder, c.Param("id")); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
+func (h *BasicHandler) DeleteStatus(c *gin.Context) {
+	if _, err := h.DB.Exec(`DELETE FROM lifecycle_statuses WHERE id=?`, c.Param("id")); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
 }
 
 // ---- 项目 ----
 
 func (h *BasicHandler) ListProjects(c *gin.Context) {
-	rows, err := h.DB.Query(`SELECT id, name, remark, color, sort_order FROM projects ORDER BY sort_order, id`)
+	rows, err := h.DB.Query(`SELECT id, name, remark, color, sort_order, status FROM projects ORDER BY sort_order, id`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -44,11 +128,12 @@ func (h *BasicHandler) ListProjects(c *gin.Context) {
 		Remark    string `json:"remark"`
 		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
+		Status    string `json:"status"`
 	}
 	out := []p{}
 	for rows.Next() {
 		var x p
-		if rows.Scan(&x.ID, &x.Name, &x.Remark, &x.Color, &x.SortOrder) == nil {
+		if rows.Scan(&x.ID, &x.Name, &x.Remark, &x.Color, &x.SortOrder, &x.Status) == nil {
 			out = append(out, x)
 		}
 	}
@@ -61,12 +146,13 @@ func (h *BasicHandler) CreateProject(c *gin.Context) {
 		Remark    string `json:"remark"`
 		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
+		Status    string `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil || in.Name == "" {
 		c.JSON(400, gin.H{"error": "name 必填"})
 		return
 	}
-	res, err := h.DB.Exec(`INSERT INTO projects (name, remark, color, sort_order) VALUES (?, ?, ?, ?)`, in.Name, in.Remark, in.Color, in.SortOrder)
+	res, err := h.DB.Exec(`INSERT INTO projects (name, remark, color, sort_order, status) VALUES (?, ?, ?, ?, ?)`, in.Name, in.Remark, in.Color, in.SortOrder, in.Status)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -81,12 +167,13 @@ func (h *BasicHandler) UpdateProject(c *gin.Context) {
 		Remark    string `json:"remark"`
 		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
+		Status    string `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := h.DB.Exec(`UPDATE projects SET name=?, remark=?, color=?, sort_order=? WHERE id=?`, in.Name, in.Remark, in.Color, in.SortOrder, c.Param("id")); err != nil {
+	if _, err := h.DB.Exec(`UPDATE projects SET name=?, remark=?, color=?, sort_order=?, status=? WHERE id=?`, in.Name, in.Remark, in.Color, in.SortOrder, in.Status, c.Param("id")); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

@@ -26,6 +26,30 @@ func (h *DomainHandler) Register(r *gin.RouterGroup) {
 	r.POST("/domains/refresh-all", h.RefreshAll)
 	r.POST("/domains/:ciid/refresh", h.Refresh)
 	r.POST("/domains/bulk-ignore", h.BulkIgnore) // 忽略/取消忽略主域名（忽略后同步跳过、不报未同步）
+	r.POST("/domains/bulk-status", h.BulkStatus) // 批量/单个设主域名生命周期状态
+}
+
+// BulkStatus 批量或单个设主域名生命周期状态（domains.status）。status 空=清除（回到"未设置"）。
+func (h *DomainHandler) BulkStatus(c *gin.Context) {
+	var in struct {
+		CIIDs  []int64 `json:"ci_ids"`
+		Status string  `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || len(in.CIIDs) == 0 {
+		c.JSON(400, gin.H{"error": "ci_ids 必填"})
+		return
+	}
+	ph := make([]string, len(in.CIIDs))
+	args := []any{in.Status}
+	for i, id := range in.CIIDs {
+		ph[i] = "?"
+		args = append(args, id)
+	}
+	if _, err := h.DB.Exec(`UPDATE domains SET status=? WHERE ci_id IN (`+strings.Join(ph, ",")+`)`, args...); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true, "count": len(in.CIIDs)})
 }
 
 // BulkIgnore 批量忽略/取消忽略主域名。ignored=1 忽略(可带原因)，=0 取消。
@@ -81,6 +105,8 @@ type domainOut struct {
 	SourceStatus  string `json:"source_status"` // 数据源(GoDaddy)返回的域名状态，如 ACTIVE/TRANSFERRED_OUT
 	Category      string `json:"category"`      // 展示分类：active/pending/dns_migrated/expired/transferred_out/cancelled/ownership/removed/ignored/unknown
 	Origin        string `json:"origin"`        // manual=手动录入, sync=数据源同步
+	LifeStatus    string `json:"life_status"`   // 主域名生命周期状态（domains.status，可自定义：使用中/备用/未使用/待下线/已下线）
+	Suggest       string `json:"suggest"`       // 系统建议（仅未手动标时）：如"未使用"（0业务解析且非回源目标）
 }
 
 func (h *DomainHandler) List(c *gin.Context) {
@@ -90,7 +116,10 @@ func (h *DomainHandler) List(c *gin.Context) {
 		       d.cert_expiry_at, d.cert_check_msg, d.stale, d.origin,
 		       (SELECT COUNT(*) FROM ci_relations r WHERE r.dst_ci_id=c.id AND r.rel_type='protects'),
 		       (SELECT COUNT(*) FROM dns_records dr WHERE dr.domain_ci_id=c.id),
-		       d.last_synced_at, d.dns_migrated, d.ignored, d.ignore_reason, d.source_status
+		       d.last_synced_at, d.dns_migrated, d.ignored, d.ignore_reason, d.source_status,
+		       d.status,
+		       (SELECT COUNT(*) FROM domain_records br WHERE br.domain_ci_id=c.id) AS reso_count,
+		       (SELECT COUNT(*) FROM domain_records cr WHERE LOWER(cr.cname)=LOWER(c.name) OR LOWER(cr.cname) LIKE CONCAT('%.', LOWER(c.name))) AS cname_ref
 		FROM cis c
 		JOIN domains d ON d.ci_id=c.id
 		LEFT JOIN registrars reg ON reg.id=d.registrar_id
@@ -107,15 +136,21 @@ func (h *DomainHandler) List(c *gin.Context) {
 		var regID sql.NullInt64
 		var exp, certExp, lastSync sql.NullTime
 		var stale, migrated, ignored int
+		var resoCount, cnameRef int
 		if err := rows.Scan(&o.CIID, &o.Name, &o.Project, &o.Env, &o.Module, &o.Owner, &o.Status,
 			&regID, &o.RegistrarName, &o.DNSProvider, &exp, &certExp, &o.CertCheckMsg, &stale, &o.Origin, &o.CertCount,
-			&o.DnsCount, &lastSync, &migrated, &ignored, &o.IgnoreReason, &o.SourceStatus); err != nil {
+			&o.DnsCount, &lastSync, &migrated, &ignored, &o.IgnoreReason, &o.SourceStatus,
+			&o.LifeStatus, &resoCount, &cnameRef); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 		o.Stale = stale == 1
 		o.DnsMigrated = migrated == 1
 		o.Ignored = ignored == 1
+		// 系统建议（仅未手动标状态时给）：0 业务解析 且 不是别的域名的回源目标 → 建议未使用
+		if o.LifeStatus == "" && resoCount == 0 && cnameRef == 0 {
+			o.Suggest = "未使用"
+		}
 		if lastSync.Valid {
 			o.LastSynced = lastSync.Time.Format("2006-01-02 15:04")
 		}

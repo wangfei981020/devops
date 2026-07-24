@@ -29,11 +29,24 @@ type certInspectItem struct {
 	CheckMsg     string `json:"check_msg"`
 	Ignored      bool   `json:"ignored"`
 	IgnoreReason string `json:"ignore_reason"`
+	DomainStatus string `json:"domain_status"` // 所属主域名生命周期状态（已下线/未使用的证书可停续期）
 }
 
 // List 返回全量巡检项（前端做排序/筛选/分页）。
 func (h *CertInspectHandler) List(c *gin.Context) {
 	out := []certInspectItem{}
+	// 主域名生命周期状态查表：domain ci_id → status
+	statusMap := map[int64]string{}
+	if srows, e := h.DB.Query(`SELECT ci_id, status FROM domains WHERE status<>''`); e == nil {
+		for srows.Next() {
+			var id int64
+			var st string
+			if srows.Scan(&id, &st) == nil {
+				statusMap[id] = st
+			}
+		}
+		srows.Close()
+	}
 
 	// 线上检测证书（来自解析记录）
 	rows, err := h.DB.Query(`
@@ -59,6 +72,7 @@ func (h *CertInspectHandler) List(c *gin.Context) {
 			it.ExpiryAt = exp.Time.Format("2006-01-02")
 		}
 		it.Ignored = ignored == 1
+		it.DomainStatus = statusMap[it.DomainCIID]
 		out = append(out, it)
 	}
 	rows.Close()
@@ -79,6 +93,7 @@ func (h *CertInspectHandler) List(c *gin.Context) {
 			if exp.Valid {
 				it.ExpiryAt = exp.Time.Format("2006-01-02")
 			}
+			it.DomainStatus = statusMap[it.DomainCIID]
 			out = append(out, it)
 		}
 		drows.Close()

@@ -15,6 +15,13 @@
         <el-button type="primary" :icon="Plus" @click="openAdd">录入解析</el-button>
       </div>
       <div v-else>
+        <el-dropdown v-if="domSelected.length" style="margin-right:8px" @command="(v) => setDomStatus(domSelected, v === '__clear__' ? '' : v)">
+          <el-button type="primary" :icon="EditPen">批量设使用状态（{{ domSelected.length }}）<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+          <template #dropdown><el-dropdown-menu>
+            <el-dropdown-item v-for="s in app.domainStatuses" :key="s.id" :command="s.label"><span :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: s.color, marginRight:'6px' }" />{{ s.label }}</el-dropdown-item>
+            <el-dropdown-item command="__clear__" divided>清除状态</el-dropdown-item>
+          </el-dropdown-menu></template>
+        </el-dropdown>
         <el-button v-if="expiredDomains.length" type="warning" :icon="Hide" @click="ignoreExpired">一键忽略已过期（{{ expiredDomains.length }}）</el-button>
         <el-tooltip content="只刷注册到期：数据源域名由同步维护(跳过)，仅查手动录入域名(RDAP→WHOIS+重试)；证书到期见「到期巡检」" placement="top">
           <el-button :icon="Refresh" :loading="refreshingAll" @click="refreshAllDom">刷新到期</el-button>
@@ -45,28 +52,43 @@
         <el-select v-model="f.module" clearable placeholder="模块" style="width:130px">
           <el-option v-for="m in moduleOptions" :key="m" :label="m" :value="m" />
         </el-select>
-        <el-select v-model="f.source" clearable placeholder="数据源" style="width:150px">
+        <el-select v-model="f.source" clearable placeholder="数据源" style="width:130px">
           <el-option v-for="r in registrars" :key="r.id" :label="r.name" :value="r.name" />
         </el-select>
-        <el-select v-model="statusView" style="width:120px" @change="onStatusChange">
+        <el-select v-model="f.pstatus" clearable placeholder="项目状态" style="width:140px">
+          <el-option v-for="s in app.projectStatuses" :key="s.id" :label="s.label" :value="s.label">
+            <span :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: s.color, marginRight:'6px' }" />{{ s.label }}
+          </el-option>
+        </el-select>
+        <el-select v-model="statusView" style="width:110px" @change="onStatusChange">
           <el-option label="正常" value="normal" />
           <el-option label="已忽略" value="ignored" />
           <el-option label="全部" value="all" />
         </el-select>
         <el-button type="primary" :icon="Search" @click="doSearch">搜索</el-button>
         <el-button @click="resetFilter">重置</el-button>
-        <span class="muted" style="margin-left:auto">共 {{ filteredRows.length }} / {{ rows.length }} 条业务域名</span>
+        <el-radio-group v-model="recordView" size="small" style="margin-left:8px" @change="currentPage=1">
+          <el-radio-button value="detail">明细</el-radio-button>
+          <el-radio-button value="module">按模块</el-radio-button>
+        </el-radio-group>
+        <span class="muted" style="margin-left:auto">
+          <template v-if="recordView==='detail'">共 {{ filteredRows.length }} / {{ rows.length }} 条业务域名</template>
+          <template v-else>共 {{ moduleGroups.length }} 个模块 / {{ filteredRows.length }} 域名</template>
+        </span>
       </div>
     </el-card>
 
-    <el-card shadow="never">
+    <el-card shadow="never" v-if="recordView==='detail'">
       <el-table ref="tableRef" :data="pagedRows" size="small" row-key="id" v-loading="loading"
         :default-sort="{ prop: 'project', order: 'ascending' }" @sort-change="onSort"
         @selection-change="(v) => selected = v">
         <el-table-column type="selection" width="42" reserve-selection />
-        <el-table-column prop="project" label="项目" width="130" sortable="custom"><template #default="{ row }">
+        <el-table-column prop="project" label="项目" width="150" sortable="custom"><template #default="{ row }">
           <el-tag v-if="row.project" size="small" effect="plain" :style="tagStyle(projectColor(row.project))">{{ row.project }}</el-tag>
           <span v-else class="muted">—</span>
+          <el-tooltip v-if="row.project_status" :content="'项目状态：' + row.project_status">
+            <span :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: app.statusColor(row.project_status), marginLeft:'5px', verticalAlign:'middle' }" />
+          </el-tooltip>
         </template></el-table-column>
         <el-table-column prop="env" label="环境" width="100" sortable="custom"><template #default="{ row }">
           <el-tag v-if="row.env" size="small" effect="plain" :style="tagStyle(envColor(row.env))">{{ row.env }}</el-tag>
@@ -76,6 +98,7 @@
         <el-table-column prop="fqdn" label="域名" min-width="230" sortable="custom" show-overflow-tooltip><template #default="{ row }">
           <span class="mono" :class="{ stale: row.stale, ignored: row.ignored }">{{ row.fqdn }}</span>
           <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">已移出账号</el-tag>
+          <el-tag v-if="row.domain_status" size="small" effect="plain" :style="tagStyle(app.statusColor(row.domain_status))" style="margin-left:6px">{{ row.domain_status }}</el-tag>
           <el-tooltip v-if="row.ignored" :disabled="!row.ignore_reason" :content="row.ignore_reason">
             <el-tag type="info" size="small" style="margin-left:6px">已忽略</el-tag>
           </el-tooltip>
@@ -121,6 +144,60 @@
       <el-pagination v-model:current-page="currentPage" v-model:page-size="pageSize" :page-sizes="[10,20,50,100]"
         :total="filteredRows.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
     </el-card>
+
+    <!-- 按模块聚合视图（一个模块一组，组内每域名独立） -->
+    <el-card shadow="never" v-else v-loading="loading">
+      <el-collapse v-model="openGroups">
+        <el-collapse-item v-for="g in pagedGroups" :key="g.key" :name="g.key">
+          <template #title>
+            <div style="display:flex;align-items:center;gap:8px;flex:1;flex-wrap:wrap">
+              <el-tag v-if="g.project" size="small" effect="plain" :style="tagStyle(projectColor(g.project))">{{ g.project }}</el-tag>
+              <span v-if="g.project_status" :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: app.statusColor(g.project_status) }" :title="'项目状态：'+g.project_status" />
+              <el-tag v-if="g.env" size="small" effect="plain" :style="tagStyle(envColor(g.env))">{{ g.env }}</el-tag>
+              <b style="font-size:13px">{{ g.module || '（无模块）' }}</b>
+              <span class="muted">{{ g.count }} 域名</span>
+              <el-tag v-if="g.ipCount>1" size="small" type="warning" effect="plain">{{ g.ipCount }} 个源站</el-tag>
+              <el-tag v-if="g.certFail" size="small" type="info" effect="plain">⚠{{ g.certFail }} 检测失败</el-tag>
+              <el-tag v-if="g.certExpiring" size="small" type="warning" effect="plain">{{ g.certExpiring }} 快到期</el-tag>
+            </div>
+          </template>
+          <el-table :data="g.rows" size="small" row-key="id">
+            <el-table-column prop="fqdn" label="域名" min-width="230" show-overflow-tooltip><template #default="{ row }">
+              <span class="mono" :class="{ stale: row.stale, ignored: row.ignored }">{{ row.fqdn }}</span>
+              <el-tag v-if="row.domain_status" size="small" effect="plain" :style="tagStyle(app.statusColor(row.domain_status))" style="margin-left:6px">{{ row.domain_status }}</el-tag>
+              <el-tag v-if="row.ignored" type="info" size="small" style="margin-left:6px">已忽略</el-tag>
+            </template></el-table-column>
+            <el-table-column prop="cdn_name" label="CDN厂商" width="120" show-overflow-tooltip><template #default="{ row }">
+              <el-tag v-if="row.cdn_name" size="small" effect="plain" :style="tagStyle(hashColor(row.cdn_name))">{{ row.cdn_name }}</el-tag>
+              <span v-else class="muted">—</span>
+            </template></el-table-column>
+            <el-table-column label="回源CNAME" min-width="180" show-overflow-tooltip><template #default="{ row }"><span class="mono">{{ row.cname || '—' }}</span></template></el-table-column>
+            <el-table-column label="源站IP" min-width="180" show-overflow-tooltip><template #default="{ row }">
+              <span v-if="row.origin_ip" class="mono">{{ row.origin_ip }}</span>
+              <span v-else-if="row.auto_origin_ip" class="mono">{{ row.auto_origin_ip }}
+                <el-tag size="small" :type="row.auto_origin_src === '规则' ? 'warning' : 'info'" effect="plain" style="margin-left:4px">自动·{{ row.auto_origin_src }}</el-tag>
+              </span>
+              <span v-else class="mono">— <el-button v-if="row.cname" link type="primary" size="small" @click="openRuleFor(row)">+ 配源站</el-button></span>
+            </template></el-table-column>
+            <el-table-column label="证书到期" width="140"><template #default="{ row }">
+              <el-tooltip :disabled="!row.cert_check_msg" :content="row.cert_check_msg"><el-tag :type="certState(row).type" size="small" effect="light">{{ certState(row).text }}</el-tag></el-tooltip>
+            </template></el-table-column>
+            <el-table-column label="操作" width="150"><template #default="{ row }">
+              <div style="display:flex;gap:8px;align-items:center">
+                <el-tooltip content="查看详情"><el-button link type="primary" :icon="View" @click="openDetail(row)" /></el-tooltip>
+                <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEdit(row)" /></el-tooltip>
+                <el-tooltip content="检测证书"><el-button link type="primary" :loading="checking[row.id]" :icon="CircleCheck" @click="checkCert(row)" /></el-tooltip>
+                <el-tooltip v-if="!row.ignored" content="忽略此解析"><el-button link type="warning" :icon="Hide" @click="openIgnore([row])" /></el-tooltip>
+                <el-tooltip v-else content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="doUnignore([row])" /></el-tooltip>
+              </div>
+            </template></el-table-column>
+          </el-table>
+        </el-collapse-item>
+      </el-collapse>
+      <el-empty v-if="!moduleGroups.length" description="没有匹配的业务域名" :image-size="60" />
+      <el-pagination v-model:current-page="currentPage" v-model:page-size="pageSize" :page-sizes="[10,20,50,100]"
+        :total="moduleGroups.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
+    </el-card>
     </template>
 
     <!-- ================= 主域名（唯一，一行一个域名） ================= -->
@@ -144,13 +221,20 @@
           <el-option label="🟠 30天内" value="soon" />
           <el-option label="🟢 正常" value="normal" />
         </el-select>
+        <el-select v-model="lifeStatusFilter" clearable placeholder="使用状态" style="width:140px" @change="domPage=1">
+          <el-option v-for="s in app.domainStatuses" :key="s.id" :label="s.label" :value="s.label">
+            <span :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: s.color, marginRight:'6px' }" />{{ s.label }}
+          </el-option>
+          <el-option label="（未设置）" value="__none__" />
+        </el-select>
         <el-button type="primary" :icon="Search" @click="doDomSearch">搜索</el-button>
         <el-button @click="resetDomFilter">重置</el-button>
         <span class="muted" style="margin-left:auto">共 {{ domFiltered.length }} 个主域名</span>
       </div>
     </el-card>
     <el-card shadow="never">
-      <el-table :data="domPaged" size="small" row-key="ci_id" v-loading="loading" @sort-change="onDomSort">
+      <el-table :data="domPaged" size="small" row-key="ci_id" v-loading="loading" @sort-change="onDomSort" @selection-change="(v) => domSelected = v">
+        <el-table-column type="selection" width="40" />
         <el-table-column prop="name" label="主域名" min-width="220" sortable="custom"><template #default="{ row }">
           <span :class="{ stale: row.category !== 'active' && row.category !== 'pending' }">{{ row.name }}</span>
           <el-tooltip v-if="row.ignored && row.ignore_reason" :content="row.ignore_reason"><el-icon style="margin-left:4px;color:#909399;vertical-align:middle"><InfoFilled /></el-icon></el-tooltip>
@@ -171,8 +255,19 @@
           </template>
           <span v-else class="muted">—</span>
         </template></el-table-column>
-        <el-table-column label="解析数" width="100"><template #default="{ row }">
+        <el-table-column label="解析数" width="90"><template #default="{ row }">
           <el-button link type="primary" @click="jumpToRecords(row)">{{ resoCountMap[row.ci_id] || 0 }}</el-button>
+        </template></el-table-column>
+        <el-table-column label="使用状态" width="180"><template #default="{ row }">
+          <el-select :model-value="row.life_status" size="small" placeholder="未设置" clearable style="width:110px"
+                     @change="(v) => setDomStatus([row], v)">
+            <el-option v-for="s in app.domainStatuses" :key="s.id" :label="s.label" :value="s.label">
+              <span :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: s.color, marginRight:'6px' }" />{{ s.label }}
+            </el-option>
+          </el-select>
+          <el-tooltip v-if="!row.life_status && row.suggest" content="0 业务解析且非回源目标，建议标此状态">
+            <el-tag size="small" type="warning" effect="plain" style="margin-left:4px; cursor:pointer" @click="setDomStatus([row], row.suggest)">建议{{ row.suggest }}</el-tag>
+          </el-tooltip>
         </template></el-table-column>
         <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
@@ -443,14 +538,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, InfoFilled, Connection } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, InfoFilled, Connection, ArrowDown } from '@element-plus/icons-vue'
 import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
 import { useDomainFilter } from '../composables/useDomainFilter'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgnoreRecords, deleteRecord, checkRecordCert,
   syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains, bulkIgnoreDomains,
-  listOriginRules, upsertOriginRule, deleteOriginRule } from '../api/cmdb'
+  listOriginRules, upsertOriginRule, deleteOriginRule, bulkDomainStatus } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
@@ -471,7 +566,7 @@ const dDlg = ref(false), detail = ref(null)
 const aDlg = ref(false), aForm = ref({ project: '', env: '', blocks: [{ module: '', domains: '' }] }), aResult = ref(null), assigning = ref(false)
 const aMode = ref('paste'), pasteText = ref('')
 const synced = computed(() => editing.value && form.value.origin && form.value.origin !== 'manual')
-const f = ref({ keyword: '', domain: null, project: null, env: null, module: null, source: null })
+const f = ref({ keyword: '', domain: null, project: null, env: null, module: null, source: null, pstatus: null })
 const query = ref({ ...f.value })
 const currentPage = ref(1), pageSize = ref(10)
 
@@ -510,7 +605,8 @@ const filteredRows = computed(() => rows.value.filter((r) => {
     (!q.project || r.project === q.project) &&
     (!q.env || r.env === q.env) &&
     (!q.module || r.module === q.module) &&
-    (!q.source || r.source_name === q.source)
+    (!q.source || r.source_name === q.source) &&
+    (!q.pstatus || r.project_status === q.pstatus)
 }))
 // 外部排序：对全量 filteredRows 先排序，再分页（避免 el-table 只排当前页）
 const sortState = ref({ prop: 'project', order: 'ascending' })
@@ -535,8 +631,31 @@ const pagedRows = computed(() => {
   const s = (currentPage.value - 1) * pageSize.value
   return sortedRows.value.slice(s, s + pageSize.value)
 })
+// —— 按模块聚合视图（项目+环境+模块 分组，组内每域名独立）——
+const recordView = ref('detail')
+const openGroups = ref([])
+const moduleGroups = computed(() => {
+  const map = new Map()
+  for (const r of sortedRows.value) {
+    const key = `${r.project || ''}|${r.env || ''}|${r.module || ''}`
+    let g = map.get(key)
+    if (!g) { g = { key, project: r.project, env: r.env, module: r.module, project_status: r.project_status, rows: [] }; map.set(key, g) }
+    g.rows.push(r)
+  }
+  return [...map.values()].map((g) => {
+    const ips = new Set(g.rows.map((r) => r.origin_ip || r.auto_origin_ip).filter(Boolean))
+    const certFail = g.rows.filter((r) => !r.cert_expiry_at && r.cert_check_msg).length
+    const certExpiring = g.rows.filter((r) => r.cert_expiry_at && (new Date(r.cert_expiry_at) - Date.now()) / 86400000 < 30).length
+    return { ...g, count: g.rows.length, ipCount: ips.size, certFail, certExpiring }
+  })
+})
+const pagedGroups = computed(() => {
+  const s = (currentPage.value - 1) * pageSize.value
+  return moduleGroups.value.slice(s, s + pageSize.value)
+})
+watch(pagedGroups, (gs) => { openGroups.value = gs.map((g) => g.key) })
 function doSearch() { query.value = { ...f.value }; currentPage.value = 1 }
-function resetFilter() { f.value = { keyword: '', domain: null, project: null, env: null, module: null, source: null }; query.value = { ...f.value }; currentPage.value = 1 }
+function resetFilter() { f.value = { keyword: '', domain: null, project: null, env: null, module: null, source: null, pstatus: null }; query.value = { ...f.value }; currentPage.value = 1 }
 
 // —— 主域名 tab ——
 const resoCountMap = computed(() => {
@@ -545,11 +664,20 @@ const resoCountMap = computed(() => {
   return m
 })
 const domNameFilter = ref(null)
+const lifeStatusFilter = ref(null)
+const domSelected = ref([])
 const domNameOptions = computed(() => [...new Set(allDomains.value.map((d) => d.name).filter(Boolean))].sort())
 const domFiltered = computed(() => {
-  const base = df.filtered.value
-  return domNameFilter.value ? base.filter((d) => d.name === domNameFilter.value) : base
+  let base = df.filtered.value
+  if (domNameFilter.value) base = base.filter((d) => d.name === domNameFilter.value)
+  if (lifeStatusFilter.value === '__none__') base = base.filter((d) => !d.life_status)
+  else if (lifeStatusFilter.value) base = base.filter((d) => d.life_status === lifeStatusFilter.value)
+  return base
 })
+async function setDomStatus(rows, status) {
+  try { await bulkDomainStatus(rows.map((r) => r.ci_id), status || ''); ElMessage.success('已更新使用状态'); load() }
+  catch (e) { ElMessage.error(e.response?.data?.error || '失败') }
+}
 const domSortState = ref({ prop: '', order: null })
 function onDomSort({ prop, order }) { domSortState.value = { prop, order } }
 const domSorted = computed(() => sortList(domFiltered.value, domSortState.value.prop, domSortState.value.order))
@@ -580,7 +708,7 @@ async function ignoreDomains(list, ignored) {
     ElMessage.success(ignored ? `已忽略 ${r.count ?? list.length} 个` : `已取消忽略 ${r.count ?? list.length} 个`); load()
   } catch (e) { if (e !== 'cancel') ElMessage.error(e.response?.data?.error || '操作失败') }
 }
-function jumpToRecords(row) { tab.value = 'records'; f.value = { keyword: '', domain: row.name, project: null, env: null, module: null, source: null }; query.value = { ...f.value }; currentPage.value = 1 }
+function jumpToRecords(row) { tab.value = 'records'; f.value = { keyword: '', domain: row.name, project: null, env: null, module: null, source: null, pstatus: null }; query.value = { ...f.value }; currentPage.value = 1 }
 function openAddDomain() { domEditing.value = false; domForm.value = { name: '', registrar_id: null, dns_provider: '', expiry_at: '' }; domDlg.value = true }
 function openEditDomain(row) { domEditing.value = true; domForm.value = { ...row, expiry_at: row.expiry_at || '' }; domDlg.value = true }
 async function saveDomain() {

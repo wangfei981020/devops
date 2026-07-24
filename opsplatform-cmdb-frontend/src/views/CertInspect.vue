@@ -30,6 +30,10 @@
       <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column label="完整域名" min-width="220"><template #default="{ row }"><span class="mono">{{ row.fqdn }}</span></template></el-table-column>
         <el-table-column prop="domain" label="所属主域名" min-width="160" />
+        <el-table-column label="域名状态" width="130"><template #default="{ row }">
+          <el-tag v-if="row.domain_status" size="small" effect="plain" :style="chip(app.statusColor(row.domain_status))">{{ row.domain_status }}</el-tag>
+          <span v-else class="muted">—</span>
+        </template></el-table-column>
         <el-table-column label="类型" width="110"><template #default="{ row }">
           <el-tag size="small" :type="KIND[row.kind].tag">{{ KIND[row.kind].l }}</el-tag>
         </template></el-table-column>
@@ -76,6 +80,10 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search, Sort, Hide, View, Link } from '@element-plus/icons-vue'
 import { listCertInspect, recordCertIgnore } from '../api/cmdb'
+import { useAppStore } from '../stores/app'
+
+const app = useAppStore()
+function chip(c) { return c ? { color: c, borderColor: c + '66', background: c + '14' } : {} }
 
 const KIND = {
   domain: { l: '域名注册', tag: 'primary' },
@@ -157,7 +165,7 @@ async function unignore(row) {
   try { await recordCertIgnore(row.record_id, { ignored: false }); ElMessage.success('已取消'); load() }
   catch (e) { ElMessage.error('操作失败') }
 }
-onMounted(load)
+onMounted(() => { load(); if (!app.statuses.length) app.loadStatuses() })
 </script>
 
 <style scoped>

@@ -136,6 +136,13 @@ export const listEnvironments = () => http.get('/environments').then((r) => r.da
 export const createEnvironment = (b) => http.post('/environments', b).then((r) => r.data)
 export const updateEnvironment = (id, b) => http.put('/environments/' + id, b).then((r) => r.data)
 export const deleteEnvironment = (id) => http.delete('/environments/' + id).then((r) => r.data)
+// 生命周期状态字典（scope=project/domain，可自定义）
+export const listStatuses = (scope) => http.get('/lifecycle-statuses', { params: scope ? { scope } : {} }).then((r) => r.data)
+export const createStatus = (b) => http.post('/lifecycle-statuses', b).then((r) => r.data)
+export const updateStatus = (id, b) => http.put('/lifecycle-statuses/' + id, b).then((r) => r.data)
+export const deleteStatus = (id) => http.delete('/lifecycle-statuses/' + id).then((r) => r.data)
+// 批量/单个设主域名生命周期状态
+export const bulkDomainStatus = (ci_ids, status) => http.post('/domains/bulk-status', { ci_ids, status }).then((r) => r.data)
 
 // 域名到期刷新
 export const refreshDomain = (id) => http.post(`/domains/${id}/refresh`).then((r) => r.data)
