@@ -44,12 +44,15 @@
           <el-option v-for="d in domainOptions" :key="d" :label="d" :value="d" />
         </el-select>
         <el-select v-model="f.project" clearable placeholder="项目" style="width:150px">
+          <el-option label="（未分配项目）" value="__none__" />
           <el-option v-for="p in projectOptions" :key="p" :label="p" :value="p" />
         </el-select>
         <el-select v-model="f.env" clearable placeholder="环境" style="width:120px">
+          <el-option label="（未分配环境）" value="__none__" />
           <el-option v-for="e in envOptions" :key="e" :label="e" :value="e" />
         </el-select>
         <el-select v-model="f.module" clearable placeholder="模块" style="width:130px">
+          <el-option label="（未分配模块）" value="__none__" />
           <el-option v-for="m in moduleOptions" :key="m" :label="m" :value="m" />
         </el-select>
         <el-select v-model="f.source" clearable placeholder="数据源" style="width:130px">
@@ -614,9 +617,9 @@ const filteredRows = computed(() => rows.value.filter((r) => {
       (r.module || '').toLowerCase().includes(kw) || (r.cname || '').toLowerCase().includes(kw) ||
       (r.origin_ip || '').toLowerCase().includes(kw) || (r.auto_origin_ip || '').toLowerCase().includes(kw)) &&
     (!q.domain || r.domain === q.domain) &&
-    (!q.project || r.project === q.project) &&
-    (!q.env || r.env === q.env) &&
-    (!q.module || r.module === q.module) &&
+    (!q.project || (q.project === '__none__' ? !r.project : r.project === q.project)) &&
+    (!q.env || (q.env === '__none__' ? !r.env : r.env === q.env)) &&
+    (!q.module || (q.module === '__none__' ? !r.module : r.module === q.module)) &&
     (!q.source || r.source_name === q.source) &&
     (!q.pstatus || r.project_status === q.pstatus)
 }))
