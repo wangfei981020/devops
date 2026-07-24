@@ -279,6 +279,14 @@
             <el-option v-for="c in app.cdns" :key="c.id" :label="c.name" :value="c.id" />
           </el-select>
         </el-form-item>
+        <el-form-item label="回源CNAME">
+          <el-switch v-model="bForm.setCname" style="margin-right:10px" />
+          <el-input v-model="bForm.cname" :disabled="!bForm.setCname" placeholder="回源 CNAME（留空=清掉，通常同步自动获取）" style="width:240px" />
+        </el-form-item>
+        <el-form-item label="源站IP">
+          <el-switch v-model="bForm.setOriginIP" style="margin-right:10px" />
+          <el-input v-model="bForm.origin_ip" :disabled="!bForm.setOriginIP" placeholder="源站IP（多个逗号分隔；留空=清掉手填、回到自动推算）" style="width:240px" />
+        </el-form-item>
       </el-form>
       <template #footer><el-button @click="bDlg=false">取消</el-button><el-button type="primary" @click="saveBulk">应用到 {{ selected.length }} 条</el-button></template>
     </el-dialog>
@@ -624,7 +632,7 @@ async function doUnignore(list) {
 function openDetail(row) { detail.value = row; dDlg.value = true }
 function editFromDetail() { dDlg.value = false; openEdit(detail.value) }
 function openBulk() {
-  bForm.value = { setProject: false, project: '', setEnv: false, env: '', setModule: false, module: '', setCdn: false, cdn_id: null }
+  bForm.value = { setProject: false, project: '', setEnv: false, env: '', setModule: false, module: '', setCdn: false, cdn_id: null, setCname: false, cname: '', setOriginIP: false, origin_ip: '' }
   bDlg.value = true
 }
 async function saveBulk() {
@@ -634,7 +642,9 @@ async function saveBulk() {
   if (b.setEnv) payload.env = b.env || ''
   if (b.setModule) payload.module = b.module || ''
   if (b.setCdn) { payload.set_cdn = true; payload.cdn_id = b.cdn_id ?? null }
-  if (payload.project === undefined && payload.env === undefined && payload.module === undefined && !payload.set_cdn) {
+  if (b.setCname) { payload.set_cname = true; payload.cname = b.cname || '' }
+  if (b.setOriginIP) { payload.set_origin_ip = true; payload.origin_ip = b.origin_ip || '' }
+  if (payload.project === undefined && payload.env === undefined && payload.module === undefined && !payload.set_cdn && !payload.set_cname && !payload.set_origin_ip) {
     ElMessage.warning('请至少打开一个要设置的字段'); return
   }
   try {

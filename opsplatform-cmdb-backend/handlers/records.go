@@ -282,12 +282,16 @@ func (h *RecordHandler) Update(c *gin.Context) {
 // BulkUpdate 批量设置选中解析的业务字段（项目/环境/模块）。只更新请求里显式给出的字段，未给出的不动。
 func (h *RecordHandler) BulkUpdate(c *gin.Context) {
 	var in struct {
-		IDs     []int64 `json:"ids"`
-		Project *string `json:"project"`
-		Env     *string `json:"env"`
-		Module  *string `json:"module"`
-		SetCdn  bool    `json:"set_cdn"`
-		CdnID   *int    `json:"cdn_id"`
+		IDs         []int64 `json:"ids"`
+		Project     *string `json:"project"`
+		Env         *string `json:"env"`
+		Module      *string `json:"module"`
+		SetCdn      bool    `json:"set_cdn"`
+		CdnID       *int    `json:"cdn_id"`
+		SetOriginIP bool    `json:"set_origin_ip"`
+		OriginIP    *string `json:"origin_ip"`
+		SetCname    bool    `json:"set_cname"`
+		Cname       *string `json:"cname"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil || len(in.IDs) == 0 {
 		c.JSON(400, gin.H{"error": "ids 必填"})
@@ -310,6 +314,22 @@ func (h *RecordHandler) BulkUpdate(c *gin.Context) {
 	if in.SetCdn {
 		sets = append(sets, "cdn_id=?")
 		args = append(args, nullableInt(in.CdnID))
+	}
+	if in.SetOriginIP { // 可填值=手填源站IP（盖过自动推算）；留空=清掉手填、回到自动推算
+		v := ""
+		if in.OriginIP != nil {
+			v = *in.OriginIP
+		}
+		sets = append(sets, "origin_ip=?")
+		args = append(args, v)
+	}
+	if in.SetCname {
+		v := ""
+		if in.Cname != nil {
+			v = *in.Cname
+		}
+		sets = append(sets, "cname=?")
+		args = append(args, v)
 	}
 	if len(sets) == 0 {
 		c.JSON(400, gin.H{"error": "至少选择一个要设置的字段"})
