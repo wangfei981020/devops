@@ -70,6 +70,7 @@ export const updateScheduledTask = (key, data) => http.put(`/scheduled-tasks/${k
 export const runScheduledTask = (key) => http.post(`/scheduled-tasks/${key}/run`).then((r) => r.data)
 export const listTaskRuns = (params) => http.get('/task-runs', { params }).then((r) => r.data)
 export const retryTaskRunFailures = (id) => http.post(`/task-runs/${id}/retry-failures`).then((r) => r.data)
+export const cancelTaskRun = (id) => http.post(`/task-runs/${id}/cancel`).then((r) => r.data)
 
 // 通知
 // 云主机（GCP，只读）

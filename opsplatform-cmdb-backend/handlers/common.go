@@ -2,12 +2,25 @@ package handlers
 
 import (
 	"database/sql"
+	"log"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"opsplatform-cmdb-backend/models"
 )
+
+// logExec 执行写并在出错时打日志（替代 `_, _ = db.Exec` 静默吞错，尤其同步/导入写路径）。
+// 返回受影响行数（出错返回 0）。desc 用于日志定位。
+func logExec(db *sql.DB, desc, query string, args ...any) int64 {
+	res, err := db.Exec(query, args...)
+	if err != nil {
+		log.Printf("[db] %s 失败: %v", desc, err)
+		return 0
+	}
+	n, _ := res.RowsAffected()
+	return n
+}
 
 // scannable 兼容 *sql.Row 与 *sql.Rows
 type scannable interface{ Scan(dest ...any) error }

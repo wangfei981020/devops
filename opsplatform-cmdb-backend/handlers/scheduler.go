@@ -31,30 +31,57 @@ type TaskFailure struct {
 // ProgressFn 进度回调：done=已处理，total=总数。核心函数边跑边上报，前端实时看进度。
 type ProgressFn func(done, total int)
 
-// taskFn 核心函数签名：prog 上报进度；targets 非空=只处理这些对象（重试用），nil=全量。
-type taskFn func(prog ProgressFn, targets []string) (string, []TaskFailure, bool)
+// taskFn 核心函数签名：ctx 用于超时/取消（核心函数在循环里 select ctx.Done() 及时中止）；
+// prog 上报进度；targets 非空=只处理这些对象（重试用），nil=全量。
+type taskFn func(ctx context.Context, prog ProgressFn, targets []string) (string, []TaskFailure, bool)
 
 type Scheduler struct {
-	db     *sql.DB
-	cipher *crypto.Cipher
-	mu     sync.Mutex
-	cron   *cron.Cron
-	funcs  map[string]taskFn
+	db      *sql.DB
+	cipher  *crypto.Cipher
+	mu      sync.Mutex
+	cron    *cron.Cron
+	funcs   map[string]taskFn
+	running map[int64]context.CancelFunc // runID -> cancel（供「取消执行」中止运行中的任务）
+	runMu   sync.Mutex
+}
+
+// taskTimeout 各任务硬超时（超过则中止并标「超时」，防止永久卡"运行中"）。
+func taskTimeout(key string) time.Duration {
+	switch key {
+	case "inspect", "refresh_expiry", "dns_sync", "host_sync":
+		return 25 * time.Minute // 逐个连 443/WHOIS/同步，量大给足
+	default:
+		return 5 * time.Minute
+	}
 }
 
 var sched *Scheduler // 全局单例，供 API 热重载 / 立即运行
 
 // StartScheduler 初始化调度器并按 scheduled_tasks 注册 cron。非阻塞（cron 在后台 goroutine）。
 func StartScheduler(db *sql.DB, cipher *crypto.Cipher) {
-	sched = &Scheduler{db: db, cipher: cipher}
+	sched = &Scheduler{db: db, cipher: cipher, running: map[int64]context.CancelFunc{}}
 	sched.funcs = map[string]taskFn{
-		"refresh_expiry": func(p ProgressFn, t []string) (string, []TaskFailure, bool) { return refreshAllWhoisCore(db, p, t) },
-		"auto_renew":     func(ProgressFn, []string) (string, []TaskFailure, bool) { return renewDue(db, cipher) },
-		"remind":         func(ProgressFn, []string) (string, []TaskFailure, bool) { return remindExpiry(db), nil, true },
-		"inspect":        func(p ProgressFn, t []string) (string, []TaskFailure, bool) { return inspectAllCertsCore(db, p, t) },
-		"dns_sync":       func(ProgressFn, []string) (string, []TaskFailure, bool) { return dnsSyncCore(db, cipher) },
-		"host_sync":      func(ProgressFn, []string) (string, []TaskFailure, bool) { return SyncAllHostProjects(db, cipher) },
+		"refresh_expiry": func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) { return refreshAllWhoisCore(ctx, db, p, t) },
+		"auto_renew":     func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) { return renewDue(db, cipher) },
+		"remind":         func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) { return remindExpiry(db), nil, true },
+		"inspect":        func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) { return inspectAllCertsCore(ctx, db, p, t) },
+		"dns_sync":       func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) { return dnsSyncCore(ctx, db, cipher) },
+		"host_sync":      func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) { return SyncAllHostProjects(db, cipher) },
 	}
+	// 自愈①：启动时，之前进程遗留的「运行中」记录一律标「中断」（那些进程已随重启死掉）
+	if _, err := db.Exec(`UPDATE task_run_logs SET status='interrupted', summary='中断：服务重启', finished_at=NOW() WHERE status='running'`); err != nil {
+		log.Printf("[scheduler] 启动清理遗留 running 记录失败: %v", err)
+	}
+	// 自愈②：每 5 分钟把 running 超过硬超时上限(30min)仍未收尾的标「中断」（兜底任何卡死）
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		for range t.C {
+			if _, err := db.Exec(`UPDATE task_run_logs SET status='interrupted', summary='中断：超时未收尾(自愈)', finished_at=NOW()
+				WHERE status='running' AND TIMESTAMPDIFF(SECOND, started_at, NOW()) > 1800`); err != nil {
+				log.Printf("[scheduler] 定期自愈卡死记录失败: %v", err)
+			}
+		}
+	}()
 	sched.reload()
 }
 
@@ -112,6 +139,13 @@ func (s *Scheduler) reload() {
 	s.cron.Start()
 }
 
+// exec 执行 UPDATE/DELETE 并在出错时打日志（不再吞错）。desc 用于日志定位。
+func (s *Scheduler) exec(desc, query string, args ...any) {
+	if _, err := s.db.Exec(query, args...); err != nil {
+		log.Printf("[scheduler] %s 失败: %v", desc, err)
+	}
+}
+
 func (s *Scheduler) run(key, trigger string, targets []string) {
 	fn := s.funcs[key]
 	if fn == nil {
@@ -119,33 +153,83 @@ func (s *Scheduler) run(key, trigger string, targets []string) {
 	}
 	start := time.Now()
 	runID := s.startRunLog(key, trigger, start) // 先写「运行中」记录，前端可实时看进度/耗时
+	// 硬超时 + 可取消：注册 cancel 供「取消执行」中止；超时/取消都会让核心函数在循环里退出
+	ctx, cancel := context.WithTimeout(context.Background(), taskTimeout(key))
+	if runID > 0 {
+		s.runMu.Lock()
+		s.running[runID] = cancel
+		s.runMu.Unlock()
+	}
 	defer func() {
+		cancel()
+		if runID > 0 {
+			s.runMu.Lock()
+			delete(s.running, runID)
+			s.runMu.Unlock()
+		}
 		if r := recover(); r != nil {
-			log.Printf("scheduler task %s panic: %v", key, r)
+			log.Printf("[scheduler] 任务 %s panic: %v", key, r)
 			msg := fmt.Sprintf("panic: %v", r)
-			_, _ = s.db.Exec(`UPDATE scheduled_tasks SET last_run_at=NOW(), last_result=?, last_ok=0 WHERE task_key=?`, msg, key)
+			s.exec("panic后更新scheduled_tasks", `UPDATE scheduled_tasks SET last_run_at=NOW(), last_result=?, last_ok=0 WHERE task_key=?`, truncate(msg, 250), key)
 			ns, ng, na := sendTaskNotify(s.db, key, "fail", msg)
 			s.finishRunLog(runID, "fail", msg, nil, start, ns, ng, na)
 		}
 	}()
-	log.Printf("[cron] 运行任务 %s (%s)", key, trigger)
+	log.Printf("[scheduler] 运行任务 %s (%s)", key, trigger)
 	prog := func(done, total int) {
-		_, _ = s.db.Exec(`UPDATE task_run_logs SET progress=? WHERE id=?`, fmt.Sprintf("%d/%d", done, total), runID)
+		s.exec("更新进度", `UPDATE task_run_logs SET progress=? WHERE id=?`, fmt.Sprintf("%d/%d", done, total), runID)
 	}
-	result, failures, ok := fn(prog, targets)
+	result, failures, ok := fn(ctx, prog, targets)
+
+	// 状态判定：ctx 取消 → 已取消 / 超时；否则 ok/partial/fail
 	status := "ok"
-	if !ok {
+	switch {
+	case ctx.Err() == context.Canceled:
+		status, ok = "cancelled", false
+		if result == "" {
+			result = "已手动取消"
+		}
+	case ctx.Err() == context.DeadlineExceeded:
+		status, ok = "timeout", false
+		result = fmt.Sprintf("超时中止（上限 %s）；%s", taskTimeout(key), result)
+	case !ok:
 		status = "fail"
-	} else if len(failures) > 0 {
+	case len(failures) > 0:
 		status = "partial"
 	}
 	okv := 0
 	if ok {
 		okv = 1
 	}
-	_, _ = s.db.Exec(`UPDATE scheduled_tasks SET last_run_at=NOW(), last_result=?, last_ok=? WHERE task_key=?`, truncate(result, 250), okv, key)
+	s.exec("更新scheduled_tasks", `UPDATE scheduled_tasks SET last_run_at=NOW(), last_result=?, last_ok=? WHERE task_key=?`, truncate(result, 250), okv, key)
 	ns, ng, na := sendTaskNotify(s.db, key, status, result)
 	s.finishRunLog(runID, status, result, failures, start, ns, ng, na)
+
+	// D 自动重试：仅 fail/timeout（不含 partial/cancelled/ok）且非自动重试触发时，延迟后重跑一次
+	if (status == "fail" || status == "timeout") && trigger != "auto_retry" {
+		log.Printf("[scheduler] 任务 %s %s，10s 后自动重试一次", key, status)
+		go func() { time.Sleep(10 * time.Second); s.run(key, "auto_retry", targets) }()
+	}
+}
+
+// CancelTask 取消运行中的任务：有活 goroutine 就 cancel 其 ctx（会正常收尾为「已取消」）；
+// 若已是僵尸（goroutine 没了）则直接强制把记录标「已取消」。返回是否处理。
+func (s *Scheduler) CancelTask(runID int64) bool {
+	s.runMu.Lock()
+	cancel, alive := s.running[runID]
+	s.runMu.Unlock()
+	if alive {
+		cancel()
+		return true
+	}
+	// 僵尸：直接收尾
+	res, err := s.db.Exec(`UPDATE task_run_logs SET status='cancelled', summary='已手动取消(强制收尾)', finished_at=NOW() WHERE id=? AND status='running'`, runID)
+	if err != nil {
+		log.Printf("[scheduler] 强制取消记录 %d 失败: %v", runID, err)
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
 }
 
 // startRunLog 任务开跑先插一条 running 记录，返回 id。
@@ -155,6 +239,7 @@ func (s *Scheduler) startRunLog(key, trigger string, start time.Time) int64 {
 	res, err := s.db.Exec(`INSERT INTO task_run_logs (task_key, name, status, trigger_by, started_at, finished_at)
 		VALUES (?,?, 'running', ?, ?, ?)`, key, name, trigger, start, start)
 	if err != nil {
+		log.Printf("[scheduler] 写运行记录失败(task=%s): %v", key, err)
 		return 0
 	}
 	id, _ := res.LastInsertId()
@@ -170,10 +255,10 @@ func (s *Scheduler) finishRunLog(runID int64, status, summary string, failures [
 		}
 	}
 	dur := int(time.Since(start).Milliseconds())
-	_, _ = s.db.Exec(`UPDATE task_run_logs SET status=?, summary=?, failures=?, duration_ms=?, notify_state=?, notify_group=?, notify_at=?, progress='', finished_at=NOW() WHERE id=?`,
+	s.exec("收尾更新运行记录", `UPDATE task_run_logs SET status=?, summary=?, failures=?, duration_ms=?, notify_state=?, notify_group=?, notify_at=?, progress='', finished_at=NOW() WHERE id=?`,
 		status, truncate(summary, 250), failJSON, dur, notifyState, notifyGroup, notifyAt, runID)
 	// 保留策略：只留 90 天历史
-	_, _ = s.db.Exec(`DELETE FROM task_run_logs WHERE finished_at < DATE_SUB(NOW(), INTERVAL 90 DAY)`)
+	s.exec("清理90天前记录", `DELETE FROM task_run_logs WHERE finished_at < DATE_SUB(NOW(), INTERVAL 90 DAY)`)
 }
 
 // ---- 任务核心函数 ----
@@ -182,7 +267,7 @@ func (s *Scheduler) finishRunLog(runID int64, status, summary string, failures [
 // 关键优化：**数据源(origin=sync)域名跳过**——它们的到期日由 DNS 同步维护（GoDaddy API 权威值）；
 // 只对 origin=manual 或到期日为空的域名走 RDAP→WHOIS。查询链路 domainExpiry，失败自动退避重试≤3 次。
 // targets 非空=只刷这些域名（重试用）。prog 上报进度。
-func refreshAllWhoisCore(db *sql.DB, prog ProgressFn, targets []string) (string, []TaskFailure, bool) {
+func refreshAllWhoisCore(ctx context.Context, db *sql.DB, prog ProgressFn, targets []string) (string, []TaskFailure, bool) {
 	// 只查数据源覆盖不到的：手动录入，或(不知何故)没有到期日的
 	q := `SELECT c.id, c.name FROM cis c JOIN domains d ON d.ci_id=c.id
 		WHERE c.type='domain' AND d.stale=0 AND (d.origin='manual' OR d.expiry_at IS NULL)`
@@ -223,11 +308,17 @@ func refreshAllWhoisCore(db *sql.DB, prog ProgressFn, targets []string) (string,
 	sem := make(chan struct{}, 6) // 并发 6，防慢查询拖垮整体
 	var wg sync.WaitGroup
 	for _, it := range items {
+		if ctx.Err() != nil { // 超时/取消：停止派发剩余
+			break
+		}
 		wg.Add(1)
 		go func(it item) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				return
+			}
 			t, reason := expiryWithRetry(it.name, 3) // 自动退避重试最多 3 次
 			if t != nil {
 				_, _ = db.Exec(`UPDATE domains SET expiry_at=? WHERE ci_id=?`, *t, it.id) // 成功才更新；失败保留旧值
@@ -266,7 +357,7 @@ func expiryWithRetry(domain string, maxRetry int) (*time.Time, string) {
 
 // inspectAllCertsCore 连 443 检测证书到期：主域名(domains) + 所有业务域名解析(domain_records)。
 // targets 非空=只检测这些 fqdn（重试用）。prog 上报进度。
-func inspectAllCertsCore(db *sql.DB, prog ProgressFn, targetList []string) (string, []TaskFailure, bool) {
+func inspectAllCertsCore(ctx context.Context, db *sql.DB, prog ProgressFn, targetList []string) (string, []TaskFailure, bool) {
 	type target struct {
 		id     int64
 		fqdn   string
@@ -318,11 +409,17 @@ func inspectAllCertsCore(db *sql.DB, prog ProgressFn, targetList []string) (stri
 	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
 	for _, t := range targets {
+		if ctx.Err() != nil { // 超时/取消：停止派发剩余
+			break
+		}
 		wg.Add(1)
 		go func(tg target) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				return
+			}
 			if ct, cmsg := tlsCertExpiry(tg.fqdn); ct != nil {
 				if tg.isMain {
 					_, _ = db.Exec(`UPDATE domains SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg='' WHERE ci_id=?`, *ct, tg.id)
@@ -366,7 +463,7 @@ func inspectAllCertsCore(db *sql.DB, prog ProgressFn, targetList []string) (stri
 }
 
 // dnsSyncCore 定时全量同步所有数据源的 DNS 记录（复用 SyncHandler 的方法）。
-func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool) {
+func dnsSyncCore(parent context.Context, db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool) {
 	sh := NewSyncHandler(db, cipher)
 	rows, err := db.Query(`SELECT id, name FROM registrars`)
 	if err != nil {
@@ -391,6 +488,9 @@ func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool
 	var newRecList []string // 本次新增的业务解析（供摘要列出）
 	var failures []TaskFailure
 	for _, s := range srcs {
+		if parent.Err() != nil { // 超时/取消：停止后续数据源
+			break
+		}
 		id := s.id
 		provider, cred, err := LoadCredential(db, cipher, id)
 		if err != nil {
@@ -402,7 +502,7 @@ func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool
 			failures = append(failures, TaskFailure{Target: s.name, Reason: "初始化适配器失败：" + truncate(err.Error(), 120)})
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 		domains, err := adapter.ListDomains(ctx)
 		if err != nil {
 			cancel()

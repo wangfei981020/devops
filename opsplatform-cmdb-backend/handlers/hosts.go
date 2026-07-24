@@ -201,7 +201,7 @@ func (h *HostHandler) UpdateComputeRate(c *gin.Context) {
 }
 
 func (h *HostHandler) DeleteComputeRate(c *gin.Context) {
-	_, _ = h.DB.Exec(`DELETE FROM cloud_compute_rates WHERE id=?`, c.Param("id"))
+	logExec(h.DB, "主机同步写", `DELETE FROM cloud_compute_rates WHERE id=?`, c.Param("id"))
 	c.JSON(200, gin.H{"ok": true})
 }
 
@@ -265,7 +265,7 @@ func (h *HostHandler) UpdateDiskRate(c *gin.Context) {
 }
 
 func (h *HostHandler) DeleteDiskRate(c *gin.Context) {
-	_, _ = h.DB.Exec(`DELETE FROM cloud_disk_rates WHERE id=?`, c.Param("id"))
+	logExec(h.DB, "主机同步写", `DELETE FROM cloud_disk_rates WHERE id=?`, c.Param("id"))
 	c.JSON(200, gin.H{"ok": true})
 }
 
@@ -450,7 +450,7 @@ func (h *HostHandler) UpdateProject(c *gin.Context) {
 	}
 	if in.CredJSON != "" {
 		if e, err := h.Cipher.Encrypt(in.CredJSON); err == nil {
-			_, _ = h.DB.Exec(`UPDATE cloud_account_projects SET cred_enc=? WHERE id=?`, e, c.Param("pid"))
+			logExec(h.DB, "主机同步写", `UPDATE cloud_account_projects SET cred_enc=? WHERE id=?`, e, c.Param("pid"))
 		}
 	}
 	c.JSON(200, gin.H{"ok": true})
@@ -628,7 +628,7 @@ func (h *HostHandler) syncOneProject(pid int64, st *hostSyncState) (name string,
 	defer cancel()
 	insts, e := adapter.ListInstances(ctx, projectID)
 	if e != nil {
-		_, _ = h.DB.Exec(`UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`, truncate(e.Error(), 250), pid)
+		logExec(h.DB, "主机同步写", `UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`, truncate(e.Error(), 250), pid)
 		return name, 0, 0, e
 	}
 	hsSet(st, func(s *hostSyncState) { s.Total += len(insts) })
@@ -644,7 +644,7 @@ func (h *HostHandler) syncOneProject(pid int64, st *hostSyncState) (name string,
 		SyncProjectNetwork(h.DB, provider, accountID, projectID, nr)
 	}
 	hsSet(st, func(s *hostSyncState) { s.Synced += len(insts); s.Stale += stale })
-	_, _ = h.DB.Exec(`UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`,
+	logExec(h.DB, "主机同步写", `UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`,
 		truncate(fmt.Sprintf("同步 %d 台，失效 %d", len(insts), stale), 250), pid)
 	return name, len(insts), stale, nil
 }
@@ -705,12 +705,12 @@ func (h *HostHandler) upsertHost(accountID int, projName string, in cloudsource.
 			return
 		}
 		ciID, _ = res.LastInsertId()
-		_, _ = h.DB.Exec(`INSERT INTO hosts (ci_id, instance_id, cloud_account_id, provider) VALUES (?, ?, ?, ?)`,
+		logExec(h.DB, "主机同步写", `INSERT INTO hosts (ci_id, instance_id, cloud_account_id, provider) VALUES (?, ?, ?, ?)`,
 			ciID, in.InstanceID, accountID, "gcp")
 	} else if err != nil {
 		return
 	} else {
-		_, _ = h.DB.Exec(`UPDATE cis SET name=? WHERE id=?`, in.Name, ciID)
+		logExec(h.DB, "主机同步写", `UPDATE cis SET name=? WHERE id=?`, in.Name, ciID)
 	}
 	preempt, delProt := 0, 0
 	if in.Preemptible {
@@ -719,7 +719,7 @@ func (h *HostHandler) upsertHost(accountID int, projName string, in cloudsource.
 	if in.DeletionProtection {
 		delProt = 1
 	}
-	_, _ = h.DB.Exec(`UPDATE hosts SET project=?, project_name=?, zone=?, region=?, machine_type=?, vcpu=?, mem_mb=?, disk_total_gb=?,
+	logExec(h.DB, "主机同步写", `UPDATE hosts SET project=?, project_name=?, zone=?, region=?, machine_type=?, vcpu=?, mem_mb=?, disk_total_gb=?,
 		internal_ip=?, external_ip=?, status=?, os=?, labels=?, self_link=?, gcp_created_at=?,
 		hostname=?, vpc=?, subnet=?, network_tags=?, preemptible=?, image=?, cpu_platform=?, deletion_protection=?, service_accounts=?,
 		stale=0, synced_at=NOW() WHERE ci_id=?`,
@@ -728,13 +728,13 @@ func (h *HostHandler) upsertHost(accountID int, projName string, in cloudsource.
 		in.Hostname, in.VPC, in.Subnet, strings.Join(in.NetworkTags, ","), preempt, in.Image, in.CPUPlatform, delProt, strings.Join(in.ServiceAccounts, ","),
 		ciID)
 	// 磁盘：全删重插
-	_, _ = h.DB.Exec(`DELETE FROM host_disks WHERE host_ci_id=?`, ciID)
+	logExec(h.DB, "主机同步写", `DELETE FROM host_disks WHERE host_ci_id=?`, ciID)
 	for _, d := range in.Disks {
 		boot := 0
 		if d.IsBoot {
 			boot = 1
 		}
-		_, _ = h.DB.Exec(`INSERT INTO host_disks (host_ci_id, name, size_gb, type, is_boot) VALUES (?, ?, ?, ?, ?)`,
+		logExec(h.DB, "主机同步写", `INSERT INTO host_disks (host_ci_id, name, size_gb, type, is_boot) VALUES (?, ?, ?, ?, ?)`,
 			ciID, d.Name, d.SizeGB, d.Type, boot)
 	}
 }
@@ -760,7 +760,7 @@ func (h *HostHandler) markStaleHosts(accountID int, projectID string, present ma
 	n := 0
 	for _, r := range all {
 		if !present[r.inst] {
-			_, _ = h.DB.Exec(`UPDATE hosts SET stale=1 WHERE ci_id=?`, r.ciID)
+			logExec(h.DB, "主机同步写", `UPDATE hosts SET stale=1 WHERE ci_id=?`, r.ciID)
 			n++
 		}
 	}

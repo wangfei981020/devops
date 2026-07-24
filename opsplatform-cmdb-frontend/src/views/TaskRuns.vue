@@ -16,6 +16,9 @@
           <el-option label="✅ 成功" value="ok" />
           <el-option label="⚠️ 部分成功" value="partial" />
           <el-option label="❌ 失败" value="fail" />
+          <el-option label="⏱ 超时中止" value="timeout" />
+          <el-option label="⛔ 已取消" value="cancelled" />
+          <el-option label="🔌 中断" value="interrupted" />
         </el-select>
         <el-select v-model="q.days" style="width:130px" @change="reload">
           <el-option label="近 24 小时" :value="1" />
@@ -53,6 +56,10 @@
         </template></el-table-column>
         <el-table-column label="通知" width="90" align="center"><template #default="{ row }">
           <el-tooltip :content="notifyTip(row)"><span>{{ notifyIcon(row.notify_state) }}</span></el-tooltip>
+        </template></el-table-column>
+        <el-table-column label="操作" width="130" fixed="right"><template #default="{ row }">
+          <el-button v-if="row.status==='running'" link type="danger" :icon="CircleClose" :loading="cancelling[row.id]" @click.stop="cancelRun(row)">取消</el-button>
+          <el-button link type="primary" :icon="View" @click.stop="openDetail(row)">详情</el-button>
         </template></el-table-column>
       </el-table>
 
@@ -101,6 +108,7 @@
         </div>
 
         <div class="sec">
+          <el-button v-if="cur.status==='running'" type="danger" :icon="CircleClose" :loading="cancelling[cur.id]" @click="cancelRun(cur)">取消执行</el-button>
           <el-button type="primary" :icon="VideoPlay" :loading="rerunning" :disabled="cur.status==='running'" @click="rerun">重跑此任务（全量）</el-button>
         </div>
       </template>
@@ -111,21 +119,33 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh, VideoPlay, RefreshRight } from '@element-plus/icons-vue'
-import { listTaskRuns, listScheduledTasks, runScheduledTask, retryTaskRunFailures } from '../api/cmdb'
+import { Refresh, VideoPlay, RefreshRight, CircleClose, View } from '@element-plus/icons-vue'
+import { listTaskRuns, listScheduledTasks, runScheduledTask, retryTaskRunFailures, cancelTaskRun } from '../api/cmdb'
+import { useAppStore } from '../stores/app'
 
+const app = useAppStore()
 const tasks = ref([]), rows = ref([]), total = ref(0), loading = ref(false)
 const q = ref({ task_key: '', status: '', days: 7, limit: 20 })
 const page = ref(1)
 const dlg = ref(false), cur = ref({}), rerunning = ref(false), retrying = ref(false)
+const cancelling = ref({})
+async function cancelRun(row) {
+  try {
+    await app.showConfirm(`取消运行中的「${row.name}」？会中止任务并标为已取消`)
+    cancelling.value = { ...cancelling.value, [row.id]: true }
+    const r = await cancelTaskRun(row.id)
+    ElMessage.success(r.ok ? '已取消' : (r.msg || '该记录已结束')); setTimeout(load, 800)
+  } catch (e) { if (e !== 'cancel') ElMessage.error(e.response?.data?.error || '取消失败') }
+  finally { cancelling.value = { ...cancelling.value, [row.id]: false } }
+}
 const nowTick = ref(Date.now())
 let timer = null
 
 const badCount = computed(() => rows.value.filter((r) => r.status !== 'ok' && r.status !== 'running').length)
 const hasRunning = computed(() => rows.value.some((r) => r.status === 'running'))
 
-function stLabel(s) { return { running: '🔵 运行中', ok: '✅ 成功', partial: '⚠️ 部分成功', fail: '❌ 失败' }[s] || s }
-function stType(s) { return { running: 'primary', ok: 'success', partial: 'warning', fail: 'danger' }[s] || 'info' }
+function stLabel(s) { return { running: '🔵 运行中', ok: '✅ 成功', partial: '⚠️ 部分成功', fail: '❌ 失败', timeout: '⏱ 超时中止', cancelled: '⛔ 已取消', interrupted: '🔌 中断' }[s] || s }
+function stType(s) { return { running: 'primary', ok: 'success', partial: 'warning', fail: 'danger', timeout: 'danger', cancelled: 'info', interrupted: 'warning' }[s] || 'info' }
 function trigLabel(t) { return { manual: '手动立即运行', retry: '重试失败项', cron: '定时(cron)' }[t] || '定时(cron)' }
 function dur(ms) { return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms' }
 function notifyIcon(s) { return s === 'sent' ? '📨' : s === 'failed' ? '⚠️' : '—' }

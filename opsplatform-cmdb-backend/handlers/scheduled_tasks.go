@@ -24,6 +24,21 @@ func (h *SchedHandler) Register(r *gin.RouterGroup) {
 	r.POST("/scheduled-tasks/:key/run", h.Run)
 	r.GET("/task-runs", h.RunLogs)
 	r.POST("/task-runs/:id/retry-failures", h.RetryFailures)
+	r.POST("/task-runs/:id/cancel", h.Cancel) // 取消运行中的任务（中止 + 收尾）
+}
+
+// Cancel 取消一条运行中的执行记录：中止其 ctx（正常收尾为已取消）或强制收尾僵尸记录。
+func (h *SchedHandler) Cancel(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if sched == nil || id <= 0 {
+		c.JSON(400, gin.H{"error": "参数错误"})
+		return
+	}
+	if sched.CancelTask(id) {
+		c.JSON(200, gin.H{"ok": true})
+	} else {
+		c.JSON(200, gin.H{"ok": false, "msg": "该记录不是运行中或已结束"})
+	}
 }
 
 // RetryFailures 只重试某次执行的失败项（读该记录 failures 的 target，生成一条 trigger=retry 的新记录）。

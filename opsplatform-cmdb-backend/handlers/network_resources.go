@@ -65,19 +65,19 @@ func SyncProjectNetwork(db *sql.DB, provider string, accountID int, project stri
 		provider = "gcp"
 	}
 	// VPC
-	_, _ = db.Exec(`DELETE FROM cloud_networks WHERE cloud_account_id=? AND project=?`, accountID, project)
+	logExec(db, "网络同步写", `DELETE FROM cloud_networks WHERE cloud_account_id=? AND project=?`, accountID, project)
 	for _, n := range nr.Networks {
-		_, _ = db.Exec(`INSERT INTO cloud_networks (provider,cloud_account_id,project,name,mode,self_link,synced_at) VALUES (?,?,?,?,?,?,NOW())`,
+		logExec(db, "网络同步写", `INSERT INTO cloud_networks (provider,cloud_account_id,project,name,mode,self_link,synced_at) VALUES (?,?,?,?,?,?,NOW())`,
 			provider, accountID, project, n.Name, n.Mode, n.SelfLink)
 	}
 	// 子网
-	_, _ = db.Exec(`DELETE FROM cloud_subnets WHERE cloud_account_id=? AND project=?`, accountID, project)
+	logExec(db, "网络同步写", `DELETE FROM cloud_subnets WHERE cloud_account_id=? AND project=?`, accountID, project)
 	for _, s := range nr.Subnets {
-		_, _ = db.Exec(`INSERT INTO cloud_subnets (provider,cloud_account_id,project,name,network,region,cidr,gateway,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,NOW())`,
+		logExec(db, "网络同步写", `INSERT INTO cloud_subnets (provider,cloud_account_id,project,name,network,region,cidr,gateway,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,NOW())`,
 			provider, accountID, project, s.Name, s.Network, s.Region, s.CIDR, s.Gateway, s.SelfLink)
 	}
 	// 防火墙
-	_, _ = db.Exec(`DELETE FROM cloud_firewalls WHERE cloud_account_id=? AND project=?`, accountID, project)
+	logExec(db, "网络同步写", `DELETE FROM cloud_firewalls WHERE cloud_account_id=? AND project=?`, accountID, project)
 	for _, f := range nr.Firewalls {
 		hr := 0
 		if fwHighRisk(f.Direction, f.Action, f.Protocols, f.SourceRanges) {
@@ -87,24 +87,24 @@ func SyncProjectNetwork(db *sql.DB, provider string, accountID int, project stri
 		if f.Disabled {
 			disabled = 1
 		}
-		_, _ = db.Exec(`INSERT INTO cloud_firewalls (provider,cloud_account_id,project,name,network,direction,priority,action,protocols,source_ranges,target_tags,disabled,high_risk,self_link,synced_at)
+		logExec(db, "网络同步写", `INSERT INTO cloud_firewalls (provider,cloud_account_id,project,name,network,direction,priority,action,protocols,source_ranges,target_tags,disabled,high_risk,self_link,synced_at)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
 			provider, accountID, project, f.Name, f.Network, f.Direction, f.Priority, f.Action, f.Protocols, f.SourceRanges, f.TargetTags, disabled, hr, f.SelfLink)
 	}
 	// 静态IP
-	_, _ = db.Exec(`DELETE FROM cloud_addresses WHERE cloud_account_id=? AND project=?`, accountID, project)
+	logExec(db, "网络同步写", `DELETE FROM cloud_addresses WHERE cloud_account_id=? AND project=?`, accountID, project)
 	for _, a := range nr.Addresses {
-		_, _ = db.Exec(`INSERT INTO cloud_addresses (provider,cloud_account_id,project,name,address,addr_type,status,region,users,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,NOW())`,
+		logExec(db, "网络同步写", `INSERT INTO cloud_addresses (provider,cloud_account_id,project,name,address,addr_type,status,region,users,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,NOW())`,
 			provider, accountID, project, a.Name, a.Address, a.Type, a.Status, a.Region, a.Users, a.SelfLink)
 	}
 	// 负载均衡 + 后端成员
-	_, _ = db.Exec(`DELETE FROM cloud_loadbalancers WHERE cloud_account_id=? AND project=?`, accountID, project)
-	_, _ = db.Exec(`DELETE FROM cloud_lb_backends WHERE cloud_account_id=? AND project=?`, accountID, project)
+	logExec(db, "网络同步写", `DELETE FROM cloud_loadbalancers WHERE cloud_account_id=? AND project=?`, accountID, project)
+	logExec(db, "网络同步写", `DELETE FROM cloud_lb_backends WHERE cloud_account_id=? AND project=?`, accountID, project)
 	for _, l := range nr.LoadBalancers {
-		_, _ = db.Exec(`INSERT INTO cloud_loadbalancers (provider,cloud_account_id,project,name,scheme,vip,port_range,protocol,target,region,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())`,
+		logExec(db, "网络同步写", `INSERT INTO cloud_loadbalancers (provider,cloud_account_id,project,name,scheme,vip,port_range,protocol,target,region,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())`,
 			provider, accountID, project, l.Name, l.Scheme, l.VIP, l.PortRange, l.Protocol, l.Target, l.Region, l.SelfLink)
 		for _, b := range l.Backends {
-			_, _ = db.Exec(`INSERT INTO cloud_lb_backends (cloud_account_id,project,lb_name,instance,group_name,zone,synced_at) VALUES (?,?,?,?,?,?,NOW())`,
+			logExec(db, "网络同步写", `INSERT INTO cloud_lb_backends (cloud_account_id,project,lb_name,instance,group_name,zone,synced_at) VALUES (?,?,?,?,?,?,NOW())`,
 				accountID, project, l.Name, b.Instance, b.Group, b.Zone)
 		}
 	}

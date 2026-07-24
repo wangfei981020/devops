@@ -110,7 +110,7 @@ func (h *SyncHandler) SyncDomainRecords(c *gin.Context) {
 	if len(recs) == 0 && dnsMigratedFromGoDaddy(name) {
 		migrated = 1
 	}
-	_, _ = h.DB.Exec(`UPDATE domains SET last_synced_at=NOW(), dns_migrated=? WHERE ci_id=?`, migrated, ciIDInt)
+	logExec(h.DB, "DNS同步写", `UPDATE domains SET last_synced_at=NOW(), dns_migrated=? WHERE ci_id=?`, migrated, ciIDInt)
 	WriteAudit(h.DB, c, "sync_domain_records", name)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "synced_records": len(recs), "imported_records": len(imported), "new_records": imported})
 }
@@ -217,7 +217,7 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 			if len(recs) == 0 && dnsMigratedFromGoDaddy(d.Name) {
 				migrated = 1
 			}
-			_, _ = h.DB.Exec(`UPDATE domains SET dns_migrated=? WHERE ci_id=?`, migrated, ciID)
+			logExec(h.DB, "DNS同步写", `UPDATE domains SET dns_migrated=? WHERE ci_id=?`, migrated, ciID)
 			syncMu.Lock()
 			st.Synced++
 			st.Records += len(recs)
@@ -225,7 +225,7 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 			syncMu.Unlock()
 		}
 		// 只要这次扫到了就更新同步时刻（不管 records 成败），消除假"24h未同步"
-		_, _ = h.DB.Exec(`UPDATE domains SET last_synced_at=NOW() WHERE ci_id=?`, ciID)
+		logExec(h.DB, "DNS同步写", `UPDATE domains SET last_synced_at=NOW() WHERE ci_id=?`, ciID)
 		syncMu.Lock()
 		st.Done++
 		syncMu.Unlock()
@@ -376,7 +376,7 @@ func domainCategory(sourceStatus string, stale, dnsMigrated, ignored, expiryPast
 // markDomainGone 把已存在的域名标记为移出账号(stale=1)并记下数据源状态；不重置 stale、不碰业务信息。
 // 域名首次出现即为消亡态(库里还没有)时无需处理——本就没纳管，不显示。
 func (h *SyncHandler) markDomainGone(name string, sourceID int, status string) {
-	_, _ = h.DB.Exec(`UPDATE domains d JOIN cis c ON c.id=d.ci_id
+	logExec(h.DB, "DNS同步写", `UPDATE domains d JOIN cis c ON c.id=d.ci_id
 		SET d.stale=1, d.source_status=?
 		WHERE c.type='domain' AND c.name=? AND d.registrar_id=? AND d.ignored=0`, status, name, sourceID)
 }
@@ -397,7 +397,7 @@ func (h *SyncHandler) upsertDomainCI(name string, sourceID int, expires *time.Ti
 	if expires != nil {
 		exp = *expires
 	}
-	_, _ = h.DB.Exec(`INSERT INTO domains (ci_id, registrar_id, expiry_at, origin, source_status) VALUES (?, ?, ?, 'sync', ?)
+	logExec(h.DB, "DNS同步写", `INSERT INTO domains (ci_id, registrar_id, expiry_at, origin, source_status) VALUES (?, ?, ?, 'sync', ?)
 		ON DUPLICATE KEY UPDATE registrar_id=VALUES(registrar_id), expiry_at=VALUES(expiry_at), stale=0, origin='sync', source_status=VALUES(source_status)`, ciID, sourceID, exp, status)
 	return ciID, nil
 }
@@ -437,7 +437,7 @@ func (h *SyncHandler) markStaleDomains(sourceID int, present map[string]bool) in
 		}
 	}
 	for _, id := range stale {
-		_, _ = h.DB.Exec(`UPDATE domains SET stale=1 WHERE ci_id=?`, id)
+		logExec(h.DB, "DNS同步写", `UPDATE domains SET stale=1 WHERE ci_id=?`, id)
 	}
 	return len(stale)
 }
@@ -487,7 +487,7 @@ func (h *SyncHandler) importBusinessRecords(ciID int64, domainName string, recs 
 			if autoIgnore {
 				ig, igReason = 1, "下划线服务记录，自动忽略"
 			}
-			_, _ = h.DB.Exec(`INSERT INTO domain_records (domain_ci_id, host, record_type, origin_ip, cname, operator, ignored, ignore_reason)
+			logExec(h.DB, "DNS同步写", `INSERT INTO domain_records (domain_ci_id, host, record_type, origin_ip, cname, operator, ignored, ignore_reason)
 				VALUES (?, ?, ?, ?, ?, 'godaddy同步', ?, ?)`, ciID, b.host, b.rtype, b.originIP, b.cname, ig, igReason)
 			if !autoIgnore { // 自动忽略的不算"新增业务解析"，不进同步摘要
 				val := b.originIP
@@ -499,7 +499,7 @@ func (h *SyncHandler) importBusinessRecords(ciID int64, domainName string, recs 
 		} else if err == nil {
 			// 只刷厂商字段，业务字段(项目/环境/模块/CDN/证书)原样保留；重新出现则取消失效标记。
 			// origin_ip：同步值为空(CNAME 记录)时保留人工手填的源站IP，非空(A 记录)才用厂商值覆盖。
-			_, _ = h.DB.Exec(`UPDATE domain_records SET origin_ip=IF(?='', origin_ip, ?), cname=?, stale=0 WHERE id=?`,
+			logExec(h.DB, "DNS同步写", `UPDATE domain_records SET origin_ip=IF(?='', origin_ip, ?), cname=?, stale=0 WHERE id=?`,
 				b.originIP, b.originIP, b.cname, id)
 		}
 	}
@@ -516,7 +516,7 @@ func (h *SyncHandler) importBusinessRecords(ciID int64, domainName string, recs 
 			}
 		}
 		for _, id := range stale {
-			_, _ = h.DB.Exec(`UPDATE domain_records SET stale=1 WHERE id=?`, id)
+			logExec(h.DB, "DNS同步写", `UPDATE domain_records SET stale=1 WHERE id=?`, id)
 		}
 	}
 	return created
@@ -525,13 +525,13 @@ func (h *SyncHandler) importBusinessRecords(ciID int64, domainName string, recs 
 // ← importBusinessRecords 返回值改为新增解析展示串列表
 
 func (h *SyncHandler) refreshDNSRecords(ciID int64, sourceID int, recs []dnsource.DNSRecord) {
-	_, _ = h.DB.Exec(`DELETE FROM dns_records WHERE domain_ci_id=?`, ciID)
+	logExec(h.DB, "DNS同步写", `DELETE FROM dns_records WHERE domain_ci_id=?`, ciID)
 	for _, r := range recs {
 		var prio any
 		if r.Priority != nil {
 			prio = *r.Priority
 		}
-		_, _ = h.DB.Exec(`INSERT INTO dns_records (domain_ci_id, type, name, data, ttl, priority, protected, source_id)
+		logExec(h.DB, "DNS同步写", `INSERT INTO dns_records (domain_ci_id, type, name, data, ttl, priority, protected, source_id)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			ciID, r.Type, r.Name, r.Data, r.TTL, prio, boolToInt(isProtectedRecord(r)), sourceID)
 	}

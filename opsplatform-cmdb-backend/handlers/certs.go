@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 
@@ -427,9 +428,15 @@ func randToken() string {
 	return hex.EncodeToString(b)
 }
 
+// truncate 截断到最多 n 字节，但回退到合法 UTF-8 边界，避免切在多字节字符(如中文)中间产生非法串
+// （非法 UTF-8 会让 MySQL(utf8mb4) 的 UPDATE 报 Incorrect string value 失败）。
 func truncate(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
+	if len(s) <= n {
+		return s
 	}
-	return s
+	t := s[:n]
+	for len(t) > 0 && !utf8.ValidString(t) {
+		t = t[:len(t)-1]
+	}
+	return t
 }

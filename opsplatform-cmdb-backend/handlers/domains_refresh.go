@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/tls"
 	"database/sql"
 	"encoding/json"
@@ -33,7 +34,7 @@ func (h *DomainHandler) Refresh(c *gin.Context) {
 // 数据源(origin=sync)域名跳过（到期日由 DNS 同步维护）、只刷 manual/无到期日域名、RDAP→WHOIS+自动重试。
 // 证书到期请走「到期巡检」；单个域名的「刷到期」按钮仍会同时刷注册+证书（Refresh）。
 func (h *DomainHandler) RefreshAll(c *gin.Context) {
-	msg, failures, _ := refreshAllWhoisCore(h.DB, nil, nil)
+	msg, failures, _ := refreshAllWhoisCore(context.Background(), h.DB, nil, nil)
 	WriteAudit(h.DB, c, "refresh_domain_all", msg)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "msg": msg, "failures": failures})
 }
