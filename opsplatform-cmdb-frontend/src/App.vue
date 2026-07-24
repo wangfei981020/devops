@@ -75,7 +75,9 @@ const menus = shallowRef([
     { path: '/dns-records', label: 'DNS 记录', icon: List },
     { path: '/certs', label: '证书', icon: Lock },
     { path: '/cert-inspect', label: '到期巡检', icon: CircleCheck },
-    { path: '/relations', label: '关系图谱', icon: Share },
+    // 关系图谱冷藏：当前只有 域名→证书 一种关系、节点少、价值低；二期 M7 接入
+    // 物理→虚拟→容器→应用全链路后升级为「影响分析」再放出。路由/组件保留。
+    // { path: '/relations', label: '关系图谱', icon: Share },
   ] },
   { type: 'item', path: '/dashboard', label: '展示台', icon: DataAnalysis },
   { type: 'group', label: '系统管理', icon: Setting, children: [

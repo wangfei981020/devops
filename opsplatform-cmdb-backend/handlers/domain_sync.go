@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -104,14 +105,14 @@ func (h *SyncHandler) SyncDomainRecords(c *gin.Context) {
 	}
 	ciIDInt, _ := parseID(ciid)
 	h.refreshDNSRecords(ciIDInt, id, recs)
-	imported := h.importBusinessRecords(ciIDInt, recs)
+	imported := h.importBusinessRecords(ciIDInt, name, recs)
 	migrated := 0
 	if len(recs) == 0 && dnsMigratedFromGoDaddy(name) {
 		migrated = 1
 	}
 	_, _ = h.DB.Exec(`UPDATE domains SET last_synced_at=NOW(), dns_migrated=? WHERE ci_id=?`, migrated, ciIDInt)
 	WriteAudit(h.DB, c, "sync_domain_records", name)
-	c.JSON(http.StatusOK, gin.H{"ok": true, "synced_records": len(recs), "imported_records": imported})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "synced_records": len(recs), "imported_records": len(imported), "new_records": imported})
 }
 
 // Usage 某数据源的 API 客户端限流用量。
@@ -210,7 +211,7 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 			log.Printf("[domain-sync] WARN 域名 %s 拉解析记录失败（可能转出中/DNS已迁走）: %v", d.Name, err)
 		} else {
 			h.refreshDNSRecords(ciID, id, recs)
-			imp := h.importBusinessRecords(ciID, recs)
+			imp := h.importBusinessRecords(ciID, d.Name, recs)
 			// 记录 0 条时查权威 NS：若已不指向 GoDaddy，说明域名还在账户但 DNS 迁走了。
 			migrated := 0
 			if len(recs) == 0 && dnsMigratedFromGoDaddy(d.Name) {
@@ -220,7 +221,7 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 			syncMu.Lock()
 			st.Synced++
 			st.Records += len(recs)
-			st.Imp += imp
+			st.Imp += len(imp)
 			syncMu.Unlock()
 		}
 		// 只要这次扫到了就更新同步时刻（不管 records 成败），消除假"24h未同步"
@@ -445,7 +446,8 @@ func (h *SyncHandler) markStaleDomains(sourceID int, present map[string]bool) in
 // 按 (host, record_type) 聚合：A 多 IP 逗号拼接、CNAME 取值。已存在的只刷厂商字段(源站IP/回源CNAME)，
 // 保留人工填的项目/环境/模块/CDN/证书；不存在的新建。受保护(_acme-challenge/NS)与非 A/CNAME 跳过。
 // 返回新建条数。
-func (h *SyncHandler) importBusinessRecords(ciID int64, recs []dnsource.DNSRecord) int {
+// importBusinessRecords 返回本次新增的业务解析展示串（FQDN + 类型 + 值），供同步摘要列出。
+func (h *SyncHandler) importBusinessRecords(ciID int64, domainName string, recs []dnsource.DNSRecord) []string {
 	type biz struct{ host, rtype, originIP, cname string }
 	agg := map[string]*biz{}
 	order := []string{}
@@ -470,7 +472,7 @@ func (h *SyncHandler) importBusinessRecords(ciID int64, recs []dnsource.DNSRecor
 			b.cname = r.Data
 		}
 	}
-	created := 0
+	var created []string
 	present := map[string]bool{}
 	for _, key := range order {
 		b := agg[key]
@@ -481,7 +483,11 @@ func (h *SyncHandler) importBusinessRecords(ciID int64, recs []dnsource.DNSRecor
 		if err == sql.ErrNoRows {
 			_, _ = h.DB.Exec(`INSERT INTO domain_records (domain_ci_id, host, record_type, origin_ip, cname, operator)
 				VALUES (?, ?, ?, ?, ?, 'godaddy同步')`, ciID, b.host, b.rtype, b.originIP, b.cname)
-			created++
+			val := b.originIP
+			if b.rtype == "CNAME" {
+				val = b.cname
+			}
+			created = append(created, fmt.Sprintf("%s (%s → %s)", recordFQDN(b.host, domainName), b.rtype, val))
 		} else if err == nil {
 			// 只刷厂商字段，业务字段(项目/环境/模块/CDN/证书)原样保留；重新出现则取消失效标记。
 			// origin_ip：同步值为空(CNAME 记录)时保留人工手填的源站IP，非空(A 记录)才用厂商值覆盖。
@@ -507,6 +513,8 @@ func (h *SyncHandler) importBusinessRecords(ciID int64, recs []dnsource.DNSRecor
 	}
 	return created
 }
+
+// ← importBusinessRecords 返回值改为新增解析展示串列表
 
 func (h *SyncHandler) refreshDNSRecords(ciID int64, sourceID int, recs []dnsource.DNSRecord) {
 	_, _ = h.DB.Exec(`DELETE FROM dns_records WHERE domain_ci_id=?`, ciID)

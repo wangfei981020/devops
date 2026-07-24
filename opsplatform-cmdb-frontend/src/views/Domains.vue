@@ -96,7 +96,7 @@
             <el-tooltip content="查看详情"><el-button link type="primary" :icon="View" @click="openDetail(row)" /></el-tooltip>
             <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEdit(row)" /></el-tooltip>
             <el-tooltip content="检测证书"><el-button link type="primary" :loading="checking[row.id]" :icon="CircleCheck" @click="checkCert(row)" /></el-tooltip>
-            <el-tooltip v-if="!row.ignored" content="忽略"><el-button link type="warning" :icon="Hide" @click="openIgnore([row])" /></el-tooltip>
+            <el-tooltip v-if="!row.ignored" content="忽略此解析"><el-button link type="warning" :icon="Hide" @click="openIgnore([row])" /></el-tooltip>
             <el-tooltip v-else content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="doUnignore([row])" /></el-tooltip>
             <el-tooltip v-if="row.origin === 'manual' || row.stale" :content="row.stale ? '移除（已移出账号）' : '删除'">
               <el-button link type="danger" :icon="Delete" @click="del(row)" />
@@ -165,7 +165,7 @@
               <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
             </template>
             <el-tooltip v-else-if="row.stale" content="移除（已移出账号）"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
-            <el-tooltip v-if="!row.ignored" content="忽略"><el-button link type="warning" :icon="Hide" @click="ignoreDomains([row], true)" /></el-tooltip>
+            <el-tooltip v-if="!row.ignored" content="忽略域名"><el-button link type="warning" :icon="Hide" @click="ignoreDomains([row], true)" /></el-tooltip>
             <el-tooltip v-else content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="ignoreDomains([row], false)" /></el-tooltip>
           </div>
         </template></el-table-column>
@@ -342,8 +342,8 @@
     </el-dialog>
 
     <!-- 忽略业务域名（单条/批量共用，原因可选） -->
-    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="igDlg" title="忽略业务域名" width="480px">
-      <div class="muted" style="margin-bottom:12px">将 {{ igRows.length }} 条业务域名标为「忽略」：默认不再展示，也不计入证书巡检 / 总览统计。可随时在「已忽略」里恢复。</div>
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="igDlg" title="忽略此解析" width="480px">
+      <div class="muted" style="margin-bottom:12px">将 {{ igRows.length }} 条业务域名（解析）标为「忽略」：整条解析默认不再展示，也不计入证书巡检 / 总览统计。可随时在「已忽略」里恢复。<br/>（注：若只是「这条解析不需要证书」但仍想保留展示，请到「到期巡检」页标「无需证书」）</div>
       <el-form label-width="60px">
         <el-form-item label="原因"><el-input v-model="igReason" placeholder="（可选）如 已下线 / 项目未使用" /></el-form-item>
       </el-form>

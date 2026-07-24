@@ -49,7 +49,7 @@ func StartScheduler(db *sql.DB, cipher *crypto.Cipher) {
 	sched = &Scheduler{db: db, cipher: cipher}
 	sched.funcs = map[string]taskFn{
 		"refresh_expiry": func(p ProgressFn, t []string) (string, []TaskFailure, bool) { return refreshAllWhoisCore(db, p, t) },
-		"auto_renew":     func(ProgressFn, []string) (string, []TaskFailure, bool) { renewDue(db, cipher); return "已扫描并触发到期前 30 天证书续期", nil, true },
+		"auto_renew":     func(ProgressFn, []string) (string, []TaskFailure, bool) { return renewDue(db, cipher) },
 		"remind":         func(ProgressFn, []string) (string, []TaskFailure, bool) { return remindExpiry(db), nil, true },
 		"inspect":        func(p ProgressFn, t []string) (string, []TaskFailure, bool) { return inspectAllCertsCore(db, p, t) },
 		"dns_sync":       func(ProgressFn, []string) (string, []TaskFailure, bool) { return dnsSyncCore(db, cipher) },
@@ -211,7 +211,10 @@ func refreshAllWhoisCore(db *sql.DB, prog ProgressFn, targets []string) (string,
 
 	total := len(items)
 	if total == 0 {
-		return "没有需要 WHOIS 的域名（数据源域名到期日由同步维护）", nil, true
+		var syncN int
+		_ = db.QueryRow(`SELECT COUNT(*) FROM cis c JOIN domains d ON d.ci_id=c.id
+			WHERE c.type='domain' AND d.stale=0 AND d.origin='sync'`).Scan(&syncN)
+		return fmt.Sprintf("0 个手动域名需 WHOIS；数据源域名（%d 个）到期日已由「DNS 记录同步」用厂商权威到期日更新", syncN), nil, true
 	}
 	var mu sync.Mutex
 	var failures []TaskFailure
@@ -344,7 +347,22 @@ func inspectAllCertsCore(db *sql.DB, prog ProgressFn, targetList []string) (stri
 		}(t)
 	}
 	wg.Wait()
-	return fmt.Sprintf("检测 %d 张证书（主域名+业务域名），成功 %d / 失败 %d", total, ok, fail), failures, true
+	msg := fmt.Sprintf("检测 %d 张证书（主域名+业务域名），成功 %d / 失败 %d", total, ok, fail)
+	if len(failures) > 0 {
+		const topN = 8
+		msg += "\n失败 TOP（完整见执行记录）："
+		for i, f := range failures {
+			if i >= topN {
+				break
+			}
+			msg += fmt.Sprintf("\n· %s — %s", f.Target, f.Reason)
+		}
+		if len(failures) > topN {
+			msg += fmt.Sprintf("\n…另 %d 条，详见「执行记录」", len(failures)-topN)
+		}
+		msg += "\n提示：常年失败多为内网/无需证书的解析，可在到期巡检标「无需证书」不再计入"
+	}
+	return msg, failures, true
 }
 
 // dnsSyncCore 定时全量同步所有数据源的 DNS 记录（复用 SyncHandler 的方法）。
@@ -370,6 +388,7 @@ func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool
 		return "没有配置数据源，跳过", nil, true
 	}
 	totalD, totalR, totalImp := 0, 0, 0
+	var newRecList []string // 本次新增的业务解析（供摘要列出）
 	var failures []TaskFailure
 	for _, s := range srcs {
 		id := s.id
@@ -416,7 +435,9 @@ func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool
 			} else {
 				sh.refreshDNSRecords(ciID, id, recs)
 				totalR += len(recs)
-				totalImp += sh.importBusinessRecords(ciID, recs)
+				imp := sh.importBusinessRecords(ciID, d.Name, recs)
+				totalImp += len(imp)
+				newRecList = append(newRecList, imp...)
 				migrated := 0
 				if len(recs) == 0 && dnsMigratedFromGoDaddy(d.Name) {
 					migrated = 1
@@ -430,9 +451,22 @@ func dnsSyncCore(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool
 		cancel()
 	}
 	ok := !(totalD == 0 && len(failures) == len(srcs)) // 全部源都失败才算失败
-	msg := fmt.Sprintf("同步 %d 域名 / %d DNS 记录 / 导入 %d 新解析", totalD, totalR, totalImp)
+	msg := fmt.Sprintf("同步 %d 域名 / %d DNS 记录 / 新增 %d 条解析", totalD, totalR, totalImp)
+	if len(newRecList) > 0 {
+		const topN = 10
+		msg += "\n新增业务解析："
+		for i, r := range newRecList {
+			if i >= topN {
+				break
+			}
+			msg += "\n· " + r
+		}
+		if len(newRecList) > topN {
+			msg += fmt.Sprintf("\n…另 %d 条，详见「执行记录」", len(newRecList)-topN)
+		}
+	}
 	if len(failures) > 0 {
-		msg += fmt.Sprintf("，%d/%d 个数据源失败", len(failures), len(srcs))
+		msg += fmt.Sprintf("\n%d/%d 个数据源失败", len(failures), len(srcs))
 	}
 	return msg, failures, ok
 }
@@ -527,8 +561,9 @@ func getSetting(db *sql.DB, key string) string {
 	return v
 }
 
-// renewDue 续期 auto_renew 且 expiry_at - now < renew_days 天的证书
-func renewDue(db *sql.DB, cipher *crypto.Cipher) {
+// renewDue 续期 auto_renew 且 expiry_at - now < renew_days 天的证书。
+// 返回摘要（列出续了哪几张 + 新到期日 + 需手动部署提示）、失败明细、ok（任务是否正常跑）。
+func renewDue(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool) {
 	rows, err := db.Query(`
 		SELECT t.ci_id, COALESCE(r.dst_ci_id, 0), t.ca, t.cn
 		FROM certificates t
@@ -536,7 +571,7 @@ func renewDue(db *sql.DB, cipher *crypto.Cipher) {
 		WHERE t.auto_renew=1 AND t.status='active' AND t.expiry_at IS NOT NULL
 		  AND t.expiry_at < DATE_ADD(NOW(), INTERVAL t.renew_days DAY)`)
 	if err != nil {
-		return
+		return "查询待续期证书失败：" + truncate(err.Error(), 160), nil, false
 	}
 	type job struct {
 		certCIID, domainCIID int64
@@ -551,19 +586,47 @@ func renewDue(db *sql.DB, cipher *crypto.Cipher) {
 	}
 	rows.Close()
 
+	if len(jobs) == 0 {
+		return "本次扫描无到期前阈值内的证书，未触发续期", nil, true
+	}
+
 	webhook := taskWebhook(db, "auto_renew")
+	var okNames []string
+	var failures []TaskFailure
 	for _, j := range jobs {
 		var acctID int
 		if err := db.QueryRow(`SELECT id FROM acme_accounts WHERE ca=? ORDER BY id LIMIT 1`, j.ca).Scan(&acctID); err != nil {
+			failures = append(failures, TaskFailure{Target: j.cn, Reason: "无对应 ACME 账户（ca=" + j.ca + "）"})
 			continue
 		}
 		log.Printf("auto-renew cert %s (ci %d)", j.cn, j.certCIID)
 		if errMsg := issueCertCore(db, cipher, j.certCIID, j.domainCIID, acctID, false, "renew"); errMsg != "" {
+			failures = append(failures, TaskFailure{Target: j.cn, Reason: truncate(errMsg, 160)})
 			notifyEvent(db, webhook, "auto_renew", "notify_renew_fail", fmt.Sprintf("❌ 证书自动续期失败：%s\n原因：%s", j.cn, errMsg))
 		} else {
-			notifyEvent(db, webhook, "auto_renew", "notify_renew_success", fmt.Sprintf("✅ 证书自动续期成功：%s", j.cn))
+			var newExp string
+			_ = db.QueryRow(`SELECT DATE_FORMAT(expiry_at,'%Y-%m-%d') FROM certificates WHERE ci_id=?`, j.certCIID).Scan(&newExp)
+			okNames = append(okNames, fmt.Sprintf("%s（%s，新到期 %s）", j.cn, j.ca, newExp))
+			notifyEvent(db, webhook, "auto_renew", "notify_renew_success",
+				fmt.Sprintf("✅ 证书自动续期成功：%s（%s，新到期 %s）\n⚠️ 已重新签发，请手动更新/部署到目标（K8s Secret / 服务器）", j.cn, j.ca, newExp))
 		}
 	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "续期成功 %d / 失败 %d（共 %d 张到期）", len(okNames), len(failures), len(jobs))
+	if len(okNames) > 0 {
+		b.WriteString("\n已重签（⚠️ 需手动更新/部署到目标）：")
+		for _, n := range okNames {
+			b.WriteString("\n✅ " + n)
+		}
+	}
+	if len(failures) > 0 {
+		b.WriteString("\n失败：")
+		for _, f := range failures {
+			fmt.Fprintf(&b, "\n❌ %s — %s", f.Target, f.Reason)
+		}
+	}
+	return b.String(), failures, true
 }
 
 // taskWebhook 取某任务配置的 Lark 群 webhook。
@@ -579,7 +642,7 @@ type remindItem struct {
 	expiry string // 到期日 YYYY-MM-DD
 }
 
-// remindDot 按剩余天数给严重度色点：🔴≤7 / 🟠≤15 / 🟡其它
+// remindDot 按剩余天数给严重度色点：🔴已过期或≤7 / 🟠≤15 / 🟡其它
 func remindDot(days int) string {
 	switch {
 	case days <= 7:
@@ -591,48 +654,53 @@ func remindDot(days int) string {
 	}
 }
 
-// remindExpiry 证书/域名到期前命中阈值天数时发飞书提醒。
-// 逐条单发 Lark（带色点+到期日），并返回一张按「证书/域名」分组、组内按剩余天数升序的多行汇总摘要。
+// remindPhrase 到期措辞：已过期 N 天 / 今天到期 / 还有 N 天到期
+func remindPhrase(days int) string {
+	switch {
+	case days < 0:
+		return fmt.Sprintf("已过期 %d 天", -days)
+	case days == 0:
+		return "今天到期"
+	default:
+		return fmt.Sprintf("还有 %d 天到期", days)
+	}
+}
+
+// remindExpiry 证书/域名剩余天数 ≤ 最大阈值（含已过期）时发飞书提醒，每天一张汇总卡直到续期/续费。
+// 返回一张按「证书/域名」分组、组内按剩余天数升序的多行汇总摘要（作为任务结果卡片发送）。
 func remindExpiry(db *sql.DB) string {
 	webhook := taskWebhook(db, "remind")
 	if webhook == "" {
 		return "未配置 Lark 群，跳过"
 	}
-	thresholds := map[int]bool{}
-	var thList []int
+	// 取最大阈值作为提醒窗口：剩余天数 ≤ maxTh（含已过期，DATEDIFF 为负）就每天提醒，直到续期/续费。
+	// 不再按精确天数（== 1/7/15/30）命中，避免"错过当天=永不再提醒 + 已过期不报"。
+	maxTh := 0
 	for _, s := range strings.Split(getSetting(db, "remind_days"), ",") {
-		if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && !thresholds[n] {
-			thresholds[n] = true
-			thList = append(thList, n)
+		if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n > maxTh {
+			maxTh = n
 		}
 	}
-	if len(thresholds) == 0 {
+	if maxTh <= 0 {
 		return "未配置提醒阈值(remind_days)，跳过"
-	}
-	sort.Ints(thList)
-	thDisplay := make([]string, len(thList))
-	for i, n := range thList {
-		thDisplay[i] = strconv.Itoa(n)
 	}
 
 	var certs, doms []remindItem
-	// 证书
+	// 证书：≤maxTh 天（含已过期）
 	crows, _ := db.Query(`
 		SELECT t.cn, DATEDIFF(t.expiry_at, NOW()), DATE_FORMAT(t.expiry_at,'%Y-%m-%d')
 		FROM certificates t WHERE t.expiry_at IS NOT NULL`)
 	if crows != nil {
 		for crows.Next() {
 			var it remindItem
-			if crows.Scan(&it.name, &it.days, &it.expiry) == nil && thresholds[it.days] {
-				notifyEvent(db, webhook, "remind", "notify_cert_expiring",
-					fmt.Sprintf("%s 证书 %s 还有 %d 天到期（%s），请关注续期", remindDot(it.days), it.name, it.days, it.expiry))
+			if crows.Scan(&it.name, &it.days, &it.expiry) == nil && it.days <= maxTh {
 				certs = append(certs, it)
 			}
 		}
 		crows.Close()
 	}
 
-	// 域名（已忽略 / 已移出账号的不提醒）
+	// 域名（已忽略 / 已移出账号的不提醒）：≤maxTh 天（含已过期）
 	drows, _ := db.Query(`
 		SELECT c.name, DATEDIFF(d.expiry_at, NOW()), DATE_FORMAT(d.expiry_at,'%Y-%m-%d')
 		FROM cis c JOIN domains d ON d.ci_id=c.id
@@ -640,9 +708,7 @@ func remindExpiry(db *sql.DB) string {
 	if drows != nil {
 		for drows.Next() {
 			var it remindItem
-			if drows.Scan(&it.name, &it.days, &it.expiry) == nil && thresholds[it.days] {
-				notifyEvent(db, webhook, "remind", "notify_domain_expiring",
-					fmt.Sprintf("%s 域名 %s 还有 %d 天到期（%s），请到注册商续费", remindDot(it.days), it.name, it.days, it.expiry))
+			if drows.Scan(&it.name, &it.days, &it.expiry) == nil && it.days <= maxTh {
 				doms = append(doms, it)
 			}
 		}
@@ -651,12 +717,12 @@ func remindExpiry(db *sql.DB) string {
 
 	total := len(certs) + len(doms)
 	if total == 0 {
-		return "正常：无临近到期项(阈值 " + strings.Join(thDisplay, "/") + " 天)"
+		return fmt.Sprintf("正常：无 %d 天内到期项（含已过期）", maxTh)
 	}
 	sort.SliceStable(certs, func(i, j int) bool { return certs[i].days < certs[j].days })
 	sort.SliceStable(doms, func(i, j int) bool { return doms[i].days < doms[j].days })
 
-	// 汇总卡：命中 N 项 —— 证书 x · 域名 y（阈值 …天）+ 分组多行
+	// 汇总卡：命中 N 项 —— 证书 x · 域名 y + 分组多行（只发一张卡，避免逐条每天刷屏）
 	var counts []string
 	if len(certs) > 0 {
 		counts = append(counts, fmt.Sprintf("证书 %d", len(certs)))
@@ -665,17 +731,17 @@ func remindExpiry(db *sql.DB) string {
 		counts = append(counts, fmt.Sprintf("域名 %d", len(doms)))
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "命中 %d 项 —— %s（阈值 %s 天）", total, strings.Join(counts, " · "), strings.Join(thDisplay, "/"))
+	fmt.Fprintf(&b, "命中 %d 项 —— %s（≤%d 天每天提醒，直到续期/续费）", total, strings.Join(counts, " · "), maxTh)
 	if len(certs) > 0 {
 		b.WriteString("\n\n证书")
 		for _, it := range certs {
-			fmt.Fprintf(&b, "\n%s %s 还有 %d 天到期（%s）", remindDot(it.days), it.name, it.days, it.expiry)
+			fmt.Fprintf(&b, "\n%s %s %s（%s）", remindDot(it.days), it.name, remindPhrase(it.days), it.expiry)
 		}
 	}
 	if len(doms) > 0 {
-		b.WriteString("\n\n域名")
+		b.WriteString("\n\n域名（请到注册商续费）")
 		for _, it := range doms {
-			fmt.Fprintf(&b, "\n%s %s 还有 %d 天到期（%s）", remindDot(it.days), it.name, it.days, it.expiry)
+			fmt.Fprintf(&b, "\n%s %s %s（%s）", remindDot(it.days), it.name, remindPhrase(it.days), it.expiry)
 		}
 	}
 	return b.String()

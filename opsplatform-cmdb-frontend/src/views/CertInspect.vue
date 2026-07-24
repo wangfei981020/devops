@@ -39,14 +39,14 @@
         <el-table-column label="状态" width="130"><template #default="{ row }">
           <el-tag size="small" :type="ST[row._st].tag">{{ ST[row._st].l }}</el-tag>
         </template></el-table-column>
-        <el-table-column label="忽略原因" min-width="160" show-overflow-tooltip><template #default="{ row }">
+        <el-table-column label="无需证书原因" min-width="160" show-overflow-tooltip><template #default="{ row }">
           <span v-if="row.ignored" class="muted">{{ row.ignore_reason || '—' }}</span>
         </template></el-table-column>
         <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
             <template v-if="row.kind==='online'">
-              <el-tooltip v-if="!row.ignored" content="忽略"><el-button link type="info" :icon="Hide" @click="openIgnore(row)" /></el-tooltip>
-              <el-tooltip v-else content="取消忽略"><el-button link type="primary" :icon="View" @click="unignore(row)" /></el-tooltip>
+              <el-tooltip v-if="!row.ignored" content="标记无需证书"><el-button link type="info" :icon="Hide" @click="openIgnore(row)" /></el-tooltip>
+              <el-tooltip v-else content="取消无需证书"><el-button link type="primary" :icon="View" @click="unignore(row)" /></el-tooltip>
               <el-tooltip content="去域名页"><el-button link type="primary" :icon="Link" @click="$router.push('/domains')" /></el-tooltip>
             </template>
             <el-tooltip v-else-if="row.kind==='domain'" content="去域名页"><el-button link type="primary" :icon="Link" @click="$router.push('/domains')" /></el-tooltip>
@@ -58,12 +58,12 @@
         :total="filtered.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
     </el-card>
 
-    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="igDlg" title="忽略证书巡检" width="460px">
-      <div class="muted" style="margin-bottom:10px">{{ igRow?.fqdn }} —— 标记为不需要证书，将从「快到期/检测失败」中排除，可在「已忽略」里查看。</div>
+    <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="igDlg" title="标记无需证书" width="460px">
+      <div class="muted" style="margin-bottom:10px">{{ igRow?.fqdn }} —— 标记为不需要证书，将从「快到期/检测失败」中排除，可在「无需证书」里查看。</div>
       <el-form label-width="70px">
         <el-form-item label="原因"><el-input v-model="igReason" type="textarea" :rows="2" placeholder="如：内网解析 / 邮件 MX / 纯跳转，无需证书" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="igDlg=false">取消</el-button><el-button type="primary" @click="confirmIgnore">确认忽略</el-button></template>
+      <template #footer><el-button @click="igDlg=false">取消</el-button><el-button type="primary" @click="confirmIgnore">确认</el-button></template>
     </el-dialog>
   </div>
 </template>
@@ -84,12 +84,12 @@ const ST = {
   expiring:  { l: '30天内到期', tag: 'warning' },
   expired:   { l: '已过期',   tag: 'danger' },
   failed:    { l: '检测失败', tag: 'danger' },
-  ignored:   { l: '已忽略',   tag: 'info' },
+  ignored:   { l: '无需证书',  tag: 'primary' },
   unknown:   { l: '未检测',   tag: 'info' },
 }
 const statusTabs = [
   { v: 'all', l: '全部' }, { v: 'expiring', l: '快到期' }, { v: 'expired', l: '已过期' },
-  { v: 'failed', l: '检测失败' }, { v: 'ignored', l: '已忽略' }, { v: 'ok', l: '正常' }, { v: 'unknown', l: '未检测' },
+  { v: 'failed', l: '检测失败' }, { v: 'ignored', l: '无需证书' }, { v: 'ok', l: '正常' }, { v: 'unknown', l: '未检测' },
 ]
 
 const rows = ref([]), loading = ref(false)
@@ -144,11 +144,11 @@ async function load() {
 }
 function openIgnore(row) { igRow.value = row; igReason.value = ''; igDlg.value = true }
 async function confirmIgnore() {
-  try { await recordCertIgnore(igRow.value.record_id, { ignored: true, reason: igReason.value }); ElMessage.success('已忽略'); igDlg.value = false; load() }
+  try { await recordCertIgnore(igRow.value.record_id, { ignored: true, reason: igReason.value }); ElMessage.success('已标记无需证书'); igDlg.value = false; load() }
   catch (e) { ElMessage.error('操作失败') }
 }
 async function unignore(row) {
-  try { await recordCertIgnore(row.record_id, { ignored: false }); ElMessage.success('已取消忽略'); load() }
+  try { await recordCertIgnore(row.record_id, { ignored: false }); ElMessage.success('已取消'); load() }
   catch (e) { ElMessage.error('操作失败') }
 }
 onMounted(load)
