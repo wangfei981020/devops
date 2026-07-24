@@ -147,6 +147,11 @@
 
     <!-- 按模块聚合视图（一个模块一组，组内每域名独立） -->
     <el-card shadow="never" v-else v-loading="loading">
+      <div style="margin-bottom:8px">
+        <el-button size="small" text @click="expandAllGroups">展开全部</el-button>
+        <el-button size="small" text @click="collapseAllGroups">收起全部</el-button>
+        <span class="muted" style="margin-left:8px;font-size:12px">点模块行展开看域名明细</span>
+      </div>
       <el-collapse v-model="openGroups">
         <el-collapse-item v-for="g in pagedGroups" :key="g.key" :name="g.key">
           <template #title>
@@ -161,7 +166,7 @@
               <el-tag v-if="g.certExpiring" size="small" type="warning" effect="plain">{{ g.certExpiring }} 快到期</el-tag>
             </div>
           </template>
-          <el-table :data="g.rows" size="small" row-key="id">
+          <el-table v-if="openGroups.includes(g.key)" :data="g.rows" size="small" row-key="id">
             <el-table-column prop="fqdn" label="域名" min-width="230" show-overflow-tooltip><template #default="{ row }">
               <span class="mono" :class="{ stale: row.stale, ignored: row.ignored }">{{ row.fqdn }}</span>
               <el-tag v-if="row.domain_status" size="small" effect="plain" :style="tagStyle(app.statusColor(row.domain_status))" style="margin-left:6px">{{ row.domain_status }}</el-tag>
@@ -653,7 +658,10 @@ const pagedGroups = computed(() => {
   const s = (currentPage.value - 1) * pageSize.value
   return moduleGroups.value.slice(s, s + pageSize.value)
 })
-watch(pagedGroups, (gs) => { openGroups.value = gs.map((g) => g.key) })
+// 默认折叠、展开才渲染组内表格（懒渲染）：切换视图/翻页瞬间只渲染组头，不再一次性渲染上百个表格
+watch([currentPage, recordView], () => { openGroups.value = [] })
+function expandAllGroups() { openGroups.value = pagedGroups.value.map((g) => g.key) }
+function collapseAllGroups() { openGroups.value = [] }
 function doSearch() { query.value = { ...f.value }; currentPage.value = 1 }
 function resetFilter() { f.value = { keyword: '', domain: null, project: null, env: null, module: null, source: null, pstatus: null }; query.value = { ...f.value }; currentPage.value = 1 }
 

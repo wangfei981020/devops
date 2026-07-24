@@ -89,7 +89,7 @@
         <el-form-item label="项目名"><el-input v-model="pForm.name" /></el-form-item>
         <el-form-item label="状态">
           <el-select v-model="pForm.status" clearable placeholder="上线状态（可自定义）" style="width:240px">
-            <el-option v-for="s in app.projectStatuses" :key="s.id" :label="s.label" :value="s.label">
+            <el-option v-for="s in projStatusOpts" :key="s.id" :label="s.label" :value="s.label">
               <span :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: s.color || '#909399', marginRight:'6px' }" />{{ s.label }}
             </el-option>
           </el-select>
@@ -135,6 +135,7 @@ const cDlg = ref(false), cEdit = ref(false), cForm = ref({})
 const statuses = ref([]), sScope = ref('project')
 const sDlg = ref(false), sEdit = ref(false), sForm = ref({})
 const scopedStatuses = computed(() => statuses.value.filter((s) => s.scope === sScope.value))
+const projStatusOpts = computed(() => statuses.value.filter((s) => s.scope === 'project')) // 本页已加载，避免依赖全局 store 未加载导致 No data
 
 async function load() { projects.value = await listProjects(); envs.value = await listEnvironments(); cdns.value = await listCdns(); statuses.value = await listStatuses() }
 function openProj(row) { pEdit.value = !!row; pForm.value = row ? { ...row } : { name: '', remark: '', color: '', sort_order: 0, status: '' }; pDlg.value = true }
@@ -162,5 +163,5 @@ async function saveCdn() {
   catch (e) { ElMessage.error(e.response?.data?.error || '失败') }
 }
 async function delCdn(row) { try { await app.showConfirm(`删除 CDN ${row.name}？`); await deleteCdn(row.id); load(); app.loadCdns() } catch (e) { if (e !== 'cancel') ElMessage.error('失败') } }
-onMounted(load)
+onMounted(() => { load(); app.loadStatuses() })
 </script>
