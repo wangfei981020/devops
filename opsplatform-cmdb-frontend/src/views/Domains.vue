@@ -67,7 +67,7 @@
         </el-select>
         <el-button type="primary" :icon="Search" @click="doSearch">搜索</el-button>
         <el-button @click="resetFilter">重置</el-button>
-        <el-radio-group v-model="recordView" size="small" style="margin-left:8px" @change="currentPage=1">
+        <el-radio-group v-model="recordView" size="small" style="margin-left:8px" @change="onRecordViewChange">
           <el-radio-button value="detail">明细</el-radio-button>
           <el-radio-button value="module">按模块</el-radio-button>
         </el-radio-group>
@@ -166,7 +166,7 @@
               <el-tag v-if="g.certExpiring" size="small" type="warning" effect="plain">{{ g.certExpiring }} 快到期</el-tag>
             </div>
           </template>
-          <el-table v-if="openGroups.includes(g.key)" :data="g.rows" size="small" row-key="id">
+          <el-table v-if="openGroups.includes(g.key)" :data="groupRows(g)" size="small" row-key="id">
             <el-table-column prop="fqdn" label="域名" min-width="230" show-overflow-tooltip><template #default="{ row }">
               <span class="mono" :class="{ stale: row.stale, ignored: row.ignored }">{{ row.fqdn }}</span>
               <el-tag v-if="row.domain_status" size="small" effect="plain" :style="tagStyle(app.statusColor(row.domain_status))" style="margin-left:6px">{{ row.domain_status }}</el-tag>
@@ -197,11 +197,18 @@
               </div>
             </template></el-table-column>
           </el-table>
+          <el-pagination v-if="openGroups.includes(g.key) && g.count > innerSize" small background
+            :current-page="innerPage[g.key] || 1" :page-size="innerSize" :total="g.count"
+            layout="total, prev, pager, next" style="margin-top:8px; justify-content:flex-end"
+            @current-change="(p) => setInnerPage(g.key, p)" />
         </el-collapse-item>
       </el-collapse>
       <el-empty v-if="!moduleGroups.length" description="没有匹配的业务域名" :image-size="60" />
-      <el-pagination v-model:current-page="currentPage" v-model:page-size="pageSize" :page-sizes="[10,20,50,100]"
-        :total="moduleGroups.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
+      <div style="display:flex;align-items:center;margin-top:12px;justify-content:flex-end;gap:10px">
+        <span class="muted" style="font-size:13px">共 {{ moduleGroups.length }} 个模块</span>
+        <el-pagination v-model:current-page="groupPage" v-model:page-size="groupSize" :page-sizes="[10,20,50]"
+          :total="moduleGroups.length" layout="sizes, prev, pager, next" />
+      </div>
     </el-card>
     </template>
 
@@ -639,6 +646,12 @@ const pagedRows = computed(() => {
 // —— 按模块聚合视图（项目+环境+模块 分组，组内每域名独立）——
 const recordView = ref('detail')
 const openGroups = ref([])
+const groupPage = ref(1), groupSize = ref(10) // 模块视图独立分页（每页模块数），不与明细共用 pageSize
+const innerSize = 20                            // 组内域名每页条数（大组如"无模块"不再一坨）
+const innerPage = ref({})                       // key -> 组内页码
+function onRecordViewChange() { currentPage.value = 1; groupPage.value = 1 }
+function groupRows(g) { const p = innerPage.value[g.key] || 1; return g.rows.slice((p - 1) * innerSize, p * innerSize) }
+function setInnerPage(key, p) { innerPage.value = { ...innerPage.value, [key]: p } }
 const moduleGroups = computed(() => {
   const map = new Map()
   for (const r of sortedRows.value) {
@@ -655,11 +668,11 @@ const moduleGroups = computed(() => {
   })
 })
 const pagedGroups = computed(() => {
-  const s = (currentPage.value - 1) * pageSize.value
-  return moduleGroups.value.slice(s, s + pageSize.value)
+  const s = (groupPage.value - 1) * groupSize.value
+  return moduleGroups.value.slice(s, s + groupSize.value)
 })
 // 默认折叠、展开才渲染组内表格（懒渲染）：切换视图/翻页瞬间只渲染组头，不再一次性渲染上百个表格
-watch([currentPage, recordView], () => { openGroups.value = [] })
+watch([groupPage, recordView], () => { openGroups.value = [] })
 function expandAllGroups() { openGroups.value = pagedGroups.value.map((g) => g.key) }
 function collapseAllGroups() { openGroups.value = [] }
 function doSearch() { query.value = { ...f.value }; currentPage.value = 1 }
