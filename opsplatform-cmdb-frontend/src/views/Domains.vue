@@ -86,8 +86,15 @@
         <el-table-column label="回源CNAME" min-width="180" show-overflow-tooltip><template #default="{ row }">
           <span class="mono">{{ row.cname || '—' }}</span>
         </template></el-table-column>
-        <el-table-column label="源站IP" min-width="150" show-overflow-tooltip><template #default="{ row }">
-          <span class="mono">{{ row.origin_ip || '—' }}</span>
+        <el-table-column label="源站IP" min-width="170" show-overflow-tooltip><template #default="{ row }">
+          <span v-if="row.origin_ip" class="mono">{{ row.origin_ip }}</span>
+          <span v-else-if="row.auto_origin_ip" class="mono">
+            {{ row.auto_origin_ip }}
+            <el-tooltip content="由回源 CNAME 在已同步 DNS 里解析得到；手填后以手填为准" placement="top">
+              <el-tag size="small" type="info" effect="plain" style="margin-left:4px">自动</el-tag>
+            </el-tooltip>
+          </span>
+          <span v-else class="mono">—</span>
         </template></el-table-column>
         <el-table-column prop="cert_expiry_at" label="证书到期" width="140" sortable="custom"><template #default="{ row }">
           <el-tooltip :disabled="!row.cert_check_msg" :content="row.cert_check_msg">
@@ -235,7 +242,10 @@
           </el-select>
         </el-form-item>
         <el-form-item label="回源CNAME"><el-input v-model="form.cname" :disabled="synced" placeholder="走 CDN 时的回源地址 / CNAME" /></el-form-item>
-        <el-form-item label="源站IP"><el-input v-model="form.origin_ip" placeholder="源站 IP（多个逗号分隔）" /></el-form-item>
+        <el-form-item label="源站IP">
+          <el-input v-model="form.origin_ip" :placeholder="form.auto_origin_ip ? `自动推测：${form.auto_origin_ip}（留空即用此值）` : '源站 IP（多个逗号分隔）'" />
+          <span v-if="form.auto_origin_ip" class="muted" style="font-size:12px">留空则展示自动推测值 {{ form.auto_origin_ip }}；手填后以手填为准</span>
+        </el-form-item>
         <el-form-item label="证书到期">
           <el-date-picker v-model="form.cert_expiry_at" type="date" value-format="YYYY-MM-DD" placeholder="可手填，或保存后点「检测证书」自动读" style="width:260px" />
         </el-form-item>
@@ -372,7 +382,7 @@
         <el-descriptions-item label="模块">{{ detail.module || '—' }}</el-descriptions-item>
         <el-descriptions-item label="CDN厂商">{{ detail.cdn_name || '—' }}</el-descriptions-item>
         <el-descriptions-item label="回源CNAME"><span class="mono detail-val">{{ detail.cname || '—' }}</span></el-descriptions-item>
-        <el-descriptions-item label="源站IP"><span class="mono detail-val">{{ detail.origin_ip || '—' }}</span></el-descriptions-item>
+        <el-descriptions-item label="源站IP"><span class="mono detail-val">{{ detail.origin_ip || (detail.auto_origin_ip ? detail.auto_origin_ip + '（自动）' : '—') }}</span></el-descriptions-item>
         <el-descriptions-item label="证书到期">
           <el-tag :type="certState(detail).type" size="small" effect="light">{{ certState(detail).text }}</el-tag>
           <div v-if="detail.cert_check_msg" class="muted" style="margin-top:4px">{{ detail.cert_check_msg }}</div>
@@ -451,7 +461,8 @@ const filteredRows = computed(() => rows.value.filter((r) => {
   const q = query.value
   const kw = q.keyword?.toLowerCase()
   return (!kw || r.fqdn.toLowerCase().includes(kw) || (r.project || '').toLowerCase().includes(kw) ||
-      (r.module || '').toLowerCase().includes(kw) || (r.cname || '').toLowerCase().includes(kw) || (r.origin_ip || '').toLowerCase().includes(kw)) &&
+      (r.module || '').toLowerCase().includes(kw) || (r.cname || '').toLowerCase().includes(kw) ||
+      (r.origin_ip || '').toLowerCase().includes(kw) || (r.auto_origin_ip || '').toLowerCase().includes(kw)) &&
     (!q.domain || r.domain === q.domain) &&
     (!q.project || r.project === q.project) &&
     (!q.env || r.env === q.env) &&

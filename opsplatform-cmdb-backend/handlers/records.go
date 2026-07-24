@@ -41,6 +41,7 @@ type flatRecordOut struct {
 	CdnName      string `json:"cdn_name"`
 	Cname        string `json:"cname"`
 	OriginIP     string `json:"origin_ip"`
+	AutoOriginIP string `json:"auto_origin_ip"` // 手填 origin_ip 为空时，由回源 CNAME 在已同步 DNS 里解析出的推测源站IP（不落库，仅展示）
 	CertExpiryAt string `json:"cert_expiry_at"`
 	CertCheckMsg string `json:"cert_check_msg"`
 	Project      string `json:"project"`
@@ -82,6 +83,7 @@ func (h *RecordHandler) ListAll(c *gin.Context) {
 		return
 	}
 	defer rows.Close()
+	resolveOrigin := buildCnameOriginResolver(h.DB) // 回源 CNAME → 已同步 DNS 里的 A 记录，推测源站IP
 	out := []flatRecordOut{}
 	for rows.Next() {
 		var o flatRecordOut
@@ -97,6 +99,10 @@ func (h *RecordHandler) ListAll(c *gin.Context) {
 		o.Stale = stale == 1
 		o.Ignored = ignored == 1
 		o.FQDN = recordFQDN(o.Host, o.Domain)
+		// 手填源站IP为空且有回源CNAME时，从已同步 DNS 解析出推测源站IP（不落库，仅展示，手填优先）
+		if o.OriginIP == "" && o.Cname != "" {
+			o.AutoOriginIP = resolveOrigin(o.Cname)
+		}
 		if cdnID.Valid {
 			v := int(cdnID.Int64)
 			o.CdnID = &v
@@ -404,4 +410,49 @@ func recordFQDN(host, domain string) string {
 		return host
 	}
 	return host + "." + domain
+}
+
+// normFQDN 归一化：去空白、末尾点、转小写，用于回源 CNAME 与 A 记录的 FQDN 匹配。
+func normFQDN(s string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(s), "."))
+}
+
+// buildCnameOriginResolver 从 dns_records 建全局「FQDN → A记录IP / CNAME目标」索引，
+// 返回一个把回源 CNAME 往下解析（跟随 CNAME 链最多 3 跳）找到背后 A 记录的函数：
+// 命中返回逗号拼的 IP（多 A），找不到（外部 CDN / 未同步）返回空串。跨所有已管域名匹配。
+func buildCnameOriginResolver(db *sql.DB) func(string) string {
+	aIdx := map[string][]string{} // fqdn -> A 记录 IP 列表
+	cIdx := map[string]string{}    // fqdn -> CNAME 目标 fqdn
+	rows, err := db.Query(`SELECT dr.type, dr.name, c.name, dr.data
+		FROM dns_records dr JOIN cis c ON c.id=dr.domain_ci_id
+		WHERE dr.type IN ('A','CNAME')`)
+	if err == nil {
+		for rows.Next() {
+			var typ, name, domain, data string
+			if rows.Scan(&typ, &name, &domain, &data) != nil {
+				continue
+			}
+			fqdn := normFQDN(recordFQDN(name, domain))
+			if typ == "A" {
+				aIdx[fqdn] = append(aIdx[fqdn], data)
+			} else {
+				cIdx[fqdn] = normFQDN(data)
+			}
+		}
+		rows.Close()
+	}
+	var resolve func(string, int) string
+	resolve = func(fqdn string, depth int) string {
+		if depth < 0 {
+			return ""
+		}
+		if ips := aIdx[fqdn]; len(ips) > 0 {
+			return strings.Join(ips, ",")
+		}
+		if tgt, ok := cIdx[fqdn]; ok && tgt != fqdn {
+			return resolve(tgt, depth-1)
+		}
+		return ""
+	}
+	return func(cname string) string { return resolve(normFQDN(cname), 3) }
 }
