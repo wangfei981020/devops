@@ -23,7 +23,10 @@
 
     <el-card shadow="never" style="margin-bottom:12px">
       <div class="filter">
-        <el-input v-model="df.kw.value" placeholder="搜索主域名" clearable :prefix-icon="Search" style="width:180px" @keyup.enter="doDomSearch" />
+        <el-input v-model="df.kw.value" placeholder="搜索主域名" clearable :prefix-icon="Search" style="width:160px" @keyup.enter="doDomSearch" />
+        <el-select v-model="domNameFilter" clearable filterable placeholder="域名" style="width:200px" @change="domPage=1">
+          <el-option v-for="d in domNameOptions" :key="d" :label="d" :value="d" />
+        </el-select>
         <el-select v-model="df.view.value" style="width:150px" @change="domPage=1">
           <el-option v-for="o in df.viewOptions.value" :key="o.value" :label="`${o.label}（${o.count}）`" :value="o.value" />
         </el-select>
@@ -186,10 +189,15 @@ async function syncOne(row) {
 // 主域名列表筛选/分页（状态/来源/到期/关键词 统一筛选）
 const domPage = ref(1), domPageSize = ref(20)
 const df = useDomainFilter(domains)
-const domFiltered = df.filtered
+const domNameFilter = ref(null)
+const domNameOptions = computed(() => [...new Set(domains.value.map((d) => d.name).filter(Boolean))].sort())
+const domFiltered = computed(() => {
+  const base = df.filtered.value
+  return domNameFilter.value ? base.filter((d) => d.name === domNameFilter.value) : base
+})
 const domPaged = computed(() => { const s = (domPage.value - 1) * domPageSize.value; return domFiltered.value.slice(s, s + domPageSize.value) })
 function doDomSearch() { df.doSearch(); domPage.value = 1 }
-function resetDomFilter() { df.reset(); domPage.value = 1 }
+function resetDomFilter() { df.reset(); domNameFilter.value = null; domPage.value = 1 }
 
 // 每个域名的 DNS 记录（懒加载）+ 各自的筛选/分页状态
 const recMap = ref({}), recLoading = ref({}), recState = ref({})

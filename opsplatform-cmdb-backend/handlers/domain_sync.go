@@ -481,13 +481,21 @@ func (h *SyncHandler) importBusinessRecords(ciID int64, domainName string, recs 
 		err := h.DB.QueryRow(`SELECT id FROM domain_records WHERE domain_ci_id=? AND host=? AND record_type=?`,
 			ciID, b.host, b.rtype).Scan(&id)
 		if err == sql.ErrNoRows {
-			_, _ = h.DB.Exec(`INSERT INTO domain_records (domain_ci_id, host, record_type, origin_ip, cname, operator)
-				VALUES (?, ?, ?, ?, ?, 'godaddy同步')`, ciID, b.host, b.rtype, b.originIP, b.cname)
-			val := b.originIP
-			if b.rtype == "CNAME" {
-				val = b.cname
+			// 下划线服务记录（如 _domainconnect 的 Domain Connect CNAME）非业务主机，新导入默认忽略；仅 INSERT 时设，不覆盖人工取消。
+			autoIgnore := strings.HasPrefix(b.host, "_")
+			ig, igReason := 0, ""
+			if autoIgnore {
+				ig, igReason = 1, "下划线服务记录，自动忽略"
 			}
-			created = append(created, fmt.Sprintf("%s (%s → %s)", recordFQDN(b.host, domainName), b.rtype, val))
+			_, _ = h.DB.Exec(`INSERT INTO domain_records (domain_ci_id, host, record_type, origin_ip, cname, operator, ignored, ignore_reason)
+				VALUES (?, ?, ?, ?, ?, 'godaddy同步', ?, ?)`, ciID, b.host, b.rtype, b.originIP, b.cname, ig, igReason)
+			if !autoIgnore { // 自动忽略的不算"新增业务解析"，不进同步摘要
+				val := b.originIP
+				if b.rtype == "CNAME" {
+					val = b.cname
+				}
+				created = append(created, fmt.Sprintf("%s (%s → %s)", recordFQDN(b.host, domainName), b.rtype, val))
+			}
 		} else if err == nil {
 			// 只刷厂商字段，业务字段(项目/环境/模块/CDN/证书)原样保留；重新出现则取消失效标记。
 			// origin_ip：同步值为空(CNAME 记录)时保留人工手填的源站IP，非空(A 记录)才用厂商值覆盖。

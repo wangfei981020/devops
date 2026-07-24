@@ -13,6 +13,9 @@
           <el-option label="线上证书" value="online" />
           <el-option label="ACME证书" value="acme" />
         </el-select>
+        <el-select v-model="domainFilter" size="small" clearable filterable placeholder="域名" style="width:190px">
+          <el-option v-for="d in domainOptions" :key="d" :label="d" :value="d" />
+        </el-select>
         <el-radio-group v-model="statusFilter" size="small">
           <el-radio-button v-for="s in statusTabs" :key="s.v" :value="s.v">{{ s.l }}（{{ counts[s.v] }}）</el-radio-button>
         </el-radio-group>
@@ -94,6 +97,8 @@ const statusTabs = [
 
 const rows = ref([]), loading = ref(false)
 const statusFilter = ref('all'), kindFilter = ref('all'), keyword = ref(''), sortAsc = ref(true)
+const domainFilter = ref(null)
+const domainOptions = computed(() => [...new Set(rows.value.map((r) => r.domain).filter(Boolean))].sort())
 const page = ref(1), size = ref(50)
 const igDlg = ref(false), igRow = ref(null), igReason = ref('')
 
@@ -122,6 +127,7 @@ const counts = computed(() => {
 })
 const filtered = computed(() => {
   let list = enriched.value
+  if (domainFilter.value) list = list.filter((r) => r.domain === domainFilter.value)
   if (kindFilter.value !== 'all') list = list.filter((r) => r.kind === kindFilter.value)
   // 「全部」= 未忽略的巡检项；已忽略的只在「已忽略」tab 看
   if (statusFilter.value === 'all') list = list.filter((r) => r._st !== 'ignored')

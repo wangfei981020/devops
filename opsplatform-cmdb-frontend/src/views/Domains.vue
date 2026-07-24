@@ -31,7 +31,10 @@
     <template v-if="tab === 'records'">
     <el-card shadow="never" style="margin-bottom:12px">
       <div class="filter">
-        <el-input v-model="f.keyword" placeholder="搜索 业务域名" clearable :prefix-icon="Search" style="width:200px" @keyup.enter="doSearch" />
+        <el-input v-model="f.keyword" placeholder="搜索 域名/模块/回源/IP" clearable :prefix-icon="Search" style="width:210px" @keyup.enter="doSearch" />
+        <el-select v-model="f.domain" clearable filterable placeholder="域名" style="width:200px">
+          <el-option v-for="d in domainOptions" :key="d" :label="d" :value="d" />
+        </el-select>
         <el-select v-model="f.project" clearable placeholder="项目" style="width:150px">
           <el-option v-for="p in projectOptions" :key="p" :label="p" :value="p" />
         </el-select>
@@ -113,7 +116,10 @@
     <template v-else>
     <el-card shadow="never" style="margin-bottom:12px">
       <div class="filter">
-        <el-input v-model="df.kw.value" placeholder="搜索主域名" clearable :prefix-icon="Search" style="width:200px" @keyup.enter="doDomSearch" />
+        <el-input v-model="df.kw.value" placeholder="搜索主域名" clearable :prefix-icon="Search" style="width:180px" @keyup.enter="doDomSearch" />
+        <el-select v-model="domNameFilter" clearable filterable placeholder="域名" style="width:200px" @change="domPage=1">
+          <el-option v-for="d in domNameOptions" :key="d" :label="d" :value="d" />
+        </el-select>
         <el-select v-model="df.view.value" style="width:150px" @change="domPage=1">
           <el-option v-for="o in df.viewOptions.value" :key="o.value" :label="`${o.label}（${o.count}）`" :value="o.value" />
         </el-select>
@@ -343,7 +349,7 @@
 
     <!-- 忽略业务域名（单条/批量共用，原因可选） -->
     <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="igDlg" title="忽略此解析" width="480px">
-      <div class="muted" style="margin-bottom:12px">将 {{ igRows.length }} 条业务域名（解析）标为「忽略」：整条解析默认不再展示，也不计入证书巡检 / 总览统计。可随时在「已忽略」里恢复。<br/>（注：若只是「这条解析不需要证书」但仍想保留展示，请到「到期巡检」页标「无需证书」）</div>
+      <div class="muted" style="margin-bottom:12px">将 {{ igRows.length }} 条业务域名（解析）标为「忽略」：<b>仅隐藏、不删数据</b>——整条解析默认不再展示，也不计入证书巡检 / 总览统计，可随时在「已忽略」里恢复。<br/>（注：若只是「这条解析不需要证书」但仍想保留展示，请到「到期巡检」页标「无需证书」）</div>
       <el-form label-width="60px">
         <el-form-item label="原因"><el-input v-model="igReason" placeholder="（可选）如 已下线 / 项目未使用" /></el-form-item>
       </el-form>
@@ -412,7 +418,7 @@ const dDlg = ref(false), detail = ref(null)
 const aDlg = ref(false), aForm = ref({ project: '', env: '', blocks: [{ module: '', domains: '' }] }), aResult = ref(null), assigning = ref(false)
 const aMode = ref('paste'), pasteText = ref('')
 const synced = computed(() => editing.value && form.value.origin && form.value.origin !== 'manual')
-const f = ref({ keyword: '', project: null, env: null, module: null, source: null })
+const f = ref({ keyword: '', domain: null, project: null, env: null, module: null, source: null })
 const query = ref({ ...f.value })
 const currentPage = ref(1), pageSize = ref(10)
 
@@ -436,6 +442,7 @@ function certState(r) {
 }
 
 const distinct = (key) => [...new Set(rows.value.map((r) => r[key]).filter(Boolean))].sort()
+const domainOptions = computed(() => distinct('domain'))
 const projectOptions = computed(() => distinct('project'))
 const envOptions = computed(() => distinct('env'))
 const moduleOptions = computed(() => distinct('module'))
@@ -443,7 +450,9 @@ const moduleOptions = computed(() => distinct('module'))
 const filteredRows = computed(() => rows.value.filter((r) => {
   const q = query.value
   const kw = q.keyword?.toLowerCase()
-  return (!kw || r.fqdn.toLowerCase().includes(kw) || (r.project || '').toLowerCase().includes(kw)) &&
+  return (!kw || r.fqdn.toLowerCase().includes(kw) || (r.project || '').toLowerCase().includes(kw) ||
+      (r.module || '').toLowerCase().includes(kw) || (r.cname || '').toLowerCase().includes(kw) || (r.origin_ip || '').toLowerCase().includes(kw)) &&
+    (!q.domain || r.domain === q.domain) &&
     (!q.project || r.project === q.project) &&
     (!q.env || r.env === q.env) &&
     (!q.module || r.module === q.module) &&
@@ -473,7 +482,7 @@ const pagedRows = computed(() => {
   return sortedRows.value.slice(s, s + pageSize.value)
 })
 function doSearch() { query.value = { ...f.value }; currentPage.value = 1 }
-function resetFilter() { f.value = { keyword: '', project: null, env: null, module: null, source: null }; query.value = { ...f.value }; currentPage.value = 1 }
+function resetFilter() { f.value = { keyword: '', domain: null, project: null, env: null, module: null, source: null }; query.value = { ...f.value }; currentPage.value = 1 }
 
 // —— 主域名 tab ——
 const resoCountMap = computed(() => {
@@ -481,7 +490,12 @@ const resoCountMap = computed(() => {
   for (const r of rows.value) m[r.domain_ci_id] = (m[r.domain_ci_id] || 0) + 1
   return m
 })
-const domFiltered = df.filtered
+const domNameFilter = ref(null)
+const domNameOptions = computed(() => [...new Set(allDomains.value.map((d) => d.name).filter(Boolean))].sort())
+const domFiltered = computed(() => {
+  const base = df.filtered.value
+  return domNameFilter.value ? base.filter((d) => d.name === domNameFilter.value) : base
+})
 const domSortState = ref({ prop: '', order: null })
 function onDomSort({ prop, order }) { domSortState.value = { prop, order } }
 const domSorted = computed(() => sortList(domFiltered.value, domSortState.value.prop, domSortState.value.order))
@@ -490,7 +504,7 @@ const domPaged = computed(() => {
   return domSorted.value.slice(s, s + domPageSize.value)
 })
 function doDomSearch() { df.doSearch(); domPage.value = 1 }
-function resetDomFilter() { df.reset(); domPage.value = 1 }
+function resetDomFilter() { df.reset(); domNameFilter.value = null; domPage.value = 1 }
 function sortByDate(a, b) { if (!a && !b) return 0; if (!a) return 1; if (!b) return -1; return new Date(a) - new Date(b) }
 function expiryClass(d) { if (!d) return ''; const days = (new Date(d) - Date.now()) / 86400000; return days < 0 ? 'exp-red' : (days < 30 ? 'exp-orange' : '') }
 function isExpired(d) { return d && new Date(d) < new Date() }
@@ -500,19 +514,19 @@ async function ignoreExpired() {
   const list = expiredDomains.value
   if (!list.length) return
   try {
-    await app.showConfirm(`将 ${list.length} 个已过期主域名标为「忽略」？忽略后不再展示、不计入到期巡检和总览统计，可随时恢复`)
+    await app.showConfirm(`将 ${list.length} 个已过期主域名标为「忽略」？仅隐藏、不删数据——不再展示、不计入到期巡检和总览统计，可随时恢复`)
     const r = await bulkIgnoreDomains(list.map((d) => d.ci_id), 1, '已过期')
     ElMessage.success(`已忽略 ${r.count ?? list.length} 个`); load()
   } catch (e) { if (e !== 'cancel') ElMessage.error(e.response?.data?.error || '忽略失败') }
 }
 async function ignoreDomains(list, ignored) {
   try {
-    if (ignored) await app.showConfirm(`忽略主域名 ${list.map((d) => d.name).join('、')}？忽略后不再展示、不计入到期巡检和总览统计，可随时恢复`)
+    if (ignored) await app.showConfirm(`忽略主域名 ${list.map((d) => d.name).join('、')}？仅隐藏、不删数据——不再展示、不计入到期巡检和总览统计，可随时恢复`)
     const r = await bulkIgnoreDomains(list.map((d) => d.ci_id), ignored ? 1 : 0, ignored ? '手动忽略' : '')
     ElMessage.success(ignored ? `已忽略 ${r.count ?? list.length} 个` : `已取消忽略 ${r.count ?? list.length} 个`); load()
   } catch (e) { if (e !== 'cancel') ElMessage.error(e.response?.data?.error || '操作失败') }
 }
-function jumpToRecords(row) { tab.value = 'records'; f.value = { keyword: row.name, project: null, env: null, module: null, source: null }; query.value = { ...f.value }; currentPage.value = 1 }
+function jumpToRecords(row) { tab.value = 'records'; f.value = { keyword: '', domain: row.name, project: null, env: null, module: null, source: null }; query.value = { ...f.value }; currentPage.value = 1 }
 function openAddDomain() { domEditing.value = false; domForm.value = { name: '', registrar_id: null, dns_provider: '', expiry_at: '' }; domDlg.value = true }
 function openEditDomain(row) { domEditing.value = true; domForm.value = { ...row, expiry_at: row.expiry_at || '' }; domDlg.value = true }
 async function saveDomain() {
