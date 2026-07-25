@@ -36,6 +36,7 @@ func main() {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
+	r.Use(handlers.RequestID())
 	r.Use(handlers.CORS())
 
 	authH := handlers.NewAuthHandler(db, cfg.JWTSecret)

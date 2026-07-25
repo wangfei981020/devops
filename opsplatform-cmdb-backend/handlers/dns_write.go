@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"opsplatform-cmdb-backend/dnsource"
+	"opsplatform-cmdb-backend/logx"
 )
 
 // DNS 解析写回 GoDaddy：在 CMDB 增/改/删解析，直接同步回厂商（以后不用登 GoDaddy 后台）。
@@ -89,7 +89,7 @@ func (h *SyncHandler) refreshDomainDNSCache(ctx context.Context, ad dnsource.Ada
 	recs, err := ad.ListRecords(ctx, domain)
 	if err != nil {
 		// 回拉失败不阻断（写回已成功），仅记日志；下次同步会对齐
-		log.Printf("[dns写回] 回拉 %s 记录失败（写回已成功，缓存稍后由同步对齐）: %v", domain, err)
+		logx.JCtx(ctx, "dns_write", "refresh_cache_fail", map[string]any{"domain": domain, "error": err.Error()})
 		return
 	}
 	h.refreshDNSRecords(ciID, sourceID, recs)
@@ -115,12 +115,12 @@ func (h *SyncHandler) CreateDNSRecord(c *gin.Context) {
 	}
 	wa, ad, domain, sourceID, err := h.writeAdapterForDomain(ciid)
 	if err != nil {
-		log.Printf("[dns写回] 新增前置失败 ciid=%s: %v", ciid, err)
+		logx.JCtx(c.Request.Context(), "dns_write", "create_precheck_fail", map[string]any{"ciid": ciid, "error": err.Error()})
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	log.Printf("[dns写回] 新增发起 domain=%s %s %s→%s env=%s dry_run=%v 操作人=%s", domain, in.Type, in.Name, in.Data, wa.EnvLabel(), wa.DryRun(), currentUser(c))
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	logx.JCtx(c.Request.Context(), "dns_write", "create_start", map[string]any{"domain": domain, "type": in.Type, "name": in.Name, "data": in.Data, "env": wa.EnvLabel(), "dry_run": wa.DryRun(), "operator": currentUser(c)})
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
 	// 读改写：取现有组 → 追加（同值查重）→ 整组 PUT
@@ -144,7 +144,7 @@ func (h *SyncHandler) CreateDNSRecord(c *gin.Context) {
 	if !wa.DryRun() {
 		h.refreshDomainDNSCache(ctx, ad, ciID, sourceID, domain)
 	}
-	log.Printf("[dns写回] 新增完成 domain=%s %s %s→%s dry_run=%v", domain, in.Type, in.Name, in.Data, wa.DryRun())
+	logx.JCtx(c.Request.Context(), "dns_write", "create_done", map[string]any{"domain": domain, "type": in.Type, "name": in.Name, "data": in.Data, "dry_run": wa.DryRun()})
 	WriteAudit(h.DB, c, "dns_create", fmt.Sprintf("%s %s.%s → %s", in.Type, in.Name, domain, in.Data))
 	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
 		"msg": writeResultMsg(wa, "已新增并写回")})
@@ -197,13 +197,12 @@ func (h *SyncHandler) BatchCreateDNSRecord(c *gin.Context) {
 	}
 	wa, ad, domain, sourceID, err := h.writeAdapterForDomain(ciid)
 	if err != nil {
-		log.Printf("[dns写回] 批量新增前置失败 ciid=%s: %v", ciid, err)
+		logx.JCtx(c.Request.Context(), "dns_write", "batch_create_precheck_fail", map[string]any{"ciid": ciid, "error": err.Error()})
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	log.Printf("[dns写回] 批量新增发起 domain=%s 有效%d条 跳过%d条 env=%s dry_run=%v 操作人=%s",
-		domain, len(valid), len(errs), wa.EnvLabel(), wa.DryRun(), currentUser(c))
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	logx.JCtx(c.Request.Context(), "dns_write", "batch_create_start", map[string]any{"domain": domain, "valid": len(valid), "skipped": len(errs), "env": wa.EnvLabel(), "dry_run": wa.DryRun(), "operator": currentUser(c)})
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 	defer cancel()
 	if err := wa.AddRecords(ctx, domain, valid); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "批量写回 GoDaddy 失败：" + err.Error()})
@@ -213,11 +212,236 @@ func (h *SyncHandler) BatchCreateDNSRecord(c *gin.Context) {
 	if !wa.DryRun() {
 		h.refreshDomainDNSCache(ctx, ad, ciID, sourceID, domain)
 	}
-	log.Printf("[dns写回] 批量新增完成 domain=%s 成功%d条 跳过%d条 dry_run=%v", domain, len(valid), len(errs), wa.DryRun())
+	logx.JCtx(c.Request.Context(), "dns_write", "batch_create_done", map[string]any{"domain": domain, "added": len(valid), "skipped": len(errs), "dry_run": wa.DryRun()})
 	WriteAudit(h.DB, c, "dns_batch_create", fmt.Sprintf("%s 新增%d条", domain, len(valid)))
 	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
 		"added": len(valid), "skipped": len(errs), "errors": errs,
 		"msg": writeResultMsg(wa, fmt.Sprintf("已批量新增 %d 条（跳过 %d 条）", len(valid), len(errs)))})
+}
+
+// cachedRec 缓存里的一条解析（批量改/删按 id 反查 type/name/data）。
+type cachedRec struct {
+	ID   int64
+	Type string
+	Name string
+	Data string
+}
+
+// loadCachedRecs 按 id 列表 + 域名反查 dns_records（限定本域名，防越权改别的域名记录）。
+func (h *SyncHandler) loadCachedRecs(ciID int64, ids []int64) map[int64]cachedRec {
+	out := map[int64]cachedRec{}
+	if len(ids) == 0 {
+		return out
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := []any{ciID}
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := h.DB.Query(`SELECT id, type, name, data FROM dns_records WHERE domain_ci_id=? AND id IN (`+ph+`)`, args...)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r cachedRec
+		if rows.Scan(&r.ID, &r.Type, &r.Name, &r.Data) == nil {
+			out[r.ID] = r
+		}
+	}
+	return out
+}
+
+type batchRowErr struct {
+	ID     int64  `json:"id"`
+	Detail string `json:"detail"`
+	Msg    string `json:"msg"`
+}
+
+// BatchDeleteDNSRecords 批量删除解析并写回（POST /domains/:ciid/dns-records/batch-delete）。
+// 按「类型+主机名」分组：整组只剩要删的→DeleteGroup；还有其它→ReplaceGroup 留剩余。受保护跳过。
+func (h *SyncHandler) BatchDeleteDNSRecords(c *gin.Context) {
+	ciid := c.Param("ciid")
+	var in struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if len(in.IDs) == 0 {
+		c.JSON(400, gin.H{"error": "没有选中要删除的记录"})
+		return
+	}
+	ciID, _ := parseID(ciid)
+	recs := h.loadCachedRecs(ciID, in.IDs)
+	// 按 (type,name) 分组收集要删的 data；受保护跳过
+	type grp struct{ rtype, name string }
+	toDel := map[grp]map[string]int64{} // group → data→id
+	var errs []batchRowErr
+	for _, id := range in.IDs {
+		r, ok := recs[id]
+		if !ok {
+			continue
+		}
+		if isProtectedTypeName(r.Type, r.Name) {
+			errs = append(errs, batchRowErr{ID: id, Detail: r.Type + " " + r.Name, Msg: "受保护，禁止删除"})
+			continue
+		}
+		g := grp{r.Type, r.Name}
+		if toDel[g] == nil {
+			toDel[g] = map[string]int64{}
+		}
+		toDel[g][r.Data] = id
+	}
+	if len(toDel) == 0 {
+		c.JSON(400, gin.H{"error": "没有可删除的记录（可能都受保护）", "errors": errs})
+		return
+	}
+	wa, ad, domain, sourceID, err := h.writeAdapterForDomain(ciid)
+	if err != nil {
+		logx.JCtx(c.Request.Context(), "dns_write", "batch_delete_precheck_fail", map[string]any{"ciid": ciid, "error": err.Error()})
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	defer cancel()
+	logx.JCtx(c.Request.Context(), "dns_write", "batch_delete_start", map[string]any{"domain": domain, "groups": len(toDel), "env": wa.EnvLabel(), "dry_run": wa.DryRun(), "operator": currentUser(c)})
+	deleted := 0
+	for g, dataSet := range toDel {
+		group, e := wa.GetGroup(ctx, domain, g.rtype, g.name)
+		if e != nil {
+			for _, id := range dataSet {
+				errs = append(errs, batchRowErr{ID: id, Detail: g.rtype + " " + g.name, Msg: "读取现有记录失败：" + e.Error()})
+			}
+			continue
+		}
+		remaining := make([]dnsource.DNSRecord, 0, len(group))
+		for _, r := range group {
+			if _, del := dataSet[r.Data]; !del {
+				remaining = append(remaining, r)
+			}
+		}
+		if len(remaining) == 0 {
+			e = wa.DeleteGroup(ctx, domain, g.rtype, g.name)
+		} else {
+			e = wa.ReplaceGroup(ctx, domain, g.rtype, g.name, remaining)
+		}
+		if e != nil {
+			for _, id := range dataSet {
+				errs = append(errs, batchRowErr{ID: id, Detail: g.rtype + " " + g.name, Msg: "写回失败：" + e.Error()})
+			}
+			continue
+		}
+		deleted += len(dataSet)
+	}
+	if !wa.DryRun() {
+		h.refreshDomainDNSCache(ctx, ad, ciID, sourceID, domain)
+	}
+	logx.JCtx(c.Request.Context(), "dns_write", "batch_delete_done", map[string]any{"domain": domain, "deleted": deleted, "skipped_failed": len(errs), "dry_run": wa.DryRun()})
+	WriteAudit(h.DB, c, "dns_batch_delete", fmt.Sprintf("%s 删除%d条", domain, deleted))
+	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
+		"deleted": deleted, "skipped": len(errs), "errors": errs,
+		"msg": writeResultMsg(wa, fmt.Sprintf("已批量删除 %d 条（跳过/失败 %d 条）", deleted, len(errs)))})
+}
+
+// BatchUpdateDNSRecords 批量编辑解析（改值/TTL/优先级）并写回（POST /domains/:ciid/dns-records/batch-update）。
+// 按 id 反查旧 (type,name,data)，按 (type,name) 分组，一次把该组内所有改动套进 ReplaceGroup。
+func (h *SyncHandler) BatchUpdateDNSRecords(c *gin.Context) {
+	ciid := c.Param("ciid")
+	var in struct {
+		Records []struct {
+			ID       int64  `json:"id"`
+			Data     string `json:"data"`
+			TTL      int    `json:"ttl"`
+			Priority *int   `json:"priority"`
+		} `json:"records"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if len(in.Records) == 0 {
+		c.JSON(400, gin.H{"error": "没有要编辑的记录"})
+		return
+	}
+	ciID, _ := parseID(ciid)
+	ids := make([]int64, 0, len(in.Records))
+	for _, r := range in.Records {
+		ids = append(ids, r.ID)
+	}
+	cache := h.loadCachedRecs(ciID, ids)
+	// 按 (type,name) 分组：旧data → 新记录
+	type grp struct{ rtype, name string }
+	edits := map[grp]map[string]dnsource.DNSRecord{} // group → oldData→newRec
+	var errs []batchRowErr
+	for _, r := range in.Records {
+		old, ok := cache[r.ID]
+		if !ok {
+			continue
+		}
+		rtype, name, ttl, prio := old.Type, old.Name, r.TTL, r.Priority
+		if msg := normalizeRecordInput(&rtype, &name, r.Data, &ttl, &prio); msg != "" {
+			errs = append(errs, batchRowErr{ID: r.ID, Detail: old.Type + " " + old.Name, Msg: msg})
+			continue
+		}
+		g := grp{old.Type, old.Name}
+		if edits[g] == nil {
+			edits[g] = map[string]dnsource.DNSRecord{}
+		}
+		edits[g][old.Data] = dnsource.DNSRecord{Type: rtype, Name: name, Data: strings.TrimSpace(r.Data), TTL: ttl, Priority: prio}
+	}
+	if len(edits) == 0 {
+		c.JSON(400, gin.H{"error": "没有可编辑的记录", "errors": errs})
+		return
+	}
+	wa, ad, domain, sourceID, err := h.writeAdapterForDomain(ciid)
+	if err != nil {
+		logx.JCtx(c.Request.Context(), "dns_write", "batch_update_precheck_fail", map[string]any{"ciid": ciid, "error": err.Error()})
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	defer cancel()
+	logx.JCtx(c.Request.Context(), "dns_write", "batch_update_start", map[string]any{"domain": domain, "groups": len(edits), "env": wa.EnvLabel(), "dry_run": wa.DryRun(), "operator": currentUser(c)})
+	updated := 0
+	for g, m := range edits {
+		group, e := wa.GetGroup(ctx, domain, g.rtype, g.name)
+		if e != nil {
+			for range m {
+				errs = append(errs, batchRowErr{Detail: g.rtype + " " + g.name, Msg: "读取现有记录失败：" + e.Error()})
+			}
+			continue
+		}
+		cnt := 0
+		for i := range group {
+			if nr, ok := m[group[i].Data]; ok {
+				group[i] = nr
+				cnt++
+			}
+		}
+		if cnt == 0 {
+			for range m {
+				errs = append(errs, batchRowErr{Detail: g.rtype + " " + g.name, Msg: "记录已在厂商侧变化，请先同步"})
+			}
+			continue
+		}
+		if e = wa.ReplaceGroup(ctx, domain, g.rtype, g.name, group); e != nil {
+			for range m {
+				errs = append(errs, batchRowErr{Detail: g.rtype + " " + g.name, Msg: "写回失败：" + e.Error()})
+			}
+			continue
+		}
+		updated += cnt
+	}
+	if !wa.DryRun() {
+		h.refreshDomainDNSCache(ctx, ad, ciID, sourceID, domain)
+	}
+	logx.JCtx(c.Request.Context(), "dns_write", "batch_update_done", map[string]any{"domain": domain, "updated": updated, "failed": len(errs), "dry_run": wa.DryRun()})
+	WriteAudit(h.DB, c, "dns_batch_update", fmt.Sprintf("%s 编辑%d条", domain, updated))
+	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
+		"updated": updated, "failed": len(errs), "errors": errs,
+		"msg": writeResultMsg(wa, fmt.Sprintf("已批量编辑 %d 条（失败 %d 条）", updated, len(errs)))})
 }
 
 // UpdateDNSRecord 编辑一条解析（改值/TTL/优先级；类型+主机名不变）并写回（PUT /dns-records/:id）。
@@ -245,12 +469,12 @@ func (h *SyncHandler) UpdateDNSRecord(c *gin.Context) {
 	}
 	wa, ad, domain, sourceID, err := h.writeAdapterForDomain(fmt.Sprint(domCiID))
 	if err != nil {
-		log.Printf("[dns写回] 编辑前置失败 id=%s: %v", id, err)
+		logx.JCtx(c.Request.Context(), "dns_write", "update_precheck_fail", map[string]any{"id": id, "error": err.Error()})
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	log.Printf("[dns写回] 编辑发起 domain=%s %s %s: %s→%s env=%s dry_run=%v 操作人=%s", domain, rtype, name, oldData, in.Data, wa.EnvLabel(), wa.DryRun(), currentUser(c))
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	logx.JCtx(c.Request.Context(), "dns_write", "update_start", map[string]any{"domain": domain, "type": rtype, "name": name, "old_data": oldData, "new_data": in.Data, "env": wa.EnvLabel(), "dry_run": wa.DryRun(), "operator": currentUser(c)})
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
 	group, err := wa.GetGroup(ctx, domain, rtype, name)
@@ -277,7 +501,7 @@ func (h *SyncHandler) UpdateDNSRecord(c *gin.Context) {
 	if !wa.DryRun() {
 		h.refreshDomainDNSCache(ctx, ad, domCiID, sourceID, domain)
 	}
-	log.Printf("[dns写回] 编辑完成 domain=%s %s %s: %s→%s dry_run=%v", domain, rtype, name, oldData, in.Data, wa.DryRun())
+	logx.JCtx(c.Request.Context(), "dns_write", "update_done", map[string]any{"domain": domain, "type": rtype, "name": name, "old_data": oldData, "new_data": in.Data, "dry_run": wa.DryRun()})
 	WriteAudit(h.DB, c, "dns_update", fmt.Sprintf("%s %s.%s: %s → %s", rtype, name, domain, oldData, in.Data))
 	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
 		"msg": writeResultMsg(wa, "已编辑并写回")})
@@ -300,12 +524,12 @@ func (h *SyncHandler) DeleteDNSRecord(c *gin.Context) {
 	}
 	wa, ad, domain, sourceID, err := h.writeAdapterForDomain(fmt.Sprint(domCiID))
 	if err != nil {
-		log.Printf("[dns写回] 删除前置失败 id=%s: %v", id, err)
+		logx.JCtx(c.Request.Context(), "dns_write", "delete_precheck_fail", map[string]any{"id": id, "error": err.Error()})
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	log.Printf("[dns写回] 删除发起 domain=%s %s %s (%s) env=%s dry_run=%v 操作人=%s", domain, rtype, name, oldData, wa.EnvLabel(), wa.DryRun(), currentUser(c))
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	logx.JCtx(c.Request.Context(), "dns_write", "delete_start", map[string]any{"domain": domain, "type": rtype, "name": name, "data": oldData, "env": wa.EnvLabel(), "dry_run": wa.DryRun(), "operator": currentUser(c)})
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
 	group, err := wa.GetGroup(ctx, domain, rtype, name)
@@ -331,7 +555,7 @@ func (h *SyncHandler) DeleteDNSRecord(c *gin.Context) {
 	if !wa.DryRun() {
 		h.refreshDomainDNSCache(ctx, ad, domCiID, sourceID, domain)
 	}
-	log.Printf("[dns写回] 删除完成 domain=%s %s %s (%s) dry_run=%v", domain, rtype, name, oldData, wa.DryRun())
+	logx.JCtx(c.Request.Context(), "dns_write", "delete_done", map[string]any{"domain": domain, "type": rtype, "name": name, "data": oldData, "dry_run": wa.DryRun()})
 	WriteAudit(h.DB, c, "dns_delete", fmt.Sprintf("%s %s.%s (%s)", rtype, name, domain, oldData))
 	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
 		"msg": writeResultMsg(wa, "已删除并写回")})

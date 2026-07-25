@@ -35,6 +35,8 @@ export const listDnsRecords = (ciid) => http.get(`/domains/${ciid}/dns-records`)
 // DNS 解析写回 GoDaddy（增/改/删）
 export const createDnsRecord = (ciid, b) => http.post(`/domains/${ciid}/dns-records`, b).then((r) => r.data)
 export const batchCreateDnsRecords = (ciid, records) => http.post(`/domains/${ciid}/dns-records/batch`, { records }).then((r) => r.data)
+export const batchDeleteDnsRecords = (ciid, ids) => http.post(`/domains/${ciid}/dns-records/batch-delete`, { ids }).then((r) => r.data)
+export const batchUpdateDnsRecords = (ciid, records) => http.post(`/domains/${ciid}/dns-records/batch-update`, { records }).then((r) => r.data)
 export const updateDnsRecord = (id, b) => http.put(`/dns-records/${id}`, b).then((r) => r.data)
 export const deleteDnsRecord = (id) => http.delete(`/dns-records/${id}`).then((r) => r.data)
 // 域名续费 / 自动续费（写回 GoDaddy；续费会真实扣费）

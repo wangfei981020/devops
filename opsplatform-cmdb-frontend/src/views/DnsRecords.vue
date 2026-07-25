@@ -69,7 +69,9 @@
                   <el-button size="small" type="primary" :icon="Plus" @click="openCreate(row)">新增解析</el-button>
                 </template>
               </div>
-              <el-table :data="recPaged(row.ci_id)" size="small" max-height="360">
+              <el-table :data="recPaged(row.ci_id)" size="small" max-height="360" row-key="id"
+                @selection-change="(v) => onRecSel(row.ci_id, v)">
+                <el-table-column type="selection" width="40" :selectable="recSelectable" reserve-selection />
                 <el-table-column label="类型" width="90"><template #default="{ row: r }">
                   <el-tag size="small" effect="plain" :style="typeStyle(r.type)">{{ r.type }}</el-tag>
                 </template></el-table-column>
@@ -88,6 +90,11 @@
                   <span v-else class="muted">—</span>
                 </template></el-table-column>
               </el-table>
+              <div v-if="(recSel[row.ci_id] || []).length" class="batch-bar">
+                <span>已选 <b>{{ recSel[row.ci_id].length }}</b> 条</span>
+                <el-button size="small" type="primary" :icon="Edit" @click="openBatchEdit(row)">批量编辑</el-button>
+                <el-button size="small" type="danger" :icon="Delete" :loading="batchDelBusy[row.ci_id]" @click="doBatchDelete(row)">批量删除</el-button>
+              </div>
               <el-empty v-if="!(recMap[row.ci_id] && recMap[row.ci_id].length) && !recLoading[row.ci_id]"
                 description="该域名暂无 DNS 记录，选好数据源点右上「从数据源同步」" :image-size="50" />
               <el-pagination v-else small background v-model:current-page="recState[row.ci_id].page" v-model:page-size="recState[row.ci_id].size"
@@ -216,6 +223,40 @@
         <el-button type="primary" :loading="batch.saving" @click="saveBatch">批量写回（{{ batch.rows.length }} 条）</el-button>
       </template>
     </el-dialog>
+
+    <!-- 批量编辑解析（可编辑网格 + 统一设 TTL，写回 GoDaddy） -->
+    <el-dialog v-model="bedit.show" title="批量编辑解析（写回 GoDaddy）" width="760px" :close-on-click-modal="false">
+      <div style="margin-bottom:8px">
+        主域名 <span class="mono">{{ bedit.domainName }}</span>
+        <span class="muted" style="margin-left:8px">类型/主机名不可改（改这些请删了重加）；受保护记录已排除</span>
+      </div>
+      <div class="filter" style="margin-bottom:8px">
+        统一设 TTL <el-input-number v-model="bedit.bulkTtl" :min="600" :step="600" size="small" controls-position="right" style="width:130px" />
+        <el-button size="small" @click="applyBulkTtl">应用到全部</el-button>
+      </div>
+      <el-table :data="bedit.rows" size="small" max-height="320">
+        <el-table-column label="类型" width="90"><template #default="{ row }">
+          <el-tag size="small" effect="plain" :style="typeStyle(row.type)">{{ row.type }}</el-tag>
+        </template></el-table-column>
+        <el-table-column label="主机名" width="150"><template #default="{ row }"><span class="mono">{{ row.name }}</span></template></el-table-column>
+        <el-table-column label="记录值"><template #default="{ row }">
+          <el-input v-model="row.data" size="small" />
+        </template></el-table-column>
+        <el-table-column label="TTL" width="100"><template #default="{ row }">
+          <el-input v-model.number="row.ttl" size="small" />
+        </template></el-table-column>
+        <el-table-column label="优先级" width="80"><template #default="{ row }">
+          <el-input v-if="row.type==='MX'" v-model.number="row.priority" size="small" />
+          <span v-else class="muted">—</span>
+        </template></el-table-column>
+      </el-table>
+      <el-alert type="warning" :closable="false" show-icon style="margin-top:10px"
+        :title="`将编辑 ${bedit.rows.length} 条并写回 GoDaddy`" />
+      <template #footer>
+        <el-button @click="bedit.show=false">关闭</el-button>
+        <el-button type="primary" :loading="bedit.saving" @click="saveBatchEdit">批量写回（{{ bedit.rows.length }} 条）</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -224,7 +265,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search, Hide, RefreshLeft, Plus, Edit, Delete, DocumentAdd } from '@element-plus/icons-vue'
 import { listDomains, listRegistrars, listDnsRecords, syncSource, syncSourceStatus, syncDomainRecords, bulkIgnoreDomains,
-  createDnsRecord, updateDnsRecord, deleteDnsRecord, batchCreateDnsRecords } from '../api/cmdb'
+  createDnsRecord, updateDnsRecord, deleteDnsRecord, batchCreateDnsRecords, batchDeleteDnsRecords, batchUpdateDnsRecords } from '../api/cmdb'
 import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
 import { useDomainFilter } from '../composables/useDomainFilter'
 import { useAppStore } from '../stores/app'
@@ -367,6 +408,59 @@ async function saveRecord() {
     ElMessage.error(e.response?.data?.error || '写回失败')
   } finally { dlg.saving = false }
 }
+// ---- 批量选择 / 批量删除 / 批量编辑 ----
+const recSel = ref({})          // ciid → 选中的记录行
+const batchDelBusy = ref({})
+function recSelectable(r) { return !r.protected && writableTypes.includes(r.type) } // 受保护/不支持类型不可选
+function onRecSel(ciid, v) { recSel.value = { ...recSel.value, [ciid]: v } }
+async function doBatchDelete(row) {
+  const sel = recSel.value[row.ci_id] || []
+  if (!sel.length) return
+  try {
+    await app.showConfirm(`将删除 ${sel.length} 条解析（${row.name}）并从 GoDaddy 删除，确认？`, '确认批量删除')
+  } catch (e) { return }
+  batchDelBusy.value = { ...batchDelBusy.value, [row.ci_id]: true }
+  try {
+    const r = await batchDeleteDnsRecords(row.ci_id, sel.map((x) => x.id))
+    let msg = r.msg || `已删除 ${r.deleted} 条`
+    if (r.skipped > 0 && r.errors?.length) msg += '；跳过/失败：' + r.errors.map((e) => `${e.detail} ${e.msg}`).join('；')
+    if (r.skipped > 0) ElMessage.warning(msg); else ElMessage.success(msg)
+    recSel.value = { ...recSel.value, [row.ci_id]: [] }
+    await loadRecords(row.ci_id); await loadDomains()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '批量删除失败')
+  } finally { batchDelBusy.value = { ...batchDelBusy.value, [row.ci_id]: false } }
+}
+
+const bedit = reactive({ show: false, saving: false, ciid: null, domainName: '', bulkTtl: 600, rows: [] })
+function openBatchEdit(row) {
+  const sel = recSel.value[row.ci_id] || []
+  if (!sel.length) return
+  bedit.ciid = row.ci_id; bedit.domainName = row.name; bedit.bulkTtl = 600
+  bedit.rows = sel.map((r) => ({ id: r.id, type: r.type, name: r.name, data: r.data, ttl: r.ttl || 600, priority: r.priority ?? 10 }))
+  bedit.show = true
+}
+function applyBulkTtl() { bedit.rows.forEach((r) => { r.ttl = bedit.bulkTtl }) }
+async function saveBatchEdit() {
+  const records = bedit.rows.map((r) => { const b = { id: r.id, data: (r.data || '').trim(), ttl: r.ttl || 600 }; if (r.type === 'MX') b.priority = r.priority; return b })
+  if (records.some((r) => !r.data)) { ElMessage.warning('记录值不能为空'); return }
+  try {
+    await app.showConfirm(`将编辑 ${records.length} 条解析（${bedit.domainName}）并写回 GoDaddy？`, '确认批量编辑')
+  } catch (e) { return }
+  bedit.saving = true
+  try {
+    const r = await batchUpdateDnsRecords(bedit.ciid, records)
+    let msg = r.msg || `已编辑 ${r.updated} 条`
+    if (r.failed > 0 && r.errors?.length) msg += '；失败：' + r.errors.map((e) => `${e.detail} ${e.msg}`).join('；')
+    if (r.failed > 0) ElMessage.warning(msg); else ElMessage.success(msg)
+    bedit.show = false
+    recSel.value = { ...recSel.value, [bedit.ciid]: [] }
+    await loadRecords(bedit.ciid); await loadDomains()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '批量编辑失败')
+  } finally { bedit.saving = false }
+}
+
 // ---- 批量新增 ----
 const batch = reactive({ show: false, saving: false, showPaste: false, pasteText: '', ciid: null, domainName: '', rows: [] })
 function openBatch(row) {
@@ -475,6 +569,7 @@ onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
 
 <style scoped>
 .filter { display: flex; gap: 10px; align-items: center; }
+.batch-bar { display: flex; gap: 10px; align-items: center; margin-top: 8px; padding: 6px 10px; background: #eef2f8; border-radius: 4px; }
 .reso { padding: 8px 16px 12px; background: #fafbfc; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 .stale { text-decoration: line-through; color: #b0b3bb; }

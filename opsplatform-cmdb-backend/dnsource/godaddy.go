@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+
+	"opsplatform-cmdb-backend/logx"
 )
 
 // GoDaddy 数据源 adapter。API: https://api.godaddy.com（测试 https://api.ote-godaddy.com），
@@ -83,10 +85,10 @@ func (a *GoDaddy) doWriteBody(ctx context.Context, method, path string, payload 
 		reader = bytes.NewReader(b)
 	}
 	if a.dryRun {
-		log.Printf("[godaddy写回][DRY-RUN][%s] %s %s%s  body=%s （预演，未真发）", a.EnvLabel(), method, a.baseURL(), path, bodyStr)
+		logx.JCtx(ctx, "godaddy_write","dry_run", map[string]any{"env": a.EnvLabel(), "method": method, "url": a.baseURL() + path, "body": bodyStr, "dry_run": true})
 		return nil, nil
 	}
-	log.Printf("[godaddy写回][%s] %s %s%s  body=%s", a.EnvLabel(), method, a.baseURL(), path, bodyStr)
+	logx.JCtx(ctx, "godaddy_write","request", map[string]any{"env": a.EnvLabel(), "method": method, "url": a.baseURL() + path, "body": bodyStr, "dry_run": false})
 	if err := a.lim.Wait(ctx); err != nil {
 		return nil, err
 	}
@@ -98,7 +100,7 @@ func (a *GoDaddy) doWriteBody(ctx context.Context, method, path string, payload 
 	}
 	resp, err := gdClient.Do(req)
 	if err != nil {
-		log.Printf("[godaddy写回][%s] 请求失败 %s %s: %v", a.EnvLabel(), method, path, err)
+		logx.JCtx(ctx, "godaddy_write","fail", map[string]any{"env": a.EnvLabel(), "method": method, "path": path, "error": err.Error()})
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -107,10 +109,10 @@ func (a *GoDaddy) doWriteBody(ctx context.Context, method, path string, payload 
 		return nil, fmt.Errorf("GoDaddy 返回 429（厂商限流），请稍后再试")
 	}
 	if resp.StatusCode >= 300 {
-		log.Printf("[godaddy写回][%s] 失败 %d: %s", a.EnvLabel(), resp.StatusCode, truncateStr(string(respBody), 300))
+		logx.JCtx(ctx, "godaddy_write","fail", map[string]any{"env": a.EnvLabel(), "method": method, "path": path, "status": resp.StatusCode, "resp": truncateStr(string(respBody), 300)})
 		return nil, fmt.Errorf("GoDaddy API %d: %s", resp.StatusCode, truncateStr(string(respBody), 200))
 	}
-	log.Printf("[godaddy写回][%s] 成功 %s %s  resp=%s", a.EnvLabel(), method, path, truncateStr(string(respBody), 200))
+	logx.JCtx(ctx, "godaddy_write","success", map[string]any{"env": a.EnvLabel(), "method": method, "path": path, "status": resp.StatusCode, "resp": truncateStr(string(respBody), 200)})
 	return respBody, nil
 }
 
@@ -128,7 +130,7 @@ func (a *GoDaddy) GetGroup(ctx context.Context, domain, rtype, name string) ([]D
 	path := fmt.Sprintf("/v1/domains/%s/records/%s/%s", domain, rtype, url.PathEscape(name))
 	var raw []gdRecord
 	if err := a.do(ctx, path, &raw); err != nil {
-		log.Printf("[godaddy读组][%s] 失败 %s/%s@%s: %v", a.EnvLabel(), rtype, name, domain, err)
+		logx.JCtx(ctx, "godaddy_read","get_group_fail", map[string]any{"env": a.EnvLabel(), "type": rtype, "name": name, "domain": domain, "error": err.Error()})
 		return nil, err
 	}
 	out := make([]DNSRecord, 0, len(raw))
@@ -184,7 +186,7 @@ func (a *GoDaddy) GetDomainDetail(ctx context.Context, domain string) (DomainDet
 		Status    string `json:"status"`
 	}
 	if err := a.do(ctx, "/v1/domains/"+domain, &raw); err != nil {
-		log.Printf("[godaddy域名详情][%s] 失败 %s: %v", a.EnvLabel(), domain, err)
+		logx.JCtx(ctx, "godaddy_read","domain_detail_fail", map[string]any{"env": a.EnvLabel(), "domain": domain, "error": err.Error()})
 		return DomainDetail{}, err
 	}
 	d := DomainDetail{RenewAuto: raw.RenewAuto, Privacy: raw.Privacy, Status: raw.Status}
@@ -196,23 +198,41 @@ func (a *GoDaddy) GetDomainDetail(ctx context.Context, domain string) (DomainDet
 	return d, nil
 }
 
-// GetRenewalPrice 取续费挂牌价（估算）：GET /v1/domains/available?domain=X 返回 renewalPrice(微单位)+currency。
-// 挂牌价按 TLD 定，与是否已注册无关，可作续费估算；查不到返回零值不报错（前端展示"以厂商结算为准"）。
+// GetRenewalPrice 取续费挂牌价（估算）。available 端点只对"可注册"域名返回价，
+// 已拥有的域名(available:false)不带价——此时按 TLD 查一个合成可用域名的挂牌价当估算
+// （续费价按 TLD 定，同后缀一个价）。查不到返回零值不报错（前端展示"以厂商结算为准"）。
 func (a *GoDaddy) GetRenewalPrice(ctx context.Context, domain string) (RenewalPrice, error) {
+	if p := a.priceOf(ctx, domain); p.AmountMicro > 0 {
+		return p, nil
+	}
+	// 兜底：owned 域名拿不到价 → 按后缀查合成可用域名
+	if i := strings.LastIndex(domain, "."); i >= 0 && i+1 < len(domain) {
+		tld := domain[i+1:]
+		synth := fmt.Sprintf("cmdbpricechk%d.%s", time.Now().UnixNano(), tld)
+		if p := a.priceOf(ctx, synth); p.AmountMicro > 0 {
+			logx.JCtx(ctx, "godaddy_read","price_tld_fallback", map[string]any{"env": a.EnvLabel(), "domain": domain, "tld": tld, "amount_micro": p.AmountMicro, "currency": p.Currency})
+			return p, nil
+		}
+	}
+	return RenewalPrice{}, nil
+}
+
+// priceOf 查单个域名的挂牌价（available 端点）。查不到/失败返回零值。
+func (a *GoDaddy) priceOf(ctx context.Context, domain string) RenewalPrice {
 	var raw struct {
 		RenewalPrice int64  `json:"renewalPrice"`
 		Price        int64  `json:"price"`
 		Currency     string `json:"currency"`
 	}
 	if err := a.do(ctx, "/v1/domains/available?domain="+url.QueryEscape(domain), &raw); err != nil {
-		log.Printf("[godaddy续费价][%s] 查价失败(不阻断) %s: %v", a.EnvLabel(), domain, err)
-		return RenewalPrice{}, nil // 查价失败不阻断续费，返回零值
+		logx.JCtx(ctx, "godaddy_read","price_fail", map[string]any{"env": a.EnvLabel(), "domain": domain, "error": err.Error()})
+		return RenewalPrice{}
 	}
 	amt := raw.RenewalPrice
 	if amt == 0 {
-		amt = raw.Price // 兜底用注册价
+		amt = raw.Price
 	}
-	return RenewalPrice{AmountMicro: amt, Currency: raw.Currency}, nil
+	return RenewalPrice{AmountMicro: amt, Currency: raw.Currency}
 }
 
 // RenewDomain POST /v1/domains/{domain}/renew —— 续费 period 年。⚠️会真实扣费；dry_run 时只打日志不真扣。

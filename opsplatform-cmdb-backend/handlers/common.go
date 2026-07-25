@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"database/sql"
-	"log"
+	"encoding/hex"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"opsplatform-cmdb-backend/logx"
 	"opsplatform-cmdb-backend/models"
 )
 
@@ -15,7 +18,7 @@ import (
 func logExec(db *sql.DB, desc, query string, args ...any) int64 {
 	res, err := db.Exec(query, args...)
 	if err != nil {
-		log.Printf("[db] %s 失败: %v", desc, err)
+		logx.J("db", "exec_fail", map[string]any{"desc": desc, "error": err.Error()})
 		return 0
 	}
 	n, _ := res.RowsAffected()
@@ -58,6 +61,30 @@ func replaceLabelsDB(db *sql.DB, ciID int64, labels map[string]string) {
 		}
 		_, _ = db.Exec(`INSERT INTO ci_labels (ci_id, k, v) VALUES (?, ?, ?)`, ciID, k, v)
 	}
+}
+
+// RequestID 给每个请求分配/透传 request_id：写进 gin 上下文、请求 context（供日志携带）、响应头。
+// 一个请求的所有 [tag] JSON 日志都会带同一个 request_id，排查时按 id grep 即可串起全链路。
+func RequestID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		rid := c.GetHeader("X-Request-Id")
+		if rid == "" {
+			rid = genRequestID()
+		}
+		c.Set("request_id", rid)
+		c.Request = c.Request.WithContext(logx.WithRequestID(c.Request.Context(), rid))
+		c.Header("X-Request-Id", rid)
+		c.Next()
+	}
+}
+
+// genRequestID 生成短随机 id（16 hex）；失败退化到纳秒时间戳，保证非空。
+func genRequestID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "req-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b)
 }
 
 // CORS 允许跨域（前端经 nginx 同源代理，开发期直连也放开）。
