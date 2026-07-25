@@ -61,6 +61,10 @@
                 </el-select>
                 <el-input v-model="recState[row.ci_id].kw" placeholder="搜索 主机/值" clearable size="small" style="width:220px" />
                 <span class="muted">本域名 {{ recFiltered(row.ci_id).length }} 条</span>
+                <el-tooltip v-if="!canWrite(row)" content="该域名未绑数据源或来源不支持写回，无法新增">
+                  <span><el-button size="small" type="primary" :icon="Plus" disabled>新增解析</el-button></span>
+                </el-tooltip>
+                <el-button v-else size="small" type="primary" :icon="Plus" style="margin-left:auto" @click="openCreate(row)">新增解析</el-button>
               </div>
               <el-table :data="recPaged(row.ci_id)" size="small" max-height="360">
                 <el-table-column label="类型" width="90"><template #default="{ row: r }">
@@ -72,6 +76,13 @@
                 <el-table-column label="优先级" width="80"><template #default="{ row: r }">{{ r.priority ?? '—' }}</template></el-table-column>
                 <el-table-column label="状态" width="110"><template #default="{ row: r }">
                   <el-tag v-if="r.protected" type="warning" size="small">🔒 受保护</el-tag>
+                </template></el-table-column>
+                <el-table-column label="操作" width="120"><template #default="{ row: r }">
+                  <template v-if="!r.protected && writableTypes.includes(r.type) && canWrite(row)">
+                    <el-button link type="primary" :icon="Edit" @click="openEdit(row, r)">编辑</el-button>
+                    <el-button link type="danger" :icon="Delete" :loading="delBusy[r.id]" @click="delRecord(row, r)">删除</el-button>
+                  </template>
+                  <span v-else class="muted">—</span>
                 </template></el-table-column>
               </el-table>
               <el-empty v-if="!(recMap[row.ci_id] && recMap[row.ci_id].length) && !recLoading[row.ci_id]"
@@ -121,16 +132,52 @@
       <el-pagination v-model:current-page="domPage" v-model:page-size="domPageSize" :page-sizes="[10,20,50,100]"
         :total="domFiltered.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
     </el-card>
+
+    <!-- 解析写回 GoDaddy：新增/编辑（只点 保存/关闭/X 关闭，不点外部关） -->
+    <el-dialog v-model="dlg.show" :title="dlg.editId ? '编辑解析（写回 GoDaddy）' : '新增解析（写回 GoDaddy）'"
+      width="520px" :close-on-click-modal="false">
+      <el-form label-width="88px" @submit.prevent>
+        <el-form-item label="主域名"><span class="mono">{{ dlg.domainName }}</span></el-form-item>
+        <el-form-item label="类型">
+          <el-select v-model="dlg.form.type" :disabled="!!dlg.editId" style="width:140px">
+            <el-option v-for="t in writableTypes" :key="t" :label="t" :value="t" />
+          </el-select>
+          <span class="muted" style="margin-left:8px">仅支持 A/AAAA/CNAME/TXT/MX</span>
+        </el-form-item>
+        <el-form-item label="主机名">
+          <el-input v-model="dlg.form.name" :disabled="!!dlg.editId" placeholder="如 www、api，根记录填 @" style="width:220px" />
+        </el-form-item>
+        <el-form-item label="记录值">
+          <el-input v-model="dlg.form.data" placeholder="A→IP / CNAME→目标域名 / TXT→文本" style="width:320px" />
+        </el-form-item>
+        <el-form-item label="TTL">
+          <el-input-number v-model="dlg.form.ttl" :min="600" :step="600" controls-position="right" style="width:140px" />
+          <span class="muted" style="margin-left:8px">秒，最小 600</span>
+        </el-form-item>
+        <el-form-item v-if="dlg.form.type === 'MX'" label="优先级">
+          <el-input-number v-model="dlg.form.priority" :min="0" :max="65535" controls-position="right" style="width:140px" />
+        </el-form-item>
+        <el-alert type="warning" :closable="false" show-icon
+          :title="`保存后立即写回 ${dlg.env}，并回拉核对`" style="margin-left:0" />
+      </el-form>
+      <template #footer>
+        <el-button @click="dlg.show = false">关闭</el-button>
+        <el-button type="primary" :loading="dlg.saving" @click="saveRecord">保存并写回</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Search, Hide, RefreshLeft } from '@element-plus/icons-vue'
-import { listDomains, listRegistrars, listDnsRecords, syncSource, syncSourceStatus, syncDomainRecords, bulkIgnoreDomains } from '../api/cmdb'
+import { Refresh, Search, Hide, RefreshLeft, Plus, Edit, Delete } from '@element-plus/icons-vue'
+import { listDomains, listRegistrars, listDnsRecords, syncSource, syncSourceStatus, syncDomainRecords, bulkIgnoreDomains,
+  createDnsRecord, updateDnsRecord, deleteDnsRecord } from '../api/cmdb'
 import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
 import { useDomainFilter } from '../composables/useDomainFilter'
+import { useAppStore } from '../stores/app'
+const app = useAppStore()
 const sources = ref([]), domains = ref([]), loading = ref(false)
 const sourceId = ref(null)
 const syncing = ref(false)
@@ -227,6 +274,60 @@ async function loadRecords(ciid) {
 function onExpand(row, expandedRows) {
   const open = Array.isArray(expandedRows) ? expandedRows.some((r) => r.ci_id === row.ci_id) : false
   if (open && !recMap.value[row.ci_id]) loadRecords(row.ci_id)
+}
+
+// ---- DNS 解析写回 GoDaddy（增/改/删）----
+const writableTypes = ['A', 'AAAA', 'CNAME', 'TXT', 'MX']
+const delBusy = ref({})
+// 能否写回：绑了数据源(非手动录入、有注册商)且未忽略。后端还会再校验 provider 是否支持写回。
+function canWrite(row) { return !!(row && row.registrar_name && !row.ignored) }
+const dlg = reactive({ show: false, saving: false, editId: null, editOldData: '', ciid: null, domainName: '', env: 'GoDaddy',
+  form: { type: 'A', name: '', data: '', ttl: 600, priority: 10 } })
+
+function openCreate(row) {
+  dlg.editId = null; dlg.editOldData = ''; dlg.ciid = row.ci_id; dlg.domainName = row.name; dlg.env = 'GoDaddy'
+  dlg.form = { type: 'A', name: '', data: '', ttl: 600, priority: 10 }
+  dlg.show = true
+}
+function openEdit(row, r) {
+  dlg.editId = r.id; dlg.editOldData = r.data; dlg.ciid = row.ci_id; dlg.domainName = row.name; dlg.env = 'GoDaddy'
+  dlg.form = { type: r.type, name: r.name, data: r.data, ttl: r.ttl || 600, priority: r.priority ?? 10 }
+  dlg.show = true
+}
+async function saveRecord() {
+  if (!dlg.form.data?.trim()) { ElMessage.warning('记录值不能为空'); return }
+  const body = { type: dlg.form.type, name: dlg.form.name?.trim() || '@', data: dlg.form.data.trim(), ttl: dlg.form.ttl }
+  if (dlg.form.type === 'MX') body.priority = dlg.form.priority
+  // 编辑=改动线上解析，二次确认（显示 旧值→新值）；新增是增量，弹窗内已有警告，直接存。
+  if (dlg.editId) {
+    try {
+      await app.showConfirm(
+        `确认把 ${body.type} ${body.name}.${dlg.domainName} 的值改为「${body.data}」并写回 GoDaddy？\n原值：${dlg.editOldData}`,
+        '确认修改解析（写回 GoDaddy）')
+    } catch (e) { return }
+  }
+  dlg.saving = true
+  try {
+    const r = dlg.editId ? await updateDnsRecord(dlg.editId, body) : await createDnsRecord(dlg.ciid, body)
+    ElMessage.success(r.msg || '已写回')
+    dlg.show = false
+    await loadRecords(dlg.ciid); await loadDomains()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '写回失败')
+  } finally { dlg.saving = false }
+}
+async function delRecord(row, r) {
+  try {
+    await app.showConfirm(`删除解析 ${r.type} ${r.name}（${r.data}）？会直接从 GoDaddy 删除`, '删除解析')
+  } catch (e) { return } // 取消
+  delBusy.value = { ...delBusy.value, [r.id]: true }
+  try {
+    const res = await deleteDnsRecord(r.id)
+    ElMessage.success(res.msg || '已删除')
+    await loadRecords(row.ci_id); await loadDomains()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '删除失败')
+  } finally { delBusy.value = { ...delBusy.value, [r.id]: false } }
 }
 
 async function loadDomains() {

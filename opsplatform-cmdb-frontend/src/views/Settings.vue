@@ -22,6 +22,10 @@
         <el-table-column prop="name" label="名称" min-width="140" />
         <el-table-column prop="provider" label="provider" width="140" />
         <el-table-column label="凭据" width="90"><template #default="{ row }"><el-tag size="small" :type="row.has_cred?'success':'info'">{{ row.has_cred?'已配':'未配' }}</el-tag></template></el-table-column>
+        <el-table-column label="模式" width="120"><template #default="{ row }">
+          <el-tag v-if="row.dry_run" size="small" type="warning">🧪 预演</el-tag>
+          <el-tag v-else size="small" type="danger">真实操作</el-tag>
+        </template></el-table-column>
         <el-table-column label="操作" width="100" fixed="right">
           <template #default="{ row }">
             <div style="display:flex;gap:8px;align-items:center">
@@ -80,6 +84,10 @@
         </el-form-item>
         <el-form-item v-for="f in credFields[regForm.provider] || []" :key="f.k" :label="f.label">
           <el-input v-model="regForm.credential[f.k]" :placeholder="regEdit?'留空=保留原值':''" show-password />
+        </el-form-item>
+        <el-form-item label="预演模式">
+          <el-switch v-model="regForm.dry_run" />
+          <span class="muted" style="margin-left:8px">开启后：解析写回 / 域名续费只打日志、不真发 GoDaddy、不扣费（生产先空跑测流程用）</span>
         </el-form-item>
       </el-form>
       <template #footer><el-button @click="regDlg=false">取消</el-button><el-button type="primary" @click="saveReg">保存</el-button></template>
@@ -145,8 +153,8 @@ async function loadUsage() {
 }
 async function saveCfg() { try { await updateSettings({ export_label_whitelist: cfg.value.export_label_whitelist || '' }); ElMessage.success('已保存') } catch (e) { ElMessage.error('保存失败') } }
 
-function openReg() { regEdit.value = false; regForm.value = { name: '', provider: 'dnspod', credential: {}, enabled: 1 }; regDlg.value = true }
-function editReg(row) { regEdit.value = true; regForm.value = { ...row, credential: {}, enabled: 1 }; regDlg.value = true }
+function openReg() { regEdit.value = false; regForm.value = { name: '', provider: 'dnspod', credential: {}, dry_run: false, enabled: 1 }; regDlg.value = true }
+function editReg(row) { regEdit.value = true; regForm.value = { ...row, credential: {}, dry_run: !!row.dry_run, enabled: 1 }; regDlg.value = true }
 async function saveReg() {
   try {
     if (regEdit.value) await updateRegistrar(regForm.value.id, regForm.value)

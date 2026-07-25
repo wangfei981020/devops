@@ -25,17 +25,73 @@ type DNSRecord struct {
 	Priority *int   `json:"priority,omitempty"`
 }
 
-// Adapter 域名数据源适配接口（每厂商一个实现）
+// Adapter 域名数据源适配接口（每厂商一个实现，只读同步）
 type Adapter interface {
 	ListDomains(ctx context.Context) ([]Domain, error)
 	ListRecords(ctx context.Context, domain string) ([]DNSRecord, error)
 }
 
+// DomainDetail 厂商侧域名详情（续费页展示用）。
+type DomainDetail struct {
+	Expires   *time.Time `json:"expires"`
+	RenewAuto bool       `json:"renew_auto"`
+	Privacy   bool       `json:"privacy"` // 隐私保护是否已开启（只读展示）
+	Status    string     `json:"status"`
+}
+
+// RenewalPrice 续费价（估算，来自厂商挂牌价；真实扣费以厂商结算为准）。
+type RenewalPrice struct {
+	AmountMicro int64  `json:"amount_micro"` // 微单位（÷1_000_000 = 货币金额）
+	Currency    string `json:"currency"`
+}
+
+// RenewResult 续费厂商返回（订单号等；精确扣费以厂商账单为准，金额字段厂商不一定给）。
+type RenewResult struct {
+	OrderID     string `json:"order_id"`
+	AmountMicro int64  `json:"amount_micro"` // 厂商若返回则填，否则 0
+	Currency    string `json:"currency"`
+	RawBody     string `json:"raw_body"` // 厂商原始响应，留档
+}
+
+// WriteAdapter 可选写回接口：支持把 CMDB 的解析变更同步回厂商，以及域名续费/自动续费。
+// 只有实现了它的 adapter 才允许写回；handler 通过类型断言判断。
+// 语义对齐 GoDaddy：解析按「类型+主机名」整组操作（读改写），不是单条。
+type WriteAdapter interface {
+	// GetGroup 取某域名下某 (type,name) 的当前记录组（写回前读，做读改写）。
+	GetGroup(ctx context.Context, domain, rtype, name string) ([]DNSRecord, error)
+	// ReplaceGroup 用给定记录整组替换该 (type,name)（新增/编辑都走它）。
+	ReplaceGroup(ctx context.Context, domain, rtype, name string, recs []DNSRecord) error
+	// DeleteGroup 删除该 (type,name) 整组。
+	DeleteGroup(ctx context.Context, domain, rtype, name string) error
+	// GetDomainDetail 取域名当前到期/自动续费/隐私状态（续费前展示）。
+	GetDomainDetail(ctx context.Context, domain string) (DomainDetail, error)
+	// GetRenewalPrice 取续费挂牌价（估算展示；查不到返回零值不报错）。
+	GetRenewalPrice(ctx context.Context, domain string) (RenewalPrice, error)
+	// RenewDomain 续费 period 年（⚠️会真实扣费；dry_run 时只打日志不真扣）。返回厂商订单信息。
+	RenewDomain(ctx context.Context, domain string, period int) (RenewResult, error)
+	// SetAutoRenew 开/关自动续费（不扣费）。
+	SetAutoRenew(ctx context.Context, domain string, enabled bool) error
+	// DryRun 是否预演模式（只打日志不真发），用于生产写回/续费护栏。
+	DryRun() bool
+	// EnvLabel 环境标识（生产 / OTE 测试），用于日志/审计区分。
+	EnvLabel() string
+}
+
 // NewAdapter 按 provider + 凭据 + 该源的限流器构造 adapter。
+// 凭据 map 除 api_key/api_secret 外，可选：
+//
+//	base_url  厂商 API 根地址（GoDaddy 默认生产 https://api.godaddy.com；测试填 https://api.ote-godaddy.com）
+//	dry_run   "1" 表示写回只打日志不真发（生产护栏）
 func NewAdapter(provider string, cred map[string]string, lim *Limiter) (Adapter, error) {
 	switch provider {
 	case "godaddy":
-		return &GoDaddy{key: cred["api_key"], secret: cred["api_secret"], lim: lim}, nil
+		return &GoDaddy{
+			key:    cred["api_key"],
+			secret: cred["api_secret"],
+			base:   cred["base_url"],
+			dryRun: cred["dry_run"] == "1",
+			lim:    lim,
+		}, nil
 	// 预留：aliyun / tencent / dnspod / cloudflare —— 后续实现各自 adapter
 	}
 	return nil, fmt.Errorf("数据源 provider %q 暂不支持同步（已支持 godaddy，其余待接入）", provider)

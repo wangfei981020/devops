@@ -50,6 +50,15 @@ func (h *SyncHandler) Register(r *gin.RouterGroup) {
 	r.GET("/sources/:id/usage", h.Usage)
 	r.GET("/domains/:ciid/dns-records", h.DNSRecords)
 	r.POST("/domains/:ciid/sync-records", h.SyncDomainRecords)
+	// DNS 解析写回厂商（增/改/删）
+	r.POST("/domains/:ciid/dns-records", h.CreateDNSRecord)
+	r.PUT("/dns-records/:id", h.UpdateDNSRecord)
+	r.DELETE("/dns-records/:id", h.DeleteDNSRecord)
+	// 域名续费 / 自动续费（写回厂商）
+	r.GET("/domains/:ciid/godaddy-detail", h.GodaddyDetail)
+	r.POST("/domains/:ciid/renew", h.RenewDomain)
+	r.POST("/domains/:ciid/auto-renew", h.SetAutoRenew)
+	r.GET("/renewals", h.ListRenewals) // 续费记录历史
 }
 
 // ---- 全量同步的后台状态（进程内，按数据源 id）----

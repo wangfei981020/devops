@@ -27,6 +27,7 @@
         <el-tooltip content="只刷注册到期：数据源域名由同步维护(跳过)，仅查手动录入域名(RDAP→WHOIS+重试)；证书到期见「到期巡检」" placement="top">
           <el-button :icon="Refresh" :loading="refreshingAll" @click="refreshAllDom">刷新到期</el-button>
         </el-tooltip>
+        <el-button :icon="Tickets" @click="openRenewLog">续费记录</el-button>
         <el-button type="primary" :icon="Plus" @click="openAddDomain">录入域名</el-button>
       </div>
     </div>
@@ -291,9 +292,10 @@
             <el-tag size="small" type="warning" effect="plain" style="margin-left:4px; cursor:pointer" @click="setDomStatus([row], row.suggest)">建议{{ row.suggest }}</el-tag>
           </el-tooltip>
         </template></el-table-column>
-        <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }">
+        <el-table-column label="操作" width="180" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
             <el-tooltip content="刷到期（WHOIS+443）"><el-button link type="primary" :loading="refreshingDom[row.ci_id]" :icon="Refresh" @click="refreshOneDom(row)" /></el-tooltip>
+            <el-tooltip v-if="canRenew(row)" content="续费 / 自动续费（写回 GoDaddy）"><el-button link type="warning" :icon="RefreshRight" @click="openRenew(row)" /></el-tooltip>
             <template v-if="row.origin === 'manual'">
               <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEditDomain(row)" /></el-tooltip>
               <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
@@ -325,6 +327,81 @@
         <el-form-item label="域名到期"><el-date-picker v-model="domForm.expiry_at" type="date" value-format="YYYY-MM-DD" placeholder="域名注册到期日" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="domDlg=false">取消</el-button><el-button type="primary" @click="saveDomain">保存</el-button></template>
+    </el-dialog>
+
+    <!-- 域名续费 / 自动续费（写回 GoDaddy；续费会真实扣费） -->
+    <el-dialog v-model="renewDlg.show" title="域名续费 / 自动续费" width="520px"
+      :close-on-click-modal="false" :close-on-press-escape="false">
+      <div v-loading="renewDlg.loading">
+        <el-form label-width="100px">
+          <el-form-item label="域名"><span class="mono">{{ renewDlg.domain }}</span></el-form-item>
+          <el-form-item label="当前到期">
+            <span :class="{ 'exp-red': renewDlg.expired }">{{ renewDlg.expires || '—' }}</span>
+            <el-tag v-if="renewDlg.expired" type="danger" size="small" style="margin-left:6px">已过期</el-tag>
+            <el-tag v-if="renewDlg.env && renewDlg.env!=='生产'" type="warning" size="small" style="margin-left:6px">{{ renewDlg.env }}</el-tag>
+          </el-form-item>
+          <el-form-item label="隐私保护">
+            <template v-if="!renewDlg.detailOk"><el-tag type="info" size="small">未知（详情读取失败）</el-tag></template>
+            <el-tag v-else-if="renewDlg.privacy" type="success" size="small">✅ 已开启</el-tag>
+            <el-tag v-else type="info" size="small">未开启</el-tag>
+            <span class="muted" style="margin-left:8px">只读；续费不改隐私，购买隐私是单独付费项</span>
+          </el-form-item>
+          <el-form-item label="自动续费">
+            <el-switch v-model="renewDlg.renewAuto" :loading="renewDlg.autoBusy" @change="onToggleAuto" />
+            <span class="muted" style="margin-left:8px">开启后到期自动续（GoDaddy 账户扣费），不立即扣费</span>
+          </el-form-item>
+          <el-divider content-position="left">立即续费</el-divider>
+          <el-form-item label="续费年数">
+            <el-input-number v-model="renewDlg.period" :min="1" :max="10" controls-position="right" style="width:130px" />
+          </el-form-item>
+          <el-form-item label="预估费用">
+            <template v-if="renewDlg.pricePerYear > 0">
+              <b>{{ renewDlg.currency }} {{ (renewDlg.pricePerYear * renewDlg.period).toFixed(2) }}</b>
+              <span class="muted" style="margin-left:8px">{{ renewDlg.currency }} {{ renewDlg.pricePerYear.toFixed(2) }}/年 × {{ renewDlg.period }} 年 · 估算，以 GoDaddy 结算为准</span>
+            </template>
+            <span v-else class="muted">价格以 GoDaddy 结算为准</span>
+          </el-form-item>
+          <el-alert type="error" :closable="false" show-icon
+            :title="renewDlg.dryRun
+              ? '当前数据源为「预演」模式：点续费不会真扣费，只打日志核对报文'
+              : '⚠ 点「确认续费」会立即向 GoDaddy 账户真实扣费，不可撤销'" style="margin-left:0" />
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="renewDlg.show=false">关闭</el-button>
+        <el-button type="danger" :loading="renewDlg.renewBusy" @click="doRenew">确认续费</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 续费记录台账（防超付可查：报价/订单号/到期前后/操作人） -->
+    <el-dialog v-model="renewLog.show" title="续费记录" width="920px" :close-on-click-modal="false">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom:10px"
+        title="平台报价为下单前挂牌估算；精确扣费以 GoDaddy 账单为准，凭订单号核对。到期「前→后」可核对是否只续了所选年数（防超付）。" />
+      <el-table :data="renewLog.items" size="small" v-loading="renewLog.loading" max-height="440">
+        <el-table-column prop="created_at" label="时间" width="150" />
+        <el-table-column prop="domain" label="域名" min-width="160" show-overflow-tooltip />
+        <el-table-column label="年数" width="60"><template #default="{ row }">{{ row.period }}</template></el-table-column>
+        <el-table-column label="报价(估算)" width="120"><template #default="{ row }">
+          <span v-if="row.quoted_amount > 0">{{ row.quoted_currency }} {{ row.quoted_amount.toFixed(2) }}</span>
+          <span v-else class="muted">—</span>
+        </template></el-table-column>
+        <el-table-column label="订单号" width="150" show-overflow-tooltip><template #default="{ row }">
+          <span v-if="row.order_id" class="mono">{{ row.order_id }}</span><span v-else class="muted">—</span>
+        </template></el-table-column>
+        <el-table-column label="到期 前→后" width="200"><template #default="{ row }">
+          <span v-if="row.expiry_before || row.expiry_after"><span class="mono">{{ row.expiry_before || '—' }}</span> → <span class="mono">{{ row.expiry_after || '—' }}</span></span>
+          <span v-else class="muted">—</span>
+        </template></el-table-column>
+        <el-table-column prop="operator" label="操作人" width="100" />
+        <el-table-column label="环境" width="90"><template #default="{ row }">
+          <el-tag v-if="row.dry_run" type="warning" size="small">预演</el-tag>
+          <el-tag v-else-if="row.env && row.env!=='生产'" type="info" size="small">{{ row.env }}</el-tag>
+          <el-tag v-else type="success" size="small">生产</el-tag>
+        </template></el-table-column>
+      </el-table>
+      <el-pagination v-model:current-page="renewLog.page" :page-size="renewLog.size" :total="renewLog.total"
+        layout="total, prev, pager, next" small background style="margin-top:10px; justify-content:flex-end"
+        @current-change="loadRenewLog" />
     </el-dialog>
 
     <!-- 编辑解析（业务字段 + 回源/源站；域名只读） -->
@@ -561,17 +638,93 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, InfoFilled, Connection, ArrowDown, Close } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, RefreshRight, Tickets, InfoFilled, Connection, ArrowDown, Close } from '@element-plus/icons-vue'
 import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
 import { useDomainFilter } from '../composables/useDomainFilter'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgnoreRecords, deleteRecord, checkRecordCert,
   syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains, bulkIgnoreDomains,
-  listOriginRules, upsertOriginRule, deleteOriginRule, bulkDomainStatus } from '../api/cmdb'
+  listOriginRules, upsertOriginRule, deleteOriginRule, bulkDomainStatus,
+  godaddyDetail, renewDomain, setAutoRenew, listRenewals } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
+
+// ---- 域名续费 / 自动续费（写回 GoDaddy）----
+// 能续费：绑了数据源(非手动、有注册商)、未忽略、未移出账号。后端还会校验 provider 是否支持。
+function canRenew(row) { return !!(row && row.registrar_name && row.origin !== 'manual' && !row.ignored && !row.stale) }
+const renewDlg = reactive({ show: false, loading: false, ciid: null, domain: '', expires: '', expired: false,
+  renewAuto: false, privacy: false, detailOk: true, pricePerYear: 0, currency: '', period: 1, env: '生产', dryRun: false, autoBusy: false, renewBusy: false })
+async function openRenew(row) {
+  Object.assign(renewDlg, { show: true, loading: true, ciid: row.ci_id, domain: row.name,
+    expires: row.expiry_at || '', expired: isExpired(row.expiry_at), renewAuto: false, privacy: false, detailOk: true,
+    pricePerYear: 0, currency: '', period: 1, env: '生产', dryRun: false })
+  try {
+    const d = await godaddyDetail(row.ci_id)
+    renewDlg.detailOk = d.detail_ok !== false
+    renewDlg.expires = d.expires || renewDlg.expires
+    renewDlg.expired = d.expires ? isExpired(d.expires) : renewDlg.expired
+    renewDlg.renewAuto = !!d.renew_auto
+    renewDlg.privacy = !!d.privacy
+    renewDlg.pricePerYear = d.price_per_year || 0
+    renewDlg.currency = d.currency || ''
+    renewDlg.env = d.env || '生产'
+    renewDlg.dryRun = !!d.dry_run
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '读取域名详情失败（仍可尝试续费）')
+  } finally { renewDlg.loading = false }
+}
+// 续费记录台账
+const renewLog = reactive({ show: false, loading: false, items: [], total: 0, page: 1, size: 20 })
+function openRenewLog() { renewLog.show = true; renewLog.page = 1; loadRenewLog() }
+async function loadRenewLog() {
+  renewLog.loading = true
+  try {
+    const r = await listRenewals({ limit: renewLog.size, offset: (renewLog.page - 1) * renewLog.size })
+    renewLog.items = r.items || []
+    renewLog.total = r.total || 0
+  } catch (e) { renewLog.items = [] } finally { renewLog.loading = false }
+}
+async function onToggleAuto(val) {
+  renewDlg.autoBusy = true
+  try {
+    const r = await setAutoRenew(renewDlg.ciid, val)
+    ElMessage.success(r.msg || '已设置')
+  } catch (e) {
+    renewDlg.renewAuto = !val // 回滚开关
+    ElMessage.error(e.response?.data?.error || '设置失败')
+  } finally { renewDlg.autoBusy = false }
+}
+async function doRenew() {
+  const cost = renewDlg.pricePerYear > 0
+    ? `预估 ${renewDlg.currency} ${(renewDlg.pricePerYear * renewDlg.period).toFixed(2)}（估算，以 GoDaddy 结算为准）`
+    : '（价格以 GoDaddy 结算为准）'
+  const warn = renewDlg.dryRun
+    ? `【预演模式】对 ${renewDlg.domain} 续费 ${renewDlg.period} 年，${cost}（不会真扣费，只核对报文）？`
+    : `确认对 ${renewDlg.domain} 续费 ${renewDlg.period} 年？\n${cost}\n⚠ 会立即向 GoDaddy 账户真实扣费，不可撤销！`
+  try {
+    await app.showConfirm(warn, '确认续费（写回 GoDaddy）')
+  } catch (e) { return }
+  renewDlg.renewBusy = true
+  try {
+    const r = await renewDomain(renewDlg.ciid, {
+      period: renewDlg.period,
+      quoted_amount: renewDlg.pricePerYear > 0 ? +(renewDlg.pricePerYear * renewDlg.period).toFixed(2) : 0,
+      quoted_currency: renewDlg.currency,
+    })
+    // 成功提示写清订单号 + 到期前后，防超付一眼可核
+    const parts = [r.msg || '已续费']
+    if (r.order_id) parts.push(`订单号 ${r.order_id}`)
+    if (r.expiry_before && r.expiry_after) parts.push(`到期 ${r.expiry_before} → ${r.expiry_after}`)
+    if (!r.dry_run) parts.push('精确扣费以 GoDaddy 账单为准，凭订单号核对')
+    app.showConfirm(parts.join('\n'), '续费结果').catch(() => {}) // 用确认框展示，方便看清/复制订单号
+    renewDlg.show = false
+    await load()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '续费失败')
+  } finally { renewDlg.renewBusy = false }
+}
 const rows = ref([]), allDomains = ref([]), registrars = ref([]), loading = ref(false)
 const checking = ref({}), syncingAll = ref(false)
 const dlg = ref(false), editing = ref(false), form = ref({})

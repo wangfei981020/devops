@@ -32,6 +32,15 @@ export const deleteOriginRule = (id) => http.delete('/origin-rules/' + id).then(
 
 // DNS 记录（厂商原始记录缓存，只读）
 export const listDnsRecords = (ciid) => http.get(`/domains/${ciid}/dns-records`).then((r) => r.data)
+// DNS 解析写回 GoDaddy（增/改/删）
+export const createDnsRecord = (ciid, b) => http.post(`/domains/${ciid}/dns-records`, b).then((r) => r.data)
+export const updateDnsRecord = (id, b) => http.put(`/dns-records/${id}`, b).then((r) => r.data)
+export const deleteDnsRecord = (id) => http.delete(`/dns-records/${id}`).then((r) => r.data)
+// 域名续费 / 自动续费（写回 GoDaddy；续费会真实扣费）
+export const godaddyDetail = (ciid) => http.get(`/domains/${ciid}/godaddy-detail`).then((r) => r.data)
+export const renewDomain = (ciid, body) => http.post(`/domains/${ciid}/renew`, body).then((r) => r.data)
+export const setAutoRenew = (ciid, enabled) => http.post(`/domains/${ciid}/auto-renew`, { enabled }).then((r) => r.data)
+export const listRenewals = (params) => http.get('/renewals', { params }).then((r) => r.data) // 续费记录历史
 
 // 证书巡检（跨所有域名的线上证书 + ACME 签发）
 export const listCertInspect = () => http.get('/cert-inspect').then((r) => r.data)

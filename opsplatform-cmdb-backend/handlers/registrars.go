@@ -27,16 +27,16 @@ func (h *RegistrarHandler) Register(r *gin.RouterGroup) {
 }
 
 type registrarOut struct {
-	ID         int    `json:"id"`
-	Name       string `json:"name"`
-	Provider   string `json:"provider"`
-	HasCred    bool   `json:"has_cred"`
-	Enabled    int    `json:"enabled"`
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	HasCred  bool   `json:"has_cred"`
+	DryRun   bool   `json:"dry_run"` // 预演模式（写回/续费只打日志不真发/不扣费）
+	Enabled  int    `json:"enabled"`
 }
 
 func (h *RegistrarHandler) List(c *gin.Context) {
-	rows, err := h.DB.Query(`SELECT id, name, provider,
-		CASE WHEN credential_enc IS NULL OR credential_enc='' THEN 0 ELSE 1 END, enabled
+	rows, err := h.DB.Query(`SELECT id, name, provider, COALESCE(credential_enc,''), enabled
 		FROM registrars ORDER BY id`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -46,12 +46,21 @@ func (h *RegistrarHandler) List(c *gin.Context) {
 	out := []registrarOut{}
 	for rows.Next() {
 		var r registrarOut
-		var has int
-		if err := rows.Scan(&r.ID, &r.Name, &r.Provider, &has, &r.Enabled); err != nil {
+		var enc string
+		if err := rows.Scan(&r.ID, &r.Name, &r.Provider, &enc, &r.Enabled); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
-		r.HasCred = has == 1
+		r.HasCred = enc != ""
+		// 解密读 dry_run（不回传密钥本身）
+		if enc != "" {
+			if plain, e := h.Cipher.Decrypt(enc); e == nil {
+				var m map[string]string
+				if json.Unmarshal([]byte(plain), &m) == nil && m["dry_run"] == "1" {
+					r.DryRun = true
+				}
+			}
+		}
 		out = append(out, r)
 	}
 	c.JSON(http.StatusOK, out)
@@ -60,7 +69,8 @@ func (h *RegistrarHandler) List(c *gin.Context) {
 type registrarIn struct {
 	Name       string         `json:"name"`
 	Provider   string         `json:"provider"`
-	Credential map[string]any `json:"credential"` // 厂商凭据(明文输入)，存储前加密
+	Credential map[string]any `json:"credential"` // 厂商凭据(明文输入)，存储前加密；编辑时留空=保留原值
+	DryRun     *bool          `json:"dry_run"`    // 预演模式开关（写回/续费只打日志不真发/不扣费）
 	Enabled    int            `json:"enabled"`
 }
 
@@ -70,7 +80,11 @@ func (h *RegistrarHandler) Create(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	enc, err := h.encCred(in.Credential)
+	cred := strMap(in.Credential)
+	if in.DryRun != nil && *in.DryRun {
+		cred["dry_run"] = "1"
+	}
+	enc, err := h.encCredStr(cred)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -98,16 +112,56 @@ func (h *RegistrarHandler) Update(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	// 仅当传了非空凭据才更新（留空=保留原值）
-	if len(in.Credential) > 0 {
-		enc, err := h.encCred(in.Credential)
+	// 凭据合并更新：以现有凭据为底，只覆盖本次传的非空字段 + dry_run 开关，
+	// 从而支持"只改预演开关不动 key/secret"（留空=保留原值）。
+	provided := strMap(in.Credential)
+	idInt, _ := parseID(id)
+	if len(provided) > 0 || in.DryRun != nil {
+		_, existing, _ := LoadCredential(h.DB, h.Cipher, int(idInt))
+		if existing == nil {
+			existing = map[string]string{}
+		}
+		for k, v := range provided { // 只覆盖非空
+			existing[k] = v
+		}
+		if in.DryRun != nil {
+			if *in.DryRun {
+				existing["dry_run"] = "1"
+			} else {
+				delete(existing, "dry_run")
+			}
+		}
+		enc, err := h.encCredStr(existing)
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
-		_, _ = h.DB.Exec(`UPDATE registrars SET credential_enc=? WHERE id=?`, enc, id)
+		if _, err := h.DB.Exec(`UPDATE registrars SET credential_enc=? WHERE id=?`, enc, id); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
 	}
+	WriteAudit(h.DB, c, "update_registrar", in.Name)
 	c.JSON(200, gin.H{"ok": true})
+}
+
+// strMap 把 map[string]any 的凭据转为 map[string]string，丢弃空值（编辑时空=保留原值）。
+func strMap(m map[string]any) map[string]string {
+	out := map[string]string{}
+	for k, v := range m {
+		if s, ok := v.(string); ok && s != "" {
+			out[k] = s
+		}
+	}
+	return out
+}
+
+func (h *RegistrarHandler) encCredStr(cred map[string]string) (string, error) {
+	if len(cred) == 0 {
+		return "", nil
+	}
+	b, _ := json.Marshal(cred)
+	return h.Cipher.Encrypt(string(b))
 }
 
 func (h *RegistrarHandler) Delete(c *gin.Context) {
@@ -116,14 +170,6 @@ func (h *RegistrarHandler) Delete(c *gin.Context) {
 		return
 	}
 	c.JSON(200, gin.H{"ok": true})
-}
-
-func (h *RegistrarHandler) encCred(cred map[string]any) (string, error) {
-	if len(cred) == 0 {
-		return "", nil
-	}
-	b, _ := json.Marshal(cred)
-	return h.Cipher.Encrypt(string(b))
 }
 
 // LoadCredential 供 ACME 模块解密取用某注册商凭据（内部用，不经 HTTP 暴露）。
