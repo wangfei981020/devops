@@ -52,7 +52,7 @@ func refreshOneDomain(db *sql.DB, ciid any, name string) string {
 
 	// ② 线上 HTTPS 证书到期（连 443）
 	if t2, cmsg := tlsCertExpiry(name); t2 != nil {
-		_, _ = db.Exec(`UPDATE domains SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg='' WHERE ci_id=?`, *t2, ciid)
+		_, _ = db.Exec(`UPDATE domains SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg=? WHERE ci_id=?`, *t2, truncate(cmsg, 250), ciid)
 		msgs = append(msgs, "证书到期 "+t2.Format("2006-01-02"))
 	} else {
 		_, _ = db.Exec(`UPDATE domains SET cert_check_at=NOW(), cert_check_msg=? WHERE ci_id=?`, truncate(cmsg, 250), ciid)
@@ -162,6 +162,18 @@ func tlsCertExpiry(domain string) (*time.Time, string) {
 	if len(certs) == 0 {
 		return nil, "未取到证书"
 	}
-	na := certs[0].NotAfter
-	return &na, ""
+	leaf := certs[0]
+	na := leaf.NotAfter
+	// 非致命告警：仍返回到期日，但把"域名不匹配/链不全/自签"写进 msg，避免误报"正常"。
+	var warns []string
+	if err := leaf.VerifyHostname(domain); err != nil {
+		warns = append(warns, "⚠证书SAN不含"+domain)
+	}
+	if len(certs) < 2 {
+		warns = append(warns, "⚠证书链不全(缺中间CA)")
+	}
+	if leaf.Issuer.CommonName != "" && leaf.Issuer.CommonName == leaf.Subject.CommonName {
+		warns = append(warns, "⚠疑似自签")
+	}
+	return &na, strings.Join(warns, " ")
 }

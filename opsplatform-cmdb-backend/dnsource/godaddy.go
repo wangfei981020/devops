@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"opsplatform-cmdb-backend/logx"
@@ -202,20 +203,43 @@ func (a *GoDaddy) GetDomainDetail(ctx context.Context, domain string) (DomainDet
 // 已拥有的域名(available:false)不带价——此时按 TLD 查一个合成可用域名的挂牌价当估算
 // （续费价按 TLD 定，同后缀一个价）。查不到返回零值不报错（前端展示"以厂商结算为准"）。
 func (a *GoDaddy) GetRenewalPrice(ctx context.Context, domain string) (RenewalPrice, error) {
+	tld := ""
+	if i := strings.LastIndex(domain, "."); i >= 0 && i+1 < len(domain) {
+		tld = domain[i+1:]
+	}
+	// 挂牌价按 TLD 定，缓存 6h，避免每次开续费弹窗都打一次 GoDaddy
+	if tld != "" {
+		if v, ok := priceCache.Load(tld); ok {
+			if e := v.(priceCacheEntry); time.Since(e.at) < 6*time.Hour {
+				return e.p, nil
+			}
+		}
+	}
 	if p := a.priceOf(ctx, domain); p.AmountMicro > 0 {
+		if tld != "" {
+			priceCache.Store(tld, priceCacheEntry{p: p, at: time.Now()})
+		}
 		return p, nil
 	}
 	// 兜底：owned 域名拿不到价 → 按后缀查合成可用域名
-	if i := strings.LastIndex(domain, "."); i >= 0 && i+1 < len(domain) {
-		tld := domain[i+1:]
+	if tld != "" {
 		synth := fmt.Sprintf("cmdbpricechk%d.%s", time.Now().UnixNano(), tld)
 		if p := a.priceOf(ctx, synth); p.AmountMicro > 0 {
-			logx.JCtx(ctx, "godaddy_read","price_tld_fallback", map[string]any{"env": a.EnvLabel(), "domain": domain, "tld": tld, "amount_micro": p.AmountMicro, "currency": p.Currency})
+			logx.JCtx(ctx, "godaddy_read", "price_tld_fallback", map[string]any{"env": a.EnvLabel(), "domain": domain, "tld": tld, "amount_micro": p.AmountMicro, "currency": p.Currency})
+			priceCache.Store(tld, priceCacheEntry{p: p, at: time.Now()})
 			return p, nil
 		}
 	}
 	return RenewalPrice{}, nil
 }
+
+type priceCacheEntry struct {
+	p  RenewalPrice
+	at time.Time
+}
+
+// priceCache: TLD → 挂牌价（6h TTL）。续费价按 TLD 定，无需每次开弹窗都查厂商。
+var priceCache sync.Map
 
 // priceOf 查单个域名的挂牌价（available 端点）。查不到/失败返回零值。
 func (a *GoDaddy) priceOf(ctx context.Context, domain string) RenewalPrice {

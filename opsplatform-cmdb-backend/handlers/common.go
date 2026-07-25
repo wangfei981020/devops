@@ -87,6 +87,23 @@ func genRequestID() string {
 	return hex.EncodeToString(b)
 }
 
+// AccessLog gin 访问日志改结构化 JSON（替代默认 [GIN] 文本行），带 request_id 串全链路。
+func AccessLog() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		logx.J("access", "http", map[string]any{
+			"method":     c.Request.Method,
+			"path":       c.Request.URL.Path,
+			"status":     c.Writer.Status(),
+			"latency_ms": float64(time.Since(start).Microseconds()) / 1000.0,
+			"ip":         c.ClientIP(),
+			"size":       c.Writer.Size(),
+			"request_id": c.GetString("request_id"),
+		})
+	}
+}
+
 // CORS 允许跨域（前端经 nginx 同源代理，开发期直连也放开）。
 func CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {

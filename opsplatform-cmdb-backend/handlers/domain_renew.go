@@ -7,12 +7,16 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"opsplatform-cmdb-backend/logx"
 )
+
+// renewInFlight 按域名 ci_id 的续费互斥：防双击/重试并发导致重复扣费。
+var renewInFlight sync.Map
 
 // 域名续费 / 自动续费（写回 GoDaddy）。续费⚠️会真实扣费——UI 二次确认 + 尊重数据源 dry_run（预演不真扣）。
 // 全链路日志：每个失败分支都打 [域名续费] 标签，方便生产排错。
@@ -59,21 +63,29 @@ func (h *SyncHandler) RenewDomain(c *gin.Context) {
 		QuotedAmount   float64 `json:"quoted_amount"`
 		QuotedCurrency string  `json:"quoted_currency"`
 	}
-	_ = c.ShouldBindJSON(&in)
-	if in.Period <= 0 {
-		in.Period = 1
-	}
-	if in.Period > 10 {
-		c.JSON(400, gin.H{"error": "续费年数最多 10 年"})
+	// 畸形/空 body 直接拒，绝不静默默认续 1 年（真金白银）
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": "请求体格式错误：" + err.Error()})
 		return
 	}
+	if in.Period < 1 || in.Period > 10 {
+		c.JSON(400, gin.H{"error": "请指定续费年数（1-10 年）"})
+		return
+	}
+	ciID, _ := parseID(ciid)
+	// 防重：同域名续费串行化，双击/重试第二个请求直接拒（避免重复扣费）
+	if _, busy := renewInFlight.LoadOrStore(ciID, true); busy {
+		c.JSON(http.StatusConflict, gin.H{"error": "该域名正在续费中，请勿重复提交"})
+		return
+	}
+	defer renewInFlight.Delete(ciID)
+
 	wa, _, domain, _, err := h.writeAdapterForDomain(ciid)
 	if err != nil {
 		logx.JCtx(c.Request.Context(), "domain_renew", "renew_precheck_fail", map[string]any{"ciid": ciid, "error": err.Error()})
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	ciID, _ := parseID(ciid)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 40*time.Second)
 	defer cancel()
 
@@ -88,32 +100,65 @@ func (h *SyncHandler) RenewDomain(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "续费失败：" + err.Error()})
 		return
 	}
-	// 真续成功后拉最新到期日刷库（dry_run 不改厂商，跳过刷库）
+	// 真续成功后拉最新到期日刷库（dry_run 不改厂商，跳过刷库）。
+	// GoDaddy 续费后到期日有延迟未即时更新——若拉到的没前进，用「原到期 + 续费年数」推算，避免台账显示前后相同。
 	var expiryAfter sql.NullString
 	if !wa.DryRun() {
+		expected := addYearsDate(expiryBefore.String, in.Period)
+		newExp := ""
 		if d, e := wa.GetDomainDetail(ctx, domain); e == nil && d.Expires != nil {
-			expiryAfter = sql.NullString{String: d.Expires.Format("2006-01-02"), Valid: true}
-			logExec(h.DB, "续费刷到期", `UPDATE domains SET expiry_at=? WHERE ci_id=?`, *d.Expires, ciID)
-		} else if e != nil {
-			logx.JCtx(c.Request.Context(), "domain_renew", "renew_refresh_expiry_fail", map[string]any{"domain": domain, "error": e.Error()})
+			got := d.Expires.Format("2006-01-02")
+			if expiryBefore.Valid && got <= expiryBefore.String && expected != "" {
+				newExp = expected // 厂商延迟未更新，按推算
+			} else {
+				newExp = got
+			}
+		} else {
+			if e != nil {
+				logx.JCtx(c.Request.Context(), "domain_renew", "renew_refresh_expiry_fail", map[string]any{"domain": domain, "error": e.Error()})
+			}
+			newExp = expected // 详情拉不到，用推算
+		}
+		if newExp != "" {
+			expiryAfter = sql.NullString{String: newExp, Valid: true}
+			logExec(h.DB, "续费刷到期", `UPDATE domains SET expiry_at=? WHERE ci_id=?`, newExp, ciID)
 		}
 	}
 	dry := 0
 	if wa.DryRun() {
 		dry = 1
 	}
-	// 落续费记录台账
-	logExec(h.DB, "续费记录", `INSERT INTO domain_renewals
-		(domain_ci_id, domain, period, quoted_currency, quoted_amount, order_id, expiry_before, expiry_after, operator, env, dry_run, raw_resp)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ciID, domain, in.Period, in.QuotedCurrency, in.QuotedAmount, res.OrderID,
-		nullableStr(expiryBefore), nullableStr(expiryAfter), currentUser(c), wa.EnvLabel(), dry, res.RawBody)
+	// 厂商实际扣费金额（GoDaddy 若返回则入库，供对账；多为 0）
+	actualAmt := float64(res.AmountMicro) / 1_000_000.0
+	// 落续费记录台账——落库失败必须告警（钱已扣，台账不能悄悄丢）
+	ledgerSaved := true
+	if _, e := h.DB.Exec(`INSERT INTO domain_renewals
+		(domain_ci_id, domain, period, quoted_currency, quoted_amount, actual_amount, actual_currency, order_id, expiry_before, expiry_after, operator, env, dry_run, raw_resp)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ciID, domain, in.Period, in.QuotedCurrency, in.QuotedAmount, actualAmt, res.Currency, res.OrderID,
+		nullableStr(expiryBefore), nullableStr(expiryAfter), currentUser(c), wa.EnvLabel(), dry, res.RawBody); e != nil {
+		ledgerSaved = false
+		logx.JCtx(c.Request.Context(), "domain_renew", "ledger_save_fail", map[string]any{"domain": domain, "order_id": res.OrderID, "period": in.Period, "error": e.Error()})
+	}
 
 	WriteAudit(h.DB, c, "domain_renew", fmt.Sprintf("%s %d年 order=%s", domain, in.Period, res.OrderID))
-	logx.JCtx(c.Request.Context(), "domain_renew", "renew_done", map[string]any{"domain": domain, "period": in.Period, "order_id": res.OrderID, "expiry_before": expiryBefore.String, "expiry_after": expiryAfter.String, "env": wa.EnvLabel(), "dry_run": wa.DryRun()})
-	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
+	logx.JCtx(c.Request.Context(), "domain_renew", "renew_done", map[string]any{"domain": domain, "period": in.Period, "order_id": res.OrderID, "expiry_before": expiryBefore.String, "expiry_after": expiryAfter.String, "ledger_saved": ledgerSaved, "env": wa.EnvLabel(), "dry_run": wa.DryRun()})
+	out := gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
 		"order_id": res.OrderID, "expiry_before": expiryBefore.String, "expiry_after": expiryAfter.String,
-		"msg": renewMsg(wa, domain, in.Period)})
+		"ledger_saved": ledgerSaved, "msg": renewMsg(wa, domain, in.Period)}
+	if !ledgerSaved {
+		out["warning"] = fmt.Sprintf("续费已成功但台账写入失败，请人工补录：域名 %s 订单 %s %d年", domain, res.OrderID, in.Period)
+	}
+	c.JSON(200, out)
+}
+
+// addYearsDate 给 "YYYY-MM-DD" 加 n 年；解析失败返回空串。
+func addYearsDate(d string, n int) string {
+	t, err := time.Parse("2006-01-02", d)
+	if err != nil {
+		return ""
+	}
+	return t.AddDate(n, 0, 0).Format("2006-01-02")
 }
 
 // nullableStr 把 NullString 转为可写入的值（无效→nil）。
@@ -143,7 +188,7 @@ func (h *SyncHandler) ListRenewals(c *gin.Context) {
 	if o, e := strconv.Atoi(c.Query("offset")); e == nil && o > 0 {
 		offset = o
 	}
-	rows, err := h.DB.Query(`SELECT id, domain, period, quoted_currency, quoted_amount, order_id,
+	rows, err := h.DB.Query(`SELECT id, domain, period, quoted_currency, quoted_amount, actual_amount, actual_currency, order_id,
 		DATE_FORMAT(expiry_before,'%Y-%m-%d'), DATE_FORMAT(expiry_after,'%Y-%m-%d'),
 		operator, env, dry_run, DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s')
 		FROM domain_renewals WHERE `+cond+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
@@ -153,24 +198,26 @@ func (h *SyncHandler) ListRenewals(c *gin.Context) {
 	}
 	defer rows.Close()
 	type row struct {
-		ID           int64   `json:"id"`
-		Domain       string  `json:"domain"`
-		Period       int     `json:"period"`
-		Currency     string  `json:"quoted_currency"`
-		Amount       float64 `json:"quoted_amount"`
-		OrderID      string  `json:"order_id"`
-		ExpiryBefore string  `json:"expiry_before"`
-		ExpiryAfter  string  `json:"expiry_after"`
-		Operator     string  `json:"operator"`
-		Env          string  `json:"env"`
-		DryRun       int     `json:"dry_run"`
-		CreatedAt    string  `json:"created_at"`
+		ID             int64   `json:"id"`
+		Domain         string  `json:"domain"`
+		Period         int     `json:"period"`
+		Currency       string  `json:"quoted_currency"`
+		Amount         float64 `json:"quoted_amount"`
+		ActualAmount   float64 `json:"actual_amount"`
+		ActualCurrency string  `json:"actual_currency"`
+		OrderID        string  `json:"order_id"`
+		ExpiryBefore   string  `json:"expiry_before"`
+		ExpiryAfter    string  `json:"expiry_after"`
+		Operator       string  `json:"operator"`
+		Env            string  `json:"env"`
+		DryRun         int     `json:"dry_run"`
+		CreatedAt      string  `json:"created_at"`
 	}
 	list := []row{}
 	for rows.Next() {
 		var r row
 		var eb, ea sql.NullString
-		if rows.Scan(&r.ID, &r.Domain, &r.Period, &r.Currency, &r.Amount, &r.OrderID, &eb, &ea,
+		if rows.Scan(&r.ID, &r.Domain, &r.Period, &r.Currency, &r.Amount, &r.ActualAmount, &r.ActualCurrency, &r.OrderID, &eb, &ea,
 			&r.Operator, &r.Env, &r.DryRun, &r.CreatedAt) != nil {
 			continue
 		}

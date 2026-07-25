@@ -31,6 +31,12 @@ func RequestID(ctx context.Context) string {
 	return ""
 }
 
+// Line 把一条文本日志包成 JSON（{tag,event:"log",msg}）。用于把零散的 log.Printf 统一成 JSON 格式，
+// 不必逐条拆成结构化字段；关键操作日志仍用 J/JCtx 的富字段形式。
+func Line(tag, msg string) {
+	J(tag, "log", map[string]any{"msg": msg})
+}
+
 // JCtx 带 request_id 的 JSON 日志（从 ctx 取 request_id 自动加进字段）。
 func JCtx(ctx context.Context, tag, event string, fields map[string]any) {
 	if fields == nil {

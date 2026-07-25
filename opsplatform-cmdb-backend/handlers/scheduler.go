@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +16,7 @@ import (
 
 	"opsplatform-cmdb-backend/crypto"
 	"opsplatform-cmdb-backend/dnsource"
+	"opsplatform-cmdb-backend/logx"
 	"opsplatform-cmdb-backend/notify"
 )
 
@@ -70,7 +70,7 @@ func StartScheduler(db *sql.DB, cipher *crypto.Cipher) {
 	}
 	// 自愈①：启动时，之前进程遗留的「运行中」记录一律标「中断」（那些进程已随重启死掉）
 	if _, err := db.Exec(`UPDATE task_run_logs SET status='interrupted', summary='中断：服务重启', finished_at=NOW() WHERE status='running'`); err != nil {
-		log.Printf("[scheduler] 启动清理遗留 running 记录失败: %v", err)
+		logx.Line("scheduler", fmt.Sprintf("[scheduler] 启动清理遗留 running 记录失败: %v", err))
 	}
 	// 自愈②：每 5 分钟把 running 超过硬超时上限(30min)仍未收尾的标「中断」（兜底任何卡死）
 	go func() {
@@ -78,7 +78,7 @@ func StartScheduler(db *sql.DB, cipher *crypto.Cipher) {
 		for range t.C {
 			if _, err := db.Exec(`UPDATE task_run_logs SET status='interrupted', summary='中断：超时未收尾(自愈)', finished_at=NOW()
 				WHERE status='running' AND TIMESTAMPDIFF(SECOND, started_at, NOW()) > 1800`); err != nil {
-				log.Printf("[scheduler] 定期自愈卡死记录失败: %v", err)
+				logx.Line("scheduler", fmt.Sprintf("[scheduler] 定期自愈卡死记录失败: %v", err))
 			}
 		}
 	}()
@@ -119,7 +119,7 @@ func (s *Scheduler) reload() {
 	s.cron = cron.New()
 	rows, err := s.db.Query(`SELECT task_key, schedule FROM scheduled_tasks WHERE enabled=1`)
 	if err != nil {
-		log.Printf("scheduler reload query: %v", err)
+		logx.Line("scheduler", fmt.Sprintf("scheduler reload query: %v", err))
 		return
 	}
 	defer rows.Close()
@@ -133,7 +133,7 @@ func (s *Scheduler) reload() {
 		}
 		k := key
 		if _, err := s.cron.AddFunc(schedule, func() { s.run(k, "cron", nil) }); err != nil {
-			log.Printf("scheduler add %s (%q): %v", key, schedule, err)
+			logx.Line("scheduler", fmt.Sprintf("scheduler add %s (%q): %v", key, schedule, err))
 		}
 	}
 	s.cron.Start()
@@ -142,7 +142,7 @@ func (s *Scheduler) reload() {
 // exec 执行 UPDATE/DELETE 并在出错时打日志（不再吞错）。desc 用于日志定位。
 func (s *Scheduler) exec(desc, query string, args ...any) {
 	if _, err := s.db.Exec(query, args...); err != nil {
-		log.Printf("[scheduler] %s 失败: %v", desc, err)
+		logx.Line("scheduler", fmt.Sprintf("[scheduler] %s 失败: %v", desc, err))
 	}
 }
 
@@ -168,14 +168,14 @@ func (s *Scheduler) run(key, trigger string, targets []string) {
 			s.runMu.Unlock()
 		}
 		if r := recover(); r != nil {
-			log.Printf("[scheduler] 任务 %s panic: %v", key, r)
+			logx.Line("scheduler", fmt.Sprintf("[scheduler] 任务 %s panic: %v", key, r))
 			msg := fmt.Sprintf("panic: %v", r)
 			s.exec("panic后更新scheduled_tasks", `UPDATE scheduled_tasks SET last_run_at=NOW(), last_result=?, last_ok=0 WHERE task_key=?`, truncate(msg, 250), key)
 			ns, ng, na := sendTaskNotify(s.db, key, "fail", msg)
 			s.finishRunLog(runID, "fail", msg, nil, start, ns, ng, na)
 		}
 	}()
-	log.Printf("[scheduler] 运行任务 %s (%s)", key, trigger)
+	logx.Line("scheduler", fmt.Sprintf("[scheduler] 运行任务 %s (%s)", key, trigger))
 	prog := func(done, total int) {
 		s.exec("更新进度", `UPDATE task_run_logs SET progress=? WHERE id=?`, fmt.Sprintf("%d/%d", done, total), runID)
 	}
@@ -207,7 +207,7 @@ func (s *Scheduler) run(key, trigger string, targets []string) {
 
 	// D 自动重试：仅 fail/timeout（不含 partial/cancelled/ok）且非自动重试触发时，延迟后重跑一次
 	if (status == "fail" || status == "timeout") && trigger != "auto_retry" {
-		log.Printf("[scheduler] 任务 %s %s，10s 后自动重试一次", key, status)
+		logx.Line("scheduler", fmt.Sprintf("[scheduler] 任务 %s %s，10s 后自动重试一次", key, status))
 		go func() { time.Sleep(10 * time.Second); s.run(key, "auto_retry", targets) }()
 	}
 }
@@ -225,7 +225,7 @@ func (s *Scheduler) CancelTask(runID int64) bool {
 	// 僵尸：直接收尾
 	res, err := s.db.Exec(`UPDATE task_run_logs SET status='cancelled', summary='已手动取消(强制收尾)', finished_at=NOW() WHERE id=? AND status='running'`, runID)
 	if err != nil {
-		log.Printf("[scheduler] 强制取消记录 %d 失败: %v", runID, err)
+		logx.Line("scheduler", fmt.Sprintf("[scheduler] 强制取消记录 %d 失败: %v", runID, err))
 		return false
 	}
 	n, _ := res.RowsAffected()
@@ -239,7 +239,7 @@ func (s *Scheduler) startRunLog(key, trigger string, start time.Time) int64 {
 	res, err := s.db.Exec(`INSERT INTO task_run_logs (task_key, name, status, trigger_by, started_at, finished_at)
 		VALUES (?,?, 'running', ?, ?, ?)`, key, name, trigger, start, start)
 	if err != nil {
-		log.Printf("[scheduler] 写运行记录失败(task=%s): %v", key, err)
+		logx.Line("scheduler", fmt.Sprintf("[scheduler] 写运行记录失败(task=%s): %v", key, err))
 		return 0
 	}
 	id, _ := res.LastInsertId()
@@ -422,9 +422,9 @@ func inspectAllCertsCore(ctx context.Context, db *sql.DB, prog ProgressFn, targe
 			}
 			if ct, cmsg := tlsCertExpiry(tg.fqdn); ct != nil {
 				if tg.isMain {
-					_, _ = db.Exec(`UPDATE domains SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg='' WHERE ci_id=?`, *ct, tg.id)
+					_, _ = db.Exec(`UPDATE domains SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg=? WHERE ci_id=?`, *ct, truncate(cmsg, 250), tg.id)
 				} else {
-					_, _ = db.Exec(`UPDATE domain_records SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg='' WHERE id=?`, *ct, tg.id)
+					_, _ = db.Exec(`UPDATE domain_records SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg=? WHERE id=?`, *ct, truncate(cmsg, 250), tg.id)
 				}
 				atomic.AddInt32(&ok, 1)
 			} else {
@@ -484,7 +484,7 @@ func dnsSyncCore(parent context.Context, db *sql.DB, cipher *crypto.Cipher) (str
 	if len(srcs) == 0 {
 		return "没有配置数据源，跳过", nil, true
 	}
-	totalD, totalR, totalImp := 0, 0, 0
+	totalD, totalR, totalImp, migratedCnt := 0, 0, 0, 0
 	var newRecList []string // 本次新增的业务解析（供摘要列出）
 	var failures []TaskFailure
 	for _, s := range srcs {
@@ -517,11 +517,11 @@ func dnsSyncCore(parent context.Context, db *sql.DB, cipher *crypto.Cipher) (str
 			}
 			if isDomainGone(d.Status) {
 				sh.markDomainGone(d.Name, id, d.Status)
-				log.Printf("[domain-sync] 域名 %s 判为已移出账号（GoDaddy status=%s）", d.Name, d.Status)
+				logx.Line("scheduler", fmt.Sprintf("[domain-sync] 域名 %s 判为已移出账号（GoDaddy status=%s）", d.Name, d.Status))
 				continue
 			}
 			if !isDomainActive(d.Status) && !isDomainPending(d.Status) {
-				log.Printf("[domain-sync] WARN 域名 %s 状态未识别（GoDaddy status=%s），暂按活跃处理", d.Name, d.Status)
+				logx.Line("scheduler", fmt.Sprintf("[domain-sync] WARN 域名 %s 状态未识别（GoDaddy status=%s），暂按活跃处理", d.Name, d.Status))
 			}
 			ciID, err := sh.upsertDomainCI(d.Name, id, d.ExpiresAt, d.Status)
 			if err != nil {
@@ -531,7 +531,13 @@ func dnsSyncCore(parent context.Context, db *sql.DB, cipher *crypto.Cipher) (str
 			totalD++
 			recs, err := adapter.ListRecords(ctx, d.Name)
 			if err != nil {
-				log.Printf("[domain-sync] WARN 域名 %s 拉解析记录失败: %v", d.Name, err)
+				// 区分 DNS 已迁走(Cloudflare 等，正常) 与真失败
+				if mig, reason := classifyRecordFetchErr(d.Name, err); mig {
+					migratedCnt++
+					_, _ = db.Exec(`UPDATE domains SET dns_migrated=1 WHERE ci_id=?`, ciID)
+				} else {
+					failures = append(failures, TaskFailure{Target: d.Name, Reason: "拉解析失败：" + reason})
+				}
 			} else {
 				sh.refreshDNSRecords(ciID, id, recs)
 				totalR += len(recs)
@@ -541,6 +547,7 @@ func dnsSyncCore(parent context.Context, db *sql.DB, cipher *crypto.Cipher) (str
 				migrated := 0
 				if len(recs) == 0 && dnsMigratedFromGoDaddy(d.Name) {
 					migrated = 1
+					migratedCnt++
 				}
 				_, _ = db.Exec(`UPDATE domains SET dns_migrated=? WHERE ci_id=?`, migrated, ciID)
 			}
@@ -552,6 +559,9 @@ func dnsSyncCore(parent context.Context, db *sql.DB, cipher *crypto.Cipher) (str
 	}
 	ok := !(totalD == 0 && len(failures) == len(srcs)) // 全部源都失败才算失败
 	msg := fmt.Sprintf("同步 %d 域名 / %d DNS 记录 / 新增 %d 条解析", totalD, totalR, totalImp)
+	if migratedCnt > 0 {
+		msg += fmt.Sprintf(" / %d 个DNS已迁走(Cloudflare等,正常)", migratedCnt)
+	}
 	if len(newRecList) > 0 {
 		const topN = 10
 		msg += "\n新增业务解析："
@@ -669,7 +679,8 @@ func renewDue(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool) {
 		FROM certificates t
 		LEFT JOIN ci_relations r ON r.src_ci_id=t.ci_id AND r.rel_type='protects'
 		WHERE t.auto_renew=1 AND t.status='active' AND t.expiry_at IS NOT NULL
-		  AND t.expiry_at < DATE_ADD(NOW(), INTERVAL t.renew_days DAY)`)
+		  AND t.expiry_at < DATE_ADD(NOW(), INTERVAL t.renew_days DAY)
+		  AND t.challenge NOT IN ('manual-dns','http-01')`)
 	if err != nil {
 		return "查询待续期证书失败：" + truncate(err.Error(), 160), nil, false
 	}
@@ -699,7 +710,7 @@ func renewDue(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool) {
 			failures = append(failures, TaskFailure{Target: j.cn, Reason: "无对应 ACME 账户（ca=" + j.ca + "）"})
 			continue
 		}
-		log.Printf("auto-renew cert %s (ci %d)", j.cn, j.certCIID)
+		logx.Line("scheduler", fmt.Sprintf("auto-renew cert %s (ci %d)", j.cn, j.certCIID))
 		if errMsg := issueCertCore(db, cipher, j.certCIID, j.domainCIID, acctID, false, "renew"); errMsg != "" {
 			failures = append(failures, TaskFailure{Target: j.cn, Reason: truncate(errMsg, 160)})
 			notifyEvent(db, webhook, "auto_renew", "notify_renew_fail", fmt.Sprintf("❌ 证书自动续期失败：%s\n原因：%s", j.cn, errMsg))

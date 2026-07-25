@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 
 	"opsplatform-cmdb-backend/crypto"
 	"opsplatform-cmdb-backend/dnsource"
+	"opsplatform-cmdb-backend/logx"
 )
 
 // dnsMigratedFromGoDaddy 查域名权威 NS：若能查到且都不是 GoDaddy(domaincontrol.com)，
@@ -166,12 +166,51 @@ func (h *SyncHandler) Sync(c *gin.Context) {
 }
 
 // runSync 后台跑全量同步：限流节流(Wait)下完整拉全部域名+记录，最后 markStale。
+// 同时写「执行记录」(task_run_logs, key=dns_sync, trigger=manual)：含新增解析列表、真失败明细、DNS已迁走计数。
 func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
+	start := time.Now()
+	var srcName string
+	_ = h.DB.QueryRow(`SELECT name FROM registrars WHERE id=?`, id).Scan(&srcName)
+	var runID int64
+	if sched != nil {
+		runID = sched.startRunLog("dns_sync", "manual", start)
+	}
+	var failures []TaskFailure
+	var newRecList []string
+	migratedCnt := 0
 	defer func() {
 		syncMu.Lock()
 		st.Running = false
 		st.FinishedAt = time.Now()
+		errStr := st.Err
 		syncMu.Unlock()
+		// 写执行记录终态
+		if sched != nil && runID > 0 {
+			status := "ok"
+			if errStr != "" {
+				status = "fail"
+			} else if len(failures) > 0 {
+				status = "partial"
+			}
+			summary := fmt.Sprintf("手动同步「%s」：%d 域名 / %d 条解析 / 新增 %d 条", srcName, st.Synced, st.Records, st.Imp)
+			if migratedCnt > 0 {
+				summary += fmt.Sprintf(" / %d 个DNS已迁走(Cloudflare等,正常)", migratedCnt)
+			}
+			if errStr != "" {
+				summary += " / 出错：" + truncate(errStr, 120)
+			}
+			if len(newRecList) > 0 {
+				summary += "\n新增业务解析："
+				for i, r := range newRecList {
+					if i >= 10 {
+						summary += fmt.Sprintf("\n…另 %d 条", len(newRecList)-10)
+						break
+					}
+					summary += "\n· " + r
+				}
+			}
+			sched.finishRunLog(runID, status, summary, failures, start, "", "", "")
+		}
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -199,7 +238,7 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 		if isDomainGone(d.Status) {
 			// 已转出/取消/过户：不计 present、不重置 stale，直接标已移出账号并记状态，交由灰显+人工移除
 			h.markDomainGone(d.Name, id, d.Status)
-			log.Printf("[domain-sync] 域名 %s 判为已移出账号（GoDaddy status=%s）", d.Name, d.Status)
+			logx.Line("domain-sync", fmt.Sprintf("[domain-sync] 域名 %s 判为已移出账号（GoDaddy status=%s）", d.Name, d.Status))
 			syncMu.Lock()
 			st.Done++
 			syncMu.Unlock()
@@ -207,11 +246,11 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 		}
 		// 未识别状态（既非活跃/待激活，也不在移出清单）——暂按活跃保留，但打 WARN，便于补分类
 		if !isDomainActive(d.Status) && !isDomainPending(d.Status) {
-			log.Printf("[domain-sync] WARN 域名 %s 状态未识别（GoDaddy status=%s），暂按活跃处理，请确认是否应判移出", d.Name, d.Status)
+			logx.Line("domain-sync", fmt.Sprintf("[domain-sync] WARN 域名 %s 状态未识别（GoDaddy status=%s），暂按活跃处理，请确认是否应判移出", d.Name, d.Status))
 		}
 		ciID, err := h.upsertDomainCI(d.Name, id, d.ExpiresAt, d.Status)
 		if err != nil {
-			log.Printf("[domain-sync] WARN 域名 %s upsert 失败: %v", d.Name, err)
+			logx.Line("domain-sync", fmt.Sprintf("[domain-sync] WARN 域名 %s upsert 失败: %v", d.Name, err))
 			syncMu.Lock()
 			st.Done++
 			syncMu.Unlock()
@@ -220,14 +259,22 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 		present[d.Name] = true
 		recs, err := adapter.ListRecords(ctx, d.Name)
 		if err != nil {
-			log.Printf("[domain-sync] WARN 域名 %s 拉解析记录失败（可能转出中/DNS已迁走）: %v", d.Name, err)
+			// 区分 DNS 已迁走(Cloudflare 等，正常) 与真失败：迁走计数，真失败进执行记录 failures
+			if mig, reason := classifyRecordFetchErr(d.Name, err); mig {
+				migratedCnt++
+				logExec(h.DB, "DNS同步写", `UPDATE domains SET dns_migrated=1 WHERE ci_id=?`, ciID)
+			} else {
+				failures = append(failures, TaskFailure{Target: d.Name, Reason: "拉解析失败：" + reason})
+			}
 		} else {
 			h.refreshDNSRecords(ciID, id, recs)
 			imp := h.importBusinessRecords(ciID, d.Name, recs)
+			newRecList = append(newRecList, imp...)
 			// 记录 0 条时查权威 NS：若已不指向 GoDaddy，说明域名还在账户但 DNS 迁走了。
 			migrated := 0
 			if len(recs) == 0 && dnsMigratedFromGoDaddy(d.Name) {
 				migrated = 1
+				migratedCnt++
 			}
 			logExec(h.DB, "DNS同步写", `UPDATE domains SET dns_migrated=? WHERE ci_id=?`, migrated, ciID)
 			syncMu.Lock()
@@ -547,6 +594,19 @@ func (h *SyncHandler) refreshDNSRecords(ciID int64, sourceID int, recs []dnsourc
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			ciID, r.Type, r.Name, r.Data, r.TTL, prio, boolToInt(isProtectedRecord(r)), sourceID)
 	}
+}
+
+// classifyRecordFetchErr 区分「拉解析失败」是 DNS 已迁走(正常) 还是真失败。
+// GoDaddy 对 DNS 迁到 Cloudflare 等的域名返回 UNKNOWN_DOMAIN(404)：若权威 NS 已不指向 GoDaddy，
+// 判为已迁移(正常，不算失败)；否则算真失败。返回 (migrated, failReason)。
+func classifyRecordFetchErr(domain string, err error) (migrated bool, failReason string) {
+	msg := err.Error()
+	is404 := strings.Contains(msg, "UNKNOWN_DOMAIN") || strings.Contains(msg, "404") ||
+		strings.Contains(strings.ToLower(msg), "not registered") || strings.Contains(strings.ToLower(msg), "zone file")
+	if is404 && dnsMigratedFromGoDaddy(domain) {
+		return true, ""
+	}
+	return false, truncate(msg, 120)
 }
 
 // isProtectedRecord 标记不可在 CMDB 误改的记录：CF 的 _acme-challenge 委托、NS 等。

@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"database/sql"
-	"log"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -11,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
+
+	"opsplatform-cmdb-backend/logx"
 )
 
 type AuthHandler struct {
@@ -26,7 +28,7 @@ func NewAuthHandler(db *sql.DB, secret string) *AuthHandler {
 func (h *AuthHandler) EnsureAdmin() {
 	var n int
 	if err := h.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE username='admin'`).Scan(&n); err != nil {
-		log.Printf("EnsureAdmin check: %v", err)
+		logx.Line("auth", fmt.Sprintf("EnsureAdmin check: %v", err))
 		return
 	}
 	if n > 0 {
@@ -38,10 +40,10 @@ func (h *AuthHandler) EnsureAdmin() {
 	}
 	hash, _ := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
 	if _, err := h.DB.Exec(`INSERT INTO users (username, password_hash, display_name, is_admin) VALUES ('admin', ?, '管理员', 1)`, string(hash)); err != nil {
-		log.Printf("EnsureAdmin seed: %v", err)
+		logx.Line("auth", fmt.Sprintf("EnsureAdmin seed: %v", err))
 		return
 	}
-	log.Printf("seeded admin user (password from ADMIN_PASSWORD or default admin123)")
+	logx.Line("auth", fmt.Sprintf("seeded admin user (password from ADMIN_PASSWORD or default admin123)"))
 }
 
 func (h *AuthHandler) RegisterPublic(r *gin.RouterGroup) {

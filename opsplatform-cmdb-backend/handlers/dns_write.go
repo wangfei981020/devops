@@ -20,6 +20,17 @@ import (
 // writableTypes 当前允许在 CMDB 写回的记录类型（SRV/CAA/NS/SOA 字段复杂或受保护，暂用厂商后台）。
 var writableTypes = map[string]bool{"A": true, "AAAA": true, "CNAME": true, "TXT": true, "MX": true}
 
+// batchTimeout 按操作组数放大超时：每组 2 次 GoDaddy 调用(GetGroup+写)，
+// 撞客户端限流(50/分钟)时会阻塞等窗口，固定 90s 会中途超时导致部分写入。
+// 基础 60s + 每组 5s，上限 10 分钟。
+func batchTimeout(groups int) time.Duration {
+	d := 60*time.Second + time.Duration(groups)*5*time.Second
+	if d > 10*time.Minute {
+		d = 10 * time.Minute
+	}
+	return d
+}
+
 // isProtectedTypeName 判断某 (type,name) 是否受保护、禁止 CMDB 写回。
 // 与只读同步的 isProtectedRecord 一致：NS/SOA/_acme-challenge 不许动。
 func isProtectedTypeName(rtype, name string) bool {
@@ -123,7 +134,8 @@ func (h *SyncHandler) CreateDNSRecord(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	// 读改写：取现有组 → 追加（同值查重）→ 整组 PUT
+	// 查重（best-effort）后用 PATCH 原子追加单条——不再整组 ReplaceGroup，
+	// 避免两人同时给同 (type,name) 加记录时后写覆盖先写导致丢记录（TOCTOU）。
 	group, err := wa.GetGroup(ctx, domain, in.Type, in.Name)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "读取现有记录失败：" + err.Error()})
@@ -135,8 +147,8 @@ func (h *SyncHandler) CreateDNSRecord(c *gin.Context) {
 			return
 		}
 	}
-	group = append(group, dnsource.DNSRecord{Type: in.Type, Name: in.Name, Data: strings.TrimSpace(in.Data), TTL: in.TTL, Priority: in.Priority})
-	if err := wa.ReplaceGroup(ctx, domain, in.Type, in.Name, group); err != nil {
+	newRec := dnsource.DNSRecord{Type: in.Type, Name: in.Name, Data: strings.TrimSpace(in.Data), TTL: in.TTL, Priority: in.Priority}
+	if err := wa.AddRecords(ctx, domain, []dnsource.DNSRecord{newRec}); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "写回 GoDaddy 失败：" + err.Error()})
 		return
 	}
@@ -273,6 +285,10 @@ func (h *SyncHandler) BatchDeleteDNSRecords(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "没有选中要删除的记录"})
 		return
 	}
+	if len(in.IDs) > 200 {
+		c.JSON(400, gin.H{"error": "一次最多删除 200 条"})
+		return
+	}
 	ciID, _ := parseID(ciid)
 	recs := h.loadCachedRecs(ciID, in.IDs)
 	// 按 (type,name) 分组收集要删的 data；受保护跳过
@@ -304,7 +320,7 @@ func (h *SyncHandler) BatchDeleteDNSRecords(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), batchTimeout(len(toDel)))
 	defer cancel()
 	logx.JCtx(c.Request.Context(), "dns_write", "batch_delete_start", map[string]any{"domain": domain, "groups": len(toDel), "env": wa.EnvLabel(), "dry_run": wa.DryRun(), "operator": currentUser(c)})
 	deleted := 0
@@ -365,6 +381,10 @@ func (h *SyncHandler) BatchUpdateDNSRecords(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "没有要编辑的记录"})
 		return
 	}
+	if len(in.Records) > 200 {
+		c.JSON(400, gin.H{"error": "一次最多编辑 200 条"})
+		return
+	}
 	ciID, _ := parseID(ciid)
 	ids := make([]int64, 0, len(in.Records))
 	for _, r := range in.Records {
@@ -401,7 +421,7 @@ func (h *SyncHandler) BatchUpdateDNSRecords(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), batchTimeout(len(edits)))
 	defer cancel()
 	logx.JCtx(c.Request.Context(), "dns_write", "batch_update_start", map[string]any{"domain": domain, "groups": len(edits), "env": wa.EnvLabel(), "dry_run": wa.DryRun(), "operator": currentUser(c)})
 	updated := 0

@@ -9,7 +9,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/go-acme/lego/v4/certcrypto"
@@ -19,6 +18,8 @@ import (
 	"github.com/go-acme/lego/v4/challenge/http01"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
+
+	"opsplatform-cmdb-backend/logx"
 )
 
 // CA 目录 URL
@@ -80,16 +81,16 @@ type loggingProvider struct {
 func (l *loggingProvider) Present(domain, token, keyAuth string) error {
 	info := dns01.GetChallengeInfo(domain, keyAuth)
 	zone, zerr := dns01.FindZoneByFqdn(info.EffectiveFQDN)
-	log.Printf("[acme][present] domain=%s effectiveFQDN=%s txtValue=%s -> FindZone=%q zoneErr=%v",
-		domain, info.EffectiveFQDN, info.Value, zone, zerr)
+	logx.Line("acme", fmt.Sprintf("[acme][present] domain=%s effectiveFQDN=%s txtValue=%s -> FindZone=%q zoneErr=%v",
+		domain, info.EffectiveFQDN, info.Value, zone, zerr))
 	err := l.inner.Present(domain, token, keyAuth)
-	log.Printf("[acme][present] domain=%s 底层 provider 写入返回 err=%v", domain, err)
+	logx.Line("acme", fmt.Sprintf("[acme][present] domain=%s 底层 provider 写入返回 err=%v", domain, err))
 	return err
 }
 
 func (l *loggingProvider) CleanUp(domain, token, keyAuth string) error {
 	err := l.inner.CleanUp(domain, token, keyAuth)
-	log.Printf("[acme][cleanup] domain=%s err=%v", domain, err)
+	logx.Line("acme", fmt.Sprintf("[acme][cleanup] domain=%s err=%v", domain, err))
 	return err
 }
 
@@ -102,7 +103,7 @@ func (l *loggingProvider) Timeout() (timeout, interval time.Duration) {
 
 // Issue 执行一次 ACME 签发。
 func Issue(req IssueRequest) (*IssueResult, error) {
-	log.Printf("[acme] 开始签发 domains=%v challenge=%q caDir=%s dnsProvider=%q", req.Domains, req.Challenge, req.CADir, req.DNSProvider)
+	logx.Line("acme", fmt.Sprintf("[acme] 开始签发 domains=%v challenge=%q caDir=%s dnsProvider=%q", req.Domains, req.Challenge, req.CADir, req.DNSProvider))
 	key, accountPEM, err := loadOrGenKey(req.AccountKeyPEM)
 	if err != nil {
 		return nil, err
@@ -145,7 +146,7 @@ func Issue(req IssueRequest) (*IssueResult, error) {
 
 	res, err := client.Certificate.Obtain(certificate.ObtainRequest{Domains: req.Domains, Bundle: true})
 	if err != nil {
-		log.Printf("[acme] Obtain 失败 domains=%v: %+v", req.Domains, err)
+		logx.Line("acme", fmt.Sprintf("[acme] Obtain 失败 domains=%v: %+v", req.Domains, err))
 		return nil, fmt.Errorf("obtain: %w", err)
 	}
 
@@ -157,6 +158,42 @@ func Issue(req IssueRequest) (*IssueResult, error) {
 		AccountKeyPEM: accountPEM,
 		NotAfter:      notAfter,
 	}, nil
+}
+
+// Revoke 用账户私钥向 CA 真吊销证书。accountKeyPEM 为空则无法吊销（返回错误）。
+func Revoke(accountKeyPEM, caDir, certPEM string) error {
+	if accountKeyPEM == "" {
+		return fmt.Errorf("该证书无关联 ACME 账户私钥，无法向 CA 吊销")
+	}
+	if certPEM == "" {
+		return fmt.Errorf("无证书内容，无法吊销")
+	}
+	key, _, err := loadOrGenKey(accountKeyPEM)
+	if err != nil {
+		return fmt.Errorf("账户私钥解析失败: %w", err)
+	}
+	user := &acmeUser{key: key}
+	cfg := lego.NewConfig(user)
+	cfg.CADirURL = caDir
+	client, err := lego.NewClient(cfg)
+	if err != nil {
+		return fmt.Errorf("lego client: %w", err)
+	}
+	// 用已有账户私钥解析账户注册信息（吊销需账户身份签名）
+	reg, err := client.Registration.ResolveAccountByKey()
+	if err != nil {
+		// 兜底：账户可能未在该目录注册过，尝试注册（对已存在账户幂等）
+		reg, err = client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		if err != nil {
+			return fmt.Errorf("解析/注册 ACME 账户失败: %w", err)
+		}
+	}
+	user.reg = reg
+	if err := client.Certificate.Revoke([]byte(certPEM)); err != nil {
+		return fmt.Errorf("CA 吊销失败: %w", err)
+	}
+	logx.Line("acme", fmt.Sprintf("[acme][revoke] 已向 CA 吊销证书 caDir=%s", caDir))
+	return nil
 }
 
 func loadOrGenKey(existing string) (crypto.PrivateKey, string, error) {

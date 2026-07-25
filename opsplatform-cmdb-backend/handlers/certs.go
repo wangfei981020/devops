@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"opsplatform-cmdb-backend/acme"
 	"opsplatform-cmdb-backend/crypto"
+	"opsplatform-cmdb-backend/logx"
 )
 
 type CertHandler struct {
@@ -298,8 +300,32 @@ func (h *CertHandler) Renew(c *gin.Context) {
 	c.JSON(202, gin.H{"status": "pending"})
 }
 
+// Revoke 吊销证书：先尽力向 CA 真吊销（用账户私钥），再删除 CMDB 记录。
+// CA 吊销失败（无账户私钥/网络等）不阻断删除，但响应里明确告警——避免"以为作废实际仍有效"。
 func (h *CertHandler) Revoke(c *gin.Context) {
 	id := c.Param("id")
+	// 先取证书内容 + CA + 账户私钥，尝试真吊销
+	var certPEM, ca string
+	_ = h.DB.QueryRow(`SELECT COALESCE(cert_pem,''), ca FROM certificates WHERE ci_id=?`, id).Scan(&certPEM, &ca)
+	revokeWarning := ""
+	if certPEM != "" {
+		var acctKeyEnc string
+		_ = h.DB.QueryRow(`SELECT COALESCE(account_key_enc,'') FROM acme_accounts WHERE ca=? ORDER BY id LIMIT 1`, ca).Scan(&acctKeyEnc)
+		acctKey := ""
+		if acctKeyEnc != "" {
+			var e error
+			if acctKey, e = h.Cipher.Decrypt(acctKeyEnc); e != nil {
+				acctKey = ""
+			}
+		}
+		if err := acme.Revoke(acctKey, acme.CADir(ca, false), certPEM); err != nil {
+			revokeWarning = err.Error()
+			logx.J("cert", "revoke_ca_fail", map[string]any{"ci_id": id, "ca": ca, "error": err.Error()})
+		} else {
+			logx.J("cert", "revoke_ca_ok", map[string]any{"ci_id": id, "ca": ca})
+		}
+	}
+	// 删除 CMDB 记录（无论 CA 吊销成败，记录都删；成败在响应里如实告知）
 	tx, _ := h.DB.Begin()
 	for _, stmt := range []string{
 		`DELETE FROM ci_labels WHERE ci_id=?`,
@@ -318,7 +344,11 @@ func (h *CertHandler) Revoke(c *gin.Context) {
 		return
 	}
 	WriteAudit(h.DB, c, "revoke_cert", id)
-	c.JSON(200, gin.H{"ok": true})
+	out := gin.H{"ok": true, "ca_revoked": revokeWarning == ""}
+	if revokeWarning != "" {
+		out["warning"] = "CMDB 记录已删除，但向 CA 吊销失败（证书在 CA 侧仍有效至到期）：" + revokeWarning
+	}
+	c.JSON(200, out)
 }
 
 // Download 登录态下载证书：打包成 zip（fullchain.pem + chain.pem + privkey.pem），用户自行解压。
@@ -333,7 +363,12 @@ func (h *CertHandler) Download(c *gin.Context) {
 	}
 	key := ""
 	if keyEnc != "" {
-		key, _ = h.Cipher.Decrypt(keyEnc)
+		var derr error
+		if key, derr = h.Cipher.Decrypt(keyEnc); derr != nil {
+			logx.J("cert", "key_decrypt_fail", map[string]any{"ci_id": id, "op": "download", "error": derr.Error()})
+			c.JSON(500, gin.H{"error": "私钥解密失败（主密钥可能已变更），请联系管理员，切勿下发空私钥"})
+			return
+		}
 	}
 
 	// 文件名前缀 = CN 去掉通配 *.，如 *.k8s-g32-uat.com -> k8s-g32-uat.com
@@ -367,6 +402,13 @@ func (h *CertHandler) Download(c *gin.Context) {
 }
 
 func (h *CertHandler) runIssue(certCIID, domainCIID int64, acctID int, staging bool, action string) {
+	// panic recover：后台签发是 fire-and-forget，panic 会崩整个进程；捕获后置证书为 error 状态。
+	defer func() {
+		if r := recover(); r != nil {
+			logx.J("cert", "issue_panic", map[string]any{"ci_id": certCIID, "action": action, "panic": fmt.Sprint(r)})
+			_, _ = h.DB.Exec(`UPDATE certificates SET status='error', last_error=? WHERE ci_id=?`, truncate(fmt.Sprintf("签发内部错误(panic): %v", r), 500), certCIID)
+		}
+	}()
 	issueCertCore(h.DB, h.Cipher, certCIID, domainCIID, acctID, staging, action)
 }
 
@@ -407,18 +449,40 @@ func issueCertCore(db *sql.DB, cipher *crypto.Cipher, certCIID, domainCIID int64
 	}
 	res, err := acme.Issue(req)
 	if err != nil {
+		logx.J("cert", "issue_fail", map[string]any{"ci_id": certCIID, "cn": cn, "action": action, "challenge": challenge, "error": err.Error()})
 		_, _ = db.Exec(`UPDATE certificates SET status='error', last_error=? WHERE ci_id=?`, truncate(err.Error(), 500), certCIID)
 		_, _ = db.Exec(`INSERT INTO cert_history (cert_ci_id, action, result, detail) VALUES (?, ?, 'fail', ?)`, certCIID, action, truncate(err.Error(), 500))
 		return err.Error()
 	}
-	keyEnc, _ := cipher.Encrypt(res.KeyPEM)
-	_, _ = db.Exec(`UPDATE certificates SET status='active', cert_pem=?, chain_pem=?, key_pem_enc=?, issued_at=NOW(), expiry_at=?, version=version+1, last_error='' WHERE ci_id=?`,
-		res.CertPEM, res.ChainPEM, keyEnc, res.NotAfter, certCIID)
-	if acctKeyEnc == "" && res.AccountKeyPEM != "" {
-		enc, _ := cipher.Encrypt(res.AccountKeyPEM)
-		_, _ = db.Exec(`UPDATE acme_accounts SET account_key_enc=? WHERE id=?`, enc, acctID)
+	keyEnc, encErr := cipher.Encrypt(res.KeyPEM)
+	if encErr != nil {
+		// 私钥加密失败：CA 已签发但无法安全入库，明确报错置 error，别静默成功丢私钥
+		msg := "签发成功但私钥加密失败: " + encErr.Error()
+		logx.J("cert", "issue_key_encrypt_fail", map[string]any{"ci_id": certCIID, "cn": cn, "error": encErr.Error()})
+		_, _ = db.Exec(`UPDATE certificates SET status='error', last_error=? WHERE ci_id=?`, truncate(msg, 500), certCIID)
+		_, _ = db.Exec(`INSERT INTO cert_history (cert_ci_id, action, result, detail) VALUES (?, ?, 'fail', ?)`, certCIID, action, truncate(msg, 500))
+		return msg
 	}
-	_, _ = db.Exec(`INSERT INTO cert_history (cert_ci_id, action, result, detail) VALUES (?, ?, 'success', ?)`, certCIID, action, "到期 "+res.NotAfter.Format("2006-01-02"))
+	// 成功入库判错：CA 已签发、私钥仅在内存，这条 UPDATE 失败会静默丢私钥——必须捕获
+	if _, e := db.Exec(`UPDATE certificates SET status='active', cert_pem=?, chain_pem=?, key_pem_enc=?, issued_at=NOW(), expiry_at=?, version=version+1, last_error='' WHERE ci_id=?`,
+		res.CertPEM, res.ChainPEM, keyEnc, res.NotAfter, certCIID); e != nil {
+		msg := "签发成功但入库失败(私钥可能丢失，需重签): " + e.Error()
+		logx.J("cert", "issue_save_fail", map[string]any{"ci_id": certCIID, "cn": cn, "error": e.Error()})
+		_, _ = db.Exec(`UPDATE certificates SET status='error', last_error=? WHERE ci_id=?`, truncate(msg, 500), certCIID)
+		_, _ = db.Exec(`INSERT INTO cert_history (cert_ci_id, action, result, detail) VALUES (?, ?, 'fail', ?)`, certCIID, action, truncate(msg, 500))
+		return msg
+	}
+	if acctKeyEnc == "" && res.AccountKeyPEM != "" {
+		if enc, e := cipher.Encrypt(res.AccountKeyPEM); e == nil {
+			if _, e2 := db.Exec(`UPDATE acme_accounts SET account_key_enc=? WHERE id=?`, enc, acctID); e2 != nil {
+				logx.J("cert", "acct_key_save_fail", map[string]any{"acct_id": acctID, "error": e2.Error()})
+			}
+		}
+	}
+	if _, e := db.Exec(`INSERT INTO cert_history (cert_ci_id, action, result, detail) VALUES (?, ?, 'success', ?)`, certCIID, action, "到期 "+res.NotAfter.Format("2006-01-02")); e != nil {
+		logx.J("cert", "history_save_fail", map[string]any{"ci_id": certCIID, "error": e.Error()})
+	}
+	logx.J("cert", "issue_success", map[string]any{"ci_id": certCIID, "cn": cn, "action": action, "not_after": res.NotAfter.Format("2006-01-02")})
 	return ""
 }
 

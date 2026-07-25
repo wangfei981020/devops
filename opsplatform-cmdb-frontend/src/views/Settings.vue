@@ -100,7 +100,6 @@
         <el-form-item label="CA">
           <el-select v-model="acctForm.ca" style="width:200px">
             <el-option label="Let's Encrypt" value="letsencrypt" />
-            <el-option label="ZeroSSL" value="zerossl" />
           </el-select>
         </el-form-item>
       </el-form>

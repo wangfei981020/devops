@@ -1,8 +1,9 @@
 package main
 
 import (
-	"log"
+	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -11,19 +12,26 @@ import (
 	"opsplatform-cmdb-backend/crypto"
 	"opsplatform-cmdb-backend/database"
 	"opsplatform-cmdb-backend/handlers"
+	"opsplatform-cmdb-backend/logx"
 )
+
+// fatal 打一条 JSON 日志后退出（替代 log.Fatal，统一日志格式）。
+func fatal(msg string) {
+	logx.Line("main", msg)
+	os.Exit(1)
+}
 
 func main() {
 	cfg := config.Load()
 	db, err := database.Open(cfg.MySQLDSN)
 	if err != nil {
-		log.Fatalf("db open: %v", err)
+		fatal(fmt.Sprintf("db open: %v", err))
 	}
 	defer db.Close()
 
 	cipher, err := crypto.New(cfg.AESKey)
 	if err != nil {
-		log.Fatalf("crypto init: %v", err)
+		fatal(fmt.Sprintf("crypto init: %v", err))
 	}
 
 	// Prometheus: 证书/域名到期与创建时间指标（白名单控自定义 label 基数）
@@ -35,8 +43,10 @@ func main() {
 	go handlers.StartScheduler(db, cipher)
 
 	gin.SetMode(gin.ReleaseMode)
-	r := gin.Default()
+	r := gin.New() // 不用 gin.Default()，改用 JSON 访问日志
+	r.Use(gin.Recovery())
 	r.Use(handlers.RequestID())
+	r.Use(handlers.AccessLog())
 	r.Use(handlers.CORS())
 
 	authH := handlers.NewAuthHandler(db, cfg.JWTSecret)
@@ -64,8 +74,8 @@ func main() {
 	handlers.NewHostHandler(db, cipher).Register(api)
 	handlers.NewNetworkHandler(db).Register(api)
 
-	log.Printf("CMDB backend listening on %s", cfg.Port)
+	logx.Line("main", fmt.Sprintf("CMDB backend listening on %s", cfg.Port))
 	if err := http.ListenAndServe(cfg.Port, r); err != nil {
-		log.Fatal(err)
+		fatal(err.Error())
 	}
 }

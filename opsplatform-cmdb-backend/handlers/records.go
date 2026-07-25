@@ -229,7 +229,7 @@ func (h *RecordHandler) CheckAllCerts(c *gin.Context) {
 			defer func() { <-sem }()
 			fqdn := recordFQDN(host, domain)
 			if t, cmsg := tlsCertExpiry(fqdn); t != nil {
-				_, _ = h.DB.Exec(`UPDATE domain_records SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg='' WHERE id=?`, *t, id)
+				_, _ = h.DB.Exec(`UPDATE domain_records SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg=? WHERE id=?`, *t, truncate(cmsg, 250), id)
 				atomic.AddInt32(&ok, 1)
 			} else {
 				_, _ = h.DB.Exec(`UPDATE domain_records SET cert_check_at=NOW(), cert_check_msg=? WHERE id=?`, truncate(cmsg, 250), id)
@@ -484,8 +484,8 @@ func (h *RecordHandler) CheckCert(c *gin.Context) {
 	}
 	fqdn := recordFQDN(host, domain)
 	if t, cmsg := tlsCertExpiry(fqdn); t != nil {
-		_, _ = h.DB.Exec(`UPDATE domain_records SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg='' WHERE id=?`, *t, id)
-		c.JSON(http.StatusOK, gin.H{"ok": true, "fqdn": fqdn, "cert_expiry_at": t.Format("2006-01-02")})
+		_, _ = h.DB.Exec(`UPDATE domain_records SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg=? WHERE id=?`, *t, truncate(cmsg, 250), id)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "fqdn": fqdn, "cert_expiry_at": t.Format("2006-01-02"), "warn": cmsg})
 		return
 	} else {
 		_, _ = h.DB.Exec(`UPDATE domain_records SET cert_check_at=NOW(), cert_check_msg=? WHERE id=?`, truncate(cmsg, 250), id)

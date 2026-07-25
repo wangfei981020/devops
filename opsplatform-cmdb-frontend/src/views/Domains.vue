@@ -354,10 +354,11 @@
           <el-form-item label="续费年数">
             <el-input-number v-model="renewDlg.period" :min="1" :max="10" controls-position="right" style="width:130px" />
           </el-form-item>
-          <el-form-item label="预估费用">
+          <el-form-item label="域名费(估算)">
             <template v-if="renewDlg.pricePerYear > 0">
               <b>{{ renewDlg.currency }} {{ (renewDlg.pricePerYear * renewDlg.period).toFixed(2) }}</b>
-              <span class="muted" style="margin-left:8px">{{ renewDlg.currency }} {{ renewDlg.pricePerYear.toFixed(2) }}/年 × {{ renewDlg.period }} 年 · 估算，以 GoDaddy 结算为准</span>
+              <span class="muted" style="margin-left:8px">{{ renewDlg.currency }} {{ renewDlg.pricePerYear.toFixed(2) }}/年 × {{ renewDlg.period }} 年</span>
+              <div class="muted" style="font-size:12px">⚠ 仅域名费，另加税费/ICANN规费，实扣总额以 GoDaddy 结算为准</div>
             </template>
             <span v-else class="muted">价格以 GoDaddy 结算为准</span>
           </el-form-item>
@@ -381,9 +382,13 @@
         <el-table-column prop="created_at" label="时间" width="150" />
         <el-table-column prop="domain" label="域名" min-width="160" show-overflow-tooltip />
         <el-table-column label="年数" width="60"><template #default="{ row }">{{ row.period }}</template></el-table-column>
-        <el-table-column label="报价(估算)" width="120"><template #default="{ row }">
+        <el-table-column label="域名费(估算)" width="120"><template #default="{ row }">
           <span v-if="row.quoted_amount > 0">{{ row.quoted_currency }} {{ row.quoted_amount.toFixed(2) }}</span>
           <span v-else class="muted">—</span>
+        </template></el-table-column>
+        <el-table-column label="实扣(厂商)" width="120"><template #default="{ row }">
+          <span v-if="row.actual_amount > 0">{{ row.actual_currency }} {{ row.actual_amount.toFixed(2) }}</span>
+          <el-tooltip v-else content="GoDaddy 续费接口未返回金额，凭订单号去 GoDaddy 账单查实扣总额"><span class="muted">凭订单查</span></el-tooltip>
         </template></el-table-column>
         <el-table-column label="订单号" width="150" show-overflow-tooltip><template #default="{ row }">
           <span v-if="row.order_id" class="mono">{{ row.order_id }}</span><span v-else class="muted">—</span>
@@ -698,7 +703,7 @@ async function onToggleAuto(val) {
 }
 async function doRenew() {
   const cost = renewDlg.pricePerYear > 0
-    ? `预估 ${renewDlg.currency} ${(renewDlg.pricePerYear * renewDlg.period).toFixed(2)}（估算，以 GoDaddy 结算为准）`
+    ? `预估域名费 ${renewDlg.currency} ${(renewDlg.pricePerYear * renewDlg.period).toFixed(2)}（另加税费/规费，实扣总额以 GoDaddy 结算为准）`
     : '（价格以 GoDaddy 结算为准）'
   const warn = renewDlg.dryRun
     ? `【预演模式】对 ${renewDlg.domain} 续费 ${renewDlg.period} 年，${cost}（不会真扣费，只核对报文）？`

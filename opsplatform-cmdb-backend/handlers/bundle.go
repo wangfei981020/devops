@@ -1,13 +1,16 @@
 package handlers
 
 import (
+	"crypto/subtle"
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"opsplatform-cmdb-backend/crypto"
+	"opsplatform-cmdb-backend/logx"
 )
 
 // BundleHandler 提供 A+ 拉取式取证书：目标机用 deploy_token 自助拉取最新证书。
@@ -25,11 +28,20 @@ func (h *BundleHandler) RegisterPublic(r *gin.RouterGroup) {
 	r.GET("/certs/:id/bundle", h.Bundle)
 }
 
-// Bundle GET /certs/:id/bundle?token=xxx&part=version|fullchain|key
-// 无 part：返回 JSON {version, fullchain, key}；带 ETag，If-None-Match 命中返回 304。
+// Bundle GET /certs/:id/bundle?part=version|fullchain|key
+// 鉴权 token 优先从 Header 取（X-Deploy-Token 或 Authorization: Bearer），query ?token= 仅向后兼容
+// （query 会进 access log 泄露，目标机应尽快改用 Header）。比较用常量时间防时序侧信道。
 func (h *BundleHandler) Bundle(c *gin.Context) {
 	id := c.Param("id")
-	token := c.Query("token")
+	token := c.GetHeader("X-Deploy-Token")
+	if token == "" {
+		if a := c.GetHeader("Authorization"); strings.HasPrefix(a, "Bearer ") {
+			token = strings.TrimPrefix(a, "Bearer ")
+		}
+	}
+	if token == "" {
+		token = c.Query("token") // 向后兼容，不推荐（进日志）
+	}
 	var cert, keyEnc, dbToken string
 	var version int
 	err := h.DB.QueryRow(`SELECT COALESCE(cert_pem,''), COALESCE(key_pem_enc,''), deploy_token, version FROM certificates WHERE ci_id=?`, id).
@@ -38,7 +50,7 @@ func (h *BundleHandler) Bundle(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	if token == "" || token != dbToken {
+	if token == "" || dbToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(dbToken)) != 1 {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 		return
 	}
@@ -62,16 +74,28 @@ func (h *BundleHandler) Bundle(c *gin.Context) {
 		c.Data(http.StatusOK, "application/x-pem-file", []byte(cert))
 		return
 	case "key":
-		key := ""
-		if keyEnc != "" {
-			key, _ = h.Cipher.Decrypt(keyEnc)
+		key, derr := h.decKey(keyEnc)
+		if derr != nil {
+			logx.J("cert", "key_decrypt_fail", map[string]any{"ci_id": id, "op": "bundle", "error": derr.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "私钥解密失败，请联系管理员"})
+			return
 		}
 		c.Data(http.StatusOK, "application/x-pem-file", []byte(key))
 		return
 	}
-	key := ""
-	if keyEnc != "" {
-		key, _ = h.Cipher.Decrypt(keyEnc)
+	key, derr := h.decKey(keyEnc)
+	if derr != nil {
+		logx.J("cert", "key_decrypt_fail", map[string]any{"ci_id": id, "op": "bundle", "error": derr.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "私钥解密失败，请联系管理员"})
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{"version": version, "fullchain": cert, "key": key})
+}
+
+// decKey 解密私钥密文；空密文返回空串（不报错），解密失败返回错误（不静默下发空私钥）。
+func (h *BundleHandler) decKey(keyEnc string) (string, error) {
+	if keyEnc == "" {
+		return "", nil
+	}
+	return h.Cipher.Decrypt(keyEnc)
 }

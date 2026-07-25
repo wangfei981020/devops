@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>域名访问质量 · 遥测蓝图 (CMDB)</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
+:root{
+  /* 刻意区别于同事的深色 NOC：浅蓝图纸 + 墨黑 + 单一电光靛蓝主色 */
+  --paper:#f6f7f4;
+  --paper2:#eef0ea;
+  --card:#ffffff;
+  --ink:#14161a;
+  --ink2:#565b64;
+  --ink3:#8a909a;
+  --line:#d9dcd3;
+  --line2:#e7e9e2;
+  --accent:#3538cd;
+  --accent-soft:#e9eaff;
+  --ok:#1f9d63; --ok-bg:#e4f3ea;
+  --warn:#c98a12; --warn-bg:#faf0da;
+  --bad:#d1483a; --bad-bg:#fbe7e4;
+  --sans:'Fira Sans','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+  --mono:'Fira Code',ui-monospace,'SFMono-Regular',Menlo,monospace;
+  --r:10px;
+  --shadow:0 1px 2px rgba(20,22,26,.04),0 8px 24px -12px rgba(20,22,26,.12);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  font-family:var(--sans);
+  color:var(--ink);
+  background:
+    linear-gradient(var(--line) 1px,transparent 1px) 0 0/26px 26px,
+    linear-gradient(90deg,var(--line) 1px,transparent 1px) 0 0/26px 26px,
+    var(--paper);
+  -webkit-font-smoothing:antialiased;
+  font-size:14px;line-height:1.5;
+}
+body::before{content:"";position:fixed;inset:0;background:var(--paper);opacity:.55;z-index:-1}
+.wrap{max-width:1400px;margin:0 auto;padding:22px 24px 40px}
+
+/* 顶部标题条 */
+.masthead{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;
+  border-bottom:2px solid var(--ink);padding-bottom:14px;margin-bottom:4px}
+.brand{display:flex;flex-direction:column;gap:4px}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);font-weight:600}
+h1{font-size:27px;font-weight:700;margin:0;letter-spacing:-.01em;text-wrap:balance}
+.sub{color:var(--ink2);font-size:13px}
+.meta{font-family:var(--mono);font-size:12px;color:var(--ink2);text-align:right;display:flex;flex-direction:column;gap:3px}
+.meta b{color:var(--ink);font-weight:600}
+.live{display:inline-flex;align-items:center;gap:6px;color:var(--ok);font-weight:600}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px var(--ok-bg)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@media (prefers-reduced-motion:no-preference){.live .dot{animation:pulse 1.8s ease-in-out infinite}}
+
+/* 钻取路径 + 过滤 */
+.bar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:16px 0 18px;
+  background:var(--card);border:1px solid var(--line2);border-radius:var(--r);padding:10px 14px;box-shadow:var(--shadow)}
+.crumb{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12.5px;flex-wrap:wrap}
+.crumb .k{color:var(--ink3);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase}
+.crumb .v{background:var(--paper2);border:1px solid var(--line);padding:2px 9px;border-radius:20px;color:var(--ink);font-weight:600}
+.crumb .v.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.crumb .sep{color:var(--ink3)}
+.spacer{flex:1}
+.view-tabs{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-family:var(--mono);font-size:12px}
+.view-tabs button{border:0;background:var(--card);padding:6px 12px;color:var(--ink2);cursor:pointer;font-family:inherit}
+.view-tabs button.on{background:var(--ink);color:#fff}
+
+/* KPI */
+.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:18px}
+.kpi{background:var(--card);border:1px solid var(--line2);border-radius:var(--r);padding:13px 15px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+.kpi .lab{font-size:11.5px;color:var(--ink2);display:flex;align-items:center;gap:6px}
+.kpi .num{font-family:var(--mono);font-size:26px;font-weight:600;margin-top:4px;letter-spacing:-.02em}
+.kpi .unit{font-size:13px;color:var(--ink3);font-weight:400}
+.kpi .tr{font-family:var(--mono);font-size:11px;margin-top:2px}
+.kpi .accentbar{position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent)}
+.kpi.b .accentbar{background:var(--bad)} .kpi.w .accentbar{background:var(--warn)} .kpi.g .accentbar{background:var(--ok)}
+.up{color:var(--ok)} .down{color:var(--bad)}
+
+/* 主体两栏 */
+.layout{display:grid;grid-template-columns:270px 1fr;gap:18px;align-items:start}
+.side{display:flex;flex-direction:column;gap:16px}
+.panel{background:var(--card);border:1px solid var(--line2);border-radius:var(--r);box-shadow:var(--shadow)}
+.panel h3{margin:0;padding:12px 14px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);
+  border-bottom:1px solid var(--line2);display:flex;align-items:center;justify-content:space-between;font-weight:600}
+.panel .body{padding:10px 12px}
+
+/* 层级树 */
+.tree{font-family:var(--mono);font-size:12.5px;display:flex;flex-direction:column;gap:1px}
+.tree .row{display:flex;align-items:center;gap:7px;padding:5px 6px;border-radius:6px;cursor:pointer}
+.tree .row:hover{background:var(--paper2)}
+.tree .row.sel{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.tree .c{color:var(--ink3);width:12px;text-align:center}
+.tree .l1{padding-left:6px;font-weight:600}
+.tree .l2{padding-left:22px;color:var(--ink2)}
+.tree .l3{padding-left:38px;color:var(--ink2)}
+.tree .cnt{margin-left:auto;font-size:11px;color:var(--ink3)}
+.tree .warn-d{color:var(--bad)}
+
+/* 数据来源采集 */
+.src{display:flex;flex-direction:column;gap:9px}
+.src .item{display:flex;gap:10px;align-items:flex-start}
+.src .ic{width:26px;height:26px;flex:0 0 26px;border-radius:7px;background:var(--accent-soft);display:grid;place-items:center;color:var(--accent)}
+.src .ic svg{width:15px;height:15px}
+.src .t{font-size:12.5px;font-weight:600}
+.src .d{font-size:11px;color:var(--ink2);line-height:1.45}
+.src .freq{font-family:var(--mono);font-size:10px;color:var(--ink3);margin-top:2px}
+.src .st{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ok);white-space:nowrap;padding-top:3px}
+.src .st.w{color:var(--warn)}
+
+/* 右栏泳道拓扑 */
+.topo{background:var(--card);border:1px solid var(--line2);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+.topo .th{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--line2);gap:10px;flex-wrap:wrap}
+.topo .th .ttl{font-size:14px;font-weight:600}
+.topo .th .hint{font-family:var(--mono);font-size:11px;color:var(--ink3)}
+
+.stage-head{display:grid;grid-template-columns:236px 1fr;border-bottom:1px dashed var(--line);background:var(--paper)}
+.stage-head .lhead{padding:9px 16px;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);font-weight:600}
+.stages{display:grid;grid-template-columns:repeat(5,1fr)}
+.stages .s{padding:9px 4px;text-align:center;font-family:var(--mono);font-size:10.5px;color:var(--ink2);border-left:1px dashed var(--line2)}
+.stages .s .sn{font-weight:600;color:var(--ink);display:block;font-size:11.5px}
+
+.lane{display:grid;grid-template-columns:236px 1fr;border-bottom:1px solid var(--line2);transition:background .15s}
+.lane:last-child{border-bottom:0}
+.lane:hover{background:#fbfcf9}
+.lane .info{padding:11px 16px;border-right:1px dashed var(--line);min-width:0}
+.lane .dom{font-family:var(--mono);font-size:13px;font-weight:600;display:flex;align-items:center;gap:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lane .dom .sd{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
+.chips{display:flex;gap:5px;margin-top:6px;flex-wrap:wrap}
+.chip{font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:5px;border:1px solid var(--line);color:var(--ink2);background:var(--paper);white-space:nowrap}
+.chip.proj{border-color:#c9cffb;background:#eef0ff;color:var(--accent)}
+.chip.env-PROD{border-color:#e7c3bd;background:#fbe7e4;color:var(--bad);font-weight:600}
+.chip.env-UAT{border-color:#e6d3a3;background:#faf0da;color:var(--warn);font-weight:600}
+.chip.env-DEV{border-color:#bcd8c7;background:#e4f3ea;color:var(--ok);font-weight:600}
+
+.track{display:grid;grid-template-columns:repeat(5,1fr);align-items:center}
+.hop{position:relative;height:64px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px}
+.hop .node{width:15px;height:15px;border-radius:50%;border:2.5px solid var(--card);z-index:2;position:relative}
+.node.ok{background:var(--ok);box-shadow:0 0 0 3px var(--ok-bg)}
+.node.warn{background:var(--warn);box-shadow:0 0 0 3px var(--warn-bg)}
+.node.bad{background:var(--bad);box-shadow:0 0 0 3px var(--bad-bg)}
+.node.idle{background:var(--ink3);box-shadow:0 0 0 3px var(--line2)}
+.hop .lat{font-family:var(--mono);font-size:10.5px;color:var(--ink2);font-weight:500}
+.hop .lat.bad{color:var(--bad);font-weight:700}
+.hop .lat.warn{color:var(--warn);font-weight:600}
+.hop::before{content:"";position:absolute;top:32px;left:-50%;right:50%;height:3px;background:var(--seg,var(--ok));z-index:1}
+.hop:first-child::before{display:none}
+.hop.dash::before{background:repeating-linear-gradient(90deg,var(--ink3) 0 5px,transparent 5px 10px);height:2px}
+
+.legend{display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:11px 16px;border-top:1px solid var(--line2);
+  font-family:var(--mono);font-size:11px;color:var(--ink2);background:var(--paper)}
+.legend .g{display:flex;align-items:center;gap:6px}
+.legend .sw{width:12px;height:12px;border-radius:4px}
+
+.grid3{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:18px;margin-top:18px}
+.spark{padding:12px 14px}
+.mini-t{font-size:12px;font-weight:600;margin-bottom:2px}
+.mini-s{font-family:var(--mono);font-size:11px;color:var(--ink3);margin-bottom:10px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line2)}
+th{font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink3);font-weight:600}
+td .d{font-family:var(--mono);font-weight:600}
+.badge{font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:5px;font-weight:600}
+.badge.ok{background:var(--ok-bg);color:var(--ok)} .badge.warn{background:var(--warn-bg);color:var(--warn)} .badge.bad{background:var(--bad-bg);color:var(--bad)}
+.bars{display:flex;flex-direction:column;gap:9px;padding-top:4px}
+.brow{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11.5px}
+.brow .lbl{width:52px;color:var(--ink2)}
+.brow .tk{flex:1;height:9px;border-radius:5px;background:var(--paper2);overflow:hidden}
+.brow .fl{height:100%;border-radius:5px}
+.brow .n{width:34px;text-align:right;font-weight:600}
+
+.footnote{margin-top:22px;font-size:11.5px;color:var(--ink3);font-family:var(--mono);text-align:center;line-height:1.7}
+.footnote b{color:var(--ink2)}
+
+@media (max-width:1080px){
+  .layout{grid-template-columns:1fr}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .grid3{grid-template-columns:1fr}
+  .stage-head,.lane{grid-template-columns:1fr}
+  .lane .info{border-right:0;border-bottom:1px dashed var(--line)}
+  .stage-head .lhead{display:none}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="brand">
+      <span class="eyebrow">CMDB · Access Quality Telemetry</span>
+      <h1>域名访问质量 · 遥测蓝图</h1>
+      <span class="sub">以「项目 → 模块 → 环境 → 域名」为主轴，逐跳呈现 客户端→DNS→CDN→源站→TLS 的链路质量</span>
+    </div>
+    <div class="meta">
+      <span class="live"><span class="dot"></span>实时采集中</span>
+      <span>拨测节点 <b>5</b> / 5 在线</span>
+      <span>数据窗口 <b>近 1 小时</b> · 刷新 <b>60s</b></span>
+    </div>
+  </header>
+
+  <div class="bar">
+    <div class="crumb">
+      <span class="k">项目</span><span class="v on">opsplatform</span><span class="sep">›</span>
+      <span class="k">模块</span><span class="v">全部 6</span><span class="sep">›</span>
+      <span class="k">环境</span><span class="v">PROD</span><span class="v">UAT</span><span class="sep">›</span>
+      <span class="k">域名</span><span class="v">6 / 133</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="view-tabs">
+      <button class="on">按环境</button><button>按项目</button><button>按质量</button>
+    </div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi g"><span class="accentbar"></span><div class="lab">在管域名</div><div class="num">133</div><div class="tr up">▲ 本周 +4</div></div>
+    <div class="kpi b"><span class="accentbar"></span><div class="lab">异常链路</div><div class="num">2</div><div class="tr down">源站 1 · CDN 1</div></div>
+    <div class="kpi g"><span class="accentbar"></span><div class="lab">可用性 SLA</div><div class="num">99.94<span class="unit">%</span></div><div class="tr up">▲ 0.03</div></div>
+    <div class="kpi w"><span class="accentbar"></span><div class="lab">全链路 P95</div><div class="num">128<span class="unit">ms</span></div><div class="tr down">▲ 22ms</div></div>
+    <div class="kpi w"><span class="accentbar"></span><div class="lab">证书临期 ≤30d</div><div class="num">3</div><div class="tr">最近 <b>9</b> 天</div></div>
+  </div>
+
+  <div class="layout">
+
+    <aside class="side">
+      <div class="panel">
+        <h3>层级 <span style="font-weight:400;color:var(--ink3);font-size:10px">项目 / 模块 / 域名</span></h3>
+        <div class="body tree">
+          <div class="row l1 sel"><span class="c">▾</span>opsplatform<span class="cnt">133</span></div>
+          <div class="row l2"><span class="c">▾</span>backend<span class="cnt">28</span></div>
+          <div class="row l3"><span class="c">·</span>api.slileisure.com<span class="cnt warn-d">P95↑</span></div>
+          <div class="row l2"><span class="c">▾</span>frontend<span class="cnt">31</span></div>
+          <div class="row l3"><span class="c">·</span>ops.slileisure.com<span class="cnt">ok</span></div>
+          <div class="row l2"><span class="c">▸</span>deploy-center<span class="cnt">22</span></div>
+          <div class="row l2"><span class="c">▸</span>alert<span class="cnt">14</span></div>
+          <div class="row l2"><span class="c">▸</span>video-images<span class="cnt warn-d">1 异常</span></div>
+          <div class="row l2"><span class="c">▸</span>k8sinsight<span class="cnt">9</span></div>
+          <div class="row l1"><span class="c">▸</span>infra<span class="cnt">—</span></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>数据来源 · 采集管道</h3>
+        <div class="body src">
+          <div class="item">
+            <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg></div>
+            <div><div class="t">拨测节点 ×5</div><div class="d">华东/华南/华北/新加坡/香港 发起 DNS + HTTP(S) 拨测，测解析、连通、P95、丢包</div><div class="freq">周期 60s · 主动</div></div>
+            <span class="st">● 5/5</span>
+          </div>
+          <div class="item">
+            <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10a4 4 0 0 0-.8-8 6 6 0 0 0-11.4 2A4 4 0 0 0 6 18h11a4 4 0 0 0 1-8Z"/></svg></div>
+            <div><div class="t">CDN 厂商 API</div><div class="d">Cloudflare 拉取边缘命中率、回源延时、5xx 占比，标注每个 CDN 节点质量</div><div class="freq">周期 5m · 拉取</div></div>
+            <span class="st">● 正常</span>
+          </div>
+          <div class="item">
+            <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg></div>
+            <div><div class="t">证书扫描</div><div class="d">复用 CMDB 证书模块的 TLS 探测结果，取到期天数、链完整性、吊销状态</div><div class="freq">周期 1d · 复用</div></div>
+            <span class="st w">● 3 临期</span>
+          </div>
+          <div class="item">
+            <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></div>
+            <div><div class="t">域名台账</div><div class="d">CMDB 域名表的 project / module / env 标签，把每条链路挂到组织维度上</div><div class="freq">变更即同步 · 关联</div></div>
+            <span class="st">● 关联</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <section class="topo">
+      <div class="th">
+        <span class="ttl">链路质量泳道 — PROD / UAT</span>
+        <span class="hint">每行 = 1 个域名 · 节点色 = 该跳健康 · 连线 = 段链路质量</span>
+      </div>
+
+      <div class="stage-head">
+        <div class="lhead">域名 / 项目·模块·环境</div>
+        <div class="stages">
+          <div class="s"><span class="sn">客户端</span>Client</div>
+          <div class="s"><span class="sn">DNS 解析</span>Resolve</div>
+          <div class="s"><span class="sn">CDN 边缘</span>Edge</div>
+          <div class="s"><span class="sn">源站</span>Origin</div>
+          <div class="s"><span class="sn">TLS 证书</span>Cert</div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="info">
+          <div class="dom"><span class="sd" style="background:var(--warn)"></span>api.slileisure.com</div>
+          <div class="chips"><span class="chip proj">opsplatform</span><span class="chip">backend</span><span class="chip env-PROD">PROD</span></div>
+        </div>
+        <div class="track">
+          <div class="hop"><div class="node ok"></div><div class="lat">0ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">18ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">31ms</div></div>
+          <div class="hop" style="--seg:var(--warn)"><div class="node warn"></div><div class="lat warn">142ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">证书 68d</div></div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="info">
+          <div class="dom"><span class="sd" style="background:var(--ok)"></span>ops.slileisure.com</div>
+          <div class="chips"><span class="chip proj">opsplatform</span><span class="chip">frontend</span><span class="chip env-PROD">PROD</span></div>
+        </div>
+        <div class="track">
+          <div class="hop"><div class="node ok"></div><div class="lat">0ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">15ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">24ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">39ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">证书 210d</div></div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="info">
+          <div class="dom"><span class="sd" style="background:var(--ok)"></span>deploy.slileisure.com</div>
+          <div class="chips"><span class="chip proj">opsplatform</span><span class="chip">deploy-center</span><span class="chip env-PROD">PROD</span></div>
+        </div>
+        <div class="track">
+          <div class="hop"><div class="node ok"></div><div class="lat">0ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">16ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">28ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">44ms</div></div>
+          <div class="hop" style="--seg:var(--warn)"><div class="node warn"></div><div class="lat warn">证书 9d</div></div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="info">
+          <div class="dom"><span class="sd" style="background:var(--bad)"></span>cdn.slileisure.com</div>
+          <div class="chips"><span class="chip proj">opsplatform</span><span class="chip">video-images</span><span class="chip env-PROD">PROD</span></div>
+        </div>
+        <div class="track">
+          <div class="hop"><div class="node ok"></div><div class="lat">0ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">19ms</div></div>
+          <div class="hop" style="--seg:var(--bad)"><div class="node bad"></div><div class="lat bad">超时</div></div>
+          <div class="hop dash"><div class="node idle"></div><div class="lat" style="color:var(--ink3)">—</div></div>
+          <div class="hop dash"><div class="node idle"></div><div class="lat" style="color:var(--ink3)">—</div></div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="info">
+          <div class="dom"><span class="sd" style="background:var(--ok)"></span>alert-uat.slileisure.com</div>
+          <div class="chips"><span class="chip proj">opsplatform</span><span class="chip">alert</span><span class="chip env-UAT">UAT</span></div>
+        </div>
+        <div class="track">
+          <div class="hop"><div class="node ok"></div><div class="lat">0ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">21ms</div></div>
+          <div class="hop dash"><div class="node idle"></div><div class="lat" style="color:var(--ink3)">无 CDN</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">52ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">证书 128d</div></div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="info">
+          <div class="dom"><span class="sd" style="background:var(--warn)"></span>k8s.slileisure.com</div>
+          <div class="chips"><span class="chip proj">opsplatform</span><span class="chip">k8sinsight</span><span class="chip env-UAT">UAT</span></div>
+        </div>
+        <div class="track">
+          <div class="hop"><div class="node ok"></div><div class="lat">0ms</div></div>
+          <div class="hop" style="--seg:var(--warn)"><div class="node warn"></div><div class="lat warn">88ms</div></div>
+          <div class="hop dash"><div class="node idle"></div><div class="lat" style="color:var(--ink3)">无 CDN</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">47ms</div></div>
+          <div class="hop" style="--seg:var(--ok)"><div class="node ok"></div><div class="lat">证书 74d</div></div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <div class="g"><span class="sw" style="background:var(--ok)"></span>健康</div>
+        <div class="g"><span class="sw" style="background:var(--warn)"></span>降级 / 临期</div>
+        <div class="g"><span class="sw" style="background:var(--bad)"></span>异常 / 超时</div>
+        <div class="g"><span class="sw" style="background:var(--ink3)"></span>未采集 / 无此跳</div>
+        <div class="g" style="margin-left:auto">虚线 = 该域名不经此跳（如无 CDN / 已迁 Cloudflare 托管）</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="grid3">
+    <div class="panel spark">
+      <div class="mini-t">全链路 P95 延时趋势</div>
+      <div class="mini-s">近 1 小时 · 按分钟聚合 · 单位 ms</div>
+      <svg viewBox="0 0 320 96" width="100%" height="96" preserveAspectRatio="none" role="img" aria-label="P95 延时折线，近一小时在 90 到 150ms 波动">
+        <defs><linearGradient id="fill" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0" stop-color="#3538cd" stop-opacity="0.16"/><stop offset="1" stop-color="#3538cd" stop-opacity="0"/>
+        </linearGradient></defs>
+        <line x1="0" y1="24" x2="320" y2="24" stroke="#e7e9e2"/><line x1="0" y1="60" x2="320" y2="60" stroke="#e7e9e2"/>
+        <path d="M0,70 L32,66 L64,72 L96,58 L128,54 L160,62 L192,40 L224,48 L256,30 L288,44 L320,36 V96 H0 Z" fill="url(#fill)"/>
+        <path d="M0,70 L32,66 L64,72 L96,58 L128,54 L160,62 L192,40 L224,48 L256,30 L288,44 L320,36" fill="none" stroke="#3538cd" stroke-width="2" stroke-linejoin="round"/>
+        <circle cx="256" cy="30" r="3.5" fill="#3538cd"/><circle cx="320" cy="36" r="3.5" fill="#3538cd"/>
+      </svg>
+    </div>
+
+    <div class="panel spark">
+      <div class="mini-t">异常链路 Top</div>
+      <div class="mini-s">按影响面排序</div>
+      <table>
+        <thead><tr><th>域名</th><th>跳</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td><span class="d">cdn.slileisure.com</span></td><td>CDN 边缘</td><td><span class="badge bad">超时</span></td></tr>
+          <tr><td><span class="d">api.slileisure.com</span></td><td>源站</td><td><span class="badge warn">142ms</span></td></tr>
+          <tr><td><span class="d">deploy.slileisure.com</span></td><td>TLS</td><td><span class="badge warn">9d 临期</span></td></tr>
+          <tr><td><span class="d">k8s.slileisure.com</span></td><td>DNS</td><td><span class="badge warn">88ms</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel spark">
+      <div class="mini-t">按环境 · 健康占比</div>
+      <div class="mini-s">在管 133 域名</div>
+      <div class="bars">
+        <div class="brow"><span class="lbl">PROD</span><div class="tk"><div class="fl" style="width:94%;background:linear-gradient(90deg,var(--ok) 94%,var(--bad) 94%)"></div></div><span class="n">86</span></div>
+        <div class="brow"><span class="lbl">UAT</span><div class="tk"><div class="fl" style="width:88%;background:linear-gradient(90deg,var(--ok) 88%,var(--warn) 88%)"></div></div><span class="n">34</span></div>
+        <div class="brow"><span class="lbl">DEV</span><div class="tk"><div class="fl" style="width:100%;background:var(--ok)"></div></div><span class="n">13</span></div>
+      </div>
+      <div class="mini-s" style="margin-top:14px;margin-bottom:6px">按证书到期</div>
+      <div class="bars">
+        <div class="brow"><span class="lbl">≤7d</span><div class="tk"><div class="fl" style="width:10%;background:var(--bad)"></div></div><span class="n">1</span></div>
+        <div class="brow"><span class="lbl">≤30d</span><div class="tk"><div class="fl" style="width:24%;background:var(--warn)"></div></div><span class="n">3</span></div>
+        <div class="brow"><span class="lbl">&gt;90d</span><div class="tk"><div class="fl" style="width:82%;background:var(--ok)"></div></div><span class="n">118</span></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="footnote">
+    <b>效果图 / 数据为示意</b> — 真实数据来自：拨测节点主动探测 + CDN 厂商 API + CMDB 证书模块 + 域名台账标签关联。<br>
+    维度主轴 <b>项目 › 模块 › 环境 › 域名</b> 均来自 CMDB 域名表既有 label，无需新采集即可下钻筛选。
+  </p>
+
+</div>
+</body>
+</html>
