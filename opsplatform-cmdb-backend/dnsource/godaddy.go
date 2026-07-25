@@ -155,6 +155,24 @@ func (a *GoDaddy) DeleteGroup(ctx context.Context, domain, rtype, name string) e
 	return a.doWrite(ctx, http.MethodDelete, path, nil)
 }
 
+// gdFullRecord PATCH /records 的记录体（type/name 在 body 里，与 typed PUT 不同）。
+type gdFullRecord struct {
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	Data     string `json:"data"`
+	TTL      int    `json:"ttl,omitempty"`
+	Priority *int   `json:"priority,omitempty"`
+}
+
+// AddRecords PATCH /v1/domains/{domain}/records —— 一次追加多条（批量新增）。追加语义，不去重。
+func (a *GoDaddy) AddRecords(ctx context.Context, domain string, recs []DNSRecord) error {
+	body := make([]gdFullRecord, 0, len(recs))
+	for _, r := range recs {
+		body = append(body, gdFullRecord{Type: r.Type, Name: r.Name, Data: r.Data, TTL: r.TTL, Priority: r.Priority})
+	}
+	return a.doWrite(ctx, http.MethodPatch, "/v1/domains/"+domain+"/records", body)
+}
+
 // ---- 域名续费 / 自动续费 ----
 
 // GetDomainDetail GET /v1/domains/{domain} —— 取到期/自动续费/状态。

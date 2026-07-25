@@ -150,6 +150,76 @@ func (h *SyncHandler) CreateDNSRecord(c *gin.Context) {
 		"msg": writeResultMsg(wa, "已新增并写回")})
 }
 
+// BatchCreateDNSRecord 批量新增解析并写回（POST /domains/:ciid/dns-records/batch）。
+// GoDaddy PATCH 一次追加多条；逐行校验，非法行跳过并回报原因，合法行一把写回。
+func (h *SyncHandler) BatchCreateDNSRecord(c *gin.Context) {
+	ciid := c.Param("ciid")
+	var in struct {
+		Records []struct {
+			Type     string `json:"type"`
+			Name     string `json:"name"`
+			Data     string `json:"data"`
+			TTL      int    `json:"ttl"`
+			Priority *int   `json:"priority"`
+		} `json:"records"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if len(in.Records) == 0 {
+		c.JSON(400, gin.H{"error": "没有要新增的记录"})
+		return
+	}
+	if len(in.Records) > 200 {
+		c.JSON(400, gin.H{"error": "一次最多 200 条"})
+		return
+	}
+	// 逐行校验：合法进 valid，非法进 errs（带行号+原因），不阻断其它行
+	type rowErr struct {
+		Row    int    `json:"row"`
+		Detail string `json:"detail"`
+		Msg    string `json:"msg"`
+	}
+	var valid []dnsource.DNSRecord
+	var errs []rowErr
+	for i, r := range in.Records {
+		rtype, name, ttl, prio := r.Type, r.Name, r.TTL, r.Priority
+		if msg := normalizeRecordInput(&rtype, &name, r.Data, &ttl, &prio); msg != "" {
+			errs = append(errs, rowErr{Row: i + 1, Detail: fmt.Sprintf("%s %s", r.Type, r.Name), Msg: msg})
+			continue
+		}
+		valid = append(valid, dnsource.DNSRecord{Type: rtype, Name: name, Data: strings.TrimSpace(r.Data), TTL: ttl, Priority: prio})
+	}
+	if len(valid) == 0 {
+		c.JSON(400, gin.H{"error": "全部行校验不通过", "errors": errs})
+		return
+	}
+	wa, ad, domain, sourceID, err := h.writeAdapterForDomain(ciid)
+	if err != nil {
+		log.Printf("[dns写回] 批量新增前置失败 ciid=%s: %v", ciid, err)
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	log.Printf("[dns写回] 批量新增发起 domain=%s 有效%d条 跳过%d条 env=%s dry_run=%v 操作人=%s",
+		domain, len(valid), len(errs), wa.EnvLabel(), wa.DryRun(), currentUser(c))
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := wa.AddRecords(ctx, domain, valid); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "批量写回 GoDaddy 失败：" + err.Error()})
+		return
+	}
+	ciID, _ := parseID(ciid)
+	if !wa.DryRun() {
+		h.refreshDomainDNSCache(ctx, ad, ciID, sourceID, domain)
+	}
+	log.Printf("[dns写回] 批量新增完成 domain=%s 成功%d条 跳过%d条 dry_run=%v", domain, len(valid), len(errs), wa.DryRun())
+	WriteAudit(h.DB, c, "dns_batch_create", fmt.Sprintf("%s 新增%d条", domain, len(valid)))
+	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
+		"added": len(valid), "skipped": len(errs), "errors": errs,
+		"msg": writeResultMsg(wa, fmt.Sprintf("已批量新增 %d 条（跳过 %d 条）", len(valid), len(errs)))})
+}
+
 // UpdateDNSRecord 编辑一条解析（改值/TTL/优先级；类型+主机名不变）并写回（PUT /dns-records/:id）。
 func (h *SyncHandler) UpdateDNSRecord(c *gin.Context) {
 	id := c.Param("id")

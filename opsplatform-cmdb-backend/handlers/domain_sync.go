@@ -52,6 +52,7 @@ func (h *SyncHandler) Register(r *gin.RouterGroup) {
 	r.POST("/domains/:ciid/sync-records", h.SyncDomainRecords)
 	// DNS 解析写回厂商（增/改/删）
 	r.POST("/domains/:ciid/dns-records", h.CreateDNSRecord)
+	r.POST("/domains/:ciid/dns-records/batch", h.BatchCreateDNSRecord)
 	r.PUT("/dns-records/:id", h.UpdateDNSRecord)
 	r.DELETE("/dns-records/:id", h.DeleteDNSRecord)
 	// 域名续费 / 自动续费（写回厂商）

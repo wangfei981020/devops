@@ -63,6 +63,8 @@ type WriteAdapter interface {
 	ReplaceGroup(ctx context.Context, domain, rtype, name string, recs []DNSRecord) error
 	// DeleteGroup 删除该 (type,name) 整组。
 	DeleteGroup(ctx context.Context, domain, rtype, name string) error
+	// AddRecords 批量追加多条记录（一次调用，用于批量新增）。
+	AddRecords(ctx context.Context, domain string, recs []DNSRecord) error
 	// GetDomainDetail 取域名当前到期/自动续费/隐私状态（续费前展示）。
 	GetDomainDetail(ctx context.Context, domain string) (DomainDetail, error)
 	// GetRenewalPrice 取续费挂牌价（估算展示；查不到返回零值不报错）。

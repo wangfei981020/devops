@@ -34,6 +34,7 @@ export const deleteOriginRule = (id) => http.delete('/origin-rules/' + id).then(
 export const listDnsRecords = (ciid) => http.get(`/domains/${ciid}/dns-records`).then((r) => r.data)
 // DNS 解析写回 GoDaddy（增/改/删）
 export const createDnsRecord = (ciid, b) => http.post(`/domains/${ciid}/dns-records`, b).then((r) => r.data)
+export const batchCreateDnsRecords = (ciid, records) => http.post(`/domains/${ciid}/dns-records/batch`, { records }).then((r) => r.data)
 export const updateDnsRecord = (id, b) => http.put(`/dns-records/${id}`, b).then((r) => r.data)
 export const deleteDnsRecord = (id) => http.delete(`/dns-records/${id}`).then((r) => r.data)
 // 域名续费 / 自动续费（写回 GoDaddy；续费会真实扣费）

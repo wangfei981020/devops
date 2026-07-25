@@ -64,7 +64,10 @@
                 <el-tooltip v-if="!canWrite(row)" content="该域名未绑数据源或来源不支持写回，无法新增">
                   <span><el-button size="small" type="primary" :icon="Plus" disabled>新增解析</el-button></span>
                 </el-tooltip>
-                <el-button v-else size="small" type="primary" :icon="Plus" style="margin-left:auto" @click="openCreate(row)">新增解析</el-button>
+                <template v-else>
+                  <el-button size="small" :icon="DocumentAdd" style="margin-left:auto" @click="openBatch(row)">批量新增</el-button>
+                  <el-button size="small" type="primary" :icon="Plus" @click="openCreate(row)">新增解析</el-button>
+                </template>
               </div>
               <el-table :data="recPaged(row.ci_id)" size="small" max-height="360">
                 <el-table-column label="类型" width="90"><template #default="{ row: r }">
@@ -165,15 +168,63 @@
         <el-button type="primary" :loading="dlg.saving" @click="saveRecord">保存并写回</el-button>
       </template>
     </el-dialog>
+
+    <!-- 批量新增解析（多行表格 + 粘贴导入，一次写回 GoDaddy） -->
+    <el-dialog v-model="batch.show" title="批量新增解析（写回 GoDaddy）" width="780px" :close-on-click-modal="false">
+      <div style="margin-bottom:8px">
+        主域名 <span class="mono">{{ batch.domainName }}</span>
+        <span class="muted" style="margin-left:8px">仅支持 A/AAAA/CNAME/TXT/MX；受保护记录会被跳过</span>
+      </div>
+      <el-table :data="batch.rows" size="small" max-height="300">
+        <el-table-column label="类型" width="110"><template #default="{ row }">
+          <el-select v-model="row.type" size="small">
+            <el-option v-for="t in writableTypes" :key="t" :label="t" :value="t" />
+          </el-select>
+        </template></el-table-column>
+        <el-table-column label="主机名" width="150"><template #default="{ row }">
+          <el-input v-model="row.name" size="small" placeholder="www / @" />
+        </template></el-table-column>
+        <el-table-column label="记录值"><template #default="{ row }">
+          <el-input v-model="row.data" size="small" placeholder="IP / 目标域名 / 文本" />
+        </template></el-table-column>
+        <el-table-column label="TTL" width="90"><template #default="{ row }">
+          <el-input v-model.number="row.ttl" size="small" />
+        </template></el-table-column>
+        <el-table-column label="优先级" width="80"><template #default="{ row }">
+          <el-input v-if="row.type==='MX'" v-model.number="row.priority" size="small" />
+          <span v-else class="muted">—</span>
+        </template></el-table-column>
+        <el-table-column width="44"><template #default="{ $index }">
+          <el-button link type="danger" :icon="Delete" @click="batch.rows.splice($index,1)" />
+        </template></el-table-column>
+      </el-table>
+      <div style="margin-top:8px">
+        <el-button size="small" :icon="Plus" @click="batch.rows.push({ type:'A', name:'', data:'', ttl:600, priority:10 })">加一行</el-button>
+        <el-button size="small" @click="batch.rows=[]">清空</el-button>
+        <el-button size="small" text @click="batch.showPaste=!batch.showPaste">{{ batch.showPaste?'收起粘贴':'粘贴导入' }}</el-button>
+      </div>
+      <div v-if="batch.showPaste" style="margin-top:8px">
+        <el-input v-model="batch.pasteText" type="textarea" :rows="5"
+          placeholder="每行一条，空格或逗号分隔：类型 主机名 值 [TTL]&#10;例：&#10;A     www   1.2.3.4   600&#10;A     api   1.2.3.5&#10;CNAME blog  x.cf.com&#10;TXT   @     v=spf1..." />
+        <el-button size="small" type="primary" style="margin-top:6px" @click="doPaste">解析并填入表格</el-button>
+        <span class="muted" style="margin-left:8px">TTL 可省，默认 600</span>
+      </div>
+      <el-alert type="warning" :closable="false" show-icon style="margin-top:10px"
+        :title="`将新增 ${batch.rows.length} 条并写回 GoDaddy，保存后立即生效`" />
+      <template #footer>
+        <el-button @click="batch.show=false">关闭</el-button>
+        <el-button type="primary" :loading="batch.saving" @click="saveBatch">批量写回（{{ batch.rows.length }} 条）</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Search, Hide, RefreshLeft, Plus, Edit, Delete } from '@element-plus/icons-vue'
+import { Refresh, Search, Hide, RefreshLeft, Plus, Edit, Delete, DocumentAdd } from '@element-plus/icons-vue'
 import { listDomains, listRegistrars, listDnsRecords, syncSource, syncSourceStatus, syncDomainRecords, bulkIgnoreDomains,
-  createDnsRecord, updateDnsRecord, deleteDnsRecord } from '../api/cmdb'
+  createDnsRecord, updateDnsRecord, deleteDnsRecord, batchCreateDnsRecords } from '../api/cmdb'
 import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
 import { useDomainFilter } from '../composables/useDomainFilter'
 import { useAppStore } from '../stores/app'
@@ -315,6 +366,52 @@ async function saveRecord() {
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '写回失败')
   } finally { dlg.saving = false }
+}
+// ---- 批量新增 ----
+const batch = reactive({ show: false, saving: false, showPaste: false, pasteText: '', ciid: null, domainName: '', rows: [] })
+function openBatch(row) {
+  batch.ciid = row.ci_id; batch.domainName = row.name
+  batch.rows = [{ type: 'A', name: '', data: '', ttl: 600, priority: 10 }]
+  batch.showPaste = false; batch.pasteText = ''; batch.show = true
+}
+// 粘贴解析：每行 "类型 主机名 值 [TTL]"，空格或逗号分隔
+function doPaste() {
+  const added = []
+  for (const line of (batch.pasteText || '').split('\n')) {
+    const t = line.trim()
+    if (!t) continue
+    const parts = t.split(/[\s,]+/).filter(Boolean)
+    if (parts.length < 3) continue // 至少 类型/主机名/值
+    const type = parts[0].toUpperCase()
+    const name = parts[1]
+    const data = parts[2]
+    const ttl = parts[3] && !isNaN(+parts[3]) ? +parts[3] : 600
+    added.push({ type: writableTypes.includes(type) ? type : 'A', name, data, ttl, priority: 10 })
+  }
+  if (!added.length) { ElMessage.warning('没解析到有效行（每行至少：类型 主机名 值）'); return }
+  // 若当前只有一空行，替换；否则追加
+  const cur = batch.rows.filter((r) => r.name || r.data)
+  batch.rows = [...cur, ...added]
+  ElMessage.success(`解析到 ${added.length} 行，已填入`)
+}
+async function saveBatch() {
+  const records = batch.rows.filter((r) => (r.name || '').trim() !== '' || (r.data || '').trim() !== '')
+    .map((r) => { const b = { type: r.type, name: (r.name || '@').trim(), data: (r.data || '').trim(), ttl: r.ttl || 600 }; if (r.type === 'MX') b.priority = r.priority; return b })
+  if (!records.length) { ElMessage.warning('没有要新增的记录'); return }
+  try {
+    await app.showConfirm(`将新增 ${records.length} 条解析到 ${batch.domainName} 并写回 GoDaddy？`, '确认批量新增')
+  } catch (e) { return }
+  batch.saving = true
+  try {
+    const r = await batchCreateDnsRecords(batch.ciid, records)
+    let msg = r.msg || `已新增 ${r.added} 条`
+    if (r.skipped > 0 && r.errors?.length) msg += '；跳过：' + r.errors.map((e) => `第${e.row}行(${e.detail}) ${e.msg}`).join('；')
+    if (r.skipped > 0) ElMessage.warning(msg); else ElMessage.success(msg)
+    batch.show = false
+    await loadRecords(batch.ciid); await loadDomains()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '批量写回失败')
+  } finally { batch.saving = false }
 }
 async function delRecord(row, r) {
   try {
