@@ -89,7 +89,8 @@ func (h *K8sResourceHandler) NodePools(c *gin.Context) {
 }
 
 func (h *K8sResourceHandler) Nodes(c *gin.Context) {
-	h.list(c, `SELECT id,cluster_id,name,pool,internal_ip,roles,machine_type,cpu_cap,mem_cap,os_image,kubelet_version,ready_status,last_heartbeat,conditions,COALESCE(conditions_json,'') AS conditions_json,pod_count,stuck FROM k8s_nodes`,
+	h.list(c, `SELECT id,cluster_id,name,pool,internal_ip,roles,machine_type,cpu_cap,mem_cap,os_image,kubelet_version,ready_status,last_heartbeat,conditions,COALESCE(conditions_json,'') AS conditions_json,pod_count,stuck,
+		COALESCE((SELECT c.id FROM cis c WHERE c.type='host' AND c.name=k8s_nodes.name LIMIT 1),0) AS host_ci_id FROM k8s_nodes`,
 		[]filter{{"cluster_id", "cluster_id", true}, {"pool", "pool", false}}, "cluster_id,pool,name", []string{"name", "internal_ip", "pool"})
 }
 
@@ -104,8 +105,12 @@ func (h *K8sResourceHandler) Workloads(c *gin.Context) {
 }
 
 func (h *K8sResourceHandler) Pods(c *gin.Context) {
+	extra := []string{}
+	if c.Query("bad") == "1" { // 只看异常:非 Running/Succeeded 或有失败原因 或重启多
+		extra = append(extra, "(phase NOT IN ('Running','Succeeded') OR COALESCE(reason,'')<>'' OR restarts>5)")
+	}
 	h.list(c, `SELECT id,cluster_id,namespace,name,node_name,workload,phase,COALESCE(reason,'') AS reason,cpu_req_m,mem_req_mi,cpu_lim_m,mem_lim_mi,restarts,pod_ip,start_time FROM k8s_pods`,
-		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}, {"node_name", "node", false}, {"workload", "workload", false}}, "namespace,name", []string{"name", "pod_ip", "node_name", "workload"})
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}, {"node_name", "node", false}, {"workload", "workload", false}}, "namespace,name", []string{"name", "pod_ip", "node_name", "workload"}, extra...)
 }
 
 func (h *K8sResourceHandler) Services(c *gin.Context) {
@@ -200,8 +205,8 @@ type filter struct {
 }
 
 // list 通用列表：按 filters 拼 WHERE + q 关键词模糊(searchCols) + orderBy，扫描为 []map。
-func (h *K8sResourceHandler) list(c *gin.Context, base string, filters []filter, orderBy string, searchCols []string) {
-	where := []string{}
+func (h *K8sResourceHandler) list(c *gin.Context, base string, filters []filter, orderBy string, searchCols []string, extraWhere ...string) {
+	where := append([]string{}, extraWhere...)
 	args := []any{}
 	for _, f := range filters {
 		v := c.Query(f.param)
@@ -228,10 +233,47 @@ func (h *K8sResourceHandler) list(c *gin.Context, base string, filters []filter,
 		}
 		where = append(where, "("+strings.Join(ors, " OR ")+")")
 	}
-	sqlStr := base
+	whereSQL := ""
 	if len(where) > 0 {
-		sqlStr += " WHERE " + strings.Join(where, " AND ")
+		whereSQL = " WHERE " + strings.Join(where, " AND ")
 	}
+	// 服务端分页(opt-in)：带 page 参数时返回 {items,total,...} + LIMIT/OFFSET；否则原样返回数组(向后兼容)。
+	if pageStr := c.Query("page"); pageStr != "" {
+		page, _ := strconv.Atoi(pageStr)
+		if page < 1 {
+			page = 1
+		}
+		size, _ := strconv.Atoi(c.Query("page_size"))
+		if size < 1 || size > 500 {
+			size = 20
+		}
+		total := 0
+		// COUNT(*) 复用同一 base 的 FROM/WHERE
+		from := base
+		if i := strings.Index(strings.ToUpper(base), " FROM "); i >= 0 {
+			from = base[i:]
+		}
+		_ = h.DB.QueryRow("SELECT COUNT(*)"+from+whereSQL, args...).Scan(&total)
+		q := base + whereSQL
+		if orderBy != "" {
+			q += " ORDER BY " + orderBy
+		}
+		q += " LIMIT ? OFFSET ?"
+		rows, err := h.DB.Query(q, append(args, size, (page-1)*size)...)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+		items, err := scanRows(rows)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": items, "total": total, "page": page, "page_size": size})
+		return
+	}
+	sqlStr := base + whereSQL
 	if orderBy != "" {
 		sqlStr += " ORDER BY " + orderBy
 	}

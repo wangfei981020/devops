@@ -9,22 +9,22 @@
         <el-select v-model="clusterId" placeholder="选集群" style="width:200px" @change="onCluster">
           <el-option v-for="c in clusters" :key="c.id" :label="(c.display_name||c.name)+' · '+c.environment" :value="c.id" />
         </el-select>
-        <el-select v-model="ns" clearable filterable placeholder="命名空间" style="width:180px" @change="load">
+        <el-select v-model="ns" clearable filterable placeholder="命名空间" style="width:180px" @change="reload">
           <el-option v-for="n in namespaces" :key="n.name" :label="n.name" :value="n.name" />
         </el-select>
-        <el-select v-model="node" clearable filterable allow-create default-first-option placeholder="节点(可搜/自输)" style="width:180px" @change="load">
+        <el-select v-model="node" clearable filterable allow-create default-first-option placeholder="节点(可搜/自输)" style="width:180px" @change="reload">
           <el-option v-for="n in nodeList" :key="n.name" :label="n.name" :value="n.name" />
         </el-select>
-        <el-input v-model="q" clearable placeholder="搜 Pod名/IP/工作负载" style="width:220px" @keyup.enter="load" @clear="load" />
-        <el-button :icon="Search" @click="load">查询</el-button>
-        <el-switch v-model="onlyBad" active-text="只看异常" style="margin-left:6px" />
+        <el-input v-model="q" clearable placeholder="搜 Pod名/IP/工作负载" style="width:220px" @keyup.enter="reload" @clear="reload" />
+        <el-button :icon="Search" @click="reload">查询</el-button>
+        <el-switch v-model="onlyBad" active-text="只看异常" style="margin-left:6px" @change="reload" />
         <span class="muted" style="margin-left:auto">
-          共 {{ rows.length }} · <b style="color:#67c23a">Running {{ ov.running }}</b>
+          共 {{ ov.total }} · <b style="color:#67c23a">Running {{ ov.running }}</b>
           <b v-if="ov.failed" style="color:#f56c6c;margin-left:8px">失败 {{ ov.failed }}</b>
           <b v-if="ov.pending" style="color:#e6a23c;margin-left:8px">Pending {{ ov.pending }}</b>
         </span>
       </div>
-      <el-table :data="paged" size="small" v-loading="loading" :row-class-name="rowClass">
+      <el-table :data="rows" size="small" v-loading="loading" :row-class-name="rowClass">
         <el-table-column prop="namespace" label="命名空间" width="140" />
         <el-table-column prop="name" label="Pod" min-width="240" />
         <el-table-column prop="workload" label="工作负载" min-width="160"><template #default="{ row }">{{ row.workload || '—' }}</template></el-table-column>
@@ -58,7 +58,7 @@
           <el-button link type="warning" size="small" @click="openDiag(row)">诊断</el-button>
         </template></el-table-column>
       </el-table>
-      <Pager :total="display.length" v-model:page="page" v-model:page-size="pageSize" />
+      <Pager :total="total" :page="page" :page-size="pageSize" @update:page="onPage" @update:page-size="onSize" />
 
       <!-- 日志/事件/诊断 弹窗 -->
       <el-dialog :close-on-click-modal="false" v-model="dlg" :title="dlgTitle" width="820px" top="6vh">
@@ -93,24 +93,17 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { listK8sClusters, listK8sPods, listK8sNamespaces, listK8sNodes, k8sPodLogs, k8sPodEvents, k8sDiagnose, k8sPodUsage } from '../api/cmdb'
-import { usePager } from '../composables/usePager'
+import { listK8sClusters, listK8sPods, listK8sNamespaces, listK8sNodes, k8sPodLogs, k8sPodEvents, k8sDiagnose, k8sPodUsage, k8sNsOverview } from '../api/cmdb'
 import Pager from '../components/Pager.vue'
 
+// Pod 量可上千 → 服务端分页；概览走 ns-overview(整集群/命名空间统计,不受当前页限制)
 const clusters = ref([]); const namespaces = ref([]); const nodeList = ref([]); const rows = ref([]); const usage = ref({}); const onlyBad = ref(false)
+const page = ref(1); const pageSize = ref(20); const total = ref(0); const ov = ref({ total: 0, running: 0, failed: 0, pending: 0 })
 function isBad(r) { return (r.phase !== 'Running' && r.phase !== 'Succeeded') || !!r.reason || r.restarts > 5 }
 function rowClass({ row }) { return isBad(row) ? 'bad-row' : '' }
-const display = computed(() => onlyBad.value ? rows.value.filter(isBad) : rows.value)
-const ov = computed(() => {
-  const o = { running: 0, failed: 0, pending: 0 }
-  for (const r of rows.value) {
-    if (r.phase === 'Running' || r.phase === 'Succeeded') o.running++
-    else if (r.phase === 'Pending') o.pending++
-    else o.failed++
-  }
-  return o
-})
-const { page, pageSize, paged } = usePager(display)
+function reload() { page.value = 1; load() }
+function onPage(p) { page.value = p; load() }
+function onSize(s) { pageSize.value = s; page.value = 1; load() }
 const clusterId = ref(null); const ns = ref(''); const node = ref(''); const q = ref(''); const loading = ref(false)
 const dlg = ref(false); const dlgMode = ref(''); const dlgTitle = ref(''); const dlgLoading = ref(false)
 const logText = ref(''); const events = ref([]); const diag = ref({})
@@ -146,13 +139,22 @@ async function load() {
   if (!clusterId.value) return
   loading.value = true
   try {
-    const p = { cluster_id: clusterId.value }
+    const p = { cluster_id: clusterId.value, page: page.value, page_size: pageSize.value }
     if (ns.value) p.namespace = ns.value
     if (node.value) p.node = node.value
     if (q.value) p.q = q.value
-    rows.value = await listK8sPods(p)
-    loadUsage()
+    if (onlyBad.value) p.bad = 1
+    const r = await listK8sPods(p)
+    rows.value = r.items || r; total.value = r.total ?? (r.items ? r.items.length : r.length)
+    loadUsage(); loadOverview()
   } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+}
+
+async function loadOverview() {
+  try {
+    const o = await k8sNsOverview({ cluster_id: clusterId.value, namespace: ns.value })
+    ov.value = o
+  } catch (e) { ov.value = { total: 0, running: 0, failed: 0, pending: 0 } }
 }
 
 async function loadUsage() {

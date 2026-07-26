@@ -22,7 +22,12 @@
       </div>
       <el-table :data="paged" size="small" v-loading="loading" :row-class-name="rowClass">
         <el-table-column v-if="!clusterId" label="集群" width="150"><template #default="{ row }">{{ clusterName(row.cluster_id) }}</template></el-table-column>
-        <el-table-column prop="name" label="节点" min-width="200" />
+        <el-table-column label="节点" min-width="220"><template #default="{ row }">
+          {{ row.name }}
+          <el-tooltip v-if="Number(row.host_ci_id)" content="关联的云主机(GCE)——点看机型/IP/项目">
+            <el-link type="primary" :underline="false" style="margin-left:6px;font-size:12px" @click="openHost(row)">🖥主机</el-link>
+          </el-tooltip>
+        </template></el-table-column>
         <el-table-column prop="pool" label="节点池" width="120" />
         <el-table-column label="状态" width="140"><template #default="{ row }">
           <el-tag size="small" :type="row.ready_status==='Ready'?'success':(row.ready_status==='Unknown'?'danger':'warning')">{{ row.ready_status }}</el-tag>
@@ -81,6 +86,19 @@
       </div>
       <el-empty v-if="!loading && !display.length" :description="onlyBad ? '无异常节点 🎉' : '无数据，先去集群管理点「同步」'" />
     </el-card>
+    <el-dialog :close-on-click-modal="false" v-model="hostDlg" title="关联云主机" width="520px">
+      <el-descriptions v-if="host" :column="1" border size="small">
+        <el-descriptions-item label="主机名">{{ host.name }}</el-descriptions-item>
+        <el-descriptions-item label="机型">{{ host.machine_type || '—' }} · {{ host.vcpu }}核 / {{ host.mem_mb ? (host.mem_mb/1024).toFixed(1)+'G':'—' }}</el-descriptions-item>
+        <el-descriptions-item label="内网IP">{{ host.internal_ip || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="外网IP">{{ host.external_ip || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="区域">{{ host.zone || host.region || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="项目">{{ host.project_name || host.project || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="状态">{{ host.status || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="类型"><el-tag size="small" type="success" v-if="host.is_k8s_node">☸ K8s节点{{ host.k8s_pool?'/'+host.k8s_pool:'' }}</el-tag></el-descriptions-item>
+      </el-descriptions>
+      <el-empty v-else description="未取到主机" :image-size="50" />
+    </el-dialog>
   </div>
 </template>
 
@@ -88,13 +106,18 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { listK8sClusters, listK8sNodes, listK8sNodePools, k8sNodeUsage, k8sNodeCapacity } from '../api/cmdb'
+import { listK8sClusters, listK8sNodes, listK8sNodePools, k8sNodeUsage, k8sNodeCapacity, getHost } from '../api/cmdb'
 
 const clusters = ref([]); const pools = ref([]); const rows = ref([]); const usage = ref({}); const cap = ref({})
 function cp(row, k) { const m = cap.value[row.name]; return (m && m[k] != null) ? m[k] : 0 }
 const clusterId = ref(''); const pool = ref(''); const q = ref(''); const onlyBad = ref(false); const loading = ref(false)
 function nu(row, k) { const m = usage.value[row.name]; return (m && m[k] != null) ? m[k].toFixed(0) + '%' : null }
 function nuVal(row, k) { const m = usage.value[row.name]; return (m && m[k] != null) ? m[k] : 0 }
+const hostDlg = ref(false); const host = ref(null)
+async function openHost(row) {
+  hostDlg.value = true; host.value = null
+  try { host.value = await getHost(row.host_ci_id) } catch (e) { host.value = null }
+}
 function barColor(p) { return p >= 85 ? '#f56c6c' : (p >= 60 ? '#e6a23c' : '#67c23a') }
 function boxColor(p) { return p >= 100 ? '#f56c6c' : (p >= 80 ? '#e6a23c' : '#67c23a') }
 
