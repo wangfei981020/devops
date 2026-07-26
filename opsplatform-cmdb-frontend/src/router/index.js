@@ -23,6 +23,18 @@ const routes = [
   { path: '/cron', component: () => import('../views/Cron.vue'), meta: { title: '定时任务' } },
   { path: '/task-runs', component: () => import('../views/TaskRuns.vue'), meta: { title: '执行记录' } },
   { path: '/notify', component: () => import('../views/Notify.vue'), meta: { title: '通知' } },
+  { path: '/k8s-clusters', component: () => import('../views/K8sClusters.vue'), meta: { title: 'K8s 集群' } },
+  { path: '/k8s-nodes', component: () => import('../views/K8sNodes.vue'), meta: { title: 'K8s 节点' } },
+  { path: '/k8s-workloads', component: () => import('../views/K8sWorkloads.vue'), meta: { title: 'K8s 工作负载' } },
+  { path: '/k8s-pods', component: () => import('../views/K8sPods.vue'), meta: { title: 'K8s Pod' } },
+  { path: '/k8s-networking', component: () => import('../views/K8sNetworking.vue'), meta: { title: 'K8s 网络' } },
+  { path: '/k8s-storage', component: () => import('../views/K8sStorage.vue'), meta: { title: 'K8s 存储/伸缩' } },
+  { path: '/k8s-topology', component: () => import('../views/K8sTopology.vue'), meta: { title: 'K8s 全链路' } },
+  { path: '/k8s-ns-project', component: () => import('../views/K8sNsProject.vue'), meta: { title: '命名空间归属' } },
+  { path: '/cost', component: () => import('../views/K8sCost.vue'), meta: { title: '云成本' } },
+  { path: '/k8s-events', component: () => import('../views/K8sEvents.vue'), meta: { title: 'K8s 事件' } },
+  { path: '/obs-endpoints', component: () => import('../views/ObsEndpoints.vue'), meta: { title: '数据源接入' } },
+  { path: '/mcp', component: () => import('../views/McpAccess.vue'), meta: { title: 'AI 接入' } },
 ]
 
 const router = createRouter({ history: createWebHistory(), routes })

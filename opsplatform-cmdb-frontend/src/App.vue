@@ -79,6 +79,18 @@ const menus = shallowRef([
     // 物理→虚拟→容器→应用全链路后升级为「影响分析」再放出。路由/组件保留。
     // { path: '/relations', label: '关系图谱', icon: Share },
   ] },
+  { type: 'group', label: 'K8s', icon: Grid, children: [
+    { path: '/k8s-clusters', label: '集群管理', icon: Cloudy },
+    { path: '/k8s-nodes', label: '节点', icon: Monitor },
+    { path: '/k8s-workloads', label: '工作负载', icon: Coin },
+    { path: '/k8s-pods', label: 'Pod', icon: List },
+    { path: '/k8s-networking', label: '网络', icon: Share },
+    { path: '/k8s-storage', label: '存储/伸缩', icon: Coin },
+    { path: '/k8s-events', label: '事件', icon: Bell },
+    { path: '/k8s-topology', label: '全链路', icon: Share },
+    { path: '/k8s-ns-project', label: '命名空间归属', icon: Coin },
+  ] },
+  { type: 'item', path: '/cost', label: '云成本', icon: Coin },
   { type: 'item', path: '/dashboard', label: '展示台', icon: DataAnalysis },
   { type: 'group', label: '系统管理', icon: Setting, children: [
     { path: '/basic', label: '基础配置', icon: Tools },
@@ -86,6 +98,8 @@ const menus = shallowRef([
     { path: '/notify', label: '通知', icon: Bell },
     { path: '/cron', label: '定时任务', icon: Clock },
     { path: '/task-runs', label: '执行记录', icon: Tickets },
+    { path: '/obs-endpoints', label: '数据源接入', icon: Share },
+    { path: '/mcp', label: 'AI 接入', icon: Grid },
     { path: '/settings', label: '设置', icon: Setting },
   ] },
 ])

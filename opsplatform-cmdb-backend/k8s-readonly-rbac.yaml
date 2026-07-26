@@ -1,0 +1,42 @@
+# CMDB K8s 模块最小只读 RBAC（in-cluster 纳管本集群用）。
+# 只授 get/list/watch，禁 create/update/patch/delete/exec；Secret 只列元数据不读值另按需收紧。
+# 纳管外部集群(GKE/IDC)时，在对方集群建等价的只读 SA，把其 kubeconfig 配进 CMDB。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cmdb-k8s-readonly
+rules:
+  - apiGroups: [""]
+    resources: [nodes, namespaces, pods, services, endpoints, events, persistentvolumeclaims, configmaps]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods/log]        # 读 Pod 日志(诊断用)
+    verbs: [get]
+  - apiGroups: ["apps"]
+    resources: [deployments, statefulsets, daemonsets, replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: ["batch"]
+    resources: [cronjobs, jobs]
+    verbs: [get, list, watch]
+  - apiGroups: ["networking.k8s.io"]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+  - apiGroups: ["autoscaling"]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: [gateways, httproutes]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cmdb-k8s-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cmdb-k8s-readonly
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: opsplatform

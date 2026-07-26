@@ -67,9 +67,12 @@ type rateCache struct {
 	disk    map[string]float64    // "region|disktype" -> gbMonth
 }
 
-func (h *HostHandler) loadRates() *rateCache {
+func (h *HostHandler) loadRates() *rateCache { return newRateCache(h.DB) }
+
+// newRateCache 从 DB 加载全部费率（供主机模块与 K8s 成本模块复用）。
+func newRateCache(db *sql.DB) *rateCache {
 	rc := &rateCache{compute: map[string][2]float64{}, disk: map[string]float64{}}
-	if rows, _ := h.DB.Query(`SELECT region, machine_family, vcpu_hour_usd, ram_gb_hour_usd FROM cloud_compute_rates WHERE provider='gcp'`); rows != nil {
+	if rows, _ := db.Query(`SELECT region, machine_family, vcpu_hour_usd, ram_gb_hour_usd FROM cloud_compute_rates WHERE provider='gcp'`); rows != nil {
 		for rows.Next() {
 			var region, family string
 			var v, r float64
@@ -79,7 +82,7 @@ func (h *HostHandler) loadRates() *rateCache {
 		}
 		rows.Close()
 	}
-	if rows, _ := h.DB.Query(`SELECT region, disk_type, gb_month_usd FROM cloud_disk_rates WHERE provider='gcp'`); rows != nil {
+	if rows, _ := db.Query(`SELECT region, disk_type, gb_month_usd FROM cloud_disk_rates WHERE provider='gcp'`); rows != nil {
 		for rows.Next() {
 			var region, dtype string
 			var g float64

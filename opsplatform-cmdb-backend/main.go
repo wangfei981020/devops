@@ -12,6 +12,7 @@ import (
 	"opsplatform-cmdb-backend/crypto"
 	"opsplatform-cmdb-backend/database"
 	"opsplatform-cmdb-backend/handlers"
+	"opsplatform-cmdb-backend/k8ssource"
 	"opsplatform-cmdb-backend/logx"
 )
 
@@ -56,6 +57,8 @@ func main() {
 	authH.RegisterPublic(api)
 	// A+ 取证书：token 自鉴权，注册在登录中间件之前（目标机无需登录态拉取）
 	handlers.NewBundleHandler(db, cipher).RegisterPublic(api)
+	// MCP：自带 token 鉴权，注册在登录中间件之前（AI 客户端用 MCP token 连）
+	handlers.NewMCPHandler(db, cfg.JWTSecret, cfg.Port).RegisterPublic(api)
 	api.Use(authH.Middleware())
 	handlers.NewCIHandler(db).Register(api)
 	handlers.NewRelationHandler(db).Register(api)
@@ -73,6 +76,21 @@ func main() {
 	handlers.NewCertInspectHandler(db).Register(api)
 	handlers.NewHostHandler(db, cipher).Register(api)
 	handlers.NewNetworkHandler(db).Register(api)
+	// K8s 模块（k8sinsight 合并，只读多集群）：阶段1 集群纳管
+	k8sPool := k8ssource.NewPool(db, cipher)
+	handlers.NewK8sClusterHandler(db, cipher, k8sPool).Register(api)
+	handlers.NewK8sResourceHandler(db, k8sPool).Register(api)
+	handlers.NewK8sTopologyHandler(db).Register(api)
+	handlers.NewK8sCostHandler(db).Register(api)
+	handlers.NewK8sDiagHandler(db, k8sPool).Register(api) // 合并 k8sinsight：实时日志/事件/规则诊断
+	handlers.NewObsHandler(db, cipher).Register(api)      // 数据源接入(Prometheus/Loki/KubeSphere 地址)
+	handlers.NewObsQueryHandler(db, cipher).Register(api) // 资源使用率/Loki/KubeSphere 查询
+	mcpH := handlers.NewMCPHandler(db, cfg.JWTSecret, cfg.Port)
+	mcpH.RegisterAuthed(api)
+	// 周期全量同步所有启用集群（阶段3），默认每 120s 一轮
+	go k8ssource.StartScheduler(db, k8sPool, 120)
+	// 每 6h 刷新当月成本快照（跨月自动定格上月），供环比/报告用
+	go handlers.StartCostSnapshotScheduler(db)
 
 	logx.Line("main", fmt.Sprintf("CMDB backend listening on %s", cfg.Port))
 	if err := http.ListenAndServe(cfg.Port, r); err != nil {
