@@ -94,6 +94,7 @@ const menus = shallowRef([
   { type: 'item', path: '/dashboard', label: '展示台', icon: DataAnalysis },
   { type: 'group', label: '系统管理', icon: Setting, children: [
     { path: '/basic', label: '基础配置', icon: Tools },
+    { path: '/cloud-accounts', label: '云账号', icon: Cloudy },
     { path: '/models', label: '模型管理', icon: Grid },
     { path: '/notify', label: '通知', icon: Bell },
     { path: '/cron', label: '定时任务', icon: Clock },

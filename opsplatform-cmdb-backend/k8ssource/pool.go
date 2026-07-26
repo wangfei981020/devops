@@ -4,6 +4,7 @@
 package k8ssource
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sync"
@@ -30,13 +31,14 @@ func NewPool(db *sql.DB, cipher *crypto.Cipher) *Pool {
 	return &Pool{db: db, cipher: cipher, cache: map[int]*kubernetes.Clientset{}, dynCache: map[int]dynamic.Interface{}}
 }
 
-// restConfigFor 从 DB 读加密 kubeconfig（或 in-cluster）构建 rest.Config。
+// restConfigFor 构建 rest.Config：in-cluster / kubeconfig / GKE-SA(用云账号SA key换token) 三种。
 func (p *Pool) restConfigFor(id int) (*rest.Config, error) {
-	var kcEnc sql.NullString
-	var provider string
-	var enabled int
-	err := p.db.QueryRow(`SELECT provider, kubeconfig_enc, enabled FROM k8s_clusters WHERE id=?`, id).
-		Scan(&provider, &kcEnc, &enabled)
+	var kcEnc, caData sql.NullString
+	var provider, projectID, endpoint string
+	var enabled, cloudAcct int
+	err := p.db.QueryRow(`SELECT provider, kubeconfig_enc, enabled, cloud_account_id, project_id, endpoint, ca_data
+		FROM k8s_clusters WHERE id=?`, id).
+		Scan(&provider, &kcEnc, &enabled, &cloudAcct, &projectID, &endpoint, &caData)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("集群 %d 不存在", id)
 	}
@@ -47,15 +49,13 @@ func (p *Pool) restConfigFor(id int) (*rest.Config, error) {
 		return nil, fmt.Errorf("集群 %d 已禁用", id)
 	}
 	var cfg *rest.Config
-	if provider == "in-cluster" {
+	switch {
+	case provider == "in-cluster":
 		cfg, err = rest.InClusterConfig()
 		if err != nil {
 			return nil, fmt.Errorf("in-cluster config: %w", err)
 		}
-	} else {
-		if !kcEnc.Valid || kcEnc.String == "" {
-			return nil, fmt.Errorf("集群 %d 未配置 kubeconfig", id)
-		}
+	case kcEnc.Valid && kcEnc.String != "":
 		kc, e := p.cipher.Decrypt(kcEnc.String)
 		if e != nil {
 			return nil, fmt.Errorf("解密 kubeconfig 失败: %w", e)
@@ -64,9 +64,35 @@ func (p *Pool) restConfigFor(id int) (*rest.Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("解析 kubeconfig: %w", err)
 		}
+	case provider == "gke" && cloudAcct > 0 && endpoint != "" && caData.Valid && caData.String != "":
+		// GKE 经云账号 SA key 连：取该 project 的 SA key → 换 OAuth token
+		saJSON, e := p.projectSA(cloudAcct, projectID)
+		if e != nil {
+			return nil, e
+		}
+		return gkeRestConfig(context.Background(), saJSON, endpoint, caData.String)
+	default:
+		return nil, fmt.Errorf("集群 %d 未配置连接方式（kubeconfig 或 GKE 云账号）", id)
 	}
 	cfg.Timeout = 15 * time.Second // 只读兜底：卡死集群不拖垮采集
 	return cfg, nil
+}
+
+// projectSA 取某云账号项目的 SA key JSON（解密）。
+func (p *Pool) projectSA(accountID int, projectID string) ([]byte, error) {
+	var enc sql.NullString
+	e := p.db.QueryRow(`SELECT cred_enc FROM cloud_account_projects WHERE account_id=? AND project_id=?`, accountID, projectID).Scan(&enc)
+	if e != nil {
+		return nil, fmt.Errorf("找不到云账号项目 %d/%s 的凭据", accountID, projectID)
+	}
+	if !enc.Valid || enc.String == "" {
+		return nil, fmt.Errorf("云账号项目 %s 未配 SA key", projectID)
+	}
+	sa, e := p.cipher.Decrypt(enc.String)
+	if e != nil {
+		return nil, fmt.Errorf("解密 SA key 失败: %w", e)
+	}
+	return []byte(sa), nil
 }
 
 // ClientFor 返回指定集群的 clientset（缓存）。

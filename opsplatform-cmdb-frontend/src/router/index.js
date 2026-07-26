@@ -35,6 +35,7 @@ const routes = [
   { path: '/k8s-events', component: () => import('../views/K8sEvents.vue'), meta: { title: 'K8s 事件' } },
   { path: '/obs-endpoints', component: () => import('../views/ObsEndpoints.vue'), meta: { title: '数据源接入' } },
   { path: '/mcp', component: () => import('../views/McpAccess.vue'), meta: { title: 'AI 接入' } },
+  { path: '/cloud-accounts', component: () => import('../views/CloudAccounts.vue'), meta: { title: '云账号' } },
 ]
 
 const router = createRouter({ history: createWebHistory(), routes })

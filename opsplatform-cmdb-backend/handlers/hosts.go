@@ -689,6 +689,21 @@ func SyncAllHostProjects(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailu
 	return msg, failures, ok
 }
 
+// detectGKENode 判断 GCE 实例是否 GKE 节点(名字 gke- 前缀 或 goog-gke label)，并取节点池名。
+func detectGKENode(name string, labels map[string]string) (bool, string) {
+	isNode := strings.HasPrefix(name, "gke-")
+	pool := ""
+	for k, v := range labels {
+		if strings.HasPrefix(k, "goog-gke") {
+			isNode = true
+		}
+		if k == "goog-gke-node-pool-name" || k == "cloud.google.com/gke-nodepool" {
+			pool = v
+		}
+	}
+	return isNode, pool
+}
+
 func (h *HostHandler) upsertHost(accountID int, projName string, in cloudsource.Instance) {
 	total := 0
 	for _, d := range in.Disks {
@@ -722,14 +737,15 @@ func (h *HostHandler) upsertHost(accountID int, projName string, in cloudsource.
 	if in.DeletionProtection {
 		delProt = 1
 	}
+	isK8s, pool := detectGKENode(in.Name, in.Labels)
 	logExec(h.DB, "主机同步写", `UPDATE hosts SET project=?, project_name=?, zone=?, region=?, machine_type=?, vcpu=?, mem_mb=?, disk_total_gb=?,
 		internal_ip=?, external_ip=?, status=?, os=?, labels=?, self_link=?, gcp_created_at=?,
 		hostname=?, vpc=?, subnet=?, network_tags=?, preemptible=?, image=?, cpu_platform=?, deletion_protection=?, service_accounts=?,
-		stale=0, synced_at=NOW() WHERE ci_id=?`,
+		is_k8s_node=?, k8s_pool=?, stale=0, synced_at=NOW() WHERE ci_id=?`,
 		in.Project, projName, in.Zone, in.Region, in.MachineType, in.VCPU, in.MemMB, total,
 		in.InternalIP, in.ExternalIP, in.Status, in.OS, string(labelsJSON), in.SelfLink, created,
 		in.Hostname, in.VPC, in.Subnet, strings.Join(in.NetworkTags, ","), preempt, in.Image, in.CPUPlatform, delProt, strings.Join(in.ServiceAccounts, ","),
-		ciID)
+		boolToInt(isK8s), pool, ciID)
 	// 磁盘：全删重插
 	logExec(h.DB, "主机同步写", `DELETE FROM host_disks WHERE host_ci_id=?`, ciID)
 	for _, d := range in.Disks {
@@ -791,6 +807,8 @@ type hostOut struct {
 	AccountName string            `json:"account_name"`
 	Provider    string            `json:"provider"`
 	Stale       bool              `json:"stale"`
+	IsK8sNode   bool              `json:"is_k8s_node"`
+	K8sPool     string            `json:"k8s_pool"`
 	CreatedAt   string            `json:"gcp_created_at"`
 	// GCP 只读技术字段
 	Hostname           string   `json:"hostname"`
@@ -826,7 +844,8 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 		drows.Close()
 	}
 	rows, err := h.DB.Query(`SELECT c.id, c.name, h.project, h.project_name, h.zone, h.region, h.machine_type, h.vcpu, h.mem_mb, h.disk_total_gb,
-		h.internal_ip, h.external_ip, h.status, h.os, h.labels, h.stale, h.gcp_created_at, h.preemptible, h.provider, COALESCE(ca.name,'')
+		h.internal_ip, h.external_ip, h.status, h.os, h.labels, h.stale, h.gcp_created_at, h.preemptible, h.provider, COALESCE(ca.name,''),
+		h.is_k8s_node, COALESCE(h.k8s_pool,'')
 		FROM cis c JOIN hosts h ON h.ci_id=c.id LEFT JOIN cloud_accounts ca ON ca.id=h.cloud_account_id
 		WHERE c.type='host' ORDER BY h.project, c.name`)
 	if err != nil {
@@ -840,13 +859,14 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 		var o hostOut
 		var labels sql.NullString
 		var created sql.NullTime
-		var stale, preempt int
+		var stale, preempt, isK8s int
 		if rows.Scan(&o.CIID, &o.Name, &o.Project, &o.ProjectName, &o.Zone, &o.Region, &o.MachineType, &o.VCPU, &o.MemMB, &o.DiskTotalGB,
-			&o.InternalIP, &o.ExternalIP, &o.Status, &o.OS, &labels, &stale, &created, &preempt, &o.Provider, &o.AccountName); err != nil {
+			&o.InternalIP, &o.ExternalIP, &o.Status, &o.OS, &labels, &stale, &created, &preempt, &o.Provider, &o.AccountName, &isK8s, &o.K8sPool); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 		o.Stale = stale == 1
+		o.IsK8sNode = isK8s == 1
 		o.Preemptible = preempt == 1
 		if labels.Valid && labels.String != "" {
 			_ = json.Unmarshal([]byte(labels.String), &o.Labels)

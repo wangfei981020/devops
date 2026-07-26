@@ -32,6 +32,39 @@ func (h *K8sClusterHandler) Register(r *gin.RouterGroup) {
 	r.PUT("/k8s/clusters/:id", h.Update)
 	r.DELETE("/k8s/clusters/:id", h.Delete)
 	r.POST("/k8s/clusters/:id/test", h.Test)
+	r.POST("/k8s/clusters/discover", h.DiscoverGKE) // 用云账号 SA key 列出某 project 的 GKE 集群
+}
+
+// DiscoverGKE 用云账号项目的 SA key 列出该 GCP project 下所有 GKE 集群（供勾选纳管）。
+func (h *K8sClusterHandler) DiscoverGKE(c *gin.Context) {
+	var in struct {
+		CloudAccountID int    `json:"cloud_account_id"`
+		ProjectID      string `json:"project_id"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.CloudAccountID == 0 || in.ProjectID == "" {
+		c.JSON(400, gin.H{"error": "cloud_account_id/project_id 必填"})
+		return
+	}
+	var enc sql.NullString
+	e := h.DB.QueryRow(`SELECT cred_enc FROM cloud_account_projects WHERE account_id=? AND project_id=?`, in.CloudAccountID, in.ProjectID).Scan(&enc)
+	if e != nil || !enc.Valid || enc.String == "" {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "error": "该云账号项目未配 SA key（去 系统管理→云账号 配）"})
+		return
+	}
+	saJSON, e := h.Cipher.Decrypt(enc.String)
+	if e != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "error": "解密 SA key 失败"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	clusters, err := k8ssource.DiscoverGKE(ctx, []byte(saJSON), in.ProjectID)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	logx.J("k8s", "gke_discover", map[string]any{"account": in.CloudAccountID, "project": in.ProjectID, "found": len(clusters)})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "clusters": clusters})
 }
 
 type k8sClusterOut struct {
@@ -87,6 +120,7 @@ type k8sClusterIn struct {
 	CloudAccountID int    `json:"cloud_account_id"` // 引用主机模块云账号(GKE 用；GCP SA key 不在此重复配)
 	Location       string `json:"location"`
 	Endpoint       string `json:"endpoint"`
+	CaData         string `json:"ca_data"` // GKE 自动发现导入时的集群 CA(base64)
 	NodepoolLabel  string `json:"nodepool_label"`
 	CostMode       string `json:"cost_mode"`
 	Kubeconfig     string `json:"kubeconfig"` // 空=保留原值(更新)/未配(创建)
@@ -119,9 +153,9 @@ func (h *K8sClusterHandler) Create(c *gin.Context) {
 		enabled = *in.Enabled
 	}
 	res, err := h.DB.Exec(`INSERT INTO k8s_clusters
-		(name, display_name, environment, provider, project_id, cloud_account_id, location, endpoint, nodepool_label, cost_mode, kubeconfig_enc, enabled)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		in.Name, in.DisplayName, in.Environment, in.Provider, in.ProjectID, in.CloudAccountID, in.Location, in.Endpoint, in.NodepoolLabel, in.CostMode, kcEnc, enabled)
+		(name, display_name, environment, provider, project_id, cloud_account_id, location, endpoint, ca_data, nodepool_label, cost_mode, kubeconfig_enc, enabled)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		in.Name, in.DisplayName, in.Environment, in.Provider, in.ProjectID, in.CloudAccountID, in.Location, in.Endpoint, in.CaData, in.NodepoolLabel, in.CostMode, kcEnc, enabled)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

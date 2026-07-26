@@ -4,6 +4,7 @@
       <span class="page-title">K8s 集群管理</span>
       <span class="muted" style="margin-left:10px">多集群只读纳管（GKE / IDC 自管）· 只连 apiserver、不连节点</span>
       <el-button type="primary" size="small" style="float:right" @click="openAdd">+ 添加集群</el-button>
+      <el-button size="small" style="float:right;margin-right:8px" @click="openDiscover">从云账号发现 GKE</el-button>
     </div>
 
     <el-card shadow="never">
@@ -105,13 +106,41 @@
         <el-button type="primary" @click="save">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 从云账号发现 GKE -->
+    <el-dialog :close-on-click-modal="false" v-model="disDlg" title="从云账号发现 GKE 集群" width="720px">
+      <div class="bar" style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
+        <el-select v-model="disAcct" placeholder="云账号" style="width:180px" @change="disProj=''">
+          <el-option v-for="a in cloudAccounts" :key="a.id" :label="a.name" :value="a.id" />
+        </el-select>
+        <el-select v-model="disProj" placeholder="GCP 项目" style="width:220px" filterable>
+          <el-option v-for="p in disProjects" :key="p.project_id" :label="(p.name?p.name+' · ':'')+p.project_id" :value="p.project_id" />
+        </el-select>
+        <el-button type="primary" :loading="disLoading" @click="doDiscover">发现集群</el-button>
+        <span class="muted" style="margin-left:auto">用该项目 SA key 调 GKE API（公网，不受集群授权网络限制）</span>
+      </div>
+      <el-table :data="disList" size="small" @selection-change="s=>disSel=s" max-height="360">
+        <el-table-column type="selection" width="44" />
+        <el-table-column prop="name" label="集群" min-width="160" />
+        <el-table-column prop="location" label="区域" width="130" />
+        <el-table-column prop="version" label="版本" width="120" />
+        <el-table-column prop="node_count" label="节点" width="70" />
+        <el-table-column prop="status" label="状态" width="100" />
+      </el-table>
+      <el-empty v-if="!disLoading && disList.length===0 && disTried" description="没发现集群（或 SA key 无权限/项目无 GKE）" :image-size="60" />
+      <template #footer>
+        <el-button @click="disDlg=false">取消</el-button>
+        <el-button type="primary" :disabled="!disSel.length" @click="importSel">导入选中 ({{ disSel.length }})</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { listK8sClusters, createK8sCluster, updateK8sCluster, deleteK8sCluster, testK8sCluster, syncK8sCluster, listCloudAccounts } from '../api/cmdb'
+import { computed } from 'vue'
+import { listK8sClusters, createK8sCluster, updateK8sCluster, deleteK8sCluster, testK8sCluster, syncK8sCluster, listCloudAccounts, discoverGKE } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
@@ -178,6 +207,33 @@ async function doSync(row) {
     if (r.ok) ElMessage.success(`同步完成 · 节点${s.nodes ?? 0} 工作负载${s.workloads ?? 0} Pod${s.pods ?? 0} Service${s.services ?? 0} Ingress${s.ingresses ?? 0}`)
     else ElMessage.warning('同步部分失败，详见执行结果：' + JSON.stringify(s))
   } catch (e) { ElMessage.error(e.response?.data?.error || '同步失败') } finally { syncing[row.id] = false }
+}
+
+// ── 从云账号发现 GKE ──
+const disDlg = ref(false); const disAcct = ref(null); const disProj = ref('')
+const disList = ref([]); const disSel = ref([]); const disLoading = ref(false); const disTried = ref(false)
+const disProjects = computed(() => (cloudAccounts.value.find(a => a.id === disAcct.value)?.projects) || [])
+function openDiscover() { disDlg.value = true; disList.value = []; disSel.value = []; disTried.value = false }
+async function doDiscover() {
+  if (!disAcct.value || !disProj.value) { ElMessage.warning('选云账号和项目'); return }
+  disLoading.value = true; disTried.value = true; disList.value = []
+  try {
+    const r = await discoverGKE({ cloud_account_id: disAcct.value, project_id: disProj.value })
+    if (r.ok) disList.value = r.clusters || []
+    else ElMessage.error('发现失败：' + (r.error || ''))
+  } catch (e) { ElMessage.error('发现失败') } finally { disLoading.value = false }
+}
+async function importSel() {
+  let n = 0
+  for (const c of disSel.value) {
+    try {
+      await createK8sCluster({ name: c.name, display_name: c.name, environment: 'UAT', provider: 'gke',
+        cloud_account_id: disAcct.value, project_id: disProj.value, location: c.location, endpoint: c.endpoint,
+        ca_data: c.ca, cost_mode: 'cloud', enabled: 1 })
+      n++
+    } catch (e) { /* 跳过重复 */ }
+  }
+  ElMessage.success(`已导入 ${n} 个集群`); disDlg.value = false; load()
 }
 
 onMounted(load)

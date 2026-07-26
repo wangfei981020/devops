@@ -168,6 +168,7 @@ export const updateK8sCluster = (id, b) => http.put('/k8s/clusters/' + id, b).th
 export const deleteK8sCluster = (id) => http.delete('/k8s/clusters/' + id).then((r) => r.data)
 export const testK8sCluster = (id) => http.post(`/k8s/clusters/${id}/test`).then((r) => r.data)
 export const syncK8sCluster = (id) => http.post(`/k8s/clusters/${id}/sync`).then((r) => r.data)
+export const discoverGKE = (b) => http.post('/k8s/clusters/discover', b).then((r) => r.data)
 // K8s 资源只读列表（params: cluster_id / namespace / pool / kind / node / q）
 export const listK8sNodePools = (params) => http.get('/k8s/node-pools', { params }).then((r) => r.data)
 export const listK8sNodes = (params) => http.get('/k8s/nodes', { params }).then((r) => r.data)

@@ -188,9 +188,9 @@ func (h *K8sCostHandler) buildItems() []costItem {
 		}
 		rows.Close()
 	}
-	// 传统主机（cloud 真实）
+	// 传统主机（cloud 真实）——排除 GKE 节点(成本已在 K8s 计算里按 Pod 分摊,避免重复算)
 	if rows, _ := h.DB.Query(`SELECT c.name, h.project, h.region, h.machine_type, h.vcpu, h.mem_mb, h.disk_total_gb, h.status, COALESCE(h.labels,'')
-		FROM cis c JOIN hosts h ON h.ci_id=c.id WHERE c.type='host' AND h.stale=0`); rows != nil {
+		FROM cis c JOIN hosts h ON h.ci_id=c.id WHERE c.type='host' AND h.stale=0 AND h.is_k8s_node=0`); rows != nil {
 		for rows.Next() {
 			var name, proj, region, mt, status, labels string
 			var vcpu, memMB, disk int

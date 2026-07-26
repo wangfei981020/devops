@@ -30,6 +30,12 @@
           <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">已删</el-tag>
           <el-tooltip v-if="row.preemptible" content="抢占式/Spot 实例：价格低但 GCP 可随时回收，勿跑关键有状态服务"><el-tag type="warning" size="small" effect="dark" style="margin-left:6px">Spot</el-tag></el-tooltip>
         </template></el-table-column>
+        <el-table-column label="类型" width="150"><template #default="{ row }">
+          <el-tooltip v-if="row.is_k8s_node" content="GKE 节点：成本已计入 K8s 计算(按 Pod 分摊)，不再计入传统主机，避免重复">
+            <el-tag size="small" type="success">☸ K8s节点{{ row.k8s_pool ? '/'+row.k8s_pool : '' }}</el-tag>
+          </el-tooltip>
+          <el-tag v-else size="small" type="info">独立 VM</el-tag>
+        </template></el-table-column>
         <el-table-column label="CPU" width="70" align="right"><template #default="{ row }">{{ row.vcpu }}核</template></el-table-column>
         <el-table-column label="内存" width="80" align="right"><template #default="{ row }">{{ gb(row.mem_mb) }}G</template></el-table-column>
         <el-table-column label="磁盘" width="90" align="right"><template #default="{ row }">{{ row.disk_total_gb }}G</template></el-table-column>
