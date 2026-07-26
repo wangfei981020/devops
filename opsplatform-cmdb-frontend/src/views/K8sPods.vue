@@ -17,7 +17,7 @@
         <el-button :icon="Search" @click="load">查询</el-button>
         <span class="muted" style="margin-left:auto">共 {{ rows.length }}</span>
       </div>
-      <el-table :data="rows" size="small" v-loading="loading">
+      <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column prop="namespace" label="命名空间" width="140" />
         <el-table-column prop="name" label="Pod" min-width="240" />
         <el-table-column prop="workload" label="工作负载" min-width="160"><template #default="{ row }">{{ row.workload || '—' }}</template></el-table-column>
@@ -31,6 +31,12 @@
         <el-table-column label="内存 req/lim" width="140"><template #default="{ row }">
           {{ mem(row.mem_req_mi) }} / {{ mem(row.mem_lim_mi) }}
         </template></el-table-column>
+        <el-table-column label="CPU用量" width="90"><template #default="{ row }">
+          <span v-if="u(row,'cpu_m')">{{ u(row,'cpu_m') }}</span><span v-else class="muted">—</span>
+        </template></el-table-column>
+        <el-table-column label="内存用量" width="90"><template #default="{ row }">
+          <span v-if="u(row,'mem_mi')">{{ u(row,'mem_mi') }}</span><span v-else class="muted">—</span>
+        </template></el-table-column>
         <el-table-column label="重启" width="70"><template #default="{ row }">
           <span :class="{bad: row.restarts>5}">{{ row.restarts }}</span>
         </template></el-table-column>
@@ -42,6 +48,7 @@
           <el-button link type="warning" size="small" @click="openDiag(row)">诊断</el-button>
         </template></el-table-column>
       </el-table>
+      <Pager :total="rows.length" v-model:page="page" v-model:page-size="pageSize" />
 
       <!-- 日志/事件/诊断 弹窗 -->
       <el-dialog :close-on-click-modal="false" v-model="dlg" :title="dlgTitle" width="820px" top="6vh">
@@ -76,9 +83,12 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { listK8sClusters, listK8sPods, listK8sNamespaces, k8sPodLogs, k8sPodEvents, k8sDiagnose } from '../api/cmdb'
+import { listK8sClusters, listK8sPods, listK8sNamespaces, k8sPodLogs, k8sPodEvents, k8sDiagnose, k8sPodUsage } from '../api/cmdb'
+import { usePager } from '../composables/usePager'
+import Pager from '../components/Pager.vue'
 
-const clusters = ref([]); const namespaces = ref([]); const rows = ref([])
+const clusters = ref([]); const namespaces = ref([]); const rows = ref([]); const usage = ref({})
+const { page, pageSize, paged } = usePager(rows)
 const clusterId = ref(null); const ns = ref(''); const node = ref(''); const q = ref(''); const loading = ref(false)
 const dlg = ref(false); const dlgMode = ref(''); const dlgTitle = ref(''); const dlgLoading = ref(false)
 const logText = ref(''); const events = ref([]); const diag = ref({})
@@ -114,7 +124,21 @@ async function load() {
     if (node.value) p.node = node.value
     if (q.value) p.q = q.value
     rows.value = await listK8sPods(p)
+    loadUsage()
   } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+}
+
+async function loadUsage() {
+  usage.value = {}
+  try {
+    const r = await k8sPodUsage({ cluster_id: clusterId.value })
+    if (r.ok) usage.value = r.usage || {}
+  } catch (e) { /* Prometheus 未配/不可达时静默，用量列显示 — */ }
+}
+function u(row, k) {
+  const m = usage.value[row.namespace + '/' + row.name]
+  if (!m || m[k] == null) return null
+  return k === 'cpu_m' ? Math.round(m[k]) + 'm' : Math.round(m[k]) + 'Mi'
 }
 
 onMounted(async () => {

@@ -19,7 +19,7 @@
         <el-button :icon="Search" @click="load">查询</el-button>
         <span class="muted" style="margin-left:auto">共 {{ rows.length }}</span>
       </div>
-      <el-table :data="rows" size="small" v-loading="loading">
+      <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column prop="namespace" label="命名空间" width="150" />
         <el-table-column prop="kind" label="类型" width="120" />
         <el-table-column prop="name" label="名称" min-width="220" />
@@ -37,6 +37,7 @@
           <el-button link type="primary" size="small" @click="openChanges(row)">变更</el-button>
         </template></el-table-column>
       </el-table>
+      <Pager :total="rows.length" v-model:page="page" v-model:page-size="pageSize" />
 
       <el-dialog :close-on-click-modal="false" v-model="chDlg" :title="`变更记录 · ${chWl?.namespace}/${chWl?.name}`" width="640px">
         <el-table :data="changes" size="small" v-loading="chLoading" max-height="420">
@@ -58,9 +59,12 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { listK8sClusters, listK8sWorkloads, listK8sNamespaces, listK8sChanges } from '../api/cmdb'
+import { usePager } from '../composables/usePager'
+import Pager from '../components/Pager.vue'
 
 const kinds = ['Deployment', 'StatefulSet', 'DaemonSet', 'CronJob']
 const clusters = ref([]); const namespaces = ref([]); const rows = ref([])
+const { page, pageSize, paged } = usePager(rows)
 const clusterId = ref(null); const ns = ref(''); const kind = ref(''); const q = ref(''); const loading = ref(false)
 const chDlg = ref(false); const chWl = ref(null); const changes = ref([]); const chLoading = ref(false)
 

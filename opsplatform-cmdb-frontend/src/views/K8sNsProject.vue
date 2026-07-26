@@ -14,7 +14,7 @@
           共 {{ rows.length }} 命名空间 · <b v-if="unassigned" style="color:#e6a23c">未分配 {{ unassigned }} ⚠</b><span v-else>已全部归属</span>
         </span>
       </div>
-      <el-table :data="rows" size="small" v-loading="loading">
+      <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column prop="name" label="命名空间" min-width="220" />
         <el-table-column label="建议" width="160"><template #default="{ row }">
           <span v-if="suggest(row.name)" class="muted">{{ suggest(row.name) }}</span><span v-else class="muted">—</span>
@@ -28,6 +28,7 @@
           <el-tag size="small" :type="row.project?'success':'warning'">{{ row.project ? '已分配' : '未分配' }}</el-tag>
         </template></el-table-column>
       </el-table>
+      <Pager :total="rows.length" v-model:page="page" v-model:page-size="pageSize" />
       <el-empty v-if="!loading && !rows.length" description="该集群还没同步命名空间，先去集群管理点「同步」" />
     </el-card>
   </div>
@@ -38,8 +39,11 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { MagicStick } from '@element-plus/icons-vue'
 import { listK8sClusters, listK8sNsProjects, setK8sNsProject, listProjects } from '../api/cmdb'
+import { usePager } from '../composables/usePager'
+import Pager from '../components/Pager.vue'
 
 const clusters = ref([]); const projects = ref([]); const rows = ref([])
+const { page, pageSize, paged } = usePager(rows)
 const clusterId = ref(null); const loading = ref(false)
 
 const unassigned = computed(() => rows.value.filter(r => !r.project).length)

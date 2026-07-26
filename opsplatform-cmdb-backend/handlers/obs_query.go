@@ -38,6 +38,113 @@ func (h *ObsQueryHandler) Register(r *gin.RouterGroup) {
 	r.GET("/obs/usage", h.Usage)          // 资源使用率(Prometheus): cluster_id,env?,target,namespace?,name,metric,minutes,query?
 	r.GET("/obs/loki", h.Loki)            // Loki 日志: env?/cluster_id?,query(LogQL),minutes
 	r.GET("/obs/kubesphere", h.KubeSphere) // KubeSphere 透传: env?/cluster_id?,path(kapis 路径)
+	r.GET("/k8s/pod-usage", h.PodUsage)   // 全 Pod 实时用量(cpu_m/mem_mi) map，供 Pod 页列展示
+	r.GET("/k8s/node-usage", h.NodeUsage) // 全节点实时用量(cpu%/mem%) map，供节点页列展示
+}
+
+type promSample struct {
+	Metric map[string]string
+	Value  float64
+}
+
+// promInstant 打一次 /api/v1/query，返回样本列表。
+func promInstant(base, token, query string) ([]promSample, error) {
+	u := fmt.Sprintf("%s/api/v1/query?query=%s", base, url.QueryEscape(query))
+	code, body, err := obsGet(u, token, 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if code != 200 {
+		return nil, fmt.Errorf("prometheus HTTP %d", code)
+	}
+	var r struct {
+		Data struct {
+			Result []struct {
+				Metric map[string]string `json:"metric"`
+				Value  []any             `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &r); err != nil {
+		return nil, err
+	}
+	out := make([]promSample, 0, len(r.Data.Result))
+	for _, res := range r.Data.Result {
+		val := 0.0
+		if len(res.Value) == 2 {
+			if s, ok := res.Value[1].(string); ok {
+				val, _ = strconv.ParseFloat(s, 64)
+			}
+		}
+		out = append(out, promSample{Metric: res.Metric, Value: val})
+	}
+	return out, nil
+}
+
+func (h *ObsQueryHandler) prom(c *gin.Context) (string, string, bool) {
+	cid, _ := strconv.Atoi(c.Query("cluster_id"))
+	env := c.Query("env")
+	if env == "" && cid > 0 {
+		env = h.clusterEnv(cid)
+	}
+	base, token, err := resolveEndpoint(h.DB, h.Cipher, "prometheus", env, cid)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
+		return "", "", false
+	}
+	return base, token, true
+}
+
+// PodUsage 返回 {"ns/pod": {cpu_m, mem_mi}}，一次拉全集群 Pod 实时用量。
+func (h *ObsQueryHandler) PodUsage(c *gin.Context) {
+	base, token, ok := h.prom(c)
+	if !ok {
+		return
+	}
+	usage := map[string]map[string]float64{}
+	get := func(k string) map[string]float64 {
+		if usage[k] == nil {
+			usage[k] = map[string]float64{}
+		}
+		return usage[k]
+	}
+	if cpu, err := promInstant(base, token, `sum by(namespace,pod)(rate(container_cpu_usage_seconds_total{container!=""}[5m]))`); err == nil {
+		for _, s := range cpu {
+			get(s.Metric["namespace"]+"/"+s.Metric["pod"])["cpu_m"] = s.Value * 1000
+		}
+	}
+	if mem, err := promInstant(base, token, `sum by(namespace,pod)(container_memory_working_set_bytes{container!=""})`); err == nil {
+		for _, s := range mem {
+			get(s.Metric["namespace"]+"/"+s.Metric["pod"])["mem_mi"] = s.Value / 1048576
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "usage": usage})
+}
+
+// NodeUsage 返回 {"node": {cpu_pct, mem_pct}}（来自 node-exporter）。
+func (h *ObsQueryHandler) NodeUsage(c *gin.Context) {
+	base, token, ok := h.prom(c)
+	if !ok {
+		return
+	}
+	usage := map[string]map[string]float64{}
+	get := func(k string) map[string]float64 {
+		if usage[k] == nil {
+			usage[k] = map[string]float64{}
+		}
+		return usage[k]
+	}
+	if cpu, err := promInstant(base, token, `(1 - avg by(node)(rate(node_cpu_seconds_total{mode="idle"}[5m]))) * 100`); err == nil {
+		for _, s := range cpu {
+			get(s.Metric["node"])["cpu_pct"] = s.Value
+		}
+	}
+	if mem, err := promInstant(base, token, `(1 - sum by(node)(node_memory_MemAvailable_bytes) / sum by(node)(node_memory_MemTotal_bytes)) * 100`); err == nil {
+		for _, s := range mem {
+			get(s.Metric["node"])["mem_pct"] = s.Value
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "usage": usage})
 }
 
 // clusterEnv 由 cluster_id 取环境（用于按环境解析数据源）。

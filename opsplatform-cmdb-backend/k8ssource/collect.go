@@ -3,6 +3,7 @@ package k8ssource
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -20,6 +21,8 @@ import (
 var (
 	gatewayGVR   = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
 	httprouteGVR = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	istioVSv1    = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
+	istioVSv1b1  = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1beta1", Resource: "virtualservices"}
 )
 
 const gkeNodePoolLabel = "cloud.google.com/gke-nodepool"
@@ -59,6 +62,7 @@ func SyncCluster(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, dc d
 	run("hpas", func() (int, error) { return syncHPAs(ctx, db, cs, clusterID) })
 	run("gateways", func() (int, error) { return syncGateways(ctx, db, dc, clusterID) })
 	run("httproutes", func() (int, error) { return syncHTTPRoutes(ctx, db, dc, clusterID) })
+	run("virtualservices", func() (int, error) { return syncVirtualServices(ctx, db, dc, clusterID) })
 	run("pods", func() (int, error) { return syncPods(ctx, db, cs, clusterID) })
 	// pod 数回填到节点 + 派生节点池（依赖 nodes/pods 已入库）
 	run("node_pools", func() (int, error) { return derivePools(db, clusterID) })
@@ -92,12 +96,12 @@ func syncNodes(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid in
 			hbVal = hb.UTC()
 		}
 		_, _ = db.Exec(`INSERT INTO k8s_nodes
-			(cluster_id,name,pool,internal_ip,roles,machine_type,cpu_cap,mem_cap,os_image,kubelet_version,ready_status,last_heartbeat,conditions,stuck)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			(cluster_id,name,pool,internal_ip,roles,machine_type,cpu_cap,mem_cap,os_image,kubelet_version,ready_status,last_heartbeat,conditions,conditions_json,stuck)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			cid, n.Name, resolvePool(n, poolLabel), nodeInternalIP(n), nodeRoles(n),
 			n.Labels["node.kubernetes.io/instance-type"], n.Status.Capacity.Cpu().String(),
 			n.Status.Capacity.Memory().String(), n.Status.NodeInfo.OSImage, n.Status.NodeInfo.KubeletVersion,
-			ready, hbVal, pressureSummary(n), boolToInt(isStuck(ready, hb)))
+			ready, hbVal, pressureSummary(n), conditionsJSON(n), boolToInt(isStuck(ready, hb)))
 	}
 	return len(list.Items), nil
 }
@@ -465,9 +469,54 @@ func syncHTTPRoutes(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid i
 	return len(list.Items), nil
 }
 
-// crdAbsent 判断错误是否为"CRD 未安装"（NotFound / NoResourceMatch），用于优雅跳过。
+// syncVirtualServices 采集 Istio VirtualService（networking.istio.io，dynamic）。先试 v1 再 v1beta1，未装 → 优雅跳过。
+func syncVirtualServices(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid int) (int, error) {
+	list, err := dc.Resource(istioVSv1).Namespace("").List(ctx, metav1.ListOptions{})
+	if err != nil && crdAbsent(err) {
+		list, err = dc.Resource(istioVSv1b1).Namespace("").List(ctx, metav1.ListOptions{})
+	}
+	if err != nil {
+		if crdAbsent(err) {
+			_, _ = db.Exec(`DELETE FROM k8s_virtualservices WHERE cluster_id=?`, cid)
+			return 0, nil
+		}
+		return 0, err
+	}
+	_, _ = db.Exec(`DELETE FROM k8s_virtualservices WHERE cluster_id=?`, cid)
+	for i := range list.Items {
+		r := &list.Items[i]
+		hosts, _, _ := unstructured.NestedStringSlice(r.Object, "spec", "hosts")
+		gws, _, _ := unstructured.NestedStringSlice(r.Object, "spec", "gateways")
+		backends := map[string]struct{}{}
+		// http[].route[].destination.host + tcp/tls 同理（取 http 为主）
+		for _, proto := range []string{"http", "tcp", "tls"} {
+			if routes, found, _ := unstructured.NestedSlice(r.Object, "spec", proto); found {
+				for _, rt := range routes {
+					rm, _ := rt.(map[string]any)
+					if dests, ok := rm["route"].([]any); ok {
+						for _, d := range dests {
+							dm, _ := d.(map[string]any)
+							if dest, ok := dm["destination"].(map[string]any); ok {
+								if h, _ := dest["host"].(string); h != "" {
+									backends[h] = struct{}{}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		_, _ = db.Exec(`INSERT INTO k8s_virtualservices (cluster_id,namespace,name,hosts,gateways,backends) VALUES (?,?,?,?,?,?)`,
+			cid, r.GetNamespace(), r.GetName(), trunc(strings.Join(hosts, ","), 1024),
+			trunc(strings.Join(gws, ","), 512), trunc(strings.Join(keys(backends), ","), 512))
+	}
+	return len(list.Items), nil
+}
+
+// crdAbsent 判断错误是否为"CRD 未安装/无权限"（NotFound / NoResourceMatch / Forbidden），用于优雅跳过。
+// Forbidden：只读凭据未授权该 CRD 时不应让整次同步报错，静默跳过即可。
 func crdAbsent(err error) bool {
-	if apierrors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
 		return true
 	}
 	return strings.Contains(err.Error(), "could not find the requested resource") ||
@@ -543,14 +592,40 @@ func readyCondition(n *corev1.Node) (string, *time.Time) {
 	return "Unknown", nil
 }
 
+// realPressures 只认这几种为"真压力/异常"，GKE 的 SysctlChanged 等信息性 condition 不算。
+var realPressures = map[corev1.NodeConditionType]bool{
+	corev1.NodeMemoryPressure: true, corev1.NodeDiskPressure: true,
+	corev1.NodePIDPressure: true, corev1.NodeNetworkUnavailable: true,
+}
+
 func pressureSummary(n *corev1.Node) string {
 	p := []string{}
 	for _, c := range n.Status.Conditions {
-		if c.Status == corev1.ConditionTrue && c.Type != corev1.NodeReady {
+		if c.Status == corev1.ConditionTrue && realPressures[c.Type] {
 			p = append(p, string(c.Type))
 		}
 	}
 	return trunc(strings.Join(p, ","), 255)
+}
+
+// conditionsJSON 存全部 conditions（含信息性），供节点详情弹窗展示。
+func conditionsJSON(n *corev1.Node) string {
+	type cond struct {
+		Type    string `json:"type"`
+		Status  string `json:"status"`
+		Reason  string `json:"reason,omitempty"`
+		Message string `json:"message,omitempty"`
+		Real    bool   `json:"real"` // 是否真压力(红标)
+	}
+	out := make([]cond, 0, len(n.Status.Conditions))
+	for _, c := range n.Status.Conditions {
+		out = append(out, cond{
+			Type: string(c.Type), Status: string(c.Status), Reason: c.Reason,
+			Message: trunc(c.Message, 300), Real: c.Status == corev1.ConditionTrue && realPressures[c.Type],
+		})
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
 }
 
 func firstImage(cs []corev1.Container) string {

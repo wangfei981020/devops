@@ -6,7 +6,7 @@
       <el-button type="primary" size="small" style="float:right" @click="openAcct()">+ 添加云账号</el-button>
     </div>
     <el-card shadow="never">
-      <el-table :data="accounts" size="small" row-key="id" v-loading="loading"
+      <el-table :data="accPaged" size="small" row-key="id" v-loading="loading"
         :expand-row-keys="expanded" @expand-change="onExpand">
         <el-table-column type="expand">
           <template #default="{ row }">
@@ -40,6 +40,7 @@
           <el-button link type="danger" size="small" @click="delAcct(row)">删除</el-button>
         </template></el-table-column>
       </el-table>
+      <Pager :total="accounts.length" v-model:page="page" v-model:page-size="pageSize" />
       <el-empty v-if="!loading && !accounts.length" description="还没云账号，点右上添加" />
     </el-card>
 
@@ -73,9 +74,12 @@ import { ElMessage } from 'element-plus'
 import { listCloudAccounts, createCloudAccount, updateCloudAccount, deleteCloudAccount, syncCloudAccount,
   createCloudProject, updateCloudProject, deleteCloudProject, syncCloudProject } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { usePager } from '../composables/usePager'
+import Pager from '../components/Pager.vue'
 
 const app = useAppStore()
 const accounts = ref([]); const loading = ref(false); const expanded = ref([]); const syncing = reactive({})
+const { page, pageSize, paged: accPaged } = usePager(accounts)
 const acctDlg = ref(false); const acctEdit = ref(false); const acctForm = reactive({ id: 0, name: '', provider: 'gcp', billing_export_dataset: '' })
 const projDlg = ref(false); const projEdit = ref(false); const projAcct = ref(0)
 const projForm = reactive({ id: 0, name: '', project_id: '', cred_json: '' })

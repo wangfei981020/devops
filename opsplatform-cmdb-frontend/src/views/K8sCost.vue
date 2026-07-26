@@ -61,7 +61,7 @@
           </el-select>
           <b style="margin-left:auto">合计 ${{ det.total || 0 }} · {{ det.count || 0 }} 项</b>
         </div>
-        <el-table :data="det.items" size="small" max-height="520">
+        <el-table :data="detPaged" size="small" max-height="520">
           <el-table-column prop="type" label="类型" width="110"><template #default="{row}">{{ typeText(row.type) }}</template></el-table-column>
           <el-table-column prop="cluster" label="集群" width="130" />
           <el-table-column prop="env" label="环境" width="80" />
@@ -74,6 +74,7 @@
           </template></el-table-column>
           <el-table-column label="月费(估)" width="100"><template #default="{row}">${{ row.cost }}</template></el-table-column>
         </el-table>
+        <Pager :total="detItems.length" v-model:page="detPage" v-model:page-size="detSize" />
       </el-tab-pane>
 
       <!-- 报告 -->
@@ -148,9 +149,13 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Camera } from '@element-plus/icons-vue'
 import { costOverview, costDetail, costNodes, setNodeCostOverride, costSnapshot, costMonths, costReport, costAttribution } from '../api/cmdb'
+import { usePager } from '../composables/usePager'
+import Pager from '../components/Pager.vue'
 
 const tab = ref('ov')
 const ov = ref({}); const det = ref({}); const nodes = ref([])
+const detItems = computed(() => det.value.items || [])
+const { page: detPage, pageSize: detSize, paged: detPaged } = usePager(detItems)
 const dim = ref('biz_project'); const ovMode = ref('cloud')
 const f = ref({ biz_project: '', gcp_project: '', env: '', mode: '' })
 const months = ref([]); const rp = ref({ period: 'month', anchor: '' }); const rep = ref({}); const attr = ref({})

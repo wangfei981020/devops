@@ -81,12 +81,13 @@
             </el-descriptions-item>
           </el-descriptions>
           <div class="mini-t" style="margin-top:14px">节点上的 Pod（{{ rev.pods.length }}）</div>
-          <el-table :data="rev.pods" size="small" max-height="320">
+          <el-table :data="revPaged" size="small" max-height="320">
             <el-table-column prop="namespace" label="命名空间" width="150" />
             <el-table-column prop="pod" label="Pod" min-width="240" />
             <el-table-column prop="workload" label="工作负载" min-width="160" />
             <el-table-column prop="phase" label="状态" width="100" />
           </el-table>
+          <Pager :total="rev.pods.length" v-model:page="revPage" v-model:page-size="revSize" />
         </div>
       </div>
     </el-card>
@@ -94,14 +95,18 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { k8sTopology, k8sImpact, listK8sClusters, listK8sNodes } from '../api/cmdb'
+import { usePager } from '../composables/usePager'
+import Pager from '../components/Pager.vue'
 
 const mode = ref('fwd'); const loading = ref(false)
 const domain = ref(''); const fwd = ref(null)
 const clusters = ref([]); const nodes = ref([]); const clusterId = ref(null); const node = ref(''); const rev = ref(null)
+const revPods = computed(() => rev.value?.pods || [])
+const { page: revPage, pageSize: revSize, paged: revPaged } = usePager(revPods)
 
 async function runFwd() {
   if (!domain.value) { ElMessage.warning('输入域名'); return }

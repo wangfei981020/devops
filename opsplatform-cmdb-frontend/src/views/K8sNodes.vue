@@ -15,12 +15,12 @@
         </el-select>
         <el-input v-model="q" clearable placeholder="搜节点名/IP" style="width:200px" @keyup.enter="load" @clear="load" />
         <el-button :icon="Search" @click="load">查询</el-button>
-        <el-switch v-model="onlyBad" active-text="只看异常" style="margin-left:6px" />
+        <el-switch v-model="onlyBad" active-text="只看异常" style="margin-left:6px" @change="page=1" />
         <span class="muted" style="margin-left:auto">
           共 {{ rows.length }} · <b v-if="badCount" style="color:#f56c6c">异常 {{ badCount }}</b><span v-else>全部健康</span>
         </span>
       </div>
-      <el-table :data="display" size="small" v-loading="loading" :row-class-name="rowClass">
+      <el-table :data="paged" size="small" v-loading="loading" :row-class-name="rowClass">
         <el-table-column v-if="!clusterId" label="集群" width="150"><template #default="{ row }">{{ clusterName(row.cluster_id) }}</template></el-table-column>
         <el-table-column prop="name" label="节点" min-width="200" />
         <el-table-column prop="pool" label="节点池" width="120" />
@@ -29,17 +29,46 @@
           <el-tag v-if="Number(row.stuck)" size="small" type="danger" effect="dark" style="margin-left:4px">卡死</el-tag>
         </template></el-table-column>
         <el-table-column prop="internal_ip" label="内网IP" width="130" />
-        <el-table-column label="容量" width="150"><template #default="{ row }">{{ row.cpu_cap }}核 / {{ memGi(row.mem_cap) }}</template></el-table-column>
+        <el-table-column label="容量" width="140"><template #default="{ row }">{{ row.cpu_cap }}核 / {{ memGi(row.mem_cap) }}</template></el-table-column>
+        <el-table-column label="CPU用量" width="120"><template #default="{ row }">
+          <template v-if="nu(row,'cpu_pct')"><el-progress :percentage="Math.min(100,Math.round(nuVal(row,'cpu_pct')))" :stroke-width="10" :color="barColor" text-inside /></template>
+          <span v-else class="muted">—</span>
+        </template></el-table-column>
+        <el-table-column label="内存用量" width="120"><template #default="{ row }">
+          <template v-if="nu(row,'mem_pct')"><el-progress :percentage="Math.min(100,Math.round(nuVal(row,'mem_pct')))" :stroke-width="10" :color="barColor" text-inside /></template>
+          <span v-else class="muted">—</span>
+        </template></el-table-column>
         <el-table-column prop="pod_count" label="Pod" width="70" />
         <el-table-column prop="kubelet_version" label="版本" width="110" />
-        <el-table-column label="压力" width="130"><template #default="{ row }">
-          <span v-if="row.conditions" style="color:#e6a23c">{{ row.conditions }}</span><span v-else class="muted">—</span>
+        <el-table-column label="压力/状况" width="150"><template #default="{ row }">
+          <el-popover placement="left" width="420" trigger="click">
+            <template #reference>
+              <span style="cursor:pointer">
+                <span v-if="row.conditions" style="color:#f56c6c">⚠ {{ row.conditions }}</span>
+                <span v-else style="color:#67c23a">正常</span>
+                <el-link type="primary" :underline="false" style="margin-left:6px;font-size:12px">详情</el-link>
+              </span>
+            </template>
+            <div style="font-size:12px">
+              <div style="font-weight:600;margin-bottom:6px">{{ row.name }} · 节点状况</div>
+              <el-table :data="conds(row)" size="small">
+                <el-table-column prop="type" label="类型" width="150" />
+                <el-table-column label="状态" width="70"><template #default="{ row: c }"><el-tag size="small" :type="c.real?'danger':(c.status==='True'?'info':'success')">{{ c.status }}</el-tag></template></el-table-column>
+                <el-table-column label="原因/说明"><template #default="{ row: c }"><span :style="c.real?'color:#f56c6c':''">{{ c.reason }}<span v-if="c.message" class="muted"> · {{ c.message }}</span></span></template></el-table-column>
+              </el-table>
+              <div class="muted" style="margin-top:6px">红=真压力(内存/磁盘/PID/网络)；SysctlChanged 等为信息性，不计异常</div>
+            </div>
+          </el-popover>
         </template></el-table-column>
         <el-table-column label="最后心跳" min-width="170"><template #default="{ row }">
           <span :class="{bad: staleHb(row)}">{{ row.last_heartbeat || '—' }}</span>
           <span v-if="row.last_heartbeat" class="muted"> ({{ ago(row.last_heartbeat) }})</span>
         </template></el-table-column>
       </el-table>
+      <div class="pager" v-if="display.length > pageSize">
+        <el-pagination layout="total, sizes, prev, pager, next" :total="display.length"
+          v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[20,50,100]" small background />
+      </div>
       <el-empty v-if="!loading && !display.length" :description="onlyBad ? '无异常节点 🎉' : '无数据，先去集群管理点「同步」'" />
     </el-card>
   </div>
@@ -49,10 +78,13 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { listK8sClusters, listK8sNodes, listK8sNodePools } from '../api/cmdb'
+import { listK8sClusters, listK8sNodes, listK8sNodePools, k8sNodeUsage } from '../api/cmdb'
 
-const clusters = ref([]); const pools = ref([]); const rows = ref([])
+const clusters = ref([]); const pools = ref([]); const rows = ref([]); const usage = ref({})
 const clusterId = ref(''); const pool = ref(''); const q = ref(''); const onlyBad = ref(false); const loading = ref(false)
+function nu(row, k) { const m = usage.value[row.name]; return (m && m[k] != null) ? m[k].toFixed(0) + '%' : null }
+function nuVal(row, k) { const m = usage.value[row.name]; return (m && m[k] != null) ? m[k] : 0 }
+function barColor(p) { return p >= 85 ? '#f56c6c' : (p >= 60 ? '#e6a23c' : '#67c23a') }
 
 function memGi(ki) { const n = parseInt(ki); return isNaN(n) ? (ki || '—') : (n / 1024 / 1024).toFixed(1) + 'Gi' }
 function clusterName(id) { const c = clusters.value.find(x => x.id === id); return c ? (c.display_name || c.name) : id }
@@ -73,8 +105,17 @@ function rowClass({ row }) { return isBad(row) ? 'bad-row' : '' }
 
 const display = computed(() => onlyBad.value ? rows.value.filter(isBad) : rows.value)
 const badCount = computed(() => rows.value.filter(isBad).length)
+const page = ref(1); const pageSize = ref(20)
+const paged = computed(() => display.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
+function conds(row) { try { return JSON.parse(row.conditions_json || '[]') } catch (e) { return [] } }
 
 async function onCluster() { pool.value = ''; await load() }
+
+async function loadUsage() {
+  usage.value = {}
+  if (!clusterId.value) return
+  try { const r = await k8sNodeUsage({ cluster_id: clusterId.value }); if (r.ok) usage.value = r.usage || {} } catch (e) { /* 静默 */ }
+}
 
 async function load() {
   loading.value = true
@@ -83,7 +124,8 @@ async function load() {
     if (clusterId.value) { p.cluster_id = clusterId.value; pools.value = await listK8sNodePools(p) } else { pools.value = [] }
     if (pool.value) p.pool = pool.value
     if (q.value) p.q = q.value
-    rows.value = await listK8sNodes(p)
+    rows.value = await listK8sNodes(p); page.value = 1
+    loadUsage()
   } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
 }
 
@@ -102,5 +144,6 @@ onMounted(async () => {
 .muted { color: #909399; font-size: 12px; }
 .bad { color: #f56c6c; font-weight: 600; }
 .bar { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+.pager { display: flex; justify-content: flex-end; margin-top: 12px; }
 :deep(.bad-row) { background: #fef0f0; }
 </style>

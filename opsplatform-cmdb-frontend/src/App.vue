@@ -51,7 +51,7 @@
 <script setup>
 import { shallowRef, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Odometer, Connection, Lock, Share, DataAnalysis, Grid, Setting, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets, Cloudy, Location, Sort } from '@element-plus/icons-vue'
+import { Odometer, Connection, Lock, Share, DataAnalysis, Grid, Setting, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets, Cloudy, Location, Sort, TrendCharts } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
@@ -84,6 +84,7 @@ const menus = shallowRef([
     { path: '/k8s-nodes', label: '节点', icon: Monitor },
     { path: '/k8s-workloads', label: '工作负载', icon: Coin },
     { path: '/k8s-pods', label: 'Pod', icon: List },
+    { path: '/k8s-usage', label: '资源使用率', icon: TrendCharts },
     { path: '/k8s-networking', label: '网络', icon: Share },
     { path: '/k8s-storage', label: '存储/伸缩', icon: Coin },
     { path: '/k8s-events', label: '事件', icon: Bell },
@@ -117,7 +118,9 @@ function onCmd(c) {
 .brand { display: flex; align-items: center; gap: 8px; padding: 16px 18px; border-bottom: 1px solid rgba(255,255,255,.06); height: 56px; box-sizing: border-box; }
 .brand-n { color: #fff; font-weight: 700; font-size: 15px; letter-spacing: 1px; }
 .brand-t { margin-left: auto; font-size: 10px; color: rgba(255,255,255,.45); background: rgba(255,255,255,.08); padding: 1px 6px; border-radius: 3px; }
-.nav { flex: 1; border-right: none; padding: 8px 0; overflow: hidden; }
+.nav { flex: 1; border-right: none; padding: 8px 0; overflow-y: auto; overflow-x: hidden; }
+.nav::-webkit-scrollbar { width: 6px; }
+.nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 3px; }
 .nav:not(.el-menu--collapse) { width: 200px; }
 .nav :deep(.el-menu-item) { height: 42px; font-size: 13.5px; border-left: 2px solid transparent; }
 .nav :deep(.el-menu-item:hover) { background: rgba(255,255,255,.05); color: #fff; }

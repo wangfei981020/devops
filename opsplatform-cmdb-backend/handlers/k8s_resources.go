@@ -35,6 +35,7 @@ func (h *K8sResourceHandler) Register(r *gin.RouterGroup) {
 	r.GET("/k8s/ingresses", h.Ingresses)
 	r.GET("/k8s/gateways", h.Gateways)
 	r.GET("/k8s/httproutes", h.HTTPRoutes)
+	r.GET("/k8s/virtualservices", h.VirtualServices)
 	r.GET("/k8s/pvcs", h.PVCs)
 	r.GET("/k8s/hpas", h.HPAs)
 	r.GET("/k8s/changes", h.Changes)
@@ -86,7 +87,7 @@ func (h *K8sResourceHandler) NodePools(c *gin.Context) {
 }
 
 func (h *K8sResourceHandler) Nodes(c *gin.Context) {
-	h.list(c, `SELECT id,cluster_id,name,pool,internal_ip,roles,machine_type,cpu_cap,mem_cap,os_image,kubelet_version,ready_status,last_heartbeat,conditions,pod_count,stuck FROM k8s_nodes`,
+	h.list(c, `SELECT id,cluster_id,name,pool,internal_ip,roles,machine_type,cpu_cap,mem_cap,os_image,kubelet_version,ready_status,last_heartbeat,conditions,COALESCE(conditions_json,'') AS conditions_json,pod_count,stuck FROM k8s_nodes`,
 		[]filter{{"cluster_id", "cluster_id", true}, {"pool", "pool", false}}, "cluster_id,pool,name", []string{"name", "internal_ip", "pool"})
 }
 
@@ -123,6 +124,11 @@ func (h *K8sResourceHandler) Gateways(c *gin.Context) {
 func (h *K8sResourceHandler) HTTPRoutes(c *gin.Context) {
 	h.list(c, `SELECT id,cluster_id,namespace,name,hostnames,parents,backends FROM k8s_httproutes`,
 		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}}, "namespace,name", []string{"name", "hostnames"})
+}
+
+func (h *K8sResourceHandler) VirtualServices(c *gin.Context) {
+	h.list(c, `SELECT id,cluster_id,namespace,name,hosts,gateways,backends FROM k8s_virtualservices`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}}, "namespace,name", []string{"name", "hosts"})
 }
 
 func (h *K8sResourceHandler) PVCs(c *gin.Context) {

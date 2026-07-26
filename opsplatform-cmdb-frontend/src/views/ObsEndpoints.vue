@@ -6,7 +6,7 @@
       <el-button type="primary" size="small" style="float:right" @click="openAdd">+ 添加数据源</el-button>
     </div>
     <el-card shadow="never">
-      <el-table :data="rows" size="small" v-loading="loading">
+      <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column prop="name" label="名称" min-width="150" />
         <el-table-column prop="type" label="类型" width="130"><template #default="{row}">
           <el-tag size="small">{{ typeText(row.type) }}</el-tag>
@@ -27,6 +27,7 @@
           <el-button link type="danger" size="small" @click="del(row)">删除</el-button>
         </template></el-table-column>
       </el-table>
+      <Pager :total="rows.length" v-model:page="page" v-model:page-size="pageSize" />
       <el-empty v-if="!loading && !rows.length" description="还没配数据源，点右上添加" />
     </el-card>
 
@@ -66,10 +67,13 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listObsEndpoints, createObsEndpoint, updateObsEndpoint, deleteObsEndpoint, testObsEndpoint, listK8sClusters } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { usePager } from '../composables/usePager'
+import Pager from '../components/Pager.vue'
 
 const app = useAppStore()
 const envs = ['PROD', 'UAT', 'TEST', 'DEV']
 const rows = ref([]); const clusters = ref([]); const loading = ref(false); const testing = reactive({})
+const { page, pageSize, paged } = usePager(rows)
 const dlg = ref(false); const editing = ref(false)
 const blank = () => ({ id: 0, name: '', type: 'prometheus', url: '', env: '', cluster_id: null, token: '', enabled: 1 })
 const form = reactive(blank())

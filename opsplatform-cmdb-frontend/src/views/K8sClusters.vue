@@ -8,7 +8,7 @@
     </div>
 
     <el-card shadow="never">
-      <el-table :data="clusters" size="small" v-loading="loading">
+      <el-table :data="clPaged" size="small" v-loading="loading">
         <el-table-column label="集群" min-width="180">
           <template #default="{ row }">
             <b>{{ row.display_name || row.name }}</b>
@@ -40,6 +40,7 @@
           </template>
         </el-table-column>
       </el-table>
+      <Pager :total="clusters.length" v-model:page="clPage" v-model:page-size="clSize" />
       <el-empty v-if="!loading && !clusters.length" description="还没有纳管集群，点右上「添加集群」" />
     </el-card>
 
@@ -141,11 +142,14 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { computed } from 'vue'
 import { listK8sClusters, createK8sCluster, updateK8sCluster, deleteK8sCluster, testK8sCluster, syncK8sCluster, listCloudAccounts, discoverGKE } from '../api/cmdb'
+import { usePager } from '../composables/usePager'
+import Pager from '../components/Pager.vue'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
 const envs = ['PROD', 'UAT', 'TEST', 'DEV']
 const clusters = ref([])
+const { page: clPage, pageSize: clSize, paged: clPaged } = usePager(clusters)
 const cloudAccounts = ref([])
 const loading = ref(false)
 const testing = reactive({})

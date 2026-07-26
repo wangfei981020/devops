@@ -20,7 +20,7 @@
         <el-switch v-model="auto" active-text="自动刷新" @change="toggleAuto" />
         <span class="muted" style="margin-left:auto">共 {{ rows.length }}</span>
       </div>
-      <el-table :data="rows" size="small" v-loading="loading" max-height="600">
+      <el-table :data="paged" size="small" v-loading="loading" max-height="600">
         <el-table-column label="级别" width="90"><template #default="{row}">
           <el-tag size="small" :type="row.type==='Warning'?'danger':'info'">{{ row.type }}</el-tag>
         </template></el-table-column>
@@ -31,6 +31,7 @@
         <el-table-column prop="count" label="次数" width="70" />
         <el-table-column prop="last_seen" label="最近" width="160" />
       </el-table>
+      <Pager :total="rows.length" v-model:page="page" v-model:page-size="pageSize" />
       <el-empty v-if="!loading && !rows.length" description="无事件" />
     </el-card>
   </div>
@@ -41,9 +42,12 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { listK8sClusters, k8sEvents } from '../api/cmdb'
+import { usePager } from '../composables/usePager'
+import Pager from '../components/Pager.vue'
 
 const kinds = ['Node', 'Pod', 'Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Service', 'Ingress', 'HorizontalPodAutoscaler']
 const clusters = ref([]); const rows = ref([])
+const { page, pageSize, paged } = usePager(rows)
 const clusterId = ref(null); const kind = ref(''); const type = ref(''); const ns = ref(''); const loading = ref(false)
 const auto = ref(false); let timer = null
 

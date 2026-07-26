@@ -17,7 +17,7 @@
       </div>
       <el-tabs v-model="tab" @tab-change="load">
         <el-tab-pane label="PVC" name="pvc">
-          <el-table :data="pvcs" size="small" v-loading="loading">
+          <el-table :data="pvcPaged" size="small" v-loading="loading">
             <el-table-column prop="namespace" label="命名空间" width="150" />
             <el-table-column prop="name" label="名称" min-width="220" />
             <el-table-column label="状态" width="100"><template #default="{ row }">
@@ -27,16 +27,18 @@
             <el-table-column prop="storage_class" label="StorageClass" width="150"><template #default="{ row }">{{ row.storage_class || '—' }}</template></el-table-column>
             <el-table-column prop="volume_name" label="PV" min-width="200"><template #default="{ row }">{{ row.volume_name || '—' }}</template></el-table-column>
           </el-table>
+          <Pager :total="pvcs.length" v-model:page="pvcPage" v-model:page-size="pvcSize" />
           <el-empty v-if="!loading && !pvcs.length" description="无数据，先去集群管理点「同步」" />
         </el-tab-pane>
         <el-tab-pane label="HPA" name="hpa">
-          <el-table :data="hpas" size="small" v-loading="loading">
+          <el-table :data="hpaPaged" size="small" v-loading="loading">
             <el-table-column prop="namespace" label="命名空间" width="150" />
             <el-table-column prop="name" label="名称" min-width="200" />
             <el-table-column label="目标工作负载" min-width="220"><template #default="{ row }">{{ row.target_kind }}/{{ row.target_name }}</template></el-table-column>
             <el-table-column label="副本区间" width="120"><template #default="{ row }">{{ row.min_replicas }} - {{ row.max_replicas }}</template></el-table-column>
             <el-table-column prop="current_replicas" label="当前副本" width="100" />
           </el-table>
+          <Pager :total="hpas.length" v-model:page="hpaPage" v-model:page-size="hpaSize" />
           <el-empty v-if="!loading && !hpas.length" description="无 HPA" />
         </el-tab-pane>
       </el-tabs>
@@ -46,11 +48,15 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { usePager } from '../composables/usePager'
+import Pager from '../components/Pager.vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { listK8sClusters, listK8sPVCs, listK8sHPAs, listK8sNamespaces } from '../api/cmdb'
 
 const clusters = ref([]); const namespaces = ref([]); const pvcs = ref([]); const hpas = ref([])
+const { page: pvcPage, pageSize: pvcSize, paged: pvcPaged } = usePager(pvcs)
+const { page: hpaPage, pageSize: hpaSize, paged: hpaPaged } = usePager(hpas)
 const clusterId = ref(null); const ns = ref(''); const q = ref(''); const tab = ref('pvc'); const loading = ref(false)
 
 async function onCluster() { ns.value = ''; namespaces.value = await listK8sNamespaces({ cluster_id: clusterId.value }); load() }
