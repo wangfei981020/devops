@@ -187,6 +187,7 @@ export const k8sNodeCapacity = (params) => http.get('/k8s/node-capacity', { para
 export const k8sNsOverview = (params) => http.get('/k8s/ns-overview', { params }).then((r) => r.data)
 export const autoLinkDomainModules = () => http.post('/domains/auto-link-modules').then((r) => r.data)
 export const eventCenter = (params) => http.get('/k8s/event-center', { params }).then((r) => r.data)
+export const topoDomains = () => http.get('/k8s/topology-domains').then((r) => r.data)
 export const obsUsage = (params) => http.get('/obs/usage', { params }).then((r) => r.data)
 export const listK8sPVCs = (params) => http.get('/k8s/pvcs', { params }).then((r) => r.data)
 export const listK8sHPAs = (params) => http.get('/k8s/hpas', { params }).then((r) => r.data)

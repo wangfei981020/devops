@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -21,6 +22,55 @@ func NewK8sTopologyHandler(db *sql.DB) *K8sTopologyHandler {
 func (h *K8sTopologyHandler) Register(r *gin.RouterGroup) {
 	r.GET("/k8s/topology", h.Topology) // 正向：域名 → CDN/证书/Ingress/Service/工作负载/Pod/节点/集群
 	r.GET("/k8s/impact", h.Impact)     // 反向：节点 → 受影响的 Service/工作负载/Ingress/域名
+	r.GET("/k8s/topology-domains", h.TopoDomains) // 全链路域名候选(可搜下拉):解析FQDN + K8s入口hosts,带项目/环境/模块
+}
+
+// TopoDomains 返回可查链路的域名候选(带项目/环境/模块),供全链路下拉。
+func (h *K8sTopologyHandler) TopoDomains(c *gin.Context) {
+	type d struct {
+		Name    string `json:"name"`
+		Project string `json:"project"`
+		Env     string `json:"env"`
+		Module  string `json:"module"`
+	}
+	seen := map[string]*d{}
+	// 解析记录 FQDN(带台账项目/环境/模块)
+	if rows, _ := h.DB.Query(`SELECT DISTINCT r.host, COALESCE(c.project,''), COALESCE(c.env,''), COALESCE(c.module,'')
+		FROM domain_records r JOIN cis c ON c.id=r.domain_ci_id WHERE r.host<>''`); rows != nil {
+		for rows.Next() {
+			x := &d{}
+			if rows.Scan(&x.Name, &x.Project, &x.Env, &x.Module) == nil && x.Name != "" {
+				seen[x.Name] = x
+			}
+		}
+		rows.Close()
+	}
+	// K8s 入口 hosts(VS/Ingress/HTTPRoute)——可能不在台账,补进来(allow-create 也能自输)
+	for _, q := range []string{
+		`SELECT hosts FROM k8s_virtualservices`, `SELECT hosts FROM k8s_ingresses`, `SELECT hostnames FROM k8s_httproutes`,
+	} {
+		if rows, _ := h.DB.Query(q); rows != nil {
+			for rows.Next() {
+				var hs string
+				_ = rows.Scan(&hs)
+				for _, host := range splitCSV(hs) {
+					if host == "*" || host == "" {
+						continue
+					}
+					if _, ok := seen[host]; !ok {
+						seen[host] = &d{Name: host}
+					}
+				}
+			}
+			rows.Close()
+		}
+	}
+	out := make([]d, 0, len(seen))
+	for _, v := range seen {
+		out = append(out, *v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	c.JSON(http.StatusOK, out)
 }
 
 // Topology 正向全链路：给一个域名，串出它到 Pod/节点的整条链。

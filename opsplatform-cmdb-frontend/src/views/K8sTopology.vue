@@ -14,7 +14,15 @@
       <!-- 正向 -->
       <div v-if="mode==='fwd'">
         <div class="bar">
-          <el-input v-model="domain" clearable placeholder="输入域名，如 api.slileisure.com" style="width:320px" @keyup.enter="runFwd" />
+          <el-select v-model="fProject" clearable placeholder="项目(筛)" style="width:150px" @change="fEnv='';domain=''">
+            <el-option v-for="p in projects" :key="p" :label="p" :value="p" />
+          </el-select>
+          <el-select v-model="fEnv" clearable placeholder="环境(筛)" style="width:130px" @change="domain=''">
+            <el-option v-for="e in envs" :key="e" :label="e" :value="e" />
+          </el-select>
+          <el-select v-model="domain" filterable clearable allow-create default-first-option placeholder="选/搜域名(可自输)" style="width:340px">
+            <el-option v-for="d in domainOpts" :key="d.name" :label="d.name + (d.module?' · '+d.module:'')" :value="d.name" />
+          </el-select>
           <el-button type="primary" :icon="Search" :loading="loading" @click="runFwd">查链路</el-button>
         </div>
         <div v-if="fwd">
@@ -98,12 +106,20 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { k8sTopology, k8sImpact, listK8sClusters, listK8sNodes } from '../api/cmdb'
+import { k8sTopology, k8sImpact, listK8sClusters, listK8sNodes, topoDomains } from '../api/cmdb'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
 
 const mode = ref('fwd'); const loading = ref(false)
 const domain = ref(''); const fwd = ref(null)
+const domainsAll = ref([]); const fProject = ref(''); const fEnv = ref('')
+const projects = computed(() => [...new Set(domainsAll.value.map(d => d.project).filter(Boolean))].sort())
+const envs = computed(() => {
+  const src = fProject.value ? domainsAll.value.filter(d => d.project === fProject.value) : domainsAll.value
+  return [...new Set(src.map(d => d.env).filter(Boolean))].sort()
+})
+const domainOpts = computed(() => domainsAll.value.filter(d =>
+  (!fProject.value || d.project === fProject.value) && (!fEnv.value || d.env === fEnv.value)))
 const clusters = ref([]); const nodes = ref([]); const clusterId = ref(null); const node = ref(''); const rev = ref(null)
 const revPods = computed(() => rev.value?.pods || [])
 const { page: revPage, pageSize: revSize, paged: revPaged } = usePager(revPods)
@@ -129,6 +145,7 @@ onMounted(async () => {
     clusters.value = await listK8sClusters()
     if (clusters.value.length) { clusterId.value = clusters.value[0].id; onClusterRev() }
   } catch (e) { /* ignore */ }
+  try { domainsAll.value = await topoDomains() } catch (e) { domainsAll.value = [] }
 })
 </script>
 
