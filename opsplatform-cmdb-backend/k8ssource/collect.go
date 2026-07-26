@@ -281,6 +281,35 @@ func syncIngresses(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, ci
 	return len(list.Items), nil
 }
 
+// podReason 提取失败/异常原因：容器 waiting.reason(CrashLoopBackOff/ImagePullBackOff…)、
+// 上次终止 OOMKilled/Error、或 Pending 时未调度原因。正常 Running 返回 ""。
+func podReason(p *corev1.Pod) string {
+	for _, cs := range p.Status.ContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" && cs.State.Waiting.Reason != "ContainerCreating" {
+			return cs.State.Waiting.Reason
+		}
+		if cs.LastTerminationState.Terminated != nil {
+			if r := cs.LastTerminationState.Terminated.Reason; r == "OOMKilled" || r == "Error" {
+				return r
+			}
+		}
+		if cs.State.Terminated != nil && cs.State.Terminated.Reason != "" && cs.State.Terminated.Reason != "Completed" {
+			return cs.State.Terminated.Reason
+		}
+	}
+	if p.Status.Phase == corev1.PodPending {
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodScheduled && c.Status != corev1.ConditionTrue {
+				if c.Reason != "" {
+					return "Pending:" + c.Reason // 常见 Unschedulable(资源不足)
+				}
+				return "Pending"
+			}
+		}
+	}
+	return ""
+}
+
 func syncPods(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int) (int, error) {
 	list, err := cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -299,10 +328,10 @@ func syncPods(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 		}
 		cpuReq, memReq, cpuLim, memLim := podResources(p)
 		_, _ = db.Exec(`INSERT INTO k8s_pods
-			(cluster_id,namespace,name,node_name,workload,phase,cpu_req_m,mem_req_mi,cpu_lim_m,mem_lim_mi,restarts,pod_ip,start_time)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			(cluster_id,namespace,name,node_name,workload,phase,cpu_req_m,mem_req_mi,cpu_lim_m,mem_lim_mi,restarts,pod_ip,start_time,reason)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			cid, p.Namespace, p.Name, p.Spec.NodeName, ownerWorkload(p), string(p.Status.Phase),
-			cpuReq, memReq, cpuLim, memLim, restarts, p.Status.PodIP, st)
+			cpuReq, memReq, cpuLim, memLim, restarts, p.Status.PodIP, st, podReason(p))
 	}
 	return len(list.Items), nil
 }
@@ -390,6 +419,9 @@ func syncHPAs(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 func syncGateways(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid int) (int, error) {
 	list, err := dc.Resource(gatewayGVR).Namespace("").List(ctx, metav1.ListOptions{})
 	if err != nil {
+		if apierrors.IsForbidden(err) {
+			return 0, nil // 无权限:跳过,不删已有数据
+		}
 		if crdAbsent(err) {
 			_, _ = db.Exec(`DELETE FROM k8s_gateways WHERE cluster_id=?`, cid)
 			return 0, nil
@@ -429,6 +461,9 @@ func syncGateways(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid int
 func syncHTTPRoutes(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid int) (int, error) {
 	list, err := dc.Resource(httprouteGVR).Namespace("").List(ctx, metav1.ListOptions{})
 	if err != nil {
+		if apierrors.IsForbidden(err) {
+			return 0, nil // 无权限:跳过,不删已有数据
+		}
 		if crdAbsent(err) {
 			_, _ = db.Exec(`DELETE FROM k8s_httproutes WHERE cluster_id=?`, cid)
 			return 0, nil
@@ -476,6 +511,9 @@ func syncVirtualServices(ctx context.Context, db *sql.DB, dc dynamic.Interface, 
 		list, err = dc.Resource(istioVSv1b1).Namespace("").List(ctx, metav1.ListOptions{})
 	}
 	if err != nil {
+		if apierrors.IsForbidden(err) {
+			return 0, nil // 无权限:跳过,不删已有数据
+		}
 		if crdAbsent(err) {
 			_, _ = db.Exec(`DELETE FROM k8s_virtualservices WHERE cluster_id=?`, cid)
 			return 0, nil
@@ -513,10 +551,10 @@ func syncVirtualServices(ctx context.Context, db *sql.DB, dc dynamic.Interface, 
 	return len(list.Items), nil
 }
 
-// crdAbsent 判断错误是否为"CRD 未安装/无权限"（NotFound / NoResourceMatch / Forbidden），用于优雅跳过。
-// Forbidden：只读凭据未授权该 CRD 时不应让整次同步报错，静默跳过即可。
+// crdAbsent 判断错误是否为"CRD 未安装"（NotFound / NoResourceMatch），用于清理 stale 后跳过。
+// 注意：Forbidden(无权限) 不在此列——那种情况要跳过但**不能删已有数据**，由各 sync 单独处理。
 func crdAbsent(err error) bool {
-	if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+	if apierrors.IsNotFound(err) {
 		return true
 	}
 	return strings.Contains(err.Error(), "could not find the requested resource") ||

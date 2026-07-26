@@ -38,6 +38,16 @@
           <template v-if="nu(row,'mem_pct')"><el-progress :percentage="Math.min(100,Math.round(nuVal(row,'mem_pct')))" :stroke-width="10" :color="barColor" text-inside /></template>
           <span v-else class="muted">—</span>
         </template></el-table-column>
+        <el-table-column label="CPU请求装箱" width="150"><template #default="{ row }">
+          <el-tooltip :content="`已request ${cp(row,'req_cpu_m')}m / 可分配 ${cp(row,'alloc_cpu_m')}m · limit ${cp(row,'lim_cpu_m')}m`">
+            <div><el-progress :percentage="Math.min(150,Math.round(cp(row,'cpu_req_pct')))" :stroke-width="10" :color="boxColor" text-inside /></div>
+          </el-tooltip>
+        </template></el-table-column>
+        <el-table-column label="内存请求装箱" width="150"><template #default="{ row }">
+          <el-tooltip :content="`已request ${cp(row,'req_mem_mi')}Mi / 可分配 ${cp(row,'alloc_mem_mi')}Mi · limit ${cp(row,'lim_mem_mi')}Mi`">
+            <div><el-progress :percentage="Math.min(150,Math.round(cp(row,'mem_req_pct')))" :stroke-width="10" :color="boxColor" text-inside /></div>
+          </el-tooltip>
+        </template></el-table-column>
         <el-table-column prop="pod_count" label="Pod" width="70" />
         <el-table-column prop="kubelet_version" label="版本" width="110" />
         <el-table-column label="压力/状况" width="150"><template #default="{ row }">
@@ -78,13 +88,15 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { listK8sClusters, listK8sNodes, listK8sNodePools, k8sNodeUsage } from '../api/cmdb'
+import { listK8sClusters, listK8sNodes, listK8sNodePools, k8sNodeUsage, k8sNodeCapacity } from '../api/cmdb'
 
-const clusters = ref([]); const pools = ref([]); const rows = ref([]); const usage = ref({})
+const clusters = ref([]); const pools = ref([]); const rows = ref([]); const usage = ref({}); const cap = ref({})
+function cp(row, k) { const m = cap.value[row.name]; return (m && m[k] != null) ? m[k] : 0 }
 const clusterId = ref(''); const pool = ref(''); const q = ref(''); const onlyBad = ref(false); const loading = ref(false)
 function nu(row, k) { const m = usage.value[row.name]; return (m && m[k] != null) ? m[k].toFixed(0) + '%' : null }
 function nuVal(row, k) { const m = usage.value[row.name]; return (m && m[k] != null) ? m[k] : 0 }
 function barColor(p) { return p >= 85 ? '#f56c6c' : (p >= 60 ? '#e6a23c' : '#67c23a') }
+function boxColor(p) { return p >= 100 ? '#f56c6c' : (p >= 80 ? '#e6a23c' : '#67c23a') }
 
 function memGi(ki) { const n = parseInt(ki); return isNaN(n) ? (ki || '—') : (n / 1024 / 1024).toFixed(1) + 'Gi' }
 function clusterName(id) { const c = clusters.value.find(x => x.id === id); return c ? (c.display_name || c.name) : id }
@@ -112,9 +124,10 @@ function conds(row) { try { return JSON.parse(row.conditions_json || '[]') } cat
 async function onCluster() { pool.value = ''; await load() }
 
 async function loadUsage() {
-  usage.value = {}
+  usage.value = {}; cap.value = {}
   if (!clusterId.value) return
   try { const r = await k8sNodeUsage({ cluster_id: clusterId.value }); if (r.ok) usage.value = r.usage || {} } catch (e) { /* 静默 */ }
+  try { const r = await k8sNodeCapacity({ cluster_id: clusterId.value }); if (Array.isArray(r)) { const m = {}; r.forEach(x => m[x.node] = x); cap.value = m } } catch (e) { /* 静默 */ }
 }
 
 async function load() {

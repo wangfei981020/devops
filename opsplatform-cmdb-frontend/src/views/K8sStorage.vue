@@ -24,6 +24,12 @@
               <el-tag size="small" :type="row.status==='Bound'?'success':'warning'">{{ row.status }}</el-tag>
             </template></el-table-column>
             <el-table-column prop="capacity" label="容量" width="100" />
+            <el-table-column label="使用率" width="150"><template #default="{ row }">
+              <el-tooltip v-if="pu(row)" :content="`${pu(row).used_gi.toFixed(1)}Gi / ${pu(row).cap_gi.toFixed(1)}Gi`">
+                <div><el-progress :percentage="Math.min(100,Math.round(pu(row).pct))" :stroke-width="10" :color="pvcColor" text-inside /></div>
+              </el-tooltip>
+              <span v-else class="muted">—</span>
+            </template></el-table-column>
             <el-table-column prop="storage_class" label="StorageClass" width="150"><template #default="{ row }">{{ row.storage_class || '—' }}</template></el-table-column>
             <el-table-column prop="volume_name" label="PV" min-width="200"><template #default="{ row }">{{ row.volume_name || '—' }}</template></el-table-column>
           </el-table>
@@ -52,10 +58,11 @@ import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { listK8sClusters, listK8sPVCs, listK8sHPAs, listK8sNamespaces } from '../api/cmdb'
+import { listK8sClusters, listK8sPVCs, listK8sHPAs, listK8sNamespaces, k8sPvcUsage } from '../api/cmdb'
 
-const clusters = ref([]); const namespaces = ref([]); const pvcs = ref([]); const hpas = ref([])
+const clusters = ref([]); const namespaces = ref([]); const pvcs = ref([]); const hpas = ref([]); const pvcUse = ref({})
 const { page: pvcPage, pageSize: pvcSize, paged: pvcPaged } = usePager(pvcs)
+function pvcColor(p) { return p >= 90 ? '#f56c6c' : (p >= 75 ? '#e6a23c' : '#67c23a') }
 const { page: hpaPage, pageSize: hpaSize, paged: hpaPaged } = usePager(hpas)
 const clusterId = ref(null); const ns = ref(''); const q = ref(''); const tab = ref('pvc'); const loading = ref(false)
 
@@ -68,9 +75,17 @@ async function load() {
     const p = { cluster_id: clusterId.value }
     if (ns.value) p.namespace = ns.value
     if (q.value) p.q = q.value
-    if (tab.value === 'pvc') pvcs.value = await listK8sPVCs(p)
+    if (tab.value === 'pvc') { pvcs.value = await listK8sPVCs(p); loadPvcUsage() }
     else hpas.value = await listK8sHPAs(p)
   } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+}
+async function loadPvcUsage() {
+  pvcUse.value = {}
+  try { const r = await k8sPvcUsage({ cluster_id: clusterId.value }); if (r.ok) pvcUse.value = r.usage || {} } catch (e) { /* 静默 */ }
+}
+function pu(row) {
+  const m = pvcUse.value[row.namespace + '/' + row.name]
+  return (m && m.pct != null) ? m : null
 }
 
 onMounted(async () => {

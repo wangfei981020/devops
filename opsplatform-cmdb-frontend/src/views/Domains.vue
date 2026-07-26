@@ -10,6 +10,9 @@
         <el-button :icon="Download" @click="exportCsv">导出Excel</el-button>
         <el-button :icon="Connection" @click="openRules">源站映射</el-button>
         <el-button type="warning" :icon="Operation" @click="openAssign">批量分配</el-button>
+        <el-tooltip content="按域名匹配 K8s 入口(Istio VirtualService/Ingress/HTTPRoute)自动填模块(VS名=后端去-svc)，只补空的，不覆盖手填" placement="top">
+          <el-button :icon="MagicStick" :loading="autoLinking" @click="autoLink">K8s自动关联模块</el-button>
+        </el-tooltip>
         <el-tooltip content="只刷库里已有域名的 DNS 解析；发现新域名请去「DNS 记录」页点右上「从数据源同步」" placement="top">
           <el-button :icon="Refresh" :loading="syncingAll" @click="syncAll">刷新已有域名的解析</el-button>
         </el-tooltip>
@@ -645,16 +648,27 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, RefreshRight, Tickets, InfoFilled, Connection, ArrowDown, Close } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, RefreshRight, Tickets, InfoFilled, Connection, ArrowDown, Close, MagicStick } from '@element-plus/icons-vue'
 import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
 import { useDomainFilter } from '../composables/useDomainFilter'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgnoreRecords, deleteRecord, checkRecordCert,
   syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains, bulkIgnoreDomains,
   listOriginRules, upsertOriginRule, deleteOriginRule, bulkDomainStatus,
-  godaddyDetail, renewDomain, setAutoRenew, listRenewals } from '../api/cmdb'
+  godaddyDetail, renewDomain, setAutoRenew, listRenewals, autoLinkDomainModules } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
+
+// 从 K8s 入口自动填模块(只补空的)
+const autoLinking = ref(false)
+async function autoLink() {
+  autoLinking.value = true
+  try {
+    const r = await autoLinkDomainModules()
+    ElMessage.success(`扫描 ${r.scanned} 个空模块域名，自动填了 ${r.filled} 个`)
+    load()
+  } catch (e) { ElMessage.error('自动关联失败：' + (e.response?.data?.error || e.message)) } finally { autoLinking.value = false }
+}
 
 // ---- 域名续费 / 自动续费（写回 GoDaddy）----
 // 能续费：绑了数据源(非手动、有注册商)、未忽略、未移出账号。后端还会校验 provider 是否支持。

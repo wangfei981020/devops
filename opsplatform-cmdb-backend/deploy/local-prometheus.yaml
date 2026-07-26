@@ -61,6 +61,20 @@ data:
             regex: (.+)
             target_label: __metrics_path__
             replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+      # kubelet /metrics：含 PVC 卷用量 kubelet_volume_stats_*
+      - job_name: kubelet
+        scheme: https
+        tls_config: { insecure_skip_verify: true }
+        authorization:
+          credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs: [{ role: node }]
+        relabel_configs:
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/${1}/proxy/metrics
       # 节点级 CPU/内存：node-exporter
       - job_name: node-exporter
         kubernetes_sd_configs: [{ role: endpoints, namespaces: { names: [monitoring] } }]

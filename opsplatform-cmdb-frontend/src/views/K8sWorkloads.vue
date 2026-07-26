@@ -17,7 +17,10 @@
         </el-select>
         <el-input v-model="q" clearable placeholder="搜名称/镜像" style="width:200px" @keyup.enter="load" @clear="load" />
         <el-button :icon="Search" @click="load">查询</el-button>
-        <span class="muted" style="margin-left:auto">共 {{ rows.length }}</span>
+        <el-switch v-model="onlyBad" active-text="只看异常" style="margin-left:6px" @change="page=1" />
+        <span class="muted" style="margin-left:auto">
+          共 {{ rows.length }} <b v-if="badCount" style="color:#f56c6c;margin-left:6px">异常 {{ badCount }}</b>
+        </span>
       </div>
       <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column prop="namespace" label="命名空间" width="150" />
@@ -33,11 +36,25 @@
         <el-table-column label="状态" width="100"><template #default="{ row }">
           <el-tag size="small" :type="row.status==='healthy'?'success':(row.status==='degraded'?'danger':'info')">{{ statusText(row.status) }}</el-tag>
         </template></el-table-column>
-        <el-table-column label="操作" width="90" fixed="right"><template #default="{ row }">
+        <el-table-column label="操作" width="130" fixed="right"><template #default="{ row }">
+          <el-button link type="primary" size="small" @click="openPods(row)">Pod</el-button>
           <el-button link type="primary" size="small" @click="openChanges(row)">变更</el-button>
         </template></el-table-column>
       </el-table>
-      <Pager :total="rows.length" v-model:page="page" v-model:page-size="pageSize" />
+      <Pager :total="display.length" v-model:page="page" v-model:page-size="pageSize" />
+
+      <el-dialog :close-on-click-modal="false" v-model="podDlg" :title="`Pod · ${podWl?.namespace}/${podWl?.name}`" width="820px" top="6vh">
+        <el-table :data="wlPods" size="small" v-loading="podLoading" max-height="480">
+          <el-table-column prop="name" label="Pod" min-width="240" />
+          <el-table-column prop="node_name" label="节点" min-width="150" />
+          <el-table-column label="状态" width="100"><template #default="{ row }">
+            <el-tag size="small" :type="row.phase==='Running'||row.phase==='Succeeded'?'success':(row.phase==='Failed'?'danger':'warning')">{{ row.phase }}</el-tag>
+          </template></el-table-column>
+          <el-table-column label="失败原因" min-width="140"><template #default="{ row }"><span v-if="row.reason" style="color:#f56c6c">{{ row.reason }}</span><span v-else class="muted">—</span></template></el-table-column>
+          <el-table-column prop="restarts" label="重启" width="70" />
+        </el-table>
+        <el-empty v-if="!podLoading && !wlPods.length" description="无 Pod" :image-size="50" />
+      </el-dialog>
 
       <el-dialog :close-on-click-modal="false" v-model="chDlg" :title="`变更记录 · ${chWl?.namespace}/${chWl?.name}`" width="640px">
         <el-table :data="changes" size="small" v-loading="chLoading" max-height="420">
@@ -55,18 +72,26 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { listK8sClusters, listK8sWorkloads, listK8sNamespaces, listK8sChanges } from '../api/cmdb'
+import { listK8sClusters, listK8sWorkloads, listK8sNamespaces, listK8sChanges, listK8sPods } from '../api/cmdb'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
 
 const kinds = ['Deployment', 'StatefulSet', 'DaemonSet', 'CronJob']
-const clusters = ref([]); const namespaces = ref([]); const rows = ref([])
-const { page, pageSize, paged } = usePager(rows)
+const clusters = ref([]); const namespaces = ref([]); const rows = ref([]); const onlyBad = ref(false)
+const display = computed(() => onlyBad.value ? rows.value.filter(r => r.status === 'degraded') : rows.value)
+const badCount = computed(() => rows.value.filter(r => r.status === 'degraded').length)
+const { page, pageSize, paged } = usePager(display)
 const clusterId = ref(null); const ns = ref(''); const kind = ref(''); const q = ref(''); const loading = ref(false)
 const chDlg = ref(false); const chWl = ref(null); const changes = ref([]); const chLoading = ref(false)
+const podDlg = ref(false); const podWl = ref(null); const wlPods = ref([]); const podLoading = ref(false)
+async function openPods(row) {
+  podWl.value = row; podDlg.value = true; wlPods.value = []; podLoading.value = true
+  try { wlPods.value = await listK8sPods({ cluster_id: clusterId.value, namespace: row.namespace, workload: row.name }) }
+  catch (e) { /* 静默 */ } finally { podLoading.value = false }
+}
 
 function statusText(s) { return { healthy: '正常', degraded: '副本不足', 'scaled-0': '已缩容' }[s] || s }
 

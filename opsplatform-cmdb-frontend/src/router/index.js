@@ -28,6 +28,7 @@ const routes = [
   { path: '/k8s-workloads', component: () => import('../views/K8sWorkloads.vue'), meta: { title: 'K8s 工作负载' } },
   { path: '/k8s-pods', component: () => import('../views/K8sPods.vue'), meta: { title: 'K8s Pod' } },
   { path: '/k8s-usage', component: () => import('../views/K8sUsage.vue'), meta: { title: '资源使用率' } },
+  { path: '/event-center', component: () => import('../views/EventCenter.vue'), meta: { title: '事件中心' } },
   { path: '/k8s-networking', component: () => import('../views/K8sNetworking.vue'), meta: { title: 'K8s 网络' } },
   { path: '/k8s-storage', component: () => import('../views/K8sStorage.vue'), meta: { title: 'K8s 存储/伸缩' } },
   { path: '/k8s-topology', component: () => import('../views/K8sTopology.vue'), meta: { title: 'K8s 全链路' } },

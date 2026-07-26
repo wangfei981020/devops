@@ -40,6 +40,37 @@ func (h *ObsQueryHandler) Register(r *gin.RouterGroup) {
 	r.GET("/obs/kubesphere", h.KubeSphere) // KubeSphere 透传: env?/cluster_id?,path(kapis 路径)
 	r.GET("/k8s/pod-usage", h.PodUsage)   // 全 Pod 实时用量(cpu_m/mem_mi) map，供 Pod 页列展示
 	r.GET("/k8s/node-usage", h.NodeUsage) // 全节点实时用量(cpu%/mem%) map，供节点页列展示
+	r.GET("/k8s/pvc-usage", h.PVCUsage)   // 全 PVC 使用率(used/cap/pct) map，供存储页列展示
+}
+
+// PVCUsage 返回 {"ns/pvc": {used_gi, cap_gi, pct}}（kubelet volume 指标）。
+func (h *ObsQueryHandler) PVCUsage(c *gin.Context) {
+	base, token, ok := h.prom(c)
+	if !ok {
+		return
+	}
+	usage := map[string]map[string]float64{}
+	get := func(k string) map[string]float64 {
+		if usage[k] == nil {
+			usage[k] = map[string]float64{}
+		}
+		return usage[k]
+	}
+	if used, err := promInstant(base, token, `kubelet_volume_stats_used_bytes`); err == nil {
+		for _, s := range used {
+			get(s.Metric["namespace"]+"/"+s.Metric["persistentvolumeclaim"])["used_gi"] = s.Value / 1073741824
+		}
+	}
+	if cap, err := promInstant(base, token, `kubelet_volume_stats_capacity_bytes`); err == nil {
+		for _, s := range cap {
+			m := get(s.Metric["namespace"] + "/" + s.Metric["persistentvolumeclaim"])
+			m["cap_gi"] = s.Value / 1073741824
+			if m["cap_gi"] > 0 {
+				m["pct"] = m["used_gi"] / m["cap_gi"] * 100
+			}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "usage": usage})
 }
 
 type promSample struct {
@@ -180,6 +211,14 @@ func (h *ObsQueryHandler) Usage(c *gin.Context) {
 	}
 	end := time.Now()
 	start := end.Add(-time.Duration(minutes) * time.Minute)
+	// 自定义起止时间(unix 秒)优先于 minutes
+	if s, e1 := strconv.ParseInt(c.Query("start"), 10, 64); e1 == nil && s > 0 {
+		if en, e2 := strconv.ParseInt(c.Query("end"), 10, 64); e2 == nil && en > s {
+			start = time.Unix(s, 0)
+			end = time.Unix(en, 0)
+			minutes = (en - s) / 60
+		}
+	}
 	step := minutes / 60
 	if step < 1 {
 		step = 1
@@ -205,15 +244,23 @@ func buildPromQL(target, ns, name, metric string) string {
 		}
 		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s",pod="%s",container!=""}[5m]))`, ns, name)
 	case "workload":
+		// 按 Pod 分组 → 图上一个服务的每个 Pod 各一条线
 		if metric == "mem" {
-			return fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s",pod=~"%s-.*",container!=""})`, ns, name)
+			return fmt.Sprintf(`sum by(pod)(container_memory_working_set_bytes{namespace="%s",pod=~"%s-.*",container!=""})`, ns, name)
 		}
-		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s",pod=~"%s-.*",container!=""}[5m]))`, ns, name)
+		return fmt.Sprintf(`sum by(pod)(rate(container_cpu_usage_seconds_total{namespace="%s",pod=~"%s-.*",container!=""}[5m]))`, ns, name)
 	case "node":
+		// 节点：用 node-exporter 绝对用量(核/字节)，与 Pod 单位一致；按 node 标签匹配。
 		if metric == "mem" {
-			return fmt.Sprintf(`sum(container_memory_working_set_bytes{node="%s",container!=""})`, name)
+			return fmt.Sprintf(`sum(node_memory_MemTotal_bytes{node="%s"}) - sum(node_memory_MemAvailable_bytes{node="%s"})`, name, name)
 		}
-		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{node="%s",container!=""}[5m]))`, name)
+		return fmt.Sprintf(`sum(rate(node_cpu_seconds_total{mode!="idle",node="%s"}[5m]))`, name)
+	case "host":
+		// 传统主机：node-exporter，按 instance 匹配(通常 <ip>:9100)，传入主机内网IP。
+		if metric == "mem" {
+			return fmt.Sprintf(`sum(node_memory_MemTotal_bytes{instance=~"%s.*"}) - sum(node_memory_MemAvailable_bytes{instance=~"%s.*"})`, name, name)
+		}
+		return fmt.Sprintf(`sum(rate(node_cpu_seconds_total{mode!="idle",instance=~"%s.*"}[5m]))`, name)
 	}
 	return ""
 }

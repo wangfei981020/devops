@@ -36,10 +36,14 @@ func (h *K8sTopologyHandler) Topology(c *gin.Context) {
 	out["cdns"] = h.strList(`SELECT DISTINCT cd.name FROM domain_records r JOIN cdns cd ON cd.id=r.cdn_id
 		WHERE r.cdn_id>0 AND (r.host=? OR CONCAT(r.host,'.') LIKE ? OR ?=r.host)`, domain, "%"+domain, domain)
 
-	// 证书（best-effort：域名台账里该 FQDN 的证书到期）
-	out["cert"] = h.oneRow(`SELECT host AS fqdn, cert_expiry FROM domain_records WHERE cert_expiry IS NOT NULL AND host=? LIMIT 1`, domain)
+	// 证书（best-effort：域名台账里该 FQDN 的证书到期；列名 cert_expiry_at）
+	out["cert"] = h.oneRow(`SELECT host AS fqdn, cert_expiry_at FROM domain_records WHERE cert_expiry_at IS NOT NULL AND host=? LIMIT 1`, domain)
 
-	// 匹配 Ingress + HTTPRoute（hosts/hostnames 含该域名）
+	// 域名台账（项目/环境/模块/回源/源站）——供前端展示归属
+	out["domain_info"] = h.oneRow(`SELECT c.project, c.env, c.module, d.cert_expiry_at, d.dns_provider
+		FROM cis c JOIN domains d ON d.ci_id=c.id WHERE c.type='domain' AND c.name=? LIMIT 1`, domain)
+
+	// 匹配 Ingress + HTTPRoute + Istio VirtualService（hosts/hostnames 含该域名）
 	chains := []gin.H{}
 	// Ingress
 	rows, err := h.DB.Query(`SELECT cluster_id,namespace,name,hosts,tls,svc_names FROM k8s_ingresses WHERE hosts LIKE ?`, "%"+domain+"%")
@@ -69,6 +73,20 @@ func (h *K8sTopologyHandler) Topology(c *gin.Context) {
 		}
 		rows2.Close()
 	}
+	// Istio VirtualService（他们的主力入口）
+	rows3, err := h.DB.Query(`SELECT cluster_id,namespace,name,hosts,backends FROM k8s_virtualservices WHERE hosts LIKE ?`, "%"+domain+"%")
+	if err == nil {
+		for rows3.Next() {
+			var cid int
+			var ns, name, hosts, backends string
+			_ = rows3.Scan(&cid, &ns, &name, &hosts, &backends)
+			if !hostMatch(hosts, domain) {
+				continue
+			}
+			chains = append(chains, h.buildChain(cid, ns, "VirtualService", name, "", backends))
+		}
+		rows3.Close()
+	}
 	out["chains"] = chains
 	out["matched"] = len(chains)
 	c.JSON(http.StatusOK, out)
@@ -78,7 +96,8 @@ func (h *K8sTopologyHandler) Topology(c *gin.Context) {
 func (h *K8sTopologyHandler) buildChain(cid int, ns, entryKind, entryName, tls, svcNames string) gin.H {
 	cl := h.oneRow(`SELECT name,display_name,environment,project_id FROM k8s_clusters WHERE id=?`, cid)
 	services := []gin.H{}
-	for _, svc := range splitCSV(svcNames) {
+	for _, raw := range splitCSV(svcNames) {
+		svc := shortSvc(raw) // VS/HTTPRoute 后端常是 FQDN(svc.ns.svc.cluster.local) → 取首段
 		eps, _ := h.DB.Query(`SELECT DISTINCT pod_name,node_name FROM k8s_endpoints WHERE cluster_id=? AND namespace=? AND service_name=?`, cid, ns, svc)
 		pods, nodes, wls := []gin.H{}, map[string]struct{}{}, map[string]struct{}{}
 		if eps != nil {
@@ -164,13 +183,42 @@ func (h *K8sTopologyHandler) Impact(c *gin.Context) {
 				}
 			}
 			if hit {
-				ings = append(ings, gin.H{"namespace": ns, "name": name, "hosts": hosts})
+				ings = append(ings, gin.H{"namespace": ns, "name": name, "kind": "Ingress", "hosts": hosts})
 				for _, hh := range splitCSV(hosts) {
 					domains[hh] = struct{}{}
 				}
 			}
 		}
 		rows.Close()
+	}
+	// HTTPRoute + Istio VirtualService（后端命中受影响 service → 域名也受影响）
+	for _, q := range []struct{ table, hostCol string }{
+		{"k8s_httproutes", "hostnames"}, {"k8s_virtualservices", "hosts"},
+	} {
+		if rows, err := h.DB.Query(`SELECT namespace,name,`+q.hostCol+`,backends FROM `+q.table+` WHERE cluster_id=?`, cid); err == nil {
+			for rows.Next() {
+				var ns, name, hosts, backends string
+				_ = rows.Scan(&ns, &name, &hosts, &backends)
+				hit := false
+				for _, s := range splitCSV(backends) {
+					if _, ok := svcSet[ns+"/"+shortSvc(s)]; ok {
+						hit = true
+						break
+					}
+				}
+				if hit {
+					kind := "HTTPRoute"
+					if q.table == "k8s_virtualservices" {
+						kind = "VirtualService"
+					}
+					ings = append(ings, gin.H{"namespace": ns, "name": name, "kind": kind, "hosts": hosts})
+					for _, hh := range splitCSV(hosts) {
+						domains[hh] = struct{}{}
+					}
+				}
+			}
+			rows.Close()
+		}
 	}
 	out["ingresses"] = ings
 	out["domains"] = mapKeys(domains)
@@ -184,8 +232,27 @@ func hostMatch(hosts, domain string) bool {
 		if strings.EqualFold(h, domain) {
 			return true
 		}
+		// 通配 *.example.com 匹配 sub.example.com（不含裸 "*" catch-all，避免过度命中）
+		if strings.HasPrefix(h, "*.") && strings.HasSuffix(strings.ToLower(domain), strings.ToLower(h[1:])) {
+			return true
+		}
 	}
 	return false
+}
+
+// shortSvc 把 FQDN 后端(central-frontend-svc.g32-admin.svc.cluster.local)取首段(central-frontend-svc)。
+func shortSvc(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '.'); i > 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// moduleFromSvc 由后端 Service 名推模块名：去掉 -svc 后缀（用户规则：模块=VS名=后端去-svc）。
+func moduleFromSvc(svc string) string {
+	svc = shortSvc(svc)
+	return strings.TrimSuffix(svc, "-svc")
 }
 
 func splitCSV(s string) []string {

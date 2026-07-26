@@ -36,6 +36,8 @@ func (h *K8sResourceHandler) Register(r *gin.RouterGroup) {
 	r.GET("/k8s/gateways", h.Gateways)
 	r.GET("/k8s/httproutes", h.HTTPRoutes)
 	r.GET("/k8s/virtualservices", h.VirtualServices)
+	r.GET("/k8s/node-capacity", h.NodeCapacity) // 节点 可分配 vs 已request vs limit → 够不够/装箱
+	r.GET("/k8s/ns-overview", h.NsOverview)      // 命名空间/项目 Pod 概览:总/Running/失败/Pending+原因
 	r.GET("/k8s/pvcs", h.PVCs)
 	r.GET("/k8s/hpas", h.HPAs)
 	r.GET("/k8s/changes", h.Changes)
@@ -102,8 +104,8 @@ func (h *K8sResourceHandler) Workloads(c *gin.Context) {
 }
 
 func (h *K8sResourceHandler) Pods(c *gin.Context) {
-	h.list(c, `SELECT id,cluster_id,namespace,name,node_name,workload,phase,cpu_req_m,mem_req_mi,cpu_lim_m,mem_lim_mi,restarts,pod_ip,start_time FROM k8s_pods`,
-		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}, {"node_name", "node", false}}, "namespace,name", []string{"name", "pod_ip", "node_name", "workload"})
+	h.list(c, `SELECT id,cluster_id,namespace,name,node_name,workload,phase,COALESCE(reason,'') AS reason,cpu_req_m,mem_req_mi,cpu_lim_m,mem_lim_mi,restarts,pod_ip,start_time FROM k8s_pods`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}, {"node_name", "node", false}, {"workload", "workload", false}}, "namespace,name", []string{"name", "pod_ip", "node_name", "workload"})
 }
 
 func (h *K8sResourceHandler) Services(c *gin.Context) {

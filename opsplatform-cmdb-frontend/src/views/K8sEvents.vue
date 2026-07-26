@@ -6,7 +6,7 @@
     </div>
     <el-card shadow="never">
       <div class="bar">
-        <el-select v-model="clusterId" placeholder="选集群" style="width:200px" @change="load">
+        <el-select v-model="clusterId" placeholder="选集群" style="width:200px" @change="onCluster">
           <el-option v-for="c in clusters" :key="c.id" :label="(c.display_name||c.name)+' · '+c.environment" :value="c.id" />
         </el-select>
         <el-select v-model="kind" clearable placeholder="对象类型" style="width:140px" @change="load">
@@ -15,7 +15,9 @@
         <el-select v-model="type" clearable placeholder="级别" style="width:120px" @change="load">
           <el-option label="Warning" value="Warning" /><el-option label="Normal" value="Normal" />
         </el-select>
-        <el-input v-model="ns" clearable placeholder="命名空间" style="width:150px" @keyup.enter="load" @clear="load" />
+        <el-select v-model="ns" clearable filterable allow-create default-first-option placeholder="命名空间(可搜/自输)" style="width:170px" @change="load">
+          <el-option v-for="n in namespaces" :key="n.name" :label="n.name" :value="n.name" />
+        </el-select>
         <el-button :icon="Refresh" @click="load">刷新</el-button>
         <el-switch v-model="auto" active-text="自动刷新" @change="toggleAuto" />
         <span class="muted" style="margin-left:auto">共 {{ rows.length }}</span>
@@ -41,15 +43,21 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { listK8sClusters, k8sEvents } from '../api/cmdb'
+import { listK8sClusters, k8sEvents, listK8sNamespaces } from '../api/cmdb'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
 
 const kinds = ['Node', 'Pod', 'Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Service', 'Ingress', 'HorizontalPodAutoscaler']
-const clusters = ref([]); const rows = ref([])
+const clusters = ref([]); const rows = ref([]); const namespaces = ref([])
 const { page, pageSize, paged } = usePager(rows)
 const clusterId = ref(null); const kind = ref(''); const type = ref(''); const ns = ref(''); const loading = ref(false)
 const auto = ref(false); let timer = null
+
+async function onCluster() {
+  ns.value = ''
+  try { namespaces.value = await listK8sNamespaces({ cluster_id: clusterId.value }) } catch (e) { namespaces.value = [] }
+  load()
+}
 
 async function load() {
   if (!clusterId.value) return
@@ -67,7 +75,7 @@ function toggleAuto(v) {
 }
 onUnmounted(() => { if (timer) clearInterval(timer) })
 onMounted(async () => {
-  try { clusters.value = await listK8sClusters(); if (clusters.value.length) { clusterId.value = clusters.value[0].id; load() } }
+  try { clusters.value = await listK8sClusters(); if (clusters.value.length) { clusterId.value = clusters.value[0].id; onCluster() } }
   catch (e) { ElMessage.error('加载集群失败') }
 })
 </script>
