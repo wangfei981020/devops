@@ -108,6 +108,9 @@ type flatRecordOut struct {
 	Project      string `json:"project"`
 	Env          string `json:"env"`
 	Module       string `json:"module"`
+	ModuleSource string `json:"module_source"` // auto=K8s自动关联 / manual=手动
+	LifeStatus   string `json:"life_status"`   // 该记录使用状态(使用中等)
+	StatusSource string `json:"status_source"` // auto/manual
 	Operator     string `json:"operator"`
 	Origin       string `json:"origin"`        // 所属主域名来源：manual/sync
 	SourceName   string `json:"source_name"`   // 数据源/注册商名（GoDaddy 等）
@@ -136,7 +139,7 @@ func (h *RecordHandler) ListAll(c *gin.Context) {
 	rows, err := h.DB.Query(`
 		SELECT r.id, r.domain_ci_id, c.name, r.host, r.record_type, r.cdn_id, COALESCE(cd.name,''),
 		       r.cname, r.origin_ip, r.cert_expiry_at, r.cert_check_msg,
-		       r.project, r.env, r.module, r.operator,
+		       r.project, r.env, r.module, COALESCE(r.module_source,''), COALESCE(r.life_status,''), COALESCE(r.status_source,''), r.operator,
 		       COALESCE(d.origin,''), COALESCE(reg.name,''), r.ignored, r.ignore_reason, r.stale, r.updated_at,
 		       COALESCE(d.status,''), COALESCE(d.stale,0), COALESCE(d.source_status,'')
 		FROM domain_records r
@@ -161,7 +164,7 @@ func (h *RecordHandler) ListAll(c *gin.Context) {
 		var srcStatus string
 		if err := rows.Scan(&o.ID, &o.DomainCIID, &o.Domain, &o.Host, &o.RecordType, &cdnID, &o.CdnName,
 			&o.Cname, &o.OriginIP, &certExp, &o.CertCheckMsg,
-			&o.Project, &o.Env, &o.Module, &o.Operator, &o.Origin, &o.SourceName, &ignored, &o.IgnoreReason, &stale, &updated,
+			&o.Project, &o.Env, &o.Module, &o.ModuleSource, &o.LifeStatus, &o.StatusSource, &o.Operator, &o.Origin, &o.SourceName, &ignored, &o.IgnoreReason, &stale, &updated,
 			&o.DomainStatus, &domStale, &srcStatus); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -311,6 +314,7 @@ type recordIn struct {
 	Project    string `json:"project"`
 	Env        string `json:"env"`
 	Module     string `json:"module"`
+	LifeStatus string `json:"life_status"` // 使用中/备用/未使用/待下线/已下线,手动设置
 }
 
 func (h *RecordHandler) Create(c *gin.Context) {
@@ -342,10 +346,12 @@ func (h *RecordHandler) Update(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	// 手动改:模块/使用中状态标记为 manual(区分自动关联)
 	if _, err := h.DB.Exec(`UPDATE domain_records SET host=?, record_type=?, cdn_id=?, cname=?, origin_ip=?,
-		cert_expiry_at=NULLIF(?, ''), project=?, env=?, module=?, operator=? WHERE id=?`,
+		cert_expiry_at=NULLIF(?, ''), project=?, env=?, module=?, module_source='manual',
+		life_status=?, status_source=IF(?<>'', 'manual', status_source), operator=? WHERE id=?`,
 		in.Host, in.RecordType, nullableInt(in.CdnID), in.Cname, in.OriginIP, in.CertExpiry,
-		in.Project, in.Env, in.Module, currentUser(c), c.Param("id")); err != nil {
+		in.Project, in.Env, in.Module, in.LifeStatus, in.LifeStatus, currentUser(c), c.Param("id")); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

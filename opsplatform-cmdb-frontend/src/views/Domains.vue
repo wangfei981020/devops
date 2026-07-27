@@ -105,7 +105,19 @@
           <el-tag v-if="row.env" size="small" effect="plain" :style="tagStyle(envColor(row.env))">{{ row.env }}</el-tag>
           <span v-else class="muted">—</span>
         </template></el-table-column>
-        <el-table-column prop="module" label="模块" width="120" sortable="custom"><template #default="{ row }">{{ row.module || '—' }}</template></el-table-column>
+        <el-table-column prop="module" label="模块" width="150" sortable="custom"><template #default="{ row }">
+          <span v-if="row.module">{{ row.module }}
+            <el-tag v-if="row.module_source==='auto'" size="small" type="success" effect="plain" title="按 K8s 入口(Istio/Ingress)自动关联">自动</el-tag>
+            <el-tag v-else-if="row.module_source==='manual'" size="small" type="info" effect="plain" title="手动设置">手动</el-tag>
+          </span><span v-else class="muted">—</span>
+        </template></el-table-column>
+        <el-table-column label="使用状态" width="130"><template #default="{ row }">
+          <template v-if="row.life_status">
+            <el-tag size="small" :style="tagStyle(app.statusColor(row.life_status))">{{ row.life_status }}</el-tag>
+            <el-tag v-if="row.status_source==='auto'" size="small" type="success" effect="plain" title="关联K8s入口自动置为使用中">自动</el-tag>
+            <el-tag v-else-if="row.status_source==='manual'" size="small" type="info" effect="plain" title="手动设置">手动</el-tag>
+          </template><span v-else class="muted">—</span>
+        </template></el-table-column>
         <el-table-column prop="fqdn" label="域名" min-width="230" sortable="custom" show-overflow-tooltip><template #default="{ row }">
           <span class="mono" :class="{ stale: row.stale || row.domain_stale, ignored: row.ignored }">{{ row.fqdn }}</span>
           <el-tag v-if="row.stale" type="warning" size="small" style="margin-left:6px">解析已移出</el-tag>
@@ -441,7 +453,12 @@
             <el-option v-for="e in app.environments" :key="e.id" :label="e.code" :value="e.code" />
           </el-select>
         </el-form-item>
-        <el-form-item label="模块"><el-input v-model="form.module" style="width:260px" /></el-form-item>
+        <el-form-item label="模块"><el-input v-model="form.module" style="width:260px" placeholder="留空可用「K8s自动关联模块」自动填" /></el-form-item>
+        <el-form-item label="使用状态">
+          <el-select v-model="form.life_status" clearable placeholder="未设置（关联K8s入口会自动置使用中）" style="width:260px">
+            <el-option v-for="s in ['使用中','备用','未使用','待下线','已下线']" :key="s" :label="s" :value="s" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="CDN">
           <el-select v-model="form.cdn_id" clearable placeholder="（可选）内网/直连可留空" style="width:260px">
             <el-option v-for="c in app.cdns" :key="c.id" :label="c.name" :value="c.id" />
@@ -962,7 +979,7 @@ async function load() {
 
 function openAdd() {
   editing.value = false
-  form.value = { domain_ci_id: null, host: '', record_type: 'A', project: '', env: '', module: '', cdn_id: null, cname: '', origin_ip: '', cert_expiry_at: '' }
+  form.value = { domain_ci_id: null, host: '', record_type: 'A', project: '', env: '', module: '', life_status: '', cdn_id: null, cname: '', origin_ip: '', cert_expiry_at: '' }
   dlg.value = true
 }
 function openEdit(row) {

@@ -24,10 +24,14 @@
               <el-tag size="small" :type="row.status==='Bound'?'success':'warning'">{{ row.status }}</el-tag>
             </template></el-table-column>
             <el-table-column prop="capacity" label="容量" width="100" />
-            <el-table-column label="使用率" width="150"><template #default="{ row }">
-              <el-tooltip v-if="pu(row)" :content="`${pu(row).used_gi.toFixed(1)}Gi / ${pu(row).cap_gi.toFixed(1)}Gi`">
-                <div><el-progress :percentage="Math.min(100,Math.round(pu(row).pct))" :stroke-width="10" :color="pvcColor" text-inside /></div>
-              </el-tooltip>
+            <el-table-column label="使用率" width="200"><template #default="{ row }">
+              <template v-if="pu(row)">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <el-progress :percentage="Math.min(100,Math.round(pu(row).pct))" :stroke-width="8" :color="pvcColor" :show-text="false" style="flex:1" />
+                  <span :style="{color:pvcColor(pu(row).pct),fontWeight:600,fontSize:'13px',minWidth:'38px'}">{{ Math.round(pu(row).pct) }}%</span>
+                </div>
+                <div class="muted" style="font-size:12px">{{ pu(row).used_gi.toFixed(1) }}Gi / {{ pu(row).cap_gi.toFixed(1) }}Gi</div>
+              </template>
               <span v-else class="muted">—</span>
             </template></el-table-column>
             <el-table-column prop="storage_class" label="StorageClass" width="150"><template #default="{ row }">{{ row.storage_class || '—' }}</template></el-table-column>

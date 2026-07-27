@@ -82,15 +82,15 @@ func (h *K8sTopologyHandler) Topology(c *gin.Context) {
 	}
 	out := gin.H{"domain": domain}
 
-	// CDN（best-effort：域名台账 domain_records 匹配的 CDN）
-	out["cdns"] = h.strList(`SELECT DISTINCT cd.name FROM domain_records r JOIN cdns cd ON cd.id=r.cdn_id
-		WHERE r.cdn_id>0 AND (r.host=? OR CONCAT(r.host,'.') LIKE ? OR ?=r.host)`, domain, "%"+domain, domain)
+	// 边缘接入（CDN/回源/源站/证书）——从解析记录取该 FQDN 一行，口径与解析明细页一致。
+	// 有 CDN → 前端显 CDN厂商+回源CNAME；无 CDN → 显源站IP(origin_ip)。优先取有 CDN/证书的记录。
+	out["edge"] = h.oneRow(`SELECT COALESCE(cd.name,'') AS cdn, r.cname, r.origin_ip, r.cert_expiry_at AS cert_expiry
+		FROM domain_records r LEFT JOIN cdns cd ON cd.id=r.cdn_id
+		WHERE r.host=? ORDER BY (r.cdn_id IS NOT NULL) DESC, (r.cert_expiry_at IS NOT NULL) DESC LIMIT 1`, domain)
+	out["cdns"] = h.strList(`SELECT DISTINCT cd.name FROM domain_records r JOIN cdns cd ON cd.id=r.cdn_id WHERE r.cdn_id>0 AND r.host=?`, domain) // 兼容旧字段
 
-	// 证书（best-effort：域名台账里该 FQDN 的证书到期；列名 cert_expiry_at）
-	out["cert"] = h.oneRow(`SELECT host AS fqdn, cert_expiry_at FROM domain_records WHERE cert_expiry_at IS NOT NULL AND host=? LIMIT 1`, domain)
-
-	// 域名台账（项目/环境/模块/回源/源站）——供前端展示归属
-	out["domain_info"] = h.oneRow(`SELECT c.project, c.env, c.module, d.cert_expiry_at, d.dns_provider
+	// 域名台账（项目/环境/模块）——供前端展示归属
+	out["domain_info"] = h.oneRow(`SELECT c.project, c.env, c.module
 		FROM cis c JOIN domains d ON d.ci_id=c.id WHERE c.type='domain' AND c.name=? LIMIT 1`, domain)
 
 	// 匹配 Ingress + HTTPRoute + Istio VirtualService（hosts/hostnames 含该域名）

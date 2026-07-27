@@ -7,42 +7,52 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// AutoLinkModules 从 K8s 入口自动填域名的模块(仅补空的,不覆盖手动值)。
-// 规则(用户定):模块 = 匹配到的 VirtualService 名 = 后端 Service 去 -svc。优先 VS，其次 Ingress/HTTPRoute 后端。
+// AutoLinkModules 按解析记录的 host 匹配 K8s 入口(VS/Ingress/HTTPRoute)自动填模块+使用中(仅补空/原为auto的,不覆盖手动)。
+// 规则(用户定):模块 = 匹配到的 VirtualService 名 = 后端 Service 去 -svc。关联到入口即默认"使用中"。
 func (h *DomainHandler) AutoLinkModules(c *gin.Context) {
-	rows, err := h.DB.Query(`SELECT c.id, c.name FROM cis c JOIN domains d ON d.ci_id=c.id
-		WHERE c.type='domain' AND (c.module IS NULL OR c.module='')`)
+	rows, err := h.DB.Query(`SELECT id, host, COALESCE(life_status,''), COALESCE(status_source,'') FROM domain_records
+		WHERE ignored=0 AND stale=0 AND (module='' OR module_source='auto')`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	type dom struct {
-		id   int64
-		name string
+	type rec struct {
+		id     int64
+		host   string
+		life   string
+		srcSts string
 	}
-	doms := []dom{}
+	recs := []rec{}
 	for rows.Next() {
-		var d dom
-		if rows.Scan(&d.id, &d.name) == nil {
-			doms = append(doms, d)
+		var r rec
+		if rows.Scan(&r.id, &r.host, &r.life, &r.srcSts) == nil {
+			recs = append(recs, r)
 		}
 	}
 	rows.Close()
 
 	filled := 0
 	details := []gin.H{}
-	for _, d := range doms {
-		mod, via := h.inferModule(d.name)
+	for _, r := range recs {
+		mod, via := h.inferModule(r.host)
 		if mod == "" {
 			continue
 		}
-		if _, e := h.DB.Exec(`UPDATE cis SET module=? WHERE id=?`, mod, d.id); e == nil {
+		// 使用中:仅当当前状态为空或原本就是自动时,才自动设/更新为"使用中",不覆盖用户手动改的状态
+		setStatus := r.life == "" || r.srcSts == "auto"
+		var e error
+		if setStatus {
+			_, e = h.DB.Exec(`UPDATE domain_records SET module=?, module_source='auto', life_status='使用中', status_source='auto' WHERE id=?`, mod, r.id)
+		} else {
+			_, e = h.DB.Exec(`UPDATE domain_records SET module=?, module_source='auto' WHERE id=?`, mod, r.id)
+		}
+		if e == nil {
 			filled++
-			details = append(details, gin.H{"domain": d.name, "module": mod, "via": via})
+			details = append(details, gin.H{"domain": r.host, "module": mod, "via": via})
 		}
 	}
 	WriteAudit(h.DB, c, "auto_link_domain_modules", "filled="+strconv.Itoa(filled))
-	c.JSON(http.StatusOK, gin.H{"ok": true, "filled": filled, "scanned": len(doms), "details": details})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "filled": filled, "scanned": len(recs), "details": details})
 }
 
 // inferModule 按域名从 VS/Ingress/HTTPRoute 反推模块名，返回(模块, 来源)。

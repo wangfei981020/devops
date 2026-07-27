@@ -27,14 +27,27 @@
         </div>
         <div v-if="fwd">
           <div class="stage-row">
-            <div class="stage"><div class="st-h">CDN</div><div class="st-b"><el-tag v-for="c in fwd.cdns" :key="c" size="small">{{ c }}</el-tag><span v-if="!fwd.cdns.length" class="muted">—</span></div></div>
+            <div class="stage"><div class="st-h">CDN / 源站</div><div class="st-b">
+              <template v-if="fwd.edge && fwd.edge.cdn">
+                <el-tag size="small" type="warning">{{ fwd.edge.cdn }}</el-tag>
+                <div v-if="fwd.edge.cname" class="muted" style="margin-top:3px">回源 {{ fwd.edge.cname }}</div>
+              </template>
+              <template v-else-if="fwd.edge && fwd.edge.origin_ip">
+                <el-tag size="small" type="info">直连</el-tag>
+                <div style="margin-top:3px">源站 {{ fwd.edge.origin_ip }}</div>
+              </template>
+              <span v-else class="muted">—</span>
+            </div></div>
             <span class="arrow">→</span>
-            <div class="stage"><div class="st-h">域名</div><div class="st-b"><b>{{ fwd.domain }}</b></div></div>
+            <div class="stage"><div class="st-h">域名</div><div class="st-b">
+              <b>{{ fwd.domain }}</b>
+              <div v-if="fwd.domain_info" class="muted" style="margin-top:3px">{{ fwd.domain_info.project }} · {{ fwd.domain_info.env }} · {{ fwd.domain_info.module || '未关联模块' }}</div>
+            </div></div>
             <span class="arrow">→</span>
-            <div class="stage"><div class="st-h">证书</div><div class="st-b"><span v-if="fwd.cert">到期 {{ fwd.cert.cert_expiry }}</span><span v-else class="muted">—</span></div></div>
+            <div class="stage"><div class="st-h">证书</div><div class="st-b"><span v-if="fwd.edge && fwd.edge.cert_expiry">到期 {{ String(fwd.edge.cert_expiry).slice(0,10) }}</span><span v-else class="muted">—</span></div></div>
           </div>
           <el-alert v-if="!fwd.matched" type="info" :closable="false" style="margin-top:12px"
-            title="没匹配到 Ingress/HTTPRoute" description="该域名在已纳管集群里没有对应入口（或集群没装 Gateway API / 该域名未走 K8s 入口）" />
+            title="没匹配到 K8s 入口" description="该域名在已纳管集群里没有对应 Ingress / HTTPRoute / Istio VirtualService（或该域名未走 K8s 入口）" />
           <div v-for="(ch,i) in fwd.chains" :key="i" class="chain-card">
             <div class="chain-top">
               <el-tag type="warning" size="small">{{ ch.entry_kind }}</el-tag>

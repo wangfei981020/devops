@@ -41,11 +41,21 @@
         <el-table-column label="内存 req/lim" width="140"><template #default="{ row }">
           {{ mem(row.mem_req_mi) }} / {{ mem(row.mem_lim_mi) }}
         </template></el-table-column>
-        <el-table-column label="CPU用量" width="90"><template #default="{ row }">
-          <span v-if="u(row,'cpu_m')">{{ u(row,'cpu_m') }}</span><span v-else class="muted">—</span>
+        <el-table-column label="CPU用量·占req/lim" width="180"><template #default="{ row }">
+          <template v-if="u(row,'cpu_m')">
+            {{ u(row,'cpu_m') }}
+            <span v-if="pct(row,'cpu','req')!=null" :style="pctStyle(pct(row,'cpu','req'))">· req {{ pct(row,'cpu','req') }}%</span>
+            <span v-if="pct(row,'cpu','lim')!=null" :style="pctStyle(pct(row,'cpu','lim'))"> / lim {{ pct(row,'cpu','lim') }}%</span>
+          </template>
+          <span v-else class="muted">—</span>
         </template></el-table-column>
-        <el-table-column label="内存用量" width="90"><template #default="{ row }">
-          <span v-if="u(row,'mem_mi')">{{ u(row,'mem_mi') }}</span><span v-else class="muted">—</span>
+        <el-table-column label="内存用量·占req/lim" width="190"><template #default="{ row }">
+          <template v-if="u(row,'mem_mi')">
+            {{ u(row,'mem_mi') }}
+            <span v-if="pct(row,'mem','req')!=null" :style="pctStyle(pct(row,'mem','req'))">· req {{ pct(row,'mem','req') }}%</span>
+            <span v-if="pct(row,'mem','lim')!=null" :style="pctStyle(pct(row,'mem','lim'))"> / lim {{ pct(row,'mem','lim') }}%</span>
+          </template>
+          <span v-else class="muted">—</span>
         </template></el-table-column>
         <el-table-column label="重启" width="70"><template #default="{ row }">
           <span :class="{bad: row.restarts>5}">{{ row.restarts }}</span>
@@ -169,6 +179,16 @@ function u(row, k) {
   if (!m || m[k] == null) return null
   return k === 'cpu_m' ? Math.round(m[k]) + 'm' : Math.round(m[k]) + 'Mi'
 }
+// pct: 实时用量 占 request/limit 的百分比(metric=cpu/mem, kind=req/lim)
+function pct(row, metric, kind) {
+  const m = usage.value[row.namespace + '/' + row.name]
+  if (!m) return null
+  const used = metric === 'cpu' ? m.cpu_m : m.mem_mi
+  const div = metric === 'cpu' ? (kind === 'req' ? row.cpu_req_m : row.cpu_lim_m) : (kind === 'req' ? row.mem_req_mi : row.mem_lim_mi)
+  if (used == null || !div || Number(div) <= 0) return null
+  return Math.round(used / Number(div) * 100)
+}
+function pctStyle(p) { return { color: p >= 85 ? '#f56c6c' : (p >= 60 ? '#e6a23c' : '#909399'), fontSize: '12px' } }
 
 onMounted(async () => {
   try {
