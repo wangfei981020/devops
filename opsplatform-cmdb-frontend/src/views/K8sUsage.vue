@@ -35,6 +35,18 @@
         <el-button type="primary" :icon="Search" :loading="loading" @click="query">查询</el-button>
       </div>
       <div v-if="err" class="err">{{ err }}</div>
+      <div v-if="summary" class="usum">
+        <span class="u-item">当前用量 <b>{{ summary.use }}</b></span>
+        <template v-if="summary.reqPct != null">
+          <span class="u-sep">·</span>
+          <span class="u-item">占 Request <b :style="pctColor(summary.reqPct)">{{ summary.reqPct }}%</b> <span class="muted">/ {{ summary.req }}</span></span>
+        </template>
+        <template v-if="summary.limPct != null">
+          <span class="u-sep">·</span>
+          <span class="u-item">占 Limit <b :style="pctColor(summary.limPct)">{{ summary.limPct }}%</b> <span class="muted">/ {{ summary.lim }}</span></span>
+        </template>
+        <span v-if="summary.reqPct == null && (target === 'pod' || target === 'workload')" class="muted">（该目标未设 request/limit）</span>
+      </div>
       <div ref="chartEl" style="height:440px;width:100%"></div>
       <el-empty v-if="!loading && !hasData && !err" description="选目标+名称后点查询" />
     </el-card>
@@ -54,6 +66,20 @@ const metric = ref('cpu'); const unit = ref('abs'); const pctMode = ref(false); 
 const candidates = ref([]); const candLoading = ref(false)
 const rangeSel = ref(60); const customRange = ref(null)
 const chartEl = ref(null); let chart = null
+const summary = ref(null) // { use, reqPct, req, limPct, lim } 图上方汇总:当前用量 + 占req/lim%
+
+// 把原始值(CPU=核 / 内存=字节)格式化成可读单位
+function fmtVal(v, m) {
+  if (m === 'mem') return (v / 1073741824 >= 1) ? (v / 1073741824).toFixed(2) + 'Gi' : (v / 1048576).toFixed(0) + 'Mi'
+  const mm = v * 1000
+  if (mm >= 10) return mm.toFixed(0) + 'm'
+  if (mm >= 1) return mm.toFixed(1) + 'm'
+  return mm.toFixed(2) + 'm'
+}
+function pctColor(p) {
+  if (p == null) return {}
+  return { color: p >= 85 ? '#f56c6c' : (p >= 60 ? '#e6a23c' : '#67c23a'), fontWeight: 600 }
+}
 
 const targetLabel = computed(() => ({ pod: 'Pod', workload: '工作负载', node: '节点', host: '主机' }[target.value]))
 
@@ -97,7 +123,7 @@ function fmtY(v) {
 async function query() {
   if (!clusterId.value) { ElMessage.warning('选数据源'); return }
   if (!name.value) { ElMessage.warning('选' + targetLabel.value); return }
-  loading.value = true; err.value = ''; hasData.value = false
+  loading.value = true; err.value = ''; hasData.value = false; summary.value = null
   try {
     const sel = candidates.value.find(c => c.value === name.value)
     const p = { cluster_id: clusterId.value, target: target.value, name: name.value, metric: metric.value }
@@ -109,20 +135,38 @@ async function query() {
     if (!r.ok) { err.value = '查询失败：' + (r.error || JSON.stringify(r.data)); return }
     const result = r.data?.data?.result || []
     if (!result.length) { err.value = '无数据（该时间段/名称在 Prometheus 中无该指标；主机需装 node-exporter）'; return }
-    // 占比模式:用 CMDB 里各 Pod 的 request/limit 把绝对用量换成百分比
+    // 取各 Pod 的 request/limit（用于占比换算 + 上方汇总;仅 pod/工作负载有）
     let reqMap = {}
-    if (unit.value !== 'abs' && (target.value === 'pod' || target.value === 'workload')) {
+    if (target.value === 'pod' || target.value === 'workload') {
       try {
         const pods = await listK8sPods({ cluster_id: clusterId.value, namespace: sel?.ns || ns.value })
         pods.forEach(pd => { reqMap[pd.name] = pd })
       } catch (e) { /* 拿不到就退回绝对 */ }
     }
-    const divisor = (podName) => {
+    // 某 pod 在当前 metric 下的 request/limit（原始单位:CPU=核 / 内存=字节）
+    const rl = (podName, kind) => {
       const pd = reqMap[podName]
       if (!pd) return 0
-      if (metric.value === 'cpu') return (unit.value === 'lim' ? pd.cpu_lim_m : pd.cpu_req_m) / 1000 // 毫核→核(与绝对同单位)
-      return (unit.value === 'lim' ? pd.mem_lim_mi : pd.mem_req_mi) * 1048576 // Mi→字节
+      if (metric.value === 'cpu') return (kind === 'lim' ? pd.cpu_lim_m : pd.cpu_req_m) / 1000
+      return (kind === 'lim' ? pd.mem_lim_mi : pd.mem_req_mi) * 1048576
     }
+    const divisor = (podName) => rl(podName, unit.value === 'lim' ? 'lim' : 'req')
+
+    // 汇总:各系列最新值 + 对应 request/limit 累加 → 总用量 + 占比（一眼看清,不受小值影响）
+    let totUse = 0, totReq = 0, totLim = 0
+    result.forEach((s) => {
+      const pn = s.metric.pod || s.metric.node || s.metric.instance || ''
+      totUse += s.values.length ? parseFloat(s.values[s.values.length - 1][1]) : 0
+      totReq += rl(pn, 'req'); totLim += rl(pn, 'lim')
+    })
+    summary.value = {
+      use: fmtVal(totUse, metric.value),
+      reqPct: totReq > 0 ? Math.round(totUse / totReq * 100) : null,
+      req: totReq > 0 ? fmtVal(totReq, metric.value) : '—',
+      limPct: totLim > 0 ? Math.round(totUse / totLim * 100) : null,
+      lim: totLim > 0 ? fmtVal(totLim, metric.value) : '—',
+    }
+
     const series = result.map((s, i) => {
       const podName = s.metric.pod || s.metric.node || s.metric.instance || ''
       const d = unit.value !== 'abs' ? divisor(podName) : 0
@@ -132,6 +176,14 @@ async function query() {
         data: s.values.map(([ts, v]) => [ts * 1000, d > 0 ? parseFloat(v) / d * 100 : parseFloat(v)])
       }
     })
+    // 绝对值模式 + 单系列:画 request/limit 参考线,直观看余量
+    if (unit.value === 'abs' && series.length === 1) {
+      const pn = result[0].metric.pod || result[0].metric.node || result[0].metric.instance || ''
+      const req = rl(pn, 'req'), lim = rl(pn, 'lim'); const ml = []
+      if (req > 0) ml.push({ yAxis: req, lineStyle: { color: '#e6a23c', type: 'dashed' }, label: { formatter: 'Request', position: 'insideEndTop', color: '#e6a23c' } })
+      if (lim > 0) ml.push({ yAxis: lim, lineStyle: { color: '#f56c6c', type: 'dashed' }, label: { formatter: 'Limit', position: 'insideEndTop', color: '#f56c6c' } })
+      if (ml.length) series[0].markLine = { symbol: 'none', data: ml }
+    }
     pctMode.value = unit.value !== 'abs' && Object.keys(reqMap).length > 0
     if (unit.value !== 'abs' && !pctMode.value) err.value = '注:未取到 request/limit，暂显绝对值'
     hasData.value = true
@@ -163,4 +215,8 @@ onMounted(async () => {
 .muted { color: #909399; font-size: 12px; }
 .bar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
 .err { color: #f56c6c; background: #fef0f0; border: 1px solid #fde2e2; padding: 8px 12px; border-radius: 6px; margin-bottom: 10px; font-size: 13px; }
+.usum { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: #f4f6fa; border: 1px solid #e4e7ed; border-radius: 6px; padding: 8px 14px; margin-bottom: 10px; font-size: 13px; color: #303133; }
+.usum b { font-size: 15px; }
+.u-item { display: inline-flex; align-items: center; gap: 5px; }
+.u-sep { color: #c0c4cc; }
 </style>

@@ -35,12 +35,12 @@ func NewObsQueryHandler(db *sql.DB, cipher *crypto.Cipher) *ObsQueryHandler {
 }
 
 func (h *ObsQueryHandler) Register(r *gin.RouterGroup) {
-	r.GET("/obs/usage", h.Usage)          // 资源使用率(Prometheus): cluster_id,env?,target,namespace?,name,metric,minutes,query?
-	r.GET("/obs/loki", h.Loki)            // Loki 日志: env?/cluster_id?,query(LogQL),minutes
+	r.GET("/obs/usage", h.Usage)           // 资源使用率(Prometheus): cluster_id,env?,target,namespace?,name,metric,minutes,query?
+	r.GET("/obs/loki", h.Loki)             // Loki 日志: env?/cluster_id?,query(LogQL),minutes
 	r.GET("/obs/kubesphere", h.KubeSphere) // KubeSphere 透传: env?/cluster_id?,path(kapis 路径)
-	r.GET("/k8s/pod-usage", h.PodUsage)   // 全 Pod 实时用量(cpu_m/mem_mi) map，供 Pod 页列展示
-	r.GET("/k8s/node-usage", h.NodeUsage) // 全节点实时用量(cpu%/mem%) map，供节点页列展示
-	r.GET("/k8s/pvc-usage", h.PVCUsage)   // 全 PVC 使用率(used/cap/pct) map，供存储页列展示
+	r.GET("/k8s/pod-usage", h.PodUsage)    // 全 Pod 实时用量(cpu_m/mem_mi) map，供 Pod 页列展示
+	r.GET("/k8s/node-usage", h.NodeUsage)  // 全节点实时用量(cpu%/mem%) map，供节点页列展示
+	r.GET("/k8s/pvc-usage", h.PVCUsage)    // 全 PVC 使用率(used/cap/pct) map，供存储页列展示
 }
 
 // PVCUsage 返回 {"ns/pvc": {used_gi, cap_gi, pct}}（kubelet volume 指标）。
@@ -58,7 +58,7 @@ func (h *ObsQueryHandler) PVCUsage(c *gin.Context) {
 	}
 	if used, err := promInstant(base, token, `kubelet_volume_stats_used_bytes`); err == nil {
 		for _, s := range used {
-			get(s.Metric["namespace"]+"/"+s.Metric["persistentvolumeclaim"])["used_gi"] = s.Value / 1073741824
+			get(s.Metric["namespace"] + "/" + s.Metric["persistentvolumeclaim"])["used_gi"] = s.Value / 1073741824
 		}
 	}
 	if cap, err := promInstant(base, token, `kubelet_volume_stats_capacity_bytes`); err == nil {
@@ -141,12 +141,12 @@ func (h *ObsQueryHandler) PodUsage(c *gin.Context) {
 	}
 	if cpu, err := promInstant(base, token, `sum by(namespace,pod)(rate(container_cpu_usage_seconds_total{container!=""}[5m]))`); err == nil {
 		for _, s := range cpu {
-			get(s.Metric["namespace"]+"/"+s.Metric["pod"])["cpu_m"] = s.Value * 1000
+			get(s.Metric["namespace"] + "/" + s.Metric["pod"])["cpu_m"] = s.Value * 1000
 		}
 	}
 	if mem, err := promInstant(base, token, `sum by(namespace,pod)(container_memory_working_set_bytes{container!=""})`); err == nil {
 		for _, s := range mem {
-			get(s.Metric["namespace"]+"/"+s.Metric["pod"])["mem_mi"] = s.Value / 1048576
+			get(s.Metric["namespace"] + "/" + s.Metric["pod"])["mem_mi"] = s.Value / 1048576
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "usage": usage})
@@ -165,14 +165,26 @@ func (h *ObsQueryHandler) NodeUsage(c *gin.Context) {
 		}
 		return usage[k]
 	}
-	if cpu, err := promInstant(base, token, `(1 - avg by(node)(rate(node_cpu_seconds_total{mode="idle"}[5m]))) * 100`); err == nil {
+	// 兼容两种标签:标准 Prometheus 用 node;KubeSphere/whizard 把 instance relabel 成节点名(无 node 标签)。
+	// 用 by(node,instance) 同时保留两者,取值时 node 优先、回落 instance。
+	nodeKey := func(m map[string]string) string {
+		if n := m["node"]; n != "" {
+			return n
+		}
+		return m["instance"]
+	}
+	if cpu, err := promInstant(base, token, `(1 - avg by(node,instance)(rate(node_cpu_seconds_total{mode="idle"}[5m]))) * 100`); err == nil {
 		for _, s := range cpu {
-			get(s.Metric["node"])["cpu_pct"] = s.Value
+			if k := nodeKey(s.Metric); k != "" {
+				get(k)["cpu_pct"] = s.Value
+			}
 		}
 	}
-	if mem, err := promInstant(base, token, `(1 - sum by(node)(node_memory_MemAvailable_bytes) / sum by(node)(node_memory_MemTotal_bytes)) * 100`); err == nil {
+	if mem, err := promInstant(base, token, `(1 - sum by(node,instance)(node_memory_MemAvailable_bytes) / sum by(node,instance)(node_memory_MemTotal_bytes)) * 100`); err == nil {
 		for _, s := range mem {
-			get(s.Metric["node"])["mem_pct"] = s.Value
+			if k := nodeKey(s.Metric); k != "" {
+				get(k)["mem_pct"] = s.Value
+			}
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "usage": usage})

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -151,7 +152,11 @@ func (h *ObsHandler) Test(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
-	code, body, err := obsGet(url, token, 10*time.Second)
+	var typ string
+	_ = h.DB.QueryRow(`SELECT type FROM obs_endpoints WHERE id=?`, id).Scan(&typ)
+	// 按类型探"真实存在"的路径:Loki 根路径本身就 404,必须探 /loki/api/v1/labels。
+	probe := strings.TrimRight(url, "/") + probePath(typ)
+	code, body, err := obsGet(probe, token, 10*time.Second)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 		return
@@ -161,6 +166,18 @@ func (h *ObsHandler) Test(c *gin.Context) {
 		snippet = snippet[:200]
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": code >= 200 && code < 400, "status": code, "body": snippet})
+}
+
+// probePath 按数据源类型返回一个"确定存在"的探活路径(裸根路径对 Loki 会 404)。
+func probePath(typ string) string {
+	switch strings.ToLower(strings.TrimSpace(typ)) {
+	case "loki":
+		return "/loki/api/v1/labels"
+	case "prometheus", "vm", "victoriametrics", "prometheus/vm":
+		return "/api/v1/query?query=up"
+	default:
+		return "" // kubesphere 等:探裸地址
+	}
 }
 
 // ---- 供 usage/loki/kubesphere 复用 ----
