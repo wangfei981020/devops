@@ -1,0 +1,26 @@
+:root {
+  --bg: #faf7f2;
+  --panel: #fff;
+  --ink: #1a1714;
+  --ink2: #6b6259;
+  --ink3: #a99f93;
+  --line: #ece5db;
+  --accent: #0d9488;
+  --accent-soft: #d9f2ee;
+  --gold: #b8860b;
+  --gold-soft: #f7edd4;
+  --bad: #d1483a;
+  --bad-soft: #fbe7e4;
+  --ok: #1f9d63;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body, #app { margin: 0; height: 100%; }
+body {
+  font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-decoration: none; }

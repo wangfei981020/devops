@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: opsplatform-ai-backend
+  namespace: opsplatform
+type: Opaque
+stringData:
+  # 启动默认凭证(可留空,在设置页填);设置页填写的内存生效但重启会回落到这里
+  ANTHROPIC_API_KEY: ""
+  ANTHROPIC_AUTH_TOKEN: ""
+  # CMDB MCP 只读访问 token
+  CMDB_MCP_TOKEN: "7782870f77ddf1aa7b1b8b2432665becf57eac8feda319d2"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsplatform-ai-backend
+  namespace: opsplatform
+  labels: { app: opsplatform-ai-backend }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: opsplatform-ai-backend }
+  template:
+    metadata:
+      labels: { app: opsplatform-ai-backend }
+    spec:
+      containers:
+        - name: app
+          image: localhost:8070/opsplatform/opsplatform-ai-backend:v4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: ANTHROPIC_MODEL
+              value: "claude-opus-4-8"
+            - name: CMDB_MCP_URL
+              value: "http://opsplatform-cmdb-backend:8080/api/mcp"
+            - name: ANTHROPIC_API_KEY
+              valueFrom: { secretKeyRef: { name: opsplatform-ai-backend, key: ANTHROPIC_API_KEY } }
+            - name: ANTHROPIC_AUTH_TOKEN
+              valueFrom: { secretKeyRef: { name: opsplatform-ai-backend, key: ANTHROPIC_AUTH_TOKEN } }
+            - name: CMDB_MCP_TOKEN
+              valueFrom: { secretKeyRef: { name: opsplatform-ai-backend, key: CMDB_MCP_TOKEN } }
+          readinessProbe:
+            httpGet: { path: /api/healthz, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsplatform-ai-backend
+  namespace: opsplatform
+spec:
+  type: ClusterIP
+  selector: { app: opsplatform-ai-backend }
+  ports:
+    - port: 8080
+      targetPort: 8080

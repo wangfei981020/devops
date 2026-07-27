@@ -30,6 +30,9 @@ services:
       - "30825:30825"
       - "30826:30826"
       - "30827:30827"   # opsplatform-gke-version-frontend
+      - "30828:30828"   # opsplatform-k8sinsight-frontend
+      - "30829:30829"   # opsplatform-cmdb-frontend
+      - "30830:30830"   # opsplatform-ai-copilot
 
 networks:
   kind:
