@@ -91,8 +91,21 @@ func (s *Server) hasKey() bool {
 	return s.cfg.APIKey != "" || s.cfg.AuthToken != ""
 }
 
+// startHealthServer 独立健康端口(与平台其它后端统一::8088/health,业务端口 hang 死仍可探活)。
+func startHealthServer(addr string) {
+	hm := http.NewServeMux()
+	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK); _, _ = w.Write([]byte("ok")) }
+	hm.HandleFunc("/health", ok)
+	hm.HandleFunc("/ready", ok)
+	log.Printf("健康端口 %s (/health,/ready)", addr)
+	if err := http.ListenAndServe(addr, hm); err != nil {
+		log.Printf("健康端口监听失败: %v", err)
+	}
+}
+
 func main() {
 	port := env("PORT", "8080")
+	go startHealthServer(env("HEALTH_PORT", ":8088"))
 
 	s := &Server{
 		cfg: Config{

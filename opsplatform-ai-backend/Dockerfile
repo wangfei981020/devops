@@ -9,5 +9,5 @@ FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 app
 USER app
 COPY --from=build /ai-backend /ai-backend
-EXPOSE 8080
+EXPOSE 8080 8088
 ENTRYPOINT ["/ai-backend"]
