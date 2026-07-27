@@ -27,7 +27,7 @@ spec:
     spec:
       containers:
         - name: app
-          image: localhost:8070/opsplatform/opsplatform-ai-backend:v4
+          image: localhost:8070/opsplatform/opsplatform-ai-backend:v5
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

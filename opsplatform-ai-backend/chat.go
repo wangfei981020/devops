@@ -90,9 +90,33 @@ func (c *Chatter) loadTools(ctx context.Context) error {
 		}
 		return fmt.Errorf("无可用 MCP 服务器")
 	}
+	// Prompt Caching:在最后一个工具打缓存断点 → 缓存整个工具块(静态,每轮循环都重发,命中省~90%)
+	if n := len(tools); n > 0 && tools[n-1].OfTool != nil {
+		tools[n-1].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	}
 	c.tools = tools
 	c.owner = owner
 	return nil
+}
+
+// setConvCache 把对话历史的缓存断点移到最后一条消息的末块(先清所有旧断点,保证同一时刻只有一个),
+// 让循环里反复重发的历史(尤其大块工具返回)命中缓存。短对话(<最小缓存长度)时断点自动被忽略,无害。
+func setConvCache(messages []anthropic.MessageParam) {
+	for _, m := range messages {
+		for i := range m.Content {
+			if cc := m.Content[i].GetCacheControl(); cc != nil {
+				*cc = anthropic.CacheControlEphemeralParam{}
+			}
+		}
+	}
+	if n := len(messages); n > 0 {
+		c := messages[n-1].Content
+		if len(c) > 0 {
+			if cc := c[len(c)-1].GetCacheControl(); cc != nil {
+				*cc = anthropic.NewCacheControlEphemeralParam()
+			}
+		}
+	}
 }
 
 // Event 是推给前端的 SSE 事件。
@@ -114,8 +138,11 @@ func (c *Chatter) Turn(ctx context.Context, messages []anthropic.MessageParam, e
 	if c.oauth { // 订阅 token:首段必须是 Claude Code 身份
 		system = append([]anthropic.TextBlockParam{{Text: claudeCodeIdentity}}, system...)
 	}
+	// Prompt Caching:系统提示末段打断点(涵盖 工具+系统 整个静态前缀)
+	system[len(system)-1].CacheControl = anthropic.NewCacheControlEphemeralParam()
 	finalText := ""
 	for iter := 0; iter < 12; iter++ { // 兜底最多 12 轮工具调用
+		setConvCache(messages) // 对话历史(含大块工具返回)也缓存,断点移到最后一条
 		msg, err := c.ac.Messages.New(ctx, anthropic.MessageNewParams{
 			Model:     anthropic.Model(c.model),
 			MaxTokens: 8192,
@@ -128,6 +155,8 @@ func (c *Chatter) Turn(ctx context.Context, messages []anthropic.MessageParam, e
 			emit(Event{Type: "error", Text: "调用模型失败: " + err.Error()})
 			return finalText, messages, err
 		}
+		u := msg.Usage
+		log.Printf("用量[iter %d] 输入=%d 输出=%d 缓存写=%d 缓存读=%d", iter, u.InputTokens, u.OutputTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens)
 		messages = append(messages, msg.ToParam())
 
 		var toolResults []anthropic.ContentBlockParamUnion
