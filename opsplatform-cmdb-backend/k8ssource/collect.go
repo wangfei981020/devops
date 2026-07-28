@@ -378,10 +378,29 @@ func syncPods(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 			cpuReq, memReq, cpuLim, memLim, restarts, p.Status.PodIP, st, podReason(p),
 		})
 	}
-	return replaceAll(db, "k8s_pods", []string{
+	n, err := replaceAll(db, "k8s_pods", []string{
 		"cluster_id", "namespace", "name", "node_name", "workload", "phase",
 		"cpu_req_m", "mem_req_mi", "cpu_lim_m", "mem_lim_mi", "restarts", "pod_ip", "start_time", "reason",
 	}, cid, rows)
+	if err != nil {
+		return 0, err
+	}
+	// 顺带记下 PVC 挂载关系（复用同一次 List，不额外请求 APIServer）。
+	// 这是判断「盘还有没有人用」的唯一可靠依据。
+	vols := make([][]any, 0, 64)
+	for i := range list.Items {
+		p := &list.Items[i]
+		for _, v := range p.Spec.Volumes {
+			if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName != "" {
+				vols = append(vols, []any{cid, p.Namespace, p.Name, v.PersistentVolumeClaim.ClaimName})
+			}
+		}
+	}
+	if _, err := replaceAll(db, "k8s_pod_volumes",
+		[]string{"cluster_id", "namespace", "pod_name", "pvc_name"}, cid, vols); err != nil {
+		return n, err
+	}
+	return n, nil
 }
 
 // podResources 汇总 Pod 所有容器的 request/limit：CPU 毫核、内存 MiB。

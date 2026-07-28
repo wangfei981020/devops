@@ -34,6 +34,11 @@ func NewObsQueryHandler(db *sql.DB, cipher *crypto.Cipher) *ObsQueryHandler {
 	return &ObsQueryHandler{DB: db, Cipher: cipher}
 }
 
+func (h *ObsQueryHandler) RegisterInsights(r *gin.RouterGroup) {
+	r.GET("/k8s/resource-waste", h.ResourceWaste) // request vs 实测用量 + 推荐值
+	r.GET("/k8s/idle-cost", h.IdleCost)           // 实付/已分摊/闲置三段拆分
+}
+
 func (h *ObsQueryHandler) Register(r *gin.RouterGroup) {
 	r.GET("/obs/usage", h.Usage)           // 资源使用率(Prometheus): cluster_id,env?,target,namespace?,name,metric,minutes,query?
 	r.GET("/obs/loki", h.Loki)             // Loki 日志: env?/cluster_id?,query(LogQL),minutes
