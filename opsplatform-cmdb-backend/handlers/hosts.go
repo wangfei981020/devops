@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"opsplatform-cmdb-backend/cloudsource"
 	"opsplatform-cmdb-backend/crypto"
+	"opsplatform-cmdb-backend/logx"
 )
 
 // HostHandler 云主机（一期只读）：云账号管理 + GCP 同步 + 主机台账 + 成本估算 + 域名关联。
@@ -31,7 +33,8 @@ func (h *HostHandler) Register(r *gin.RouterGroup) {
 	r.PUT("/cloud-accounts/:id", h.UpdateAccount)
 	r.DELETE("/cloud-accounts/:id", h.DeleteAccount)
 	r.POST("/cloud-accounts/:id/sync", h.SyncAccount)          // 同步账号下所有 project（后台异步）
-	r.GET("/cloud-accounts/:id/sync-status", h.SyncStatus)     // 主机同步进度轮询
+	r.GET("/cloud-accounts/:id/sync-status", h.SyncStatus)        // 账号级：汇总 + 每项目明细
+	r.GET("/cloud-projects/:pid/sync-status", h.ProjectSyncStatus) // 项目级进度
 	r.POST("/cloud-accounts/:id/projects", h.CreateProject)
 	r.PUT("/cloud-projects/:pid", h.UpdateProject)
 	r.DELETE("/cloud-projects/:pid", h.DeleteProject)
@@ -488,11 +491,20 @@ type hostSyncState struct {
 	Synced, Stale         int
 	Err                   string
 	StartedAt, FinishedAt time.Time
+	AccountID             int
+	ProjectID             int64
+	ProjectName           string
 }
 
+// 进度按 **project** 存，不按 account。
+//
+// 之前 key 是 accountID，导致同一账号下所有项目共用一份进度：三个项目
+// （24 台 / 38 台 / 0 台）在界面上全都显示同一个数字，其中还包括一个同步失败、
+// 一台主机都没有的项目。互斥也因此被抬到账号级——同账号里同步一个项目时，
+// 点另一个项目会被直接拒。两个问题同源，一起降到项目粒度。
 var (
 	hostSyncMu    sync.Mutex
-	hostSyncStore = map[int]*hostSyncState{}
+	hostSyncStore = map[int64]*hostSyncState{}
 )
 
 func hsSet(st *hostSyncState, f func(*hostSyncState)) {
@@ -504,16 +516,34 @@ func hsSet(st *hostSyncState, f func(*hostSyncState)) {
 	hostSyncMu.Unlock()
 }
 
-// startHostSync 起一个账号级同步状态；已在跑返回 nil。
-func (h *HostHandler) startHostSync(accountID int) *hostSyncState {
+// startProjectSync 起一个项目级同步状态；该项目已在跑返回 nil。
+// 不同项目互不阻塞——它们用各自的凭据打各自的 GCP project，本来就没有共享资源。
+func (h *HostHandler) startProjectSync(accountID int, pid int64, projName string) *hostSyncState {
 	hostSyncMu.Lock()
 	defer hostSyncMu.Unlock()
-	if st := hostSyncStore[accountID]; st != nil && st.Running {
+	if st := hostSyncStore[pid]; st != nil && st.Running {
 		return nil
 	}
-	st := &hostSyncState{Running: true, StartedAt: time.Now()}
-	hostSyncStore[accountID] = st
+	st := &hostSyncState{Running: true, StartedAt: time.Now(),
+		AccountID: accountID, ProjectID: pid, ProjectName: projName}
+	hostSyncStore[pid] = st
 	return st
+}
+
+// projectMeta 取项目所属账号与显示名，供进度展示用。
+func (h *HostHandler) projectMeta(pid int64) (accountID int, name string, ok bool) {
+	var n, projID *string
+	if h.DB.QueryRow(`SELECT account_id, name, project_id FROM cloud_account_projects WHERE id=?`, pid).
+		Scan(&accountID, &n, &projID) != nil {
+		return 0, "", false
+	}
+	switch {
+	case n != nil && *n != "":
+		name = *n
+	case projID != nil:
+		name = *projID
+	}
+	return accountID, name, true
 }
 
 func (h *HostHandler) finishHostSync(st *hostSyncState, errMsg string) {
@@ -534,19 +564,25 @@ func (h *HostHandler) SyncProject(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "项目不存在"})
 		return
 	}
-	st := h.startHostSync(accountID)
+	_, projName, _ := h.projectMeta(pid)
+	st := h.startProjectSync(accountID, pid, projName)
 	if st == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "该账号正在同步中，请稍候"})
+		c.JSON(http.StatusConflict, gin.H{"error": "该项目正在同步中，请稍候"})
 		return
 	}
 	WriteAudit(h.DB, c, "sync_cloud_project", strconv.FormatInt(pid, 10))
 	go func() {
-		_, _, _, err := h.syncOneProject(pid, st)
+		// 手动触发也要进「执行记录」——之前只有定时任务写，手动点完在执行记录里
+		// 什么都看不到，用户无从判断到底跑没跑。
+		runID, start := startManualRunLog(h.DB, "host_sync", "手动同步项目 "+projName)
+		_, synced, stale, err := h.syncOneProject(pid, st)
 		e := ""
 		if err != nil {
 			e = err.Error()
 		}
 		h.finishHostSync(st, e)
+		finishManualRunLog(h.DB, runID, start, err,
+			fmt.Sprintf("同步 %s：%d 台，失效 %d", projName, synced, stale))
 	}()
 	c.JSON(http.StatusAccepted, gin.H{"ok": true, "running": true, "msg": "已在后台同步，主机多约 1-3 分钟，完成后自动刷新"})
 }
@@ -571,38 +607,165 @@ func (h *HostHandler) SyncAccount(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "该账号下还没有项目，请先添加项目并配置凭据"})
 		return
 	}
-	st := h.startHostSync(accountID)
-	if st == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "该账号正在同步中，请稍候"})
+	// 为每个项目各起一份进度。已在单独同步中的项目跳过，不因为其中一个在跑就拒掉整批。
+	type job struct {
+		pid  int64
+		st   *hostSyncState
+		name string
+	}
+	jobs := make([]job, 0, len(pids))
+	skipped := []string{}
+	for _, pid := range pids {
+		_, pn, _ := h.projectMeta(pid)
+		st := h.startProjectSync(accountID, pid, pn)
+		if st == nil {
+			skipped = append(skipped, pn)
+			continue
+		}
+		jobs = append(jobs, job{pid, st, pn})
+	}
+	if len(jobs) == 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "该账号下的项目都正在同步中，请稍候"})
 		return
 	}
 	WriteAudit(h.DB, c, "sync_cloud_account", c.Param("id"))
 	go func() {
+		// 串行跑：各项目虽用各自凭据，但共享 GCP API 配额，并发容易撞限流
+		runID, start := startManualRunLog(h.DB, "host_sync", "手动同步账号下全部项目")
 		var errs []string
-		for _, pid := range pids {
-			if _, _, _, err := h.syncOneProject(pid, st); err != nil {
-				errs = append(errs, err.Error())
+		totalSynced, totalStale := 0, 0
+		for _, j := range jobs {
+			_, synced, stale, err := h.syncOneProject(j.pid, j.st)
+			e := ""
+			if err != nil {
+				e = err.Error()
+				errs = append(errs, j.name+": "+e)
 			}
+			totalSynced += synced
+			totalStale += stale
+			// 每个项目跑完就结束自己那份进度，前端能逐个看到完成
+			h.finishHostSync(j.st, e)
 		}
-		h.finishHostSync(st, strings.Join(errs, "；"))
+		var runErr error
+		if len(errs) > 0 {
+			runErr = fmt.Errorf("%s", strings.Join(errs, "；"))
+		}
+		finishManualRunLog(h.DB, runID, start, runErr,
+			fmt.Sprintf("同步 %d 个项目：%d 台，失效 %d", len(jobs), totalSynced, totalStale))
 	}()
-	c.JSON(http.StatusAccepted, gin.H{"ok": true, "running": true, "msg": "已在后台同步，主机多约 1-3 分钟，完成后自动刷新"})
+	resp := gin.H{"ok": true, "running": true, "projects": len(jobs),
+		"msg": "已在后台同步，主机多约 1-3 分钟，完成后自动刷新"}
+	if len(skipped) > 0 {
+		// 跳过了什么必须说出来，否则用户以为全部都在跑
+		resp["skipped"] = skipped
+		resp["msg"] = fmt.Sprintf("已同步 %d 个项目；%d 个项目正在同步中已跳过：%s",
+			len(jobs), len(skipped), strings.Join(skipped, "、"))
+	}
+	c.JSON(http.StatusAccepted, resp)
 }
 
 // SyncStatus 查某云账号后台同步进度（前端轮询）。
+//
+// 进度按项目存，这里汇总该账号下所有项目：顶层字段是合计（保持与旧版兼容），
+// projects 数组给出每个项目各自的进度——界面上三行显示同一个数字的毛病就出在
+// 以前没有这份明细，各行只能去读同一个账号级计数。
 func (h *HostHandler) SyncStatus(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	hostSyncMu.Lock()
-	st := hostSyncStore[id]
+	items := []gin.H{}
+	agg := hostSyncState{}
+	anyRunning, started := false, false
+	errs := []string{}
+	for _, st := range hostSyncStore {
+		if st.AccountID != id {
+			continue
+		}
+		started = true
+		if st.Running {
+			anyRunning = true
+		}
+		agg.Total += st.Total
+		agg.Done += st.Done
+		agg.Synced += st.Synced
+		agg.Stale += st.Stale
+		if st.Err != "" {
+			errs = append(errs, st.ProjectName+": "+st.Err)
+		}
+		items = append(items, gin.H{
+			"project_id": st.ProjectID, "project": st.ProjectName, "running": st.Running,
+			"total": st.Total, "done": st.Done, "synced": st.Synced, "stale": st.Stale,
+			"error": st.Err,
+		})
+	}
+	hostSyncMu.Unlock()
+	if !started {
+		c.JSON(http.StatusOK, gin.H{"running": false, "started": false, "projects": []gin.H{}})
+		return
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i]["project_id"].(int64) < items[j]["project_id"].(int64)
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"running": anyRunning, "started": true,
+		"total": agg.Total, "done": agg.Done, "synced": agg.Synced, "stale": agg.Stale,
+		"error": strings.Join(errs, "；"), "projects": items,
+	})
+}
+
+// ProjectSyncStatus 查单个项目的同步进度。
+func (h *HostHandler) ProjectSyncStatus(c *gin.Context) {
+	pid, _ := strconv.ParseInt(c.Param("pid"), 10, 64)
+	hostSyncMu.Lock()
+	st := hostSyncStore[pid]
 	if st == nil {
 		hostSyncMu.Unlock()
 		c.JSON(http.StatusOK, gin.H{"running": false, "started": false})
 		return
 	}
-	out := gin.H{"running": st.Running, "started": true, "total": st.Total, "done": st.Done,
-		"synced": st.Synced, "stale": st.Stale, "error": st.Err}
+	out := gin.H{"running": st.Running, "started": true, "project": st.ProjectName,
+		"total": st.Total, "done": st.Done, "synced": st.Synced, "stale": st.Stale, "error": st.Err}
 	hostSyncMu.Unlock()
 	c.JSON(http.StatusOK, out)
+}
+
+// startManualRunLog 手动触发的同步也写一条执行记录。
+// 之前只有定时任务写 task_run_logs，手动点完在「执行记录」里什么都看不到。
+// task_key 与定时任务一致，这样按任务名筛选时手动和定时的能一起看到，
+// 靠 trigger_by 区分。
+func startManualRunLog(db *sql.DB, taskKey, summary string) (int64, time.Time) {
+	start := time.Now()
+	var name string
+	_ = db.QueryRow(`SELECT name FROM scheduled_tasks WHERE task_key=?`, taskKey).Scan(&name)
+	if name == "" {
+		name = summary
+	}
+	res, err := db.Exec(`INSERT INTO task_run_logs (task_key,name,status,trigger_by,started_at,finished_at)
+		VALUES (?,?,'running','manual',?,?)`, taskKey, name, start, start)
+	if err != nil {
+		logx.J("host", "manual_run_log_fail", map[string]any{
+			"task": taskKey, "err": err.Error(), "warn": "手动同步的执行记录没写进去，界面上会看不到这次执行",
+		})
+		return 0, start
+	}
+	id, _ := res.LastInsertId()
+	return id, start
+}
+
+// finishManualRunLog 收尾：把 running 记录更新成终态。
+func finishManualRunLog(db *sql.DB, runID int64, start time.Time, err error, summary string) {
+	if runID == 0 {
+		return
+	}
+	status := "success"
+	if err != nil {
+		status, summary = "failed", err.Error()
+	}
+	if _, e := db.Exec(`UPDATE task_run_logs SET status=?, summary=?, duration_ms=?, progress='', finished_at=NOW() WHERE id=?`,
+		status, truncate(summary, 250), int(time.Since(start).Milliseconds()), runID); e != nil {
+		logx.J("host", "manual_run_log_finish_fail", map[string]any{
+			"run_id": runID, "err": e.Error(), "warn": "执行记录停在 running 状态，界面上会一直显示运行中",
+		})
+	}
 }
 
 // syncOneProject 同步单个 project 行：解密凭据 → 列实例 → 逐台 upsert(报进度) → 标 stale → 网络资源。

@@ -27,7 +27,8 @@
                 <el-table-column prop="host_count" label="主机数" width="80" />
                 <el-table-column prop="last_sync_at" label="最近同步" width="140"><template #default="{ row: p }">{{ p.last_sync_at || '—' }}</template></el-table-column>
                 <el-table-column label="操作" width="180"><template #default="{ row: p }">
-                  <el-button link type="success" size="small" :loading="syncing['p'+p.id]" @click="syncProj(p)">同步</el-button>
+                  <el-button link type="success" size="small" :loading="syncing['p'+p.id]" @click="syncProject(row.id, p.id)">同步</el-button>
+                  <span v-if="projProg[p.id]" class="muted" style="font-size:11px">{{ progressText(projProg[p.id]) }}</span>
                   <el-button link type="primary" size="small" @click="openProj(row, p)">编辑</el-button>
                   <el-button link type="danger" size="small" @click="delProj(p)">删除</el-button>
                 </template></el-table-column>
@@ -40,7 +41,8 @@
         <el-table-column prop="provider" label="厂商" width="90"><template #default="{ row }"><el-tag size="small">{{ row.provider }}</el-tag></template></el-table-column>
         <el-table-column label="项目数" width="90"><template #default="{ row }">{{ row.projects?.length || 0 }}</template></el-table-column>
         <el-table-column label="操作" width="220" fixed="right"><template #default="{ row }">
-          <el-button link type="success" size="small" :loading="syncing['a'+row.id]" @click="syncAcct(row)">同步全部</el-button>
+          <el-button link type="success" size="small" :loading="syncing['a'+row.id]" @click="syncAccount(row.id)">同步全部</el-button>
+          <span v-if="acctProg[row.id]" class="muted" style="font-size:12px">同步中 {{ progressText(acctProg[row.id]) }}</span>
           <el-button link type="primary" size="small" @click="openAcct(row)">编辑</el-button>
           <el-button link type="danger" size="small" @click="delAcct(row)">删除</el-button>
         </template></el-table-column>
@@ -76,9 +78,10 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { listCloudAccounts, createCloudAccount, updateCloudAccount, deleteCloudAccount, syncCloudAccount,
-  createCloudProject, updateCloudProject, deleteCloudProject, syncCloudProject } from '../api/cmdb'
+import { listCloudAccounts, createCloudAccount, updateCloudAccount, deleteCloudAccount,
+  createCloudProject, updateCloudProject, deleteCloudProject } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { useHostSync } from '../composables/useHostSync'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
 
@@ -86,7 +89,11 @@ import Pager from '../components/Pager.vue'
 defineProps({ embedded: { type: Boolean, default: false } })
 
 const app = useAppStore()
-const accounts = ref([]); const loading = ref(false); const expanded = ref([]); const syncing = reactive({})
+const accounts = ref([]); const loading = ref(false); const expanded = ref([])
+// 与「主机」页共用同一份同步实现：这里原本只发请求、不轮询进度、错误一律吞成「失败」，
+// 而同步失败发生在后台协程里，不轮询就永远看不到原因（比如 GCP 权限 403）。
+const { syncing, acctProg, projProg, syncAccount, syncProject, progressText } =
+  useHostSync(() => load())
 const { page, pageSize, paged: accPaged } = usePager(accounts)
 const acctDlg = ref(false); const acctEdit = ref(false); const acctForm = reactive({ id: 0, name: '', provider: 'gcp', billing_export_dataset: '' })
 const projDlg = ref(false); const projEdit = ref(false); const projAcct = ref(0)
@@ -102,7 +109,7 @@ async function saveAcct() {
   catch (e) { ElMessage.error(e.response?.data?.error || '保存失败') }
 }
 async function delAcct(row) { try { await app.showConfirm(`删除云账号「${row.name}」？其下项目+同步来的主机一并清除。`); await deleteCloudAccount(row.id); ElMessage.success('已删除'); load() } catch (e) { if (e !== 'cancel') ElMessage.error('失败') } }
-async function syncAcct(row) { syncing['a'+row.id] = true; try { await syncCloudAccount(row.id); ElMessage.success('已触发同步（后台进行，看执行记录）') } catch (e) { ElMessage.error('失败') } finally { syncing['a'+row.id] = false } }
+
 
 function openProj(acct, p) { projEdit.value = !!p; projAcct.value = acct.id; Object.assign(projForm, p ? { ...p, cred_json: '' } : { id: 0, name: '', project_id: '', cred_json: '' }); projDlg.value = true }
 async function saveProj() {
@@ -111,7 +118,7 @@ async function saveProj() {
   catch (e) { ElMessage.error(e.response?.data?.error || '保存失败') }
 }
 async function delProj(p) { try { await app.showConfirm(`删除项目「${p.project_id}」？`); await deleteCloudProject(p.id); ElMessage.success('已删除'); load() } catch (e) { if (e !== 'cancel') ElMessage.error('失败') } }
-async function syncProj(p) { syncing['p'+p.id] = true; try { await syncCloudProject(p.id); ElMessage.success('已触发同步') } catch (e) { ElMessage.error('失败') } finally { syncing['p'+p.id] = false } }
+
 
 onMounted(load)
 </script>

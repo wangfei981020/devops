@@ -152,8 +152,8 @@
                 </template></el-table-column>
                 <el-table-column label="操作" width="150"><template #default="{ row: p }">
                   <div style="display:flex;gap:4px;align-items:center">
-                    <el-button link type="primary" :icon="Refresh" :loading="syncing['p'+p.id]" @click="syncProj(acc, p)">同步</el-button>
-                    <span v-if="hostProg[acc.id]" class="muted" style="font-size:11px">{{ hostProg[acc.id].done }}/{{ hostProg[acc.id].total || '…' }}</span>
+                    <el-button link type="primary" :icon="Refresh" :loading="syncing['p'+p.id]" @click="syncProject(acc.id, p.id)">同步</el-button>
+                    <span v-if="projProg[p.id]" class="muted" style="font-size:11px">{{ progressText(projProg[p.id]) }}</span>
                     <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openProjForm(acc, p)" /></el-tooltip>
                     <el-tooltip content="删除（连主机）"><el-button link type="danger" :icon="Delete" @click="delProj(p)" /></el-tooltip>
                   </div>
@@ -168,8 +168,8 @@
         <el-table-column label="项目数" width="80" align="right"><template #default="{ row }">{{ row.projects.length }}</template></el-table-column>
         <el-table-column label="操作" width="220" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:6px;align-items:center">
-            <el-button link type="primary" :icon="Refresh" :loading="syncing['a'+row.id]" @click="syncAcct(row)">同步全部</el-button>
-            <span v-if="hostProg[row.id]" class="muted" style="font-size:12px">同步中 {{ hostProg[row.id].done }}/{{ hostProg[row.id].total || '…' }}</span>
+            <el-button link type="primary" :icon="Refresh" :loading="syncing['a'+row.id]" @click="syncAccount(row.id)">同步全部</el-button>
+            <span v-if="acctProg[row.id]" class="muted" style="font-size:12px">同步中 {{ progressText(acctProg[row.id]) }}</span>
             <el-tooltip content="编辑账号"><el-button link type="primary" :icon="Edit" @click="openAcctForm(row)" /></el-tooltip>
             <el-tooltip content="删除（连项目和主机）"><el-button link type="danger" :icon="Delete" @click="delAcct(row)" /></el-tooltip>
           </div>
@@ -264,10 +264,11 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, View, Refresh, Edit, Delete, Plus, Money, Cloudy } from '@element-plus/icons-vue'
 import { listHosts, getHost, listCloudAccounts, createCloudAccount, updateCloudAccount, deleteCloudAccount,
-  syncCloudAccount, cloudAccountSyncStatus, createCloudProject, updateCloudProject, deleteCloudProject, syncCloudProject,
+  createCloudProject, updateCloudProject, deleteCloudProject,
   listComputeRates, createComputeRate, updateComputeRate, deleteComputeRate,
   listDiskRates, createDiskRate, updateDiskRate, deleteDiskRate } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { useHostSync } from '../composables/useHostSync'
 import { providerLabel as plabel, providerStyle, projectStyle, regionStyle } from '../utils/cloud'
 
 const app = useAppStore()
@@ -275,8 +276,10 @@ const rows = ref([]), loading = ref(false)
 const f = ref({ kw: '', provider: null, project: null, zone: null, status: null })
 const page = ref(1), size = ref(10)
 const dDlg = ref(false), detail = ref(null), detailCiid = ref(null), asOf = ref('')
-const acctDlg = ref(false), accounts = ref([]), syncing = ref({})
-const hostProg = ref({}) // 后台同步进度：{ [accountId]: { total, done } }
+const acctDlg = ref(false), accounts = ref([])
+// 同步逻辑与「接入管理」共用同一份实现，避免两处分叉（以前接入管理那份缺轮询和错误透传）
+const { syncing, acctProg, projProg, syncAccount, syncProject, progressText } =
+  useHostSync(() => { refreshAccounts(); load() })
 const acctForm = ref({ dlg: false })
 const projForm = ref({ dlg: false })
 const rateDlg = ref(false), rateTab = ref('compute'), computeRates = ref([]), diskRates = ref([])
@@ -330,34 +333,6 @@ async function delAcct(row) {
   try { await app.showConfirm(`删除云账号 ${row.name}？其下项目和同步来的主机一并清除`); await deleteCloudAccount(row.id); refreshAccounts(); load() }
   catch (e) { if (e !== 'cancel') ElMessage.error('失败') }
 }
-// 后台同步：POST 立即返回 202，随后每 2.5s 轮询进度，跑完自动刷新
-async function pollHostSync(accId, projId) {
-  let s
-  try { s = await cloudAccountSyncStatus(accId) }
-  catch (e) { setTimeout(() => pollHostSync(accId, projId), 2500); return }
-  hostProg.value = { ...hostProg.value, [accId]: { total: s.total || 0, done: s.done || 0 } }
-  if (s.running) { setTimeout(() => pollHostSync(accId, projId), 2500); return }
-  // 已结束：清进度、清 loading、提示、刷新
-  const { [accId]: _drop, ...rest } = hostProg.value
-  hostProg.value = rest
-  syncing.value = { ...syncing.value, ['a' + accId]: false, ...(projId ? { ['p' + projId]: false } : {}) }
-  if (s.error) ElMessage.error('同步失败：' + s.error)
-  else ElMessage.success(`同步完成：${s.synced} 台，失效 ${s.stale}`)
-  refreshAccounts(); load()
-}
-async function syncAcct(row) {
-  syncing.value = { ...syncing.value, ['a' + row.id]: true }
-  hostProg.value = { ...hostProg.value, [row.id]: { total: 0, done: 0 } }
-  try {
-    await syncCloudAccount(row.id)
-    pollHostSync(row.id)
-  } catch (e) {
-    syncing.value = { ...syncing.value, ['a' + row.id]: false }
-    const { [row.id]: _drop, ...rest } = hostProg.value; hostProg.value = rest
-    ElMessage.error(e.response?.data?.error || '同步启动失败')
-  }
-}
-
 // 项目（凭据层）
 function openProjForm(acc, p) {
   projForm.value = p
@@ -376,19 +351,6 @@ async function delProj(p) {
   try { await app.showConfirm(`删除项目 ${p.name}（${p.project_id}）？其下同步来的主机一并清除`); await deleteCloudProject(p.id); refreshAccounts(); load() }
   catch (e) { if (e !== 'cancel') ElMessage.error('失败') }
 }
-async function syncProj(acc, p) {
-  syncing.value = { ...syncing.value, ['p' + p.id]: true, ['a' + acc.id]: true }
-  hostProg.value = { ...hostProg.value, [acc.id]: { total: 0, done: 0 } }
-  try {
-    await syncCloudProject(p.id)
-    pollHostSync(acc.id, p.id)
-  } catch (e) {
-    syncing.value = { ...syncing.value, ['p' + p.id]: false, ['a' + acc.id]: false }
-    const { [acc.id]: _drop, ...rest } = hostProg.value; hostProg.value = rest
-    ElMessage.error(e.response?.data?.error || '同步启动失败')
-  }
-}
-
 function noteLabel(n) { return ({ official: '官方确认', estimate: '估算待核对', confirmed: '已核对', manual: '手填', fallback: '兜底' }[n] || n || '—') }
 function noteType(n) { return n === 'official' || n === 'confirmed' ? 'success' : (n === 'estimate' ? 'warning' : 'info') }
 async function refreshRates() { computeRates.value = await listComputeRates(); diskRates.value = await listDiskRates() }
