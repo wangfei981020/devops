@@ -90,6 +90,10 @@ func main() {
 	obsQ.Register(api)         // 资源使用率/Loki/KubeSphere 查询
 	obsQ.RegisterInsights(api) // 浪费排行/闲置成本（需 Prometheus 实测数据）
 	obsQ.RegisterDevOps(api)   // 流水线运行记录/构建日志（Jenkins 输出不进 pod stdout，只能走这条）
+	obsQ.RegisterPromQuery(api) // 通用 PromQL + 指标发现：中间件(Kafka/nacos/etcd…)指标不必逐个写接口
+	harborH := handlers.NewHarborHandler(db, cipher)
+	harborH.Register(api)      // Harbor 只读：健康/配额/仓库（补发布链路「推送」「拉取」两个环节）
+	harborH.RegisterAdmin(api) // Harbor 接入配置
 	mcpH := handlers.NewMCPHandler(db, cfg.JWTSecret, cfg.Port)
 	mcpH.RegisterAuthed(api)
 	// 周期全量同步所有启用集群（阶段3），默认每 120s 一轮
