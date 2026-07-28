@@ -1,0 +1,24 @@
+# opsplatform MySQL 的本地固定直连通道（NodePort 30306）
+#
+# 为什么单独一个 Service：原来的 ClusterIP `mysql` 是集群内应用靠 DNS 访问的，
+# 不动它，另开一个 NodePort 指向同一组 Pod，只给本机调试用。
+#
+# 用法：mysql -h127.0.0.1 -P30306 -uroot -p<MYSQL_ROOT_PASSWORD> opsplatform
+# 端口经 k8s-proxy 容器映射到 host，只监听本机，不对外暴露。
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-nodeport
+  namespace: opsplatform
+  labels:
+    app: mysql
+    purpose: local-debug
+spec:
+  type: NodePort
+  selector:
+    app: mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+      nodePort: 30306

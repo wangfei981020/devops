@@ -71,3 +71,19 @@ opsplatform-jira-confluence-lock-backend/
 
 # 本地敏感备份（含 AES_KEY / mysqldump），切勿提交
 backups/
+
+# CMDB 真实 Secret（含 DB/JWT/AES/admin 密码），勿提交；用 k8s-secret.example.yaml 占位
+opsplatform-cmdb-backend/k8s-secret.yaml
+
+# 临时干净交付副本（仅本地，勿提交/推送 GitHub）
+ops-new/
+
+# Kali 安全学习笔记（仅本地，勿提交/推送 GitHub）
+kali-security-120天学习计划.md
+kali-学习笔记.md
+kali-*.md
+.playwright-mcp/
+
+# k8s-proxy 本地凭证与备份，不入库
+k8s-proxy/token
+k8s-proxy/*.bak
