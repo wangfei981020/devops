@@ -117,14 +117,13 @@ async function del(row) {
   } catch (e) { if (e !== 'cancel') ElMessage.error('删除失败') }
 }
 
-// Cloudflare 的 verify 接口只验「Token 是否有效」，不验权限够不够——
-// 权限缺失要到同步时才暴露，所以这里成功后仍提示去同步确认。
+// 后端改成探真正要用的只读接口（列站点），所以这里通过就等于「token 有效 + 读权限够」。
 async function verify(row) {
   busy['v' + row.id] = true
   try {
     const r = await verifyCdnAccount(row.id)
-    if (r.ok) ElMessage.success('Token 有效；权限是否齐全需点「同步」确认')
-    else ElMessage.error(r.error || 'Token 无效')
+    if (r.ok) ElMessage.success('Token 可用：认证通过且具备读取站点的权限')
+    else ElMessage.error(r.error || 'Token 不可用')
   } catch (e) { ElMessage.error('验证失败') } finally { busy['v' + row.id] = false }
 }
 

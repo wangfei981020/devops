@@ -127,9 +127,20 @@ func (c *Client) getPaged(ctx context.Context, path string, q url.Values) ([]jso
 	}
 }
 
-// Verify 校验 token 可用（配置账号时先验一下，免得配错了到同步时才发现）。
+// Verify 校验 token 是否真的能用（配账号时先探一下，免得配错了到同步才发现）。
+//
+// 不用 /user/tokens/verify：那个端点只认「用户 API 令牌」，而 Cloudflare 的
+// 「账户 API 令牌」(Account-owned) 不属于任何用户，调它一律返回 401 Invalid API Token——
+// 哪怕这个 token 完全正常。实测就撞过：verify 报 401，同一个 token 同步却成功拉回
+// 6 个站点 45 条解析记录。账户令牌要验得带 account_id，但那个字段是选填的，靠它不可靠。
+//
+// 所以直接探一个真正要调的只读接口。好处是顺带把权限也验了：
+// tokens/verify 只回答「token 有没有效」，答不了「Zone:Read 给了没有」，
+// 而后者才是配错时最常见的问题。
 func (c *Client) Verify(ctx context.Context) error {
-	_, err := c.get(ctx, "/user/tokens/verify", nil)
+	q := url.Values{}
+	q.Set("per_page", "1") // 只要能通就行，不必真拉数据
+	_, err := c.get(ctx, "/zones", q)
 	return err
 }
 
