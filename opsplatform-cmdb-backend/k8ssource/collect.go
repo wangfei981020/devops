@@ -63,6 +63,7 @@ func SyncCluster(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, dc d
 	run("gateways", func() (int, error) { return syncGateways(ctx, db, dc, clusterID) })
 	run("httproutes", func() (int, error) { return syncHTTPRoutes(ctx, db, dc, clusterID) })
 	run("virtualservices", func() (int, error) { return syncVirtualServices(ctx, db, dc, clusterID) })
+	run("configmaps", func() (int, error) { return syncConfigMaps(ctx, db, cs, clusterID) })
 	run("pods", func() (int, error) { return syncPods(ctx, db, cs, clusterID) })
 	// pod 数回填到节点 + 派生节点池（依赖 nodes/pods 已入库）
 	run("node_pools", func() (int, error) { return derivePools(db, clusterID) })
@@ -398,6 +399,11 @@ func syncPods(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 	}
 	if _, err := replaceAll(db, "k8s_pod_volumes",
 		[]string{"cluster_id", "namespace", "pod_name", "pvc_name"}, cid, vols); err != nil {
+		return n, err
+	}
+	// 配置引用同样复用这一次 List：谁引用了哪个 ConfigMap/Secret 全在 pod spec 里，
+	// 不需要额外权限，也不额外打 APIServer。
+	if err := syncPodConfigRefs(db, cid, list.Items); err != nil {
 		return n, err
 	}
 	return n, nil

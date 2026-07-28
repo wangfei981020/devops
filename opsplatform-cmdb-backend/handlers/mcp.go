@@ -125,6 +125,7 @@ var mcpTools = []mcpTool{
 	{"pod_events", "取 Pod 相关事件", "/api/k8s/pod-events", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"namespace", "string", "命名空间", true}, {"pod", "string", "Pod名", true}}, false},
 	{"list_events", "统一事件(全集群,含Node),可按对象类型/级别筛", "/api/k8s/events", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"kind", "string", "对象类型(Node/Pod/..)", false}, {"type", "string", "Warning/Normal", false}, {"namespace", "string", "命名空间", false}}, false},
 	{"diagnose_pod", "规则诊断 Pod:根因+证据+处置建议(只给方案)", "/api/k8s/diagnose", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"namespace", "string", "命名空间", true}, {"pod", "string", "Pod名", true}}, false},
+	{"config_audit", "配置引用审计:Pod 起不来时查缺哪个 ConfigMap/Secret(含镜像拉取密钥)。ConfigMap 有名录可确定判定;Secret 无名录,仅在事件有 not found 佐证时报出——未报出不等于没问题", "/api/k8s/config-audit", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"namespace", "string", "命名空间", false}, {"include_unused", "string", "1=同时列出无人引用的 ConfigMap", false}}, false},
 	{"domain_topology", "域名全链路:CDN→Ingress→Service→Pod→节点→云主机", "/api/k8s/topology", []mcpParam{{"domain", "string", "域名", true}}, false},
 	{"node_impact", "反向影响:某节点下线/卡死影响哪些服务和域名", "/api/k8s/impact", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"node", "string", "节点名", true}}, false},
 	{"cost_overview", "云成本总览:按项目/环境/集群/类型,cloud真实vs idc迁云估算", "/api/k8s/cost/overview", []mcpParam{{"dim", "string", "维度:biz_project/gcp_project/cluster/env/type", false}, {"mode", "string", "cloud/idc", false}}, false},

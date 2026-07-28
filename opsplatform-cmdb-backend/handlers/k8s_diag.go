@@ -39,6 +39,8 @@ func (h *K8sDiagHandler) Register(r *gin.RouterGroup) {
 	r.GET("/k8s/pod-events", h.Events)    // cluster_id, namespace, pod
 	r.GET("/k8s/events", h.ClusterEvents) // cluster_id, namespace?, kind?(Node/Pod/..), type?(Warning/Normal) 统一事件
 	r.GET("/k8s/diagnose", h.Diagnose)    // cluster_id, namespace, pod → 规则诊断
+	// cluster_id, namespace?, include_unused? → 配置引用完整性（缺哪个 ConfigMap/Secret）
+	r.GET("/k8s/config-audit", h.ConfigAudit)
 }
 
 // ClusterEvents 统一事件视图（全集群/命名空间，可按 involvedObject.kind(含 Node) / 类型 筛，实时）。

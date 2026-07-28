@@ -1,0 +1,381 @@
+package handlers
+
+import (
+	"context"
+	"net/http"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// 配置引用审计：回答「Pod 起不来，缺的到底是哪个 ConfigMap/Secret」。
+//
+// 判定能力在两类资源上并不对等，这个差异必须暴露给使用者，不能糊在一起：
+//
+//	ConfigMap —— 有名录（只读 RBAC 已含 configmaps 权限），能**确定性**判断存不存在、键在不在。
+//	Secret    —— 没有名录，也不打算加权限（list secrets 会连 data 一起返回，
+//	             等于让 CMDB 能读全集群所有密码）。因此默认**不下结论**，
+//	             只有拿到事件佐证才报缺失。
+//
+// 为什么 Secret 不做「全部标为待确认」：那会产出几百条无效条目。
+// CMDB-005 的教训——误报会连带把真问题一起淹掉。宁可少报，不可乱报。
+
+// K8s 把「引用的东西不存在」写进事件消息，这是无 Secret 权限时唯一的判定依据。
+var (
+	// Error: secret "xxx" not found / configmap "xxx" not found
+	notFoundPattern = regexp.MustCompile(`(?i)\b(secret|configmap)\s+"([^"]+)"\s+not\s+found`)
+	// kubelet 取不到镜像拉取密钥时的措辞，DEV-002 正是这一类。
+	// 实测格式（K8s 1.29 FailedToRetrieveImagePullSecret 事件）：
+	//   Unable to retrieve some image pull secrets (harbor-id, other); attempting to pull the image may not succeed.
+	// 括号内是逗号分隔的名字列表，可能多个。
+	pullSecretListPattern = regexp.MustCompile(`(?i)unable to retrieve some image pull secrets?\s*\(([^)]+)\)`)
+	// 另一种单数措辞，部分版本/运行时会用：
+	//   Unable to retrieve pull secret ns/name for ns/pod because the secret does not exist
+	pullSecretSinglePattern = regexp.MustCompile(`(?i)unable to retrieve pull secret\s+[^/\s]+/(\S+?)\s`)
+)
+
+// 系统自动维护的 ConfigMap：每个命名空间都有、无人显式引用，报「未被引用」纯属噪音。
+var systemConfigMaps = map[string]bool{
+	"kube-root-ca.crt":     true,
+	"istio-ca-root-cert":   true,
+	"openshift-service-ca": true,
+}
+
+// configNoiseNS 平台自带组件所在的命名空间。它们的 ConfigMap 由 operator 维护，
+// 「无 Pod 引用」是常态，报出来只会淹掉业务侧的真问题。
+// 与 orphans.go 的 isSystemNamespace 分开定义：那个判的是「命名空间可以为空」，
+// 这里判的是「配置未被引用属正常」，两个语义不同，合用会互相牵制。
+func configNoiseNS(ns string) bool {
+	if isSystemNamespace(ns) {
+		return true
+	}
+	switch ns {
+	case "istio-system", "cattle-system", "kubesphere-system", "monitoring", "cert-manager":
+		return true
+	}
+	return strings.HasPrefix(ns, "kube-")
+}
+
+type configFinding struct {
+	Severity  string   `json:"severity"`
+	Status    string   `json:"status"` // missing | key_missing | unused
+	Namespace string   `json:"namespace"`
+	RefKind   string   `json:"ref_kind"`
+	RefName   string   `json:"ref_name"`
+	RefKey    string   `json:"ref_key,omitempty"`
+	Source    string   `json:"source,omitempty"`
+	Pods      []string `json:"pods,omitempty"`
+	PodCount  int      `json:"pod_count,omitempty"`
+	Basis     string   `json:"basis"` // 判定依据——依据不同可信度不同，必须写明
+	Issue     string   `json:"issue"`
+	Action    string   `json:"action"`
+}
+
+// refRow 一条聚合后的引用（同名同键的多个 Pod 合并）。
+type refRow struct {
+	ns, kind, name, key, source string
+	optional                    bool
+	pods                        []string
+	badPods                     int // 其中状态异常的 Pod 数
+}
+
+// ConfigAudit 审计配置引用完整性。
+// 参数：cluster_id(必填)、namespace(可选)、include_unused(可选，默认不含未引用清单)
+func (h *K8sDiagHandler) ConfigAudit(c *gin.Context) {
+	cid, _ := strconv.Atoi(c.Query("cluster_id"))
+	if cid == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 必填"})
+		return
+	}
+	ns := c.Query("namespace")
+
+	refs, err := h.loadRefs(cid, ns)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	cmIndex, err := h.loadConfigMapIndex(cid, ns)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 事件佐证只在有异常 Pod 时才拉——没有异常就没有 Secret 缺失可查，白打一次 APIServer。
+	var evidence map[string]bool
+	evidenceOK := false
+	if anyBad(refs) {
+		evidence, evidenceOK = h.notFoundEvidence(cid, ns)
+	}
+
+	findings := make([]configFinding, 0, 16)
+	referenced := map[string]bool{}
+
+	for _, r := range refs {
+		if r.kind == kindCMName {
+			referenced[r.ns+"/"+r.name] = true
+		}
+		if r.optional {
+			continue // 缺了也不影响启动，报出来只会淹没真问题
+		}
+		if f := judgeRef(r, cmIndex, evidence, evidenceOK); f != nil {
+			findings = append(findings, *f)
+		}
+	}
+
+	// 反向：名录里有、但没有任何 Pod 引用。措辞是「未发现引用」而非「无用」——
+	// ConfigMap 也可能被工作流/外部工具读取，CMDB 只看得到 Pod 这一侧。
+	unused := []configFinding{}
+	if c.Query("include_unused") == "1" {
+		for k, cm := range cmIndex {
+			ns0, name := splitNSName(k)
+			if referenced[k] || systemConfigMaps[name] || configNoiseNS(ns0) {
+				continue
+			}
+			unused = append(unused, configFinding{
+				Severity: "low", Status: "unused", Namespace: ns0,
+				RefKind: kindCMName, RefName: name,
+				Basis: "名录中存在，但本集群所有 Pod 的 spec 里都没有引用它",
+				Issue: "无 Pod 引用（" + itoa(cm.keyCount) + " 个键）",
+				Action: "确认没有工作流/外部工具在读它之后再清理；CMDB 只能看到 Pod 侧的引用，" +
+					"Job/CronJob 未运行时也不会有 Pod",
+			})
+		}
+		sort.Slice(unused, func(i, j int) bool {
+			return unused[i].Namespace+unused[i].RefName < unused[j].Namespace+unused[j].RefName
+		})
+	}
+
+	sortFindings(findings)
+	sum := map[string]int{}
+	for _, f := range findings {
+		sum[f.Status]++
+		sum[f.Severity]++
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"cluster_id":        cid,
+		"checked_at":        time.Now().Format("2006-01-02 15:04:05"),
+		"summary":           sum,
+		"findings":          findings,
+		"unused_configmaps": unused,
+		"capability": gin.H{
+			"configmap": "可确定性判定：CMDB 有 ConfigMap 名录（仅键名，不含内容）",
+			"secret": "无法主动判定存在性：只读 RBAC 不含 secrets 权限（该权限会连同 Secret 内容一并授予）。" +
+				"Secret 缺失仅在事件中出现 not found 佐证时才报出——未报出不等于不存在问题",
+			"evidence_loaded": evidenceOK,
+		},
+	})
+}
+
+const kindCMName = "configmap"
+
+// judgeRef 判定单条引用。ConfigMap 走名录（确定性），Secret 走事件佐证（有则报、无则不报）。
+func judgeRef(r refRow, idx map[string]cmEntry, evidence map[string]bool, evidenceOK bool) *configFinding {
+	base := configFinding{
+		Namespace: r.ns, RefKind: r.kind, RefName: r.name, RefKey: r.key,
+		Source: r.source, Pods: capPods(r.pods), PodCount: len(r.pods),
+	}
+	key := r.ns + "/" + r.name
+
+	if r.kind == kindCMName {
+		cm, ok := idx[key]
+		if !ok {
+			base.Severity, base.Status = "high", "missing"
+			base.Basis = "CMDB 有本集群完整 ConfigMap 名录，其中不存在该名称——这是确定性判定"
+			base.Issue = "引用的 ConfigMap 不存在（来源：" + r.source + "）"
+			base.Action = "确认是否漏建、或名称/命名空间写错；" + restartWarning(r)
+			return &base
+		}
+		if r.key != "" && !cm.hasKey(r.key) {
+			base.Severity, base.Status = "high", "key_missing"
+			base.Basis = "ConfigMap 存在，但名录记录的键名里没有 " + r.key
+			base.Issue = "引用的键 " + r.key + " 在 ConfigMap 中不存在"
+			base.Action = "补上该键，或修正引用的键名；" + restartWarning(r)
+			return &base
+		}
+		return nil
+	}
+
+	// Secret：没有名录，只认事件佐证。
+	if evidenceOK && evidence[key] {
+		base.Severity, base.Status = "high", "missing"
+		base.Basis = "集群事件中出现该 Secret 的 not found 记录（无 Secret 名录，此为唯一可用依据）"
+		base.Issue = "引用的 Secret 不存在（来源：" + r.source + "）"
+		if r.source == "imagePullSecret" {
+			base.Issue = "镜像拉取密钥不存在，镜像拉不下来（ImagePullBackOff 的直接原因）"
+			base.Action = "在命名空间 " + r.ns + " 下创建该拉取密钥；" +
+				"若多个命名空间共用同一仓库，检查是否漏了这个命名空间"
+			return &base
+		}
+		base.Action = "确认是否漏建、或名称/命名空间写错；" + restartWarning(r)
+		return &base
+	}
+	return nil
+}
+
+// restartWarning 引用缺失但 Pod 还活着 = 定时炸弹：进程在跑只是因为它启动早于配置被删。
+func restartWarning(r refRow) string {
+	if r.badPods == 0 && len(r.pods) > 0 {
+		return "注意：这些 Pod 目前仍在运行（启动时该配置还在），但**下次重启会直接起不来**"
+	}
+	return "受影响 Pod 当前已处于异常状态"
+}
+
+type cmEntry struct {
+	keys     string
+	keyCount int
+}
+
+func (e cmEntry) hasKey(k string) bool {
+	for _, s := range strings.Split(e.keys, ",") {
+		if s == k {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *K8sDiagHandler) loadConfigMapIndex(cid int, ns string) (map[string]cmEntry, error) {
+	q := "SELECT namespace,name,COALESCE(key_names,''),key_count FROM k8s_configmaps WHERE cluster_id=?"
+	args := []any{cid}
+	if ns != "" {
+		q += " AND namespace=?"
+		args = append(args, ns)
+	}
+	rows, err := h.DB.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	idx := map[string]cmEntry{}
+	for rows.Next() {
+		var n, name, keys string
+		var cnt int
+		if rows.Scan(&n, &name, &keys, &cnt) == nil {
+			idx[n+"/"+name] = cmEntry{keys, cnt}
+		}
+	}
+	return idx, rows.Err()
+}
+
+// loadRefs 取引用并按 (ns,kind,name,key,source) 聚合，顺带统计其中异常 Pod 数。
+func (h *K8sDiagHandler) loadRefs(cid int, ns string) ([]refRow, error) {
+	q := `SELECT r.namespace, r.ref_kind, r.ref_name, r.ref_key, r.source, r.optional, r.pod_name,
+	             COALESCE(p.phase,''), COALESCE(p.reason,'')
+	      FROM k8s_pod_config_refs r
+	      LEFT JOIN k8s_pods p ON p.cluster_id=r.cluster_id AND p.namespace=r.namespace AND p.name=r.pod_name
+	      WHERE r.cluster_id=?`
+	args := []any{cid}
+	if ns != "" {
+		q += " AND r.namespace=?"
+		args = append(args, ns)
+	}
+	rows, err := h.DB.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	agg := map[string]*refRow{}
+	order := []string{}
+	for rows.Next() {
+		var r refRow
+		var pod, phase, reason string
+		var opt int
+		if err := rows.Scan(&r.ns, &r.kind, &r.name, &r.key, &r.source, &opt, &pod, &phase, &reason); err != nil {
+			continue
+		}
+		k := strings.Join([]string{r.ns, r.kind, r.name, r.key, r.source}, "\x00")
+		e, ok := agg[k]
+		if !ok {
+			r.optional = opt == 1
+			e = &r
+			agg[k] = e
+			order = append(order, k)
+		}
+		e.pods = append(e.pods, pod)
+		if phase != "" && phase != "Running" && phase != "Succeeded" || reason != "" {
+			e.badPods++
+		}
+	}
+	out := make([]refRow, 0, len(order))
+	for _, k := range order {
+		out = append(out, *agg[k])
+	}
+	return out, rows.Err()
+}
+
+func anyBad(refs []refRow) bool {
+	for _, r := range refs {
+		if r.badPods > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// notFoundEvidence 从集群事件里抽出「哪个 ConfigMap/Secret 不存在」。
+// 一次拉全量事件（而非逐 Pod 查），请求数固定为 1。
+// 返回 ok=false 表示事件没取到——此时「没报缺失」不能当成「没有缺失」。
+func (h *K8sDiagHandler) notFoundEvidence(cid int, ns string) (map[string]bool, bool) {
+	cs, err := h.Pool.ClientFor(cid)
+	if err != nil {
+		return nil, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	list, err := cs.CoreV1().Events(ns).List(ctx, metav1.ListOptions{Limit: 2000})
+	if err != nil {
+		return nil, false
+	}
+	found := map[string]bool{}
+	for i := range list.Items {
+		e := &list.Items[i]
+		msg := e.Message
+		for _, m := range notFoundPattern.FindAllStringSubmatch(msg, -1) {
+			found[e.Namespace+"/"+m[2]] = true
+		}
+		for _, m := range pullSecretListPattern.FindAllStringSubmatch(msg, -1) {
+			// 括号内可能是「a, b, c」多个名字
+			for _, name := range strings.Split(m[1], ",") {
+				if n := strings.Trim(strings.TrimSpace(name), `"`); n != "" {
+					found[e.Namespace+"/"+n] = true
+				}
+			}
+		}
+		for _, m := range pullSecretSinglePattern.FindAllStringSubmatch(msg, -1) {
+			found[e.Namespace+"/"+strings.Trim(m[1], `"`)] = true
+		}
+	}
+	return found, true
+}
+
+func capPods(p []string) []string {
+	sort.Strings(p)
+	if len(p) > 5 {
+		return p[:5]
+	}
+	return p
+}
+
+func splitNSName(k string) (string, string) {
+	if i := strings.IndexByte(k, '/'); i >= 0 {
+		return k[:i], k[i+1:]
+	}
+	return "", k
+}
+
+func sortFindings(f []configFinding) {
+	rank := map[string]int{"high": 0, "medium": 1, "low": 2}
+	sort.SliceStable(f, func(i, j int) bool {
+		if rank[f[i].Severity] != rank[f[j].Severity] {
+			return rank[f[i].Severity] < rank[f[j].Severity]
+		}
+		return f[i].PodCount > f[j].PodCount
+	})
+}
