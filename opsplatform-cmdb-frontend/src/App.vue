@@ -73,6 +73,7 @@ const menus = shallowRef([
   { type: 'group', label: '资产管理', icon: Coin, children: [
     { path: '/domains', label: '域名', icon: Connection },
     { path: '/dns-records', label: 'DNS 记录', icon: List },
+    { path: '/cdn-sites', label: 'CDN 站点', icon: Cloudy },
     { path: '/certs', label: '证书', icon: Lock },
     { path: '/cert-inspect', label: '到期巡检', icon: CircleCheck },
     // 关系图谱冷藏：当前只有 域名→证书 一种关系、节点少、价值低；二期 M7 接入
