@@ -15,7 +15,7 @@ FROM nginx:1.29-alpine
 # libxml2 是 nginx 运行时依赖，无法 del，需要从 alpine edge 仓库升级到含 CVE-2026-6732 修复的 r2 版本
 RUN apk upgrade --no-cache && \
     echo "https://dl-cdn.alpinelinux.org/alpine/edge/main" > /etc/apk/repositories.edge && \
-    apk add --no-cache --upgrade --repositories-file=/etc/apk/repositories.edge libxml2 && \
+    apk add --no-cache --upgrade --repositories-file=/etc/apk/repositories.edge libxml2 expat && \
     rm /etc/apk/repositories.edge && \
     apk del --no-cache curl libcurl freetype fontconfig libavif libheif 2>/dev/null || true
 

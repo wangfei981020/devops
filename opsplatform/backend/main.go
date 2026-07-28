@@ -199,6 +199,8 @@ func main() {
 	protected.HandleFunc("/schedule/contacts/{id}", handlers.HandleUpdateContact).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/schedule/contacts/{id}", handlers.HandleDeleteContact).Methods("DELETE", "OPTIONS")
 	protected.HandleFunc("/schedule/reset", handlers.HandleResetSchedule).Methods("POST", "OPTIONS")
+	// v763: 导出排班表 Excel（带班次填充色、按组分块、底部图例）
+	protected.HandleFunc("/schedule/export", handlers.HandleExportSchedule).Methods("GET", "OPTIONS")
 	// v733: 排班月度应工作天数（用于排班统计分析页判定达成/缺勤/超勤）
 	protected.HandleFunc("/schedule/month-target", handlers.HandleGetMonthTarget).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/schedule/month-target", handlers.HandleSetMonthTarget).Methods("PUT", "OPTIONS")

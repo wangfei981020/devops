@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"opsplatform/database"
@@ -17,6 +18,7 @@ type ScheduleEmployee struct {
 	Name        string            `json:"name"`
 	GroupName   string            `json:"group_name"`
 	Role        string            `json:"role"`
+	RoleEn      string            `json:"role_en"` // v763: 职位英文名，导出 Excel 的「组别/日期」列用
 	AvatarColor string            `json:"avatarColor"`
 	Shifts      map[string]string `json:"shifts"`
 }
@@ -338,8 +340,8 @@ func HandleBatchUpdateShift(w http.ResponseWriter, r *http.Request) {
 // 辅助函数
 func getScheduleEmployees() ([]ScheduleEmployee, error) {
 	rows, err := database.DB.Query(`
-		SELECT id, name, COALESCE(group_name,''), role, avatar_color 
-		FROM schedule_employees 
+		SELECT id, name, COALESCE(group_name,''), role, COALESCE(role_en,''), avatar_color
+		FROM schedule_employees
 		ORDER BY group_name, sort_order, id
 	`)
 	if err != nil {
@@ -350,7 +352,7 @@ func getScheduleEmployees() ([]ScheduleEmployee, error) {
 	var employees []ScheduleEmployee
 	for rows.Next() {
 		var emp ScheduleEmployee
-		if err := rows.Scan(&emp.ID, &emp.Name, &emp.GroupName, &emp.Role, &emp.AvatarColor); err != nil {
+		if err := rows.Scan(&emp.ID, &emp.Name, &emp.GroupName, &emp.Role, &emp.RoleEn, &emp.AvatarColor); err != nil {
 			continue
 		}
 		emp.Shifts = make(map[string]string)
@@ -389,6 +391,10 @@ func insertEmployee(emp ScheduleEmployee) (int, error) {
 	if emp.Role == "" {
 		emp.Role = "运维工程师"
 	}
+	// v763: 没填英文职位时按中文职位推导，保证导出 Excel 不出现空白列
+	if emp.RoleEn == "" {
+		emp.RoleEn = defaultRoleEn(emp.Role)
+	}
 	if emp.AvatarColor == "" {
 		emp.AvatarColor = "linear-gradient(135deg, #667eea, #764ba2)"
 	}
@@ -398,9 +404,9 @@ func insertEmployee(emp ScheduleEmployee) (int, error) {
 	database.DB.QueryRow("SELECT COALESCE(MAX(sort_order), 0) FROM schedule_employees").Scan(&maxOrder)
 
 	result, err := database.DB.Exec(`
-		INSERT INTO schedule_employees (name, group_name, role, avatar_color, sort_order)
-		VALUES (?, ?, ?, ?, ?)
-	`, emp.Name, emp.GroupName, emp.Role, emp.AvatarColor, maxOrder+1)
+		INSERT INTO schedule_employees (name, group_name, role, role_en, avatar_color, sort_order)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, emp.Name, emp.GroupName, emp.Role, emp.RoleEn, emp.AvatarColor, maxOrder+1)
 	if err != nil {
 		return 0, err
 	}
@@ -410,12 +416,24 @@ func insertEmployee(emp ScheduleEmployee) (int, error) {
 }
 
 func updateEmployee(emp ScheduleEmployee) error {
+	if emp.RoleEn == "" {
+		emp.RoleEn = defaultRoleEn(emp.Role)
+	}
 	_, err := database.DB.Exec(`
-		UPDATE schedule_employees 
-		SET name = ?, group_name = ?, role = ?, avatar_color = ? 
+		UPDATE schedule_employees
+		SET name = ?, group_name = ?, role = ?, role_en = ?, avatar_color = ?
 		WHERE id = ?
-	`, emp.Name, emp.GroupName, emp.Role, emp.AvatarColor, emp.ID)
+	`, emp.Name, emp.GroupName, emp.Role, emp.RoleEn, emp.AvatarColor, emp.ID)
 	return err
+}
+
+// defaultRoleEn v763: 中文职位 -> 英文职位兜底映射（用户可在员工弹窗里自行覆盖）
+// 只区分「组长」和其余，其余一律 YW Team
+func defaultRoleEn(role string) string {
+	if strings.Contains(role, "组长") || strings.Contains(role, "Leader") {
+		return "YW Leader"
+	}
+	return "YW Team"
 }
 
 func upsertShift(employeeID int, date, shiftType string) error {
@@ -441,6 +459,7 @@ type ShiftConfig struct {
 	Label  string `json:"label"`
 	Name   string `json:"name"`
 	Time   string `json:"time"`
+	TimeEn string `json:"time_en"` // v763: 英文说明，导出 Excel 图例的「时间」列用
 	Color  string `json:"color"`
 	IsDuty bool   `json:"isDuty"`
 }
@@ -453,8 +472,8 @@ func HandleGetShiftConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := database.DB.Query(`
-		SELECT code, label, name, time_range, color, is_duty 
-		FROM schedule_shift_configs 
+		SELECT code, label, name, time_range, COALESCE(time_en,''), color, is_duty
+		FROM schedule_shift_configs
 		ORDER BY sort_order, id
 	`)
 	if err != nil {
@@ -468,7 +487,7 @@ func HandleGetShiftConfig(w http.ResponseWriter, r *http.Request) {
 	var configs []ShiftConfig
 	for rows.Next() {
 		var cfg ShiftConfig
-		if err := rows.Scan(&cfg.Code, &cfg.Label, &cfg.Name, &cfg.Time, &cfg.Color, &cfg.IsDuty); err != nil {
+		if err := rows.Scan(&cfg.Code, &cfg.Label, &cfg.Name, &cfg.Time, &cfg.TimeEn, &cfg.Color, &cfg.IsDuty); err != nil {
 			continue
 		}
 		configs = append(configs, cfg)
@@ -508,10 +527,20 @@ func HandleSaveShiftConfig(w http.ResponseWriter, r *http.Request) {
 
 	// 插入新配置
 	for i, cfg := range configs {
+		// v763: 英文说明留空时按时间段兜底，导出图例不会出现空格子
+		timeEn := cfg.TimeEn
+		if timeEn == "" {
+			if cfg.Time == "" || cfg.Time == "-" {
+				timeEn = "Duty"
+			} else {
+				timeEn = strings.ReplaceAll(cfg.Time, "-", " - ")
+			}
+			log.Printf("[排班] 班次 %s 未填英文说明，按时间段兜底为 %q", cfg.Code, timeEn)
+		}
 		_, err = tx.Exec(`
-			INSERT INTO schedule_shift_configs (code, label, name, time_range, color, is_duty, sort_order) 
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, cfg.Code, cfg.Label, cfg.Name, cfg.Time, cfg.Color, cfg.IsDuty, i)
+			INSERT INTO schedule_shift_configs (code, label, name, time_range, time_en, color, is_duty, sort_order)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, cfg.Code, cfg.Label, cfg.Name, cfg.Time, timeEn, cfg.Color, cfg.IsDuty, i)
 		if err != nil {
 			tx.Rollback()
 			http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useAppStore, useAuthStore } from '@/stores'
 import api from '@/api'
+import { saveAs } from 'file-saver'
 import ScheduleAnalyticsView from './ScheduleAnalyticsView.vue'
 
 const appStore = useAppStore()
@@ -37,11 +38,14 @@ const editingContactId = ref(null)
 const contactSearchQuery = ref('')
 
 const showEmployeeModal = ref(false)
-const employeeForm = ref({ name: '', group_name: '', role: '运维工程师' })
+const employeeForm = ref({ name: '', group_name: '', role: '运维工程师', role_en: '' })
 const employeeModalMode = ref('add')
 const editingEmployeeId = ref(null)
 
 const showConfigModal = ref(false)
+const showExportModal = ref(false)
+const exportForm = ref({ mode: 'current', start: '', end: '' })
+const exporting = ref(false)
 const showBatchModal = ref(false)
 const batchForm = ref({ employees: [], startDate: '', endDate: '', shiftCode: '', weekdays: [1, 2, 3, 4, 5] })
 const selectedEmployees = ref([])
@@ -55,17 +59,17 @@ const showShiftPicker = ref(false)
 const shiftPickerTarget = ref({ empId: null, dateStr: '', x: 0, y: 0 })
 
 const shiftTypes = ref([
-  { code: 'A', label: 'A', name: '早班', time: '09:00-18:00', color: '#3a84ff', isDuty: false },
-  { code: 'B', label: 'B', name: '中班', time: '15:00-24:00', color: '#ff9c01', isDuty: false },
-  { code: 'C', label: 'C', name: '晚班', time: '24:00-09:00', color: '#8b5cf6', isDuty: false },
-  { code: 'D', label: 'D', name: '值班', time: '全天', color: '#ea3636', isDuty: true },
-  { code: 'OD', label: 'OD', name: '周末休', time: '-', color: '#6b7280', isDuty: false },
-  { code: 'OFF', label: 'OFF', name: '排班休', time: '-', color: '#94a3b8', isDuty: false },
-  { code: 'H', label: 'H', name: '公共假期', time: '-', color: '#10b981', isDuty: false },
-  { code: 'PL', label: 'PL', name: '事假', time: '-', color: '#f59e0b', isDuty: false },
-  { code: 'SL', label: 'SL', name: '病假', time: '-', color: '#ef4444', isDuty: false },
-  { code: 'AL', label: 'AL', name: '年假', time: '-', color: '#06b6d4', isDuty: false },
-  { code: 'CT', label: 'CT', name: '调休', time: '-', color: '#a855f7', isDuty: false }
+  { code: 'A', label: 'A', name: '早班', time: '09:00-18:00', time_en: '09:00 - 18:00', color: '#3a84ff', isDuty: false },
+  { code: 'B', label: 'B', name: '中班', time: '15:00-24:00', time_en: '15:00 - 24:00', color: '#ff9c01', isDuty: false },
+  { code: 'C', label: 'C', name: '晚班', time: '24:00-09:00', time_en: '24:00 - 09:00', color: '#8b5cf6', isDuty: false },
+  { code: 'D', label: 'D', name: '值班', time: '全天', time_en: 'Duty', color: '#ea3636', isDuty: true },
+  { code: 'OD', label: 'OD', name: '周末休', time: '-', time_en: 'Weekend off', color: '#6b7280', isDuty: false },
+  { code: 'OFF', label: 'OFF', name: '排班休', time: '-', time_en: 'Scheduled off', color: '#94a3b8', isDuty: false },
+  { code: 'H', label: 'H', name: '公共假期', time: '-', time_en: 'Holidays', color: '#10b981', isDuty: false },
+  { code: 'PL', label: 'PL', name: '事假', time: '-', time_en: 'Personal Leave', color: '#f59e0b', isDuty: false },
+  { code: 'SL', label: 'SL', name: '病假', time: '-', time_en: 'Sick Leave', color: '#ef4444', isDuty: false },
+  { code: 'AL', label: 'AL', name: '年假', time: '-', time_en: 'Annual Leave', color: '#06b6d4', isDuty: false },
+  { code: 'CT', label: 'CT', name: '调休', time: '-', time_en: 'Change Shift', color: '#a855f7', isDuty: false }
 ])
 
 const weekDays = ['日', '一', '二', '三', '四', '五', '六']
@@ -255,10 +259,10 @@ function openEmployeeModal(mode, emp = null) {
   employeeModalMode.value = mode
   if (mode === 'edit' && emp) {
     editingEmployeeId.value = emp.id
-    employeeForm.value = { name: emp.name, group_name: emp.group_name || '', role: emp.role }
+    employeeForm.value = { name: emp.name, group_name: emp.group_name || '', role: emp.role, role_en: emp.role_en || '' }
   } else {
     editingEmployeeId.value = null
-    employeeForm.value = { name: '', group_name: '', role: '运维工程师' }
+    employeeForm.value = { name: '', group_name: '', role: '运维工程师', role_en: '' }
   }
   showEmployeeModal.value = true
 }
@@ -275,6 +279,7 @@ async function saveEmployee() {
         emp.name = employeeForm.value.name
         emp.group_name = employeeForm.value.group_name
         emp.role = employeeForm.value.role
+        emp.role_en = employeeForm.value.role_en
         await api.post('/api/schedule', [emp])
       }
     } else {
@@ -339,7 +344,7 @@ async function saveShiftConfig() {
 
 function addShiftType() {
   shiftTypes.value.push({
-    code: '', label: '', name: '', time: '', color: '#3a84ff', isDuty: false
+    code: '', label: '', name: '', time: '', time_en: '', color: '#3a84ff', isDuty: false
   })
 }
 
@@ -411,35 +416,62 @@ async function saveEmployeeOrder() {
   }
 }
 
-async function exportToExcel() {
-  const header = ['姓名', '组别', ...daysInMonth.value.map(d => `${d.day}日(${weekDays[d.weekDay]})`)]
-  const rows = employees.value.map(emp => {
-    const row = [emp.name, emp.group_name || '']
-    daysInMonth.value.forEach(d => {
-      row.push(emp.shifts?.[d.dateStr] || '')
+// v763: 导出改由后端 excelize 生成真正的 xlsx（带班次填充色、按组分块、底部图例）
+// 旧实现是前端拼 CSV，CSV 存不下颜色，Excel 打开永远是全白的
+function currentMonthStr() {
+  return `${currentYear.value}-${String(currentMonth.value).padStart(2, '0')}`
+}
+
+function openExportModal() {
+  const cur = currentMonthStr()
+  exportForm.value = { mode: 'current', start: cur, end: cur }
+  showExportModal.value = true
+}
+
+async function doExport() {
+  let start = currentMonthStr()
+  let end = start
+  if (exportForm.value.mode === 'range') {
+    start = exportForm.value.start
+    end = exportForm.value.end
+    if (!start || !end) {
+      appStore.showToast('请选择起止月份', 'error')
+      return
+    }
+    if (end < start) {
+      appStore.showToast('结束月份不能早于开始月份', 'error')
+      return
+    }
+  }
+
+  exporting.value = true
+  try {
+    const res = await api.get('/api/schedule/export', {
+      params: { start, end },
+      responseType: 'blob'
     })
-    return row
-  })
-
-  let csv = '\uFEFF'
-  csv += header.join(',') + '\n'
-  rows.forEach(row => {
-    csv += row.map(cell => `"${cell}"`).join(',') + '\n'
-  })
-
-  csv += '\n班次说明\n'
-  shiftTypes.value.forEach(s => {
-    csv += `${s.code},${s.name},${s.time}\n`
-  })
-
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `排班表_${currentYear.value}年${currentMonth.value}月.csv`
-  link.click()
-  URL.revokeObjectURL(url)
-  appStore.showToast('导出成功', 'success')
+    const blob = res.data
+    // 后端报错时返回的是纯文本，responseType=blob 下不会走 catch，这里显式识别一次
+    if (blob.type && !blob.type.includes('spreadsheetml')) {
+      const text = await blob.text()
+      throw new Error(text || '导出失败')
+    }
+    const filename = start === end
+      ? `排班表_${start}.xlsx`
+      : `排班表_${start}_至_${end}.xlsx`
+    saveAs(blob, filename)
+    showExportModal.value = false
+    appStore.showToast('导出成功', 'success')
+  } catch (e) {
+    let msg = e.message || '导出失败'
+    if (e.response?.data instanceof Blob) {
+      msg = (await e.response.data.text()) || msg
+    }
+    console.error('[排班导出] 失败', e)
+    appStore.showToast(`导出失败：${msg}`, 'error')
+  } finally {
+    exporting.value = false
+  }
 }
 
 async function resetSchedule() {
@@ -688,7 +720,7 @@ watch(activeTab, (tab) => {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
           重置排班
         </button>
-        <button v-if="canExport" class="btn btn-secondary" @click="exportToExcel">
+        <button v-if="canExport" class="btn btn-secondary" @click="openExportModal">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           导出Excel
         </button>
@@ -895,6 +927,15 @@ watch(activeTab, (tab) => {
                 </datalist>
               </div>
               <div class="form-group"><label>职位</label><input type="text" class="form-input" v-model="employeeForm.role" placeholder="运维工程师" /></div>
+              <div class="form-group">
+                <label>职位（英文）</label>
+                <input type="text" class="form-input" v-model="employeeForm.role_en" list="schedule-role-en-options" placeholder="YW Team" />
+                <datalist id="schedule-role-en-options">
+                  <option value="YW Leader" />
+                  <option value="YW Team" />
+                </datalist>
+                <div class="form-hint">导出 Excel 的「组别/日期」列用；留空自动按中文职位推导（含"组长"→ YW Leader，其余 → YW Team）</div>
+              </div>
             </div>
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" @click="showEmployeeModal = false">取消</button>
@@ -967,6 +1008,47 @@ watch(activeTab, (tab) => {
       </div>
     </Teleport>
 
+    <!-- 导出 Excel 弹窗 (v763) -->
+    <Teleport to="body">
+      <div class="modal-overlay" :class="{ active: showExportModal }">
+        <div class="modal export-modal">
+          <div class="modal-header">
+            <h2>导出 Excel</h2>
+            <button class="modal-close" @click="showExportModal = false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          </div>
+          <div class="modal-body">
+            <div class="export-options">
+              <label class="export-option" :class="{ active: exportForm.mode === 'current' }">
+                <input type="radio" value="current" v-model="exportForm.mode" />
+                <span class="export-option-title">当前月</span>
+                <span class="export-option-desc">{{ currentYear }}年{{ currentMonth }}月，单个 sheet</span>
+              </label>
+              <label class="export-option" :class="{ active: exportForm.mode === 'range' }">
+                <input type="radio" value="range" v-model="exportForm.mode" />
+                <span class="export-option-title">月份区间</span>
+                <span class="export-option-desc">每个月一个 sheet，最多 12 个月</span>
+              </label>
+            </div>
+            <div v-if="exportForm.mode === 'range'" class="export-range">
+              <div class="form-group">
+                <label>开始月份</label>
+                <input type="month" class="form-input" v-model="exportForm.start" />
+              </div>
+              <div class="form-group">
+                <label>结束月份</label>
+                <input type="month" class="form-input" v-model="exportForm.end" />
+              </div>
+            </div>
+            <div class="form-hint">导出的表格按组分块、班次格填对应颜色，底部附班次图例。颜色取自「班次配置」。</div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" @click="showExportModal = false">取消</button>
+            <button type="button" class="btn btn-primary" :disabled="exporting" @click="doExport">{{ exporting ? '生成中...' : '导出' }}</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- 班次配置弹窗 -->
     <Teleport to="body">
       <div class="modal-overlay" :class="{ active: showConfigModal }">
@@ -981,6 +1063,7 @@ watch(activeTab, (tab) => {
                 <span class="cfg-col-code">代码</span>
                 <span class="cfg-col-name">名称</span>
                 <span class="cfg-col-time">时间段</span>
+                <span class="cfg-col-time-en">英文说明</span>
                 <span class="cfg-col-color">颜色</span>
                 <span class="cfg-col-duty">值班</span>
                 <span class="cfg-col-action">操作</span>
@@ -989,6 +1072,7 @@ watch(activeTab, (tab) => {
                 <input type="text" class="cfg-input cfg-input-code" v-model="s.code" placeholder="A" maxlength="4" @input="s.label = s.code" />
                 <input type="text" class="cfg-input cfg-input-name" v-model="s.name" placeholder="早班" />
                 <input type="text" class="cfg-input cfg-input-time" v-model="s.time" placeholder="09:00-18:00" />
+                <input type="text" class="cfg-input cfg-input-time-en" v-model="s.time_en" placeholder="Weekend off" title="导出 Excel 图例的「时间」列" />
                 <div class="cfg-color-wrap">
                   <input type="color" class="cfg-color" v-model="s.color" title="选择颜色" />
                   <span class="cfg-color-preview" :style="{ background: s.color }">{{ s.code }}</span>
@@ -1472,9 +1556,65 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
+/* 导出 Excel 弹窗 (v763) */
+.export-modal {
+  width: 480px;
+}
+.export-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.export-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.export-option:hover {
+  border-color: rgba(59,130,246,0.4);
+}
+.export-option.active {
+  border-color: var(--primary);
+  background: rgba(59,130,246,0.06);
+}
+.export-option input[type="radio"] {
+  grid-row: 1 / 3;
+  margin: 0;
+  cursor: pointer;
+}
+.export-option-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.export-option-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.export-range {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.form-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
 /* 班次配置弹窗 */
 .config-modal {
-  width: 820px;
+  width: 940px;
   max-height: 85vh;
 }
 .config-list {
@@ -1486,7 +1626,7 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 }
 .config-header {
   display: grid;
-  grid-template-columns: 60px 80px 1fr 100px 60px 40px;
+  grid-template-columns: 60px 80px 1fr 1fr 100px 60px 40px;
   gap: 10px;
   padding: 8px 10px;
   background: var(--bg-hover);
@@ -1506,12 +1646,13 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 .cfg-col-code { }
 .cfg-col-name { }
 .cfg-col-time { }
+.cfg-col-time-en { }
 .cfg-col-color { text-align: center; }
 .cfg-col-duty { text-align: center; }
 .cfg-col-action { text-align: center; }
 .config-item {
   display: grid;
-  grid-template-columns: 60px 80px 1fr 100px 60px 40px;
+  grid-template-columns: 60px 80px 1fr 1fr 100px 60px 40px;
   gap: 10px;
   align-items: center;
   padding: 8px 10px;
@@ -1541,6 +1682,7 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 .cfg-input-code { font-weight: 600; text-align: center; }
 .cfg-input-name { }
 .cfg-input-time { }
+.cfg-input-time-en { }
 .cfg-color-wrap { display: flex; align-items: center; gap: 6px; }
 .cfg-color {
   width: 32px;

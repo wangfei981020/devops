@@ -444,6 +444,19 @@ func createTables() error {
 	}
 	// 兼容旧数据库：添加 group_name 列
 	DB.Exec(`ALTER TABLE schedule_employees ADD COLUMN group_name VARCHAR(64) DEFAULT '' COMMENT '组别' AFTER name`)
+	// v763: 职位英文名（导出 Excel 用），存量按中文职位回填：组长 -> YW Leader，其余 -> YW Team
+	DB.Exec(`ALTER TABLE schedule_employees ADD COLUMN role_en VARCHAR(64) DEFAULT '' COMMENT '职位英文名(导出Excel用)' AFTER role`)
+	if res, err := DB.Exec(`
+		UPDATE schedule_employees
+		SET role_en = CASE WHEN role LIKE '%组长%' THEN 'YW Leader' ELSE 'YW Team' END
+		WHERE role_en IS NULL OR role_en = ''
+	`); err == nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			log.Printf("[排班] 回填员工职位英文名 role_en: %d 行", n)
+		}
+	} else {
+		log.Printf("[排班] WARN 回填 role_en 失败: %v", err)
+	}
 
 	// 创建排班记录表
 	_, err = DB.Exec(`
@@ -481,6 +494,32 @@ func createTables() error {
 	`)
 	if err != nil {
 		return err
+	}
+	// v763: 班次英文说明（导出 Excel 图例用）。有时间段的班次回填时间段本身，休假类回填英文词
+	DB.Exec(`ALTER TABLE schedule_shift_configs ADD COLUMN time_en VARCHAR(64) DEFAULT '' COMMENT '英文说明(导出Excel图例用)' AFTER time_range`)
+	shiftTimeEnDefaults := map[string]string{
+		"OD":  "Weekend off",
+		"OFF": "Scheduled off",
+		"H":   "Holidays",
+		"PL":  "Personal Leave",
+		"SL":  "Sick Leave",
+		"AL":  "Annual Leave",
+		"CT":  "Change Shift",
+	}
+	for code, timeEn := range shiftTimeEnDefaults {
+		if _, err := DB.Exec(`
+			UPDATE schedule_shift_configs SET time_en = ? WHERE code = ? AND (time_en IS NULL OR time_en = '')
+		`, timeEn, code); err != nil {
+			log.Printf("[排班] WARN 回填班次 %s 的 time_en 失败: %v", code, err)
+		}
+	}
+	// 其余班次（早/中/晚班、值班等）英文说明直接用时间段，值班类没时间段的兜底成 Duty
+	if _, err := DB.Exec(`
+		UPDATE schedule_shift_configs
+		SET time_en = CASE WHEN time_range = '' OR time_range = '-' THEN 'Duty' ELSE REPLACE(time_range, '-', ' - ') END
+		WHERE time_en IS NULL OR time_en = ''
+	`); err != nil {
+		log.Printf("[排班] WARN 回填班次 time_en 兜底失败: %v", err)
 	}
 
 	// 创建排班月度应工作天数配置表（v733: 排班统计分析功能）
