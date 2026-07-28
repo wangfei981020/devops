@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -46,11 +48,83 @@ func (h *ObsQueryHandler) Register(r *gin.RouterGroup) {
 	r.GET("/k8s/pod-usage", h.PodUsage)    // 全 Pod 实时用量(cpu_m/mem_mi) map，供 Pod 页列展示
 	r.GET("/k8s/node-usage", h.NodeUsage)  // 全节点实时用量(cpu%/mem%) map，供节点页列展示
 	r.GET("/k8s/pvc-usage", h.PVCUsage)    // 全 PVC 使用率(used/cap/pct) map，供存储页列展示
+	r.GET("/obs/host-usage", h.HostUsage)  // 云主机(非K8s)用量排行: env?/project?/team?
+}
+
+// HostUsage 列云主机实时用量，按内存降序（先看谁快撑爆）。
+//
+// 为什么单独一个接口：主机不在任何 K8s 集群里，node-usage 那套按 node 标签的口径覆盖不到它们。
+// 通用数据源里主机全在 cluster="ecs" 下，靠 env/project/team 三个标签区分归属——
+// 这也是"UAT 的 g32 项目哪台机器内存快满了"这类问题唯一能一次问出来的地方。
+//
+// 只看主机不看 K8s 节点：K8s 节点的 node-exporter 指标没有 env/project/team 标签，
+// 用 env!="" 就能把它们排除干净，不必依赖 cluster="ecs"（老数据源没有 cluster 标签）。
+func (h *ObsQueryHandler) HostUsage(c *gin.Context) {
+	base, token, _, ok := h.prom(c)
+	if !ok {
+		return
+	}
+	sel := hostSelector(c.Query("env"), c.Query("project"), c.Query("team"))
+	if sel == "" {
+		sel = `env!=""` // 没给筛选条件：取全部主机，同时排除掉 K8s 节点
+	}
+	by := "by(instance,env,project,team)"
+	rows := map[string]map[string]any{}
+	get := func(m map[string]string) map[string]any {
+		ip := m["instance"]
+		if i := strings.IndexByte(ip, ':'); i > 0 {
+			ip = ip[:i]
+		}
+		if rows[ip] == nil {
+			rows[ip] = map[string]any{"ip": ip, "env": m["env"], "project": m["project"], "team": m["team"]}
+		}
+		return rows[ip]
+	}
+	lbl := promLabels("", sel)
+	cpuLbl := promLabels("", sel, `mode="idle"`)
+	if cpu, err := promInstant(base, token,
+		`(1 - avg `+by+`(rate(node_cpu_seconds_total`+cpuLbl+`[5m]))) * 100`); err == nil {
+		for _, s := range cpu {
+			get(s.Metric)["cpu_pct"] = round2(s.Value)
+		}
+	}
+	if mem, err := promInstant(base, token,
+		`(1 - sum `+by+`(node_memory_MemAvailable_bytes`+lbl+`) / sum `+by+`(node_memory_MemTotal_bytes`+lbl+`)) * 100`); err == nil {
+		for _, s := range mem {
+			get(s.Metric)["mem_pct"] = round2(s.Value)
+		}
+	}
+	if len(rows) == 0 {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "items": []any{},
+			"error": "没查到任何主机指标。可能是：数据源里主机指标没有 env/project/team 标签，" +
+				"或筛选条件(env/project/team)写错了——标签值是小写，如 env=uat、project=g32、team=dba"})
+		return
+	}
+	// 补 CMDB 台账里的主机名/规格，让"哪台机器"直接可读，不用再拿 IP 去查一遍。
+	out := make([]map[string]any, 0, len(rows))
+	for ip, r := range rows {
+		var name string
+		var vcpu, memMB int
+		if h.DB.QueryRow(`SELECT name, COALESCE(vcpu,0), COALESCE(mem_mb,0) FROM hosts WHERE internal_ip=? LIMIT 1`, ip).
+			Scan(&name, &vcpu, &memMB) == nil {
+			r["host_name"], r["vcpu"], r["mem_gb"] = name, vcpu, memMB/1024
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return num(out[i]["mem_pct"]) > num(out[j]["mem_pct"]) })
+	c.JSON(http.StatusOK, gin.H{"ok": true, "count": len(out), "items": out})
+}
+
+func num(v any) float64 {
+	if f, ok := v.(float64); ok {
+		return f
+	}
+	return -1 // 没采到用量的排最后，别把它们顶到"最危险"的位置
 }
 
 // PVCUsage 返回 {"ns/pvc": {used_gi, cap_gi, pct}}（kubelet volume 指标）。
 func (h *ObsQueryHandler) PVCUsage(c *gin.Context) {
-	base, token, ok := h.prom(c)
+	base, token, sel, ok := h.prom(c)
 	if !ok {
 		return
 	}
@@ -61,12 +135,13 @@ func (h *ObsQueryHandler) PVCUsage(c *gin.Context) {
 		}
 		return usage[k]
 	}
-	if used, err := promInstant(base, token, `kubelet_volume_stats_used_bytes`); err == nil {
+	lbl := promLabels(sel)
+	if used, err := promInstant(base, token, `kubelet_volume_stats_used_bytes`+lbl); err == nil {
 		for _, s := range used {
 			get(s.Metric["namespace"] + "/" + s.Metric["persistentvolumeclaim"])["used_gi"] = s.Value / 1073741824
 		}
 	}
-	if cap, err := promInstant(base, token, `kubelet_volume_stats_capacity_bytes`); err == nil {
+	if cap, err := promInstant(base, token, `kubelet_volume_stats_capacity_bytes`+lbl); err == nil {
 		for _, s := range cap {
 			m := get(s.Metric["namespace"] + "/" + s.Metric["persistentvolumeclaim"])
 			m["cap_gi"] = s.Value / 1073741824
@@ -117,23 +192,25 @@ func promInstant(base, token, query string) ([]promSample, error) {
 	return out, nil
 }
 
-func (h *ObsQueryHandler) prom(c *gin.Context) (string, string, bool) {
+// prom 解析 Prometheus 端点，并返回把查询限定到本集群的标签选择器。
+// selector 为空表示该源只有一个集群的数据，无需隔离。
+func (h *ObsQueryHandler) prom(c *gin.Context) (base, token, selector string, ok bool) {
 	cid, _ := strconv.Atoi(c.Query("cluster_id"))
 	env := c.Query("env")
 	if env == "" && cid > 0 {
 		env = h.clusterEnv(cid)
 	}
-	base, token, err := resolveEndpoint(h.DB, h.Cipher, "prometheus", env, cid)
+	base, token, clusterLabel, err := resolveEndpointFull(h.DB, h.Cipher, "prometheus", env, cid)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
-		return "", "", false
+		return "", "", "", false
 	}
-	return base, token, true
+	return base, token, clusterSelector(h.DB, clusterLabel, cid), true
 }
 
 // PodUsage 返回 {"ns/pod": {cpu_m, mem_mi}}，一次拉全集群 Pod 实时用量。
 func (h *ObsQueryHandler) PodUsage(c *gin.Context) {
-	base, token, ok := h.prom(c)
+	base, token, sel, ok := h.prom(c)
 	if !ok {
 		return
 	}
@@ -144,12 +221,13 @@ func (h *ObsQueryHandler) PodUsage(c *gin.Context) {
 		}
 		return usage[k]
 	}
-	if cpu, err := promInstant(base, token, `sum by(namespace,pod)(rate(container_cpu_usage_seconds_total{container!=""}[5m]))`); err == nil {
+	lbl := promLabels(sel, `container!=""`)
+	if cpu, err := promInstant(base, token, `sum by(namespace,pod)(rate(container_cpu_usage_seconds_total`+lbl+`[5m]))`); err == nil {
 		for _, s := range cpu {
 			get(s.Metric["namespace"] + "/" + s.Metric["pod"])["cpu_m"] = s.Value * 1000
 		}
 	}
-	if mem, err := promInstant(base, token, `sum by(namespace,pod)(container_memory_working_set_bytes{container!=""})`); err == nil {
+	if mem, err := promInstant(base, token, `sum by(namespace,pod)(container_memory_working_set_bytes`+lbl+`)`); err == nil {
 		for _, s := range mem {
 			get(s.Metric["namespace"] + "/" + s.Metric["pod"])["mem_mi"] = s.Value / 1048576
 		}
@@ -159,7 +237,7 @@ func (h *ObsQueryHandler) PodUsage(c *gin.Context) {
 
 // NodeUsage 返回 {"node": {cpu_pct, mem_pct}}（来自 node-exporter）。
 func (h *ObsQueryHandler) NodeUsage(c *gin.Context) {
-	base, token, ok := h.prom(c)
+	base, token, sel, ok := h.prom(c)
 	if !ok {
 		return
 	}
@@ -178,14 +256,15 @@ func (h *ObsQueryHandler) NodeUsage(c *gin.Context) {
 		}
 		return m["instance"]
 	}
-	if cpu, err := promInstant(base, token, `(1 - avg by(node,instance)(rate(node_cpu_seconds_total{mode="idle"}[5m]))) * 100`); err == nil {
+	cpuLbl, memLbl := promLabels(sel, `mode="idle"`), promLabels(sel)
+	if cpu, err := promInstant(base, token, `(1 - avg by(node,instance)(rate(node_cpu_seconds_total`+cpuLbl+`[5m]))) * 100`); err == nil {
 		for _, s := range cpu {
 			if k := nodeKey(s.Metric); k != "" {
 				get(k)["cpu_pct"] = s.Value
 			}
 		}
 	}
-	if mem, err := promInstant(base, token, `(1 - sum by(node,instance)(node_memory_MemAvailable_bytes) / sum by(node,instance)(node_memory_MemTotal_bytes)) * 100`); err == nil {
+	if mem, err := promInstant(base, token, `(1 - sum by(node,instance)(node_memory_MemAvailable_bytes`+memLbl+`) / sum by(node,instance)(node_memory_MemTotal_bytes`+memLbl+`)) * 100`); err == nil {
 		for _, s := range mem {
 			if k := nodeKey(s.Metric); k != "" {
 				get(k)["mem_pct"] = s.Value
@@ -209,18 +288,28 @@ func (h *ObsQueryHandler) Usage(c *gin.Context) {
 	if env == "" && cid > 0 {
 		env = h.clusterEnv(cid)
 	}
-	base, token, err := resolveEndpoint(h.DB, h.Cipher, "prometheus", env, cid)
+	base, token, clusterLabel, err := resolveEndpointFull(h.DB, h.Cipher, "prometheus", env, cid)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
+	sel := clusterSelector(h.DB, clusterLabel, cid)
 	promql := c.Query("query")
-	if promql == "" {
-		promql = buildPromQL(c.Query("target"), c.Query("namespace"), c.Query("name"), c.Query("metric"))
+	rawQuery := promql != ""
+	if !rawQuery {
+		promql = buildPromQL(c.Query("target"), c.Query("namespace"), c.Query("name"), c.Query("metric"),
+			sel, hostSelector(c.Query("host_env"), c.Query("host_project"), c.Query("host_team")))
 	}
 	if promql == "" {
 		c.JSON(400, gin.H{"error": "缺 query 或 target/name/metric"})
 		return
+	}
+	// 自带 PromQL 的调用方要自己写集群条件——我们不解析、更不改写别人的表达式。
+	// 但共享源上不加条件就会跨集群串数据，这里必须显式告知，不能让调用方以为拿到的是本集群的数据。
+	var hint string
+	if rawQuery && sel != "" {
+		hint = fmt.Sprintf("该数据源同时采集多个集群，自定义 query 未自动加集群条件；"+
+			"如需只看本集群请在每个指标上加 {%s}", sel)
 	}
 	minutes := int64(60)
 	if m, e := strconv.ParseInt(c.Query("minutes"), 10, 64); e == nil && m > 0 && m <= 43200 {
@@ -247,37 +336,68 @@ func (h *ObsQueryHandler) Usage(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": code == 200, "status": code, "query": promql, "data": rawJSON(body)})
+	out := gin.H{"ok": code == 200, "status": code, "query": promql, "data": rawJSON(body)}
+	if hint != "" {
+		out["hint"] = hint
+	}
+	c.JSON(http.StatusOK, out)
 }
 
-func buildPromQL(target, ns, name, metric string) string {
+// hostSelector 把环境/项目/团队拼成云主机指标的过滤条件。
+//
+// 主机不属于任何 K8s 集群（通用源里它们在 cluster="ecs" 下），所以不能套用集群选择器，
+// 靠这三个标签区分：env=uat|prod、project=g01|g02|g32|g33|infra、team=app|dba|infra。
+// env 统一转小写——CMDB 里环境是 UAT/PROD 大写枚举，指标标签是小写。
+func hostSelector(env, project, team string) string {
+	conds := []string{}
+	if env = strings.TrimSpace(env); env != "" {
+		conds = append(conds, fmt.Sprintf("env=%q", strings.ToLower(env)))
+	}
+	if project = strings.TrimSpace(project); project != "" {
+		conds = append(conds, fmt.Sprintf("project=%q", project))
+	}
+	if team = strings.TrimSpace(team); team != "" {
+		conds = append(conds, fmt.Sprintf("team=%q", team))
+	}
+	return strings.Join(conds, ",")
+}
+
+// buildPromQL 按目标类型构造 PromQL。
+//
+// selector 是集群隔离条件，只加在 K8s 对象(pod/workload/node)上；主机(host)在通用源里
+// 属于 cluster="ecs"，套集群条件会一条都查不到，所以它走 hostSel(env/project/team) 那套。
+func buildPromQL(target, ns, name, metric, selector, hostSel string) string {
 	if name == "" {
 		return ""
 	}
 	switch target {
 	case "pod":
+		lbl := promLabels(selector, fmt.Sprintf("namespace=%q,pod=%q", ns, name), `container!=""`)
 		if metric == "mem" {
-			return fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s",pod="%s",container!=""})`, ns, name)
+			return `sum(container_memory_working_set_bytes` + lbl + `)`
 		}
-		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s",pod="%s",container!=""}[5m]))`, ns, name)
+		return `sum(rate(container_cpu_usage_seconds_total` + lbl + `[5m]))`
 	case "workload":
 		// 按 Pod 分组 → 图上一个服务的每个 Pod 各一条线
+		lbl := promLabels(selector, fmt.Sprintf("namespace=%q,pod=~%q", ns, name+"-.*"), `container!=""`)
 		if metric == "mem" {
-			return fmt.Sprintf(`sum by(pod)(container_memory_working_set_bytes{namespace="%s",pod=~"%s-.*",container!=""})`, ns, name)
+			return `sum by(pod)(container_memory_working_set_bytes` + lbl + `)`
 		}
-		return fmt.Sprintf(`sum by(pod)(rate(container_cpu_usage_seconds_total{namespace="%s",pod=~"%s-.*",container!=""}[5m]))`, ns, name)
+		return `sum by(pod)(rate(container_cpu_usage_seconds_total` + lbl + `[5m]))`
 	case "node":
 		// 节点：用 node-exporter 绝对用量(核/字节)，与 Pod 单位一致；按 node 标签匹配。
 		if metric == "mem" {
-			return fmt.Sprintf(`sum(node_memory_MemTotal_bytes{node="%s"}) - sum(node_memory_MemAvailable_bytes{node="%s"})`, name, name)
+			lbl := promLabels(selector, fmt.Sprintf("node=%q", name))
+			return `sum(node_memory_MemTotal_bytes` + lbl + `) - sum(node_memory_MemAvailable_bytes` + lbl + `)`
 		}
-		return fmt.Sprintf(`sum(rate(node_cpu_seconds_total{mode!="idle",node="%s"}[5m]))`, name)
+		return `sum(rate(node_cpu_seconds_total` + promLabels(selector, `mode!="idle"`, fmt.Sprintf("node=%q", name)) + `[5m]))`
 	case "host":
 		// 传统主机：node-exporter，按 instance 匹配(通常 <ip>:9100)，传入主机内网IP。
 		if metric == "mem" {
-			return fmt.Sprintf(`sum(node_memory_MemTotal_bytes{instance=~"%s.*"}) - sum(node_memory_MemAvailable_bytes{instance=~"%s.*"})`, name, name)
+			lbl := promLabels("", hostSel, fmt.Sprintf("instance=~%q", name+".*"))
+			return `sum(node_memory_MemTotal_bytes` + lbl + `) - sum(node_memory_MemAvailable_bytes` + lbl + `)`
 		}
-		return fmt.Sprintf(`sum(rate(node_cpu_seconds_total{mode!="idle",instance=~"%s.*"}[5m]))`, name)
+		return `sum(rate(node_cpu_seconds_total` + promLabels("", hostSel, `mode!="idle"`, fmt.Sprintf("instance=~%q", name+".*")) + `[5m]))`
 	}
 	return ""
 }

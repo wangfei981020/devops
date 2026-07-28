@@ -1,0 +1,13 @@
+-- 多集群共享数据源的隔离标签。
+--
+-- 背景：老的 Prometheus 一个集群一套，查询不带集群条件也不会串。新接入的通用数据源
+-- (VictoriaMetrics) 同时采 prod/uat/infra 多个 K8s 集群和全部云主机，同一条 PromQL
+-- 会把所有集群的数据一起捞回来——实测 CMDB 的节点用量查询从 15 个节点变成 286 个，
+-- Pod 用量从 636 组变成 1708 组。更麻烦的是 UAT 和 PROD 有大量同名 namespace
+-- (g32-admin/g32-game/cesar/devops...)，sum by(namespace,pod) 会把两个集群的同名 Pod
+-- 直接加在一起，拿到的是虚高的错误值，表面还看不出来。
+--
+-- cluster_label 存这个数据源用哪个标签名区分集群(通用源填 cluster)，查询时自动注入
+-- <cluster_label>="<k8s_clusters.name>"。留空 = 该源只有一个集群的数据，不注入，
+-- 行为与改造前完全一致——DEV 集群那套独立 Prometheus 和待下线的老 UAT 源都靠这个保持兼容。
+ALTER TABLE obs_endpoints ADD COLUMN cluster_label VARCHAR(64) NOT NULL DEFAULT '' AFTER cluster_id;

@@ -15,6 +15,10 @@
         <el-table-column label="适用" width="140"><template #default="{row}">
           {{ row.env || '通用' }}<span v-if="row.cluster_id"> / 集群{{ row.cluster_id }}</span>
         </template></el-table-column>
+        <el-table-column label="多集群" width="110"><template #default="{row}">
+          <el-tag v-if="row.cluster_label" size="small" type="warning">{{ row.cluster_label }}</el-tag>
+          <span v-else class="muted">单集群</span>
+        </template></el-table-column>
         <el-table-column label="Token" width="80"><template #default="{row}">
           <el-tag size="small" :type="row.has_token?'success':'info'">{{ row.has_token?'已配':'无' }}</el-tag>
         </template></el-table-column>
@@ -52,6 +56,14 @@
             <el-option v-for="c in clusters" :key="c.id" :label="c.display_name||c.name" :value="c.id" />
           </el-select>
         </el-form-item>
+        <el-form-item label="集群隔离标签">
+          <el-input v-model="form.cluster_label" placeholder="留空=该源只有一个集群的数据" style="width:240px" />
+          <div class="muted" style="font-size:12px;line-height:1.6;margin-top:4px">
+            数据源同时采多个集群时必填，填区分集群的标签名（通常是 <code>cluster</code>）。<br>
+            查询会自动加上 <code>标签名="集群名"</code>，否则会把其它集群的同名 Pod 一起算进来。<br>
+            只采单个集群的数据源留空。
+          </div>
+        </el-form-item>
         <el-form-item label="Token">
           <el-input v-model="form.token" type="password" show-password :placeholder="editing?'留空=保留原值':'可选，Bearer token'" />
         </el-form-item>
@@ -75,7 +87,7 @@ const envs = ['PROD', 'UAT', 'TEST', 'DEV']
 const rows = ref([]); const clusters = ref([]); const loading = ref(false); const testing = reactive({})
 const { page, pageSize, paged } = usePager(rows)
 const dlg = ref(false); const editing = ref(false)
-const blank = () => ({ id: 0, name: '', type: 'prometheus', url: '', env: '', cluster_id: null, token: '', enabled: 1 })
+const blank = () => ({ id: 0, name: '', type: 'prometheus', url: '', env: '', cluster_id: null, cluster_label: '', token: '', enabled: 1 })
 const form = reactive(blank())
 
 function typeText(t) { return { prometheus: 'Prometheus/VM', loki: 'Loki', kubesphere: 'KubeSphere' }[t] || t }
@@ -103,7 +115,17 @@ async function doTest(row) {
   testing[row.id] = true
   try {
     const r = await testObsEndpoint(row.id)
-    if (r.ok) ElMessage.success(`连通成功（HTTP ${r.status}）`); else ElMessage.error('连通失败：' + (r.error || ('HTTP ' + r.status)))
+    if (r.ok) {
+      ElMessage.success(`连通成功（HTTP ${r.status} ${r.path || ''}）`)
+      return
+    }
+    // 失败时把每条探测路径的结果都列出来——只说"HTTP 404"看不出是地址错了还是服务没起来。
+    const detail = (r.tried || []).map(t => `${t.path} → ${t.status || t.error}`).join('\n')
+    ElMessage({
+      type: 'error', duration: 8000, showClose: true,
+      message: (r.error || '连通失败') + (detail ? `\n探测明细：\n${detail}` : ''),
+      customClass: 'obs-test-msg',
+    })
   } catch (e) { ElMessage.error('测试失败') } finally { testing[row.id] = false }
 }
 onMounted(load)
@@ -113,4 +135,10 @@ onMounted(load)
 .page-head { margin-bottom: 14px; }
 .page-title { font-size: 18px; font-weight: 600; }
 .muted { color: #909399; font-size: 12px; }
+</style>
+
+<!-- ElMessage 挂在 body 上，scoped 管不到，探测明细要靠这个才能换行显示 -->
+<style>
+.obs-test-msg { max-width: 620px; }
+.obs-test-msg .el-message__content { white-space: pre-line; line-height: 1.7; }
 </style>

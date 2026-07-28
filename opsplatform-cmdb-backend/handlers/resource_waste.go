@@ -240,13 +240,15 @@ func (h *ObsQueryHandler) IdleCost(c *gin.Context) {
 
 // podUsageMap 取全集群 Pod 实时用量（复用 PodUsage 的 PromQL 口径）。
 func (h *ObsQueryHandler) podUsageMap(cid int) (map[string]podUse, error) {
-	base, token, err := resolveEndpoint(h.DB, h.Cipher, "prometheus", h.clusterEnv(cid), cid)
+	base, token, clusterLabel, err := resolveEndpointFull(h.DB, h.Cipher, "prometheus", h.clusterEnv(cid), cid)
 	if err != nil {
 		return nil, err
 	}
+	// 浪费排行/闲置成本是拿实测用量去比 request，混进别的集群的同名 Pod 会直接算错钱。
+	lbl := promLabels(clusterSelector(h.DB, clusterLabel, cid), `container!=""`, `container!="POD"`)
 	out := map[string]podUse{}
 	cpu, err := promInstant(base, token,
-		`sum by (namespace,pod) (rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])) * 1000`)
+		`sum by (namespace,pod) (rate(container_cpu_usage_seconds_total`+lbl+`[5m])) * 1000`)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +259,7 @@ func (h *ObsQueryHandler) podUsageMap(cid int) (map[string]podUse, error) {
 		out[k] = u
 	}
 	mem, err := promInstant(base, token,
-		`sum by (namespace,pod) (container_memory_working_set_bytes{container!="",container!="POD"}) / 1024 / 1024`)
+		`sum by (namespace,pod) (container_memory_working_set_bytes`+lbl+`) / 1024 / 1024`)
 	if err != nil {
 		return out, nil // CPU 已经拿到，内存失败不至于整体报废
 	}
