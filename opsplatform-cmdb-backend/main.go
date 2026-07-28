@@ -82,14 +82,14 @@ func main() {
 	handlers.NewK8sResourceHandler(db, k8sPool).Register(api)
 	handlers.NewK8sTopologyHandler(db).Register(api)
 	handlers.NewK8sCostHandler(db).Register(api)
-	handlers.NewK8sDiagHandler(db, k8sPool).Register(api) // 合并 k8sinsight：实时日志/事件/规则诊断
+	handlers.NewK8sDiagHandler(db, k8sPool, cipher).Register(api) // 合并 k8sinsight：实时日志/事件/规则诊断
 	handlers.NewEventCenterHandler(db, k8sPool).Register(api) // 事件中心:到期/变更/同步失败/K8s Warning 统一时间线
 	handlers.NewObsHandler(db, cipher).Register(api)      // 数据源接入(Prometheus/Loki/KubeSphere 地址)
 	handlers.NewObsQueryHandler(db, cipher).Register(api) // 资源使用率/Loki/KubeSphere 查询
 	mcpH := handlers.NewMCPHandler(db, cfg.JWTSecret, cfg.Port)
 	mcpH.RegisterAuthed(api)
 	// 周期全量同步所有启用集群（阶段3），默认每 120s 一轮
-	go k8ssource.StartScheduler(db, k8sPool, 120)
+	go k8ssource.StartScheduler(db, k8sPool, k8ssource.DefaultSyncIntervalSec)
 	// 每 6h 刷新当月成本快照（跨月自动定格上月），供环比/报告用
 	go handlers.StartCostSnapshotScheduler(db)
 

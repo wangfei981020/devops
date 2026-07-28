@@ -29,6 +29,8 @@ func (h *K8sResourceHandler) Register(r *gin.RouterGroup) {
 	r.GET("/k8s/node-pools", h.NodePools)
 	r.GET("/k8s/nodes", h.Nodes)
 	r.GET("/k8s/namespaces", h.Namespaces)
+	r.GET("/k8s/sync-state", h.SyncState)         // 采集新鲜度:这份数据能不能信
+	r.GET("/k8s/expose-surface", h.ExposeSurface) // 暴露面:谁能从外面访问到什么
 	r.GET("/k8s/workloads", h.Workloads)
 	r.GET("/k8s/pods", h.Pods)
 	r.GET("/k8s/services", h.Services)
@@ -37,11 +39,11 @@ func (h *K8sResourceHandler) Register(r *gin.RouterGroup) {
 	r.GET("/k8s/httproutes", h.HTTPRoutes)
 	r.GET("/k8s/virtualservices", h.VirtualServices)
 	r.GET("/k8s/node-capacity", h.NodeCapacity) // 节点 可分配 vs 已request vs limit → 够不够/装箱
-	r.GET("/k8s/ns-overview", h.NsOverview)      // 命名空间/项目 Pod 概览:总/Running/失败/Pending+原因
+	r.GET("/k8s/ns-overview", h.NsOverview)     // 命名空间/项目 Pod 概览:总/Running/失败/Pending+原因
 	r.GET("/k8s/pvcs", h.PVCs)
 	r.GET("/k8s/hpas", h.HPAs)
 	r.GET("/k8s/changes", h.Changes)
-	r.GET("/k8s/ns-projects", h.NsProjects)   // 命名空间→项目 映射(含未映射的命名空间)
+	r.GET("/k8s/ns-projects", h.NsProjects)    // 命名空间→项目 映射(含未映射的命名空间)
 	r.POST("/k8s/ns-projects", h.SetNsProject) // upsert 单条映射
 }
 
@@ -89,7 +91,15 @@ func (h *K8sResourceHandler) NodePools(c *gin.Context) {
 }
 
 func (h *K8sResourceHandler) Nodes(c *gin.Context) {
+	// health 是派生结论列：conditions 为空既可能是「无压力」也可能是「没采到」，
+	// 空字符串对调用方（尤其 AI）有歧义，这里直接给出可采信的判定，免得各方自己解析 conditions_json。
 	h.list(c, `SELECT id,cluster_id,name,pool,internal_ip,roles,machine_type,cpu_cap,mem_cap,os_image,kubelet_version,ready_status,last_heartbeat,conditions,COALESCE(conditions_json,'') AS conditions_json,pod_count,stuck,
+		CASE
+			WHEN stuck=1 THEN CONCAT('异常:卡死/失联(Ready=',ready_status,')')
+			WHEN ready_status<>'Ready' THEN CONCAT('异常:未就绪(Ready=',ready_status,')')
+			WHEN COALESCE(conditions,'')<>'' THEN CONCAT('异常:存在压力(',conditions,')')
+			ELSE '正常'
+		END AS health,
 		COALESCE((SELECT c.id FROM cis c WHERE c.type='host' AND c.name=k8s_nodes.name LIMIT 1),0) AS host_ci_id FROM k8s_nodes`,
 		[]filter{{"cluster_id", "cluster_id", true}, {"pool", "pool", false}}, "cluster_id,pool,name", []string{"name", "internal_ip", "pool"})
 }
@@ -114,8 +124,10 @@ func (h *K8sResourceHandler) Pods(c *gin.Context) {
 }
 
 func (h *K8sResourceHandler) Services(c *gin.Context) {
-	h.list(c, `SELECT id,cluster_id,namespace,name,type,cluster_ip,ports FROM k8s_services`,
-		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}}, "namespace,name", []string{"name", "cluster_ip"})
+	h.list(c, `SELECT id,cluster_id,namespace,name,type,cluster_ip,COALESCE(external_ip,'') AS external_ip,
+		COALESCE(lb_type,'') AS lb_type,ports FROM k8s_services`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}}, "namespace,name",
+		[]string{"name", "cluster_ip", "external_ip"})
 }
 
 func (h *K8sResourceHandler) Ingresses(c *gin.Context) {

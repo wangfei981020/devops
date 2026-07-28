@@ -27,11 +27,8 @@ func (h *NetworkHandler) Register(r *gin.RouterGroup) {
 	r.GET("/cloud-ips", h.ListIPs) // 聚合视图
 }
 
-// 敏感端口（对 0.0.0.0/0 放行即高危）
-var sensitivePorts = map[string]bool{
-	"22": true, "3389": true, "3306": true, "6379": true, "5432": true,
-	"27017": true, "1433": true, "9200": true, "5984": true, "11211": true,
-}
+// 敏感端口口径统一在 expose_surface.go 的 sensitivePortNames，这里直接复用其字符串形式，
+// 避免防火墙判定和暴露面判定各记一份导致结论互相打架（原先这里缺 ZooKeeper/Nacos/Kafka 等端口）。
 
 // fwHighRisk 入站 allow + 源含 0.0.0.0/0 + 命中敏感端口(或 all/未限端口) → 高危。
 func fwHighRisk(direction, action, protocols, sourceRanges string) bool {

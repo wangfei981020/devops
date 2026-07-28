@@ -60,14 +60,17 @@ func (h *EventCenterHandler) List(c *gin.Context) {
 	}
 
 	// 1. 到期:证书(线上探测) + 域名注册
-	if rows, _ := h.DB.Query(`SELECT r.host, r.cert_expiry_at FROM domain_records r
+	// Object 必须是完整 FQDN：domain_records.host 只是子域前缀（@ / www / mond），
+	// 单独拿出来会得到「证书 @ 即将到期」这种没法处置的告警，必须 JOIN 出根域名拼全。
+	if rows, _ := h.DB.Query(`SELECT r.host, c.name, r.cert_expiry_at FROM domain_records r
+		JOIN cis c ON c.id=r.domain_ci_id
 		WHERE r.cert_expiry_at IS NOT NULL AND r.cert_ignored=0 AND r.cert_expiry_at <= NOW()+INTERVAL ? DAY
 		ORDER BY r.cert_expiry_at`, days); rows != nil {
 		for rows.Next() {
-			var host string
+			var host, domain string
 			var exp sql.NullTime
-			if rows.Scan(&host, &exp) == nil && exp.Valid {
-				add(evt{Source: "expiry", Level: expiryLevel(exp.Time), Object: host,
+			if rows.Scan(&host, &domain, &exp) == nil && exp.Valid {
+				add(evt{Source: "expiry", Level: expiryLevel(exp.Time), Object: recordFQDN(host, domain),
 					Title: "证书到期", Message: "证书 " + exp.Time.Format("2006-01-02") + " 到期", sortTs: exp.Time})
 			}
 		}

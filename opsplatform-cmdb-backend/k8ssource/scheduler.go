@@ -8,6 +8,10 @@ import (
 	"opsplatform-cmdb-backend/logx"
 )
 
+// DefaultSyncIntervalSec 默认全量同步周期。数据新鲜度判定（handlers.SyncState）按它算 stale 阈值，
+// 两处必须一致，所以定在这里由调用方引用，不要各写各的字面量。
+const DefaultSyncIntervalSec = 120
+
 // StartScheduler 周期全量同步所有启用集群（阶段3）。每 intervalSec 一轮，逐集群串行、各自超时隔离。
 // 启动后先等 20s（让进程/DB 就绪）再首轮。
 func StartScheduler(db *sql.DB, pool *Pool, intervalSec int) {

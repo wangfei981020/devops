@@ -74,12 +74,11 @@ func syncNamespaces(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, c
 	if err != nil {
 		return 0, err
 	}
-	_, _ = db.Exec(`DELETE FROM k8s_namespaces WHERE cluster_id=?`, cid)
+	rows := make([][]any, 0, len(list.Items))
 	for _, ns := range list.Items {
-		_, _ = db.Exec(`INSERT INTO k8s_namespaces (cluster_id,name,phase) VALUES (?,?,?)`,
-			cid, ns.Name, string(ns.Status.Phase))
+		rows = append(rows, []any{cid, ns.Name, string(ns.Status.Phase)})
 	}
-	return len(list.Items), nil
+	return replaceAll(db, "k8s_namespaces", []string{"cluster_id", "name", "phase"}, cid, rows)
 }
 
 func syncNodes(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int, poolLabel string) (int, error) {
@@ -87,7 +86,7 @@ func syncNodes(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid in
 	if err != nil {
 		return 0, err
 	}
-	_, _ = db.Exec(`DELETE FROM k8s_nodes WHERE cluster_id=?`, cid)
+	rows := make([][]any, 0, len(list.Items))
 	for i := range list.Items {
 		n := &list.Items[i]
 		ready, hb := readyCondition(n)
@@ -95,15 +94,17 @@ func syncNodes(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid in
 		if hb != nil && !hb.IsZero() {
 			hbVal = hb.UTC()
 		}
-		_, _ = db.Exec(`INSERT INTO k8s_nodes
-			(cluster_id,name,pool,internal_ip,roles,machine_type,cpu_cap,mem_cap,os_image,kubelet_version,ready_status,last_heartbeat,conditions,conditions_json,stuck)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rows = append(rows, []any{
 			cid, n.Name, resolvePool(n, poolLabel), nodeInternalIP(n), nodeRoles(n),
 			n.Labels["node.kubernetes.io/instance-type"], n.Status.Capacity.Cpu().String(),
 			n.Status.Capacity.Memory().String(), n.Status.NodeInfo.OSImage, n.Status.NodeInfo.KubeletVersion,
-			ready, hbVal, pressureSummary(n), conditionsJSON(n), boolToInt(isStuck(ready, hb)))
+			ready, hbVal, pressureSummary(n), conditionsJSON(n), boolToInt(isStuck(ready, hb)),
+		})
 	}
-	return len(list.Items), nil
+	return replaceAll(db, "k8s_nodes", []string{
+		"cluster_id", "name", "pool", "internal_ip", "roles", "machine_type", "cpu_cap", "mem_cap",
+		"os_image", "kubelet_version", "ready_status", "last_heartbeat", "conditions", "conditions_json", "stuck",
+	}, cid, rows)
 }
 
 // stuckHeartbeatThreshold：Ready 心跳超过此时长未更新 → 判为卡死/失联。
@@ -149,26 +150,26 @@ func syncWorkloads(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, ci
 		}
 		rows.Close()
 	}
-	_, _ = db.Exec(`DELETE FROM k8s_workloads WHERE cluster_id=?`, cid)
-	total := 0
+	// 变更先攒着，等新数据成功落库再写——采集失败回滚时不该留下变更记录。
+	type change struct{ ns, kind, name, field, oldV, newV string }
+	var changes []change
+	rows := make([][]any, 0, 512)
 	ins := func(ns, kind, name string, desired, ready int32, image, status string) {
 		img, tag := splitImage(image)
 		// diff：镜像/副本变化则记变更（首轮 oldMap 空，不产生噪音）
 		if o, ok := oldMap[ns+"|"+kind+"|"+name]; ok {
 			newImg := img + ":" + tag
 			if o.image != newImg {
-				recordChange(db, cid, ns, kind, name, "image", o.image, newImg)
+				changes = append(changes, change{ns, kind, name, "image", o.image, newImg})
 			}
 			if o.desired != int(desired) {
-				recordChange(db, cid, ns, kind, name, "replicas", fmt.Sprintf("%d", o.desired), fmt.Sprintf("%d", desired))
+				changes = append(changes, change{ns, kind, name, "replicas",
+					fmt.Sprintf("%d", o.desired), fmt.Sprintf("%d", desired)})
 			}
 		}
-		_, _ = db.Exec(`INSERT INTO k8s_workloads
-			(cluster_id,namespace,kind,name,replicas_desired,replicas_ready,image,image_tag,status)
-			VALUES (?,?,?,?,?,?,?,?,?)`,
-			cid, ns, kind, name, desired, ready, img, tag, status)
-		total++
+		rows = append(rows, []any{cid, ns, kind, name, desired, ready, img, tag, status})
 	}
+	// Deployment 是主体，拉不到就整轮放弃，保住上一轮的完整数据（旧实现此时已把表清空了）。
 	if dl, err := cs.AppsV1().Deployments("").List(ctx, metav1.ListOptions{}); err == nil {
 		for i := range dl.Items {
 			d := &dl.Items[i]
@@ -176,7 +177,7 @@ func syncWorkloads(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, ci
 				firstImage(d.Spec.Template.Spec.Containers), wlStatus(deref(d.Spec.Replicas), d.Status.ReadyReplicas))
 		}
 	} else {
-		return total, err
+		return 0, err
 	}
 	if sl, err := cs.AppsV1().StatefulSets("").List(ctx, metav1.ListOptions{}); err == nil {
 		for i := range sl.Items {
@@ -198,7 +199,16 @@ func syncWorkloads(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, ci
 			ins(c.Namespace, "CronJob", c.Name, 0, 0, firstImage(c.Spec.JobTemplate.Spec.Template.Spec.Containers), c.Spec.Schedule)
 		}
 	}
-	return total, nil
+	n, err := replaceAll(db, "k8s_workloads", []string{
+		"cluster_id", "namespace", "kind", "name", "replicas_desired", "replicas_ready", "image", "image_tag", "status",
+	}, cid, rows)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range changes {
+		recordChange(db, cid, c.ns, c.kind, c.name, c.field, c.oldV, c.newV)
+	}
+	return n, nil
 }
 
 func syncServices(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int) (int, error) {
@@ -206,17 +216,55 @@ func syncServices(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid
 	if err != nil {
 		return 0, err
 	}
-	_, _ = db.Exec(`DELETE FROM k8s_services WHERE cluster_id=?`, cid)
+	rows := make([][]any, 0, len(list.Items))
 	for i := range list.Items {
 		s := &list.Items[i]
 		ports := []string{}
 		for _, p := range s.Spec.Ports {
 			ports = append(ports, fmt.Sprintf("%d/%s", p.Port, p.Protocol))
 		}
-		_, _ = db.Exec(`INSERT INTO k8s_services (cluster_id,namespace,name,type,cluster_ip,ports) VALUES (?,?,?,?,?,?)`,
-			cid, s.Namespace, s.Name, string(s.Spec.Type), s.Spec.ClusterIP, trunc(strings.Join(ports, ","), 255))
+		rows = append(rows, []any{cid, s.Namespace, s.Name, string(s.Spec.Type), s.Spec.ClusterIP,
+			trunc(serviceExternalIPs(s), 255), lbTypeAnnotation(s), trunc(strings.Join(ports, ","), 255)})
 	}
-	return len(list.Items), nil
+	return replaceAll(db, "k8s_services",
+		[]string{"cluster_id", "namespace", "name", "type", "cluster_ip", "external_ip", "lb_type", "ports"}, cid, rows)
+}
+
+// serviceExternalIPs 取 Service 对外暴露的地址：LoadBalancer 分配的 ingress IP/域名，
+// 外加显式声明的 spec.externalIPs。多个用逗号分隔。
+func serviceExternalIPs(s *corev1.Service) string {
+	seen := map[string]bool{}
+	out := []string{}
+	add := func(v string) {
+		if v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	for _, ing := range s.Status.LoadBalancer.Ingress {
+		add(ing.IP)
+		add(ing.Hostname)
+	}
+	for _, ip := range s.Spec.ExternalIPs {
+		add(ip)
+	}
+	return strings.Join(out, ",")
+}
+
+// lbTypeAnnotation 取云厂商的「内网 LB」注解值（GKE 新旧两种键都认）。
+// 空值不等于外网——托管 LB 的权威内外网属性在 cloud_loadbalancers.scheme，这里只是 K8s 侧的声明。
+func lbTypeAnnotation(s *corev1.Service) string {
+	for _, k := range []string{
+		"networking.gke.io/load-balancer-type",
+		"cloud.google.com/load-balancer-type",
+		"service.beta.kubernetes.io/aws-load-balancer-internal",
+		"service.beta.kubernetes.io/azure-load-balancer-internal",
+	} {
+		if v := s.Annotations[k]; v != "" {
+			return trunc(v, 32)
+		}
+	}
+	return ""
 }
 
 // syncEndpoints 采集 Endpoints，打通 Service→Pod→Node（全链路/影响分析用）。
@@ -225,8 +273,7 @@ func syncEndpoints(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, ci
 	if err != nil {
 		return 0, err
 	}
-	_, _ = db.Exec(`DELETE FROM k8s_endpoints WHERE cluster_id=?`, cid)
-	n := 0
+	rows := [][]any{}
 	for i := range list.Items {
 		ep := &list.Items[i]
 		for _, ss := range ep.Subsets {
@@ -238,13 +285,12 @@ func syncEndpoints(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, ci
 				if a.NodeName != nil {
 					node = *a.NodeName
 				}
-				_, _ = db.Exec(`INSERT INTO k8s_endpoints (cluster_id,namespace,service_name,pod_name,node_name) VALUES (?,?,?,?,?)`,
-					cid, ep.Namespace, ep.Name, pod, node)
-				n++
+				rows = append(rows, []any{cid, ep.Namespace, ep.Name, pod, node})
 			}
 		}
 	}
-	return n, nil
+	return replaceAll(db, "k8s_endpoints",
+		[]string{"cluster_id", "namespace", "service_name", "pod_name", "node_name"}, cid, rows)
 }
 
 func syncIngresses(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int) (int, error) {
@@ -252,7 +298,7 @@ func syncIngresses(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, ci
 	if err != nil {
 		return 0, err
 	}
-	_, _ = db.Exec(`DELETE FROM k8s_ingresses WHERE cluster_id=?`, cid)
+	rows := make([][]any, 0, len(list.Items))
 	for i := range list.Items {
 		ing := &list.Items[i]
 		hosts, svcs := []string{}, map[string]struct{}{}
@@ -274,11 +320,11 @@ func syncIngresses(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, ci
 				tls = append(tls, t.SecretName)
 			}
 		}
-		_, _ = db.Exec(`INSERT INTO k8s_ingresses (cluster_id,namespace,name,hosts,tls,svc_names) VALUES (?,?,?,?,?,?)`,
-			cid, ing.Namespace, ing.Name, trunc(strings.Join(hosts, ","), 1024),
-			trunc(strings.Join(tls, ","), 512), trunc(strings.Join(keys(svcs), ","), 512))
+		rows = append(rows, []any{cid, ing.Namespace, ing.Name, trunc(strings.Join(hosts, ","), 1024),
+			trunc(strings.Join(tls, ","), 512), trunc(strings.Join(keys(svcs), ","), 512)})
 	}
-	return len(list.Items), nil
+	return replaceAll(db, "k8s_ingresses",
+		[]string{"cluster_id", "namespace", "name", "hosts", "tls", "svc_names"}, cid, rows)
 }
 
 // podReason 提取失败/异常原因：容器 waiting.reason(CrashLoopBackOff/ImagePullBackOff…)、
@@ -315,7 +361,7 @@ func syncPods(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 	if err != nil {
 		return 0, err
 	}
-	_, _ = db.Exec(`DELETE FROM k8s_pods WHERE cluster_id=?`, cid)
+	rows := make([][]any, 0, len(list.Items))
 	for i := range list.Items {
 		p := &list.Items[i]
 		var restarts int32
@@ -327,13 +373,15 @@ func syncPods(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 			st = p.Status.StartTime.UTC()
 		}
 		cpuReq, memReq, cpuLim, memLim := podResources(p)
-		_, _ = db.Exec(`INSERT INTO k8s_pods
-			(cluster_id,namespace,name,node_name,workload,phase,cpu_req_m,mem_req_mi,cpu_lim_m,mem_lim_mi,restarts,pod_ip,start_time,reason)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rows = append(rows, []any{
 			cid, p.Namespace, p.Name, p.Spec.NodeName, ownerWorkload(p), string(p.Status.Phase),
-			cpuReq, memReq, cpuLim, memLim, restarts, p.Status.PodIP, st, podReason(p))
+			cpuReq, memReq, cpuLim, memLim, restarts, p.Status.PodIP, st, podReason(p),
+		})
 	}
-	return len(list.Items), nil
+	return replaceAll(db, "k8s_pods", []string{
+		"cluster_id", "namespace", "name", "node_name", "workload", "phase",
+		"cpu_req_m", "mem_req_mi", "cpu_lim_m", "mem_lim_mi", "restarts", "pod_ip", "start_time", "reason",
+	}, cid, rows)
 }
 
 // podResources 汇总 Pod 所有容器的 request/limit：CPU 毫核、内存 MiB。
@@ -360,15 +408,25 @@ func derivePools(db *sql.DB, cid int) (int, error) {
 	// 回填 pod_count
 	_, _ = db.Exec(`UPDATE k8s_nodes n SET pod_count=(
 		SELECT COUNT(*) FROM k8s_pods p WHERE p.cluster_id=n.cluster_id AND p.node_name=n.name) WHERE n.cluster_id=?`, cid)
-	// 重建节点池
-	_, _ = db.Exec(`DELETE FROM k8s_node_pools WHERE cluster_id=?`, cid)
-	res, err := db.Exec(`INSERT INTO k8s_node_pools (cluster_id,name,machine_type,node_count,version)
+	// 重建节点池：同样放进事务，避免查询读到"池已删、还没重建"的空档。
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM k8s_node_pools WHERE cluster_id=?`, cid); err != nil {
+		return 0, err
+	}
+	res, err := tx.Exec(`INSERT INTO k8s_node_pools (cluster_id,name,machine_type,node_count,version)
 		SELECT cluster_id, pool, MAX(machine_type), COUNT(*), MAX(kubelet_version)
 		FROM k8s_nodes WHERE cluster_id=? GROUP BY cluster_id, pool`, cid)
 	if err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
 	return int(n), nil
 }
 
@@ -377,7 +435,7 @@ func syncPVCs(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 	if err != nil {
 		return 0, err
 	}
-	_, _ = db.Exec(`DELETE FROM k8s_pvcs WHERE cluster_id=?`, cid)
+	rows := make([][]any, 0, len(list.Items))
 	for i := range list.Items {
 		p := &list.Items[i]
 		cap := ""
@@ -390,10 +448,10 @@ func syncPVCs(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 		if p.Spec.StorageClassName != nil {
 			sc = *p.Spec.StorageClassName
 		}
-		_, _ = db.Exec(`INSERT INTO k8s_pvcs (cluster_id,namespace,name,status,capacity,storage_class,volume_name) VALUES (?,?,?,?,?,?,?)`,
-			cid, p.Namespace, p.Name, string(p.Status.Phase), cap, sc, p.Spec.VolumeName)
+		rows = append(rows, []any{cid, p.Namespace, p.Name, string(p.Status.Phase), cap, sc, p.Spec.VolumeName})
 	}
-	return len(list.Items), nil
+	return replaceAll(db, "k8s_pvcs",
+		[]string{"cluster_id", "namespace", "name", "status", "capacity", "storage_class", "volume_name"}, cid, rows)
 }
 
 func syncHPAs(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int) (int, error) {
@@ -401,18 +459,20 @@ func syncHPAs(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 	if err != nil {
 		return 0, err
 	}
-	_, _ = db.Exec(`DELETE FROM k8s_hpas WHERE cluster_id=?`, cid)
+	rows := make([][]any, 0, len(list.Items))
 	for i := range list.Items {
 		h := &list.Items[i]
 		minR := int32(0)
 		if h.Spec.MinReplicas != nil {
 			minR = *h.Spec.MinReplicas
 		}
-		_, _ = db.Exec(`INSERT INTO k8s_hpas (cluster_id,namespace,name,target_kind,target_name,min_replicas,max_replicas,current_replicas) VALUES (?,?,?,?,?,?,?,?)`,
-			cid, h.Namespace, h.Name, h.Spec.ScaleTargetRef.Kind, h.Spec.ScaleTargetRef.Name,
-			minR, h.Spec.MaxReplicas, h.Status.CurrentReplicas)
+		rows = append(rows, []any{cid, h.Namespace, h.Name, h.Spec.ScaleTargetRef.Kind, h.Spec.ScaleTargetRef.Name,
+			minR, h.Spec.MaxReplicas, h.Status.CurrentReplicas})
 	}
-	return len(list.Items), nil
+	return replaceAll(db, "k8s_hpas", []string{
+		"cluster_id", "namespace", "name", "target_kind", "target_name",
+		"min_replicas", "max_replicas", "current_replicas",
+	}, cid, rows)
 }
 
 // syncGateways 采集 Gateway API 的 Gateway（CRD，dynamic）。集群未装 CRD → 优雅跳过(0)。
@@ -423,12 +483,11 @@ func syncGateways(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid int
 			return 0, nil // 无权限:跳过,不删已有数据
 		}
 		if crdAbsent(err) {
-			_, _ = db.Exec(`DELETE FROM k8s_gateways WHERE cluster_id=?`, cid)
-			return 0, nil
+			return 0, clearAll(db, "k8s_gateways", cid)
 		}
 		return 0, err
 	}
-	_, _ = db.Exec(`DELETE FROM k8s_gateways WHERE cluster_id=?`, cid)
+	rows := make([][]any, 0, len(list.Items))
 	for i := range list.Items {
 		g := &list.Items[i]
 		class, _, _ := unstructured.NestedString(g.Object, "spec", "gatewayClassName")
@@ -451,10 +510,11 @@ func syncGateways(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid int
 				}
 			}
 		}
-		_, _ = db.Exec(`INSERT INTO k8s_gateways (cluster_id,namespace,name,gateway_class,listeners,addresses) VALUES (?,?,?,?,?,?)`,
-			cid, g.GetNamespace(), g.GetName(), class, trunc(strings.Join(listeners, ","), 512), trunc(strings.Join(addrs, ","), 512))
+		rows = append(rows, []any{cid, g.GetNamespace(), g.GetName(), class,
+			trunc(strings.Join(listeners, ","), 512), trunc(strings.Join(addrs, ","), 512)})
 	}
-	return len(list.Items), nil
+	return replaceAll(db, "k8s_gateways",
+		[]string{"cluster_id", "namespace", "name", "gateway_class", "listeners", "addresses"}, cid, rows)
 }
 
 // syncHTTPRoutes 采集 Gateway API 的 HTTPRoute（CRD，dynamic）。未装 CRD → 优雅跳过。
@@ -465,12 +525,11 @@ func syncHTTPRoutes(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid i
 			return 0, nil // 无权限:跳过,不删已有数据
 		}
 		if crdAbsent(err) {
-			_, _ = db.Exec(`DELETE FROM k8s_httproutes WHERE cluster_id=?`, cid)
-			return 0, nil
+			return 0, clearAll(db, "k8s_httproutes", cid)
 		}
 		return 0, err
 	}
-	_, _ = db.Exec(`DELETE FROM k8s_httproutes WHERE cluster_id=?`, cid)
+	rows := make([][]any, 0, len(list.Items))
 	for i := range list.Items {
 		r := &list.Items[i]
 		hosts, _, _ := unstructured.NestedStringSlice(r.Object, "spec", "hostnames")
@@ -497,11 +556,11 @@ func syncHTTPRoutes(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid i
 				}
 			}
 		}
-		_, _ = db.Exec(`INSERT INTO k8s_httproutes (cluster_id,namespace,name,hostnames,parents,backends) VALUES (?,?,?,?,?,?)`,
-			cid, r.GetNamespace(), r.GetName(), trunc(strings.Join(hosts, ","), 1024),
-			trunc(strings.Join(parents, ","), 512), trunc(strings.Join(keys(backends), ","), 512))
+		rows = append(rows, []any{cid, r.GetNamespace(), r.GetName(), trunc(strings.Join(hosts, ","), 1024),
+			trunc(strings.Join(parents, ","), 512), trunc(strings.Join(keys(backends), ","), 512)})
 	}
-	return len(list.Items), nil
+	return replaceAll(db, "k8s_httproutes",
+		[]string{"cluster_id", "namespace", "name", "hostnames", "parents", "backends"}, cid, rows)
 }
 
 // syncVirtualServices 采集 Istio VirtualService（networking.istio.io，dynamic）。先试 v1 再 v1beta1，未装 → 优雅跳过。
@@ -515,12 +574,11 @@ func syncVirtualServices(ctx context.Context, db *sql.DB, dc dynamic.Interface, 
 			return 0, nil // 无权限:跳过,不删已有数据
 		}
 		if crdAbsent(err) {
-			_, _ = db.Exec(`DELETE FROM k8s_virtualservices WHERE cluster_id=?`, cid)
-			return 0, nil
+			return 0, clearAll(db, "k8s_virtualservices", cid)
 		}
 		return 0, err
 	}
-	_, _ = db.Exec(`DELETE FROM k8s_virtualservices WHERE cluster_id=?`, cid)
+	rows := make([][]any, 0, len(list.Items))
 	for i := range list.Items {
 		r := &list.Items[i]
 		hosts, _, _ := unstructured.NestedStringSlice(r.Object, "spec", "hosts")
@@ -544,11 +602,11 @@ func syncVirtualServices(ctx context.Context, db *sql.DB, dc dynamic.Interface, 
 				}
 			}
 		}
-		_, _ = db.Exec(`INSERT INTO k8s_virtualservices (cluster_id,namespace,name,hosts,gateways,backends) VALUES (?,?,?,?,?,?)`,
-			cid, r.GetNamespace(), r.GetName(), trunc(strings.Join(hosts, ","), 1024),
-			trunc(strings.Join(gws, ","), 512), trunc(strings.Join(keys(backends), ","), 512))
+		rows = append(rows, []any{cid, r.GetNamespace(), r.GetName(), trunc(strings.Join(hosts, ","), 1024),
+			trunc(strings.Join(gws, ","), 512), trunc(strings.Join(keys(backends), ","), 512)})
 	}
-	return len(list.Items), nil
+	return replaceAll(db, "k8s_virtualservices",
+		[]string{"cluster_id", "namespace", "name", "hosts", "gateways", "backends"}, cid, rows)
 }
 
 // crdAbsent 判断错误是否为"CRD 未安装"（NotFound / NoResourceMatch），用于清理 stale 后跳过。

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -88,6 +89,14 @@ var mcpTools = []mcpTool{
 	{"list_domains", "列域名(可按项目/状态/关键词筛)，看到期/CDN/证书", "/api/domains", []mcpParam{{"status", "string", "状态筛选", false}, {"q", "string", "关键词(域名/模块)", false}}, false},
 	{"list_certificates", "证书巡检:临期/过期/检测失败的证书", "/api/cert-inspect", nil, false},
 	{"list_hosts", "列主机(云VM):机型/IP/状态/项目", "/api/hosts", nil, false},
+	// 云网络台账（GCP 只读采集）。判断"某服务是不是暴露在公网"必须看这里：
+	// scheme=EXTERNAL/INTERNAL 是权威答案，K8s 侧的 Service/注解只是间接线索。
+	{"list_loadbalancers", "列负载均衡:scheme(EXTERNAL=外网/INTERNAL=内网)+VIP+端口+后端实例——判断服务是否公网暴露看这个", "/api/cloud-loadbalancers", nil, false},
+	{"list_firewalls", "列防火墙规则:方向/优先级/放行端口/来源网段/是否高危(0.0.0.0/0 放行敏感端口)", "/api/cloud-firewalls", nil, false},
+	{"list_cloud_ips", "IP 台账聚合:静态IP+主机内外网IP+LB VIP,含是否闲置(预留未绑=白花钱)", "/api/cloud-ips", nil, false},
+	{"list_cloud_addresses", "列云静态/预留 IP:地址/内外网类型/占用状态/使用者", "/api/cloud-addresses", nil, false},
+	{"list_networks", "列 VPC 网络", "/api/cloud-networks", nil, false},
+	{"list_subnets", "列子网:网段/区域", "/api/cloud-subnets", nil, false},
 	{"list_clusters", "列纳管的 K8s 集群", "/api/k8s/clusters", nil, false},
 	{"list_nodes", "列节点(可只看某集群/节点池/异常),含卡死状态", "/api/k8s/nodes", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"pool", "string", "节点池", false}, {"q", "string", "关键词", false}}, false},
 	{"list_workloads", "列工作负载(Deploy/STS/DS/CronJob),含副本/镜像/状态", "/api/k8s/workloads", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"namespace", "string", "命名空间", false}, {"kind", "string", "类型", false}, {"q", "string", "关键词", false}}, false},
@@ -98,6 +107,8 @@ var mcpTools = []mcpTool{
 	{"list_gateways", "列 Gateway API Gateway", "/api/k8s/gateways", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"namespace", "string", "命名空间", false}}, false},
 	{"list_httproutes", "列 HTTPRoute", "/api/k8s/httproutes", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"namespace", "string", "命名空间", false}}, false},
 	{"list_namespaces", "列命名空间", "/api/k8s/namespaces", []mcpParam{{"cluster_id", "integer", "集群ID", false}}, false},
+	{"data_freshness", "采集新鲜度:CMDB 里这份数据是什么时候采的/能不能信——下结论前先查这个,尤其当结果和预期不符时", "/api/k8s/sync-state", []mcpParam{{"cluster_id", "integer", "集群ID", false}}, false},
+	{"expose_surface", "暴露面总览:所有对外入口(VS/Ingress/LB/NodePort)的内外网判定+TLS+后端存活+风险分级——问'哪些服务暴露在公网'直接用这个,不要自己拼", "/api/k8s/expose-surface", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"only", "string", "external=只看外网, risky=只看有风险的", false}}, false},
 	{"ns_projects", "命名空间→业务项目归属", "/api/k8s/ns-projects", []mcpParam{{"cluster_id", "integer", "集群ID", true}}, false},
 	{"list_pvcs", "列 PVC 存储卷", "/api/k8s/pvcs", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"namespace", "string", "命名空间", false}}, false},
 	{"list_hpas", "列 HPA 自动伸缩", "/api/k8s/hpas", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"namespace", "string", "命名空间", false}}, false},
@@ -181,6 +192,11 @@ func toolSchemas() []gin.H {
 				req = append(req, p.Name)
 			}
 		}
+		// 列表类工具统一支持 fields 裁剪：全量返回动辄几十上百 KB，直接读会超上下文上限。
+		if strings.HasPrefix(t.Name, "list_") {
+			props["fields"] = gin.H{"type": "string",
+				"description": "只返回这些列(逗号分隔),用于裁剪大列表避免超长,如 namespace,name,restarts;不传=全部列"}
+		}
 		schema := gin.H{"type": "object", "properties": props}
 		if len(req) > 0 {
 			schema["required"] = req
@@ -233,7 +249,107 @@ func (h *MCPHandler) callTool(c *gin.Context, req rpcReq) {
 		c.JSON(http.StatusOK, rpcOK(req.ID, gin.H{"content": []gin.H{{"type": "text", "text": "调用失败: " + err.Error()}}, "isError": true}))
 		return
 	}
+	body = h.hintIfNarrowedToEmpty(tool, q, p.Arguments, body)
+	if !tool.Text {
+		body = applyFields(body, str(p.Arguments["fields"]))
+	}
 	c.JSON(http.StatusOK, rpcOK(req.ID, gin.H{"content": []gin.H{{"type": "text", "text": body}}}))
+}
+
+// applyFields 按调用方声明的列白名单裁剪返回的 JSON 数组。
+//
+// 动因：list_pods 全量 246KB、list_certificates 173KB、list_nodes 67KB，都远超单次能直接读的量，
+// 每次都得先落盘再写脚本解析，既慢又容易漏字段。让调用方先声明「我只要这几列」，
+// 一次调用就能拿到可直接分析的数据。
+//
+// 只裁剪顶层为数组的响应；对象响应（诊断、成本汇总等）原样返回。
+func applyFields(body, fields string) string {
+	if strings.TrimSpace(fields) == "" {
+		return body
+	}
+	keep := map[string]bool{}
+	for _, f := range strings.Split(fields, ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			keep[f] = true
+		}
+	}
+	if len(keep) == 0 {
+		return body
+	}
+	var rows []map[string]json.RawMessage
+	if json.Unmarshal([]byte(body), &rows) != nil {
+		return body // 不是对象数组，原样返回
+	}
+	out := make([]map[string]json.RawMessage, 0, len(rows))
+	for _, r := range rows {
+		m := make(map[string]json.RawMessage, len(keep))
+		for k, v := range r {
+			if keep[k] {
+				m[k] = v
+			}
+		}
+		out = append(out, m)
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return body
+	}
+	return string(b)
+}
+
+func str(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+// hintIfNarrowedToEmpty 空结果 + 带了过滤条件时，附一句「放宽后还有多少条」。
+//
+// 起因是真实踩过的坑：list_virtualservices(namespace=istio-system) 返回 []，
+// 于是被判定成「这个集群没用 Istio」，实际 VS 都定义在各业务 ns 下，全集群有 144 条，
+// 整张入口拓扑就这么被漏掉了。空数组本身不区分「真没有」和「过滤错了」，这里补上区分。
+func (h *MCPHandler) hintIfNarrowedToEmpty(tool *mcpTool, q url.Values, args map[string]any, body string) string {
+	if tool.Text || strings.TrimSpace(body) != "[]" {
+		return body
+	}
+	narrowed := narrowingArgs(args)
+	if len(narrowed) == 0 {
+		return body // 本来就没过滤，那就是真的没有
+	}
+	wide := url.Values{}
+	if cid := q.Get("cluster_id"); cid != "" {
+		wide.Set("cluster_id", cid) // cluster_id 是定位不是过滤，保留
+	}
+	wideBody, err := h.internalGet(tool.Path, wide)
+	if err != nil {
+		return body
+	}
+	var items []json.RawMessage
+	if json.Unmarshal([]byte(wideBody), &items) != nil || len(items) == 0 {
+		return body // 放宽后也是空 → 确实没有，不必提示
+	}
+	hint := gin.H{
+		"items": []any{},
+		"hint": "当前过滤条件(" + strings.Join(narrowed, ", ") + ")下没有匹配项，" +
+			"但去掉这些条件后共有 " + strconv.Itoa(len(items)) + " 条 —— 不要据此判定集群里没有该资源，请放宽条件重查。",
+	}
+	b, err := json.Marshal(hint)
+	if err != nil {
+		return body
+	}
+	return string(b)
+}
+
+// narrowingArgs 列出会收窄结果的参数名。cluster_id 是定位维度而非过滤，不计入。
+func narrowingArgs(args map[string]any) []string {
+	out := []string{}
+	for k, v := range args {
+		if k == "cluster_id" || v == nil || v == "" {
+			continue
+		}
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // internalGet 用系统 JWT 调本进程 REST API（复用全部只读逻辑 + RBAC）。
