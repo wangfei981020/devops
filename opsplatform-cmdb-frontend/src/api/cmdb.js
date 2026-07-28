@@ -213,6 +213,15 @@ export const saveCdnAccount = (b) => http.post('/cdn/accounts', b).then((r) => r
 export const deleteCdnAccount = (id) => http.delete(`/cdn/accounts/${id}`).then((r) => r.data)
 export const verifyCdnAccount = (id) => http.post(`/cdn/accounts/${id}/verify`).then((r) => r.data)
 export const syncCdnAccount = (id) => http.post(`/cdn/accounts/${id}/sync`).then((r) => r.data)
+
+// Harbor 镜像仓库（只读接入）：补发布链路「推送」「拉取」两个环节的可见性
+export const listHarborRegistries = () => http.get('/harbor/registries').then((r) => r.data.items || [])
+export const saveHarborRegistry = (b) =>
+  (b.id ? http.put(`/harbor/registries/${b.id}`, b) : http.post('/harbor/registries', b)).then((r) => r.data)
+export const deleteHarborRegistry = (id) => http.delete(`/harbor/registries/${id}`).then((r) => r.data)
+export const testHarborRegistry = (id) => http.post(`/harbor/registries/${id}/test`).then((r) => r.data)
+export const harborStatus = (p) => http.get('/harbor/status', { params: p }).then((r) => r.data)
+export const harborProjects = (p) => http.get('/harbor/projects', { params: p }).then((r) => r.data)
 export const listCdnZones = () => http.get('/cdn/zones').then((r) => r.data)
 export const listCdnDnsRecords = (params) => http.get('/cdn/dns-records', { params }).then((r) => r.data)
 export const cdnDomainCheck = (params) => http.get('/cdn/domain-check', { params }).then((r) => r.data)

@@ -18,6 +18,9 @@
         <el-tab-pane label="CDN" name="cdn">
           <CdnPanel v-if="loaded.cdn" />
         </el-tab-pane>
+        <el-tab-pane label="镜像仓库" name="harbor">
+          <HarborPanel v-if="loaded.harbor" />
+        </el-tab-pane>
         <el-tab-pane label="观测数据源" name="obs">
           <ObsEndpoints v-if="loaded.obs" embedded />
         </el-tab-pane>
@@ -35,17 +38,18 @@ import { useRoute, useRouter } from 'vue-router'
 import RegistrarPanel from '../components/integrations/RegistrarPanel.vue'
 import CdnPanel from '../components/integrations/CdnPanel.vue'
 import AcmePanel from '../components/integrations/AcmePanel.vue'
+import HarborPanel from '../components/integrations/HarborPanel.vue'
 import CloudAccounts from './CloudAccounts.vue'
 import ObsEndpoints from './ObsEndpoints.vue'
 
 const route = useRoute()
 const router = useRouter()
-const valid = ['registrar', 'cloud', 'cdn', 'obs', 'acme']
+const valid = ['registrar', 'cloud', 'cdn', 'harbor', 'obs', 'acme']
 const tab = ref(valid.includes(route.query.tab) ? route.query.tab : 'registrar')
 
 // 各 tab 懒加载：每个面板在 onMounted 里各自拉数据，一次性全挂会同时打五组请求，
 // 而用户通常只看其中一个。切到哪个才加载哪个，加载过的保留（避免来回切时重复请求）。
-const loaded = reactive({ registrar: false, cloud: false, cdn: false, obs: false, acme: false })
+const loaded = reactive({ registrar: false, cloud: false, cdn: false, harbor: false, obs: false, acme: false })
 loaded[tab.value] = true
 
 function onTab(name) {
