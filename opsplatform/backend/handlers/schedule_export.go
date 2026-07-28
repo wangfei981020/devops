@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -111,10 +112,7 @@ func (s *exportStyles) shift(hexColor string) int {
 	if id, ok := s.shiftCache[fill]; ok {
 		return id
 	}
-	fontColor := "FFFFFF"
-	if isLightColor(fill) {
-		fontColor = "333333"
-	}
+	fontColor := shiftFontColor(fill)
 	id, err := s.f.NewStyle(&excelize.Style{
 		Border:    borderAll(),
 		Alignment: centerAlign(),
@@ -142,16 +140,33 @@ func normalizeHexColor(c string) string {
 	return strings.ToUpper(c)
 }
 
-// isLightColor 按感知亮度判断底色深浅，浅底配深字，深底配白字，保证怎么配色都能看清
-func isLightColor(hex6 string) bool {
+// shiftFontColor 按 WCAG 相对亮度算白字对比度，低于 3:1 就换深字，保证怎么配色都能看清
+// ⚠️ 判定规则要和前端 ScheduleView.vue 的 shiftTextColor 保持一致，否则页面和导出的表两个样
+func shiftFontColor(hex6 string) string {
+	if contrastWithWhite(hex6) < 3 {
+		return "1F2937"
+	}
+	return "FFFFFF"
+}
+
+func contrastWithWhite(hex6 string) float64 {
+	return 1.05 / (relativeLuminance(hex6) + 0.05)
+}
+
+func relativeLuminance(hex6 string) float64 {
 	v, err := strconv.ParseUint(hex6, 16, 32)
 	if err != nil {
-		return false
+		log.Printf("[排班导出] WARN 颜色值 %q 解析失败，按深色处理", hex6)
+		return 0
 	}
-	r := float64((v >> 16) & 0xFF)
-	g := float64((v >> 8) & 0xFF)
-	b := float64(v & 0xFF)
-	return 0.299*r+0.587*g+0.114*b > 165
+	chan8 := func(shift uint) float64 {
+		c := float64((v>>shift)&0xFF) / 255
+		if c <= 0.03928 {
+			return c / 12.92
+		}
+		return math.Pow((c+0.055)/1.055, 2.4)
+	}
+	return 0.2126*chan8(16) + 0.7152*chan8(8) + 0.0722*chan8(0)
 }
 
 var weekDayEn = [7]string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}

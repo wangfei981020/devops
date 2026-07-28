@@ -245,10 +245,50 @@ function closeShiftPicker() {
   showShiftPicker.value = false
 }
 
+// v614: 班次徽章字色按底色自动切黑白
+// 之前无条件用白字，浅色班次（OFF #fdf0b5 对比度 1.15、H #fff200 1.17、OD 1.44、AL 1.53）
+// 等于白纸写白字，整张表看着发虚。这里按 WCAG 相对亮度算对比度，
+// 白字对比度低于 3:1 就换深字，深色班次（A/C/A+/CT）维持白字不变。
+// ⚠️ 判定规则要和后端导出 Excel 的 shiftFontColor 保持一致，否则页面和导出的表两个样。
+const SHIFT_DARK_TEXT = '#1f2937'
+
+function relativeLuminance(hex) {
+  const h = String(hex || '').replace('#', '').trim()
+  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) {
+    console.warn('[排班] 无法识别的班次颜色值，按深色处理:', hex)
+    return 0
+  }
+  const chan = i => {
+    const c = parseInt(full.slice(i, i + 2), 16) / 255
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+  }
+  return 0.2126 * chan(0) + 0.7152 * chan(2) + 0.0722 * chan(4)
+}
+
+function contrastWithWhite(hex) {
+  return 1.05 / (relativeLuminance(hex) + 0.05)
+}
+
+function shiftTextColor(hex) {
+  return contrastWithWhite(hex) < 3 ? SHIFT_DARK_TEXT : '#ffffff'
+}
+
+// 浅底配深色描边、深底配白色描边，否则浅底上那圈半透明白描边会把边缘也冲淡
+function shiftRingShadow(hex) {
+  return contrastWithWhite(hex) < 3
+    ? 'inset 0 0 0 1px rgba(15,23,42,0.16), 0 1px 1.5px rgba(15,23,42,0.18)'
+    : 'inset 0 0 0 1px rgba(255,255,255,0.28), 0 1px 1.5px rgba(15,23,42,0.18)'
+}
+
 function getShiftStyle(shiftCode) {
   const shift = shiftTypes.value.find(s => s.code === shiftCode)
   if (!shift) return {}
-  return { background: shift.color, color: 'white' }
+  return {
+    background: shift.color,
+    color: shiftTextColor(shift.color),
+    boxShadow: shiftRingShadow(shift.color)
+  }
 }
 
 function getShiftInfo(shiftCode) {
@@ -742,7 +782,7 @@ watch(activeTab, (tab) => {
 
     <div class="shift-legend">
       <div v-for="s in shiftTypes" :key="s.code" class="legend-item" :style="{ '--shift-color': s.color }">
-        <span class="legend-code" :style="{ background: s.color }">{{ s.code }}</span>
+        <span class="legend-code" :style="{ background: s.color, color: shiftTextColor(s.color) }">{{ s.code }}</span>
         <span class="legend-name">{{ s.name }}</span>
         <span class="legend-time" v-if="s.time && s.time !== '-'">{{ s.time }}</span>
         <span class="legend-duty" v-if="s.isDuty">值班</span>
@@ -1101,7 +1141,7 @@ watch(activeTab, (tab) => {
           <div class="shift-picker-header">选择班次</div>
           <div class="shift-picker-grid">
             <button v-for="s in shiftTypes" :key="s.code" class="shift-picker-item" :class="{ active: shiftPickerTarget.currentShift === s.code }" @click="selectShift(s.code)">
-              <span class="sp-code" :style="{ background: s.color }">{{ s.code }}</span>
+              <span class="sp-code" :style="{ background: s.color, color: shiftTextColor(s.color) }">{{ s.code }}</span>
               <span class="sp-name">{{ s.name }}</span>
             </button>
             <button class="shift-picker-item clear-btn" :class="{ active: !shiftPickerTarget.currentShift }" @click="selectShift('')">
@@ -1177,7 +1217,7 @@ watch(activeTab, (tab) => {
 
 .shift-legend { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0; }
 .legend-item { display: flex; align-items: center; gap: 5px; padding: 5px 8px; border-radius: 6px; background: var(--bg-hover); border: 1px solid var(--border-color); font-size: 11px; white-space: nowrap; }
-.legend-code { padding: 2px 6px; border-radius: 4px; font-weight: 700; color: white; font-size: 10px; min-width: 18px; text-align: center; }
+.legend-code { padding: 2px 6px; border-radius: 4px; font-weight: 700; color: #fff; font-size: 10px; min-width: 18px; text-align: center; }
 .legend-name { font-weight: 500; color: var(--text-primary); white-space: nowrap; }
 .legend-time { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
 .legend-duty { background: #ef4444; color: white; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
