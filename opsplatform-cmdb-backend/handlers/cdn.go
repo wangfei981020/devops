@@ -224,6 +224,8 @@ func (h *CDNHandler) syncOne(ctx context.Context, accountID int) (int, int, erro
 	zoneRows := make([][]any, 0, len(zones))
 	recRows := [][]any{}
 	setRows := [][]any{}
+	ruleRows := [][]any{}
+	certRows := [][]any{}
 	for _, z := range zones {
 		zoneRows = append(zoneRows, []any{accountID, z.ZoneID, z.Name, z.Status, boolInt(z.Paused),
 			z.Plan, strings.Join(z.NameServers, ",")})
@@ -242,6 +244,25 @@ func (h *CDNHandler) syncOne(ctx context.Context, accountID int) (int, int, erro
 				setRows = append(setRows, []any{accountID, z.ZoneID, z.Name, s.Name, s.Value})
 			}
 		}
+		// 规则同理：token 可能没有 Page Rules / Config 读权限。拿不到只跳过这个 zone，
+		// 不影响已经采到的 DNS——但日志里会留下 [cf-rules] ERROR 说明原因。
+		if rules, err := cli.ListPageRules(ctx, z.ZoneID); err == nil {
+			for _, r := range rules {
+				ruleRows = append(ruleRows, ruleRow(accountID, z.ZoneID, z.Name, r))
+			}
+		}
+		if rules, err := cli.ListRulesets(ctx, z.ZoneID); err == nil {
+			for _, r := range rules {
+				ruleRows = append(ruleRows, ruleRow(accountID, z.ZoneID, z.Name, r))
+			}
+		}
+		// 边缘证书：需要 SSL and Certificates·Read 权限，没有就跳过（日志里有 [cf-cert] ERROR）
+		if certs, err := cli.ListCertificates(ctx, z.ZoneID); err == nil {
+			for _, ct := range certs {
+				certRows = append(certRows, []any{accountID, z.ZoneID, z.Name, ct.PackID, ct.Type,
+					strings.Join(ct.Hosts, ","), ct.Issuer, ct.Status, parseCFTime(ct.ExpiresOn), time.Now()})
+			}
+		}
 	}
 
 	tx, err := h.DB.Begin()
@@ -249,7 +270,7 @@ func (h *CDNHandler) syncOne(ctx context.Context, accountID int) (int, int, erro
 		return 0, 0, err
 	}
 	defer tx.Rollback()
-	for _, t := range []string{"cdn_zones", "cdn_dns_records", "cdn_zone_settings"} {
+	for _, t := range []string{"cdn_zones", "cdn_dns_records", "cdn_zone_settings", "cdn_rules", "cdn_certificates"} {
 		if _, err := tx.Exec("DELETE FROM "+t+" WHERE account_id=?", accountID); err != nil {
 			return 0, 0, err
 		}
@@ -266,11 +287,21 @@ func (h *CDNHandler) syncOne(ctx context.Context, accountID int) (int, int, erro
 		[]string{"account_id", "zone_id", "zone_name", "name", "value"}, setRows); err != nil {
 		return 0, 0, err
 	}
+	if err := txInsert(tx, "cdn_rules",
+		[]string{"account_id", "zone_id", "zone_name", "source", "rule_id", "name", "phase", "kind",
+			"priority", "status", "expression", "actions", "last_updated", "synced_at"}, ruleRows); err != nil {
+		return 0, 0, err
+	}
+	if err := txInsert(tx, "cdn_certificates",
+		[]string{"account_id", "zone_id", "zone_name", "pack_id", "type", "hosts",
+			"issuer", "status", "expires_on", "synced_at"}, certRows); err != nil {
+		return 0, 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, 0, err
 	}
 	h.markSync(accountID, "成功")
-	logx.J("cdn", "sync", map[string]any{"account_id": accountID, "zones": len(zoneRows), "records": len(recRows)})
+	logx.J("cdn", "sync", map[string]any{"account_id": accountID, "zones": len(zoneRows), "records": len(recRows), "rules": len(ruleRows)})
 	return len(zoneRows), len(recRows), nil
 }
 
@@ -422,4 +453,27 @@ func txInsert(tx *sql.Tx, table string, cols []string, rows [][]any) error {
 		}
 	}
 	return nil
+}
+
+// ruleRow 把一条规则拍平成 cdn_rules 的一行。synced_at 用 NOW() 不方便走 txInsert，
+// 这里显式传当前时间，保持与其它表「同一次同步同一时间戳」的一致性。
+func ruleRow(accountID int, zoneID, zoneName string, r cdnsource.Rule) []any {
+	return []any{accountID, zoneID, zoneName, r.Source, r.RuleID, r.Name, r.Phase, r.Kind,
+		r.Priority, r.Status, r.Expression, r.Actions, r.LastUpdated, time.Now()}
+}
+
+// parseCFTime 解析 Cloudflare 的 RFC3339 时间，解析不了返回 nil（存 NULL）。
+// 不返回零值时间——那会变成 0000-00-00，被读成「已过期很久」，是个会误导人的默认值。
+func parseCFTime(s string) any {
+	if s == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		logx.J("cdn", "cert_time_parse_fail", map[string]any{
+			"value": s, "warn": "无法解析 Cloudflare 返回的证书到期时间，该证书到期时间存为空",
+		})
+		return nil
+	}
+	return t
 }

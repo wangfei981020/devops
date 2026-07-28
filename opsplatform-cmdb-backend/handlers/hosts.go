@@ -646,6 +646,16 @@ func (h *HostHandler) syncOneProject(pid int64, st *hostSyncState) (name string,
 	if nr, e := adapter.ListNetwork(ctx, projectID); e == nil {
 		SyncProjectNetwork(h.DB, provider, accountID, projectID, nr)
 	}
+	// IAM 与 Cloud DNS 是 GCP 特有的，用类型断言而非往 Adapter 接口里加方法——
+	// 其它 provider 的对应概念不同，塞进同一个接口会逼它们实现空方法。
+	if g, ok := adapter.(*cloudsource.GCP); ok {
+		bindings, ierr := g.ListIAM(ctx, projectID)
+		zones, derr := g.ListDNS(ctx, projectID)
+		// 任一成功就写库；两个都失败时不动库，避免把上一次采到的好数据删成空
+		if ierr == nil || derr == nil {
+			SyncProjectIAMDNS(h.DB, accountID, projectID, bindings, zones)
+		}
+	}
 	hsSet(st, func(s *hostSyncState) { s.Synced += len(insts); s.Stale += stale })
 	logExec(h.DB, "主机同步写", `UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`,
 		truncate(fmt.Sprintf("同步 %d 台，失效 %d", len(insts), stale), 250), pid)

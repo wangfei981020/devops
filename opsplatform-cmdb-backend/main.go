@@ -75,8 +75,12 @@ func main() {
 	handlers.NewSyncHandler(db, cipher).Register(api)
 	handlers.NewCertInspectHandler(db).Register(api)
 	handlers.NewHostHandler(db, cipher).Register(api)
-	handlers.NewNetworkHandler(db).Register(api)
-	handlers.NewCDNHandler(db, cipher).Register(api) // CDN(Cloudflare) 只读接入
+	netH := handlers.NewNetworkHandler(db)
+	netH.Register(api)
+	netH.RegisterIAMDNS(api) // GCP IAM 权限审计 + Cloud DNS 台账/与 Cloudflare 一致性
+	cdnH := handlers.NewCDNHandler(db, cipher)
+	cdnH.Register(api)      // CDN(Cloudflare) 只读接入
+	cdnH.RegisterRules(api) // CDN 规则台账 + 优化分析（Page Rules / Rulesets）
 	// K8s 模块（k8sinsight 合并，只读多集群）：阶段1 集群纳管
 	k8sPool := k8ssource.NewPool(db, cipher)
 	handlers.NewK8sClusterHandler(db, cipher, k8sPool).Register(api)
