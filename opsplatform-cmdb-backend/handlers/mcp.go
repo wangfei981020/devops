@@ -141,7 +141,10 @@ var mcpTools = []mcpTool{
 	{"pvc_usage", "全PVC使用率(used/cap/pct)——找快满的存储", "/api/k8s/pvc-usage", []mcpParam{{"cluster_id", "integer", "集群ID", true}}, false},
 	{"event_center", "事件中心:最近平台出了什么事(到期/变更/同步失败/K8s Warning统一时间线)——排障先看这个", "/api/k8s/event-center", []mcpParam{{"days", "integer", "天数窗口,默认30", false}, {"source", "string", "expiry/change/sync/k8s", false}, {"level", "string", "critical/warning/info", false}}, false},
 	{"query_loki", "Loki 日志检索(LogQL),跨Pod/历史深查", "/api/obs/loki", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"env", "string", "环境", false}, {"query", "string", "LogQL", true}, {"minutes", "integer", "时间窗", false}}, false},
-	{"kubesphere_fetch", "拉 KubeSphere 数据(如流水线运行/日志),交AI诊断失败或耗时长", "/api/obs/kubesphere", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"env", "string", "环境", false}, {"path", "string", "kapis 路径", true}}, false},
+	{"kubesphere_fetch", "拉 KubeSphere 原始 kapis 数据(兜底用;查流水线优先用 pipeline_runs/pipeline_log)", "/api/obs/kubesphere", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"env", "string", "环境", false}, {"path", "string", "kapis 路径", true}}, false},
+	// Jenkins 的编译输出不进 pod stdout、Loki 也采不到，pod_logs/query_loki 都看不到构建失败原因，只能走这两个。
+	{"pipeline_runs", "列流水线运行记录(默认只列失败的):哪条流水线/第几次构建挂了+Jenkins构建号——问'构建失败'先用这个", "/api/devops/pipeline-runs", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"namespace", "string", "DevOps项目命名空间,形如 g66-test-devopsj2q22", true}, {"pipeline", "string", "只看某条流水线", false}, {"only_failed", "string", "0=含成功的,默认只列失败", false}}, false},
+	{"pipeline_log", "构建日志+自动抽出报错行:直接回答'这次构建为什么失败'(编译报错/测试失败/镜像推送失败都在这)", "/api/devops/pipeline-log", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"namespace", "string", "DevOps项目命名空间", true}, {"pipeline", "string", "流水线名", true}, {"run", "string", "Jenkins构建号(从 pipeline_runs 拿)", true}, {"tail", "integer", "尾部行数,默认60", false}, {"full", "string", "1=返回全文(可能很大)", false}}, false},
 }
 
 // ---- JSON-RPC ----
