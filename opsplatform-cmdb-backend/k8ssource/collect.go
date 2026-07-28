@@ -406,6 +406,10 @@ func syncPods(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 	if err := syncPodConfigRefs(db, cid, list.Items); err != nil {
 		return n, err
 	}
+	// 安全上下文同理：privileged/hostPath/capabilities 都在 pod spec 里，顺手采下来。
+	if err := syncPodSecurity(db, cid, list.Items); err != nil {
+		return n, err
+	}
 	return n, nil
 }
 
