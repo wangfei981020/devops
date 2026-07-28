@@ -76,6 +76,7 @@ func main() {
 	handlers.NewCertInspectHandler(db).Register(api)
 	handlers.NewHostHandler(db, cipher).Register(api)
 	handlers.NewNetworkHandler(db).Register(api)
+	handlers.NewCDNHandler(db, cipher).Register(api) // CDN(Cloudflare) 只读接入
 	// K8s 模块（k8sinsight 合并，只读多集群）：阶段1 集群纳管
 	k8sPool := k8ssource.NewPool(db, cipher)
 	handlers.NewK8sClusterHandler(db, cipher, k8sPool).Register(api)
@@ -94,6 +95,8 @@ func main() {
 	go k8ssource.StartScheduler(db, k8sPool, k8ssource.DefaultSyncIntervalSec)
 	// 每 6h 刷新当月成本快照（跨月自动定格上月），供环比/报告用
 	go handlers.StartCostSnapshotScheduler(db)
+	// 每 6h 同步 CDN(Cloudflare) 的 Zone/DNS/设置
+	go handlers.StartCDNScheduler(db, cipher)
 
 	logx.Line("main", fmt.Sprintf("CMDB backend listening on %s", cfg.Port))
 	if err := http.ListenAndServe(cfg.Port, r); err != nil {

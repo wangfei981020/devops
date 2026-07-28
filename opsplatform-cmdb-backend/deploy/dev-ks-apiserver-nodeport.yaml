@@ -1,0 +1,79 @@
+# DEV(k3s, 10.146.40.x)把 KubeSphere ks-apiserver 暴露成 NodePort，供 CMDB 只读拉 kapis 数据。
+# 约定端口：32767=Prometheus(whizard) 32766=Loki 32765=ks-apiserver(本文件)
+#
+# ⚠️ 不要直接 patch 自带的 ks-apiserver Service 成 NodePort：ks-installer 会 reconcile 回 ClusterIP，
+#    这里另建一个同 selector 的独立 Service，升级/重装都不受影响。
+#
+# 落地前先核对 selector 和容器端口（不同 KubeSphere 版本 label 可能不同）：
+#   kubectl -n kubesphere-system get svc ks-apiserver -o jsonpath='{.spec.selector}{"\n"}{.spec.ports}{"\n"}'
+# 若输出的 selector 不是下面这两个 label，按输出改本文件的 selector 再 apply。
+apiVersion: v1
+kind: Service
+metadata:
+  name: ks-apiserver-nodeport
+  namespace: kubesphere-system
+  labels:
+    app: ks-apiserver
+    tier: backend
+    managed-by: cmdb          # 标记来源，方便日后清理
+  annotations:
+    cmdb.sl-devops.com/purpose: "CMDB 只读拉取 KubeSphere kapis(流水线/构建日志)"
+spec:
+  type: NodePort
+  selector:                   # 必须与自带 ks-apiserver Service 的 selector 完全一致
+    app: ks-apiserver
+    tier: backend
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80                # Service 端口（对齐自带 svc）
+      targetPort: 9090        # ks-apiserver 容器端口
+      nodePort: 32765         # 固定，CMDB 数据源 URL 用它
+---
+# ===== 可选：给 CMDB 建专用只读账号（KubeSphere 3.3/3.4，iam v1alpha2）=====
+# 不建也能用（直接拿 admin 的 token），但建议建，避免 admin token 外泄到 CMDB 库里。
+# KubeSphere 4.x 请把 apiVersion 换成 iam.kubesphere.io/v1beta1，字段结构以本集群 CRD 为准：
+#   kubectl get crd users.iam.kubesphere.io -o jsonpath='{.spec.versions[*].name}{"\n"}'
+apiVersion: iam.kubesphere.io/v1alpha2
+kind: User
+metadata:
+  name: cmdb-readonly
+spec:
+  email: cmdb-readonly@sl-devops.com
+  description: "CMDB 只读接入账号（拉流水线/构建日志，勿用于人工登录）"
+  password: "Cmdb@Readonly2026"   # 首次创建后 KubeSphere 会 hash 存库；建议 apply 后改成自己的强密码
+---
+# 平台层只给 "普通用户"（能登录、能读自己被授权的项目，无任何平台管理权）
+apiVersion: iam.kubesphere.io/v1alpha2
+kind: GlobalRoleBinding
+metadata:
+  name: cmdb-readonly-platform-regular
+  labels:
+    iam.kubesphere.io/user-ref: cmdb-readonly
+subjects:
+  - kind: User
+    name: cmdb-readonly
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: GlobalRole
+  name: platform-regular
+  apiGroup: rbac.authorization.k8s.io
+---
+# DevOps 项目内授只读(viewer)。namespace 填 DevOps 项目的真实 namespace，
+# g66-test-devops 的真实 ns 是 g66-test-devopsj2q22（用 kubectl get ns | grep devops 确认）。
+# 有多个 DevOps 项目就复制多份，改 namespace 和 name。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cmdb-readonly-viewer
+  namespace: g66-test-devopsj2q22
+  labels:
+    iam.kubesphere.io/user-ref: cmdb-readonly
+subjects:
+  - kind: User
+    name: cmdb-readonly
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: viewer
+  apiGroup: rbac.authorization.k8s.io

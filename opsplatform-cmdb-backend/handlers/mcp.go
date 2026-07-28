@@ -96,6 +96,10 @@ var mcpTools = []mcpTool{
 	{"list_cloud_ips", "IP 台账聚合:静态IP+主机内外网IP+LB VIP,含是否闲置(预留未绑=白花钱)", "/api/cloud-ips", nil, false},
 	{"list_cloud_addresses", "列云静态/预留 IP:地址/内外网类型/占用状态/使用者", "/api/cloud-addresses", nil, false},
 	{"list_networks", "列 VPC 网络", "/api/cloud-networks", nil, false},
+	// CDN(Cloudflare) 只读。域名类故障排查的最前面一跳，此前只能登录 CF 控制台看。
+	{"list_cdn_zones", "列 CDN 站点:状态/套餐/NS/DNS记录数/SSL模式(flexible=回源明文,有风险)", "/api/cdn/zones", nil, false},
+	{"list_cdn_dns", "列 CDN 的 DNS 解析记录:类型/目标/是否经CDN代理(proxied=橙云)——查'这个域名解析到哪'用它", "/api/cdn/dns-records", []mcpParam{{"zone", "string", "根域名", false}, {"type", "string", "记录类型 A/CNAME/...", false}, {"q", "string", "关键词(域名或解析目标)", false}}, false},
+	{"cdn_domain_check", "DNS 一致性校验:CDN 解析目标 vs 我方实际入口IP——查出'解析到已下线IP的域名'(证书巡检里那批超时多半是这个)和'绕过CDN直连源站'的记录", "/api/cdn/domain-check", []mcpParam{{"zone", "string", "根域名", false}, {"only", "string", "issues=只看有问题的", false}}, false},
 	{"list_subnets", "列子网:网段/区域", "/api/cloud-subnets", nil, false},
 	{"list_clusters", "列纳管的 K8s 集群", "/api/k8s/clusters", nil, false},
 	{"list_nodes", "列节点(可只看某集群/节点池/异常),含卡死状态", "/api/k8s/nodes", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"pool", "string", "节点池", false}, {"q", "string", "关键词", false}}, false},
