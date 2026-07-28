@@ -2,6 +2,8 @@ package diag
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -148,7 +150,7 @@ func (dc *DiagnosisContext) collectContainer(ctx context.Context, cs *kubernetes
 		tail, err := getLogTail(ctx, cs, ns, pod, st.Name, st.RestartCount > 0)
 		switch {
 		case err != nil:
-			dc.LogErrors[st.Name] = explainLogError(err)
+			dc.LogErrors[st.Name] = ExplainLogError(err)
 		case tail != "":
 			dc.LogTails[st.Name] = tail
 			dc.LogSource[st.Name] = "kubelet"
@@ -175,23 +177,42 @@ func getLogTail(ctx context.Context, cs *kubernetes.Clientset, ns, pod, containe
 	return strings.TrimSpace(string(raw)), nil
 }
 
-// explainLogError 把 client-go 的原始报错翻成能直接据以行动的结论。
-// 取日志要经 APIServer 代理到节点 kubelet(10250)，失败形态很多但原文极不友好——
-// 比如 "unknown (get pods xxx)"，光看这句分不清是没权限、Pod 不在、还是节点失联。
-func explainLogError(err error) string {
+// ExplainLogError 把 client-go 的原始报错翻成能直接据以行动的结论。
+//
+// 取日志要经 APIServer 代理到节点 kubelet(10250)，失败形态多且原文极不友好。
+// 最常见的 "unknown (get pods xxx)" 只是 client-go 无法把响应体解析成 Status 对象时的
+// 兜底文案，它本身不含任何原因信息——真正的原因在 HTTP 状态码里。
+// 所以这里一律以状态码为主判据：早先按错误文本匹配，结果 403 与「kubelet 不可达」
+// 都长成 "unknown (...)"，前一个分支把后一个吞掉，导致所有失败都被报成权限问题。
+func ExplainLogError(err error) string {
 	s := err.Error()
-	switch {
-	case apierrors.IsForbidden(err):
-		return "无权限读日志(只读 RBAC 缺 pods/log): " + s
-	case apierrors.IsNotFound(err):
-		return "Pod 或容器不存在(可能刚被重建): " + s
+	switch code := apiStatusCode(err); {
+	case code == 403:
+		return "无权限读日志(HTTP 403)：先确认集群只读 ClusterRole 是否包含 pods/log 子资源；" +
+			"若已包含，再查云厂商 IAM 层是否另有限制。原始错误: " + s
+	case code == 401:
+		return "认证失败(HTTP 401)：集群凭证可能已过期或被吊销。原始错误: " + s
+	case code == 404:
+		return "Pod 或容器不存在(可能刚被重建)。原始错误: " + s
 	case strings.Contains(s, "context deadline exceeded"), strings.Contains(s, "Timeout"), strings.Contains(s, "timeout"):
-		return "读取超时:APIServer 连节点 kubelet(10250) 超时,多为节点失联或 kubelet 繁忙: " + s
-	case strings.Contains(s, "unknown ("):
-		return "APIServer 无法从节点 kubelet(10250) 取到日志,多为 kubelet 不可达/证书问题;可改用 query_loki 查历史日志: " + s
+		return "读取超时：APIServer 连节点 kubelet(10250) 超时，多为节点失联或 kubelet 繁忙；" +
+			"可改用 query_loki 查历史日志。原始错误: " + s
+	case code >= 500:
+		return "APIServer 未能从节点 kubelet(10250) 取到日志(HTTP " + strconv.Itoa(int(code)) + ")，" +
+			"多为 kubelet 不可达或证书问题；可改用 query_loki 查历史日志。原始错误: " + s
 	default:
 		return s
 	}
+}
+
+// apiStatusCode 取 K8s API 错误的 HTTP 状态码；非 API 错误返回 0。
+// 用 errors.As 而不是类型断言：client-go 会包装错误，直接断言取不到。
+func apiStatusCode(err error) int32 {
+	var st apierrors.APIStatus
+	if errors.As(err, &st) {
+		return st.Status().Code
+	}
+	return 0
 }
 
 // lastLines 返回字符串末尾 n 行（给规则贴日志用）。

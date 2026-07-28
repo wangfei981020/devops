@@ -111,11 +111,41 @@ func (h *K8sDiagHandler) Logs(c *gin.Context) {
 	defer cancel()
 	raw, err := cs.CoreV1().Pods(ns).GetLogs(pod, opts).DoRaw(ctx)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		// 与 diagnose_pod 同一套处理：翻译报错 + 退到 Loki。
+		// 否则调用方在这里只会拿到 "unknown (get pods xxx)"，既不知道原因也没有退路。
+		explained := diag.ExplainLogError(err)
+		if lines := h.lokiTail(cid, ns, pod, int(tail)); lines != "" {
+			c.Data(http.StatusOK, "text/plain; charset=utf-8",
+				[]byte("# kubelet 通道取日志失败，以下为 Loki 历史日志\n# 失败原因: "+explained+"\n\n"+lines))
+			WriteAudit(h.DB, c, "view_pod_log_via_loki", ns+"/"+pod)
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": explained})
 		return
 	}
 	WriteAudit(h.DB, c, "view_pod_log", ns+"/"+pod)
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", raw)
+}
+
+// lokiTail 从 Loki 取某 Pod 的历史日志尾部；没配 Loki 或查不到时返回空串。
+func (h *K8sDiagHandler) lokiTail(cid int, ns, pod string, tail int) string {
+	var env string
+	_ = h.DB.QueryRow(`SELECT COALESCE(environment,'') FROM k8s_clusters WHERE id=?`, cid).Scan(&env)
+	base, token, err := resolveEndpoint(h.DB, h.Cipher, "loki", env, cid)
+	if err != nil {
+		return ""
+	}
+	if tail <= 0 || tail > 1000 {
+		tail = 200
+	}
+	q := fmt.Sprintf(`{namespace=%q,pod=%q}`, ns, pod)
+	u := fmt.Sprintf("%s/loki/api/v1/query_range?query=%s&limit=%d&direction=backward&start=%d&end=%d",
+		base, url.QueryEscape(q), tail, time.Now().Add(-6*time.Hour).UnixNano(), time.Now().UnixNano())
+	code, body, err := obsGet(u, token, 15*time.Second)
+	if err != nil || code != 200 {
+		return ""
+	}
+	return extractLokiLines(body, tail)
 }
 
 // Events 取 Pod 相关事件（Warning 优先、按时间倒序）。

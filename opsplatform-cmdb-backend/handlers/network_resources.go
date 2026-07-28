@@ -38,22 +38,58 @@ func fwHighRisk(direction, action, protocols, sourceRanges string) bool {
 	if !strings.Contains(sourceRanges, "0.0.0.0/0") {
 		return false
 	}
-	p := strings.ToLower(protocols)
+	p := strings.ToLower(strings.TrimSpace(protocols))
 	if p == "" || strings.Contains(p, "all") {
 		return true // 全放行
 	}
-	for port := range sensitivePorts {
-		if strings.Contains(protocols, ":"+port) || strings.HasSuffix(protocols, ","+port) || strings.Contains(protocols, ","+port+",") || strings.HasSuffix(protocols, ":"+port) {
-			return true
-		}
-	}
-	// 协议未带端口（如裸 tcp/udp）视为放开该协议全部端口
+	return fwOpensSensitivePort(p)
+}
+
+// fwOpensSensitivePort 解析防火墙的 protocols 串，判断是否放行了敏感端口。
+// 格式形如 "tcp:80,443;udp:53"、"tcp:1000-2000"，或裸 "tcp"（等于放开该协议全部端口）。
+//
+// 必须真正解析出端口数字，不能用子串包含：":2181" 会匹配到 "tcp:21810"，
+// 把一个普通业务端口误报成公网暴露 ZooKeeper。误报的代价不只是烦人——
+// 高危清单里混进假货，真高危就会被一起忽略。
+func fwOpensSensitivePort(protocols string) bool {
 	for _, seg := range strings.Split(protocols, ";") {
-		if seg != "" && !strings.Contains(seg, ":") {
-			return true
+		if seg = strings.TrimSpace(seg); seg == "" {
+			continue
+		}
+		_, ports, hasPorts := strings.Cut(seg, ":")
+		if !hasPorts || strings.TrimSpace(ports) == "" {
+			return true // 裸 tcp/udp：未限端口即放开全部
+		}
+		for _, item := range strings.Split(ports, ",") {
+			lo, hi, ok := parsePortRange(strings.TrimSpace(item))
+			if !ok {
+				continue
+			}
+			for port := range sensitivePortNames {
+				if port >= lo && port <= hi {
+					return true
+				}
+			}
 		}
 	}
 	return false
+}
+
+// parsePortRange 解析单端口 "6379" 或端口范围 "1000-2000"。
+func parsePortRange(s string) (lo, hi int, ok bool) {
+	if a, b, found := strings.Cut(s, "-"); found {
+		l, e1 := strconv.Atoi(strings.TrimSpace(a))
+		r, e2 := strconv.Atoi(strings.TrimSpace(b))
+		if e1 != nil || e2 != nil || l > r {
+			return 0, 0, false
+		}
+		return l, r, true
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, 0, false
+	}
+	return n, n, true
 }
 
 // SyncProjectNetwork 把一个 project 的网络资源刷进库（只读镜像：按 account+project 删旧插新）。
@@ -180,9 +216,14 @@ func (h *NetworkHandler) ListFirewalls(c *gin.Context) {
 		var provider, project, name, network, direction, action, protocols, src, tags string
 		var aid, priority, disabled, hr int
 		if rows.Scan(&provider, &aid, &project, &name, &network, &direction, &priority, &action, &protocols, &src, &tags, &disabled, &hr) == nil {
+			// high_risk 按当前规则实时重算，不直接读存列。
+			// 存列是入库那一刻算的，敏感端口字典一旦扩充（比如补进 ZooKeeper 2181、
+			// RocketMQ 9876），存量记录不会自动跟着变，得等下一次同步才刷新——
+			// 那期间查出来的结论是错的，而且没人会意识到。判定规则应当即时生效。
+			live := fwHighRisk(direction, action, protocols, src)
 			out = append(out, gin.H{"provider": provider, "project": pn[itoa(aid)+"/"+project], "name": name, "network": network,
 				"direction": direction, "priority": priority, "action": action, "protocols": protocols,
-				"source_ranges": src, "target_tags": tags, "disabled": disabled == 1, "high_risk": hr == 1})
+				"source_ranges": src, "target_tags": tags, "disabled": disabled == 1, "high_risk": live})
 		}
 	}
 	c.JSON(http.StatusOK, out)
