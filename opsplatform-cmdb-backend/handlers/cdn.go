@@ -181,8 +181,15 @@ func (h *CDNHandler) SyncAccount(c *gin.Context) {
 
 func (h *CDNHandler) clientFor(id string) (*cdnsource.Client, error) {
 	var enc sql.NullString
-	if err := h.DB.QueryRow(`SELECT cred_enc FROM cdn_accounts WHERE id=?`, id).Scan(&enc); err != nil {
+	var provider string
+	if err := h.DB.QueryRow(`SELECT a.cred_enc, COALESCE(d.name,'')
+		FROM cdn_accounts a LEFT JOIN cdns d ON d.id=a.cdn_id WHERE a.id=?`, id).Scan(&enc, &provider); err != nil {
 		return nil, err
+	}
+	// cdnsource 目前只实现了 Cloudflare 适配。厂商对不上必须当场报清楚，
+	// 否则会拿着别家的 token 去调 api.cloudflare.com，报出来的认证错误指不到真正的原因。
+	if !strings.EqualFold(strings.TrimSpace(provider), "cloudflare") {
+		return nil, &cdnError{"暂未接入该 CDN 厂商（" + provider + "）：目前只实现了 Cloudflare 适配"}
 	}
 	if !enc.Valid || enc.String == "" {
 		return nil, errNoCredential

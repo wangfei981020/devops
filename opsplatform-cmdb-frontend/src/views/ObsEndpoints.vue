@@ -1,11 +1,16 @@
 <template>
-  <div class="page">
-    <div class="page-head">
+  <div :class="{ page: !embedded }">
+    <div v-if="!embedded" class="page-head">
       <span class="page-title">数据源接入</span>
       <span class="muted" style="margin-left:10px">Prometheus/VM · Loki · KubeSphere 只读地址，支持多条（按环境/集群区分）。本地不存历史，实时查这些源</span>
       <el-button type="primary" size="small" style="float:right" @click="openAdd">+ 添加数据源</el-button>
     </div>
-    <el-card shadow="never">
+    <!-- 嵌进「接入管理」的 tab 时不重复显示页标题，但按钮和说明要留着 -->
+    <div v-else style="margin-bottom:10px">
+      <el-button type="primary" size="small" @click="openAdd">+ 添加数据源</el-button>
+      <span class="muted" style="margin-left:10px">Prometheus/VM · Loki · KubeSphere 只读地址，支持多条（按环境/集群区分）。本地不存历史，实时查这些源</span>
+    </div>
+    <el-card shadow="never" :body-style="embedded ? { padding: '0' } : {}">
       <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column prop="name" label="名称" min-width="150" />
         <el-table-column prop="type" label="类型" width="130"><template #default="{row}">
@@ -81,6 +86,9 @@ import { listObsEndpoints, createObsEndpoint, updateObsEndpoint, deleteObsEndpoi
 import { useAppStore } from '../stores/app'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
+
+// embedded=true 时作为「接入管理」的一个 tab 渲染：不显示页级标题，去掉外层留白
+defineProps({ embedded: { type: Boolean, default: false } })
 
 const app = useAppStore()
 const envs = ['PROD', 'UAT', 'TEST', 'DEV']

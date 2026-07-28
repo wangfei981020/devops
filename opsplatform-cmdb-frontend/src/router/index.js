@@ -35,9 +35,12 @@ const routes = [
   { path: '/k8s-ns-project', component: () => import('../views/K8sNsProject.vue'), meta: { title: '命名空间归属' } },
   { path: '/cost', component: () => import('../views/K8sCost.vue'), meta: { title: '云成本' } },
   { path: '/k8s-events', component: () => import('../views/K8sEvents.vue'), meta: { title: 'K8s 事件' } },
-  { path: '/obs-endpoints', component: () => import('../views/ObsEndpoints.vue'), meta: { title: '数据源接入' } },
+  // 接入管理：注册商/云账号/CDN/数据源/ACME 五类凭据统一入口。
+  // 旧路径保留并重定向到对应 tab——收藏夹和文档里的链接不会失效。
+  { path: '/integrations', component: () => import('../views/Integrations.vue'), meta: { title: '接入管理' } },
+  { path: '/obs-endpoints', redirect: { path: '/integrations', query: { tab: 'obs' } } },
   { path: '/mcp', component: () => import('../views/McpAccess.vue'), meta: { title: 'AI 接入' } },
-  { path: '/cloud-accounts', component: () => import('../views/CloudAccounts.vue'), meta: { title: '云账号' } },
+  { path: '/cloud-accounts', redirect: { path: '/integrations', query: { tab: 'cloud' } } },
 ]
 
 const router = createRouter({ history: createWebHistory(), routes })

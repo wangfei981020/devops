@@ -1,11 +1,16 @@
 <template>
-  <div class="page">
-    <div class="page-head">
+  <div :class="{ page: !embedded }">
+    <div v-if="!embedded" class="page-head">
       <span class="page-title">云账号</span>
       <span class="muted" style="margin-left:10px">全局共享：主机 / K8s / 成本 都用它。账号=业务分组；凭据(SA key)配在项目层，每 GCP project 一份</span>
       <el-button type="primary" size="small" style="float:right" @click="openAcct()">+ 添加云账号</el-button>
     </div>
-    <el-card shadow="never">
+    <!-- 嵌进「接入管理」的 tab 时不重复显示页标题，但按钮和说明要留着 -->
+    <div v-else style="margin-bottom:10px">
+      <el-button type="primary" size="small" @click="openAcct()">+ 添加云账号</el-button>
+      <span class="muted" style="margin-left:10px">全局共享：主机 / K8s / 成本 都用它。账号=业务分组；凭据(SA key)配在项目层，每 GCP project 一份</span>
+    </div>
+    <el-card :shadow="embedded ? 'never' : 'never'" :body-style="embedded ? { padding: '0' } : {}">
       <el-table :data="accPaged" size="small" row-key="id" v-loading="loading"
         :expand-row-keys="expanded" @expand-change="onExpand">
         <el-table-column type="expand">
@@ -76,6 +81,9 @@ import { listCloudAccounts, createCloudAccount, updateCloudAccount, deleteCloudA
 import { useAppStore } from '../stores/app'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
+
+// embedded=true 时作为「接入管理」的一个 tab 渲染：不显示页级标题，去掉外层留白
+defineProps({ embedded: { type: Boolean, default: false } })
 
 const app = useAppStore()
 const accounts = ref([]); const loading = ref(false); const expanded = ref([]); const syncing = reactive({})
