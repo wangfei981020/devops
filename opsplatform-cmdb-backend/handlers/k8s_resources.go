@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"opsplatform-cmdb-backend/crypto"
 	"opsplatform-cmdb-backend/k8ssource"
 	"opsplatform-cmdb-backend/logx"
 )
@@ -18,10 +19,12 @@ import (
 type K8sResourceHandler struct {
 	DB   *sql.DB
 	Pool *k8ssource.Pool
+	// 体检要取节点磁盘水位，得解 Prometheus 数据源的 token
+	Cipher *crypto.Cipher
 }
 
-func NewK8sResourceHandler(db *sql.DB, pool *k8ssource.Pool) *K8sResourceHandler {
-	return &K8sResourceHandler{DB: db, Pool: pool}
+func NewK8sResourceHandler(db *sql.DB, pool *k8ssource.Pool, cipher *crypto.Cipher) *K8sResourceHandler {
+	return &K8sResourceHandler{DB: db, Pool: pool, Cipher: cipher}
 }
 
 func (h *K8sResourceHandler) Register(r *gin.RouterGroup) {

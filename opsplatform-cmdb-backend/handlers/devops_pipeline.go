@@ -178,26 +178,76 @@ func (h *ObsQueryHandler) PipelineLog(c *gin.Context) {
 // 刻意不加 (?i)：Jenkins/构建工具的失败关键字本来就是全大写(ERROR:/FAILURE/FAILED)，
 // 一旦忽略大小写，栈帧里的 failureErrorWithLog 就会命中 FAILURE。
 // 只有 exit status/code 这类写法不统一的才单独放宽。
+// 全大写关键字之外，还要单独补构建工具的小写报错——它们才是「为什么失败」。
+// 实测：一次 vite 构建失败，全大写那组只能抽出 "ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL"、
+// "Exit status 1"、"ERROR: script returned exit code 1"，看完只知道 vite build 挂了，
+// 而真正的根因 "error during build:" + "[vite:vue] Unexpected token, expected \",\" (38:2)"
+// 全是小写开头、一条都抓不到。
+//
+// 这些模式在三份真实构建日志上验过：零栈帧噪音。新增模式必须同样用真实日志复测——
+// naive 地匹配 "error" 会抓回 660 行（几乎全是 errorCallback/failureErrorWithLog 栈帧），
+// 正确收敛后应当只有个位数。
+var buildToolErrPattern = regexp.MustCompile(
+	`error during build|Unexpected token|SyntaxError|Cannot find module|Module not found|` +
+		`Type error:|Parse error|Compilation failed|ENOENT: no such file`)
+
 var errLinePattern = regexp.MustCompile(
 	`(^|\s)(ERROR:|ERR_[A-Z][A-Z_]*|\bFAILURE\b|\bFAILED\b|npm ERR!|error TS\d+|fatal:|panic:|Traceback \(most recent call last\))` +
 		`|(?i)\bexit (status|code) \d+`)
 
+// ansiPattern 终端颜色码。构建日志里混着 \x1b[31m 之类的转义，
+// 不清掉会让抽出来的行难读，也会干扰后续做字符串匹配。
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+// stackFramePattern 栈帧行。它们跟在真正的报错后面，本身不含根因信息，
+// 收集上下文时要跳过，否则 6 行上下文会被栈帧占满。
+var stackFramePattern = regexp.MustCompile(`^\s*at\s+|^\s*File "|^\s{4,}\.\.\.`)
+
+func isErrLine(s string) bool {
+	return errLinePattern.MatchString(s) || buildToolErrPattern.MatchString(s)
+}
+
 // extractErrorLines 抽出报错行并带上原始行号（方便让人回原文定位）。
 // 一次构建动辄 3000+ 行、236KB，整段返回会直接撑爆上下文——这是这个接口存在的主要理由。
+//
+// 命中后还要带几行上下文：像 "error during build:" 这种行只说明「构建失败了」，
+// 具体是哪个文件哪一行在它**后面**几行。只返回命中行本身仍然定位不到问题。
 func extractErrorLines(lines []string) []gin.H {
 	out := []gin.H{}
 	for i, l := range lines {
-		s := strings.TrimSpace(l)
-		if s == "" || !errLinePattern.MatchString(s) {
+		s := strings.TrimSpace(ansiPattern.ReplaceAllString(l, ""))
+		if s == "" || !isErrLine(s) {
 			continue
 		}
-		out = append(out, gin.H{"line": i + 1, "text": truncate(s, 500)})
+		item := gin.H{"line": i + 1, "text": truncate(s, 500)}
+		if ctx := collectContext(lines, i); len(ctx) > 0 {
+			item["context"] = ctx
+		}
+		out = append(out, item)
 		if len(out) >= 80 { // 够定位就行，再多是噪音
 			out = append(out, gin.H{"line": 0, "text": "（报错行过多，仅列前 80 条，用 full=1 看全文）"})
 			break
 		}
 	}
 	return out
+}
+
+// collectContext 取命中行之后最多 6 行非栈帧内容，遇到下一个报错行即停。
+// 上限 6 行是权衡：够带出文件名、行号和代码片段，又不至于把整段日志搬回来。
+func collectContext(lines []string, from int) []string {
+	const maxCtx = 6
+	ctx := []string{}
+	for j := from + 1; j < len(lines) && len(ctx) < maxCtx; j++ {
+		s := strings.TrimSpace(ansiPattern.ReplaceAllString(lines[j], ""))
+		if s == "" || stackFramePattern.MatchString(s) {
+			continue
+		}
+		if isErrLine(s) {
+			break // 下一个报错自成一条，不重复收进上下文
+		}
+		ctx = append(ctx, truncate(s, 300))
+	}
+	return ctx
 }
 
 func lastN(lines []string, n int) []string {

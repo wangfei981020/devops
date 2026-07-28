@@ -80,7 +80,7 @@ func main() {
 	// K8s 模块（k8sinsight 合并，只读多集群）：阶段1 集群纳管
 	k8sPool := k8ssource.NewPool(db, cipher)
 	handlers.NewK8sClusterHandler(db, cipher, k8sPool).Register(api)
-	handlers.NewK8sResourceHandler(db, k8sPool).Register(api)
+	handlers.NewK8sResourceHandler(db, k8sPool, cipher).Register(api)
 	handlers.NewK8sTopologyHandler(db).Register(api)
 	handlers.NewK8sCostHandler(db).Register(api)
 	handlers.NewK8sDiagHandler(db, k8sPool, cipher).Register(api) // 合并 k8sinsight：实时日志/事件/规则诊断

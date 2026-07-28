@@ -150,7 +150,73 @@ func (h *ObsQueryHandler) PVCUsage(c *gin.Context) {
 			}
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "usage": usage})
+	shared := h.sharedFSPVCs(c.Query("cluster_id"))
+	c.JSON(http.StatusOK, gin.H{"ok": true, "usage": usage, "accuracy": h.pvcAccuracy(usage, shared)})
+}
+
+// sharedFSPVCs 找出「与宿主机共用文件系统」的 PVC（key 为 ns/name）。
+//
+// k3s 的 local-path、hostPath 这类卷本质就是宿主机上的一个目录，没有独立块设备或配额。
+// kubelet 对它们上报的 kubelet_volume_stats_* 是**整个宿主机文件系统**的容量和用量，
+// 于是同一节点上所有 PVC 报出来的数完全一样——DEV 集群 53 个 PVC 全是 4030.64Gi / 61.53%。
+//
+// 按 storageClass 判定，而不是按「数值相同」猜：数值相同也可能是真巧合，
+// 而 storageClass 是这类卷的定义性特征。
+func (h *ObsQueryHandler) sharedFSPVCs(clusterID string) map[string]string {
+	out := map[string]string{}
+	if clusterID == "" {
+		return out
+	}
+	rows, err := h.DB.Query(`SELECT namespace, name, COALESCE(storage_class,'') FROM k8s_pvcs WHERE cluster_id=?`, clusterID)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ns, name, sc string
+		if rows.Scan(&ns, &name, &sc) != nil {
+			continue
+		}
+		if isSharedFSStorageClass(sc) {
+			out[ns+"/"+name] = sc
+		}
+	}
+	return out
+}
+
+// isSharedFSStorageClass 这些 StorageClass 分配出来的卷与宿主机共用文件系统。
+var sharedFSClasses = []string{"local-path", "hostpath", "local-storage", "manual", "nfs"}
+
+func isSharedFSStorageClass(sc string) bool {
+	sc = strings.ToLower(strings.TrimSpace(sc))
+	if sc == "" {
+		return false
+	}
+	for _, c := range sharedFSClasses {
+		if strings.Contains(sc, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// pvcAccuracy 为每个 PVC 标注这个数字有多可信。
+//
+// 不直接把失真的数据藏起来：宿主机水位本身是有用的（正好对应节点磁盘吃紧的问题），
+// 藏了反而少一个信息源。但必须让调用方知道「这不是本卷的用量」，
+// 否则会据此判断某个 PVC 快满了——而实际上它可能几乎是空的。
+func (h *ObsQueryHandler) pvcAccuracy(usage map[string]map[string]float64, shared map[string]string) map[string]any {
+	out := map[string]any{}
+	for k := range usage {
+		if sc, ok := shared[k]; ok {
+			out[k] = map[string]string{
+				"level": "node-fs",
+				"note": "该卷由 " + sc + " 分配，与宿主机共用文件系统，此处显示的是**宿主机整体水位**，" +
+					"不代表本卷实际用量；同节点上的卷会看到相同数值",
+			}
+		}
+	}
+	return out
 }
 
 type promSample struct {
@@ -268,6 +334,19 @@ func (h *ObsQueryHandler) NodeUsage(c *gin.Context) {
 		for _, s := range mem {
 			if k := nodeKey(s.Metric); k != "" {
 				get(k)["mem_pct"] = s.Value
+			}
+		}
+	}
+	// 磁盘水位。此前完全没采，导致「镜像 GC 回收不出空间、磁盘吃紧」这类问题
+	// 只能等它触发事件后从侧面撞见，无法提前预警——而磁盘满会直接让发布失败。
+	// 只看根分区(mountpoint="/")：容器镜像和日志都落在这里，也是真正会打爆的地方；
+	// 排除各类虚拟文件系统，否则 overlay/tmpfs 会把结果搅乱。
+	diskLbl := promLabels(sel, `mountpoint="/"`, `fstype!~"tmpfs|overlay|squashfs|iso9660"`)
+	if disk, err := promInstant(base, token,
+		`(1 - sum by(node,instance)(node_filesystem_avail_bytes`+diskLbl+`) / sum by(node,instance)(node_filesystem_size_bytes`+diskLbl+`)) * 100`); err == nil {
+		for _, s := range disk {
+			if k := nodeKey(s.Metric); k != "" {
+				get(k)["disk_pct"] = s.Value
 			}
 		}
 	}

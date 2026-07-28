@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -33,6 +36,7 @@ func (h *K8sResourceHandler) ClusterHealth(c *gin.Context) {
 	}
 	fs := []healthFinding{}
 	fs = append(fs, h.checkDataFreshness(cid)...)
+	fs = append(fs, h.checkNodeDisk(cid)...)
 	fs = append(fs, h.checkNodes(cid)...)
 	fs = append(fs, h.checkPods(cid)...)
 	fs = append(fs, h.checkWorkloads(cid)...)
@@ -73,6 +77,81 @@ func (h *K8sResourceHandler) checkDataFreshness(cid string) []healthFinding {
 		})
 	}
 	return out
+}
+
+// 磁盘水位阈值。85% 起提示、92% 起告警——留出的余量要够撑到人来处理，
+// 因为磁盘满不是"性能变差"而是"发布直接失败、Pod 被驱逐"，没有缓冲期。
+const (
+	diskWarnPct     = 85.0
+	diskCriticalPct = 92.0
+)
+
+// checkNodeDisk 节点磁盘水位。这是此前完全缺失的一块：
+// 「镜像 GC 回收不出空间」只能等它触发事件后从侧面撞见，而那时往往已经在影响发布了。
+func (h *K8sResourceHandler) checkNodeDisk(cid string) []healthFinding {
+	usage, err := h.nodeDiskUsage(cid)
+	if err != nil || len(usage) == 0 {
+		return nil // 没有 Prometheus 数据源时静默跳过，不制造假阴性之外的噪声
+	}
+	var warn, crit []string
+	for node, pct := range usage {
+		switch {
+		case pct >= diskCriticalPct:
+			crit = append(crit, fmt.Sprintf("%s(%.0f%%)", node, pct))
+		case pct >= diskWarnPct:
+			warn = append(warn, fmt.Sprintf("%s(%.0f%%)", node, pct))
+		}
+	}
+	sort.Strings(crit)
+	sort.Strings(warn)
+	out := []healthFinding{}
+	if len(crit) > 0 {
+		out = append(out, healthFinding{
+			Severity: "critical", Category: "节点", Count: len(crit),
+			Title:  "节点磁盘水位过高(≥92%)",
+			Detail: strings.Join(crit, "、") + "；磁盘满会直接导致镜像拉取失败、Pod 被驱逐，发布随之失败",
+			Action: "先清理无用镜像与日志；若 GC 回收不出空间，多为镜像层被正在运行的容器占用，需扩容磁盘",
+		})
+	}
+	if len(warn) > 0 {
+		out = append(out, healthFinding{
+			Severity: "warning", Category: "节点", Count: len(warn),
+			Title:  "节点磁盘水位偏高(≥85%)",
+			Detail: strings.Join(warn, "、"),
+			Action: "提前清理或扩容，别等触发 DiskPressure 驱逐",
+		})
+	}
+	return out
+}
+
+// nodeDiskUsage 复用 node-usage 的口径取各节点根分区水位。
+func (h *K8sResourceHandler) nodeDiskUsage(cid string) (map[string]float64, error) {
+	out := map[string]float64{}
+	n, err := strconv.Atoi(cid)
+	if err != nil {
+		return out, err
+	}
+	obs := NewObsQueryHandler(h.DB, h.Cipher)
+	base, token, clusterLabel, err := resolveEndpointFull(h.DB, obs.Cipher, "prometheus", obs.clusterEnv(n), n)
+	if err != nil {
+		return out, err
+	}
+	lbl := promLabels(clusterSelector(h.DB, clusterLabel, n), `mountpoint="/"`, `fstype!~"tmpfs|overlay|squashfs|iso9660"`)
+	rows, err := promInstant(base, token,
+		`(1 - sum by(node,instance)(node_filesystem_avail_bytes`+lbl+`) / sum by(node,instance)(node_filesystem_size_bytes`+lbl+`)) * 100`)
+	if err != nil {
+		return out, err
+	}
+	for _, s := range rows {
+		k := s.Metric["node"]
+		if k == "" {
+			k = s.Metric["instance"]
+		}
+		if k != "" {
+			out[k] = s.Value
+		}
+	}
+	return out, nil
 }
 
 func (h *K8sResourceHandler) checkNodes(cid string) []healthFinding {
@@ -133,9 +212,20 @@ func (h *K8sResourceHandler) checkPods(cid string) []healthFinding {
 			Action: "kubectl delete pod -A --field-selector=status.phase=Failed"})
 	}
 	if pending > 0 {
-		out = append(out, healthFinding{Severity: "warning", Category: "工作负载", Count: pending,
-			Title: "存在 Pending 的 Pod", Detail: "调度不上去，常见原因是资源不足或亲和性无法满足",
-			Action: "pod_events 看具体调度失败原因"})
+		// 只说「有 N 个 Pending」等于没说——真正要答的是「为什么排不进去/缺什么」。
+		// 原因在 k8s_pods.reason 里已经采到了，按原因归类直接给出来。
+		f := healthFinding{Severity: "warning", Category: "工作负载", Count: pending,
+			Title: "存在 Pending 的 Pod", Action: "pod_events 看具体某个 Pod 的完整事件"}
+		if reasons := h.pendingReasons(cid); len(reasons) > 0 {
+			parts := make([]string, 0, len(reasons))
+			for _, r := range reasons {
+				parts = append(parts, fmt.Sprintf("%s × %d（%s）", r.reason, r.count, explainPendingReason(r.reason)))
+			}
+			f.Detail = strings.Join(parts, "；")
+		} else {
+			f.Detail = "调度不上去，常见原因是资源不足或亲和性无法满足"
+		}
+		out = append(out, f)
 	}
 	// BestEffort：节点内存压力下最先被驱逐，控制面组件落在这类里尤其危险
 	var bestEffort int
@@ -148,6 +238,52 @@ func (h *K8sResourceHandler) checkPods(cid string) []healthFinding {
 			Action: "给关键组件补 request，或用 LimitRange 兜底"})
 	}
 	return out
+}
+
+type pendingReason struct {
+	reason string
+	count  int
+}
+
+// pendingReasons 把 Pending/启动失败的 Pod 按原因归类。
+// 「有 12 个 Pod Pending」这种结论没法行动，「10 个卡在缺 ConfigMap/Secret、2 个资源不足」才有用。
+func (h *K8sResourceHandler) pendingReasons(cid string) []pendingReason {
+	rows, err := h.DB.Query(`SELECT COALESCE(reason,''), COUNT(*) FROM k8s_pods
+		WHERE cluster_id=? AND phase='Pending' AND COALESCE(reason,'')<>''
+		GROUP BY reason ORDER BY COUNT(*) DESC`, cid)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []pendingReason{}
+	for rows.Next() {
+		var r pendingReason
+		if rows.Scan(&r.reason, &r.count) == nil {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// explainPendingReason 把 K8s 的原因码翻成「缺什么、该去查什么」。
+// 这些码本身对不熟悉 K8s 的人几乎没有信息量，而它们恰恰是发布失败最常见的落点。
+func explainPendingReason(reason string) string {
+	switch {
+	case strings.Contains(reason, "CreateContainerConfigError"):
+		return "引用的 ConfigMap/Secret 不存在或键名对不上，容器配置装配不出来"
+	case strings.Contains(reason, "ImagePullBackOff"), strings.Contains(reason, "ErrImagePull"):
+		return "镜像拉不下来：镜像不存在、tag 写错，或缺 imagePullSecret"
+	case strings.Contains(reason, "Unschedulable"):
+		return "没有节点能容纳：资源不足、taint 未容忍，或亲和性/拓扑约束无法满足"
+	case strings.Contains(reason, "CreateContainerError"):
+		return "容器创建失败：常见于挂载路径冲突或运行时报错"
+	case strings.Contains(reason, "Init"):
+		return "卡在 init 容器：多为它依赖的服务还没就绪"
+	case strings.Contains(reason, "ContainerStatusUnknown"):
+		return "容器状态未知，通常是节点失联或 kubelet 异常"
+	default:
+		return "原因码见 pod_events"
+	}
 }
 
 func (h *K8sResourceHandler) checkWorkloads(cid string) []healthFinding {
