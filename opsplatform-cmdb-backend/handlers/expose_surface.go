@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -227,13 +228,15 @@ func (h *K8sResourceHandler) serviceExposure(cid string, alive map[string]bool, 
 		return nil
 	}
 	defer rows.Close()
+	// 节点网络位置查一次即可，全集群共用——NodePort 的可达性取决于节点而非单个 Service
+	nodeNet := h.loadNodeNetwork(cid)
 	out := []exposureItem{}
 	for rows.Next() {
 		var ns, name, typ, extIP, lbType, ports string
 		if rows.Scan(&ns, &name, &typ, &extIP, &lbType, &ports) != nil {
 			continue
 		}
-		exp, basis := serviceExposureOf(typ, extIP, lbType, lbByVIP)
+		exp, basis := serviceExposureOf(typ, extIP, lbType, lbByVIP, nodeNet)
 		entry := extIP
 		if entry == "" {
 			entry = ns + "/" + name
@@ -252,8 +255,77 @@ func (h *K8sResourceHandler) serviceExposure(cid string, alive map[string]bool, 
 }
 
 // serviceExposureOf 内外网判定，按可信度从高到低取证：
+
+// nodeNetwork 集群节点的网络位置，NodePort 判定的依据。
+//
+// 为什么需要它：GKE 上 Service 走云 LB，cloud_loadbalancers.scheme 是权威依据；
+// 而 k3s/自建集群大量用 NodePort，云侧没有任何记录，此前一律判 unknown——
+// DEV 集群 502 条里 500 条如此（CMDB-009），等于这个功能在一半环境上是瞎的。
+type nodeNetwork struct {
+	total      int
+	withPublic int      // 有公网 IP 的节点数
+	sampleIPs  []string // 举例用，最多几个
+	declared   string   // 集群上人工声明的 network_exposure：public/private/空
+}
+
+// nodePortExposure 判定 NodePort 的可达性。
+//
+// 判定链（依据强度从高到低）：
+//  1. 节点有公网 IP —— NodePort 在公网可达是确定的（K8s 会在每个节点上监听该端口）
+//  2. 人工声明 network_exposure —— 节点无公网 IP 时用它兜底
+//  3. 节点全无公网 IP 且未声明 —— 判 internal，但写明依据和例外（NAT/端口转发）
+//
+// 第 3 条以前是 unknown。改成 internal + 说明理由，是因为「无公网 IP 的节点上的 NodePort
+// 走不到公网」在绝大多数部署下成立，给出带依据的结论比一句「取决于防火墙」有用得多；
+// 而例外情况也一并写出来，不假装确定。
+func nodePortExposure(n nodeNetwork) (string, string) {
+	switch {
+	case n.withPublic > 0:
+		ips := ""
+		if len(n.sampleIPs) > 0 {
+			ips = "（如 " + strings.Join(n.sampleIPs, ", ") + "）"
+		}
+		return "external", fmt.Sprintf("%d/%d 个节点有公网 IP%s，NodePort 在这些节点上公网可达；"+
+			"实际是否放行还要看防火墙（list_firewalls）", n.withPublic, n.total, ips)
+	case strings.EqualFold(n.declared, "public"):
+		return "external", "集群被声明为 public（节点可从公网访问），NodePort 视为公网可达"
+	case strings.EqualFold(n.declared, "private"):
+		return "internal", "集群被声明为 private（仅内网），NodePort 只在内网可达"
+	case n.total == 0:
+		return "unknown", "集群没有节点数据，无法判断 NodePort 可达性——先确认节点采集是否正常"
+	default:
+		return "internal", fmt.Sprintf("%d 个节点全部没有公网 IP，NodePort 只在内网可达。"+
+			"例外：若存在 NAT/端口转发/前置负载均衡，仍可能从公网到达——"+
+			"这种情况请在集群上设置「网络位置」为 public 以覆盖此判定", n.total)
+	}
+}
+
+// loadNodeNetwork 汇总集群节点的公网 IP 情况与人工声明。
+func (h *K8sResourceHandler) loadNodeNetwork(cid string) nodeNetwork {
+	n := nodeNetwork{}
+	rows, err := h.DB.Query(`SELECT COALESCE(external_ip,'') FROM k8s_nodes WHERE cluster_id=?`, cid)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var ip string
+			if rows.Scan(&ip) != nil {
+				continue
+			}
+			n.total++
+			if strings.TrimSpace(ip) != "" {
+				n.withPublic++
+				if len(n.sampleIPs) < 3 {
+					n.sampleIPs = append(n.sampleIPs, ip)
+				}
+			}
+		}
+	}
+	_ = h.DB.QueryRow(`SELECT COALESCE(network_exposure,'') FROM k8s_clusters WHERE id=?`, cid).Scan(&n.declared)
+	return n
+}
+
 // 云侧 LB 的 scheme > K8s 内网 LB 注解 > 有无外部 IP。
-func serviceExposureOf(typ, extIP, lbType string, lbByVIP map[string]string) (string, string) {
+func serviceExposureOf(typ, extIP, lbType string, lbByVIP map[string]string, nodeNet nodeNetwork) (string, string) {
 	for _, ip := range splitCSV(extIP) {
 		if scheme, ok := lbByVIP[ip]; ok {
 			if strings.EqualFold(scheme, "INTERNAL") {
@@ -266,7 +338,7 @@ func serviceExposureOf(typ, extIP, lbType string, lbByVIP map[string]string) (st
 		return "internal", "Service 带内网 LB 注解: " + lbType
 	}
 	if typ == "NodePort" {
-		return "unknown", "NodePort 是否可达取决于节点防火墙规则，需结合 list_firewalls 判断"
+		return nodePortExposure(nodeNet)
 	}
 	if extIP == "" {
 		return "unknown", "LoadBalancer 尚未分配外部 IP（可能正在创建或创建失败）"

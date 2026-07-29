@@ -1,0 +1,31 @@
+# 纳管外部 GKE 集群时，给 CMDB 用的 GCP 服务账号授只读权限。
+#
+# 背景：GKE 经 GCP 服务账号(SA key → OAuth token)接入时，集群里没有 ServiceAccount 对象可绑，
+# GKE 把 GCP SA 映射成一个 K8s User，用户名就是 SA 的邮箱。权限有两条来源：
+#   1. GCP IAM 角色自动映射——roles/container.clusterViewer 只能看集群元数据，**不含 pods/log**；
+#      roles/container.viewer 才含读日志(container.pods.getLogs)。
+#   2. 集群内显式 ClusterRoleBinding 绑到该邮箱——就是本文件做的事，权限面更可控。
+#
+# g32 生产踩的坑：CMDB 能列 Pod、能查事件，唯独读日志报 403，
+# 排障时才发现——所以现在「测试连接」会主动把缺的只读权限列出来。
+#
+# 用法：
+#   1. 先在本集群 apply 主文件里的 ClusterRole（本文件只管绑定，不重复定义角色，避免两处漂移）：
+#        kubectl apply -f k8s-readonly-rbac.yaml   # 若不想建 SA/Binding，可只截取其中 ClusterRole 部分
+#   2. 把下面的 <CMDB_GCP_SA_EMAIL> 换成 CMDB 实际使用的 GCP 服务账号邮箱，再 apply 本文件。
+#      查邮箱：CMDB「主机 → 云账号」里配的那个 SA，或 `kubectl auth whoami` 用同一凭据执行。
+#   3. 验证（用 CMDB 那份凭据执行，应输出 yes）：
+#        kubectl auth can-i get pods/log --all-namespaces
+#      或直接在 CMDB「接入管理 → 集群 → 测试连接」看是否还提示缺权限。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cmdb-k8s-readonly-gcp-sa
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cmdb-k8s-readonly    # 定义见 k8s-readonly-rbac.yaml，已含 pods/log 的 get
+subjects:
+  - kind: User
+    name: <CMDB_GCP_SA_EMAIL>   # 例：cmdb-readonly@csc5002-g32-prod.iam.gserviceaccount.com
+    apiGroup: rbac.authorization.k8s.io

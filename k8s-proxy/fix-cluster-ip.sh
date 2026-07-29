@@ -38,7 +38,13 @@ if [ "$OLD_IP" = "$NEW_IP" ]; then
 else
   # 备份 + 替换
   cp "$CONF" "$CONF.bak"
-  sed -i "s|172\\.[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+|$NEW_IP|g" "$CONF"
+  # macOS 自带的是 BSD sed：-i 必须带参数，且基本正则不支持 \+。
+  # 用 -E（两个实现都支持扩展正则）并按实现分支传 -i，Windows/WSL 的 GNU sed 照常可用。
+  if sed --version >/dev/null 2>&1; then
+    sed -i -E "s|172\.[0-9]+\.[0-9]+\.[0-9]+|$NEW_IP|g" "$CONF"   # GNU
+  else
+    sed -i '' -E "s|172\.[0-9]+\.[0-9]+\.[0-9]+|$NEW_IP|g" "$CONF" # BSD / macOS
+  fi
   echo "✓ 已把 $OLD_IP 全部替换成 $NEW_IP（备份 nginx.conf.bak）"
 fi
 

@@ -188,8 +188,14 @@ func ExplainLogError(err error) string {
 	s := err.Error()
 	switch code := apiStatusCode(err); {
 	case code == 403:
-		return "无权限读日志(HTTP 403)：先确认集群只读 ClusterRole 是否包含 pods/log 子资源；" +
-			"若已包含，再查云厂商 IAM 层是否另有限制。原始错误: " + s
+		// 只说「去确认 ClusterRole」不够用：GKE 经 GCP 服务账号接入时，集群里根本没有对应的
+		// ClusterRole 可查，权限来自 GCP IAM 角色映射，两种接入方式的修法完全不同。
+		return "无权限读日志(HTTP 403)：当前凭据缺 pods/log 的 get 权限。" +
+			"① kubeconfig/自管集群：给该 SA 绑定的 ClusterRole 补一条 " +
+			`{apiGroups:[""], resources:["pods/log"], verbs:["get"]}；` +
+			"② GKE 经 GCP 服务账号接入：roles/container.clusterViewer 不含读日志权限，" +
+			"需改用 roles/container.viewer，或在集群内把该 SA 邮箱绑到含 pods/log 的 ClusterRole。" +
+			"用「接入管理 → 集群 → 测试连接」可一次性列出还缺哪些只读权限。原始错误: " + s
 	case code == 401:
 		return "认证失败(HTTP 401)：集群凭证可能已过期或被吊销。原始错误: " + s
 	case code == 404:

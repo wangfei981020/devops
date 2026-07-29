@@ -1,6 +1,9 @@
 package handlers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // 暴露面的判定逻辑是「AI 只连 CMDB 就能下结论」的关键一环，判错的代价是把公网服务
 // 当成内网放着不管。本地环境没有 Istio、没有云 LB，端到端跑不到这些分支，
@@ -37,7 +40,7 @@ func TestIstioExposure(t *testing.T) {
 
 func TestServiceExposureOf(t *testing.T) {
 	lbs := map[string]string{
-		"34.92.20.123": "EXTERNAL",
+		"34.92.20.123":  "EXTERNAL",
 		"10.170.48.103": "INTERNAL",
 	}
 	cases := []struct {
@@ -57,9 +60,9 @@ func TestServiceExposureOf(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, basis := serviceExposureOf(c.typ, c.extIP, c.lbType, lbs)
+			got, basis := serviceExposureOf(c.typ, c.extIP, c.lbType, lbs, nodeNetwork{})
 			if got != c.want {
-				t.Errorf("serviceExposureOf(%q,%q,%q) = %q, 期望 %q", c.typ, c.extIP, c.lbType, got, c.want)
+				t.Errorf("serviceExposureOf(%q,%q,%q, nodeNetwork{}) = %q, 期望 %q", c.typ, c.extIP, c.lbType, got, c.want)
 			}
 			if basis == "" {
 				t.Error("判定依据不能为空")
@@ -155,5 +158,58 @@ func TestSensitivePortsConsistency(t *testing.T) {
 		if _, ok := sensitivePortNames[p]; !ok {
 			t.Errorf("端口 %d 应在敏感端口字典里（这些中间件默认无认证）", p)
 		}
+	}
+}
+
+// ── CMDB-009：k3s 上 NodePort 的可达性判定 ──────────────────────────
+
+// 节点有公网 IP 是最强依据：NodePort 在每个节点上都监听，公网可达是确定的。
+func TestNodePortExposurePublicNodes(t *testing.T) {
+	exp, basis := nodePortExposure(nodeNetwork{total: 3, withPublic: 2, sampleIPs: []string{"1.2.3.4"}})
+	if exp != "external" {
+		t.Fatalf("有公网 IP 的节点应判 external，实际 %s", exp)
+	}
+	if !strings.Contains(basis, "1.2.3.4") || !strings.Contains(basis, "防火墙") {
+		t.Errorf("依据应给出样例 IP 并提示还要看防火墙，实际: %s", basis)
+	}
+}
+
+// 这是 CMDB-009 的核心：节点全无公网 IP 时不再一律 unknown，
+// 给出带依据的 internal 判定，同时写明 NAT/端口转发这个例外。
+func TestNodePortExposurePrivateNodesGivesConclusion(t *testing.T) {
+	exp, basis := nodePortExposure(nodeNetwork{total: 14})
+	if exp != "internal" {
+		t.Fatalf("节点全无公网 IP 应判 internal 而非 unknown，实际 %s", exp)
+	}
+	if !strings.Contains(basis, "NAT") {
+		t.Errorf("必须写明 NAT/端口转发这个例外，不能假装确定，实际: %s", basis)
+	}
+	if !strings.Contains(basis, "网络位置") {
+		t.Errorf("应告诉用户如何覆盖该判定，实际: %s", basis)
+	}
+}
+
+// 人工声明优先于「无公网 IP」的推断——存在 NAT 的集群靠它纠正。
+func TestNodePortExposureDeclaredOverrides(t *testing.T) {
+	if exp, _ := nodePortExposure(nodeNetwork{total: 14, declared: "public"}); exp != "external" {
+		t.Errorf("声明 public 时应判 external，实际 %s", exp)
+	}
+	if exp, _ := nodePortExposure(nodeNetwork{total: 14, declared: "private"}); exp != "internal" {
+		t.Errorf("声明 private 时应判 internal，实际 %s", exp)
+	}
+	// 但节点确实有公网 IP 时，事实依据优先于声明
+	if exp, _ := nodePortExposure(nodeNetwork{total: 3, withPublic: 1, declared: "private"}); exp != "external" {
+		t.Errorf("节点实际有公网 IP 时应以事实为准，实际 %s", exp)
+	}
+}
+
+// 没有节点数据时不能瞎猜——那说明采集有问题，要说出来。
+func TestNodePortExposureNoNodesStaysUnknown(t *testing.T) {
+	exp, basis := nodePortExposure(nodeNetwork{})
+	if exp != "unknown" {
+		t.Errorf("无节点数据时应为 unknown，实际 %s", exp)
+	}
+	if !strings.Contains(basis, "采集") {
+		t.Errorf("应提示先查采集是否正常，实际: %s", basis)
 	}
 }

@@ -16,13 +16,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 )
 
 var (
-	gatewayGVR   = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
-	httprouteGVR = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
-	istioVSv1    = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
-	istioVSv1b1  = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1beta1", Resource: "virtualservices"}
+	gatewayGVR      = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
+	httprouteGVR    = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	istioVSv1       = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
+	istioGatewayGVR = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "gateways"}
+	istioVSv1b1     = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1beta1", Resource: "virtualservices"}
 )
 
 const gkeNodePoolLabel = "cloud.google.com/gke-nodepool"
@@ -36,7 +38,8 @@ type SyncResult struct {
 
 // SyncCluster 全量只读采集一个集群的资源到 DB。每类资源 delete+insert 全量替换（镜像语义）。
 // 返回各资源结果；单类失败不影响其它类。
-func SyncCluster(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, dc dynamic.Interface, clusterID int, nodepoolLabel string) []SyncResult {
+// mc 为只取 metadata 的客户端，专用于 Secret 名录（不请求 data）。传 nil 则跳过该项。
+func SyncCluster(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, dc dynamic.Interface, mc metadata.Interface, clusterID int, nodepoolLabel string) []SyncResult {
 	var out []SyncResult
 	run := func(res string, fn func() (int, error)) {
 		start := time.Now()
@@ -64,6 +67,16 @@ func SyncCluster(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, dc d
 	run("httproutes", func() (int, error) { return syncHTTPRoutes(ctx, db, dc, clusterID) })
 	run("virtualservices", func() (int, error) { return syncVirtualServices(ctx, db, dc, clusterID) })
 	run("configmaps", func() (int, error) { return syncConfigMaps(ctx, db, cs, clusterID) })
+	// Secret 名录：默认关闭，只对显式开启的集群采，且只取名字不取内容。
+	// 开关状态每轮现查——关掉开关后下一轮就会把已有名录清空。
+	run("secrets", func() (int, error) {
+		if mc == nil {
+			return 0, nil
+		}
+		var allow int
+		_ = db.QueryRow(`SELECT COALESCE(allow_secret_inventory,0) FROM k8s_clusters WHERE id=?`, clusterID).Scan(&allow)
+		return syncSecretNames(ctx, db, mc, clusterID, allow == 1)
+	})
 	run("pods", func() (int, error) { return syncPods(ctx, db, cs, clusterID) })
 	// pod 数回填到节点 + 派生节点池（依赖 nodes/pods 已入库）
 	run("node_pools", func() (int, error) { return derivePools(db, clusterID) })
@@ -96,16 +109,29 @@ func syncNodes(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid in
 			hbVal = hb.UTC()
 		}
 		rows = append(rows, []any{
-			cid, n.Name, resolvePool(n, poolLabel), nodeInternalIP(n), nodeRoles(n),
+			cid, n.Name, resolvePool(n, poolLabel), nodeInternalIP(n), nodeExternalIP(n), nodeRoles(n),
 			n.Labels["node.kubernetes.io/instance-type"], n.Status.Capacity.Cpu().String(),
 			n.Status.Capacity.Memory().String(), n.Status.NodeInfo.OSImage, n.Status.NodeInfo.KubeletVersion,
 			ready, hbVal, pressureSummary(n), conditionsJSON(n), boolToInt(isStuck(ready, hb)),
 		})
 	}
 	return replaceAll(db, "k8s_nodes", []string{
-		"cluster_id", "name", "pool", "internal_ip", "roles", "machine_type", "cpu_cap", "mem_cap",
+		"cluster_id", "name", "pool", "internal_ip", "external_ip", "roles", "machine_type", "cpu_cap", "mem_cap",
 		"os_image", "kubelet_version", "ready_status", "last_heartbeat", "conditions", "conditions_json", "stuck",
 	}, cid, rows)
+}
+
+// nodeExternalIP 取节点公网 IP。
+//
+// 这是判断「NodePort 是不是公网可达」的权威依据，而且 K8s 本来就在 status.addresses
+// 里给了——之前只采 InternalIP，把它丢掉了，导致 k3s 集群的暴露面完全判不了（CMDB-009）。
+func nodeExternalIP(n *corev1.Node) string {
+	for _, a := range n.Status.Addresses {
+		if a.Type == corev1.NodeExternalIP && a.Address != "" {
+			return a.Address
+		}
+	}
+	return ""
 }
 
 // stuckHeartbeatThreshold：Ready 心跳超过此时长未更新 → 判为卡死/失联。
@@ -506,44 +532,120 @@ func syncHPAs(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 
 // syncGateways 采集 Gateway API 的 Gateway（CRD，dynamic）。集群未装 CRD → 优雅跳过(0)。
 func syncGateways(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid int) (int, error) {
-	list, err := dc.Resource(gatewayGVR).Namespace("").List(ctx, metav1.ListOptions{})
-	if err != nil {
-		if apierrors.IsForbidden(err) {
-			return 0, nil // 无权限:跳过,不删已有数据
+	// 两套 Gateway 都采：Gateway API（gateway.networking.k8s.io）与 Istio
+	// （networking.istio.io）是完全不同的资源，生产用的是后者。此前只采前者，
+	// 结果 Istio 集群查出来 count=0，VirtualService 引用的 Gateway 名对不上任何东西。
+	rows := make([][]any, 0, 32)
+	anyOK := false
+	for _, src := range []struct {
+		gvr   schema.GroupVersionResource
+		group string
+	}{
+		{gatewayGVR, "gateway.networking.k8s.io"},
+		{istioGatewayGVR, "networking.istio.io"},
+	} {
+		list, err := dc.Resource(src.gvr).Namespace("").List(ctx, metav1.ListOptions{})
+		if err != nil {
+			// 无权限或 CRD 不存在都只跳过这一套，另一套照采——
+			// 只装了其中一种的集群很常见，不能因此丢掉另一种的数据。
+			if apierrors.IsForbidden(err) || crdAbsent(err) {
+				continue
+			}
+			return 0, err
 		}
-		if crdAbsent(err) {
-			return 0, clearAll(db, "k8s_gateways", cid)
+		anyOK = true
+		for i := range list.Items {
+			g := &list.Items[i]
+			if src.group == "networking.istio.io" {
+				rows = append(rows, istioGatewayRow(cid, g))
+				continue
+			}
+			rows = append(rows, gatewayAPIRow(cid, g))
 		}
-		return 0, err
 	}
-	rows := make([][]any, 0, len(list.Items))
-	for i := range list.Items {
-		g := &list.Items[i]
-		class, _, _ := unstructured.NestedString(g.Object, "spec", "gatewayClassName")
-		listeners := []string{}
-		if ls, found, _ := unstructured.NestedSlice(g.Object, "spec", "listeners"); found {
-			for _, l := range ls {
-				m, _ := l.(map[string]any)
-				name, _ := m["name"].(string)
-				proto, _ := m["protocol"].(string)
-				port := toInt(m["port"])
-				listeners = append(listeners, fmt.Sprintf("%s:%d/%s", name, port, proto))
-			}
-		}
-		addrs := []string{}
-		if as, found, _ := unstructured.NestedSlice(g.Object, "status", "addresses"); found {
-			for _, a := range as {
-				m, _ := a.(map[string]any)
-				if v, _ := m["value"].(string); v != "" {
-					addrs = append(addrs, v)
-				}
-			}
-		}
-		rows = append(rows, []any{cid, g.GetNamespace(), g.GetName(), class,
-			trunc(strings.Join(listeners, ","), 512), trunc(strings.Join(addrs, ","), 512)})
+	if !anyOK {
+		// 两套都拿不到：不清空，保留上一轮数据（可能只是本轮权限抖动）
+		return 0, nil
 	}
 	return replaceAll(db, "k8s_gateways",
-		[]string{"cluster_id", "namespace", "name", "gateway_class", "listeners", "addresses"}, cid, rows)
+		[]string{"cluster_id", "namespace", "name", "gateway_class", "listeners", "addresses", "api_group"}, cid, rows)
+}
+
+// gatewayAPIRow 解析 Gateway API 的 Gateway。
+func gatewayAPIRow(cid int, g *unstructured.Unstructured) []any {
+	class, _, _ := unstructured.NestedString(g.Object, "spec", "gatewayClassName")
+	listeners := []string{}
+	if ls, found, _ := unstructured.NestedSlice(g.Object, "spec", "listeners"); found {
+		for _, l := range ls {
+			m, _ := l.(map[string]any)
+			name, _ := m["name"].(string)
+			proto, _ := m["protocol"].(string)
+			port := toInt(m["port"])
+			listeners = append(listeners, fmt.Sprintf("%s:%d/%s", name, port, proto))
+		}
+	}
+	addrs := []string{}
+	if as, found, _ := unstructured.NestedSlice(g.Object, "status", "addresses"); found {
+		for _, a := range as {
+			m, _ := a.(map[string]any)
+			if v, _ := m["value"].(string); v != "" {
+				addrs = append(addrs, v)
+			}
+		}
+	}
+	return []any{cid, g.GetNamespace(), g.GetName(), class,
+		trunc(strings.Join(listeners, ","), 512), trunc(strings.Join(addrs, ","), 512),
+		"gateway.networking.k8s.io"}
+}
+
+// istioGatewayRow 解析 Istio Gateway。
+//
+// 结构与 Gateway API 完全不同：
+//   - 没有 gatewayClassName，改用 spec.selector 指向承载它的网关 Pod（如 istio=ingressgateway）
+//     ——这正是「这个 Gateway 落在哪个网关负载上」的答案，排障时最需要
+//   - servers[].port + hosts + tls.mode 对应 listeners
+//   - 没有 status.addresses，地址要看 selector 选中的那个 Service
+func istioGatewayRow(cid int, g *unstructured.Unstructured) []any {
+	sel := []string{}
+	if m, found, _ := unstructured.NestedStringMap(g.Object, "spec", "selector"); found {
+		for k, v := range m {
+			sel = append(sel, k+"="+v)
+		}
+		sort.Strings(sel) // map 顺序随机，不排序每轮 diff 都是噪音
+	}
+	listeners := []string{}
+	if ss, found, _ := unstructured.NestedSlice(g.Object, "spec", "servers"); found {
+		for _, sv := range ss {
+			m, _ := sv.(map[string]any)
+			port, _ := m["port"].(map[string]any)
+			name, _ := port["name"].(string)
+			proto, _ := port["protocol"].(string)
+			num := toInt(port["number"])
+			tlsMode := ""
+			if t, ok := m["tls"].(map[string]any); ok {
+				tlsMode, _ = t["mode"].(string)
+			}
+			hosts := []string{}
+			if hs, ok := m["hosts"].([]any); ok {
+				for _, h := range hs {
+					if v, _ := h.(string); v != "" {
+						hosts = append(hosts, v)
+					}
+				}
+			}
+			entry := fmt.Sprintf("%s:%d/%s", name, num, proto)
+			if tlsMode != "" {
+				entry += "(tls:" + tlsMode + ")"
+			}
+			if len(hosts) > 0 {
+				entry += " hosts=" + strings.Join(hosts, "|")
+			}
+			listeners = append(listeners, entry)
+		}
+	}
+	// gateway_class 位置放 selector：它回答的是同一个问题——这个 Gateway 由谁承载
+	return []any{cid, g.GetNamespace(), g.GetName(), trunc(strings.Join(sel, ","), 255),
+		trunc(strings.Join(listeners, ","), 512), "", "networking.istio.io"}
 }
 
 // syncHTTPRoutes 采集 Gateway API 的 HTTPRoute（CRD，dynamic）。未装 CRD → 优雅跳过。

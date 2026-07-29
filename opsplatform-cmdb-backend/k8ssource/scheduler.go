@@ -56,7 +56,11 @@ func syncAll(db *sql.DB, pool *Pool) {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		results := SyncCluster(ctx, db, cs, dc, x.id, x.label)
+		mc, mcErr := pool.MetadataFor(x.id)
+		if mcErr != nil {
+			mc = nil // 取不到不影响其它资源采集，Secret 名录本轮跳过
+		}
+		results := SyncCluster(ctx, db, cs, dc, mc, x.id, x.label)
 		cancel()
 		failed := 0
 		for _, r := range results {

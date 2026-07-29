@@ -124,9 +124,13 @@ func num(v any) float64 {
 
 // PVCUsage 返回 {"ns/pvc": {used_gi, cap_gi, pct}}（kubelet volume 指标）。
 func (h *ObsQueryHandler) PVCUsage(c *gin.Context) {
-	base, token, sel, ok := h.prom(c)
+	base, token, label, value, ok := h.promParts(c)
 	if !ok {
 		return
+	}
+	sel := ""
+	if label != "" {
+		sel = fmt.Sprintf("%s=%q", label, value)
 	}
 	usage := map[string]map[string]float64{}
 	get := func(k string) map[string]float64 {
@@ -151,7 +155,18 @@ func (h *ObsQueryHandler) PVCUsage(c *gin.Context) {
 		}
 	}
 	shared := h.sharedFSPVCs(c.Query("cluster_id"))
-	c.JSON(http.StatusOK, gin.H{"ok": true, "usage": usage, "accuracy": h.pvcAccuracy(usage, shared)})
+	out := gin.H{"ok": true, "usage": usage, "accuracy": h.pvcAccuracy(usage, shared)}
+	// 一个卷都没查到时，先排除「集群标签值配错」——否则返回的空 map 会被当成「该集群没有 PVC」。
+	if len(usage) == 0 && label != "" {
+		if bad := verifyClusterValue(base, token, label, value); bad != nil {
+			out["ok"] = false
+			out["cluster_label_error"] = bad
+		} else {
+			out["empty_hint"] = "该集群没查到任何 PVC 用量。集群标签值是对的，" +
+				"可能是数据源未采集 kubelet_volume_stats_* 指标，或该集群确实没有 PVC"
+		}
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // sharedFSPVCs 找出「与宿主机共用文件系统」的 PVC（key 为 ns/name）。
@@ -261,6 +276,19 @@ func promInstant(base, token, query string) ([]promSample, error) {
 // prom 解析 Prometheus 端点，并返回把查询限定到本集群的标签选择器。
 // selector 为空表示该源只有一个集群的数据，无需隔离。
 func (h *ObsQueryHandler) prom(c *gin.Context) (base, token, selector string, ok bool) {
+	base, token, label, value, ok := h.promParts(c)
+	if !ok {
+		return "", "", "", false
+	}
+	if label == "" {
+		return base, token, "", true
+	}
+	return base, token, fmt.Sprintf("%s=%q", label, value), true
+}
+
+// promParts 同 prom，但把隔离标签拆成名/值返回，供「隔离查询返回空」时的自检使用
+// （标签值配错和组件真没数据，返回的都是空，必须能分开）。
+func (h *ObsQueryHandler) promParts(c *gin.Context) (base, token, label, value string, ok bool) {
 	cid, _ := strconv.Atoi(c.Query("cluster_id"))
 	env := c.Query("env")
 	if env == "" && cid > 0 {
@@ -269,9 +297,10 @@ func (h *ObsQueryHandler) prom(c *gin.Context) (base, token, selector string, ok
 	base, token, clusterLabel, err := resolveEndpointFull(h.DB, h.Cipher, "prometheus", env, cid)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
-		return "", "", "", false
+		return "", "", "", "", false
 	}
-	return base, token, clusterSelector(h.DB, clusterLabel, cid), true
+	label, value = clusterSelectorParts(h.DB, clusterLabel, cid)
+	return base, token, label, value, true
 }
 
 // PodUsage 返回 {"ns/pod": {cpu_m, mem_mi}}，一次拉全集群 Pod 实时用量。
@@ -504,14 +533,22 @@ func (h *ObsQueryHandler) Loki(c *gin.Context) {
 	}
 	end := time.Now()
 	start := end.Add(-time.Duration(minutes) * time.Minute)
-	u := fmt.Sprintf("%s/loki/api/v1/query_range?query=%s&start=%d&end=%d&limit=500",
-		base, url.QueryEscape(q), start.UnixNano(), end.UnixNano())
+	// step 必须显式给：不给的话 Loki 对聚合查询（sum/count_over_time 等）按默认步长采样，
+	// 查 30 分钟能返回几百个点 × 每条序列，而且相邻点值几乎一样——对判断趋势毫无帮助，
+	// 纯粹撑爆调用方的上下文。复用 PromQL 那边同一套步长策略，控制在 ~200 个点。
+	step := c.Query("step")
+	if step == "" {
+		step = autoStep(int(minutes))
+	}
+	u := fmt.Sprintf("%s/loki/api/v1/query_range?query=%s&start=%d&end=%d&limit=500&step=%s",
+		base, url.QueryEscape(q), start.UnixNano(), end.UnixNano(), url.QueryEscape(step))
 	code, body, err := obsGet(u, token, 20*time.Second)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": code == 200, "status": code, "data": rawJSON(body)})
+	c.JSON(http.StatusOK, gin.H{"ok": code == 200, "status": code, "step": step,
+		"data": rawJSON(stripLokiStats(body))})
 }
 
 // KubeSphere 透传：拉指定 kapis 路径（如流水线运行状态/日志），交给 AI 诊断。
@@ -537,4 +574,29 @@ func (h *ObsQueryHandler) KubeSphere(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": code >= 200 && code < 300, "status": code, "data": rawJSON(body)})
+}
+
+// stripLokiStats 去掉 Loki 响应里的 stats 字段。
+//
+// 那一段是查询引擎的自我统计（下载了多少 chunk、解压多少字节…），对排障没有任何价值，
+// 却常常比结果本身还长——实测一次事件查询里 stats 占了输出的一大半。
+// 解析失败时原样返回：宁可多带一点，也不能因为裁剪逻辑出错就丢掉真正的数据。
+func stripLokiStats(body string) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		return body
+	}
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		return body
+	}
+	if _, has := data["stats"]; !has {
+		return body
+	}
+	delete(data, "stats")
+	out, err := json.Marshal(m)
+	if err != nil {
+		return body
+	}
+	return string(out)
 }

@@ -79,9 +79,13 @@ func (h promQueryHandler) Query(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "query 必填（PromQL）"})
 		return
 	}
-	base, token, sel, ok := h.prom(c)
+	base, token, clusterLabel, clusterValue, ok := h.promParts(c)
 	if !ok {
 		return
+	}
+	sel := ""
+	if clusterLabel != "" {
+		sel = fmt.Sprintf("%s=%q", clusterLabel, clusterValue)
 	}
 	final, isolated, note := applyCluster(query, sel)
 
@@ -164,6 +168,16 @@ func (h promQueryHandler) Query(c *gin.Context) {
 		// 空结果的两种含义必须分开：指标不存在 vs 指标存在但当前无数据。
 		out["empty_hint"] = "无数据。可能是：指标名不存在（用 prom_metrics 确认）、" +
 			"标签选择器过严、或该 exporter 未部署/已挂。空结果不等于「该组件正常」"
+		// 还有第三种，且最隐蔽：查询确实注入了集群条件，但那个值在数据源里根本不存在。
+		// 这时每一条 $CLUSTER 查询都返回空，看起来像「全都正常」。只在真的空了才去自检，
+		// 多打一次 label values 请求换掉一个会导致误判的静默失败，值得。
+		if isolated && strings.Contains(query, clusterPlaceholder) && clusterLabel != "" {
+			if bad := verifyClusterValue(base, token, clusterLabel, clusterValue); bad != nil {
+				out["ok"] = false
+				out["cluster_label_error"] = bad
+				delete(out, "empty_hint") // 根因已确定，别再给一串猜测干扰判断
+			}
+		}
 	}
 	c.JSON(http.StatusOK, out)
 }

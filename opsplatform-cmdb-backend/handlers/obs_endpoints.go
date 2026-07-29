@@ -2,9 +2,12 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -288,21 +291,75 @@ func resolveEndpointFull(db *sql.DB, cipher *crypto.Cipher, typ, env string, clu
 // 只有多集群共享的数据源才需要——它同时采多个集群，不加这个条件会把别的集群的数据一起捞回来，
 // 而 UAT 和 PROD 存在大量同名 namespace，sum by(namespace,pod) 会把同名 Pod 直接加在一起。
 // 返回空串表示不需要注入（单集群源），此时所有查询与改造前完全一致。
-//
-// 标签值取 k8s_clusters.name，与通用源里 cluster 标签的取值一致（已逐节点比对验证）。
 func clusterSelector(db *sql.DB, clusterLabel string, clusterID int) string {
-	if clusterLabel == "" || clusterID <= 0 {
+	label, value := clusterSelectorParts(db, clusterLabel, clusterID)
+	if label == "" {
 		return ""
 	}
-	var name string
-	if db.QueryRow(`SELECT name FROM k8s_clusters WHERE id=?`, clusterID).Scan(&name) != nil || name == "" {
+	return fmt.Sprintf("%s=%q", label, value)
+}
+
+// clusterSelectorParts 同 clusterSelector，但把标签名和取值分开返回——
+// 调用方需要它们去做「配的值在数据源里到底存不存在」的自检（见 verifyClusterValue）。
+//
+// 取值优先用 k8s_clusters.prom_cluster_value，为空才回落到 name。
+// 早期版本只用 name，隐含假设「CMDB 集群名 == 指标里的 cluster 标签值」；UAT 恰好成立，
+// g32 生产不成立（g32-prod-cluster vs prod-k8s-cluster-01），于是所有隔离查询静默返回空。
+// 台账命名和对方集群的采集配置本就是两回事，不该绑死。
+func clusterSelectorParts(db *sql.DB, clusterLabel string, clusterID int) (label, value string) {
+	if clusterLabel == "" || clusterID <= 0 {
+		return "", ""
+	}
+	var name, promValue string
+	if db.QueryRow(`SELECT name, COALESCE(prom_cluster_value,'') FROM k8s_clusters WHERE id=?`,
+		clusterID).Scan(&name, &promValue) != nil || name == "" {
 		logx.J("obs", "cluster_selector_miss", map[string]any{
 			"cluster_id": clusterID, "cluster_label": clusterLabel,
 			"warn": "数据源配了 cluster_label 但集群没有 name，本次查询不做集群隔离，结果可能混入其它集群",
 		})
-		return ""
+		return "", ""
 	}
-	return fmt.Sprintf("%s=%q", clusterLabel, name)
+	if promValue != "" {
+		return clusterLabel, promValue
+	}
+	return clusterLabel, name
+}
+
+// verifyClusterValue 检查隔离用的标签值在数据源里是否真的存在。
+//
+// 只在「查询做了集群隔离、但结果为空」时调用——这正是最危险的一种空：
+// 标签值配错时 Prometheus 不会报错，只会返回 0 条，读起来和「组件正常、无异常数据」一模一样。
+// g32 的 Kafka 就是这么被查成「无数据」的。
+//
+// 返回 nil 表示值存在（空结果另有原因，比如 exporter 没部署）；否则返回可直接给人看的诊断。
+func verifyClusterValue(base, token, label, value string) map[string]any {
+	code, body, err := obsGet(base+"/api/v1/label/"+url.PathEscape(label)+"/values", token, 15*time.Second)
+	if err != nil || code != 200 {
+		return nil // 自检本身失败就不猜了，别拿一个不确定的结论去覆盖真实的空结果
+	}
+	var r struct {
+		Data []string `json:"data"`
+	}
+	if json.Unmarshal([]byte(body), &r) != nil || len(r.Data) == 0 {
+		return nil
+	}
+	for _, v := range r.Data {
+		if v == value {
+			return nil
+		}
+	}
+	sort.Strings(r.Data)
+	logx.J("obs", "cluster_value_mismatch", map[string]any{
+		"label": label, "configured": value, "available": r.Data,
+		"warn": "集群隔离标签值在数据源里不存在，所有隔离查询都会返回空结果",
+	})
+	return map[string]any{
+		"label": label, "configured_value": value, "available_values": r.Data,
+		"error": fmt.Sprintf("集群隔离标签值 %s=%q 在该数据源里不存在——所有带集群条件的查询都会返回空，"+
+			"这个空不代表组件正常。数据源里可选的值：%s。"+
+			"请在「接入管理 → 集群」里把该集群的「指标集群标签值」改成正确的那个。",
+			label, value, strings.Join(r.Data, ", ")),
+	}
 }
 
 // promLabels 把集群选择器与查询级条件拼成 PromQL 的 {...} 片段；全空时返回空串。

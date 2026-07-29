@@ -35,7 +35,7 @@ func (h *K8sResourceHandler) Register(r *gin.RouterGroup) {
 	r.GET("/k8s/sync-state", h.SyncState)         // 采集新鲜度:这份数据能不能信
 	r.GET("/k8s/expose-surface", h.ExposeSurface) // 暴露面:谁能从外面访问到什么
 	r.GET("/k8s/orphans", h.ListOrphans)          // 孤儿资源:还在占资源/计费但没人用
-	r.GET("/k8s/security-audit", h.SecurityAudit)  // 安全上下文:特权容器/hostPath/capabilities
+	r.GET("/k8s/security-audit", h.SecurityAudit) // 安全上下文:特权容器/hostPath/capabilities
 	r.GET("/k8s/health", h.ClusterHealth)         // 集群体检总入口
 	r.GET("/k8s/workloads", h.Workloads)
 	r.GET("/k8s/pods", h.Pods)
@@ -73,7 +73,11 @@ func (h *K8sResourceHandler) Sync(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 120*time.Second)
 	defer cancel()
-	results := k8ssource.SyncCluster(ctx, h.DB, cs, dc, id, poolLabel)
+	mc, mcErr := h.Pool.MetadataFor(id)
+	if mcErr != nil {
+		mc = nil
+	}
+	results := k8ssource.SyncCluster(ctx, h.DB, cs, dc, mc, id, poolLabel)
 	summary := gin.H{}
 	failed := 0
 	for _, r := range results {
@@ -142,8 +146,12 @@ func (h *K8sResourceHandler) Ingresses(c *gin.Context) {
 }
 
 func (h *K8sResourceHandler) Gateways(c *gin.Context) {
-	h.list(c, `SELECT id,cluster_id,namespace,name,gateway_class,listeners,addresses FROM k8s_gateways`,
-		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}}, "namespace,name", []string{"name", "gateway_class"})
+	// api_group 区分 Gateway API 与 Istio Gateway：两者是完全不同的资源，
+	// 但排查「这个 VirtualService 的 Gateway 在哪」时要一起看，所以放同一个列表。
+	// Istio 的 gateway_class 列放的是 spec.selector（由哪个网关负载承载）。
+	h.list(c, `SELECT id,cluster_id,namespace,name,gateway_class,listeners,addresses,api_group FROM k8s_gateways`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false},
+			{"api_group", "api_group", false}}, "api_group,namespace,name", []string{"name", "gateway_class"})
 }
 
 func (h *K8sResourceHandler) HTTPRoutes(c *gin.Context) {

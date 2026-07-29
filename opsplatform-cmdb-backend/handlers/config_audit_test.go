@@ -12,7 +12,7 @@ var idx = map[string]cmEntry{
 // ConfigMap 有名录 → 可确定性判定「不存在」。
 func TestJudgeRefConfigMapMissingIsDefinitive(t *testing.T) {
 	f := judgeRef(refRow{ns: "g50-uat", kind: "configmap", name: "no-such", source: "volume",
-		pods: []string{"a"}}, idx, nil, false)
+		pods: []string{"a"}}, idx, secretInv{}, nil, false)
 	if f == nil || f.Status != "missing" || f.Severity != "high" {
 		t.Fatalf("名录里没有的 ConfigMap 应报 high/missing，实际 %+v", f)
 	}
@@ -24,7 +24,7 @@ func TestJudgeRefConfigMapMissingIsDefinitive(t *testing.T) {
 // 引用的键不在名录里 → key_missing。这类问题肉眼极难发现。
 func TestJudgeRefDetectsMissingKey(t *testing.T) {
 	f := judgeRef(refRow{ns: "g50-uat", kind: "configmap", name: "app-conf", key: "log_lvl",
-		source: "env", pods: []string{"a"}}, idx, nil, false)
+		source: "env", pods: []string{"a"}}, idx, secretInv{}, nil, false)
 	if f == nil || f.Status != "key_missing" {
 		t.Fatalf("键名对不上应报 key_missing，实际 %+v", f)
 	}
@@ -33,7 +33,7 @@ func TestJudgeRefDetectsMissingKey(t *testing.T) {
 // 键存在时不该报——名录判定必须是双向准确的。
 func TestJudgeRefQuietWhenKeyPresent(t *testing.T) {
 	if f := judgeRef(refRow{ns: "g50-uat", kind: "configmap", name: "app-conf", key: "timeout",
-		source: "env", pods: []string{"a"}}, idx, nil, false); f != nil {
+		source: "env", pods: []string{"a"}}, idx, secretInv{}, nil, false); f != nil {
 		t.Errorf("键存在时不该报，实际 %+v", f)
 	}
 }
@@ -43,10 +43,10 @@ func TestJudgeRefQuietWhenKeyPresent(t *testing.T) {
 func TestJudgeRefSecretSilentWithoutEvidence(t *testing.T) {
 	r := refRow{ns: "g50-uat", kind: "secret", name: "harbor-id", source: "imagePullSecret",
 		pods: []string{"a"}, badPods: 1}
-	if f := judgeRef(r, idx, map[string]bool{}, true); f != nil {
+	if f := judgeRef(r, idx, secretInv{}, map[string]bool{}, true); f != nil {
 		t.Errorf("无事件佐证的 Secret 引用不该报出，实际 %+v", f)
 	}
-	if f := judgeRef(r, idx, nil, false); f != nil {
+	if f := judgeRef(r, idx, secretInv{}, nil, false); f != nil {
 		t.Errorf("事件都没取到时更不该下结论，实际 %+v", f)
 	}
 }
@@ -55,7 +55,7 @@ func TestJudgeRefSecretSilentWithoutEvidence(t *testing.T) {
 func TestJudgeRefSecretReportsWithEvidence(t *testing.T) {
 	f := judgeRef(refRow{ns: "g50-uat", kind: "secret", name: "harbor-id",
 		source: "imagePullSecret", pods: []string{"a"}, badPods: 1},
-		idx, map[string]bool{"g50-uat/harbor-id": true}, true)
+		idx, secretInv{}, map[string]bool{"g50-uat/harbor-id": true}, true)
 	if f == nil || f.Status != "missing" {
 		t.Fatalf("有 not found 佐证时应报缺失，实际 %+v", f)
 	}
@@ -131,5 +131,69 @@ func TestCMEntryHasKeyIsExact(t *testing.T) {
 	}
 	if !e.hasKey("timeout") {
 		t.Error("完整键名应命中")
+	}
+}
+
+// ── Secret 名录（按集群开关）────────────────────────────────────────────
+
+// 名录可用时，Secret 缺失是确定性判定，不再依赖事件。
+func TestJudgeRefSecretDefinitiveWhenInventoryUsable(t *testing.T) {
+	inv := secretInv{enabled: true, usable: true, names: map[string]bool{"g50-uat/exists": true}}
+	f := judgeRef(refRow{ns: "g50-uat", kind: "secret", name: "harbor-id", source: "imagePullSecret",
+		pods: []string{"p1"}}, nil, inv, nil, false)
+	if f == nil || f.Status != "missing" || f.Severity != "high" {
+		t.Fatalf("名录可用且不含该名字时应确定性判缺失，实际 %+v", f)
+	}
+	if !strings.Contains(f.Basis, "确定性") {
+		t.Errorf("依据应写明是确定性判定，实际: %s", f.Basis)
+	}
+	// 名录里有的不该报
+	if f2 := judgeRef(refRow{ns: "g50-uat", kind: "secret", name: "exists", source: "env"},
+		nil, inv, nil, false); f2 != nil {
+		t.Errorf("名录中存在的 Secret 不该报出，实际 %+v", f2)
+	}
+}
+
+// 最关键的一条：开了开关但一条都没采到（403）时，绝不能把所有引用判成缺失。
+// 那会一次产生几百条误报，比不给结论危险得多。
+func TestJudgeRefSecretNoFalsePositiveWhenInventoryEmpty(t *testing.T) {
+	inv := secretInv{enabled: true, usable: false, names: map[string]bool{}} // 开了但空
+	f := judgeRef(refRow{ns: "g50-uat", kind: "secret", name: "harbor-id", source: "imagePullSecret"},
+		nil, inv, nil, false)
+	if f != nil {
+		t.Fatalf("名录为空时应退回事件佐证、不下确定性结论，实际报了 %+v", f)
+	}
+	// 有事件佐证时仍然要报
+	ev := map[string]bool{"g50-uat/harbor-id": true}
+	if f2 := judgeRef(refRow{ns: "g50-uat", kind: "secret", name: "harbor-id", source: "imagePullSecret"},
+		nil, inv, ev, true); f2 == nil {
+		t.Error("有事件佐证时应报出缺失")
+	}
+}
+
+// 未开启名录的集群（UAT/生产）行为不变：只认事件佐证。
+func TestJudgeRefSecretFallsBackWhenDisabled(t *testing.T) {
+	inv := secretInv{enabled: false}
+	if f := judgeRef(refRow{ns: "cesar", kind: "secret", name: "x", source: "env"},
+		nil, inv, nil, false); f != nil {
+		t.Errorf("未开启名录且无佐证时不该报，实际 %+v", f)
+	}
+}
+
+// capability 文案必须让人看出这次判定可不可信——三种状态说法不能一样。
+func TestSecretCapabilityDistinguishesThreeStates(t *testing.T) {
+	usable := secretCapability(secretInv{enabled: true, usable: true})
+	emptyInv := secretCapability(secretInv{enabled: true, usable: false})
+	disabled := secretCapability(secretInv{enabled: false})
+	if usable == emptyInv || emptyInv == disabled || usable == disabled {
+		t.Fatal("三种状态的说明不能相同")
+	}
+	if !strings.Contains(usable, "确定性") {
+		t.Errorf("可用状态应说明可确定性判定: %s", usable)
+	}
+	for _, s := range []string{emptyInv, disabled} {
+		if !strings.Contains(s, "不等于") {
+			t.Errorf("不可用状态必须点明「未报出不等于没问题」: %s", s)
+		}
 	}
 }

@@ -91,9 +91,11 @@ func TestExtractErrorLines_CapsOutput(t *testing.T) {
 	if len(got) > 81 { // 80 条 + 1 条截断说明
 		t.Errorf("应截断到 80 条左右，got %d", len(got))
 	}
+	// 断言语义而非固定文案：必须说清「一共多少条、省略了多少」，
+	// 否则调用方会把截断后的结果当成全部。
 	last, _ := got[len(got)-1]["text"].(string)
-	if !strings.Contains(last, "仅列前 80 条") {
-		t.Errorf("截断时应说明，got %q", last)
+	if !strings.Contains(last, "省略") || !strings.Contains(last, "500") {
+		t.Errorf("截断时应说明总数与省略数量，got %q", last)
 	}
 }
 

@@ -18,12 +18,19 @@ import (
 // 判定能力在两类资源上并不对等，这个差异必须暴露给使用者，不能糊在一起：
 //
 //	ConfigMap —— 有名录（只读 RBAC 已含 configmaps 权限），能**确定性**判断存不存在、键在不在。
-//	Secret    —— 没有名录，也不打算加权限（list secrets 会连 data 一起返回，
-//	             等于让 CMDB 能读全集群所有密码）。因此默认**不下结论**，
-//	             只有拿到事件佐证才报缺失。
+//	Secret    —— 分两种情况，取决于该集群有没有开 allow_secret_inventory：
+//	             开启（目前只给 DEV）→ 有名录，可确定性判断存不存在（判不了键，
+//	                                   因为 metadata-only 采集拿不到键名）
+//	             关闭（UAT/生产）    → 无名录，只有拿到事件佐证才报缺失
+//
+// 为什么 Secret 默认不开：K8s 的 list secrets 会连 data 一起返回，等于让 CMDB 能读
+// 全集群所有密码。开启的集群靠 metadata 客户端把接触面降到最低（APIServer 不返回 data），
+// 但 RBAC 那层权限本身仍在——所以只在敏感度低的环境开。
 //
 // 为什么 Secret 不做「全部标为待确认」：那会产出几百条无效条目。
 // CMDB-005 的教训——误报会连带把真问题一起淹掉。宁可少报，不可乱报。
+// 同理，开了名录却一条都没采到时**不做确定性判定**——那种情况下照常判会把每一条
+// Secret 引用都报成缺失。
 
 // K8s 把「引用的东西不存在」写进事件消息，这是无 Secret 权限时唯一的判定依据。
 var (
@@ -105,6 +112,8 @@ func (h *K8sDiagHandler) ConfigAudit(c *gin.Context) {
 		return
 	}
 
+	secIdx := h.loadSecretIndex(cid, ns)
+
 	// 事件佐证只在有异常 Pod 时才拉——没有异常就没有 Secret 缺失可查，白打一次 APIServer。
 	var evidence map[string]bool
 	evidenceOK := false
@@ -122,7 +131,7 @@ func (h *K8sDiagHandler) ConfigAudit(c *gin.Context) {
 		if r.optional {
 			continue // 缺了也不影响启动，报出来只会淹没真问题
 		}
-		if f := judgeRef(r, cmIndex, evidence, evidenceOK); f != nil {
+		if f := judgeRef(r, cmIndex, secIdx, evidence, evidenceOK); f != nil {
 			findings = append(findings, *f)
 		}
 	}
@@ -164,9 +173,9 @@ func (h *K8sDiagHandler) ConfigAudit(c *gin.Context) {
 		"findings":          findings,
 		"unused_configmaps": unused,
 		"capability": gin.H{
-			"configmap": "可确定性判定：CMDB 有 ConfigMap 名录（仅键名，不含内容）",
-			"secret": "无法主动判定存在性：只读 RBAC 不含 secrets 权限（该权限会连同 Secret 内容一并授予）。" +
-				"Secret 缺失仅在事件中出现 not found 佐证时才报出——未报出不等于不存在问题",
+			"configmap":       "可确定性判定：CMDB 有 ConfigMap 名录（仅键名，不含内容）",
+			"secret":          secretCapability(secIdx),
+			"secret_detail":   secIdx.note,
 			"evidence_loaded": evidenceOK,
 		},
 	})
@@ -175,7 +184,7 @@ func (h *K8sDiagHandler) ConfigAudit(c *gin.Context) {
 const kindCMName = "configmap"
 
 // judgeRef 判定单条引用。ConfigMap 走名录（确定性），Secret 走事件佐证（有则报、无则不报）。
-func judgeRef(r refRow, idx map[string]cmEntry, evidence map[string]bool, evidenceOK bool) *configFinding {
+func judgeRef(r refRow, idx map[string]cmEntry, sec secretInv, evidence map[string]bool, evidenceOK bool) *configFinding {
 	base := configFinding{
 		Namespace: r.ns, RefKind: r.kind, RefName: r.name, RefKey: r.key,
 		Source: r.source, Pods: capPods(r.pods), PodCount: len(r.pods),
@@ -201,7 +210,23 @@ func judgeRef(r refRow, idx map[string]cmEntry, evidence map[string]bool, eviden
 		return nil
 	}
 
-	// Secret：没有名录，只认事件佐证。
+	// Secret：名录可用时确定性判定；否则只认事件佐证。
+	if sec.usable {
+		if !sec.names[key] {
+			base.Severity, base.Status = "high", "missing"
+			base.Basis = "该集群已开启 Secret 名录，其中不存在该名称——这是确定性判定"
+			base.Issue = "引用的 Secret 不存在（来源：" + r.source + "）"
+			if r.source == "imagePullSecret" {
+				base.Issue = "镜像拉取密钥不存在，镜像拉不下来（ImagePullBackOff 的直接原因）"
+				base.Action = "在命名空间 " + r.ns + " 下创建该拉取密钥；" +
+					"若多个命名空间共用同一仓库，检查是否漏了这个命名空间"
+				return &base
+			}
+			base.Action = "确认是否漏建、或名称/命名空间写错；" + restartWarning(r)
+			return &base
+		}
+		return nil // 名录里有，确定存在
+	}
 	if evidenceOK && evidence[key] {
 		base.Severity, base.Status = "high", "missing"
 		base.Basis = "集群事件中出现该 Secret 的 not found 记录（无 Secret 名录，此为唯一可用依据）"
@@ -238,6 +263,60 @@ func (e cmEntry) hasKey(k string) bool {
 		}
 	}
 	return false
+}
+
+// secretInv Secret 名录及其「能不能用来下确定性结论」的判定。
+//
+// 三种状态必须分开，混起来会出大事：
+//
+//	开关关闭        —— 没名录，走事件佐证（默认，UAT/生产就是这个）
+//	开关开启且采到  —— 可以确定性判定「这个 Secret 不存在」
+//	开关开启但空的  —— **绝不能当成「都不存在」**。403 或采集失败时名录就是空的，
+//	                   照常判定会把该集群每一条 Secret 引用都报成缺失，一次几百条误报。
+type secretInv struct {
+	enabled bool
+	names   map[string]bool
+	usable  bool
+	note    string
+}
+
+func (h *K8sDiagHandler) loadSecretIndex(cid int, ns string) secretInv {
+	inv := secretInv{names: map[string]bool{}}
+	var allow int
+	_ = h.DB.QueryRow(`SELECT COALESCE(allow_secret_inventory,0) FROM k8s_clusters WHERE id=?`, cid).Scan(&allow)
+	inv.enabled = allow == 1
+	if !inv.enabled {
+		inv.note = "该集群未开启 Secret 名录（默认关闭），Secret 缺失只能靠集群事件佐证——" +
+			"没报出来不等于没问题，尤其是从未启动过的 Pod（事件已过 TTL）"
+		return inv
+	}
+	q := "SELECT namespace,name FROM k8s_secrets WHERE cluster_id=?"
+	args := []any{cid}
+	if ns != "" {
+		q += " AND namespace=?"
+		args = append(args, ns)
+	}
+	rows, err := h.DB.Query(q, args...)
+	if err != nil {
+		inv.note = "读取 Secret 名录失败: " + err.Error() + "；本次退回事件佐证"
+		return inv
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n, name string
+		if rows.Scan(&n, &name) == nil {
+			inv.names[n+"/"+name] = true
+		}
+	}
+	if len(inv.names) == 0 {
+		// 开了开关却一条都没有，只可能是没采到（任何集群都有 default-token 之类的 Secret）
+		inv.note = "已开启 Secret 名录但一条都没采到——极可能是该集群只读 ClusterRole 缺 secrets:[list]（403）。" +
+			"本次退回事件佐证，不做确定性判定，以免把每一条 Secret 引用都误报成缺失"
+		return inv
+	}
+	inv.usable = true
+	inv.note = "Secret 名录可用（" + itoa(len(inv.names)) + " 个，仅名字不含内容），可确定性判定存在性"
+	return inv
 }
 
 func (h *K8sDiagHandler) loadConfigMapIndex(cid int, ns string) (map[string]cmEntry, error) {
@@ -378,4 +457,16 @@ func sortFindings(f []configFinding) {
 		}
 		return f[i].PodCount > f[j].PodCount
 	})
+}
+
+// secretCapability 一句话说明本次 Secret 判定的可信度，跟结论一起给出。
+func secretCapability(inv secretInv) string {
+	if inv.usable {
+		return "可确定性判定：该集群已开启 Secret 名录（仅名字/命名空间，metadata-only 采集，不含内容）"
+	}
+	if inv.enabled {
+		return "本应可判定但名录为空，已退回事件佐证——未报出不等于没问题"
+	}
+	return "无法主动判定存在性：该集群未开启 Secret 名录。仅在集群事件出现 not found 佐证时才报出——" +
+		"未报出不等于不存在问题，从未启动过的 Pod（事件已过 TTL）查不出来"
 }

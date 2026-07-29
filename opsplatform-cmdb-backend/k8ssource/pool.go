@@ -12,6 +12,7 @@ import (
 
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -20,10 +21,10 @@ import (
 
 // Pool 按 cluster id 缓存 clientset / dynamic client，避免每次请求重建连接。
 type Pool struct {
-	db      *sql.DB
-	cipher  *crypto.Cipher
-	mu      sync.Mutex
-	cache   map[int]*kubernetes.Clientset
+	db       *sql.DB
+	cipher   *crypto.Cipher
+	mu       sync.Mutex
+	cache    map[int]*kubernetes.Clientset
 	dynCache map[int]dynamic.Interface
 }
 
@@ -112,6 +113,24 @@ func (p *Pool) ClientFor(id int) (*kubernetes.Clientset, error) {
 	}
 	p.cache[id] = cs
 	return cs, nil
+}
+
+// MetadataFor 返回只取对象 metadata 的客户端。
+//
+// 专为 Secret 名录准备：普通 clientset 的 list secrets 会把 data（也就是密码本身）
+// 一并取回来，而 metadata 客户端请求的是 PartialObjectMetadata，
+// **APIServer 根本不会把 data 发过来**。所以 CMDB 进程从不接触 Secret 内容，
+// 即使这个集群给了 secrets:list 权限。
+func (p *Pool) MetadataFor(id int) (metadata.Interface, error) {
+	cfg, err := p.restConfigFor(id)
+	if err != nil {
+		return nil, err
+	}
+	mc, err := metadata.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("构建 metadata client: %w", err)
+	}
+	return mc, nil
 }
 
 // DynamicFor 返回指定集群的 dynamic client（缓存），用于 Gateway API 等 CRD。

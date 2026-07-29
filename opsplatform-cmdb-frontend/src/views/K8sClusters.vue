@@ -86,6 +86,32 @@
           <el-input v-model="form.nodepool_label" placeholder="GKE 默认 cloud.google.com/gke-nodepool；IDC 填自定义 label" style="width:360px" />
           <span class="muted" style="margin-left:8px">留空=按角色/default 兜底分组</span>
         </el-form-item>
+        <el-form-item label="指标集群标签值">
+          <el-input v-model="form.prom_cluster_value" placeholder="留空=用上面的集群名" style="width:360px" />
+          <span class="muted" style="margin-left:8px">
+            共享 Prometheus 里 <b>cluster</b> 标签的取值。与集群名不一致时必须填，否则所有查询静默返回空
+          </span>
+        </el-form-item>
+        <el-form-item label="网络位置">
+          <el-select v-model="form.network_exposure" clearable placeholder="自动（按节点公网 IP 推断）" style="width:260px">
+            <el-option label="public — 节点可从公网访问" value="public" />
+            <el-option label="private — 仅内网可达" value="private" />
+          </el-select>
+          <div class="muted" style="font-size:12px;line-height:1.6;margin-top:4px">
+            决定 NodePort 服务算不算「暴露在公网」。默认按节点有没有公网 IP 自动判断；<br>
+            集群前面有 NAT / 端口转发 / 负载均衡时自动判断会偏保守，用这里覆盖。
+          </div>
+        </el-form-item>
+        <el-form-item label="Secret 名录">
+          <el-switch v-model="form.allow_secret_inventory" />
+          <div class="muted" style="font-size:12px;line-height:1.6;margin-top:4px">
+            开启后可确定性判断「Pod 引用的 Secret 到底存不存在」（如缺 harbor-id 拉取密钥）；<br>
+            关闭时只能靠集群事件反推，<b>从未启动过的 Pod 查不出来</b>。<br>
+            <span class="warn">开启需要该集群只读 ClusterRole 具备 secrets:[list]。CMDB 只取名字不取内容
+            （metadata-only，APIServer 不会返回 Secret 内容），但该 RBAC 权限本身允许读取内容，
+            建议只在 DEV 等低敏感环境开启。</span>
+          </div>
+        </el-form-item>
         <el-form-item label="计费模式">
           <el-select v-model="form.cost_mode" clearable placeholder="自动（按接入方式推断）" style="width:260px">
             <el-option label="cloud（真实云支出）" value="cloud" />
@@ -156,7 +182,7 @@ const testing = reactive({})
 const syncing = reactive({})
 const dlg = ref(false)
 const editing = ref(false)
-const blank = () => ({ id: 0, name: '', display_name: '', environment: 'DEV', provider: 'gke', project_id: '', cloud_account_id: null, location: '', endpoint: '', nodepool_label: '', cost_mode: '', kubeconfig: '', enabled: 1 })
+const blank = () => ({ id: 0, name: '', prom_cluster_value: '', network_exposure: '', allow_secret_inventory: false, display_name: '', environment: 'DEV', provider: 'gke', project_id: '', cloud_account_id: null, location: '', endpoint: '', nodepool_label: '', cost_mode: '', kubeconfig: '', enabled: 1 })
 const form = reactive(blank())
 
 async function load() {
@@ -247,4 +273,5 @@ onMounted(load)
 .page-head { margin-bottom: 14px; }
 .page-title { font-size: 18px; font-weight: 600; }
 .muted { color: #909399; font-size: 12px; }
+.warn { color: #e6a23c; }
 </style>

@@ -207,13 +207,37 @@ func isErrLine(s string) bool {
 	return errLinePattern.MatchString(s) || buildToolErrPattern.MatchString(s)
 }
 
+// fatalErrPattern 决定「构建为什么失败」的那几行。
+//
+// 它们几乎总在日志末尾：编译器先吐一大堆类型/lint 错误，最后才是构建工具宣布失败。
+// 区分出来是因为按行号从前往后截断会把它们全部挤掉——实测 g66 #78：
+// 抽到的 81 条全是 L333~L698 的 TS 类型错误，真正致命的 error during build 在 L3148，
+// 一条都没进来（CMDB-007）。
+var fatalErrPattern = regexp.MustCompile(
+	`(?i)error during build|command failed|exit (status|code) [1-9]|` +
+		`ELIFECYCLE|npm ERR!|ERR_PNPM|build failed|compilation failed|` +
+		`finished: failure|script returned exit code|process exited with|` +
+		`cannot find module|module not found|out of memory|killed`)
+
+// maxErrLines 返回给调用方的报错行上限。一次构建动辄 3000+ 行、236KB，
+// 整段返回会撑爆上下文——这是这个接口存在的主要理由。
+const maxErrLines = 80
+
 // extractErrorLines 抽出报错行并带上原始行号（方便让人回原文定位）。
-// 一次构建动辄 3000+ 行、236KB，整段返回会直接撑爆上下文——这是这个接口存在的主要理由。
 //
 // 命中后还要带几行上下文：像 "error during build:" 这种行只说明「构建失败了」，
 // 具体是哪个文件哪一行在它**后面**几行。只返回命中行本身仍然定位不到问题。
+//
+// 超过上限时的取舍（CMDB-007 的修复）：
+//  1. 致命行**全部保留**——它们才回答「为什么失败」，而且数量本来就少
+//  2. 普通行**从后往前取**——同一个文件的类型错误重复几百条，越靠后越接近失败点
+//  3. 丢了多少、丢的是哪一段，明确写出来，不让人以为这就是全部
 func extractErrorLines(lines []string) []gin.H {
-	out := []gin.H{}
+	type hit struct {
+		item  gin.H
+		fatal bool
+	}
+	hits := make([]hit, 0, 128)
 	for i, l := range lines {
 		s := strings.TrimSpace(ansiPattern.ReplaceAllString(l, ""))
 		if s == "" || !isErrLine(s) {
@@ -223,13 +247,53 @@ func extractErrorLines(lines []string) []gin.H {
 		if ctx := collectContext(lines, i); len(ctx) > 0 {
 			item["context"] = ctx
 		}
-		out = append(out, item)
-		if len(out) >= 80 { // 够定位就行，再多是噪音
-			out = append(out, gin.H{"line": 0, "text": "（报错行过多，仅列前 80 条，用 full=1 看全文）"})
-			break
+		f := fatalErrPattern.MatchString(s)
+		if f {
+			item["fatal"] = true
+		}
+		hits = append(hits, hit{item, f})
+	}
+	if len(hits) <= maxErrLines {
+		out := make([]gin.H, 0, len(hits))
+		for _, h := range hits {
+			out = append(out, h.item)
+		}
+		return out
+	}
+
+	// 超限：先收致命行（全留），再用剩余配额从后往前收普通行
+	kept := make([]gin.H, 0, maxErrLines)
+	takenIdx := map[int]bool{}
+	for i, h := range hits {
+		if h.fatal {
+			kept = append(kept, h.item)
+			takenIdx[i] = true
 		}
 	}
-	return out
+	fatalCount := len(kept)
+	quota := maxErrLines - fatalCount
+	normalTaken := 0
+	for i := len(hits) - 1; i >= 0 && normalTaken < quota; i-- {
+		if takenIdx[i] {
+			continue
+		}
+		kept = append(kept, hits[i].item)
+		takenIdx[i] = true
+		normalTaken++
+	}
+	// 按原始行号排回去，读起来才和日志一致
+	sort.Slice(kept, func(a, b int) bool {
+		la, _ := kept[a]["line"].(int)
+		lb, _ := kept[b]["line"].(int)
+		return la < lb
+	})
+	dropped := len(hits) - len(kept)
+	if dropped > 0 {
+		kept = append(kept, gin.H{"line": 0, "text": fmt.Sprintf(
+			"（共 %d 条报错行，已保留全部 %d 条致命错误 + 最靠近失败点的 %d 条，省略中间 %d 条重复报错；用 full=1 看全文）",
+			len(hits), fatalCount, normalTaken, dropped)})
+	}
+	return kept
 }
 
 // collectContext 取命中行之后最多 6 行非栈帧内容，遇到下一个报错行即停。
