@@ -1,0 +1,219 @@
+<template>
+  <div class="page">
+    <div class="page-head">
+      <span class="page-title">集群体检</span>
+      <span class="muted" style="margin-left:10px">
+        「这个集群有什么问题」的统一入口——异常按等级排好、每条带处置建议，不用自己去翻列表拼。
+      </span>
+      <el-select v-model="cid" size="small" style="width:230px;margin-left:auto" @change="reload">
+        <el-option v-for="c in clusters" :key="c.id"
+          :label="(c.display_name || c.name) + ' · ' + c.environment" :value="c.id" />
+      </el-select>
+      <el-button size="small" :icon="Refresh" :loading="loading" style="margin-left:8px" @click="reload">刷新</el-button>
+    </div>
+
+    <!-- 采集新鲜度放最前面：这份数据能不能信，决定下面所有结论能不能信。
+         观测组件挂了的时候，依赖日志/指标的结论会静默失真，必须先看见这一点。 -->
+    <el-alert v-if="fresh && !fresh.trustworthy" type="warning" :closable="false" show-icon style="margin-bottom:12px">
+      <template #title>数据可信度存疑，以下结论请谨慎采信</template>
+      {{ fresh.advice }}
+    </el-alert>
+
+    <el-card shadow="never">
+      <el-tabs v-model="tab" @tab-change="onTab">
+        <el-tab-pane :label="`体检总览${sumLabel}`" name="health">
+          <div class="sev-bar" v-if="summary">
+            <span class="chip critical">critical {{ summary.critical || 0 }}</span>
+            <span class="chip warning">warning {{ summary.warning || 0 }}</span>
+            <span class="chip info">info {{ summary.info || 0 }}</span>
+          </div>
+          <el-table :data="findings" size="small" v-loading="loading" max-height="560">
+            <el-table-column label="等级" width="100"><template #default="{ row }">
+              <el-tag size="small" :type="sevType(row.severity)">{{ row.severity }}</el-tag>
+            </template></el-table-column>
+            <el-table-column prop="category" label="类别" width="100" />
+            <el-table-column prop="title" label="问题" min-width="230" show-overflow-tooltip />
+            <el-table-column prop="count" label="数量" width="80" align="right" />
+            <el-table-column prop="detail" label="说明" min-width="240" show-overflow-tooltip />
+            <el-table-column prop="action" label="怎么查/怎么处置" min-width="240" show-overflow-tooltip />
+          </el-table>
+          <el-empty v-if="!loading && !findings.length" description="本次体检未发现异常" :image-size="60" />
+        </el-tab-pane>
+
+        <el-tab-pane label="配置审计" name="config">
+          <!-- capability 必须显示：ConfigMap 是确定性判定，Secret 取决于该集群有没有开名录，
+               两者可信度不同。不写出来的话「没报问题」会被误读成「没有问题」。 -->
+          <div v-if="cfgCap" class="cap">
+            <div><b>ConfigMap</b>：{{ cfgCap.configmap }}</div>
+            <div><b>Secret</b>：{{ cfgCap.secret }}</div>
+          </div>
+          <el-table :data="cfgFindings" size="small" v-loading="loading" max-height="520">
+            <el-table-column label="等级" width="90"><template #default="{ row }">
+              <el-tag size="small" :type="sevType(row.severity)">{{ row.severity }}</el-tag>
+            </template></el-table-column>
+            <el-table-column prop="namespace" label="命名空间" width="150" show-overflow-tooltip />
+            <el-table-column label="缺失对象" min-width="200"><template #default="{ row }">
+              <el-tag size="small" type="info">{{ row.ref_kind }}</el-tag>
+              <span style="margin-left:6px">{{ row.ref_name }}</span>
+              <span v-if="row.ref_key" class="muted">/{{ row.ref_key }}</span>
+            </template></el-table-column>
+            <el-table-column prop="source" label="引用方式" width="130" />
+            <el-table-column prop="pod_count" label="影响 Pod" width="100" align="right" />
+            <el-table-column prop="basis" label="判定依据" min-width="220" show-overflow-tooltip />
+            <el-table-column prop="action" label="处置建议" min-width="220" show-overflow-tooltip />
+          </el-table>
+          <el-empty v-if="!loading && !cfgFindings.length" :image-size="60"
+            description="没有发现缺失的配置引用（注意上方 Secret 判定能力说明）" />
+        </el-tab-pane>
+
+        <el-tab-pane label="安全审计" name="security">
+          <div class="filters">
+            <el-checkbox v-model="includePlatform" size="small" @change="loadSecurity">
+              包含平台组件（CNI/CSI/监控等，特权是设计使然）
+            </el-checkbox>
+            <span v-if="secHidden" class="muted">已隐藏 {{ secHidden }} 个平台组件</span>
+            <span v-if="secSummary" class="muted">
+              critical {{ secSummary.critical || 0 }} · high {{ secSummary.high || 0 }} ·
+              medium {{ secSummary.medium || 0 }} · info {{ secSummary.info || 0 }}
+            </span>
+          </div>
+          <el-table :data="secFindings" size="small" v-loading="loading" max-height="520">
+            <el-table-column label="等级" width="90"><template #default="{ row }">
+              <el-tag size="small" :type="sevType(row.severity)">{{ row.severity }}</el-tag>
+            </template></el-table-column>
+            <el-table-column prop="namespace" label="命名空间" width="150" show-overflow-tooltip />
+            <el-table-column prop="workload" label="工作负载" min-width="180" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.workload || row.pod }}</template>
+            </el-table-column>
+            <el-table-column label="风险" min-width="360"><template #default="{ row }">
+              <div v-for="(r, i) in row.risks" :key="i" class="risk-line">{{ r }}</div>
+            </template></el-table-column>
+            <el-table-column label="平台组件" width="100"><template #default="{ row }">
+              <el-tag v-if="row.platform_component" size="small" type="info">是</el-tag>
+              <span v-else class="muted">—</span>
+            </template></el-table-column>
+          </el-table>
+          <el-empty v-if="!loading && !secFindings.length" :image-size="60"
+            description="未发现有风险的安全上下文配置" />
+        </el-tab-pane>
+      </el-tabs>
+    </el-card>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { Refresh } from '@element-plus/icons-vue'
+import { listK8sClusters, clusterHealth, configAudit, securityAudit, k8sSyncState } from '../api/cmdb'
+
+const route = useRoute()
+const router = useRouter()
+const valid = ['health', 'config', 'security']
+const tab = ref(valid.includes(route.query.tab) ? route.query.tab : 'health')
+
+const loading = ref(false)
+const clusters = ref([]); const cid = ref(null)
+const findings = ref([]); const summary = ref(null); const fresh = ref(null)
+const cfgFindings = ref([]); const cfgCap = ref(null)
+const secFindings = ref([]); const secSummary = ref(null); const secHidden = ref(0)
+const includePlatform = ref(false)
+const done = { health: false, config: false, security: false }
+
+const sumLabel = computed(() => {
+  const s = summary.value
+  if (!s) return ''
+  const c = (s.critical || 0) + (s.warning || 0)
+  return c ? ` (${c})` : ''
+})
+
+function sevType(s) {
+  return { critical: 'danger', high: 'danger', warning: 'warning', medium: 'warning' }[s] || 'info'
+}
+
+async function loadClusters() {
+  clusters.value = await listK8sClusters()
+  if (!cid.value && clusters.value.length) {
+    const q = Number(route.query.cluster_id)
+    cid.value = clusters.value.some((c) => c.id === q) ? q : clusters.value[0].id
+  }
+}
+
+async function loadHealth() {
+  if (!cid.value) return
+  loading.value = true
+  try {
+    const r = await clusterHealth({ cluster_id: cid.value })
+    findings.value = r.findings || []
+    summary.value = r.summary || null
+    done.health = true
+    // 顺带取一次新鲜度：结论可信度的前提，放在页面最上方
+    try {
+      const s = await k8sSyncState({ cluster_id: cid.value })
+      fresh.value = (s.clusters || []).find((x) => x.cluster_id === cid.value) || null
+    } catch (e) { fresh.value = null }
+  } catch (e) { ElMessage.error('体检失败') } finally { loading.value = false }
+}
+
+async function loadConfig() {
+  if (!cid.value) return
+  loading.value = true
+  try {
+    const r = await configAudit({ cluster_id: cid.value })
+    cfgFindings.value = r.findings || []
+    cfgCap.value = r.capability || null
+    done.config = true
+  } catch (e) { ElMessage.error('配置审计失败') } finally { loading.value = false }
+}
+
+async function loadSecurity() {
+  if (!cid.value) return
+  loading.value = true
+  try {
+    const r = await securityAudit({
+      cluster_id: cid.value,
+      include_platform: includePlatform.value ? '1' : undefined,
+    })
+    secFindings.value = r.findings || []
+    secSummary.value = r.summary || null
+    secHidden.value = r.platform_hidden || 0
+    done.security = true
+  } catch (e) { ElMessage.error('安全审计失败') } finally { loading.value = false }
+}
+
+function loadTab(name) {
+  if (name === 'health') loadHealth()
+  if (name === 'config') loadConfig()
+  if (name === 'security') loadSecurity()
+}
+
+function onTab(name) {
+  router.replace({ query: { ...route.query, tab: name } })
+  if (!done[name]) loadTab(name)
+}
+
+async function reload() {
+  done.health = done.config = done.security = false
+  router.replace({ query: { ...route.query, cluster_id: cid.value } })
+  loadTab(tab.value)
+}
+
+;(async () => {
+  await loadClusters()
+  loadTab(tab.value)
+})()
+</script>
+
+<style scoped>
+.page-head { display: flex; align-items: center; }
+.filters { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.muted { color: #909399; font-size: 12px; }
+.sev-bar { margin-bottom: 10px; display: flex; gap: 8px; }
+.chip { font-size: 12px; padding: 2px 10px; border-radius: 10px; }
+.chip.critical { background: #fef0f0; color: #f56c6c; }
+.chip.warning { background: #fdf6ec; color: #e6a23c; }
+.chip.info { background: #f4f4f5; color: #909399; }
+.cap { font-size: 12px; color: #606266; background: #f4f4f5; border-left: 3px solid #909399; padding: 8px 12px; margin-bottom: 10px; line-height: 1.8; }
+.risk-line { font-size: 12px; line-height: 1.6; }
+</style>

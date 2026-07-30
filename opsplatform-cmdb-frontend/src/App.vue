@@ -69,6 +69,7 @@ const menus = shallowRef([
     { path: '/cloud-networks', label: 'VPC 网络', icon: Share },
     { path: '/cloud-firewalls', label: '防火墙', icon: Lock },
     { path: '/cloud-lbs', label: '负载均衡', icon: Sort },
+    { path: '/cloud-audit', label: '云平台审计', icon: CircleCheck },
   ] },
   { type: 'group', label: '资产管理', icon: Coin, children: [
     { path: '/domains', label: '域名', icon: Connection },
@@ -88,6 +89,7 @@ const menus = shallowRef([
     { path: '/k8s-networking', label: '网络', icon: Share },
     { path: '/k8s-storage', label: '存储/伸缩', icon: Coin },
     { path: '/k8s-events', label: '事件', icon: Bell },
+    { path: '/k8s-health', label: '集群体检', icon: CircleCheck },
     { path: '/k8s-topology', label: '全链路', icon: Share },
     { path: '/k8s-ns-project', label: '命名空间归属', icon: Coin },
   ] },

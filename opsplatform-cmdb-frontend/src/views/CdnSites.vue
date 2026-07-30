@@ -58,6 +58,80 @@
           <el-empty v-if="!loading && !dns.length" description="没有匹配的解析记录" :image-size="60" />
         </el-tab-pane>
 
+        <el-tab-pane label="规则" name="rules">
+          <!-- 规则分析放在列表前面：数量逼近套餐上限、同一匹配式重复配置这类问题，
+               光看列表看不出来，得先给结论再给明细。 -->
+          <div v-if="ruleFindings.length" class="findings">
+            <!-- 循环变量刻意不叫 f：外层 f 是筛选条件对象，同名虽不冲突但读代码时极易搞混 -->
+            <div v-for="(fd, i) in ruleFindings" :key="i" class="finding" :class="fd.severity">
+              <el-tag size="small" :type="sevType(fd.severity)">{{ fd.severity }}</el-tag>
+              <b style="margin:0 6px">{{ fd.zone }}</b>{{ fd.issue }}
+              <div class="muted">{{ fd.action }}</div>
+            </div>
+          </div>
+          <el-alert v-else-if="ruleAnalyzed" type="success" :closable="false" show-icon
+            title="规则配置未发现问题" style="margin-bottom:10px" />
+
+          <div class="filters">
+            <el-select v-model="f.ruleZone" clearable placeholder="全部站点" size="small" style="width:190px" @change="loadRules">
+              <el-option v-for="z in zones" :key="z.zone_id" :label="z.name" :value="z.name" />
+            </el-select>
+            <el-select v-model="f.ruleSource" clearable placeholder="全部体系" size="small" style="width:150px" @change="loadRules">
+              <el-option label="Page Rules（老）" value="pagerule" />
+              <el-option label="Rulesets（新）" value="ruleset" />
+            </el-select>
+            <el-checkbox v-model="f.hideManaged" size="small">隐藏 Cloudflare 托管规则集</el-checkbox>
+            <span class="muted">共 {{ shownRules.length }} 条</span>
+          </div>
+          <el-table :data="shownRules" size="small" v-loading="loading" max-height="520">
+            <el-table-column prop="zone" label="站点" width="150" show-overflow-tooltip />
+            <el-table-column prop="name" label="规则名" min-width="200" show-overflow-tooltip />
+            <el-table-column label="类别" width="200"><template #default="{ row }">
+              <span class="mono">{{ phaseLabel(row.phase) }}</span>
+            </template></el-table-column>
+            <el-table-column label="状态" width="90"><template #default="{ row }">
+              <el-tag size="small" :type="row.status === 'disabled' ? 'danger' : 'success'">
+                {{ row.status === 'disabled' ? '已禁用' : '启用' }}</el-tag>
+            </template></el-table-column>
+            <el-table-column prop="actions" label="动作" min-width="150" show-overflow-tooltip />
+            <el-table-column prop="expression" label="匹配条件" min-width="260" show-overflow-tooltip />
+          </el-table>
+          <el-empty v-if="!loading && !shownRules.length" :image-size="60"
+            description="没有规则数据。若确认配过规则，检查 token 是否有 Page Rules·Read / Config·Read 权限" />
+        </el-tab-pane>
+
+        <el-tab-pane label="边缘证书" name="certs">
+          <!-- 必须写清这跟「证书 / 到期巡检」不是一套：边缘证书由 Cloudflare 自动续期，
+               源站证书要自己管，两者到期时间互相独立，混起来会得出反向结论。 -->
+          <el-alert type="info" :closable="false" show-icon style="margin-bottom:10px">
+            <template #title>这里是 Cloudflare <b>边缘</b>上的证书</template>
+            与「证书」「到期巡检」里我方<b>源站</b>的证书是两套，到期时间互相独立——
+            边缘证书没过期不代表源站没过期；反过来源站过期时若 SSL 模式不是 strict，用户侧甚至看不出异常。
+          </el-alert>
+          <div class="filters">
+            <el-select v-model="f.certZone" clearable placeholder="全部站点" size="small" style="width:190px" @change="loadCerts">
+              <el-option v-for="z in zones" :key="z.zone_id" :label="z.name" :value="z.name" />
+            </el-select>
+            <span class="muted">共 {{ certs.length }} 张</span>
+          </div>
+          <el-table :data="certs" size="small" v-loading="loading" max-height="520">
+            <el-table-column prop="zone" label="站点" width="150" show-overflow-tooltip />
+            <el-table-column prop="hosts" label="覆盖域名" min-width="240" show-overflow-tooltip />
+            <el-table-column prop="type" label="类型" width="110" />
+            <el-table-column prop="issuer" label="签发方" width="150" show-overflow-tooltip />
+            <el-table-column label="剩余" width="150"><template #default="{ row }">
+              <span v-if="row.expires_on === ''" class="muted">{{ row.note || '未取到到期时间' }}</span>
+              <span v-else>
+                <el-tag size="small" :type="certType(row.days_left)">{{ row.days_left }} 天</el-tag>
+                <span class="muted" style="margin-left:6px">{{ row.expires_on }}</span>
+              </span>
+            </template></el-table-column>
+            <el-table-column prop="issue" label="提示" min-width="200" show-overflow-tooltip />
+          </el-table>
+          <el-empty v-if="!loading && !certs.length" :image-size="60"
+            description="没有边缘证书数据。启用了 CDN 代理的站点一定有 Universal SSL，空结果基本等于 token 缺 SSL and Certificates·Read 权限" />
+        </el-tab-pane>
+
         <el-tab-pane label="一致性校验" name="check">
           <!-- scope 是这个功能能不能被采信的前提，必须显示在结论前面。
                纳管范围不完整时「查不到」不等于「不属于我方」——CMDB-005 就栽在这里。 -->
@@ -109,23 +183,25 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { listCdnZones, listCdnDnsRecords, cdnDomainCheck } from '../api/cmdb'
+import { listCdnZones, listCdnDnsRecords, cdnDomainCheck, listCdnRules, cdnRuleAnalysis, listCdnCertificates } from '../api/cmdb'
 
 const route = useRoute()
 const router = useRouter()
-const valid = ['zones', 'dns', 'check']
+const valid = ['zones', 'dns', 'rules', 'certs', 'check']
 const tab = ref(valid.includes(route.query.tab) ? route.query.tab : 'zones')
 
 const loading = ref(false)
 const zones = ref([]); const dns = ref([]); const checks = ref([])
 const summary = ref(null); const scope = ref(null)
-const f = reactive({ zone: '', type: '', q: '', checkZone: '', onlyIssues: true })
+const rules = ref([]); const ruleFindings = ref([]); const ruleAnalyzed = ref(false); const certs = ref([])
+const f = reactive({ zone: '', type: '', q: '', checkZone: '', onlyIssues: true,
+  ruleZone: '', ruleSource: '', hideManaged: true, certZone: '' })
 // 已加载过的 tab 不重复请求；站点列表三个 tab 都要用，单独标记
-const done = reactive({ zones: false, dns: false, check: false })
+const done = reactive({ zones: false, dns: false, rules: false, certs: false, check: false })
 
 async function loadZones() {
   if (done.zones) return
@@ -153,10 +229,56 @@ async function loadCheck() {
   } catch (e) { ElMessage.error('校验失败') } finally { loading.value = false }
 }
 
+
+async function loadRules() {
+  loading.value = true
+  try {
+    const r = await listCdnRules({ zone: f.ruleZone || undefined, source: f.ruleSource || undefined })
+    rules.value = r.rules || []
+    // 分析结果与列表一起取：先看结论再看明细，顺序反了没人会去逐条看 51 行规则
+    const a = await cdnRuleAnalysis({ zone: f.ruleZone || undefined })
+    ruleFindings.value = a.findings || []
+    ruleAnalyzed.value = (a.total_rules || 0) > 0
+    done.rules = true
+  } catch (e) { ElMessage.error('加载规则失败') } finally { loading.value = false }
+}
+
+async function loadCerts() {
+  loading.value = true
+  try {
+    const r = await listCdnCertificates({ zone: f.certZone || undefined })
+    certs.value = r.certificates || []
+    done.certs = true
+  } catch (e) { ElMessage.error('加载证书失败') } finally { loading.value = false }
+}
+
+// Cloudflare 托管规则集（WAF/DDoS 那些）条目多、不可改，默认折叠掉，
+// 否则 51 条里 30 多条是它们，自己配的规则反而找不到。
+const shownRules = computed(() =>
+  f.hideManaged ? rules.value.filter((r) => r.kind !== 'managed') : rules.value)
+
+// phase 是 Cloudflare 的内部命名，直接显示没人看得懂
+const PHASE_LABEL = {
+  http_request_cache_settings: '缓存设置',
+  http_request_dynamic_redirect: '动态重定向',
+  http_request_origin: '源站路由',
+  http_request_firewall_custom: 'WAF 自定义规则',
+  http_request_firewall_managed: 'WAF 托管规则',
+  http_request_sanitize: 'URL 规范化',
+  http_ratelimit: '限速',
+  ddos_l7: 'DDoS 防护(L7)',
+  http_request_transform: '请求改写',
+  http_response_headers_transform: '响应头改写',
+}
+function phaseLabel(p) { return PHASE_LABEL[p] || p || '—' }
+function certType(d) { return d < 0 ? 'danger' : d <= 14 ? 'warning' : d <= 30 ? 'warning' : 'success' }
+
 function onTab(name) {
   router.replace({ query: { ...route.query, tab: name } })
   loadZones()
   if (name === 'dns' && !done.dns) loadDns()
+  if (name === 'rules' && !done.rules) loadRules()
+  if (name === 'certs' && !done.certs) loadCerts()
   if (name === 'check' && !done.check) loadCheck()
 }
 
@@ -174,11 +296,15 @@ function reload() {
   done.zones = false
   loadZones()
   if (tab.value === 'dns') loadDns()
+  if (tab.value === 'rules') loadRules()
+  if (tab.value === 'certs') loadCerts()
   if (tab.value === 'check') loadCheck()
 }
 
 loadZones()
 if (tab.value === 'dns') loadDns()
+if (tab.value === 'rules') loadRules()
+if (tab.value === 'certs') loadCerts()
 if (tab.value === 'check') loadCheck()
 </script>
 
@@ -190,4 +316,9 @@ if (tab.value === 'check') loadCheck()
 .risk { color: #e6a23c; font-size: 12px; }
 .sev-high { color: #f56c6c; }
 .sev-medium { color: #e6a23c; }
+.mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.findings { margin-bottom: 12px; }
+.finding { font-size: 12px; padding: 6px 10px; margin-bottom: 6px; background: #fdf6ec; border-left: 3px solid #e6a23c; }
+.finding.high { background: #fef0f0; border-left-color: #f56c6c; }
+.finding.low { background: #f4f4f5; border-left-color: #909399; }
 </style>

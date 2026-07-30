@@ -1,22 +1,61 @@
 # 纳管外部 GKE 集群时，给 CMDB 用的 GCP 服务账号授只读权限。
 #
 # 背景：GKE 经 GCP 服务账号(SA key → OAuth token)接入时，集群里没有 ServiceAccount 对象可绑，
-# GKE 把 GCP SA 映射成一个 K8s User，用户名就是 SA 的邮箱。权限有两条来源：
-#   1. GCP IAM 角色自动映射——roles/container.clusterViewer 只能看集群元数据，**不含 pods/log**；
-#      roles/container.viewer 才含读日志(container.pods.getLogs)。
-#   2. 集群内显式 ClusterRoleBinding 绑到该邮箱——就是本文件做的事，权限面更可控。
+# GKE 把 GCP SA 映射成一个 K8s User，用户名就是 SA 的邮箱。
 #
-# g32 生产踩的坑：CMDB 能列 Pod、能查事件，唯独读日志报 403，
-# 排障时才发现——所以现在「测试连接」会主动把缺的只读权限列出来。
+# ⚠️ 2026-07-29 更正：本文件原先写「roles/container.clusterViewer 不含 pods/log，
+# 换成 roles/container.viewer 即可」——**这是错的**。
 #
-# 用法：
-#   1. 先在本集群 apply 主文件里的 ClusterRole（本文件只管绑定，不重复定义角色，避免两处漂移）：
-#        kubectl apply -f k8s-readonly-rbac.yaml   # 若不想建 SA/Binding，可只截取其中 ClusterRole 部分
-#   2. 把下面的 <CMDB_GCP_SA_EMAIL> 换成 CMDB 实际使用的 GCP 服务账号邮箱，再 apply 本文件。
-#      查邮箱：CMDB「主机 → 云账号」里配的那个 SA，或 `kubectl auth whoami` 用同一凭据执行。
-#   3. 验证（用 CMDB 那份凭据执行，应输出 yes）：
-#        kubectl auth can-i get pods/log --all-namespaces
-#      或直接在 CMDB「接入管理 → 集群 → 测试连接」看是否还提示缺权限。
+# 用 gcloud 直接问 GCP 拿到的实际权限（比文档摘要可靠，文档页的表格还自相矛盾过）：
+#
+#   $ gcloud iam roles describe roles/container.viewer \
+#       --format="value(includedPermissions)" | tr ';' '\n' | grep pods
+#   container.pods.get / getStatus / list          ← 没有 getLogs
+#
+#   $ gcloud iam roles describe roles/container.developer ... | grep pods
+#   container.pods.get / getStatus / list / getLogs ← 有 getLogs，但同时带
+#   container.pods.attach / create / delete / evict / exec / portForward /
+#   proxy / update / updateStatus                   ← 一整套写权限
+#
+# 所以：viewer 加多少次都不会通（实测 UAT 与 infra 两个项目加完仍 403，排除了传播延迟）；
+# 而 developer 为了一个 getLogs 要连带吃下删 Pod、进容器、改工作负载——CMDB 就不只读了。
+#
+# 正解是自定义角色，只补那一个权限。
+#
+# ── 方式 A：自定义 IAM 角色（推荐，全程控制台，不用 kubectl）──────────
+# 只把缺的那一个权限补上，现有的 Kubernetes Engine Viewer 保留不动：
+#
+#   IAM 和管理 → 角色 → 创建角色
+#     标题/ID：CMDB Pod Log Reader / cmdbPodLogReader
+#     权限：只勾 container.pods.getLogs
+#   IAM → 找到 CMDB 用的 SA → 编辑 → 添加其他角色 → 选上面这个 → 保存
+#
+# 或用 gcloud：
+#   gcloud iam roles create cmdbPodLogReader --project=<PROJECT> \
+#     --title="CMDB Pod Log Reader" --permissions=container.pods.getLogs --stage=GA
+#   gcloud projects add-iam-policy-binding <PROJECT> \
+#     --member=serviceAccount:<CMDB_GCP_SA_EMAIL> \
+#     --role=projects/<PROJECT>/roles/cmdbPodLogReader
+#
+# 自定义角色是项目级的，每个 GKE 项目各建一次。
+#
+# ── 方式 B：集群内 RBAC 绑定（备选，不依赖任何 IAM 角色）──────────────
+# 拿不到 IAM 改动权限时用这个，但需要 kubectl：
+#
+#   kubectl create clusterrole cmdb-pod-log-reader --verb=get --resource=pods/log
+#   kubectl create clusterrolebinding cmdb-pod-log-reader \
+#     --clusterrole=cmdb-pod-log-reader --user=<CMDB_GCP_SA_EMAIL>
+#
+# 验证（两种方式通用，用 CMDB 那份凭据执行，应输出 yes）：
+#   kubectl auth can-i get pods/log --all-namespaces
+# 或在 CMDB「接入管理 → 集群 → 测试连接」看是否还提示缺权限。
+#
+# ── 方式 C：整套只读权限走集群内 RBAC（一次绑齐，不只是日志）──────────
+#   1. 先 apply 主文件里的 ClusterRole：kubectl apply -f k8s-readonly-rbac.yaml
+#   2. 把下面的 <CMDB_GCP_SA_EMAIL> 换成实际邮箱后 apply 本文件。
+#      查邮箱：CMDB「接入管理 → 云账号」里该项目配的 SA。
+#
+# 注意：每个 GKE 项目/集群各自独立，UAT 与 infra 要各做一次，且各用自己项目下的 SA 邮箱。
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -27,5 +66,5 @@ roleRef:
   name: cmdb-k8s-readonly    # 定义见 k8s-readonly-rbac.yaml，已含 pods/log 的 get
 subjects:
   - kind: User
-    name: <CMDB_GCP_SA_EMAIL>   # 例：cmdb-readonly@csc5002-g32-prod.iam.gserviceaccount.com
+    name: <CMDB_GCP_SA_EMAIL>   # 例：gke-read@csc5002-public-uat.iam.gserviceaccount.com
     apiGroup: rbac.authorization.k8s.io

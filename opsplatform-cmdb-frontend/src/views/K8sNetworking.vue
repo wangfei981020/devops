@@ -71,6 +71,50 @@
           <Pager :total="httproutes.length" v-model:page="routePage" v-model:page-size="routeSize" />
           <el-empty v-if="!loading && !httproutes.length" description="无 HTTPRoute" />
         </el-tab-pane>
+        <el-tab-pane label="暴露面" name="expose">
+          <!-- 这个 tab 回答的不是「有哪些资源」而是「谁能从外面访问到什么」：
+               把 VS/Ingress/LB/NodePort 拉平成一张入口表，并给出内外网判定依据。
+               判定依据必须显示——同样一个 external，依据是云 LB scheme 还是节点有公网 IP，
+               可信程度差很多。 -->
+          <div class="filters" style="margin-bottom:10px">
+            <el-radio-group v-model="exposeOnly" size="small" @change="load">
+              <el-radio-button label="">全部</el-radio-button>
+              <el-radio-button label="external">只看外网</el-radio-button>
+              <el-radio-button label="risky">只看有风险</el-radio-button>
+            </el-radio-group>
+            <span v-if="exposeSummary" class="muted">
+              共 {{ exposeSummary.total }} · 外网 {{ exposeSummary.external }} · 内网 {{ exposeSummary.internal }}
+              · 未判定 {{ exposeSummary.unknown }} · 高危 {{ exposeSummary.high }}
+            </span>
+          </div>
+          <el-table :data="exposeItems" size="small" v-loading="loading" max-height="560">
+            <el-table-column label="等级" width="90"><template #default="{ row }">
+              <el-tag size="small" :type="row.severity === 'high' ? 'danger' : row.severity === 'medium' ? 'warning' : 'info'">
+                {{ row.severity || '—' }}</el-tag>
+            </template></el-table-column>
+            <el-table-column prop="entry" label="入口" min-width="230" show-overflow-tooltip />
+            <el-table-column prop="kind" label="类型" width="130" />
+            <el-table-column label="内外网" width="100"><template #default="{ row }">
+              <el-tag size="small" :type="row.exposure === 'external' ? 'danger' : row.exposure === 'internal' ? 'success' : 'info'">
+                {{ { external: '外网', internal: '内网', unknown: '未判定' }[row.exposure] || row.exposure }}</el-tag>
+            </template></el-table-column>
+            <el-table-column prop="exposure_basis" label="判定依据" min-width="230" show-overflow-tooltip />
+            <el-table-column label="TLS" width="80"><template #default="{ row }">
+              <el-tag v-if="row.tls === 'no'" size="small" type="danger">无</el-tag>
+              <el-tag v-else-if="row.tls === 'yes'" size="small" type="success">有</el-tag>
+              <span v-else class="muted">—</span>
+            </template></el-table-column>
+            <el-table-column label="后端存活" width="100"><template #default="{ row }">
+              <el-tag v-if="row.backend_alive === 'no'" size="small" type="danger">无实例</el-tag>
+              <el-tag v-else-if="row.backend_alive === 'yes'" size="small" type="success">正常</el-tag>
+              <span v-else class="muted">未知</span>
+            </template></el-table-column>
+            <el-table-column label="风险" min-width="280"><template #default="{ row }">
+              <div v-for="(r, i) in row.risks" :key="i" class="risk-line">{{ r }}</div>
+            </template></el-table-column>
+          </el-table>
+          <el-empty v-if="!loading && !exposeItems.length" description="没有对外入口，或该筛选条件下无结果" :image-size="60" />
+        </el-tab-pane>
       </el-tabs>
     </el-card>
   </div>
@@ -80,7 +124,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { listK8sClusters, listK8sServices, listK8sIngresses, listK8sGateways, listK8sHTTPRoutes, listK8sVirtualServices, listK8sNamespaces } from '../api/cmdb'
+import { listK8sClusters, listK8sServices, listK8sIngresses, listK8sGateways, listK8sHTTPRoutes, listK8sVirtualServices, listK8sNamespaces, exposeSurface } from '../api/cmdb'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
 
@@ -92,6 +136,7 @@ const { page: ingPage, pageSize: ingSize, paged: ingPaged } = usePager(ingresses
 const { page: gwPage, pageSize: gwSize, paged: gwPaged } = usePager(gateways)
 const { page: routePage, pageSize: routeSize, paged: routePaged } = usePager(httproutes)
 const clusterId = ref(null); const ns = ref(''); const q = ref(''); const tab = ref('svc'); const loading = ref(false)
+const exposeItems = ref([]); const exposeSummary = ref(null); const exposeOnly = ref('')
 
 async function onCluster() { ns.value = ''; namespaces.value = await listK8sNamespaces({ cluster_id: clusterId.value }); load() }
 
@@ -106,7 +151,13 @@ async function load() {
     else if (tab.value === 'vs') virtualservices.value = await listK8sVirtualServices(p)
     else if (tab.value === 'ing') ingresses.value = await listK8sIngresses(p)
     else if (tab.value === 'gw') gateways.value = await listK8sGateways(p)
-    else httproutes.value = await listK8sHTTPRoutes(p)
+    else if (tab.value === 'route') httproutes.value = await listK8sHTTPRoutes(p)
+    else if (tab.value === 'expose') {
+      // 暴露面是全集群视角，不吃命名空间/关键词筛选——入口的内外网属性由集群和云侧决定
+      const r = await exposeSurface({ cluster_id: clusterId.value, only: exposeOnly.value || undefined })
+      exposeItems.value = r.items || []
+      exposeSummary.value = r.summary || null
+    }
   } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
 }
 
@@ -123,4 +174,7 @@ onMounted(async () => {
 .page-title { font-size: 18px; font-weight: 600; }
 .muted { color: #909399; font-size: 12px; }
 .bar { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+.risk-line { font-size: 12px; line-height: 1.6; }
+.filters { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.muted { color: #909399; font-size: 12px; }
 </style>

@@ -5,7 +5,7 @@
       <span class="muted" style="margin-left:10px">估算口径（机型费率 × 请求分摊）· cloud=真实支出 / idc=迁云估算 / 本地不计费 · USD/月</span>
     </div>
 
-    <el-tabs v-model="tab">
+    <el-tabs v-model="tab" @tab-change="onTabChange">
       <!-- 总览 -->
       <el-tab-pane label="总览" name="ov">
         <div class="kpis">
@@ -140,6 +140,107 @@
           </template></el-table-column>
         </el-table>
       </el-tab-pane>
+      <el-tab-pane label="浪费排行" name="waste">
+        <!-- 这三个 tab 是「按集群」的，上面几个是跨集群账单视角，所以各自带集群选择器。 -->
+        <div class="filters">
+          <el-select v-model="optCid" size="small" style="width:230px" @change="loadOpt">
+            <el-option v-for="c in clusters" :key="c.id"
+              :label="(c.display_name || c.name) + ' · ' + c.environment" :value="c.id" />
+          </el-select>
+          <el-input v-model="wasteNs" clearable placeholder="命名空间(可选)" size="small" style="width:180px" @change="loadWaste" />
+          <span v-if="waste.summary" class="muted">
+            CPU 申请 {{ waste.summary.cpu_request_cores }} 核 · 实用 {{ waste.summary.cpu_used_cores }} 核
+            （<b class="bad">{{ waste.summary.cpu_usage_pct }}%</b>）· 浪费
+            <b class="bad">{{ waste.summary.cpu_wasted_cores }} 核</b>
+            ｜内存 申请 {{ waste.summary.mem_request_gi }}Gi · 实用 {{ waste.summary.mem_used_gi }}Gi
+            （{{ waste.summary.mem_usage_pct }}%）
+          </span>
+        </div>
+        <el-alert v-if="waste.summary" type="info" :closable="false" show-icon style="margin-bottom:10px"
+          :title="`推荐值 = 实测峰值 × ${waste.summary.suggest_factor}，按此调 request 后再缩节点才安全`" />
+        <el-table :data="wasteItems" size="small" v-loading="optLoading" max-height="520">
+          <el-table-column prop="namespace" label="命名空间" width="160" show-overflow-tooltip />
+          <el-table-column prop="workload" label="工作负载" min-width="200" show-overflow-tooltip />
+          <el-table-column prop="replicas" label="副本" width="70" align="right" />
+          <el-table-column label="CPU 申请→实用" min-width="180"><template #default="{ row }">
+            {{ row.cpu_req_m }}m → {{ row.cpu_used_m }}m
+            <el-tag size="small" :type="pctType(row.cpu_usage_pct)">{{ row.cpu_usage_pct }}%</el-tag>
+          </template></el-table-column>
+          <el-table-column label="内存 申请→实用" min-width="190"><template #default="{ row }">
+            {{ row.mem_req_mi }}Mi → {{ row.mem_used_mi }}Mi
+            <el-tag size="small" :type="pctType(row.mem_usage_pct)">{{ row.mem_usage_pct }}%</el-tag>
+          </template></el-table-column>
+          <el-table-column label="建议 request" min-width="160"><template #default="{ row }">
+            <span class="ok">{{ row.suggest_cpu_req_m }}m / {{ row.suggest_mem_req_mi }}Mi</span>
+          </template></el-table-column>
+        </el-table>
+        <el-empty v-if="!optLoading && !wasteItems.length" :image-size="60"
+          description="没有数据。资源浪费需要 Prometheus 实测用量，先确认该集群的数据源已配置且可达" />
+      </el-tab-pane>
+
+      <el-tab-pane label="闲置成本" name="idle">
+        <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px">
+          <template #title>闲置 = 实付 − 已按 request 分摊</template>
+          这部分是买了但没有任何工作负载申请的容量，<b>缩节点能直接省下的上限</b>。
+          按 request 分摊的成本看板看不见它——那种口径下这笔钱不属于任何人。
+        </el-alert>
+        <el-table :data="idle" size="small" v-loading="optLoading">
+          <el-table-column prop="cluster" label="集群" min-width="200" />
+          <el-table-column prop="nodes" label="节点" width="70" align="right" />
+          <el-table-column label="实付/月" width="120" align="right"><template #default="{ row }">
+            ${{ row.actual_monthly_usd }}
+          </template></el-table-column>
+          <el-table-column label="已分摊/月" width="120" align="right"><template #default="{ row }">
+            ${{ row.allocated_monthly_usd }}
+          </template></el-table-column>
+          <el-table-column label="闲置/月" width="130" align="right"><template #default="{ row }">
+            <b class="bad">${{ row.idle_monthly_usd }}</b>
+          </template></el-table-column>
+          <el-table-column label="闲置占比" width="150"><template #default="{ row }">
+            <el-progress :percentage="Math.min(row.idle_pct, 100)" :stroke-width="12"
+              :status="row.idle_pct >= 40 ? 'exception' : row.idle_pct >= 20 ? 'warning' : undefined" />
+          </template></el-table-column>
+          <el-table-column label="年化闲置" width="130" align="right"><template #default="{ row }">
+            <b class="bad">${{ row.idle_yearly_usd }}</b>
+          </template></el-table-column>
+          <el-table-column label="request 占用" min-width="160"><template #default="{ row }">
+            <span class="muted">CPU {{ row.cpu_request_pct }}% · 内存 {{ row.mem_request_pct }}%</span>
+          </template></el-table-column>
+        </el-table>
+        <el-empty v-if="!optLoading && !idle.length" description="没有闲置成本数据" :image-size="60" />
+      </el-tab-pane>
+
+      <el-tab-pane label="孤儿资源" name="orphan">
+        <div class="filters">
+          <el-select v-model="optCid" size="small" style="width:230px" @change="loadOpt">
+            <el-option v-for="c in clusters" :key="c.id"
+              :label="(c.display_name || c.name) + ' · ' + c.environment" :value="c.id" />
+          </el-select>
+          <el-select v-model="orphanKind" clearable placeholder="全部类型" size="small" style="width:170px" @change="loadOrphans">
+            <el-option label="PVC（无挂载）" value="pvc" />
+            <el-option label="HPA（指向已删负载）" value="hpa" />
+            <el-option label="VirtualService（后端不存在）" value="virtualservice" />
+            <el-option label="Ingress" value="ingress" />
+            <el-option label="空命名空间" value="namespace" />
+          </el-select>
+          <span v-if="orphanSum" class="muted">
+            共 {{ orphanSum.total }} 项 · 每月浪费 <b class="bad">${{ orphanSum.monthly_usd_wasted }}</b>
+            · 年化 <b class="bad">${{ orphanSum.yearly_usd_wasted }}</b>
+          </span>
+        </div>
+        <el-table :data="orphans" size="small" v-loading="optLoading" max-height="520">
+          <el-table-column prop="kind" label="类型" width="120" />
+          <el-table-column prop="namespace" label="命名空间" width="150" show-overflow-tooltip />
+          <el-table-column prop="name" label="名称" min-width="200" show-overflow-tooltip />
+          <el-table-column prop="reason" label="判定原因" width="160" show-overflow-tooltip />
+          <el-table-column prop="detail" label="明细" min-width="200" show-overflow-tooltip />
+          <el-table-column label="月成本" width="100" align="right"><template #default="{ row }">
+            <span v-if="row.monthly_usd">${{ row.monthly_usd }}</span><span v-else class="muted">—</span>
+          </template></el-table-column>
+          <el-table-column prop="action" label="处置命令" min-width="280" show-overflow-tooltip />
+        </el-table>
+        <el-empty v-if="!optLoading && !orphans.length" description="没有孤儿资源" :image-size="60" />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -148,7 +249,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Camera } from '@element-plus/icons-vue'
-import { costOverview, costDetail, costNodes, setNodeCostOverride, costSnapshot, costMonths, costReport, costAttribution } from '../api/cmdb'
+import { costOverview, costDetail, costNodes, setNodeCostOverride, costSnapshot, costMonths, costReport, costAttribution,
+  listK8sClusters, resourceWaste, idleCost, listOrphans } from '../api/cmdb'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
 
@@ -159,6 +261,63 @@ const { page: detPage, pageSize: detSize, paged: detPaged } = usePager(detItems)
 const dim = ref('biz_project'); const ovMode = ref('cloud')
 const f = ref({ biz_project: '', gcp_project: '', env: '', mode: '' })
 const months = ref([]); const rp = ref({ period: 'month', anchor: '' }); const rep = ref({}); const attr = ref({})
+
+// 优化类 tab（浪费/闲置/孤儿）是按集群的，与上面的跨集群账单视角不同，单独一套状态
+const clusters = ref([]); const optCid = ref(null); const optLoading = ref(false)
+const waste = ref({}); const wasteNs = ref(''); const idle = ref([])
+const orphans = ref([]); const orphanKind = ref(''); const orphanSum = ref(null)
+const wasteItems = computed(() => waste.value.items || [])
+
+function pctType(p) { return p < 20 ? 'danger' : p < 50 ? 'warning' : 'success' }
+
+async function loadWaste() {
+  if (!optCid.value) return
+  optLoading.value = true
+  try {
+    waste.value = await resourceWaste({ cluster_id: optCid.value, namespace: wasteNs.value || undefined, top: 50 })
+  } catch (e) { ElMessage.error('加载浪费排行失败') } finally { optLoading.value = false }
+}
+async function loadIdle() {
+  optLoading.value = true
+  try {
+    const r = await idleCost({ cluster_id: optCid.value || undefined })
+    idle.value = r.clusters || []
+  } catch (e) { ElMessage.error('加载闲置成本失败') } finally { optLoading.value = false }
+}
+async function loadOrphans() {
+  if (!optCid.value) return
+  optLoading.value = true
+  try {
+    const r = await listOrphans({ cluster_id: optCid.value, kind: orphanKind.value || undefined })
+    orphans.value = r.items || []
+    orphanSum.value = r.summary || null
+  } catch (e) { ElMessage.error('加载孤儿资源失败') } finally { optLoading.value = false }
+}
+// 切集群时刷新当前所在的那个 tab，不预加载另外两个——每个都要打 Prometheus，没必要
+function loadOpt() {
+  // 切集群后其它两个 tab 的数据已失效，标记为待重载
+  for (const k of Object.keys(optDone)) optDone[k] = k === tab.value
+  if (tab.value === 'waste') loadWaste()
+  else if (tab.value === 'idle') loadIdle()
+  else if (tab.value === 'orphan') loadOrphans()
+}
+// 优化类 tab 首次进入才加载：三个都要打 Prometheus / 扫全集群资源，进页面就全拉太重
+const optDone = { waste: false, idle: false, orphan: false }
+async function onTabChange(name) {
+  if (!['waste', 'idle', 'orphan'].includes(name)) return
+  await ensureClusters()
+  if (optDone[name]) return
+  optDone[name] = true
+  loadOpt()
+}
+
+async function ensureClusters() {
+  if (clusters.value.length) return
+  try {
+    clusters.value = await listK8sClusters()
+    if (!optCid.value && clusters.value.length) optCid.value = clusters.value[0].id
+  } catch (e) { ElMessage.error('加载集群失败') }
+}
 
 function tHeight(c) { const max = Math.max(...(rep.value.trend || []).map(x => x.cost), 1); return Math.round(c / max * 90) + 2 }
 

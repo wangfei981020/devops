@@ -220,6 +220,33 @@ export const saveHarborRegistry = (b) =>
   (b.id ? http.put(`/harbor/registries/${b.id}`, b) : http.post('/harbor/registries', b)).then((r) => r.data)
 export const deleteHarborRegistry = (id) => http.delete(`/harbor/registries/${id}`).then((r) => r.data)
 export const testHarborRegistry = (id) => http.post(`/harbor/registries/${id}/test`).then((r) => r.data)
+// ── 分析/审计类接口 ────────────────────────────────────────────────
+// 这些能力后端与 MCP 早就有了，界面上一直看不到——人只能靠问 AI 才拿得到，
+// 本轮补齐。路径与 MCP 工具一一对应，改一处两边同时生效。
+
+// 采集新鲜度：这份数据能不能信——所有结论的前提
+export const k8sSyncState = (p) => http.get('/k8s/sync-state', { params: p }).then((r) => r.data)
+// 集群体检：一次返回所有异常并分级
+export const clusterHealth = (p) => http.get('/k8s/health', { params: p }).then((r) => r.data)
+// 配置引用审计：Pod 起不来时缺哪个 ConfigMap/Secret
+export const configAudit = (p) => http.get('/k8s/config-audit', { params: p }).then((r) => r.data)
+// 容器安全上下文审计：特权容器/hostPath/capabilities
+export const securityAudit = (p) => http.get('/k8s/security-audit', { params: p }).then((r) => r.data)
+// 暴露面：所有对外入口的内外网判定 + TLS + 后端存活
+export const exposeSurface = (p) => http.get('/k8s/expose-surface', { params: p }).then((r) => r.data)
+// 孤儿资源 / 资源浪费 / 闲置成本
+export const listOrphans = (p) => http.get('/k8s/orphans', { params: p }).then((r) => r.data)
+export const resourceWaste = (p) => http.get('/k8s/resource-waste', { params: p }).then((r) => r.data)
+export const idleCost = (p) => http.get('/k8s/idle-cost', { params: p }).then((r) => r.data)
+// CDN 规则与边缘证书
+export const listCdnRules = (p) => http.get('/cdn/rules', { params: p }).then((r) => r.data)
+export const cdnRuleAnalysis = (p) => http.get('/cdn/rule-analysis', { params: p }).then((r) => r.data)
+export const listCdnCertificates = (p) => http.get('/cdn/certificates', { params: p }).then((r) => r.data)
+// GCP IAM 权限审计 / Cloud DNS / 与 Cloudflare 的一致性
+export const cloudIamAudit = (p) => http.get('/cloud-iam', { params: p }).then((r) => r.data)
+export const listCloudDns = (p) => http.get('/cloud-dns', { params: p }).then((r) => r.data)
+export const dnsConsistency = () => http.get('/dns-consistency').then((r) => r.data)
+
 export const harborStatus = (p) => http.get('/harbor/status', { params: p }).then((r) => r.data)
 export const harborProjects = (p) => http.get('/harbor/projects', { params: p }).then((r) => r.data)
 export const listCdnZones = () => http.get('/cdn/zones').then((r) => r.data)
