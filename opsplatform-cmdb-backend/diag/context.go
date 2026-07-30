@@ -200,6 +200,17 @@ func ExplainLogError(err error) string {
 		return "认证失败(HTTP 401)：集群凭证可能已过期或被吊销。原始错误: " + s
 	case code == 404:
 		return "Pod 或容器不存在(可能刚被重建)。原始错误: " + s
+	case code == 400:
+		// client-go 拿不到 APIServer 的原始 message：GetLogs 的错误响应没被解析成 Status，
+		// 于是 err.Error() 只剩 "the server rejected our request for an unknown reason"，
+		// 对使用者零信息量。而 APIServer 其实说得很清楚，实测原话是：
+		//   previous terminated container "backend" in pod "xxx" not found   (reason=BadRequest, code=400)
+		// 这个 400 绝大多数就是 previous=1 但容器根本没重启过，必须替使用者翻译出来。
+		return "APIServer 拒绝了这次日志请求(HTTP 400)。" +
+			"① 若本次带了 previous=1：该容器没有「上一个已终止的实例」——它从未重启过，" +
+			"或上个实例的日志已被节点回收；先用 list_pods 确认 restarts>0 再用 previous。" +
+			"② 若没带 previous：多为容器名写错，多容器 Pod 必须显式指定 container。" +
+			"查更早的历史一律用 query_loki。原始错误: " + s
 	case strings.Contains(s, "context deadline exceeded"), strings.Contains(s, "Timeout"), strings.Contains(s, "timeout"):
 		return "读取超时：APIServer 连节点 kubelet(10250) 超时，多为节点失联或 kubelet 繁忙；" +
 			"可改用 query_loki 查历史日志。原始错误: " + s

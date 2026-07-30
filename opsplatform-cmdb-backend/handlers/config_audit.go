@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"regexp"
 	"sort"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"opsplatform-cmdb-backend/logx"
 )
 
 // 配置引用审计：回答「Pod 起不来，缺的到底是哪个 ConfigMap/Secret」。
@@ -210,11 +213,11 @@ func judgeRef(r refRow, idx map[string]cmEntry, sec secretInv, evidence map[stri
 		return nil
 	}
 
-	// Secret：名录可用时确定性判定；否则只认事件佐证。
-	if sec.usable {
+	// Secret：名录可用且覆盖到本命名空间时确定性判定；否则只认事件佐证。
+	if sec.usable && sec.covers(r.ns) {
 		if !sec.names[key] {
 			base.Severity, base.Status = "high", "missing"
-			base.Basis = "该集群已开启 Secret 名录，其中不存在该名称——这是确定性判定"
+			base.Basis = sec.basis()
 			base.Issue = "引用的 Secret 不存在（来源：" + r.source + "）"
 			if r.source == "imagePullSecret" {
 				base.Issue = "镜像拉取密钥不存在，镜像拉不下来（ImagePullBackOff 的直接原因）"
@@ -273,11 +276,37 @@ func (e cmEntry) hasKey(k string) bool {
 //	开关开启且采到  —— 可以确定性判定「这个 Secret 不存在」
 //	开关开启但空的  —— **绝不能当成「都不存在」**。403 或采集失败时名录就是空的，
 //	                   照常判定会把该集群每一条 Secret 引用都报成缺失，一次几百条误报。
+//	开关关闭但 KSM 可用 —— 见 ksmSecretInventory：用 kube_secret_info 当名录，
+//	                       但只在 KSM 确实覆盖到的命名空间内可判定（coveredNS）
 type secretInv struct {
 	enabled bool
 	names   map[string]bool
 	usable  bool
 	note    string
+	source  string // "" = CMDB 自采名录；"ksm" = 来自 kube-state-metrics 指标
+	// coveredNS 为 nil 表示覆盖全集群（自采名录就是全量）；非 nil 时只有列出的 ns 可判定。
+	coveredNS map[string]bool
+}
+
+// covers 判断该命名空间是否在名录覆盖范围内。
+//
+// 为什么必须有这一层：KSM 可以被 --namespaces 限定成只采部分命名空间。
+// 对它没覆盖的 ns 照样判定，会把那些 ns 里每一条 Secret 引用都报成「不存在」——
+// 正是 CMDB-005 那种一次几百条误报。名录不覆盖就退回事件佐证。
+func (s secretInv) covers(ns string) bool {
+	if s.coveredNS == nil {
+		return true
+	}
+	return s.coveredNS[ns]
+}
+
+// basis 说明这条确定性判定的依据来自哪里。依据不同可信度不同，必须写明而不是糊成一句。
+func (s secretInv) basis() string {
+	if s.source == "ksm" {
+		return "kube-state-metrics 的 kube_secret_info 中不存在该名称（该指标由 KSM 直接 watch APIServer 得出，" +
+			"且已确认覆盖本命名空间）——这是确定性判定，不依赖事件 TTL"
+	}
+	return "该集群已开启 Secret 名录，其中不存在该名称——这是确定性判定"
 }
 
 func (h *K8sDiagHandler) loadSecretIndex(cid int, ns string) secretInv {
@@ -286,8 +315,12 @@ func (h *K8sDiagHandler) loadSecretIndex(cid int, ns string) secretInv {
 	_ = h.DB.QueryRow(`SELECT COALESCE(allow_secret_inventory,0) FROM k8s_clusters WHERE id=?`, cid).Scan(&allow)
 	inv.enabled = allow == 1
 	if !inv.enabled {
-		inv.note = "该集群未开启 Secret 名录（默认关闭），Secret 缺失只能靠集群事件佐证——" +
-			"没报出来不等于没问题，尤其是从未启动过的 Pod（事件已过 TTL）"
+		// 开关关着不代表只能靠事件：KSM 已经在暴露 Secret 的名字了，先试这条路。
+		if ksm := h.ksmSecretInventory(cid, ns); ksm != nil {
+			return *ksm
+		}
+		inv.note = "该集群未开启 Secret 名录（默认关闭），且 kube-state-metrics 的 kube_secret_info 不可用，" +
+			"Secret 缺失只能靠集群事件佐证——没报出来不等于没问题，尤其是从未启动过的 Pod（事件已过 TTL）"
 		return inv
 	}
 	q := "SELECT namespace,name FROM k8s_secrets WHERE cluster_id=?"
@@ -316,6 +349,83 @@ func (h *K8sDiagHandler) loadSecretIndex(cid int, ns string) secretInv {
 	}
 	inv.usable = true
 	inv.note = "Secret 名录可用（" + itoa(len(inv.names)) + " 个，仅名字不含内容），可确定性判定存在性"
+	return inv
+}
+
+// ksmSecretInventory 用 kube-state-metrics 的 kube_secret_info 当 Secret 名录——不需要任何新权限。
+//
+// 动因：UAT/生产都不开 allow_secret_inventory（不给 CMDB secrets:list），于是「缺哪个 Secret」
+// 只能靠集群事件佐证，而事件 TTL 只有 1 小时（UAT 实测最老就到 1 小时前）——
+// 从未启动过、或昨晚就崩了的 Pod 根本查不出来，这正是本文件开头那句免责声明的由来。
+// 而 KSM 一直在 watch Secret 的 metadata，把 (namespace, secret) 暴露成指标；
+// 名字本身不是敏感信息，data 永远不进指标。所以这条路既不碰内容、也不加权限，
+// 却把 Secret 从「只能靠事件蒙」变成了「和 ConfigMap 一样的确定性判定」。
+//
+// 安全阀按 CMDB-005 的教训设计——宁可不判，不可乱判，任一条不满足就返回 nil 退回事件佐证：
+//  1. 数据源解析失败 / 查询失败（Prometheus 没接、KSM 没装）
+//  2. 一条都没返回：任何集群都有 helm release、TLS 这类 Secret，0 条只可能是
+//     KSM 关掉了 secret 收集器，此时照判会把每一条引用都误报成缺失
+//  3. 覆盖面记进 coveredNS，判定时只认覆盖到的命名空间（见 secretInv.covers）
+func (h *K8sDiagHandler) ksmSecretInventory(cid int, ns string) *secretInv {
+	var env string
+	_ = h.DB.QueryRow(`SELECT environment FROM k8s_clusters WHERE id=?`, cid).Scan(&env)
+	base, token, clusterLabel, err := resolveEndpointFull(h.DB, h.Cipher, "prometheus", env, cid)
+	if err != nil {
+		logx.J("k8s_diag", "ksm_secret_inventory_skip", map[string]any{
+			"cluster_id": cid, "reason": "无可用 Prometheus 数据源", "err": err.Error(),
+		})
+		return nil
+	}
+	label, value := clusterSelectorParts(h.DB, clusterLabel, cid)
+	var filters []string
+	if label != "" {
+		// 多集群共享数据源时必须隔离，否则会把别的集群的 Secret 当成本集群有，进而漏报缺失
+		filters = append(filters, fmt.Sprintf("%s=%q", label, value))
+	}
+	if ns != "" {
+		filters = append(filters, fmt.Sprintf("namespace=%q", ns))
+	}
+	q := "kube_secret_info"
+	if len(filters) > 0 {
+		q += "{" + strings.Join(filters, ",") + "}"
+	}
+	samples, err := promInstant(base, token, q)
+	if err != nil || len(samples) == 0 {
+		reason := "kube_secret_info 无数据（KSM 未部署或关闭了 secret 收集器）"
+		if err != nil {
+			reason = "查询 kube_secret_info 失败: " + err.Error()
+		}
+		logx.J("k8s_diag", "ksm_secret_inventory_skip", map[string]any{
+			"cluster_id": cid, "namespace": ns, "query": q, "reason": reason,
+		})
+		return nil
+	}
+	inv := &secretInv{names: map[string]bool{}, coveredNS: map[string]bool{}, source: "ksm"}
+	for _, s := range samples {
+		n, name := s.Metric["namespace"], s.Metric["secret"]
+		if n == "" || name == "" {
+			continue
+		}
+		inv.names[n+"/"+name] = true
+		inv.coveredNS[n] = true
+	}
+	if len(inv.names) == 0 {
+		// 有序列但标签取不出来 = 指标结构和预期不符，同样不能拿来下结论
+		logx.J("k8s_diag", "ksm_secret_inventory_skip", map[string]any{
+			"cluster_id": cid, "namespace": ns, "samples": len(samples),
+			"reason": "kube_secret_info 缺 namespace/secret 标签，无法构成名录",
+		})
+		return nil
+	}
+	inv.usable = true
+	inv.note = "Secret 名录取自 kube-state-metrics 的 kube_secret_info（" + itoa(len(inv.names)) +
+		" 个，覆盖 " + itoa(len(inv.coveredNS)) + " 个命名空间，仅名字不含内容）——" +
+		"该集群未开 allow_secret_inventory，改用 KSM 指标做确定性判定，不再依赖事件 TTL；" +
+		"KSM 未覆盖的命名空间仍退回事件佐证"
+	logx.J("k8s_diag", "ksm_secret_inventory", map[string]any{
+		"cluster_id": cid, "namespace": ns, "query": q,
+		"secrets": len(inv.names), "covered_ns": len(inv.coveredNS),
+	})
 	return inv
 }
 
@@ -461,6 +571,11 @@ func sortFindings(f []configFinding) {
 
 // secretCapability 一句话说明本次 Secret 判定的可信度，跟结论一起给出。
 func secretCapability(inv secretInv) string {
+	if inv.usable && inv.source == "ksm" {
+		return "可确定性判定（限 KSM 覆盖的 " + itoa(len(inv.coveredNS)) + " 个命名空间）：" +
+			"名录取自 kube-state-metrics 的 kube_secret_info，只有名字没有内容；" +
+			"KSM 未覆盖的命名空间仍退回事件佐证"
+	}
 	if inv.usable {
 		return "可确定性判定：该集群已开启 Secret 名录（仅名字/命名空间，metadata-only 采集，不含内容）"
 	}

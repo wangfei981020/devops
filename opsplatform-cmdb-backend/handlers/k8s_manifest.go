@@ -133,14 +133,22 @@ var sensitiveValueKeys = []string{
 	"secret", "accesskey", "dsn", "keystore", "passphrase",
 }
 
+// keyNormalizer 去掉键名里的分隔符。
+//
+// 必须归一化：敏感词表里写的是 apikey/accesskey 这种连写，而真实环境变量几乎都是
+// API_KEY / ACCESS-KEY 这种带分隔符的形式。不归一化就会漏脱——单测里 API_KEY_VALUE
+// 就是这么漏出来的，那可是密码明文进 AI 上下文。
+var keyNormalizer = strings.NewReplacer("_", "", "-", "", ".", "")
+
 // isReferenceKey 判断这个键装的是"指向凭据的引用"而不是凭据本身。
 // 这些必须原样保留：排障时要靠 secretName 去查到底引用了哪个 Secret，脱掉就断链了。
+// 入参已由 looksSensitiveKey 归一化（小写、去分隔符）。
 func isReferenceKey(lk string) bool {
 	return strings.Contains(lk, "name") || strings.Contains(lk, "ref") || strings.Contains(lk, "path")
 }
 
 func looksSensitiveKey(k string) bool {
-	lk := strings.ToLower(k)
+	lk := keyNormalizer.Replace(strings.ToLower(k))
 	if isReferenceKey(lk) {
 		return false
 	}
