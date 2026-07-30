@@ -35,11 +35,12 @@
                框间连线上色（绿=正常/黄=需确认/红=断），分支从入口横向展开。
                链路可能十来跳，容器横向滚动而不是压缩节点。
                视觉沿用 cmdb-domain-quality-topo 那套：浅纸底 + 状态点光晕 + 连线着色。 -->
-          <div class="topo2">
+          <div ref="topoEl" class="topo2">
             <div class="tp-row">
               <template v-for="(n, i) in flowNodes" :key="'n' + i">
                 <i v-if="i" class="tp-link" :class="n.link || 'ok'" />
-                <div class="tp-node" :class="n.status">
+                <div v-if="n.divider" class="tp-divider"><span>集群边界</span></div>
+                <div v-else class="tp-node" :class="n.status" :data-entry="n.lab === '入口' || undefined">
                   <div class="tp-lab">{{ n.lab }}</div>
                   <div class="tp-title">
                     <span class="dot" :class="n.status" />{{ n.title }}
@@ -54,8 +55,11 @@
               </template>
             </div>
 
-            <!-- 后端分支：一个 Service 一支，从入口节点分出去 -->
-            <div v-for="(b, bi) in branches" :key="'b' + bi" class="tp-row branch">
+            <!-- 后端分支：一个 Service 一支，从「入口」节点正下方分出去。
+                 marginLeft 不能写死——链路前段（CNAME 跳数、有没有网关）长度不定，
+                 「入口」在整行里的实际横坐标会变，写死的偏移量只是碰巧在某些情况下对得上。
+                 改成量「入口」节点渲染后的真实 offsetLeft，分支永远从它正下方分出。 -->
+            <div v-for="(b, bi) in branches" :key="'b' + bi" class="tp-row branch" :style="{ marginLeft: entryOffset + 'px' }">
               <div class="tp-fork" :class="{ bad: !b.pods }" />
               <div class="tp-node" :class="b.pods ? 'ok' : 'bad'">
                 <div class="tp-lab">Service</div>
@@ -171,7 +175,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { k8sTopology, k8sImpact, listK8sClusters, listK8sNodes, topoDomains } from '../api/cmdb'
@@ -242,6 +246,10 @@ const flowNodes = computed(() => {
   // 网关与入口只画第一条 chain 的（多 chain 极少见，明细表里能看全）
   const ch = (f.chains || [])[0]
   if (ch) {
+    // 集群边界：域名/CDN/回源在集群外，网关(Gateway)/入口(VirtualService)虽然
+    // 网络路径上离外部最近，但本身已经是集群内的 Istio CRD——不画出这条界线，
+    // 两段很容易被看成是同一层，或者被以为「网关是集群外的东西」。
+    out.push({ divider: true })
     for (const gw of ch.gateways || []) {
       const sub = []
       if (gw.lb_ip) sub.push({ text: `${gw.lb_scope} ${gw.lb_ip}` })
@@ -255,9 +263,12 @@ const flowNodes = computed(() => {
         })
       }
       const bad = gw.missing || (gw.tls || []).some((c) => c.exists === false)
+      // cdn_origin_match 只在链路里真有 CDN 回源地址时才有值。不走 CDN 的域名压根
+      // 没有回源可比，undefined 不等于「对不上」——以前一律判 warn，等于给每个
+      // 直连域名挂一个既没依据也没说明的橙灯。
       out.push({
         lab: '网关', title: gw.ref,
-        status: bad ? 'bad' : gw.cdn_origin_match ? 'ok' : 'warn',
+        status: bad ? 'bad' : gw.cdn_origin_match === false ? 'warn' : 'ok',
         link: bad ? 'bad' : 'ok',
         sub: gw.missing ? [{ text: gw.missing, cls: 'bad' }] : sub,
         why: gw.cdn_origin_note || gw.service_missing,
@@ -284,6 +295,20 @@ const branches = computed(() => {
     nodeList: sv.nodes || [],
   }))
 })
+
+// 「入口」节点的真实横坐标，供下面的 Service 分支行对齐——见上面模板里的注释。
+// 每次重算都从容器里现查 DOM，而不是缓存节点的 ref：换域名重查时整行节点会被
+// 重建，缓存下来的那个已经脱离文档，offsetLeft 读出来是 0，分支就跑到最左边去了。
+const topoEl = ref(null)
+const entryOffset = ref(0)
+async function recalcEntryOffset() {
+  await nextTick()
+  const el = topoEl.value?.querySelector('[data-entry]')
+  entryOffset.value = el ? el.offsetLeft : 0
+}
+watch(flowNodes, recalcEntryOffset, { flush: 'post' })
+onMounted(() => window.addEventListener('resize', recalcEntryOffset))
+onUnmounted(() => window.removeEventListener('resize', recalcEntryOffset))
 
 const originIPs = computed(() => {
   const fromTrace = trace.value?.origin_ips || []
@@ -346,9 +371,21 @@ function certTagType(d) {
 
 /* 横向节点流拓扑。视觉沿用 cmdb-domain-quality-topo：状态点带光晕、连线按状态着色。
    节点不压缩、容器横向滚动——链路十来跳时压缩会让每格都读不清。 */
-.topo2 { overflow-x: auto; padding: 6px 2px 2px; }
+/* padding-top 要容下「集群边界」那个上浮的标签(top:-18px)，否则它会被 overflow 裁掉 */
+.topo2 { overflow-x: auto; padding: 22px 2px 2px; position: relative; }
 .tp-row { display: flex; align-items: stretch; min-width: max-content; margin-bottom: 10px; }
-.tp-row.branch { margin-left: 34px; }
+/* Service 分支行的 margin-left 由 JS 量「入口」节点的 offsetLeft 动态给出，见组件脚本 */
+
+/* 集群边界：域名/CDN/回源在这条线左边（集群外），网关/入口/Service/…在右边（K8s 集群内）。
+   之前两段挤在一起看不出物理边界，容易把网关当成"集群外"的东西。 */
+.tp-divider {
+  align-self: stretch; flex: none; width: 0; margin: 0 16px; position: relative;
+  border-left: 2px dashed #c3c7cf;
+}
+.tp-divider span {
+  position: absolute; top: -18px; left: 50%; transform: translateX(-50%);
+  font-size: 10.5px; color: #8a909a; white-space: nowrap; background: #fff; padding: 0 4px;
+}
 .tp-node {
   min-width: 150px; max-width: 260px; background: #fff;
   border: 1px solid #e7e9e2; border-left: 3px solid #1f9d63; border-radius: 8px;
