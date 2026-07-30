@@ -87,3 +87,8 @@ kali-*.md
 # k8s-proxy 本地凭证与备份，不入库
 k8s-proxy/token
 k8s-proxy/*.bak
+
+# 运维内部文档（问题记录/体检报告/设计稿/runbook），仅本地保存，勿推 GitHub
+# 含内网 IP、节点名、集群拓扑、故障细节；GitHub 上只放服务代码
+# 2026-07-30 已用 git filter-repo 从远程历史中彻底清除
+docs/
