@@ -26,21 +26,18 @@
           <el-button type="primary" :icon="Search" :loading="loading" @click="runFwd">查链路</el-button>
         </div>
         <div v-if="fwd">
-          <!-- 完整拓扑：从域名起，把 CNAME 链 → CDN → 回源 → 网关 → 入口 → Service
-               → 工作负载 → Pod → 节点 串成一条竖着走的链。
-               以前是「CDN→域名→证书」一行 + 「入口→…→节点」另一行，两段断开、顺序还反了
-               （域名才是起点）。竖排是因为这条链有十来跳，横排既放不下也读不顺。 -->
-          <!-- 横向节点流拓扑：节点框 + 带状态色的连线 + 分支。
-               上一版是纵向清单，读起来是「一行行的字」而不是拓扑；这版每跳一个框、
-               框间连线上色（绿=正常/黄=需确认/红=断），分支从入口横向展开。
-               链路可能十来跳，容器横向滚动而不是压缩节点。
-               视觉沿用 cmdb-domain-quality-topo 那套：浅纸底 + 状态点光晕 + 连线着色。 -->
-          <div ref="topoEl" class="topo2">
-            <div class="tp-row">
+          <!-- 竖排树型：主干（域名→CNAME→CDN→回源→网关→入口）从上往下走，
+               每格一整行宽度，不用横向压缩、也不用滚动着看。
+               信息量大的图之前横排一条线，格子挤在一起还要横向滚动才能看全；
+               竖排后每个节点能把证书/IP这些细节完整摊开，读起来更松。
+               后端分支（Service→工作负载→Pod→节点）从「入口」下方缩进分叉出来，
+               视觉上和目录树的父子缩进一致。 -->
+          <div class="topo2">
+            <div class="tp-trunk">
               <template v-for="(n, i) in flowNodes" :key="'n' + i">
-                <i v-if="i" class="tp-link" :class="n.link || 'ok'" />
+                <i v-if="i" class="tp-vlink" :class="n.link || 'ok'" />
                 <div v-if="n.divider" class="tp-divider"><span>集群边界</span></div>
-                <div v-else class="tp-node" :class="n.status" :data-entry="n.lab === '入口' || undefined">
+                <div v-else class="tp-node" :class="n.status">
                   <div class="tp-lab">{{ n.lab }}</div>
                   <div class="tp-title">
                     <span class="dot" :class="n.status" />{{ n.title }}
@@ -55,11 +52,10 @@
               </template>
             </div>
 
-            <!-- 后端分支：一个 Service 一支，从「入口」节点正下方分出去。
-                 marginLeft 不能写死——链路前段（CNAME 跳数、有没有网关）长度不定，
-                 「入口」在整行里的实际横坐标会变，写死的偏移量只是碰巧在某些情况下对得上。
-                 改成量「入口」节点渲染后的真实 offsetLeft，分支永远从它正下方分出。 -->
-            <div v-for="(b, bi) in branches" :key="'b' + bi" class="tp-row branch" :style="{ marginLeft: entryOffset + 'px' }">
+            <!-- 后端分支：一个 Service 一支，紧跟在主干最后一格（入口）下面，
+                 固定缩进即可——不用再像横排那样去量「入口」的像素坐标对齐，
+                 主干竖排后分支自然就排在它正下方，缩进只是视觉上标出父子关系。 -->
+            <div v-for="(b, bi) in branches" :key="'b' + bi" class="tp-row branch">
               <div class="tp-fork" :class="{ bad: !b.pods }" />
               <div class="tp-node" :class="b.pods ? 'ok' : 'bad'">
                 <div class="tp-lab">Service</div>
@@ -175,7 +171,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { k8sTopology, k8sImpact, listK8sClusters, listK8sNodes, topoDomains } from '../api/cmdb'
@@ -296,20 +292,6 @@ const branches = computed(() => {
   }))
 })
 
-// 「入口」节点的真实横坐标，供下面的 Service 分支行对齐——见上面模板里的注释。
-// 每次重算都从容器里现查 DOM，而不是缓存节点的 ref：换域名重查时整行节点会被
-// 重建，缓存下来的那个已经脱离文档，offsetLeft 读出来是 0，分支就跑到最左边去了。
-const topoEl = ref(null)
-const entryOffset = ref(0)
-async function recalcEntryOffset() {
-  await nextTick()
-  const el = topoEl.value?.querySelector('[data-entry]')
-  entryOffset.value = el ? el.offsetLeft : 0
-}
-watch(flowNodes, recalcEntryOffset, { flush: 'post' })
-onMounted(() => window.addEventListener('resize', recalcEntryOffset))
-onUnmounted(() => window.removeEventListener('resize', recalcEntryOffset))
-
 const originIPs = computed(() => {
   const fromTrace = trace.value?.origin_ips || []
   const fromRecs = cdnRecs.value.filter((r) => r.type === 'A' || r.type === 'AAAA').map((r) => r.content)
@@ -369,28 +351,45 @@ function certTagType(d) {
 .warn-note { font-size: 11px; color: #e6a23c; margin-top: 3px; line-height: 1.5; }
 .bad { color: #f56c6c; }
 
-/* 横向节点流拓扑。视觉沿用 cmdb-domain-quality-topo：状态点带光晕、连线按状态着色。
-   节点不压缩、容器横向滚动——链路十来跳时压缩会让每格都读不清。 */
-/* padding-top 要容下「集群边界」那个上浮的标签(top:-18px)，否则它会被 overflow 裁掉 */
-.topo2 { overflow-x: auto; padding: 22px 2px 2px; position: relative; }
-.tp-row { display: flex; align-items: stretch; min-width: max-content; margin-bottom: 10px; }
-/* Service 分支行的 margin-left 由 JS 量「入口」节点的 offsetLeft 动态给出，见组件脚本 */
+/* 竖排树型拓扑。视觉沿用 cmdb-domain-quality-topo：状态点带光晕、连线按状态着色。
+   主干竖着走、每格一整行宽度，不用横向滚动就能看全；分支（Service→…→节点）
+   仍是横向小链，靠固定缩进挂在主干最后一格下面，读起来像目录树的父子关系。 */
+.topo2 { padding: 2px; }
+.tp-trunk { display: flex; flex-direction: column; align-items: stretch; width: 100%; max-width: 640px; }
+/* 竖向连线 + 向下的箭头，颜色跟随两端状态，逻辑与横排时的 .tp-link 一致 */
+.tp-vlink {
+  align-self: flex-start; width: 3px; height: 20px; margin: 2px 0 2px 15px;
+  background: #1f9d63; position: relative; flex: none; color: #1f9d63;
+}
+.tp-vlink.warn { background: #c98a12; color: #c98a12; }
+.tp-vlink.bad { background: #d1483a; color: #d1483a; }
+.tp-vlink.dash {
+  width: 2px;
+  background: repeating-linear-gradient(180deg, #8a909a 0 5px, transparent 5px 10px);
+  color: #8a909a;
+}
+.tp-vlink::after {
+  content: ''; position: absolute; bottom: 0; left: -3.5px;
+  border-top: 6px solid currentColor; border-left: 4.5px solid transparent; border-right: 4.5px solid transparent;
+}
 
-/* 集群边界：域名/CDN/回源在这条线左边（集群外），网关/入口/Service/…在右边（K8s 集群内）。
+/* 集群边界：域名/CDN/回源在这条线上边（集群外），网关/入口/Service/…在下边（K8s 集群内）。
    之前两段挤在一起看不出物理边界，容易把网关当成"集群外"的东西。 */
-.tp-divider {
-  align-self: stretch; flex: none; width: 0; margin: 0 16px; position: relative;
-  border-left: 2px dashed #c3c7cf;
-}
+.tp-divider { border-top: 2px dashed #c3c7cf; height: 0; position: relative; margin: 16px 0 20px; }
 .tp-divider span {
-  position: absolute; top: -18px; left: 50%; transform: translateX(-50%);
-  font-size: 10.5px; color: #8a909a; white-space: nowrap; background: #fff; padding: 0 4px;
+  position: absolute; top: -9px; left: 50%; transform: translateX(-50%);
+  font-size: 10.5px; color: #8a909a; white-space: nowrap; background: #fff; padding: 0 6px;
 }
+.tp-row { display: flex; align-items: stretch; min-width: max-content; margin-bottom: 10px; }
+.tp-row.branch { margin-left: 32px; margin-top: 4px; }
+
 .tp-node {
-  min-width: 150px; max-width: 260px; background: #fff;
+  min-width: 150px; max-width: 260px; background: #fff; box-sizing: border-box;
   border: 1px solid #e7e9e2; border-left: 3px solid #1f9d63; border-radius: 8px;
   padding: 7px 11px;
 }
+/* 主干节点不用挤在一起省地方，铺满整条主干宽度，证书/IP这些细节能完整摊开 */
+.tp-trunk .tp-node { min-width: 0; max-width: none; width: 100%; }
 .tp-node.warn { border-left-color: #c98a12; background: #fefbf4; }
 .tp-node.bad { border-left-color: #d1483a; background: #fdf5f4; }
 .tp-node.idle { border-left-color: #8a909a; background: #fafaf8; }
