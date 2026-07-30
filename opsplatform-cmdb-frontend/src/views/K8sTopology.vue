@@ -62,6 +62,16 @@
                   用户解析到边缘 IP {{ trace.ips.slice(0, 3).join(', ') }}
                 </div>
                 <div class="basis">{{ trace?.basis || fwd.cdn?.reason }}</div>
+                <!-- 边缘证书与源站证书是两张，用户先撞到的是这张 -->
+                <div v-if="fwd.cdn_cert" class="cert-line">
+                  证书 {{ fwd.cdn_cert.type }} · {{ fwd.cdn_cert.issuer }} ·
+                  <el-tag size="small" :type="certTagType(fwd.cdn_cert.days_left)">
+                    {{ fwd.cdn_cert.days_left != null ? fwd.cdn_cert.days_left + ' 天' : '到期未知' }}
+                  </el-tag>
+                  <span class="muted">{{ fwd.cdn_cert.hosts }}</span>
+                  <div v-if="fwd.cdn_cert.issue" class="basis bad">{{ fwd.cdn_cert.issue }}</div>
+                </div>
+                <div v-else class="basis">CDN 上没找到覆盖该域名的边缘证书记录（可能 token 缺 SSL and Certificates·Read）</div>
               </div>
               <div v-else class="fl-box dim">
                 未经纳管 CDN
@@ -88,6 +98,16 @@
                     回源已对上
                   </el-tag>
                   <div v-if="gw.listeners" class="muted">{{ gw.listeners }}</div>
+                  <!-- 源站侧证书：Gateway 引用的 TLS Secret。存在性判定取决于该集群
+                       有没有开 Secret 名录，未知与不存在必须分开显示。 -->
+                  <div v-for="(ct, ti) in (gw.tls || [])" :key="'t' + ti" class="cert-line">
+                    证书 Secret <b>{{ ct.secret }}</b>
+                    <el-tag v-if="ct.exists === true" size="small" type="success">存在</el-tag>
+                    <el-tag v-else-if="ct.exists === false" size="small" type="danger">不存在</el-tag>
+                    <el-tag v-else size="small" type="info">存在性未知</el-tag>
+                    <div v-if="ct.note" class="basis" :class="{ bad: ct.exists === false }">{{ ct.note }}</div>
+                  </div>
+                  <div v-if="gw.tls_note" class="basis">{{ gw.tls_note }}</div>
                   <div v-if="gw.missing" class="basis bad">{{ gw.missing }}</div>
                   <div v-else-if="gw.cdn_origin_note" class="basis">{{ gw.cdn_origin_note }}</div>
                   <div v-if="gw.service_missing" class="basis bad">{{ gw.service_missing }}</div>
@@ -262,6 +282,10 @@ onMounted(async () => {
   } catch (e) { /* ignore */ }
   try { domainsAll.value = await topoDomains() } catch (e) { domainsAll.value = [] }
 })
+function certTagType(d) {
+  if (d == null) return 'info'
+  return d < 0 ? 'danger' : d <= 14 ? 'warning' : d <= 30 ? 'warning' : 'success'
+}
 </script>
 
 <style scoped>
@@ -307,6 +331,7 @@ onMounted(async () => {
 .fl-box.dim { background: #f4f4f5; color: #909399; }
 .fl-box .basis { font-size: 11px; color: #909399; margin-top: 3px; line-height: 1.6; }
 .fl-box .basis.bad { color: #f56c6c; }
+.cert-line { font-size: 12px; margin-top: 4px; line-height: 1.7; }
 .svc-line { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
 .mini-arrow {
   display: inline-block; width: 16px; height: 1px; background: #c0c4cc; position: relative; margin: 0 2px;

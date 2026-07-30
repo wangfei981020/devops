@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -123,6 +124,12 @@ func (h *K8sTopologyHandler) Topology(c *gin.Context) {
 	// 上面两行查的是旧域名台账 domain_records+cdns，那套很多域名压根没登记，
 	// 所以 cdns/edge 长期是空的——不是没数据，是查错了地方。
 	out["cdn"] = h.cdnFacts(domain)
+
+	// CDN 边缘证书：与 Gateway 的 TLS Secret 是两张不同的证书，用户先撞到的是这张。
+	// 两者到期时间互相独立——边缘没过期不代表源站没过期。
+	if cert := h.cdnCertFor(domain); cert != nil {
+		out["cdn_cert"] = cert
+	}
 
 	// 域名台账（项目/环境/模块）——供前端展示归属
 	out["domain_info"] = h.oneRow(`SELECT c.project, c.env, c.module
@@ -519,11 +526,12 @@ func (h *K8sTopologyHandler) gatewayHops(cid int, gwRefs string, cdnAny any) []g
 		g := gin.H{"ref": ref, "namespace": ns, "name": name}
 
 		// Gateway 本体：selector 指向承载它的网关负载，listeners 给出端口/协议/TLS/hosts
-		var selector, listeners, apiGroup string
+		var selector, listeners, apiGroup, tlsSecrets string
 		if ns != "" {
-			_ = h.DB.QueryRow(`SELECT COALESCE(gateway_class,''),COALESCE(listeners,''),COALESCE(api_group,'')
+			_ = h.DB.QueryRow(`SELECT COALESCE(gateway_class,''),COALESCE(listeners,''),COALESCE(api_group,''),
+				COALESCE(tls_secrets,'')
 				FROM k8s_gateways WHERE cluster_id=? AND namespace=? AND name=? LIMIT 1`,
-				cid, ns, name).Scan(&selector, &listeners, &apiGroup)
+				cid, ns, name).Scan(&selector, &listeners, &apiGroup, &tlsSecrets)
 		}
 		if selector == "" && listeners == "" {
 			// 采不到就说清楚，别让人以为这个 Gateway 不存在——它可能只是没被采集到
@@ -536,6 +544,14 @@ func (h *K8sTopologyHandler) gatewayHops(cid int, gwRefs string, cdnAny any) []g
 		g["selector"] = selector
 		g["listeners"] = listeners
 		g["api_group"] = apiGroup
+		// 源站侧证书：Gateway 引用的 TLS Secret。PROD-002 就是这些 Secret 不存在
+		// 导致 istiod 持续报错，而以前 CMDB 连引用关系都看不到。
+		if certs := h.gatewayTLSStatus(cid, ns, tlsSecrets); len(certs) > 0 {
+			g["tls"] = certs
+		} else if strings.Contains(listeners, "tls:") {
+			g["tls_note"] = "listeners 里声明了 TLS，但没采到 credentialName——" +
+				"可能是证书由网关自身配置（非 Secret 引用），或采集时该字段为空"
+		}
 
 		// 承载它的网关 Service：先按 selector 的值找（istio=xxx → Service xxx），
 		// 再退回按 Gateway 同名找。两种命名习惯都常见，标注用了哪种以免误读。
@@ -622,4 +638,114 @@ func cdnOriginIPs(cdnAny any) []string {
 		out = append(out, tr.OriginIPs...)
 	}
 	return out
+}
+
+// gatewayTLSStatus 判定 Gateway 引用的每张 TLS Secret 存不存在。
+//
+// 判定能力取决于该集群有没有开 Secret 名录（默认关，只 DEV 开），三种状态必须分开：
+//
+//	名录可用且覆盖该命名空间 → 能确定性说「存在 / 不存在」
+//	名录不可用               → 只能列出引用关系，存在性未知
+//
+// 混着说会出大事：把「查不到」当成「不存在」会报出一堆假的证书缺失。
+func (h *K8sTopologyHandler) gatewayTLSStatus(cid int, ns, tlsSecrets string) []gin.H {
+	names := splitCSV(tlsSecrets)
+	if len(names) == 0 {
+		return nil
+	}
+	// Secret 名录是否可用：开关开着且该命名空间确实采到了东西
+	var allow int
+	_ = h.DB.QueryRow(`SELECT COALESCE(allow_secret_inventory,0) FROM k8s_clusters WHERE id=?`, cid).Scan(&allow)
+	nsCovered := false
+	if allow == 1 {
+		var n int
+		_ = h.DB.QueryRow(`SELECT COUNT(*) FROM k8s_secrets WHERE cluster_id=? AND namespace=?`, cid, ns).Scan(&n)
+		nsCovered = n > 0
+	}
+
+	out := make([]gin.H, 0, len(names))
+	for _, nm := range names {
+		item := gin.H{"secret": nm, "namespace": ns}
+		if !nsCovered {
+			item["exists"] = nil
+			item["note"] = "该集群未开启 Secret 名录（或未覆盖此命名空间），无法判断这张证书是否存在。" +
+				"istiod 若持续报证书找不到，多半就是它缺了"
+			out = append(out, item)
+			continue
+		}
+		var cnt int
+		_ = h.DB.QueryRow(`SELECT COUNT(*) FROM k8s_secrets WHERE cluster_id=? AND namespace=? AND name=?`,
+			cid, ns, nm).Scan(&cnt)
+		item["exists"] = cnt > 0
+		if cnt == 0 {
+			item["note"] = "Gateway 引用的 TLS Secret 不存在——该端口的 HTTPS 无法正常提供，istiod 会持续报错"
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// cdnCertFor 找覆盖该域名的 CDN 边缘证书。
+//
+// hosts 字段是逗号分隔的域名列表，可能含通配符（*.uatcfzone.com）——所以不能用等号匹配。
+// 优先返回剩余天数最少的那张：一个域名可能被多张证书覆盖（universal + advanced 并存），
+// 先到期的那张才是风险点。
+func (h *K8sTopologyHandler) cdnCertFor(domain string) gin.H {
+	rows, err := h.DB.Query(`SELECT zone_name,COALESCE(hosts,''),type,issuer,status,expires_on
+		FROM cdn_certificates ORDER BY expires_on IS NULL, expires_on`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var zone, hosts, typ, issuer, status string
+		var exp *time.Time
+		if rows.Scan(&zone, &hosts, &typ, &issuer, &status, &exp) != nil {
+			continue
+		}
+		if !certCoversHost(hosts, domain) {
+			continue
+		}
+		out := gin.H{"zone": zone, "hosts": hosts, "type": typ, "issuer": issuer, "status": status}
+		if exp != nil {
+			days := int(time.Until(*exp).Hours() / 24)
+			out["expires_on"] = exp.Format("2006-01-02")
+			out["days_left"] = days
+			switch {
+			case days < 0:
+				out["severity"] = "high"
+				out["issue"] = "边缘证书已过期"
+			case days <= 14:
+				out["severity"] = "medium"
+				out["issue"] = "边缘证书 " + itoa(days) + " 天后到期（Universal SSL 通常自动续期，未续说明有问题）"
+			}
+		} else {
+			out["note"] = "未取到到期时间（证书可能处于签发中）"
+		}
+		return out // 已按到期时间排序，第一个命中的就是最早到期的
+	}
+	return nil
+}
+
+// certCoversHost 判断证书的 hosts 列表是否覆盖该域名，支持一级通配符。
+func certCoversHost(hosts, domain string) bool {
+	for _, h := range splitCSV(hosts) {
+		h = strings.TrimSpace(strings.ToLower(h))
+		d := strings.ToLower(domain)
+		if h == "" {
+			continue
+		}
+		if h == d {
+			return true
+		}
+		// *.example.com 只覆盖一级子域，a.b.example.com 不在其内——这是 TLS 的规则，
+		// 放宽会得出「证书覆盖了」的错误结论。
+		if strings.HasPrefix(h, "*.") {
+			suffix := h[1:] // ".example.com"
+			if strings.HasSuffix(d, suffix) && !strings.Contains(strings.TrimSuffix(d, suffix), ".") {
+				return true
+			}
+		}
+	}
+	return false
 }

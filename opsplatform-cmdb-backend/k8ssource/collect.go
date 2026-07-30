@@ -568,7 +568,8 @@ func syncGateways(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid int
 		return 0, nil
 	}
 	return replaceAll(db, "k8s_gateways",
-		[]string{"cluster_id", "namespace", "name", "gateway_class", "listeners", "addresses", "api_group"}, cid, rows)
+		[]string{"cluster_id", "namespace", "name", "gateway_class", "listeners", "addresses",
+			"api_group", "tls_secrets"}, cid, rows)
 }
 
 // gatewayAPIRow 解析 Gateway API 的 Gateway。
@@ -593,9 +594,29 @@ func gatewayAPIRow(cid int, g *unstructured.Unstructured) []any {
 			}
 		}
 	}
+	// Gateway API 的证书在 listeners[].tls.certificateRefs[].name
+	certSet := map[string]struct{}{}
+	if ls, found, _ := unstructured.NestedSlice(g.Object, "spec", "listeners"); found {
+		for _, l := range ls {
+			m, _ := l.(map[string]any)
+			tls, _ := m["tls"].(map[string]any)
+			refs, _ := tls["certificateRefs"].([]any)
+			for _, r := range refs {
+				rm, _ := r.(map[string]any)
+				if n, _ := rm["name"].(string); n != "" {
+					certSet[n] = struct{}{}
+				}
+			}
+		}
+	}
+	certs := make([]string, 0, len(certSet))
+	for c := range certSet {
+		certs = append(certs, c)
+	}
+	sort.Strings(certs)
 	return []any{cid, g.GetNamespace(), g.GetName(), class,
 		trunc(strings.Join(listeners, ","), 512), trunc(strings.Join(addrs, ","), 512),
-		"gateway.networking.k8s.io"}
+		"gateway.networking.k8s.io", trunc(strings.Join(certs, ","), 1024)}
 }
 
 // istioGatewayRow 解析 Istio Gateway。
@@ -606,6 +627,7 @@ func gatewayAPIRow(cid int, g *unstructured.Unstructured) []any {
 //   - servers[].port + hosts + tls.mode 对应 listeners
 //   - 没有 status.addresses，地址要看 selector 选中的那个 Service
 func istioGatewayRow(cid int, g *unstructured.Unstructured) []any {
+	tlsSecrets := map[string]struct{}{}
 	sel := []string{}
 	if m, found, _ := unstructured.NestedStringMap(g.Object, "spec", "selector"); found {
 		for k, v := range m {
@@ -621,9 +643,15 @@ func istioGatewayRow(cid int, g *unstructured.Unstructured) []any {
 			name, _ := port["name"].(string)
 			proto, _ := port["protocol"].(string)
 			num := toInt(port["number"])
-			tlsMode := ""
+			tlsMode, credName := "", ""
 			if t, ok := m["tls"].(map[string]any); ok {
 				tlsMode, _ = t["mode"].(string)
+				// credentialName 才回答「这个入口用哪张证书」。只采 mode 的话
+				// 只知道「开了 TLS」，答不出证书是哪张、存不存在（PROD-002 就卡在这）。
+				credName, _ = t["credentialName"].(string)
+			}
+			if credName != "" {
+				tlsSecrets[credName] = struct{}{}
 			}
 			hosts := []string{}
 			if hs, ok := m["hosts"].([]any); ok {
@@ -643,9 +671,15 @@ func istioGatewayRow(cid int, g *unstructured.Unstructured) []any {
 			listeners = append(listeners, entry)
 		}
 	}
+	certs := make([]string, 0, len(tlsSecrets))
+	for c := range tlsSecrets {
+		certs = append(certs, c)
+	}
+	sort.Strings(certs) // map 顺序随机，不排序每轮 diff 都是噪音
 	// gateway_class 位置放 selector：它回答的是同一个问题——这个 Gateway 由谁承载
 	return []any{cid, g.GetNamespace(), g.GetName(), trunc(strings.Join(sel, ","), 255),
-		trunc(strings.Join(listeners, ","), 512), "", "networking.istio.io"}
+		trunc(strings.Join(listeners, ","), 512), "", "networking.istio.io",
+		trunc(strings.Join(certs, ","), 1024)}
 }
 
 // syncHTTPRoutes 采集 Gateway API 的 HTTPRoute（CRD，dynamic）。未装 CRD → 优雅跳过。
