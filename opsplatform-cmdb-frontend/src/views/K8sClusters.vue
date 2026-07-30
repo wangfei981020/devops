@@ -28,6 +28,10 @@
             {{ row.provider==='in-cluster' ? '本集群' : (row.has_kubeconfig ? '已配' : '未配') }}
           </el-tag>
         </template></el-table-column>
+        <el-table-column label="Secret 名录" width="110"><template #default="{ row }">
+          <el-tag v-if="row.allow_secret_inventory" size="small" type="warning">已开启</el-tag>
+          <span v-else class="muted">关闭</span>
+        </template></el-table-column>
         <el-table-column label="状态" width="80"><template #default="{ row }">
           <el-tag size="small" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
         </template></el-table-column>

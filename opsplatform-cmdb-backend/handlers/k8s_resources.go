@@ -36,6 +36,7 @@ func (h *K8sResourceHandler) Register(r *gin.RouterGroup) {
 	r.GET("/k8s/expose-surface", h.ExposeSurface) // 暴露面:谁能从外面访问到什么
 	r.GET("/k8s/orphans", h.ListOrphans)          // 孤儿资源:还在占资源/计费但没人用
 	r.GET("/k8s/security-audit", h.SecurityAudit) // 安全上下文:特权容器/hostPath/capabilities
+	r.GET("/k8s/health/detail", h.HealthDetail)   // 体检项下钻：汇总数字→具体清单
 	r.GET("/k8s/health", h.ClusterHealth)         // 集群体检总入口
 	r.GET("/k8s/workloads", h.Workloads)
 	r.GET("/k8s/pods", h.Pods)

@@ -36,6 +36,9 @@
             <el-table-column prop="count" label="数量" width="80" align="right" />
             <el-table-column prop="detail" label="说明" min-width="240" show-overflow-tooltip />
             <el-table-column prop="action" label="怎么查/怎么处置" min-width="240" show-overflow-tooltip />
+            <el-table-column label="" width="80" fixed="right"><template #default="{ row }">
+              <el-button v-if="row.key" link type="primary" size="small" @click="drill(row)">查看</el-button>
+            </template></el-table-column>
           </el-table>
           <el-empty v-if="!loading && !findings.length" description="本次体检未发现异常" :image-size="60" />
         </el-tab-pane>
@@ -98,6 +101,25 @@
         </el-tab-pane>
       </el-tabs>
     </el-card>
+
+    <!-- 下钻抽屉：光有「56 个」没法处置，得能看到是哪 56 个。
+         列名由后端给出（与 SELECT 顺序对应），前端不写死——加新体检项时前端不用改。 -->
+    <el-drawer v-model="dw" :title="dwTitle" size="70%" :close-on-click-modal="false">
+      <el-alert v-if="dwUnsupported" type="info" :closable="false" show-icon style="margin-bottom:10px">
+        <template #title>这一项没有明细清单</template>
+        {{ dwUnsupported }}
+      </el-alert>
+      <div v-if="dwNote" class="cap" style="margin-bottom:10px">{{ dwNote }}</div>
+      <el-alert v-if="dwTruncated" type="warning" :closable="false" show-icon style="margin-bottom:10px"
+        :title="dwTruncated" />
+      <el-table v-if="dwRows.length" :data="dwRows" size="small" v-loading="dwLoading" max-height="calc(100vh - 260px)">
+        <el-table-column v-for="(c, i) in dwColumns" :key="i" :label="c" :min-width="colWidth(c)"
+          show-overflow-tooltip>
+          <template #default="{ row }">{{ row[i] ?? '—' }}</template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else-if="!dwLoading && !dwUnsupported" description="没有明细数据" :image-size="60" />
+    </el-drawer>
   </div>
 </template>
 
@@ -106,7 +128,7 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { listK8sClusters, clusterHealth, configAudit, securityAudit, k8sSyncState } from '../api/cmdb'
+import { listK8sClusters, clusterHealth, configAudit, securityAudit, k8sSyncState, healthDetail } from '../api/cmdb'
 
 const route = useRoute()
 const router = useRouter()
@@ -120,6 +142,34 @@ const cfgFindings = ref([]); const cfgCap = ref(null)
 const secFindings = ref([]); const secSummary = ref(null); const secHidden = ref(0)
 const includePlatform = ref(false)
 const done = { health: false, config: false, security: false }
+
+// 下钻抽屉
+const dw = ref(false); const dwLoading = ref(false); const dwTitle = ref('')
+const dwColumns = ref([]); const dwRows = ref([]); const dwNote = ref('')
+const dwUnsupported = ref(''); const dwTruncated = ref('')
+
+async function drill(row) {
+  dwTitle.value = `${row.title}（${row.count} 项）`
+  dw.value = true
+  dwLoading.value = true
+  dwColumns.value = []; dwRows.value = []; dwNote.value = ''
+  dwUnsupported.value = ''; dwTruncated.value = ''
+  try {
+    const r = await healthDetail({ cluster_id: cid.value, key: row.key })
+    dwColumns.value = r.columns || []
+    dwRows.value = r.rows || []
+    dwNote.value = r.note || ''
+    dwUnsupported.value = r.unsupported || ''
+    dwTruncated.value = r.truncated || ''
+  } catch (e) { ElMessage.error('取明细失败') } finally { dwLoading.value = false }
+}
+
+// 列宽按语义给：名字类的长、数字类的短，避免长列被挤成一团
+function colWidth(c) {
+  if (/Pod|名称|镜像|错误|Conditions/.test(c)) return 220
+  if (/命名空间|节点|工作负载|PVC|HPA|storageClass|OS|资源类型/.test(c)) return 150
+  return 100
+}
 
 const sumLabel = computed(() => {
   const s = summary.value

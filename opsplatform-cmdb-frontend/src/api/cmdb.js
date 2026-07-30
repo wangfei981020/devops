@@ -228,6 +228,8 @@ export const testHarborRegistry = (id) => http.post(`/harbor/registries/${id}/te
 export const k8sSyncState = (p) => http.get('/k8s/sync-state', { params: p }).then((r) => r.data)
 // 集群体检：一次返回所有异常并分级
 export const clusterHealth = (p) => http.get('/k8s/health', { params: p }).then((r) => r.data)
+// 体检项下钻：汇总数字 → 具体清单
+export const healthDetail = (p) => http.get('/k8s/health/detail', { params: p }).then((r) => r.data)
 // 配置引用审计：Pod 起不来时缺哪个 ConfigMap/Secret
 export const configAudit = (p) => http.get('/k8s/config-audit', { params: p }).then((r) => r.data)
 // 容器安全上下文审计：特权容器/hostPath/capabilities

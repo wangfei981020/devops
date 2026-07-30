@@ -25,6 +25,9 @@ type healthFinding struct {
 	Detail   string `json:"detail"`
 	Action   string `json:"action,omitempty"`
 	Count    int    `json:"count,omitempty"`
+	// Key 用于下钻：界面上点「查看」时带这个 key 调 /k8s/health/detail 取明细。
+	// 只说「有 56 个 Pod 重启超 100 次」没法处置，得能点进去看是哪 56 个。
+	Key string `json:"key,omitempty"`
 }
 
 // ClusterHealth GET /api/k8s/health?cluster_id=
@@ -64,14 +67,14 @@ func (h *K8sResourceHandler) checkDataFreshness(cid string) []healthFinding {
 	if failed > 0 {
 		out = append(out, healthFinding{
 			Severity: "critical", Category: "数据可信度", Count: failed,
-			Title:  "有资源类型采集失败",
+			Key: "sync_failed", Title: "有资源类型采集失败",
 			Detail: "本次体检的其余结论基于可能过期的数据，先修采集再看下面的问题",
 			Action: "调 data_freshness 看具体是哪类资源、报什么错",
 		})
 	} else if stale > 0 {
 		out = append(out, healthFinding{
 			Severity: "warning", Category: "数据可信度", Count: stale,
-			Title:  "有资源类型的数据已超出新鲜期",
+			Key: "sync_stale", Title: "有资源类型的数据已超出新鲜期",
 			Detail: "采集器可能已停止，数据可能不反映现状",
 			Action: "调 data_freshness 确认",
 		})
@@ -108,7 +111,7 @@ func (h *K8sResourceHandler) checkNodeDisk(cid string) []healthFinding {
 	if len(crit) > 0 {
 		out = append(out, healthFinding{
 			Severity: "critical", Category: "节点", Count: len(crit),
-			Title:  "节点磁盘水位过高(≥92%)",
+			Key: "node_disk_critical", Title: "节点磁盘水位过高(≥92%)",
 			Detail: strings.Join(crit, "、") + "；磁盘满会直接导致镜像拉取失败、Pod 被驱逐，发布随之失败",
 			Action: "先清理无用镜像与日志；若 GC 回收不出空间，多为镜像层被正在运行的容器占用，需扩容磁盘",
 		})
@@ -116,7 +119,7 @@ func (h *K8sResourceHandler) checkNodeDisk(cid string) []healthFinding {
 	if len(warn) > 0 {
 		out = append(out, healthFinding{
 			Severity: "warning", Category: "节点", Count: len(warn),
-			Title:  "节点磁盘水位偏高(≥85%)",
+			Key: "node_disk_warn", Title: "节点磁盘水位偏高(≥85%)",
 			Detail: strings.Join(warn, "、"),
 			Action: "提前清理或扩容，别等触发 DiskPressure 驱逐",
 		})
@@ -164,16 +167,16 @@ func (h *K8sResourceHandler) checkNodes(cid string) []healthFinding {
 		FROM k8s_nodes WHERE cluster_id=?`, cid).Scan(&stuck, &notReady, &pressure)
 	if stuck > 0 {
 		out = append(out, healthFinding{Severity: "critical", Category: "节点", Count: stuck,
-			Title: "节点卡死/失联", Detail: "Ready 心跳长时间未更新，其上 Pod 可能已不可用",
+			Key: "node_stuck", Title: "节点卡死/失联", Detail: "Ready 心跳长时间未更新，其上 Pod 可能已不可用",
 			Action: "list_nodes 看 health 列，再用 node_impact 评估影响面"})
 	}
 	if notReady > stuck {
 		out = append(out, healthFinding{Severity: "critical", Category: "节点", Count: notReady - stuck,
-			Title: "节点未就绪", Action: "list_nodes 查 ready_status"})
+			Key: "node_notready", Title: "节点未就绪", Action: "list_nodes 查 ready_status"})
 	}
 	if pressure > 0 {
 		out = append(out, healthFinding{Severity: "warning", Category: "节点", Count: pressure,
-			Title: "节点存在资源压力", Detail: "磁盘/内存/PID 压力会触发 Pod 驱逐",
+			Key: "node_pressure", Title: "节点存在资源压力", Detail: "磁盘/内存/PID 压力会触发 Pod 驱逐",
 			Action: "list_nodes 看 conditions 列具体是哪类压力"})
 	}
 	// 节点版本漂移：同集群不同 kubelet 版本，升级窗口没拉齐
@@ -181,7 +184,7 @@ func (h *K8sResourceHandler) checkNodes(cid string) []healthFinding {
 	_ = h.DB.QueryRow(`SELECT COUNT(DISTINCT kubelet_version) FROM k8s_nodes WHERE cluster_id=?`, cid).Scan(&versions)
 	if versions > 1 {
 		out = append(out, healthFinding{Severity: "info", Category: "节点", Count: versions,
-			Title: "节点 kubelet 版本不一致", Detail: "存在版本漂移，建议统一升级窗口",
+			Key: "node_kubelet_drift", Title: "节点 kubelet 版本不一致", Detail: "存在版本漂移，建议统一升级窗口",
 			Action: "list_nodes 对比 kubelet_version"})
 	}
 	return out
@@ -198,24 +201,24 @@ func (h *K8sResourceHandler) checkPods(cid string) []healthFinding {
 		FROM k8s_pods WHERE cluster_id=?`, cid).Scan(&failed, &pending, &oom, &highRestart)
 	if highRestart > 0 {
 		out = append(out, healthFinding{Severity: "critical", Category: "工作负载", Count: highRestart,
-			Title: "Pod 重启次数异常高(>100)", Detail: "持续 CrashLoop 的服务，且往往长期无人发现",
+			Key: "pod_high_restart", Title: "Pod 重启次数异常高(>100)", Detail: "持续 CrashLoop 的服务，且往往长期无人发现",
 			Action: "list_pods 按 restarts 排序，再用 diagnose_pod 查根因"})
 	}
 	if oom > 0 {
 		out = append(out, healthFinding{Severity: "warning", Category: "工作负载", Count: oom,
-			Title: "Pod 被 OOMKilled", Detail: "内存 limit 不足或存在泄漏",
+			Key: "pod_oomkilled", Title: "Pod 被 OOMKilled", Detail: "内存 limit 不足或存在泄漏",
 			Action: "resource_waste 看实际用量，据此调 limit"})
 	}
 	if failed > 0 {
 		out = append(out, healthFinding{Severity: "warning", Category: "工作负载", Count: failed,
-			Title: "存在 Failed 状态的 Pod", Detail: "Failed Pod 不会自动清理，会一直占用 etcd 对象",
+			Key: "pod_failed", Title: "存在 Failed 状态的 Pod", Detail: "Failed Pod 不会自动清理，会一直占用 etcd 对象",
 			Action: "kubectl delete pod -A --field-selector=status.phase=Failed"})
 	}
 	if pending > 0 {
 		// 只说「有 N 个 Pending」等于没说——真正要答的是「为什么排不进去/缺什么」。
 		// 原因在 k8s_pods.reason 里已经采到了，按原因归类直接给出来。
 		f := healthFinding{Severity: "warning", Category: "工作负载", Count: pending,
-			Title: "存在 Pending 的 Pod", Action: "pod_events 看具体某个 Pod 的完整事件"}
+			Key: "pod_pending", Title: "存在 Pending 的 Pod", Action: "pod_events 看具体某个 Pod 的完整事件"}
 		if reasons := h.pendingReasons(cid); len(reasons) > 0 {
 			parts := make([]string, 0, len(reasons))
 			for _, r := range reasons {
@@ -233,7 +236,7 @@ func (h *K8sResourceHandler) checkPods(cid string) []healthFinding {
 		WHERE cluster_id=? AND phase='Running' AND cpu_req_m=0 AND mem_req_mi=0`, cid).Scan(&bestEffort)
 	if bestEffort > 0 {
 		out = append(out, healthFinding{Severity: "warning", Category: "工作负载", Count: bestEffort,
-			Title:  "BestEffort Pod（未配 request/limit）",
+			Key: "pod_besteffort", Title: "BestEffort Pod（未配 request/limit）",
 			Detail: "节点内存压力时最先被驱逐；若控制面组件在其中，故障时会先死控制面",
 			Action: "给关键组件补 request，或用 LimitRange 兜底"})
 	}
@@ -295,11 +298,11 @@ func (h *K8sResourceHandler) checkWorkloads(cid string) []healthFinding {
 		FROM k8s_workloads WHERE cluster_id=?`, cid).Scan(&degraded, &scaledZero)
 	if degraded > 0 {
 		out = append(out, healthFinding{Severity: "critical", Category: "工作负载", Count: degraded,
-			Title: "工作负载副本未达期望", Action: "list_workloads 看 replicas_ready/replicas_desired"})
+			Key: "workload_replica_gap", Title: "工作负载副本未达期望", Action: "list_workloads 看 replicas_ready/replicas_desired"})
 	}
 	if scaledZero > 0 {
 		out = append(out, healthFinding{Severity: "info", Category: "治理", Count: scaledZero,
-			Title: "被缩容到 0 的工作负载", Detail: "长期为 0 的多是遗留，占着配置与 HPA",
+			Key: "workload_scaled_zero", Title: "被缩容到 0 的工作负载", Detail: "长期为 0 的多是遗留，占着配置与 HPA",
 			Action: "确认是否已废弃，是则连同其 HPA/Service 一并清理"})
 	}
 	return out
@@ -309,7 +312,7 @@ func (h *K8sResourceHandler) checkOrphans(cid string) []healthFinding {
 	out := []healthFinding{}
 	if n := h.countOrphanHPAs(cid); n > 0 {
 		out = append(out, healthFinding{Severity: "warning", Category: "治理", Count: n,
-			Title:  "HPA 指向已不存在的工作负载",
+			Key: "orphan_hpa", Title: "HPA 指向已不存在的工作负载",
 			Detail: "controller 每 15 秒重试一次并报错，长期累积成海量噪声事件",
 			Action: "list_orphans kind=hpa 拿到清单和删除命令"})
 	}
@@ -319,7 +322,7 @@ func (h *K8sResourceHandler) checkOrphans(cid string) []healthFinding {
 		WHERE p.cluster_id=? AND v.id IS NULL`, cid).Scan(&orphanPVC)
 	if orphanPVC > 0 {
 		out = append(out, healthFinding{Severity: "warning", Category: "成本", Count: orphanPVC,
-			Title:  "PVC 无人挂载但仍在计费",
+			Key: "orphan_pvc", Title: "PVC 无人挂载但仍在计费",
 			Detail: "多为缩容/迁移/组件卸载后遗留的盘",
 			Action: "list_orphans kind=pvc 看逐项金额，快照后删除"})
 	}
@@ -342,7 +345,7 @@ func (h *K8sResourceHandler) checkImages(cid string) []healthFinding {
 		cid).Scan(&mutable)
 	if mutable > 0 {
 		return []healthFinding{{Severity: "info", Category: "治理", Count: mutable,
-			Title:  "使用可变镜像 tag（latest/SNAPSHOT 等）",
+			Key: "workload_mutable_tag", Title: "使用可变镜像 tag（latest/SNAPSHOT 等）",
 			Detail: "同一 tag 内容会变，故障时无法复现当时的版本，也难以回滚",
 			Action: "改用不可变 tag（构建号/commit）"}}
 	}
