@@ -73,8 +73,12 @@ type cdnTrace struct {
 	ViaCDN   bool     `json:"via_cdn"`       // 是否判定为经过 CDN
 	Managed  bool     `json:"managed"`       // 是否落在我方纳管的 CF 账号里
 	MatchHop string   `json:"match_hop,omitempty"`
-	Basis    string   `json:"basis"` // 判定依据，必须写清楚
-	Err      string   `json:"error,omitempty"`
+	// OriginIPs 命中跳在 CDN 上配的回源地址（A 记录 content）。
+	// 与 IPs 完全不同：IPs 是用户解析到的 CDN 边缘地址（104.x），
+	// 这里是 CDN 往后打的源站地址——做「回源是否指向本集群网关」的比对只能用它。
+	OriginIPs []string `json:"origin_ips,omitempty"`
+	Basis     string   `json:"basis"` // 判定依据，必须写清楚
+	Err       string   `json:"error,omitempty"`
 }
 
 // traceCDN 解析域名并判断是否经过 CDN。
@@ -165,6 +169,24 @@ func lookupCDNRecord(db *sql.DB, fqdn string) (zone string, proxied bool, ok boo
 		return "", false, false
 	}
 	return zone, p == 1, true
+}
+
+// cdnOriginOf 取该 FQDN 在 CDN 上配置的回源地址（A/AAAA 记录的 content）。
+func cdnOriginOf(db *sql.DB, fqdn string) []string {
+	rows, err := db.Query(`SELECT content FROM cdn_dns_records
+		WHERE name=? AND type IN ('A','AAAA') ORDER BY content`, fqdn)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var c string
+		if rows.Scan(&c) == nil && c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func lookupIPs(ctx context.Context, r *net.Resolver, host string) []string {

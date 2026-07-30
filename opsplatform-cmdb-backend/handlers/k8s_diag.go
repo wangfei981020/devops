@@ -37,13 +37,36 @@ func NewK8sDiagHandler(db *sql.DB, pool *k8ssource.Pool, cipher *crypto.Cipher) 
 func (h *K8sDiagHandler) Register(r *gin.RouterGroup) {
 	r.GET("/k8s/pod-logs", h.Logs)        // cluster_id, namespace, pod, container, tail, previous
 	r.GET("/k8s/pod-events", h.Events)    // cluster_id, namespace, pod
-	r.GET("/k8s/events", h.ClusterEvents) // cluster_id, namespace?, kind?(Node/Pod/..), type?(Warning/Normal) 统一事件
+	// cluster_id, namespace?, kind?, type?, reason?, sort?(count), min_count?, hours?, limit?, exclude_reason?, include_noise?
+	r.GET("/k8s/events", h.ClusterEvents)
 	r.GET("/k8s/diagnose", h.Diagnose)    // cluster_id, namespace, pod → 规则诊断
 	// cluster_id, namespace?, include_unused? → 配置引用完整性（缺哪个 ConfigMap/Secret）
 	r.GET("/k8s/config-audit", h.ConfigAudit)
+	// cluster_id, kind, name, namespace?, api_group? → 单对象完整 YAML（脱敏），看探针/env/亲和性等 spec
+	r.GET("/k8s/manifest", h.Manifest)
 }
 
-// ClusterEvents 统一事件视图（全集群/命名空间，可按 involvedObject.kind(含 Node) / 类型 筛，实时）。
+// eventNoiseReasons 是实测确认会把事件视图整个淹掉的高频控制器噪声。
+//
+// 起因：UAT 上取 500 条事件回来，argocd 的 StatusRefreshed 占了三分之二，
+// 而真问题（一个 Pod BackOff 82 万次、3 个孤儿 HPA 的 FailedGetScale 20 万次）被挤到看不见。
+// 这些 reason 只代表「控制器又对账了一次」，排障用不上，默认剔掉；
+// 显式传 reason= 点名查某一种、或 include_noise=1 时不剔。
+var eventNoiseReasons = map[string]bool{
+	"StatusRefreshed":    true, // argocd application-controller，每分钟数条
+	"ResourceUpdated":    true,
+	"OperationStarted":   true,
+	"OperationCompleted": true,
+}
+
+// ClusterEvents 统一事件视图（全集群/命名空间，可按 involvedObject.kind(含 Node) / 类型 / reason 筛，实时）。
+//
+// 三个坑都是实测踩出来的：
+//  1. kind/type/reason 必须下推成 apiserver 的 FieldSelector。原来是先无条件取 500 条、再在内存里筛，
+//     等于「500 条里的过滤」——集群 Warning 上千条时，传 type=Warning 只能看到最新那批里的零头，
+//     漏掉的恰恰是 count 几十万的重灾区。
+//  2. 默认剔掉 eventNoiseReasons，否则真问题永远排不进前几十条。
+//  3. 默认按时间倒序（前端事件流是这个语义，15 秒刷一次）；排障要找「反复发生」的传 sort=count。
 func (h *K8sDiagHandler) ClusterEvents(c *gin.Context) {
 	cid, _ := strconv.Atoi(c.Query("cluster_id"))
 	if cid == 0 {
@@ -55,28 +78,72 @@ func (h *K8sDiagHandler) ClusterEvents(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	kind, typ := c.Query("kind"), c.Query("type")
+	kind, typ, reason := c.Query("kind"), c.Query("type"), c.Query("reason")
 	ns := c.Query("namespace") // 空=全部命名空间
+
+	var sel []string
+	if typ != "" {
+		sel = append(sel, "type="+typ)
+	}
+	if reason != "" {
+		sel = append(sel, "reason="+reason)
+	}
+	if kind != "" {
+		sel = append(sel, "involvedObject.kind="+kind)
+	}
+	limit := int64(1000)
+	if v, e := strconv.ParseInt(c.Query("limit"), 10, 64); e == nil && v > 0 && v <= 5000 {
+		limit = v
+	}
+	opts := metav1.ListOptions{Limit: limit}
+	if len(sel) > 0 {
+		opts.FieldSelector = strings.Join(sel, ",")
+	}
+
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
-	limit := int64(500)
-	list, err := cs.CoreV1().Events(ns).List(ctx, metav1.ListOptions{Limit: limit})
+	list, err := cs.CoreV1().Events(ns).List(ctx, opts)
 	if err != nil {
+		logx.J("k8s_diag", "cluster_events_failed", map[string]any{
+			"cluster_id": cid, "namespace": ns, "field_selector": opts.FieldSelector, "err": err.Error(),
+		})
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+
+	minCount := 0
+	if v, e := strconv.Atoi(c.Query("min_count")); e == nil && v > 0 {
+		minCount = v
+	}
+	var since time.Time
+	if v, e := strconv.Atoi(c.Query("hours")); e == nil && v > 0 {
+		since = time.Now().Add(-time.Duration(v) * time.Hour)
+	}
+	dropNoise := c.Query("include_noise") != "1" && reason == ""
+	excluded := map[string]bool{}
+	for _, r := range strings.Split(c.Query("exclude_reason"), ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			excluded[r] = true
+		}
+	}
+
 	out := []gin.H{}
+	noiseDropped := 0
 	for i := range list.Items {
 		e := &list.Items[i]
-		if kind != "" && e.InvolvedObject.Kind != kind {
+		if dropNoise && eventNoiseReasons[e.Reason] {
+			noiseDropped++
 			continue
 		}
-		if typ != "" && e.Type != typ {
+		if excluded[e.Reason] || int(e.Count) < minCount {
 			continue
 		}
 		ts := e.LastTimestamp.Time
 		if ts.IsZero() {
 			ts = e.EventTime.Time
+		}
+		if !since.IsZero() && ts.Before(since) {
+			continue
 		}
 		out = append(out, gin.H{
 			"type": e.Type, "reason": e.Reason, "message": e.Message, "count": e.Count,
@@ -84,7 +151,26 @@ func (h *K8sDiagHandler) ClusterEvents(c *gin.Context) {
 			"last_seen": ts.Format("2006-01-02 15:04:05"),
 		})
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i]["last_seen"].(string) > out[j]["last_seen"].(string) })
+	if c.Query("sort") == "count" {
+		sort.SliceStable(out, func(i, j int) bool { return out[i]["count"].(int32) > out[j]["count"].(int32) })
+	} else {
+		sort.SliceStable(out, func(i, j int) bool { return out[i]["last_seen"].(string) > out[j]["last_seen"].(string) })
+	}
+
+	// 事件是 TTL 只有 1 小时的易失数据，取回多少 / 筛掉多少 / 有没有被 limit 截断都必须留痕，
+	// 否则「查不到」分不清是真没发生、还是被剔了或截断了。
+	truncated := int64(len(list.Items)) >= limit
+	if truncated {
+		logx.J("k8s_diag", "cluster_events_truncated", map[string]any{
+			"cluster_id": cid, "namespace": ns, "limit": limit,
+			"hint": "已达 limit，结果可能不完整，请收窄 namespace/kind/type 或提高 limit",
+		})
+	}
+	logx.J("k8s_diag", "cluster_events", map[string]any{
+		"cluster_id": cid, "namespace": ns, "field_selector": opts.FieldSelector, "sort": c.Query("sort"),
+		"limit": limit, "fetched": len(list.Items), "returned": len(out),
+		"noise_dropped": noiseDropped, "truncated": truncated,
+	})
 	c.JSON(http.StatusOK, out)
 }
 

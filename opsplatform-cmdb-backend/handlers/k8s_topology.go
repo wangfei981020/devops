@@ -159,16 +159,22 @@ func (h *K8sTopologyHandler) Topology(c *gin.Context) {
 		rows2.Close()
 	}
 	// Istio VirtualService（他们的主力入口）
-	rows3, err := h.DB.Query(`SELECT cluster_id,namespace,name,hosts,backends FROM k8s_virtualservices WHERE hosts LIKE ?`, "%"+domain+"%")
+	rows3, err := h.DB.Query(`SELECT cluster_id,namespace,name,hosts,backends,COALESCE(gateways,'')
+		FROM k8s_virtualservices WHERE hosts LIKE ?`, "%"+domain+"%")
 	if err == nil {
 		for rows3.Next() {
 			var cid int
-			var ns, name, hosts, backends string
-			_ = rows3.Scan(&cid, &ns, &name, &hosts, &backends)
+			var ns, name, hosts, backends, gws string
+			_ = rows3.Scan(&cid, &ns, &name, &hosts, &backends, &gws)
 			if !hostMatch(hosts, domain) {
 				continue
 			}
-			chains = append(chains, h.buildChain(cid, ns, "VirtualService", name, "", backends))
+			ch := h.buildChain(cid, ns, "VirtualService", name, "", backends)
+			// 网关这一环以前完全没有：链路从「域名」直接跳到「VirtualService」，
+			// 中间「流量从哪个 IP 进集群、经哪个网关」是断的——而那正是排查入口
+			// 类故障最关键的一段（CF 回源到底打到哪个 LB）。
+			ch["gateways"] = h.gatewayHops(cid, gws, out["cdn"])
+			chains = append(chains, ch)
 		}
 		rows3.Close()
 	}
@@ -487,5 +493,133 @@ func (h *K8sTopologyHandler) cdnFacts(domain string) map[string]any {
 			strings.Join(zones, "、") + "）——它不走我们管理的这套 CDN，可能是直连源站或使用了其它 CDN 厂商"
 	}
 	out["managed_zones"] = zones
+	return out
+}
+
+// gatewayHops 把 VirtualService 挂载的 Gateway 展开成链路上的一环。
+//
+// 补的是链路里最关键的一段缺失：域名 → ??? → VirtualService。这个 ??? 就是
+// 「流量从哪个公网 IP 进集群、经哪个网关」。有了它才能验证 CDN 回源指向的
+// 是不是这个集群的入口——那是入口类故障（502/超时/证书不对）的第一分叉点。
+//
+// cdnFacts 结果传进来做闭环比对：CF 那条 A 记录的 content 若与网关 LB IP 相同，
+// 说明「CDN 回源 → 本集群网关」这条路是通的；不同则要么回源配错，要么中间还有一层。
+func (h *K8sTopologyHandler) gatewayHops(cid int, gwRefs string, cdnAny any) []gin.H {
+	out := []gin.H{}
+	originIPs := cdnOriginIPs(cdnAny)
+	for _, ref := range splitCSV(gwRefs) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		ns, name := "", ref
+		if i := strings.IndexByte(ref, '/'); i > 0 {
+			ns, name = ref[:i], ref[i+1:]
+		}
+		g := gin.H{"ref": ref, "namespace": ns, "name": name}
+
+		// Gateway 本体：selector 指向承载它的网关负载，listeners 给出端口/协议/TLS/hosts
+		var selector, listeners, apiGroup string
+		if ns != "" {
+			_ = h.DB.QueryRow(`SELECT COALESCE(gateway_class,''),COALESCE(listeners,''),COALESCE(api_group,'')
+				FROM k8s_gateways WHERE cluster_id=? AND namespace=? AND name=? LIMIT 1`,
+				cid, ns, name).Scan(&selector, &listeners, &apiGroup)
+		}
+		if selector == "" && listeners == "" {
+			// 采不到就说清楚，别让人以为这个 Gateway 不存在——它可能只是没被采集到
+			g["missing"] = "在 CMDB 的 Gateway 名录里找不到它。若确认集群中存在，" +
+				"检查只读 RBAC 是否含 networking.istio.io/gateways；" +
+				"若集群中确实没有，则该 VirtualService 挂在一个不存在的 Gateway 上，这条路由不会生效"
+			out = append(out, g)
+			continue
+		}
+		g["selector"] = selector
+		g["listeners"] = listeners
+		g["api_group"] = apiGroup
+
+		// 承载它的网关 Service：先按 selector 的值找（istio=xxx → Service xxx），
+		// 再退回按 Gateway 同名找。两种命名习惯都常见，标注用了哪种以免误读。
+		svcName, how := gatewaySvcName(selector, name)
+		var svcExtIP, svcLBType, svcType string
+		if svcName != "" && ns != "" {
+			_ = h.DB.QueryRow(`SELECT COALESCE(external_ip,''),COALESCE(lb_type,''),COALESCE(type,'')
+				FROM k8s_services WHERE cluster_id=? AND namespace=? AND name=? LIMIT 1`,
+				cid, ns, svcName).Scan(&svcExtIP, &svcLBType, &svcType)
+		}
+		if svcExtIP != "" || svcType != "" {
+			g["service"] = svcName
+			g["service_matched_by"] = how
+			g["service_type"] = svcType
+			g["lb_ip"] = svcExtIP
+			g["lb_scope"] = "外网"
+			if strings.EqualFold(svcLBType, "Internal") {
+				g["lb_scope"] = "内网"
+			}
+			// 闭环：CDN 回源 IP 是否就是这个网关的 LB IP
+			if len(originIPs) > 0 && svcExtIP != "" {
+				matched := false
+				for _, ip := range originIPs {
+					if ip == svcExtIP {
+						matched = true
+						break
+					}
+				}
+				g["cdn_origin_match"] = matched
+				if matched {
+					g["cdn_origin_note"] = "CDN 回源 IP 与该网关的 LB IP 一致——回源路径确认打到本集群这个网关"
+				} else {
+					g["cdn_origin_note"] = "CDN 回源到 " + strings.Join(originIPs, ", ") +
+						"，与该网关 LB IP(" + svcExtIP + ") 不同：可能回源配置指向了别的入口，或中间还有一层代理"
+				}
+			}
+		} else if svcName != "" {
+			g["service_missing"] = "按名字 " + ns + "/" + svcName + " 找不到对应 Service，无法得到入口 IP"
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
+// gatewaySvcName 从 Gateway 的 selector 推出承载它的 Service 名。
+// istio=uat-istio-ingressgateway-extra → uat-istio-ingressgateway-extra
+func gatewaySvcName(selector, gwName string) (name, how string) {
+	for _, kv := range strings.Split(selector, ",") {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			if v := strings.TrimSpace(kv[i+1:]); v != "" {
+				return v, "按 Gateway 的 selector 值匹配"
+			}
+		}
+	}
+	if gwName != "" {
+		return gwName, "selector 无法解析，退回按 Gateway 同名匹配"
+	}
+	return "", ""
+}
+
+// cdnOriginIPs 从 cdnFacts 结果里取「CDN 回源指向的地址」。
+//
+// 注意区分两种 IP：records 里 A 记录的 content 是**回源地址**（源站），
+// trace.ips 是用户实际解析到的**边缘地址**（CF 的 104.x）。做闭环比对要用前者。
+func cdnOriginIPs(cdnAny any) []string {
+	m, ok := cdnAny.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := []string{}
+	// ① 精确匹配到的记录（该 FQDN 自己就在 CDN 上）
+	if recs, ok := m["records"].([]map[string]any); ok {
+		for _, r := range recs {
+			if t, _ := r["type"].(string); t != "A" && t != "AAAA" {
+				continue
+			}
+			if c, _ := r["content"].(string); c != "" {
+				out = append(out, c)
+			}
+		}
+	}
+	// ② 经 CNAME 链命中的那一跳（更常见：本域不在 CDN 的 zone 里，链路末端才在）
+	if tr, ok := m["trace"].(cdnTrace); ok {
+		out = append(out, tr.OriginIPs...)
+	}
 	return out
 }

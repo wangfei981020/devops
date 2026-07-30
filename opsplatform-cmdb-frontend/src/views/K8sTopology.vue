@@ -26,130 +26,140 @@
           <el-button type="primary" :icon="Search" :loading="loading" @click="runFwd">查链路</el-button>
         </div>
         <div v-if="fwd">
-          <div class="stage-row">
-            <div class="stage" :class="{ dim: !cdnRecs.length && !fwd.edge?.cdn }">
-              <div class="st-h">CDN / 源站</div><div class="st-b">
-              <!-- 优先用 Cloudflare 接入数据（cdn_dns_records）；旧域名台账里很多域名没登记，
-                   以前只查那张表所以这一格长期是空的。 -->
-              <template v-if="cdnRecs.length">
-                <el-tag size="small" :type="fwd.cdn?.via_cdn ? 'warning' : 'info'">
-                  {{ fwd.cdn?.via_cdn ? 'Cloudflare 代理' : '已解析·未代理' }}
-                </el-tag>
-                <div v-for="(r, i) in cdnRecs" :key="i" class="muted" style="margin-top:3px">
-                  {{ r.type }} → {{ r.content }}
+          <!-- 完整拓扑：从域名起，把 CNAME 链 → CDN → 回源 → 网关 → 入口 → Service
+               → 工作负载 → Pod → 节点 串成一条竖着走的链。
+               以前是「CDN→域名→证书」一行 + 「入口→…→节点」另一行，两段断开、顺序还反了
+               （域名才是起点）。竖排是因为这条链有十来跳，横排既放不下也读不顺。 -->
+          <div class="flow">
+            <div class="fl-step">
+              <div class="fl-lab">域名</div>
+              <div class="fl-box origin">
+                <b>{{ fwd.domain }}</b>
+                <div v-if="fwd.domain_info" class="muted">
+                  {{ fwd.domain_info.project || '未关联项目' }} ·
+                  {{ fwd.domain_info.env || '未标环境' }} ·
+                  {{ fwd.domain_info.module || '未关联模块' }}
                 </div>
-                <div v-if="fwd.cdn?.note" class="warn-note">{{ fwd.cdn.note }}</div>
-              </template>
-              <template v-else-if="fwd.edge && fwd.edge.cdn">
-                <el-tag size="small" type="warning">{{ fwd.edge.cdn }}</el-tag>
-                <div v-if="fwd.edge.cname" class="muted" style="margin-top:3px">回源 {{ fwd.edge.cname }}</div>
-              </template>
-              <template v-else-if="fwd.edge && fwd.edge.origin_ip">
-                <el-tag size="small" type="info">直连</el-tag>
-                <div style="margin-top:3px">源站 {{ fwd.edge.origin_ip }}</div>
-              </template>
-              <!-- 实时解析出的 CNAME 链：很多域名本身不在 CF 的 zone 里，是通过
-                   两三跳 CNAME 指过去的，只查库必然查不到（用户就是这么发现问题的）。 -->
-              <template v-else-if="trace && trace.via_cdn">
-                <el-tag size="small" type="warning">
-                  {{ trace.managed ? '经我方 CDN' : '经 Cloudflare（非纳管账号）' }}
-                </el-tag>
-                <div class="muted hops">{{ (trace.hops || []).join(' → ') }}</div>
-                <div v-if="trace.ips?.length" class="muted">解析到 {{ trace.ips.slice(0, 2).join(', ') }}</div>
-                <el-tooltip :content="trace.basis" placement="bottom">
-                  <span class="why">判定依据</span>
-                </el-tooltip>
-              </template>
-              <template v-else>
-                <span class="muted">未走纳管 CDN</span>
-                <div v-if="trace && trace.hops?.length > 1" class="muted hops">
-                  {{ trace.hops.join(' → ') }}
-                </div>
-                <!-- 「为什么是空的」比一个「—」有用：不写清楚会被当成采集坏了 -->
-                <el-tooltip v-if="trace?.basis || fwd.cdn?.reason"
-                  :content="trace?.basis || fwd.cdn.reason" placement="bottom">
-                  <span class="why">为什么？</span>
-                </el-tooltip>
-              </template>
-            </div></div>
-            <span class="arrow">→</span>
-            <div class="stage"><div class="st-h">域名</div><div class="st-b">
-              <b>{{ fwd.domain }}</b>
-              <div v-if="fwd.domain_info" class="muted" style="margin-top:3px">{{ fwd.domain_info.project }} · {{ fwd.domain_info.env }} · {{ fwd.domain_info.module || '未关联模块' }}</div>
-            </div></div>
-            <span class="arrow">→</span>
-            <div class="stage"><div class="st-h">证书</div><div class="st-b"><span v-if="fwd.edge && fwd.edge.cert_expiry">到期 {{ String(fwd.edge.cert_expiry).slice(0,10) }}</span><span v-else class="muted">—</span></div></div>
-          </div>
-          <el-alert v-if="!fwd.matched" type="info" :closable="false" style="margin-top:12px"
-            title="没匹配到 K8s 入口" description="该域名在已纳管集群里没有对应 Ingress / HTTPRoute / Istio VirtualService（或该域名未走 K8s 入口）" />
-          <div v-for="(ch,i) in fwd.chains" :key="i" class="chain-card">
-            <div class="chain-top">
-              <el-tag type="warning" size="small">{{ ch.entry_kind }}</el-tag>
-              <b style="margin-left:6px">{{ ch.namespace }}/{{ ch.entry_name }}</b>
-              <span class="muted" style="margin-left:10px">集群 {{ ch.cluster?.display_name || ch.cluster?.name }} · {{ ch.cluster?.environment }}</span>
-              <el-tag v-if="ch.tls_secret" size="small" style="margin-left:8px">TLS: {{ ch.tls_secret }}</el-tag>
-            </div>
-            <!-- 图形化链路：一个 Service 一行，把「入口→Service→工作负载→Pod→节点」摆成一条，
-                 层级关系一眼能看出来。下面的表格保留，用于看完整字段。 -->
-            <div class="topo">
-              <div v-for="(sv, si) in ch.services" :key="si" class="topo-row">
-                <div class="node entry">
-                  <div class="n-t">{{ ch.entry_kind }}</div>
-                  <div class="n-v">{{ ch.entry_name }}</div>
-                </div>
-                <i class="link" />
-                <div class="node">
-                  <div class="n-t">Service</div>
-                  <div class="n-v">{{ sv.service }}</div>
-                </div>
-                <i class="link" />
-                <div class="node">
-                  <div class="n-t">工作负载</div>
-                  <div class="n-v">
-                    <span v-if="!sv.workloads?.length" class="bad">无</span>
-                    <span v-for="(w, wi) in sv.workloads" :key="wi" class="pill">{{ w }}</span>
-                  </div>
-                </div>
-                <i class="link" />
-                <div class="node" :class="{ bad: !sv.pods?.length }">
-                  <div class="n-t">Pod</div>
-                  <div class="n-v">
-                    <span v-if="!sv.pods?.length" class="bad">0 个（入口指向没有实例，访问会 5xx）</span>
-                    <el-tooltip v-else placement="bottom">
-                      <template #content>
-                        <div v-for="(p, pi) in sv.pods" :key="pi">{{ p.pod }} @ {{ p.node }}</div>
-                      </template>
-                      <span class="pill">{{ sv.pods.length }} 个</span>
-                    </el-tooltip>
-                  </div>
-                </div>
-                <i class="link" />
-                <div class="node">
-                  <div class="n-t">节点</div>
-                  <div class="n-v">
-                    <el-tooltip v-if="sv.nodes?.length" placement="bottom">
-                      <template #content><div v-for="(n, ni) in sv.nodes" :key="ni">{{ n }}</div></template>
-                      <span class="pill">{{ sv.nodes.length }} 个</span>
-                    </el-tooltip>
-                    <span v-else class="muted">—</span>
-                  </div>
-                </div>
+                <div v-else class="muted">域名台账里没有这条记录（不影响链路查询）</div>
               </div>
             </div>
 
-            <el-table :data="ch.services" size="small" style="margin-top:8px">
-              <el-table-column prop="service" label="Service" min-width="180" />
-              <el-table-column label="工作负载" min-width="200"><template #default="{ row }">
-                <el-tag v-for="w in row.workloads" :key="w" size="small" type="success" style="margin:2px">{{ w }}</el-tag>
-                <span v-if="!row.workloads.length" class="muted">—</span>
-              </template></el-table-column>
-              <el-table-column label="节点" min-width="180"><template #default="{ row }">
-                <el-tag v-for="n in row.nodes" :key="n" size="small" style="margin:2px">{{ n }}</el-tag>
-                <span v-if="!row.nodes.length" class="muted">—</span>
-              </template></el-table-column>
-              <el-table-column label="Pod 数" width="80"><template #default="{ row }">{{ row.pods.length }}</template></el-table-column>
-            </el-table>
+            <div v-for="(hp, i) in hops.slice(1)" :key="'h' + i" class="fl-step">
+              <div class="fl-lab">CNAME</div>
+              <div class="fl-box" :class="{ cdn: hp === trace?.match_hop }">
+                {{ hp }}
+                <el-tag v-if="hp === trace?.match_hop" size="small" type="warning" style="margin-left:6px">
+                  {{ trace.managed ? 'CDN 站点' : 'CDN' }}
+                </el-tag>
+              </div>
+            </div>
+
+            <div class="fl-step">
+              <div class="fl-lab">CDN</div>
+              <div v-if="trace?.via_cdn || cdnRecs.length" class="fl-box cdn">
+                <b>{{ trace?.managed ? '我方 Cloudflare 站点' : 'Cloudflare（非纳管账号）' }}</b>
+                <div v-if="trace?.ips?.length" class="muted">
+                  用户解析到边缘 IP {{ trace.ips.slice(0, 3).join(', ') }}
+                </div>
+                <div class="basis">{{ trace?.basis || fwd.cdn?.reason }}</div>
+              </div>
+              <div v-else class="fl-box dim">
+                未经纳管 CDN
+                <div class="basis">{{ trace?.basis || fwd.cdn?.reason || '无 CDN 数据' }}</div>
+              </div>
+            </div>
+
+            <div class="fl-step" v-if="originIPs.length">
+              <div class="fl-lab">回源</div>
+              <div class="fl-box">
+                源站 <b>{{ originIPs.join(', ') }}</b>
+                <div class="muted">CDN 在这里配的回源地址——与上面的边缘 IP 是两回事</div>
+              </div>
+            </div>
+
+            <template v-for="(ch, ci) in fwd.chains" :key="'c' + ci">
+              <div v-for="(gw, gi) in (ch.gateways || [])" :key="'g' + ci + '-' + gi" class="fl-step">
+                <div class="fl-lab">网关</div>
+                <div class="fl-box" :class="{ warn: gw.missing, ok: gw.cdn_origin_match }">
+                  <b>{{ gw.ref }}</b>
+                  <el-tag v-if="gw.lb_ip" size="small" :type="gw.lb_scope === '内网' ? 'info' : 'danger'"
+                    style="margin-left:6px">{{ gw.lb_scope }} {{ gw.lb_ip }}</el-tag>
+                  <el-tag v-if="gw.cdn_origin_match" size="small" type="success" style="margin-left:6px">
+                    回源已对上
+                  </el-tag>
+                  <div v-if="gw.listeners" class="muted">{{ gw.listeners }}</div>
+                  <div v-if="gw.missing" class="basis bad">{{ gw.missing }}</div>
+                  <div v-else-if="gw.cdn_origin_note" class="basis">{{ gw.cdn_origin_note }}</div>
+                  <div v-if="gw.service_missing" class="basis bad">{{ gw.service_missing }}</div>
+                </div>
+              </div>
+
+              <div class="fl-step">
+                <div class="fl-lab">入口</div>
+                <div class="fl-box entry">
+                  <el-tag size="small" type="warning">{{ ch.entry_kind }}</el-tag>
+                  <b style="margin-left:6px">{{ ch.namespace }}/{{ ch.entry_name }}</b>
+                  <el-tag v-if="ch.tls_secret" size="small" style="margin-left:6px">TLS: {{ ch.tls_secret }}</el-tag>
+                  <div class="muted">
+                    集群 {{ ch.cluster?.display_name || ch.cluster?.name }} · {{ ch.cluster?.environment }}
+                  </div>
+                </div>
+              </div>
+
+              <div v-for="(sv, si) in ch.services" :key="'s' + ci + '-' + si" class="fl-step">
+                <div class="fl-lab">后端</div>
+                <div class="fl-box" :class="{ bad: !sv.pods?.length }">
+                  <div class="svc-line">
+                    <span class="pill">Service {{ sv.service }}</span>
+                    <i class="mini-arrow" />
+                    <span v-if="!sv.workloads?.length" class="bad">无工作负载</span>
+                    <span v-for="(w, wi) in sv.workloads" :key="wi" class="pill">{{ w }}</span>
+                    <i class="mini-arrow" />
+                    <template v-if="sv.pods?.length">
+                      <el-tooltip placement="right">
+                        <template #content>
+                          <div v-for="(pd, pi) in sv.pods" :key="pi">{{ pd.pod }} @ {{ pd.node }}</div>
+                        </template>
+                        <span class="pill">{{ sv.pods.length }} Pod</span>
+                      </el-tooltip>
+                      <i class="mini-arrow" />
+                      <el-tooltip placement="right">
+                        <template #content><div v-for="(nd, ni) in sv.nodes" :key="ni">{{ nd }}</div></template>
+                        <span class="pill">{{ sv.nodes.length }} 节点</span>
+                      </el-tooltip>
+                    </template>
+                    <span v-else class="bad">0 Pod —— 入口指向没有实例，访问会 5xx</span>
+                  </div>
+                </div>
+              </div>
+            </template>
           </div>
+
+          <el-alert v-if="!fwd.matched" type="info" :closable="false" style="margin-top:12px"
+            title="没匹配到 K8s 入口"
+            description="该域名在已纳管集群里没有对应 Ingress / HTTPRoute / Istio VirtualService（或该域名未走 K8s 入口）" />
+
+          <!-- 拓扑图看关系，明细表看完整字段，两者都留 -->
+          <el-collapse v-if="fwd.matched" style="margin-top:12px">
+            <el-collapse-item title="后端明细（完整字段）" name="d">
+              <div v-for="(ch, i) in fwd.chains" :key="i" style="margin-bottom:10px">
+                <div class="muted">{{ ch.entry_kind }} · {{ ch.namespace }}/{{ ch.entry_name }}</div>
+                <el-table :data="ch.services" size="small">
+                  <el-table-column prop="service" label="Service" min-width="180" />
+                  <el-table-column label="工作负载" min-width="180"><template #default="{ row }">
+                    {{ (row.workloads || []).join(', ') || '—' }}
+                  </template></el-table-column>
+                  <el-table-column label="Pod" min-width="240"><template #default="{ row }">
+                    <div v-for="(pd, pi) in row.pods" :key="pi" class="muted">{{ pd.pod }}</div>
+                    <span v-if="!row.pods?.length" class="bad">无</span>
+                  </template></el-table-column>
+                  <el-table-column label="节点" min-width="240"><template #default="{ row }">
+                    <div v-for="(nd, ni) in row.nodes" :key="ni" class="muted">{{ nd }}</div>
+                  </template></el-table-column>
+                </el-table>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
         </div>
       </div>
 
@@ -210,6 +220,14 @@ const domain = ref(''); const fwd = ref(null)
 const domainsAll = ref([]); const fProject = ref(''); const fEnv = ref('')
 const cdnRecs = computed(() => fwd.value?.cdn?.records || [])
 const trace = computed(() => fwd.value?.cdn?.trace || null)
+const hops = computed(() => trace.value?.hops || [])
+// 回源地址与边缘 IP 必须分开：前者是 CDN 往源站打的，后者是用户解析到的 CDN 节点。
+// 混在一起看会得出「回源打到 Cloudflare 自己」这种荒谬结论。
+const originIPs = computed(() => {
+  const fromTrace = trace.value?.origin_ips || []
+  const fromRecs = cdnRecs.value.filter((r) => r.type === 'A' || r.type === 'AAAA').map((r) => r.content)
+  return [...new Set([...fromTrace, ...fromRecs])]
+})
 const projects = computed(() => [...new Set(domainsAll.value.map(d => d.project).filter(Boolean))].sort())
 const envs = computed(() => {
   const src = fProject.value ? domainsAll.value.filter(d => d.project === fProject.value) : domainsAll.value
@@ -251,37 +269,50 @@ onMounted(async () => {
 .page-title { font-size: 18px; font-weight: 600; }
 .muted { color: #909399; font-size: 12px; }
 .bar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
-.stage-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.stage { border: 1px solid #e7e9e2; border-radius: 8px; padding: 8px 14px; min-width: 120px; }
-.st-h { font-size: 11px; color: #909399; text-transform: uppercase; letter-spacing: .05em; }
-.st-b { margin-top: 4px; font-size: 13px; }
-.arrow { color: #c0c4cc; font-weight: 700; }
-.chain-card { border: 1px solid #e7e9e2; border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
-.chain-top { display: flex; align-items: center; flex-wrap: wrap; }
 .mini-t { font-size: 13px; font-weight: 600; }
 
 /* 图形化链路：横向分层 + 连线。不引图表库——这里只要层级清晰，CSS 够用 */
-.topo { margin-top: 10px; overflow-x: auto; }
-.topo-row { display: flex; align-items: stretch; gap: 0; margin-bottom: 8px; min-width: max-content; }
-.topo-row .node {
-  min-width: 130px; max-width: 220px; padding: 6px 10px;
-  border: 1px solid #dcdfe6; border-radius: 4px; background: #fff;
-}
-.topo-row .node.entry { background: #fdf6ec; border-color: #f3d19e; }
-.topo-row .node.bad { background: #fef0f0; border-color: #fbc4c4; }
-.topo-row .n-t { font-size: 11px; color: #909399; margin-bottom: 2px; }
-.topo-row .n-v { font-size: 12px; color: #303133; word-break: break-all; line-height: 1.5; }
-.topo-row .link {
-  align-self: center; width: 22px; height: 1px; background: #c0c4cc; position: relative; flex: none;
-}
-.topo-row .link::after {
-  content: ''; position: absolute; right: 0; top: -3px;
-  border-left: 5px solid #c0c4cc; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent;
-}
 .pill { display: inline-block; padding: 0 6px; margin: 1px 2px 1px 0; border-radius: 3px; background: #f0f2f5; font-size: 12px; }
-.stage.dim { opacity: .65; }
 .hops { word-break: break-all; line-height: 1.5; margin-top: 3px; }
 .why { margin-left: 6px; font-size: 12px; color: #409eff; cursor: help; text-decoration: underline dotted; }
 .warn-note { font-size: 11px; color: #e6a23c; margin-top: 3px; line-height: 1.5; }
 .bad { color: #f56c6c; }
+
+/* 纵向拓扑：每跳一格，左侧层名右侧内容，格与格之间用竖线+箭头连起来 */
+.flow { padding: 4px 0; }
+.fl-step { display: flex; align-items: stretch; position: relative; padding-bottom: 18px; }
+.fl-step:last-child { padding-bottom: 0; }
+/* 竖线画在层名列上，最后一格不画 */
+.fl-step:not(:last-child)::before {
+  content: ''; position: absolute; left: 47px; top: 26px; bottom: 0; width: 1px; background: #dcdfe6;
+}
+.fl-step:not(:last-child)::after {
+  content: ''; position: absolute; left: 44px; bottom: 2px;
+  border-top: 5px solid #c0c4cc; border-left: 4px solid transparent; border-right: 4px solid transparent;
+}
+.fl-lab {
+  flex: none; width: 56px; font-size: 11px; color: #909399; text-align: right;
+  padding-right: 14px; padding-top: 6px;
+}
+.fl-box {
+  flex: 1; min-width: 0; border: 1px solid #dcdfe6; border-radius: 4px;
+  padding: 6px 10px; background: #fff; font-size: 13px; word-break: break-all;
+}
+.fl-box.origin { background: #ecf5ff; border-color: #b3d8ff; }
+.fl-box.cdn { background: #fdf6ec; border-color: #f3d19e; }
+.fl-box.entry { background: #fdf6ec; border-color: #f3d19e; }
+.fl-box.ok { border-color: #b3e19d; }
+.fl-box.warn { background: #fdf6ec; border-color: #e6a23c; }
+.fl-box.bad { background: #fef0f0; border-color: #fbc4c4; }
+.fl-box.dim { background: #f4f4f5; color: #909399; }
+.fl-box .basis { font-size: 11px; color: #909399; margin-top: 3px; line-height: 1.6; }
+.fl-box .basis.bad { color: #f56c6c; }
+.svc-line { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+.mini-arrow {
+  display: inline-block; width: 16px; height: 1px; background: #c0c4cc; position: relative; margin: 0 2px;
+}
+.mini-arrow::after {
+  content: ''; position: absolute; right: 0; top: -3px;
+  border-left: 4px solid #c0c4cc; border-top: 3px solid transparent; border-bottom: 3px solid transparent;
+}
 </style>
