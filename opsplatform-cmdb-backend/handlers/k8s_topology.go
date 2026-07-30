@@ -10,16 +10,21 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"opsplatform-cmdb-backend/crypto"
 	"opsplatform-cmdb-backend/logx"
 )
 
 // K8sTopologyHandler 全链路关系（按需计算，不物化 ci_relations）+ 反向影响分析。
 type K8sTopologyHandler struct {
 	DB *sql.DB
+	// Cipher 解观测数据源的 token。判断 Gateway 引用的 TLS Secret 存不存在时，
+	// 要复用 config_audit 那套 Secret 名录判定——其中的 KSM 兜底走 Prometheus 查询，
+	// 需要解密 token。
+	Cipher *crypto.Cipher
 }
 
-func NewK8sTopologyHandler(db *sql.DB) *K8sTopologyHandler {
-	return &K8sTopologyHandler{DB: db}
+func NewK8sTopologyHandler(db *sql.DB, cipher *crypto.Cipher) *K8sTopologyHandler {
+	return &K8sTopologyHandler{DB: db, Cipher: cipher}
 }
 
 func (h *K8sTopologyHandler) Register(r *gin.RouterGroup) {
@@ -653,31 +658,31 @@ func (h *K8sTopologyHandler) gatewayTLSStatus(cid int, ns, tlsSecrets string) []
 	if len(names) == 0 {
 		return nil
 	}
-	// Secret 名录是否可用：开关开着且该命名空间确实采到了东西
-	var allow int
-	_ = h.DB.QueryRow(`SELECT COALESCE(allow_secret_inventory,0) FROM k8s_clusters WHERE id=?`, cid).Scan(&allow)
-	nsCovered := false
-	if allow == 1 {
-		var n int
-		_ = h.DB.QueryRow(`SELECT COUNT(*) FROM k8s_secrets WHERE cluster_id=? AND namespace=?`, cid, ns).Scan(&n)
-		nsCovered = n > 0
-	}
+	// 复用 config_audit 的 Secret 名录判定，而不是自己再查一遍 allow_secret_inventory
+	// + k8s_secrets。原来那样写有两个问题：
+	//   1. 白丢了 KSM 兜底——UAT/生产都不开 allow_secret_inventory，自己查开关的话
+	//      永远返回「存在性未知」，而 kube_secret_info 指标本来就能给出名录、不需要新权限。
+	//      而 PROD-002（6 个 Gateway 引用的 TLS Secret 不存在）恰好只有这条路答得出来。
+	//   2. 「名录是否覆盖该命名空间」的判断在两处各写一遍，是重复逻辑，容易漂移。
+	// loadSecretIndex 只用 DB 与 Cipher（KSM 兜底走 Prometheus），不碰 Pool，所以这里
+	// 构造一个轻量 K8sDiagHandler 是安全的。
+	inv := (&K8sDiagHandler{DB: h.DB, Cipher: h.Cipher}).loadSecretIndex(cid, ns)
+	usable := inv.usable && inv.covers(ns)
 
 	out := make([]gin.H, 0, len(names))
 	for _, nm := range names {
 		item := gin.H{"secret": nm, "namespace": ns}
-		if !nsCovered {
+		if !usable {
 			item["exists"] = nil
-			item["note"] = "该集群未开启 Secret 名录（或未覆盖此命名空间），无法判断这张证书是否存在。" +
-				"istiod 若持续报证书找不到，多半就是它缺了"
+			item["note"] = "无法判断这张证书是否存在：" + inv.note +
+				"。istiod 若持续报证书找不到，多半就是它缺了"
 			out = append(out, item)
 			continue
 		}
-		var cnt int
-		_ = h.DB.QueryRow(`SELECT COUNT(*) FROM k8s_secrets WHERE cluster_id=? AND namespace=? AND name=?`,
-			cid, ns, nm).Scan(&cnt)
-		item["exists"] = cnt > 0
-		if cnt == 0 {
+		exists := inv.names[ns+"/"+nm]
+		item["exists"] = exists
+		item["basis"] = inv.basis()
+		if !exists {
 			item["note"] = "Gateway 引用的 TLS Secret 不存在——该端口的 HTTPS 无法正常提供，istiod 会持续报错"
 		}
 		out = append(out, item)

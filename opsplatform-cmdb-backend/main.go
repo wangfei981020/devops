@@ -85,7 +85,7 @@ func main() {
 	k8sPool := k8ssource.NewPool(db, cipher)
 	handlers.NewK8sClusterHandler(db, cipher, k8sPool).Register(api)
 	handlers.NewK8sResourceHandler(db, k8sPool, cipher).Register(api)
-	handlers.NewK8sTopologyHandler(db).Register(api)
+	handlers.NewK8sTopologyHandler(db, cipher).Register(api)
 	handlers.NewK8sCostHandler(db).Register(api)
 	handlers.NewK8sDiagHandler(db, k8sPool, cipher).Register(api) // 合并 k8sinsight：实时日志/事件/规则诊断
 	handlers.NewEventCenterHandler(db, k8sPool).Register(api) // 事件中心:到期/变更/同步失败/K8s Warning 统一时间线

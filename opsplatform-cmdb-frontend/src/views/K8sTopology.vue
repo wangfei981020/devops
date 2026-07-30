@@ -30,129 +30,72 @@
                → 工作负载 → Pod → 节点 串成一条竖着走的链。
                以前是「CDN→域名→证书」一行 + 「入口→…→节点」另一行，两段断开、顺序还反了
                （域名才是起点）。竖排是因为这条链有十来跳，横排既放不下也读不顺。 -->
-          <div class="flow">
-            <div class="fl-step">
-              <div class="fl-lab">域名</div>
-              <div class="fl-box origin">
-                <b>{{ fwd.domain }}</b>
-                <div v-if="fwd.domain_info" class="muted">
-                  {{ fwd.domain_info.project || '未关联项目' }} ·
-                  {{ fwd.domain_info.env || '未标环境' }} ·
-                  {{ fwd.domain_info.module || '未关联模块' }}
-                </div>
-                <div v-else class="muted">域名台账里没有这条记录（不影响链路查询）</div>
-              </div>
-            </div>
-
-            <div v-for="(hp, i) in hops.slice(1)" :key="'h' + i" class="fl-step">
-              <div class="fl-lab">CNAME</div>
-              <div class="fl-box" :class="{ cdn: hp === trace?.match_hop }">
-                {{ hp }}
-                <el-tag v-if="hp === trace?.match_hop" size="small" type="warning" style="margin-left:6px">
-                  {{ trace.managed ? 'CDN 站点' : 'CDN' }}
-                </el-tag>
-              </div>
-            </div>
-
-            <div class="fl-step">
-              <div class="fl-lab">CDN</div>
-              <div v-if="trace?.via_cdn || cdnRecs.length" class="fl-box cdn">
-                <b>{{ trace?.managed ? '我方 Cloudflare 站点' : 'Cloudflare（非纳管账号）' }}</b>
-                <div v-if="trace?.ips?.length" class="muted">
-                  用户解析到边缘 IP {{ trace.ips.slice(0, 3).join(', ') }}
-                </div>
-                <div class="basis">{{ trace?.basis || fwd.cdn?.reason }}</div>
-                <!-- 边缘证书与源站证书是两张，用户先撞到的是这张 -->
-                <div v-if="fwd.cdn_cert" class="cert-line">
-                  证书 {{ fwd.cdn_cert.type }} · {{ fwd.cdn_cert.issuer }} ·
-                  <el-tag size="small" :type="certTagType(fwd.cdn_cert.days_left)">
-                    {{ fwd.cdn_cert.days_left != null ? fwd.cdn_cert.days_left + ' 天' : '到期未知' }}
-                  </el-tag>
-                  <span class="muted">{{ fwd.cdn_cert.hosts }}</span>
-                  <div v-if="fwd.cdn_cert.issue" class="basis bad">{{ fwd.cdn_cert.issue }}</div>
-                </div>
-                <div v-else class="basis">CDN 上没找到覆盖该域名的边缘证书记录（可能 token 缺 SSL and Certificates·Read）</div>
-              </div>
-              <div v-else class="fl-box dim">
-                未经纳管 CDN
-                <div class="basis">{{ trace?.basis || fwd.cdn?.reason || '无 CDN 数据' }}</div>
-              </div>
-            </div>
-
-            <div class="fl-step" v-if="originIPs.length">
-              <div class="fl-lab">回源</div>
-              <div class="fl-box">
-                源站 <b>{{ originIPs.join(', ') }}</b>
-                <div class="muted">CDN 在这里配的回源地址——与上面的边缘 IP 是两回事</div>
-              </div>
-            </div>
-
-            <template v-for="(ch, ci) in fwd.chains" :key="'c' + ci">
-              <div v-for="(gw, gi) in (ch.gateways || [])" :key="'g' + ci + '-' + gi" class="fl-step">
-                <div class="fl-lab">网关</div>
-                <div class="fl-box" :class="{ warn: gw.missing, ok: gw.cdn_origin_match }">
-                  <b>{{ gw.ref }}</b>
-                  <el-tag v-if="gw.lb_ip" size="small" :type="gw.lb_scope === '内网' ? 'info' : 'danger'"
-                    style="margin-left:6px">{{ gw.lb_scope }} {{ gw.lb_ip }}</el-tag>
-                  <el-tag v-if="gw.cdn_origin_match" size="small" type="success" style="margin-left:6px">
-                    回源已对上
-                  </el-tag>
-                  <div v-if="gw.listeners" class="muted">{{ gw.listeners }}</div>
-                  <!-- 源站侧证书：Gateway 引用的 TLS Secret。存在性判定取决于该集群
-                       有没有开 Secret 名录，未知与不存在必须分开显示。 -->
-                  <div v-for="(ct, ti) in (gw.tls || [])" :key="'t' + ti" class="cert-line">
-                    证书 Secret <b>{{ ct.secret }}</b>
-                    <el-tag v-if="ct.exists === true" size="small" type="success">存在</el-tag>
-                    <el-tag v-else-if="ct.exists === false" size="small" type="danger">不存在</el-tag>
-                    <el-tag v-else size="small" type="info">存在性未知</el-tag>
-                    <div v-if="ct.note" class="basis" :class="{ bad: ct.exists === false }">{{ ct.note }}</div>
+          <!-- 横向节点流拓扑：节点框 + 带状态色的连线 + 分支。
+               上一版是纵向清单，读起来是「一行行的字」而不是拓扑；这版每跳一个框、
+               框间连线上色（绿=正常/黄=需确认/红=断），分支从入口横向展开。
+               链路可能十来跳，容器横向滚动而不是压缩节点。
+               视觉沿用 cmdb-domain-quality-topo 那套：浅纸底 + 状态点光晕 + 连线着色。 -->
+          <div class="topo2">
+            <div class="tp-row">
+              <template v-for="(n, i) in flowNodes" :key="'n' + i">
+                <i v-if="i" class="tp-link" :class="n.link || 'ok'" />
+                <div class="tp-node" :class="n.status">
+                  <div class="tp-lab">{{ n.lab }}</div>
+                  <div class="tp-title">
+                    <span class="dot" :class="n.status" />{{ n.title }}
                   </div>
-                  <div v-if="gw.tls_note" class="basis">{{ gw.tls_note }}</div>
-                  <div v-if="gw.missing" class="basis bad">{{ gw.missing }}</div>
-                  <div v-else-if="gw.cdn_origin_note" class="basis">{{ gw.cdn_origin_note }}</div>
-                  <div v-if="gw.service_missing" class="basis bad">{{ gw.service_missing }}</div>
-                </div>
-              </div>
-
-              <div class="fl-step">
-                <div class="fl-lab">入口</div>
-                <div class="fl-box entry">
-                  <el-tag size="small" type="warning">{{ ch.entry_kind }}</el-tag>
-                  <b style="margin-left:6px">{{ ch.namespace }}/{{ ch.entry_name }}</b>
-                  <el-tag v-if="ch.tls_secret" size="small" style="margin-left:6px">TLS: {{ ch.tls_secret }}</el-tag>
-                  <div class="muted">
-                    集群 {{ ch.cluster?.display_name || ch.cluster?.name }} · {{ ch.cluster?.environment }}
+                  <div v-for="(s, si) in n.sub || []" :key="si" class="tp-sub" :class="s.cls">
+                    {{ s.text }}
                   </div>
+                  <el-tooltip v-if="n.why" :content="n.why" placement="bottom">
+                    <span class="tp-why">依据 / 例外</span>
+                  </el-tooltip>
+                </div>
+              </template>
+            </div>
+
+            <!-- 后端分支：一个 Service 一支，从入口节点分出去 -->
+            <div v-for="(b, bi) in branches" :key="'b' + bi" class="tp-row branch">
+              <div class="tp-fork" :class="{ bad: !b.pods }" />
+              <div class="tp-node" :class="b.pods ? 'ok' : 'bad'">
+                <div class="tp-lab">Service</div>
+                <div class="tp-title"><span class="dot" :class="b.pods ? 'ok' : 'bad'" />{{ b.service }}</div>
+              </div>
+              <i class="tp-link" :class="b.pods ? 'ok' : 'bad'" />
+              <div class="tp-node" :class="b.workloads.length ? 'ok' : 'bad'">
+                <div class="tp-lab">工作负载</div>
+                <div class="tp-title">
+                  <span class="dot" :class="b.workloads.length ? 'ok' : 'bad'" />
+                  {{ b.workloads.join(', ') || '无' }}
                 </div>
               </div>
-
-              <div v-for="(sv, si) in ch.services" :key="'s' + ci + '-' + si" class="fl-step">
-                <div class="fl-lab">后端</div>
-                <div class="fl-box" :class="{ bad: !sv.pods?.length }">
-                  <div class="svc-line">
-                    <span class="pill">Service {{ sv.service }}</span>
-                    <i class="mini-arrow" />
-                    <span v-if="!sv.workloads?.length" class="bad">无工作负载</span>
-                    <span v-for="(w, wi) in sv.workloads" :key="wi" class="pill">{{ w }}</span>
-                    <i class="mini-arrow" />
-                    <template v-if="sv.pods?.length">
-                      <el-tooltip placement="right">
-                        <template #content>
-                          <div v-for="(pd, pi) in sv.pods" :key="pi">{{ pd.pod }} @ {{ pd.node }}</div>
-                        </template>
-                        <span class="pill">{{ sv.pods.length }} Pod</span>
-                      </el-tooltip>
-                      <i class="mini-arrow" />
-                      <el-tooltip placement="right">
-                        <template #content><div v-for="(nd, ni) in sv.nodes" :key="ni">{{ nd }}</div></template>
-                        <span class="pill">{{ sv.nodes.length }} 节点</span>
-                      </el-tooltip>
+              <i class="tp-link" :class="b.pods ? 'ok' : 'bad'" />
+              <div class="tp-node" :class="b.pods ? 'ok' : 'bad'">
+                <div class="tp-lab">Pod</div>
+                <div class="tp-title">
+                  <span class="dot" :class="b.pods ? 'ok' : 'bad'" />
+                  <el-tooltip v-if="b.pods" placement="bottom">
+                    <template #content>
+                      <div v-for="(p, pi) in b.podList" :key="pi">{{ p.pod }} @ {{ p.node }}</div>
                     </template>
-                    <span v-else class="bad">0 Pod —— 入口指向没有实例，访问会 5xx</span>
-                  </div>
+                    <span>{{ b.pods }} 个</span>
+                  </el-tooltip>
+                  <span v-else>0 个</span>
+                </div>
+                <div v-if="!b.pods" class="tp-sub bad">入口指向没有实例，访问会 5xx</div>
+              </div>
+              <i v-if="b.nodes" class="tp-link ok" />
+              <div v-if="b.nodes" class="tp-node ok">
+                <div class="tp-lab">节点</div>
+                <div class="tp-title">
+                  <span class="dot ok" />
+                  <el-tooltip placement="bottom">
+                    <template #content><div v-for="(nd, ni) in b.nodeList" :key="ni">{{ nd }}</div></template>
+                    <span>{{ b.nodes }} 个</span>
+                  </el-tooltip>
                 </div>
               </div>
-            </template>
+            </div>
           </div>
 
           <el-alert v-if="!fwd.matched" type="info" :closable="false" style="margin-top:12px"
@@ -243,6 +186,105 @@ const trace = computed(() => fwd.value?.cdn?.trace || null)
 const hops = computed(() => trace.value?.hops || [])
 // 回源地址与边缘 IP 必须分开：前者是 CDN 往源站打的，后者是用户解析到的 CDN 节点。
 // 混在一起看会得出「回源打到 Cloudflare 自己」这种荒谬结论。
+// 把整条链路拍平成节点数组：一处生成，模板只负责画。
+// 状态语义固定为三档——ok 通、warn 需人工确认、bad 断——连线颜色跟节点走，
+// 这样一眼能看出「链在哪一跳变黄/变红」。
+const flowNodes = computed(() => {
+  const f = fwd.value
+  if (!f) return []
+  const out = []
+  const di = f.domain_info
+  out.push({
+    lab: '域名', title: f.domain, status: 'ok',
+    sub: [{ text: di
+      ? `${di.project || '未关联项目'} · ${di.env || '未标环境'} · ${di.module || '未关联模块'}`
+      : '域名台账里没有这条记录（不影响链路查询）' }],
+  })
+
+  // CNAME 逐跳。命中 CDN 的那跳单独标出来
+  for (const hp of hops.value.slice(1)) {
+    const isMatch = hp === trace.value?.match_hop
+    out.push({
+      lab: 'CNAME', title: hp, status: 'ok', link: 'ok',
+      sub: isMatch ? [{ text: trace.value.managed ? '我方纳管的 CDN 站点' : '第三方 CDN 站点' }] : [],
+    })
+  }
+
+  const tr = trace.value
+  const viaCDN = tr?.via_cdn || cdnRecs.value.length
+  const cert = f.cdn_cert
+  const cdnSub = []
+  if (tr?.ips?.length) cdnSub.push({ text: `用户解析到边缘 IP ${tr.ips.slice(0, 3).join(', ')}` })
+  if (cert) {
+    cdnSub.push({
+      text: `边缘证书 ${cert.type} · ${cert.issuer} · ${cert.days_left != null ? cert.days_left + ' 天' : '到期未知'}`,
+      cls: cert.severity === 'high' ? 'bad' : cert.severity ? 'warn' : '',
+    })
+  } else if (viaCDN) {
+    cdnSub.push({ text: '未找到覆盖该域名的边缘证书记录', cls: 'warn' })
+  }
+  out.push({
+    lab: 'CDN',
+    title: viaCDN ? (tr?.managed ? '我方 Cloudflare 站点' : 'Cloudflare（非纳管账号）') : '未经纳管 CDN',
+    status: viaCDN ? 'ok' : 'idle',
+    link: viaCDN ? 'ok' : 'dash',
+    sub: cdnSub,
+    why: tr?.basis || f.cdn?.reason,
+  })
+
+  if (originIPs.value.length) {
+    out.push({
+      lab: '回源', title: originIPs.value.join(', '), status: 'ok', link: 'ok',
+      sub: [{ text: 'CDN 往源站打的地址——与上面的边缘 IP 是两回事' }],
+    })
+  }
+
+  // 网关与入口只画第一条 chain 的（多 chain 极少见，明细表里能看全）
+  const ch = (f.chains || [])[0]
+  if (ch) {
+    for (const gw of ch.gateways || []) {
+      const sub = []
+      if (gw.lb_ip) sub.push({ text: `${gw.lb_scope} ${gw.lb_ip}` })
+      if (gw.listeners) sub.push({ text: gw.listeners })
+      for (const ct of gw.tls || []) {
+        const st = ct.exists === false ? 'bad' : ct.exists === true ? '' : 'warn'
+        sub.push({
+          text: `证书 Secret ${ct.secret}：` +
+            (ct.exists === true ? '存在' : ct.exists === false ? '不存在' : '存在性未知'),
+          cls: st,
+        })
+      }
+      const bad = gw.missing || (gw.tls || []).some((c) => c.exists === false)
+      out.push({
+        lab: '网关', title: gw.ref,
+        status: bad ? 'bad' : gw.cdn_origin_match ? 'ok' : 'warn',
+        link: bad ? 'bad' : 'ok',
+        sub: gw.missing ? [{ text: gw.missing, cls: 'bad' }] : sub,
+        why: gw.cdn_origin_note || gw.service_missing,
+      })
+    }
+    out.push({
+      lab: '入口', title: `${ch.entry_kind} ${ch.namespace}/${ch.entry_name}`, status: 'ok', link: 'ok',
+      sub: [{ text: `集群 ${ch.cluster?.display_name || ch.cluster?.name} · ${ch.cluster?.environment}` }],
+    })
+  }
+  return out
+})
+
+// 后端分支：一个 Service 一支
+const branches = computed(() => {
+  const ch = (fwd.value?.chains || [])[0]
+  if (!ch) return []
+  return (ch.services || []).map((sv) => ({
+    service: sv.service,
+    workloads: sv.workloads || [],
+    pods: (sv.pods || []).length,
+    podList: sv.pods || [],
+    nodes: (sv.nodes || []).length,
+    nodeList: sv.nodes || [],
+  }))
+})
+
 const originIPs = computed(() => {
   const fromTrace = trace.value?.origin_ips || []
   const fromRecs = cdnRecs.value.filter((r) => r.type === 'A' || r.type === 'AAAA').map((r) => r.content)
@@ -302,42 +344,67 @@ function certTagType(d) {
 .warn-note { font-size: 11px; color: #e6a23c; margin-top: 3px; line-height: 1.5; }
 .bad { color: #f56c6c; }
 
-/* 纵向拓扑：每跳一格，左侧层名右侧内容，格与格之间用竖线+箭头连起来 */
-.flow { padding: 4px 0; }
-.fl-step { display: flex; align-items: stretch; position: relative; padding-bottom: 18px; }
-.fl-step:last-child { padding-bottom: 0; }
-/* 竖线画在层名列上，最后一格不画 */
-.fl-step:not(:last-child)::before {
-  content: ''; position: absolute; left: 47px; top: 26px; bottom: 0; width: 1px; background: #dcdfe6;
+/* 横向节点流拓扑。视觉沿用 cmdb-domain-quality-topo：状态点带光晕、连线按状态着色。
+   节点不压缩、容器横向滚动——链路十来跳时压缩会让每格都读不清。 */
+.topo2 { overflow-x: auto; padding: 6px 2px 2px; }
+.tp-row { display: flex; align-items: stretch; min-width: max-content; margin-bottom: 10px; }
+.tp-row.branch { margin-left: 34px; }
+.tp-node {
+  min-width: 150px; max-width: 260px; background: #fff;
+  border: 1px solid #e7e9e2; border-left: 3px solid #1f9d63; border-radius: 8px;
+  padding: 7px 11px;
 }
-.fl-step:not(:last-child)::after {
-  content: ''; position: absolute; left: 44px; bottom: 2px;
-  border-top: 5px solid #c0c4cc; border-left: 4px solid transparent; border-right: 4px solid transparent;
+.tp-node.warn { border-left-color: #c98a12; background: #fefbf4; }
+.tp-node.bad { border-left-color: #d1483a; background: #fdf5f4; }
+.tp-node.idle { border-left-color: #8a909a; background: #fafaf8; }
+.tp-lab { font-size: 10.5px; color: #8a909a; letter-spacing: .3px; margin-bottom: 2px; }
+.tp-title {
+  font-size: 13px; font-weight: 600; color: #14161a; display: flex; align-items: center; gap: 6px;
+  word-break: break-all;
 }
-.fl-lab {
-  flex: none; width: 56px; font-size: 11px; color: #909399; text-align: right;
-  padding-right: 14px; padding-top: 6px;
+.tp-title .dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; background: #1f9d63;
+  box-shadow: 0 0 0 3px #e4f3ea;
 }
-.fl-box {
-  flex: 1; min-width: 0; border: 1px solid #dcdfe6; border-radius: 4px;
-  padding: 6px 10px; background: #fff; font-size: 13px; word-break: break-all;
+.tp-title .dot.warn { background: #c98a12; box-shadow: 0 0 0 3px #faf0da; }
+.tp-title .dot.bad { background: #d1483a; box-shadow: 0 0 0 3px #fbe7e4; }
+.tp-title .dot.idle { background: #8a909a; box-shadow: 0 0 0 3px #e7e9e2; }
+.tp-sub { font-size: 11px; color: #565b64; line-height: 1.6; margin-top: 2px; word-break: break-all; }
+.tp-sub.warn { color: #c98a12; }
+.tp-sub.bad { color: #d1483a; font-weight: 600; }
+.tp-why {
+  display: inline-block; margin-top: 3px; font-size: 11px; color: #3538cd;
+  cursor: help; text-decoration: underline dotted;
 }
-.fl-box.origin { background: #ecf5ff; border-color: #b3d8ff; }
-.fl-box.cdn { background: #fdf6ec; border-color: #f3d19e; }
-.fl-box.entry { background: #fdf6ec; border-color: #f3d19e; }
-.fl-box.ok { border-color: #b3e19d; }
-.fl-box.warn { background: #fdf6ec; border-color: #e6a23c; }
-.fl-box.bad { background: #fef0f0; border-color: #fbc4c4; }
-.fl-box.dim { background: #f4f4f5; color: #909399; }
-.fl-box .basis { font-size: 11px; color: #909399; margin-top: 3px; line-height: 1.6; }
-.fl-box .basis.bad { color: #f56c6c; }
-.cert-line { font-size: 12px; margin-top: 4px; line-height: 1.7; }
-.svc-line { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
-.mini-arrow {
-  display: inline-block; width: 16px; height: 1px; background: #c0c4cc; position: relative; margin: 0 2px;
+/* 连线：横线 + 箭头，颜色跟随两端状态 */
+.tp-link { align-self: center; width: 26px; height: 3px; background: #1f9d63; position: relative; flex: none; }
+.tp-link.warn { background: #c98a12; }
+.tp-link.bad { background: #d1483a; }
+.tp-link.dash {
+  height: 2px;
+  background: repeating-linear-gradient(90deg, #8a909a 0 5px, transparent 5px 10px);
 }
-.mini-arrow::after {
+.tp-link::after {
   content: ''; position: absolute; right: 0; top: -3px;
-  border-left: 4px solid #c0c4cc; border-top: 3px solid transparent; border-bottom: 3px solid transparent;
+  border-left: 6px solid currentColor; border-top: 4.5px solid transparent; border-bottom: 4.5px solid transparent;
+  color: inherit;
+}
+.tp-link { color: #1f9d63; }
+.tp-link.warn { color: #c98a12; }
+.tp-link.bad { color: #d1483a; }
+.tp-link.dash { color: #8a909a; }
+/* 分支从上一行底部拐出来 */
+.tp-fork {
+  align-self: center; width: 26px; height: 3px; background: #1f9d63; position: relative; flex: none;
+  color: #1f9d63;
+}
+.tp-fork.bad { background: #d1483a; color: #d1483a; }
+.tp-fork::before {
+  content: ''; position: absolute; left: 0; bottom: 0; width: 3px; height: 22px;
+  background: currentColor; transform: translateY(-100%);
+}
+.tp-fork::after {
+  content: ''; position: absolute; right: 0; top: -3px;
+  border-left: 6px solid currentColor; border-top: 4.5px solid transparent; border-bottom: 4.5px solid transparent;
 }
 </style>

@@ -104,6 +104,9 @@ func traceCDN(db *sql.DB, domain string) cdnTrace {
 				t.Basis = "CNAME 链上的 " + cur + " 在我方 CDN 站点 " + zone +
 					" 中有解析记录，但**未开启代理**（灰云）——流量直连源站，不经 CDN 防护与缓存"
 			}
+			// 命中跳在 CDN 上配的回源地址。必须在这里取——闭环比对（回源 IP 是否等于
+			// 本集群网关 LB IP）用的是它，而不是下面 lookupIPs 拿到的边缘 IP。
+			t.OriginIPs = cdnOriginOf(db, cur)
 			ipCtx, ipCancel := context.WithTimeout(context.Background(), cdnTraceIPTimeout)
 			t.IPs = lookupIPs(ipCtx, r, cur)
 			ipCancel()
@@ -144,6 +147,8 @@ func traceCDN(db *sql.DB, domain string) cdnTrace {
 			t.MatchHop = hop
 			t.Basis = "CNAME 链指向 " + hop + "，其根域 " + zone +
 				" 是我方纳管的 CDN 站点——流量进入我方 CDN（该 FQDN 在 CF 里没有单独的解析记录，可能走通配符）"
+			// 这一跳虽然没有该 FQDN 的精确记录，但命中跳自己的 A 记录就是回源地址
+			t.OriginIPs = cdnOriginOf(db, hop)
 			return t
 		}
 	}
