@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"opsplatform-cmdb-backend/logx"
 )
 
 // K8sTopologyHandler 全链路关系（按需计算，不物化 ci_relations）+ 反向影响分析。
@@ -20,8 +22,8 @@ func NewK8sTopologyHandler(db *sql.DB) *K8sTopologyHandler {
 }
 
 func (h *K8sTopologyHandler) Register(r *gin.RouterGroup) {
-	r.GET("/k8s/topology", h.Topology) // 正向：域名 → CDN/证书/Ingress/Service/工作负载/Pod/节点/集群
-	r.GET("/k8s/impact", h.Impact)     // 反向：节点 → 受影响的 Service/工作负载/Ingress/域名
+	r.GET("/k8s/topology", h.Topology)            // 正向：域名 → CDN/证书/Ingress/Service/工作负载/Pod/节点/集群
+	r.GET("/k8s/impact", h.Impact)                // 反向：节点 → 受影响的 Service/工作负载/Ingress/域名
 	r.GET("/k8s/topology-domains", h.TopoDomains) // 全链路域名候选(可搜下拉):解析FQDN + K8s入口hosts,带项目/环境/模块
 }
 
@@ -45,25 +47,53 @@ func (h *K8sTopologyHandler) TopoDomains(c *gin.Context) {
 		}
 		rows.Close()
 	}
-	// K8s 入口 hosts(VS/Ingress/HTTPRoute)——可能不在台账,补进来(allow-create 也能自输)
+	// K8s 入口 hosts(VS/Ingress/HTTPRoute)——可能不在台账,补进来(allow-create 也能自输)。
+	//
+	// 项目/环境不能留空：这两个字段是界面上的筛选器，全空时下拉显示 "No data"，
+	// 等于筛选功能不可用。而它们本来就推得出来——环境=集群的 environment，
+	// 项目=该命名空间的项目归属(k8s_ns_project)。以前只填了 Name，白扔了这两层信息。
 	for _, q := range []string{
-		`SELECT hosts FROM k8s_virtualservices`, `SELECT hosts FROM k8s_ingresses`, `SELECT hostnames FROM k8s_httproutes`,
+		`SELECT v.hosts, COALESCE(k.environment,''), COALESCE(p.project,'')
+		   FROM k8s_virtualservices v
+		   LEFT JOIN k8s_clusters k ON k.id=v.cluster_id
+		   LEFT JOIN k8s_ns_project p ON p.cluster_id=v.cluster_id AND p.namespace=v.namespace`,
+		`SELECT i.hosts, COALESCE(k.environment,''), COALESCE(p.project,'')
+		   FROM k8s_ingresses i
+		   LEFT JOIN k8s_clusters k ON k.id=i.cluster_id
+		   LEFT JOIN k8s_ns_project p ON p.cluster_id=i.cluster_id AND p.namespace=i.namespace`,
+		`SELECT r.hostnames, COALESCE(k.environment,''), COALESCE(p.project,'')
+		   FROM k8s_httproutes r
+		   LEFT JOIN k8s_clusters k ON k.id=r.cluster_id
+		   LEFT JOIN k8s_ns_project p ON p.cluster_id=r.cluster_id AND p.namespace=r.namespace`,
 	} {
-		if rows, _ := h.DB.Query(q); rows != nil {
-			for rows.Next() {
-				var hs string
-				_ = rows.Scan(&hs)
-				for _, host := range splitCSV(hs) {
-					if host == "*" || host == "" {
-						continue
-					}
-					if _, ok := seen[host]; !ok {
-						seen[host] = &d{Name: host}
-					}
-				}
-			}
-			rows.Close()
+		rows, err := h.DB.Query(q)
+		if err != nil {
+			logx.J("topology", "topo_domains_query_fail", map[string]any{
+				"err": err.Error(), "warn": "该来源的域名候选本次缺失，界面下拉会少一部分选项",
+			})
+			continue
 		}
+		for rows.Next() {
+			var hs, env, proj string
+			_ = rows.Scan(&hs, &env, &proj)
+			for _, host := range splitCSV(hs) {
+				if host == "*" || host == "" {
+					continue
+				}
+				if ex, ok := seen[host]; ok {
+					// 台账里已有的以台账为准，只补台账缺的那几项
+					if ex.Env == "" {
+						ex.Env = env
+					}
+					if ex.Project == "" {
+						ex.Project = proj
+					}
+					continue
+				}
+				seen[host] = &d{Name: host, Env: env, Project: proj}
+			}
+		}
+		rows.Close()
 	}
 	out := make([]d, 0, len(seen))
 	for _, v := range seen {
@@ -88,6 +118,11 @@ func (h *K8sTopologyHandler) Topology(c *gin.Context) {
 		FROM domain_records r LEFT JOIN cdns cd ON cd.id=r.cdn_id
 		WHERE r.host=? ORDER BY (r.cdn_id IS NOT NULL) DESC, (r.cert_expiry_at IS NOT NULL) DESC LIMIT 1`, domain)
 	out["cdns"] = h.strList(`SELECT DISTINCT cd.name FROM domain_records r JOIN cdns cd ON cd.id=r.cdn_id WHERE r.cdn_id>0 AND r.host=?`, domain) // 兼容旧字段
+
+	// 真正的 CDN 侧数据在 cdn_dns_records（Cloudflare 只读接入采来的），
+	// 上面两行查的是旧域名台账 domain_records+cdns，那套很多域名压根没登记，
+	// 所以 cdns/edge 长期是空的——不是没数据，是查错了地方。
+	out["cdn"] = h.cdnFacts(domain)
 
 	// 域名台账（项目/环境/模块）——供前端展示归属
 	out["domain_info"] = h.oneRow(`SELECT c.project, c.env, c.module
@@ -363,4 +398,82 @@ func (h *K8sTopologyHandler) oneRow(q string, args ...any) gin.H {
 		m[col] = normVal(vals[i])
 	}
 	return m
+}
+
+// cdnFacts 从 Cloudflare 接入数据里查这个域名的 CDN 事实。
+//
+// 空结果必须说清是哪一种空，两者处置完全不同：
+//
+//	① 该域名的根域根本不在纳管的 CDN 账号里 → 它不走我们管的 CDN（可能直连，或用别家）
+//	② 根域在、但这条 FQDN 没有解析记录     → CDN 上漏配了
+//
+// 只显示一个「—」的话，看的人会以为是 CMDB 采集坏了。
+func (h *K8sTopologyHandler) cdnFacts(domain string) map[string]any {
+	out := map[string]any{}
+	rows, err := h.DB.Query(`SELECT zone_name, type, content, proxied, ttl
+		FROM cdn_dns_records WHERE name=? ORDER BY type`, domain)
+	if err != nil {
+		out["error"] = "查询 CDN 解析记录失败: " + err.Error()
+		return out
+	}
+	defer rows.Close()
+	recs := []map[string]any{}
+	for rows.Next() {
+		var zone, typ, content string
+		var proxied, ttl int
+		if rows.Scan(&zone, &typ, &content, &proxied, &ttl) != nil {
+			continue
+		}
+		recs = append(recs, map[string]any{
+			"zone": zone, "type": typ, "content": content,
+			"proxied": proxied == 1, "ttl": ttl,
+		})
+	}
+	if len(recs) > 0 {
+		out["records"] = recs
+		viaCDN := false
+		for _, r := range recs {
+			if r["proxied"] == true {
+				viaCDN = true
+			}
+		}
+		out["via_cdn"] = viaCDN
+		if !viaCDN {
+			out["note"] = "该域名在 CDN 上有解析记录，但未开启代理（灰云）——流量直连源站，不经过 CDN 防护与缓存"
+		}
+		return out
+	}
+
+	// 没有记录：区分「根域不在纳管范围」和「根域在但漏配这条」
+	zones := []string{}
+	if zr, err := h.DB.Query(`SELECT name FROM cdn_zones ORDER BY name`); err == nil {
+		for zr.Next() {
+			var z string
+			if zr.Scan(&z) == nil {
+				zones = append(zones, z)
+			}
+		}
+		zr.Close()
+	}
+	matchedZone := ""
+	for _, z := range zones {
+		if domain == z || strings.HasSuffix(domain, "."+z) {
+			matchedZone = z
+			break
+		}
+	}
+	switch {
+	case len(zones) == 0:
+		out["reason"] = "CMDB 里还没有任何 CDN 站点数据——请到「接入管理 → CDN」配置只读 Token 并同步。" +
+			"本项为空不代表该域名没走 CDN"
+	case matchedZone != "":
+		out["reason"] = "根域 " + matchedZone + " 已纳管，但这条 FQDN 在 CDN 上没有解析记录——" +
+			"可能是 CDN 侧漏配，或该域名走的是别的解析途径"
+		out["matched_zone"] = matchedZone
+	default:
+		out["reason"] = "该域名的根域不在已纳管的 CDN 站点中（已纳管 " + itoa(len(zones)) + " 个：" +
+			strings.Join(zones, "、") + "）——它不走我们管理的这套 CDN，可能是直连源站或使用了其它 CDN 厂商"
+	}
+	out["managed_zones"] = zones
+	return out
 }

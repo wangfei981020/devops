@@ -27,8 +27,20 @@
         </div>
         <div v-if="fwd">
           <div class="stage-row">
-            <div class="stage"><div class="st-h">CDN / 源站</div><div class="st-b">
-              <template v-if="fwd.edge && fwd.edge.cdn">
+            <div class="stage" :class="{ dim: !cdnRecs.length && !fwd.edge?.cdn }">
+              <div class="st-h">CDN / 源站</div><div class="st-b">
+              <!-- 优先用 Cloudflare 接入数据（cdn_dns_records）；旧域名台账里很多域名没登记，
+                   以前只查那张表所以这一格长期是空的。 -->
+              <template v-if="cdnRecs.length">
+                <el-tag size="small" :type="fwd.cdn?.via_cdn ? 'warning' : 'info'">
+                  {{ fwd.cdn?.via_cdn ? 'Cloudflare 代理' : '已解析·未代理' }}
+                </el-tag>
+                <div v-for="(r, i) in cdnRecs" :key="i" class="muted" style="margin-top:3px">
+                  {{ r.type }} → {{ r.content }}
+                </div>
+                <div v-if="fwd.cdn?.note" class="warn-note">{{ fwd.cdn.note }}</div>
+              </template>
+              <template v-else-if="fwd.edge && fwd.edge.cdn">
                 <el-tag size="small" type="warning">{{ fwd.edge.cdn }}</el-tag>
                 <div v-if="fwd.edge.cname" class="muted" style="margin-top:3px">回源 {{ fwd.edge.cname }}</div>
               </template>
@@ -36,7 +48,13 @@
                 <el-tag size="small" type="info">直连</el-tag>
                 <div style="margin-top:3px">源站 {{ fwd.edge.origin_ip }}</div>
               </template>
-              <span v-else class="muted">—</span>
+              <template v-else>
+                <span class="muted">未走纳管 CDN</span>
+                <!-- 「为什么是空的」比一个「—」有用：不写清楚会被当成采集坏了 -->
+                <el-tooltip v-if="fwd.cdn?.reason" :content="fwd.cdn.reason" placement="bottom">
+                  <span class="why">为什么？</span>
+                </el-tooltip>
+              </template>
             </div></div>
             <span class="arrow">→</span>
             <div class="stage"><div class="st-h">域名</div><div class="st-b">
@@ -55,6 +73,54 @@
               <span class="muted" style="margin-left:10px">集群 {{ ch.cluster?.display_name || ch.cluster?.name }} · {{ ch.cluster?.environment }}</span>
               <el-tag v-if="ch.tls_secret" size="small" style="margin-left:8px">TLS: {{ ch.tls_secret }}</el-tag>
             </div>
+            <!-- 图形化链路：一个 Service 一行，把「入口→Service→工作负载→Pod→节点」摆成一条，
+                 层级关系一眼能看出来。下面的表格保留，用于看完整字段。 -->
+            <div class="topo">
+              <div v-for="(sv, si) in ch.services" :key="si" class="topo-row">
+                <div class="node entry">
+                  <div class="n-t">{{ ch.entry_kind }}</div>
+                  <div class="n-v">{{ ch.entry_name }}</div>
+                </div>
+                <i class="link" />
+                <div class="node">
+                  <div class="n-t">Service</div>
+                  <div class="n-v">{{ sv.service }}</div>
+                </div>
+                <i class="link" />
+                <div class="node">
+                  <div class="n-t">工作负载</div>
+                  <div class="n-v">
+                    <span v-if="!sv.workloads?.length" class="bad">无</span>
+                    <span v-for="(w, wi) in sv.workloads" :key="wi" class="pill">{{ w }}</span>
+                  </div>
+                </div>
+                <i class="link" />
+                <div class="node" :class="{ bad: !sv.pods?.length }">
+                  <div class="n-t">Pod</div>
+                  <div class="n-v">
+                    <span v-if="!sv.pods?.length" class="bad">0 个（入口指向没有实例，访问会 5xx）</span>
+                    <el-tooltip v-else placement="bottom">
+                      <template #content>
+                        <div v-for="(p, pi) in sv.pods" :key="pi">{{ p.pod }} @ {{ p.node }}</div>
+                      </template>
+                      <span class="pill">{{ sv.pods.length }} 个</span>
+                    </el-tooltip>
+                  </div>
+                </div>
+                <i class="link" />
+                <div class="node">
+                  <div class="n-t">节点</div>
+                  <div class="n-v">
+                    <el-tooltip v-if="sv.nodes?.length" placement="bottom">
+                      <template #content><div v-for="(n, ni) in sv.nodes" :key="ni">{{ n }}</div></template>
+                      <span class="pill">{{ sv.nodes.length }} 个</span>
+                    </el-tooltip>
+                    <span v-else class="muted">—</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <el-table :data="ch.services" size="small" style="margin-top:8px">
               <el-table-column prop="service" label="Service" min-width="180" />
               <el-table-column label="工作负载" min-width="200"><template #default="{ row }">
@@ -126,6 +192,7 @@ import Pager from '../components/Pager.vue'
 const mode = ref('fwd'); const loading = ref(false)
 const domain = ref(''); const fwd = ref(null)
 const domainsAll = ref([]); const fProject = ref(''); const fEnv = ref('')
+const cdnRecs = computed(() => fwd.value?.cdn?.records || [])
 const projects = computed(() => [...new Set(domainsAll.value.map(d => d.project).filter(Boolean))].sort())
 const envs = computed(() => {
   const src = fProject.value ? domainsAll.value.filter(d => d.project === fProject.value) : domainsAll.value
@@ -175,4 +242,28 @@ onMounted(async () => {
 .chain-card { border: 1px solid #e7e9e2; border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
 .chain-top { display: flex; align-items: center; flex-wrap: wrap; }
 .mini-t { font-size: 13px; font-weight: 600; }
+
+/* 图形化链路：横向分层 + 连线。不引图表库——这里只要层级清晰，CSS 够用 */
+.topo { margin-top: 10px; overflow-x: auto; }
+.topo-row { display: flex; align-items: stretch; gap: 0; margin-bottom: 8px; min-width: max-content; }
+.topo-row .node {
+  min-width: 130px; max-width: 220px; padding: 6px 10px;
+  border: 1px solid #dcdfe6; border-radius: 4px; background: #fff;
+}
+.topo-row .node.entry { background: #fdf6ec; border-color: #f3d19e; }
+.topo-row .node.bad { background: #fef0f0; border-color: #fbc4c4; }
+.topo-row .n-t { font-size: 11px; color: #909399; margin-bottom: 2px; }
+.topo-row .n-v { font-size: 12px; color: #303133; word-break: break-all; line-height: 1.5; }
+.topo-row .link {
+  align-self: center; width: 22px; height: 1px; background: #c0c4cc; position: relative; flex: none;
+}
+.topo-row .link::after {
+  content: ''; position: absolute; right: 0; top: -3px;
+  border-left: 5px solid #c0c4cc; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent;
+}
+.pill { display: inline-block; padding: 0 6px; margin: 1px 2px 1px 0; border-radius: 3px; background: #f0f2f5; font-size: 12px; }
+.stage.dim { opacity: .65; }
+.why { margin-left: 6px; font-size: 12px; color: #409eff; cursor: help; text-decoration: underline dotted; }
+.warn-note { font-size: 11px; color: #e6a23c; margin-top: 3px; line-height: 1.5; }
+.bad { color: #f56c6c; }
 </style>
