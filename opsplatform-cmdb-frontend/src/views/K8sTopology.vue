@@ -48,10 +48,26 @@
                 <el-tag size="small" type="info">直连</el-tag>
                 <div style="margin-top:3px">源站 {{ fwd.edge.origin_ip }}</div>
               </template>
+              <!-- 实时解析出的 CNAME 链：很多域名本身不在 CF 的 zone 里，是通过
+                   两三跳 CNAME 指过去的，只查库必然查不到（用户就是这么发现问题的）。 -->
+              <template v-else-if="trace && trace.via_cdn">
+                <el-tag size="small" type="warning">
+                  {{ trace.managed ? '经我方 CDN' : '经 Cloudflare（非纳管账号）' }}
+                </el-tag>
+                <div class="muted hops">{{ (trace.hops || []).join(' → ') }}</div>
+                <div v-if="trace.ips?.length" class="muted">解析到 {{ trace.ips.slice(0, 2).join(', ') }}</div>
+                <el-tooltip :content="trace.basis" placement="bottom">
+                  <span class="why">判定依据</span>
+                </el-tooltip>
+              </template>
               <template v-else>
                 <span class="muted">未走纳管 CDN</span>
+                <div v-if="trace && trace.hops?.length > 1" class="muted hops">
+                  {{ trace.hops.join(' → ') }}
+                </div>
                 <!-- 「为什么是空的」比一个「—」有用：不写清楚会被当成采集坏了 -->
-                <el-tooltip v-if="fwd.cdn?.reason" :content="fwd.cdn.reason" placement="bottom">
+                <el-tooltip v-if="trace?.basis || fwd.cdn?.reason"
+                  :content="trace?.basis || fwd.cdn.reason" placement="bottom">
                   <span class="why">为什么？</span>
                 </el-tooltip>
               </template>
@@ -193,6 +209,7 @@ const mode = ref('fwd'); const loading = ref(false)
 const domain = ref(''); const fwd = ref(null)
 const domainsAll = ref([]); const fProject = ref(''); const fEnv = ref('')
 const cdnRecs = computed(() => fwd.value?.cdn?.records || [])
+const trace = computed(() => fwd.value?.cdn?.trace || null)
 const projects = computed(() => [...new Set(domainsAll.value.map(d => d.project).filter(Boolean))].sort())
 const envs = computed(() => {
   const src = fProject.value ? domainsAll.value.filter(d => d.project === fProject.value) : domainsAll.value
@@ -263,6 +280,7 @@ onMounted(async () => {
 }
 .pill { display: inline-block; padding: 0 6px; margin: 1px 2px 1px 0; border-radius: 3px; background: #f0f2f5; font-size: 12px; }
 .stage.dim { opacity: .65; }
+.hops { word-break: break-all; line-height: 1.5; margin-top: 3px; }
 .why { margin-left: 6px; font-size: 12px; color: #409eff; cursor: help; text-decoration: underline dotted; }
 .warn-note { font-size: 11px; color: #e6a23c; margin-top: 3px; line-height: 1.5; }
 .bad { color: #f56c6c; }

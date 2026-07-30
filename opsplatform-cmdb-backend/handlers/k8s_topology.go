@@ -444,6 +444,18 @@ func (h *K8sTopologyHandler) cdnFacts(domain string) map[string]any {
 		return out
 	}
 
+	// 库里没有这条 FQDN —— 但不等于它不走 CDN：很多域名是通过 CNAME 链指到
+	// CF 上的（本域不在 CF 的 zone 里，链路末端才在）。这种情况库里必然查不到，
+	// 只能实时解析一次。域名解析是公开信息，不需要任何凭据。
+	if tr := traceCDN(h.DB, domain); tr.ViaCDN || tr.Managed || len(tr.Hops) > 1 {
+		out["trace"] = tr
+		if tr.ViaCDN {
+			out["via_cdn"] = true
+			out["reason"] = tr.Basis
+			return out
+		}
+	}
+
 	// 没有记录：区分「根域不在纳管范围」和「根域在但漏配这条」
 	zones := []string{}
 	if zr, err := h.DB.Query(`SELECT name FROM cdn_zones ORDER BY name`); err == nil {
