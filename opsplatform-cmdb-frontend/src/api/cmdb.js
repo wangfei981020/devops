@@ -271,3 +271,11 @@ export const costAttribution = (month) => http.get('/k8s/cost/attribution', { pa
 
 // 登录
 export const login = (username, password) => http.post('/login', { username, password }).then((r) => r.data)
+
+// GKE 版本与升级
+export const gkeUpgradeOverview = () => http.get('/gke/upgrade/overview').then((r) => r.data)
+export const gkeVersionSchedule = () => http.get('/gke/version-schedule').then((r) => r.data)
+export const gkeOverrideSchedule = (id, b) => http.put('/gke/version-schedule/' + id, b).then((r) => r.data)
+export const gkeClearScheduleOverride = (id) => http.delete(`/gke/version-schedule/${id}/override`).then((r) => r.data)
+export const gkeUpgradeHistory = (params) => http.get('/gke/upgrade/history', { params }).then((r) => r.data)
+export const gkeRepairHistory = (params) => http.get('/gke/repair-history', { params }).then((r) => r.data)

@@ -36,6 +36,7 @@ const routes = [
   { path: '/k8s-storage', component: () => import('../views/K8sStorage.vue'), meta: { title: 'K8s 存储/伸缩' } },
   { path: '/k8s-topology', component: () => import('../views/K8sTopology.vue'), meta: { title: 'K8s 全链路' } },
   { path: '/k8s-ns-project', component: () => import('../views/K8sNsProject.vue'), meta: { title: '命名空间归属' } },
+  { path: '/version-upgrade', component: () => import('../views/VersionUpgrade.vue'), meta: { title: '版本与升级' } },
   { path: '/cost', component: () => import('../views/K8sCost.vue'), meta: { title: '云成本' } },
   { path: '/k8s-events', component: () => import('../views/K8sEvents.vue'), meta: { title: 'K8s 事件' } },
   // 接入管理：注册商/云账号/CDN/数据源/ACME 五类凭据统一入口。

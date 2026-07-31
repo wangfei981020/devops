@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -389,13 +390,23 @@ func predictUpgradeDate(db *sql.DB, s *k8ssource.ClusterUpgradeSnapshot, pools [
 		}
 	}
 
-	// ② 官网排期表
+	// ② 官网排期表：优先用 API 给的目标版本
 	target := minorOf(s.MinorTargetVersion)
+	source = "schedule_table"
 	if target == "" {
+		// ③ 兜底推断：minorTargetVersion 只在 GKE 已排期时才有值，
+		// 实测 4 个集群全为空（都还没排期）。此时用「当前小版本的下一个」查排期表，
+		// 否则看板上「预计自动升级」会永远是空的，等于这个功能白做。
+		// 标记 source=inferred_next_minor，前端必须显示为「推断」而非确定值。
+		target = nextMinor(s.CurrentMasterVersion)
+		source = "inferred_next_minor"
 		logx.J("gke_upgrade", "no_minor_target", map[string]any{
-			"master": s.CurrentMasterVersion, "note": "无 minorTargetVersion，无法查排期表",
+			"master": s.CurrentMasterVersion, "inferred": target,
+			"note": "GKE 尚未排期(minorTargetVersion 为空)，按当前版本的下一个小版本推断",
 		})
-		return "", "unknown", "none"
+		if target == "" {
+			return "", "unknown", "none"
+		}
 	}
 	channel := strings.ToUpper(s.ReleaseChannel)
 	if channel == "" || channel == "UNSPECIFIED" {
@@ -416,7 +427,25 @@ func predictUpgradeDate(db *sql.DB, s *k8ssource.ClusterUpgradeSnapshot, pools [
 	if len(d) >= 10 {
 		d = d[:10]
 	}
-	return d, prec, "schedule_table"
+	return d, prec, source
+}
+
+// nextMinor 由当前版本推下一个小版本："1.34.8-gke.1278000" → "1.35"。
+// 用整数递增而非字符串拼接，否则 1.9 会推成 1.10 之外的错值。
+func nextMinor(cur string) string {
+	m := minorOf(cur)
+	if m == "" {
+		return ""
+	}
+	parts := strings.SplitN(m, ".", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	n, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return ""
+	}
+	return parts[0] + "." + strconv.Itoa(n+1)
 }
 
 // poolUpgradeRisk 节点池升级风险：maxUnavailable 占比越高，升级时同时不可用的节点越多。

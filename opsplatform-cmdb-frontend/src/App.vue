@@ -83,6 +83,7 @@ const menus = shallowRef([
   ] },
   { type: 'group', label: 'K8s', icon: Grid, children: [
     { path: '/k8s-clusters', label: '集群管理', icon: Cloudy },
+    { path: '/version-upgrade', label: '版本与升级', icon: Clock },
     { path: '/k8s-nodes', label: '节点', icon: Monitor },
     { path: '/k8s-workloads', label: '工作负载', icon: Coin },
     { path: '/k8s-pods', label: 'Pod', icon: List },
