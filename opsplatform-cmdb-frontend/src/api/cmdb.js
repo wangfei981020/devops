@@ -280,3 +280,7 @@ export const gkeClearScheduleOverride = (id) => http.delete(`/gke/version-schedu
 export const gkeUpgradeHistory = (params) => http.get('/gke/upgrade/history', { params }).then((r) => r.data)
 export const gkeRepairHistory = (params) => http.get('/gke/repair-history', { params }).then((r) => r.data)
 export const gkeNodeHealth = () => http.get('/gke/node-health').then((r) => r.data)
+// 升级预案与过程看板（只读；执行仍在 GCP 控制台，预案里给的是控制台步骤）
+export const gkeUpgradePlan = (params) => http.get('/gke/upgrade/plan', { params }).then((r) => r.data)
+export const gkeUpgradeProgress = (params) => http.get('/gke/upgrade/progress', { params }).then((r) => r.data)
+export const k8sPdbs = (params) => http.get('/k8s/pdbs', { params }).then((r) => r.data)

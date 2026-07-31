@@ -304,6 +304,10 @@ func (s *Scheduler) purgeHistory() {
 		`DELETE FROM k8s_changes WHERE changed_at < DATE_SUB(NOW(), INTERVAL 180 DAY)`)
 	s.exec("清理365天前证书历史",
 		`DELETE FROM cert_history WHERE at < DATE_SUB(NOW(), INTERVAL 365 DAY)`)
+	// 节点增删事件同样只增不删。保留一年：升级窗口是按年规划的，
+	// 排明年的升级时要能翻出今年同一批集群的实测节奏。
+	s.exec("清理365天前节点版本变更事件",
+		`DELETE FROM k8s_node_version_events WHERE detected_at < DATE_SUB(NOW(), INTERVAL 365 DAY)`)
 }
 
 // ---- 任务核心函数 ----

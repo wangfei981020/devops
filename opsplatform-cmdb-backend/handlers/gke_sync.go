@@ -288,21 +288,27 @@ func saveNodePools(db *sql.DB, clusterID int, pools []k8ssource.NodePoolSnapshot
 			INSERT INTO gke_node_pools
 			  (cluster_id, name, node_count, version, status, auto_upgrade, auto_repair,
 			   auto_upgrade_start_time, upgrade_description, max_surge, max_unavailable, strategy,
-			   bg_phase, upgrade_risk, auto_upgrade_status, paused_reason, minor_target_version, eos_standard_at, eos_extended_at)
-			VALUES (?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?)
+			   bg_phase, bg_rollout_policy, bg_batch_node_count, bg_batch_percentage, bg_batch_soak_sec, bg_node_pool_soak_sec,
+			   upgrade_risk, auto_upgrade_status, paused_reason, minor_target_version, eos_standard_at, eos_extended_at)
+			VALUES (?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?)
 			ON DUPLICATE KEY UPDATE
 			  node_count=VALUES(node_count), version=VALUES(version), status=VALUES(status),
 			  auto_upgrade=VALUES(auto_upgrade), auto_repair=VALUES(auto_repair),
 			  auto_upgrade_start_time=VALUES(auto_upgrade_start_time), upgrade_description=VALUES(upgrade_description),
 			  max_surge=VALUES(max_surge), max_unavailable=VALUES(max_unavailable), strategy=VALUES(strategy),
-			  bg_phase=VALUES(bg_phase), upgrade_risk=VALUES(upgrade_risk),
+			  bg_phase=VALUES(bg_phase), bg_rollout_policy=VALUES(bg_rollout_policy),
+			  bg_batch_node_count=VALUES(bg_batch_node_count), bg_batch_percentage=VALUES(bg_batch_percentage),
+			  bg_batch_soak_sec=VALUES(bg_batch_soak_sec), bg_node_pool_soak_sec=VALUES(bg_node_pool_soak_sec),
+			  upgrade_risk=VALUES(upgrade_risk),
 			  auto_upgrade_status=VALUES(auto_upgrade_status), paused_reason=VALUES(paused_reason),
 			  minor_target_version=VALUES(minor_target_version), eos_standard_at=VALUES(eos_standard_at),
 			  eos_extended_at=VALUES(eos_extended_at), synced_at=NOW()`,
 			clusterID, p.Name, p.NodeCount, p.Version, p.Status, boolInt(p.AutoUpgrade), boolInt(p.AutoRepair),
 			nullDateTime(p.AutoUpgradeStartTime), truncStr(p.UpgradeDescription, 500),
 			p.MaxSurge, p.MaxUnavailable, p.Strategy,
-			p.BlueGreenPhase, poolUpgradeRisk(p), strings.Join(p.AutoUpgradeStatus, ","),
+			p.BlueGreenPhase, p.BGRolloutPolicy, nullZeroInt(p.BGBatchNodeCount), nullZeroFloat(p.BGBatchPercentage),
+			p.BGBatchSoakSec, p.BGNodePoolSoakSec,
+			poolUpgradeRisk(p), strings.Join(p.AutoUpgradeStatus, ","),
 			strings.Join(p.PausedReason, ","), p.MinorTargetVersion, dateOnly(p.EOSStandard), dateOnly(p.EOSExtended))
 		if e != nil {
 			logx.J("gke_upgrade", "save_pool_failed", map[string]any{"cluster_id": clusterID, "pool": p.Name, "err": e.Error()})
@@ -566,6 +572,26 @@ func nullDateTime(s string) any {
 }
 
 // boolInt / truncStr 复用 cdn.go / event_center.go 里的同名 helper，此处不重复定义。
+
+// nullZeroInt / nullZeroFloat 把「API 没给」存成 NULL 而不是 0。
+//
+// 用在 BLUE_GREEN 的批次参数上：batchNodeCount 和 batchPercentage 本来就是二选一，
+// 没被选中的那个恒为 0。存成 0 会让预估公式把「除以 0 批」当成合法输入；
+// 存 NULL 则能让下游明确判出「这个池用的是另一种批次口径」。
+// GKE 也不接受 0 作为有效批次大小，所以 0 与「未设置」在语义上等价。
+func nullZeroInt(v int) any {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
+
+func nullZeroFloat(v float64) any {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
 
 func containsStr(list []string, s string) bool {
 	for _, x := range list {

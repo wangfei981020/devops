@@ -56,6 +56,13 @@
 #      查邮箱：CMDB「接入管理 → 云账号」里该项目配的 SA。
 #
 # 注意：每个 GKE 项目/集群各自独立，UAT 与 infra 要各做一次，且各用自己项目下的 SA 邮箱。
+#
+# ── PodDisruptionBudget（2026-07-31 新增采集）─────────────────────────
+# roles/container.viewer 已含 container.podDisruptionBudgets.get/list，走 IAM 的集群无需额外授权。
+# 走方式 C（集群内 RBAC）的集群，重新 apply 一次 k8s-readonly-rbac.yaml 即可——
+# ClusterRole 里已补上 policy/poddisruptionbudgets。
+# 采不到时 CMDB 只跳过这一项并打日志，不影响其他资源；但升级预案里的
+# 「drain 阻塞风险」会显示为「未知」而不是「无风险」——这两者区别很大，别看漏。
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

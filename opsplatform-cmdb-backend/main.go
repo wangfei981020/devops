@@ -86,7 +86,9 @@ func main() {
 	handlers.NewK8sClusterHandler(db, cipher, k8sPool).Register(api)
 	handlers.NewGKEUpgradeHandler(db).Register(api)
 	handlers.NewGKEHistoryHandler(db).Register(api)
+	handlers.NewGKEUpgradePlanHandler(db).Register(api) // 升级预案 + 过程看板（只读，执行仍在 GCP 控制台）
 	handlers.NewK8sResourceHandler(db, k8sPool, cipher).Register(api)
+	handlers.NewK8sPDBHandler(db).Register(api) // PDB：节点能不能被 drain 走，升级卡不卡
 	handlers.NewK8sTopologyHandler(db, cipher).Register(api)
 	handlers.NewK8sCostHandler(db).Register(api)
 	handlers.NewK8sDiagHandler(db, k8sPool, cipher).Register(api) // 合并 k8sinsight：实时日志/事件/规则诊断

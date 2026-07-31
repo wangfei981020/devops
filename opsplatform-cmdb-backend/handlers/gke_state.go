@@ -45,9 +45,18 @@ type poolState struct {
 	MaxSurge       int
 	Strategy       string
 	BGPhase        string
-	StartTime      string
-	Status         string
-	riskNote       string
+
+	// BLUE_GREEN 批次与观察期参数（migration 070）。指针区分「API 没给」与「配成 0」——
+	// 观察期常常是 BLUE_GREEN 里最长的一段，当成 0 会让耗时预估严重偏小。
+	BGRolloutPolicy   string
+	BGBatchNodeCount  *int
+	BGBatchPercentage *float64
+	BGBatchSoakSec    *int
+	BGNodePoolSoakSec *int
+
+	StartTime string
+	Status    string
+	riskNote  string
 }
 
 // clusterUpgradeState 一个集群的完整升级状态，看板/提醒/MCP 共用。
@@ -166,6 +175,7 @@ func loadPoolStates(db *sql.DB, today time.Time) (map[int][]poolState, error) {
 	rows, err := db.Query(`
 		SELECT cluster_id, name, node_count, version, status, auto_upgrade, auto_repair,
 		       auto_upgrade_start_time, max_surge, max_unavailable, strategy, bg_phase,
+		       bg_rollout_policy, bg_batch_node_count, bg_batch_percentage, bg_batch_soak_sec, bg_node_pool_soak_sec,
 		       upgrade_risk, paused_reason, minor_target_version, eos_standard_at, eos_extended_at
 		  FROM gke_node_pools ORDER BY cluster_id, name`)
 	if err != nil {
@@ -178,10 +188,19 @@ func loadPoolStates(db *sql.DB, today time.Time) (map[int][]poolState, error) {
 		var p poolState
 		var au, ar int
 		var startTime, eos, eosExt sql.NullString
+		var bgBatch, bgBatchSoak, bgPoolSoak sql.NullInt64
+		var bgPct sql.NullFloat64
 		if rows.Scan(&cid, &p.Name, &p.NodeCount, &p.Version, &p.Status, &au, &ar,
 			&startTime, &p.MaxSurge, &p.MaxUnavailable, &p.Strategy, &p.BGPhase,
+			&p.BGRolloutPolicy, &bgBatch, &bgPct, &bgBatchSoak, &bgPoolSoak,
 			&p.UpgradeRisk, &p.PausedReason, &p.MinorTarget, &eos, &eosExt) != nil {
 			continue
+		}
+		p.BGBatchNodeCount, p.BGBatchSoakSec = nullIntPtr(bgBatch), nullIntPtr(bgBatchSoak)
+		p.BGNodePoolSoakSec = nullIntPtr(bgPoolSoak)
+		if bgPct.Valid {
+			v := bgPct.Float64
+			p.BGBatchPercentage = &v
 		}
 		p.AutoUpgrade, p.AutoRepair = au == 1, ar == 1
 		p.StartTime = dateTimeStr(startTime)

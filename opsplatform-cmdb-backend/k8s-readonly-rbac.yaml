@@ -24,6 +24,12 @@ rules:
   - apiGroups: ["autoscaling"]
     resources: [horizontalpodautoscalers]
     verbs: [get, list, watch]
+  # PodDisruptionBudget：升级/drain 能不能推进的决定因素。
+  # 余量(status.disruptionsAllowed)为 0 时 kubectl drain 会一直被拒，
+  # 节点升级卡到超时才强杀——不采这个就永远在升级当晚才发现。
+  - apiGroups: ["policy"]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch]
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: [gateways, httproutes]
     verbs: [get, list, watch]

@@ -17,6 +17,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
+
+	"opsplatform-cmdb-backend/logx"
 )
 
 var (
@@ -65,6 +67,7 @@ func SyncCluster(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, dc d
 	run("ingresses", func() (int, error) { return syncIngresses(ctx, db, cs, clusterID) })
 	run("pvcs", func() (int, error) { return syncPVCs(ctx, db, cs, clusterID) })
 	run("hpas", func() (int, error) { return syncHPAs(ctx, db, cs, clusterID) })
+	run("pdbs", func() (int, error) { return syncPDBs(ctx, db, cs, clusterID) })
 	run("gateways", func() (int, error) { return syncGateways(ctx, db, dc, clusterID) })
 	run("httproutes", func() (int, error) { return syncHTTPRoutes(ctx, db, dc, clusterID) })
 	run("virtualservices", func() (int, error) { return syncVirtualServices(ctx, db, dc, clusterID) })
@@ -103,6 +106,7 @@ func syncNodes(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid in
 		return 0, err
 	}
 	rows := make([][]any, 0, len(list.Items))
+	current := make(map[string]nodeVersionRef, len(list.Items))
 	for i := range list.Items {
 		n := &list.Items[i]
 		ready, hb := readyCondition(n)
@@ -110,13 +114,20 @@ func syncNodes(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid in
 		if hb != nil && !hb.IsZero() {
 			hbVal = hb.UTC()
 		}
+		pool := resolvePool(n, poolLabel)
+		current[n.Name] = nodeVersionRef{Pool: pool, Version: n.Status.NodeInfo.KubeletVersion}
 		rows = append(rows, []any{
-			cid, n.Name, resolvePool(n, poolLabel), nodeInternalIP(n), nodeExternalIP(n), nodeRoles(n),
+			cid, n.Name, pool, nodeInternalIP(n), nodeExternalIP(n), nodeRoles(n),
 			n.Labels["node.kubernetes.io/instance-type"], n.Status.Capacity.Cpu().String(),
 			n.Status.Capacity.Memory().String(), n.Status.NodeInfo.OSImage, n.Status.NodeInfo.KubeletVersion,
 			ready, hbVal, pressureSummary(n), conditionsJSON(n), boolToInt(isStuck(ready, hb)),
 		})
 	}
+
+	// 先记事件再覆盖当前状态：k8s_nodes 是覆盖式的，写完就再也看不出这一轮变了什么。
+	// 记录失败只打日志不阻断——节点数据本身比变更事件重要得多，不能因为记流水失败就丢掉这一轮采集。
+	recordNodeVersionEvents(db, cid, current)
+
 	return writeRows(db, "k8s_nodes", []string{
 		"cluster_id", "name", "pool", "internal_ip", "external_ip", "roles", "machine_type", "cpu_cap", "mem_cap",
 		"os_image", "kubelet_version", "ready_status", "last_heartbeat", "conditions", "conditions_json", "stuck",
@@ -530,6 +541,90 @@ func syncHPAs(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 		"cluster_id", "namespace", "name", "target_kind", "target_name",
 		"min_replicas", "max_replicas", "current_replicas",
 	}, cid, rows, "cluster_id", "namespace", "name")
+}
+
+// syncPDBs 采集 PodDisruptionBudget。
+//
+// 采它只为回答一个问题：这个节点能不能被 drain 走。
+// status.disruptionsAllowed=0 时驱逐请求会被 API Server 一直拒绝，节点升级卡到超时才强杀，
+// 单节点可能多花一小时——而这在升级开始前是完全可见的，只要采了。
+//
+// 权限不足只跳过本项（老集群的只读 RBAC 里可能还没加 policy 组），
+// 但必须打日志：预案里「drain 阻塞风险未知」和「无阻塞风险」是两回事，
+// 静默返回 0 会让人以为后者。
+func syncPDBs(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int) (int, error) {
+	list, err := cs.PolicyV1().PodDisruptionBudgets("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if apierrors.IsForbidden(err) {
+			logx.J("k8s_sync", "pdb_forbidden", map[string]any{
+				"cluster_id": cid, "err": truncErr(err.Error()),
+				"hint": "只读 RBAC 缺 policy/poddisruptionbudgets；升级预案的 drain 阻塞风险将显示为「未知」而非「无风险」",
+			})
+			return 0, nil
+		}
+		return 0, err
+	}
+	rows := make([][]any, 0, len(list.Items))
+	blocking := 0
+	for i := range list.Items {
+		p := &list.Items[i]
+		var minAvail, maxUnavail string
+		if p.Spec.MinAvailable != nil {
+			minAvail = p.Spec.MinAvailable.String()
+		}
+		if p.Spec.MaxUnavailable != nil {
+			maxUnavail = p.Spec.MaxUnavailable.String()
+		}
+		if p.Status.DisruptionsAllowed == 0 {
+			blocking++
+		}
+		rows = append(rows, []any{
+			cid, p.Namespace, p.Name, minAvail, maxUnavail, selectorText(p.Spec.Selector),
+			p.Status.CurrentHealthy, p.Status.DesiredHealthy, p.Status.ExpectedPods, p.Status.DisruptionsAllowed,
+		})
+	}
+	if blocking > 0 {
+		// 稳态下也可能有余量为 0 的 PDB（副本正在重启时是暂态），所以这里是 INFO 不是告警；
+		// 真正的判断在升级预案里做——那时才关心「计划升级的池上有没有卡住的 PDB」。
+		logx.J("k8s_sync", "pdb_zero_disruptions", map[string]any{
+			"cluster_id": cid, "blocking": blocking, "total": len(rows),
+			"note": "这些 PDB 此刻不允许驱逐任何 Pod，若升级期间仍为 0 会阻塞 drain",
+		})
+	}
+	return writeRows(db, "k8s_pdbs", []string{
+		"cluster_id", "namespace", "name", "min_available", "max_unavailable", "selector",
+		"current_healthy", "desired_healthy", "expected_pods", "disruptions_allowed",
+	}, cid, rows, "cluster_id", "namespace", "name")
+}
+
+// selectorText 把 LabelSelector 拍平成 "k=v,k2=v2" 便于人读和关联工作负载。
+// matchExpressions 无法用这种形式无损表达，遇到时标注出来而不是悄悄丢掉。
+func selectorText(sel *metav1.LabelSelector) string {
+	if sel == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(sel.MatchLabels))
+	for k, v := range sel.MatchLabels {
+		parts = append(parts, k+"="+v)
+	}
+	sort.Strings(parts)
+	s := strings.Join(parts, ",")
+	if len(sel.MatchExpressions) > 0 {
+		if s != "" {
+			s += ","
+		}
+		s += fmt.Sprintf("(+%d 个 matchExpressions)", len(sel.MatchExpressions))
+	}
+	return truncRunes(s, 500)
+}
+
+// truncRunes 按字符截断，避免把多字节字符切成半个。
+func truncRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
 }
 
 // syncGateways 采集 Gateway API 的 Gateway（CRD，dynamic）。集群未装 CRD → 优雅跳过(0)。

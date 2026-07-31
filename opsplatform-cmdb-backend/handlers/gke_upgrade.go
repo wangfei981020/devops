@@ -47,7 +47,17 @@ type gkePoolOut struct {
 	MaxUnavailable       int    `json:"max_unavailable"`
 	Strategy             string `json:"strategy"`
 	BGPhase              string `json:"bg_phase"`
-	UpgradeRisk          string `json:"upgrade_risk"`
+
+	// BLUE_GREEN 批次与观察期：决定这个池升级要多久。
+	// null 表示 API 没返回该参数（GKE 会用它自己的默认值），前端须显示「未配」而非 0，
+	// 否则会让人以为「观察期为 0，升级很快」——恰恰相反，默认观察期通常是一小时量级。
+	BGRolloutPolicy   string   `json:"bg_rollout_policy"`
+	BGBatchNodeCount  *int     `json:"bg_batch_node_count"`
+	BGBatchPercentage *float64 `json:"bg_batch_percentage"`
+	BGBatchSoakSec    *int     `json:"bg_batch_soak_sec"`
+	BGNodePoolSoakSec *int     `json:"bg_node_pool_soak_sec"`
+
+	UpgradeRisk string `json:"upgrade_risk"`
 	RiskNote             string `json:"risk_note"`
 	PausedReason         string `json:"paused_reason"`
 	MinorTargetVersion   string `json:"minor_target_version"`
@@ -155,7 +165,10 @@ func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
 				AutoUpgradeStartTime: p.StartTime,
 				MaxSurge:             p.MaxSurge, MaxUnavailable: p.MaxUnavailable,
 				Strategy: p.Strategy, BGPhase: p.BGPhase,
-				UpgradeRisk: p.UpgradeRisk, RiskNote: joinNote(p.RiskNote(), riskNoteFor(p)),
+				BGRolloutPolicy: p.BGRolloutPolicy, BGBatchNodeCount: p.BGBatchNodeCount,
+				BGBatchPercentage: p.BGBatchPercentage, BGBatchSoakSec: p.BGBatchSoakSec,
+				BGNodePoolSoakSec: p.BGNodePoolSoakSec,
+				UpgradeRisk:       p.UpgradeRisk, RiskNote: joinNote(p.RiskNote(), riskNoteFor(p)),
 				PausedReason: p.PausedReason, MinorTargetVersion: p.MinorTarget,
 				VersionSkew: skewText(p.SkewMinors), EOSStandardAt: p.EffectiveEOSAt,
 				EOSDaysLeft: p.EOSDaysLeft, Stranded: p.Stranded,
@@ -496,6 +509,16 @@ func dateTimeStr(v sql.NullString) string {
 		return t.Format("2006-01-02 15:04:05")
 	}
 	return v.String
+}
+
+// nullIntPtr NULL → nil，有值 → 指针。
+// 升级参数里 NULL 和 0 语义完全不同（「没采到」vs「不等待」），不能塌缩成同一个值。
+func nullIntPtr(v sql.NullInt64) *int {
+	if !v.Valid {
+		return nil
+	}
+	n := int(v.Int64)
+	return &n
 }
 
 // dateWindow 按粒度把「归一化到首日的日期」还原成它真正代表的区间 [start, end]。

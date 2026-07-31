@@ -227,6 +227,225 @@
           </el-table>
         </el-tab-pane>
 
+        <!-- ------------------------------------------------ 升级预案 -->
+        <!-- 排一次升级需要的东西全在这一屏：要多久、要多少配额、会断什么、卡在哪、怎么点、事后怎么验。
+             CMDB 只出方案不执行——执行在 GCP 控制台，所以给的是页面步骤而不是命令。 -->
+        <el-tab-pane label="升级预案" name="plan">
+          <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <el-select v-model="planCluster" size="small" style="width:200px" placeholder="选择集群" @change="loadPlan">
+              <el-option v-for="c in clusters" :key="c.cluster_id"
+                :label="c.display_name || c.name" :value="c.cluster_id" />
+            </el-select>
+            <el-input v-model="planTarget" size="small" style="width:230px" clearable
+              placeholder="目标版本，留空=用推断值" @keyup.enter="loadPlan" />
+            <el-button size="small" type="primary" :loading="planLoading" @click="loadPlan">生成预案</el-button>
+            <span class="muted" v-if="plan">生成于 {{ plan.generated_at }}</span>
+          </div>
+
+          <!-- 失败必须占住版面：只弹个 toast 的话，toast 消失后页面看起来就像「这个集群没风险」 -->
+          <el-alert v-if="planError" type="error" :closable="false" show-icon style="margin-bottom:10px">
+            <template #title>预案生成失败，当前页面不代表该集群没有风险</template>
+            {{ planError }}
+          </el-alert>
+
+          <el-alert v-if="!planCluster && !planError" type="info" :closable="false" show-icon>
+            <template #title>选一个集群生成升级预案</template>
+            预案会算出分池耗时、配额需求、会中断的服务、会卡住 drain 的 PDB，并留下升级前基线快照。
+            <b>CMDB 不执行升级</b>——预案给的是 GCP 控制台的点击步骤。
+          </el-alert>
+
+          <template v-if="plan">
+            <!-- 先回答「要多久」，这是排窗口时唯一先看的数字 -->
+            <div class="sum-bar" style="margin-bottom:12px">
+              <span class="chip critical">
+                预计总耗时 {{ fmtMin(plan.total_estimate.min_minutes) }} ~ {{ fmtMin(plan.total_estimate.max_minutes) }}
+              </span>
+              <span class="chip" :class="plan.total_estimate.measured ? 'ok' : ''">
+                {{ plan.total_estimate.measured ? '基于实测' : '含经验区间' }}
+              </span>
+              <span class="chip" v-if="plan.target_version">目标 {{ plan.target_version }}</span>
+              <span class="chip" v-if="totalExtraNodes">升级峰值多占 {{ totalExtraNodes }} 台</span>
+              <span class="chip critical" v-if="plan.blocking_pdbs && plan.blocking_pdbs.length">
+                {{ plan.blocking_pdbs.length }} 个 PDB 会卡住 drain
+              </span>
+              <span class="chip critical" v-if="!plan.pdbs_collected">PDB 未采集</span>
+            </div>
+
+            <el-alert v-for="(w, i) in plan.warnings" :key="'pw' + i" type="warning"
+              :closable="false" show-icon style="margin-bottom:6px" :title="w" />
+
+            <!-- 预估的可信度：缺了哪些参数必须让人看见，否则区间会被当定值用 -->
+            <el-alert v-if="plan.total_estimate.incomplete && plan.total_estimate.incomplete.length"
+              type="warning" :closable="false" show-icon style="margin:6px 0 12px">
+              <template #title>耗时预估有 {{ plan.total_estimate.incomplete.length }} 项参数缺失，排停机窗口请按上限算</template>
+              <div v-for="(s, i) in plan.total_estimate.incomplete" :key="'inc' + i" style="font-size:12px">· {{ s }}</div>
+            </el-alert>
+
+            <!-- 控制面 -->
+            <el-card shadow="never" class="plan-card">
+              <div class="plan-card-head">
+                <b>控制面</b>
+                <span class="muted">{{ plan.control_plane.current_version }} → {{ plan.control_plane.target_version || '待定' }}</span>
+                <el-tag size="small" type="danger" v-if="plan.control_plane.minor_jump > 1">
+                  跨 {{ plan.control_plane.minor_jump }} 个小版本
+                </el-tag>
+                <span style="margin-left:auto">
+                  <b>{{ fmtMin(plan.control_plane.estimate.min_minutes) }} ~ {{ fmtMin(plan.control_plane.estimate.max_minutes) }}</b>
+                </span>
+              </div>
+              <div class="muted" style="font-size:12px">依据：{{ plan.control_plane.estimate.basis }}</div>
+              <div v-for="(w, i) in plan.control_plane.warnings" :key="'cw' + i" class="plan-warn">⚠ {{ w }}</div>
+            </el-card>
+
+            <!-- 各节点池 -->
+            <el-card v-for="p in plan.pools" :key="p.name" shadow="never" class="plan-card">
+              <div class="plan-card-head">
+                <b>{{ p.name }}</b>
+                <span class="muted">{{ p.node_count }} 台 · {{ p.current_version }}</span>
+                <el-tag size="small" :type="p.strategy === 'BLUE_GREEN' ? 'warning' : 'info'">{{ p.strategy || '策略未知' }}</el-tag>
+                <el-tag size="small" type="danger" v-if="p.auto_repair_off">autoRepair 已关</el-tag>
+                <span style="margin-left:auto">
+                  <b>{{ fmtMin(p.estimate.min_minutes) }} ~ {{ fmtMin(p.estimate.max_minutes) }}</b>
+                  <span class="muted" v-if="p.estimate.batches"> · {{ p.estimate.batches }} 批</span>
+                </span>
+              </div>
+              <div class="muted" style="font-size:12px">依据：{{ p.estimate.basis }}</div>
+
+              <!-- BLUE_GREEN 参数：null 显示「未配(用GKE默认)」而不是 0——
+                   显示成 0 会让人以为观察期不存在，而默认观察期通常是一小时量级 -->
+              <div class="plan-params" v-if="p.strategy === 'BLUE_GREEN'">
+                <span>批次：{{ p.batch_node_count ?? (p.batch_percentage ? (p.batch_percentage * 100) + '%' : '未配（用 GKE 默认）') }}</span>
+                <span>每批观察期：{{ fmtSoak(p.batch_soak_sec) }}</span>
+                <span>整池观察期：{{ fmtSoak(p.node_pool_soak_sec) }}</span>
+                <span v-if="p.rollout_policy">策略：{{ p.rollout_policy }}</span>
+              </div>
+
+              <div class="plan-quota">📦 {{ p.quota_note }}</div>
+              <div v-for="(w, i) in p.warnings" :key="'pw' + i" class="plan-warn">⚠ {{ w }}</div>
+
+              <el-collapse v-if="p.single_replica_workloads.length || p.concentrated_nodes.length" style="margin-top:8px">
+                <el-collapse-item v-if="p.single_replica_workloads.length"
+                  :title="`必然中断的单副本服务 (${p.single_replica_workloads.length})`" :name="p.name + '-sr'">
+                  <el-table :data="p.single_replica_workloads" size="small" border>
+                    <el-table-column prop="namespace" label="命名空间" width="180" />
+                    <el-table-column prop="kind" label="类型" width="110" />
+                    <el-table-column prop="name" label="名称" />
+                    <el-table-column prop="node" label="所在节点" show-overflow-tooltip />
+                  </el-table>
+                </el-collapse-item>
+                <el-collapse-item v-if="p.concentrated_nodes.length"
+                  :title="`单点集中节点 (${p.concentrated_nodes.length}) —— drain 一台断多个服务`" :name="p.name + '-cn'">
+                  <div v-for="n in p.concentrated_nodes" :key="n.node" class="conc-node">
+                    <div><b>{{ n.node }}</b> — {{ n.count }} 个有状态/单副本 Pod</div>
+                    <div class="muted" style="font-size:12px">{{ n.pods.join('、') }}</div>
+                    <div class="plan-warn">⚠ {{ n.risk_note }}</div>
+                  </div>
+                </el-collapse-item>
+              </el-collapse>
+            </el-card>
+
+            <!-- PDB 阻塞 -->
+            <el-card shadow="never" class="plan-card">
+              <div class="plan-card-head"><b>drain 阻塞风险（PodDisruptionBudget）</b></div>
+              <el-alert :type="plan.pdbs_collected ? (plan.blocking_pdbs.length ? 'warning' : 'success') : 'error'"
+                :closable="false" show-icon :title="plan.pdb_note" style="margin-bottom:8px" />
+              <el-table v-if="plan.blocking_pdbs.length" :data="plan.blocking_pdbs" size="small" border>
+                <el-table-column prop="namespace" label="命名空间" width="180" />
+                <el-table-column prop="name" label="PDB" width="220" />
+                <el-table-column label="所在节点池" width="220">
+                  <template #default="{ row }">
+                    <el-tooltip :content="row.pools_note" placement="top">
+                      <span>{{ row.pools.join('、') || '—' }} <span class="muted">(近似)</span></span>
+                    </el-tooltip>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="risk_note" label="为什么卡 / 怎么办" show-overflow-tooltip />
+              </el-table>
+            </el-card>
+
+            <!-- 升级前基线 -->
+            <el-card shadow="never" class="plan-card">
+              <div class="plan-card-head">
+                <b>升级前基线快照</b>
+                <span class="muted">{{ plan.baseline.taken_at }}</span>
+              </div>
+              <div class="sum-bar" style="margin:0 0 8px">
+                <span class="chip">节点 {{ plan.baseline.nodes }}</span>
+                <span class="chip">Pod {{ plan.baseline.pods }}</span>
+                <span class="chip ok">Running {{ plan.baseline.running }}</span>
+                <span class="chip" :class="plan.baseline.failed ? 'critical' : ''">Failed {{ plan.baseline.failed }}</span>
+                <span class="chip" :class="plan.baseline.pending ? 'critical' : ''">Pending {{ plan.baseline.pending }}</span>
+                <span class="chip">工作负载 {{ plan.baseline.workloads }}</span>
+              </div>
+              <!-- 没采过 Pod 时数字全是 0，看起来像「空集群」——必须显式报错而不是让人自己看出来 -->
+              <el-alert v-if="!plan.baseline.pods_collected" type="error" :closable="false" show-icon
+                style="margin-bottom:8px" :title="plan.baseline.note" />
+              <div v-else class="muted" style="font-size:12px;margin-bottom:8px">{{ plan.baseline.note }}</div>
+              <el-collapse v-if="plan.baseline.known_bad && plan.baseline.known_bad.length">
+                <el-collapse-item :title="`升级前已存在的异常 (${plan.baseline.known_bad.length}) —— 升级后原样出现即与升级无关`" name="kb">
+                  <el-table :data="plan.baseline.known_bad" size="small" border max-height="360">
+                    <el-table-column prop="namespace" label="命名空间" width="180" />
+                    <el-table-column prop="pod" label="Pod" show-overflow-tooltip />
+                    <el-table-column prop="phase" label="状态" width="100" />
+                    <el-table-column prop="restarts" label="重启" width="80" />
+                    <el-table-column prop="reason" label="说明" show-overflow-tooltip />
+                  </el-table>
+                </el-collapse-item>
+              </el-collapse>
+            </el-card>
+
+            <!-- 执行步骤 + 验证清单 -->
+            <el-card shadow="never" class="plan-card">
+              <div class="plan-card-head"><b>GCP 控制台执行步骤</b>
+                <span class="muted">顺序是硬约束不是建议</span>
+              </div>
+              <ol class="plan-steps">
+                <li v-for="(s, i) in plan.console_steps" :key="'cs' + i">{{ s }}</li>
+              </ol>
+            </el-card>
+
+            <el-card shadow="never" class="plan-card">
+              <div class="plan-card-head"><b>升级后验证清单</b></div>
+              <ul class="plan-steps">
+                <li v-for="(s, i) in plan.verification" :key="'vf' + i">{{ s }}</li>
+              </ul>
+            </el-card>
+
+            <!-- 实测节奏：升完之后这里自动出数，是外推生产窗口的依据 -->
+            <el-card shadow="never" class="plan-card">
+              <div class="plan-card-head">
+                <b>实测节奏</b>
+                <span class="muted">从节点增删事件还原，用于外推其他集群</span>
+                <el-select v-model="progHours" size="small" style="width:130px;margin-left:auto" @change="loadProgress">
+                  <el-option label="最近 24 小时" :value="24" />
+                  <el-option label="最近 3 天" :value="72" />
+                  <el-option label="最近 30 天" :value="720" />
+                </el-select>
+              </div>
+              <template v-if="prog">
+                <el-alert v-for="(w, i) in prog.warnings" :key="'gw' + i" type="info"
+                  :closable="false" show-icon style="margin-bottom:6px" :title="w" />
+                <el-table v-if="prog.pools.length" :data="prog.pools" size="small" border style="margin-bottom:8px">
+                  <el-table-column prop="pool" label="节点池" show-overflow-tooltip />
+                  <el-table-column prop="at" label="升级时间" width="160" />
+                  <el-table-column prop="nodes" label="换掉" width="70" />
+                  <el-table-column prop="batches" label="批次" width="70" />
+                  <el-table-column prop="batch_size" label="并行度" width="80" />
+                  <el-table-column label="单批(中位/最慢)" width="140">
+                    <template #default="{ row }">{{ row.median_batch_minutes }} / {{ row.slowest_batch_minutes }} 分</template>
+                  </el-table-column>
+                  <el-table-column prop="total_minutes" label="整池(分)" width="90" />
+                  <el-table-column prop="note" label="说明" show-overflow-tooltip />
+                </el-table>
+                <pre class="extrapolate">{{ prog.extrapolate }}</pre>
+                <div class="muted" style="font-size:12px">
+                  {{ prog.precision }}<br />采集状态：{{ prog.collection_note }}
+                </div>
+              </template>
+            </el-card>
+          </template>
+        </el-tab-pane>
+
         <!-- ------------------------------------------------ 官网版本排期 -->
         <el-tab-pane :label="`官网版本排期${rows.length ? ' (' + rows.length + ')' : ''}`" name="schedule">
           <el-alert type="info" :closable="false" show-icon style="margin-bottom:10px">
@@ -541,7 +760,7 @@ import { useAppStore } from '../stores/app'
 import {
   gkeUpgradeOverview, gkeVersionSchedule, gkeOverrideSchedule,
   gkeClearScheduleOverride, runScheduledTask, gkeUpgradeHistory, gkeRepairHistory,
-  gkeNodeHealth,
+  gkeNodeHealth, gkeUpgradePlan, gkeUpgradeProgress,
 } from '../api/cmdb'
 
 const app = useAppStore()
@@ -580,6 +799,73 @@ const hScope = ref(null)
 const hQ = ref('')
 const hDays = ref(0)
 const hPage = ref(1); const hPageSize = ref(20)
+
+// 升级预案 Tab
+const planCluster = ref(null)
+const planTarget = ref('')
+const plan = ref(null)
+const planLoading = ref(false)
+const planError = ref('')
+const prog = ref(null)
+const progHours = ref(24)
+
+// 升级峰值一共要多占几台——BLUE_GREEN 按池翻倍，配额不够会在深夜窗口里升到一半失败
+const totalExtraNodes = computed(() =>
+  (plan.value?.pools || []).reduce((s, p) => s + (p.extra_nodes_needed || 0), 0))
+
+// 分钟转人读。排窗口时「310 分钟」远不如「5 小时 10 分」直观
+function fmtMin(m) {
+  if (m === null || m === undefined) return '—'
+  if (m < 60) return m + ' 分'
+  const h = Math.floor(m / 60); const r = m % 60
+  return r ? `${h} 小时 ${r} 分` : `${h} 小时`
+}
+
+// 观察期：null 是「API 没给，GKE 会用自己的默认值」，不是 0。
+// 显示成 0 会让人以为不用等，而默认观察期通常是一小时量级——这个区别直接决定窗口排多长。
+function fmtSoak(sec) {
+  if (sec === null || sec === undefined) return '未配（用 GKE 默认，未计入预估）'
+  if (sec === 0) return '0（不等待）'
+  return sec >= 60 ? Math.round(sec / 60) + ' 分钟' : sec + ' 秒'
+}
+
+// http.js 的响应拦截器（若已启用）会把错误规范化并全局弹一次 toast，规范化后的错误带 __cmdb 标记。
+// 这里据此决定要不要再弹：带标记说明全局已经提示过，重复弹就是同一个错误两条红条；
+// 没有标记（拦截器未启用时）则由本页负责提示，两种情况都不会静默失败。
+function reportError(e, prefix) {
+  const msg = e?.__cmdb ? e.message : (e?.response?.data?.error || e?.message || '未知错误')
+  if (!e?.__cmdb) ElMessage.error(prefix + '：' + msg)
+  return msg
+}
+
+async function loadPlan() {
+  if (!planCluster.value) return
+  planLoading.value = true
+  planError.value = ''
+  try {
+    const params = { cluster_id: planCluster.value }
+    if (planTarget.value.trim()) params.target_version = planTarget.value.trim()
+    plan.value = await gkeUpgradePlan(params)
+    await loadProgress()
+  } catch (e) {
+    // 预案查询失败必须清空并报出来：残留上一次的预案会被当成本次结果，
+    // 而空白页会被读成「没有风险」——两种都比报错危险
+    plan.value = null
+    planError.value = reportError(e, '生成预案失败')
+  } finally {
+    planLoading.value = false
+  }
+}
+
+async function loadProgress() {
+  if (!planCluster.value) return
+  try {
+    prog.value = await gkeUpgradeProgress({ cluster_id: planCluster.value, hours: progHours.value })
+  } catch (e) {
+    prog.value = null
+    reportError(e, '读取实测节奏失败')
+  }
+}
 
 // 节点健康 Tab
 const nh = ref([])
@@ -829,4 +1115,21 @@ onMounted(async () => { await reload(); loadHistory(); loadNodeHealth() })
 .dot.red { background: var(--el-color-danger); }
 .dot.yellow { background: var(--el-color-warning); }
 .dot.green { background: var(--el-color-success); }
+
+/* ---- 升级预案 ---- */
+.chip.ok { background: var(--el-color-success-light-9); color: var(--el-color-success); }
+.plan-card { margin-bottom: 10px; }
+.plan-card :deep(.el-card__body) { padding: 12px 14px; }
+.plan-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.plan-params { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; margin: 6px 0;
+  color: var(--el-text-color-regular); background: var(--el-fill-color-lighter);
+  padding: 6px 10px; border-radius: 4px; }
+.plan-quota { font-size: 12px; margin: 6px 0; color: var(--el-text-color-regular); }
+.plan-warn { font-size: 12px; color: var(--el-color-warning); margin-top: 4px; line-height: 1.6; }
+.plan-steps { margin: 4px 0 0; padding-left: 22px; font-size: 13px; line-height: 1.9; }
+.conc-node { padding: 6px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
+.conc-node:last-child { border-bottom: none; }
+.extrapolate { white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.8;
+  background: var(--el-fill-color-lighter); padding: 10px; border-radius: 4px; margin: 0 0 8px;
+  font-family: inherit; }
 </style>

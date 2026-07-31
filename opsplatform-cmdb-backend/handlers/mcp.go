@@ -118,6 +118,10 @@ var mcpTools = []mcpTool{
 	{"gke_upgrade_history", "GKE 升级历史:何时升过/从哪版到哪版/是Google自动升(AUTOMATIC)还是我们手动升(MANUAL)。⚠️GCP保留期很短,空结果不等于没发生过,看返回的 coverage", "/api/gke/upgrade/history", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"start_type", "string", "AUTOMATIC=自动 MANUAL=手动", false}, {"scope", "string", "control_plane=控制面 nodepool=节点池", false}}, false},
 	{"gke_node_repair_history", "GKE 节点自动修复记录:哪些节点被静默drain重建过及原因。node auto-repair 默认开启且无通知,这是唯一能事后追溯的地方", "/api/gke/repair-history", []mcpParam{{"cluster_id", "integer", "集群ID", false}}, false},
 	{"gke_version_schedule", "GKE 官网版本排期表:某小版本在各通道的自动升级日期与标准/扩展支持截止。⚠️月(2026-09)或季度(2026-Q4)粒度是官方近似值,看 precision 字段别当精确日期", "/api/gke/version-schedule", nil, false},
+	// 升级预案与过程看板：把「排一次升级」需要的东西一次性给全，不用再逐个工具拼。
+	// 只读——CMDB 不执行升级，执行在 GCP 控制台，预案里给的是控制台步骤。
+	{"gke_upgrade_plan", "GKE 升级预案:一次给全排升级要的所有东西——分池耗时预估(按真实 blueGreenSettings 算,标明是实测还是经验区间)、配额需求(BLUE_GREEN 要翻倍节点)、会中断的单副本服务清单、单点集中节点、余量为0会卡住drain的PDB、升级前基线快照、控制台执行步骤、验证清单。问'升级要多久''会断什么''该怎么升'用这个,别自己拼。⚠️看 estimate.measured 与 incomplete:false/非空表示用的经验区间且有参数缺失,排停机窗口按上限算", "/api/gke/upgrade/plan", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"target_version", "string", "目标版本如 1.35.6-gke.1127000;不传=用CMDB推断的下一个小版本", false}}, false},
+	{"gke_upgrade_progress", "GKE 升级过程与实测节奏:升级中看各池进度/卡没卡住,升完自动算出实测并行度(每批几台)、单批耗时中位数与最慢值、整池耗时,并给出外推到其他集群的公式。排生产升级窗口前先看目标集群和已升过集群的这个。⚠️时间粒度=采集间隔120秒,有±2分钟误差", "/api/gke/upgrade/progress", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"hours", "integer", "回看几小时,默认24", false}}, false},
 	{"cluster_health", "集群体检:一次返回所有异常(节点/工作负载/孤儿/镜像)并按critical/warning/info分级+处置建议——问'集群有什么问题'先用这个", "/api/k8s/health", []mcpParam{{"cluster_id", "integer", "集群ID", true}}, false},
 	{"list_orphans", "孤儿资源:还在占资源/计费/报错但已没人用的(PVC无挂载/HPA指向已删负载/VS后端不存在/空命名空间),带浪费金额和删除命令", "/api/k8s/orphans", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"kind", "string", "pvc/hpa/virtualservice/ingress/namespace,不传=全部", false}}, false},
 	{"resource_waste", "资源浪费排行:request vs Prometheus实测用量,按浪费量排序+给出推荐request值——答'能缩多少/哪里最浪费'", "/api/k8s/resource-waste", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"namespace", "string", "命名空间", false}, {"top", "integer", "只看前N条", false}}, false},
@@ -125,6 +129,9 @@ var mcpTools = []mcpTool{
 	{"ns_projects", "命名空间→业务项目归属", "/api/k8s/ns-projects", []mcpParam{{"cluster_id", "integer", "集群ID", true}}, false},
 	{"list_pvcs", "列 PVC 存储卷", "/api/k8s/pvcs", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"namespace", "string", "命名空间", false}}, false},
 	{"list_hpas", "列 HPA 自动伸缩", "/api/k8s/hpas", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"namespace", "string", "命名空间", false}}, false},
+	// 排升级/维护窗口必查：余量为 0 的 PDB 会让 drain 卡到超时才强杀，单节点多花一小时。
+	// collected=false 表示没采到（多半是只读 RBAC 缺 policy 组），此时「没有阻塞」这个结论不成立。
+	{"list_pdbs", "列 PodDisruptionBudget,带 drain 阻塞判定。排升级/维护窗口/节点下线必查:blocking=1 只看余量为0的(此刻驱逐任何Pod都会被拒,节点drain会卡到超时)。⚠️看返回的 collected 字段,false=没采到,此时不能得出'无阻塞'的结论", "/api/k8s/pdbs", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"namespace", "string", "命名空间", false}, {"blocking", "string", "1=只看余量为0的(会阻塞drain的)", false}}, false},
 	{"workload_changes", "工作负载变更历史(镜像/副本谁何时改)", "/api/k8s/changes", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"name", "string", "工作负载名", false}, {"namespace", "string", "命名空间", false}}, false},
 	// previous 是 CrashLoopBackOff 排障的唯一入口：当前实例刚起来往往还没打日志，真正的报错在上一个已崩溃的实例里。
 	// 后端一直支持，但这里漏了声明，等于调用方不知道有这个参数——重启上百次的 Pod 就此查不出根因。

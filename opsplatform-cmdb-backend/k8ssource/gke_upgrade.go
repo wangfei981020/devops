@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +64,16 @@ type NodePoolSnapshot struct {
 	MaxUnavailable       int             `json:"max_unavailable"`
 	Strategy             string          `json:"strategy"` // SURGE / BLUE_GREEN
 	BlueGreenPhase       string          `json:"blue_green_phase"`
+
+	// BLUE_GREEN 的批次与观察期参数。只有 Strategy=BLUE_GREEN 时才有意义，
+	// 是升级耗时预估的决定性输入（见 migration 070）。
+	// 两个 *Sec 用指针：API 没给和「配成 0」必须区分得开——
+	// 存成 0 会让预估时长凭空少掉观察期，而观察期往往是 BLUE_GREEN 里最长的一段。
+	BGRolloutPolicy   string   `json:"bg_rollout_policy"` // STANDARD / AUTOSCALED / ""
+	BGBatchNodeCount  int      `json:"bg_batch_node_count"`
+	BGBatchPercentage float64  `json:"bg_batch_percentage"`
+	BGBatchSoakSec    *int     `json:"bg_batch_soak_sec"`
+	BGNodePoolSoakSec *int     `json:"bg_node_pool_soak_sec"`
 	AutoUpgradeStatus    []string        `json:"auto_upgrade_status"`
 	PausedReason         []string        `json:"paused_reason"`
 	MinorTargetVersion   string          `json:"minor_target_version"`
@@ -189,6 +200,7 @@ func FetchNodePools(ctx context.Context, saJSON []byte, project, location, clust
 		if np.UpgradeSettings != nil {
 			s.MaxSurge, s.MaxUnavailable = int(np.UpgradeSettings.MaxSurge), int(np.UpgradeSettings.MaxUnavailable)
 			s.Strategy = np.UpgradeSettings.Strategy
+			applyBlueGreenSettings(&s, np.UpgradeSettings, cluster)
 		}
 		if np.UpdateInfo != nil && np.UpdateInfo.BlueGreenInfo != nil {
 			s.BlueGreenPhase = np.UpdateInfo.BlueGreenInfo.Phase
@@ -210,6 +222,89 @@ func FetchNodePools(ctx context.Context, saJSON []byte, project, location, clust
 	}
 	logx.J("gke_upgrade", "nodepools_fetched", map[string]any{"cluster": cluster, "pools": len(out)})
 	return out, nil
+}
+
+// applyBlueGreenSettings 把 upgradeSettings.blueGreenSettings 填进快照。
+//
+// 这组参数决定 BLUE_GREEN 升级要多久：
+//
+//	总时长 ≈ (节点数 ÷ 每批节点数) × (每批重建时长 + batchSoak) + nodePoolSoak
+//
+// 所以「没采到」和「配成 0」必须区分：前者预估算不准要标出来，后者是真的不等待。
+// 每一种缺失都打日志——排期算出来不对时，得能直接从日志看出是哪个参数没拿到，
+// 而不是回头去猜。
+func applyBlueGreenSettings(s *NodePoolSnapshot, us *container.UpgradeSettings, cluster string) {
+	// 策略是 SURGE 或空（GKE 默认 SURGE）时没有 blueGreenSettings，属正常，不必记。
+	if !strings.EqualFold(s.Strategy, "BLUE_GREEN") {
+		if s.Strategy != "" && !strings.EqualFold(s.Strategy, "SURGE") {
+			// 出现文档之外的策略值：预估公式不认识它，必须让人看见
+			logx.J("gke_upgrade", "unknown_upgrade_strategy", map[string]any{
+				"cluster": cluster, "pool": s.Name, "strategy": s.Strategy,
+				"hint": "只认 SURGE / BLUE_GREEN，耗时预估将无法计算",
+			})
+		}
+		return
+	}
+
+	bg := us.BlueGreenSettings
+	if bg == nil {
+		// BLUE_GREEN 但没给参数：GKE 会用它自己的默认值，而默认值官方未承诺稳定，
+		// 预估只能给区间。这是「预估不准」的头号原因，必须记。
+		logx.J("gke_upgrade", "bluegreen_settings_absent", map[string]any{
+			"cluster": cluster, "pool": s.Name,
+			"hint": "策略为 BLUE_GREEN 但 API 未返回 blueGreenSettings，将按 GKE 默认值走，耗时预估只能给区间",
+		})
+		return
+	}
+
+	s.BGNodePoolSoakSec = parseGKEDurationSec(bg.NodePoolSoakDuration, cluster, s.Name, "nodePoolSoakDuration")
+
+	switch {
+	case bg.StandardRolloutPolicy != nil:
+		s.BGRolloutPolicy = "STANDARD"
+		p := bg.StandardRolloutPolicy
+		s.BGBatchNodeCount, s.BGBatchPercentage = int(p.BatchNodeCount), p.BatchPercentage
+		s.BGBatchSoakSec = parseGKEDurationSec(p.BatchSoakDuration, cluster, s.Name, "batchSoakDuration")
+		if p.BatchNodeCount == 0 && p.BatchPercentage == 0 {
+			// 两个都为 0 时 GKE 用默认批次大小，我们算不出批次数
+			logx.J("gke_upgrade", "bluegreen_batch_size_absent", map[string]any{
+				"cluster": cluster, "pool": s.Name,
+				"hint": "batchNodeCount 与 batchPercentage 均为 0，批次数无法计算，耗时预估只能给区间",
+			})
+		}
+	case bg.AutoscaledRolloutPolicy != nil:
+		// autoscaled 策略由 cluster autoscaler 决定批次，没有可读的批次参数，
+		// 耗时只能靠实测反推——这正是要做逐节点耗时记录的原因之一。
+		s.BGRolloutPolicy = "AUTOSCALED"
+		logx.J("gke_upgrade", "bluegreen_autoscaled_policy", map[string]any{
+			"cluster": cluster, "pool": s.Name,
+			"hint": "批次由 autoscaler 决定，无固定参数，耗时预估须依赖历史实测值",
+		})
+	default:
+		logx.J("gke_upgrade", "bluegreen_rollout_policy_absent", map[string]any{
+			"cluster": cluster, "pool": s.Name,
+			"hint": "blueGreenSettings 里两种 rolloutPolicy 都没有，按 GKE 默认值走",
+		})
+	}
+}
+
+// parseGKEDurationSec 解析 protobuf Duration 的 JSON 形式（"3600s" / "1.5s"）为秒。
+// 空字符串返回 nil（API 没给），解析失败也返回 nil 并 WARN——
+// 绝不能退化成 0，0 意味着「不等待」，会让预估时长凭空少掉整个观察期。
+func parseGKEDurationSec(raw, cluster, pool, field string) *int {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	v, err := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(raw), "s"), 64)
+	if err != nil {
+		logx.J("gke_upgrade", "bad_duration", map[string]any{
+			"cluster": cluster, "pool": pool, "field": field, "raw": raw, "err": err.Error(),
+			"hint": "无法解析为秒，按「未知」处理而非 0，耗时预估会标注缺参",
+		})
+		return nil
+	}
+	sec := int(v + 0.5)
+	return &sec
 }
 
 // ListGKEOperations 列出该 project 下所有 location 的操作记录。
