@@ -51,7 +51,10 @@ type gkePoolOut struct {
 	RiskNote             string `json:"risk_note"`
 	PausedReason         string `json:"paused_reason"`
 	MinorTargetVersion   string `json:"minor_target_version"`
-	VersionSkew          string `json:"version_skew"` // 与控制面版本的偏斜说明，空=一致
+	VersionSkew          string `json:"version_skew"`    // 与控制面版本的偏斜说明，空=一致
+	EOSStandardAt        string `json:"eos_standard_at"` // 该池自己版本的支持截止
+	EOSDaysLeft          *int   `json:"eos_days_left"`
+	Stranded             bool   `json:"stranded"` // 落后控制面且 autoUpgrade=false —— 不会自己跟上
 }
 
 type gkeClusterOut struct {
@@ -68,6 +71,8 @@ type gkeClusterOut struct {
 	MasterVersion  string `json:"current_master_version"`
 	MinorTarget    string `json:"minor_target_version"`
 	PatchTarget    string `json:"patch_target_version"`
+	// InferredTarget GKE 尚未排期时按「当前小版本 +1」推断出的目标版本，前端标注「推断」显示
+	InferredTarget string `json:"inferred_target_version"`
 
 	PredictedAt        string `json:"predicted_upgrade_at"`
 	PredictedPrecision string `json:"predicted_precision"`
@@ -85,9 +90,18 @@ type gkeClusterOut struct {
 	PauseKind         string `json:"pause_kind"` // excluded / throttled / ""
 	PauseNote         string `json:"pause_note"` // 人话解释，前端直接显示
 
+	// EOSStandardAt 是控制面自己的支持截止。
+	// ⚠️ 看板不能只看它——节点池版本可能远落后于控制面，那时真正的风险日期在节点池身上。
+	// 实测 g32：控制面 1.34（EOS 2027-01-25，绿色 178 天），但 35 个节点全在 1.33
+	// （EOS 2026-08-03，3 天后），看板却显示安全。
 	EOSStandardAt string `json:"eos_standard_at"`
 	EOSDaysLeft   *int   `json:"eos_days_left"`
 	EOSExtendedAt string `json:"eos_extended_at"`
+
+	// 以下是「控制面 + 全部节点池」里最早的那个 EOS，看板和判定都用它
+	EffectiveEOSAt     string `json:"effective_eos_at"`
+	EffectiveEOSDays   *int   `json:"effective_eos_days"`
+	EffectiveEOSSource string `json:"effective_eos_source"` // 控制面 / 节点池 xxx
 
 	MaintenancePolicy string       `json:"maintenance_policy_json"`
 	Pools             []gkePoolOut `json:"pools"`
@@ -129,6 +143,11 @@ func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
 			continue
 		}
 		x.PredictedAt = dateStr(predAt)
+		// 目标版本为空但预计日期有值时，那个日期是按「当前小版本 +1」推断的——
+		// 目标列也得把推断出的版本显示出来，否则用户看到「目标 —，预计 2026-09-01」无从判断在说哪个版本
+		if x.MinorTarget == "" && x.PredictedSource == "inferred_next_minor" {
+			x.InferredTarget = nextMinor(x.MasterVersion)
+		}
 		x.EOSStandardAt, x.EOSExtendedAt = dateStr(eosStd), dateStr(eosExt)
 		x.SyncedAt = dateTimeStr(syncedAt)
 		x.Synced = x.SyncedAt != "" && x.MasterVersion != ""
@@ -149,7 +168,7 @@ func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
 	pr, err := h.DB.Query(`
 		SELECT cluster_id, name, node_count, version, status, auto_upgrade, auto_repair,
 		       auto_upgrade_start_time, max_surge, max_unavailable, strategy, bg_phase,
-		       upgrade_risk, paused_reason, minor_target_version
+		       upgrade_risk, paused_reason, minor_target_version, eos_standard_at
 		  FROM gke_node_pools ORDER BY cluster_id, name`)
 	if err == nil {
 		defer pr.Close()
@@ -157,14 +176,21 @@ func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
 			var cid int
 			var p gkePoolOut
 			var au, ar int
-			var startTime sql.NullString
+			var startTime, poolEOS sql.NullString
 			if pr.Scan(&cid, &p.Name, &p.NodeCount, &p.Version, &p.Status, &au, &ar,
 				&startTime, &p.MaxSurge, &p.MaxUnavailable, &p.Strategy, &p.BGPhase,
-				&p.UpgradeRisk, &p.PausedReason, &p.MinorTargetVersion) != nil {
+				&p.UpgradeRisk, &p.PausedReason, &p.MinorTargetVersion, &poolEOS) != nil {
 				continue
 			}
 			p.AutoUpgrade, p.AutoRepair = au == 1, ar == 1
 			p.AutoUpgradeStartTime = dateTimeStr(startTime)
+			p.EOSStandardAt = dateStr(poolEOS)
+			// API 没给节点池 EOS 时，用该池版本的小版本去排期表补——
+			// 否则「节点池早已过期」这件事在看板上根本不存在
+			if p.EOSStandardAt == "" {
+				p.EOSStandardAt = h.eosFromSchedule(p.Version)
+			}
+			p.EOSDaysLeft = daysUntil(p.EOSStandardAt, today)
 			p.RiskNote = riskNote(p)
 			poolsBy[cid] = append(poolsBy[cid], p)
 		}
@@ -178,6 +204,22 @@ func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
 		for j := range x.Pools {
 			x.Pools[j].VersionSkew = versionSkew(x.MasterVersion, x.Pools[j].Version)
 		}
+		// 有效 EOS = 控制面与所有节点池里最早的那个。
+		// 节点池落后控制面且 autoUpgrade=false 时，它永远不会自己跟上，风险直接升红。
+		x.EffectiveEOSAt, x.EffectiveEOSSource = x.EOSStandardAt, "控制面"
+		for j := range x.Pools {
+			p := &x.Pools[j]
+			p.Stranded = p.VersionSkew != "" && !p.AutoUpgrade
+			if p.Stranded && p.UpgradeRisk != "red" {
+				p.UpgradeRisk = "red"
+				p.RiskNote = "落后控制面且自动升级已关，节点池不会自己跟上；" + p.RiskNote
+			}
+			if p.EOSStandardAt != "" && (x.EffectiveEOSAt == "" || p.EOSStandardAt < x.EffectiveEOSAt) {
+				x.EffectiveEOSAt, x.EffectiveEOSSource = p.EOSStandardAt, "节点池 "+p.Name
+			}
+		}
+		x.EffectiveEOSDays = daysUntil(x.EffectiveEOSAt, today)
+
 		x.Verdict = clusterVerdict(x)
 		// 用区间「最早」那端做 30 天判定：宁可早提醒，也不能因为月/季度粒度而漏掉。
 		// 但展示层不会把这个数字当成确定倒计时（见 WindowText）。
@@ -370,13 +412,22 @@ func clusterVerdict(x *gkeClusterOut) string {
 		}
 		return "尚未采集。需要为该集群所属云账号项目配置 SA key，然后运行「GKE 集群升级信息采集」任务"
 	}
-	// 硬期限优先：支持结束比自动升级更要命
-	if x.EOSDaysLeft != nil {
+	// 硬期限优先：支持结束比自动升级更要命。
+	// ⚠️ 必须用 EffectiveEOS（控制面与节点池取最早），不能只看控制面——
+	// 否则「控制面 1.34 安全、35 个节点跑在 3 天后到期的 1.33」会显示成绿色。
+	if x.EffectiveEOSDays != nil {
+		via := ""
+		if x.EffectiveEOSSource != "控制面" {
+			via = "（来自" + x.EffectiveEOSSource + "，控制面本身是 " + x.EOSStandardAt + "）"
+			if s := strandedSummary(x); s != "" {
+				via += "。" + s
+			}
+		}
 		switch {
-		case *x.EOSDaysLeft < 0:
-			return "当前小版本标准支持已于 " + x.EOSStandardAt + " 结束，不再有安全补丁，应尽快升级"
-		case *x.EOSDaysLeft <= 30:
-			return "当前小版本标准支持将在 " + strconv.Itoa(*x.EOSDaysLeft) + " 天后（" + x.EOSStandardAt + "）结束，这是硬期限"
+		case *x.EffectiveEOSDays < 0:
+			return "标准支持已于 " + x.EffectiveEOSAt + " 结束，不再有安全补丁，应尽快升级" + via
+		case *x.EffectiveEOSDays <= 30:
+			return "标准支持将在 " + strconv.Itoa(*x.EffectiveEOSDays) + " 天后（" + x.EffectiveEOSAt + "）结束，这是硬期限" + via
 		}
 	}
 	if x.Blocked {
@@ -425,6 +476,39 @@ func clusterVerdict(x *gkeClusterOut) string {
 		return x.PauseNote
 	}
 	return ""
+}
+
+// strandedSummary 汇总「落后控制面且关了自动升级」的节点池——它们不会自己跟上，
+// 必须人工升级，是 EOS 到期时真正的风险来源。
+func strandedSummary(x *gkeClusterOut) string {
+	names, nodes := []string{}, 0
+	for _, p := range x.Pools {
+		if p.Stranded {
+			names = append(names, p.Name)
+			nodes += p.NodeCount
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d 个节点池（%d 个节点）落后控制面且自动升级已关，不会自己跟上，需人工升级：%s",
+		len(names), nodes, strings.Join(names, "、"))
+}
+
+// eosFromSchedule 用版本号去官网排期表查该小版本的标准支持截止。
+// 节点池级 EOS 在 API 里可能为空，但排期表一定有——不补的话「节点池已过期」在看板上不存在。
+func (h *GKEUpgradeHandler) eosFromSchedule(version string) string {
+	m := minorOf(strings.TrimPrefix(version, "v"))
+	if m == "" {
+		return ""
+	}
+	var at sql.NullString
+	// EOS 是版本级属性，四个通道行冗余同值，取任意一行即可
+	if h.DB.QueryRow(`SELECT eos_standard_at FROM gke_version_schedule
+	                   WHERE minor_version=? AND eos_standard_at IS NOT NULL LIMIT 1`, m).Scan(&at) != nil {
+		return ""
+	}
+	return dateStr(at)
 }
 
 func riskNote(p gkePoolOut) string {

@@ -73,9 +73,23 @@
                         </el-tooltip>
                       </template>
                     </el-table-column>
-                    <el-table-column label="自动升级" width="86" align="center">
+                    <!-- 节点池自己的支持截止：集群「支持截止」列取的就是这里的最早值 -->
+                    <el-table-column label="支持截止" min-width="150">
                       <template #default="{ row: p }">
-                        <el-tag size="small" :type="p.auto_upgrade ? 'warning' : 'info'">
+                        <span v-if="!p.eos_standard_at" class="muted">—</span>
+                        <span v-else>
+                          <span :class="'dot ' + daysLevel(p.eos_days_left)"></span>{{ p.eos_standard_at }}
+                          <span class="muted" v-if="p.eos_days_left !== null">（{{ daysText(p.eos_days_left) }}）</span>
+                        </span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="自动升级" width="100" align="center">
+                      <template #default="{ row: p }">
+                        <!-- 落后控制面 + 自动升级关 = 这个池永远不会自己跟上，是 EOS 的真实风险源 -->
+                        <el-tooltip v-if="p.stranded" content="落后控制面且自动升级已关，节点池不会自己跟上，必须人工升级">
+                          <el-tag size="small" type="danger">关 · 脱队</el-tag>
+                        </el-tooltip>
+                        <el-tag v-else size="small" :type="p.auto_upgrade ? 'warning' : 'info'">
                           {{ p.auto_upgrade ? '开' : '关' }}</el-tag>
                       </template>
                     </el-table-column>
@@ -128,8 +142,16 @@
               </template>
             </el-table-column>
             <el-table-column prop="current_master_version" label="当前版本" min-width="150" show-overflow-tooltip />
-            <el-table-column label="目标" width="90">
-              <template #default="{ row }">{{ shortMinor(row.minor_target_version) || '—' }}</template>
+            <el-table-column label="目标" width="120">
+              <template #default="{ row }">
+                <span v-if="row.minor_target_version">{{ shortMinor(row.minor_target_version) }}</span>
+                <!-- 目标为空但预计日期有值时，日期是按这个推断版本算的，必须显示出来 -->
+                <span v-else-if="row.inferred_target_version">
+                  {{ row.inferred_target_version }}
+                  <el-tag size="small" type="info" style="margin-left:2px">推断</el-tag>
+                </span>
+                <span v-else class="muted">—</span>
+              </template>
             </el-table-column>
             <el-table-column label="预计自动升级" min-width="170">
               <template #default="{ row }">
@@ -165,12 +187,18 @@
                 <span v-else class="muted">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="支持截止" min-width="145">
+            <!-- 用「控制面与所有节点池里最早的」EOS。只看控制面会漏掉最危险的情况：
+                 控制面已升到新版本、但节点池还跑在几天后就到期的旧版本 -->
+            <el-table-column label="支持截止" min-width="190">
               <template #default="{ row }">
-                <span v-if="!row.eos_standard_at" class="muted">—</span>
+                <span v-if="!row.effective_eos_at" class="muted">—</span>
                 <span v-else>
-                  <span :class="'dot ' + daysLevel(row.eos_days_left)"></span>{{ row.eos_standard_at }}
-                  <span class="muted" v-if="row.eos_days_left !== null">（{{ daysText(row.eos_days_left) }}）</span>
+                  <span :class="'dot ' + daysLevel(row.effective_eos_days)"></span>{{ row.effective_eos_at }}
+                  <span class="muted" v-if="row.effective_eos_days !== null">（{{ daysText(row.effective_eos_days) }}）</span>
+                  <el-tooltip v-if="row.effective_eos_source && row.effective_eos_source !== '控制面'"
+                    :content="`最早到期的是${row.effective_eos_source}；控制面本身是 ${row.eos_standard_at || '未知'}`">
+                    <el-tag size="small" type="danger" style="margin-left:4px">节点池</el-tag>
+                  </el-tooltip>
                 </span>
               </template>
             </el-table-column>

@@ -105,7 +105,10 @@ func nodeHealthWatchCore(ctx context.Context, db *sql.DB, pool *k8ssource.Pool, 
 			failures = append(failures, TaskFailure{Target: cl.Name, Reason: e.Error()})
 			continue
 		}
-		nl, e := cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		// ResourceVersion:"0" 让 apiserver 从自己的 watch cache 返回，不穿透到 etcd。
+		// 代价是数据可能落后几秒——对「NotReady 连续 3 分钟」这种判定完全无所谓，
+		// 换来的是 apiserver 侧开销大幅下降（kubelet 等组件的标准做法）。
+		nl, e := cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{ResourceVersion: "0"})
 		if e != nil {
 			failures = append(failures, TaskFailure{Target: cl.Name, Reason: e.Error()})
 			continue

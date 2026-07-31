@@ -241,8 +241,44 @@ func saveClusterUpgrade(db *sql.DB, clusterID int, s *k8ssource.ClusterUpgradeSn
 	}
 }
 
+// realNodeCounts 按节点池统计真实节点数。
+// ⚠️ 不能用 NodePool.InitialNodeCount（GKE API 给的是「每个 zone 的初始节点数」）：
+// regional 集群会 ×3 个 zone，开了自动扩缩容后更是与当前值无关。
+// 实测 g32 看板显示 6/1/1/1/2（合计 11），真实是 16/4/5/4/6（合计 35）。
+// 这不只是显示错——风险评分的「≤4 节点」判据会跟着错，把大池误判成小池。
+func realNodeCounts(db *sql.DB, clusterID int) map[string]int {
+	out := map[string]int{}
+	rows, err := db.Query(`SELECT pool, COUNT(*) FROM k8s_nodes WHERE cluster_id=? AND pool<>'' GROUP BY pool`, clusterID)
+	if err != nil {
+		logx.J("gke_upgrade", "node_count_query_failed", map[string]any{"cluster_id": clusterID, "err": err.Error()})
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pool string
+		var n int
+		if rows.Scan(&pool, &n) == nil {
+			out[pool] = n
+		}
+	}
+	return out
+}
+
 func saveNodePools(db *sql.DB, clusterID int, pools []k8ssource.NodePoolSnapshot) int {
+	counts := realNodeCounts(db, clusterID)
 	n := 0
+	for i := range pools {
+		p := &pools[i]
+		if c, ok := counts[p.Name]; ok && c > 0 {
+			p.NodeCount = c
+		} else if p.NodeCount > 0 {
+			// k8s_nodes 还没采到这个池（新建或节点标签缺失），沿用 API 值但要能看见
+			logx.J("gke_upgrade", "node_count_fallback", map[string]any{
+				"cluster_id": clusterID, "pool": p.Name, "api_initial_count": p.NodeCount,
+				"note": "k8s_nodes 表里没有该池的节点，暂用 API 的 initialNodeCount（可能偏小）",
+			})
+		}
+	}
 	for _, p := range pools {
 		_, e := db.Exec(`
 			INSERT INTO gke_node_pools
@@ -273,18 +309,32 @@ func saveNodePools(db *sql.DB, clusterID int, pools []k8ssource.NodePoolSnapshot
 	return n
 }
 
+// upgradeEventKey 与来源无关的事件键：同一次升级无论从 upgradeDetails 还是 operations 采到，
+// 都落到同一行，避免历史条数虚高一倍（见 migration 068）。
+// 截到分钟：两个来源的 startTime 有秒级抖动，而同一节点池同一分钟不会有两次升级。
+func upgradeEventKey(scope, pool, startTime string) string {
+	minute := ""
+	if t, ok := k8ssource.ParseGKETime(startTime); ok {
+		minute = t.UTC().Format("2006-01-02 15:04")
+	} else if len(startTime) >= 16 {
+		minute = startTime[:16]
+	}
+	return fmt.Sprintf("%s:%s:%s", scope, pool, minute)
+}
+
 func saveUpgradeHistory(db *sql.DB, clusterID int, recs []k8ssource.UpgradeRecord) int {
 	n := 0
 	for _, r := range recs {
-		// upgradeDetails 没有操作 ID，用 scope+pool+起始时刻合成去重键
-		key := fmt.Sprintf("ud:%s:%s:%s", r.Scope, r.Pool, r.StartTime)
+		key := upgradeEventKey(r.Scope, r.Pool, r.StartTime)
 		_, e := db.Exec(`
 			INSERT INTO gke_upgrade_history
 			  (cluster_id, dedup_key, scope, pool, start_type, state,
 			   initial_version, target_version, started_at, ended_at, detail, source)
 			VALUES (?,?,?,?,?,?, ?,?,?,?, '', 'upgradeDetails')
 			ON DUPLICATE KEY UPDATE
-			  state=VALUES(state), ended_at=VALUES(ended_at), synced_at=NOW()`,
+			  start_type=VALUES(start_type), state=VALUES(state),
+			  initial_version=VALUES(initial_version), target_version=VALUES(target_version),
+			  ended_at=VALUES(ended_at), source='upgradeDetails', synced_at=NOW()`,
 			clusterID, key, r.Scope, r.Pool, r.StartType, r.State,
 			r.InitialVersion, r.TargetVersion, nullDateTime(r.StartTime), nullDateTime(r.EndTime))
 		if e != nil {
@@ -337,15 +387,19 @@ func saveOperations(db *sql.DB, all []gkeTarget, project string, ops []k8ssource
 			if op.Type == "UPGRADE_NODES" {
 				scope = "nodepool"
 			}
+			// 与 upgradeDetails 共用事件键落到同一行。
+			// ⚠️ 冲突时不能覆盖 start_type / 版本 / source —— 那些只有 upgradeDetails 有，
+			// operations 这一侧全是空值，覆盖过去会把「🤖自动/👤手动」抹成「未知」。
 			_, e := db.Exec(`
 				INSERT INTO gke_upgrade_history
 				  (cluster_id, dedup_key, scope, pool, start_type, state,
-				   initial_version, target_version, started_at, ended_at, detail, source)
-				VALUES (?,?,?,?,'',?, '','',?,?,?, 'operations')
-				ON DUPLICATE KEY UPDATE state=VALUES(state), ended_at=VALUES(ended_at),
-				  detail=VALUES(detail), synced_at=NOW()`,
-				cid, "op:"+op.Name, scope, op.Pool, op.Status,
-				nullDateTime(op.StartTime), nullDateTime(op.EndTime), truncStr(op.Detail, 1000))
+				   initial_version, target_version, started_at, ended_at, detail, source, op_name)
+				VALUES (?,?,?,?,'',?, '','',?,?,?, 'operations', ?)
+				ON DUPLICATE KEY UPDATE
+				  ended_at=IFNULL(gke_upgrade_history.ended_at, VALUES(ended_at)),
+				  detail=VALUES(detail), op_name=VALUES(op_name), synced_at=NOW()`,
+				cid, upgradeEventKey(scope, op.Pool, op.StartTime), scope, op.Pool, op.Status,
+				nullDateTime(op.StartTime), nullDateTime(op.EndTime), truncStr(op.Detail, 1000), op.Name)
 			if e == nil {
 				hist++
 			} else {
