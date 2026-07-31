@@ -1,16 +1,19 @@
 // GKE 版本与升级看板的只读接口。
 //
 // 两个页面：
+//
 //	GET /api/gke/upgrade/overview   升级看板（集群 + 节点池 + 汇总）
 //	GET /api/gke/version-schedule   官网版本排期表（含「哪个集群锚在哪一格」）
 //
 // 手工覆盖排期（官网页面改版导致解析错时的兜底）：
+//
 //	PUT    /api/gke/version-schedule/:id
 //	DELETE /api/gke/version-schedule/:id/override
 package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -69,7 +72,12 @@ type gkeClusterOut struct {
 	PredictedAt        string `json:"predicted_upgrade_at"`
 	PredictedPrecision string `json:"predicted_precision"`
 	PredictedSource    string `json:"predicted_source"`
-	DaysLeft           *int   `json:"days_left"` // nil=未知
+	// DaysLeft 只在 day 粒度下给数字。月/季度粒度给单一数字会造成虚假紧迫感（见 dateWindow 注释），
+	// 那时改用 WindowText + DaysMin/DaysMax 表达。
+	DaysLeft   *int   `json:"days_left"`
+	WindowText string `json:"predicted_window_text"`
+	DaysMin    *int   `json:"days_min"` // 区间最早还有几天（阶段 4 提醒用它做保守触发）
+	DaysMax    *int   `json:"days_max"`
 
 	AutoUpgradeStatus string `json:"auto_upgrade_status"`
 	PausedReason      string `json:"paused_reason"`
@@ -124,7 +132,12 @@ func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
 		x.EOSStandardAt, x.EOSExtendedAt = dateStr(eosStd), dateStr(eosExt)
 		x.SyncedAt = dateTimeStr(syncedAt)
 		x.Synced = x.SyncedAt != "" && x.MasterVersion != ""
-		x.DaysLeft = daysUntil(x.PredictedAt, today)
+		start, end := dateWindow(x.PredictedAt, x.PredictedPrecision)
+		x.DaysMin, x.DaysMax = daysUntil(start, today), daysUntil(end, today)
+		x.WindowText = windowText(x.PredictedAt, x.PredictedPrecision)
+		if x.PredictedPrecision == "day" {
+			x.DaysLeft = x.DaysMin
+		}
 		x.EOSDaysLeft = daysUntil(x.EOSStandardAt, today)
 		x.PauseKind, x.PauseNote = classifyPause(x.PausedReason)
 		x.Blocked = x.PauseKind == "excluded"
@@ -166,10 +179,12 @@ func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
 			x.Pools[j].VersionSkew = versionSkew(x.MasterVersion, x.Pools[j].Version)
 		}
 		x.Verdict = clusterVerdict(x)
-		if x.DaysLeft != nil && *x.DaysLeft >= 0 && *x.DaysLeft <= 30 {
+		// 用区间「最早」那端做 30 天判定：宁可早提醒，也不能因为月/季度粒度而漏掉。
+		// 但展示层不会把这个数字当成确定倒计时（见 WindowText）。
+		if x.DaysMin != nil && *x.DaysMin >= 0 && *x.DaysMin <= 30 {
 			due30++
-			if *x.DaysLeft < minDays {
-				minDays, urgent = *x.DaysLeft, x.Name
+			if *x.DaysMin < minDays {
+				minDays, urgent = *x.DaysMin, x.Name
 			}
 		}
 		if x.Blocked {
@@ -245,17 +260,33 @@ func (h *GKEUpgradeHandler) Schedule(c *gin.Context) {
 			&esRaw, &esAt, &esPrec, &eeRaw, &eePrec, &isManual, &synced) != nil {
 			continue
 		}
-		out = append(out, gin.H{
+		// 月/季度粒度只给区间和文案，不给单一天数——否则 `2026-08` 在 7/31 会显示成「1 天」
+		auStart, auEnd := dateWindow(dateStr(auAt), auPrec)
+		esStart, esEnd := dateWindow(dateStr(esAt), esPrec)
+		row := gin.H{
 			"id": id, "minor_version": ver, "channel": ch,
 			"available_raw": avRaw, "available_precision": avPrec,
 			"auto_upgrade_raw": auRaw, "auto_upgrade_at": dateStr(auAt), "auto_upgrade_precision": auPrec,
-			"auto_upgrade_days": daysUntil(dateStr(auAt), today),
-			"eos_standard_raw":  esRaw, "eos_standard_at": dateStr(esAt), "eos_standard_precision": esPrec,
-			"eos_standard_days": daysUntil(dateStr(esAt), today),
-			"eos_extended_raw":  eeRaw, "eos_extended_precision": eePrec,
+			"auto_upgrade_window":   windowText(dateStr(auAt), auPrec),
+			"auto_upgrade_days":     nil,
+			"auto_upgrade_days_min": daysUntil(auStart, today),
+			"auto_upgrade_days_max": daysUntil(auEnd, today),
+			"eos_standard_raw":      esRaw, "eos_standard_at": dateStr(esAt), "eos_standard_precision": esPrec,
+			"eos_standard_window":   windowText(dateStr(esAt), esPrec),
+			"eos_standard_days":     nil,
+			"eos_standard_days_min": daysUntil(esStart, today),
+			"eos_standard_days_max": daysUntil(esEnd, today),
+			"eos_extended_raw":      eeRaw, "eos_extended_precision": eePrec,
 			"is_manual": isManual == 1, "synced_at": dateTimeStr(synced),
 			"anchored_clusters": anchors[ver+"|"+ch],
-		})
+		}
+		if auPrec == "day" {
+			row["auto_upgrade_days"] = daysUntil(auStart, today)
+		}
+		if esPrec == "day" {
+			row["eos_standard_days"] = daysUntil(esStart, today)
+		}
+		out = append(out, row)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "rows": out})
 }
@@ -351,22 +382,36 @@ func clusterVerdict(x *gkeClusterOut) string {
 	if x.Blocked {
 		return "升级已被维护排除挡住（" + x.PausedReason + "），可按计划安排手动升级；注意排除期结束后会恢复自动升级"
 	}
-	// 推断来源的日期不能当确定值说话，措辞必须带「推断」
-	guess := ""
+	// 不确定性有两层，都必须在措辞里说出来，否则用户会把估算值当确定日期：
+	//   ① 版本不确定：GKE 尚未排期，目标版本是按「当前小版本 +1」推断的
+	//   ② 日期不确定：官网只给到月/季度粒度，我们归一化到了首日
+	qualifiers := []string{}
 	if x.PredictedSource == "inferred_next_minor" {
-		guess = "（推断：GKE 尚未排期，按当前版本的下一个小版本估算）"
+		qualifiers = append(qualifiers, "GKE 尚未排期，目标版本按当前版本的下一个小版本推断")
 	}
-	if x.DaysLeft != nil {
+	if x.PredictedPrecision == "month" || x.PredictedPrecision == "quarter" {
+		qualifiers = append(qualifiers, "官网只给到"+precisionCN(x.PredictedPrecision)+"粒度，实际日期在"+x.WindowText)
+	}
+	guess := ""
+	if len(qualifiers) > 0 {
+		guess = "（" + strings.Join(qualifiers, "；") + "）"
+	}
+	// 判定用区间最早端（保守），但只有 day 粒度才把数字说成确定的倒计时
+	if d := x.DaysMin; d != nil {
+		when := strconv.Itoa(*d) + " 天后"
+		if x.PredictedPrecision != "day" {
+			when = "最早 " + strconv.Itoa(*d) + " 天后"
+		}
 		switch {
-		case *x.DaysLeft < 0:
+		case *d < 0:
 			return "官网自动升级日期已过但仍未升级，需查明原因（rollout 未到 / 升级失败 / 通道配置）" + guess
-		case *x.DaysLeft <= 7:
-			return "距自动升级不足 " + strconv.Itoa(*x.DaysLeft) + " 天，且未设维护排除，届时会自动升级" + guess
-		case *x.DaysLeft <= 30:
+		case *d <= 7:
+			return "距自动升级" + when + "，且未设维护排除，届时会自动升级" + guess
+		case *d <= 30:
 			if x.Environment == "PROD" {
-				return "生产集群且未设维护排除，" + strconv.Itoa(*x.DaysLeft) + " 天后会被自动升级，建议先挡住再计划内升级" + guess
+				return "生产集群且未设维护排除，" + when + "会被自动升级，建议先挡住再计划内升级" + guess
 			}
-			return strconv.Itoa(*x.DaysLeft) + " 天后会自动升级" + guess
+			return when + "会自动升级" + guess
 		}
 	}
 	if x.PredictedAt == "" {
@@ -417,11 +462,69 @@ func dateStr(v sql.NullString) string {
 	return v.String
 }
 
+// dateTimeStr 统一成 "2006-01-02 15:04:05"。
+// driver 可能回 RFC3339（带 T 和 +08:00），直接透给前端会显示成 2026-07-31T08:26:29+08:00 这种原始串。
 func dateTimeStr(v sql.NullString) string {
-	if !v.Valid {
+	if !v.Valid || v.String == "" {
 		return ""
 	}
+	if t, ok := parseMySQLTime(v.String); ok {
+		return t.Format("2006-01-02 15:04:05")
+	}
 	return v.String
+}
+
+// dateWindow 按粒度把「归一化到首日的日期」还原成它真正代表的区间 [start, end]。
+//
+// ⚠️ 这是必须的，不能只用首日。官网对月/季度粒度只承诺「2026 年 8 月」这种范围，
+// 我们为了排序把它归一化成 2026-08-01；若直接拿首日算倒计时，会系统性提前：
+// 月粒度最多误报 30 天，季度粒度（2026-Q4 → 2026-10-01，实际可能 12-31）最多 89 天。
+// 实测就出现过 `1.32 EXTENDED Auto Upgrade: 2026-08 · 1 天` 这种虚假紧迫感。
+func dateWindow(date, precision string) (start, end string) {
+	if date == "" {
+		return "", ""
+	}
+	t, err := time.ParseInLocation("2006-01-02", date, time.Local)
+	if err != nil {
+		return date, date
+	}
+	switch precision {
+	case "month":
+		return date, t.AddDate(0, 1, -1).Format("2006-01-02")
+	case "quarter":
+		return date, t.AddDate(0, 3, -1).Format("2006-01-02")
+	}
+	return date, date // day 粒度：区间退化成一个点
+}
+
+func precisionCN(p string) string {
+	switch p {
+	case "month":
+		return "月"
+	case "quarter":
+		return "季度"
+	case "day":
+		return "日"
+	}
+	return p
+}
+
+// windowText 区间的人话表述。非 day 粒度绝不能只给一个数字。
+func windowText(date, precision string) string {
+	if date == "" {
+		return ""
+	}
+	t, err := time.ParseInLocation("2006-01-02", date, time.Local)
+	if err != nil {
+		return date
+	}
+	switch precision {
+	case "month":
+		return t.Format("2006 年 1 月内")
+	case "quarter":
+		return fmt.Sprintf("%d 年第 %d 季度内", t.Year(), (int(t.Month())-1)/3+1)
+	}
+	return date
 }
 
 // localMidnight 本地时区的今天零点。

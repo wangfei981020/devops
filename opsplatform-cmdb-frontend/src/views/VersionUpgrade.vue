@@ -137,26 +137,32 @@
                   <el-tag size="small" type="success">已挡住</el-tag>
                 </template>
                 <template v-else-if="row.predicted_upgrade_at">
-                  {{ row.predicted_upgrade_at }} 起
-                  <!-- 官网自己标注月/季度为近似值，不能显示成精确日期 -->
+                  <!-- 月/季度粒度绝不显示成精确日期：官网只承诺范围，显示首日会造成虚假紧迫感 -->
+                  <template v-if="row.predicted_precision === 'day'">{{ row.predicted_upgrade_at }} 起</template>
+                  <template v-else>{{ row.predicted_window_text }}</template>
+                  <!-- 两层不确定性各自一个标签，可能同时出现（推断的版本 + 近似的日期） -->
                   <el-tooltip v-if="row.predicted_precision !== 'day'"
-                    content="官网当前只给到月/季度粒度，是近似值，日期会变">
-                    <el-tag size="small" type="warning" style="margin-left:4px">近似</el-tag>
+                    :content="`官网只给到${row.predicted_precision === 'month' ? '月' : '季度'}粒度，实际日期在 ${row.predicted_window_text}，且官方注明会变`">
+                    <el-tag size="small" type="warning" style="margin-left:4px">日期近似</el-tag>
                   </el-tooltip>
-                  <!-- GKE 未排期时按「当前版本 + 1」估的，不能当确定值 -->
                   <el-tooltip v-if="row.predicted_source === 'inferred_next_minor'"
-                    content="GKE 尚未为该集群排期（minorTargetVersion 为空），此日期按当前版本的下一个小版本推断">
-                    <el-tag size="small" type="info" style="margin-left:4px">推断</el-tag>
+                    content="GKE 尚未为该集群排期（minorTargetVersion 为空），目标版本按当前版本的下一个小版本推断">
+                    <el-tag size="small" type="info" style="margin-left:4px">版本推断</el-tag>
                   </el-tooltip>
                 </template>
                 <span v-else class="muted">未知</span>
               </template>
             </el-table-column>
-            <el-table-column label="倒计时" width="100">
+            <el-table-column label="倒计时" width="120">
               <template #default="{ row }">
                 <span v-if="row.blocked" class="muted">—</span>
-                <span v-else-if="row.days_left === null" class="muted">—</span>
-                <span v-else><span :class="'dot ' + daysLevel(row.days_left)"></span>{{ daysText(row.days_left) }}</span>
+                <!-- day 粒度才是确定倒计时；月/季度只能说「最早」，否则会把 2026-08 在 7/31 说成 1 天 -->
+                <span v-else-if="row.days_left !== null && row.days_left !== undefined">
+                  <span :class="'dot ' + daysLevel(row.days_left)"></span>{{ daysText(row.days_left) }}</span>
+                <span v-else-if="row.days_min !== null && row.days_min !== undefined">
+                  <span :class="'dot ' + daysLevel(row.days_min)"></span>
+                  <span class="muted">最早 </span>{{ daysText(row.days_min) }}</span>
+                <span v-else class="muted">—</span>
               </template>
             </el-table-column>
             <el-table-column label="支持截止" min-width="145">
@@ -193,18 +199,18 @@
             <el-table-column label="Available" width="120">
               <template #default="{ row }">{{ row.available_raw || '—' }}</template>
             </el-table-column>
-            <el-table-column label="Auto Upgrade" min-width="180">
+            <el-table-column label="Auto Upgrade" min-width="215">
               <template #default="{ row }">
                 <b>{{ row.auto_upgrade_raw || '—' }}</b>
                 <el-tag v-if="row.auto_upgrade_precision === 'month'" size="small" type="warning" style="margin-left:4px">月</el-tag>
                 <el-tag v-else-if="row.auto_upgrade_precision === 'quarter'" size="small" type="warning" style="margin-left:4px">季度</el-tag>
-                <span class="muted" v-if="row.auto_upgrade_days !== null"> · {{ daysText(row.auto_upgrade_days) }}</span>
+                <span class="muted">{{ windowDays(row.auto_upgrade_days, row.auto_upgrade_days_min, row.auto_upgrade_precision) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="标准支持截止" min-width="165">
+            <el-table-column label="标准支持截止" min-width="195">
               <template #default="{ row }">
-                <span :class="'dot ' + daysLevel(row.eos_standard_days)"></span>{{ row.eos_standard_raw || '—' }}
-                <span class="muted" v-if="row.eos_standard_days !== null">（{{ daysText(row.eos_standard_days) }}）</span>
+                <span :class="'dot ' + daysLevel(row.eos_standard_days ?? row.eos_standard_days_min)"></span>{{ row.eos_standard_raw || '—' }}
+                <span class="muted">{{ windowDays(row.eos_standard_days, row.eos_standard_days_min, row.eos_standard_precision) }}</span>
               </template>
             </el-table-column>
             <el-table-column label="扩展支持截止" width="130">
@@ -227,6 +233,67 @@
             </el-table-column>
           </el-table>
           <el-empty v-if="!loading && !rows.length" description="排期表还没同步，点上方「同步排期表」" :image-size="60" />
+        </el-tab-pane>
+
+        <!-- ------------------------------------------------ 节点健康与自动修复 -->
+        <el-tab-pane :label="`节点健康${nh.length ? ' (' + nh.length + ')' : ''}`" name="health">
+          <!-- 任务关着的时候「无异常」是假象，必须显著区分「没在监控」和「监控到没问题」 -->
+          <el-alert v-if="nhTask && !nhTask.enabled" type="warning" :closable="false" show-icon style="margin-bottom:10px">
+            <template #title>节点健康监控未开启</template>
+            {{ nhTask.note }}
+          </el-alert>
+          <el-alert v-else-if="nhTask" type="success" :closable="false" show-icon style="margin-bottom:10px">
+            <template #title>
+              监控运行中（{{ nhTask.schedule }}）
+              <template v-if="nhTask.last_run_at">· 最后一轮 {{ nhTask.last_run_at }}</template>
+            </template>
+            {{ nhTask.last_result }}
+          </el-alert>
+
+          <!-- 能提前多久是有物理上限的，写在页面上免得被当成万能预警 -->
+          <div class="kv" v-if="nhTh" style="margin-bottom:10px">
+            <span><b>NotReady 告警</b>{{ nhTh.not_ready_alert_after }}</span>
+            <span><b>GKE 自动修复阈值</b>{{ nhTh.gke_repair_threshold }}</span>
+            <span><b>磁盘预警</b>{{ nhTh.disk_predict_window }}</span>
+          </div>
+          <div class="muted" v-if="nhTh" style="margin-bottom:10px">{{ nhTh.note }}</div>
+
+          <el-table :data="nh" size="small" v-loading="nhLoading">
+            <el-table-column label="等级" width="80">
+              <template #default="{ row }">
+                <span :class="'dot ' + (row.alert_level || 'green')"></span>
+                {{ row.alert_level === 'red' ? '紧急' : row.alert_level === 'yellow' ? '注意' : '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="cluster" label="集群" min-width="140" show-overflow-tooltip />
+            <el-table-column prop="node_name" label="节点" min-width="230" show-overflow-tooltip />
+            <el-table-column label="问题" width="120">
+              <template #default="{ row }">
+                {{ row.alert_kind === 'not_ready' ? 'NotReady' : row.alert_kind === 'disk_full' ? '磁盘将满' : '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="已持续" width="120">
+              <template #default="{ row }">{{ row.not_ready_text || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="距自动修复" width="130">
+              <template #default="{ row }">
+                <span v-if="row.repair_in_text" :class="row.repair_in_text === '已超阈值' ? 'warn' : ''">
+                  {{ row.repair_in_text }}</span>
+                <span v-else class="muted">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="磁盘" width="90">
+              <template #default="{ row }">
+                <span v-if="row.disk_pct > 0">{{ row.disk_pct.toFixed(1) }}%</span>
+                <span v-else class="muted">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="last_alert_at" label="上次告警" width="165" />
+          </el-table>
+          <el-empty v-if="!nhLoading && !nh.length"
+            :description="nhTask && !nhTask.enabled
+              ? '监控未开启，所以这里没有数据——不代表节点没问题'
+              : '当前没有异常节点'" :image-size="60" />
         </el-tab-pane>
 
         <!-- ------------------------------------------------ 升级与修复历史 -->
@@ -259,8 +326,12 @@
               <span class="muted" v-if="hStat">
                 自动 {{ hStat.AUTOMATIC || 0 }} · 手动 {{ hStat.MANUAL || 0 }}
                 · 来源无方式 {{ hStat.UNKNOWN || 0 }}
-                <span v-if="hStat.FAILED" style="color:var(--el-color-danger)"> · 失败 {{ hStat.FAILED }}</span>
               </span>
+              <!-- 失败的升级最该被看见，所以给一个可点的筛选入口而不是只显示个数字 -->
+              <el-button v-if="hStat && hStat.FAILED" size="small"
+                :type="onlyFailed ? 'danger' : 'default'" @click="toggleFailed">
+                {{ onlyFailed ? '✕ 取消只看失败' : `⚠ 失败 ${hStat.FAILED} 条` }}
+              </el-button>
             </template>
           </div>
 
@@ -368,6 +439,7 @@ import { useAppStore } from '../stores/app'
 import {
   gkeUpgradeOverview, gkeVersionSchedule, gkeOverrideSchedule,
   gkeClearScheduleOverride, runScheduledTask, gkeUpgradeHistory, gkeRepairHistory,
+  gkeNodeHealth,
 } from '../api/cmdb'
 
 const app = useAppStore()
@@ -393,6 +465,13 @@ const hRows = ref([])
 const hStat = ref(null)
 const cov = ref(null)
 const hLoading = ref(false)
+const onlyFailed = ref(false)
+
+// 节点健康 Tab
+const nh = ref([])
+const nhTask = ref(null)
+const nhTh = ref(null)
+const nhLoading = ref(false)
 
 const filteredRows = computed(() => rows.value.filter((r) =>
   (!chFilter.value || r.channel === chFilter.value) &&
@@ -425,6 +504,21 @@ function onExpand(row, rowsExpanded) {
   expanded.value = rowsExpanded.map((r) => r.cluster_id)
 }
 
+async function loadNodeHealth() {
+  nhLoading.value = true
+  try {
+    const r = await gkeNodeHealth()
+    if (r.ok) { nh.value = r.rows || []; nhTask.value = r.task; nhTh.value = r.thresholds }
+  } catch (e) {
+    ElMessage.error('加载节点健康失败：' + (e?.response?.data?.error || e.message))
+  } finally { nhLoading.value = false }
+}
+
+function toggleFailed() {
+  onlyFailed.value = !onlyFailed.value
+  loadHistory()
+}
+
 async function loadHistory() {
   hLoading.value = true
   try {
@@ -433,7 +527,13 @@ async function loadHistory() {
     if (hKind.value === 'upgrade') {
       if (hStartType.value) params.start_type = hStartType.value
       const r = await gkeUpgradeHistory(params)
-      if (r.ok) { hRows.value = r.rows || []; hStat.value = r.stat; cov.value = r.coverage }
+      if (r.ok) {
+        // stat 始终按全量算，否则筛选后「失败 N 条」的入口会自己消失
+        hStat.value = r.stat; cov.value = r.coverage
+        hRows.value = onlyFailed.value
+          ? (r.rows || []).filter((x) => x.state === 'FAILED')
+          : (r.rows || [])
+      }
     } else {
       const r = await gkeRepairHistory(params)
       if (r.ok) { hRows.value = r.rows || []; hStat.value = null; cov.value = r.coverage }
@@ -490,6 +590,15 @@ function daysText(d) {
   return `${d} 天`
 }
 
+// windowDays 排期表里的天数展示。
+// day 粒度才给确定数字；月/季度只能说「最早 N 天」——官网只承诺范围，
+// 拿归一化后的首日当确定日期会系统性提前（季度粒度最多 89 天）。
+function windowDays(days, daysMin, precision) {
+  if (precision === 'day' && days !== null && days !== undefined) return ` · ${daysText(days)}`
+  if (daysMin !== null && daysMin !== undefined) return ` · 最早 ${daysText(daysMin)}`
+  return ''
+}
+
 // 红黄绿：30 天是提醒锚点，7 天是最后窗口
 function daysLevel(d) {
   if (d === null || d === undefined) return ''
@@ -521,7 +630,7 @@ function maintWindow(row) {
   return ''
 }
 
-onMounted(async () => { await reload(); loadHistory() })
+onMounted(async () => { await reload(); loadHistory(); loadNodeHealth() })
 </script>
 
 <style scoped>

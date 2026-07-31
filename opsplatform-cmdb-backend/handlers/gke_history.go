@@ -26,13 +26,14 @@ func NewGKEHistoryHandler(db *sql.DB) *GKEHistoryHandler { return &GKEHistoryHan
 func (h *GKEHistoryHandler) Register(r *gin.RouterGroup) {
 	r.GET("/gke/upgrade/history", h.UpgradeHistory)
 	r.GET("/gke/repair-history", h.RepairHistory)
+	r.GET("/gke/node-health", h.NodeHealthState)
 }
 
 // coverage 说明这份历史能覆盖多久，避免「空结果」被误读成「没发生过」。
 func (h *GKEHistoryHandler) coverage(table string) gin.H {
 	var total int
 	var earliest, latest sql.NullString
-	_ = h.DB.QueryRow(`SELECT COUNT(*), MIN(started_at), MAX(started_at) FROM ` + table).
+	_ = h.DB.QueryRow(`SELECT COUNT(*), MIN(started_at), MAX(started_at) FROM `+table).
 		Scan(&total, &earliest, &latest)
 	note := "GCP 的 operations 历史保留期很短且未文档化，实测三个 project 合计仅 9 条。" +
 		"这里的记录靠定时采集往后累积，早于首次采集的历史已无法找回。"
@@ -149,7 +150,7 @@ func (h *GKEHistoryHandler) RepairHistory(c *gin.Context) {
 		out = append(out, gin.H{
 			"cluster_id": cid, "cluster": cname, "op_name": op, "pool": pool, "node_name": node,
 			"repair_reason": reason, "status": status,
-			"started_at":    dateTimeStr(startedAt), "ended_at": dateTimeStr(endedAt),
+			"started_at": dateTimeStr(startedAt), "ended_at": dateTimeStr(endedAt),
 			"duration": durationText(startedAt, endedAt),
 			"detail":   detail, "status_message": msg,
 		})

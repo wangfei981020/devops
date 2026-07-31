@@ -40,8 +40,6 @@ func main() {
 
 	// 健康 + /metrics 独立端口（业务端口 hang 死时仍可探活），与 k8sinsight/gke-version 一致
 	go handlers.StartHealthServer(cfg.HealthPort, db)
-	// 每日任务：自动续期 + 到期提醒
-	go handlers.StartScheduler(db, cipher)
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New() // 不用 gin.Default()，改用 JSON 访问日志
@@ -83,6 +81,8 @@ func main() {
 	cdnH.RegisterRules(api) // CDN 规则台账 + 优化分析（Page Rules / Rulesets）
 	// K8s 模块（k8sinsight 合并，只读多集群）：阶段1 集群纳管
 	k8sPool := k8ssource.NewPool(db, cipher)
+	// 定时任务调度器：放在 Pool 之后启动，节点健康任务需要 Pool 直连集群
+	go handlers.StartScheduler(db, cipher, k8sPool)
 	handlers.NewK8sClusterHandler(db, cipher, k8sPool).Register(api)
 	handlers.NewGKEUpgradeHandler(db).Register(api)
 	handlers.NewGKEHistoryHandler(db).Register(api)
@@ -90,12 +90,12 @@ func main() {
 	handlers.NewK8sTopologyHandler(db, cipher).Register(api)
 	handlers.NewK8sCostHandler(db).Register(api)
 	handlers.NewK8sDiagHandler(db, k8sPool, cipher).Register(api) // 合并 k8sinsight：实时日志/事件/规则诊断
-	handlers.NewEventCenterHandler(db, k8sPool).Register(api) // 事件中心:到期/变更/同步失败/K8s Warning 统一时间线
-	handlers.NewObsHandler(db, cipher).Register(api)      // 数据源接入(Prometheus/Loki/KubeSphere 地址)
+	handlers.NewEventCenterHandler(db, k8sPool).Register(api)     // 事件中心:到期/变更/同步失败/K8s Warning 统一时间线
+	handlers.NewObsHandler(db, cipher).Register(api)              // 数据源接入(Prometheus/Loki/KubeSphere 地址)
 	obsQ := handlers.NewObsQueryHandler(db, cipher)
-	obsQ.Register(api)         // 资源使用率/Loki/KubeSphere 查询
-	obsQ.RegisterInsights(api) // 浪费排行/闲置成本（需 Prometheus 实测数据）
-	obsQ.RegisterDevOps(api)   // 流水线运行记录/构建日志（Jenkins 输出不进 pod stdout，只能走这条）
+	obsQ.Register(api)          // 资源使用率/Loki/KubeSphere 查询
+	obsQ.RegisterInsights(api)  // 浪费排行/闲置成本（需 Prometheus 实测数据）
+	obsQ.RegisterDevOps(api)    // 流水线运行记录/构建日志（Jenkins 输出不进 pod stdout，只能走这条）
 	obsQ.RegisterPromQuery(api) // 通用 PromQL + 指标发现：中间件(Kafka/nacos/etcd…)指标不必逐个写接口
 	harborH := handlers.NewHarborHandler(db, cipher)
 	harborH.Register(api)      // Harbor 只读：健康/配额/仓库（补发布链路「推送」「拉取」两个环节）

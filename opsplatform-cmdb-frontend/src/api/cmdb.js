@@ -279,3 +279,4 @@ export const gkeOverrideSchedule = (id, b) => http.put('/gke/version-schedule/' 
 export const gkeClearScheduleOverride = (id) => http.delete(`/gke/version-schedule/${id}/override`).then((r) => r.data)
 export const gkeUpgradeHistory = (params) => http.get('/gke/upgrade/history', { params }).then((r) => r.data)
 export const gkeRepairHistory = (params) => http.get('/gke/repair-history', { params }).then((r) => r.data)
+export const gkeNodeHealth = () => http.get('/gke/node-health').then((r) => r.data)

@@ -16,6 +16,7 @@ import (
 
 	"opsplatform-cmdb-backend/crypto"
 	"opsplatform-cmdb-backend/dnsource"
+	"opsplatform-cmdb-backend/k8ssource"
 	"opsplatform-cmdb-backend/logx"
 	"opsplatform-cmdb-backend/notify"
 )
@@ -61,21 +62,41 @@ func taskTimeout(key string) time.Duration {
 var sched *Scheduler // 全局单例，供 API 热重载 / 立即运行
 
 // StartScheduler 初始化调度器并按 scheduled_tasks 注册 cron。非阻塞（cron 在后台 goroutine）。
-func StartScheduler(db *sql.DB, cipher *crypto.Cipher) {
+func StartScheduler(db *sql.DB, cipher *crypto.Cipher, pool *k8ssource.Pool) {
+	nodeHealthPool = pool // 节点健康任务要直连集群，见 node_health.go
 	sched = &Scheduler{db: db, cipher: cipher, running: map[int64]context.CancelFunc{}}
 	sched.funcs = map[string]taskFn{
-		"refresh_expiry": func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) { return refreshAllWhoisCore(ctx, db, p, t) },
-		"auto_renew":     func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) { return renewDue(db, cipher) },
-		"remind":         func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) { return remindExpiry(db), nil, true },
-		"inspect":        func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) { return inspectAllCertsCore(ctx, db, p, t) },
-		"dns_sync":       func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) { return dnsSyncCore(ctx, db, cipher) },
-		"host_sync":      func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) { return SyncAllHostProjects(db, cipher) },
+		"refresh_expiry": func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) {
+			return refreshAllWhoisCore(ctx, db, p, t)
+		},
+		"auto_renew": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return renewDue(db, cipher)
+		},
+		"remind": func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) {
+			return remindExpiry(db), nil, true
+		},
+		"inspect": func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) {
+			return inspectAllCertsCore(ctx, db, p, t)
+		},
+		"dns_sync": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return dnsSyncCore(ctx, db, cipher)
+		},
+		"host_sync": func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) {
+			return SyncAllHostProjects(db, cipher)
+		},
 		// GKE 版本与升级：排期表同步不依赖云凭据，集群采集依赖 SA key，故拆成两个任务
 		"gke_schedule_sync": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
 			return gkeScheduleSyncCore(ctx, db)
 		},
 		"gke_upgrade_sync": func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) {
 			return gkeUpgradeSyncCore(ctx, db, cipher, p, t)
+		},
+		"gke_upgrade_remind": func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) {
+			return gkeUpgradeRemindCore(db)
+		},
+		// 节点健康是分钟级任务，自己直连集群（k8s_nodes 表 120s 才刷一次，撑不起 3 分钟判定）
+		"node_health_watch": func(ctx context.Context, p ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return nodeHealthWatchCore(ctx, db, nodeHealthPool, cipher, p)
 		},
 	}
 	// 自愈①：启动时，之前进程遗留的「运行中」记录一律标「中断」（那些进程已随重启死掉）
