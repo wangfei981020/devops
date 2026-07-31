@@ -37,7 +37,10 @@ func (h *GKEHistoryHandler) coverage(table string) gin.H {
 	_ = h.DB.QueryRow(`SELECT COUNT(*), MIN(started_at), MAX(started_at) FROM `+table).
 		Scan(&total, &earliest, &latest)
 	note := "GCP 的 operations 历史保留期很短且未文档化，实测三个 project 合计仅 9 条。" +
-		"这里的记录靠定时采集往后累积，早于首次采集的历史已无法找回。"
+		"这里的记录靠定时采集往后累积，早于首次采集的历史已无法找回。" +
+		"库是只增不删的：采到的记录会一直留着，即使上游后来不再返回它。" +
+		"同一对象在两次采集之间连升两次时，理论上可能只留下后一次（upgradeDetails 返回条数官方未文档化），" +
+		"但 operations 来源会补上（代价是没有『自动/手动』标记）。计划内多次升级建议升完立即采集一次。"
 	if total == 0 {
 		// 前端是纯文本插值，不解析 markdown，所以这里不能用 ** 强调
 		note = "目前一条都没有。这不代表没发生过——" + note
