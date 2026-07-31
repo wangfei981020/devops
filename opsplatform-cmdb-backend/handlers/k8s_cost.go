@@ -21,9 +21,9 @@ func (h *K8sCostHandler) Register(r *gin.RouterGroup) {
 	r.GET("/k8s/cost/detail", h.Detail)
 	r.GET("/k8s/cost/nodes", h.Nodes)
 	r.POST("/k8s/cost/node-override", h.SetNodeOverride)
-	r.POST("/k8s/cost/snapshot", h.SnapshotNow) // 立即打快照(?month=YYYY-MM 可选)
-	r.GET("/k8s/cost/months", h.Months)          // 有快照的月份
-	r.GET("/k8s/cost/report", h.Report)          // 月/季/年报告 + 环比
+	r.POST("/k8s/cost/snapshot", h.SnapshotNow)   // 立即打快照(?month=YYYY-MM 可选)
+	r.GET("/k8s/cost/months", h.Months)           // 有快照的月份
+	r.GET("/k8s/cost/report", h.Report)           // 月/季/年报告 + 环比
 	r.GET("/k8s/cost/attribution", h.Attribution) // 环比归因(哪涨了)
 }
 

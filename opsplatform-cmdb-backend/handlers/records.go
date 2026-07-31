@@ -91,36 +91,36 @@ func (h *RecordHandler) DeleteOriginRule(c *gin.Context) {
 }
 
 type flatRecordOut struct {
-	ID           int64  `json:"id"`
-	DomainCIID   int64  `json:"domain_ci_id"`
-	Domain       string `json:"domain"`
-	FQDN         string `json:"fqdn"`
-	Host         string `json:"host"`
-	RecordType   string `json:"record_type"`
-	CdnID        *int   `json:"cdn_id"`
-	CdnName      string `json:"cdn_name"`
-	Cname        string `json:"cname"`
+	ID            int64  `json:"id"`
+	DomainCIID    int64  `json:"domain_ci_id"`
+	Domain        string `json:"domain"`
+	FQDN          string `json:"fqdn"`
+	Host          string `json:"host"`
+	RecordType    string `json:"record_type"`
+	CdnID         *int   `json:"cdn_id"`
+	CdnName       string `json:"cdn_name"`
+	Cname         string `json:"cname"`
 	OriginIP      string `json:"origin_ip"`
 	AutoOriginIP  string `json:"auto_origin_ip"`  // 手填 origin_ip 为空时的推测源站IP（不落库，仅展示）：DNS 解析优先，查不到用映射规则兜底
 	AutoOriginSrc string `json:"auto_origin_src"` // 推测来源：解析(DNS查A记录) / 规则(源站映射) / 空
 	CertExpiryAt  string `json:"cert_expiry_at"`
-	CertCheckMsg string `json:"cert_check_msg"`
-	Project      string `json:"project"`
-	Env          string `json:"env"`
-	Module       string `json:"module"`
-	ModuleSource string `json:"module_source"` // auto=K8s自动关联 / manual=手动
-	LifeStatus   string `json:"life_status"`   // 该记录使用状态(使用中等)
-	StatusSource string `json:"status_source"` // auto/manual
-	Operator     string `json:"operator"`
-	Origin       string `json:"origin"`        // 所属主域名来源：manual/sync
-	SourceName   string `json:"source_name"`   // 数据源/注册商名（GoDaddy 等）
-	DomainStatus string `json:"domain_status"` // 所属主域名的生命周期状态
-	DomainStale  bool   `json:"domain_stale"`  // 所属主域名是否已移出账号/过户（stale）
-	DomainGone   string `json:"domain_gone"`   // 主域名失效标签：已过户/已移出账号/已取消/已失效（stale 时）
-	Ignored      bool   `json:"ignored"`
-	IgnoreReason string `json:"ignore_reason"`
-	Stale        bool   `json:"stale"`
-	UpdatedAt    string `json:"updated_at"`
+	CertCheckMsg  string `json:"cert_check_msg"`
+	Project       string `json:"project"`
+	Env           string `json:"env"`
+	Module        string `json:"module"`
+	ModuleSource  string `json:"module_source"` // auto=K8s自动关联 / manual=手动
+	LifeStatus    string `json:"life_status"`   // 该记录使用状态(使用中等)
+	StatusSource  string `json:"status_source"` // auto/manual
+	Operator      string `json:"operator"`
+	Origin        string `json:"origin"`        // 所属主域名来源：manual/sync
+	SourceName    string `json:"source_name"`   // 数据源/注册商名（GoDaddy 等）
+	DomainStatus  string `json:"domain_status"` // 所属主域名的生命周期状态
+	DomainStale   bool   `json:"domain_stale"`  // 所属主域名是否已移出账号/过户（stale）
+	DomainGone    string `json:"domain_gone"`   // 主域名失效标签：已过户/已移出账号/已取消/已失效（stale 时）
+	Ignored       bool   `json:"ignored"`
+	IgnoreReason  string `json:"ignore_reason"`
+	Stale         bool   `json:"stale"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 // ListAll 拉平所有域名下的解析记录：一行一个「主机头.域名」，供主机头台账页展示。
@@ -537,7 +537,7 @@ func normFQDN(s string) string {
 // 查不到再用映射规则兜底(命中→"规则")；都没有返回("", "")。跨所有已管域名匹配。
 func buildCnameOriginResolver(db *sql.DB) func(string) (string, string) {
 	aIdx := map[string][]string{} // fqdn -> A 记录 IP 列表
-	cIdx := map[string]string{}    // fqdn -> CNAME 目标 fqdn
+	cIdx := map[string]string{}   // fqdn -> CNAME 目标 fqdn
 	rows, err := db.Query(`SELECT dr.type, dr.name, c.name, dr.data
 		FROM dns_records dr JOIN cis c ON c.id=dr.domain_ci_id
 		WHERE dr.type IN ('A','CNAME')`)

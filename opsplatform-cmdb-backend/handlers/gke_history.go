@@ -4,8 +4,8 @@
 //	GET /api/gke/repair-history    节点被自动 drain 重建的记录
 //
 // ⚠️ 关于「查不到记录」的解读（2026-07-31 实测踩到）：
-// GCP 的 operations.list 保留期很短——三个 project 加起来只有 9 条 operation，
-// AUTO_REPAIR_NODES 一条都没有。所以本页的空结果**不能读成「没发生过」**，
+// GCP 的 operations.list 保留期很短（实测约两周量级且随时间滚动），
+// 首次采集时 AUTO_REPAIR_NODES 一条都没有。所以本页的空结果**不能读成「没发生过」**，
 // 只能读成「GCP 已经不保留了 + 我们还没采到」。接口一律返回 coverage 元信息说明这一点，
 // 前端必须显示，否则这个页面会给出错误的安全结论。
 package handlers
@@ -36,7 +36,7 @@ func (h *GKEHistoryHandler) coverage(table string) gin.H {
 	var earliest, latest sql.NullString
 	_ = h.DB.QueryRow(`SELECT COUNT(*), MIN(started_at), MAX(started_at) FROM `+table).
 		Scan(&total, &earliest, &latest)
-	note := "GCP 的 operations 历史保留期很短且未文档化，实测三个 project 合计仅 9 条。" +
+	note := "GCP 的 operations 历史保留期很短且未文档化（实测约两周量级，且会随时间滚动）。" +
 		"这里的记录靠定时采集往后累积，早于首次采集的历史已无法找回。" +
 		"库是只增不删的：采到的记录会一直留着，即使上游后来不再返回它。" +
 		"同一对象在两次采集之间连升两次时，理论上可能只留下后一次（upgradeDetails 返回条数官方未文档化），" +

@@ -35,11 +35,11 @@ func NewK8sDiagHandler(db *sql.DB, pool *k8ssource.Pool, cipher *crypto.Cipher) 
 }
 
 func (h *K8sDiagHandler) Register(r *gin.RouterGroup) {
-	r.GET("/k8s/pod-logs", h.Logs)        // cluster_id, namespace, pod, container, tail, previous
-	r.GET("/k8s/pod-events", h.Events)    // cluster_id, namespace, pod
+	r.GET("/k8s/pod-logs", h.Logs)     // cluster_id, namespace, pod, container, tail, previous
+	r.GET("/k8s/pod-events", h.Events) // cluster_id, namespace, pod
 	// cluster_id, namespace?, kind?, type?, reason?, sort?(count), min_count?, hours?, limit?, exclude_reason?, include_noise?
 	r.GET("/k8s/events", h.ClusterEvents)
-	r.GET("/k8s/diagnose", h.Diagnose)    // cluster_id, namespace, pod → 规则诊断
+	r.GET("/k8s/diagnose", h.Diagnose) // cluster_id, namespace, pod → 规则诊断
 	// cluster_id, namespace?, include_unused? → 配置引用完整性（缺哪个 ConfigMap/Secret）
 	r.GET("/k8s/config-audit", h.ConfigAudit)
 	// cluster_id, kind, name, namespace?, api_group? → 单对象完整 YAML（脱敏），看探针/env/亲和性等 spec

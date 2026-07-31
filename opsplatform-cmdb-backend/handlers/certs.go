@@ -162,21 +162,21 @@ func (h *CertHandler) List(c *gin.Context) {
 func (h *CertHandler) Get(c *gin.Context) {
 	id := c.Param("id")
 	var o struct {
-		CIID      int64    `json:"ci_id"`
-		CN        string   `json:"cn"`
-		SANs      []string `json:"sans"`
-		CA        string   `json:"ca"`
-		Challenge string   `json:"challenge"`
-		Status    string   `json:"status"`
-		IssuedAt  string   `json:"issued_at"`
-		ExpiryAt  string   `json:"expiry_at"`
-		AutoRenew   int     `json:"auto_renew"`
-		RenewDays   int     `json:"renew_days"`
-		LastError      string  `json:"last_error"`
-		DeployToken    string  `json:"deploy_token"`
-		ChallengeFqdn  string  `json:"challenge_fqdn"`
-		ChallengeValue string  `json:"challenge_value"`
-		History        []gin.H `json:"history"`
+		CIID           int64    `json:"ci_id"`
+		CN             string   `json:"cn"`
+		SANs           []string `json:"sans"`
+		CA             string   `json:"ca"`
+		Challenge      string   `json:"challenge"`
+		Status         string   `json:"status"`
+		IssuedAt       string   `json:"issued_at"`
+		ExpiryAt       string   `json:"expiry_at"`
+		AutoRenew      int      `json:"auto_renew"`
+		RenewDays      int      `json:"renew_days"`
+		LastError      string   `json:"last_error"`
+		DeployToken    string   `json:"deploy_token"`
+		ChallengeFqdn  string   `json:"challenge_fqdn"`
+		ChallengeValue string   `json:"challenge_value"`
+		History        []gin.H  `json:"history"`
 	}
 	var sans string
 	var issued, exp sql.NullTime
@@ -214,20 +214,20 @@ func (h *CertHandler) Get(c *gin.Context) {
 }
 
 type certApplyIn struct {
-	CN           string            `json:"cn"`
-	SANs         []string          `json:"sans"`
-	CA           string            `json:"ca"`
-	Challenge    string            `json:"challenge"`
-	DomainCIID   int64             `json:"domain_ci_id"`
-	ACMEAccount  int               `json:"acme_account_id"`
-	Project      string            `json:"project"`
-	Env          string            `json:"env"`
-	Module       string            `json:"module"`
-	Owner        string            `json:"owner"`
-	AutoRenew    int               `json:"auto_renew"`
-	RenewDays    int               `json:"renew_days"`
-	Staging      bool              `json:"staging"`
-	Labels       map[string]string `json:"labels"`
+	CN          string            `json:"cn"`
+	SANs        []string          `json:"sans"`
+	CA          string            `json:"ca"`
+	Challenge   string            `json:"challenge"`
+	DomainCIID  int64             `json:"domain_ci_id"`
+	ACMEAccount int               `json:"acme_account_id"`
+	Project     string            `json:"project"`
+	Env         string            `json:"env"`
+	Module      string            `json:"module"`
+	Owner       string            `json:"owner"`
+	AutoRenew   int               `json:"auto_renew"`
+	RenewDays   int               `json:"renew_days"`
+	Staging     bool              `json:"staging"`
+	Labels      map[string]string `json:"labels"`
 }
 
 func (h *CertHandler) Apply(c *gin.Context) {

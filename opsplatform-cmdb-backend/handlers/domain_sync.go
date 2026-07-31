@@ -66,11 +66,11 @@ func (h *SyncHandler) Register(r *gin.RouterGroup) {
 
 // ---- 全量同步的后台状态（进程内，按数据源 id）----
 type syncState struct {
-	Running                            bool
-	Total, Done, Synced, Records, Imp  int
-	Stale                              int
-	Err                                string
-	StartedAt, FinishedAt              time.Time
+	Running                           bool
+	Total, Done, Synced, Records, Imp int
+	Stale                             int
+	Err                               string
+	StartedAt, FinishedAt             time.Time
 }
 
 var (

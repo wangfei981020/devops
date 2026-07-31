@@ -72,8 +72,8 @@ func TestExtractErrorLines_QuietOnSuccess(t *testing.T) {
 	lines := []string{
 		"[Pipeline] echo",
 		"Downloading dependencies...",
-		"error handling configured",     // 含 error 但不是报错
-		"errorCallback registered",      // 同上
+		"error handling configured", // 含 error 但不是报错
+		"errorCallback registered",  // 同上
 		"Finished: SUCCESS",
 	}
 	if got := extractErrorLines(lines); len(got) != 0 {

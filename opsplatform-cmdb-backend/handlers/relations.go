@@ -42,14 +42,14 @@ func (h *RelationHandler) List(c *gin.Context) {
 	}
 	defer rows.Close()
 	type edge struct {
-		ID       int64  `json:"id"`
-		SrcCIID  int64  `json:"src_ci_id"`
-		DstCIID  int64  `json:"dst_ci_id"`
-		RelType  string `json:"rel_type"`
-		SrcName  string `json:"src_name"`
-		SrcType  string `json:"src_type"`
-		DstName  string `json:"dst_name"`
-		DstType  string `json:"dst_type"`
+		ID      int64  `json:"id"`
+		SrcCIID int64  `json:"src_ci_id"`
+		DstCIID int64  `json:"dst_ci_id"`
+		RelType string `json:"rel_type"`
+		SrcName string `json:"src_name"`
+		SrcType string `json:"src_type"`
+		DstName string `json:"dst_name"`
+		DstType string `json:"dst_type"`
 	}
 	out := []edge{}
 	for rows.Next() {

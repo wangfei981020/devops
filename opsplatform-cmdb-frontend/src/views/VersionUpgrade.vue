@@ -103,10 +103,15 @@
                           {{ p.auto_upgrade ? '开' : '关' }}</el-tag>
                       </template>
                     </el-table-column>
-                    <el-table-column label="自动修复" width="86" align="center">
+                    <!-- 自动修复关 = 节点坏了 GKE 不会自动重建，得人工上。
+                         这和「自动升级关」是同等重要的开关，呈现规格要一致，不能只中性显示「关」 -->
+                    <el-table-column label="自动修复" width="100" align="center">
                       <template #default="{ row: p }">
-                        <el-tag size="small" :type="p.auto_repair ? 'warning' : 'info'">
-                          {{ p.auto_repair ? '开' : '关' }}</el-tag>
+                        <el-tooltip v-if="p.repair_off"
+                          content="自动修复已关：节点故障时 GKE 不会自动 drain 重建，需人工介入">
+                          <el-tag size="small" type="danger">关 · 需人工</el-tag>
+                        </el-tooltip>
+                        <el-tag v-else size="small" type="success">开</el-tag>
                       </template>
                     </el-table-column>
                     <el-table-column label="升级策略" min-width="150">
@@ -116,10 +121,10 @@
                           +{{ p.max_surge }}/-{{ p.max_unavailable }}</span>
                       </template>
                     </el-table-column>
-                    <el-table-column label="风险" min-width="200">
+                    <el-table-column label="风险 / 排期影响" min-width="280">
                       <template #default="{ row: p }">
                         <span :class="'dot ' + (p.upgrade_risk || 'green')"></span>
-                        <span class="muted">{{ p.risk_note || '—' }}</span>
+                        <span class="muted">{{ p.risk_note || rollingNote(p) }}</span>
                       </template>
                     </el-table-column>
                     <el-table-column label="临期时刻" width="150">
@@ -127,7 +132,9 @@
                         <!-- 官方只在升级即将开始时才填这个字段，有值=最后拦截机会 -->
                         <el-tag v-if="p.auto_upgrade_start_time" size="small" type="danger">
                           {{ p.auto_upgrade_start_time }}</el-tag>
-                        <span v-else class="muted">—</span>
+                        <el-tooltip v-else
+                          content="GKE 只在升级即将开始时才填这个字段。为空=尚未临近，属正常；一旦有值就是最后的拦截机会">
+                          <span class="muted">—</span></el-tooltip>
                       </template>
                     </el-table-column>
                   </el-table>
@@ -208,6 +215,11 @@
                   <el-tooltip v-if="row.effective_eos_source && row.effective_eos_source !== '控制面'"
                     :content="`最早到期的是${row.effective_eos_source}；控制面本身是 ${row.eos_standard_at || '未知'}`">
                     <el-tag size="small" type="danger" style="margin-left:4px">节点池</el-tag>
+                  </el-tooltip>
+                  <!-- EXTENDED 通道的硬期限是扩展支持，不标出来会以为看的是标准支持 -->
+                  <el-tooltip v-if="row.eos_basis === '扩展支持'"
+                    content="该集群订阅 EXTENDED 通道，标准支持结束后仍可继续使用，硬期限是扩展支持截止">
+                    <el-tag size="small" type="success" style="margin-left:4px">扩展支持</el-tag>
                   </el-tooltip>
                 </span>
               </template>
@@ -703,6 +715,15 @@ async function loadHistory() {
   } catch (e) {
     ElMessage.error('加载历史失败：' + (e?.response?.data?.error || e.message))
   } finally { hLoading.value = false }
+}
+
+// rollingNote maxUnavailable=0 时不会同时不可用，但节点越多滚完越久——
+// 16 节点的池和 4 节点的池排期难度完全不同，不能都显示「—」
+function rollingNote(p) {
+  if (!p.node_count) return '—'
+  if (p.strategy === 'BLUE_GREEN') return `蓝绿升级，${p.node_count} 节点整池切换`
+  if (p.max_unavailable > 0) return '—'
+  return `逐个替换不中断，${p.node_count} 个节点需滚完（节点越多窗口越长）`
 }
 
 function stateType(s) {

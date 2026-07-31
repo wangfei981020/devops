@@ -5,6 +5,7 @@ import "testing"
 // 脱敏是 get_manifest 的安全边界，且有两个方向的失败都会造成实际损失：
 //   - 漏脱：密码明文进了 AI 上下文
 //   - 过脱：secretName 这类引用名被打码，排障时查不到到底引用了哪个 Secret，链路直接断掉
+//
 // 所以两个方向都要钉住。
 func TestLooksSensitiveKey(t *testing.T) {
 	sensitive := []string{

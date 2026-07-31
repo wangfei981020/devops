@@ -25,8 +25,8 @@ func (h *DomainHandler) Register(r *gin.RouterGroup) {
 	r.POST("/domains/sync", h.Sync)
 	r.POST("/domains/refresh-all", h.RefreshAll)
 	r.POST("/domains/:ciid/refresh", h.Refresh)
-	r.POST("/domains/bulk-ignore", h.BulkIgnore) // 忽略/取消忽略主域名（忽略后同步跳过、不报未同步）
-	r.POST("/domains/bulk-status", h.BulkStatus) // 批量/单个设主域名生命周期状态
+	r.POST("/domains/bulk-ignore", h.BulkIgnore)            // 忽略/取消忽略主域名（忽略后同步跳过、不报未同步）
+	r.POST("/domains/bulk-status", h.BulkStatus)            // 批量/单个设主域名生命周期状态
 	r.POST("/domains/auto-link-modules", h.AutoLinkModules) // 从 K8s 入口(VS/Ingress hosts) 自动填模块(仅补空的)
 }
 
@@ -97,8 +97,8 @@ type domainOut struct {
 	CertExpiryAt  string `json:"cert_expiry_at"`
 	CertCheckMsg  string `json:"cert_check_msg"`
 	CertCount     int    `json:"cert_count"`
-	DnsCount      int    `json:"dns_count"`    // 厂商原始 DNS 记录条数（DNS 记录页展开用）
-	LastSynced    string `json:"last_synced"`  // 最近一次同步时刻（独立记录，0 记录也算已同步）
+	DnsCount      int    `json:"dns_count"`   // 厂商原始 DNS 记录条数（DNS 记录页展开用）
+	LastSynced    string `json:"last_synced"` // 最近一次同步时刻（独立记录，0 记录也算已同步）
 	Stale         bool   `json:"stale"`
 	DnsMigrated   bool   `json:"dns_migrated"` // 域名还在数据源账户但 DNS 已迁走(NS 非 GoDaddy)
 	Ignored       bool   `json:"ignored"`

@@ -54,7 +54,9 @@ type gkePoolOut struct {
 	VersionSkew          string `json:"version_skew"`    // 与控制面版本的偏斜说明，空=一致
 	EOSStandardAt        string `json:"eos_standard_at"` // 该池自己版本的支持截止
 	EOSDaysLeft          *int   `json:"eos_days_left"`
-	Stranded             bool   `json:"stranded"` // 落后控制面且 autoUpgrade=false —— 不会自己跟上
+	EOSExtendedAt        string `json:"eos_extended_at"`
+	Stranded             bool   `json:"stranded"`   // 落后控制面且 autoUpgrade=false，平时不会自己跟上
+	RepairOff            bool   `json:"repair_off"` // 自动修复已关：节点坏了不会被自动重建
 }
 
 type gkeClusterOut struct {
@@ -106,6 +108,8 @@ type gkeClusterOut struct {
 	// 节点最多落后控制面 2 个小版本是 GKE 的硬限制，触及会出兼容故障
 	SkewCritical bool   `json:"skew_critical"`
 	SkewNote     string `json:"skew_note"`
+	// EOSBasis 说明有效期限是按「标准支持」还是「扩展支持」算的（EXTENDED 通道用后者）
+	EOSBasis string `json:"eos_basis"`
 
 	MaintenancePolicy string       `json:"maintenance_policy_json"`
 	Pools             []gkePoolOut `json:"pools"`
@@ -141,7 +145,7 @@ func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
 			EOSExtendedAt:  s.EOSExtendedAt,
 			EffectiveEOSAt: s.EffectiveEOS, EffectiveEOSDays: s.EffectiveEOSDays,
 			EffectiveEOSSource: s.EffectiveEOSSource,
-			SkewCritical:       s.SkewCritical, SkewNote: s.SkewNote,
+			SkewCritical:       s.SkewCritical, SkewNote: s.SkewNote, EOSBasis: s.EOSBasis,
 			MaintenancePolicy: s.MaintenancePolicyJSON,
 		}
 		for _, p := range s.Pools {
@@ -153,8 +157,9 @@ func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
 				Strategy: p.Strategy, BGPhase: p.BGPhase,
 				UpgradeRisk: p.UpgradeRisk, RiskNote: joinNote(p.RiskNote(), riskNoteFor(p)),
 				PausedReason: p.PausedReason, MinorTargetVersion: p.MinorTarget,
-				VersionSkew: skewText(p.SkewMinors), EOSStandardAt: p.EOSStandardAt,
+				VersionSkew: skewText(p.SkewMinors), EOSStandardAt: p.EffectiveEOSAt,
 				EOSDaysLeft: p.EOSDaysLeft, Stranded: p.Stranded,
+				EOSExtendedAt: p.EOSExtendedAt, RepairOff: p.RepairOff,
 			})
 		}
 		x.Verdict = clusterVerdict(&x)
@@ -389,11 +394,15 @@ func clusterVerdict(x *gkeClusterOut) string {
 				via += "。" + s
 			}
 		}
+		basis := x.EOSBasis
+		if basis == "" {
+			basis = "标准支持"
+		}
 		switch {
 		case *x.EffectiveEOSDays < 0:
-			return "标准支持已于 " + x.EffectiveEOSAt + " 结束，不再有安全补丁，应尽快升级" + via
+			return basis + "已于 " + x.EffectiveEOSAt + " 结束，不再有安全补丁，应尽快升级" + via
 		case *x.EffectiveEOSDays <= 30:
-			return "标准支持将在 " + strconv.Itoa(*x.EffectiveEOSDays) + " 天后（" + x.EffectiveEOSAt + "）结束，这是硬期限" + via
+			return basis + "将在 " + strconv.Itoa(*x.EffectiveEOSDays) + " 天后（" + x.EffectiveEOSAt + "）结束，这是硬期限" + via
 		}
 	}
 	if x.Blocked {

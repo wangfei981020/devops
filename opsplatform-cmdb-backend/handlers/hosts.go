@@ -25,15 +25,17 @@ type HostHandler struct {
 	Cipher *crypto.Cipher
 }
 
-func NewHostHandler(db *sql.DB, cipher *crypto.Cipher) *HostHandler { return &HostHandler{DB: db, Cipher: cipher} }
+func NewHostHandler(db *sql.DB, cipher *crypto.Cipher) *HostHandler {
+	return &HostHandler{DB: db, Cipher: cipher}
+}
 
 func (h *HostHandler) Register(r *gin.RouterGroup) {
 	r.GET("/cloud-accounts", h.ListAccounts)
 	r.POST("/cloud-accounts", h.CreateAccount)
 	r.PUT("/cloud-accounts/:id", h.UpdateAccount)
 	r.DELETE("/cloud-accounts/:id", h.DeleteAccount)
-	r.POST("/cloud-accounts/:id/sync", h.SyncAccount)          // 同步账号下所有 project（后台异步）
-	r.GET("/cloud-accounts/:id/sync-status", h.SyncStatus)        // 账号级：汇总 + 每项目明细
+	r.POST("/cloud-accounts/:id/sync", h.SyncAccount)              // 同步账号下所有 project（后台异步）
+	r.GET("/cloud-accounts/:id/sync-status", h.SyncStatus)         // 账号级：汇总 + 每项目明细
 	r.GET("/cloud-projects/:pid/sync-status", h.ProjectSyncStatus) // 项目级进度
 	r.POST("/cloud-accounts/:id/projects", h.CreateProject)
 	r.PUT("/cloud-projects/:pid", h.UpdateProject)

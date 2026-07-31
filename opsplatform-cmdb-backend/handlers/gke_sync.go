@@ -288,8 +288,8 @@ func saveNodePools(db *sql.DB, clusterID int, pools []k8ssource.NodePoolSnapshot
 			INSERT INTO gke_node_pools
 			  (cluster_id, name, node_count, version, status, auto_upgrade, auto_repair,
 			   auto_upgrade_start_time, upgrade_description, max_surge, max_unavailable, strategy,
-			   bg_phase, upgrade_risk, auto_upgrade_status, paused_reason, minor_target_version, eos_standard_at)
-			VALUES (?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?)
+			   bg_phase, upgrade_risk, auto_upgrade_status, paused_reason, minor_target_version, eos_standard_at, eos_extended_at)
+			VALUES (?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?)
 			ON DUPLICATE KEY UPDATE
 			  node_count=VALUES(node_count), version=VALUES(version), status=VALUES(status),
 			  auto_upgrade=VALUES(auto_upgrade), auto_repair=VALUES(auto_repair),
@@ -298,12 +298,12 @@ func saveNodePools(db *sql.DB, clusterID int, pools []k8ssource.NodePoolSnapshot
 			  bg_phase=VALUES(bg_phase), upgrade_risk=VALUES(upgrade_risk),
 			  auto_upgrade_status=VALUES(auto_upgrade_status), paused_reason=VALUES(paused_reason),
 			  minor_target_version=VALUES(minor_target_version), eos_standard_at=VALUES(eos_standard_at),
-			  synced_at=NOW()`,
+			  eos_extended_at=VALUES(eos_extended_at), synced_at=NOW()`,
 			clusterID, p.Name, p.NodeCount, p.Version, p.Status, boolInt(p.AutoUpgrade), boolInt(p.AutoRepair),
 			nullDateTime(p.AutoUpgradeStartTime), truncStr(p.UpgradeDescription, 500),
 			p.MaxSurge, p.MaxUnavailable, p.Strategy,
 			p.BlueGreenPhase, poolUpgradeRisk(p), strings.Join(p.AutoUpgradeStatus, ","),
-			strings.Join(p.PausedReason, ","), p.MinorTargetVersion, dateOnly(p.EOSStandard))
+			strings.Join(p.PausedReason, ","), p.MinorTargetVersion, dateOnly(p.EOSStandard), dateOnly(p.EOSExtended))
 		if e != nil {
 			logx.J("gke_upgrade", "save_pool_failed", map[string]any{"cluster_id": clusterID, "pool": p.Name, "err": e.Error()})
 			continue

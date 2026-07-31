@@ -32,9 +32,12 @@ type poolState struct {
 	AutoUpgrade    bool
 	AutoRepair     bool
 	EOSStandardAt  string
+	EOSExtendedAt  string
+	EffectiveEOSAt string // 按集群通道选出的硬期限（EXTENDED 取 extended，其余取 standard）
 	EOSDaysLeft    *int
 	SkewMinors     int  // 落后控制面几个小版本
 	Stranded       bool // 落后且 autoUpgrade=false：平时不会自己升（但 EOS 时仍会被强制升）
+	RepairOff      bool // autoRepair=false：节点故障时不会被自动重建，需人工介入
 	PausedReason   string
 	MinorTarget    string
 	UpgradeRisk    string
@@ -82,6 +85,7 @@ type clusterUpgradeState struct {
 	EffectiveEOSDays    *int
 	EffectiveEOSSource  string
 	EOSExtendedAt       string
+	EOSBasis            string // 「标准支持」/「扩展支持」——有效期限是按哪个算的
 
 	MaintenancePolicyJSON string
 	Pools                 []poolState
@@ -162,7 +166,7 @@ func loadPoolStates(db *sql.DB, today time.Time) (map[int][]poolState, error) {
 	rows, err := db.Query(`
 		SELECT cluster_id, name, node_count, version, status, auto_upgrade, auto_repair,
 		       auto_upgrade_start_time, max_surge, max_unavailable, strategy, bg_phase,
-		       upgrade_risk, paused_reason, minor_target_version, eos_standard_at
+		       upgrade_risk, paused_reason, minor_target_version, eos_standard_at, eos_extended_at
 		  FROM gke_node_pools ORDER BY cluster_id, name`)
 	if err != nil {
 		return nil, err
@@ -173,26 +177,51 @@ func loadPoolStates(db *sql.DB, today time.Time) (map[int][]poolState, error) {
 		var cid int
 		var p poolState
 		var au, ar int
-		var startTime, eos sql.NullString
+		var startTime, eos, eosExt sql.NullString
 		if rows.Scan(&cid, &p.Name, &p.NodeCount, &p.Version, &p.Status, &au, &ar,
 			&startTime, &p.MaxSurge, &p.MaxUnavailable, &p.Strategy, &p.BGPhase,
-			&p.UpgradeRisk, &p.PausedReason, &p.MinorTarget, &eos) != nil {
+			&p.UpgradeRisk, &p.PausedReason, &p.MinorTarget, &eos, &eosExt) != nil {
 			continue
 		}
 		p.AutoUpgrade, p.AutoRepair = au == 1, ar == 1
 		p.StartTime = dateTimeStr(startTime)
-		p.EOSStandardAt = dateStr(eos)
-		p.EOSDaysLeft = daysUntil(p.EOSStandardAt, today)
+		p.EOSStandardAt, p.EOSExtendedAt = dateStr(eos), dateStr(eosExt)
+		// EOSDaysLeft 在 applyEffectiveEOS 里按通道基准重算
 		out[cid] = append(out[cid], p)
 	}
 	return out, nil
 }
 
+// isExtendedChannel 集群是否订了 EXTENDED 通道。
+// ⚠️ 这决定「硬期限」取哪个日期，取错会产生最高优先级的红色误报：
+// 非 EXTENDED → 标准支持结束时被强制升级，硬期限 = eos_standard
+// EXTENDED    → 标准支持结束后仍可继续用，硬期限 = eos_extended
+// 早期版本一律用 standard，切到 EXTENDED 后会在 standard 到期、extended 未到的那段时间里
+// 红着报「强制升级：还有 N 天」，而 GKE 根本不会升。
+func isExtendedChannel(channel string) bool {
+	return strings.EqualFold(strings.TrimSpace(channel), "EXTENDED")
+}
+
+// eosBaseline 按通道选支持截止基准。extended 为空时退回 standard（不能因为没采到就把期限当成无限）。
+func eosBaseline(channel, standardAt, extendedAt string) string {
+	if isExtendedChannel(channel) && extendedAt != "" {
+		return extendedAt
+	}
+	return standardAt
+}
+
 // applyEffectiveEOS 算有效 EOS、节点池偏斜与脱队状态、以及偏斜临界判定。
-// 这是 P0-2/P0-3 的核心语义，只此一份。
+// 这是 P0-2/P0-3/P1-4 的核心语义，只此一份。
 func applyEffectiveEOS(x *clusterUpgradeState, today time.Time) {
-	x.EffectiveEOS, x.EffectiveEOSSource = x.ControlPlaneEOS, "控制面"
-	maxSkew := 0
+	ext := isExtendedChannel(x.ReleaseChannel)
+	x.EOSBasis = "标准支持"
+	if ext {
+		x.EOSBasis = "扩展支持"
+	}
+	x.EffectiveEOS = eosBaseline(x.ReleaseChannel, x.ControlPlaneEOS, x.EOSExtendedAt)
+	x.EffectiveEOSSource = "控制面"
+
+	maxSkew, oldestPool := 0, ""
 	for i := range x.Pools {
 		p := &x.Pools[i]
 		p.SkewMinors = minorGap(x.MasterVersion, p.Version)
@@ -202,11 +231,24 @@ func applyEffectiveEOS(x *clusterUpgradeState, today time.Time) {
 			p.UpgradeRisk = "red"
 			p.RiskNoteAppend("落后控制面且自动升级已关，平时不会自己跟上（但支持结束时 GKE 仍会强制升级）")
 		}
-		if p.SkewMinors > maxSkew {
-			maxSkew = p.SkewMinors
+		// 自动修复关闭同样是风险，且与自动升级关闭同等重要：
+		// 节点坏了 GKE 不会自动 drain 重建，必须人工介入。之前只中性显示「关」，规格差太多。
+		if !p.AutoRepair {
+			p.RepairOff = true
+			p.RiskNoteAppend("自动修复已关：节点故障时 GKE 不会自动重建，需人工介入")
+			if p.UpgradeRisk == "" || p.UpgradeRisk == "green" {
+				p.UpgradeRisk = "yellow"
+			}
 		}
-		if p.EOSStandardAt != "" && (x.EffectiveEOS == "" || p.EOSStandardAt < x.EffectiveEOS) {
-			x.EffectiveEOS, x.EffectiveEOSSource = p.EOSStandardAt, "节点池 "+p.Name
+		if p.SkewMinors > maxSkew {
+			maxSkew, oldestPool = p.SkewMinors, p.Name
+		}
+		// 节点池的硬期限同样按集群通道选基准
+		pe := eosBaseline(x.ReleaseChannel, p.EOSStandardAt, p.EOSExtendedAt)
+		p.EffectiveEOSAt = pe
+		p.EOSDaysLeft = daysUntil(pe, today)
+		if pe != "" && (x.EffectiveEOS == "" || pe < x.EffectiveEOS) {
+			x.EffectiveEOS, x.EffectiveEOSSource = pe, "节点池 "+p.Name
 		}
 	}
 	x.EffectiveEOSDays = daysUntil(x.EffectiveEOS, today)
@@ -219,8 +261,16 @@ func applyEffectiveEOS(x *clusterUpgradeState, today time.Time) {
 	if target != "" && maxSkew > 0 {
 		if gap := minorGap(target, oldestPoolVersion(x.Pools)); gap >= 2 {
 			x.SkewCritical = true
-			x.SkewNote = "控制面升到 " + minorOf(target) + " 后，最旧节点池将落后 " +
-				strconv.Itoa(gap) + " 个小版本，触及 GKE「节点最多落后控制面 2 个小版本」的硬限制"
+			// 必须点名是哪个池——EffectiveEOS 那边会写「节点池 app-pool-01」，两处口径要一致
+			name := oldestPool
+			if name == "" {
+				name = "最旧节点池"
+			} else {
+				name = "节点池 " + name
+			}
+			x.SkewNote = "控制面升到 " + minorOf(target) + " 后，" + name + "（" +
+				oldestPoolVersion(x.Pools) + "）将落后 " + strconv.Itoa(gap) +
+				" 个小版本，触及 GKE「节点最多落后控制面 2 个小版本」的硬限制"
 		}
 	}
 }

@@ -67,6 +67,7 @@ type NodePoolSnapshot struct {
 	PausedReason         []string        `json:"paused_reason"`
 	MinorTargetVersion   string          `json:"minor_target_version"`
 	EOSStandard          string          `json:"eos_standard"`
+	EOSExtended          string          `json:"eos_extended"`
 	UpgradeDetails       []UpgradeRecord `json:"upgrade_details"`
 }
 
@@ -202,6 +203,7 @@ func FetchNodePools(ctx context.Context, saJSON []byte, project, location, clust
 		} else {
 			s.AutoUpgradeStatus, s.PausedReason = ui.AutoUpgradeStatus, ui.PausedReason
 			s.MinorTargetVersion, s.EOSStandard = ui.MinorTargetVersion, ui.EndOfStandardSupportTimestamp
+			s.EOSExtended = ui.EndOfExtendedSupportTimestamp
 			s.UpgradeDetails = toUpgradeRecords(ui.UpgradeDetails, "nodepool", np.Name)
 		}
 		out = append(out, s)

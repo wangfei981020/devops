@@ -98,7 +98,7 @@ func buildRemindItem(s *clusterUpgradeState, today time.Time) gkeRemindItem {
 			via = fmt.Sprintf("（最早到期的是%s，控制面本身是 %s）", s.EffectiveEOSSource, s.ControlPlaneEOS)
 		}
 		it.Lines = append(it.Lines, fmt.Sprintf(
-			"🔴 强制升级：当前版本标准支持 %s 结束，还有 %d 天%s", s.EffectiveEOS, *d, via))
+			"🔴 强制升级：当前版本%s %s 结束，还有 %d 天%s", basisOf(s), s.EffectiveEOS, *d, via))
 		it.Lines = append(it.Lines,
 			"   支持结束时 GKE 会强制升级，关闭 autoUpgrade 或设维护排除都拦不住，只能赶在此前自己升完")
 		if n := strandedPools(s); n != "" {
@@ -204,6 +204,14 @@ func dateOf(dt string) string {
 		return dt[:10]
 	}
 	return dt
+}
+
+// basisOf 期限基准的措辞。EXTENDED 通道的硬期限是扩展支持，说成「标准支持」会误导。
+func basisOf(s *clusterUpgradeState) string {
+	if s.EOSBasis != "" {
+		return s.EOSBasis
+	}
+	return "标准支持"
 }
 
 func hitGate(days int, gates []int) bool {

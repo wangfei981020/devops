@@ -15,7 +15,7 @@ import (
 // snapRow 快照粒度：工作负载/主机/PVC。
 type snapRow struct {
 	cluster, mode, gcp, biz, env, typ, key, spec string
-	cost                                          float64
+	cost                                         float64
 }
 
 // snapshotRows 把当前成本聚合到稳定粒度（Pod→工作负载），并附规格摘要（归因用）。
