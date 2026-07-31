@@ -13,6 +13,7 @@ package handlers
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -373,6 +374,110 @@ func (h *GKEUpgradePlanHandler) measuredPoolPace(cid int) map[string]*measuredPa
 		out[p.Pool] = &cp
 	}
 	return out
+}
+
+// historyPace 从 GCP 升级历史里反推出的「每批实际要多久」。
+//
+// 为什么必须有这一档：预案原先只有「本集群节点事件实测」和「通用经验区间」两级，
+// 而节点事件要升过一次才有，新集群永远落到经验区间上。可 gke_upgrade_history 里
+// 早就躺着 GCP 给的真实耗时（精确到秒），一直没被用。
+//
+// 2026-07-31 用当时仅有的 3 条节点池历史校验，经验区间（8~20 分钟/批）错得离谱：
+//   demo-pool-01        1 节点 1 批 → 实测每批 67 分钟
+//   elasticsearch-pool  3 节点 1 批 → 实测每批  3 分钟
+//   kafka-pool          3 节点 3 批 → 实测每批 22 分钟
+// 相差 22 倍。原因是耗时主要取决于节点上跑的是什么（优雅停机、PVC 重挂、PDB 等待），
+// 跟节点数几乎无关——拿一个通用分钟数去套，本来就套不准。
+type historyPace struct {
+	PerBatchMin int
+	PerBatchMax int
+	// 中位数：样本里常有离群值（2026-07-31 实测中 demo-pool-01 单节点花了 67 分钟／批，
+	// 而同期 elasticsearch 三节点只花 3 分钟）。只给 min~max 的话，
+	// 上限被离群值拉高、下限又过于乐观，排窗口的人只能二选一。
+	PerBatchMedian int
+	Samples        int
+	SamePool       bool     // true=就是这个池自己的历史，可信度最高
+	From           []string // 数据来自哪几个池，必须让人看得见
+	perBatch       []int    // 原始样本，用于算中位数
+}
+
+// poolHistoryPace 取历史里的每批耗时。优先本池，没有再用其他池的同类实测。
+//
+// 反推方式：每批耗时 = (总时长 − 整池观察期 − 各批观察期) ÷ 批次数
+// 观察期是配置的确定值，扣掉后剩下的才是真正在建节点、排空 Pod 的时间。
+//
+// ⚠️ 用的是各池**当前**的 batch/soak 配置去还原**当时**那次升级，配置改过就会有偏差。
+// 所以跨池那档只作参考区间，且在 basis 里点名来源，不假装是本池实测。
+func (h *GKEUpgradePlanHandler) poolHistoryPace(cid int, pool string) *historyPace {
+	rows, err := h.DB.Query(`
+		SELECT h.cluster_id, h.pool, h.started_at, h.ended_at,
+		       COALESCE(p.node_count,0), COALESCE(p.bg_batch_node_count,0),
+		       COALESCE(p.bg_node_pool_soak_sec,0), COALESCE(p.bg_batch_soak_sec,0)
+		  FROM gke_upgrade_history h
+		  LEFT JOIN gke_node_pools p ON p.cluster_id=h.cluster_id AND p.name=h.pool
+		 WHERE h.scope='nodepool' AND h.state='SUCCEEDED'
+		   AND h.started_at IS NOT NULL AND h.ended_at IS NOT NULL AND h.pool<>''`)
+	if err != nil {
+		logx.J("gke_plan", "history_pace_failed", map[string]any{"cluster_id": cid, "err": err.Error()})
+		return nil
+	}
+	defer rows.Close()
+
+	same := &historyPace{SamePool: true}
+	other := &historyPace{}
+	for rows.Next() {
+		var hcid, nodeCount, batch, poolSoak, batchSoak int
+		var hpool string
+		var st, en sql.NullTime
+		if rows.Scan(&hcid, &hpool, &st, &en, &nodeCount, &batch, &poolSoak, &batchSoak) != nil {
+			continue
+		}
+		if !st.Valid || !en.Valid {
+			continue
+		}
+		total := int(en.Time.Sub(st.Time).Minutes())
+		if total <= 0 {
+			continue
+		}
+		batches := 1
+		if batch > 0 && nodeCount > 0 {
+			batches = int(math.Ceil(float64(nodeCount) / float64(batch)))
+		}
+		// 扣掉配置死等的观察期，剩下才是真正干活的时间
+		work := total - poolSoak/60 - batches*batchSoak/60
+		if work < 1 {
+			// 观察期比总时长还长，说明配置和当时对不上，这条样本不可用
+			continue
+		}
+		per := work / batches
+		if per < 1 {
+			per = 1
+		}
+
+		t := other
+		if hcid == cid && hpool == pool {
+			t = same
+		}
+		if t.Samples == 0 || per < t.PerBatchMin {
+			t.PerBatchMin = per
+		}
+		if per > t.PerBatchMax {
+			t.PerBatchMax = per
+		}
+		t.Samples++
+		t.perBatch = append(t.perBatch, per)
+		t.From = append(t.From, fmt.Sprintf("%s(%d分/批)", hpool, per))
+	}
+
+	if same.Samples > 0 {
+		same.PerBatchMedian = medianInt(same.perBatch)
+		return same
+	}
+	if other.Samples > 0 {
+		other.PerBatchMedian = medianInt(other.perBatch)
+		return other
+	}
+	return nil
 }
 
 // measuredControlPlane 本集群控制面升级的历史耗时区间。

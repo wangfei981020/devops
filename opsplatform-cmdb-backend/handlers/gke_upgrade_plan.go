@@ -217,7 +217,7 @@ func (h *GKEUpgradePlanHandler) Plan(c *gin.Context) {
 	measuredPerPool := h.measuredPoolPace(cid)
 
 	for _, p := range st.Pools {
-		out.Pools = append(out.Pools, h.planPool(cid, p, target, measuredPerPool[p.Name]))
+		out.Pools = append(out.Pools, h.planPool(cid, p, target, measuredPerPool[p.Name], h.poolHistoryPace(cid, p.Name)))
 	}
 
 	out.BlockingPDBs, out.PDBsCollected, out.PDBNote = h.blockingPDBs(cid)
@@ -330,7 +330,7 @@ func (h *GKEUpgradePlanHandler) planControlPlane(st *clusterUpgradeState, target
 }
 
 // planPool 单个节点池的预案。
-func (h *GKEUpgradePlanHandler) planPool(cid int, p poolState, target string, measured *measuredPace) poolPlanOut {
+func (h *GKEUpgradePlanHandler) planPool(cid int, p poolState, target string, measured *measuredPace, hist *historyPace) poolPlanOut {
 	out := poolPlanOut{
 		Name: p.Name, NodeCount: p.NodeCount, CurrentVersion: p.Version,
 		Strategy: p.Strategy, RolloutPolicy: p.BGRolloutPolicy,
@@ -339,7 +339,7 @@ func (h *GKEUpgradePlanHandler) planPool(cid int, p poolState, target string, me
 		AutoRepairOff: p.RepairOff,
 	}
 
-	out.Estimate = estimatePool(p, measured)
+	out.Estimate = estimatePool(p, measured, hist)
 	out.ExtraNodesNeeded, out.QuotaNote = quotaNeed(p)
 
 	out.SingleReplicaWorkloads = h.singleReplicaInPool(cid, p.Name)
@@ -363,9 +363,15 @@ func (h *GKEUpgradePlanHandler) planPool(cid int, p poolState, target string, me
 // BLUE_GREEN：  创建绿池 + 批次数 × (每批重建 + batchSoak) + nodePoolSoak
 // SURGE：       ceil(节点数 / maxSurge) × 每批重建
 //
+// 取值分四档，越靠前越可信，逐级降级并在 basis 里写明用的是哪一档：
+//   1. 本池节点事件实测（CMDB 自采，±2 分钟）
+//   2. 本池 GCP 升级历史（精确到秒，但保留期约两周）
+//   3. 其他池的 GCP 历史反推出的每批耗时（真实测量，但工作负载不同）
+//   4. 通用经验区间（最后手段，2026-07-31 实测证明它能偏差数倍）
+//
 // 任何一个参数缺失都不会被当成 0——观察期常常是 BLUE_GREEN 里最长的一段，
 // 当成 0 会让预估严重偏小，而偏小的预估会直接变成排错的停机窗口。
-func estimatePool(p poolState, measured *measuredPace) estimateOut {
+func estimatePool(p poolState, measured *measuredPace, hist *historyPace) estimateOut {
 	est := estimateOut{}
 
 	if p.NodeCount <= 0 {
@@ -389,13 +395,41 @@ func estimatePool(p poolState, measured *measuredPace) estimateOut {
 	}
 
 	if strings.EqualFold(p.Strategy, "BLUE_GREEN") {
-		return estimateBlueGreen(p)
+		return estimateBlueGreen(p, hist)
 	}
-	return estimateSurge(p)
+	return estimateSurge(p, hist)
 }
 
-func estimateBlueGreen(p poolState) estimateOut {
-	est := estimateOut{Basis: "按 blueGreenSettings 参数推算 + 经验区间的单批重建时长"}
+// batchRange 每批重建耗时取哪个区间：有真实历史就用历史，没有才退到经验值。
+// 返回的第三个值是这个区间的来源说明，必须一路带到 basis 里——
+// 「3~67 分钟」这种宽区间只有在知道它是实测得来的时候才有意义。
+func batchRange(hist *historyPace) (int, int, string) {
+	if hist != nil && hist.Samples > 0 {
+		src := "其他节点池的 GCP 升级历史"
+		if hist.SamePool {
+			src = "本池的 GCP 升级历史"
+		}
+		return hist.PerBatchMin, hist.PerBatchMax,
+			fmt.Sprintf("%s实测每批 %d~%d 分钟（中位数 %d，%d 个样本：%s）。"+
+				"样本离散时上限多半被离群值拉高，排窗口建议按中位数×批次数打底、再留出余量",
+				src, hist.PerBatchMin, hist.PerBatchMax, hist.PerBatchMedian, hist.Samples,
+				strings.Join(hist.From, "、"))
+	}
+	return batchRebuildMinMinutes, batchRebuildMaxMinutes,
+		fmt.Sprintf("经验区间每批 %d~%d 分钟（无任何历史实测可用）", batchRebuildMinMinutes, batchRebuildMaxMinutes)
+}
+
+func estimateBlueGreen(p poolState, hist *historyPace) estimateOut {
+	loBatch, hiBatch, batchBasis := batchRange(hist)
+	est := estimateOut{Basis: "按 blueGreenSettings 参数推算，" + batchBasis}
+	est.Measured = hist != nil && hist.Samples > 0
+	if hist == nil || hist.Samples == 0 {
+		est.Incomplete = append(est.Incomplete,
+			"单批耗时用的是经验区间——实测显示它可能偏差数倍（1 节点的池曾花 67 分钟/批，3 节点的池只花 3 分钟）")
+	} else if !hist.SamePool {
+		est.Incomplete = append(est.Incomplete,
+			"单批耗时来自其他节点池的实测，本池工作负载不同（优雅停机、PVC 重挂、PDB 等待都会显著改变耗时），只能当参考区间")
+	}
 
 	batch := blueGreenBatchSize(p)
 	if batch <= 0 {
@@ -403,12 +437,12 @@ func estimateBlueGreen(p poolState) estimateOut {
 			"batchNodeCount 与 batchPercentage 都没配，批次数算不出——GKE 会用它自己的默认批次大小")
 		// 给一个覆盖「一次全排空」到「一次一台」的区间，宽但诚实
 		est.Batches = 0
-		est.MinMinutes = blueGreenProvisionMinMinutes + batchRebuildMinMinutes
-		est.MaxMinutes = blueGreenProvisionMaxMinutes + p.NodeCount*batchRebuildMaxMinutes
+		est.MinMinutes = blueGreenProvisionMinMinutes + loBatch
+		est.MaxMinutes = blueGreenProvisionMaxMinutes + p.NodeCount*hiBatch
 	} else {
 		est.Batches = int(math.Ceil(float64(p.NodeCount) / float64(batch)))
-		est.MinMinutes = blueGreenProvisionMinMinutes + est.Batches*batchRebuildMinMinutes
-		est.MaxMinutes = blueGreenProvisionMaxMinutes + est.Batches*batchRebuildMaxMinutes
+		est.MinMinutes = blueGreenProvisionMinMinutes + est.Batches*loBatch
+		est.MaxMinutes = blueGreenProvisionMaxMinutes + est.Batches*hiBatch
 	}
 
 	// 观察期是确定值（API 给了就是多少），直接加进去；没给则标出来
@@ -434,8 +468,10 @@ func estimateBlueGreen(p poolState) estimateOut {
 	return est
 }
 
-func estimateSurge(p poolState) estimateOut {
-	est := estimateOut{Basis: "按 maxSurge 推算 + 经验区间的单批重建时长"}
+func estimateSurge(p poolState, hist *historyPace) estimateOut {
+	loBatch, hiBatch, batchBasis := batchRange(hist)
+	est := estimateOut{Basis: "按 maxSurge 推算，" + batchBasis}
+	est.Measured = hist != nil && hist.Samples > 0
 	surge := p.MaxSurge
 	if surge <= 0 {
 		// maxSurge=0 且 maxUnavailable=0 是无效配置（升级无法推进）；
@@ -445,8 +481,8 @@ func estimateSurge(p poolState) estimateOut {
 			"maxSurge 为 0，按每次 1 台估算；若实际配置不同请在控制台核对 upgradeSettings")
 	}
 	est.Batches = int(math.Ceil(float64(p.NodeCount) / float64(surge)))
-	est.MinMinutes = est.Batches * batchRebuildMinMinutes
-	est.MaxMinutes = est.Batches * batchRebuildMaxMinutes
+	est.MinMinutes = est.Batches * loBatch
+	est.MaxMinutes = est.Batches * hiBatch
 	return est
 }
 
