@@ -12,6 +12,7 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -68,7 +69,8 @@ func (h *GKEHistoryHandler) UpgradeHistory(c *gin.Context) {
 		args = append(args, v)
 	}
 	q += " ORDER BY h.started_at DESC, h.id DESC LIMIT ?"
-	args = append(args, limitOr(c.Query("limit"), 300))
+	lim := limitOr(c.Query("limit"), 1000)
+	args = append(args, lim)
 
 	rows, err := h.DB.Query(q, args...)
 	if err != nil {
@@ -105,9 +107,13 @@ func (h *GKEHistoryHandler) UpgradeHistory(c *gin.Context) {
 			"detail":   detail, "source": src,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"ok": true, "rows": out, "stat": stat, "coverage": h.coverage("gke_upgrade_history"),
-	})
+	cov := h.coverage("gke_upgrade_history")
+	// 取到上限说明还有更多没返回。静默截断会让人以为「就这些了」，必须说出来。
+	if len(out) >= lim {
+		cov["truncated"] = true
+		cov["truncated_note"] = fmt.Sprintf("已达单次返回上限 %d 条，更早的记录未包含在内", lim)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "rows": out, "stat": stat, "coverage": cov})
 }
 
 // RepairHistory 节点自动修复记录。
@@ -125,7 +131,8 @@ func (h *GKEHistoryHandler) RepairHistory(c *gin.Context) {
 		args = append(args, v)
 	}
 	q += " ORDER BY r.started_at DESC, r.id DESC LIMIT ?"
-	args = append(args, limitOr(c.Query("limit"), 300))
+	lim := limitOr(c.Query("limit"), 1000)
+	args = append(args, lim)
 
 	rows, err := h.DB.Query(q, args...)
 	if err != nil {
@@ -164,6 +171,10 @@ func (h *GKEHistoryHandler) RepairHistory(c *gin.Context) {
 		cov["reason_note"] = "有 " + strconv.Itoa(noReason) + " 条解析不出修复原因：" +
 			"REST v1 的 Operation 结构没有 operationReason 字段（那是 gcloud CLI 的），" +
 			"只能从 detail/statusMessage 文本提取。原文已保留在「详情」列。"
+	}
+	if len(out) >= lim {
+		cov["truncated"] = true
+		cov["truncated_note"] = fmt.Sprintf("已达单次返回上限 %d 条，更早的记录未包含在内", lim)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "rows": out, "coverage": cov})
 }

@@ -36,7 +36,17 @@
             并在「系统管理 → 云账号」为对应的 GCP 项目配置 SA key，然后点上方「采集集群」。
           </el-alert>
 
-          <el-table :data="clusters" size="small" v-loading="loading" row-key="cluster_id"
+          <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap" v-if="clusters.length">
+            <el-select v-model="envFilter" size="small" style="width:120px" placeholder="全部环境" clearable>
+              <el-option v-for="e in envOptions" :key="e" :label="e" :value="e" />
+            </el-select>
+            <el-input v-model="boardQ" size="small" style="width:180px" clearable placeholder="搜集群 / 节点池名" />
+            <!-- 直接对应「哪些集群要动手」：脱队节点池不会自己跟上，是 EOS 到期时的真实风险源 -->
+            <el-checkbox v-model="onlyStranded" size="small">只看有节点池脱队的</el-checkbox>
+            <span class="muted" style="margin-left:auto">{{ boardRows.length }} / {{ clusters.length }} 个集群</span>
+          </div>
+
+          <el-table :data="boardRows" size="small" v-loading="loading" row-key="cluster_id"
             :expand-row-keys="expanded" @expand-change="onExpand">
             <el-table-column type="expand">
               <template #default="{ row }">
@@ -213,15 +223,26 @@
             官方注明：日期每月更新且可能变动，只给到月（2026-09）或季度（2026-Q4）的是近似值。
           </el-alert>
 
-          <div style="margin-bottom:8px">
-            <el-select v-model="chFilter" size="small" style="width:150px" placeholder="通道">
-              <el-option label="全部通道" value="" />
+          <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <el-select v-model="chFilter" size="small" style="width:130px" placeholder="全部通道"
+              clearable @change="schedPage = 1">
               <el-option v-for="c in ['RAPID', 'REGULAR', 'STABLE', 'EXTENDED']" :key="c" :label="c" :value="c" />
             </el-select>
-            <el-checkbox v-model="onlyAnchored" size="small" style="margin-left:10px">只看集群锚定的行</el-checkbox>
+            <el-select v-model="eosFilter" size="small" style="width:150px" placeholder="全部支持状态"
+              clearable @change="schedPage = 1">
+              <el-option label="30 天内到期" value="30" />
+              <el-option label="90 天内到期" value="90" />
+              <el-option label="已过期" value="expired" />
+            </el-select>
+            <el-input v-model="schedQ" size="small" style="width:140px" clearable
+              placeholder="版本号，如 1.35" @input="schedPage = 1" />
+            <!-- 1.30~1.32 全过期了，12 行噪音占 43%，一个开关就能滤掉 -->
+            <el-checkbox v-model="hideExpired" size="small" @change="schedPage = 1">只看未过期</el-checkbox>
+            <el-checkbox v-model="onlyAnchored" size="small" @change="schedPage = 1">只看集群锚定的行</el-checkbox>
+            <span class="muted" style="margin-left:auto">{{ filteredRows.length }} / {{ rows.length }} 行</span>
           </div>
 
-          <el-table :data="filteredRows" size="small" v-loading="loading" max-height="560">
+          <el-table :data="pagedSchedule" size="small" v-loading="loading" max-height="560">
             <el-table-column prop="minor_version" label="版本" width="76" />
             <el-table-column prop="channel" label="通道" width="100" />
             <el-table-column label="Available" width="120">
@@ -260,7 +281,13 @@
               </template>
             </el-table-column>
           </el-table>
+          <div class="pager" v-if="filteredRows.length > schedPageSize">
+            <el-pagination layout="total, sizes, prev, pager, next" :total="filteredRows.length"
+              v-model:current-page="schedPage" v-model:page-size="schedPageSize"
+              :page-sizes="[10, 20, 50]" small background />
+          </div>
           <el-empty v-if="!loading && !rows.length" description="排期表还没同步，点上方「同步排期表」" :image-size="60" />
+          <el-empty v-else-if="!loading && !filteredRows.length" description="当前筛选没有匹配的行" :image-size="60" />
         </el-tab-pane>
 
         <!-- ------------------------------------------------ 节点健康与自动修复 -->
@@ -286,7 +313,20 @@
           </div>
           <div class="muted" v-if="nhTh" style="margin-bottom:10px">{{ nhTh.note }}</div>
 
-          <el-table :data="nh" size="small" v-loading="nhLoading">
+          <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap" v-if="nh.length">
+            <el-select v-model="nhLevel" size="small" style="width:110px" placeholder="全部等级" clearable>
+              <el-option label="紧急" value="red" />
+              <el-option label="注意" value="yellow" />
+            </el-select>
+            <el-select v-model="nhKindF" size="small" style="width:130px" placeholder="全部问题" clearable>
+              <el-option label="NotReady" value="not_ready" />
+              <el-option label="磁盘将满" value="disk_full" />
+            </el-select>
+            <el-input v-model="nhQ" size="small" style="width:200px" clearable placeholder="搜节点名 / 集群" />
+            <span class="muted" style="margin-left:auto">{{ nhRows.length }} / {{ nh.length }} 个节点</span>
+          </div>
+
+          <el-table :data="nhRows" size="small" v-loading="nhLoading">
             <el-table-column label="等级" width="80">
               <template #default="{ row }">
                 <span :class="'dot ' + (row.alert_level || 'green')"></span>
@@ -335,6 +375,7 @@
             </template>
             {{ cov.note }}
             <div v-if="cov.reason_note" style="margin-top:4px">{{ cov.reason_note }}</div>
+            <div v-if="cov.truncated" style="margin-top:4px;color:var(--el-color-warning)">{{ cov.truncated_note }}</div>
           </el-alert>
 
           <div style="margin-bottom:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -347,9 +388,14 @@
                 :label="c.display_name || c.name" :value="c.cluster_id" />
             </el-select>
             <template v-if="hKind === 'upgrade'">
-              <el-select v-model="hStartType" size="small" style="width:150px" placeholder="全部方式" clearable @change="loadHistory">
+              <el-select v-model="hStartType" size="small" style="width:130px" placeholder="全部方式" clearable @change="loadHistory">
                 <el-option label="🤖 自动升级" value="AUTOMATIC" />
                 <el-option label="👤 手动升级" value="MANUAL" />
+              </el-select>
+              <!-- 后端 API 早就支持 scope 参数，前端补个下拉即可 -->
+              <el-select v-model="hScope" size="small" style="width:130px" placeholder="全部对象" clearable @change="loadHistory">
+                <el-option label="控制面" value="control_plane" />
+                <el-option label="节点池" value="nodepool" />
               </el-select>
               <span class="muted" v-if="hStat">
                 自动 {{ hStat.AUTOMATIC || 0 }} · 手动 {{ hStat.MANUAL || 0 }}
@@ -361,10 +407,20 @@
                 {{ onlyFailed ? '✕ 取消只看失败' : `⚠ 失败 ${hStat.FAILED} 条` }}
               </el-button>
             </template>
+            <el-select v-model="hDays" size="small" style="width:120px" @change="hPage = 1">
+              <el-option label="全部时间" :value="0" />
+              <el-option label="近 7 天" :value="7" />
+              <el-option label="近 30 天" :value="30" />
+              <el-option label="近 90 天" :value="90" />
+            </el-select>
+            <el-input v-model="hQ" size="small" style="width:170px" clearable
+              placeholder="搜节点池 / 版本号" @input="hPage = 1" />
+            <template v-if="false">
+            </template>
           </div>
 
           <!-- 升级记录 -->
-          <el-table v-if="hKind === 'upgrade'" :data="hRows" size="small" v-loading="hLoading" max-height="520">
+          <el-table v-if="hKind === 'upgrade'" :data="pagedHistory" size="small" v-loading="hLoading" max-height="520">
             <el-table-column prop="started_at" label="开始" width="165" />
             <el-table-column prop="cluster" label="集群" min-width="150" show-overflow-tooltip />
             <el-table-column label="对象" min-width="170">
@@ -399,7 +455,7 @@
           </el-table>
 
           <!-- 节点自动修复 -->
-          <el-table v-else :data="hRows" size="small" v-loading="hLoading" max-height="520">
+          <el-table v-else :data="pagedHistory" size="small" v-loading="hLoading" max-height="520">
             <el-table-column prop="started_at" label="开始" width="165" />
             <el-table-column prop="cluster" label="集群" min-width="140" show-overflow-tooltip />
             <el-table-column prop="pool" label="节点池" min-width="150" show-overflow-tooltip />
@@ -419,10 +475,16 @@
             <el-table-column prop="detail" label="详情" min-width="220" show-overflow-tooltip />
           </el-table>
 
+          <div class="pager" v-if="filteredHistory.length > hPageSize">
+            <el-pagination layout="total, sizes, prev, pager, next" :total="filteredHistory.length"
+              v-model:current-page="hPage" v-model:page-size="hPageSize"
+              :page-sizes="[10, 20, 50, 100]" small background />
+          </div>
           <el-empty v-if="!hLoading && !hRows.length"
             :description="hKind === 'repair'
               ? '没有采集到自动修复记录——这不代表没发生过，见上方覆盖范围说明'
               : '没有采集到升级记录，先运行「采集集群」'" :image-size="60" />
+          <el-empty v-else-if="!hLoading && !filteredHistory.length" description="当前筛选没有匹配的记录" :image-size="60" />
         </el-tab-pane>
       </el-tabs>
     </el-card>
@@ -481,6 +543,14 @@ const rows = ref([])
 const expanded = ref([])
 const chFilter = ref('')
 const onlyAnchored = ref(false)
+const hideExpired = ref(false)
+const eosFilter = ref('')
+const schedQ = ref('')
+const schedPage = ref(1); const schedPageSize = ref(10)
+// 看板筛选
+const envFilter = ref('')
+const boardQ = ref('')
+const onlyStranded = ref(false)
 const ovDlg = ref(false)
 const ovRow = ref({})
 const ovForm = reactive({ auto_upgrade_raw: '', auto_upgrade_at: '', auto_upgrade_precision: 'day' })
@@ -494,16 +564,78 @@ const hStat = ref(null)
 const cov = ref(null)
 const hLoading = ref(false)
 const onlyFailed = ref(false)
+const hScope = ref(null)
+const hQ = ref('')
+const hDays = ref(0)
+const hPage = ref(1); const hPageSize = ref(20)
 
 // 节点健康 Tab
 const nh = ref([])
 const nhTask = ref(null)
 const nhTh = ref(null)
 const nhLoading = ref(false)
+const nhLevel = ref('')
+const nhKindF = ref('')
+const nhQ = ref('')
 
-const filteredRows = computed(() => rows.value.filter((r) =>
-  (!chFilter.value || r.channel === chFilter.value) &&
-  (!onlyAnchored.value || (r.anchored_clusters && r.anchored_clusters.length))))
+const filteredRows = computed(() => rows.value.filter((r) => {
+  if (chFilter.value && r.channel !== chFilter.value) return false
+  if (onlyAnchored.value && !(r.anchored_clusters && r.anchored_clusters.length)) return false
+  if (schedQ.value && !String(r.minor_version).includes(schedQ.value.trim())) return false
+  // 支持状态用 days_min（区间最早端），与倒计时口径一致
+  const d = r.eos_standard_days ?? r.eos_standard_days_min
+  if (hideExpired.value && d !== null && d !== undefined && d < 0) return false
+  if (eosFilter.value) {
+    if (d === null || d === undefined) return false
+    if (eosFilter.value === 'expired' && d >= 0) return false
+    if (eosFilter.value !== 'expired' && (d < 0 || d > Number(eosFilter.value))) return false
+  }
+  return true
+}))
+const pagedSchedule = computed(() =>
+  filteredRows.value.slice((schedPage.value - 1) * schedPageSize.value, schedPage.value * schedPageSize.value))
+
+// ---- 升级看板筛选 ----
+const envOptions = computed(() => [...new Set(clusters.value.map((c) => c.environment).filter(Boolean))])
+const boardRows = computed(() => clusters.value.filter((c) => {
+  if (envFilter.value && c.environment !== envFilter.value) return false
+  if (onlyStranded.value && !(c.pools || []).some((p) => p.stranded)) return false
+  if (boardQ.value) {
+    const q = boardQ.value.trim().toLowerCase()
+    const hit = `${c.display_name || ''}${c.name || ''}`.toLowerCase().includes(q) ||
+      (c.pools || []).some((p) => (p.name || '').toLowerCase().includes(q))
+    if (!hit) return false
+  }
+  return true
+}))
+
+// ---- 历史筛选 + 分页（scope/方式走后端，其余前端过滤）----
+const filteredHistory = computed(() => hRows.value.filter((r) => {
+  if (hDays.value) {
+    const t = Date.parse((r.started_at || '').replace(' ', 'T'))
+    if (!Number.isNaN(t) && Date.now() - t > hDays.value * 86400000) return false
+  }
+  if (hQ.value) {
+    const q = hQ.value.trim().toLowerCase()
+    const hay = [r.pool, r.cluster, r.node_name, r.initial_version, r.target_version, r.repair_reason]
+      .filter(Boolean).join(' ').toLowerCase()
+    if (!hay.includes(q)) return false
+  }
+  return true
+}))
+const pagedHistory = computed(() =>
+  filteredHistory.value.slice((hPage.value - 1) * hPageSize.value, hPage.value * hPageSize.value))
+
+// ---- 节点健康筛选 ----
+const nhRows = computed(() => nh.value.filter((r) => {
+  if (nhLevel.value && r.alert_level !== nhLevel.value) return false
+  if (nhKindF.value && r.alert_kind !== nhKindF.value) return false
+  if (nhQ.value) {
+    const q = nhQ.value.trim().toLowerCase()
+    if (!`${r.node_name || ''} ${r.cluster || ''}`.toLowerCase().includes(q)) return false
+  }
+  return true
+}))
 
 async function reload() {
   loading.value = true
@@ -549,11 +681,13 @@ function toggleFailed() {
 
 async function loadHistory() {
   hLoading.value = true
+  hPage.value = 1
   try {
     const params = {}
     if (hCluster.value) params.cluster_id = hCluster.value
     if (hKind.value === 'upgrade') {
       if (hStartType.value) params.start_type = hStartType.value
+      if (hScope.value) params.scope = hScope.value
       const r = await gkeUpgradeHistory(params)
       if (r.ok) {
         // stat 始终按全量算，否则筛选后「失败 N 条」的入口会自己消失
