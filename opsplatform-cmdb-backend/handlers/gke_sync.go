@@ -186,8 +186,12 @@ func gkeUpgradeSyncCore(ctx context.Context, db *sql.DB, cipher *crypto.Cipher, 
 	}
 	prog(len(list), len(list))
 
-	summary := fmt.Sprintf("采集完成：%d/%d 个集群成功，节点池 %d 个，升级记录 %d 条，自动修复记录 %d 条",
-		okCount, len(list), poolCount, histCount, repairCount)
+	// ⚠️ histCount 是「处理条数」不是「落库行数」：同一升级事件会被 upgradeDetails 和
+	// operations 两个来源各交一次，合并后落库只有一行。摘要不写清楚会被误读成去重没生效。
+	var histRows int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM gke_upgrade_history`).Scan(&histRows)
+	summary := fmt.Sprintf("采集完成：%d/%d 个集群成功，节点池 %d 个，升级记录处理 %d 条→库中 %d 个事件，自动修复记录 %d 条",
+		okCount, len(list), poolCount, histCount, histRows, repairCount)
 	logx.J("gke_upgrade", "sync_done", map[string]any{
 		"ok": okCount, "total": len(list), "pools": poolCount,
 		"history": histCount, "repairs": repairCount, "failures": len(failures),

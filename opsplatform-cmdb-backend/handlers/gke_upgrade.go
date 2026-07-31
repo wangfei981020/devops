@@ -103,126 +103,61 @@ type gkeClusterOut struct {
 	EffectiveEOSDays   *int   `json:"effective_eos_days"`
 	EffectiveEOSSource string `json:"effective_eos_source"` // 控制面 / 节点池 xxx
 
+	// 节点最多落后控制面 2 个小版本是 GKE 的硬限制，触及会出兼容故障
+	SkewCritical bool   `json:"skew_critical"`
+	SkewNote     string `json:"skew_note"`
+
 	MaintenancePolicy string       `json:"maintenance_policy_json"`
 	Pools             []gkePoolOut `json:"pools"`
 	Verdict           string       `json:"verdict"` // 一句话判断，不是纯数据
 }
 
 // Overview 升级看板。
-// 用 LEFT JOIN：没采集过的集群也要列出来（显示「未采集」），否则用户会以为集群丢了。
+// 状态全部来自 loadClusterUpgradeStates —— 与提醒任务同一份计算，不许在这里另算 EOS。
 func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
-	rows, err := h.DB.Query(`
-		SELECT c.id, c.name, c.display_name, c.environment, c.project_id, c.location,
-		       COALESCE(u.release_channel,''), COALESCE(u.current_master_version,''),
-		       COALESCE(u.minor_target_version,''), COALESCE(u.patch_target_version,''),
-		       u.predicted_upgrade_at, COALESCE(u.predicted_precision,''), COALESCE(u.predicted_source,''),
-		       COALESCE(u.auto_upgrade_status,''), COALESCE(u.paused_reason,''),
-		       u.eos_standard_at, u.eos_extended_at,
-		       COALESCE(u.maintenance_policy_json,''), COALESCE(u.last_error,''),
-		       u.synced_at
-		  FROM k8s_clusters c
-		  LEFT JOIN gke_cluster_upgrade u ON u.cluster_id = c.id
-		 WHERE c.provider='gke' AND c.enabled=1
-		 ORDER BY FIELD(c.environment,'PROD','UAT','TEST','DEV'), c.name`)
+	states, err := loadClusterUpgradeStates(h.DB)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
-	defer rows.Close()
 
-	today := localMidnight()
-	out := []gkeClusterOut{}
-	for rows.Next() {
-		var x gkeClusterOut
-		var predAt, eosStd, eosExt, syncedAt sql.NullString
-		if e := rows.Scan(&x.ClusterID, &x.Name, &x.DisplayName, &x.Environment, &x.Project, &x.Location,
-			&x.ReleaseChannel, &x.MasterVersion, &x.MinorTarget, &x.PatchTarget,
-			&predAt, &x.PredictedPrecision, &x.PredictedSource,
-			&x.AutoUpgradeStatus, &x.PausedReason, &eosStd, &eosExt,
-			&x.MaintenancePolicy, &x.LastError, &syncedAt); e != nil {
-			continue
-		}
-		x.PredictedAt = dateStr(predAt)
-		// 目标版本为空但预计日期有值时，那个日期是按「当前小版本 +1」推断的——
-		// 目标列也得把推断出的版本显示出来，否则用户看到「目标 —，预计 2026-09-01」无从判断在说哪个版本
-		if x.MinorTarget == "" && x.PredictedSource == "inferred_next_minor" {
-			x.InferredTarget = nextMinor(x.MasterVersion)
-		}
-		x.EOSStandardAt, x.EOSExtendedAt = dateStr(eosStd), dateStr(eosExt)
-		x.SyncedAt = dateTimeStr(syncedAt)
-		x.Synced = x.SyncedAt != "" && x.MasterVersion != ""
-		start, end := dateWindow(x.PredictedAt, x.PredictedPrecision)
-		x.DaysMin, x.DaysMax = daysUntil(start, today), daysUntil(end, today)
-		x.WindowText = windowText(x.PredictedAt, x.PredictedPrecision)
-		if x.PredictedPrecision == "day" {
-			x.DaysLeft = x.DaysMin
-		}
-		x.EOSDaysLeft = daysUntil(x.EOSStandardAt, today)
-		x.PauseKind, x.PauseNote = classifyPause(x.PausedReason)
-		x.Blocked = x.PauseKind == "excluded"
-		out = append(out, x)
-	}
-
-	// 节点池按集群装配
-	poolsBy := map[int][]gkePoolOut{}
-	pr, err := h.DB.Query(`
-		SELECT cluster_id, name, node_count, version, status, auto_upgrade, auto_repair,
-		       auto_upgrade_start_time, max_surge, max_unavailable, strategy, bg_phase,
-		       upgrade_risk, paused_reason, minor_target_version, eos_standard_at
-		  FROM gke_node_pools ORDER BY cluster_id, name`)
-	if err == nil {
-		defer pr.Close()
-		for pr.Next() {
-			var cid int
-			var p gkePoolOut
-			var au, ar int
-			var startTime, poolEOS sql.NullString
-			if pr.Scan(&cid, &p.Name, &p.NodeCount, &p.Version, &p.Status, &au, &ar,
-				&startTime, &p.MaxSurge, &p.MaxUnavailable, &p.Strategy, &p.BGPhase,
-				&p.UpgradeRisk, &p.PausedReason, &p.MinorTargetVersion, &poolEOS) != nil {
-				continue
-			}
-			p.AutoUpgrade, p.AutoRepair = au == 1, ar == 1
-			p.AutoUpgradeStartTime = dateTimeStr(startTime)
-			p.EOSStandardAt = dateStr(poolEOS)
-			// API 没给节点池 EOS 时，用该池版本的小版本去排期表补——
-			// 否则「节点池早已过期」这件事在看板上根本不存在
-			if p.EOSStandardAt == "" {
-				p.EOSStandardAt = h.eosFromSchedule(p.Version)
-			}
-			p.EOSDaysLeft = daysUntil(p.EOSStandardAt, today)
-			p.RiskNote = riskNote(p)
-			poolsBy[cid] = append(poolsBy[cid], p)
-		}
-	}
-
+	out := make([]gkeClusterOut, 0, len(states))
 	due30, blocked, urgent := 0, 0, ""
 	minDays := 1 << 30
-	for i := range out {
-		x := &out[i]
-		x.Pools = poolsBy[x.ClusterID]
-		for j := range x.Pools {
-			x.Pools[j].VersionSkew = versionSkew(x.MasterVersion, x.Pools[j].Version)
+	for i := range states {
+		s := &states[i]
+		x := gkeClusterOut{
+			ClusterID: s.ClusterID, Name: s.Name, DisplayName: s.DisplayName,
+			Environment: s.Env, Project: s.Project, Location: s.Location,
+			Synced: s.Synced, LastError: s.LastError, SyncedAt: s.SyncedAt,
+			ReleaseChannel: s.ReleaseChannel, MasterVersion: s.MasterVersion,
+			MinorTarget: s.MinorTarget, PatchTarget: s.PatchTarget, InferredTarget: s.InferredTarget,
+			PredictedAt: s.PredictedAt, PredictedPrecision: s.PredictedPrecision,
+			PredictedSource: s.PredictedSource, DaysLeft: s.DaysLeft,
+			WindowText: s.WindowText, DaysMin: s.DaysMin, DaysMax: s.DaysMax,
+			AutoUpgradeStatus: s.AutoUpgradeStatus, PausedReason: s.PausedReason,
+			Blocked: s.Blocked, PauseKind: s.PauseKind, PauseNote: s.PauseNote,
+			EOSStandardAt: s.ControlPlaneEOS, EOSDaysLeft: s.ControlPlaneEOSDays,
+			EOSExtendedAt:  s.EOSExtendedAt,
+			EffectiveEOSAt: s.EffectiveEOS, EffectiveEOSDays: s.EffectiveEOSDays,
+			EffectiveEOSSource: s.EffectiveEOSSource,
+			SkewCritical:       s.SkewCritical, SkewNote: s.SkewNote,
+			MaintenancePolicy: s.MaintenancePolicyJSON,
 		}
-		// 有效 EOS = 控制面与所有节点池里最早的那个。
-		// 节点池落后控制面且 autoUpgrade=false 时，它永远不会自己跟上，风险直接升红。
-		x.EffectiveEOSAt, x.EffectiveEOSSource = x.EOSStandardAt, "控制面"
-		for j := range x.Pools {
-			p := &x.Pools[j]
-			p.Stranded = p.VersionSkew != "" && !p.AutoUpgrade
-			if p.Stranded && p.UpgradeRisk != "red" {
-				p.UpgradeRisk = "red"
-				p.RiskNote = "落后控制面且自动升级已关，节点池不会自己跟上；" + p.RiskNote
-			}
-			if p.EOSStandardAt != "" && (x.EffectiveEOSAt == "" || p.EOSStandardAt < x.EffectiveEOSAt) {
-				x.EffectiveEOSAt, x.EffectiveEOSSource = p.EOSStandardAt, "节点池 "+p.Name
-			}
+		for _, p := range s.Pools {
+			x.Pools = append(x.Pools, gkePoolOut{
+				Name: p.Name, NodeCount: p.NodeCount, Version: p.Version, Status: p.Status,
+				AutoUpgrade: p.AutoUpgrade, AutoRepair: p.AutoRepair,
+				AutoUpgradeStartTime: p.StartTime,
+				MaxSurge:             p.MaxSurge, MaxUnavailable: p.MaxUnavailable,
+				Strategy: p.Strategy, BGPhase: p.BGPhase,
+				UpgradeRisk: p.UpgradeRisk, RiskNote: joinNote(p.RiskNote(), riskNoteFor(p)),
+				PausedReason: p.PausedReason, MinorTargetVersion: p.MinorTarget,
+				VersionSkew: skewText(p.SkewMinors), EOSStandardAt: p.EOSStandardAt,
+				EOSDaysLeft: p.EOSDaysLeft, Stranded: p.Stranded,
+			})
 		}
-		x.EffectiveEOSDays = daysUntil(x.EffectiveEOSAt, today)
-
-		x.Verdict = clusterVerdict(x)
-		// 用区间「最早」那端做 30 天判定：宁可早提醒，也不能因为月/季度粒度而漏掉。
-		// 但展示层不会把这个数字当成确定倒计时（见 WindowText）。
+		x.Verdict = clusterVerdict(&x)
 		if x.DaysMin != nil && *x.DaysMin >= 0 && *x.DaysMin <= 30 {
 			due30++
 			if *x.DaysMin < minDays {
@@ -232,9 +167,9 @@ func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
 		if x.Blocked {
 			blocked++
 		}
+		out = append(out, x)
 	}
 
-	// 排期表同步状态：解析失败时前端要标黄，所以把行数和最后同步时间一起给出去
 	var schedRows, schedApprox int
 	var schedSynced sql.NullString
 	_ = h.DB.QueryRow(`SELECT COUNT(*), MAX(synced_at),
@@ -251,6 +186,33 @@ func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
 		},
 		"clusters": out,
 	})
+}
+
+func joinNote(a, b string) string {
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	return a + "；" + b
+}
+
+func skewText(minors int) string {
+	if minors <= 0 {
+		return ""
+	}
+	return "落后控制面 " + strconv.Itoa(minors) + " 个小版本"
+}
+
+// riskNoteFor maxUnavailable 占比说明
+func riskNoteFor(p poolState) string {
+	if p.NodeCount <= 0 || p.MaxUnavailable <= 0 || strings.EqualFold(p.Strategy, "BLUE_GREEN") {
+		return ""
+	}
+	pct := float64(p.MaxUnavailable) * 100 / float64(p.NodeCount)
+	return "升级时同时不可用 " + strconv.Itoa(p.MaxUnavailable) + "/" + strconv.Itoa(p.NodeCount) +
+		" 个节点（" + strconv.FormatFloat(pct, 'f', 1, 64) + "%）"
 }
 
 // Schedule 官网排期表 + 标注哪些集群锚在哪一格。
@@ -412,6 +374,10 @@ func clusterVerdict(x *gkeClusterOut) string {
 		}
 		return "尚未采集。需要为该集群所属云账号项目配置 SA key，然后运行「GKE 集群升级信息采集」任务"
 	}
+	// 偏斜临界会直接导致节点与控制面不兼容，比日期类问题更硬
+	if x.SkewCritical {
+		return "版本偏斜临界：" + x.SkewNote
+	}
 	// 硬期限优先：支持结束比自动升级更要命。
 	// ⚠️ 必须用 EffectiveEOS（控制面与节点池取最早），不能只看控制面——
 	// 否则「控制面 1.34 安全、35 个节点跑在 3 天后到期的 1.33」会显示成绿色。
@@ -496,43 +462,8 @@ func strandedSummary(x *gkeClusterOut) string {
 }
 
 // eosFromSchedule 用版本号去官网排期表查该小版本的标准支持截止。
-// 节点池级 EOS 在 API 里可能为空，但排期表一定有——不补的话「节点池已过期」在看板上不存在。
-func (h *GKEUpgradeHandler) eosFromSchedule(version string) string {
-	m := minorOf(strings.TrimPrefix(version, "v"))
-	if m == "" {
-		return ""
-	}
-	var at sql.NullString
-	// EOS 是版本级属性，四个通道行冗余同值，取任意一行即可
-	if h.DB.QueryRow(`SELECT eos_standard_at FROM gke_version_schedule
-	                   WHERE minor_version=? AND eos_standard_at IS NOT NULL LIMIT 1`, m).Scan(&at) != nil {
-		return ""
-	}
-	return dateStr(at)
-}
-
-func riskNote(p gkePoolOut) string {
-	if p.UpgradeRisk == "green" || p.NodeCount <= 0 || p.MaxUnavailable <= 0 {
-		return ""
-	}
-	pct := float64(p.MaxUnavailable) * 100 / float64(p.NodeCount)
-	return "升级时同时不可用 " + strconv.Itoa(p.MaxUnavailable) + "/" + strconv.Itoa(p.NodeCount) +
-		" 个节点（" + strconv.FormatFloat(pct, 'f', 1, 64) + "%）"
-}
 
 // versionSkew 比较节点池版本与控制面版本。GKE 有版本偏斜限制，
-// 节点落后控制面超过 2 个小版本会出故障，所以小版本差异必须显著提示。
-func versionSkew(master, pool string) string {
-	m, p := minorOf(strings.TrimPrefix(master, "v")), minorOf(strings.TrimPrefix(pool, "v"))
-	if m == "" || p == "" || m == p {
-		// 小版本相同再比补丁
-		if master != "" && pool != "" && master != pool {
-			return "补丁版本与控制面不一致"
-		}
-		return ""
-	}
-	return "落后控制面一个小版本以上（控制面 " + m + "，节点池 " + p + "）"
-}
 
 // ---------------------------------------------------------------------------
 

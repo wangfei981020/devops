@@ -113,6 +113,11 @@ var mcpTools = []mcpTool{
 	{"list_namespaces", "列命名空间", "/api/k8s/namespaces", []mcpParam{{"cluster_id", "integer", "集群ID", false}}, false},
 	{"data_freshness", "采集新鲜度:CMDB 里这份数据是什么时候采的/能不能信——下结论前先查这个,尤其当结果和预期不符时", "/api/k8s/sync-state", []mcpParam{{"cluster_id", "integer", "集群ID", false}}, false},
 	{"expose_surface", "暴露面总览:所有对外入口(VS/Ingress/LB/NodePort)的内外网判定+TLS+后端存活+风险分级——问'哪些服务暴露在公网'直接用这个,不要自己拼", "/api/k8s/expose-surface", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"only", "string", "external=只看外网, risky=只看有风险的", false}}, false},
+	// GKE 版本与升级（阶段 6）：AI 直接回答「什么时候会被升级」「历史上是不是被自动升的」
+	{"gke_upgrade_status", "GKE 升级状态:每个集群的控制面/节点池分别什么时候会被自动升级、目标版本、被什么挡住、支持截止(取控制面与所有节点池最早)。问'g32什么时候升级''会不会被强制升'用这个", "/api/gke/upgrade/overview", nil, false},
+	{"gke_upgrade_history", "GKE 升级历史:何时升过/从哪版到哪版/是Google自动升(AUTOMATIC)还是我们手动升(MANUAL)。⚠️GCP保留期很短,空结果不等于没发生过,看返回的 coverage", "/api/gke/upgrade/history", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"start_type", "string", "AUTOMATIC=自动 MANUAL=手动", false}, {"scope", "string", "control_plane=控制面 nodepool=节点池", false}}, false},
+	{"gke_node_repair_history", "GKE 节点自动修复记录:哪些节点被静默drain重建过及原因。node auto-repair 默认开启且无通知,这是唯一能事后追溯的地方", "/api/gke/repair-history", []mcpParam{{"cluster_id", "integer", "集群ID", false}}, false},
+	{"gke_version_schedule", "GKE 官网版本排期表:某小版本在各通道的自动升级日期与标准/扩展支持截止。⚠️月(2026-09)或季度(2026-Q4)粒度是官方近似值,看 precision 字段别当精确日期", "/api/gke/version-schedule", nil, false},
 	{"cluster_health", "集群体检:一次返回所有异常(节点/工作负载/孤儿/镜像)并按critical/warning/info分级+处置建议——问'集群有什么问题'先用这个", "/api/k8s/health", []mcpParam{{"cluster_id", "integer", "集群ID", true}}, false},
 	{"list_orphans", "孤儿资源:还在占资源/计费/报错但已没人用的(PVC无挂载/HPA指向已删负载/VS后端不存在/空命名空间),带浪费金额和删除命令", "/api/k8s/orphans", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"kind", "string", "pvc/hpa/virtualservice/ingress/namespace,不传=全部", false}}, false},
 	{"resource_waste", "资源浪费排行:request vs Prometheus实测用量,按浪费量排序+给出推荐request值——答'能缩多少/哪里最浪费'", "/api/k8s/resource-waste", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"namespace", "string", "命名空间", false}, {"top", "integer", "只看前N条", false}}, false},
