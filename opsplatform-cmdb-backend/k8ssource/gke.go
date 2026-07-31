@@ -25,6 +25,9 @@ type GKECluster struct {
 	NodeCount int    `json:"node_count"`
 	Status    string `json:"status"`
 	CA        string `json:"ca"` // base64 PEM
+	// ReleaseChannel 决定这个集群的自动升级排期取官网表的哪一列（空=未入通道，规则上取 STABLE 列）。
+	// 纳管时就显示出来，免得选完还要回 GCP 控制台确认。
+	ReleaseChannel string `json:"release_channel"`
 }
 
 // DiscoverGKE 用 SA key 列出某 project 下所有 GKE 集群。
@@ -43,9 +46,14 @@ func DiscoverGKE(ctx context.Context, saJSON []byte, projectID string) ([]GKEClu
 		if c.MasterAuth != nil {
 			ca = c.MasterAuth.ClusterCaCertificate
 		}
+		channel := ""
+		if c.ReleaseChannel != nil {
+			channel = c.ReleaseChannel.Channel
+		}
 		out = append(out, GKECluster{
 			Name: c.Name, Location: c.Location, Endpoint: c.Endpoint,
 			Version: c.CurrentMasterVersion, NodeCount: int(c.CurrentNodeCount), Status: c.Status, CA: ca,
+			ReleaseChannel: channel,
 		})
 	}
 	return out, nil

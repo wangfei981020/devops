@@ -50,6 +50,9 @@ func taskTimeout(key string) time.Duration {
 	switch key {
 	case "inspect", "refresh_expiry", "dns_sync", "host_sync":
 		return 25 * time.Minute // 逐个连 443/WHOIS/同步，量大给足
+	case "gke_upgrade_sync":
+		// 每集群 3 次 API + 每节点池 1 次 fetchNodePoolUpgradeInfo，4 集群约 10 个池，给足余量
+		return 15 * time.Minute
 	default:
 		return 5 * time.Minute
 	}
@@ -67,6 +70,13 @@ func StartScheduler(db *sql.DB, cipher *crypto.Cipher) {
 		"inspect":        func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) { return inspectAllCertsCore(ctx, db, p, t) },
 		"dns_sync":       func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) { return dnsSyncCore(ctx, db, cipher) },
 		"host_sync":      func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) { return SyncAllHostProjects(db, cipher) },
+		// GKE 版本与升级：排期表同步不依赖云凭据，集群采集依赖 SA key，故拆成两个任务
+		"gke_schedule_sync": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return gkeScheduleSyncCore(ctx, db)
+		},
+		"gke_upgrade_sync": func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) {
+			return gkeUpgradeSyncCore(ctx, db, cipher, p, t)
+		},
 	}
 	// 自愈①：启动时，之前进程遗留的「运行中」记录一律标「中断」（那些进程已随重启死掉）
 	if _, err := db.Exec(`UPDATE task_run_logs SET status='interrupted', summary='中断：服务重启', finished_at=NOW() WHERE status='running'`); err != nil {
