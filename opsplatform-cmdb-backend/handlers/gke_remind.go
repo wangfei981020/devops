@@ -106,22 +106,50 @@ func buildRemindItem(s *clusterUpgradeState, today time.Time) gkeRemindItem {
 		}
 	}
 
-	// ① 控制面自动升级
+	// ① 升级时间线。
+	// ⚠️ 主语必须跟着日期的来源走：predicted_upgrade_at 的第一优先级是**节点池**的
+	// autoUpgradeStartTime，此时说「控制面 1.34.8 → 1.35，预计 N 天后」是张冠李戴——
+	// 到期的其实是某个节点池。按 PredictedSource 分主语。
 	if !s.Blocked && s.DaysMin != nil && hitGate(*s.DaysMin, remindGates) {
-		it.Rules = append(it.Rules, "control_plane")
 		if *s.DaysMin <= 7 {
 			it.Urgent = true
 		}
-		it.Lines = append(it.Lines, fmt.Sprintf(
-			"控制面：%s → %s，预计%s（通道 %s）",
-			s.MasterVersion, targetOf(s), whenText(s), channelOr(s.ReleaseChannel)))
-		it.Lines = append(it.Lines, "   控制面自动升级无法关闭，只能用维护排除延迟（最长 180 天）")
-		if s.PredictedSource == "inferred_next_minor" {
-			it.Lines = append(it.Lines, "   ⚠ 目标版本是推断值：GKE 尚未排期，按当前小版本 +1 估算")
+		if s.PredictedSource == "autoUpgradeStartTime" {
+			it.Rules = append(it.Rules, "nodepool_imminent")
+			owner := earliestStartTimePool(s)
+			it.Lines = append(it.Lines, fmt.Sprintf(
+				"节点池 %s：即将升级，预计 %s", owner.Name, whenText(s)))
+			it.Lines = append(it.Lines,
+				"   该时刻由 GKE 直接给出（autoUpgradeStartTime，仅在升级临近时才有值），是最后的拦截机会")
+			it.Lines = append(it.Lines, controlPlaneContextLine(s))
+		} else {
+			it.Rules = append(it.Rules, "control_plane")
+			it.Lines = append(it.Lines, fmt.Sprintf(
+				"控制面：%s → %s，预计 %s（通道 %s）",
+				s.MasterVersion, targetOf(s), whenText(s), channelOr(s.ReleaseChannel)))
+			it.Lines = append(it.Lines, "   控制面自动升级无法关闭，只能用维护排除延迟（最长 180 天）")
+			if s.PredictedSource == "inferred_next_minor" {
+				it.Lines = append(it.Lines, "   ⚠ 目标版本是推断值：GKE 尚未排期，按当前小版本 +1 估算")
+			}
+			it.Lines = append(it.Lines, nodePoolLine(s))
 		}
+	}
 
-		// ② 节点池：跟随控制面，或已关自动升级
-		it.Lines = append(it.Lines, nodePoolLine(s))
+	// ② 节点池独立触发：任何节点池自己拿到了 autoUpgradeStartTime 就单独报，
+	// 不依附控制面那条判定——否则控制面不在窗口内时，临期的节点池会被整条跳过。
+	for i := range s.Pools {
+		p := &s.Pools[i]
+		if p.StartTime == "" || s.PredictedSource == "autoUpgradeStartTime" {
+			continue // 已由 ① 覆盖，避免同一节点池报两次
+		}
+		if d := daysUntil(dateOf(p.StartTime), today); d != nil && hitGate(*d, remindGates) {
+			it.Rules = append(it.Rules, "nodepool_imminent")
+			if *d <= 7 {
+				it.Urgent = true
+			}
+			it.Lines = append(it.Lines, fmt.Sprintf(
+				"节点池 %s：GKE 已给出升级时刻 %s（还有 %d 天）", p.Name, p.StartTime, *d))
+		}
 	}
 
 	// 维护排除到期：排除期一过就恢复自动升级，等于白挡
@@ -140,6 +168,42 @@ func buildRemindItem(s *clusterUpgradeState, today time.Time) gkeRemindItem {
 		it.Lines = append(it.Lines, "🔴 版本偏斜临界："+s.SkewNote)
 	}
 	return it
+}
+
+// earliestStartTimePool 找出给出最早 autoUpgradeStartTime 的节点池——
+// predictUpgradeDate 取的就是这个值，所以主语归它。
+func earliestStartTimePool(s *clusterUpgradeState) poolState {
+	var best poolState
+	for _, p := range s.Pools {
+		if p.StartTime == "" {
+			continue
+		}
+		if best.StartTime == "" || p.StartTime < best.StartTime {
+			best = p
+		}
+	}
+	if best.Name == "" {
+		best.Name = "（未能定位到具体节点池）"
+	}
+	return best
+}
+
+// controlPlaneContextLine 节点池临期时，把控制面的排期作为背景补一句，
+// 避免只看到节点池而忽略控制面也会动。
+func controlPlaneContextLine(s *clusterUpgradeState) string {
+	if s.ControlPlaneEOS == "" {
+		return "   控制面：" + s.MasterVersion + "（排期未知）"
+	}
+	return fmt.Sprintf("   控制面：%s，支持截止 %s（控制面自动升级无法关闭）",
+		s.MasterVersion, s.ControlPlaneEOS)
+}
+
+// dateOf 从 "2006-01-02 15:04:05" 取日期部分。
+func dateOf(dt string) string {
+	if len(dt) >= 10 {
+		return dt[:10]
+	}
+	return dt
 }
 
 func hitGate(days int, gates []int) bool {
