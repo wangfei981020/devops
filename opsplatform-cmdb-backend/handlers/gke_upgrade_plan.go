@@ -33,6 +33,54 @@ func NewGKEUpgradePlanHandler(db *sql.DB) *GKEUpgradePlanHandler {
 func (h *GKEUpgradePlanHandler) Register(r *gin.RouterGroup) {
 	r.GET("/gke/upgrade/plan", h.Plan)
 	r.GET("/gke/upgrade/progress", h.Progress)
+	r.GET("/gke/available-versions", h.AvailableVersions)
+}
+
+// AvailableVersions 某集群所在区域可选的升级目标版本。
+// 给前端下拉框用，也让人不必手输——手输没有任何校验，
+// 打错一个字符预案照样算得出来，要到控制台才发现选不到这个版本。
+func (h *GKEUpgradePlanHandler) AvailableVersions(c *gin.Context) {
+	cid, _ := strconv.Atoi(c.Query("cluster_id"))
+	if cid == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 必填"})
+		return
+	}
+	var project, location string
+	if err := h.DB.QueryRow(`SELECT project_id, location FROM k8s_clusters WHERE id=?`, cid).
+		Scan(&project, &location); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "集群不存在"})
+		return
+	}
+
+	kind := c.Query("kind")
+	if kind == "" {
+		kind = "master"
+	}
+	rows, err := h.DB.Query(`SELECT version FROM gke_available_versions
+		WHERE project_id=? AND location=? AND kind=? ORDER BY sort_order`, project, location, kind)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询可用版本失败: " + err.Error()})
+		return
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var v string
+		if rows.Scan(&v) == nil {
+			out = append(out, v)
+		}
+	}
+	// 空清单不等于「没有可用版本」，多半是还没采过。必须让前端能区分，
+	// 否则下拉框空着会被读成「这个集群没法升级」
+	note := ""
+	if len(out) == 0 {
+		note = "尚未采集到该区域的可用版本清单。请先在「定时任务」里跑一次「GKE 集群升级信息采集」；" +
+			"在此之前目标版本只能手输，且 CMDB 无法校验它是否存在"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"cluster_id": cid, "project_id": project, "location": location,
+		"kind": kind, "versions": out, "total": len(out), "note": note,
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +259,10 @@ func (h *GKEUpgradePlanHandler) Plan(c *gin.Context) {
 		out.Warnings = append(out.Warnings,
 			"未指定目标版本，且 CMDB 也没推断出来（多半是该集群未加入发布通道）。"+
 				"耗时预估与偏斜判断已跳过——请在 GCP 控制台确认可选版本后重新生成")
+	} else if w := h.validateTarget(st, target); w != "" {
+		// 填了个不存在的版本时，整份预案都是照着一个升不上去的目标算的。
+		// 这必须在最显眼的地方说，不能等人到控制台下拉框里找不到才发现。
+		out.Warnings = append(out.Warnings, w)
 	}
 
 	out.ControlPlane = h.planControlPlane(st, target)
@@ -235,6 +287,65 @@ func (h *GKEUpgradePlanHandler) Plan(c *gin.Context) {
 		"total_min": out.TotalEstimate.MinMinutes, "total_max": out.TotalEstimate.MaxMinutes,
 	})
 	c.JSON(http.StatusOK, out)
+}
+
+// validateTarget 校验目标版本在该集群所在区域是否真的可选。
+//
+// 返回空串表示通过（或无从校验）。三种结果分得开：
+//   合法        → ""
+//   清单没采到  → 提示去采，但不说「版本不存在」——没采到不等于不存在
+//   确实不在清单→ 明确报错，并给出最接近的几个候选
+//
+// 这个区分很要紧：把「不知道」说成「不存在」会让人以为版本号写错了，
+// 反过来把「不存在」当成「不知道」则会让人照着一个升不上去的目标排完整个窗口。
+func (h *GKEUpgradePlanHandler) validateTarget(st *clusterUpgradeState, target string) string {
+	rows, err := h.DB.Query(`SELECT version FROM gke_available_versions
+		WHERE project_id=? AND location=? AND kind='master' ORDER BY sort_order`,
+		st.Project, st.Location)
+	if err != nil {
+		logx.J("gke_plan", "validate_target_failed", map[string]any{
+			"cluster_id": st.ClusterID, "err": err.Error()})
+		return ""
+	}
+	defer rows.Close()
+	var all []string
+	for rows.Next() {
+		var v string
+		if rows.Scan(&v) == nil {
+			all = append(all, v)
+		}
+	}
+	if len(all) == 0 {
+		return "无法校验目标版本：尚未采集该区域的可用版本清单。" +
+			"请在「定时任务」里跑一次「GKE 集群升级信息采集」后重新生成预案"
+	}
+	for _, v := range all {
+		if v == target {
+			return ""
+		}
+	}
+	// 同一小版本下的候选最有参考价值——多半就是补丁号敲错了
+	maj, min, ok := parseMinor(target)
+	var near []string
+	if ok {
+		prefix := fmt.Sprintf("%d.%d.", maj, min)
+		for _, v := range all {
+			if strings.HasPrefix(strings.TrimPrefix(v, "v"), prefix) {
+				near = append(near, v)
+				if len(near) >= 5 {
+					break
+				}
+			}
+		}
+	}
+	if len(near) == 0 && len(all) > 5 {
+		near = all[:5]
+	} else if len(near) == 0 {
+		near = all
+	}
+	return fmt.Sprintf("🔴 目标版本 %s 不在 %s 的可选清单里（共 %d 个可选），"+
+		"照这个版本算出来的预案没有意义。相近的可选版本：%s",
+		target, st.Location, len(all), strings.Join(near, "、"))
 }
 
 // normalizePlanSlices 把所有 nil 切片换成空切片。

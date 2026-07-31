@@ -284,3 +284,4 @@ export const gkeNodeHealth = () => http.get('/gke/node-health').then((r) => r.da
 export const gkeUpgradePlan = (params) => http.get('/gke/upgrade/plan', { params }).then((r) => r.data)
 export const gkeUpgradeProgress = (params) => http.get('/gke/upgrade/progress', { params }).then((r) => r.data)
 export const k8sPdbs = (params) => http.get('/k8s/pdbs', { params }).then((r) => r.data)
+export const gkeAvailableVersions = (params) => http.get('/gke/available-versions', { params }).then((r) => r.data)

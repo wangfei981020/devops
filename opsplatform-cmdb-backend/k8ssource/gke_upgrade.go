@@ -307,6 +307,30 @@ func parseGKEDurationSec(raw, cluster, pool, field string) *int {
 	return &sec
 }
 
+// FetchAvailableVersions 取某区域可用的控制面/节点版本清单。
+//
+// 这是「目标版本填什么」的唯一权威来源：手输版本号没有任何校验，
+// 打错一个字符预案照样算得出来，要到控制台下拉框才发现选不到。
+// 官方按降序返回，顺序原样保留（版本号不能按字符串排，
+// "1.35.6-gke.98000" 字符串比 "1.35.6-gke.1127000" 大，但实际更旧）。
+func FetchAvailableVersions(ctx context.Context, saJSON []byte, project, location string) (master []string, node []string, err error) {
+	svc, e := gkeService(ctx, saJSON)
+	if e != nil {
+		return nil, nil, e
+	}
+	name := fmt.Sprintf("projects/%s/locations/%s", project, location)
+	cfg, e := svc.Projects.Locations.GetServerConfig(name).Context(ctx).Do()
+	if e != nil {
+		return nil, nil, fmt.Errorf("getServerConfig %s: %w", name, e)
+	}
+	logx.J("gke_upgrade", "versions_fetched", map[string]any{
+		"project": project, "location": location,
+		"master": len(cfg.ValidMasterVersions), "node": len(cfg.ValidNodeVersions),
+		"default": cfg.DefaultClusterVersion,
+	})
+	return cfg.ValidMasterVersions, cfg.ValidNodeVersions, nil
+}
+
 // ListGKEOperations 列出该 project 下所有 location 的操作记录。
 // 注意：ListOperationsResponse 没有分页字段，一次返回全部（保留期由 GKE 决定，官方未文档化）。
 func ListGKEOperations(ctx context.Context, saJSON []byte, project string) ([]OperationRecord, error) {

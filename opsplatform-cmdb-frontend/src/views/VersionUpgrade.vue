@@ -232,12 +232,17 @@
              CMDB 只出方案不执行——执行在 GCP 控制台，所以给的是页面步骤而不是命令。 -->
         <el-tab-pane label="升级预案" name="plan">
           <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <el-select v-model="planCluster" size="small" style="width:200px" placeholder="选择集群" @change="loadPlan">
+            <el-select v-model="planCluster" size="small" style="width:200px" placeholder="选择集群" @change="onPlanCluster">
               <el-option v-for="c in clusters" :key="c.cluster_id"
                 :label="c.display_name || c.name" :value="c.cluster_id" />
             </el-select>
-            <el-input v-model="planTarget" size="small" style="width:230px" clearable
-              placeholder="目标版本，留空=用推断值" @keyup.enter="loadPlan" />
+            <!-- 版本从 GKE getServerConfig 采来，是该区域真实可选的那份清单。
+                 仍允许自己输（allow-create）：清单还没采到时不能把人卡死 -->
+            <el-select v-model="planTarget" size="small" style="width:280px" clearable filterable
+              allow-create default-first-option
+              :placeholder="verOpts.length ? '选择目标版本' : '目标版本（清单未采集，需手输）'">
+              <el-option v-for="v in verOpts" :key="v" :label="v" :value="v" />
+            </el-select>
             <el-button size="small" type="primary" :loading="planLoading" @click="loadPlan">生成预案</el-button>
             <span class="muted" v-if="plan">生成于 {{ plan.generated_at }}</span>
           </div>
@@ -783,7 +788,7 @@ import { useAppStore } from '../stores/app'
 import {
   gkeUpgradeOverview, gkeVersionSchedule, gkeOverrideSchedule,
   gkeClearScheduleOverride, runScheduledTask, gkeUpgradeHistory, gkeRepairHistory,
-  gkeNodeHealth, gkeUpgradePlan, gkeUpgradeProgress,
+  gkeNodeHealth, gkeUpgradePlan, gkeUpgradeProgress, gkeAvailableVersions,
 } from '../api/cmdb'
 
 const app = useAppStore()
@@ -831,6 +836,24 @@ const planLoading = ref(false)
 const planError = ref('')
 const prog = ref(null)
 const progHours = ref(24)
+const verOpts = ref([])
+
+// 换集群时先拉该区域的可选版本，再生成预案。
+// 版本清单是按「project+区域」存的，换集群可能换区域，不能沿用上一个的。
+async function onPlanCluster() {
+  verOpts.value = []
+  planTarget.value = ''
+  if (!planCluster.value) return
+  try {
+    const r = await gkeAvailableVersions({ cluster_id: planCluster.value })
+    verOpts.value = r.versions || []
+    // 清单没采到时给出可操作的提示，而不是留个空下拉框让人以为没版本可升
+    if (r.note) ElMessage.warning(r.note)
+  } catch (e) {
+    reportError(e, '读取可用版本失败')
+  }
+  await loadPlan()
+}
 
 // 升级峰值一共要多占几台——BLUE_GREEN 按池翻倍，配额不够会在深夜窗口里升到一半失败
 const totalExtraNodes = computed(() =>

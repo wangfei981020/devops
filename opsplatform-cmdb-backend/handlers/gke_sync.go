@@ -134,6 +134,7 @@ func gkeUpgradeSyncCore(ctx context.Context, db *sql.DB, cipher *crypto.Cipher, 
 	var failures []TaskFailure
 	var okCount, poolCount, histCount, repairCount int
 	opsDone := map[string]bool{} // 同 project 的多个集群共用一次 operations.list
+	verDone := map[string]bool{} // 同「project+区域」的多个集群共用一次可用版本清单
 
 	for i, t := range list {
 		select {
@@ -169,6 +170,22 @@ func gkeUpgradeSyncCore(ctx context.Context, db *sql.DB, cipher *crypto.Cipher, 
 		histCount += saveUpgradeHistory(db, t.ClusterID, snap.UpgradeDetails)
 		for _, p := range pools {
 			histCount += saveUpgradeHistory(db, t.ClusterID, p.UpgradeDetails)
+		}
+
+		// 可用版本是「project + 区域」级的，同区域所有集群看到的一样，只拉一次。
+		// 失败不影响其他环节：拿不到清单只是退回手输目标版本，不该拖垮整轮采集。
+		verKey := t.Project + "|" + t.Location
+		if !verDone[verKey] {
+			verDone[verKey] = true
+			if mv, nv, e2 := k8ssource.FetchAvailableVersions(ctx, saJSON, t.Project, t.Location); e2 != nil {
+				failures = append(failures, TaskFailure{Target: t.Project + "/" + t.Location + "/versions", Reason: e2.Error()})
+				logx.J("gke_upgrade", "versions_failed", map[string]any{
+					"project": t.Project, "location": t.Location, "err": e2.Error(),
+					"hint": "可用版本清单没采到，预案页的目标版本只能手输且无法校验",
+				})
+			} else {
+				saveAvailableVersions(db, t.Project, t.Location, mv, nv)
+			}
 		}
 
 		// operations.list 是 project 级的，同 project 只拉一次
@@ -246,6 +263,84 @@ func saveClusterUpgrade(db *sql.DB, clusterID int, s *k8ssource.ClusterUpgradeSn
 	if e != nil {
 		logx.J("gke_upgrade", "save_cluster_failed", map[string]any{"cluster_id": clusterID, "err": e.Error()})
 	}
+}
+
+// saveAvailableVersions 存某区域的可用版本清单。
+//
+// 先比对再写：这份清单几周才变一次，而采集每 6 小时一轮。
+// 无脑 DELETE+INSERT 会在 binlog 里每天凭空多出几百行写入——CMDB-012 就是这么把盘写满的。
+func saveAvailableVersions(db *sql.DB, project, location string, master, node []string) {
+	for _, kv := range []struct {
+		kind string
+		list []string
+	}{{"master", master}, {"node", node}} {
+		if len(kv.list) == 0 {
+			continue
+		}
+		if sameVersionList(db, project, location, kv.kind, kv.list) {
+			continue // 一个字节都不用写
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			logx.J("gke_upgrade", "versions_save_failed", map[string]any{
+				"project": project, "location": location, "kind": kv.kind, "err": err.Error()})
+			continue
+		}
+		if _, e := tx.Exec(`DELETE FROM gke_available_versions WHERE project_id=? AND location=? AND kind=?`,
+			project, location, kv.kind); e != nil {
+			tx.Rollback()
+			logx.J("gke_upgrade", "versions_delete_failed", map[string]any{
+				"project": project, "location": location, "kind": kv.kind, "err": e.Error()})
+			continue
+		}
+		ok := true
+		for i, v := range kv.list {
+			// sort_order 保留官方的降序位置，前端照它排——版本号按字符串排是错的
+			if _, e := tx.Exec(`INSERT INTO gke_available_versions
+				(project_id,location,kind,version,sort_order) VALUES (?,?,?,?,?)`,
+				project, location, kv.kind, v, i); e != nil {
+				ok = false
+				logx.J("gke_upgrade", "versions_insert_failed", map[string]any{
+					"project": project, "location": location, "kind": kv.kind, "version": v, "err": e.Error()})
+				break
+			}
+		}
+		if !ok {
+			tx.Rollback()
+			continue
+		}
+		if e := tx.Commit(); e != nil {
+			logx.J("gke_upgrade", "versions_commit_failed", map[string]any{
+				"project": project, "location": location, "kind": kv.kind, "err": e.Error()})
+			continue
+		}
+		logx.J("gke_upgrade", "versions_updated", map[string]any{
+			"project": project, "location": location, "kind": kv.kind, "count": len(kv.list),
+			"newest": kv.list[0],
+		})
+	}
+}
+
+// sameVersionList 库里存的和刚采到的是否完全一致（含顺序）。
+func sameVersionList(db *sql.DB, project, location, kind string, want []string) bool {
+	rows, err := db.Query(`SELECT version FROM gke_available_versions
+		WHERE project_id=? AND location=? AND kind=? ORDER BY sort_order`, project, location, kind)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	i := 0
+	for rows.Next() {
+		var v string
+		if rows.Scan(&v) != nil {
+			return false
+		}
+		if i >= len(want) || want[i] != v {
+			return false
+		}
+		i++
+	}
+	return i == len(want)
 }
 
 // recordControlPlaneVersionEvent 控制面版本变了就记一条，必须在覆盖 gke_cluster_upgrade 之前调用。
