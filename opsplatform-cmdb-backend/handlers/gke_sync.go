@@ -222,6 +222,9 @@ func markClusterErr(db *sql.DB, clusterID int, msg string) {
 }
 
 func saveClusterUpgrade(db *sql.DB, clusterID int, s *k8ssource.ClusterUpgradeSnapshot, predAt, predPrec, predSrc string) {
+	// 覆盖前先记变更：current_master_version 是覆盖式的，写完就再也看不出升过没有
+	recordControlPlaneVersionEvent(db, clusterID, s.CurrentMasterVersion)
+
 	_, e := db.Exec(`
 		INSERT INTO gke_cluster_upgrade
 		  (cluster_id, release_channel, current_master_version, minor_target_version, patch_target_version,
@@ -243,6 +246,58 @@ func saveClusterUpgrade(db *sql.DB, clusterID int, s *k8ssource.ClusterUpgradeSn
 	if e != nil {
 		logx.J("gke_upgrade", "save_cluster_failed", map[string]any{"cluster_id": clusterID, "err": e.Error()})
 	}
+}
+
+// recordControlPlaneVersionEvent 控制面版本变了就记一条，必须在覆盖 gke_cluster_upgrade 之前调用。
+//
+// 为什么要本地记一份：控制面的历史此前完全押在 GCP 的 gke_upgrade_history 上，
+// 而那份保留期只有两周量级、会滚动，且连升两次时前一次可能被覆盖——
+// 最该被记住的对象反而最容易丢。
+//
+// ⚠️ detected_at 是采集时刻，gke_upgrade_sync 每 6 小时一轮 → 精度只有 ±6 小时。
+// 所以这条记录回答的是「升过、从哪版到哪版」，**不是**「升了多久」。
+// 耗时始终取 gke_upgrade_history 的 started_at/ended_at（GCP 的真实时刻）。
+//
+// 任何失败都只打日志：这是辅助流水，不能因为它写不进去就让整轮 GKE 采集失败。
+func recordControlPlaneVersionEvent(db *sql.DB, clusterID int, newVer string) {
+	if strings.TrimSpace(newVer) == "" {
+		return
+	}
+	var oldVer string
+	err := db.QueryRow(`SELECT COALESCE(current_master_version,'') FROM gke_cluster_upgrade WHERE cluster_id=?`,
+		clusterID).Scan(&oldVer)
+	if err == sql.ErrNoRows {
+		// 首次采集：建立基线，不算变更（同 recordNodeVersionEvents 的处理）
+		logx.J("gke_upgrade", "control_plane_baseline", map[string]any{
+			"cluster_id": clusterID, "version": newVer, "note": "首次采集，建立基线不记变更",
+		})
+		return
+	}
+	if err != nil {
+		logx.J("gke_upgrade", "control_plane_event_load_failed", map[string]any{
+			"cluster_id": clusterID, "err": err.Error(),
+			"hint": "本轮控制面版本变更未记录，升级历史会缺这一段",
+		})
+		return
+	}
+	if oldVer == "" || oldVer == newVer {
+		return
+	}
+
+	if _, e := db.Exec(`INSERT INTO k8s_node_version_events
+		(cluster_id, scope, node_name, pool, event, from_version, to_version, detected_at)
+		VALUES (?, 'control_plane', '', '', 'version_changed', ?, ?, NOW())`,
+		clusterID, oldVer, newVer); e != nil {
+		logx.J("gke_upgrade", "control_plane_event_insert_failed", map[string]any{
+			"cluster_id": clusterID, "from": oldVer, "to": newVer, "err": e.Error(),
+		})
+		return
+	}
+	// 控制面版本变化是大事：要么是我们自己升的，要么是 GKE 自动升的（后者此前完全无感）
+	logx.J("gke_upgrade", "control_plane_version_changed", map[string]any{
+		"cluster_id": clusterID, "from": oldVer, "to": newVer,
+		"note": "已记入 k8s_node_version_events(scope=control_plane)；耗时请查 gke_upgrade_history",
+	})
 }
 
 // realNodeCounts 按节点池统计真实节点数。

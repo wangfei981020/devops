@@ -82,9 +82,11 @@ func recordNodeVersionEvents(db *sql.DB, cid int, current map[string]nodeVersion
 	}
 
 	for _, e := range evs {
+		// scope 显式写 'node'：同一张表还存控制面变更（scope=control_plane），
+		// 两者的 detected_at 精度差一个数量级，靠列默认值区分太隐蔽
 		if _, err := db.Exec(`INSERT INTO k8s_node_version_events
-			(cluster_id,node_name,pool,event,from_version,to_version,detected_at)
-			VALUES (?,?,?,?,?,?,?)`,
+			(cluster_id,scope,node_name,pool,event,from_version,to_version,detected_at)
+			VALUES (?,'node',?,?,?,?,?,?)`,
 			cid, e.node, e.pool, e.kind, e.from, e.to, now); err != nil {
 			logx.J("k8s_sync", "node_event_insert_failed", map[string]any{
 				"cluster_id": cid, "node": e.node, "event": e.kind, "err": err.Error(),

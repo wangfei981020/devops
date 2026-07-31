@@ -437,6 +437,29 @@
                   <el-table-column prop="total_minutes" label="整池(分)" width="90" />
                   <el-table-column prop="note" label="说明" show-overflow-tooltip />
                 </el-table>
+                <!-- 控制面与节点在同一条时间线上，但精度差一个数量级，逐行标出来 -->
+                <el-collapse v-if="prog.events && prog.events.length" style="margin-bottom:8px">
+                  <el-collapse-item :title="`版本变更时间线 (${prog.events.length})`" name="tl">
+                    <el-table :data="prog.events" size="small" border max-height="360">
+                      <el-table-column prop="detected_at" label="采集到的时刻" width="160" />
+                      <el-table-column label="对象" min-width="200">
+                        <template #default="{ row }">
+                          <el-tag v-if="row.scope === 'control_plane'" size="small" type="warning">控制面</el-tag>
+                          <span v-else>{{ row.node }}<span class="muted" v-if="row.pool"> · {{ row.pool }}</span></span>
+                        </template>
+                      </el-table-column>
+                      <el-table-column prop="event" label="事件" width="130" />
+                      <el-table-column label="版本" min-width="240">
+                        <template #default="{ row }">
+                          <span class="muted" v-if="row.from_version">{{ row.from_version }} →</span>
+                          {{ row.to_version || '（已移除）' }}
+                        </template>
+                      </el-table-column>
+                      <el-table-column prop="precision" label="时间精度" min-width="240" show-overflow-tooltip />
+                    </el-table>
+                  </el-collapse-item>
+                </el-collapse>
+
                 <pre class="extrapolate">{{ prog.extrapolate }}</pre>
                 <div class="muted" style="font-size:12px">
                   {{ prog.precision }}<br />采集状态：{{ prog.collection_note }}

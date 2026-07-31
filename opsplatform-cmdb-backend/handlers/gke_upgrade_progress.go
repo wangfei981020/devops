@@ -32,12 +32,16 @@ const upgradeBurstGapMinutes = 60
 const batchGapMinutes = 5
 
 type nodeEventOut struct {
+	// scope=node 精度 ±2 分钟（k8s 采集 120s 一轮）；
+	// scope=control_plane 精度 ±6 小时（gke_upgrade_sync 6h 一轮），只说明「升过」，不能算耗时
+	Scope       string `json:"scope"`
 	Node        string `json:"node"`
 	Pool        string `json:"pool"`
 	Event       string `json:"event"`
 	FromVersion string `json:"from_version"`
 	ToVersion   string `json:"to_version"`
 	DetectedAt  string `json:"detected_at"`
+	Precision   string `json:"precision"`
 }
 
 // measuredPace 从事件流里还原出的一次节点池升级的真实节奏。
@@ -106,12 +110,26 @@ func (h *GKEUpgradePlanHandler) Progress(c *gin.Context) {
 	}
 	_ = h.DB.QueryRow(`SELECT name FROM k8s_clusters WHERE id=?`, cid).Scan(&out.Cluster)
 
+	cpEvents := 0
 	for _, e := range events {
-		out.Events = append(out.Events, nodeEventOut{
-			Node: e.Node, Pool: e.Pool, Event: e.Event,
+		o := nodeEventOut{
+			Scope: e.Scope, Node: e.Node, Pool: e.Pool, Event: e.Event,
 			FromVersion: e.From, ToVersion: e.To,
 			DetectedAt: e.At.Format("2006-01-02 15:04:05"),
-		})
+			Precision:  "±2 分钟（k8s 采集 120 秒一轮）",
+		}
+		if e.Scope == "control_plane" {
+			cpEvents++
+			// 精度差一个数量级，必须逐条标出来——同一张列表里混着两种精度，
+			// 不标的话很容易拿控制面那行去算耗时，结果偏差以小时计
+			o.Precision = "±6 小时（GKE 采集 6 小时一轮）；控制面耗时请查升级历史的 started_at/ended_at"
+		}
+		out.Events = append(out.Events, o)
+	}
+	if cpEvents > 0 {
+		out.Warnings = append(out.Warnings, fmt.Sprintf(
+			"列表含 %d 条控制面版本变更。它们回答的是「升过、从哪版到哪版」，"+
+				"不能用来算耗时——采集间隔 6 小时，误差就是 6 小时。控制面耗时取升级历史里 GCP 给的真实时刻", cpEvents))
 	}
 
 	for _, p := range pacesFromEvents(events) {
@@ -146,13 +164,13 @@ func (h *GKEUpgradePlanHandler) Progress(c *gin.Context) {
 }
 
 type rawEvent struct {
-	Node, Pool, Event, From, To string
-	At                          time.Time
+	Scope, Node, Pool, Event, From, To string
+	At                                 time.Time
 }
 
 func (h *GKEUpgradePlanHandler) nodeEvents(cid int, since time.Time) ([]rawEvent, error) {
 	rows, err := h.DB.Query(`
-		SELECT node_name,pool,event,from_version,to_version,detected_at
+		SELECT COALESCE(scope,'node'),node_name,pool,event,from_version,to_version,detected_at
 		  FROM k8s_node_version_events
 		 WHERE cluster_id=? AND detected_at>=?
 		 ORDER BY detected_at, node_name`, cid, since)
@@ -164,7 +182,7 @@ func (h *GKEUpgradePlanHandler) nodeEvents(cid int, since time.Time) ([]rawEvent
 	for rows.Next() {
 		var e rawEvent
 		var at sql.NullTime
-		if rows.Scan(&e.Node, &e.Pool, &e.Event, &e.From, &e.To, &at) != nil {
+		if rows.Scan(&e.Scope, &e.Node, &e.Pool, &e.Event, &e.From, &e.To, &at) != nil {
 			continue
 		}
 		if !at.Valid {
@@ -188,7 +206,9 @@ func (h *GKEUpgradePlanHandler) nodeEvents(cid int, since time.Time) ([]rawEvent
 func pacesFromEvents(events []rawEvent) []measuredPace {
 	byPool := map[string][]rawEvent{}
 	for _, e := range events {
-		if e.Pool == "" {
+		// 控制面事件不参与节奏计算：它的 detected_at 精度是 6 小时，
+		// 混进来会把批次切分和耗时全带偏（pool 为空本来也会被下面滤掉，这里显式挡一道）
+		if e.Scope == "control_plane" || e.Pool == "" {
 			continue
 		}
 		byPool[e.Pool] = append(byPool[e.Pool], e)
