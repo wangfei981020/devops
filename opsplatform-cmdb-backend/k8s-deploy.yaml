@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/opsplatform-cmdb-backend:v148
+          image: localhost:8070/opsplatform/opsplatform-cmdb-backend:v149
           imagePullPolicy: IfNotPresent
           env:
             # 泛解析(* CNAME)场景：禁用 lego 跟随 CNAME，让它直接在注册域名 zone 加显式 _acme-challenge TXT 盖过通配
@@ -28,10 +28,23 @@ spec:
           ports:
             - containerPort: 8080
             - containerPort: 8088
+          # readiness 查库(/ready 内含 PingContext)：DB 不可用就摘流量，别把请求
+          # 送进一个注定超时的后端——CMDB-012 里正是所有查库接口拖成 CF 524。
           readinessProbe:
             httpGet: { path: /ready, port: 8088 }
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # liveness 只探进程存活(/health 不查库)，绝不能用 /ready。
+          # 数据库故障时重启 Pod 既治不好 DB，还会让本来只是"暂时不可用"的服务
+          # 陷入 CrashLoop。这里只负责捞回"进程还在、但已经卡死不响应 HTTP"的情况。
+          livenessProbe:
+            httpGet: { path: /health, port: 8088 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests: { cpu: 50m, memory: 64Mi }
             limits: { cpu: 500m, memory: 256Mi }

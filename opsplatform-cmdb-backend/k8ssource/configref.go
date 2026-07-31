@@ -131,7 +131,7 @@ func syncPodConfigRefs(db *sql.DB, cid int, pods []corev1.Pod) error {
 			rows = append(rows, []any{cid, p.Namespace, p.Name, r.Container, r.Kind, r.Name, r.Key, r.Source, opt})
 		}
 	}
-	_, err := replaceAll(db, "k8s_pod_config_refs", []string{
+	_, err := writeRows(db, "k8s_pod_config_refs", []string{
 		"cluster_id", "namespace", "pod_name", "container",
 		"ref_kind", "ref_name", "ref_key", "source", "optional",
 	}, cid, rows)
@@ -162,6 +162,6 @@ func syncConfigMaps(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, c
 		sort.Strings(keys)
 		rows = append(rows, []any{cid, cm.Namespace, cm.Name, strings.Join(keys, ","), len(keys)})
 	}
-	return replaceAll(db, "k8s_configmaps",
-		[]string{"cluster_id", "namespace", "name", "key_names", "key_count"}, cid, rows)
+	return writeRows(db, "k8s_configmaps",
+		[]string{"cluster_id", "namespace", "name", "key_names", "key_count"}, cid, rows, "cluster_id", "namespace", "name")
 }

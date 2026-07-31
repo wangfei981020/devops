@@ -36,7 +36,9 @@ type SyncResult struct {
 	Err      error
 }
 
-// SyncCluster 全量只读采集一个集群的资源到 DB。每类资源 delete+insert 全量替换（镜像语义）。
+// SyncCluster 全量只读采集一个集群的资源到 DB。每类资源都是「全量比对 + 增量写」
+// （见 diff.go writeRows）：采集结果与库中现存行逐字段比对，只写真正变化的行，
+// 对外仍是镜像语义，但稳态下不产生任何写入。
 // 返回各资源结果；单类失败不影响其它类。
 // mc 为只取 metadata 的客户端，专用于 Secret 名录（不请求 data）。传 nil 则跳过该项。
 func SyncCluster(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, dc dynamic.Interface, mc metadata.Interface, clusterID int, nodepoolLabel string) []SyncResult {
@@ -92,7 +94,7 @@ func syncNamespaces(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, c
 	for _, ns := range list.Items {
 		rows = append(rows, []any{cid, ns.Name, string(ns.Status.Phase)})
 	}
-	return replaceAll(db, "k8s_namespaces", []string{"cluster_id", "name", "phase"}, cid, rows)
+	return writeRows(db, "k8s_namespaces", []string{"cluster_id", "name", "phase"}, cid, rows, "cluster_id", "name")
 }
 
 func syncNodes(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int, poolLabel string) (int, error) {
@@ -115,10 +117,10 @@ func syncNodes(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid in
 			ready, hbVal, pressureSummary(n), conditionsJSON(n), boolToInt(isStuck(ready, hb)),
 		})
 	}
-	return replaceAll(db, "k8s_nodes", []string{
+	return writeRows(db, "k8s_nodes", []string{
 		"cluster_id", "name", "pool", "internal_ip", "external_ip", "roles", "machine_type", "cpu_cap", "mem_cap",
 		"os_image", "kubelet_version", "ready_status", "last_heartbeat", "conditions", "conditions_json", "stuck",
-	}, cid, rows)
+	}, cid, rows, "cluster_id", "name")
 }
 
 // nodeExternalIP 取节点公网 IP。
@@ -226,9 +228,9 @@ func syncWorkloads(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, ci
 			ins(c.Namespace, "CronJob", c.Name, 0, 0, firstImage(c.Spec.JobTemplate.Spec.Template.Spec.Containers), c.Spec.Schedule)
 		}
 	}
-	n, err := replaceAll(db, "k8s_workloads", []string{
+	n, err := writeRows(db, "k8s_workloads", []string{
 		"cluster_id", "namespace", "kind", "name", "replicas_desired", "replicas_ready", "image", "image_tag", "status",
-	}, cid, rows)
+	}, cid, rows, "cluster_id", "namespace", "kind", "name")
 	if err != nil {
 		return 0, err
 	}
@@ -253,8 +255,8 @@ func syncServices(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid
 		rows = append(rows, []any{cid, s.Namespace, s.Name, string(s.Spec.Type), s.Spec.ClusterIP,
 			trunc(serviceExternalIPs(s), 255), lbTypeAnnotation(s), trunc(strings.Join(ports, ","), 255)})
 	}
-	return replaceAll(db, "k8s_services",
-		[]string{"cluster_id", "namespace", "name", "type", "cluster_ip", "external_ip", "lb_type", "ports"}, cid, rows)
+	return writeRows(db, "k8s_services",
+		[]string{"cluster_id", "namespace", "name", "type", "cluster_ip", "external_ip", "lb_type", "ports"}, cid, rows, "cluster_id", "namespace", "name")
 }
 
 // serviceExternalIPs 取 Service 对外暴露的地址：LoadBalancer 分配的 ingress IP/域名，
@@ -316,7 +318,7 @@ func syncEndpoints(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, ci
 			}
 		}
 	}
-	return replaceAll(db, "k8s_endpoints",
+	return writeRows(db, "k8s_endpoints",
 		[]string{"cluster_id", "namespace", "service_name", "pod_name", "node_name"}, cid, rows)
 }
 
@@ -350,8 +352,8 @@ func syncIngresses(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, ci
 		rows = append(rows, []any{cid, ing.Namespace, ing.Name, trunc(strings.Join(hosts, ","), 1024),
 			trunc(strings.Join(tls, ","), 512), trunc(strings.Join(keys(svcs), ","), 512)})
 	}
-	return replaceAll(db, "k8s_ingresses",
-		[]string{"cluster_id", "namespace", "name", "hosts", "tls", "svc_names"}, cid, rows)
+	return writeRows(db, "k8s_ingresses",
+		[]string{"cluster_id", "namespace", "name", "hosts", "tls", "svc_names"}, cid, rows, "cluster_id", "namespace", "name")
 }
 
 // podReason 提取失败/异常原因：容器 waiting.reason(CrashLoopBackOff/ImagePullBackOff…)、
@@ -405,10 +407,10 @@ func syncPods(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 			cpuReq, memReq, cpuLim, memLim, restarts, p.Status.PodIP, st, podReason(p),
 		})
 	}
-	n, err := replaceAll(db, "k8s_pods", []string{
+	n, err := writeRows(db, "k8s_pods", []string{
 		"cluster_id", "namespace", "name", "node_name", "workload", "phase",
 		"cpu_req_m", "mem_req_mi", "cpu_lim_m", "mem_lim_mi", "restarts", "pod_ip", "start_time", "reason",
-	}, cid, rows)
+	}, cid, rows, "cluster_id", "namespace", "name")
 	if err != nil {
 		return 0, err
 	}
@@ -423,7 +425,7 @@ func syncPods(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 			}
 		}
 	}
-	if _, err := replaceAll(db, "k8s_pod_volumes",
+	if _, err := writeRows(db, "k8s_pod_volumes",
 		[]string{"cluster_id", "namespace", "pod_name", "pvc_name"}, cid, vols); err != nil {
 		return n, err
 	}
@@ -505,8 +507,8 @@ func syncPVCs(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 		}
 		rows = append(rows, []any{cid, p.Namespace, p.Name, string(p.Status.Phase), cap, sc, p.Spec.VolumeName})
 	}
-	return replaceAll(db, "k8s_pvcs",
-		[]string{"cluster_id", "namespace", "name", "status", "capacity", "storage_class", "volume_name"}, cid, rows)
+	return writeRows(db, "k8s_pvcs",
+		[]string{"cluster_id", "namespace", "name", "status", "capacity", "storage_class", "volume_name"}, cid, rows, "cluster_id", "namespace", "name")
 }
 
 func syncHPAs(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int) (int, error) {
@@ -524,10 +526,10 @@ func syncHPAs(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 		rows = append(rows, []any{cid, h.Namespace, h.Name, h.Spec.ScaleTargetRef.Kind, h.Spec.ScaleTargetRef.Name,
 			minR, h.Spec.MaxReplicas, h.Status.CurrentReplicas})
 	}
-	return replaceAll(db, "k8s_hpas", []string{
+	return writeRows(db, "k8s_hpas", []string{
 		"cluster_id", "namespace", "name", "target_kind", "target_name",
 		"min_replicas", "max_replicas", "current_replicas",
-	}, cid, rows)
+	}, cid, rows, "cluster_id", "namespace", "name")
 }
 
 // syncGateways 采集 Gateway API 的 Gateway（CRD，dynamic）。集群未装 CRD → 优雅跳过(0)。
@@ -567,9 +569,9 @@ func syncGateways(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid int
 		// 两套都拿不到：不清空，保留上一轮数据（可能只是本轮权限抖动）
 		return 0, nil
 	}
-	return replaceAll(db, "k8s_gateways",
+	return writeRows(db, "k8s_gateways",
 		[]string{"cluster_id", "namespace", "name", "gateway_class", "listeners", "addresses",
-			"api_group", "tls_secrets"}, cid, rows)
+			"api_group", "tls_secrets"}, cid, rows, "cluster_id", "namespace", "name")
 }
 
 // gatewayAPIRow 解析 Gateway API 的 Gateway。
@@ -724,8 +726,8 @@ func syncHTTPRoutes(ctx context.Context, db *sql.DB, dc dynamic.Interface, cid i
 		rows = append(rows, []any{cid, r.GetNamespace(), r.GetName(), trunc(strings.Join(hosts, ","), 1024),
 			trunc(strings.Join(parents, ","), 512), trunc(strings.Join(keys(backends), ","), 512)})
 	}
-	return replaceAll(db, "k8s_httproutes",
-		[]string{"cluster_id", "namespace", "name", "hostnames", "parents", "backends"}, cid, rows)
+	return writeRows(db, "k8s_httproutes",
+		[]string{"cluster_id", "namespace", "name", "hostnames", "parents", "backends"}, cid, rows, "cluster_id", "namespace", "name")
 }
 
 // syncVirtualServices 采集 Istio VirtualService（networking.istio.io，dynamic）。先试 v1 再 v1beta1，未装 → 优雅跳过。
@@ -770,8 +772,8 @@ func syncVirtualServices(ctx context.Context, db *sql.DB, dc dynamic.Interface, 
 		rows = append(rows, []any{cid, r.GetNamespace(), r.GetName(), trunc(strings.Join(hosts, ","), 1024),
 			trunc(strings.Join(gws, ","), 512), trunc(strings.Join(keys(backends), ","), 512)})
 	}
-	return replaceAll(db, "k8s_virtualservices",
-		[]string{"cluster_id", "namespace", "name", "hosts", "gateways", "backends"}, cid, rows)
+	return writeRows(db, "k8s_virtualservices",
+		[]string{"cluster_id", "namespace", "name", "hosts", "gateways", "backends"}, cid, rows, "cluster_id", "namespace", "name")
 }
 
 // crdAbsent 判断错误是否为"CRD 未安装"（NotFound / NoResourceMatch），用于清理 stale 后跳过。

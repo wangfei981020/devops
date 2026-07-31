@@ -110,11 +110,11 @@ func syncPodSecurity(db *sql.DB, cid int, pods []corev1.Pod) error {
 			strings.Join(s.AddedCaps, ","), strings.Join(s.HostPaths, ","),
 		})
 	}
-	_, err := replaceAll(db, "k8s_pod_security", []string{
+	_, err := writeRows(db, "k8s_pod_security", []string{
 		"cluster_id", "namespace", "pod_name", "workload",
 		"host_network", "host_pid", "host_ipc", "privileged",
 		"run_as_root", "priv_esc", "added_caps", "host_paths",
-	}, cid, rows)
+	}, cid, rows, "cluster_id", "namespace", "pod_name")
 	return err
 }
 

@@ -52,8 +52,8 @@ func syncSecretNames(ctx context.Context, db *sql.DB, mc metadata.Interface, cid
 		// 判「存不存在」不需要它，而为了拿它去请求完整对象就等于把 data 也取回来了。
 		rows = append(rows, []any{cid, m.Namespace, m.Name, ""})
 	}
-	n, err := replaceAll(db, "k8s_secrets",
-		[]string{"cluster_id", "namespace", "name", "type"}, cid, rows)
+	n, err := writeRows(db, "k8s_secrets",
+		[]string{"cluster_id", "namespace", "name", "type"}, cid, rows, "cluster_id", "namespace", "name")
 	if err == nil {
 		logx.J("k8s", "secret_inventory", map[string]any{
 			"cluster_id": cid, "count": n,

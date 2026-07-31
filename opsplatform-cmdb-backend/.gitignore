@@ -1,0 +1,3 @@
+# 本地构建产物：`go build ./cmd/difftest` 会在项目根留下同名二进制，别误提交
+/difftest
+/cmdb-backend

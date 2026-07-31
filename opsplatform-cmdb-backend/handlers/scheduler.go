@@ -290,6 +290,20 @@ func (s *Scheduler) finishRunLog(runID int64, status, summary string, failures [
 		status, truncate(summary, 250), failJSON, dur, notifyState, notifyGroup, notifyAt, runID)
 	// 保留策略：只留 90 天历史
 	s.exec("清理90天前记录", `DELETE FROM task_run_logs WHERE finished_at < DATE_SUB(NOW(), INTERVAL 90 DAY)`)
+	s.purgeHistory()
+}
+
+// purgeHistory 回收只增不删的历史表。
+//
+// task_run_logs 早就有 90 天保留，但 k8s_changes 和 cert_history 一直是纯追加、
+// 没有任何回收——增速不快（实测 k8s_changes 约 78 条/天），短期不致命，
+// 但和 CMDB-012 是同一类问题：没人给它设上界，就总有一天会撑满盘。
+// 保留期按用途给：工作负载变更主要用于近期排障，证书历史要覆盖一个签发周期（一年）。
+func (s *Scheduler) purgeHistory() {
+	s.exec("清理180天前工作负载变更",
+		`DELETE FROM k8s_changes WHERE changed_at < DATE_SUB(NOW(), INTERVAL 180 DAY)`)
+	s.exec("清理365天前证书历史",
+		`DELETE FROM cert_history WHERE at < DATE_SUB(NOW(), INTERVAL 365 DAY)`)
 }
 
 // ---- 任务核心函数 ----

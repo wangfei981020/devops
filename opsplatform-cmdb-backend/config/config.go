@@ -33,7 +33,15 @@ func buildDSN() string {
 	db := getenv("MYSQL_DATABASE", "cmdb")
 	// loc=Local：驱动按容器时区(TZ=Asia/Manila)解析 DATETIME；
 	// time_zone='+08:00'：让 MySQL 会话 NOW() 按马尼拉(UTC+8)返回，存/读一致。
-	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local&time_zone=%s",
+	//
+	// timeout/readTimeout/writeTimeout 是 2026-07-31 故障的直接教训（CMDB-012）：
+	// MySQL 数据盘写满后挂在「等磁盘空间写 binlog」上，此前 DSN 没有任何超时，
+	// 查询就无限期等下去、永不返回，连接池 10 条被占死后**每一个查库接口都卡住**，
+	// 对外表现成 Cloudflare 524。有了读超时，卡死的查询会在 30s 内失败并释放连接，
+	// 接口快速报错而不是拖成 524——故障依然是故障，但可见、可诊断、不放大。
+	// 30s 的取值：实测最慢的采集查询约 1.3s，正常查询远低于此，30s 只兜异常。
+	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local&time_zone=%s"+
+		"&timeout=5s&readTimeout=30s&writeTimeout=30s",
 		u, pw, h, p, db, url.QueryEscape("'+08:00'"))
 }
 
