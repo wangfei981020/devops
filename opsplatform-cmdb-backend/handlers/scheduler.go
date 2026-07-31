@@ -670,6 +670,12 @@ func atMentionsForTask2(db *sql.DB, taskKey string) (seg, names string) {
 		}
 	}
 	if b.Len() == 0 {
+		// 没配 @人 时告警只会静静躺在群里。半夜的节点崩溃预警没人 @ 就等于没发出去，
+		// 所以这里必须留痕，别让「配置漏了」表现得和「本来就不用 @」一样。
+		logx.J("scheduler", "no_at_mentions", map[string]any{
+			"task": taskKey,
+			"note": "该任务未配置通知人，告警将不 @ 任何人；去「系统管理 → 通知」添加并在定时任务里关联",
+		})
 		return "", ""
 	}
 	return "\n" + b.String(), strings.Join(ns, "、")

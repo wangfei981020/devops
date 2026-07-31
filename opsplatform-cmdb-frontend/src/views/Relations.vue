@@ -1,9 +1,22 @@
 <template>
   <div class="page">
     <div class="page-head"><span class="page-title">关系图谱</span><el-button :icon="Refresh" @click="load">刷新</el-button></div>
-    <el-card shadow="never">
-      <div ref="chartEl" style="width:100%;height:560px"></div>
-      <el-empty v-if="!edges.length" description="暂无关系（申请证书时会自动建立 证书→域名 关系）" :image-size="70" />
+    <el-card shadow="never" v-loading="loading">
+      <!-- 出错必须显式说出来。之前 load() 无 try/catch 且 edges 可能是非数组，
+           模板里 edges.length 直接抛 TypeError，整个 card 渲染失败，
+           页面只剩 card 外的标题和刷新按钮，看上去像「功能是空的」。 -->
+      <el-alert v-if="error" type="error" :closable="false" show-icon style="margin-bottom:10px">
+        <template #title>关系图加载失败</template>
+        {{ error }}
+      </el-alert>
+      <div v-show="!error && edges.length" ref="chartEl" style="width:100%;height:560px"></div>
+      <el-empty v-if="!loading && !error && !edges.length" :image-size="70"
+        description="暂无关系数据" >
+        <div class="muted" style="max-width:520px;line-height:1.7">
+          当前只建立「证书 → 域名」一种关系，申请/绑定证书时自动生成。
+          物理机→虚拟机→容器→应用的全链路关系尚未接入，所以这里为空属正常，不是故障。
+        </div>
+      </el-empty>
     </el-card>
   </div>
 </template>
@@ -20,14 +33,34 @@ echarts.use([GraphChart, TooltipComponent, LegendComponent, CanvasRenderer])
 
 const chartEl = ref(null)
 const edges = ref([])
+const loading = ref(false)
+const error = ref('')
 let chart = null
 
 async function load() {
-  edges.value = await listRelations()
-  await nextTick()
-  render()
+  loading.value = true
+  error.value = ''
+  try {
+    const r = await listRelations()
+    // 接口可能返回 null / 对象；不归一成数组的话 edges.length 会在模板里抛错，整页白掉
+    edges.value = Array.isArray(r) ? r : (Array.isArray(r?.data) ? r.data : [])
+    await nextTick()
+    if (edges.value.length) render()
+  } catch (e) {
+    error.value = e?.response?.data?.error || e.message || String(e)
+    edges.value = []
+  } finally {
+    loading.value = false
+  }
 }
 function render() {
+  try {
+    renderInner()
+  } catch (e) {
+    error.value = '图表渲染失败：' + (e.message || String(e))
+  }
+}
+function renderInner() {
   if (!chartEl.value) return
   if (!chart) chart = echarts.init(chartEl.value)
   // 按 类型|名称 合并同名节点（多张同名证书合并成一个，去掉堆叠）
@@ -36,7 +69,7 @@ function render() {
   const linkSet = new Set()
   const links = []
   const keyOf = (type, name) => type + '|' + name
-  for (const e of edges.value) {
+  for (const e of (edges.value || [])) {
     const sk = keyOf(e.src_type, e.src_name), dk = keyOf(e.dst_type, e.dst_name)
     if (!nodeMap[sk]) nodeMap[sk] = { id: sk, name: e.src_name, category: e.src_type, count: 0 }
     if (!nodeMap[dk]) nodeMap[dk] = { id: dk, name: e.dst_name, category: e.dst_type, count: 0 }

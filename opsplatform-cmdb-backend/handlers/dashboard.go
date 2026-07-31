@@ -33,10 +33,17 @@ func (h *DashboardHandler) Get(c *gin.Context) {
 	}
 
 	resp := gin.H{
-		"ci_total":     count(`SELECT COUNT(*) FROM cis`),
+		"ci_total": count(`SELECT COUNT(*) FROM cis`),
+		// ⚠️ domain_total 是**注册域名**（顶级域），不是域名页那 700+ 行——
+		// 那些是解析记录(domain_records)，两个是不同层级。展示台只写「域名」会被当成同一个数，
+		// 所以这里同时给出 record_total，前端必须分别标注。
 		"domain_total": count(`SELECT COUNT(*) FROM cis WHERE type='domain'`),
+		"record_total": count(`SELECT COUNT(*) FROM domain_records WHERE ignored=0`),
 		"cert_total":   count(`SELECT COUNT(*) FROM cis WHERE type='certificate'`),
 		"cert_active":  count(`SELECT COUNT(*) FROM certificates WHERE status='active'`),
+		// cert_expired 只统计**我们自己管理**的证书（certificates 表）。
+		// 它常年是 0，但线上实际在用的证书可能早已过期——那个数在 online_cert_expired 里。
+		// 展示台若只显示这个 0，会让人直接认定证书没问题，是最危险的误导。
 		"cert_expired": count(`SELECT COUNT(*) FROM certificates WHERE status='active' AND expiry_at < NOW()`),
 		// 线上检测证书（解析记录），未忽略
 		"online_cert_expiring": count(`SELECT COUNT(*) FROM domain_records WHERE ignored=0 AND cert_ignored=0 AND cert_expiry_at IS NOT NULL AND cert_expiry_at >= NOW() AND cert_expiry_at < DATE_ADD(NOW(), INTERVAL 30 DAY)`),

@@ -5,7 +5,9 @@
       <span class="bclock">{{ now }}</span>
     </div>
     <div class="kpis">
-      <div class="kpi" v-for="k in kpis" :key="k.label"><div class="kn" :style="{color:k.color}">{{ k.num }}</div><div class="kl">{{ k.label }}</div></div>
+      <el-tooltip v-for="k in kpis" :key="k.label" :content="k.tip || ''" :disabled="!k.tip" placement="bottom">
+        <div class="kpi"><div class="kn" :style="{color:k.color}">{{ k.num }}</div><div class="kl">{{ k.label }}</div></div>
+      </el-tooltip>
     </div>
     <div class="charts">
       <div class="panel"><div class="pt">按环境分布</div><div ref="envEl" class="chart"></div></div>
@@ -28,12 +30,33 @@ const now = ref('')
 const envEl = ref(null), expEl = ref(null)
 let envChart = null, expChart = null, timer = null
 
+// ⚠️ 标签必须写清楚统计口径，否则展示台的数字会和详情页对不上、被当成数据错误：
+//   注册域名(cis type=domain) ≠ 解析记录(domain_records)，两个是不同层级
+//   已登记证书过期(certificates 表) ≠ 线上实测证书过期(domain_records.cert_expiry_at)
+// 尤其后者：只显示前者常年是 0，会让人直接认定证书没问题，而线上可能有多张在用的已过期。
 const kpis = computed(() => [
   { label: '配置项', num: data.value.ci_total || 0, color: '#60a5fa' },
-  { label: '域名', num: data.value.domain_total || 0, color: '#34d399' },
+  { label: '注册域名', num: data.value.domain_total || 0, color: '#34d399' },
+  { label: '解析记录', num: data.value.record_total || 0, color: '#2dd4bf' },
   { label: '证书', num: data.value.cert_total || 0, color: '#fbbf24' },
-  { label: '有效证书', num: data.value.cert_active || 0, color: '#a78bfa' },
-  { label: '已过期', num: data.value.cert_expired || 0, color: '#f87171' },
+  {
+    label: '线上证书已过期',
+    num: data.value.online_cert_expired || 0,
+    color: '#f87171',
+    tip: '来自解析记录的实测结果（到期巡检页同源）。这是真正在用的证书，比「已登记证书」更能反映风险',
+  },
+  {
+    label: '线上证书 30 天内到期',
+    num: data.value.online_cert_expiring || 0,
+    color: '#fb923c',
+    tip: '实测线上证书 30 天内到期数',
+  },
+  {
+    label: '已登记证书过期',
+    num: data.value.cert_expired || 0,
+    color: '#94a3b8',
+    tip: '仅统计 CMDB 里登记管理的证书；线上实际在用的证书看上一项',
+  },
 ])
 
 function render() {

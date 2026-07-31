@@ -359,11 +359,16 @@ func sendNodeHealthAlert(db *sql.DB, alerts []nodeAlert) {
 		}
 		fmt.Fprintf(&b, "\n   %s\n   ▸ %s\n", a.Detail, a.Suggestion)
 	}
+	// @人：分钟级的崩溃预警只进群不 @ 人，半夜根本没人看得到
+	atSeg, atNames := atMentionsForTask2(db, "node_health_watch")
+	b.WriteString(atSeg)
 	if err := notify.SendFeishu(webhook, b.String()); err != nil {
 		logx.J("node_health", "alert_send_failed", map[string]any{"group": group, "err": err.Error()})
 		return
 	}
-	logx.J("node_health", "alert_sent", map[string]any{"group": group, "alerts": len(alerts)})
+	logx.J("node_health", "alert_sent", map[string]any{
+		"group": group, "alerts": len(alerts), "at": atNames,
+	})
 }
 
 // larkWebhookForTask 取某个定时任务绑定的飞书群 webhook。

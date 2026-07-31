@@ -374,9 +374,14 @@ func sendUpgradeRemind(db *sql.DB, items []gkeRemindItem) string {
 	}
 	b.WriteString("\n控制面与节点池是两个独立事件，需分别安排时间。" +
 		"强制升级（支持结束）无法阻止，务必在该日期前自行升完。")
+	atSeg, atNames := atMentionsForTask2(db, "gke_upgrade_remind")
+	b.WriteString(atSeg)
 	if err := notify.SendFeishu(webhook, b.String()); err != nil {
 		logx.J("gke_remind", "send_failed", map[string]any{"group": group, "err": err.Error()})
 		return "投递失败：" + err.Error()
 	}
-	return "已发送到 " + group
+	if atNames == "" {
+		return "已发送到 " + group + "（未配通知人，无 @）"
+	}
+	return "已发送到 " + group + "，@" + atNames
 }
