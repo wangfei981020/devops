@@ -66,6 +66,20 @@
       <el-empty v-if="!scopedStatuses.length" description="该类别还没有状态，点右上添加" :image-size="60" />
     </el-card>
 
+    <!-- 原「设置」页整页只剩这一项，其余全是「已移到别处」的指引，不值得单占一个菜单，合并过来 -->
+    <el-card shadow="never">
+      <template #header><b>指标导出</b>
+        <span class="muted" style="margin-left:8px">控制哪些 label 能进 Prometheus</span>
+      </template>
+      <el-form label-width="160px" style="max-width:760px">
+        <el-form-item label="可导出 label 白名单">
+          <el-input v-model="expLabels" placeholder="project,env,module,name,ca,registrar,team" />
+          <div class="muted">只有列入白名单的自定义 label 才会进 Prometheus（控高基数，防 VM 写爆）</div>
+        </el-form-item>
+        <el-button type="primary" @click="saveExpLabels">保存</el-button>
+      </el-form>
+    </el-card>
+
     <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="sDlg" :title="sEdit?'编辑状态':'添加状态'" width="440px">
       <el-form :model="sForm" label-width="80px">
         <el-form-item label="类别"><el-radio-group v-model="sForm.scope" :disabled="sEdit"><el-radio value="project">项目状态</el-radio><el-radio value="domain">主域名状态</el-radio></el-radio-group></el-form-item>
@@ -118,7 +132,7 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Edit, Delete } from '@element-plus/icons-vue'
 import { listProjects, createProject, updateProject, deleteProject, listEnvironments, createEnvironment, updateEnvironment, deleteEnvironment, listCdns, createCdn, updateCdn, deleteCdn,
-  listStatuses, createStatus, updateStatus, deleteStatus } from '../api/cmdb'
+  listStatuses, createStatus, updateStatus, deleteStatus, getSettings, updateSettings } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 import { usePaged } from '../composables/usePaged'
 
@@ -137,7 +151,20 @@ const sDlg = ref(false), sEdit = ref(false), sForm = ref({})
 const scopedStatuses = computed(() => statuses.value.filter((s) => s.scope === sScope.value))
 const projStatusOpts = computed(() => statuses.value.filter((s) => s.scope === 'project')) // 本页已加载，避免依赖全局 store 未加载导致 No data
 
-async function load() { projects.value = await listProjects(); envs.value = await listEnvironments(); cdns.value = await listCdns(); statuses.value = await listStatuses() }
+// 从原「设置」页合并过来的指标导出白名单
+const expLabels = ref('')
+async function saveExpLabels() {
+  try { await updateSettings({ export_label_whitelist: expLabels.value || '' }); ElMessage.success('已保存') }
+  catch (e) { ElMessage.error(e.response?.data?.error || '保存失败') }
+}
+
+async function load() {
+  projects.value = await listProjects(); envs.value = await listEnvironments()
+  cdns.value = await listCdns(); statuses.value = await listStatuses()
+  // 设置读失败不该拖垮整页——上面四张表已经有值了，白名单单独降级
+  try { expLabels.value = (await getSettings()).export_label_whitelist || '' }
+  catch (e) { ElMessage.warning('指标导出配置读取失败，其余配置正常') }
+}
 function openProj(row) { pEdit.value = !!row; pForm.value = row ? { ...row } : { name: '', remark: '', color: '', sort_order: 0, status: '' }; pDlg.value = true }
 function openStatus(row) { sEdit.value = !!row; sForm.value = row ? { ...row } : { scope: sScope.value, label: '', color: '', sort_order: 0 }; sDlg.value = true }
 async function saveStatus() {

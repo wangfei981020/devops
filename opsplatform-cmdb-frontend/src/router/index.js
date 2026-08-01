@@ -21,7 +21,9 @@ const routes = [
   { path: '/dashboard', component: () => import('../views/Dashboard.vue'), meta: { title: '展示台' } },
   { path: '/basic', component: () => import('../views/Basic.vue'), meta: { title: '基础配置' } },
   { path: '/models', component: () => import('../views/Models.vue'), meta: { title: '模型管理' } },
-  { path: '/settings', component: () => import('../views/Settings.vue'), meta: { title: '设置' } },
+  // 「设置」页内容已并入基础配置（原页整页只剩一个指标导出白名单）。
+  // 路由保留为重定向而不是删掉：老书签/收藏直接删会变成空白页，而不是给人一个去处。
+  { path: '/settings', redirect: '/basic' },
   { path: '/cron', component: () => import('../views/Cron.vue'), meta: { title: '定时任务' } },
   { path: '/task-runs', component: () => import('../views/TaskRuns.vue'), meta: { title: '执行记录' } },
   { path: '/notify', component: () => import('../views/Notify.vue'), meta: { title: '通知' } },

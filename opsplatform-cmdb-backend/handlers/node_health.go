@@ -346,6 +346,11 @@ func sendNodeHealthAlert(db *sql.DB, alerts []nodeAlert) {
 		})
 		return
 	}
+	// 关掉这类告警时监控照跑（节点状态仍写库、看板可见），只是不投递飞书。
+	// 这条尤其重要：任务 90 秒一轮，想静音一段时间时不该被迫停掉整个监控
+	if !alertEnabled(db, "notify_node_health") {
+		return
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "🔴 节点健康预警（%d 条）\n", len(alerts))
 	for _, a := range alerts {

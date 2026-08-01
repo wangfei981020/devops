@@ -917,6 +917,28 @@ func remindExpiry(db *sql.DB) string {
 	return b.String()
 }
 
+// alertEnabled 该类告警的事件开关是否打开。默认开（settings 没存该 key 时按开处理），显式 '0' 才关。
+//
+// 为什么单独抽出来：GKE 升级预警 / 磁盘水位 / 节点健康这三类是后加的，
+// 当初直接调了 notify.SendFeishu，绕过了 notifyEvent 的开关检查，
+// 结果「想关掉某类告警」只能去定时任务页把整个任务停掉——而停任务连数据采集也一起没了（CMDB-026）。
+// 这三个发送点各自的 @ 人逻辑不同（有的用 atMentionsForTask、有的用 atMentionsForTask2、有的不 @），
+// 所以不能直接套 notifyEvent，改成各自在发送前问一次这个函数。
+//
+// 事件 key 一览（settings 表）：
+//
+//	notify_cert_expiring / notify_renew_success / notify_renew_fail / notify_domain_expiring
+//	notify_gke_upgrade   / notify_disk_watch    / notify_node_health
+func alertEnabled(db *sql.DB, eventKey string) bool {
+	if getSetting(db, eventKey) == "0" {
+		logx.J("notify", "alert_muted", map[string]any{
+			"event": eventKey, "note": "该类告警已在「通知」页关闭，本次不投递（任务仍照常执行）",
+		})
+		return false
+	}
+	return true
+}
+
 // notifyEvent 按事件开关决定是否发送；发送时 @ 通知人（阶段②增强）。
 // 事件 key 对应 settings：notify_cert_expiring / notify_renew_success / notify_renew_fail / notify_domain_expiring
 func notifyEvent(db *sql.DB, webhook, taskKey, eventKey, text string) {

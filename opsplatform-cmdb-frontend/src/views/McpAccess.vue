@@ -29,10 +29,18 @@
     </el-card>
 
     <el-card shadow="never" style="margin-bottom:14px">
-      <template #header><b>Claude Code 接入示例</b></template>
+      <template #header>
+        <b>Claude Code 接入示例</b>
+        <el-button size="small" style="float:right" @click="copy(cmdFull)">复制完整命令</el-button>
+      </template>
+      <!-- 示例里的 token 一律打码：这个页面经常被截图分享，明文 token 一截就泄露。
+           要真正的值走「复制完整命令」，剪贴板不会进截图（CMDB-027） -->
       <pre class="cfg">claude mcp add --transport http cmdb {{ endpoint }} \
-  --header "Authorization: Bearer {{ info.token || '&lt;token&gt;' }}"</pre>
-      <div class="muted">或在 AI 界面里配置：HTTP MCP，URL = 上面端点，Header 带 Authorization: Bearer &lt;token&gt;</div>
+  --header "Authorization: Bearer {{ tokenMasked }}"</pre>
+      <div class="muted">
+        Token 已打码，点右上「复制完整命令」拿真实值。
+        或在 AI 界面里配置：HTTP MCP，URL = 上面端点，Header 带 Authorization: Bearer &lt;token&gt;
+      </div>
     </el-card>
 
     <el-card shadow="never">
@@ -58,6 +66,17 @@ import { useAppStore } from '../stores/app'
 const app = useAppStore()
 const info = ref({ token: '', tools: 0 })
 const endpoint = computed(() => location.origin + '/api/mcp')
+
+// 只露首尾各 4 位，中间固定长度的星号——不按真实长度打码，免得泄露 token 位数
+const tokenMasked = computed(() => {
+  const t = info.value.token
+  if (!t) return '<token>'
+  return t.length <= 12 ? '••••••••' : `${t.slice(0, 4)}••••••••••••${t.slice(-4)}`
+})
+
+// 复制用的是真实 token：剪贴板不进截图，这是「能用」与「不泄露」的平衡点
+const cmdFull = computed(() =>
+  `claude mcp add --transport http cmdb ${endpoint.value} \\\n  --header "Authorization: Bearer ${info.value.token || '<token>'}"`)
 
 async function load() { try { info.value = await mcpInfo() } catch (e) { ElMessage.error('加载失败') } }
 async function regen() {

@@ -58,10 +58,33 @@
           <el-input v-model="cfg.remind_days" placeholder="30,15,7,1" style="width:240px" />
           <span class="muted" style="margin-left:8px">逗号分隔，剩余天数命中即提醒</span>
         </el-form-item>
+        <el-divider content-position="left"><span class="muted">证书 / 域名</span></el-divider>
         <el-form-item label="证书即将到期"><el-switch v-model="ev.notify_cert_expiring" active-value="1" inactive-value="0" /></el-form-item>
         <el-form-item label="续期成功通知"><el-switch v-model="ev.notify_renew_success" active-value="1" inactive-value="0" /></el-form-item>
         <el-form-item label="续期失败告警"><el-switch v-model="ev.notify_renew_fail" active-value="1" inactive-value="0" /></el-form-item>
         <el-form-item label="域名即将到期"><el-switch v-model="ev.notify_domain_expiring" active-value="1" inactive-value="0" /></el-form-item>
+
+        <!-- 这三类此前没有开关，想静音只能去「定时任务」把整个任务停掉，
+             而停任务连数据采集也一起没了。关开关只停投递，任务照跑（CMDB-026） -->
+        <el-divider content-position="left"><span class="muted">集群</span></el-divider>
+        <el-form-item label="GKE 升级预警">
+          <el-switch v-model="ev.notify_gke_upgrade" active-value="1" inactive-value="0" />
+          <span class="muted" style="margin-left:8px">强制升级倒计时与版本偏斜</span>
+        </el-form-item>
+        <el-form-item label="磁盘水位告警">
+          <el-switch v-model="ev.notify_disk_watch" active-value="1" inactive-value="0" />
+          <span class="muted" style="margin-left:8px">盘满会直接打垮全站，建议保持开启</span>
+        </el-form-item>
+        <el-form-item label="节点健康预警">
+          <el-switch v-model="ev.notify_node_health" active-value="1" inactive-value="0" />
+          <span class="muted" style="margin-left:8px">节点 NotReady / 卡死，90 秒一轮</span>
+        </el-form-item>
+
+        <el-alert type="info" :closable="false" show-icon style="margin:4px 0 14px">
+          关掉开关只停止<b>飞书投递</b>，对应的定时任务照常执行，数据仍写库、看板照常可见。
+          要连采集一起停，去「定时任务」页关任务。
+        </el-alert>
+
         <el-button type="primary" @click="saveCfg">保存规则</el-button>
       </el-form>
     </el-card>
@@ -85,7 +108,12 @@ const { page: gPage, size: gSize, paged: gPaged } = usePaged(groups)
 const { page: uPage, size: uSize, paged: uPaged } = usePaged(users)
 const gDlg = ref(false), gEdit = ref(false), gForm = ref({})
 // 事件开关，settings 没存按默认（续期成功默认关，其余开）
-const ev = ref({ notify_cert_expiring: '1', notify_renew_success: '0', notify_renew_fail: '1', notify_domain_expiring: '1' })
+// 默认值必须与后端 alertEnabled() 的默认一致：settings 里没存该 key 时后端按「开」处理，
+// 所以这里除了「续期成功」这种噪音类，其余都默认 '1'，避免界面显示关、实际却在发
+const ev = ref({
+  notify_cert_expiring: '1', notify_renew_success: '0', notify_renew_fail: '1', notify_domain_expiring: '1',
+  notify_gke_upgrade: '1', notify_disk_watch: '1', notify_node_health: '1',
+})
 
 async function load() {
   cfg.value = await getSettings()

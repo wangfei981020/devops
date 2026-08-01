@@ -108,7 +108,8 @@ const menus = shallowRef([
     { path: '/cron', label: '定时任务', icon: Clock },
     { path: '/task-runs', label: '执行记录', icon: Tickets },
     { path: '/mcp', label: 'AI 接入', icon: Grid },
-    { path: '/settings', label: '设置', icon: Setting },
+    // 「设置」整页只剩一个指标导出白名单，已并进「基础配置」，菜单去掉这一项。
+    // /settings 路由保留并重定向，老书签不至于 404
   ] },
 ])
 

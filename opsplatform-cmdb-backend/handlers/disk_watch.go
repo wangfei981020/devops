@@ -228,6 +228,10 @@ func sendDiskAlert(db *sql.DB, items []diskAlertItem) {
 		})
 		return
 	}
+	// 关掉这类告警时巡检照跑（水位仍写库、看板可见），只是不投递飞书
+	if !alertEnabled(db, "notify_disk_watch") {
+		return
+	}
 	var b strings.Builder
 	b.WriteString("【CMDB 磁盘水位告警】\n")
 	for _, it := range items {

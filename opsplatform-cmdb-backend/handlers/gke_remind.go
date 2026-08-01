@@ -374,6 +374,10 @@ func sendUpgradeRemind(db *sql.DB, items []gkeRemindItem) string {
 	}
 	b.WriteString("\n控制面与节点池是两个独立事件，需分别安排时间。" +
 		"强制升级（支持结束）无法阻止，务必在该日期前自行升完。")
+	// 关掉这类告警时任务照跑（数据仍在采集与看板里），只是不投递飞书
+	if !alertEnabled(db, "notify_gke_upgrade") {
+		return "已跳过投递：GKE 升级预警在「通知」页被关闭"
+	}
 	atSeg, atNames := atMentionsForTask2(db, "gke_upgrade_remind")
 	b.WriteString(atSeg)
 	if err := notify.SendFeishu(webhook, b.String()); err != nil {
