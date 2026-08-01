@@ -209,7 +209,7 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 					summary += "\n· " + r
 				}
 			}
-			sched.finishRunLog(runID, status, summary, failures, start, "", "", "")
+			sched.finishRunLog(runID, status, summary, failures, nil, start, "", "", "")
 		}
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)

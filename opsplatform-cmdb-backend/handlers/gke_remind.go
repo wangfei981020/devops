@@ -14,6 +14,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -40,7 +41,7 @@ type gkeRemindItem struct {
 }
 
 // gkeUpgradeRemindCore 每天跑一次。
-func gkeUpgradeRemindCore(db *sql.DB) (string, []TaskFailure, bool) {
+func gkeUpgradeRemindCore(ctx context.Context, db *sql.DB) (string, []TaskFailure, bool) {
 	states, err := loadClusterUpgradeStates(db)
 	if err != nil {
 		return "查询失败：" + err.Error(), []TaskFailure{{Target: "db", Reason: err.Error()}}, false
@@ -72,17 +73,38 @@ func gkeUpgradeRemindCore(db *sql.DB) (string, []TaskFailure, bool) {
 
 	sent := sendUpgradeRemind(db, items)
 	rules := map[string]int{}
+	findings := []TaskFinding{}
 	for _, it := range items {
 		for _, r := range it.Rules {
 			rules[r]++
 		}
+		// 命中的集群逐个留痕：只说"3 个命中"看不出该去处理哪个集群
+		lv := "warning"
+		if it.Urgent {
+			lv = "critical"
+		}
+		f := TaskFinding{
+			Level: lv, Target: it.Cluster, Value: ruleSummary(countRules(it.Rules)),
+			Detail: strings.Join(it.Lines, "；"),
+		}
+		AddFinding(ctx, f)
+		findings = append(findings, f)
 	}
-	summary := fmt.Sprintf("扫描 %d 个集群，%d 个命中提醒规则（%s），飞书投递：%s",
-		len(states), len(items), ruleSummary(rules), sent)
+	summary := fmt.Sprintf("扫描 %d 个集群，%d 个命中提醒规则（%s）【%s】，飞书投递：%s",
+		len(states), len(items), ruleSummary(rules), SummarizeFindings(findings, 3), sent)
 	logx.J("gke_remind", "done", map[string]any{
 		"clusters": len(states), "items": len(items), "rules": rules, "delivery": sent,
 	})
 	return summary, nil, true
+}
+
+// countRules 把单个集群命中的规则列表转成计数 map，复用 ruleSummary 的中文表述。
+func countRules(rs []string) map[string]int {
+	m := map[string]int{}
+	for _, r := range rs {
+		m[r]++
+	}
+	return m
 }
 
 // buildRemindItem 按三条时间线判定一个集群。

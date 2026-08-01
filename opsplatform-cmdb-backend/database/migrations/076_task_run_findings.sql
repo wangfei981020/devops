@@ -1,0 +1,11 @@
+-- 任务执行记录增加「发现明细」。
+--
+-- 起因：disk_watch 跑完只在历史里留下一句「危险(≥92%) 1 项、偏高(≥85%) 3 项」，
+-- 看不出是哪个盘 —— 告警只给计数不给对象，等于没有告警。
+-- 明细此前只存在于飞书消息文本里，发完就没了；更糟的是告警抑制期内飞书也不发，
+-- 那一轮就彻底查不到是哪些对象超标。
+--
+-- findings 与 failures 是两回事，故分开存：
+--   failures = 这次「没跑成」的目标（连不上、超时），需要重试
+--   findings = 这次「跑成了并且发现的问题」（磁盘 94%、节点 NotReady），需要处置
+ALTER TABLE task_run_logs ADD COLUMN findings TEXT NULL COMMENT '发现明细,JSON数组:[{"level":"critical","target":"节点 node17","value":"93.6%","detail":"根分区"}]';

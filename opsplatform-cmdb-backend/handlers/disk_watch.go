@@ -65,6 +65,7 @@ func diskWatchCore(ctx context.Context, db *sql.DB, cipher *crypto.Cipher) (stri
 
 	all := []diskAlertItem{}
 	failures := []TaskFailure{}
+	skipped := []string{} // 未接入监控、无从检查的集群——必须显式列出来，见下方注释
 	checked := 0
 	for _, c := range clusters {
 		select {
@@ -72,12 +73,28 @@ func diskWatchCore(ctx context.Context, db *sql.DB, cipher *crypto.Cipher) (stri
 			return fmt.Sprintf("已取消（已检查 %d/%d 个集群）", checked, len(clusters)), failures, false
 		default:
 		}
-		items, err := diskWatchCluster(db, cipher, c.id)
+		items, covered, err := diskWatchCluster(db, cipher, c.id)
 		if err != nil {
 			// 取不到数据要显式记失败，不能当成"这个集群没问题"——
 			// 那正是 CMDB-013 里被点名的那种假阴性。
 			failures = append(failures, TaskFailure{Target: c.name, Reason: err.Error()})
 			logx.J("disk_watch", "cluster_fail", map[string]any{"cluster_id": c.id, "cluster": c.name, "err": err.Error()})
+			continue
+		}
+		if !covered {
+			// 数据源连得上、但这个集群一条磁盘指标都没有（未部署监控，或集群标签值对不上）。
+			// 这种情况**不算失败**（infra-02 就是还在测试阶段没部监控，属正常），
+			// 但绝不能混进"已检查"里 —— 否则 summary 说"检查了 5 个集群"，
+			// 其中一个其实什么都没查，又变成一次假阴性。
+			skipped = append(skipped, c.name)
+			AddFinding(ctx, TaskFinding{
+				Level: "info", Target: c.name, Value: "未检查",
+				Detail: "该集群在观测数据源里没有任何磁盘指标（未部署监控或集群标签值不匹配），本次未覆盖",
+			})
+			logx.J("disk_watch", "cluster_skipped", map[string]any{
+				"cluster_id": c.id, "cluster": c.name,
+				"reason": "数据源中无该集群的磁盘指标",
+			})
 			continue
 		}
 		checked++
@@ -93,38 +110,72 @@ func diskWatchCore(ctx context.Context, db *sql.DB, cipher *crypto.Cipher) (stri
 		sendDiskAlert(db, fresh)
 	}
 
+	// 每一项都落进执行记录：告警抑制期内飞书不会重发，页面上必须还能查到当前有哪些盘超标
 	crit, warn := 0, 0
+	critItems, warnItems := []TaskFinding{}, []TaskFinding{}
 	for _, a := range all {
+		f := TaskFinding{
+			Level: a.level, Target: a.target,
+			Value:  fmt.Sprintf("%.1f%%", a.pct),
+			Detail: a.detail,
+		}
+		AddFinding(ctx, f)
 		if a.level == "critical" {
 			crit++
+			critItems = append(critItems, f)
 		} else {
 			warn++
+			warnItems = append(warnItems, f)
 		}
 	}
-	summary := fmt.Sprintf("检查 %d 个集群：危险(≥%.0f%%) %d 项、偏高(≥%.0f%%) %d 项",
-		checked, pvcCriticalPct, crit, pvcWarnPct, warn)
+
+	// summary 必须带上具体对象。只给「危险 1 项」看不出要去处置什么，
+	// 而任务历史列表页只显示这一行 —— 那正是本次改动的起因。
+	summary := fmt.Sprintf("检查 %d 个集群：", checked)
+	if crit == 0 && warn == 0 {
+		summary += "无超阈值磁盘"
+	} else {
+		segs := []string{}
+		if crit > 0 {
+			segs = append(segs, fmt.Sprintf("🔴危险(≥%.0f%%) %d 项【%s】", pvcCriticalPct, crit, SummarizeFindings(critItems, 2)))
+		}
+		if warn > 0 {
+			segs = append(segs, fmt.Sprintf("🟠偏高(≥%.0f%%) %d 项【%s】", pvcWarnPct, warn, SummarizeFindings(warnItems, 2)))
+		}
+		summary += strings.Join(segs, "、")
+	}
 	if len(fresh) > 0 {
 		summary += fmt.Sprintf("，本次推送 %d 条", len(fresh))
 	}
+	if len(skipped) > 0 {
+		summary += fmt.Sprintf("；%d 个集群未接入监控未检查（%s）", len(skipped), strings.Join(skipped, "、"))
+	}
 	if len(failures) > 0 {
-		summary += fmt.Sprintf("；%d 个集群未取到水位数据", len(failures))
+		summary += fmt.Sprintf("；%d 个集群取数失败", len(failures))
 	}
 	logx.J("disk_watch", "done", map[string]any{
 		"clusters": checked, "critical": crit, "warning": warn,
-		"notified": len(fresh), "failed_clusters": len(failures),
+		"notified": len(fresh), "skipped_clusters": len(skipped), "failed_clusters": len(failures),
 	})
 	return summary, failures, len(failures) == 0
 }
 
 // diskWatchCluster 取单个集群的 PVC + 节点磁盘水位，返回超阈值的对象。
-func diskWatchCluster(db *sql.DB, cipher *crypto.Cipher, cid int) ([]diskAlertItem, error) {
+//
+// 第二个返回值 covered 回答的是「这个集群到底有没有被真正检查过」：
+// 数据源连得上、但一条磁盘指标都查不到时为 false。这两种情况必须分开——
+// 空结果被当成"没有超阈值的盘"，是磁盘告警最容易出的假阴性。
+func diskWatchCluster(db *sql.DB, cipher *crypto.Cipher, cid int) ([]diskAlertItem, bool, error) {
 	obs := NewObsQueryHandler(db, cipher)
 	base, token, clusterLabel, err := resolveEndpointFull(db, cipher, "prometheus", obs.clusterEnv(cid), cid)
 	if err != nil {
-		return nil, fmt.Errorf("未配置可用的 Prometheus 数据源: %w", err)
+		// 压根没配数据源：这是"没接监控"，不是"查失败"，交给上层当跳过处理
+		logx.J("disk_watch", "no_datasource", map[string]any{"cluster_id": cid, "err": err.Error()})
+		return nil, false, nil
 	}
 	sel := clusterSelector(db, clusterLabel, cid)
 	out := []diskAlertItem{}
+	seen := 0 // 采到的指标条数（不分是否超阈值）——用它判断覆盖与否
 
 	// 1) PVC。共享文件系统的卷（k3s local-path / hostPath）要排除：
 	// kubelet 对它们上报的是整个宿主机文件系统，同节点所有 PVC 数值一样，按 PVC 告警毫无意义。
@@ -137,6 +188,7 @@ func diskWatchCluster(db *sql.DB, cipher *crypto.Cipher, cid int) ([]diskAlertIt
 		}
 	}
 	if rs, err := promInstant(base, token, `kubelet_volume_stats_capacity_bytes`+lbl); err == nil {
+		seen += len(rs)
 		for _, s := range rs {
 			k := s.Metric["namespace"] + "/" + s.Metric["persistentvolumeclaim"]
 			if _, isShared := shared[k]; isShared || s.Value <= 0 {
@@ -156,6 +208,7 @@ func diskWatchCluster(db *sql.DB, cipher *crypto.Cipher, cid int) ([]diskAlertIt
 	nlbl := promLabels(sel, `mountpoint="/"`, `fstype!~"tmpfs|overlay|squashfs|iso9660"`)
 	if rs, err := promInstant(base, token,
 		`(1 - sum by(node,instance)(node_filesystem_avail_bytes`+nlbl+`) / sum by(node,instance)(node_filesystem_size_bytes`+nlbl+`)) * 100`); err == nil {
+		seen += len(rs)
 		for _, s := range rs {
 			name := s.Metric["node"]
 			if name == "" {
@@ -172,7 +225,7 @@ func diskWatchCluster(db *sql.DB, cipher *crypto.Cipher, cid int) ([]diskAlertIt
 			}
 		}
 	}
-	return out, nil
+	return out, seen > 0, nil
 }
 
 func diskLevel(pct float64) string {

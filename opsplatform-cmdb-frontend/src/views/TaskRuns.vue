@@ -47,8 +47,12 @@
             <el-progress v-if="pct(row)>=0" :percentage="pct(row)" :stroke-width="6" style="max-width:220px" />
           </template>
           <template v-else>
-            <span>{{ row.summary || '—' }}</span>
+            <!-- 摘要现在带具体对象，可能很长：列表页省略显示（悬停看全文），完整内容在详情抽屉 -->
+            <el-tooltip :content="row.summary" :disabled="(row.summary||'').length <= 90" placement="top-start">
+              <span class="sum-text">{{ row.summary || '—' }}</span>
+            </el-tooltip>
             <span v-if="row.failures.length" class="fail-badge">{{ row.failures.length }} 项失败</span>
+            <span v-if="row.findings.length" :class="['find-badge', worstLevel(row.findings)]">{{ row.findings.length }} 项发现</span>
           </template>
         </template></el-table-column>
         <el-table-column label="耗时" width="90"><template #default="{ row }">
@@ -86,6 +90,20 @@
           <el-descriptions-item label="触发方式">{{ trigLabel(cur.trigger_by) }}</el-descriptions-item>
           <el-descriptions-item v-if="cur.status!=='running'" label="结果">{{ cur.summary || '—' }}</el-descriptions-item>
         </el-descriptions>
+
+        <!-- 发现明细：告警任务查出来的问题项。这里必须能看到具体对象——
+             此前只有一句「危险 1 项、偏高 3 项」，不知道是哪个盘，等于没有告警。 -->
+        <div v-if="cur.findings.length" class="sec">
+          <div class="sec-title">🔎 发现明细（{{ cur.findings.length }}）</div>
+          <el-table :data="cur.findings" size="small" :show-header="true">
+            <el-table-column label="级别" width="76"><template #default="{ row }">
+              <el-tag size="small" :type="lvType(row.level)" effect="dark">{{ lvLabel(row.level) }}</el-tag>
+            </template></el-table-column>
+            <el-table-column prop="target" label="对象" min-width="200" show-overflow-tooltip />
+            <el-table-column prop="value" label="数值" width="90" />
+            <el-table-column prop="detail" label="说明" min-width="200" show-overflow-tooltip />
+          </el-table>
+        </div>
 
         <div v-if="cur.failures.length" class="sec">
           <div class="sec-title" style="display:flex;align-items:center">
@@ -155,6 +173,15 @@ function dur(ms) { return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms' 
 function notifyIcon(s) { return s === 'sent' ? '📨' : s === 'failed' ? '⚠️' : '—' }
 function notifyText(s) { return { sent: '已送达', failed: 'Lark 发送失败', skipped: '按配置未发送', none: '未配置通知群' }[s] || '—' }
 function notifyTip(r) { return notifyText(r.notify_state) + (r.notify_group ? `（${r.notify_group}）` : '') }
+// 发现明细：级别 → 颜色/中文。critical 用红色，是"现在就得处理"，别和 warning 混色
+function lvType(l) { return { critical: 'danger', warning: 'warning', info: 'info' }[l] || 'info' }
+function lvLabel(l) { return { critical: '危险', warning: '偏高', info: '提示' }[l] || l }
+// 列表页徽标取最严重的那一级：一眼看出这次跑出来有没有红的
+function worstLevel(fs) {
+  if (fs.some((f) => f.level === 'critical')) return 'lv-crit'
+  if (fs.some((f) => f.level === 'warning')) return 'lv-warn'
+  return 'lv-info'
+}
 // 运行中实时耗时（本地计时，秒）
 function elapsed(row) {
   if (!row.started_at) return 0
@@ -211,6 +238,11 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .grow { flex:1; }
 .pager { display:flex; justify-content:flex-end; margin-top:12px; }
 .fail-badge { margin-left:8px; color:#e6a23c; font-size:12px; }
+.sum-text { display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.find-badge { margin-left:8px; font-size:12px; }
+.find-badge.lv-crit { color:#f56c6c; font-weight:600; }
+.find-badge.lv-warn { color:#e6a23c; }
+.find-badge.lv-info { color:#909399; }
 .running-time { color:#409eff; font-variant-numeric: tabular-nums; }
 .d-head { margin-top:4px; }
 .sec { margin-top:18px; }

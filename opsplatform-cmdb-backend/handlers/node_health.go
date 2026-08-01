@@ -154,8 +154,30 @@ func nodeHealthWatchCore(ctx context.Context, db *sql.DB, pool *k8ssource.Pool, 
 	if len(alerts) > 0 {
 		sendNodeHealthAlert(db, alerts)
 	}
+
+	// 告警明细落进执行记录：告警有重发间隔(notReadyRepeatGap)，静默期内飞书不会再发，
+	// 页面上必须还能看到「现在到底是哪个节点不健康」，否则又回到只有计数的老问题。
+	findings := []TaskFinding{}
+	for _, a := range alerts {
+		lv := "warning"
+		if a.Level == "red" {
+			lv = "critical"
+		}
+		f := TaskFinding{
+			Level:  lv,
+			Target: a.Cluster + " · 节点 " + a.Node,
+			Value:  nodeAlertKindLabel(a.Kind),
+			Detail: a.Detail,
+		}
+		AddFinding(ctx, f)
+		findings = append(findings, f)
+	}
+
 	summary := fmt.Sprintf("检查 %d 个集群 %d 个节点：NotReady %d 个，本轮告警 %d 条",
 		len(clusters), totalNodes, notReadyNow, len(alerts))
+	if len(findings) > 0 {
+		summary += "【" + SummarizeFindings(findings, 3) + "】"
+	}
 	logx.J("node_health", "checked", map[string]any{
 		"clusters": len(clusters), "nodes": totalNodes,
 		"not_ready": notReadyNow, "alerts": len(alerts), "failures": len(failures),
@@ -173,6 +195,17 @@ func nodeReady(n *corev1.Node) bool {
 }
 
 // nodeConditionSummary 把压力位 condition 拼成一句话——它们往往是 NotReady 的前因。
+// nodeAlertKindLabel 把告警类型翻成人话，用于摘要里那一句「是什么问题」。
+func nodeAlertKindLabel(kind string) string {
+	switch kind {
+	case "not_ready":
+		return "NotReady"
+	case "disk_full":
+		return "磁盘将写满"
+	}
+	return kind
+}
+
 func nodeConditionSummary(n *corev1.Node) string {
 	bad := []string{}
 	for _, c := range n.Status.Conditions {

@@ -104,7 +104,7 @@ func (h *SchedHandler) RunLogs(c *gin.Context) {
 		offset = o
 	}
 
-	rows, err := h.DB.Query(`SELECT id, task_key, name, status, summary, failures, trigger_by, duration_ms,
+	rows, err := h.DB.Query(`SELECT id, task_key, name, status, summary, failures, COALESCE(findings,''), trigger_by, duration_ms,
 		notify_state, notify_group, notify_at, progress, started_at, finished_at
 		FROM task_run_logs WHERE `+cond+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
@@ -119,6 +119,7 @@ func (h *SchedHandler) RunLogs(c *gin.Context) {
 		Status      string        `json:"status"`
 		Summary     string        `json:"summary"`
 		Failures    []TaskFailure `json:"failures"`
+		Findings    []TaskFinding `json:"findings"`
 		TriggerBy   string        `json:"trigger_by"`
 		DurationMs  int           `json:"duration_ms"`
 		NotifyState string        `json:"notify_state"`
@@ -132,14 +133,19 @@ func (h *SchedHandler) RunLogs(c *gin.Context) {
 	for rows.Next() {
 		var o runOut
 		var failJSON sql.NullString
+		var findJSON string
 		var started, fin sql.NullTime
-		if rows.Scan(&o.ID, &o.TaskKey, &o.Name, &o.Status, &o.Summary, &failJSON, &o.TriggerBy, &o.DurationMs,
+		if rows.Scan(&o.ID, &o.TaskKey, &o.Name, &o.Status, &o.Summary, &failJSON, &findJSON, &o.TriggerBy, &o.DurationMs,
 			&o.NotifyState, &o.NotifyGroup, &o.NotifyAt, &o.Progress, &started, &fin) != nil {
 			continue
 		}
 		o.Failures = []TaskFailure{}
 		if failJSON.Valid && failJSON.String != "" {
 			_ = json.Unmarshal([]byte(failJSON.String), &o.Failures) // 老格式(字符串数组)会解析失败→空，可接受
+		}
+		o.Findings = []TaskFinding{}
+		if findJSON != "" {
+			_ = json.Unmarshal([]byte(findJSON), &o.Findings)
 		}
 		if started.Valid {
 			o.StartedAt = started.Time.Format("2006-01-02 15:04:05")

@@ -29,6 +29,80 @@ type TaskFailure struct {
 	Reason string `json:"reason"`
 }
 
+// TaskFinding 任务「发现的问题」，与 TaskFailure 严格区分：
+//
+//	TaskFailure = 这次没跑成的目标（连不上/超时），需要重试
+//	TaskFinding = 这次跑成了、并且查出来的问题（磁盘 94%、节点 NotReady），需要处置
+//
+// 做这个是因为告警任务此前只把明细拼进飞书文本，历史里只留下一句
+// 「危险 1 项、偏高 3 项」——不知道是哪个盘，等于没有告警。
+// 而且告警抑制期内飞书根本不发，那一轮就彻底查不到超标对象了。
+type TaskFinding struct {
+	Level  string `json:"level"`            // critical / warning / info
+	Target string `json:"target"`           // 对象，如「dev-k8s · 节点 node17」
+	Value  string `json:"value,omitempty"`  // 数值，如「93.6%」
+	Detail string `json:"detail,omitempty"` // 补充说明
+}
+
+// findingSink 收集一次任务运行期间的所有 finding。
+// 走 context 传递而不是改 taskFn 签名：需要 finding 的只有告警类任务（3 个），
+// 让其余 8 个任务陪着改签名不划算。
+type findingSink struct {
+	mu    sync.Mutex
+	items []TaskFinding
+}
+
+type findingKey struct{}
+
+// withFindingSink 在任务开跑时把收集器塞进 ctx。
+func withFindingSink(ctx context.Context) (context.Context, *findingSink) {
+	sink := &findingSink{}
+	return context.WithValue(ctx, findingKey{}, sink), sink
+}
+
+// AddFinding 由各任务的核心函数调用，上报一个发现项。ctx 里没有收集器时静默忽略
+// （比如被单元测试或其它入口直接调用），不影响主流程。
+func AddFinding(ctx context.Context, f TaskFinding) {
+	sink, _ := ctx.Value(findingKey{}).(*findingSink)
+	if sink == nil {
+		return
+	}
+	sink.mu.Lock()
+	sink.items = append(sink.items, f)
+	sink.mu.Unlock()
+}
+
+func (fs *findingSink) list() []TaskFinding {
+	if fs == nil {
+		return nil
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	return append([]TaskFinding{}, fs.items...)
+}
+
+// SummarizeFindings 把 finding 列表压成一句带对象名的摘要。
+// 「危险 1 项、偏高 3 项」看不出要处置什么，必须带上前几个对象；
+// 全量明细在 findings 字段里，页面上能点开看。
+func SummarizeFindings(items []TaskFinding, maxShow int) string {
+	if len(items) == 0 {
+		return ""
+	}
+	parts := []string{}
+	for i, f := range items {
+		if i >= maxShow {
+			parts = append(parts, fmt.Sprintf("等 %d 项", len(items)))
+			break
+		}
+		one := f.Target
+		if f.Value != "" {
+			one += " " + f.Value
+		}
+		parts = append(parts, one)
+	}
+	return strings.Join(parts, "、")
+}
+
 // ProgressFn 进度回调：done=已处理，total=总数。核心函数边跑边上报，前端实时看进度。
 type ProgressFn func(done, total int)
 
@@ -91,8 +165,8 @@ func StartScheduler(db *sql.DB, cipher *crypto.Cipher, pool *k8ssource.Pool) {
 		"gke_upgrade_sync": func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) {
 			return gkeUpgradeSyncCore(ctx, db, cipher, p, t)
 		},
-		"gke_upgrade_remind": func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) {
-			return gkeUpgradeRemindCore(db)
+		"gke_upgrade_remind": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return gkeUpgradeRemindCore(ctx, db)
 		},
 		// 磁盘水位巡检：盘满是能直接打垮整个平台的故障，且此前完全没有告警（CMDB-012）
 		"disk_watch": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
@@ -190,6 +264,7 @@ func (s *Scheduler) run(key, trigger string, targets []string) {
 	runID := s.startRunLog(key, trigger, start) // 先写「运行中」记录，前端可实时看进度/耗时
 	// 硬超时 + 可取消：注册 cancel 供「取消执行」中止；超时/取消都会让核心函数在循环里退出
 	ctx, cancel := context.WithTimeout(context.Background(), taskTimeout(key))
+	ctx, sink := withFindingSink(ctx)
 	if runID > 0 {
 		s.runMu.Lock()
 		s.running[runID] = cancel
@@ -207,7 +282,7 @@ func (s *Scheduler) run(key, trigger string, targets []string) {
 			msg := fmt.Sprintf("panic: %v", r)
 			s.exec("panic后更新scheduled_tasks", `UPDATE scheduled_tasks SET last_run_at=NOW(), last_result=?, last_ok=0 WHERE task_key=?`, truncate(msg, 250), key)
 			ns, ng, na := sendTaskNotify(s.db, key, "fail", msg)
-			s.finishRunLog(runID, "fail", msg, nil, start, ns, ng, na)
+			s.finishRunLog(runID, "fail", msg, nil, nil, start, ns, ng, na)
 		}
 	}()
 	logx.Line("scheduler", fmt.Sprintf("[scheduler] 运行任务 %s (%s)", key, trigger))
@@ -238,7 +313,7 @@ func (s *Scheduler) run(key, trigger string, targets []string) {
 	}
 	s.exec("更新scheduled_tasks", `UPDATE scheduled_tasks SET last_run_at=NOW(), last_result=?, last_ok=? WHERE task_key=?`, truncate(result, 250), okv, key)
 	ns, ng, na := sendTaskNotify(s.db, key, status, result)
-	s.finishRunLog(runID, status, result, failures, start, ns, ng, na)
+	s.finishRunLog(runID, status, result, failures, sink.list(), start, ns, ng, na)
 
 	// D 自动重试：仅 fail/timeout（不含 partial/cancelled/ok）且非自动重试触发时，延迟后重跑一次
 	if (status == "fail" || status == "timeout") && trigger != "auto_retry" {
@@ -282,16 +357,25 @@ func (s *Scheduler) startRunLog(key, trigger string, start time.Time) int64 {
 }
 
 // finishRunLog 任务跑完把 running 记录更新为终态（含失败明细/通知投递/耗时）。
-func (s *Scheduler) finishRunLog(runID int64, status, summary string, failures []TaskFailure, start time.Time, notifyState, notifyGroup, notifyAt string) {
+func (s *Scheduler) finishRunLog(runID int64, status, summary string, failures []TaskFailure, findings []TaskFinding, start time.Time, notifyState, notifyGroup, notifyAt string) {
 	var failJSON any
 	if len(failures) > 0 {
 		if b, err := json.Marshal(failures); err == nil {
 			failJSON = string(b)
 		}
 	}
+	var findJSON any
+	if len(findings) > 0 {
+		if b, err := json.Marshal(findings); err == nil {
+			findJSON = string(b)
+		}
+	}
 	dur := int(time.Since(start).Milliseconds())
-	s.exec("收尾更新运行记录", `UPDATE task_run_logs SET status=?, summary=?, failures=?, duration_ms=?, notify_state=?, notify_group=?, notify_at=?, progress='', finished_at=NOW() WHERE id=?`,
-		status, truncate(summary, 250), failJSON, dur, notifyState, notifyGroup, notifyAt, runID)
+	s.exec("收尾更新运行记录", `UPDATE task_run_logs SET status=?, summary=?, failures=?, findings=?, duration_ms=?, notify_state=?, notify_group=?, notify_at=?, progress='', finished_at=NOW() WHERE id=?`,
+		// summary 是 TEXT（迁移 077）：带对象名的摘要很容易超过原来的 250 字符上限，
+		// 截断会先切掉排在最后的「N 个集群未接入监控」，反而制造"全查过了"的假象。
+		// scheduled_tasks.last_result 那列仍是 VARCHAR(255)，所以那边保持 250 不变。
+		status, truncate(summary, 2000), failJSON, findJSON, dur, notifyState, notifyGroup, notifyAt, runID)
 	// 保留策略：只留 90 天历史
 	s.exec("清理90天前记录", `DELETE FROM task_run_logs WHERE finished_at < DATE_SUB(NOW(), INTERVAL 90 DAY)`)
 	s.purgeHistory()
