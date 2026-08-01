@@ -27,6 +27,11 @@
         <el-tab-pane label="证书 CA" name="acme">
           <AcmePanel v-if="loaded.acme" />
         </el-tab-pane>
+        <!-- AI 接入并进来：它本质也是"对外接入点 + 一份凭据"，
+             和注册商/云账号/数据源是同一类东西，不值得单占一个一级菜单 -->
+        <el-tab-pane label="AI 接入 (MCP)" name="mcp">
+          <McpAccess v-if="loaded.mcp" embedded />
+        </el-tab-pane>
       </el-tabs>
     </el-card>
   </div>
@@ -41,15 +46,16 @@ import AcmePanel from '../components/integrations/AcmePanel.vue'
 import HarborPanel from '../components/integrations/HarborPanel.vue'
 import CloudAccounts from './CloudAccounts.vue'
 import ObsEndpoints from './ObsEndpoints.vue'
+import McpAccess from './McpAccess.vue'
 
 const route = useRoute()
 const router = useRouter()
-const valid = ['registrar', 'cloud', 'cdn', 'harbor', 'obs', 'acme']
+const valid = ['registrar', 'cloud', 'cdn', 'harbor', 'obs', 'acme', 'mcp']
 const tab = ref(valid.includes(route.query.tab) ? route.query.tab : 'registrar')
 
 // 各 tab 懒加载：每个面板在 onMounted 里各自拉数据，一次性全挂会同时打五组请求，
 // 而用户通常只看其中一个。切到哪个才加载哪个，加载过的保留（避免来回切时重复请求）。
-const loaded = reactive({ registrar: false, cloud: false, cdn: false, harbor: false, obs: false, acme: false })
+const loaded = reactive({ registrar: false, cloud: false, cdn: false, harbor: false, obs: false, acme: false, mcp: false })
 loaded[tab.value] = true
 
 function onTab(name) {

@@ -45,7 +45,7 @@ const routes = [
   // 旧路径保留并重定向到对应 tab——收藏夹和文档里的链接不会失效。
   { path: '/integrations', component: () => import('../views/Integrations.vue'), meta: { title: '接入管理' } },
   { path: '/obs-endpoints', redirect: { path: '/integrations', query: { tab: 'obs' } } },
-  { path: '/mcp', component: () => import('../views/McpAccess.vue'), meta: { title: 'AI 接入' } },
+  { path: '/mcp', redirect: { path: '/integrations', query: { tab: 'mcp' } } },
   { path: '/cloud-accounts', redirect: { path: '/integrations', query: { tab: 'cloud' } } },
   // catch-all 兜底：没有它时未知路径会渲染成空白页，面包屑还默认回退到「总览」，
   // 看起来像总览页坏了而不是地址不存在（CMDB-018）。必须放在最后。

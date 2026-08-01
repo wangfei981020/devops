@@ -1,11 +1,14 @@
 <template>
-  <div class="page">
-    <div class="page-head">
+  <div :class="embedded ? '' : 'page'">
+    <div v-if="!embedded" class="page-head">
       <span class="page-title">AI 接入 (MCP)</span>
       <span class="muted" style="margin-left:10px">把 CMDB 只读能力暴露成 MCP 工具，供你的 AI 界面 / Claude Code 连接查询</span>
     </div>
+    <div v-else class="muted" style="margin-bottom:12px">
+      把 CMDB 只读能力暴露成 MCP 工具，供你的 AI 界面 / Claude Code 连接查询
+    </div>
 
-    <el-card shadow="never" style="margin-bottom:14px">
+    <el-card shadow="never" style="margin-bottom:14px" :body-style="embedded ? {padding:'14px'} : {}">
       <template #header><b>连接信息</b></template>
       <el-form label-width="120px" style="max-width:900px">
         <el-form-item label="MCP 端点">
@@ -15,11 +18,16 @@
           <div class="muted">生产替换成对外域名，如 https://opsplatform-cmdb.slileisure.com/api/mcp</div>
         </el-form-item>
         <el-form-item label="访问 Token">
-          <el-input v-model="info.token" readonly show-password>
-            <template #append><el-button @click="copy(info.token)">复制</el-button></template>
+          <!-- 这里**不能**用 el-input 的 show-password：那个属性是"可切换显示"，
+               点一下眼睛就变明文，截图就泄露。这个 token 是全部只读工具的通行证，
+               所以做成永远只显示打码值，真实值只能走「复制」进剪贴板（CMDB-027）。 -->
+          <el-input :model-value="tokenMasked" readonly>
+            <template #append><el-button :disabled="!info.token" @click="copy(info.token)">复制</el-button></template>
           </el-input>
           <el-button size="small" type="warning" plain style="margin-top:8px" @click="regen">重新生成 Token</el-button>
-          <span class="muted" style="margin-left:8px">重新生成后旧 token 立即失效</span>
+          <span class="muted" style="margin-left:8px">
+            Token 不显示明文，只能复制；重新生成后旧 token 立即失效
+          </span>
         </el-form-item>
         <el-form-item label="工具数">
           <el-tag type="success">{{ info.tools }} 个只读工具</el-tag>
@@ -62,6 +70,8 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { mcpInfo, mcpRegenerate } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+
+defineProps({ embedded: { type: Boolean, default: false } })
 
 const app = useAppStore()
 const info = ref({ token: '', tools: 0 })
