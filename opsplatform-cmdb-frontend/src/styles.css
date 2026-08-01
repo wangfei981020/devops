@@ -1,4 +1,9 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* 字体本地托管在 /fonts/（public/fonts/），不再外链 Google Fonts。
+   原来这行是 @import 外链，有两个问题：
+   1. CSS @import 阻塞渲染 —— 每次开页面都要先等这个外部请求
+   2. 受限网络下 fonts.gstatic.com 被拦截返回 403，实测生产 console 常驻 4 条报错
+   汉字本来就走 Microsoft YaHei/PingFang，所以只打包 latin 子集，共 260KB。 */
+@import url('/fonts/fonts.css');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
