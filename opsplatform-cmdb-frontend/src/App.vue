@@ -33,7 +33,9 @@
 
     <main class="main">
       <div class="topbar">
-        <div class="crumb">CMDB / <b>{{ route.meta.title || '总览' }}</b></div>
+        <!-- 匹配不到 title 时显示「未知页面」而不是回退到「总览」——
+             那个默认值会把 404 伪装成一个正常页面（CMDB-018） -->
+        <div class="crumb">CMDB / <b>{{ route.meta.title || '未知页面' }}</b></div>
         <el-dropdown trigger="click" @command="onCmd">
           <span class="user"><el-icon><User /></el-icon> {{ auth.user?.username || 'admin' }} <el-icon><ArrowDown /></el-icon></span>
           <template #dropdown>

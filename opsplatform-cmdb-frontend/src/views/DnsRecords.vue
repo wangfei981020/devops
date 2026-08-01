@@ -49,6 +49,7 @@
     </el-card>
 
     <el-card shadow="never">
+      <LoadError :error="loadErr" @retry="loadDomains" />
       <el-table :data="domPaged" size="small" row-key="ci_id" v-loading="loading" @expand-change="onExpand"
         @selection-change="(v) => selectedDoms = v">
         <el-table-column type="selection" width="42" reserve-selection />
@@ -97,7 +98,7 @@
               </div>
               <el-empty v-if="!(recMap[row.ci_id] && recMap[row.ci_id].length) && !recLoading[row.ci_id]"
                 description="该域名暂无 DNS 记录，选好数据源点右上「从数据源同步」" :image-size="50" />
-              <el-pagination v-else small background v-model:current-page="recState[row.ci_id].page" v-model:page-size="recState[row.ci_id].size"
+              <el-pagination v-else size="small" background v-model:current-page="recState[row.ci_id].page" v-model:page-size="recState[row.ci_id].size"
                 :page-sizes="[20,50,100]" :total="recFiltered(row.ci_id).length" layout="total, sizes, prev, pager, next"
                 style="margin-top:8px; justify-content:flex-end" />
             </div>
@@ -266,11 +267,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search, Hide, RefreshLeft, Plus, Edit, Delete, DocumentAdd } from '@element-plus/icons-vue'
 import { listDomains, listRegistrars, listDnsRecords, syncSource, syncSourceStatus, syncDomainRecords, bulkIgnoreDomains,
   createDnsRecord, updateDnsRecord, deleteDnsRecord, batchCreateDnsRecords, batchDeleteDnsRecords, batchUpdateDnsRecords } from '../api/cmdb'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
 import { useDomainFilter } from '../composables/useDomainFilter'
 import { useAppStore } from '../stores/app'
 const app = useAppStore()
 const sources = ref([]), domains = ref([]), loading = ref(false)
+const loadErr = ref('')
 const sourceId = ref(null)
 const syncing = ref(false)
 const prog = ref({ total: 0, done: 0, imported_records: 0 })
@@ -523,7 +527,10 @@ async function delRecord(row, r) {
 
 async function loadDomains() {
   loading.value = true
-  try { domains.value = await listDomains(); ensureState() } catch (e) {} finally { loading.value = false }
+  loadErr.value = ''
+  try { domains.value = await listDomains(); ensureState() }
+  catch (e) { loadErr.value = normalizeError(e).message; domains.value = [] }
+  finally { loading.value = false }
 }
 // 全量同步：后台异步 + 轮询进度。点击瞬间置灰(防连点)+立即查一次状态。
 async function doSync() {

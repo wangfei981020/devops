@@ -45,6 +45,10 @@ const routes = [
   { path: '/obs-endpoints', redirect: { path: '/integrations', query: { tab: 'obs' } } },
   { path: '/mcp', component: () => import('../views/McpAccess.vue'), meta: { title: 'AI 接入' } },
   { path: '/cloud-accounts', redirect: { path: '/integrations', query: { tab: 'cloud' } } },
+  // catch-all 兜底：没有它时未知路径会渲染成空白页，面包屑还默认回退到「总览」，
+  // 看起来像总览页坏了而不是地址不存在（CMDB-018）。必须放在最后。
+  { path: '/:pathMatch(.*)*', name: 'NotFound', component: () => import('../views/NotFound.vue'),
+    meta: { title: '页面不存在' } },
 ]
 
 const router = createRouter({ history: createWebHistory(), routes })

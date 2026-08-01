@@ -16,11 +16,13 @@
         <el-select v-model="f.project" clearable placeholder="项目" style="width:150px"><el-option v-for="p in opts.project" :key="p" :label="p" :value="p" /></el-select>
         <el-select v-model="f.zone" clearable placeholder="区域" style="width:150px"><el-option v-for="z in opts.zone" :key="z" :label="z" :value="z" /></el-select>
         <el-select v-model="f.status" clearable placeholder="状态" style="width:130px"><el-option v-for="s in opts.status" :key="s" :label="s" :value="s" /></el-select>
-        <span class="muted" style="margin-left:auto">共 {{ filtered.length }} / {{ rows.length }} 台　月估合计 ${{ monthSum }}</span>
+        <span class="muted" style="margin-left:auto" v-if="loadErr">共 — 台　月估合计 —</span>
+        <span class="muted" style="margin-left:auto" v-else>共 {{ filtered.length }} / {{ rows.length }} 台　月估合计 ${{ monthSum }}</span>
       </div>
     </el-card>
 
     <el-card shadow="never">
+      <LoadError :error="loadErr" @retry="load" />
       <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column label="厂商" width="80"><template #default="{ row }"><el-tag :style="providerStyle(row.provider)" size="small">{{ plabel(row.provider) }}</el-tag></template></el-table-column>
         <el-table-column label="项目" min-width="120"><template #default="{ row }"><el-tag :style="projectStyle(projName(row))" size="small">{{ projName(row) }}</el-tag></template></el-table-column>
@@ -268,11 +270,14 @@ import { listHosts, getHost, listCloudAccounts, createCloudAccount, updateCloudA
   listComputeRates, createComputeRate, updateComputeRate, deleteComputeRate,
   listDiskRates, createDiskRate, updateDiskRate, deleteDiskRate } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 import { useHostSync } from '../composables/useHostSync'
 import { providerLabel as plabel, providerStyle, projectStyle, regionStyle } from '../utils/cloud'
 
 const app = useAppStore()
 const rows = ref([]), loading = ref(false)
+const loadErr = ref('')
 const f = ref({ kw: '', provider: null, project: null, zone: null, status: null })
 const page = ref(1), size = ref(10)
 const dDlg = ref(false), detail = ref(null), detailCiid = ref(null), asOf = ref('')
@@ -309,7 +314,10 @@ const monthSum = computed(() => Math.round(filtered.value.reduce((n, r) => n + (
 
 async function load() {
   loading.value = true
-  try { rows.value = await listHosts() } catch (e) {} finally { loading.value = false }
+  loadErr.value = ''
+  try { rows.value = await listHosts() }
+  catch (e) { loadErr.value = normalizeError(e).message; rows.value = [] }
+  finally { loading.value = false }
 }
 async function openDetail(row) { detailCiid.value = row.ci_id; asOf.value = ''; detail.value = await getHost(row.ci_id); dDlg.value = true }
 async function reloadDetail() { if (detailCiid.value) detail.value = await getHost(detailCiid.value, asOf.value || undefined) }

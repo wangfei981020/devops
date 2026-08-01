@@ -5,6 +5,7 @@
       <span class="muted" style="margin-left:10px">节点池 / 状态 / 容量 · 卡死(Ready=Unknown 或心跳超时)红标</span>
     </div>
     <el-card shadow="never">
+      <LoadError :error="error" @retry="load" />
       <div class="bar">
         <el-select v-model="clusterId" placeholder="集群" style="width:220px" @change="onCluster">
           <el-option label="全部集群" :value="''" />
@@ -17,7 +18,9 @@
         <el-button :icon="Search" @click="load">查询</el-button>
         <el-switch v-model="onlyBad" active-text="只看异常" style="margin-left:6px" @change="page=1" />
         <span class="muted" style="margin-left:auto">
-          共 {{ rows.length }} · <b v-if="badCount" style="color:#f56c6c">异常 {{ badCount }}</b><span v-else>全部健康</span>
+          <!-- 「全部健康」是一句断言，只有在数据真的取到时才允许说出口（CMDB-013） -->
+          <template v-if="error">共 — · <b style="color:#f56c6c">数据未加载，状态未知</b></template>
+          <template v-else>共 {{ rows.length }} · <b v-if="badCount" style="color:#f56c6c">异常 {{ badCount }}</b><span v-else>全部健康</span></template>
         </span>
       </div>
       <el-table :data="paged" size="small" v-loading="loading" :row-class-name="rowClass">
@@ -25,7 +28,7 @@
         <el-table-column label="节点" min-width="220"><template #default="{ row }">
           {{ row.name }}
           <el-tooltip v-if="Number(row.host_ci_id)" content="关联的云主机(GCE)——点看机型/IP/项目">
-            <el-link type="primary" :underline="false" style="margin-left:6px;font-size:12px" @click="openHost(row)">🖥主机</el-link>
+            <el-link type="primary" underline="never" style="margin-left:6px;font-size:12px" @click="openHost(row)">🖥主机</el-link>
           </el-tooltip>
         </template></el-table-column>
         <el-table-column prop="pool" label="节点池" width="120" />
@@ -61,7 +64,7 @@
               <span style="cursor:pointer">
                 <span v-if="row.conditions" style="color:#f56c6c">⚠ {{ row.conditions }}</span>
                 <span v-else style="color:#67c23a">正常</span>
-                <el-link type="primary" :underline="false" style="margin-left:6px;font-size:12px">详情</el-link>
+                <el-link type="primary" underline="never" style="margin-left:6px;font-size:12px">详情</el-link>
               </span>
             </template>
             <div style="font-size:12px">
@@ -82,9 +85,9 @@
       </el-table>
       <div class="pager" v-if="display.length > pageSize">
         <el-pagination layout="total, sizes, prev, pager, next" :total="display.length"
-          v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[20,50,100]" small background />
+          v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[20,50,100]" size="small" background />
       </div>
-      <el-empty v-if="!loading && !display.length" :description="onlyBad ? '无异常节点 🎉' : '无数据，先去集群管理点「同步」'" />
+      <el-empty v-if="!loading && !error && !display.length" :description="onlyBad ? '无异常节点 🎉' : '无数据，先去集群管理点「同步」'" />
     </el-card>
     <el-dialog :close-on-click-modal="false" v-model="hostDlg" title="关联云主机" width="520px">
       <el-descriptions v-if="host" :column="1" border size="small">
@@ -104,13 +107,16 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { listK8sClusters, listK8sNodes, listK8sNodePools, k8sNodeUsage, k8sNodeCapacity, getHost } from '../api/cmdb'
+import { useLoadState } from '../composables/useLoadState'
+import LoadError from '../components/LoadError.vue'
+
+const { loading, error, run } = useLoadState()
 
 const clusters = ref([]); const pools = ref([]); const rows = ref([]); const usage = ref({}); const cap = ref({})
 function cp(row, k) { const m = cap.value[row.name]; return (m && m[k] != null) ? m[k] : 0 }
-const clusterId = ref(''); const pool = ref(''); const q = ref(''); const onlyBad = ref(false); const loading = ref(false)
+const clusterId = ref(''); const pool = ref(''); const q = ref(''); const onlyBad = ref(false)
 function nu(row, k) { const m = usage.value[row.name]; return (m && m[k] != null) ? m[k].toFixed(0) + '%' : null }
 function nuVal(row, k) { const m = usage.value[row.name]; return (m && m[k] != null) ? m[k] : 0 }
 const hostDlg = ref(false); const host = ref(null)
@@ -154,23 +160,28 @@ async function loadUsage() {
 }
 
 async function load() {
-  loading.value = true
-  try {
+  // 失败时把 rows 清空：留着上一次的数据配上这次的错误横幅，会让人分不清看的是哪一时刻的状态
+  await run(async () => {
     const p = {}
     if (clusterId.value) { p.cluster_id = clusterId.value; pools.value = await listK8sNodePools(p) } else { pools.value = [] }
     if (pool.value) p.pool = pool.value
     if (q.value) p.q = q.value
-    rows.value = await listK8sNodes(p); page.value = 1
+    const r = await listK8sNodes(p)
+    rows.value = r
+    page.value = 1
     loadUsage()
-  } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+  })
+  if (error.value) { rows.value = []; pools.value = [] }
 }
 
 onMounted(async () => {
-  try {
+  const ok = await run(async () => {
     clusters.value = await listK8sClusters()
-    if (clusters.value.length) clusterId.value = clusters.value[0].id
-    load()
-  } catch (e) { ElMessage.error('加载集群失败') }
+    return true
+  })
+  if (!ok) return
+  if (clusters.value.length) clusterId.value = clusters.value[0].id
+  load()
 })
 </script>
 

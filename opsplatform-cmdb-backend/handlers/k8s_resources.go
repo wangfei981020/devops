@@ -280,7 +280,12 @@ func (h *K8sResourceHandler) list(c *gin.Context, base string, filters []filter,
 		if i := strings.Index(strings.ToUpper(base), " FROM "); i >= 0 {
 			from = base[i:]
 		}
-		_ = h.DB.QueryRow("SELECT COUNT(*)"+from+whereSQL, args...).Scan(&total)
+		// total 失败不能吞：吞了会变成"共 0 条"但表里有数据，前端分页器直接失真。
+		if err := h.DB.QueryRow("SELECT COUNT(*)"+from+whereSQL, args...).Scan(&total); err != nil {
+			logx.J("k8s_list", "count_fail", map[string]any{"from": from, "err": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 		q := base + whereSQL
 		if orderBy != "" {
 			q += " ORDER BY " + orderBy

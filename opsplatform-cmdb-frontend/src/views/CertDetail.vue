@@ -2,6 +2,11 @@
   <div class="page">
     <el-page-header @back="$router.back()"><template #content><span class="mono">{{ cert.cn }}</span></template></el-page-header>
 
+    <el-result v-if="notFound" icon="warning" title="证书不存在" :sub-title="notFound">
+      <template #extra><el-button type="primary" @click="$router.push('/certs')">返回证书列表</el-button></template>
+    </el-result>
+    <template v-else>
+
     <el-alert v-if="cert.status === 'await_dns'" type="warning" :closable="false" show-icon style="margin-top:14px">
       <template #title>需要手动添加 DNS TXT 记录验证</template>
       <div style="line-height:2">
@@ -49,6 +54,7 @@
         <el-table-column prop="detail" label="详情" min-width="240" />
       </el-table>
     </el-card>
+    </template>
   </div>
 </template>
 
@@ -57,6 +63,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getCert, certDnsReady } from '../api/cmdb'
+import { normalizeError } from '../api/http'
 
 const route = useRoute()
 const cert = ref({})
@@ -88,6 +95,16 @@ async function confirmDns() {
   } catch (e) { ElMessage.error('提交失败') } finally { confirming.value = false }
 }
 
-onMounted(async () => { cert.value = await getCert(route.params.id) })
+// 非法/不存在的证书 ID 要给出明确的「不存在」，而不是把 el-page-header 渲染成一片空白（CMDB-018）
+const notFound = ref('')
+onMounted(async () => {
+  try {
+    cert.value = await getCert(route.params.id)
+  } catch (e) {
+    const err = normalizeError(e)
+    notFound.value = err.status === 404 ? `没有找到 ID 为 ${route.params.id} 的证书` : err.message
+    cert.value = {}
+  }
+})
 onBeforeUnmount(() => clearInterval(pollTimer))
 </script>

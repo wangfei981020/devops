@@ -94,6 +94,10 @@ func StartScheduler(db *sql.DB, cipher *crypto.Cipher, pool *k8ssource.Pool) {
 		"gke_upgrade_remind": func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) {
 			return gkeUpgradeRemindCore(db)
 		},
+		// 磁盘水位巡检：盘满是能直接打垮整个平台的故障，且此前完全没有告警（CMDB-012）
+		"disk_watch": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return diskWatchCore(ctx, db, cipher)
+		},
 		// 节点健康是分钟级任务，自己直连集群（k8s_nodes 表 120s 才刷一次，撑不起 3 分钟判定）
 		"node_health_watch": func(ctx context.Context, p ProgressFn, _ []string) (string, []TaskFailure, bool) {
 			return nodeHealthWatchCore(ctx, db, nodeHealthPool, cipher, p)

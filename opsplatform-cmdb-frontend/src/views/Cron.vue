@@ -7,6 +7,7 @@
     <div class="muted" style="margin-bottom:14px">每个任务可开关、改频率、立即运行；跑完按配置发 Lark 群通知（成败 + @人）。Lark 群在「通知」页维护。</div>
 
     <el-card shadow="never">
+      <LoadError :error="loadErr" @retry="load" />
       <el-table :data="tPaged" size="small" v-loading="loading">
         <el-table-column label="任务名" min-width="200"><template #default="{ row }">
           <b>{{ row.name }}</b>
@@ -91,6 +92,8 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh, VideoPlay, Edit } from '@element-plus/icons-vue'
 import { listScheduledTasks, updateScheduledTask, runScheduledTask, listLarkGroups, listNotifyUsers } from '../api/cmdb'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 import { usePaged } from '../composables/usePaged'
 
 const presets = [
@@ -110,6 +113,7 @@ const desc = {
   host_sync: '同步所有云账号所有 project 的主机（各用各自凭据）。',
 }
 const tasks = ref([]), groups = ref([]), users = ref([]), loading = ref(false)
+const loadErr = ref('')
 const { page: tPage, size: tSize, paged: tPaged } = usePaged(tasks)
 const running = ref({})
 const dlg = ref(false), form = ref({})
@@ -119,11 +123,15 @@ function atNames(ids) { return (ids || []).map((id) => users.value.find((u) => u
 
 async function load() {
   loading.value = true
+  loadErr.value = ''
   try {
     groups.value = await listLarkGroups()
     users.value = await listNotifyUsers()
     tasks.value = await listScheduledTasks()
-  } catch (e) {} finally { loading.value = false }
+  } catch (e) {
+    loadErr.value = normalizeError(e).message
+    tasks.value = []
+  } finally { loading.value = false }
 }
 function openEdit(row) {
   const p = presets.find((p) => p.v === row.schedule)

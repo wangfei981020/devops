@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"net/http"
 
+	"opsplatform-cmdb-backend/logx"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -33,11 +35,19 @@ type certInspectItem struct {
 }
 
 // List 返回全量巡检项（前端做排序/筛选/分页）。
+//
+// ⚠️ 三段来源（线上检测 / 域名注册 / ACME 签发）缺一不可：少了任何一段，
+// 前端算出来的"快到期 N / 已过期 N / 检测失败 N"就是偏小的，
+// 而偏小的告警数比报错更危险（CMDB-013）。所以任何一段查失败都返回 500。
 func (h *CertInspectHandler) List(c *gin.Context) {
 	out := []certInspectItem{}
 	// 主域名生命周期状态查表：domain ci_id → status
 	statusMap := map[int64]string{}
-	if srows, e := h.DB.Query(`SELECT ci_id, status FROM domains WHERE status<>''`); e == nil {
+	if srows, e := h.DB.Query(`SELECT ci_id, status FROM domains WHERE status<>''`); e != nil {
+		logx.J("cert_inspect", "query_fail", map[string]any{"item": "domain_status", "err": e.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "巡检查询失败(域名状态): " + e.Error()})
+		return
+	} else {
 		for srows.Next() {
 			var id int64
 			var st string
@@ -79,7 +89,11 @@ func (h *CertInspectHandler) List(c *gin.Context) {
 
 	// 域名注册到期（WHOIS）——已忽略的主域名不纳入巡检
 	drows, err := h.DB.Query(`SELECT c.id, c.name, d.expiry_at FROM cis c JOIN domains d ON d.ci_id=c.id WHERE c.type='domain' AND d.stale=0 AND d.ignored=0`)
-	if err == nil {
+	if err != nil {
+		logx.J("cert_inspect", "query_fail", map[string]any{"item": "domain_expiry", "err": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "巡检查询失败(域名到期): " + err.Error()})
+		return
+	} else {
 		for drows.Next() {
 			var it certInspectItem
 			var name string
@@ -102,7 +116,11 @@ func (h *CertInspectHandler) List(c *gin.Context) {
 	// ACME 签发证书
 	arows, err := h.DB.Query(`SELECT cert.ci_id, c.name, cert.cn, cert.expiry_at
 		FROM certificates cert JOIN cis c ON c.id=cert.ci_id WHERE cert.status='active'`)
-	if err == nil {
+	if err != nil {
+		logx.J("cert_inspect", "query_fail", map[string]any{"item": "acme_certs", "err": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "巡检查询失败(ACME 证书): " + err.Error()})
+		return
+	} else {
 		for arows.Next() {
 			var it certInspectItem
 			var name, cn string

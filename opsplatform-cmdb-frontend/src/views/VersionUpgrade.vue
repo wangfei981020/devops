@@ -543,7 +543,7 @@
           <div class="pager" v-if="filteredRows.length > schedPageSize">
             <el-pagination layout="total, sizes, prev, pager, next" :total="filteredRows.length"
               v-model:current-page="schedPage" v-model:page-size="schedPageSize"
-              :page-sizes="[10, 20, 50]" small background />
+              :page-sizes="[10, 20, 50]" size="small" background />
           </div>
           <el-empty v-if="!loading && !rows.length" description="排期表还没同步，点上方「同步排期表」" :image-size="60" />
           <el-empty v-else-if="!loading && !filteredRows.length" description="当前筛选没有匹配的行" :image-size="60" />
@@ -737,7 +737,7 @@
           <div class="pager" v-if="filteredHistory.length > hPageSize">
             <el-pagination layout="total, sizes, prev, pager, next" :total="filteredHistory.length"
               v-model:current-page="hPage" v-model:page-size="hPageSize"
-              :page-sizes="[10, 20, 50, 100]" small background />
+              :page-sizes="[10, 20, 50, 100]" size="small" background />
           </div>
           <el-empty v-if="!hLoading && !hRows.length"
             :description="hKind === 'repair'

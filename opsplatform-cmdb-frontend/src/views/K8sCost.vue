@@ -7,7 +7,7 @@
 
     <el-tabs v-model="tab" @tab-change="onTabChange">
       <!-- 总览 -->
-      <el-tab-pane label="总览" name="ov">
+      <el-tab-pane lazy label="总览" name="ov">
         <div class="kpis">
           <div class="kpi"><div class="lab">云支出（真实/月）</div><div class="num">${{ ov.cloud_total || 0 }}</div></div>
           <div class="kpi idc"><div class="lab">IDC 迁云估算/月</div><div class="num">${{ ov.idc_estimate || 0 }}</div></div>
@@ -45,7 +45,7 @@
       </el-tab-pane>
 
       <!-- 明细 -->
-      <el-tab-pane label="明细" name="detail">
+      <el-tab-pane lazy label="明细" name="detail">
         <div class="bar">
           <el-select v-model="f.biz_project" clearable placeholder="业务项目" style="width:160px" @change="loadDetail">
             <el-option v-for="p in projOpts" :key="p" :label="p" :value="p" />
@@ -78,7 +78,7 @@
       </el-tab-pane>
 
       <!-- 报告 -->
-      <el-tab-pane label="报告/环比" name="report">
+      <el-tab-pane lazy label="报告/环比" name="report">
         <div class="bar">
           <el-radio-group v-model="rp.period" size="small" @change="loadReport">
             <el-radio-button value="month">月度</el-radio-button>
@@ -109,7 +109,7 @@
         </el-card>
         <el-card shadow="never">
           <template #header><b>环比归因（本月 vs 上月，按变化额排序）</b><span class="muted" style="margin-left:8px">哪些资源导致费用变化</span></template>
-          <el-table :data="attr.movers" size="small" max-height="380">
+          <el-table :data="moverPaged" size="small" max-height="380">
             <el-table-column prop="resource" label="资源" min-width="240" />
             <el-table-column prop="type" label="类型" width="110"><template #default="{row}">{{ typeText(row.type) }}</template></el-table-column>
             <el-table-column prop="cluster" label="集群" width="130" />
@@ -119,12 +119,13 @@
             </template></el-table-column>
             <el-table-column prop="reason" label="原因" min-width="200" />
           </el-table>
-          <el-empty v-if="!attr.movers?.length" description="无变化（需至少两个月快照）" />
+          <Pager :total="moverItems.length" v-model:page="moverPage" v-model:page-size="moverSize" />
+          <el-empty v-if="!moverItems.length" description="无变化（需至少两个月快照）" />
         </el-card>
       </el-tab-pane>
 
       <!-- 节点成本 -->
-      <el-tab-pane label="节点成本" name="nodes">
+      <el-tab-pane lazy label="节点成本" name="nodes">
         <div class="muted" style="margin-bottom:10px">GKE 走机型费率；IDC 标"迁云估算"；本地不计费。无机型/IDC 可手填月成本</div>
         <el-table :data="nodes" size="small">
           <el-table-column prop="cluster" label="集群" width="150" />
@@ -140,7 +141,7 @@
           </template></el-table-column>
         </el-table>
       </el-tab-pane>
-      <el-tab-pane label="浪费排行" name="waste">
+      <el-tab-pane lazy label="浪费排行" name="waste">
         <!-- 这三个 tab 是「按集群」的，上面几个是跨集群账单视角，所以各自带集群选择器。 -->
         <div class="filters">
           <el-select v-model="optCid" size="small" style="width:230px" @change="loadOpt">
@@ -178,7 +179,7 @@
           description="没有数据。资源浪费需要 Prometheus 实测用量，先确认该集群的数据源已配置且可达" />
       </el-tab-pane>
 
-      <el-tab-pane label="闲置成本" name="idle">
+      <el-tab-pane lazy label="闲置成本" name="idle">
         <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px">
           <template #title>闲置 = 实付 − 已按 request 分摊</template>
           这部分是买了但没有任何工作负载申请的容量，<b>缩节点能直接省下的上限</b>。
@@ -210,7 +211,7 @@
         <el-empty v-if="!optLoading && !idle.length" description="没有闲置成本数据" :image-size="60" />
       </el-tab-pane>
 
-      <el-tab-pane label="孤儿资源" name="orphan">
+      <el-tab-pane lazy label="孤儿资源" name="orphan">
         <div class="filters">
           <el-select v-model="optCid" size="small" style="width:230px" @change="loadOpt">
             <el-option v-for="c in clusters" :key="c.id"
@@ -261,6 +262,10 @@ const { page: detPage, pageSize: detSize, paged: detPaged } = usePager(detItems)
 const dim = ref('biz_project'); const ovMode = ref('cloud')
 const f = ref({ biz_project: '', gcp_project: '', env: '', mode: '' })
 const months = ref([]); const rp = ref({ period: 'month', anchor: '' }); const rep = ref({}); const attr = ref({})
+// 环比归因表实测 1626 行，不分页会一次性铺进 DOM（CMDB-017）。
+// 注：数据仍是一次性传回来的，这里只解决渲染；若行数继续涨，需要改成后端分页。
+const moverItems = computed(() => attr.value.movers || [])
+const { page: moverPage, pageSize: moverSize, paged: moverPaged } = usePager(moverItems)
 
 // 优化类 tab（浪费/闲置/孤儿）是按集群的，与上面的跨集群账单视角不同，单独一套状态
 const clusters = ref([]); const optCid = ref(null); const optLoading = ref(false)

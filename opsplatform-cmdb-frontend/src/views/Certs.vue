@@ -22,11 +22,12 @@
         </el-select>
         <el-button type="primary" :icon="Search" @click="doSearch">搜索</el-button>
         <el-button @click="resetFilter">重置</el-button>
-        <span class="muted" style="margin-left:auto">共 {{ filteredRows.length }} / {{ rows.length }} 条</span>
+        <span class="muted" style="margin-left:auto">共 {{ loadErr ? '—' : filteredRows.length + ' / ' + rows.length }} 条</span>
       </div>
     </el-card>
 
     <el-card shadow="never">
+      <LoadError :error="loadErr" @retry="load" />
       <el-table :data="pagedRows" size="small" v-loading="loading">
         <el-table-column prop="cn" label="域名(CN)" min-width="180" />
         <el-table-column label="SAN" width="70"><template #default="{ row }">{{ row.sans?.length || 0 }}</template></el-table-column>
@@ -65,9 +66,9 @@
         </el-form-item>
         <el-form-item label="验证方式">
           <el-radio-group v-model="form.challenge">
-            <el-radio label="dns-01">DNS-01 自动（复用注册商 API 凭据）</el-radio>
-            <el-radio label="manual-dns">手动 DNS（无 API，自己加 TXT 记录，如 GoDaddy）</el-radio>
-            <el-radio label="http-01">HTTP-01（服务器 80 端口可达）</el-radio>
+            <el-radio value="dns-01">DNS-01 自动（复用注册商 API 凭据）</el-radio>
+            <el-radio value="manual-dns">手动 DNS（无 API，自己加 TXT 记录，如 GoDaddy）</el-radio>
+            <el-radio value="http-01">HTTP-01（服务器 80 端口可达）</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="CA">
@@ -112,9 +113,12 @@ import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Search, View, Download, Delete } from '@element-plus/icons-vue'
 import { listCerts, applyCert, renewCert, revokeCert, downloadCert, listDomains, listAcme } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 
 const app = useAppStore()
 const rows = ref([]), domains = ref([]), accounts = ref([]), loading = ref(false)
+const loadErr = ref('')
 const dlg = ref(false), submitting = ref(false), form = ref({})
 
 const statusOptions = [
@@ -139,7 +143,10 @@ function resetFilter() { f.value = { keyword: '', project: '', env: '', status: 
 
 async function load() {
   loading.value = true
-  try { rows.value = await listCerts(); app.loadBasics() } catch (e) {} finally { loading.value = false }
+  loadErr.value = ''
+  try { rows.value = await listCerts(); app.loadBasics() }
+  catch (e) { loadErr.value = normalizeError(e).message; rows.value = [] }
+  finally { loading.value = false }
 }
 async function openApply() {
   form.value = { cn: '', sans: [], domain_ci_id: null, challenge: 'dns-01', ca: 'letsencrypt', acme_account_id: null, project: '', env: '', module: '', auto_renew: 1, renew_days: 30, staging: false }

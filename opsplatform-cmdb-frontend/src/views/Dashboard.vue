@@ -4,9 +4,15 @@
       <span class="bt">CMDB 资产展示台</span>
       <span class="bclock">{{ now }}</span>
     </div>
+    <!-- 大屏挂在墙上，失败必须一眼看见：全 0 的看板和正常看板长得一模一样（CMDB-013） -->
+    <div v-if="error" class="berr">
+      <span class="be-t">⚠ 数据加载失败，以下数字不可信</span>
+      <span class="be-d">{{ error }}</span>
+      <span class="be-r" @click="load">重试</span>
+    </div>
     <div class="kpis">
       <el-tooltip v-for="k in kpis" :key="k.label" :content="k.tip || ''" :disabled="!k.tip" placement="bottom">
-        <div class="kpi"><div class="kn" :style="{color:k.color}">{{ k.num }}</div><div class="kl">{{ k.label }}</div></div>
+        <div class="kpi"><div class="kn" :style="{color: error ? '#64748b' : k.color}">{{ error ? '—' : k.num }}</div><div class="kl">{{ k.label }}</div></div>
       </el-tooltip>
     </div>
     <div class="charts">
@@ -23,6 +29,7 @@ import { PieChart, BarChart } from 'echarts/charts'
 import { TooltipComponent, GridComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { dashboard } from '../api/cmdb'
+import { normalizeError } from '../api/http'
 echarts.use([PieChart, BarChart, TooltipComponent, GridComponent, LegendComponent, CanvasRenderer])
 
 const data = ref({})
@@ -82,7 +89,19 @@ function render() {
     expChart.resize()
   }
 }
-async function load() { data.value = await dashboard(); await nextTick(); render() }
+const error = ref('')
+async function load() {
+  try {
+    data.value = await dashboard()
+    error.value = ''
+  } catch (e) {
+    // 清空而不是保留旧值：墙上大屏留着上一次的数字，比显示 — 更容易误导
+    error.value = normalizeError(e).message
+    data.value = {}
+  }
+  await nextTick()
+  render()
+}
 function tick() { now.value = new Date().toLocaleString('zh-CN') }
 function onResize() { envChart?.resize(); expChart?.resize() }
 onMounted(() => {
@@ -98,6 +117,12 @@ onBeforeUnmount(() => { clearInterval(timer); window.removeEventListener('resize
 .board-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
 .bt { color: #e2e8f0; font-size: 22px; font-weight: 700; letter-spacing: 2px; }
 .bclock { color: #64748b; font-family: Consolas, monospace; }
+.berr { display: flex; align-items: center; gap: 14px; background: #7f1d1d; border: 1px solid #ef4444;
+  border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; }
+.be-t { color: #fecaca; font-weight: 700; font-size: 15px; }
+.be-d { color: #fca5a5; font-size: 13px; }
+.be-r { color: #fff; border: 1px solid #fca5a5; border-radius: 4px; padding: 2px 10px; font-size: 12px;
+  cursor: pointer; margin-left: auto; }
 .kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 18px; }
 .kpi { background: #1e293b; border-radius: 10px; padding: 18px; text-align: center; }
 .kn { font-size: 34px; font-weight: 800; }

@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"opsplatform-cmdb-backend/k8ssource"
+	"opsplatform-cmdb-backend/logx"
 )
 
 // EventCenterHandler 事件中心：聚合平台各处事件成统一时间线(到期/变更/同步失败/K8s Warning)。
@@ -41,6 +42,14 @@ type evt struct {
 }
 
 // List 聚合事件。days 默认30(到期/变更窗口);K8s Warning 取各启用集群实时(有界)。
+// eventCenterLimit 单次返回的事件条数上限。超出会在响应里以 truncated=true 明确标出，
+// 绝不静默丢弃——静默截断让人以为看到的就是全部（CMDB-019，与 CMDB-007 同类问题）。
+const eventCenterLimit = 500
+
+// workloadChangeLimit 工作负载变更这一路的取数上限。它是"最近的变更"，
+// 时间倒序取前 N 条即可，但同样不该假装那就是全部——超过时打日志留痕。
+const workloadChangeLimit = 300
+
 func (h *EventCenterHandler) List(c *gin.Context) {
 	days := 30
 	if d, e := strconv.Atoi(c.Query("days")); e == nil && d > 0 && d <= 365 {
@@ -92,7 +101,7 @@ func (h *EventCenterHandler) List(c *gin.Context) {
 
 	// 2. 工作负载变更
 	if rows, _ := h.DB.Query(`SELECT namespace,kind,name,field,old_value,new_value,changed_at FROM k8s_changes
-		WHERE changed_at >= NOW()-INTERVAL ? DAY ORDER BY changed_at DESC LIMIT 300`, days); rows != nil {
+		WHERE changed_at >= NOW()-INTERVAL ? DAY ORDER BY changed_at DESC LIMIT ?`, days, workloadChangeLimit); rows != nil {
 		for rows.Next() {
 			var ns, kind, name, field, ov, nv string
 			var ts time.Time
@@ -150,10 +159,29 @@ func (h *EventCenterHandler) List(c *gin.Context) {
 	}
 
 	sort.Slice(events, func(i, j int) bool { return events[i].sortTs.After(events[j].sortTs) })
-	if len(events) > 500 {
-		events = events[:500]
+
+	// 上限仍然保留（一次返回上万条对前端没意义），但**必须显式告知被截断了**。
+	// 原先 count 返回的是截断后的长度，于是「近 30 天」正好 500 条看起来像真实总数，
+	// 使用者拿到的是"这就是全部"的错觉（CMDB-019）。
+	// 分级计数在**截断之前**统计：数字必须反映选定时间范围内的真实总量，
+	// 不能是"当前这页有几条"——否则严重事件被截掉后，计数也跟着变小（CMDB-019）。
+	byLevel := map[string]int{"critical": 0, "warning": 0, "info": 0}
+	for _, e := range events {
+		byLevel[e.Level]++
 	}
-	c.JSON(http.StatusOK, gin.H{"events": events, "count": len(events)})
+	total := len(events)
+	truncated := false
+	if total > eventCenterLimit {
+		events = events[:eventCenterLimit]
+		truncated = true
+		logx.J("event_center", "truncated", map[string]any{"total": total, "limit": eventCenterLimit, "days": days})
+	}
+	// count 保持"本次返回条数"的语义不变（前端老代码在用），total 才是截断前的真实总量。
+	c.JSON(http.StatusOK, gin.H{
+		"events": events, "count": len(events),
+		"total": total, "truncated": truncated, "limit": eventCenterLimit,
+		"by_level": byLevel,
+	})
 }
 
 func (h *EventCenterHandler) collectK8sWarnings(ctx context.Context, days int, _ *[]evt, add func(evt)) {

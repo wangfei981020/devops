@@ -7,13 +7,16 @@
     <div class="muted" style="margin-bottom:12px">云防火墙规则，只读。<b style="color:#f56c6c">🔴高危</b>=入站对 <span class="mono">0.0.0.0/0</span> 放行敏感端口(22/3389/3306/6379…) 或全端口。</div>
 
     <el-card shadow="never">
+      <LoadError :error="error" @retry="load" />
       <div class="filters">
         <el-select v-model="fp" clearable placeholder="厂商" style="width:130px"><el-option v-for="p in opts.provider" :key="p" :label="plabel(p)" :value="p" /></el-select>
         <el-select v-model="fnet" clearable placeholder="VPC" style="width:150px"><el-option v-for="n in opts.network" :key="n" :label="n" :value="n" /></el-select>
         <el-select v-model="fdir" clearable placeholder="方向" style="width:120px"><el-option label="入站" value="INGRESS" /><el-option label="出站" value="EGRESS" /></el-select>
         <el-checkbox v-model="onlyRisk" style="margin-left:6px">只看高危</el-checkbox>
         <span class="grow" />
-        <span class="muted">共 {{ filtered.length }} 条 · <span style="color:#f56c6c">🔴高危 {{ riskCount }}</span></span>
+        <!-- 「高危 0」在没取到数据时是最危险的谎话，失败态一律给 —（CMDB-013） -->
+        <span class="muted" v-if="error">共 — 条 · <span style="color:#f56c6c">高危数未知</span></span>
+        <span class="muted" v-else>共 {{ filtered.length }} 条 · <span style="color:#f56c6c">🔴高危 {{ riskCount }}</span></span>
       </div>
       <el-table :data="paged" size="small" v-loading="loading" :row-class-name="rowCls">
         <el-table-column label="厂商" width="80"><template #default="{ row }"><el-tag :style="providerStyle(row.provider)" size="small">{{ plabel(row.provider) }}</el-tag></template></el-table-column>
@@ -39,13 +42,15 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { listCloudFirewalls } from '../api/cmdb'
 import { providerLabel as plabel, providerStyle, projectStyle, typeStyle } from '../utils/cloud'
 import { usePaged } from '../composables/usePaged'
+import { useLoadState } from '../composables/useLoadState'
+import LoadError from '../components/LoadError.vue'
 
-const rows = ref([]), loading = ref(false)
+const { loading, error, run } = useLoadState()
+const rows = ref([])
 const fp = ref(null), fnet = ref(null), fdir = ref(null), onlyRisk = ref(false)
 
 const opts = computed(() => ({
@@ -60,8 +65,8 @@ const riskCount = computed(() => rows.value.filter((r) => r.high_risk).length)
 function rowCls({ row }) { return row.high_risk ? 'risk-row' : '' }
 
 async function load() {
-  loading.value = true
-  try { rows.value = await listCloudFirewalls() } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+  await run(async () => { rows.value = await listCloudFirewalls() })
+  if (error.value) rows.value = []
 }
 onMounted(load)
 </script>

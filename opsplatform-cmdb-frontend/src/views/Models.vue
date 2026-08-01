@@ -2,6 +2,7 @@
   <div class="page">
     <div class="page-head"><span class="page-title">模型管理</span></div>
     <el-card shadow="never">
+      <LoadError :error="loadErr" @retry="load" />
       <el-table :data="tPaged" size="small">
         <el-table-column prop="code" label="类型 code" width="180" />
         <el-table-column prop="name" label="名称" width="160" />
@@ -18,17 +19,29 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { listCITypes, dashboard } from '../api/cmdb'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 import { usePaged } from '../composables/usePaged'
 
 const types = ref([])
 const { page: tPage, size: tSize, paged: tPaged } = usePaged(types)
 const counts = ref({})
+const loadErr = ref('')
 const desc = {
   domain: '域名资产：注册商 / 到期 / 解析状态',
   certificate: '证书资产：CA / 绑定域名 / 到期 / 自动续期',
 }
-onMounted(async () => {
-  types.value = await listCITypes()
-  try { const d = await dashboard(); counts.value = { domain: d.domain_total, certificate: d.cert_total } } catch (e) {}
-})
+async function load() {
+  loadErr.value = ''
+  try {
+    types.value = await listCITypes()
+    const d = await dashboard()
+    counts.value = { domain: d.domain_total, certificate: d.cert_total }
+  } catch (e) {
+    // 实例数取不到就不显示数字，而不是显示 0 —— 0 会被读成"这个模型一条实例都没有"
+    loadErr.value = normalizeError(e).message
+    types.value = []; counts.value = {}
+  }
+}
+onMounted(load)
 </script>

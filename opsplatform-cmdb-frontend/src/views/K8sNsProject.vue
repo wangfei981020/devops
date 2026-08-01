@@ -5,13 +5,16 @@
       <span class="muted" style="margin-left:10px">多项目共享集群时，按此把命名空间成本拆到项目（一个项目可挂多个命名空间）</span>
     </div>
     <el-card shadow="never">
+      <LoadError :error="error" @retry="load" />
       <div class="bar">
         <el-select v-model="clusterId" placeholder="选集群" style="width:220px" @change="load">
           <el-option v-for="c in clusters" :key="c.id" :label="(c.display_name||c.name)+' · '+c.environment" :value="c.id" />
         </el-select>
         <el-button :icon="MagicStick" @click="autoFill">按名称智能填充</el-button>
         <span class="muted" style="margin-left:auto">
-          共 {{ rows.length }} 命名空间 · <b v-if="unassigned" style="color:#e6a23c">未分配 {{ unassigned }} ⚠</b><span v-else>已全部归属</span>
+          <!-- 「已全部归属」同样是断言，取不到数据时不能说（CMDB-013） -->
+          <template v-if="error">共 — 命名空间 · <b style="color:#f56c6c">数据未加载，归属情况未知</b></template>
+          <template v-else>共 {{ rows.length }} 命名空间 · <b v-if="unassigned" style="color:#e6a23c">未分配 {{ unassigned }} ⚠</b><span v-else>已全部归属</span></template>
         </span>
       </div>
       <el-table :data="paged" size="small" v-loading="loading">
@@ -29,7 +32,7 @@
         </template></el-table-column>
       </el-table>
       <Pager :total="rows.length" v-model:page="page" v-model:page-size="pageSize" />
-      <el-empty v-if="!loading && !rows.length" description="该集群还没同步命名空间，先去集群管理点「同步」" />
+      <el-empty v-if="!loading && !error && !rows.length" description="该集群还没同步命名空间，先去集群管理点「同步」" />
     </el-card>
   </div>
 </template>
@@ -40,11 +43,14 @@ import { ElMessage } from 'element-plus'
 import { MagicStick } from '@element-plus/icons-vue'
 import { listK8sClusters, listK8sNsProjects, setK8sNsProject, listProjects } from '../api/cmdb'
 import { usePager } from '../composables/usePager'
+import { useLoadState } from '../composables/useLoadState'
 import Pager from '../components/Pager.vue'
+import LoadError from '../components/LoadError.vue'
 
+const { loading, error, run } = useLoadState()
 const clusters = ref([]); const projects = ref([]); const rows = ref([])
 const { page, pageSize, paged } = usePager(rows)
-const clusterId = ref(null); const loading = ref(false)
+const clusterId = ref(null)
 
 const unassigned = computed(() => rows.value.filter(r => !r.project).length)
 
@@ -57,8 +63,8 @@ function suggest(nsName) {
 
 async function load() {
   if (!clusterId.value) return
-  loading.value = true
-  try { rows.value = await listK8sNsProjects(clusterId.value) } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+  await run(async () => { rows.value = await listK8sNsProjects(clusterId.value) })
+  if (error.value) rows.value = []
 }
 
 async function save(row) {
@@ -77,11 +83,13 @@ async function autoFill() {
 }
 
 onMounted(async () => {
-  try {
+  const ok = await run(async () => {
     clusters.value = await listK8sClusters()
     projects.value = await listProjects()
-    if (clusters.value.length) { clusterId.value = clusters.value[0].id; load() }
-  } catch (e) { ElMessage.error('加载失败') }
+    return true
+  })
+  if (!ok) return
+  if (clusters.value.length) { clusterId.value = clusters.value[0].id; load() }
 })
 </script>
 

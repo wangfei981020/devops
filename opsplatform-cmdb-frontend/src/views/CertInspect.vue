@@ -5,6 +5,14 @@
       <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </div>
 
+    <!-- 口径说明：本页把三类对象拉平在一起统计，总览的「线上证书 30 天内到期」只数其中的
+         线上证书一类，两个数不相等是正常的。不写出来就会被当成数据错误（CMDB-015）。 -->
+    <div class="muted" style="margin-bottom:10px; font-size:12px">
+      本页统计 <b>域名注册到期 + 线上实测证书 + ACME 签发证书</b> 三类；
+      总览页的「线上证书 30 天内到期」只统计其中的<b>线上证书</b>一类，两者数量不同属正常。
+      分类口径：已过期 = 剩余 &lt; 0 天，快到期 = 剩余 0~30 天，二者互斥。
+    </div>
+
     <el-card shadow="never" style="margin-bottom:12px">
       <div class="filter">
         <el-select v-model="kindFilter" size="small" style="width:130px">
@@ -17,7 +25,8 @@
           <el-option v-for="d in domainOptions" :key="d" :label="d" :value="d" />
         </el-select>
         <el-radio-group v-model="statusFilter" size="small">
-          <el-radio-button v-for="s in statusTabs" :key="s.v" :value="s.v">{{ s.l }}（{{ counts[s.v] }}）</el-radio-button>
+          <!-- 计数在加载失败时给 —，不给 0：0 是"确实没有"的断言（CMDB-013） -->
+          <el-radio-button v-for="s in statusTabs" :key="s.v" :value="s.v">{{ s.l }}（{{ error ? '—' : counts[s.v] }}）</el-radio-button>
         </el-radio-group>
         <el-input v-model="keyword" placeholder="搜索域名" clearable :prefix-icon="Search" style="width:200px; margin-left:auto" />
         <el-button :icon="sortAsc ? Sort : Sort" @click="sortAsc = !sortAsc">
@@ -27,7 +36,8 @@
     </el-card>
 
     <el-card shadow="never">
-      <el-table :data="paged" size="small" v-loading="loading">
+      <LoadError :error="error" @retry="load" />
+      <el-table v-if="!error" :data="paged" size="small" v-loading="loading">
         <el-table-column label="完整域名" min-width="220"><template #default="{ row }"><span class="mono">{{ row.fqdn }}</span></template></el-table-column>
         <el-table-column prop="domain" label="所属主域名" min-width="160" />
         <el-table-column label="域名状态" width="130"><template #default="{ row }">
@@ -61,7 +71,7 @@
           </div>
         </template></el-table-column>
       </el-table>
-      <el-pagination v-model:current-page="page" v-model:page-size="size" :page-sizes="[20,50,100,200]"
+      <el-pagination v-if="!error" v-model:current-page="page" v-model:page-size="size" :page-sizes="[20,50,100,200]"
         :total="filtered.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
     </el-card>
 
@@ -81,6 +91,10 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Search, Sort, Hide, View, Link } from '@element-plus/icons-vue'
 import { listCertInspect, recordCertIgnore } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { useLoadState } from '../composables/useLoadState'
+import LoadError from '../components/LoadError.vue'
+
+const { loading, error, run } = useLoadState()
 
 const app = useAppStore()
 function chip(c) { return c ? { color: c, borderColor: c + '66', background: c + '14' } : {} }
@@ -103,7 +117,7 @@ const statusTabs = [
   { v: 'failed', l: '检测失败' }, { v: 'ignored', l: '无需证书' }, { v: 'ok', l: '正常' }, { v: 'unknown', l: '未检测' },
 ]
 
-const rows = ref([]), loading = ref(false)
+const rows = ref([])
 const statusFilter = ref('all'), kindFilter = ref('all'), keyword = ref(''), sortAsc = ref(true)
 const domainFilter = ref(null)
 const domainOptions = computed(() => [...new Set(rows.value.map((r) => r.domain).filter(Boolean))].sort())
@@ -111,12 +125,16 @@ const page = ref(1), size = ref(50)
 const igDlg = ref(false), igRow = ref(null), igReason = ref('')
 
 function daysTo(d) { return Math.ceil((new Date(d) - Date.now()) / 86400000) }
+// 分类定义（与后端 dashboard.go 逐字对齐，CMDB-015）：
+//   已过期 = days < 0        快到期 = 0 <= days <= 30       正常 = days > 30
+// 三者互斥。此前这里写的是 d < 30、后端写的是 SQL 秒级比较，边界项两边归类不同，
+// 于是总览显示 158、本页显示 162，同一时刻同一指标对不上。
 function statusOf(r) {
   if (r.ignored) return 'ignored'
   if (!r.expiry_at) return r.check_msg ? 'failed' : 'unknown'
   const d = daysTo(r.expiry_at)
   if (d < 0) return 'expired'
-  if (d < 30) return 'expiring'
+  if (d <= 30) return 'expiring'
   return 'ok'
 }
 const enriched = computed(() => rows.value.map((r) => {
@@ -153,8 +171,8 @@ const filtered = computed(() => {
 const paged = computed(() => { const s = (page.value - 1) * size.value; return filtered.value.slice(s, s + size.value) })
 
 async function load() {
-  loading.value = true
-  try { rows.value = await listCertInspect() } catch (e) { rows.value = [] } finally { loading.value = false }
+  await run(async () => { rows.value = await listCertInspect() })
+  if (error.value) rows.value = []
 }
 function openIgnore(row) { igRow.value = row; igReason.value = ''; igDlg.value = true }
 async function confirmIgnore() {

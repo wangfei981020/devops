@@ -78,9 +78,9 @@
                可信程度差很多。 -->
           <div class="filters" style="margin-bottom:10px">
             <el-radio-group v-model="exposeOnly" size="small" @change="load">
-              <el-radio-button label="">全部</el-radio-button>
-              <el-radio-button label="external">只看外网</el-radio-button>
-              <el-radio-button label="risky">只看有风险</el-radio-button>
+              <el-radio-button value="">全部</el-radio-button>
+              <el-radio-button value="external">只看外网</el-radio-button>
+              <el-radio-button value="risky">只看有风险</el-radio-button>
             </el-radio-group>
             <span v-if="exposeSummary" class="muted">
               共 {{ exposeSummary.total }} · 外网 {{ exposeSummary.external }} · 内网 {{ exposeSummary.internal }}

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"opsplatform-cmdb-backend/logx"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -30,6 +32,11 @@ type healthFinding struct {
 	Key string `json:"key,omitempty"`
 }
 
+// healthFail 由各 check 项在查询失败时调用，把错误上报给总入口。
+// 体检的输出是「没问题」这种断言，查询失败却当成「没查到问题」是最糟的失效模式，
+// 所以任何一项查不成，整个体检就不出结论（CMDB-013）。
+type healthFail func(item string, err error)
+
 // ClusterHealth GET /api/k8s/health?cluster_id=
 func (h *K8sResourceHandler) ClusterHealth(c *gin.Context) {
 	cid := c.Query("cluster_id")
@@ -37,14 +44,30 @@ func (h *K8sResourceHandler) ClusterHealth(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 必填"})
 		return
 	}
+	var firstErr error
+	var firstItem string
+	fail := func(item string, err error) {
+		if firstErr == nil {
+			firstErr, firstItem = err, item
+		}
+		logx.J("cluster_health", "check_fail", map[string]any{"cluster_id": cid, "item": item, "err": err.Error()})
+	}
 	fs := []healthFinding{}
-	fs = append(fs, h.checkDataFreshness(cid)...)
+	fs = append(fs, h.checkDataFreshness(cid, fail)...)
 	fs = append(fs, h.checkNodeDisk(cid)...)
-	fs = append(fs, h.checkNodes(cid)...)
-	fs = append(fs, h.checkPods(cid)...)
-	fs = append(fs, h.checkWorkloads(cid)...)
-	fs = append(fs, h.checkOrphans(cid)...)
-	fs = append(fs, h.checkImages(cid)...)
+	fs = append(fs, h.checkNodes(cid, fail)...)
+	fs = append(fs, h.checkPods(cid, fail)...)
+	fs = append(fs, h.checkWorkloads(cid, fail)...)
+	fs = append(fs, h.checkOrphans(cid, fail)...)
+	fs = append(fs, h.checkImages(cid, fail)...)
+
+	if firstErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "集群体检未完成(" + firstItem + "): " + firstErr.Error() +
+				"；本次未得出任何结论，请勿据此认为集群无问题",
+		})
+		return
+	}
 
 	sort.SliceStable(fs, func(i, j int) bool {
 		return healthRank(fs[i].Severity) < healthRank(fs[j].Severity)
@@ -57,12 +80,17 @@ func (h *K8sResourceHandler) ClusterHealth(c *gin.Context) {
 }
 
 // checkDataFreshness 放在最前面：数据本身不新鲜的话，后面所有结论都不可信。
-func (h *K8sResourceHandler) checkDataFreshness(cid string) []healthFinding {
+func (h *K8sResourceHandler) checkDataFreshness(cid string, fail healthFail) []healthFinding {
 	var failed, stale int
-	_ = h.DB.QueryRow(`SELECT
-		SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END),
-		SUM(CASE WHEN last_sync IS NULL OR last_sync < NOW() - INTERVAL ? SECOND THEN 1 ELSE 0 END)
-		FROM k8s_sync_state WHERE cluster_id=?`, staleFactor*120, cid).Scan(&failed, &stale)
+	// COALESCE 不能省：集群没有 sync_state 行时 SUM 返回 NULL，Scan 会报错，
+	// 那属于"没数据"而不是"查询失败"，不该触发体检中止。
+	if err := h.DB.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN last_sync IS NULL OR last_sync < NOW() - INTERVAL ? SECOND THEN 1 ELSE 0 END),0)
+		FROM k8s_sync_state WHERE cluster_id=?`, staleFactor*120, cid).Scan(&failed, &stale); err != nil {
+		fail("data_freshness", err)
+		return nil
+	}
 	out := []healthFinding{}
 	if failed > 0 {
 		out = append(out, healthFinding{
@@ -94,7 +122,19 @@ const (
 func (h *K8sResourceHandler) checkNodeDisk(cid string) []healthFinding {
 	usage, err := h.nodeDiskUsage(cid)
 	if err != nil || len(usage) == 0 {
-		return nil // 没有 Prometheus 数据源时静默跳过，不制造假阴性之外的噪声
+		// 不能静默返回 nil：那样体检报告看上去像"磁盘检查过了、没问题"。
+		// 磁盘满是能直接打垮整个平台的故障（CMDB-012），"没检查"必须说出来。
+		reason := "该集群未配置 Prometheus 观测数据源"
+		if err != nil {
+			reason = "查询观测数据源失败：" + err.Error()
+			logx.J("cluster_health", "node_disk_skip", map[string]any{"cluster_id": cid, "err": err.Error()})
+		}
+		return []healthFinding{{
+			Severity: "info", Category: "数据可信度",
+			Key: "node_disk_unknown", Title: "节点磁盘水位未检查",
+			Detail: reason + "；本次体检不覆盖磁盘水位，不代表磁盘没问题",
+			Action: "在「接入管理 → 观测数据源」给该集群绑定 Prometheus 后重跑体检",
+		}}
 	}
 	var warn, crit []string
 	for node, pct := range usage {
@@ -157,14 +197,17 @@ func (h *K8sResourceHandler) nodeDiskUsage(cid string) (map[string]float64, erro
 	return out, nil
 }
 
-func (h *K8sResourceHandler) checkNodes(cid string) []healthFinding {
+func (h *K8sResourceHandler) checkNodes(cid string, fail healthFail) []healthFinding {
 	out := []healthFinding{}
 	var stuck, notReady, pressure int
-	_ = h.DB.QueryRow(`SELECT
-		SUM(CASE WHEN stuck=1 THEN 1 ELSE 0 END),
-		SUM(CASE WHEN ready_status<>'Ready' THEN 1 ELSE 0 END),
-		SUM(CASE WHEN COALESCE(conditions,'')<>'' THEN 1 ELSE 0 END)
-		FROM k8s_nodes WHERE cluster_id=?`, cid).Scan(&stuck, &notReady, &pressure)
+	if err := h.DB.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN stuck=1 THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN ready_status<>'Ready' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN COALESCE(conditions,'')<>'' THEN 1 ELSE 0 END),0)
+		FROM k8s_nodes WHERE cluster_id=?`, cid).Scan(&stuck, &notReady, &pressure); err != nil {
+		fail("nodes", err)
+		return nil
+	}
 	if stuck > 0 {
 		out = append(out, healthFinding{Severity: "critical", Category: "节点", Count: stuck,
 			Key: "node_stuck", Title: "节点卡死/失联", Detail: "Ready 心跳长时间未更新，其上 Pod 可能已不可用",
@@ -181,7 +224,10 @@ func (h *K8sResourceHandler) checkNodes(cid string) []healthFinding {
 	}
 	// 节点版本漂移：同集群不同 kubelet 版本，升级窗口没拉齐
 	var versions int
-	_ = h.DB.QueryRow(`SELECT COUNT(DISTINCT kubelet_version) FROM k8s_nodes WHERE cluster_id=?`, cid).Scan(&versions)
+	if err := h.DB.QueryRow(`SELECT COUNT(DISTINCT kubelet_version) FROM k8s_nodes WHERE cluster_id=?`, cid).Scan(&versions); err != nil {
+		fail("node_kubelet_drift", err)
+		return out
+	}
 	if versions > 1 {
 		out = append(out, healthFinding{Severity: "info", Category: "节点", Count: versions,
 			Key: "node_kubelet_drift", Title: "节点 kubelet 版本不一致", Detail: "存在版本漂移，建议统一升级窗口",
@@ -190,15 +236,18 @@ func (h *K8sResourceHandler) checkNodes(cid string) []healthFinding {
 	return out
 }
 
-func (h *K8sResourceHandler) checkPods(cid string) []healthFinding {
+func (h *K8sResourceHandler) checkPods(cid string, fail healthFail) []healthFinding {
 	out := []healthFinding{}
 	var failed, pending, oom, highRestart int
-	_ = h.DB.QueryRow(`SELECT
-		SUM(CASE WHEN phase='Failed' THEN 1 ELSE 0 END),
-		SUM(CASE WHEN phase='Pending' THEN 1 ELSE 0 END),
-		SUM(CASE WHEN reason='OOMKilled' THEN 1 ELSE 0 END),
-		SUM(CASE WHEN restarts>100 THEN 1 ELSE 0 END)
-		FROM k8s_pods WHERE cluster_id=?`, cid).Scan(&failed, &pending, &oom, &highRestart)
+	if err := h.DB.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN phase='Failed' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN phase='Pending' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN reason='OOMKilled' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN restarts>100 THEN 1 ELSE 0 END),0)
+		FROM k8s_pods WHERE cluster_id=?`, cid).Scan(&failed, &pending, &oom, &highRestart); err != nil {
+		fail("pods", err)
+		return nil
+	}
 	if highRestart > 0 {
 		out = append(out, healthFinding{Severity: "critical", Category: "工作负载", Count: highRestart,
 			Key: "pod_high_restart", Title: "Pod 重启次数异常高(>100)", Detail: "持续 CrashLoop 的服务，且往往长期无人发现",
@@ -219,7 +268,7 @@ func (h *K8sResourceHandler) checkPods(cid string) []healthFinding {
 		// 原因在 k8s_pods.reason 里已经采到了，按原因归类直接给出来。
 		f := healthFinding{Severity: "warning", Category: "工作负载", Count: pending,
 			Key: "pod_pending", Title: "存在 Pending 的 Pod", Action: "pod_events 看具体某个 Pod 的完整事件"}
-		if reasons := h.pendingReasons(cid); len(reasons) > 0 {
+		if reasons := h.pendingReasons(cid, fail); len(reasons) > 0 {
 			parts := make([]string, 0, len(reasons))
 			for _, r := range reasons {
 				parts = append(parts, fmt.Sprintf("%s × %d（%s）", r.reason, r.count, explainPendingReason(r.reason)))
@@ -232,8 +281,11 @@ func (h *K8sResourceHandler) checkPods(cid string) []healthFinding {
 	}
 	// BestEffort：节点内存压力下最先被驱逐，控制面组件落在这类里尤其危险
 	var bestEffort int
-	_ = h.DB.QueryRow(`SELECT COUNT(*) FROM k8s_pods
-		WHERE cluster_id=? AND phase='Running' AND cpu_req_m=0 AND mem_req_mi=0`, cid).Scan(&bestEffort)
+	if err := h.DB.QueryRow(`SELECT COUNT(*) FROM k8s_pods
+		WHERE cluster_id=? AND phase='Running' AND cpu_req_m=0 AND mem_req_mi=0`, cid).Scan(&bestEffort); err != nil {
+		fail("pod_besteffort", err)
+		return out
+	}
 	if bestEffort > 0 {
 		out = append(out, healthFinding{Severity: "warning", Category: "工作负载", Count: bestEffort,
 			Key: "pod_besteffort", Title: "BestEffort Pod（未配 request/limit）",
@@ -250,11 +302,12 @@ type pendingReason struct {
 
 // pendingReasons 把 Pending/启动失败的 Pod 按原因归类。
 // 「有 12 个 Pod Pending」这种结论没法行动，「10 个卡在缺 ConfigMap/Secret、2 个资源不足」才有用。
-func (h *K8sResourceHandler) pendingReasons(cid string) []pendingReason {
+func (h *K8sResourceHandler) pendingReasons(cid string, fail healthFail) []pendingReason {
 	rows, err := h.DB.Query(`SELECT COALESCE(reason,''), COUNT(*) FROM k8s_pods
 		WHERE cluster_id=? AND phase='Pending' AND COALESCE(reason,'')<>''
 		GROUP BY reason ORDER BY COUNT(*) DESC`, cid)
 	if err != nil {
+		fail("pending_reasons", err)
 		return nil
 	}
 	defer rows.Close()
@@ -289,13 +342,16 @@ func explainPendingReason(reason string) string {
 	}
 }
 
-func (h *K8sResourceHandler) checkWorkloads(cid string) []healthFinding {
+func (h *K8sResourceHandler) checkWorkloads(cid string, fail healthFail) []healthFinding {
 	out := []healthFinding{}
 	var degraded, scaledZero int
-	_ = h.DB.QueryRow(`SELECT
-		SUM(CASE WHEN replicas_desired>0 AND replicas_ready<replicas_desired THEN 1 ELSE 0 END),
-		SUM(CASE WHEN replicas_desired=0 AND kind IN ('Deployment','StatefulSet') THEN 1 ELSE 0 END)
-		FROM k8s_workloads WHERE cluster_id=?`, cid).Scan(&degraded, &scaledZero)
+	if err := h.DB.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN replicas_desired>0 AND replicas_ready<replicas_desired THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN replicas_desired=0 AND kind IN ('Deployment','StatefulSet') THEN 1 ELSE 0 END),0)
+		FROM k8s_workloads WHERE cluster_id=?`, cid).Scan(&degraded, &scaledZero); err != nil {
+		fail("workloads", err)
+		return nil
+	}
 	if degraded > 0 {
 		out = append(out, healthFinding{Severity: "critical", Category: "工作负载", Count: degraded,
 			Key: "workload_replica_gap", Title: "工作负载副本未达期望", Action: "list_workloads 看 replicas_ready/replicas_desired"})
@@ -308,18 +364,21 @@ func (h *K8sResourceHandler) checkWorkloads(cid string) []healthFinding {
 	return out
 }
 
-func (h *K8sResourceHandler) checkOrphans(cid string) []healthFinding {
+func (h *K8sResourceHandler) checkOrphans(cid string, fail healthFail) []healthFinding {
 	out := []healthFinding{}
-	if n := h.countOrphanHPAs(cid); n > 0 {
+	if n := h.countOrphanHPAs(cid, fail); n > 0 {
 		out = append(out, healthFinding{Severity: "warning", Category: "治理", Count: n,
 			Key: "orphan_hpa", Title: "HPA 指向已不存在的工作负载",
 			Detail: "controller 每 15 秒重试一次并报错，长期累积成海量噪声事件",
 			Action: "list_orphans kind=hpa 拿到清单和删除命令"})
 	}
 	var orphanPVC int
-	_ = h.DB.QueryRow(`SELECT COUNT(*) FROM k8s_pvcs p
+	if err := h.DB.QueryRow(`SELECT COUNT(*) FROM k8s_pvcs p
 		LEFT JOIN k8s_pod_volumes v ON v.cluster_id=p.cluster_id AND v.namespace=p.namespace AND v.pvc_name=p.name
-		WHERE p.cluster_id=? AND v.id IS NULL`, cid).Scan(&orphanPVC)
+		WHERE p.cluster_id=? AND v.id IS NULL`, cid).Scan(&orphanPVC); err != nil {
+		fail("orphan_pvc", err)
+		return out
+	}
 	if orphanPVC > 0 {
 		out = append(out, healthFinding{Severity: "warning", Category: "成本", Count: orphanPVC,
 			Key: "orphan_pvc", Title: "PVC 无人挂载但仍在计费",
@@ -329,20 +388,26 @@ func (h *K8sResourceHandler) checkOrphans(cid string) []healthFinding {
 	return out
 }
 
-func (h *K8sResourceHandler) countOrphanHPAs(cid string) int {
+func (h *K8sResourceHandler) countOrphanHPAs(cid string, fail healthFail) int {
 	var n int
-	_ = h.DB.QueryRow(`SELECT COUNT(*) FROM k8s_hpas hpa
+	if err := h.DB.QueryRow(`SELECT COUNT(*) FROM k8s_hpas hpa
 		LEFT JOIN k8s_workloads w ON w.cluster_id=hpa.cluster_id AND w.namespace=hpa.namespace
 			AND w.name=hpa.target_name AND w.kind=hpa.target_kind
-		WHERE hpa.cluster_id=? AND w.id IS NULL`, cid).Scan(&n)
+		WHERE hpa.cluster_id=? AND w.id IS NULL`, cid).Scan(&n); err != nil {
+		fail("orphan_hpa", err)
+		return 0
+	}
 	return n
 }
 
-func (h *K8sResourceHandler) checkImages(cid string) []healthFinding {
+func (h *K8sResourceHandler) checkImages(cid string, fail healthFail) []healthFinding {
 	var mutable int
-	_ = h.DB.QueryRow(`SELECT COUNT(*) FROM k8s_workloads
+	if err := h.DB.QueryRow(`SELECT COUNT(*) FROM k8s_workloads
 		WHERE cluster_id=? AND (image_tag IN ('latest','master','main','dev','stable','') OR image_tag LIKE '%SNAPSHOT%')`,
-		cid).Scan(&mutable)
+		cid).Scan(&mutable); err != nil {
+		fail("mutable_image_tag", err)
+		return nil
+	}
 	if mutable > 0 {
 		return []healthFinding{{Severity: "info", Category: "治理", Count: mutable,
 			Key: "workload_mutable_tag", Title: "使用可变镜像 tag（latest/SNAPSHOT 等）",

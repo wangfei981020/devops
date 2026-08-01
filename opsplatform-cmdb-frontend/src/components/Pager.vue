@@ -1,7 +1,7 @@
 <template>
   <div class="pager" v-if="total > pageSize">
     <el-pagination layout="total, sizes, prev, pager, next" :total="total"
-      :current-page="page" :page-size="pageSize" :page-sizes="[20,50,100]" small background
+      :current-page="page" :page-size="pageSize" :page-sizes="[20,50,100]" size="small" background
       @update:current-page="$emit('update:page', $event)" @update:page-size="$emit('update:pageSize', $event)" />
   </div>
 </template>

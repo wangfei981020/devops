@@ -223,13 +223,13 @@
               </div>
             </template></el-table-column>
           </el-table>
-          <el-pagination v-if="openGroups.includes(g.key) && g.count > innerSize" small background
+          <el-pagination v-if="openGroups.includes(g.key) && g.count > innerSize" size="small" background
             :current-page="innerPage[g.key] || 1" :page-size="innerSize" :total="g.count"
             layout="total, prev, pager, next" style="margin-top:8px; justify-content:flex-end"
             @current-change="(p) => setInnerPage(g.key, p)" />
         </el-collapse-item>
       </el-collapse>
-      <el-empty v-if="!moduleGroups.length" description="没有匹配的业务域名" :image-size="60" />
+      <el-empty v-if="!loadErr && !moduleGroups.length" description="没有匹配的业务域名" :image-size="60" />
       <div style="display:flex;align-items:center;margin-top:12px;justify-content:flex-end;gap:10px">
         <span class="muted" style="font-size:13px">共 {{ moduleGroups.length }} 个模块</span>
         <el-pagination v-model:current-page="groupPage" v-model:page-size="groupSize" :page-sizes="[10,20,50]"
@@ -271,6 +271,7 @@
       </div>
     </el-card>
     <el-card shadow="never">
+      <LoadError :error="loadErr" @retry="load" />
       <el-table :data="domPaged" size="small" row-key="ci_id" v-loading="loading" @sort-change="onDomSort" @selection-change="(v) => domSelected = v">
         <el-table-column type="selection" width="40" />
         <el-table-column prop="name" label="主域名" min-width="220" sortable="custom"><template #default="{ row }">
@@ -420,7 +421,7 @@
         </template></el-table-column>
       </el-table>
       <el-pagination v-model:current-page="renewLog.page" :page-size="renewLog.size" :total="renewLog.total"
-        layout="total, prev, pager, next" small background style="margin-top:10px; justify-content:flex-end"
+        layout="total, prev, pager, next" size="small" background style="margin-top:10px; justify-content:flex-end"
         @current-change="loadRenewLog" />
     </el-dialog>
 
@@ -548,8 +549,8 @@
     <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="aDlg" title="批量分配" width="660px">
       <template v-if="!aResult">
         <el-radio-group v-model="aMode" size="small" style="margin-bottom:12px">
-          <el-radio-button label="paste">两列粘贴（服务名 + 域名）</el-radio-button>
-          <el-radio-button label="blocks">分模块填</el-radio-button>
+          <el-radio-button value="paste">两列粘贴（服务名 + 域名）</el-radio-button>
+          <el-radio-button value="blocks">分模块填</el-radio-button>
         </el-radio-group>
         <div style="display:flex;gap:20px;align-items:center;margin-bottom:10px">
           <div>项目
@@ -672,6 +673,8 @@ import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgno
   syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains, bulkIgnoreDomains,
   listOriginRules, upsertOriginRule, deleteOriginRule, bulkDomainStatus,
   godaddyDetail, renewDomain, setAutoRenew, listRenewals, autoLinkDomainModules } from '../api/cmdb'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
@@ -762,6 +765,7 @@ async function doRenew() {
   } finally { renewDlg.renewBusy = false }
 }
 const rows = ref([]), allDomains = ref([]), registrars = ref([]), loading = ref(false)
+const loadErr = ref('')
 const checking = ref({}), syncingAll = ref(false)
 const dlg = ref(false), editing = ref(false), form = ref({})
 // 编辑表单：项目多选(数组) ↔ form.project(逗号字符串)
@@ -970,11 +974,15 @@ async function refreshAllDom() {
 async function load() {
   loading.value = true
   try {
+    loadErr.value = ''
     rows.value = await listAllRecords(statusView.value)
     allDomains.value = await listDomains()
     registrars.value = await listRegistrars()
     app.loadBasics()
-  } catch (e) {} finally { loading.value = false }
+  } catch (e) {
+    loadErr.value = normalizeError(e).message
+    rows.value = []; allDomains.value = []
+  } finally { loading.value = false }
 }
 
 function openAdd() {

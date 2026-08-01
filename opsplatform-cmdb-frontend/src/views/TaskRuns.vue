@@ -30,6 +30,7 @@
         <span class="muted">共 {{ total }} 次 · 失败/部分 {{ badCount }}</span>
       </div>
 
+      <LoadError :error="loadErr" @retry="load" />
       <el-table :data="rows" size="small" v-loading="loading" @row-click="openDetail" style="cursor:pointer">
         <el-table-column label="结果" width="120"><template #default="{ row }">
           <el-tag :type="stType(row.status)" size="small" :effect="row.status==='running'?'dark':'light'">{{ stLabel(row.status) }}</el-tag>
@@ -121,10 +122,13 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh, VideoPlay, RefreshRight, CircleClose, View } from '@element-plus/icons-vue'
 import { listTaskRuns, listScheduledTasks, runScheduledTask, retryTaskRunFailures, cancelTaskRun } from '../api/cmdb'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
 const tasks = ref([]), rows = ref([]), total = ref(0), loading = ref(false)
+const loadErr = ref('')
 const q = ref({ task_key: '', status: '', days: 7, limit: 20 })
 const page = ref(1)
 const dlg = ref(false), cur = ref({}), rerunning = ref(false), retrying = ref(false)
@@ -191,7 +195,7 @@ async function retryFailures() {
 }
 
 onMounted(async () => {
-  try { tasks.value = await listScheduledTasks() } catch (e) {}
+  try { tasks.value = await listScheduledTasks() } catch (e) { loadErr.value = normalizeError(e).message }
   load()
   // 每秒推进"已耗时"；有运行中任务时每 3 秒轮询一次进度
   timer = setInterval(() => {

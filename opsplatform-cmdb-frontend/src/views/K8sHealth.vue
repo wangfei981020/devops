@@ -22,7 +22,8 @@
     <el-card shadow="never">
       <el-tabs v-model="tab" @tab-change="onTab">
         <el-tab-pane :label="`体检总览${sumLabel}`" name="health">
-          <div class="sev-bar" v-if="summary">
+          <LoadError :error="errHealth" title="体检未完成" @retry="loadHealth" />
+          <div class="sev-bar" v-if="summary && !errHealth">
             <span class="chip critical">critical {{ summary.critical || 0 }}</span>
             <span class="chip warning">warning {{ summary.warning || 0 }}</span>
             <span class="chip info">info {{ summary.info || 0 }}</span>
@@ -40,13 +41,15 @@
               <el-button v-if="row.key" link type="primary" size="small" @click="drill(row)">查看</el-button>
             </template></el-table-column>
           </el-table>
-          <el-empty v-if="!loading && !findings.length" description="本次体检未发现异常" :image-size="60" />
+          <!-- 「未发现异常」只在体检真的跑完时才能说 -->
+          <el-empty v-if="!loading && !errHealth && !findings.length" description="本次体检未发现异常" :image-size="60" />
         </el-tab-pane>
 
         <el-tab-pane label="配置审计" name="config">
           <!-- capability 必须显示：ConfigMap 是确定性判定，Secret 取决于该集群有没有开名录，
                两者可信度不同。不写出来的话「没报问题」会被误读成「没有问题」。 -->
-          <div v-if="cfgCap" class="cap">
+          <LoadError :error="errConfig" title="配置审计未完成" @retry="loadConfig" />
+          <div v-if="cfgCap && !errConfig" class="cap">
             <div><b>ConfigMap</b>：{{ cfgCap.configmap }}</div>
             <div><b>Secret</b>：{{ cfgCap.secret }}</div>
           </div>
@@ -65,17 +68,18 @@
             <el-table-column prop="basis" label="判定依据" min-width="220" show-overflow-tooltip />
             <el-table-column prop="action" label="处置建议" min-width="220" show-overflow-tooltip />
           </el-table>
-          <el-empty v-if="!loading && !cfgFindings.length" :image-size="60"
+          <el-empty v-if="!loading && !errConfig && !cfgFindings.length" :image-size="60"
             description="没有发现缺失的配置引用（注意上方 Secret 判定能力说明）" />
         </el-tab-pane>
 
         <el-tab-pane label="安全审计" name="security">
+          <LoadError :error="errSecurity" title="安全审计未完成" @retry="loadSecurity" />
           <div class="filters">
             <el-checkbox v-model="includePlatform" size="small" @change="loadSecurity">
               包含平台组件（CNI/CSI/监控等，特权是设计使然）
             </el-checkbox>
             <span v-if="secHidden" class="muted">已隐藏 {{ secHidden }} 个平台组件</span>
-            <span v-if="secSummary" class="muted">
+            <span v-if="secSummary && !errSecurity" class="muted">
               critical {{ secSummary.critical || 0 }} · high {{ secSummary.high || 0 }} ·
               medium {{ secSummary.medium || 0 }} · info {{ secSummary.info || 0 }}
             </span>
@@ -96,7 +100,7 @@
               <span v-else class="muted">—</span>
             </template></el-table-column>
           </el-table>
-          <el-empty v-if="!loading && !secFindings.length" :image-size="60"
+          <el-empty v-if="!loading && !errSecurity && !secFindings.length" :image-size="60"
             description="未发现有风险的安全上下文配置" />
         </el-tab-pane>
       </el-tabs>
@@ -129,6 +133,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { listK8sClusters, clusterHealth, configAudit, securityAudit, k8sSyncState, healthDetail } from '../api/cmdb'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -136,6 +142,8 @@ const valid = ['health', 'config', 'security']
 const tab = ref(valid.includes(route.query.tab) ? route.query.tab : 'health')
 
 const loading = ref(false)
+// 三个 tab 各自记自己的失败：配置审计挂了不该让体检总览也显示报错，反之亦然
+const errHealth = ref(''); const errConfig = ref(''); const errSecurity = ref('')
 const clusters = ref([]); const cid = ref(null)
 const findings = ref([]); const summary = ref(null); const fresh = ref(null)
 const cfgFindings = ref([]); const cfgCap = ref(null)
@@ -183,7 +191,15 @@ function sevType(s) {
 }
 
 async function loadClusters() {
-  clusters.value = await listK8sClusters()
+  try {
+    clusters.value = await listK8sClusters()
+  } catch (e) {
+    // 集群列表取不到 => 后面每个 tab 都没法体检，直接把错误摊开说
+    const msg = normalizeError(e).message
+    errHealth.value = errConfig.value = errSecurity.value = '加载集群列表失败：' + msg
+    clusters.value = []
+    return
+  }
   if (!cid.value && clusters.value.length) {
     const q = Number(route.query.cluster_id)
     cid.value = clusters.value.some((c) => c.id === q) ? q : clusters.value[0].id
@@ -191,8 +207,15 @@ async function loadClusters() {
 }
 
 async function loadHealth() {
-  if (!cid.value) return
+  // 没有集群可选（多半是集群列表就没加载出来）时，不能什么都不做——
+  // 那样页面会停在「本次体检未发现异常」的空态上，等于报告"没问题"（CMDB-013）
+  if (!cid.value) {
+    findings.value = []; summary.value = null
+    if (!errHealth.value) errHealth.value = '没有可体检的集群：集群列表为空或未加载成功'
+    return
+  }
   loading.value = true
+  errHealth.value = ''
   try {
     const r = await clusterHealth({ cluster_id: cid.value })
     findings.value = r.findings || []
@@ -203,23 +226,40 @@ async function loadHealth() {
       const s = await k8sSyncState({ cluster_id: cid.value })
       fresh.value = (s.clusters || []).find((x) => x.cluster_id === cid.value) || null
     } catch (e) { fresh.value = null }
-  } catch (e) { ElMessage.error('体检失败') } finally { loading.value = false }
+  } catch (e) {
+    // 体检失败必须清空结论：留着上一次的 findings 会让人以为这就是本次结果
+    errHealth.value = normalizeError(e).message
+    findings.value = []; summary.value = null
+  } finally { loading.value = false }
 }
 
 async function loadConfig() {
-  if (!cid.value) return
+  if (!cid.value) {
+    cfgFindings.value = []; cfgCap.value = null
+    if (!errConfig.value) errConfig.value = '没有可审计的集群：集群列表为空或未加载成功'
+    return
+  }
   loading.value = true
+  errConfig.value = ''
   try {
     const r = await configAudit({ cluster_id: cid.value })
     cfgFindings.value = r.findings || []
     cfgCap.value = r.capability || null
     done.config = true
-  } catch (e) { ElMessage.error('配置审计失败') } finally { loading.value = false }
+  } catch (e) {
+    errConfig.value = normalizeError(e).message
+    cfgFindings.value = []; cfgCap.value = null
+  } finally { loading.value = false }
 }
 
 async function loadSecurity() {
-  if (!cid.value) return
+  if (!cid.value) {
+    secFindings.value = []; secSummary.value = null
+    if (!errSecurity.value) errSecurity.value = '没有可审计的集群：集群列表为空或未加载成功'
+    return
+  }
   loading.value = true
+  errSecurity.value = ''
   try {
     const r = await securityAudit({
       cluster_id: cid.value,
@@ -229,7 +269,10 @@ async function loadSecurity() {
     secSummary.value = r.summary || null
     secHidden.value = r.platform_hidden || 0
     done.security = true
-  } catch (e) { ElMessage.error('安全审计失败') } finally { loading.value = false }
+  } catch (e) {
+    errSecurity.value = normalizeError(e).message
+    secFindings.value = []; secSummary.value = null
+  } finally { loading.value = false }
 }
 
 function loadTab(name) {
