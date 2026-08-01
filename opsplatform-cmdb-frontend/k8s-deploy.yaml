@@ -38,7 +38,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: localhost:8070/opsplatform/opsplatform-cmdb-frontend:v174
+          image: localhost:8070/opsplatform/opsplatform-cmdb-frontend:v175
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80

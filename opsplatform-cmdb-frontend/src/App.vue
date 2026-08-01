@@ -53,7 +53,7 @@
 <script setup>
 import { shallowRef, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Odometer, Connection, Lock, Share, DataAnalysis, Grid, Setting, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets, Cloudy, Location, Sort, TrendCharts } from '@element-plus/icons-vue'
+import { Odometer, Connection, Lock, Share, DataAnalysis, Grid, Operation, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets, Cloudy, Location, Sort, TrendCharts } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
@@ -100,7 +100,11 @@ const menus = shallowRef([
   { type: 'item', path: '/k8s-usage', label: '资源使用率', icon: TrendCharts },
   { type: 'item', path: '/cost', label: '云成本', icon: Coin },
   { type: 'item', path: '/dashboard', label: '展示台', icon: DataAnalysis },
-  { type: 'group', label: '系统管理', icon: Setting, children: [
+  // ⚠️ 这里原来用 Setting（齿轮）。它的 SVG path 长 1403 字符，是全站 37 个菜单图标里
+  // 唯一的断层离群值（中位数 185，第二名 443），在部分 Windows Chrome 上**渲染不出来**——
+  // DOM、尺寸(24x18)、fill、opacity 全部正常，强制 fill:red 也依然不可见。
+  // 换成路径简单的 Operation。新增菜单图标时注意别再挑这种超复杂路径的。
+  { type: 'group', label: '系统管理', icon: Operation, children: [
     { path: '/basic', label: '基础配置', icon: Tools },
     { path: '/integrations', label: '接入管理', icon: Cloudy },
     { path: '/models', label: '模型管理', icon: Grid },
