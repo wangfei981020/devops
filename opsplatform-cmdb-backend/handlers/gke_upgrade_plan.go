@@ -9,6 +9,7 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -34,6 +35,84 @@ func (h *GKEUpgradePlanHandler) Register(r *gin.RouterGroup) {
 	r.GET("/gke/upgrade/plan", h.Plan)
 	r.GET("/gke/upgrade/progress", h.Progress)
 	r.GET("/gke/available-versions", h.AvailableVersions)
+	r.POST("/gke/upgrade/baseline", h.SaveBaseline)
+	r.GET("/gke/upgrade/baselines", h.ListBaselines)
+}
+
+// SaveBaseline 把当前基线存成快照。
+//
+// 为什么必须显式存：预案里的基线是每次生成时现算的，升完再生成一次拿到的是升级后的状态，
+// 没有东西可以对比（CMDB-030）。2026-07-31 UAT 升级那次是靠人工把 JSON 落盘到 docs 才保住的。
+func (h *GKEUpgradePlanHandler) SaveBaseline(c *gin.Context) {
+	cid, _ := strconv.Atoi(c.Query("cluster_id"))
+	if cid == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 必填"})
+		return
+	}
+	b := h.baseline(cid)
+	// 没采过 Pod 的基线存下来也没用——比对时两边都是 0，看不出任何东西
+	if !b.PodsCollected {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "该集群尚未成功采集过 Pod，此时的基线无法用于事后比对。请先执行一次采集",
+		})
+		return
+	}
+	payload, err := json.Marshal(b)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "序列化基线失败: " + err.Error()})
+		return
+	}
+	target := strings.TrimSpace(c.Query("target_version"))
+	res, err := h.DB.Exec(`INSERT INTO gke_upgrade_baselines (cluster_id,target_version,taken_at,payload_json)
+		VALUES (?,?,NOW(),?)`, cid, target, string(payload))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存基线失败: " + err.Error()})
+		return
+	}
+	id, _ := res.LastInsertId()
+	logx.J("gke_plan", "baseline_saved", map[string]any{
+		"cluster_id": cid, "id": id, "target": target,
+		"pods": b.Pods, "failed": b.Failed, "pending": b.Pending, "known_bad": len(b.KnownBad),
+	})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "id": id, "taken_at": b.TakenAt, "baseline": b})
+}
+
+// ListBaselines 该集群存过的基线快照，新的在前。
+// 只返回摘要不返回全量 payload——列表页只需要「哪天存的、当时多少 Pod」来选一份做对比。
+func (h *GKEUpgradePlanHandler) ListBaselines(c *gin.Context) {
+	cid, _ := strconv.Atoi(c.Query("cluster_id"))
+	if cid == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 必填"})
+		return
+	}
+	rows, err := h.DB.Query(`SELECT id,target_version,taken_at,payload_json
+		  FROM gke_upgrade_baselines WHERE cluster_id=? ORDER BY taken_at DESC LIMIT 50`, cid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询基线失败: " + err.Error()})
+		return
+	}
+	defer rows.Close()
+	out := []gin.H{}
+	for rows.Next() {
+		var id int64
+		var target, payload string
+		var takenAt sql.NullTime
+		if rows.Scan(&id, &target, &takenAt, &payload) != nil {
+			continue
+		}
+		var b baselineOut
+		_ = json.Unmarshal([]byte(payload), &b)
+		ts := ""
+		if takenAt.Valid {
+			ts = takenAt.Time.Format("2006-01-02 15:04:05")
+		}
+		out = append(out, gin.H{
+			"id": id, "target_version": target, "taken_at": ts,
+			"nodes": b.Nodes, "pods": b.Pods, "running": b.Running,
+			"failed": b.Failed, "pending": b.Pending, "known_bad": len(b.KnownBad),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out, "total": len(out)})
 }
 
 // AvailableVersions 某集群所在区域可选的升级目标版本。
@@ -789,8 +868,11 @@ func (h *GKEUpgradePlanHandler) poolsOfNamespace(cid int, ns string) []string {
 // 把「升级前就坏的」列清楚，事后逐条比对即可。
 func (h *GKEUpgradePlanHandler) baseline(cid int) baselineOut {
 	b := baselineOut{TakenAt: time.Now().Format("2006-01-02 15:04:05")}
-	b.Note = "升级后重新生成一次预案，逐项比对这些数字。" +
-		"下面「升级前已存在的异常」若原样出现，说明与升级无关，不必排查"
+	// ⚠️ 这份数字是**现在**的实时状态，不是快照。升级后重新生成预案拿到的是升级后的状态，
+	// 两次生成之间没有任何东西被留下——所以必须先「保存为基线」再动手（CMDB-030）。
+	b.Note = "⚠️ 这是实时状态，不是快照。升级前请先点「保存为基线」存档，" +
+		"否则升完重新生成预案时拿到的是升级后的数字，没有东西可以比对。" +
+		"下面「升级前已存在的异常」若在升级后原样出现，说明与升级无关，不必排查"
 
 	// 「集群里没有 Pod」和「从没采集过 Pod」在数字上都是 0，但对预案的意义天差地别：
 	// 前者可以拿来做基线，后者说明这份基线根本不能用。和 PDB 的 collected 是同一类问题。
@@ -915,7 +997,8 @@ func consoleSteps(st *clusterUpgradeState, target string, pools []poolPlanOut) [
 			i+1, p.Name, p.NodeCount, why))
 	}
 	steps = append(steps,
-		"⑤ 全部升完后，在 CMDB 重新生成一次本预案，用「升级前基线」逐项比对")
+		"⑤ 全部升完后重新生成预案，与**升级前保存的那份基线快照**逐项比对"+
+			"（注意不是和新生成的基线比——新基线就是升级后的状态，比不出东西）")
 	return steps
 }
 

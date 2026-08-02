@@ -373,6 +373,10 @@
               <div class="plan-card-head">
                 <b>升级前基线快照</b>
                 <span class="muted">{{ plan.baseline.taken_at }}</span>
+                <!-- 这一步是升级前的必做动作：不存快照，升完就没有可比对的东西了 -->
+                <el-button size="small" type="primary" plain style="margin-left:auto"
+                  :loading="savingBaseline" :disabled="!plan.baseline.pods_collected"
+                  @click="saveBaseline">保存为基线</el-button>
               </div>
               <div class="sum-bar" style="margin:0 0 8px">
                 <span class="chip">节点 {{ plan.baseline.nodes }}</span>
@@ -395,6 +399,25 @@
                     <el-table-column prop="restarts" label="重启" width="80" />
                     <el-table-column prop="reason" label="说明" show-overflow-tooltip />
                   </el-table>
+                </el-collapse-item>
+              </el-collapse>
+
+              <!-- 存过的快照列表：升完后要拿哪一份来比对，得看得见 -->
+              <el-collapse v-if="baselines.length" style="margin-top:8px">
+                <el-collapse-item :title="`已保存的基线快照 (${baselines.length})`" name="bl">
+                  <el-table :data="baselines" size="small" border max-height="260">
+                    <el-table-column prop="taken_at" label="保存时刻" width="170" />
+                    <el-table-column prop="target_version" label="当时的目标版本" min-width="180" show-overflow-tooltip />
+                    <el-table-column prop="nodes" label="节点" width="70" />
+                    <el-table-column prop="pods" label="Pod" width="80" />
+                    <el-table-column prop="running" label="Running" width="90" />
+                    <el-table-column prop="failed" label="Failed" width="80" />
+                    <el-table-column prop="pending" label="Pending" width="90" />
+                    <el-table-column prop="known_bad" label="已知异常" width="90" />
+                  </el-table>
+                  <div class="muted" style="font-size:12px;margin-top:6px">
+                    升级后拿<b>升级前那一份</b>与当前状态比对。和新生成的基线比没有意义——新基线就是升级后的状态。
+                  </div>
                 </el-collapse-item>
               </el-collapse>
             </el-card>
@@ -789,6 +812,7 @@ import {
   gkeUpgradeOverview, gkeVersionSchedule, gkeOverrideSchedule,
   gkeClearScheduleOverride, runScheduledTask, gkeUpgradeHistory, gkeRepairHistory,
   gkeNodeHealth, gkeUpgradePlan, gkeUpgradeProgress, gkeAvailableVersions,
+  gkeSaveBaseline, gkeListBaselines,
 } from '../api/cmdb'
 
 const app = useAppStore()
@@ -837,6 +861,27 @@ const planError = ref('')
 const prog = ref(null)
 const progHours = ref(24)
 const verOpts = ref([])
+const baselines = ref([])
+const savingBaseline = ref(false)
+
+async function loadBaselines() {
+  if (!planCluster.value) { baselines.value = []; return }
+  try { baselines.value = (await gkeListBaselines({ cluster_id: planCluster.value })).items || [] }
+  catch (e) { baselines.value = []; reportError(e, '读取基线快照失败') }
+}
+
+async function saveBaseline() {
+  if (!plan.value) return
+  savingBaseline.value = true
+  try {
+    const params = { cluster_id: planCluster.value }
+    if (plan.value.target_version) params.target_version = plan.value.target_version
+    await gkeSaveBaseline(params)
+    ElMessage.success('基线已存档，升级后拿它来比对')
+    await loadBaselines()
+  } catch (e) { reportError(e, '保存基线失败') }
+  finally { savingBaseline.value = false }
+}
 
 // 换集群时先拉该区域的可选版本，再生成预案。
 // 版本清单是按「project+区域」存的，换集群可能换区域，不能沿用上一个的。
@@ -893,6 +938,7 @@ async function loadPlan() {
     if (planTarget.value.trim()) params.target_version = planTarget.value.trim()
     plan.value = await gkeUpgradePlan(params)
     await loadProgress()
+    await loadBaselines()
   } catch (e) {
     // 预案查询失败必须清空并报出来：残留上一次的预案会被当成本次结果，
     // 而空白页会被读成「没有风险」——两种都比报错危险

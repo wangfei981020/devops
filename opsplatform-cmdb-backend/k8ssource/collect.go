@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -30,6 +31,14 @@ var (
 )
 
 const gkeNodePoolLabel = "cloud.google.com/gke-nodepool"
+
+// lastPDBBlocking 记住每个集群上一轮「余量为 0 的 PDB」数量，用于只在变化时打日志。
+// 定时采集是串行遍历集群的，但「立即采集」API 可能与它并发，所以加锁。
+// 进程重启后清空——重启后第一轮当作首次观测，会补打一条当前状态，不会漏。
+var (
+	pdbStateMu      sync.Mutex
+	lastPDBBlocking = map[int]int{}
+)
 
 // SyncResult 记录每类资源的采集结果（写 k8s_sync_state）。
 type SyncResult struct {
@@ -112,7 +121,7 @@ func syncNodes(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid in
 		ready, hb := readyCondition(n)
 		var hbVal any
 		if hb != nil && !hb.IsZero() {
-			hbVal = hb.UTC()
+			hbVal = bucketHeartbeat(hb.UTC())
 		}
 		pool := resolvePool(n, poolLabel)
 		current[n.Name] = nodeVersionRef{Pool: pool, Version: n.Status.NodeInfo.KubeletVersion}
@@ -149,6 +158,26 @@ func nodeExternalIP(n *corev1.Node) string {
 
 // stuckHeartbeatThreshold：Ready 心跳超过此时长未更新 → 判为卡死/失联。
 const stuckHeartbeatThreshold = 10 * time.Minute
+
+// heartbeatBucket：存库前把心跳时间向下取整到这个粒度。
+//
+// 为什么要取整：kubelet 每 10 秒刷一次 Ready 心跳，而采集是 120 秒一轮，
+// 于是每一轮拿到的 last_heartbeat 都和库里不同 → syncDiff 判为「行变了」→ 每个节点每轮重写。
+// 实测本地单节点集群 129 轮采集写了 129 次 upd，一次不落——
+// v149「稳态零写入」的结论对 k8s_nodes 根本不成立，写放大只是从 4.2G/天降到了约 62M/天。
+//
+// 取整到 5 分钟后，稳态下同一个桶内的值完全相同，syncDiff 不再判为变化，
+// 每个节点从「每 2 分钟写一次」降到「每 5 分钟写一次」，约 2.4 倍。
+//
+// ⚠️ 做不到真正的零写入：心跳本来就是个一直在动的量，
+// 想零写入只能不存它，但页面要展示「上次心跳」。这里是「写入量」与「展示不误导」的折中。
+//
+// 粒度必须明显小于 stuckHeartbeatThreshold(10 分钟)：
+// 取整最多让展示值滞后 5 分钟，不会出现「节点健康但心跳看起来快超时」的误导。
+// 卡死判定不受影响——isStuck 用的是**实时**心跳，结果单独存在 stuck 列里。
+const heartbeatBucket = 5 * time.Minute
+
+func bucketHeartbeat(t time.Time) time.Time { return t.Truncate(heartbeatBucket) }
 
 // isStuck 卡死判定：Ready=Unknown(节点控制器已判失联) 或 Ready 心跳长时间未更新。
 func isStuck(ready string, hb *time.Time) bool {
@@ -583,13 +612,31 @@ func syncPDBs(ctx context.Context, db *sql.DB, cs *kubernetes.Clientset, cid int
 			p.Status.CurrentHealthy, p.Status.DesiredHealthy, p.Status.ExpectedPods, p.Status.DisruptionsAllowed,
 		})
 	}
-	if blocking > 0 {
-		// 稳态下也可能有余量为 0 的 PDB（副本正在重启时是暂态），所以这里是 INFO 不是告警；
-		// 真正的判断在升级预案里做——那时才关心「计划升级的池上有没有卡住的 PDB」。
-		logx.J("k8s_sync", "pdb_zero_disruptions", map[string]any{
-			"cluster_id": cid, "blocking": blocking, "total": len(rows),
-			"note": "这些 PDB 此刻不允许驱逐任何 Pod，若升级期间仍为 0 会阻塞 drain",
-		})
+	// 只在「阻塞数量发生变化」时打日志，不是每轮都打。
+	// 原先每轮打一次：本地那个 video-images-generator 的 PDB 长期是 0，
+	// 于是每 2 分钟刷一条，实测 108 条日志描述的是同一个持续状态。
+	// 持续态刷屏会把真正的状态变化淹掉——这和告警要去重是同一个道理，
+	// 当时在告警上想到了，日志上没做到。
+	pdbStateMu.Lock()
+	prev, seen := lastPDBBlocking[cid]
+	changed := !seen || prev != blocking
+	if changed {
+		lastPDBBlocking[cid] = blocking
+	}
+	pdbStateMu.Unlock()
+	if changed {
+		if blocking > 0 {
+			logx.J("k8s_sync", "pdb_zero_disruptions", map[string]any{
+				"cluster_id": cid, "blocking": blocking, "total": len(rows), "prev": prev,
+				"note": "这些 PDB 此刻不允许驱逐任何 Pod，若升级期间仍为 0 会阻塞 drain",
+			})
+		} else if seen {
+			// 恢复也要说一声，否则只知道坏不知道好
+			logx.J("k8s_sync", "pdb_blocking_cleared", map[string]any{
+				"cluster_id": cid, "prev": prev, "total": len(rows),
+				"note": "余量为 0 的 PDB 已全部恢复",
+			})
+		}
 	}
 	return writeRows(db, "k8s_pdbs", []string{
 		"cluster_id", "namespace", "name", "min_available", "max_unavailable", "selector",

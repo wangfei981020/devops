@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"opsplatform-cmdb-backend/logx"
 )
 
 // 孤儿资源检测：找出「还在占资源/还在计费/还在报错，但已经没人用」的东西。
@@ -202,31 +205,55 @@ func (h *K8sResourceHandler) orphanIngresses(cid string) []orphanItem {
 // emptyNamespaces 没有任何工作负载也没有 Pod 的命名空间。本身不花钱，
 // 但残留的 RBAC/Secret/NetworkPolicy 是治理死角，也会让人误以为某组件还在跑
 // （UAT 上 falco/kyverno 等 6 个安全组件的 ns 都还在，实际一个 Pod 都没有）。
+//
+// ⚠️ 「没有 Pod」不等于「里面什么都没有」。实测 DEV 集群 51 个被判为空的命名空间里，
+// 前 10 个装着 1664 个 ConfigMap（单个最多 587 个）——而 action 给的是 `kubectl delete ns`，
+// 照做会把它们一并带走，且从判定结论里完全看不出这件事（CMDB-010）。
+//
+// 所以这里把 ConfigMap 数量实测出来一并返回：有内容的不再说「可能残留」，
+// 而是直接给出数量，并把 action 从「确认无残留资源后删除」改成「先看这些东西再决定」。
 func (h *K8sResourceHandler) emptyNamespaces(cid string) []orphanItem {
-	rows, err := h.DB.Query(`SELECT n.name FROM k8s_namespaces n
-		WHERE n.cluster_id=?
-		  AND NOT EXISTS (SELECT 1 FROM k8s_workloads w WHERE w.cluster_id=n.cluster_id AND w.namespace=n.name)
-		  AND NOT EXISTS (SELECT 1 FROM k8s_pods p WHERE p.cluster_id=n.cluster_id AND p.namespace=n.name)
-		ORDER BY n.name`, cid)
+	// 用 LEFT JOIN 聚合而不是先查名字再逐个 count：命名空间可能上百个，逐个查会打出上百条 SQL
+	rows, err := h.DB.Query(`SELECT n.name, COUNT(c.id) AS cm_cnt
+		  FROM k8s_namespaces n
+		  LEFT JOIN k8s_configmaps c ON c.cluster_id=n.cluster_id AND c.namespace=n.name
+		 WHERE n.cluster_id=?
+		   AND NOT EXISTS (SELECT 1 FROM k8s_workloads w WHERE w.cluster_id=n.cluster_id AND w.namespace=n.name)
+		   AND NOT EXISTS (SELECT 1 FROM k8s_pods p WHERE p.cluster_id=n.cluster_id AND p.namespace=n.name)
+		 GROUP BY n.name
+		 ORDER BY n.name`, cid)
 	if err != nil {
+		logx.J("orphans", "empty_ns_query_failed", map[string]any{
+			"cluster_id": cid, "err": err.Error(),
+			"hint": "空命名空间判定查询失败，本次不返回该类孤儿（不是「没有孤儿」）",
+		})
 		return nil
 	}
 	defer rows.Close()
 	out := []orphanItem{}
 	for rows.Next() {
 		var name string
-		if rows.Scan(&name) != nil {
+		var cmCount int
+		if rows.Scan(&name, &cmCount) != nil {
 			continue
 		}
 		if isSystemNamespace(name) {
 			continue // kube-public/kube-node-lease 之类天生就是空的，不算孤儿
 		}
-		out = append(out, orphanItem{
+		it := orphanItem{
 			Kind: "namespace", Name: name,
 			Reason: "无任何工作负载与 Pod",
 			Detail: "空命名空间，可能残留 RBAC/Secret/NetworkPolicy",
 			Action: "确认无残留资源后：kubectl delete ns " + name,
-		})
+		}
+		if cmCount > 0 {
+			// 有实测数量时就别再说「可能」——把真实内容摆出来，并让人先看再删
+			it.Detail = fmt.Sprintf("⚠️ 没有 Pod，但里面有 %d 个 ConfigMap，删 ns 会一并删掉；"+
+				"另可能还有 RBAC/Secret/NetworkPolicy（CMDB 未采，需自行确认）", cmCount)
+			it.Action = fmt.Sprintf("先看里面装了什么：kubectl -n %s get configmap,secret,rolebinding,networkpolicy"+
+				"；确认可弃后再 kubectl delete ns %s", name, name)
+		}
+		out = append(out, it)
 	}
 	return out
 }

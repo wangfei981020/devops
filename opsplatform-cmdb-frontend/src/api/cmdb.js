@@ -285,3 +285,6 @@ export const gkeUpgradePlan = (params) => http.get('/gke/upgrade/plan', { params
 export const gkeUpgradeProgress = (params) => http.get('/gke/upgrade/progress', { params }).then((r) => r.data)
 export const k8sPdbs = (params) => http.get('/k8s/pdbs', { params }).then((r) => r.data)
 export const gkeAvailableVersions = (params) => http.get('/gke/available-versions', { params }).then((r) => r.data)
+// 基线必须显式存快照：预案里的基线是现算的，升完再生成拿到的是升级后状态，没得比（CMDB-030）
+export const gkeSaveBaseline = (params) => http.post('/gke/upgrade/baseline', null, { params }).then((r) => r.data)
+export const gkeListBaselines = (params) => http.get('/gke/upgrade/baselines', { params }).then((r) => r.data)
