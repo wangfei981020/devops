@@ -384,19 +384,8 @@ func sendNodeHealthAlert(db *sql.DB, alerts []nodeAlert) {
 	if !alertEnabled(db, "notify_node_health") {
 		return
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "🔴 节点健康预警（%d 条）\n", len(alerts))
-	for _, a := range alerts {
-		icon := "🔴"
-		if a.Level == "yellow" {
-			icon = "🟡"
-		}
-		fmt.Fprintf(&b, "\n%s %s / %s", icon, a.Cluster, a.Node)
-		if a.Pool != "" {
-			fmt.Fprintf(&b, "（%s）", a.Pool)
-		}
-		fmt.Fprintf(&b, "\n   %s\n   ▸ %s\n", a.Detail, a.Suggestion)
-	}
+	b := strings.Builder{}
+	b.WriteString(renderNodeHealthAlert(alerts))
 	// @人：分钟级的崩溃预警只进群不 @ 人，半夜根本没人看得到
 	atSeg, atNames := atMentionsForTask2(db, "node_health_watch")
 	b.WriteString(atSeg)
@@ -517,4 +506,61 @@ func nodeHealthTaskNote(found, enabled bool) string {
 			"去「系统管理 → 定时任务」打开 node_health_watch，并给它配一个独立的告警群。"
 	}
 	return ""
+}
+
+// renderNodeHealthAlert 节点健康告警排版。
+//
+// 和 GKE 那条同一个毛病（CMDB-023）：旧版每个节点铺 3 行、且每条都跟一句
+// 「▸ 处置建议」——而同一类问题的建议是完全一样的，5 个 NotReady 节点
+// 就把同一句话重复 5 遍。改成按 Kind 分组、建议在组末只说一次。
+func renderNodeHealthAlert(alerts []nodeAlert) string {
+	// 按类型分组，保持「红在前、黄在后」
+	groups := map[string][]nodeAlert{}
+	order := []string{}
+	for _, a := range alerts {
+		if _, ok := groups[a.Kind]; !ok {
+			order = append(order, a.Kind)
+		}
+		groups[a.Kind] = append(groups[a.Kind], a)
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		return nodeKindRank(groups[order[i]][0].Level) < nodeKindRank(groups[order[j]][0].Level)
+	})
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "🔴 节点健康预警 · %d 个节点\n", len(alerts))
+	tips := []string{}
+	for _, kind := range order {
+		list := groups[kind]
+		icon := "🔴"
+		if list[0].Level == "yellow" {
+			icon = "🟡"
+		}
+		fmt.Fprintf(&b, "\n%s %s（%d）\n", icon, nodeAlertKindLabel(kind), len(list))
+		for _, a := range list {
+			pool := ""
+			if a.Pool != "" {
+				pool = "（" + a.Pool + "）"
+			}
+			fmt.Fprintf(&b, "· %s / %s%s %s\n", a.Cluster, a.Node, pool, a.Detail)
+		}
+		// 同类的处置建议只取一次
+		if list[0].Suggestion != "" {
+			tips = append(tips, nodeAlertKindLabel(kind)+"："+list[0].Suggestion)
+		}
+	}
+	if len(tips) > 0 {
+		b.WriteString("\n─────────────────────\n")
+		for _, t := range tips {
+			b.WriteString(t + "\n")
+		}
+	}
+	return b.String()
+}
+
+func nodeKindRank(level string) int {
+	if level == "red" {
+		return 0
+	}
+	return 1
 }

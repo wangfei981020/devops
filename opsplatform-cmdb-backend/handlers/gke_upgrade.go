@@ -57,16 +57,16 @@ type gkePoolOut struct {
 	BGBatchSoakSec    *int     `json:"bg_batch_soak_sec"`
 	BGNodePoolSoakSec *int     `json:"bg_node_pool_soak_sec"`
 
-	UpgradeRisk string `json:"upgrade_risk"`
-	RiskNote             string `json:"risk_note"`
-	PausedReason         string `json:"paused_reason"`
-	MinorTargetVersion   string `json:"minor_target_version"`
-	VersionSkew          string `json:"version_skew"`    // 与控制面版本的偏斜说明，空=一致
-	EOSStandardAt        string `json:"eos_standard_at"` // 该池自己版本的支持截止
-	EOSDaysLeft          *int   `json:"eos_days_left"`
-	EOSExtendedAt        string `json:"eos_extended_at"`
-	Stranded             bool   `json:"stranded"`   // 落后控制面且 autoUpgrade=false，平时不会自己跟上
-	RepairOff            bool   `json:"repair_off"` // 自动修复已关：节点坏了不会被自动重建
+	UpgradeRisk        string `json:"upgrade_risk"`
+	RiskNote           string `json:"risk_note"`
+	PausedReason       string `json:"paused_reason"`
+	MinorTargetVersion string `json:"minor_target_version"`
+	VersionSkew        string `json:"version_skew"`    // 与控制面版本的偏斜说明，空=一致
+	EOSStandardAt      string `json:"eos_standard_at"` // 该池自己版本的支持截止
+	EOSDaysLeft        *int   `json:"eos_days_left"`
+	EOSExtendedAt      string `json:"eos_extended_at"`
+	Stranded           bool   `json:"stranded"`   // 落后控制面且 autoUpgrade=false，平时不会自己跟上
+	RepairOff          bool   `json:"repair_off"` // 自动修复已关：节点坏了不会被自动重建
 }
 
 type gkeClusterOut struct {
@@ -117,7 +117,9 @@ type gkeClusterOut struct {
 
 	// 节点最多落后控制面 2 个小版本是 GKE 的硬限制，触及会出兼容故障
 	SkewCritical bool   `json:"skew_critical"`
-	SkewNote     string `json:"skew_note"`
+	SkewNote     string `json:"skew_note"`     // 事实：当前已落后几个
+	SkewCurrent  int    `json:"skew_current"`  // 当前落后的小版本数
+	SkewForecast string `json:"skew_forecast"` // 预测：再升一次会落后几个
 	// EOSBasis 说明有效期限是按「标准支持」还是「扩展支持」算的（EXTENDED 通道用后者）
 	EOSBasis string `json:"eos_basis"`
 
@@ -156,6 +158,7 @@ func (h *GKEUpgradeHandler) Overview(c *gin.Context) {
 			EffectiveEOSAt: s.EffectiveEOS, EffectiveEOSDays: s.EffectiveEOSDays,
 			EffectiveEOSSource: s.EffectiveEOSSource,
 			SkewCritical:       s.SkewCritical, SkewNote: s.SkewNote, EOSBasis: s.EOSBasis,
+			SkewCurrent: s.SkewCurrent, SkewForecast: s.SkewForecast,
 			MaintenancePolicy: s.MaintenancePolicyJSON,
 		}
 		for _, p := range s.Pools {
@@ -392,9 +395,13 @@ func clusterVerdict(x *gkeClusterOut) string {
 		}
 		return "尚未采集。需要为该集群所属云账号项目配置 SA key，然后运行「GKE 集群升级信息采集」任务"
 	}
-	// 偏斜临界会直接导致节点与控制面不兼容，比日期类问题更硬
+	// 偏斜临界会直接导致节点与控制面不兼容，比日期类问题更硬。
+	// 事实优先：已经落后的说「已落后」，还没落后的才说「将落后」（CMDB-024）
 	if x.SkewCritical {
-		return "版本偏斜临界：" + x.SkewNote
+		if x.SkewCurrent >= 2 {
+			return "版本偏斜已达硬限制：" + x.SkewNote
+		}
+		return "版本偏斜临界：" + x.SkewForecast
 	}
 	// 硬期限优先：支持结束比自动升级更要命。
 	// ⚠️ 必须用 EffectiveEOS（控制面与节点池取最早），不能只看控制面——

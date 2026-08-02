@@ -10,7 +10,7 @@
 //	② 节点池自动升级 —— 可以关；关了平时就不升 → 但别忘了③
 //	③ 强制升级(EOS)  —— 完全不可阻止，关了 autoUpgrade 也照升 → 必须自己先升完
 //
-// 提醒节奏：①② 用 T-30/T-7；③ 因为完全拦不住，额外加 T-14 一档。
+// 提醒节奏：T-30/14/7/3/1，越近越密（CMDB-023）。T-3 起 @ 人。
 package handlers
 
 import (
@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,10 +26,12 @@ import (
 	"opsplatform-cmdb-backend/notify"
 )
 
-// 提醒档位。强制升级多一档 T-14：它拦不住，只能靠更早知道。
+// 提醒档位。越近越密：实测一轮完整升级要 2.5 小时（等满观察期）或约 1 小时（跳过），
+// 原来 T-30 / T-7 两档，提前 7 天才第二次提醒，留给排期协调的时间不够（CMDB-023）。
 var (
-	remindGates      = []int{30, 7}
-	forcedGates      = []int{30, 14, 7}
+	remindGates      = []int{30, 14, 7, 3, 1}
+	forcedGates      = []int{30, 14, 7, 3, 1}
+	atMentionDays    = 3 // 剩余 ≤3 天时 @ 人：这时候还没排上窗口就真的来不及了
 	nodeFollowupDays = 7 // 官方「控制面升完后 typically a few days」，取一周作为节点池的保守窗口
 )
 
@@ -37,7 +40,18 @@ type gkeRemindItem struct {
 	Env     string
 	Urgent  bool
 	Rules   []string // 命中的规则，用于日志与摘要
-	Lines   []string
+	Lines   []string // 详细说明，进任务记录的 findings（页面上看得到全文）
+
+	// —— 以下为飞书排版用的结构化字段（CMDB-023）——
+	// 旧版把所有内容拼成 Lines 直接往飞书倒，单条消息 1800 字、解释文案逐集群重复。
+	// 改成结构化后，飞书那边才能按倒计时排序、把共同解释抽到消息末尾只说一次。
+	EOSDays  *int   // 强制升级倒计时（nil=未命中该规则）
+	EOSDate  string // 强制升级截止日
+	PoolCnt  int    // 受影响节点池数
+	NodeCnt  int    // 受影响节点数
+	Action   string // 一句话动作建议：看完就知道要干什么
+	SkewNow  int    // 当前已落后几个小版本（CMDB-024 的事实值）
+	SkewText string // 偏斜详情，只在 🟡 区块或行尾标记里用
 }
 
 // gkeUpgradeRemindCore 每天跑一次。
@@ -68,7 +82,11 @@ func gkeUpgradeRemindCore(ctx context.Context, db *sql.DB) (string, []TaskFailur
 			"gates": fmt.Sprintf("常规 T-%v / 强制 T-%v", remindGates, forcedGates),
 			"note":  "已扫描但无集群命中任何规则",
 		})
-		return fmt.Sprintf("扫描 %d 个集群（其中 %d 个有采集数据），无一命中提醒规则", len(states), scanned), nil, true
+		// 全绿也发一条（每天一次）。用户明确要求保留：静默久了分不清
+		// 是真没问题、还是这个任务已经死了（CMDB-023 四）。
+		sent := sendAllGreen(db, scanned)
+		return fmt.Sprintf("扫描 %d 个集群（其中 %d 个有采集数据），无一命中提醒规则，飞书投递：%s",
+			len(states), scanned, sent), nil, true
 	}
 
 	sent := sendUpgradeRemind(db, items)
@@ -115,6 +133,9 @@ func buildRemindItem(s *clusterUpgradeState, today time.Time) gkeRemindItem {
 	if d := s.EffectiveEOSDays; d != nil && hitGate(*d, forcedGates) {
 		it.Urgent = *d <= 14
 		it.Rules = append(it.Rules, "forced_eos")
+		it.EOSDays, it.EOSDate = d, s.EffectiveEOS
+		it.PoolCnt, it.NodeCnt = strandedCount(s)
+		it.Action = upgradeAction(s)
 		via := ""
 		if s.EffectiveEOSSource != "控制面" {
 			via = fmt.Sprintf("（最早到期的是%s，控制面本身是 %s）", s.EffectiveEOSSource, s.ControlPlaneEOS)
@@ -183,13 +204,68 @@ func buildRemindItem(s *clusterUpgradeState, today time.Time) gkeRemindItem {
 		}
 	}
 
-	// 偏斜临界：会真出兼容故障，不受 30 天窗口限制，命中就报
+	// 偏斜临界：会真出兼容故障，不受 30 天窗口限制，命中就报。
+	// ⚪ 落后 1 个小版本属正常范围，不进告警（只在看板显示）——
+	// g32 生产 5 个池里 4 个是这种，每次都跟着刷但不需要人动手（CMDB-023 分档）
 	if s.SkewCritical {
 		it.Rules = append(it.Rules, "skew_critical")
 		it.Urgent = true
-		it.Lines = append(it.Lines, "🔴 版本偏斜临界："+s.SkewNote)
+		it.SkewNow = s.SkewCurrent
+		// 事实句优先；控制面还没升时只有预测句（CMDB-024）
+		if s.SkewNote != "" {
+			it.SkewText = s.SkewNote
+		} else {
+			it.SkewText = s.SkewForecast
+		}
+		it.Lines = append(it.Lines, "🔴 版本偏斜："+it.SkewText)
+		if s.SkewForecast != "" && s.SkewNote != "" {
+			it.Lines = append(it.Lines, "   "+s.SkewForecast)
+		}
 	}
 	return it
+}
+
+// strandedCount 受强制升级影响的节点池数与节点数。
+// 旧版把池名全列出来（5 个占两整行），而真正有用的是规模和「最早到期的是哪个」。
+func strandedCount(s *clusterUpgradeState) (pools, nodes int) {
+	for _, p := range s.Pools {
+		if p.EOSStandardAt != "" && p.EOSStandardAt == s.EffectiveEOS {
+			pools++
+			nodes += p.NodeCount
+		}
+	}
+	if pools == 0 { // 到期的是控制面自己，那影响面就是全部节点池
+		for _, p := range s.Pools {
+			pools++
+			nodes += p.NodeCount
+		}
+	}
+	return
+}
+
+// upgradeAction 一句话回答「我现在要干什么」——CMDB-023 的第四条设计原则：
+// 每条告警都必须能回答这个问题，否则看完还是不知道先动哪个。
+func upgradeAction(s *clusterUpgradeState) string {
+	autoOff := 0
+	for _, p := range s.Pools {
+		if !p.AutoUpgrade {
+			autoOff++
+		}
+	}
+	// 控制面已经追上目标版本 → 只剩节点池要升
+	if s.MinorTarget != "" && minorOf(s.MasterVersion) == minorOf(s.MinorTarget) {
+		return fmt.Sprintf("控制面已 %s → 只升节点池", minorOf(s.MasterVersion))
+	}
+	if s.EffectiveEOSSource != "控制面" && s.EffectiveEOSSource != "" {
+		if autoOff > 0 {
+			return fmt.Sprintf("%s 到期 → 自动升级关着，须人工升", s.EffectiveEOSSource)
+		}
+		return s.EffectiveEOSSource + " 到期 → 自动升级开着，确认窗口即可"
+	}
+	if autoOff > 0 {
+		return fmt.Sprintf("控制面 %s → 升完节点不会跟随，%d 个池须人工升", minorOf(s.MasterVersion), autoOff)
+	}
+	return fmt.Sprintf("控制面 %s → 节点池会自动跟随", minorOf(s.MasterVersion))
 }
 
 // earliestStartTimePool 找出给出最早 autoUpgradeStartTime 的节点池——
@@ -372,37 +448,19 @@ func sendUpgradeRemind(db *sql.DB, items []gkeRemindItem) string {
 		})
 		return "未配置群（提醒未送达）"
 	}
-	urgent := 0
-	for _, it := range items {
-		if it.Urgent {
-			urgent++
-		}
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "⚠️ GKE 升级预警（%d 个集群", len(items))
-	if urgent > 0 {
-		fmt.Fprintf(&b, "，其中 %d 个紧急", urgent)
-	}
-	b.WriteString("）\n")
-	for _, it := range items {
-		icon := "🟡"
-		if it.Urgent {
-			icon = "🔴"
-		}
-		fmt.Fprintf(&b, "\n%s %s（%s）\n", icon, it.Cluster, it.Env)
-		for _, l := range it.Lines {
-			fmt.Fprintf(&b, "   %s\n", l)
-		}
-	}
-	b.WriteString("\n控制面与节点池是两个独立事件，需分别安排时间。" +
-		"强制升级（支持结束）无法阻止，务必在该日期前自行升完。")
+	text := renderUpgradeRemind(items)
 	// 关掉这类告警时任务照跑（数据仍在采集与看板里），只是不投递飞书
 	if !alertEnabled(db, "notify_gke_upgrade") {
 		return "已跳过投递：GKE 升级预警在「通知」页被关闭"
 	}
-	atSeg, atNames := atMentionsForTask2(db, "gke_upgrade_remind")
-	b.WriteString(atSeg)
-	if err := notify.SendFeishu(webhook, b.String()); err != nil {
+	atSeg, atNames := "", ""
+	// @人只在真的来不及时才用：T-3 起 @，平时只进群。半夜被 @ 醒却发现还有 20 天，
+	// 下次就没人认真看了（CMDB-023 五）
+	if shouldAtMention(items) {
+		atSeg, atNames = atMentionsForTask2(db, "gke_upgrade_remind")
+		text += atSeg
+	}
+	if err := notify.SendFeishu(webhook, text); err != nil {
 		logx.J("gke_remind", "send_failed", map[string]any{"group": group, "err": err.Error()})
 		return "投递失败：" + err.Error()
 	}
@@ -410,4 +468,132 @@ func sendUpgradeRemind(db *sql.DB, items []gkeRemindItem) string {
 		return "已发送到 " + group + "（未配通知人，无 @）"
 	}
 	return "已发送到 " + group + "，@" + atNames
+}
+
+// ---- 飞书排版（CMDB-023）----
+//
+// 旧版把每个集群的所有说明逐条铺开，单条消息约 1800 字、三个集群刷满一屏，
+// 且「支持结束时 GKE 会强制升级…」这类**不随集群变化的解释**在每个集群下各出现一遍。
+// 用户原话：「现在一堆字，看的比较麻烦，要简洁点，一眼就知道问题」。
+//
+// 四条原则：
+//  1. 标题给结论不给分类 —— 倒计时进标题
+//  2. 共同解释只说一次 —— 统一放分隔线下方，不随集群数量重复
+//  3. 用对齐代替句子 —— 「受影响：5 个节点池 / 35 个节点：a、b、c…」→「35 节点 / 5 池」
+//  4. 每条都要能回答「我现在干什么」—— 每行跟一句动作建议
+//
+// 🔴（强制升级）与 🟡（偏斜已达硬限制）分区块不混排：两者要人做的事不同，
+// 🔴 是「排窗口」，🟡 是「这个池别再拖了」。同一集群两条都中时只在 🔴 出现一次，
+// 行尾挂 🟡 标记，避免同一个集群在消息里露两遍。
+func renderUpgradeRemind(items []gkeRemindItem) string {
+	forced, skewOnly := []gkeRemindItem{}, []gkeRemindItem{}
+	for _, it := range items {
+		switch {
+		case it.EOSDays != nil:
+			forced = append(forced, it) // 两条都中的也归这里，偏斜降为行尾标记
+		case it.SkewNow >= 2 || it.SkewText != "":
+			skewOnly = append(skewOnly, it)
+		}
+	}
+	// 倒计时升序：最急的排最前，一眼看到的就是最该动手的那个
+	sort.SliceStable(forced, func(i, j int) bool { return *forced[i].EOSDays < *forced[j].EOSDays })
+
+	var b strings.Builder
+	if len(forced) > 0 {
+		fmt.Fprintf(&b, "🔴 GKE 强制升级 · 最早 %d 天后\n\n", *forced[0].EOSDays)
+		for _, it := range forced {
+			skewTag := ""
+			if it.SkewNow >= 2 {
+				skewTag = fmt.Sprintf(" · 🟡偏斜%d", it.SkewNow)
+			}
+			fmt.Fprintf(&b, "⏰ %s · %s · %s（%s）· %d 节点/%d 池%s\n",
+				daysText(*it.EOSDays), shortDate(it.EOSDate), it.Cluster, it.Env,
+				it.NodeCnt, it.PoolCnt, skewTag)
+			if it.Action != "" {
+				fmt.Fprintf(&b, "     %s\n", it.Action)
+			}
+		}
+	}
+	if len(skewOnly) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("🟡 版本偏斜已顶到硬限制（不影响期限，但该池不能再等）\n\n")
+		for _, it := range skewOnly {
+			fmt.Fprintf(&b, "· %s（%s）%s\n", it.Cluster, it.Env, it.SkewText)
+		}
+	}
+
+	// 共同解释：只说一次，不随集群数量重复
+	b.WriteString("\n─────────────────────\n")
+	if len(forced) > 0 {
+		b.WriteString("到期后 GKE 强制升级，关 autoUpgrade / 设维护排除都拦不住\n")
+	}
+	if len(skewOnly) > 0 || anySkew(forced) {
+		b.WriteString("偏斜达 3 个时该池将无法调度\n")
+	}
+	// 实测耗时来自 2026-07-31 UAT 那次完整升级，给的是排窗口要预留多久
+	b.WriteString("实测：控制面 6 分钟 ｜ 每池 18~24 分钟（跳过观察期，等满 +40 分钟）\n")
+	b.WriteString("📋 生成预案 → 「K8s → 版本与升级」")
+	return b.String()
+}
+
+// renderAllGreen 全绿播报。用户明确要求保留：静默久了分不清是真没问题还是任务死了。
+func renderAllGreen(total int) string {
+	return fmt.Sprintf("✅ GKE 版本巡检 · %d 个集群，30 天内无强制升级、无偏斜", total)
+}
+
+// shouldAtMention 只在 T-3 以内才 @ 人。
+func shouldAtMention(items []gkeRemindItem) bool {
+	for _, it := range items {
+		if it.EOSDays != nil && *it.EOSDays <= atMentionDays {
+			return true
+		}
+	}
+	return false
+}
+
+func anySkew(items []gkeRemindItem) bool {
+	for _, it := range items {
+		if it.SkewNow >= 2 {
+			return true
+		}
+	}
+	return false
+}
+
+// daysText 倒计时。已过期用负数会看不懂，直接说「已过期 N 天」。
+func daysText(d int) string {
+	if d < 0 {
+		return fmt.Sprintf("已过期 %d 天", -d)
+	}
+	if d == 0 {
+		return "今天到期"
+	}
+	return fmt.Sprintf("%d 天", d)
+}
+
+// shortDate 2026-08-03 → 08-03，日期只用来区分先后，年份是噪声。
+func shortDate(d string) string {
+	if len(d) == 10 {
+		return d[5:]
+	}
+	return d
+}
+
+// sendAllGreen 全绿播报：一行，够确认「任务还活着」即可。
+func sendAllGreen(db *sql.DB, scanned int) string {
+	webhook, group := larkWebhookForTask(db, "gke_upgrade_remind")
+	if webhook == "" {
+		return "未配置群"
+	}
+	if !alertEnabled(db, "notify_gke_upgrade") {
+		return "已跳过（通知页关闭）"
+	}
+	// 全绿不 @ 人：没事也 @ 是消耗信任最快的方式
+	if err := notify.SendFeishu(webhook, renderAllGreen(scanned)); err != nil {
+		logx.J("gke_remind", "green_send_failed", map[string]any{"group": group, "err": err.Error()})
+		return "投递失败：" + err.Error()
+	}
+	return "已发送到 " + group
 }

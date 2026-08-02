@@ -98,8 +98,15 @@ type clusterUpgradeState struct {
 
 	MaintenancePolicyJSON string
 	Pools                 []poolState
-	SkewCritical          bool // 目标版本会让节点落后达到 2 个小版本上限
-	SkewNote              string
+	// 偏斜分「事实」与「预测」两层，别再混成一句（CMDB-024）：
+	// 控制面升完、节点池没跟上的那段窗口里，偏斜**当下**就已经踩在硬限制上，
+	// 而旧写法只说「再升一次会落后 3 个」，看的人会以为是以后的事。
+	SkewCurrent  int    // 当前已落后几个小版本 —— 用 MasterVersion 算，是事实
+	SkewPool     string // 落后最多的那个池
+	SkewPoolVer  string // 该池的版本
+	SkewCritical bool   // 当前已落后 >=2，或目标版本会让它落后 >=2
+	SkewNote     string // 事实句（当前已落后…）
+	SkewForecast string // 预测句（若升到 X 将落后…）
 
 	LastError string
 	SyncedAt  string
@@ -272,24 +279,40 @@ func applyEffectiveEOS(x *clusterUpgradeState, today time.Time) {
 	}
 	x.EffectiveEOSDays = daysUntil(x.EffectiveEOS, today)
 
-	// 偏斜临界：控制面再升一个小版本，落后最多的节点池就会触及「最多落后 2 个小版本」的硬限制
+	// 偏斜：事实优先、预测次之（CMDB-024）
+	oldestVer := oldestPoolVersion(x.Pools)
+	// 必须点名是哪个池——EffectiveEOS 那边会写「节点池 app-pool-01」，两处口径要一致
+	poolName := oldestPool
+	if poolName == "" {
+		poolName = "最旧节点池"
+	} else {
+		poolName = "节点池 " + poolName
+	}
+	x.SkewPool, x.SkewPoolVer = oldestPool, oldestVer
+
+	// ① 事实：拿**当前控制面版本**比，回答「现在已经落后几个」
+	if oldestVer != "" {
+		x.SkewCurrent = minorGap(x.MasterVersion, oldestVer)
+	}
+	if x.SkewCurrent >= 2 {
+		x.SkewCritical = true
+		x.SkewNote = "当前：控制面 " + minorOf(x.MasterVersion) + " ｜ " + poolName + "（" + oldestVer +
+			"）已落后 " + strconv.Itoa(x.SkewCurrent) + " 个小版本，已达 GKE「节点最多落后控制面 2 个小版本」的硬限制"
+	} else if x.SkewCurrent > 0 {
+		x.SkewNote = "当前：控制面 " + minorOf(x.MasterVersion) + " ｜ " + poolName + "（" + oldestVer +
+			"）落后 " + strconv.Itoa(x.SkewCurrent) + " 个小版本（正常范围）"
+	}
+
+	// ② 预测：拿**推断的下一个版本**比，回答「再升一次会怎样」
 	target := x.MinorTarget
 	if target == "" {
 		target = x.InferredTarget
 	}
 	if target != "" && maxSkew > 0 {
-		if gap := minorGap(target, oldestPoolVersion(x.Pools)); gap >= 2 {
+		if gap := minorGap(target, oldestVer); gap >= 2 {
 			x.SkewCritical = true
-			// 必须点名是哪个池——EffectiveEOS 那边会写「节点池 app-pool-01」，两处口径要一致
-			name := oldestPool
-			if name == "" {
-				name = "最旧节点池"
-			} else {
-				name = "节点池 " + name
-			}
-			x.SkewNote = "控制面升到 " + minorOf(target) + " 后，" + name + "（" +
-				oldestPoolVersion(x.Pools) + "）将落后 " + strconv.Itoa(gap) +
-				" 个小版本，触及 GKE「节点最多落后控制面 2 个小版本」的硬限制"
+			x.SkewForecast = "预测：控制面若升到 " + minorOf(target) + "，" + poolName +
+				"将落后 " + strconv.Itoa(gap) + " 个小版本，GKE 将拒绝"
 		}
 	}
 }

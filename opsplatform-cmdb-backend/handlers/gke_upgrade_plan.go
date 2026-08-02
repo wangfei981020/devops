@@ -104,10 +104,10 @@ const (
 type estimateOut struct {
 	MinMinutes int      `json:"min_minutes"`
 	MaxMinutes int      `json:"max_minutes"`
-	Basis      string   `json:"basis"`               // 这个数字怎么来的：实测 / API 参数 / 经验区间
-	Batches    int      `json:"batches"`             // 批次数，0=算不出
-	Incomplete []string `json:"incomplete"`          // 缺了哪些参数导致只能给区间
-	Measured   bool     `json:"measured"`            // true=用了本集群实测值
+	Basis      string   `json:"basis"`      // 这个数字怎么来的：实测 / API 参数 / 经验区间
+	Batches    int      `json:"batches"`    // 批次数，0=算不出
+	Incomplete []string `json:"incomplete"` // 缺了哪些参数导致只能给区间
+	Measured   bool     `json:"measured"`   // true=用了本集群实测值
 }
 
 type poolPlanOut struct {
@@ -292,9 +292,10 @@ func (h *GKEUpgradePlanHandler) Plan(c *gin.Context) {
 // validateTarget 校验目标版本在该集群所在区域是否真的可选。
 //
 // 返回空串表示通过（或无从校验）。三种结果分得开：
-//   合法        → ""
-//   清单没采到  → 提示去采，但不说「版本不存在」——没采到不等于不存在
-//   确实不在清单→ 明确报错，并给出最接近的几个候选
+//
+//	合法        → ""
+//	清单没采到  → 提示去采，但不说「版本不存在」——没采到不等于不存在
+//	确实不在清单→ 明确报错，并给出最接近的几个候选
 //
 // 这个区分很要紧：把「不知道」说成「不存在」会让人以为版本号写错了，
 // 反过来把「不存在」当成「不知道」则会让人照着一个升不上去的目标排完整个窗口。
@@ -433,9 +434,17 @@ func (h *GKEUpgradePlanHandler) planControlPlane(st *clusterUpgradeState, target
 			out.MinorJump, out.MinorJump))
 	}
 	if st.SkewCritical {
-		out.Warnings = append(out.Warnings,
-			"控制面升级后节点池将落后 2 个小版本，触及 GKE 硬限制——"+
-				"控制面升完必须紧接着升节点池，不能隔夜")
+		if st.SkewCurrent >= 2 {
+			// 已经踩在硬限制上，不是"升完之后"的事，措辞不能再用将来时（CMDB-024）
+			out.Warnings = append(out.Warnings, fmt.Sprintf(
+				"节点池 %s 当前已落后控制面 %d 个小版本，正踩在 GKE 硬限制上——"+
+					"必须先把该池升上来，控制面再升会被 GKE 拒绝",
+				st.SkewPool, st.SkewCurrent))
+		} else {
+			out.Warnings = append(out.Warnings,
+				"控制面升级后节点池将落后 2 个小版本，触及 GKE 硬限制——"+
+					"控制面升完必须紧接着升节点池，不能隔夜")
+		}
 	}
 	return out
 }
@@ -475,10 +484,10 @@ func (h *GKEUpgradePlanHandler) planPool(cid int, p poolState, target string, me
 // SURGE：       ceil(节点数 / maxSurge) × 每批重建
 //
 // 取值分四档，越靠前越可信，逐级降级并在 basis 里写明用的是哪一档：
-//   1. 本池节点事件实测（CMDB 自采，±2 分钟）
-//   2. 本池 GCP 升级历史（精确到秒，但保留期约两周）
-//   3. 其他池的 GCP 历史反推出的每批耗时（真实测量，但工作负载不同）
-//   4. 通用经验区间（最后手段，2026-07-31 实测证明它能偏差数倍）
+//  1. 本池节点事件实测（CMDB 自采，±2 分钟）
+//  2. 本池 GCP 升级历史（精确到秒，但保留期约两周）
+//  3. 其他池的 GCP 历史反推出的每批耗时（真实测量，但工作负载不同）
+//  4. 通用经验区间（最后手段，2026-07-31 实测证明它能偏差数倍）
 //
 // 任何一个参数缺失都不会被当成 0——观察期常常是 BLUE_GREEN 里最长的一段，
 // 当成 0 会让预估严重偏小，而偏小的预估会直接变成排错的停机窗口。
