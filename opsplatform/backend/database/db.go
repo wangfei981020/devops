@@ -1647,6 +1647,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_cmdb_k8s_topology", "menu:cmdb_k8s_topology", "[K8s] 全链路", "/cmdb/k8s-topology", "perm_menu_cmdb", "", 78},
 		{"perm_menu_cmdb_k8s_ns_project", "menu:cmdb_k8s_ns_project", "[K8s] 命名空间归属", "/cmdb/k8s-ns-project", "perm_menu_cmdb", "", 80},
 		{"perm_menu_cmdb_event_center", "menu:cmdb_event_center", "[观测] 事件中心", "/cmdb/event-center", "perm_menu_cmdb", "", 90},
+		{"perm_menu_cmdb_alerts", "menu:cmdb_alerts", "[观测] 告警", "/cmdb/alerts", "perm_menu_cmdb", "", 91},
 		{"perm_menu_cmdb_k8s_usage", "menu:cmdb_k8s_usage", "[观测] 资源使用率", "/cmdb/k8s-usage", "perm_menu_cmdb", "", 92},
 		{"perm_menu_cmdb_cost", "menu:cmdb_cost", "[观测] 云成本", "/cmdb/cost", "perm_menu_cmdb", "", 94},
 		{"perm_menu_cmdb_basic", "menu:cmdb_basic", "[系统] 基础配置", "/cmdb/basic", "perm_menu_cmdb", "", 100},
@@ -2082,7 +2083,7 @@ var cmdbMenuCodes = []string{
 	"menu:cmdb_k8s_workloads", "menu:cmdb_k8s_pods", "menu:cmdb_k8s_networking",
 	"menu:cmdb_k8s_storage", "menu:cmdb_k8s_events", "menu:cmdb_k8s_health",
 	"menu:cmdb_k8s_topology", "menu:cmdb_k8s_ns_project",
-	"menu:cmdb_event_center", "menu:cmdb_k8s_usage", "menu:cmdb_cost",
+	"menu:cmdb_event_center", "menu:cmdb_alerts", "menu:cmdb_k8s_usage", "menu:cmdb_cost",
 	"menu:cmdb_basic", "menu:cmdb_integrations", "menu:cmdb_notify",
 	"menu:cmdb_cron", "menu:cmdb_task_runs", "menu:cmdb_users", "menu:cmdb_audit",
 }
@@ -2169,7 +2170,7 @@ func initCMDBRoleTemplates() {
 				"menu:cmdb_k8s_workloads", "menu:cmdb_k8s_pods", "menu:cmdb_k8s_networking",
 				"menu:cmdb_k8s_storage", "menu:cmdb_k8s_events", "menu:cmdb_k8s_health",
 				"menu:cmdb_k8s_topology", "menu:cmdb_k8s_ns_project",
-				"menu:cmdb_event_center", "menu:cmdb_k8s_usage", "menu:cmdb_cost",
+				"menu:cmdb_event_center", "menu:cmdb_alerts", "menu:cmdb_k8s_usage", "menu:cmdb_cost",
 			}, []string{
 				"cmdb:sync_k8s", "cmdb:manage_ns_project", "cmdb:manage_upgrade", "cmdb:k8s_diag",
 			})},

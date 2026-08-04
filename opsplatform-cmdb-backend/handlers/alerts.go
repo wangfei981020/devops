@@ -61,6 +61,7 @@ func n9eClient(db *sql.DB, cipher *crypto.Cipher, env string) (*n9e.Client, erro
 func (h *AlertHandler) List(c *gin.Context) {
 	env := c.Query("env")
 	state := c.DefaultQuery("state", "current")
+	sevFilter := c.Query("severity") // critical/warning/info
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
 
 	cli, err := n9eClient(h.DB, h.Cipher, env)
@@ -92,8 +93,7 @@ func (h *AlertHandler) List(c *gin.Context) {
 		stime := etime - int64(hours)*3600
 		events, total, err = cli.HistoryAlerts(ctx, stime, etime, limit)
 	} else {
-		events, err = cli.CurrentAlerts(ctx, limit)
-		total = int64(len(events))
+		events, total, err = cli.CurrentAlerts(ctx, limit)
 	}
 	if err != nil {
 		logx.Line("alerts", fmt.Sprintf("WARN 拉夜莺告警失败 env=%s state=%s: %v", env, state, err))
@@ -102,13 +102,19 @@ func (h *AlertHandler) List(c *gin.Context) {
 	}
 
 	list := make([]gin.H, 0, len(events))
+	filtered := 0
 	for _, e := range events {
+		if sevFilter != "" && e.SeverityLabel() != sevFilter {
+			filtered++
+			continue
+		}
 		item := gin.H{
 			"id": e.ID, "rule_name": e.RuleName, "rule_note": e.RuleNote,
 			"severity": e.SeverityLabel(), "object": e.Object(),
 			"cluster": e.Cluster, "group": e.GroupName,
-			"trigger_value": e.TriggerValue, "tags": e.Tags,
-			"recovered":    e.IsRecovered == 1,
+			"trigger_value": e.TriggerValue, "tags": e.BizTags(),
+			"notified":     e.NotifyCurNumber,
+			"recovered":    e.IsRecovered,
 			"trigger_time": tsFmt(e.TriggerTime),
 		}
 		if e.RecoverTime > 0 {
@@ -116,7 +122,17 @@ func (h *AlertHandler) List(c *gin.Context) {
 		}
 		list = append(list, item)
 	}
-	c.JSON(200, gin.H{"list": list, "total": total, "configured": true, "state": state})
+	out := gin.H{"list": list, "returned": len(list), "total": total, "configured": true, "state": state}
+	if sevFilter != "" {
+		out["severity_filter"] = sevFilter
+		out["filtered_out"] = filtered
+	}
+	if total > int64(len(list)) {
+		// 静默截断会让人以为"线上就这几条"。CMDB-019 同类问题。
+		out["truncated"] = true
+		out["hint"] = fmt.Sprintf("夜莺侧共 %d 条，本次只取回 %d 条（limit=%d）", total, len(list), limit)
+	}
+	c.JSON(200, out)
 }
 
 func tsFmt(ts int64) string {
@@ -136,13 +152,25 @@ func (h *EventCenterHandler) collectAlerts(ctx context.Context, cipher *crypto.C
 	if err != nil || cli == nil {
 		return // 没接入就跳过，不影响其他来源
 	}
-	events, err := cli.CurrentAlerts(ctx, 200)
+	events, total, err := cli.CurrentAlerts(ctx, 300)
 	if err != nil {
 		logx.Line("event_center", fmt.Sprintf("WARN 拉夜莺告警失败，事件中心少了告警这一路: %v", err))
 		return
 	}
+
+	// **只收 critical / warning，info 级挡在外面**。
+	//
+	//	实测生产上有 298 条活跃告警（info 89 / warning 187 / critical 22）。
+	//	全灌进来的话告警会占掉事件中心近一半版面，把变更、到期、K8s Warning
+	//	全挤到看不见——事件中心就变成了第二个告警列表，失去"一眼看到
+	//	平台最近出了什么事"的作用。info 级是"提醒"，要看去告警页。
+	skipped := 0
 	for _, e := range events {
-		if e.IsRecovered == 1 {
+		if e.IsRecovered {
+			continue
+		}
+		if e.Severity >= 3 {
+			skipped++
 			continue
 		}
 		msg := e.RuleNote
@@ -160,5 +188,10 @@ func (h *EventCenterHandler) collectAlerts(ctx context.Context, cipher *crypto.C
 			Cluster: e.Cluster,
 			sortTs:  t,
 		})
+	}
+	if skipped > 0 {
+		logx.Line("event_center", fmt.Sprintf(
+			"告警接入：夜莺共 %d 条活跃，已收 critical/warning，另有 %d 条 info 级未纳入（去告警页看）",
+			total, skipped))
 	}
 }

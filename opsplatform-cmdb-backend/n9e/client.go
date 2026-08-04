@@ -34,24 +34,32 @@ func New(url, token string) *Client {
 	}
 }
 
-// AlertEvent 一条告警。字段名对齐夜莺 v6/v7 的返回。
+// AlertEvent 一条告警。
+//
+//	字段类型按**生产实例的真实返回**对齐（2026-08-04 实测 n9e-extra）。
+//	⚠️ is_recovered 是 **bool** 不是 int——从 confluence 那份抄来的定义写的是 int，
+//	一接真实数据就 `cannot unmarshal bool into Go struct field`。
+//	夜莺不同版本字段类型有出入，抄定义务必用真实响应验一遍。
 type AlertEvent struct {
-	ID               int64             `json:"id"`
-	Cate             string            `json:"cate"`
-	IsRecovered      int               `json:"is_recovered"`
-	Cluster          string            `json:"cluster"`
-	GroupName        string            `json:"group_name"`
-	RuleID           int64             `json:"rule_id"`
-	RuleName         string            `json:"rule_name"`
-	RuleNote         string            `json:"rule_note"`
-	Severity         int               `json:"severity"` // 1=紧急 2=告警 3=提醒
+	ID          int64  `json:"id"`
+	Cate        string `json:"cate"`
+	IsRecovered bool   `json:"is_recovered"`
+	Cluster     string `json:"cluster"`
+	GroupName   string `json:"group_name"`
+	RuleID      int64  `json:"rule_id"`
+	RuleName    string `json:"rule_name"`
+	RuleNote    string `json:"rule_note"`
+	Severity    int    `json:"severity"` // 1=紧急 2=告警 3=提醒
+	// 实测生产上 target_ident 多为空，真正能标识对象的在 tags_map / annotations 里
 	TargetIdent      string            `json:"target_ident"`
 	TriggerTime      int64             `json:"trigger_time"`
 	TriggerValue     string            `json:"trigger_value"`
 	RecoverTime      int64             `json:"recover_time"`
-	Tags             []string          `json:"tags"`
+	Tags             []string          `json:"tags"`     // ["cluster=ecs","env=prod",...]
+	TagsMap          map[string]string `json:"tags_map"` // 同上但已拆成 kv，取 instance 用这个
 	Annotations      map[string]string `json:"annotations"`
 	FirstTriggerTime int64             `json:"first_trigger_time"`
+	NotifyCurNumber  int               `json:"notify_cur_number"` // 已通知次数，反映告警持续了多久
 }
 
 // SeverityLabel 夜莺的 severity 是数字，直接展示给人看没有意义
@@ -66,15 +74,63 @@ func (e AlertEvent) SeverityLabel() string {
 	}
 }
 
-// Object 告警对象：优先用监控对象标识，退化到规则名
+// Object 告警对象：这条告警到底在说哪台机器/哪个实例。
+//
+//	实测生产数据里 target_ident 基本是空的，有用的标识散在 tags_map
+//	和 annotations 里。直接把整串 tags 拼出来（"cluster=ecs,env=prod,instance=..."）
+//	在列表里没法看，所以按有用程度依次取。
 func (e AlertEvent) Object() string {
 	if e.TargetIdent != "" {
 		return e.TargetIdent
+	}
+	// 业务标识优先于基础设施标识。
+	//
+	//	实测教训：域名到期告警的 instance 是 domain-exporter 的地址
+	//	（172.16.14.16:8080），30 条域名告警全长一个样，完全没法排障；
+	//	真正要看的 g01prod.com 在 tags_map.domain 里。
+	//	证书类同理。所以先找"这条告警在说哪个业务对象"，
+	//	找不到才退回"哪台机器报出来的"。
+	// ① 明确的业务对象标签
+	for _, k := range []string{"domain", "cn", "certificate", "cert", "pod", "deployment", "service", "node", "database", "topic", "name"} {
+		if v := e.TagsMap[k]; v != "" {
+			return v
+		}
+	}
+	// ② annotations 里的标识优先于 tags 里的 instance。
+	//
+	//	annotations 是告警规则作者写给人看的，通常带业务含义；
+	//	tags.instance 往往只是 exporter 的地址。实测视频流告警：
+	//	  tags.instance        = 10.170.96.153:8080     ← 一个 exporter 上几十条流，全一样
+	//	  annotations.instance = g01-source_..._N7103   ← 这才是出问题的那条流
+	//	按 tags.instance 取，列表会出现十几行长得一模一样的告警。
+	for _, k := range []string{"instance", "hostname", "host", "target"} {
+		if v := e.Annotations[k]; v != "" {
+			return v
+		}
+	}
+	// ③ 兜底：exporter 地址
+	for _, k := range []string{"instance", "ident", "host", "hostname"} {
+		if v := e.TagsMap[k]; v != "" {
+			return v
+		}
 	}
 	if len(e.Tags) > 0 {
 		return strings.Join(e.Tags, ",")
 	}
 	return e.RuleName
+}
+
+// BizTags 除去噪音后的业务标签，给列表当次要信息展示。
+// 过滤掉 instance/ident 这类已经在 Object 里体现的，避免重复占地方。
+func (e AlertEvent) BizTags() map[string]string {
+	skip := map[string]bool{"instance": true, "ident": true, "host": true, "hostname": true, "__name__": true}
+	out := map[string]string{}
+	for k, v := range e.TagsMap {
+		if !skip[k] && v != "" {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 type listResp struct {
@@ -127,25 +183,29 @@ func (c *Client) TestConnection(ctx context.Context) error {
 }
 
 // CurrentAlerts 当前活跃告警（未恢复的）。排障时最先要看的就是这个。
-func (c *Client) CurrentAlerts(ctx context.Context, limit int) ([]AlertEvent, error) {
+//
+//	返回的 total 是**夜莺侧的真实总数**，不是本次取回的条数。
+//	两者必须分开：limit=8 时取回 8 条但线上有 298 条，
+//	把 8 当成总数就是把"只看了个开头"显示成"总共就这些"。
+func (c *Client) CurrentAlerts(ctx context.Context, limit int) ([]AlertEvent, int64, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
 	b, status, err := c.get(ctx, fmt.Sprintf("/api/n9e/alert-cur-events/list?limit=%d&p=1", limit))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if status != 200 {
-		return nil, fmt.Errorf("夜莺 HTTP %d：%.120s", status, string(b))
+		return nil, 0, fmt.Errorf("夜莺 HTTP %d：%.120s", status, string(b))
 	}
 	var r listResp
 	if err := json.Unmarshal(b, &r); err != nil {
-		return nil, fmt.Errorf("解析失败：%v", err)
+		return nil, 0, fmt.Errorf("解析失败：%v", err)
 	}
 	if r.Err != "" {
-		return nil, fmt.Errorf("夜莺返回错误：%s", r.Err)
+		return nil, 0, fmt.Errorf("夜莺返回错误：%s", r.Err)
 	}
-	return r.Dat.List, nil
+	return r.Dat.List, r.Dat.Total, nil
 }
 
 // HistoryAlerts 历史告警（含已恢复）。分页拉，但设了硬上限——

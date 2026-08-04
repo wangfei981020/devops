@@ -54,7 +54,7 @@
 import { shallowRef, ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { permOf as permOfPath } from './router'
-import { Odometer, Connection, Lock, Share, Grid, Operation, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets, Cloudy, Location, Sort, TrendCharts, Document } from '@element-plus/icons-vue'
+import { Odometer, Connection, Lock, Share, Grid, Operation, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets, Cloudy, Location, Sort, TrendCharts, Document, Warning } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
@@ -98,6 +98,7 @@ const menus = shallowRef([
     { path: '/k8s-ns-project', label: '命名空间归属', icon: Coin },
   ] },
   { type: 'item', path: '/event-center', label: '事件中心', icon: Bell },
+  { type: 'item', path: '/alerts', label: '告警', icon: Warning },
   { type: 'item', path: '/k8s-usage', label: '资源使用率', icon: TrendCharts },
   { type: 'item', path: '/cost', label: '云成本', icon: Coin },
   // 「展示台」已删除：它和总览用的是同一个 /dashboard 接口，7 个 KPI 全部是总览的子集，

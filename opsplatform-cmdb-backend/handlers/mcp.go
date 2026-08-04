@@ -159,6 +159,9 @@ var mcpTools = []mcpTool{
 	{"node_capacity", "节点可分配vs已request vs limit——答'节点够不够/还能排多少/超卖'", "/api/k8s/node-capacity", []mcpParam{{"cluster_id", "integer", "集群ID", true}}, false},
 	{"ns_overview", "命名空间/项目Pod概览:总/Running/失败/Pending+失败原因", "/api/k8s/ns-overview", []mcpParam{{"cluster_id", "integer", "集群ID", true}, {"namespace", "string", "命名空间", false}, {"project", "string", "业务项目", false}}, false},
 	{"pvc_usage", "全PVC使用率(used/cap/pct)——找快满的存储", "/api/k8s/pvc-usage", []mcpParam{{"cluster_id", "integer", "集群ID", true}}, false},
+	// 告警：接夜莺。排障第一句往往是"现在有什么在响"，
+	// 以前要切到夜莺看，现在和资产在同一个 AI 会话里
+	{"list_alerts", "夜莺当前活跃告警(未恢复):严重度/对象/规则/触发值/已通知次数。severity=critical|warning|info 筛级别。⚠️返回里 total 是夜莺侧总数、returned 是本次取回数,两者不等说明被 limit 截断了", "/api/alerts", []mcpParam{{"severity", "string", "critical/warning/info,不传=全部", false}, {"limit", "integer", "取回条数上限,默认200", false}}, false},
 	{"event_center", "事件中心:最近平台出了什么事(到期/变更/同步失败/K8s Warning统一时间线)——排障先看这个", "/api/k8s/event-center", []mcpParam{{"days", "integer", "天数窗口,默认30", false}, {"source", "string", "expiry/change/sync/k8s", false}, {"level", "string", "critical/warning/info", false}}, false},
 	{"query_loki", "Loki 日志检索(LogQL),跨Pod/历史深查。事件历史也在这里:event-exporter 把 K8s 事件以结构化 JSON 打到 stdout,可用 | json | type=\"Warning\" | reason=\"OOMKilling\" 过滤", "/api/obs/loki", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"env", "string", "环境", false}, {"query", "string", "LogQL", true}, {"minutes", "integer", "时间窗", false}, {"step", "string", "聚合查询步长,如 1m,不传自动选", false}}, false},
 	{"query_prometheus", "通用 PromQL 查询,中间件指标(Kafka积压/nacos实例/etcd延迟/Harbor配额)全靠它。多集群共享数据源时须在标签里写 $CLUSTER 占位符做隔离,如 up{$CLUSTER};传 minutes 则查区间看趋势", "/api/obs/prom-query", []mcpParam{{"cluster_id", "integer", "集群ID", false}, {"env", "string", "环境", false}, {"query", "string", "PromQL,标签里可用 $CLUSTER 占位", true}, {"minutes", "integer", "时间窗(分钟),不传=瞬时值", false}, {"step", "string", "区间查询步长,如 1m,不传自动选", false}}, false},

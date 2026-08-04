@@ -304,3 +304,6 @@ export const listUsers = () => http.get('/users').then((r) => r.data)
 export const changeUserPassword = (id, password) => http.put(`/users/${id}/password`, { password }).then((r) => r.data)
 export const kickUser = (id) => http.post(`/users/${id}/kick`).then((r) => r.data)
 export const deleteUser = (id) => http.delete(`/users/${id}`).then((r) => r.data)
+
+// 夜莺告警（只读）
+export const listAlerts = (params) => http.get('/alerts', { params }).then((r) => r.data)

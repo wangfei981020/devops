@@ -96,7 +96,7 @@ var permPrefixRules = []permRule{
 	{"/api/k8s/ns-overview", "menu:cmdb_k8s_ns_project", ""},
 	{"/api/k8s/ns-projects", "menu:cmdb_k8s_ns_project", "cmdb:manage_ns_project"},
 	{"/api/k8s/event-center", "menu:cmdb_event_center", ""},
-	{"/api/alerts", "menu:cmdb_event_center", ""},
+	{"/api/alerts", "menu:cmdb_alerts,menu:cmdb_event_center", ""},
 	{"/api/gke/", "menu:cmdb_version_upgrade", "cmdb:manage_upgrade"},
 
 	// 实时诊断：虽是读，但绕过快照直连生产 apiserver，日志里可能有业务数据，

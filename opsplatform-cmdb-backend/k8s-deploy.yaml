@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/opsplatform-cmdb-backend:v188
+          image: localhost:8070/opsplatform/opsplatform-cmdb-backend:v194
           imagePullPolicy: IfNotPresent
           env:
             # 泛解析(* CNAME)场景：禁用 lego 跟随 CNAME，让它直接在注册域名 zone 加显式 _acme-challenge TXT 盖过通配
