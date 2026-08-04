@@ -285,6 +285,7 @@
         <div v-if="form.alert_mode === 'not_found'" class="form-group">
           <label class="form-label">告警间隔</label>
           <select v-model="form.alert_interval" class="form-select" style="width: 250px;">
+            <option value="once">只告警一次（恢复后再通知）</option>
             <option value="">每次执行都发（默认）</option>
             <option value="5m">每 5 分钟</option>
             <option value="10m">每 10 分钟</option>
@@ -295,7 +296,13 @@
             <option value="12h">每 12 小时</option>
             <option value="24h">每 24 小时</option>
           </select>
-          <div class="form-hint">持续搜不到日志时，多久发送一次告警。留空则跟随执行周期每次都发</div>
+          <div class="form-hint">
+            持续搜不到日志时，多久发送一次告警。留空则跟随执行周期每次都发<br>
+            选「只告警一次」时：搜不到发一条告警，之后不再重复；恢复时发一条恢复通知，一告一恢复算一个闭环。再次搜不到会重新告警（分组时每个容器各自独立闭环）
+          </div>
+          <div v-if="form.alert_interval === 'once' && form.recovery_enabled !== 1" class="form-hint" style="color: #b45309;">
+            ⚠️ 当前未启用恢复通知：只告警一次又不发恢复，故障恢复后不会有任何消息，建议勾选上方「启用恢复通知」
+          </div>
         </div>
 
         <!-- 屏蔽管理 -->

@@ -121,6 +121,14 @@ func releaseGlobal() {
 	}
 }
 
+// AlertIntervalOnce 表示 not_found 模式下「只告警一次」：
+// 从正常→搜不到时发一条告警，之后持续搜不到不再重复发，直到恢复发一条恢复通知，
+// 一次告警 + 一次恢复算一个闭环；再次搜不到属于新的闭环，会重新告警。
+const AlertIntervalOnce = "once"
+
+// alertStateTTL 是 Redis 中告警状态 key 的存活时间
+const alertStateTTL = 7 * 24 * time.Hour
+
 // Engine manages all alert rules and their schedules
 type Engine struct {
 	mu          sync.RWMutex
@@ -622,6 +630,13 @@ func (e *Engine) executeRule(ruleID int) {
 		if len(result.Hits) == 0 {
 			// No hits → should be alerting
 			if prevState == "alerting" {
+				// alert_interval=once: 一次告警 + 一次恢复为一个闭环，恢复前不重复发
+				if rule.AlertInterval == AlertIntervalOnce {
+					// 续期状态 key，避免长时间未恢复时 TTL 过期被误判为新故障
+					database.RDB.Expire(ctx, stateKey, alertStateTTL)
+					log.Printf("[Engine] Rule %d: once mode, already alerting, skip until recovery", rule.ID)
+					return
+				}
 				// Already alerting, check alert_interval for repeat notification
 				alertInterval := time.Duration(0)
 				if rule.AlertInterval != "" {
@@ -1445,6 +1460,17 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 			if isMuted(rule.ID, groupKey) {
 				log.Printf("[Engine] Rule %d: group '%s' is muted, skipping", rule.ID, groupKey)
 				continue
+			}
+
+			// alert_interval=once: 该分组已在告警中，恢复前不再重复发
+			if rule.AlertInterval == AlertIntervalOnce {
+				curState, _ := database.RDB.Get(ctx, stateKey).Result()
+				if curState == "alerting" {
+					// 续期状态 key，避免长时间未恢复时 TTL 过期被误判为新故障
+					database.RDB.Expire(ctx, stateKey, alertStateTTL)
+					log.Printf("[Engine] Rule %d: group '%s' once mode, already alerting, skip until recovery", rule.ID, groupKey)
+					continue
+				}
 			}
 
 			// Check alert interval (should we send again?)
@@ -2457,8 +2483,14 @@ func BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJS
 
 // checkAlertInterval checks if enough time has passed since last alert
 func checkAlertInterval(ctx context.Context, key, interval string) bool {
+	if interval == AlertIntervalOnce {
+		// once 依赖 not_found 的告警状态机，found 模式没有状态机，这里按「不限流」处理
+		log.Printf("[Engine] WARN: alert_interval=once 只在 not_found 模式生效，key=%s，按每次都发处理", key)
+		return false
+	}
 	d, err := time.ParseDuration(interval)
 	if err != nil {
+		log.Printf("[Engine] WARN: 无法识别的 alert_interval '%s'，key=%s，按每次都发处理", interval, key)
 		return false
 	}
 	lastTime, err := database.RDB.Get(ctx, key).Result()

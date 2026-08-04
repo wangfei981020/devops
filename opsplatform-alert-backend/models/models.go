@@ -107,7 +107,7 @@ type AlertRule struct {
 	GroupBy          string         `json:"group_by"`
 	ExpectedGroups   string         `json:"expected_groups"`  // JSON array of expected group names
 	QueryConcurrency int            `json:"query_concurrency"` // per-rule concurrency for group checks
-	AlertInterval    string         `json:"alert_interval"`    // repeat alert interval: 5m/10m/30m/1h
+	AlertInterval    string         `json:"alert_interval"`    // repeat alert interval: once(只告警一次,恢复后再通知)/5m/10m/30m/1h
 	DedupField       string         `json:"dedup_field"`
 	DedupTTL         int            `json:"dedup_ttl"`
 	MaxAlerts        int            `json:"max_alerts"`

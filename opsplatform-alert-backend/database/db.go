@@ -238,7 +238,7 @@ func autoMigrate() {
 		{"alert_rules", "group_by", "VARCHAR(200) DEFAULT '' COMMENT '分组字段'"},
 		{"alert_rules", "expected_groups", "TEXT COMMENT '期望的分组列表JSON'"},
 		{"alert_rules", "query_concurrency", "INT DEFAULT 5 COMMENT '单规则查询并发数'"},
-		{"alert_rules", "alert_interval", "VARCHAR(20) DEFAULT '' COMMENT '告警间隔: 5m/10m/30m/1h，空则每次都发'"},
+		{"alert_rules", "alert_interval", "VARCHAR(20) DEFAULT '' COMMENT '告警间隔: once=只告警一次(恢复后再通知)/5m/10m/30m/1h，空则每次都发'"},
 		{"alert_rules", "data_source_type", "VARCHAR(20) DEFAULT 'es' COMMENT '数据源类型: es/loki'"},
 		{"alert_rules", "loki_connection_id", "INT DEFAULT 0 COMMENT 'Loki连接ID'"},
 		{"alert_rules", "logql", "TEXT COMMENT 'LogQL查询语句(Loki)'"},

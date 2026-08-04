@@ -17,6 +17,7 @@ Docker Desktop 的 K8s NodePort 不会直接 expose 到 `localhost`，这层 ngi
 | 30826 | 发布控制台前端 | 页面 + **API：`localhost:30826/api/...`** |
 | 30829 | CMDB 前端 | 页面 + **API：`localhost:30829/api/...`** |
 | 30830 | 运维 AI 助手前端 | 页面 + **API：`localhost:30830/api/...`** |
+| 30825 | ES 告警平台前端 | 页面 + **API：`localhost:30825/api/...`** |
 | 30840 | video-images web | 缩略图代理（根路径 404 是正常的，按 key 取图） |
 | 30900 | SSO 后端 | |
 | 30901 | SSO 前端 | |
