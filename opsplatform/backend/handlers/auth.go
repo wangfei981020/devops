@@ -399,6 +399,22 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, contextKeyRole, claims.Role)
 		ctx = context.WithValue(ctx, contextKeyToken, token)
 
+		// 把 X-Operator 头改写成**已认证的身份**（OPS-001 的第二半）。
+		//
+		//	全站有 70+ 处 handler 用 `r.Header.Get("X-Operator")` 当操作人，
+		//	写进审计日志和 created_by。那是个客户端可以随便填的头——
+		//	任何登录用户都能把自己的操作记成别人干的，审计因此不可信。
+		//
+		//	逐个改 70 多处风险大且容易漏；在鉴权入口统一覆盖，
+		//	下游一行都不用动就拿到不可伪造的值。
+		//	不一致时留一条日志：正常调用两者本就相同，不同要么是调用方写错，
+		//	要么是有人在试探。
+		if op := r.Header.Get("X-Operator"); op != "" && op != claims.Username {
+			log.Printf("[审计] WARN X-Operator=%q 与认证身份 %q 不一致，已按后者记录 (%s %s)",
+				op, claims.Username, r.Method, r.URL.Path)
+		}
+		r.Header.Set("X-Operator", claims.Username)
+
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"opsplatform-cmdb-backend/crypto"
 	"opsplatform-cmdb-backend/k8ssource"
 	"opsplatform-cmdb-backend/logx"
 )
@@ -18,16 +19,17 @@ import (
 // EventCenterHandler 事件中心：聚合平台各处事件成统一时间线(到期/变更/同步失败/K8s Warning)。
 // AI 排障入口:一次拉到"最近平台出了什么事"，再钻具体诊断。
 type EventCenterHandler struct {
-	DB   *sql.DB
-	Pool *k8ssource.Pool
+	DB     *sql.DB
+	Pool   *k8ssource.Pool
+	Cipher *crypto.Cipher // 解密夜莺接入的 token
 }
 
-func NewEventCenterHandler(db *sql.DB, pool *k8ssource.Pool) *EventCenterHandler {
-	return &EventCenterHandler{DB: db, Pool: pool}
+func NewEventCenterHandler(db *sql.DB, pool *k8ssource.Pool, cipher *crypto.Cipher) *EventCenterHandler {
+	return &EventCenterHandler{DB: db, Pool: pool, Cipher: cipher}
 }
 
 func (h *EventCenterHandler) Register(r *gin.RouterGroup) {
-	r.GET("/k8s/event-center", h.List) // days,level(critical/warning/info),source(expiry/change/sync/k8s)
+	r.GET("/k8s/event-center", h.List) // days,level(critical/warning/info),source(expiry/change/sync/k8s/alert)
 }
 
 type evt struct {
@@ -170,6 +172,13 @@ func (h *EventCenterHandler) List(c *gin.Context) {
 		if lvlFilter == "" || lvlFilter == "warning" {
 			h.collectK8sWarnings(c.Request.Context(), days, &events, add)
 		}
+	}
+
+	// 5. 夜莺告警（当前活跃的）。没接入夜莺就自动跳过，不影响其他来源。
+	// 只取活跃的：事件中心看的是"最近发生了什么"，
+	// 把几千条已恢复的历史告警灌进来会把其他来源全淹掉。
+	if srcFilter == "" || srcFilter == "alert" {
+		h.collectAlerts(c.Request.Context(), h.Cipher, add)
 	}
 
 	// 合并完全同类的重复条目（同来源+对象+标题+详情）。

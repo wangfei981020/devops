@@ -102,9 +102,9 @@ func main() {
 	handlers.NewK8sPDBHandler(db).Register(api) // PDB：节点能不能被 drain 走，升级卡不卡
 	handlers.NewK8sTopologyHandler(db, cipher).Register(api)
 	handlers.NewK8sCostHandler(db).Register(api)
-	handlers.NewK8sDiagHandler(db, k8sPool, cipher).Register(api) // 合并 k8sinsight：实时日志/事件/规则诊断
-	handlers.NewEventCenterHandler(db, k8sPool).Register(api)     // 事件中心:到期/变更/同步失败/K8s Warning 统一时间线
-	handlers.NewObsHandler(db, cipher).Register(api)              // 数据源接入(Prometheus/Loki/KubeSphere 地址)
+	handlers.NewK8sDiagHandler(db, k8sPool, cipher).Register(api)     // 合并 k8sinsight：实时日志/事件/规则诊断
+	handlers.NewEventCenterHandler(db, k8sPool, cipher).Register(api) // 事件中心:到期/变更/同步失败/K8s Warning 统一时间线
+	handlers.NewObsHandler(db, cipher).Register(api)                  // 数据源接入(Prometheus/Loki/KubeSphere 地址)
 	obsQ := handlers.NewObsQueryHandler(db, cipher)
 	obsQ.Register(api)          // 资源使用率/Loki/KubeSphere 查询
 	obsQ.RegisterInsights(api)  // 浪费排行/闲置成本（需 Prometheus 实测数据）
@@ -115,9 +115,10 @@ func main() {
 	harborH.RegisterAdmin(api) // Harbor 接入配置
 	mcpH := handlers.NewMCPHandler(db, cfg.JWTSecret, cfg.Port)
 	mcpH.RegisterAuthed(api)
-	handlers.NewUserHandler(db).Register(api)  // 用户管理（区分本地账号与运维平台 SSO 影子账号）
-	handlers.NewAuditHandler(db).Register(api) // 操作审计查询 + 变更回滚
-	handlers.StartAuditCleanup(db)             // 按保留期清理（默认 0=永久，不删）
+	handlers.NewAlertHandler(db, cipher).Register(api) // 夜莺告警（接入走 obs_endpoints type=n9e）
+	handlers.NewUserHandler(db).Register(api)          // 用户管理（区分本地账号与运维平台 SSO 影子账号）
+	handlers.NewAuditHandler(db).Register(api)         // 操作审计查询 + 变更回滚
+	handlers.StartAuditCleanup(db)                     // 按保留期清理（默认 0=永久，不删）
 	// 周期全量同步所有启用集群（阶段3），默认每 120s 一轮
 	go k8ssource.StartScheduler(db, k8sPool, k8ssource.DefaultSyncIntervalSec)
 	// 每 6h 刷新当月成本快照（跨月自动定格上月），供环比/报告用
