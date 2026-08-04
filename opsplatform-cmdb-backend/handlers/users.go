@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -31,6 +33,8 @@ func NewUserHandler(db *sql.DB) *UserHandler { return &UserHandler{DB: db} }
 
 func (h *UserHandler) Register(r *gin.RouterGroup) {
 	r.GET("/users", h.List)
+	r.POST("/users", h.Create)
+	r.PUT("/users/:id/role", h.ChangeRole)
 	r.PUT("/users/:id/password", h.ChangePassword)
 	r.POST("/users/:id/kick", h.Kick)
 	r.DELETE("/users/:id", h.Delete)
@@ -39,7 +43,9 @@ func (h *UserHandler) Register(r *gin.RouterGroup) {
 // List GET /api/users
 func (h *UserHandler) List(c *gin.Context) {
 	rows, err := h.DB.Query(`SELECT u.id, u.username, IFNULL(u.display_name,''), u.is_admin,
-		IFNULL(u.auth_source,'local'), u.last_login_at, u.created_at,
+		IFNULL(u.auth_source,'local'), IFNULL(u.role_code,''),
+		IFNULL((SELECT r.name FROM local_roles r WHERE r.code = u.role_code), ''),
+		u.last_login_at, u.created_at,
 		(SELECT COUNT(*) FROM auth_sessions s WHERE s.user_id = u.id AND s.expires_at > NOW()) AS active_sessions
 		FROM users u ORDER BY u.auth_source, u.username`)
 	if err != nil {
@@ -51,16 +57,24 @@ func (h *UserHandler) List(c *gin.Context) {
 	list := []gin.H{}
 	for rows.Next() {
 		var id, isAdmin, sessions int
-		var username, display, src string
+		var username, display, src, roleCode, roleName string
 		var lastLogin sql.NullTime
 		var createdAt time.Time
-		if err := rows.Scan(&id, &username, &display, &isAdmin, &src, &lastLogin, &createdAt, &sessions); err != nil {
+		if err := rows.Scan(&id, &username, &display, &isAdmin, &src, &roleCode, &roleName,
+			&lastLogin, &createdAt, &sessions); err != nil {
 			continue
 		}
 		item := gin.H{
 			"id": id, "username": username, "display_name": display,
 			"is_admin": isAdmin == 1, "auth_source": src,
 			"active_sessions": sessions,
+			"role_code":       roleCode,
+			// 角色为空 = 升级前建的老账号，语义上就是不受限。
+			// 显示成"不受限"而不是留白——留白会被当成"还没配"，
+			// 而它其实是**权限最大**的那一档，看反了很危险。
+			"role_name": roleDisplayName(src, roleCode, roleName),
+			// portal 用户的角色在运维平台，这里改不了
+			"can_change_role": src == "local" && !(src == "local" && username == "admin"),
 			"created_at":      createdAt.Format("2006-01-02 15:04:05"),
 			// 这三个 flag 由后端算，前端不必自己推断规则——
 			// 规则散在两处迟早会不一致
@@ -74,6 +88,146 @@ func (h *UserHandler) List(c *gin.Context) {
 		list = append(list, item)
 	}
 	c.JSON(200, gin.H{"list": list})
+}
+
+// roleDisplayName 角色在列表里怎么显示。
+//
+//	三种情况必须区分开：
+//	  portal 用户   —— 角色在运维平台，CMDB 这边不存也不显示具体角色
+//	  role_code 为空 —— 升级前的老账号，**不受限**（权限最大的一档）
+//	  其余          —— 角色名；查不到说明角色被删了，要明说而不是留白
+func roleDisplayName(src, code, name string) string {
+	if src != "local" {
+		return "由运维平台分配"
+	}
+	if code == "" {
+		return "不受限（管理员）"
+	}
+	if name == "" {
+		return "角色已不存在（" + code + "）"
+	}
+	return name
+}
+
+// Create POST /api/users  {"username","password","display_name","role_code"}
+//
+//	只能建**本地**账号。portal 用户是 SSO 首次登录时自动建的影子记录，
+//	在这里手工造一条没有意义：运维平台那边没有对应的人，永远登不进来。
+func (h *UserHandler) Create(c *gin.Context) {
+	var in struct {
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		DisplayName string `json:"display_name"`
+		RoleCode    string `json:"role_code"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": "请求体格式错误：" + err.Error()})
+		return
+	}
+	in.Username = strings.TrimSpace(in.Username)
+	if in.Username == "" || len(in.Password) < 8 {
+		c.JSON(400, gin.H{"error": "用户名不能为空，密码至少 8 位"})
+		return
+	}
+	// 角色必须显式选。默认给个"不受限"太危险——建号的人未必意识到
+	// 自己刚发出去的是一把万能钥匙。
+	if in.RoleCode == "" {
+		c.JSON(400, gin.H{"error": "请选择角色"})
+		return
+	}
+	var exists int
+	if err := h.DB.QueryRow(`SELECT COUNT(*) FROM local_roles WHERE code=?`, in.RoleCode).Scan(&exists); err != nil || exists == 0 {
+		c.JSON(400, gin.H{"error": "角色不存在：" + in.RoleCode})
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "密码加密失败"})
+		return
+	}
+	if in.DisplayName == "" {
+		in.DisplayName = in.Username
+	}
+	res, err := h.DB.Exec(
+		`INSERT INTO users (username, password_hash, display_name, is_admin, role_code, auth_source)
+		 VALUES (?, ?, ?, ?, ?, 'local')`,
+		in.Username, string(hash), in.DisplayName, boolToInt(in.RoleCode == "cmdb_admin"), in.RoleCode)
+	if err != nil {
+		// 同名本地账号已存在。注意同名的 portal 影子账号是允许并存的
+		// （唯一键是 username+auth_source），这里只会撞本地那条。
+		c.JSON(409, gin.H{"error": "创建失败，可能用户名已存在：" + err.Error()})
+		return
+	}
+	id, _ := res.LastInsertId()
+	SetAuditTarget(c, in.Username+" 角色="+in.RoleCode)
+	AuditCreated(c, "users", id)
+	logx.Line("users", "创建本地账号 "+in.Username+" 角色="+in.RoleCode)
+	c.JSON(200, gin.H{"ok": true, "id": id})
+}
+
+// ChangeRole PUT /api/users/:id/role  {"role_code": "..."}
+//
+//	⚠️ 改角色**立即作废该用户的所有会话**。
+//	不这么做的话，权限快照还留在旧会话里：把人从管理员降成只读，
+//	他那个窗口照样能删东西，直到会话自然过期（默认 24 小时）。
+//	降权不即时生效，等于没降。
+func (h *UserHandler) ChangeRole(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(400, gin.H{"error": "id 不合法"})
+		return
+	}
+	var in struct {
+		RoleCode string `json:"role_code"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.RoleCode == "" {
+		c.JSON(400, gin.H{"error": "请选择角色"})
+		return
+	}
+	var username, src string
+	if err := h.DB.QueryRow(`SELECT username, IFNULL(auth_source,'local') FROM users WHERE id=?`, id).
+		Scan(&username, &src); err != nil {
+		c.JSON(404, gin.H{"error": "用户不存在"})
+		return
+	}
+	if src != "local" {
+		c.JSON(400, gin.H{"error": "该账号的权限在运维平台分配，请到运维平台「角色管理」修改"})
+		return
+	}
+	// 最后一个兜底管理员不能降权——运维平台一挂就再也进不来了，
+	// 而这个恰恰是本地账号存在的全部理由。
+	if in.RoleCode != "cmdb_admin" {
+		var others int
+		h.DB.QueryRow(`SELECT COUNT(*) FROM users
+			WHERE auth_source='local' AND id<>? AND (role_code='cmdb_admin' OR role_code='')`, id).Scan(&others)
+		if others == 0 {
+			c.JSON(400, gin.H{"error": "这是最后一个不受限的本地管理员，降权后运维平台不可用时将无人能登录 CMDB"})
+			return
+		}
+	}
+	var exists int
+	if err := h.DB.QueryRow(`SELECT COUNT(*) FROM local_roles WHERE code=?`, in.RoleCode).Scan(&exists); err != nil || exists == 0 {
+		c.JSON(400, gin.H{"error": "角色不存在：" + in.RoleCode})
+		return
+	}
+
+	// 改前快照由审计中间件自动抓（users 表在自动快照名单里），这里不用手工记
+	if _, err := h.DB.Exec(`UPDATE users SET role_code=?, is_admin=? WHERE id=?`,
+		in.RoleCode, boolToInt(in.RoleCode == "cmdb_admin"), id); err != nil {
+		c.JSON(500, gin.H{"error": "保存失败：" + err.Error()})
+		return
+	}
+	// 见上：降权必须立刻生效
+	r, _ := h.DB.Exec(`DELETE FROM auth_sessions WHERE user_id=?`, id)
+	killed := int64(0)
+	if r != nil {
+		killed, _ = r.RowsAffected()
+	}
+	SetAuditTarget(c, username+" → "+in.RoleCode)
+	logx.Line("users", fmt.Sprintf("用户 %s 角色改为 %s，已作废 %d 个会话", username, in.RoleCode, killed))
+	c.JSON(200, gin.H{"ok": true, "sessions_killed": killed,
+		"msg": fmt.Sprintf("已改为该角色，并作废了 %d 个在线会话（该用户需重新登录）", killed)})
 }
 
 // ChangePassword PUT /api/users/:id/password  {"password": "..."}

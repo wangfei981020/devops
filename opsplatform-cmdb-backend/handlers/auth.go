@@ -96,9 +96,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 	var id int
-	var hash, display, authSource string
-	err := h.DB.QueryRow(`SELECT id, password_hash, display_name, IFNULL(auth_source,'local')
-		FROM users WHERE username=?`, req.Username).Scan(&id, &hash, &display, &authSource)
+	var hash, display, authSource, roleCode string
+	err := h.DB.QueryRow(`SELECT id, password_hash, display_name, IFNULL(auth_source,'local'), IFNULL(role_code,'')
+		FROM users WHERE username=?`, req.Username).Scan(&id, &hash, &display, &authSource, &roleCode)
 	// portal 用户没有本地密码（password_hash 为空），不能走密码登录——
 	// 否则空密码 hash 一旦被 bcrypt 意外匹配就是个后门。
 	if err != nil || authSource != "local" || hash == "" ||
@@ -109,8 +109,22 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// 本地账号权限表留空：Middleware 见到 auth_source=local 直接全放行
-	token, expires, err := h.issueSession(id, req.Username, "admin", "local", nil, "")
+	// 本地账号按角色发权限。
+	//
+	//	role_code 为空 = 升级前就有的老账号，保持原样不受约束（迁移 088 刻意不回填，
+	//	否则升级这一下就可能把人锁在门外）。其余角色照权限表来。
+	//	sessionRole 写进会话，中间件据此决定放不放行——不能再简单地
+	//	"见到 local 就全放行"了。
+	perms, unrestricted := permsOfLocalRole(h.DB, roleCode)
+	sessionRole := roleCode
+	if unrestricted {
+		sessionRole = "admin" // 与 portal 超管同一个标记，中间件只认这一个值
+	}
+	var permArg map[string]bool
+	if !unrestricted {
+		permArg = perms
+	}
+	token, expires, err := h.issueSession(id, req.Username, sessionRole, "local", permArg, "")
 	if err != nil {
 		logx.Line("auth", fmt.Sprintf("issue session %s: %v", req.Username, err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
@@ -120,9 +134,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	WriteAuditAs(h.DB, h.ctxWithUser(c, req.Username), "auth.login.success", "auth_source=local")
 	c.JSON(http.StatusOK, gin.H{
 		"token": token, "username": req.Username, "display_name": display,
-		"auth_source": "local", "role": "admin", "expires_at": expires,
-		// 本地账号不受权限约束，给个空表让前端走 isAdmin 分支
-		"permissions": map[string]bool{},
+		"auth_source": "local", "role": sessionRole, "role_code": roleCode,
+		"expires_at": expires,
+		// is_admin 决定前端走"全放行"还是"查权限表"，必须和后端 IsAdmin 一致
+		"is_admin":    unrestricted,
+		"permissions": perms,
 	})
 }
 
@@ -230,11 +246,20 @@ func (h *AuthHandler) Middleware() gin.HandlerFunc {
 		c.Set(ctxAuthSource, authSource)
 		c.Set(ctxPerms, perms)
 		c.Set(ctxTokenHash, th)
-		// 谁不受权限码约束：
-		//   local —— 运维平台不可用时的兜底通道
-		//   运维平台超管 —— 它在运维平台侧就是全通的，到了 CMDB 反而被自己的
-		//     权限表挡住说不过去。**漏了这一条**，SSO 超管会被锁死在无权访问页。
-		c.Set(ctxIsAdmin, authSource == "local" || role == "admin")
+		// 谁不受权限码约束——**只认会话里的 role**，不再看 auth_source。
+		//
+		//	原来写的是 `authSource == "local"`，即"本地账号一律全放行"。
+		//	那样一来本地账号就只有全权限一档，开不出只读号（迁移 088 的由来）。
+		//	现在本地账号也带角色：cmdb_admin / 空（老账号）→ role 落成 "admin"，
+		//	其余角色按权限码查表。运维平台超管同样落 "admin"，两条路合一。
+		//
+		//	⚠️ 别改回按 auth_source 判断：那会让所有本地角色瞬间提权成管理员，
+		//	而且不会有任何报错——只读号能删域名，你也看不出来。
+		//
+		//	role 为空只可能是**升级前建立的老会话**（新会话一定写值）。
+		//	那种会话按老语义处理，否则一次发版就把当时在线的人全踢成无权限。
+		isAdmin := role == "admin" || (role == "" && authSource == "local")
+		c.Set(ctxIsAdmin, isAdmin)
 		c.Set(ctxRole, role)
 		c.Next()
 	}

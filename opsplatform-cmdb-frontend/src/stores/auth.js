@@ -20,11 +20,21 @@ export const useAuthStore = defineStore('auth', {
     isLoggedIn: () => !!localStorage.getItem(TOKEN_KEY),
     // 本地账号是运维平台不可用时的兜底通道，不受权限码约束（后端同样放行）
     isLocal: (s) => s.user?.auth_source !== 'portal',
-    // 不受权限码约束的两类人，必须和后端 IsAdmin 保持一致：
-    //   本地兜底账号，以及运维平台的超管（SSO 进来的 role=admin）。
-    // 漏掉后者的后果实测过：超管菜单全空、每个路由都被拦，
-    // 而后端其实是放行的——两边对"这个人能干什么"理解不一致最难查。
-    isUnrestricted: (s) => s.user?.auth_source !== 'portal' || s.user?.is_admin === true,
+    // 受不受权限码约束，**只认后端给的 is_admin**，不要自己按 auth_source 推。
+    //
+    //	曾经写成 `auth_source !== 'portal'`，即"本地账号一律不受限"。
+    //	本地账号能分配角色之后这条就错了：一个 CMDB 只读的本地账号
+    //	在前端看到全部 38 个菜单，点进去每个都 403——
+    //	后端拦得住不代表没问题，把注定被拒的页面摆出来同样是 bug。
+    //
+    //	is_admin 缺失只可能是升级前存下的登录态（那时后端还不发这个字段），
+    //	按老语义兜底，否则用户刷新一下页面就变成空菜单。
+    isUnrestricted: (s) => {
+      const u = s.user
+      if (!u) return false
+      if (typeof u.is_admin === 'boolean') return u.is_admin
+      return u.auth_source !== 'portal'
+    },
   },
   actions: {
     // has 单个权限码：本地账号全放行，portal 账号严格查表。

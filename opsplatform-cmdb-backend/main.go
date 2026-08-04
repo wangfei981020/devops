@@ -117,8 +117,11 @@ func main() {
 	mcpH.RegisterAuthed(api)
 	handlers.NewAlertHandler(db, cipher).Register(api) // 夜莺告警（接入走 obs_endpoints type=n9e）
 	handlers.NewUserHandler(db).Register(api)          // 用户管理（区分本地账号与运维平台 SSO 影子账号）
-	handlers.NewAuditHandler(db).Register(api)         // 操作审计查询 + 变更回滚
-	handlers.StartAuditCleanup(db)                     // 按保留期清理（默认 0=永久，不删）
+	// 本地账号的角色。SSO 用户不看这份——他们的权限每次登录从运维平台实时拉。
+	handlers.SeedLocalRoles(db)
+	api.GET("/local-roles", (&handlers.LocalRoleHandler{DB: db}).List)
+	handlers.NewAuditHandler(db).Register(api) // 操作审计查询 + 变更回滚
+	handlers.StartAuditCleanup(db)             // 按保留期清理（默认 0=永久，不删）
 	// 周期全量同步所有启用集群（阶段3），默认每 120s 一轮
 	go k8ssource.StartScheduler(db, k8sPool, k8ssource.DefaultSyncIntervalSec)
 	// 每 6h 刷新当月成本快照（跨月自动定格上月），供环比/报告用

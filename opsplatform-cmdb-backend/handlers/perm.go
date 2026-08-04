@@ -134,6 +134,9 @@ var permPrefixRules = []permRule{
 
 	// 审计：看审计要菜单权限；回滚是独立按钮权限——能改 ≠ 能把别人的改动撤掉
 	{"/api/users", "menu:cmdb_users", "cmdb:manage_users"},
+	// 角色列表只是给用户管理页的下拉用，跟着用户管理菜单走即可——
+	// 单独要一个权限码没意义（看得到用户就该看得到能给他配哪些角色）
+	{"/api/local-roles", "menu:cmdb_users", ""},
 	{"/api/audit-logs", "menu:cmdb_audit", "cmdb:revert_change"},
 	{"/api/audit-changes", "menu:cmdb_audit", "cmdb:revert_change"},
 	// 对象详情页内嵌的变更历史：跟着对象走，不单独要审计菜单权限，

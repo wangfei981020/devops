@@ -152,7 +152,13 @@ func (h *AuthHandler) PortalAuth(c *gin.Context) {
 func (h *AuthHandler) RefreshPermissions(c *gin.Context) {
 	src, _ := c.Get(ctxAuthSource)
 	if src != "portal" || h.effectivePortalURL() == "" {
-		c.JSON(http.StatusOK, gin.H{"permissions": map[string]bool{}, "auth_source": src, "is_admin": true})
+		// 本地账号没有可以向运维平台刷的权限，**原样回当前会话的**即可。
+		//
+		//	⚠️ 这里曾经无条件返回 `permissions:{}, is_admin:true`——那是本地账号
+		//	还只有"全权限"一档时的写法。本地账号能分配角色之后，这一行会把
+		//	一个只读号在前端直接提权成管理员（后端仍拦得住，但界面全放开了）。
+		c.JSON(http.StatusOK, gin.H{
+			"permissions": permsFromCtx(c), "auth_source": src, "is_admin": IsAdmin(c)})
 		return
 	}
 	username, _ := c.Get(ctxUsername)
