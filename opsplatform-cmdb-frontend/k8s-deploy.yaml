@@ -26,7 +26,9 @@ data:
       # style 必须留 unsafe-inline——Element Plus 大量用内联样式，去掉会整站掉版。
       add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
 
-      location /api/ {
+      # ^~ = 前缀命中就别再看正则了。本地目前没有正则 location 所以踩不到，
+      # 但生产那份因为有静态资源正则，/api/xxx.js 会被劫持成 404。两边写法保持一致。
+      location ^~ /api/ {
         proxy_pass http://opsplatform-cmdb-backend:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
