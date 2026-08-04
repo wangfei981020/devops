@@ -342,8 +342,28 @@ func HandleRefreshPermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Call portal /api/my/permissions directly (internal service call, use X-Operator for user identification)
-	permissions := fetchPortalPermissionsInternal(cfg.PortalAPIURL, username)
+	// 用该用户存档的 portal token 调运维平台。
+	//
+	//	原先这里走的是 fetchPortalPermissionsInternal → {portal}/my/permissions，
+	//	注释写着"依赖内网信任"，但运维平台**根本没有这条路由**（它挂在 /api 下，
+	//	实测 404）；而 /api/my/permissions 认的是用户身份，光带 X-Operator 头是 401。
+	//	两条路都不通，于是这个函数一直返回 nil，前端 `if (data?.permissions)`
+	//	见到 null 就跳过更新——刷新权限静默无效，管理员撤了权限用户毫无感知。
+	//	（DEPLOY-002 同源缺陷）
+	permissions := fetchPortalPermissionsForUser(cfg.PortalAPIURL, userID, username)
+	if permissions == nil {
+		// 拉不到时**不下发 permissions 字段**，让前端保持现有权限不动，
+		// 只用 stale 标记告诉它"这次没刷成"。
+		// 下发空 map 是更糟的选择：前端 `if (data?.permissions)` 对 {} 为真，
+		// 会把用户权限清空——把一次网络抖动变成一次误降权。
+		log.Printf("[RefreshPerms] %s 拉取失败，前端将保持现有权限", username)
+		jsonSuccess(w, map[string]interface{}{
+			"stale":       true,
+			"role":        role,
+			"auth_source": authSource,
+		})
+		return
+	}
 
 	jsonSuccess(w, map[string]interface{}{
 		"permissions": permissions,
@@ -352,44 +372,23 @@ func HandleRefreshPermissions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// fetchPortalPermissionsInternal calls portal permissions endpoint without auth token (internal service-to-service)
-func fetchPortalPermissionsInternal(portalURL, username string) map[string]bool {
-	// Use /my/permissions with a service-level call
-	// The opsplatform /api/my/permissions is protected, so we use X-Operator header
-	// and rely on internal network trust (k8s service-to-service)
-	permURL := strings.TrimRight(portalURL, "/") + "/my/permissions"
-	client := &http.Client{Timeout: 5 * time.Second}
-	permReq, _ := http.NewRequest("GET", permURL, nil)
-	permReq.Header.Set("X-Operator", username)
-
-	resp, err := client.Do(permReq)
-	if err != nil {
-		log.Printf("[RefreshPerms] 获取权限失败: %v", err)
+// fetchPortalPermissionsForUser 用该用户存档的 portal token 拉最新权限。
+//
+//	token 在 portal-auth 成功时就写进 users.portal_token 了，只是从没被读过。
+//	⚠️ 它目前是**明文**存的（发布中心是加密存的），另行记录待修。
+func fetchPortalPermissionsForUser(portalURL string, userID int, username string) map[string]bool {
+	var tok string
+	if err := database.DB.QueryRow(`SELECT COALESCE(portal_token,'') FROM users WHERE id = ?`, userID).Scan(&tok); err != nil {
+		log.Printf("[RefreshPerms] 读 portal_token 失败 user=%s: %v", username, err)
 		return nil
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[RefreshPerms] HTTP %d for %s", resp.StatusCode, username)
+	if tok == "" {
+		log.Printf("[RefreshPerms] user=%s 没有存档的 portal token，需重新登录一次", username)
 		return nil
 	}
-
-	var result struct {
-		Permissions map[string]bool `json:"permissions"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil
-	}
-
-	alertPerms := make(map[string]bool)
-	for code, granted := range result.Permissions {
-		if granted && (code == "menu:alert" || strings.HasPrefix(code, "menu:alert_") || strings.HasPrefix(code, "alert:")) {
-			alertPerms[code] = true
-		}
-	}
-	log.Printf("[RefreshPerms] %s permissions: %v", username, alertPerms)
-	return alertPerms
+	return fetchPortalPermissions(portalURL, tok, username)
 }
+
 
 // AuthMiddleware validates JWT tokens
 func AuthMiddleware(next http.Handler) http.Handler {

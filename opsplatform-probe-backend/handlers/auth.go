@@ -306,25 +306,26 @@ func HandleRefreshPermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	permURL := strings.TrimRight(cfg.PortalAPIURL, "/") + "/my/permissions"
-	client := &http.Client{Timeout: 5 * time.Second}
-	permReq, _ := http.NewRequest("GET", permURL, nil)
-	permReq.Header.Set("X-Operator", username)
-	resp, err := client.Do(permReq)
-	if err != nil {
-		jsonSuccess(w, map[string]interface{}{"permissions": map[string]bool{}, "role": role, "auth_source": authSource})
+	// 用该用户存档的 portal token 调运维平台（DEPLOY-002 同源缺陷）。
+	//
+	//	原先这里拼的是 {portal}/my/permissions —— 运维平台没有这条路由（实测 404），
+	//	且没带用户身份。代码又不检查状态码，直接把 404 页面丢给 JSON 解码器，
+	//	解出来 permissions 为 nil、probePerms 变成**空 map**，然后原样下发。
+	//	前端 `if (data?.permissions)` 对 {} 判真——**用户点一下"刷新权限"
+	//	就把自己的权限清空了**。这比拉不到更糟。
+	var tok string
+	if err := database.DB.QueryRow(`SELECT COALESCE(portal_token,'') FROM users WHERE id = ?`, userID).Scan(&tok); err != nil || tok == "" {
+		log.Printf("[RefreshPerms] user=%s 无存档 portal token，保持现有权限不动", username)
+		jsonSuccess(w, map[string]interface{}{"stale": true, "role": role, "auth_source": authSource})
 		return
 	}
-	defer resp.Body.Close()
-	var result struct {
-		Permissions map[string]bool `json:"permissions"`
-	}
-	json.NewDecoder(resp.Body).Decode(&result)
-	probePerms := make(map[string]bool)
-	for code, granted := range result.Permissions {
-		if granted && (code == "menu:probe" || strings.HasPrefix(code, "menu:probe_") || strings.HasPrefix(code, "probe:")) {
-			probePerms[code] = true
-		}
+	probePerms := fetchPortalPermissions(cfg.PortalAPIURL, tok, username)
+	if probePerms == nil {
+		// 拉不到时**不下发 permissions 字段**，让前端保持现有权限，
+		// 只用 stale 告诉它这次没刷成——绝不下发空 map
+		log.Printf("[RefreshPerms] user=%s 拉取失败，前端将保持现有权限", username)
+		jsonSuccess(w, map[string]interface{}{"stale": true, "role": role, "auth_source": authSource})
+		return
 	}
 	jsonSuccess(w, map[string]interface{}{"permissions": probePerms, "role": role, "auth_source": authSource})
 }

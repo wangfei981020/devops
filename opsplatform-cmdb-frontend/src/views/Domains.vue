@@ -311,6 +311,7 @@
         </template></el-table-column>
         <el-table-column label="操作" width="180" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
+            <el-tooltip content="变更历史"><el-button link type="info" :icon="Tickets" @click="openDomHist(row)" /></el-tooltip>
             <el-tooltip v-if="canSync" content="刷到期（WHOIS+443）"><el-button link type="primary" :loading="refreshingDom[row.ci_id]" :icon="Refresh" @click="refreshOneDom(row)" /></el-tooltip>
             <el-tooltip v-if="canManage && canRenew(row)" content="续费 / 自动续费（写回 GoDaddy）"><el-button link type="warning" :icon="RefreshRight" @click="openRenew(row)" /></el-tooltip>
             <template v-if="canManage && row.origin === 'manual'">
@@ -393,6 +394,11 @@
 
     <!-- 续费记录台账（防超付可查：报价/订单号/到期前后/操作人） -->
     <!-- 批量续费：两步（先预览确认，再执行），真金白银不做一步到位 -->
+    <el-dialog v-model="domHist.show" :title="`变更历史 · ${domHist.name}`" width="720px" :close-on-click-modal="false">
+      <ChangeHistory v-if="domHist.show" table="domains" :pk="domHist.ciid" />
+      <template #footer><el-button @click="domHist.show=false">关闭</el-button></template>
+    </el-dialog>
+
     <el-dialog v-model="batchRenew.show" title="批量续费" width="880px" :close-on-click-modal="false">
       <el-alert type="warning" :closable="false" show-icon style="margin-bottom:12px"
         title="续费会真实扣费。请先「检查」确认清单无误，再执行；结果以订单号为准。" />
@@ -728,6 +734,12 @@
         <el-descriptions-item label="操作人">{{ detail.operator || '—' }}</el-descriptions-item>
         <el-descriptions-item label="更新时间">{{ detail.updated_at || '—' }}</el-descriptions-item>
       </el-descriptions>
+      <el-collapse v-if="detail" v-model="detailHist" style="margin-top:10px">
+        <el-collapse-item title="变更历史" name="h">
+          <!-- v-if 挂在展开状态上：折叠着就不发请求，避免每次开详情都多一次查询 -->
+          <ChangeHistory v-if="detailHist.includes('h')" table="domain_records" :pk="detail.id" :limit="10" />
+        </el-collapse-item>
+      </el-collapse>
       <template #footer><el-button @click="dDlg=false">关闭</el-button><el-button type="primary" :icon="Edit" @click="editFromDetail">编辑</el-button></template>
     </el-dialog>
   </div>
@@ -746,6 +758,7 @@ import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgno
   previewBatchRenew, batchRenewDomains } from '../api/cmdb'
 import { normalizeError } from '../api/http'
 import LoadError from '../components/LoadError.vue'
+import ChangeHistory from '../components/ChangeHistory.vue'
 import { useAppStore } from '../stores/app'
 import { useAuthStore } from '../stores/auth'
 
@@ -757,6 +770,12 @@ const canManage = computed(() => auth.hasButton('manage_domains'))
 const canSync = computed(() => auth.hasButton('sync_domains'))
 const canCert = computed(() => auth.hasButton('manage_certs'))
 const canRecords = computed(() => auth.hasButton('manage_records'))
+
+const detailHist = ref([])                       // 解析详情里「变更历史」的展开状态
+const domHist = reactive({ show: false, ciid: null, name: '' })
+function openDomHist(row) {
+  Object.assign(domHist, { show: true, ciid: row.ci_id, name: row.name })
+}
 
 // ── 批量续费 ──
 // 两步走：input（粘域名）→ preview（看清单）→ 执行。
