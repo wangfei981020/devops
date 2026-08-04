@@ -63,6 +63,7 @@ func (h *SyncHandler) Register(r *gin.RouterGroup) {
 	// 批量续费：先 preview 看清楚哪些能续，再执行（真金白银，不做一步到位）
 	r.POST("/domains/renew-batch/preview", h.PreviewBatchRenew)
 	r.POST("/domains/renew-batch", h.BatchRenewDomains)
+	r.GET("/domains/renew-batch/:id", h.BatchRenewStatus) // 轮询后台任务进度
 	r.POST("/domains/:ciid/auto-renew", h.SetAutoRenew)
 	r.GET("/renewals", h.ListRenewals) // 续费记录历史
 }

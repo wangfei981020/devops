@@ -399,7 +399,9 @@
       <template #footer><el-button @click="domHist.show=false">关闭</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="batchRenew.show" title="批量续费" width="880px" :close-on-click-modal="false">
+    <el-dialog v-model="batchRenew.show" title="批量续费" width="880px"
+               :close-on-click-modal="false" :close-on-press-escape="false"
+               :show-close="true">
       <el-alert type="warning" :closable="false" show-icon style="margin-bottom:12px"
         title="续费会真实扣费。请先「检查」确认清单无误，再执行；结果以订单号为准。" />
 
@@ -423,6 +425,7 @@
           <el-tag v-if="cntBy('unsupported')" type="warning" effect="plain">不支持写回 {{ cntBy('unsupported') }}</el-tag>
           <el-tag v-if="cntBy('duplicated')" type="info" effect="plain">重复 {{ cntBy('duplicated') }}</el-tag>
           <el-tag v-if="cntBy('renewed')" type="success">已续 {{ cntBy('renewed') }}</el-tag>
+          <el-tag v-if="cntBy('uncertain')" type="warning">待核对 {{ cntBy('uncertain') }}</el-tag>
           <el-tag v-if="cntBy('failed')" type="danger">失败 {{ cntBy('failed') }}</el-tag>
           <span class="muted" style="margin-left:auto">续费年数：{{ batchRenew.period }} 年</span>
         </div>
@@ -440,6 +443,18 @@
         </div>
         <el-alert v-if="batchRenew.warning" type="warning" :closable="false" show-icon
                   style="margin-bottom:10px" :title="batchRenew.warning" />
+        <!-- 执行结果常驻，不用一闪而过的 toast：这是花钱且不可回滚的操作，
+             结果必须留在页面上让人看完、对账 -->
+        <el-progress v-if="batchRenew.running && batchRenew.total" :percentage="Math.round(batchRenew.done / batchRenew.total * 100)"
+                     :stroke-width="14" style="margin-bottom:10px" />
+        <el-alert v-if="batchRenew.result" :type="batchRenew.resultType" :closable="false" show-icon
+                  style="margin-bottom:10px">
+          <template #title>{{ batchRenew.result }}</template>
+          <div v-if="cntBy('uncertain')" class="muted" style="margin-top:4px">
+            「待核对」= 厂商没返回响应，但我们回查到期日确认<b>已实际扣费</b>。
+            这类没有订单号，请到 GoDaddy 账单按日期核对，<b>不要重试</b>。
+          </div>
+        </el-alert>
         <el-table :data="batchRenew.items" size="small" max-height="380" border>
           <el-table-column prop="domain" label="域名" min-width="180" show-overflow-tooltip />
           <el-table-column label="状态" width="110">
@@ -472,6 +487,9 @@
           <el-table-column label="订单号 / 说明" min-width="230" show-overflow-tooltip>
             <template #default="{ row }">
               <code v-if="row.order_id">{{ row.order_id }}</code>
+              <el-tooltip v-else-if="row.msg" :content="row.msg">
+                <span class="warn-txt">响应超时，已确认扣费 →去账单核对</span>
+              </el-tooltip>
               <span v-else class="muted">{{ row.reason || '—' }}</span>
             </template>
           </el-table-column>
@@ -479,7 +497,7 @@
       </div>
 
       <template #footer>
-        <el-button @click="batchRenew.show = false">关闭</el-button>
+        <el-button @click="batchRenew.show = false">{{ batchRenew.running ? '关闭（任务继续在后台跑）' : '关闭' }}</el-button>
         <template v-if="batchRenew.step === 'input'">
           <el-button type="primary" :loading="batchRenew.checking" @click="doPreviewBatch">检查</el-button>
         </template>
@@ -770,7 +788,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, RefreshRight, Tickets, InfoFilled, Connection, ArrowDown, Close, MagicStick } from '@element-plus/icons-vue'
 import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
@@ -779,7 +797,7 @@ import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgno
   syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains, bulkIgnoreDomains,
   listOriginRules, upsertOriginRule, deleteOriginRule, bulkDomainStatus,
   godaddyDetail, renewDomain, setAutoRenew, listRenewals, autoLinkDomainModules,
-  previewBatchRenew, batchRenewDomains } from '../api/cmdb'
+  previewBatchRenew, batchRenewDomains, batchRenewStatus } from '../api/cmdb'
 import { normalizeError } from '../api/http'
 import LoadError from '../components/LoadError.vue'
 import ChangeHistory from '../components/ChangeHistory.vue'
@@ -808,7 +826,8 @@ function openDomHist(row) {
 const batchRenew = reactive({
   show: false, step: 'input', text: '', period: 1,
   items: [], renewable: 0, warning: '', checking: false, running: false,
-  totals: {}, priced: 0, unpriced: 0,
+  totals: {}, priced: 0, unpriced: 0, result: '', resultType: 'success',
+  jobId: '', done: 0, total: 0,
 })
 
 // 总额按币种分开展示：混币种硬加出来的数没有意义
@@ -821,13 +840,14 @@ const totalText = computed(() => {
 function openBatchRenew() {
   Object.assign(batchRenew, { show: true, step: 'input', text: '', period: 1,
     items: [], renewable: 0, warning: '', checking: false, running: false,
-    totals: {}, priced: 0, unpriced: 0 })
+    totals: {}, priced: 0, unpriced: 0, result: '', resultType: 'success',
+    jobId: '', done: 0, total: 0 })
 }
 
 function cntBy(st) { return batchRenew.items.filter((x) => x.status === st).length }
 function brLabel(st) {
-  return { ok: '可续费', renewed: '已续费', failed: '失败', not_found: '未找到',
-    unsupported: '不支持', duplicated: '重复' }[st] || st
+  return { ok: '可续费', renewed: '已续费', uncertain: '待核对', failed: '失败',
+    not_found: '未找到', unsupported: '不支持', duplicated: '重复' }[st] || st
 }
 function brType(st) {
   return { ok: 'success', renewed: 'success', failed: 'danger', not_found: 'danger',
@@ -860,14 +880,24 @@ async function doBatchRenew() {
   } catch (_) { return }
   batchRenew.running = true
   try {
+    // 后端立即返回 job_id，续费在后台跑。
+    // 之前是同步等——4 个域名就可能超过 axios 的 30 秒超时，
+    // 前端断开而后端还在扣费，用户看到的结果是错的。
     const r = await batchRenewDomains({
       domains: batchRenew.text, period: batchRenew.period,
       confirm_count: batchRenew.renewable,   // 服务端会核对，对不上说明台账变过
     })
+    if (r.job_id) {
+      batchRenew.jobId = r.job_id
+      batchRenew.result = r.msg || '任务已提交，后台执行中…'
+      batchRenew.resultType = 'info'
+      pollBatch()
+      return
+    }
     batchRenew.items = r.items || []
     batchRenew.renewable = 0
-    if (r.failed) ElMessage.warning(r.msg)
-    else ElMessage.success(r.msg)
+    batchRenew.result = r.msg || '执行完成'
+    batchRenew.resultType = r.failed ? 'error' : (r.uncertain ? 'warning' : 'success')
     load()
   } catch (e) {
     // 409 = 预览之后台账变了，必须重新看一遍
@@ -1399,6 +1429,7 @@ onMounted(load)
   background: #fdf6ec; border: 1px solid #f5dab1; border-radius: 4px; font-size: 13px; }
 .brtotal b { font-size: 15px; color: #b88230; }
 .brtotal .warn { color: #e6a23c; margin-left: auto; font-size: 12px; }
+.warn-txt { color: #e6a23c; font-size: 12px; }
 .ok { color: #2f7d31; }
 .filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }

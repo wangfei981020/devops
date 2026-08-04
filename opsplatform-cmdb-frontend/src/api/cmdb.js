@@ -307,3 +307,4 @@ export const deleteUser = (id) => http.delete(`/users/${id}`).then((r) => r.data
 
 // 夜莺告警（只读）
 export const listAlerts = (params) => http.get('/alerts', { params }).then((r) => r.data)
+export const batchRenewStatus = (jobId) => http.get(`/domains/renew-batch/${jobId}`).then((r) => r.data)

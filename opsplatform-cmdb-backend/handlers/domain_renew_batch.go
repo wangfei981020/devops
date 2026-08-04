@@ -26,6 +26,56 @@ import (
 //	执行时**串行**：并发打注册商 API 既可能触发限流，也让"到底扣了几笔钱"
 //	在出错时更难查清。域名数量本来就不大，串行的代价可以接受。
 
+// ── 异步执行 ────────────────────────────────────────────────────────
+//
+//	批量续费改成"提交后立即返回 + 轮询进度"，不再让 HTTP 请求一直挂着。
+//
+//	为什么必须异步：前端 axios 超时 30 秒，而单个域名续费要走一次
+//	GoDaddy 写 API（慢时十几秒），失败还要回查核对（最长再 25 秒）。
+//	4 个域名就可能超过 30 秒——**前端断开了，后端还在继续跑**。
+//	用户看到的是"超时/部分失败"，实际钱一分不少地扣了。
+//	这不只是体验问题，是对账问题。
+//
+//	进度存内存：进程重启会丢，但真正的账在 domain_renewals 表里，
+//	丢的只是"这一批的实时进度"，不影响追溯。
+
+type batchRenewJob struct {
+	ID        string
+	Total     int
+	Done      int
+	Succeeded int
+	Failed    int
+	Uncertain int
+	Items     []batchRenewItem
+	Finished  bool
+	Msg       string
+	StartedAt time.Time
+	Operator  string
+}
+
+var (
+	batchJobs   = map[string]*batchRenewJob{}
+	batchJobsMu sync.RWMutex
+)
+
+// putJob / getJob 带锁访问；顺手清理 2 小时前的旧任务，避免内存无限涨
+func putJob(j *batchRenewJob) {
+	batchJobsMu.Lock()
+	defer batchJobsMu.Unlock()
+	batchJobs[j.ID] = j
+	for id, old := range batchJobs {
+		if old.Finished && time.Since(old.StartedAt) > 2*time.Hour {
+			delete(batchJobs, id)
+		}
+	}
+}
+
+func getJob(id string) *batchRenewJob {
+	batchJobsMu.RLock()
+	defer batchJobsMu.RUnlock()
+	return batchJobs[id]
+}
+
 // batchRenewMax 一次最多处理多少个域名。
 // 不是技术限制，是安全阀：粘贴板一次贴进几百个域名再点确认，
 // 出错时的代价太大。需要更多就分批做。
@@ -45,6 +95,10 @@ type batchRenewItem struct {
 	DryRun       bool    `json:"dry_run,omitempty"`
 	Env          string  `json:"env,omitempty"`
 	LedgerSaved  bool    `json:"ledger_saved,omitempty"`
+	// Uncertain：厂商响应没拿到但回查确认已扣费。必须和普通成功区分——
+	// 这类没有订单号，要人去账单核对，而且**绝不能重试**
+	Uncertain bool   `json:"uncertain,omitempty"`
+	Msg       string `json:"msg,omitempty"`
 }
 
 // parseDomainList 从一坨文本里抽域名：换行/逗号/分号/空格都当分隔符。
@@ -282,53 +336,113 @@ func (h *SyncHandler) BatchRenewDomains(c *gin.Context) {
 		return
 	}
 
-	// 执行前再取一次价：台账要记下单时的报价，而不是预览那一刻的
-	priceCtx, cancelPrice := context.WithTimeout(c.Request.Context(), 25*time.Second)
-	h.fillBatchPrices(priceCtx, items)
-	cancelPrice()
+	// 起一个后台任务，立即把 job_id 返回给前端去轮询。
+	// 这里刻意不复用请求的 context——请求一返回它就被 cancel 了，
+	// 而续费必须跑完（钱已经在扣了，中途放弃只会让账更乱）。
+	job := &batchRenewJob{
+		ID: fmt.Sprintf("br-%d", time.Now().UnixNano()), Total: renewable,
+		Items: items, StartedAt: time.Now(), Operator: currentUser(c),
+	}
+	putJob(job)
 
 	logx.JCtx(c.Request.Context(), "domain_renew", "batch_start", map[string]any{
-		"count": renewable, "period": in.Period, "operator": currentUser(c)})
+		"job": job.ID, "count": renewable, "period": in.Period, "operator": job.Operator})
 
-	succeeded, failed := 0, 0
-	for i := range items {
-		if items[i].Status != "ok" {
+	go h.runBatchRenew(job, in.Period, in.QuotedCurrency, in.QuotedAmount)
+
+	SetAuditTarget(c, fmt.Sprintf("批量续费 %d 个域名 %d 年（任务 %s）", renewable, in.Period, job.ID))
+	c.JSON(http.StatusAccepted, gin.H{
+		"job_id": job.ID, "total": renewable, "accepted": true,
+		"msg": fmt.Sprintf("已开始为 %d 个域名续费，可关闭弹窗，任务在后台继续", renewable),
+	})
+}
+
+// runBatchRenew 后台跑批量续费。串行——并发打注册商 API 既可能触发限流，
+// 也让"到底扣了几笔"在出错时更难查清。
+func (h *SyncHandler) runBatchRenew(job *batchRenewJob, period int, qCurIn string, qAmtIn float64) {
+	defer func() {
+		if r := recover(); r != nil {
+			// panic 也要把任务收尾，否则前端会一直转圈等一个永远不来的结果
+			logx.Line("domain_renew", fmt.Sprintf("批量续费任务 %s panic: %v", job.ID, r))
+			batchJobsMu.Lock()
+			job.Finished = true
+			job.Msg = "任务异常中断，请到「续费记录」核对实际扣费情况"
+			batchJobsMu.Unlock()
+		}
+	}()
+
+	// 执行前取一次价：台账要记下单时的报价
+	priceCtx, cancelPrice := context.WithTimeout(context.Background(), 25*time.Second)
+	h.fillBatchPrices(priceCtx, job.Items)
+	cancelPrice()
+
+	for i := range job.Items {
+		if job.Items[i].Status != "ok" {
 			continue
 		}
-		// 每个域名独立超时：一个卡住不该把后面的都拖死
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 40*time.Second)
-		// 报价按域名各自的来（台账要能对上每一笔实扣），
-		// 请求体里的 quoted_* 只作为取不到价时的兜底
-		qCur, qAmt := in.QuotedCurrency, in.QuotedAmount
-		if items[i].PricePerYear > 0 {
-			qCur = items[i].Currency
-			qAmt = items[i].PricePerYear * float64(in.Period)
+		qCur, qAmt := qCurIn, qAmtIn
+		if job.Items[i].PricePerYear > 0 {
+			qCur = job.Items[i].Currency
+			qAmt = job.Items[i].PricePerYear * float64(period)
 		}
-		res := h.renewOne(ctx, c, items[i].CIID, items[i].Domain, in.Period, qCur, qAmt)
+
+		// 每个域名独立超时：一个卡住不该把后面的都拖死
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		res := h.renewOne(ctx, job.Operator, job.Items[i].CIID, job.Items[i].Domain, period, qCur, qAmt)
 		cancel()
 
+		batchJobsMu.Lock()
 		if res.Err != "" {
-			items[i].Status = "failed"
-			items[i].Reason = res.Err
-			failed++
-			continue
+			job.Items[i].Status = "failed"
+			job.Items[i].Reason = res.Err
+			job.Failed++
+		} else {
+			job.Items[i].OrderID = res.OrderID
+			job.Items[i].ExpiryAfter = res.ExpiryAfter
+			job.Items[i].DryRun = res.DryRun
+			job.Items[i].Env = res.Env
+			job.Items[i].LedgerSaved = res.LedgerSaved
+			job.Items[i].Msg = res.Msg
+			if res.Uncertain {
+				job.Items[i].Status = "uncertain"
+				job.Items[i].Uncertain = true
+				job.Uncertain++
+			} else {
+				job.Items[i].Status = "renewed"
+			}
+			job.Succeeded++
 		}
-		items[i].Status = "renewed"
-		items[i].OrderID = res.OrderID
-		items[i].ExpiryAfter = res.ExpiryAfter
-		items[i].DryRun = res.DryRun
-		items[i].Env = res.Env
-		items[i].LedgerSaved = res.LedgerSaved
-		succeeded++
+		job.Done++
+		batchJobsMu.Unlock()
 	}
 
-	logx.JCtx(c.Request.Context(), "domain_renew", "batch_done", map[string]any{
-		"succeeded": succeeded, "failed": failed, "period": in.Period})
-	SetAuditTarget(c, fmt.Sprintf("批量续费 %d 年：成功 %d 个，失败 %d 个", in.Period, succeeded, failed))
+	batchJobsMu.Lock()
+	job.Finished = true
+	job.Msg = fmt.Sprintf("续费完成：成功 %d 个", job.Succeeded)
+	if job.Uncertain > 0 {
+		job.Msg += fmt.Sprintf("（其中 %d 个响应超时但已确认扣费，需去账单核对订单号）", job.Uncertain)
+	}
+	if job.Failed > 0 {
+		job.Msg += fmt.Sprintf("，失败 %d 个", job.Failed)
+	}
+	batchJobsMu.Unlock()
 
+	logx.Line("domain_renew", fmt.Sprintf("批量续费任务 %s 完成：成功 %d 待核对 %d 失败 %d",
+		job.ID, job.Succeeded, job.Uncertain, job.Failed))
+}
+
+// BatchRenewStatus GET /domains/renew-batch/:id —— 轮询进度
+func (h *SyncHandler) BatchRenewStatus(c *gin.Context) {
+	job := getJob(c.Param("id"))
+	if job == nil {
+		c.JSON(404, gin.H{"error": "任务不存在或已过期（超过 2 小时）。实际结果请看「续费记录」"})
+		return
+	}
+	batchJobsMu.RLock()
+	defer batchJobsMu.RUnlock()
 	c.JSON(200, gin.H{
-		"ok": failed == 0, "succeeded": succeeded, "failed": failed,
-		"items": items,
-		"msg":   fmt.Sprintf("续费完成：成功 %d 个，失败 %d 个", succeeded, failed),
+		"job_id": job.ID, "total": job.Total, "done": job.Done,
+		"succeeded": job.Succeeded, "failed": job.Failed, "uncertain": job.Uncertain,
+		"finished": job.Finished, "msg": job.Msg, "items": job.Items,
 	})
 }

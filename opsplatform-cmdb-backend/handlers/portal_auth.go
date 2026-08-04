@@ -46,14 +46,18 @@ func (h *AuthHandler) PortalAuth(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 token"})
 		return
 	}
-	if h.PortalURL == "" {
-		logx.Line("portal_auth", "PORTAL_API_URL 未配置，portal 登录不可用")
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "未开启单点登录"})
+	portalURL := h.effectivePortalURL()
+	if portalURL == "" {
+		logx.Line("portal_auth", "未配置运维平台地址，SSO 不可用（环境变量 PORTAL_API_URL 和「基础配置→单点登录」都为空）")
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "未开启单点登录",
+			"hint":  "请用本地管理员登录后，到「基础配置 → 单点登录」填写运维平台地址并启用",
+		})
 		return
 	}
 
 	// ① 拿 token 找运维平台换身份
-	username, displayName, role, ok := portalWhoAmI(h.PortalURL, req.Token)
+	username, displayName, role, ok := portalWhoAmI(portalURL, req.Token)
 	if !ok {
 		WriteAuditAs(h.DB, h.ctxWithUser(c, "anonymous"), "auth.portal.failed", "token 无法换取身份")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "登录凭证无效或已过期"})
@@ -63,7 +67,7 @@ func (h *AuthHandler) PortalAuth(c *gin.Context) {
 	// ② 拉权限码 + ③ 应用准入。admin 跳过（运维平台超管天然全通）
 	perms := map[string]bool{}
 	if role != "admin" {
-		p, ok := portalFetchPerms(h.PortalURL, req.Token, username)
+		p, ok := portalFetchPerms(portalURL, req.Token, username)
 		if !ok {
 			// 拉不到 ≠ 没权限，但两者都不能放行：问不到答案就当没答案
 			WriteAuditAs(h.DB, h.ctxWithUser(c, username), "auth.portal.denied", "权限服务不可达")
@@ -76,7 +80,7 @@ func (h *AuthHandler) PortalAuth(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "您没有 CMDB 的访问权限，请联系管理员"})
 			return
 		}
-		allowed, ok := portalCanAccessApp(h.PortalURL, req.Token, "cmdb")
+		allowed, ok := portalCanAccessApp(portalURL, req.Token, "cmdb")
 		if !ok {
 			WriteAuditAs(h.DB, h.ctxWithUser(c, username), "auth.portal.denied", "应用准入服务不可达")
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "权限服务暂不可用，请稍后重试"})
@@ -125,7 +129,7 @@ func (h *AuthHandler) PortalAuth(c *gin.Context) {
 //	本地账号（portal 之外）没有可刷的权限，原样返回空表示"不受权限约束"。
 func (h *AuthHandler) RefreshPermissions(c *gin.Context) {
 	src, _ := c.Get(ctxAuthSource)
-	if src != "portal" || h.PortalURL == "" {
+	if src != "portal" || h.effectivePortalURL() == "" {
 		c.JSON(http.StatusOK, gin.H{"permissions": map[string]bool{}, "auth_source": src})
 		return
 	}
@@ -143,7 +147,7 @@ func (h *AuthHandler) RefreshPermissions(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"permissions": permsFromCtx(c), "stale": true})
 		return
 	}
-	perms, ok := portalFetchPerms(h.PortalURL, ptoken, uname)
+	perms, ok := portalFetchPerms(h.effectivePortalURL(), ptoken, uname)
 	if !ok {
 		// 拉不到就保持旧快照——刷新失败（网络抖动/portal token 过期）不该把人踢出去
 		logx.Line("portal_auth", fmt.Sprintf("WARN refresh perms failed user=%s，沿用会话内旧快照", uname))
@@ -160,6 +164,25 @@ func (h *AuthHandler) RefreshPermissions(c *gin.Context) {
 	b, _ := json.Marshal(perms)
 	h.DB.Exec(`UPDATE auth_sessions SET permissions=? WHERE token_hash=?`, string(b), tokenHashFromCtx(c))
 	c.JSON(http.StatusOK, gin.H{"permissions": perms})
+}
+
+// effectivePortalURL 运维平台地址。**数据库配置优先，环境变量兜底**。
+//
+//	为什么要能在页面上配：改环境变量意味着改 Helm values 再滚动重启，
+//	生产上开一次 SSO 要走一遍发布流程，太重；而且忘了配的时候，
+//	用户在登录页只看到一句"未开启单点登录"，根本不知道去哪开。
+//	放进 settings 表后，本地管理员登录进去填一下即可，改完立即生效。
+func (h *AuthHandler) effectivePortalURL() string {
+	// 开关先判，且不管地址填在哪里都生效。
+	// （之前把这个判断写在"地址非空"分支里，结果地址留空时会回退到
+	//  环境变量，开关等于没关——开关必须是最外层的那道。）
+	if getSetting(h.DB, "portal_sso_enabled") == "0" {
+		return ""
+	}
+	if v := strings.TrimSpace(getSetting(h.DB, "portal_api_url")); v != "" {
+		return v
+	}
+	return h.PortalURL
 }
 
 // portalTokenOfSession 取出并解密当前会话保存的 portal token。
@@ -196,6 +219,16 @@ func (h *AuthHandler) upsertPortalUser(username, displayName, role string) (int,
 	var id int
 	err := h.DB.QueryRow(`SELECT id FROM users WHERE username=? AND auth_source='portal'`, username).Scan(&id)
 	if err == sql.ErrNoRows {
+		// 同名的本地账号已存在？绝不能复用它——本地账号在权限中间件里是
+		// **全放行**的兜底身份，让 SSO 用户挂到那条记录上等于直接提权。
+		// 迁移 086 已把唯一键改成 (username, auth_source) 让两者共存，
+		// 这里再挡一道，并给出人看得懂的原因。
+		var localID int
+		if e := h.DB.QueryRow(`SELECT id FROM users WHERE username=? AND auth_source<>'portal'`, username).
+			Scan(&localID); e == nil {
+			logx.Line("portal_auth", fmt.Sprintf(
+				"WARN SSO 用户 %s 与本地账号同名；已建独立影子记录，两者权限互不相通", username))
+		}
 		res, err := h.DB.Exec(
 			`INSERT INTO users (username, password_hash, display_name, is_admin, auth_source, last_login_at)
 			 VALUES (?, '', ?, ?, 'portal', NOW())`, username, displayName, isAdmin)

@@ -62,7 +62,7 @@ type poolPaceOut struct {
 	Nodes        int    `json:"nodes"`
 	Batches      int    `json:"batches"`
 	TotalMinutes int    `json:"total_minutes"`
-	BatchSize    int    `json:"batch_size"`      // 实测并行度（每批几台）
+	BatchSize    int    `json:"batch_size"` // 实测并行度（每批几台）
 	MedianBatch  int    `json:"median_batch_minutes"`
 	SlowestBatch int    `json:"slowest_batch_minutes"`
 	Note         string `json:"note"`
@@ -73,9 +73,9 @@ type progressOut struct {
 	Cluster   string `json:"cluster"`
 	Since     string `json:"since"`
 
-	Events     []nodeEventOut `json:"events"`
-	Pools      []poolPaceOut  `json:"pools"`
-	Extrapolate string        `json:"extrapolate"` // 怎么拿这些数外推到别的集群
+	Events      []nodeEventOut `json:"events"`
+	Pools       []poolPaceOut  `json:"pools"`
+	Extrapolate string         `json:"extrapolate"` // 怎么拿这些数外推到别的集群
 
 	CollectionHealthy bool   `json:"collection_healthy"` // 采集此刻是否正常
 	CollectionNote    string `json:"collection_note"`
@@ -383,9 +383,11 @@ func (h *GKEUpgradePlanHandler) measuredPoolPace(cid int) map[string]*measuredPa
 // 早就躺着 GCP 给的真实耗时（精确到秒），一直没被用。
 //
 // 2026-07-31 用当时仅有的 3 条节点池历史校验，经验区间（8~20 分钟/批）错得离谱：
-//   demo-pool-01        1 节点 1 批 → 实测每批 67 分钟
-//   elasticsearch-pool  3 节点 1 批 → 实测每批  3 分钟
-//   kafka-pool          3 节点 3 批 → 实测每批 22 分钟
+//
+//	demo-pool-01        1 节点 1 批 → 实测每批 67 分钟
+//	elasticsearch-pool  3 节点 1 批 → 实测每批  3 分钟
+//	kafka-pool          3 节点 3 批 → 实测每批 22 分钟
+//
 // 相差 22 倍。原因是耗时主要取决于节点上跑的是什么（优雅停机、PVC 重挂、PDB 等待），
 // 跟节点数几乎无关——拿一个通用分钟数去套，本来就套不准。
 type historyPace struct {

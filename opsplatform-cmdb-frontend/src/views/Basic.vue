@@ -102,6 +102,29 @@
       </el-form>
     </el-card>
 
+    <el-card shadow="never" style="margin-top:14px">
+      <template #header><b>单点登录（运维平台）</b>
+        <span class="muted" style="margin-left:8px">开启后可从运维平台点「CMDB」直接跳转登录</span>
+      </template>
+      <el-form label-width="160px" style="max-width:760px">
+        <el-form-item label="启用单点登录">
+          <el-switch v-model="ssoEnabled" />
+          <span class="muted" style="margin-left:10px">
+            关掉后只能用本地账号登录（本地账号是运维平台不可用时的兜底通道，请保留）
+          </span>
+        </el-form-item>
+        <el-form-item label="运维平台后端地址">
+          <el-input v-model="portalUrl" placeholder="http://opsplatform-backend:8080" />
+          <div class="muted">
+            填运维平台<b>后端</b>地址（不是前端页面地址）。集群内可用 Service 名，如
+            <code>http://opsplatform-backend:8080</code>；跨集群填可达的外部地址。<br>
+            留空则回退到环境变量 <code>PORTAL_API_URL</code>；两者都空时 SSO 不可用。
+          </div>
+        </el-form-item>
+        <el-button type="primary" @click="saveSso">保存</el-button>
+      </el-form>
+    </el-card>
+
     <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="sDlg" :title="sEdit?'编辑状态':'添加状态'" width="440px">
       <el-form :model="sForm" label-width="80px">
         <el-form-item label="类别"><el-radio-group v-model="sForm.scope" :disabled="sEdit"><el-radio value="project">项目状态</el-radio><el-radio value="domain">主域名状态</el-radio></el-radio-group></el-form-item>
@@ -201,6 +224,20 @@ const projStatusOpts = computed(() => statuses.value.filter((s) => s.scope === '
 
 // 从原「设置」页合并过来的指标导出白名单
 const expLabels = ref('')
+
+// 单点登录：原先只认环境变量，改一次要动 Helm values 再滚动重启，
+// 生产上开个 SSO 得走一遍发布流程。放到页面上填，改完立即生效。
+const portalUrl = ref('')
+const ssoEnabled = ref(true)
+async function saveSso() {
+  try {
+    await updateSettings({
+      portal_api_url: (portalUrl.value || '').trim(),
+      portal_sso_enabled: ssoEnabled.value ? '1' : '0',
+    })
+    ElMessage.success('已保存，立即生效（无需重启）')
+  } catch (e) { ElMessage.error(e.response?.data?.error || '保存失败') }
+}
 async function saveExpLabels() {
   try { await updateSettings({ export_label_whitelist: expLabels.value || '' }); ElMessage.success('已保存') }
   catch (e) { ElMessage.error(e.response?.data?.error || '保存失败') }
@@ -210,8 +247,12 @@ async function load() {
   projects.value = await listProjects(); envs.value = await listEnvironments()
   cdns.value = await listCdns(); statuses.value = await listStatuses()
   // 设置读失败不该拖垮整页——上面四张表已经有值了，白名单单独降级
-  try { expLabels.value = (await getSettings()).export_label_whitelist || '' }
-  catch (e) { ElMessage.warning('指标导出配置读取失败，其余配置正常') }
+  try {
+    const st = await getSettings()
+    expLabels.value = st.export_label_whitelist || ''
+    portalUrl.value = st.portal_api_url || ''
+    ssoEnabled.value = st.portal_sso_enabled !== '0'
+  } catch (e) { ElMessage.warning('部分设置读取失败，其余配置正常') }
 }
 function openProj(row) { pEdit.value = !!row; pForm.value = row ? { ...row } : { name: '', remark: '', color: '', sort_order: 0, status: '' }; pDlg.value = true }
 function openStatus(row) { sEdit.value = !!row; sForm.value = row ? { ...row } : { scope: sScope.value, label: '', color: '', sort_order: 0 }; sDlg.value = true }

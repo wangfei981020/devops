@@ -56,7 +56,7 @@ func (h *DashboardHandler) Get(c *gin.Context) {
 		"domain_total": count("domain_total", `SELECT COUNT(*) FROM cis WHERE type='domain'`),
 		// host_total：主机一直在往 cis 写 type='host'，却从没被任何统计口径认领过，
 		// 于是 ci_total(16) 和「域名 6 + 证书 0」永远差着 10 台主机对不上（见迁移 080）。
-		"host_total": count("host_total", `SELECT COUNT(*) FROM cis WHERE type='host'`),
+		"host_total":   count("host_total", `SELECT COUNT(*) FROM cis WHERE type='host'`),
 		"record_total": count("record_total", `SELECT COUNT(*) FROM domain_records WHERE ignored=0`),
 		"cert_total":   count("cert_total", `SELECT COUNT(*) FROM cis WHERE type='certificate'`),
 		"cert_active":  count("cert_active", `SELECT COUNT(*) FROM certificates WHERE status='active'`),

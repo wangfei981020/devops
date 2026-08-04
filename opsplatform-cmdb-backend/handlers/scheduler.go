@@ -123,7 +123,7 @@ type Scheduler struct {
 // taskTimeout 各任务硬超时（超过则中止并标「超时」，防止永久卡"运行中"）。
 func taskTimeout(key string) time.Duration {
 	switch key {
-	case "inspect", "refresh_expiry", "dns_sync", "host_sync":
+	case "inspect", "refresh_expiry", "registrar_expiry_sync", "dns_sync", "host_sync":
 		return 25 * time.Minute // 逐个连 443/WHOIS/同步，量大给足
 	case "gke_upgrade_sync":
 		// 每集群 3 次 API + 每节点池 1 次 fetchNodePoolUpgradeInfo，4 集群约 10 个池，给足余量
@@ -151,6 +151,11 @@ func StartScheduler(db *sql.DB, cipher *crypto.Cipher, pool *k8ssource.Pool) {
 		},
 		"inspect": func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) {
 			return inspectAllCertsCore(ctx, db, p, t)
+		},
+		// 从注册商 API 拿到期日：比 WHOIS 权威且续费后当场生效，
+		// WHOIS 那条路留给不属于任何数据源的手工域名
+		"registrar_expiry_sync": func(ctx context.Context, p ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return registrarExpirySyncCore(ctx, db, cipher, p)
 		},
 		"dns_sync": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
 			return dnsSyncCore(ctx, db, cipher)

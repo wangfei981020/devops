@@ -159,6 +159,7 @@ var permExactRules = map[string]string{
 	// preview 只读不扣费，但会暴露台账内容，同样要域名菜单权限
 	"POST /api/domains/renew-batch":         "cmdb:manage_domains",
 	"POST /api/domains/renew-batch/preview": "menu:cmdb_domains",
+	"GET /api/domains/renew-batch/:id":      "menu:cmdb_domains",
 	"POST /api/cloud-accounts/:id/sync":     "cmdb:sync_cloud",
 	"POST /api/cloud-projects/:pid/sync":    "cmdb:sync_cloud",
 	"POST /api/k8s/clusters/:id/sync":       "cmdb:sync_k8s",
