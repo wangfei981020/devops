@@ -80,12 +80,48 @@ type obsIn struct {
 	Enabled      *int   `json:"enabled"`
 }
 
+// obsTypes 认得的数据源类型。
+//
+//	以前不校验，什么字符串都收。打错一个字母（n9E / nightingle）就会静默建出
+//	一条永远不工作的记录：查询时按 type 找不到源，界面上却显示"已启用"。
+//	这类错误没有任何报错，只有"功能怎么没数据"。
+var obsTypes = map[string]string{
+	"prometheus": "Prometheus / VictoriaMetrics",
+	"loki":       "Loki",
+	"kubesphere": "KubeSphere",
+	"n9e":        "夜莺 Nightingale",
+}
+
+func normalizeObsType(t string) (string, bool) {
+	k := strings.ToLower(strings.TrimSpace(t))
+	// 几个常见别名归一，免得同一种源存成两个 type 值互相看不见
+	switch k {
+	case "vm", "victoriametrics", "prometheus/vm":
+		k = "prometheus"
+	case "nightingale":
+		k = "n9e"
+	}
+	_, ok := obsTypes[k]
+	return k, ok
+}
+
 func (h *ObsHandler) Create(c *gin.Context) {
 	var in obsIn
 	if err := c.ShouldBindJSON(&in); err != nil || in.Name == "" || in.Type == "" || in.URL == "" {
 		c.JSON(400, gin.H{"error": "name/type/url 必填"})
 		return
 	}
+	typ, ok := normalizeObsType(in.Type)
+	if !ok {
+		names := make([]string, 0, len(obsTypes))
+		for k := range obsTypes {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		c.JSON(400, gin.H{"error": "不认识的数据源类型 " + in.Type + "，支持：" + strings.Join(names, " / ")})
+		return
+	}
+	in.Type = typ
 	tokEnc := ""
 	if in.Token != "" {
 		e, err := h.Cipher.Encrypt(in.Token)
@@ -168,16 +204,16 @@ func (h *ObsHandler) Test(c *gin.Context) {
 	var typ string
 	_ = h.DB.QueryRow(`SELECT type FROM obs_endpoints WHERE id=?`, id).Scan(&typ)
 
-	c.JSON(http.StatusOK, probeEndpoint(base, token, probePaths(typ)))
+	c.JSON(http.StatusOK, probeEndpoint(base, token, probePaths(typ), typ))
 }
 
 // probeEndpoint 依次探候选路径，任一 2xx 即算通；全不通则按失败形态给出可行动的原因。
-func probeEndpoint(base, token string, paths []string) gin.H {
+func probeEndpoint(base, token string, paths []string, typ string) gin.H {
 	root := strings.TrimRight(base, "/")
 	tried := []gin.H{}
 	var lastErr string
 	for _, p := range paths {
-		code, body, e := obsGet(root+p, token, 10*time.Second)
+		code, body, e := obsGetAs(root+p, token, typ, 10*time.Second)
 		if e != nil {
 			lastErr = e.Error()
 			tried = append(tried, gin.H{"path": orRoot(p), "error": truncate(e.Error(), 120)})
@@ -231,6 +267,11 @@ func probePaths(typ string) []string {
 		// ks-apiserver 根路径和 /kapis 都是 404。实测这几条返回 200：
 		// /kapis/version 还能顺带确认"这确实是个 KubeSphere"，所以排在健康检查前面。
 		return []string{"/kapis/version", "/healthz", "/version", "/apis"}
+	case "n9e", "nightingale":
+		// 夜莺没有无鉴权的健康检查路径，根路径是前端页面（200 但说明不了什么）。
+		// 直接探真正要用的那个接口，limit=1 开销最小——
+		// 它同时验证了"地址对"和"token 有效"，这才是用户点「测试」想知道的。
+		return []string{"/api/n9e/alert-cur-events/list?limit=1&p=1"}
 	default:
 		return []string{"", "/healthz"}
 	}
@@ -404,12 +445,27 @@ func errNoEndpoint(t string) error {
 
 // obsGet 只读 GET（带可选 Bearer token）。
 func obsGet(url, token string, timeout time.Duration) (int, string, error) {
+	return obsGetAs(url, token, "", timeout)
+}
+
+// obsGetAs 按数据源类型选鉴权头。
+//
+//	⚠️ 夜莺**只认 X-User-Token**，不认 Authorization: Bearer。
+//	统一发 Bearer 的后果是：token 明明是好的，「测试连通」永远报
+//	"401 token 没配或已失效"——而告警功能本身却是正常工作的。
+//	这种"功能好的、测试说坏的"最误导人，会让人去改一个根本没问题的配置。
+func obsGetAs(url, token, typ string, timeout time.Duration) (int, string, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return 0, "", err
 	}
 	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+		switch strings.ToLower(strings.TrimSpace(typ)) {
+		case "n9e", "nightingale":
+			req.Header.Set("X-User-Token", token)
+		default:
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 	}
 	cli := &http.Client{Timeout: timeout}
 	resp, err := cli.Do(req)

@@ -21,7 +21,7 @@ func TestProbeEndpoint_KubeSphereRootIs404ButVersionIs200(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got := probeEndpoint(srv.URL, "", probePaths("kubesphere"))
+	got := probeEndpoint(srv.URL, "", probePaths("kubesphere"), "kubesphere")
 	if got["ok"] != true {
 		t.Fatalf("应判为连通，got %+v", got)
 	}
@@ -40,7 +40,7 @@ func TestProbeEndpoint_AllNon2xxGivesActionableError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got := probeEndpoint(srv.URL, "", probePaths("kubesphere"))
+	got := probeEndpoint(srv.URL, "", probePaths("kubesphere"), "kubesphere")
 	if got["ok"] != false {
 		t.Fatalf("应判为失败，got %+v", got)
 	}
@@ -64,7 +64,7 @@ func TestProbeEndpoint_UnauthorizedIsReportedAsPermission(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got := probeEndpoint(srv.URL, "", probePaths("prometheus"))
+	got := probeEndpoint(srv.URL, "", probePaths("prometheus"), "prometheus")
 	msg, _ := got["error"].(string)
 	if got["ok"] != false || !contains(msg, "权限") {
 		t.Errorf("401 应报成权限问题，got %+v", got)
@@ -77,7 +77,7 @@ func TestProbeEndpoint_ConnectionRefused(t *testing.T) {
 	url := srv.URL
 	srv.Close() // 立刻关掉，制造连不上
 
-	got := probeEndpoint(url, "", []string{"/healthz"})
+	got := probeEndpoint(url, "", []string{"/healthz"}, "")
 	msg, _ := got["error"].(string)
 	if got["ok"] != false || !contains(msg, "连不上") {
 		t.Errorf("应报连接失败，got %+v", got)
@@ -93,7 +93,7 @@ func TestProbeEndpoint_StopsAtFirstSuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got := probeEndpoint(srv.URL, "", probePaths("loki"))
+	got := probeEndpoint(srv.URL, "", probePaths("loki"), "loki")
 	if got["ok"] != true || hits != 1 {
 		t.Errorf("应在第一条成功后停止，hits=%d got=%+v", hits, got)
 	}
@@ -109,5 +109,49 @@ func TestProbePaths_CoverKnownTypes(t *testing.T) {
 	ks := probePaths("kubesphere")
 	if ks[0] == "" {
 		t.Error("kubesphere 首选路径不能是根路径")
+	}
+}
+
+// 夜莺只认 X-User-Token。发成 Authorization: Bearer 的话，token 明明是好的，
+// 「测试连通」却报"401 token 没配或已失效"——功能正常但测试说坏了，
+// 会让人去改一个根本没问题的配置。
+func TestProbeNightingaleUsesUserTokenHeader(t *testing.T) {
+	var gotUserToken, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserToken = r.Header.Get("X-User-Token")
+		gotAuth = r.Header.Get("Authorization")
+		if gotUserToken != "secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"dat":{"list":[],"total":0}}`))
+	}))
+	defer srv.Close()
+
+	got := probeEndpoint(srv.URL, "secret", probePaths("n9e"), "n9e")
+	if got["ok"] != true {
+		t.Fatalf("夜莺探活应成功，实际: %v", got)
+	}
+	if gotUserToken != "secret" {
+		t.Errorf("X-User-Token = %q，期望 secret", gotUserToken)
+	}
+	if gotAuth != "" {
+		t.Errorf("不该再发 Authorization 头，实际 %q", gotAuth)
+	}
+}
+
+// 其余类型仍走 Bearer，别在修夜莺的时候把 Prometheus 带坏
+func TestProbeOthersStillUseBearer(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	probeEndpoint(srv.URL, "tok", probePaths("prometheus"), "prometheus")
+	if gotAuth != "Bearer tok" {
+		t.Errorf("Authorization = %q，期望 Bearer tok", gotAuth)
 	}
 }

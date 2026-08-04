@@ -2,13 +2,13 @@
   <div :class="{ page: !embedded }">
     <div v-if="!embedded" class="page-head">
       <span class="page-title">数据源接入</span>
-      <span class="muted" style="margin-left:10px">Prometheus/VM · Loki · KubeSphere 只读地址，支持多条（按环境/集群区分）。本地不存历史，实时查这些源</span>
+      <span class="muted" style="margin-left:10px">Prometheus/VM · Loki · KubeSphere · 夜莺 只读地址，支持多条（按环境/集群区分）。本地不存历史，实时查这些源</span>
       <el-button v-if="canIntegr" type="primary" size="small" style="float:right" @click="openAdd">+ 添加数据源</el-button>
     </div>
     <!-- 嵌进「接入管理」的 tab 时不重复显示页标题，但按钮和说明要留着 -->
     <div v-else style="margin-bottom:10px">
       <el-button v-if="canIntegr" type="primary" size="small" @click="openAdd">+ 添加数据源</el-button>
-      <span class="muted" style="margin-left:10px">Prometheus/VM · Loki · KubeSphere 只读地址，支持多条（按环境/集群区分）。本地不存历史，实时查这些源</span>
+      <span class="muted" style="margin-left:10px">Prometheus/VM · Loki · KubeSphere · 夜莺 只读地址，支持多条（按环境/集群区分）。本地不存历史，实时查这些源</span>
     </div>
     <LoadError :error="error" title="数据源列表未加载" @retry="load" />
     <el-card shadow="never" :body-style="embedded ? { padding: '0' } : {}">
@@ -49,9 +49,18 @@
             <el-option label="Prometheus / VictoriaMetrics" value="prometheus" />
             <el-option label="Loki" value="loki" />
             <el-option label="KubeSphere" value="kubesphere" />
+            <el-option label="夜莺 Nightingale（告警）" value="n9e" />
           </el-select>
+          <span v-if="form.type === 'n9e'" class="muted" style="margin-left:10px">
+            接进来后「告警」菜单和事件中心会显示夜莺的告警
+          </span>
         </el-form-item>
-        <el-form-item label="地址"><el-input v-model="form.url" placeholder="如 http://vmselect.monitoring:8481/select/0/prometheus" /></el-form-item>
+        <el-form-item label="地址">
+          <el-input v-model="form.url" :placeholder="urlHint" />
+          <div v-if="form.type === 'n9e'" class="muted" style="font-size:12px;margin-top:4px">
+            填夜莺主站地址即可（不带路径），如 <code>http://n9e.example.com</code>
+          </div>
+        </el-form-item>
         <el-form-item label="适用环境">
           <el-select v-model="form.env" clearable placeholder="通用（不限环境）" style="width:200px">
             <el-option v-for="e in envs" :key="e" :label="e" :value="e" />
@@ -71,7 +80,12 @@
           </div>
         </el-form-item>
         <el-form-item label="Token">
-          <el-input v-model="form.token" type="password" show-password :placeholder="editing?'留空=保留原值':'可选，Bearer token'" />
+          <el-input v-model="form.token" type="password" show-password
+                    :placeholder="editing ? '留空=保留原值' : tokenHint" />
+          <div v-if="form.type === 'n9e'" class="muted" style="font-size:12px;margin-top:4px">
+            <b>必填</b>。夜莺里「个人设置 → 访问令牌」生成，CMDB 会用
+            <code>X-User-Token</code> 头发过去（不是 Bearer）。
+          </div>
         </el-form-item>
         <el-form-item label="启用"><el-switch v-model="form.enabled" :active-value="1" :inactive-value="0" /></el-form-item>
       </el-form>
@@ -102,10 +116,24 @@ const { loading, error, run } = useLoadState()
 const rows = ref([]); const clusters = ref([]); const testing = reactive({})
 const { page, pageSize, paged } = usePager(rows)
 const dlg = ref(false); const editing = ref(false)
+// 地址与 token 的提示随类型变——四种源的填法差别不小，
+// 用一句通用 placeholder 等于没提示
+const urlHint = computed(() => ({
+  prometheus: '如 http://vmselect.monitoring:8481/select/0/prometheus',
+  loki: '如 http://loki.monitoring:3100',
+  kubesphere: '如 http://ks-apiserver.kubesphere-system:80',
+  n9e: '如 http://n9e.example.com（夜莺主站地址，不带路径）',
+}[form.type] || '数据源地址'))
+const tokenHint = computed(() => form.type === 'n9e' ? '必填，夜莺的访问令牌' : '可选，Bearer token')
+
 const blank = () => ({ id: 0, name: '', type: 'prometheus', url: '', env: '', cluster_id: null, cluster_label: '', token: '', enabled: 1 })
 const form = reactive(blank())
 
-function typeText(t) { return { prometheus: 'Prometheus/VM', loki: 'Loki', kubesphere: 'KubeSphere' }[t] || t }
+// 类型显示名。漏了某个 type 的话会直接把裸代号显示出来（比如 n9e），
+// 用户看不懂那是什么——夜莺就这么裸奔过一阵。
+function typeText(t) {
+  return { prometheus: 'Prometheus/VM', loki: 'Loki', kubesphere: 'KubeSphere', n9e: '夜莺' }[t] || t
+}
 
 // 同上：数据源没拉到却显示空列表，会被当成"没接任何观测源"（CMDB-013）
 async function load() {
