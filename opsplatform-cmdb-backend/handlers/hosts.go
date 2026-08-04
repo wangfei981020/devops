@@ -368,7 +368,7 @@ func (h *HostHandler) CreateAccount(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "add_cloud_account", in.Name)
+	SetAuditTarget(c, in.Name)
 	c.JSON(201, gin.H{"ok": true})
 }
 
@@ -434,7 +434,7 @@ func (h *HostHandler) CreateProject(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "add_cloud_project", in.ProjectID)
+	SetAuditTarget(c, in.ProjectID)
 	c.JSON(201, gin.H{"ok": true})
 }
 
@@ -572,7 +572,7 @@ func (h *HostHandler) SyncProject(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "该项目正在同步中，请稍候"})
 		return
 	}
-	WriteAudit(h.DB, c, "sync_cloud_project", strconv.FormatInt(pid, 10))
+	SetAuditTarget(c, strconv.FormatInt(pid, 10))
 	go func() {
 		// 手动触发也要进「执行记录」——之前只有定时任务写，手动点完在执行记录里
 		// 什么都看不到，用户无从判断到底跑没跑。
@@ -630,7 +630,7 @@ func (h *HostHandler) SyncAccount(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "该账号下的项目都正在同步中，请稍候"})
 		return
 	}
-	WriteAudit(h.DB, c, "sync_cloud_account", c.Param("id"))
+	SetAuditTarget(c, c.Param("id"))
 	go func() {
 		// 串行跑：各项目虽用各自凭据，但共享 GCP API 配额，并发容易撞限流
 		runID, start := startManualRunLog(h.DB, "host_sync", "手动同步账号下全部项目")

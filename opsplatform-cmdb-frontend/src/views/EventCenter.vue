@@ -24,6 +24,9 @@
           <template v-else>共 {{ total }}</template>
           <b v-if="!loadErr && cnt.critical" style="color:#f56c6c;margin-left:8px">严重 {{ cnt.critical }}</b>
           <b v-if="!loadErr && cnt.warning" style="color:#e6a23c;margin-left:8px">警告 {{ cnt.warning }}</b>
+          <!-- 合并掉多少条要摆在明面上，否则数字变小会被当成事件凭空少了 -->
+          <span v-if="!loadErr && mergedAway" style="margin-left:8px">（已合并 {{ mergedAway }} 条重复）</span>
+          <span v-if="!loadErr && upcoming" style="margin-left:8px">含 {{ upcoming }} 条到期预告</span>
         </span>
       </div>
       <LoadError :error="loadErr" @retry="load" />
@@ -31,9 +34,19 @@
         :title="`只显示最近 ${limit} 条，选定范围内实际有 ${total} 条`"
         description="更早的事件没有展示出来。请缩小时间范围，或按来源/级别筛选后再看。" />
       <el-table :data="paged" size="small" v-loading="loading">
-        <el-table-column label="时间" width="160" prop="time" />
+        <el-table-column label="时间" width="170"><template #default="{ row }">
+          <!-- 预告（到期日在未来）明确标出来，不然「2026-08-09」看着像那天发生过什么 -->
+          <span>{{ row.time }}</span>
+          <el-tag v-if="row.upcoming" size="small" type="warning" effect="plain" style="margin-left:6px">预告</el-tag>
+        </template></el-table-column>
         <el-table-column label="来源" width="110"><template #default="{ row }">
           <el-tag size="small" :type="srcType(row.source)">{{ srcText(row.source) }}</el-tag>
+        </template></el-table-column>
+        <el-table-column label="次数" width="82" align="right"><template #default="{ row }">
+          <!-- K8s 自带的重复次数。BackOff 发生 491 次和发生 1 次，
+               在时间线上原本长得一模一样，而这个数恰恰区分"偶发"和"一直在崩"。 -->
+          <span v-if="row.count > 1" :style="{color: row.count >= 100 ? '#f56c6c' : '#e6a23c', fontWeight: 600}">×{{ row.count }}</span>
+          <span v-else class="muted">1</span>
         </template></el-table-column>
         <el-table-column label="级别" width="80"><template #default="{ row }">
           <el-tag size="small" :type="row.level==='critical'?'danger':(row.level==='warning'?'warning':'info')">{{ lvlText(row.level) }}</el-tag>
@@ -62,6 +75,8 @@ import LoadError from '../components/LoadError.vue'
 const rows = ref([]); const loading = ref(false); const loadErr = ref('')
 // total/truncated 来自后端：total 是截断**前**的真实总量
 const total = ref(0); const truncated = ref(false); const limit = ref(500)
+// upcoming=未发生的到期预告条数（已排到时间线末尾）；mergedAway=被合并掉的重复条数
+const upcoming = ref(0); const mergedAway = ref(0)
 // by_level 也在截断前统计，所以严重/警告的计数不会因为截断而变小
 const byLevel = ref(null)
 const source = ref(''); const level = ref(''); const days = ref(30)
@@ -90,9 +105,12 @@ async function load() {
     truncated.value = !!r.truncated
     limit.value = r.limit || 500
     byLevel.value = r.by_level || null
+    upcoming.value = r.upcoming || 0
+    mergedAway.value = r.merged_away || 0
   } catch (e) {
     loadErr.value = normalizeError(e).message
     rows.value = []; total.value = 0; truncated.value = false; byLevel.value = null
+    upcoming.value = 0; mergedAway.value = 0
   } finally { loading.value = false }
 }
 onMounted(load)

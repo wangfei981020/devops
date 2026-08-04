@@ -3,11 +3,11 @@
     <div v-if="!embedded" class="page-head">
       <span class="page-title">数据源接入</span>
       <span class="muted" style="margin-left:10px">Prometheus/VM · Loki · KubeSphere 只读地址，支持多条（按环境/集群区分）。本地不存历史，实时查这些源</span>
-      <el-button type="primary" size="small" style="float:right" @click="openAdd">+ 添加数据源</el-button>
+      <el-button v-if="canIntegr" type="primary" size="small" style="float:right" @click="openAdd">+ 添加数据源</el-button>
     </div>
     <!-- 嵌进「接入管理」的 tab 时不重复显示页标题，但按钮和说明要留着 -->
     <div v-else style="margin-bottom:10px">
-      <el-button type="primary" size="small" @click="openAdd">+ 添加数据源</el-button>
+      <el-button v-if="canIntegr" type="primary" size="small" @click="openAdd">+ 添加数据源</el-button>
       <span class="muted" style="margin-left:10px">Prometheus/VM · Loki · KubeSphere 只读地址，支持多条（按环境/集群区分）。本地不存历史，实时查这些源</span>
     </div>
     <el-card shadow="never" :body-style="embedded ? { padding: '0' } : {}">
@@ -31,9 +31,9 @@
           <el-tag size="small" :type="row.enabled?'success':'info'">{{ row.enabled?'启用':'停用' }}</el-tag>
         </template></el-table-column>
         <el-table-column label="操作" width="200" fixed="right"><template #default="{row}">
-          <el-button link type="primary" size="small" :loading="testing[row.id]" @click="doTest(row)">测连通</el-button>
-          <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
-          <el-button link type="danger" size="small" @click="del(row)">删除</el-button>
+          <el-button v-if="canIntegr" link type="primary" size="small" :loading="testing[row.id]" @click="doTest(row)">测连通</el-button>
+          <el-button v-if="canIntegr" link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+          <el-button v-if="canIntegr" link type="danger" size="small" @click="del(row)">删除</el-button>
         </template></el-table-column>
       </el-table>
       <Pager :total="rows.length" v-model:page="page" v-model:page-size="pageSize" />
@@ -80,7 +80,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
+import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
 import { listObsEndpoints, createObsEndpoint, updateObsEndpoint, deleteObsEndpoint, testObsEndpoint, listK8sClusters } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
@@ -90,6 +91,8 @@ import Pager from '../components/Pager.vue'
 // embedded=true 时作为「接入管理」的一个 tab 渲染：不显示页级标题，去掉外层留白
 defineProps({ embedded: { type: Boolean, default: false } })
 
+const auth = useAuthStore()
+const canIntegr = computed(() => auth.hasButton('manage_integrations'))
 const app = useAppStore()
 const envs = ['PROD', 'UAT', 'TEST', 'DEV']
 const rows = ref([]); const clusters = ref([]); const loading = ref(false); const testing = reactive({})

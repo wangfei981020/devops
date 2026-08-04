@@ -997,7 +997,7 @@ func consoleSteps(st *clusterUpgradeState, target string, pools []poolPlanOut) [
 			i+1, p.Name, p.NodeCount, why))
 	}
 	steps = append(steps,
-		"⑤ 全部升完后重新生成预案，与**升级前保存的那份基线快照**逐项比对"+
+		"⑤ 全部升完后重新生成预案，与「升级前保存的那份基线快照」逐项比对"+
 			"（注意不是和新生成的基线比——新基线就是升级后的状态，比不出东西）")
 	return steps
 }

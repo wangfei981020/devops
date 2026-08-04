@@ -8,14 +8,17 @@
     <el-tabs v-model="tab" @tab-change="onTabChange">
       <!-- 总览 -->
       <el-tab-pane lazy label="总览" name="ov">
+        <!-- 取不到就显示 —，绝不显示 $0：成本页的 0 会被直接读成"这个月没花钱"，
+             而真相是接口没返回。金额类指标尤其不能拿 `|| 0` 兜底（CMDB-013）。 -->
+        <LoadError :error="ovErr" title="成本总览未加载" @retry="loadOv" />
         <div class="kpis">
-          <div class="kpi"><div class="lab">云支出（真实/月）</div><div class="num">${{ ov.cloud_total || 0 }}</div></div>
-          <div class="kpi idc"><div class="lab">IDC 迁云估算/月</div><div class="num">${{ ov.idc_estimate || 0 }}</div></div>
-          <div class="kpi"><div class="lab">K8s 计算</div><div class="num sm">${{ ov.by_type?.k8s_compute || 0 }}</div></div>
-          <div class="kpi"><div class="lab">K8s 存储</div><div class="num sm">${{ ov.by_type?.k8s_storage || 0 }}</div></div>
-          <div class="kpi"><div class="lab">传统主机</div><div class="num sm">${{ ov.by_type?.traditional || 0 }}</div></div>
+          <div class="kpi"><div class="lab">云支出（真实/月）</div><div class="num">{{ money(ov?.cloud_total) }}</div></div>
+          <div class="kpi idc"><div class="lab">IDC 迁云估算/月</div><div class="num">{{ money(ov?.idc_estimate) }}</div></div>
+          <div class="kpi"><div class="lab">K8s 计算</div><div class="num sm">{{ money(ov?.by_type?.k8s_compute) }}</div></div>
+          <div class="kpi"><div class="lab">K8s 存储</div><div class="num sm">{{ money(ov?.by_type?.k8s_storage) }}</div></div>
+          <div class="kpi"><div class="lab">传统主机</div><div class="num sm">{{ money(ov?.by_type?.traditional) }}</div></div>
         </div>
-        <el-card shadow="never">
+        <el-card v-if="ov" shadow="never">
           <template #header>
             <div class="cardhd">
               <span>维度：</span>
@@ -41,7 +44,7 @@
           </div>
           <el-empty v-if="!ov.groups?.length" description="无数据（费率未配或本地集群不计费）" />
         </el-card>
-        <div class="muted" style="margin-top:8px">{{ ov.note }}</div>
+        <div v-if="ov?.note" class="muted" style="margin-top:8px">{{ ov.note }}</div>
       </el-tab-pane>
 
       <!-- 明细 -->
@@ -88,7 +91,7 @@
           <el-select v-model="rp.anchor" placeholder="选月份" style="width:130px" @change="loadReport">
             <el-option v-for="m in months" :key="m" :label="m" :value="m" />
           </el-select>
-          <el-button type="primary" size="small" :icon="Camera" @click="snapshot">立即打本月快照</el-button>
+          <el-button v-if="canRates" type="primary" size="small" :icon="Camera" @click="snapshot">立即打本月快照</el-button>
           <span class="muted" style="margin-left:auto">每 6h 自动刷新当月快照，跨月自动定格上月</span>
         </div>
         <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
@@ -137,7 +140,7 @@
           <el-table-column prop="source" label="来源" min-width="160" />
           <el-table-column label="手动覆盖" width="200"><template #default="{row}">
             <el-input v-model.number="row._ov" size="small" style="width:100px" placeholder="月$" />
-            <el-button link type="primary" size="small" @click="saveOv(row)">保存</el-button>
+            <el-button v-if="canRates" link type="primary" size="small" @click="saveOv(row)">保存</el-button>
           </template></el-table-column>
         </el-table>
       </el-tab-pane>
@@ -175,7 +178,7 @@
             <span class="ok">{{ row.suggest_cpu_req_m }}m / {{ row.suggest_mem_req_mi }}Mi</span>
           </template></el-table-column>
         </el-table>
-        <el-empty v-if="!optLoading && !wasteItems.length" :image-size="60"
+        <el-empty v-if="!optLoading && !error && !wasteItems.length" :image-size="60"
           description="没有数据。资源浪费需要 Prometheus 实测用量，先确认该集群的数据源已配置且可达" />
       </el-tab-pane>
 
@@ -208,7 +211,7 @@
             <span class="muted">CPU {{ row.cpu_request_pct }}% · 内存 {{ row.mem_request_pct }}%</span>
           </template></el-table-column>
         </el-table>
-        <el-empty v-if="!optLoading && !idle.length" description="没有闲置成本数据" :image-size="60" />
+        <el-empty v-if="!optLoading && !error && !idle.length" description="没有闲置成本数据" :image-size="60" />
       </el-tab-pane>
 
       <el-tab-pane lazy label="孤儿资源" name="orphan">
@@ -240,7 +243,7 @@
           </template></el-table-column>
           <el-table-column prop="action" label="处置命令" min-width="280" show-overflow-tooltip />
         </el-table>
-        <el-empty v-if="!optLoading && !orphans.length" description="没有孤儿资源" :image-size="60" />
+        <el-empty v-if="!optLoading && !error && !orphans.length" description="没有孤儿资源" :image-size="60" />
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -249,14 +252,21 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useAuthStore } from '../stores/auth'
 import { Camera } from '@element-plus/icons-vue'
 import { costOverview, costDetail, costNodes, setNodeCostOverride, costSnapshot, costMonths, costReport, costAttribution,
   listK8sClusters, resourceWaste, idleCost, listOrphans } from '../api/cmdb'
+import { pickDefaultCluster } from '../composables/useClusterPick'
+import { useLoadState } from '../composables/useLoadState'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
 
+const auth = useAuthStore()
+const canRates = computed(() => auth.hasButton('manage_cost_rates'))
 const tab = ref('ov')
-const ov = ref({}); const det = ref({}); const nodes = ref([])
+const ov = ref(null); const det = ref({}); const nodes = ref([])
 const detItems = computed(() => det.value.items || [])
 const { page: detPage, pageSize: detSize, paged: detPaged } = usePager(detItems)
 const dim = ref('biz_project'); const ovMode = ref('cloud')
@@ -320,7 +330,7 @@ async function ensureClusters() {
   if (clusters.value.length) return
   try {
     clusters.value = await listK8sClusters()
-    if (!optCid.value && clusters.value.length) optCid.value = clusters.value[0].id
+    if (!optCid.value && clusters.value.length) optCid.value = pickDefaultCluster(clusters.value)
   } catch (e) { ElMessage.error('加载集群失败') }
 }
 
@@ -349,7 +359,13 @@ const projOpts = computed(() => [...new Set((det.value.items || []).map(i => i.b
 const gcpOpts = computed(() => [...new Set((det.value.items || []).map(i => i.gcp_project))])
 const envOpts = computed(() => [...new Set((det.value.items || []).map(i => i.env))])
 
-async function loadOv() { try { ov.value = await costOverview({ dim: dim.value, mode: ovMode.value }) } catch (e) { ElMessage.error('加载失败') } }
+const ovErr = ref('')
+// 金额取不到时置 null 让模板显示 —，不要保留旧值也不要退化成 0
+async function loadOv() {
+  try { ov.value = await costOverview({ dim: dim.value, mode: ovMode.value }); ovErr.value = '' }
+  catch (e) { ov.value = null; ovErr.value = normalizeError(e).message }
+}
+function money(v) { return v === undefined || v === null ? '—' : '$' + v }
 async function loadDetail() { try { det.value = await costDetail({ ...f.value }) } catch (e) { ElMessage.error('加载失败') } }
 async function loadNodes() { try { nodes.value = (await costNodes()).map(n => ({ ...n, _ov: '' })) } catch (e) { ElMessage.error('加载失败') } }
 

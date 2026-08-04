@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: localhost:8070/opsplatform/opsplatform-cmdb-backend:v165
+          image: localhost:8070/opsplatform/opsplatform-cmdb-backend:v182
           imagePullPolicy: IfNotPresent
           env:
             # 泛解析(* CNAME)场景：禁用 lego 跟随 CNAME，让它直接在注册域名 zone 加显式 _acme-challenge TXT 盖过通配
@@ -23,6 +23,10 @@ spec:
             # 统一显示马尼拉时间（Go time.Now()/格式化；配合 DSN time_zone='+08:00'）
             - name: TZ
               value: "Asia/Manila"
+            # 运维平台后端地址：权限与单点登录的来源。留空则只剩本地 admin 能登，
+            # 权限校验随之全放行（本地账号是运维平台不可用时的兜底通道）。
+            - name: PORTAL_API_URL
+              value: "http://opsplatform-backend:8080"
           envFrom:
             - secretRef: { name: opsplatform-cmdb-secret }
           ports:

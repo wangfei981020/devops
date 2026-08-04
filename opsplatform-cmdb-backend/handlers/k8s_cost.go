@@ -362,7 +362,7 @@ func (h *K8sCostHandler) SetNodeOverride(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "set_k8s_node_cost", in.Name)
+	SetAuditTarget(c, in.Name)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

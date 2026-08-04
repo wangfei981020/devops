@@ -80,7 +80,7 @@ func (h *SyncHandler) RenewDomain(c *gin.Context) {
 	}
 	defer renewInFlight.Delete(ciID)
 
-	wa, _, domain, _, err := h.writeAdapterForDomain(ciid)
+	_, _, domain, _, err := h.writeAdapterForDomain(ciid)
 	if err != nil {
 		logx.JCtx(c.Request.Context(), "domain_renew", "renew_precheck_fail", map[string]any{"ciid": ciid, "error": err.Error()})
 		c.JSON(400, gin.H{"error": err.Error()})
@@ -89,22 +89,66 @@ func (h *SyncHandler) RenewDomain(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 40*time.Second)
 	defer cancel()
 
+	r := h.renewOne(ctx, c, ciID, domain, in.Period, in.QuotedCurrency, in.QuotedAmount)
+	if r.Err != "" {
+		c.JSON(http.StatusBadGateway, gin.H{"error": r.Err})
+		return
+	}
+	SetAuditTarget(c, fmt.Sprintf("%s %d年 order=%s", domain, in.Period, r.OrderID))
+	out := gin.H{"ok": true, "dry_run": r.DryRun, "env": r.Env,
+		"order_id": r.OrderID, "expiry_before": r.ExpiryBefore, "expiry_after": r.ExpiryAfter,
+		"ledger_saved": r.LedgerSaved, "msg": r.Msg}
+	if !r.LedgerSaved {
+		out["warning"] = fmt.Sprintf("续费已成功但台账写入失败，请人工补录：域名 %s 订单 %s %d年", domain, r.OrderID, in.Period)
+	}
+	c.JSON(200, out)
+}
+
+// renewOneResult 一次续费的结果。Err 非空表示这一个失败了，
+// 批量场景下继续处理下一个而不是整体中断。
+type renewOneResult struct {
+	OrderID      string
+	ExpiryBefore string
+	ExpiryAfter  string
+	DryRun       bool
+	Env          string
+	LedgerSaved  bool
+	Msg          string
+	Err          string
+}
+
+// renewOne 续一个域名。单个续费和批量续费共用这一份——
+// 防重、防超付推算、台账落库、dry_run 处理任何一条都不该有两份实现。
+//
+//	调用方负责：解析 ciID/domain、校验 period、设置超时。
+//	本函数负责：加互斥锁、调厂商、刷到期日、落台账。
+func (h *SyncHandler) renewOne(ctx context.Context, c *gin.Context, ciID int64, domain string, period int, quotedCur string, quotedAmt float64) renewOneResult {
+	// 批量入口没有单个入口那层锁，这里再加一次（同一域名被两处同时续 = 扣两笔）
+	if _, busy := renewInFlight.LoadOrStore(ciID*-1, true); busy {
+		return renewOneResult{Err: "该域名正在续费中，请勿重复提交"}
+	}
+	defer renewInFlight.Delete(ciID * -1)
+
+	wa, _, _, _, err := h.writeAdapterForDomain(fmt.Sprint(ciID))
+	if err != nil {
+		return renewOneResult{Err: err.Error()}
+	}
+
 	// 续费前到期日（防超付：与续费后对比，看年数是否只前进了所选 period）
 	var expiryBefore sql.NullString
 	_ = h.DB.QueryRow(`SELECT DATE_FORMAT(expiry_at,'%Y-%m-%d') FROM domains WHERE ci_id=?`, ciID).Scan(&expiryBefore)
 
-	logx.JCtx(c.Request.Context(), "domain_renew", "renew_start", map[string]any{"domain": domain, "period": in.Period, "quoted_currency": in.QuotedCurrency, "quoted_amount": in.QuotedAmount, "env": wa.EnvLabel(), "dry_run": wa.DryRun(), "operator": currentUser(c)})
-	res, err := wa.RenewDomain(ctx, domain, in.Period)
+	logx.JCtx(c.Request.Context(), "domain_renew", "renew_start", map[string]any{"domain": domain, "period": period, "quoted_currency": quotedCur, "quoted_amount": quotedAmt, "env": wa.EnvLabel(), "dry_run": wa.DryRun(), "operator": currentUser(c)})
+	res, err := wa.RenewDomain(ctx, domain, period)
 	if err != nil {
-		logx.JCtx(c.Request.Context(), "domain_renew", "renew_fail", map[string]any{"domain": domain, "period": in.Period, "error": err.Error()})
-		c.JSON(http.StatusBadGateway, gin.H{"error": "续费失败：" + err.Error()})
-		return
+		logx.JCtx(c.Request.Context(), "domain_renew", "renew_fail", map[string]any{"domain": domain, "period": period, "error": err.Error()})
+		return renewOneResult{Err: "续费失败：" + err.Error()}
 	}
 	// 真续成功后拉最新到期日刷库（dry_run 不改厂商，跳过刷库）。
 	// GoDaddy 续费后到期日有延迟未即时更新——若拉到的没前进，用「原到期 + 续费年数」推算，避免台账显示前后相同。
 	var expiryAfter sql.NullString
 	if !wa.DryRun() {
-		expected := addYearsDate(expiryBefore.String, in.Period)
+		expected := addYearsDate(expiryBefore.String, period)
 		newExp := ""
 		if d, e := wa.GetDomainDetail(ctx, domain); e == nil && d.Expires != nil {
 			got := d.Expires.Format("2006-01-02")
@@ -135,21 +179,18 @@ func (h *SyncHandler) RenewDomain(c *gin.Context) {
 	if _, e := h.DB.Exec(`INSERT INTO domain_renewals
 		(domain_ci_id, domain, period, quoted_currency, quoted_amount, actual_amount, actual_currency, order_id, expiry_before, expiry_after, operator, env, dry_run, raw_resp)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ciID, domain, in.Period, in.QuotedCurrency, in.QuotedAmount, actualAmt, res.Currency, res.OrderID,
+		ciID, domain, period, quotedCur, quotedAmt, actualAmt, res.Currency, res.OrderID,
 		nullableStr(expiryBefore), nullableStr(expiryAfter), currentUser(c), wa.EnvLabel(), dry, res.RawBody); e != nil {
 		ledgerSaved = false
-		logx.JCtx(c.Request.Context(), "domain_renew", "ledger_save_fail", map[string]any{"domain": domain, "order_id": res.OrderID, "period": in.Period, "error": e.Error()})
+		logx.JCtx(c.Request.Context(), "domain_renew", "ledger_save_fail", map[string]any{"domain": domain, "order_id": res.OrderID, "period": period, "error": e.Error()})
 	}
 
-	WriteAudit(h.DB, c, "domain_renew", fmt.Sprintf("%s %d年 order=%s", domain, in.Period, res.OrderID))
-	logx.JCtx(c.Request.Context(), "domain_renew", "renew_done", map[string]any{"domain": domain, "period": in.Period, "order_id": res.OrderID, "expiry_before": expiryBefore.String, "expiry_after": expiryAfter.String, "ledger_saved": ledgerSaved, "env": wa.EnvLabel(), "dry_run": wa.DryRun()})
-	out := gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
-		"order_id": res.OrderID, "expiry_before": expiryBefore.String, "expiry_after": expiryAfter.String,
-		"ledger_saved": ledgerSaved, "msg": renewMsg(wa, domain, in.Period)}
-	if !ledgerSaved {
-		out["warning"] = fmt.Sprintf("续费已成功但台账写入失败，请人工补录：域名 %s 订单 %s %d年", domain, res.OrderID, in.Period)
+	logx.JCtx(c.Request.Context(), "domain_renew", "renew_done", map[string]any{"domain": domain, "period": period, "order_id": res.OrderID, "expiry_before": expiryBefore.String, "expiry_after": expiryAfter.String, "ledger_saved": ledgerSaved, "env": wa.EnvLabel(), "dry_run": wa.DryRun()})
+	return renewOneResult{
+		OrderID: res.OrderID, ExpiryBefore: expiryBefore.String, ExpiryAfter: expiryAfter.String,
+		DryRun: wa.DryRun(), Env: wa.EnvLabel(), LedgerSaved: ledgerSaved,
+		Msg: renewMsg(wa, domain, period),
 	}
-	c.JSON(200, out)
 }
 
 // addYearsDate 给 "YYYY-MM-DD" 加 n 年；解析失败返回空串。
@@ -252,7 +293,7 @@ func (h *SyncHandler) SetAutoRenew(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "设置自动续费失败：" + err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "domain_auto_renew", domain)
+	SetAuditTarget(c, domain)
 	state := "开启"
 	if !in.Enabled {
 		state = "关闭"

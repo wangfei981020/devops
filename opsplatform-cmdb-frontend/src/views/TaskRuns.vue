@@ -108,7 +108,7 @@
         <div v-if="cur.failures.length" class="sec">
           <div class="sec-title" style="display:flex;align-items:center">
             ❌ 失败明细（{{ cur.failures.length }}）
-            <el-button size="small" type="warning" :icon="RefreshRight" :loading="retrying" style="margin-left:auto" @click="retryFailures">重试失败项</el-button>
+            <el-button v-if="canRun" size="small" type="warning" :icon="RefreshRight" :loading="retrying" style="margin-left:auto" @click="retryFailures">重试失败项</el-button>
           </div>
           <ul class="fail-list">
             <li v-for="(f, i) in cur.failures" :key="i">
@@ -127,8 +127,8 @@
         </div>
 
         <div class="sec">
-          <el-button v-if="cur.status==='running'" type="danger" :icon="CircleClose" :loading="cancelling[cur.id]" @click="cancelRun(cur)">取消执行</el-button>
-          <el-button type="primary" :icon="VideoPlay" :loading="rerunning" :disabled="cur.status==='running'" @click="rerun">重跑此任务（全量）</el-button>
+          <el-button v-if="canRun && cur.status==='running'" type="danger" :icon="CircleClose" :loading="cancelling[cur.id]" @click="cancelRun(cur)">取消执行</el-button>
+          <el-button v-if="canRun" type="primary" :icon="VideoPlay" :loading="rerunning" :disabled="cur.status==='running'" @click="rerun">重跑此任务（全量）</el-button>
         </div>
       </template>
     </el-drawer>
@@ -143,8 +143,11 @@ import { listTaskRuns, listScheduledTasks, runScheduledTask, retryTaskRunFailure
 import { normalizeError } from '../api/http'
 import LoadError from '../components/LoadError.vue'
 import { useAppStore } from '../stores/app'
+import { useAuthStore } from '../stores/auth'
 
 const app = useAppStore()
+const auth = useAuthStore()
+const canRun = computed(() => auth.hasButton('run_task'))
 const tasks = ref([]), rows = ref([]), total = ref(0), loading = ref(false)
 const loadErr = ref('')
 const q = ref({ task_key: '', status: '', days: 7, limit: 20 })

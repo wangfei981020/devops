@@ -5,7 +5,7 @@
     <!-- 项目 -->
     <el-card shadow="never" style="margin-bottom:14px">
       <template #header><b>项目</b><span class="muted" style="margin-left:8px">录入域名/证书时下拉选</span>
-        <el-button type="primary" size="small" style="float:right" @click="openProj()">+ 添加项目</el-button></template>
+        <el-button v-if="canManage" type="primary" size="small" style="float:right" @click="openProj()">+ 添加项目</el-button></template>
       <el-table :data="pPaged" size="small">
         <el-table-column label="项目名" min-width="160"><template #default="{ row }"><el-tag size="small" effect="plain" :style="chip(row.color)">{{ row.name }}</el-tag></template></el-table-column>
         <el-table-column label="状态" min-width="150"><template #default="{ row }">
@@ -14,7 +14,7 @@
         </template></el-table-column>
         <el-table-column prop="remark" label="备注" min-width="200" />
         <el-table-column prop="sort_order" label="排序" width="80" />
-        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><div style="display:flex;gap:8px;align-items:center"><el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openProj(row)" /></el-tooltip><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delProj(row)" /></el-tooltip></div></template></el-table-column>
+        <el-table-column v-if="canManage" label="操作" width="100" fixed="right"><template #default="{ row }"><div style="display:flex;gap:8px;align-items:center"><el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openProj(row)" /></el-tooltip><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delProj(row)" /></el-tooltip></div></template></el-table-column>
       </el-table>
       <el-pagination v-if="projects.length > pSize" v-model:current-page="pPage" v-model:page-size="pSize" :page-sizes="[10,20,50,100]"
         :total="projects.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
@@ -24,12 +24,12 @@
     <!-- 环境 -->
     <el-card shadow="never">
       <template #header><b>环境</b><span class="muted" style="margin-left:8px">PROD/UAT/TEST/DEV 等，可自定义</span>
-        <el-button type="primary" size="small" style="float:right" @click="openEnv()">+ 添加环境</el-button></template>
+        <el-button v-if="canManage" type="primary" size="small" style="float:right" @click="openEnv()">+ 添加环境</el-button></template>
       <el-table :data="ePaged" size="small">
         <el-table-column label="环境" width="150"><template #default="{ row }"><el-tag v-if="row.color" size="small" effect="plain" :style="chip(row.color)">{{ row.code }}</el-tag><el-tag v-else :type="row.tag_type" size="small">{{ row.code }}</el-tag></template></el-table-column>
         <el-table-column prop="name" label="名称" min-width="160" />
         <el-table-column prop="sort_order" label="排序" width="80" />
-        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><div style="display:flex;gap:8px;align-items:center"><el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEnv(row)" /></el-tooltip><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delEnv(row)" /></el-tooltip></div></template></el-table-column>
+        <el-table-column v-if="canManage" label="操作" width="100" fixed="right"><template #default="{ row }"><div style="display:flex;gap:8px;align-items:center"><el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEnv(row)" /></el-tooltip><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delEnv(row)" /></el-tooltip></div></template></el-table-column>
       </el-table>
       <el-pagination v-if="envs.length > eSize" v-model:current-page="ePage" v-model:page-size="eSize" :page-sizes="[10,20,50,100]"
         :total="envs.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
@@ -38,11 +38,11 @@
     <!-- CDN -->
     <el-card shadow="never" style="margin-top:14px">
       <template #header><b>CDN 厂商</b><span class="muted" style="margin-left:8px">录入解析时下拉选，可留空</span>
-        <el-button type="primary" size="small" style="float:right" @click="openCdn()">+ 添加 CDN</el-button></template>
+        <el-button v-if="canManage" type="primary" size="small" style="float:right" @click="openCdn()">+ 添加 CDN</el-button></template>
       <el-table :data="cPaged" size="small">
         <el-table-column prop="name" label="CDN 名称" min-width="200" />
         <el-table-column prop="sort_order" label="排序" width="80" />
-        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><div style="display:flex;gap:8px;align-items:center"><el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openCdn(row)" /></el-tooltip><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delCdn(row)" /></el-tooltip></div></template></el-table-column>
+        <el-table-column v-if="canManage" label="操作" width="100" fixed="right"><template #default="{ row }"><div style="display:flex;gap:8px;align-items:center"><el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openCdn(row)" /></el-tooltip><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delCdn(row)" /></el-tooltip></div></template></el-table-column>
       </el-table>
       <el-pagination v-if="cdns.length > cSize" v-model:current-page="cPage" v-model:page-size="cSize" :page-sizes="[10,20,50,100]"
         :total="cdns.length" layout="total, sizes, prev, pager, next" style="margin-top:12px; justify-content:flex-end" />
@@ -52,7 +52,7 @@
     <!-- 生命周期状态字典 -->
     <el-card shadow="never" style="margin-top:14px">
       <template #header><b>生命周期状态</b><span class="muted" style="margin-left:8px">项目上线状态 / 主域名使用状态，可自定义增删改</span>
-        <el-button type="primary" size="small" style="float:right" @click="openStatus()">+ 添加状态</el-button></template>
+        <el-button v-if="canManage" type="primary" size="small" style="float:right" @click="openStatus()">+ 添加状态</el-button></template>
       <el-radio-group v-model="sScope" size="small" style="margin-bottom:10px">
         <el-radio-button value="project">项目状态</el-radio-button>
         <el-radio-button value="domain">主域名状态</el-radio-button>
@@ -61,9 +61,31 @@
         <el-table-column label="状态" min-width="180"><template #default="{ row }"><el-tag size="small" effect="plain" :style="chip(row.color)">{{ row.label }}</el-tag></template></el-table-column>
         <el-table-column label="颜色" width="90"><template #default="{ row }"><span :style="{ display:'inline-block', width:'16px', height:'16px', borderRadius:'4px', background: row.color || '#909399', verticalAlign:'middle' }" /></template></el-table-column>
         <el-table-column prop="sort_order" label="排序" width="80" />
-        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><div style="display:flex;gap:8px;align-items:center"><el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openStatus(row)" /></el-tooltip><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delStatus(row)" /></el-tooltip></div></template></el-table-column>
+        <el-table-column v-if="canManage" label="操作" width="100" fixed="right"><template #default="{ row }"><div style="display:flex;gap:8px;align-items:center"><el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openStatus(row)" /></el-tooltip><el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delStatus(row)" /></el-tooltip></div></template></el-table-column>
       </el-table>
       <el-empty v-if="!scopedStatuses.length" description="该类别还没有状态，点右上添加" :image-size="60" />
+    </el-card>
+
+    <!-- 原「模型管理」整页只有这一个只读表格、没有任何操作按钮，同样不值得单占一个菜单位。
+         并过来时顺手补了实例数的口径说明：原页面只统计域名/证书两类，而 cis 表里还有主机，
+         于是总览「配置项 16」和模型页「6+0」长期对不上（已由迁移 080 补登 host 类型）。 -->
+    <el-card shadow="never" style="margin-bottom:14px">
+      <template #header><b>CI 类型</b>
+        <span class="muted" style="margin-left:8px">配置项模型清单（只读）</span>
+      </template>
+      <LoadError :error="ciTypeErr" @retry="loadCITypes" />
+      <el-table :data="ciTypes" size="small">
+        <el-table-column prop="code" label="类型 code" width="180" />
+        <el-table-column prop="name" label="名称" width="160" />
+        <el-table-column label="实例数" width="120">
+          <!-- 取不到就显示 —，不显示 0：0 会被读成"这个模型一条实例都没有" -->
+          <template #default="{ row }">{{ ciTypeErr ? '—' : (ciCounts[row.code] ?? '—') }}</template>
+        </el-table-column>
+        <el-table-column label="说明" min-width="280">
+          <template #default="{ row }">{{ ciDesc[row.code] || 'CI 类型' }}</template>
+        </el-table-column>
+      </el-table>
+      <div class="muted" style="margin-top:10px">扩展应用 / 数据库 / 负载均衡等类型时，走迁移文件往 ci_types 里加。</div>
     </el-card>
 
     <!-- 原「设置」页整页只剩这一项，其余全是「已移到别处」的指引，不值得单占一个菜单，合并过来 -->
@@ -129,14 +151,40 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
 import { Edit, Delete } from '@element-plus/icons-vue'
 import { listProjects, createProject, updateProject, deleteProject, listEnvironments, createEnvironment, updateEnvironment, deleteEnvironment, listCdns, createCdn, updateCdn, deleteCdn,
-  listStatuses, createStatus, updateStatus, deleteStatus, getSettings, updateSettings } from '../api/cmdb'
+  listStatuses, createStatus, updateStatus, deleteStatus, getSettings, updateSettings, listCITypes, dashboard } from '../api/cmdb'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 import { useAppStore } from '../stores/app'
 import { usePaged } from '../composables/usePaged'
 
+const auth = useAuthStore()
+const canManage = computed(() => auth.hasButton('manage_basic'))
 const app = useAppStore()
+
+// CI 类型（原「模型管理」页）
+const ciTypes = ref([])
+const ciCounts = ref({})
+const ciTypeErr = ref('')
+const ciDesc = {
+  domain: '域名资产：注册商 / 到期 / 解析状态',
+  certificate: '证书资产：CA / 绑定域名 / 到期 / 自动续期',
+  host: '主机资产：云厂商 / 规格 / 磁盘 / 成本',
+}
+async function loadCITypes() {
+  ciTypeErr.value = ''
+  try {
+    ciTypes.value = await listCITypes()
+    const d = await dashboard()
+    ciCounts.value = { domain: d.domain_total, certificate: d.cert_total, host: d.host_total }
+  } catch (e) {
+    ciTypeErr.value = normalizeError(e).message
+    ciTypes.value = []; ciCounts.value = {}
+  }
+}
 const COOL = ['#3b7dd8', '#5b8ff9', '#269a99', '#5ad8a6', '#6dc8ec', '#9270ca', '#5d7092', '#0e7a6e', '#7d5fd6', '#2f9e8f']
 function chip(c) { return c ? { color: c, borderColor: c + '66', background: c + '14' } : {} }
 const projects = ref([]), envs = ref([]), cdns = ref([])
@@ -190,5 +238,5 @@ async function saveCdn() {
   catch (e) { ElMessage.error(e.response?.data?.error || '失败') }
 }
 async function delCdn(row) { try { await app.showConfirm(`删除 CDN ${row.name}？`); await deleteCdn(row.id); load(); app.loadCdns() } catch (e) { if (e !== 'cancel') ElMessage.error('失败') } }
-onMounted(() => { load(); app.loadStatuses() })
+onMounted(() => { load(); app.loadStatuses(); loadCITypes() })
 </script>

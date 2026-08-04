@@ -19,9 +19,12 @@
         <el-button :icon="Search" @click="load">查询</el-button>
         <el-switch v-model="onlyBad" active-text="只看异常" style="margin-left:6px" @change="page=1" />
         <span class="muted" style="margin-left:auto">
-          共 {{ rows.length }} <b v-if="badCount" style="color:#f56c6c;margin-left:6px">异常 {{ badCount }}</b>
+          <!-- 失败时不能报「共 0」：0 是"这个集群没有工作负载"的断言（CMDB-013） -->
+          <template v-if="error">共 — · <b style="color:#f56c6c">数据未加载</b></template>
+          <template v-else>共 {{ rows.length }} <b v-if="badCount" style="color:#f56c6c;margin-left:6px">异常 {{ badCount }}</b></template>
         </span>
       </div>
+      <LoadError :error="error" title="工作负载未加载" @retry="load" />
       <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column prop="namespace" label="命名空间" width="150" />
         <el-table-column prop="kind" label="类型" width="120" />
@@ -53,7 +56,7 @@
           <el-table-column label="失败原因" min-width="140"><template #default="{ row }"><span v-if="row.reason" style="color:#f56c6c">{{ row.reason }}</span><span v-else class="muted">—</span></template></el-table-column>
           <el-table-column prop="restarts" label="重启" width="70" />
         </el-table>
-        <el-empty v-if="!podLoading && !wlPods.length" description="无 Pod" :image-size="50" />
+        <el-empty v-if="!podLoading && !error && !wlPods.length" description="无 Pod" :image-size="50" />
       </el-dialog>
 
       <el-dialog :close-on-click-modal="false" v-model="chDlg" :title="`变更记录 · ${chWl?.namespace}/${chWl?.name}`" width="640px">
@@ -64,9 +67,9 @@
             <span class="muted">{{ row.old_value }}</span> → <b>{{ row.new_value }}</b>
           </template></el-table-column>
         </el-table>
-        <el-empty v-if="!chLoading && !changes.length" description="暂无变更（首次纳管后、镜像/副本变化才会记录）" />
+        <el-empty v-if="!chLoading && !error && !changes.length" description="暂无变更（首次纳管后、镜像/副本变化才会记录）" />
       </el-dialog>
-      <el-empty v-if="!loading && !rows.length" description="无数据，先去集群管理点「同步」" />
+      <el-empty v-if="!loading && !error && !rows.length" description="无数据，先去集群管理点「同步」" />
     </el-card>
   </div>
 </template>
@@ -76,6 +79,10 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { listK8sClusters, listK8sWorkloads, listK8sNamespaces, listK8sChanges, listK8sPods } from '../api/cmdb'
+import { pickDefaultCluster } from '../composables/useClusterPick'
+import { useLoadState } from '../composables/useLoadState'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
 
@@ -84,7 +91,8 @@ const clusters = ref([]); const namespaces = ref([]); const rows = ref([]); cons
 const display = computed(() => onlyBad.value ? rows.value.filter(r => r.status === 'degraded') : rows.value)
 const badCount = computed(() => rows.value.filter(r => r.status === 'degraded').length)
 const { page, pageSize, paged } = usePager(display)
-const clusterId = ref(null); const ns = ref(''); const kind = ref(''); const q = ref(''); const loading = ref(false)
+const clusterId = ref(null); const ns = ref(''); const kind = ref(''); const q = ref('')
+const { loading, error, run } = useLoadState()
 const chDlg = ref(false); const chWl = ref(null); const changes = ref([]); const chLoading = ref(false)
 const podDlg = ref(false); const podWl = ref(null); const wlPods = ref([]); const podLoading = ref(false)
 async function openPods(row) {
@@ -106,20 +114,22 @@ async function onCluster() { ns.value = ''; namespaces.value = await listK8sName
 
 async function load() {
   if (!clusterId.value) return
-  loading.value = true
-  try {
+  // 失败落到页面 error（红条 + 计数变 —），不是一闪而过的 toast：
+  // toast 消失后表格照常显示「无数据，先去集群管理点同步」，把接口故障说成了"这个集群是空的"。
+  const r = await run(() => {
     const p = { cluster_id: clusterId.value }
     if (ns.value) p.namespace = ns.value
     if (kind.value) p.kind = kind.value
     if (q.value) p.q = q.value
-    rows.value = await listK8sWorkloads(p)
-  } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+    return listK8sWorkloads(p)
+  })
+  rows.value = error.value ? [] : (r || [])
 }
 
 onMounted(async () => {
   try {
     clusters.value = await listK8sClusters()
-    if (clusters.value.length) { clusterId.value = clusters.value[0].id; onCluster() }
+    if (clusters.value.length) { clusterId.value = pickDefaultCluster(clusters.value); onCluster() }
   } catch (e) { ElMessage.error('加载集群失败') }
 })
 </script>

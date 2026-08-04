@@ -132,14 +132,14 @@
     <!-- 云账号管理（账号=分组，展开看其下多个 project，凭据在 project 层） -->
     <el-dialog :close-on-click-modal="false" :close-on-press-escape="false" v-model="acctDlg" title="云账号" width="820px">
       <div class="muted" style="margin-bottom:10px">账号是业务分组；<b>凭据配在项目层</b>——同一账号下每个 GCP project 一份 service account。展开账号管理其下项目。</div>
-      <div style="text-align:right;margin-bottom:10px"><el-button type="primary" size="small" :icon="Plus" @click="openAcctForm()">添加云账号</el-button></div>
+      <div style="text-align:right;margin-bottom:10px"><el-button v-if="canIntegr" type="primary" size="small" :icon="Plus" @click="openAcctForm()">添加云账号</el-button></div>
       <el-table :data="accounts" size="small" row-key="id">
         <el-table-column type="expand">
           <template #default="{ row: acc }">
             <div style="padding:6px 16px 12px">
               <div style="display:flex;align-items:center;margin-bottom:8px">
                 <b>项目（每个 project 独立凭据）</b>
-                <el-button size="small" :icon="Plus" style="margin-left:auto" @click="openProjForm(acc)">添加项目</el-button>
+                <el-button v-if="canProj" size="small" :icon="Plus" style="margin-left:auto" @click="openProjForm(acc)">添加项目</el-button>
               </div>
               <el-table :data="acc.projects" size="small">
                 <el-table-column prop="name" label="自定义名" min-width="110" />
@@ -154,10 +154,10 @@
                 </template></el-table-column>
                 <el-table-column label="操作" width="150"><template #default="{ row: p }">
                   <div style="display:flex;gap:4px;align-items:center">
-                    <el-button link type="primary" :icon="Refresh" :loading="syncing['p'+p.id]" @click="syncProject(acc.id, p.id)">同步</el-button>
+                    <el-button v-if="canSyncCloud" link type="primary" :icon="Refresh" :loading="syncing['p'+p.id]" @click="syncProject(acc.id, p.id)">同步</el-button>
                     <span v-if="projProg[p.id]" class="muted" style="font-size:11px">{{ progressText(projProg[p.id]) }}</span>
-                    <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openProjForm(acc, p)" /></el-tooltip>
-                    <el-tooltip content="删除（连主机）"><el-button link type="danger" :icon="Delete" @click="delProj(p)" /></el-tooltip>
+                    <el-tooltip v-if="canProj" content="编辑"><el-button link type="primary" :icon="Edit" @click="openProjForm(acc, p)" /></el-tooltip>
+                    <el-tooltip v-if="canProj" content="删除（连主机）"><el-button link type="danger" :icon="Delete" @click="delProj(p)" /></el-tooltip>
                   </div>
                 </template></el-table-column>
               </el-table>
@@ -170,10 +170,10 @@
         <el-table-column label="项目数" width="80" align="right"><template #default="{ row }">{{ row.projects.length }}</template></el-table-column>
         <el-table-column label="操作" width="220" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:6px;align-items:center">
-            <el-button link type="primary" :icon="Refresh" :loading="syncing['a'+row.id]" @click="syncAccount(row.id)">同步全部</el-button>
+            <el-button v-if="canSyncCloud" link type="primary" :icon="Refresh" :loading="syncing['a'+row.id]" @click="syncAccount(row.id)">同步全部</el-button>
             <span v-if="acctProg[row.id]" class="muted" style="font-size:12px">同步中 {{ progressText(acctProg[row.id]) }}</span>
-            <el-tooltip content="编辑账号"><el-button link type="primary" :icon="Edit" @click="openAcctForm(row)" /></el-tooltip>
-            <el-tooltip content="删除（连项目和主机）"><el-button link type="danger" :icon="Delete" @click="delAcct(row)" /></el-tooltip>
+            <el-tooltip v-if="canIntegr" content="编辑账号"><el-button link type="primary" :icon="Edit" @click="openAcctForm(row)" /></el-tooltip>
+            <el-tooltip v-if="canIntegr" content="删除（连项目和主机）"><el-button link type="danger" :icon="Delete" @click="delAcct(row)" /></el-tooltip>
           </div>
         </template></el-table-column>
       </el-table>
@@ -212,7 +212,7 @@
       </div>
       <el-tabs v-model="rateTab">
         <el-tab-pane label="计算费率（vCPU + 内存）" name="compute">
-          <div style="text-align:right;margin-bottom:8px"><el-button size="small" :icon="Plus" @click="openRateForm('compute')">添加档位</el-button></div>
+          <div style="text-align:right;margin-bottom:8px"><el-button v-if="canRates" size="small" :icon="Plus" @click="openRateForm('compute')">添加档位</el-button></div>
           <el-table :data="computeRates" size="small" max-height="380">
             <el-table-column prop="region" label="区域" min-width="120" />
             <el-table-column prop="machine_family" label="机型族" width="100" />
@@ -270,12 +270,20 @@ import { listHosts, getHost, listCloudAccounts, createCloudAccount, updateCloudA
   listComputeRates, createComputeRate, updateComputeRate, deleteComputeRate,
   listDiskRates, createDiskRate, updateDiskRate, deleteDiskRate } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { useAuthStore } from '../stores/auth'
 import { normalizeError } from '../api/http'
 import LoadError from '../components/LoadError.vue'
 import { useHostSync } from '../composables/useHostSync'
 import { providerLabel as plabel, providerStyle, projectStyle, regionStyle } from '../utils/cloud'
 
 const app = useAppStore()
+// 按钮级权限：账号凭据、云同步、计价三类分开——能同步资源 ≠ 能改凭据或改计费
+const auth = useAuthStore()
+const canHosts = computed(() => auth.hasButton('manage_hosts'))
+const canIntegr = computed(() => auth.hasButton('manage_integrations'))
+const canSyncCloud = computed(() => auth.hasButton('sync_cloud'))
+const canProj = computed(() => auth.hasButton('manage_cloud_projects'))
+const canRates = computed(() => auth.hasButton('manage_cost_rates'))
 const rows = ref([]), loading = ref(false)
 const loadErr = ref('')
 const f = ref({ kw: '', provider: null, project: null, zone: null, status: null })

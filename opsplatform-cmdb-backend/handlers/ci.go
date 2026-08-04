@@ -134,8 +134,9 @@ func (h *CIHandler) Create(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	AuditCreated(c, "cis", id)
 	replaceLabelsDB(h.DB, id, in.Labels)
-	WriteAudit(h.DB, c, "create_ci", in.Type+"/"+in.Name)
+	SetAuditTarget(c, in.Type+"/"+in.Name)
 	c.JSON(201, gin.H{"id": id})
 }
 
@@ -156,7 +157,7 @@ func (h *CIHandler) Update(c *gin.Context) {
 			replaceLabelsDB(h.DB, iid, in.Labels)
 		}
 	}
-	WriteAudit(h.DB, c, "update_ci", in.Name)
+	SetAuditTarget(c, in.Name)
 	c.JSON(200, gin.H{"ok": true})
 }
 
@@ -191,7 +192,7 @@ func (h *CIHandler) Delete(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "delete_ci", id)
+	SetAuditTarget(c, id)
 	c.JSON(200, gin.H{"ok": true})
 }
 

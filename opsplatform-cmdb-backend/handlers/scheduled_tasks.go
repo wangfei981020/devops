@@ -68,7 +68,7 @@ func (h *SchedHandler) RetryFailures(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "该任务不支持重试"})
 		return
 	}
-	WriteAudit(h.DB, c, "retry_task_failures", taskKey)
+	SetAuditTarget(c, taskKey)
 	c.JSON(200, gin.H{"ok": true, "msg": fmt.Sprintf("已触发重试 %d 项，稍后刷新看新记录", len(targets))})
 }
 
@@ -264,7 +264,7 @@ func (h *SchedHandler) Update(c *gin.Context) {
 		}
 	}
 	ReloadScheduler()
-	WriteAudit(h.DB, c, "update_scheduled_task", key)
+	SetAuditTarget(c, key)
 	c.JSON(200, gin.H{"ok": true})
 }
 
@@ -274,6 +274,6 @@ func (h *SchedHandler) Run(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "未知任务"})
 		return
 	}
-	WriteAudit(h.DB, c, "run_scheduled_task", key)
+	SetAuditTarget(c, key)
 	c.JSON(200, gin.H{"ok": true, "msg": "已触发，稍后刷新看结果"})
 }

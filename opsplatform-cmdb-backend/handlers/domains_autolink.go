@@ -51,7 +51,7 @@ func (h *DomainHandler) AutoLinkModules(c *gin.Context) {
 			details = append(details, gin.H{"domain": r.host, "module": mod, "via": via})
 		}
 	}
-	WriteAudit(h.DB, c, "auto_link_domain_modules", "filled="+strconv.Itoa(filled))
+	SetAuditTarget(c, "filled="+strconv.Itoa(filled))
 	c.JSON(http.StatusOK, gin.H{"ok": true, "filled": filled, "scanned": len(recs), "details": details})
 }
 

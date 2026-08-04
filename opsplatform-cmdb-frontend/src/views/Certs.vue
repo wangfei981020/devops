@@ -4,7 +4,7 @@
       <span class="page-title">证书</span>
       <div>
         <el-button :icon="Refresh" @click="load">刷新</el-button>
-        <el-button type="primary" :icon="Plus" @click="openApply">申请证书</el-button>
+        <el-button v-if="canIssue" type="primary" :icon="Plus" @click="openApply">申请证书</el-button>
       </div>
     </div>
 
@@ -41,9 +41,9 @@
           <template #default="{ row }">
             <div style="display:flex;gap:8px;align-items:center">
               <el-tooltip content="详情"><el-button link type="primary" :icon="View" @click="$router.push('/certs/'+row.ci_id)" /></el-tooltip>
-              <el-tooltip content="续期"><el-button link type="primary" :icon="Refresh" @click="renew(row)" /></el-tooltip>
+              <el-tooltip v-if="canIssue" content="续期"><el-button link type="primary" :icon="Refresh" @click="renew(row)" /></el-tooltip>
               <el-tooltip content="下载证书"><el-button link type="primary" :icon="Download" :disabled="row.status!=='active'" @click="download(row)" /></el-tooltip>
-              <el-tooltip content="吊销"><el-button link type="danger" :icon="Delete" @click="revoke(row)" /></el-tooltip>
+              <el-tooltip v-if="canCert" content="吊销"><el-button link type="danger" :icon="Delete" @click="revoke(row)" /></el-tooltip>
             </div>
           </template>
         </el-table-column>
@@ -109,6 +109,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Search, View, Download, Delete } from '@element-plus/icons-vue'
 import { listCerts, applyCert, renewCert, revokeCert, downloadCert, listDomains, listAcme } from '../api/cmdb'
@@ -116,6 +117,10 @@ import { useAppStore } from '../stores/app'
 import { normalizeError } from '../api/http'
 import LoadError from '../components/LoadError.vue'
 
+// 申请/续期会真的调 CA（有速率限制），和"录入/吊销台账"是两个权限
+const auth = useAuthStore()
+const canCert = computed(() => auth.hasButton('manage_certs'))
+const canIssue = computed(() => auth.hasButton('issue_cert'))
 const app = useAppStore()
 const rows = ref([]), domains = ref([]), accounts = ref([]), loading = ref(false)
 const loadErr = ref('')

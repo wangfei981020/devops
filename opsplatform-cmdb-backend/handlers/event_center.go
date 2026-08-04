@@ -38,7 +38,13 @@ type evt struct {
 	Title   string `json:"title"`
 	Message string `json:"message"`
 	Cluster string `json:"cluster,omitempty"`
-	sortTs  time.Time
+	// Upcoming=true 表示这条是「还没发生的预告」（到期类），不是已发生的事件。
+	// 到期事件的时间戳是**到期日**（未来），混在按时间倒序的时间线里会永远霸占顶部——
+	// 一条 7 天后才到期的证书，看起来像刚刚发生的最新严重事件（实测过 3 条 2026-08-09 排在最前）。
+	Upcoming bool `json:"upcoming"`
+	// Count 为合并掉的同类条数（同来源+对象+标题+详情），>1 时前端显示 ×N。
+	Count  int `json:"count"`
+	sortTs time.Time
 }
 
 // List 聚合事件。days 默认30(到期/变更窗口);K8s Warning 取各启用集群实时(有界)。
@@ -61,9 +67,17 @@ func (h *EventCenterHandler) List(c *gin.Context) {
 		return (srcFilter == "" || srcFilter == src) && (lvlFilter == "" || lvlFilter == lvl)
 	}
 	events := []evt{}
+	now := time.Now()
 	add := func(e evt) {
 		if want(e.Source, e.Level) {
-			e.Time = e.sortTs.Format("2006-01-02 15:04:05")
+			// 预告（到期日在未来）只显示到「天」：证书到期时刻精确到秒毫无意义，
+			// 反而让人误以为那一刻发生过什么事。
+			e.Upcoming = e.sortTs.After(now)
+			if e.Upcoming {
+				e.Time = e.sortTs.Format("2006-01-02")
+			} else {
+				e.Time = e.sortTs.Format("2006-01-02 15:04:05")
+			}
 			events = append(events, e)
 		}
 	}
@@ -158,7 +172,43 @@ func (h *EventCenterHandler) List(c *gin.Context) {
 		}
 	}
 
-	sort.Slice(events, func(i, j int) bool { return events[i].sortTs.After(events[j].sortTs) })
+	// 合并完全同类的重复条目（同来源+对象+标题+详情）。
+	// 实测同一个 Pod 的 Unhealthy 会重复 3 条、同一域名的证书到期重复 2 条，
+	// 时间线被同一件事刷屏，真正不同的事件被挤出视野。合并后用 ×N 表示发生次数，
+	// 时间取最近一次——丢的是重复，不是信息。
+	rawTotal := len(events)
+	merged := make([]evt, 0, len(events))
+	seen := map[string]int{}
+	for _, e := range events {
+		k := e.Source + "\x00" + e.Object + "\x00" + e.Title + "\x00" + e.Message
+		if e.Count < 1 {
+			e.Count = 1 // 非 K8s 来源没有原生次数，按 1 次算
+		}
+		if i, ok := seen[k]; ok {
+			merged[i].Count += e.Count
+			if e.sortTs.After(merged[i].sortTs) {
+				merged[i].sortTs, merged[i].Time = e.sortTs, e.Time
+			}
+			continue
+		}
+		seen[k] = len(merged)
+		merged = append(merged, e)
+	}
+	events = merged
+
+	// 排序分两段：已发生的按时间倒序（最新在前）排在上面；
+	// 未发生的预告按到期时间正序（最紧迫在前）排在下面。
+	// 预告绝不能靠"时间戳更大"插到已发生事件前面——那是在用未来的日期伪装成最新消息。
+	sort.Slice(events, func(i, j int) bool {
+		a, b := events[i], events[j]
+		if a.Upcoming != b.Upcoming {
+			return !a.Upcoming
+		}
+		if a.Upcoming {
+			return a.sortTs.Before(b.sortTs)
+		}
+		return a.sortTs.After(b.sortTs)
+	})
 
 	// 上限仍然保留（一次返回上万条对前端没意义），但**必须显式告知被截断了**。
 	// 原先 count 返回的是截断后的长度，于是「近 30 天」正好 500 条看起来像真实总数，
@@ -166,8 +216,12 @@ func (h *EventCenterHandler) List(c *gin.Context) {
 	// 分级计数在**截断之前**统计：数字必须反映选定时间范围内的真实总量，
 	// 不能是"当前这页有几条"——否则严重事件被截掉后，计数也跟着变小（CMDB-019）。
 	byLevel := map[string]int{"critical": 0, "warning": 0, "info": 0}
+	upcoming := 0
 	for _, e := range events {
 		byLevel[e.Level]++
+		if e.Upcoming {
+			upcoming++
+		}
 	}
 	total := len(events)
 	truncated := false
@@ -177,10 +231,16 @@ func (h *EventCenterHandler) List(c *gin.Context) {
 		logx.J("event_center", "truncated", map[string]any{"total": total, "limit": eventCenterLimit, "days": days})
 	}
 	// count 保持"本次返回条数"的语义不变（前端老代码在用），total 才是截断前的真实总量。
+	// raw_total/merged_away 把"合并掉了多少条"摆在明面上：
+	// 合并后 total 变小是预期行为，但不能让人以为事件凭空少了（同 CMDB-019 的态度）。
 	c.JSON(http.StatusOK, gin.H{
 		"events": events, "count": len(events),
 		"total": total, "truncated": truncated, "limit": eventCenterLimit,
 		"by_level": byLevel,
+		// upcoming 是"尚未发生的到期预告"条数，已从时间线顶部移到末尾单独成段。
+		"upcoming":    upcoming,
+		"raw_total":   rawTotal,
+		"merged_away": rawTotal - total,
 	})
 }
 
@@ -229,8 +289,15 @@ func (h *EventCenterHandler) collectK8sWarnings(ctx context.Context, days int, _
 			if e.InvolvedObject.Namespace != "" {
 				obj = e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
 			}
+			// K8s 自己就记了同一事件重复发生的次数（Event.Count），直接带出来。
+			// 不带的话「BackOff 重启」发生 200 次和发生 1 次在时间线上长得一模一样，
+			// 而这个次数恰恰是判断"偶发还是一直在崩"的关键。
+			cnt := int(e.Count)
+			if cnt < 1 {
+				cnt = 1
+			}
 			add(evt{Source: "k8s", Level: "warning", Object: obj,
-				Title: e.Reason, Message: truncStr(e.Message, 240), Cluster: x.name, sortTs: ts})
+				Title: e.Reason, Message: truncStr(e.Message, 240), Cluster: x.name, sortTs: ts, Count: cnt})
 		}
 	}
 }

@@ -29,11 +29,11 @@ type orphanItem struct {
 
 // ListOrphans GET /api/k8s/orphans?cluster_id=&kind=
 func (h *K8sResourceHandler) ListOrphans(c *gin.Context) {
-	cid := c.Query("cluster_id")
-	if cid == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 必填"})
+	cidNum, ok := requireCluster(c, h.DB)
+	if !ok {
 		return
 	}
+	cid := itoa(cidNum) // 下游子查询都按字符串拼参数
 	kind := c.Query("kind")
 
 	items := []orphanItem{}

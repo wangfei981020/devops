@@ -8,7 +8,7 @@
     </div>
 
     <div style="margin-bottom:10px">
-      <el-button type="primary" size="small" @click="open()">+ 添加 CDN 账号</el-button>
+      <el-button v-if="canIntegr" type="primary" size="small" @click="open()">+ 添加 CDN 账号</el-button>
       <el-button size="small" :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </div>
 
@@ -32,10 +32,10 @@
         <el-tooltip v-else :content="row.last_result"><el-tag size="small" type="danger">失败</el-tag></el-tooltip>
       </template></el-table-column>
       <el-table-column label="操作" width="220" fixed="right"><template #default="{ row }">
-        <el-button link type="warning" size="small" :loading="busy['v' + row.id]" @click="verify(row)">验证</el-button>
-        <el-button link type="success" size="small" :loading="busy['s' + row.id]" @click="sync(row)">同步</el-button>
-        <el-button link type="primary" size="small" @click="open(row)">编辑</el-button>
-        <el-button link type="danger" size="small" @click="del(row)">删除</el-button>
+        <el-button v-if="canSyncCdn" link type="warning" size="small" :loading="busy['v' + row.id]" @click="verify(row)">验证</el-button>
+        <el-button v-if="canSyncCdn" link type="success" size="small" :loading="busy['s' + row.id]" @click="sync(row)">同步</el-button>
+        <el-button v-if="canIntegr" link type="primary" size="small" @click="open(row)">编辑</el-button>
+        <el-button v-if="canIntegr" link type="danger" size="small" @click="del(row)">删除</el-button>
       </template></el-table-column>
     </el-table>
     <el-empty v-if="!loading && !rows.length" description="还没配 CDN 账号，点上面「添加」并填只读 Token" :image-size="60" />
@@ -68,12 +68,17 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
+import { useAuthStore } from '../../stores/auth'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { listCdnAccounts, saveCdnAccount, deleteCdnAccount, verifyCdnAccount, syncCdnAccount, listCdns } from '../../api/cmdb'
 import { useAppStore } from '../../stores/app'
 
+// 接入凭据 = 各系统的钥匙，权限最高危；同步是另一回事，不能顺带给出去
+const auth = useAuthStore()
+const canIntegr = computed(() => auth.hasButton('manage_integrations'))
+const canSyncCdn = computed(() => auth.hasButton('sync_cdn'))
 const app = useAppStore()
 const rows = ref([]); const cdns = ref([]); const loading = ref(false); const busy = reactive({})
 const dlg = ref(false); const editing = ref(false)

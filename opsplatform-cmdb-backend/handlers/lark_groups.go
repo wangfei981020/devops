@@ -57,7 +57,7 @@ func (h *LarkGroupHandler) Create(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "add_lark_group", in.Name)
+	SetAuditTarget(c, in.Name)
 	c.JSON(201, gin.H{"ok": true})
 }
 
@@ -96,6 +96,6 @@ func (h *LarkGroupHandler) Test(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "发送失败：" + err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "test_lark_group", c.Param("id"))
+	SetAuditTarget(c, c.Param("id"))
 	c.JSON(200, gin.H{"ok": true, "msg": "已发送，去群里看"})
 }

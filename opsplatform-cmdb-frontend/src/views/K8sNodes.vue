@@ -18,8 +18,12 @@
         <el-button :icon="Search" @click="load">查询</el-button>
         <el-switch v-model="onlyBad" active-text="只看异常" style="margin-left:6px" @change="page=1" />
         <span class="muted" style="margin-left:auto">
-          <!-- 「全部健康」是一句断言，只有在数据真的取到时才允许说出口（CMDB-013） -->
+          <!-- 「全部健康」是一句断言，只有在数据真的取到时才允许说出口（CMDB-013）。
+               三种状态必须分开说：取不到 / 一个节点都没有 / 确实都健康。
+               原先 0 个节点也会打出「共 0 · 全部健康」——对一个还没同步过、
+               或者选错了集群的页面下"健康"的结论，比不说更糟。 -->
           <template v-if="error">共 — · <b style="color:#f56c6c">数据未加载，状态未知</b></template>
+          <template v-else-if="!rows.length">共 0 · <span style="color:#e6a23c">没有节点数据，健康状况无从判断</span></template>
           <template v-else>共 {{ rows.length }} · <b v-if="badCount" style="color:#f56c6c">异常 {{ badCount }}</b><span v-else>全部健康</span></template>
         </span>
       </div>
@@ -109,6 +113,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { listK8sClusters, listK8sNodes, listK8sNodePools, k8sNodeUsage, k8sNodeCapacity, getHost } from '../api/cmdb'
+import { pickDefaultCluster } from '../composables/useClusterPick'
 import { useLoadState } from '../composables/useLoadState'
 import LoadError from '../components/LoadError.vue'
 
@@ -180,7 +185,7 @@ onMounted(async () => {
     return true
   })
   if (!ok) return
-  if (clusters.value.length) clusterId.value = clusters.value[0].id
+  if (clusters.value.length) clusterId.value = pickDefaultCluster(clusters.value)
   load()
 })
 </script>

@@ -165,6 +165,6 @@ func (h *CertInspectHandler) Ignore(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "cert_ignore", c.Param("id"))
+	SetAuditTarget(c, c.Param("id"))
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

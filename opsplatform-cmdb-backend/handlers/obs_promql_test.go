@@ -1,5 +1,10 @@
 package handlers
 
+// 容器级查询一律是 sum(avg by (...,container) (...)) 的形状，不是多此一举：
+// 生产上同一容器的 container_* 指标有 3 条重复 series（两套监控栈重复采 kubelet），
+// 直接 sum 会虚高 3 倍。avg 先把重复的那几份收成一份（值本来就相同），再求和。
+// 详见 docs/ops-issues/clusters/g32-prod/PROD-014。
+
 import "testing"
 
 // 单集群数据源(selector 为空)必须生成和改造前一字不差的 PromQL。
@@ -8,13 +13,13 @@ import "testing"
 func TestBuildPromQL_NoSelectorKeepsLegacyQuery(t *testing.T) {
 	cases := []struct{ target, ns, name, metric, want string }{
 		{"pod", "g32-uat", "api-0", "mem",
-			`sum(container_memory_working_set_bytes{namespace="g32-uat",pod="api-0",container!=""})`},
+			`sum(avg by (namespace,pod,container) (container_memory_working_set_bytes{namespace="g32-uat",pod="api-0",container!=""}))`},
 		{"pod", "g32-uat", "api-0", "cpu",
-			`sum(rate(container_cpu_usage_seconds_total{namespace="g32-uat",pod="api-0",container!=""}[5m]))`},
+			`sum(avg by (namespace,pod,container) (rate(container_cpu_usage_seconds_total{namespace="g32-uat",pod="api-0",container!=""}[5m])))`},
 		{"workload", "g32-uat", "api", "mem",
-			`sum by(pod)(container_memory_working_set_bytes{namespace="g32-uat",pod=~"api-.*",container!=""})`},
+			`sum by (pod) (avg by (pod,container) (container_memory_working_set_bytes{namespace="g32-uat",pod=~"api-.*",container!=""}))`},
 		{"workload", "g32-uat", "api", "cpu",
-			`sum by(pod)(rate(container_cpu_usage_seconds_total{namespace="g32-uat",pod=~"api-.*",container!=""}[5m]))`},
+			`sum by (pod) (avg by (pod,container) (rate(container_cpu_usage_seconds_total{namespace="g32-uat",pod=~"api-.*",container!=""}[5m])))`},
 		{"node", "", "gke-node-1", "mem",
 			`sum(node_memory_MemTotal_bytes{node="gke-node-1"}) - sum(node_memory_MemAvailable_bytes{node="gke-node-1"})`},
 		{"node", "", "gke-node-1", "cpu",
@@ -36,9 +41,9 @@ func TestBuildPromQL_SelectorAppliedToK8sTargets(t *testing.T) {
 	sel := `cluster="uat-k8s-cluster-01"`
 	cases := []struct{ target, ns, name, metric, want string }{
 		{"pod", "cesar", "busybox1", "mem",
-			`sum(container_memory_working_set_bytes{cluster="uat-k8s-cluster-01",namespace="cesar",pod="busybox1",container!=""})`},
+			`sum(avg by (namespace,pod,container) (container_memory_working_set_bytes{cluster="uat-k8s-cluster-01",namespace="cesar",pod="busybox1",container!=""}))`},
 		{"workload", "cesar", "api", "cpu",
-			`sum by(pod)(rate(container_cpu_usage_seconds_total{cluster="uat-k8s-cluster-01",namespace="cesar",pod=~"api-.*",container!=""}[5m]))`},
+			`sum by (pod) (avg by (pod,container) (rate(container_cpu_usage_seconds_total{cluster="uat-k8s-cluster-01",namespace="cesar",pod=~"api-.*",container!=""}[5m])))`},
 		{"node", "", "gke-node-1", "cpu",
 			`sum(rate(node_cpu_seconds_total{cluster="uat-k8s-cluster-01",mode!="idle",node="gke-node-1"}[5m]))`},
 		{"node", "", "gke-node-1", "mem",

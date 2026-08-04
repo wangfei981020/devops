@@ -68,9 +68,11 @@ var eventNoiseReasons = map[string]bool{
 //  2. 默认剔掉 eventNoiseReasons，否则真问题永远排不进前几十条。
 //  3. 默认按时间倒序（前端事件流是这个语义，15 秒刷一次）；排障要找「反复发生」的传 sort=count。
 func (h *K8sDiagHandler) ClusterEvents(c *gin.Context) {
-	cid, _ := strconv.Atoi(c.Query("cluster_id"))
-	if cid == 0 {
-		c.JSON(400, gin.H{"error": "cluster_id 必填"})
+	// 先判「集群存不存在」(404)，再判「连不连得上」(502)：
+	// 这两件事的处置完全不同——前者是集群已被删除/传错了 id，后者是凭据或网络问题。
+	// 原先都走 ClientFor 的 502，一律报"集群 N 不存在"，把连不上也说成了不存在。
+	cid, ok := requireCluster(c, h.DB)
+	if !ok {
 		return
 	}
 	cs, err := h.Pool.ClientFor(cid)
@@ -205,13 +207,13 @@ func (h *K8sDiagHandler) Logs(c *gin.Context) {
 		if lines := h.lokiTail(cid, ns, pod, int(tail)); lines != "" {
 			c.Data(http.StatusOK, "text/plain; charset=utf-8",
 				[]byte("# kubelet 通道取日志失败，以下为 Loki 历史日志\n# 失败原因: "+explained+"\n\n"+lines))
-			WriteAudit(h.DB, c, "view_pod_log_via_loki", ns+"/"+pod)
+			SetAuditTarget(c, ns+"/"+pod)
 			return
 		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": explained})
 		return
 	}
-	WriteAudit(h.DB, c, "view_pod_log", ns+"/"+pod)
+	SetAuditTarget(c, ns+"/"+pod)
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", raw)
 }
 
@@ -298,7 +300,7 @@ func (h *K8sDiagHandler) Diagnose(c *gin.Context) {
 	h.fillLogsFromLoki(ctx, cid, dc)
 	res := diag.RuleProvider{}.Diagnose(dc)
 	logx.J("k8s", "diagnose", map[string]any{"cluster_id": cid, "ns": ns, "pod": pod, "matched": res.Matched, "root_cause": res.RootCause})
-	WriteAudit(h.DB, c, "diagnose_pod", ns+"/"+pod)
+	SetAuditTarget(c, ns+"/"+pod)
 	c.JSON(http.StatusOK, gin.H{"result": res, "context": dc})
 }
 

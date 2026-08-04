@@ -48,7 +48,7 @@
         <span v-if="summary.reqPct == null && (target === 'pod' || target === 'workload')" class="muted">（该目标未设 request/limit）</span>
       </div>
       <div ref="chartEl" style="height:440px;width:100%"></div>
-      <el-empty v-if="!loading && !hasData && !err" description="选目标+名称后点查询" />
+      <el-empty v-if="!loading && !error && !hasData && !err" description="选目标+名称后点查询" />
     </el-card>
   </div>
 </template>
@@ -59,6 +59,10 @@ import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { listK8sClusters, listK8sNamespaces, listK8sPods, listK8sWorkloads, listK8sNodes, listHosts, obsUsage } from '../api/cmdb'
+import { pickDefaultCluster } from '../composables/useClusterPick'
+import { useLoadState } from '../composables/useLoadState'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 
 const clusters = ref([]); const namespaces = ref([])
 const clusterId = ref(null); const target = ref('pod'); const ns = ref(''); const name = ref('')
@@ -203,7 +207,7 @@ function renderChart(series) {
 onMounted(async () => {
   try {
     clusters.value = await listK8sClusters()
-    if (clusters.value.length) { clusterId.value = clusters.value[0].id; onCluster() }
+    if (clusters.value.length) { clusterId.value = pickDefaultCluster(clusters.value); onCluster() }
   } catch (e) { ElMessage.error('加载集群失败') }
   window.addEventListener('resize', () => chart && chart.resize())
 })

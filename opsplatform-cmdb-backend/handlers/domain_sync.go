@@ -60,6 +60,9 @@ func (h *SyncHandler) Register(r *gin.RouterGroup) {
 	// 域名续费 / 自动续费（写回厂商）
 	r.GET("/domains/:ciid/godaddy-detail", h.GodaddyDetail)
 	r.POST("/domains/:ciid/renew", h.RenewDomain)
+	// 批量续费：先 preview 看清楚哪些能续，再执行（真金白银，不做一步到位）
+	r.POST("/domains/renew-batch/preview", h.PreviewBatchRenew)
+	r.POST("/domains/renew-batch", h.BatchRenewDomains)
 	r.POST("/domains/:ciid/auto-renew", h.SetAutoRenew)
 	r.GET("/renewals", h.ListRenewals) // 续费记录历史
 }
@@ -123,7 +126,7 @@ func (h *SyncHandler) SyncDomainRecords(c *gin.Context) {
 		migrated = 1
 	}
 	logExec(h.DB, "DNS同步写", `UPDATE domains SET last_synced_at=NOW(), dns_migrated=? WHERE ci_id=?`, migrated, ciIDInt)
-	WriteAudit(h.DB, c, "sync_domain_records", name)
+	SetAuditTarget(c, name)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "synced_records": len(recs), "imported_records": len(imported), "new_records": imported})
 }
 
@@ -160,7 +163,7 @@ func (h *SyncHandler) Sync(c *gin.Context) {
 	syncMu.Lock()
 	syncStore[id] = st
 	syncMu.Unlock()
-	WriteAudit(h.DB, c, "sync_source", c.Param("id"))
+	SetAuditTarget(c, c.Param("id"))
 	go h.runSync(id, adapter, st)
 	c.JSON(http.StatusAccepted, gin.H{"ok": true, "running": true, "msg": "已在后台同步，域名较多约 1-2 分钟，完成后自动刷新"})
 }

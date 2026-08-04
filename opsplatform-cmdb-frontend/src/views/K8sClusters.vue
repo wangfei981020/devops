@@ -3,11 +3,12 @@
     <div class="page-head">
       <span class="page-title">K8s 集群管理</span>
       <span class="muted" style="margin-left:10px">多集群只读纳管（GKE / IDC 自管）· 只连 apiserver、不连节点</span>
-      <el-button type="primary" size="small" style="float:right" @click="openAdd">+ 添加集群</el-button>
-      <el-button size="small" style="float:right;margin-right:8px" @click="openDiscover">从云账号发现 GKE</el-button>
+      <el-button v-if="canManage" type="primary" size="small" style="float:right" @click="openAdd">+ 添加集群</el-button>
+      <el-button v-if="canManage" size="small" style="float:right;margin-right:8px" @click="openDiscover">从云账号发现 GKE</el-button>
     </div>
 
     <el-card shadow="never">
+      <LoadError :error="error" title="集群列表未加载" @retry="load" />
       <el-table :data="clPaged" size="small" v-loading="loading">
         <el-table-column label="集群" min-width="180">
           <template #default="{ row }">
@@ -37,15 +38,15 @@
         </template></el-table-column>
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" :loading="testing[row.id]" @click="doTest(row)">测连通</el-button>
-            <el-button link type="success" size="small" :loading="syncing[row.id]" @click="doSync(row)">同步</el-button>
-            <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" size="small" @click="delCluster(row)">删除</el-button>
+            <el-button v-if="canManage" link type="primary" size="small" :loading="testing[row.id]" @click="doTest(row)">测连通</el-button>
+            <el-button v-if="canSync" link type="success" size="small" :loading="syncing[row.id]" @click="doSync(row)">同步</el-button>
+            <el-button v-if="canManage" link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+            <el-button v-if="canManage" link type="danger" size="small" @click="delCluster(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
       <Pager :total="clusters.length" v-model:page="clPage" v-model:page-size="clSize" />
-      <el-empty v-if="!loading && !clusters.length" description="还没有纳管集群，点右上「添加集群」" />
+      <el-empty v-if="!loading && !error && !clusters.length" description="还没有纳管集群，点右上「添加集群」" />
     </el-card>
 
     <!-- 添加/编辑弹窗 -->
@@ -175,13 +176,18 @@ import { listK8sClusters, createK8sCluster, updateK8sCluster, deleteK8sCluster, 
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
 import { useAppStore } from '../stores/app'
+import { useAuthStore } from '../stores/auth'
 
 const app = useAppStore()
+// 集群纳管要填 kubeconfig/SA 凭据，和"手动触发一次同步"是两个权限
+const auth = useAuthStore()
+const canManage = computed(() => auth.hasButton('manage_clusters'))
+const canSync = computed(() => auth.hasButton('sync_k8s'))
 const envs = ['PROD', 'UAT', 'TEST', 'DEV']
 const clusters = ref([])
 const { page: clPage, pageSize: clSize, paged: clPaged } = usePager(clusters)
 const cloudAccounts = ref([])
-const loading = ref(false)
+const { loading, error, run } = useLoadState()
 const testing = reactive({})
 const syncing = reactive({})
 const dlg = ref(false)
@@ -190,11 +196,13 @@ const blank = () => ({ id: 0, name: '', prom_cluster_value: '', network_exposure
 const form = reactive(blank())
 
 async function load() {
-  loading.value = true
-  try {
-    clusters.value = await listK8sClusters()
+  // 集群列表是这一页的全部内容，拉不到必须显式报错——
+  // 空表格加一句「还没纳管集群」会让人以为纳管记录丢了，跑去重新添加。
+  const r = await run(() => listK8sClusters())
+  clusters.value = error.value ? [] : (r || [])
+  if (!error.value) {
     try { cloudAccounts.value = await listCloudAccounts() } catch (e) { /* 无云账号不阻塞 */ }
-  } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+  }
 }
 
 function openAdd() {

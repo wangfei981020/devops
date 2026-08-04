@@ -25,11 +25,11 @@ import (
 type contextKey string
 
 const (
-	ctxUserID       contextKey = "userID"
-	ctxUsername     contextKey = "username"
-	ctxUserRole     contextKey = "userRole"
-	ctxPermissions  contextKey = "permissions"
-	ctxAllowedEnvs  contextKey = "allowedEnvs"  // *[]string；nil=不过滤；空切片=啥都看不到
+	ctxUserID      contextKey = "userID"
+	ctxUsername    contextKey = "username"
+	ctxUserRole    contextKey = "userRole"
+	ctxPermissions contextKey = "permissions"
+	ctxAllowedEnvs contextKey = "allowedEnvs" // *[]string；nil=不过滤；空切片=啥都看不到
 )
 
 type JWTClaims struct {
@@ -326,8 +326,47 @@ func HandleRefreshPermissions(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	permissions := fetchPortalPermissionsInternal(Cfg.PortalAPIURL, username)
+	permissions := fetchPortalPermissionsForUser(Cfg.PortalAPIURL, userID, username)
+	// 拉不到就保持会话里的旧快照并明确告知——刷新失败（portal token 过期/网络抖动）
+	// 不该把人踢下线，但也不能让前端以为"刷新成功且此人现在没有任何权限"，
+	// 那会把一次网络抖动变成一次误降权。
+	if permissions == nil {
+		log.Printf("[RefreshPerms] user=%s 拉取失败，沿用会话内旧快照", username)
+		JSONSuccess(w, map[string]interface{}{
+			"permissions":      permsFromCtx(r),
+			"stale":            true,
+			"role":             role,
+			"auth_source":      authSource,
+			"has_any_uat_env":  true,
+			"has_any_prod_env": true,
+		})
+		return
+	}
+
+	// env 白名单一并刷新：只更权限码不更 env，"权限即时生效"就只做了一半——
+	// 菜单和按钮变了，能发哪些环境还是登录那一刻的旧值。
 	hasUAT, hasPROD := envTypeFlagsFromCtx(r)
+	if tok := decryptedPortalToken(userID, username); tok != "" {
+		if envs, isAdmin, ok := portalUserDeployEnvs(Cfg.PortalAPIURL, tok, username); ok {
+			if isAdmin {
+				hasUAT, hasPROD = true, true
+				database.DB.Exec(`UPDATE sessions SET allowed_envs = NULL WHERE token_hash = ?`, sessionHashFromCtx(r))
+			} else {
+				b, _ := json.Marshal(envs)
+				database.DB.Exec(`UPDATE sessions SET allowed_envs = ? WHERE token_hash = ?`, string(b), sessionHashFromCtx(r))
+				hasUAT, hasPROD = computeEnvTypeFlags(envs)
+			}
+		}
+	}
+
+	// 权限刷新后已经没有发布中心访问权 → 会话作废，避免继续拿着旧 session 用
+	if role != "admin" && !permissions["menu:deploy_center"] {
+		database.DB.Exec(`DELETE FROM sessions WHERE token_hash = ?`, sessionHashFromCtx(r))
+		Audit(r, "auth.access_revoked", "user", username, nil)
+		JSONError(w, 40300, "您的发布中心访问权限已被取消")
+		return
+	}
+
 	JSONSuccess(w, map[string]interface{}{
 		"permissions":      permissions,
 		"role":             role,
@@ -447,21 +486,59 @@ func fetchPortalPermissions(portalURL, portalToken, username string) map[string]
 }
 
 // fetchPortalPermissionsInternal: 内网服务间调用
-func fetchPortalPermissionsInternal(portalURL, username string) map[string]bool {
-	permURL := strings.TrimRight(portalURL, "/") + "/my/permissions"
-	client := &http.Client{Timeout: 5 * time.Second}
-	req, _ := http.NewRequest("GET", permURL, nil)
-	req.Header.Set("X-Operator", username)
-	resp, err := client.Do(req)
+// fetchPortalPermissionsForUser 用该用户存档的 portal token 拉最新权限。
+//
+//	原先这里调的是 {portal}/my/permissions —— 运维平台**根本没有这条路由**
+//	（它挂在 /api 下，实测 404），而 /api/my/permissions 认的是用户身份，
+//	光带 X-Operator 头会 401。两条路都不通，于是这个函数一直返回 nil，
+//	前端 `if (data?.permissions)` 见到 null 就跳过更新——**刷新权限静默无效**。
+//	后果是管理员撤了权限，已登录用户毫无感知，一直用着旧权限直到会话过期。
+//	（DEPLOY-002）
+//
+//	portal token 在 portal-auth 时就已经加密存进 users.portal_token 了，
+//	只是从没被读过。这里把它取出来解密，走正确的路径。
+func fetchPortalPermissionsForUser(portalURL string, userID int, username string) map[string]bool {
+	tok := decryptedPortalToken(userID, username)
+	if tok == "" {
+		return nil
+	}
+	return fetchPortalPermissions(portalURL, tok, username)
+}
+
+// permsFromCtx 会话里缓存的权限快照（AuthMiddleware 放进去的）
+func permsFromCtx(r *http.Request) map[string]bool {
+	if p, ok := r.Context().Value(ctxPermissions).(map[string]bool); ok && p != nil {
+		return p
+	}
+	return map[string]bool{}
+}
+
+// sessionHashFromCtx 当前请求的会话行标识（token 只存 hash，不存原文）
+func sessionHashFromCtx(r *http.Request) string {
+	tok := extractToken(r)
+	if tok == "" {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(tok)))
+}
+
+// decryptedPortalToken 取出并解密某用户存档的 portal token；拿不到返回空串。
+func decryptedPortalToken(userID int, username string) string {
+	var enc sql.NullString
+	if err := database.DB.QueryRow(`SELECT portal_token FROM users WHERE id = ?`, userID).Scan(&enc); err != nil {
+		log.Printf("[RefreshPerms] 读 portal_token 失败 user=%s: %v", username, err)
+		return ""
+	}
+	if !enc.Valid || enc.String == "" {
+		log.Printf("[RefreshPerms] user=%s 没有存档的 portal token，无法刷新权限（需重新登录一次）", username)
+		return ""
+	}
+	tok, err := crypto.Decrypt(enc.String)
 	if err != nil {
-		log.Printf("[RefreshPerms] %v", err)
-		return nil
+		log.Printf("[RefreshPerms] 解密 portal_token 失败 user=%s: %v", username, err)
+		return ""
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
-	return parseDeployCenterPerms(resp.Body)
+	return tok
 }
 
 func parseDeployCenterPerms(body io.Reader) map[string]bool {

@@ -96,7 +96,8 @@ func (h *RegistrarHandler) Create(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
-	WriteAudit(h.DB, c, "create_registrar", in.Name)
+	AuditCreated(c, "registrars", id)
+	SetAuditTarget(c, in.Name)
 	c.JSON(201, gin.H{"id": id})
 }
 
@@ -141,7 +142,7 @@ func (h *RegistrarHandler) Update(c *gin.Context) {
 			return
 		}
 	}
-	WriteAudit(h.DB, c, "update_registrar", in.Name)
+	SetAuditTarget(c, in.Name)
 	c.JSON(200, gin.H{"ok": true})
 }
 

@@ -89,7 +89,7 @@ func (h *K8sResourceHandler) Sync(c *gin.Context) {
 			summary[r.Resource] = r.Count
 		}
 	}
-	WriteAudit(h.DB, c, "sync_k8s_cluster", c.Param("id"))
+	SetAuditTarget(c, c.Param("id"))
 	logx.J("k8s", "cluster_sync", map[string]any{"cluster_id": id, "failed": failed, "summary": summary})
 	c.JSON(http.StatusOK, gin.H{"ok": failed == 0, "summary": summary})
 }
@@ -177,9 +177,8 @@ func (h *K8sResourceHandler) HPAs(c *gin.Context) {
 
 // NsProjects 列出某集群所有命名空间 + 已配的项目归属（未配的 project 为空，前端提醒）。
 func (h *K8sResourceHandler) NsProjects(c *gin.Context) {
-	cid := c.Query("cluster_id")
-	if cid == "" {
-		c.JSON(400, gin.H{"error": "cluster_id 必填"})
+	cid, ok := requireCluster(c, h.DB)
+	if !ok {
 		return
 	}
 	rows, err := h.DB.Query(`SELECT n.name, COALESCE(m.project,'') AS project
@@ -215,7 +214,7 @@ func (h *K8sResourceHandler) SetNsProject(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "set_k8s_ns_project", in.Namespace+"→"+in.Project)
+	SetAuditTarget(c, in.Namespace+"→"+in.Project)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -233,6 +232,18 @@ type filter struct {
 
 // list 通用列表：按 filters 拼 WHERE + q 关键词模糊(searchCols) + orderBy，扫描为 []map。
 func (h *K8sResourceHandler) list(c *gin.Context, base string, filters []filter, orderBy string, searchCols []string, extraWhere ...string) {
+	// cluster_id 在这里是**选填**（不传=跨集群全量），但一旦传了就必须指向真实存在的集群：
+	// 否则 `?cluster_id=999` 会安静地返回 []，前端渲染成「无数据」，与「这个集群真的空」无从区分。
+	if raw := strings.TrimSpace(c.Query("cluster_id")); raw != "" {
+		cid, err := strconv.Atoi(raw)
+		if err != nil || cid <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 不是合法的集群编号: " + raw})
+			return
+		}
+		if clusterGone(c, h.DB, cid) {
+			return
+		}
+	}
 	where := append([]string{}, extraWhere...)
 	args := []any{}
 	for _, f := range filters {

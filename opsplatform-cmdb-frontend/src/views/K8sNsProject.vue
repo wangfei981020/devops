@@ -10,10 +10,12 @@
         <el-select v-model="clusterId" placeholder="选集群" style="width:220px" @change="load">
           <el-option v-for="c in clusters" :key="c.id" :label="(c.display_name||c.name)+' · '+c.environment" :value="c.id" />
         </el-select>
-        <el-button :icon="MagicStick" @click="autoFill">按名称智能填充</el-button>
+        <el-button v-if="canManage" :icon="MagicStick" @click="autoFill">按名称智能填充</el-button>
         <span class="muted" style="margin-left:auto">
-          <!-- 「已全部归属」同样是断言，取不到数据时不能说（CMDB-013） -->
+          <!-- 「已全部归属」同样是断言，取不到数据时不能说（CMDB-013）。
+               0 个命名空间也不能说"已全部归属"——那是"没东西可归属"，不是"归属都做完了"。 -->
           <template v-if="error">共 — 命名空间 · <b style="color:#f56c6c">数据未加载，归属情况未知</b></template>
+          <template v-else-if="!rows.length">共 0 命名空间 · <span style="color:#e6a23c">该集群没有命名空间数据，无从判断归属</span></template>
           <template v-else>共 {{ rows.length }} 命名空间 · <b v-if="unassigned" style="color:#e6a23c">未分配 {{ unassigned }} ⚠</b><span v-else>已全部归属</span></template>
         </span>
       </div>
@@ -40,13 +42,17 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useAuthStore } from '../stores/auth'
 import { MagicStick } from '@element-plus/icons-vue'
 import { listK8sClusters, listK8sNsProjects, setK8sNsProject, listProjects } from '../api/cmdb'
+import { pickDefaultCluster } from '../composables/useClusterPick'
 import { usePager } from '../composables/usePager'
 import { useLoadState } from '../composables/useLoadState'
 import Pager from '../components/Pager.vue'
 import LoadError from '../components/LoadError.vue'
 
+const auth = useAuthStore()
+const canManage = computed(() => auth.hasButton('manage_ns_project'))
 const { loading, error, run } = useLoadState()
 const clusters = ref([]); const projects = ref([]); const rows = ref([])
 const { page, pageSize, paged } = usePager(rows)
@@ -89,7 +95,7 @@ onMounted(async () => {
     return true
   })
   if (!ok) return
-  if (clusters.value.length) { clusterId.value = clusters.value[0].id; load() }
+  if (clusters.value.length) { clusterId.value = pickDefaultCluster(clusters.value); load() }
 })
 </script>
 

@@ -711,11 +711,28 @@ func HandleMyPermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := r.Header.Get("X-Operator")
-	log.Printf("[权限调试] X-Operator header (username): '%s'", username)
+	// 权限查谁，以**中间件已认证的身份**为准（OPS-001）。
+	//
+	//	原先这里读的是 X-Operator 请求头，且为空时默认当成 admin。那意味着：
+	//	任何持有有效 token 的低权限用户，只要省掉这个头就能拿到 admin 的完整
+	//	权限清单；填上别人的用户名就能查别人的权限。头是客户端可以随便写的，
+	//	不是凭据——这个接口在 protected 下，中间件早就知道请求者是谁了。
+	//
+	//	兼容性：各接入方（CMDB/发布中心/告警/探测/Jira/Confluence）调这个接口时
+	//	都带着**用户自己的 token**，且 X-Operator 填的就是同一个人，
+	//	所以对它们来说行为完全不变。至于"服务间代查他人权限"——
+	//	那条路径（不带 token 只带 X-Operator）走的是 /my/permissions，
+	//	而运维平台根本没有这条路由，从来就没生效过（见 DEPLOY-002）。
+	username, _ := r.Context().Value(contextKeyUsername).(string)
 	if username == "" {
-		username = "admin"
-		log.Printf("[权限调试] X-Operator为空，使用默认值: %s", username)
+		log.Printf("[权限] 请求上下文里没有已认证身份，拒绝")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	// 头里带的操作人和 token 身份不一致时留个痕：正常调用两者相同，
+	// 不一致要么是调用方写错了，要么是有人在试探
+	if op := r.Header.Get("X-Operator"); op != "" && op != username {
+		log.Printf("[权限] WARN X-Operator=%q 与已认证身份 %q 不一致，以后者为准", op, username)
 	}
 
 	// 通过用户名查找用户 ID

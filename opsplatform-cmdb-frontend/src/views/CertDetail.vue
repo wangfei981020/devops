@@ -54,6 +54,12 @@
         <el-table-column prop="detail" label="详情" min-width="240" />
       </el-table>
     </el-card>
+
+    <!-- 谁在什么时候把这张证书改成了现在的样子——放在对象自己身上，
+         比让人去审计页按关键字翻实用得多 -->
+    <el-card shadow="never" style="margin-top:14px"><template #header><b>变更历史</b></template>
+      <ChangeHistory table="certificates" :pk="route.params.id" />
+    </el-card>
     </template>
   </div>
 </template>
@@ -64,6 +70,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getCert, certDnsReady } from '../api/cmdb'
 import { normalizeError } from '../api/http'
+import ChangeHistory from '../components/ChangeHistory.vue'
 
 const route = useRoute()
 const cert = ref({})

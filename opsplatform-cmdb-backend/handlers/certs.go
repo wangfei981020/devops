@@ -98,6 +98,7 @@ func (h *CertHandler) CreateAccount(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	AuditCreated(c, "acme_accounts", id)
 	c.JSON(201, gin.H{"id": id})
 }
 
@@ -274,7 +275,7 @@ func (h *CertHandler) Apply(c *gin.Context) {
 		return
 	}
 	replaceLabelsDB(h.DB, certCIID, in.Labels)
-	WriteAudit(h.DB, c, "apply_cert", in.CN)
+	SetAuditTarget(c, in.CN)
 	go h.runIssue(certCIID, in.DomainCIID, in.ACMEAccount, in.Staging, "issue")
 	c.JSON(202, gin.H{"ci_id": certCIID, "status": "pending"})
 }
@@ -296,7 +297,7 @@ func (h *CertHandler) Renew(c *gin.Context) {
 	}
 	_, _ = h.DB.Exec(`UPDATE certificates SET status='pending' WHERE ci_id=?`, certCIID)
 	go h.runIssue(certCIID, domainCIID, acctID, false, "renew")
-	WriteAudit(h.DB, c, "renew_cert", c.Param("id"))
+	SetAuditTarget(c, c.Param("id"))
 	c.JSON(202, gin.H{"status": "pending"})
 }
 
@@ -343,7 +344,7 @@ func (h *CertHandler) Revoke(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "revoke_cert", id)
+	SetAuditTarget(c, id)
 	out := gin.H{"ok": true, "ca_revoked": revokeWarning == ""}
 	if revokeWarning != "" {
 		out["warning"] = "CMDB 记录已删除，但向 CA 吊销失败（证书在 CA 侧仍有效至到期）：" + revokeWarning
@@ -396,7 +397,7 @@ func (h *CertHandler) Download(c *gin.Context) {
 		return
 	}
 
-	WriteAudit(h.DB, c, "download_cert", id)
+	SetAuditTarget(c, id)
 	c.Header("Content-Disposition", `attachment; filename="`+base+`.zip"`)
 	c.Data(http.StatusOK, "application/zip", buf.Bytes())
 }

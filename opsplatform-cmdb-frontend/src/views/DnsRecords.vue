@@ -6,7 +6,7 @@
         <el-select v-model="sourceId" placeholder="数据源" style="width:170px">
           <el-option v-for="s in sources" :key="s.id" :label="`${s.name}（${s.provider}）`" :value="s.id" />
         </el-select>
-        <el-button type="primary" :icon="Refresh" :loading="syncing" @click="doSync">
+        <el-button v-if="canSync" type="primary" :icon="Refresh" :loading="syncing" @click="doSync">
           {{ syncing ? `同步中 ${prog.done}/${prog.total || '…'}` : '从数据源同步' }}
         </el-button>
       </div>
@@ -42,8 +42,8 @@
         </el-select>
         <el-button type="primary" :icon="Search" @click="doDomSearch">搜索</el-button>
         <el-button @click="resetDomFilter">重置</el-button>
-        <el-button v-if="selectedDoms.length && df.view.value!=='ignored'" type="warning" :icon="Hide" @click="ignoreDoms(selectedDoms)">批量忽略（{{ selectedDoms.length }}）</el-button>
-        <el-button v-if="selectedDoms.length && df.view.value==='ignored'" type="success" @click="unignoreDoms(selectedDoms)">取消忽略（{{ selectedDoms.length }}）</el-button>
+        <el-button v-if="canDns && selectedDoms.length && df.view.value!=='ignored'" type="warning" :icon="Hide" @click="ignoreDoms(selectedDoms)">批量忽略（{{ selectedDoms.length }}）</el-button>
+        <el-button v-if="canDns && selectedDoms.length && df.view.value==='ignored'" type="success" @click="unignoreDoms(selectedDoms)">取消忽略（{{ selectedDoms.length }}）</el-button>
         <span class="muted" style="margin-left:auto">共 {{ domFiltered.length }} 个域名</span>
       </div>
     </el-card>
@@ -66,8 +66,8 @@
                   <span><el-button size="small" type="primary" :icon="Plus" disabled>新增解析</el-button></span>
                 </el-tooltip>
                 <template v-else>
-                  <el-button size="small" :icon="DocumentAdd" style="margin-left:auto" @click="openBatch(row)">批量新增</el-button>
-                  <el-button size="small" type="primary" :icon="Plus" @click="openCreate(row)">新增解析</el-button>
+                  <el-button v-if="canDns" size="small" :icon="DocumentAdd" style="margin-left:auto" @click="openBatch(row)">批量新增</el-button>
+                  <el-button v-if="canDns" size="small" type="primary" :icon="Plus" @click="openCreate(row)">新增解析</el-button>
                 </template>
               </div>
               <el-table :data="recPaged(row.ci_id)" size="small" max-height="360" row-key="id"
@@ -85,16 +85,16 @@
                 </template></el-table-column>
                 <el-table-column label="操作" width="120"><template #default="{ row: r }">
                   <template v-if="!r.protected && writableTypes.includes(r.type) && canWrite(row)">
-                    <el-button link type="primary" :icon="Edit" @click="openEdit(row, r)">编辑</el-button>
-                    <el-button link type="danger" :icon="Delete" :loading="delBusy[r.id]" @click="delRecord(row, r)">删除</el-button>
+                    <el-button v-if="canDns" link type="primary" :icon="Edit" @click="openEdit(row, r)">编辑</el-button>
+                    <el-button v-if="canDns" link type="danger" :icon="Delete" :loading="delBusy[r.id]" @click="delRecord(row, r)">删除</el-button>
                   </template>
                   <span v-else class="muted">—</span>
                 </template></el-table-column>
               </el-table>
               <div v-if="(recSel[row.ci_id] || []).length" class="batch-bar">
                 <span>已选 <b>{{ recSel[row.ci_id].length }}</b> 条</span>
-                <el-button size="small" type="primary" :icon="Edit" @click="openBatchEdit(row)">批量编辑</el-button>
-                <el-button size="small" type="danger" :icon="Delete" :loading="batchDelBusy[row.ci_id]" @click="doBatchDelete(row)">批量删除</el-button>
+                <el-button v-if="canDns" size="small" type="primary" :icon="Edit" @click="openBatchEdit(row)">批量编辑</el-button>
+                <el-button v-if="canDns" size="small" type="danger" :icon="Delete" :loading="batchDelBusy[row.ci_id]" @click="doBatchDelete(row)">批量删除</el-button>
               </div>
               <el-empty v-if="!(recMap[row.ci_id] && recMap[row.ci_id].length) && !recLoading[row.ci_id]"
                 description="该域名暂无 DNS 记录，选好数据源点右上「从数据源同步」" :image-size="50" />
@@ -133,10 +133,10 @@
         <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
             <el-tooltip v-if="row.origin !== 'manual' && !row.ignored" content="从数据源同步这个域名">
-              <el-button link type="primary" :icon="Refresh" :loading="syncingOne[row.ci_id]" @click="syncOne(row)">同步</el-button>
+              <el-button v-if="canSync" link type="primary" :icon="Refresh" :loading="syncingOne[row.ci_id]" @click="syncOne(row)">同步</el-button>
             </el-tooltip>
-            <el-tooltip v-if="!row.ignored" content="忽略（同步跳过、不报未同步）"><el-button link type="warning" :icon="Hide" @click="ignoreDoms([row])" /></el-tooltip>
-            <el-tooltip v-else content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="unignoreDoms([row])" /></el-tooltip>
+            <el-tooltip v-if="canDns && !row.ignored" content="忽略（同步跳过、不报未同步）"><el-button link type="warning" :icon="Hide" @click="ignoreDoms([row])" /></el-tooltip>
+            <el-tooltip v-else-if="canDns" content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="unignoreDoms([row])" /></el-tooltip>
           </div>
         </template></el-table-column>
       </el-table>
@@ -272,7 +272,12 @@ import LoadError from '../components/LoadError.vue'
 import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
 import { useDomainFilter } from '../composables/useDomainFilter'
 import { useAppStore } from '../stores/app'
+import { useAuthStore } from '../stores/auth'
 const app = useAppStore()
+// 按钮级权限：写 DNS 会直接改云端解析，与"域名同步"是两个独立权限
+const auth = useAuthStore()
+const canDns = computed(() => auth.hasButton('manage_dns'))
+const canSync = computed(() => auth.hasButton('sync_domains'))
 const sources = ref([]), domains = ref([]), loading = ref(false)
 const loadErr = ref('')
 const sourceId = ref(null)

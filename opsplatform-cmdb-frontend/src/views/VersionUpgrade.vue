@@ -23,7 +23,7 @@
       </span>
       <el-button size="small" :loading="syncing.schedule" style="margin-left:8px"
         @click="runTask('gke_schedule_sync', 'schedule')">同步排期表</el-button>
-      <el-button size="small" :loading="syncing.upgrade" @click="runTask('gke_upgrade_sync', 'upgrade')">采集集群</el-button>
+      <el-button v-if="canUpgrade" size="small" :loading="syncing.upgrade" @click="runTask('gke_upgrade_sync', 'upgrade')">采集集群</el-button>
     </div>
 
     <el-card shadow="never">
@@ -558,8 +558,8 @@
             <el-table-column label="" width="120" fixed="right">
               <template #default="{ row }">
                 <el-tag v-if="row.is_manual" size="small" type="warning">手工</el-tag>
-                <el-button link type="primary" size="small" @click="openOverride(row)">覆盖</el-button>
-                <el-button v-if="row.is_manual" link type="info" size="small" @click="clearOverride(row)">还原</el-button>
+                <el-button v-if="canUpgrade" link type="primary" size="small" @click="openOverride(row)">覆盖</el-button>
+                <el-button v-if="canUpgrade && row.is_manual" link type="info" size="small" @click="clearOverride(row)">还原</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -805,6 +805,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { useAppStore } from '../stores/app'
@@ -815,6 +816,8 @@ import {
   gkeSaveBaseline, gkeListBaselines,
 } from '../api/cmdb'
 
+const auth = useAuthStore()
+const canUpgrade = computed(() => auth.hasButton('manage_upgrade'))
 const app = useAppStore()
 const tab = ref('board')
 const loading = ref(false)

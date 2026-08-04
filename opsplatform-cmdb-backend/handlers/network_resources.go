@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"opsplatform-cmdb-backend/cloudsource"
+	"opsplatform-cmdb-backend/logx"
 )
 
 func itoa(n int) string { return strconv.Itoa(n) }
@@ -144,9 +145,17 @@ func SyncProjectNetwork(db *sql.DB, provider string, accountID int, project stri
 }
 
 // projName 项目自定义名映射（account+project_id -> name），列表展示用。
+// projNames 取 账号/项目 → 项目显示名 的映射。
+// 查询失败时返回空 map（调用方会退化成显示项目 ID），但**必须留下日志**：
+// 原先这里是 `rows, _ :=`，DB 一抖动整列「项目」就会变空白，页面看起来只是"没填项目名"，
+// 排查时完全无从得知发生过一次查询失败。
 func (h *NetworkHandler) projNames() map[string]string {
 	m := map[string]string{}
-	rows, _ := h.DB.Query(`SELECT account_id, project_id, name FROM cloud_account_projects`)
+	rows, err := h.DB.Query(`SELECT account_id, project_id, name FROM cloud_account_projects`)
+	if err != nil {
+		logx.J("cloud", "proj_names_failed", map[string]any{"err": err.Error()})
+		return m
+	}
 	if rows != nil {
 		for rows.Next() {
 			var aid int

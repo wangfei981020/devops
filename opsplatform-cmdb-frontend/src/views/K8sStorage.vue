@@ -15,6 +15,7 @@
         <el-input v-model="q" clearable placeholder="搜名称" style="width:200px" @keyup.enter="load" @clear="load" />
         <el-button :icon="Search" @click="load">查询</el-button>
       </div>
+      <LoadError :error="error" title="存储/伸缩数据未加载" @retry="load" />
       <el-tabs v-model="tab" @tab-change="load">
         <el-tab-pane label="PVC" name="pvc">
           <el-table :data="pvcPaged" size="small" v-loading="loading">
@@ -38,7 +39,7 @@
             <el-table-column prop="volume_name" label="PV" min-width="200"><template #default="{ row }">{{ row.volume_name || '—' }}</template></el-table-column>
           </el-table>
           <Pager :total="pvcs.length" v-model:page="pvcPage" v-model:page-size="pvcSize" />
-          <el-empty v-if="!loading && !pvcs.length" description="无数据，先去集群管理点「同步」" />
+          <el-empty v-if="!loading && !error && !pvcs.length" description="无数据，先去集群管理点「同步」" />
         </el-tab-pane>
         <el-tab-pane label="HPA" name="hpa">
           <el-table :data="hpaPaged" size="small" v-loading="loading">
@@ -49,7 +50,7 @@
             <el-table-column prop="current_replicas" label="当前副本" width="100" />
           </el-table>
           <Pager :total="hpas.length" v-model:page="hpaPage" v-model:page-size="hpaSize" />
-          <el-empty v-if="!loading && !hpas.length" description="无 HPA" />
+          <el-empty v-if="!loading && !error && !hpas.length" description="无 HPA" />
         </el-tab-pane>
       </el-tabs>
     </el-card>
@@ -63,25 +64,31 @@ import Pager from '../components/Pager.vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { listK8sClusters, listK8sPVCs, listK8sHPAs, listK8sNamespaces, k8sPvcUsage } from '../api/cmdb'
+import { pickDefaultCluster } from '../composables/useClusterPick'
+import { useLoadState } from '../composables/useLoadState'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 
 const clusters = ref([]); const namespaces = ref([]); const pvcs = ref([]); const hpas = ref([]); const pvcUse = ref({})
 const { page: pvcPage, pageSize: pvcSize, paged: pvcPaged } = usePager(pvcs)
 function pvcColor(p) { return p >= 90 ? '#f56c6c' : (p >= 75 ? '#e6a23c' : '#67c23a') }
 const { page: hpaPage, pageSize: hpaSize, paged: hpaPaged } = usePager(hpas)
-const clusterId = ref(null); const ns = ref(''); const q = ref(''); const tab = ref('pvc'); const loading = ref(false)
+const clusterId = ref(null); const ns = ref(''); const q = ref(''); const tab = ref('pvc')
+const { loading, error, run } = useLoadState()
 
 async function onCluster() { ns.value = ''; namespaces.value = await listK8sNamespaces({ cluster_id: clusterId.value }); load() }
 
 async function load() {
   if (!clusterId.value) return
-  loading.value = true
-  try {
+  // 失败落到页面 error：否则「无数据，先去集群管理点同步」会把接口故障说成"这个集群没有存储卷"
+  await run(async () => {
     const p = { cluster_id: clusterId.value }
     if (ns.value) p.namespace = ns.value
     if (q.value) p.q = q.value
     if (tab.value === 'pvc') { pvcs.value = await listK8sPVCs(p); loadPvcUsage() }
     else hpas.value = await listK8sHPAs(p)
-  } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+  })
+  if (error.value) { pvcs.value = []; hpas.value = [] }
 }
 async function loadPvcUsage() {
   pvcUse.value = {}
@@ -95,7 +102,7 @@ function pu(row) {
 onMounted(async () => {
   try {
     clusters.value = await listK8sClusters()
-    if (clusters.value.length) { clusterId.value = clusters.value[0].id; onCluster() }
+    if (clusters.value.length) { clusterId.value = pickDefaultCluster(clusters.value); onCluster() }
   } catch (e) { ElMessage.error('加载集群失败') }
 })
 </script>

@@ -122,6 +122,28 @@ func CORS() gin.HandlerFunc {
 func WriteAudit(db *sql.DB, c *gin.Context, action, target string) {
 	user, _ := c.Get("username")
 	uname, _ := user.(string)
-	_, _ = db.Exec(`INSERT INTO audit_logs (username, action, target, ip) VALUES (?, ?, ?, ?)`,
-		uname, action, target, c.ClientIP())
+	_, _ = db.Exec(`INSERT INTO audit_logs (username, action, target, ip, actor_source) VALUES (?, ?, ?, ?, ?)`,
+		uname, action, target, c.ClientIP(), actorSourceOf(c))
+}
+
+// actorSourceOf 操作来源：portal / local / mcp / system。
+// 审计页要能一眼分出"这是人做的还是 AI 做的"——MCP 是机器身份、
+// 不受 RBAC 约束，它的调用尤其需要单独标出来。
+func actorSourceOf(c *gin.Context) string {
+	if v, ok := c.Get(ctxAuthSource); ok {
+		if s, ok := v.(string); ok && s != "" {
+			return s
+		}
+	}
+	return "local"
+}
+
+// WriteAuditAs 同 WriteAudit，但操作人取自 context 里已 Set 的 username。
+//
+//	登录路径专用：鉴权中间件还没跑过，ctx 里本来没有 username，
+//	由调用方先 Set 再调这里——失败登录也要能看出"谁在试"。
+func WriteAuditAs(db *sql.DB, c *gin.Context, action, target string) {
+	uname := UsernameFromCtx(c)
+	_, _ = db.Exec(`INSERT INTO audit_logs (username, action, target, ip, actor_source) VALUES (?, ?, ?, ?, ?)`,
+		uname, action, target, c.ClientIP(), actorSourceOf(c))
 }

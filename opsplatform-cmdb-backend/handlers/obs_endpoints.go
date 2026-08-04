@@ -106,7 +106,8 @@ func (h *ObsHandler) Create(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
-	WriteAudit(h.DB, c, "create_obs_endpoint", in.Name)
+	AuditCreated(c, "obs_endpoints", id)
+	SetAuditTarget(c, in.Name)
 	c.JSON(http.StatusOK, gin.H{"id": id})
 }
 
@@ -137,7 +138,7 @@ func (h *ObsHandler) Update(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "update_obs_endpoint", in.Name)
+	SetAuditTarget(c, in.Name)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -147,7 +148,7 @@ func (h *ObsHandler) Delete(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "delete_obs_endpoint", c.Param("id"))
+	SetAuditTarget(c, c.Param("id"))
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -418,4 +419,48 @@ func obsGet(url, token string, timeout time.Duration) (int, string, error) {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	return resp.StatusCode, string(b), nil
+}
+
+// ── 容器级指标去重（PROD-014）────────────────────────────────────────
+//
+//	g32 生产上同一个容器的 container_* 指标存在 **3 条独立 series**
+//	（kube-prometheus-stack 和 victoria-metrics 两套栈重复采 kubelet，
+//	外加 /metrics/resource 与 /metrics/cadvisor 两条路径）。标签不同、值相同，
+//	Prometheus 不会自动去重，于是任何 `sum(...) by (pod)` 都把同一份用量加了三遍。
+//
+//	后果不是"数字不好看"，是**基于它的结论全错**：resource_waste 报某服务
+//	内存用了 211%（超 request 一倍多），HPA 的 status.currentMetrics 实测只有 70%，
+//	比值精确 3.00。照着这种数去做扩缩容决策，方向都是反的。
+//
+//	修法用 avg 而不是锁定某个 metrics_path/service 标签：
+//	`sum by (pod) (avg by (pod,container) (metric))` —— 先把同一容器的多份取平均
+//	（它们值本来就相同，avg 即原值），再按 pod 求和。这样不依赖任何一套采集器的
+//	标签约定，将来换监控栈、或者重复采集被治好，这个表达式都照样正确。
+
+// dedupContainerSum 生成去重的容器级聚合表达式。
+//
+//	by:    最终聚合维度，如 "namespace,pod"；空串表示全局 sum
+//	inner: 被聚合的指标表达式（含标签选择器），如 container_memory_working_set_bytes{...}
+func dedupContainerSum(by, inner string) string {
+	if by == "" {
+		return fmt.Sprintf("sum(avg by (namespace,pod,container) (%s))", inner)
+	}
+	return fmt.Sprintf("sum by (%s) (avg by (%s,container) (%s))", by, by, inner)
+}
+
+// warnIfDuplicateSeries 采一次样，若同一 (pod,container) 有多条 series 就打 WARN。
+//
+//	去重之后数字是对的，但重复采集本身还在浪费监控存储、也说明集群侧配置有问题
+//	（PROD-014 第 4 步「根治」）。这条日志是让它别再无声无息。
+func warnIfDuplicateSeries(base, token, selector string) {
+	res, err := promInstant(base, token,
+		`count by (namespace,pod,container) (container_memory_working_set_bytes`+selector+`) > 1`)
+	if err != nil || len(res) == 0 {
+		return
+	}
+	dup := res[0]
+	logx.Line("obs", fmt.Sprintf(
+		"WARN 容器级指标存在重复采集：%s/%s 容器 %s 有 %.0f 条 series（共 %d 个容器中招）。"+
+			"查询已做去重所以数值正确，但监控侧仍在重复存储，参见 PROD-014",
+		dup.Metric["namespace"], dup.Metric["pod"], dup.Metric["container"], dup.Value, len(res)))
 }

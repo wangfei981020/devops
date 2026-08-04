@@ -91,13 +91,68 @@ type k8sClusterOut struct {
 	Enabled          int    `json:"enabled"`
 }
 
+// clusterGone 校验 cluster_id 指向的集群确实存在；不存在就写好响应并返回 true（调用方直接 return）。
+//
+// ⚠️ 为什么必须查一次库：原先各接口只校验「cluster_id 必填」，不校验「这个集群存在」，
+// 于是对一个已删除/根本不存在的集群，体检返回 200 +「未发现有风险的安全上下文配置」、
+// 孤儿资源返回 200 + 空列表、暴露面返回 200 + 空列表——**把"查不到这个集群"说成了"这个集群没问题"**。
+// 只有 /k8s/events 一个接口老实报错，口径完全不统一。查不到对象必须是 404，不能是"一切正常"。
+func clusterGone(c *gin.Context, db *sql.DB, cid int) bool {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM k8s_clusters WHERE id=?`, cid).Scan(&n); err != nil {
+		logx.J("k8s", "cluster_check_err", map[string]any{"cluster_id": cid, "err": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "校验集群是否存在失败: " + err.Error()})
+		return true
+	}
+	if n == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("集群 %d 不存在（可能已被删除）；这不代表该集群没有问题", cid)})
+		return true
+	}
+	return false
+}
+
+// requireCluster 取必填的 cluster_id 并校验存在性。返回 ok=false 时响应已写好。
+func requireCluster(c *gin.Context, db *sql.DB) (int, bool) {
+	raw := strings.TrimSpace(c.Query("cluster_id"))
+	if raw == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 必填"})
+		return 0, false
+	}
+	cid, err := strconv.Atoi(raw)
+	if err != nil || cid <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 不是合法的集群编号: " + raw})
+		return 0, false
+	}
+	if clusterGone(c, db, cid) {
+		return 0, false
+	}
+	return cid, true
+}
+
+// envRank 生成按环境重要性排序的 SQL 片段（数字越小越靠前）。
+//
+// ⚠️ 这个排序不是"好看"，它决定了前端 11 个 K8s 页面**默认选中哪个集群**——
+// 那些页面统一取集群列表的第一项。原先是 `ORDER BY environment, name`，纯字母序，
+// 于是 environment='DEMO' 的演示集群永远排第一，打开任何 K8s 页面默认都是它，
+// 全都显示「无数据，先去集群管理点同步」；即便没有 DEMO，DEV 也会排在 PROD 前面。
+// 配合 `enabled DESC`（未启用的集群一律沉底），默认选中的才是"真正在跑的生产集群"。
+func envRank(col string) string {
+	return `CASE UPPER(COALESCE(` + col + `,''))
+		WHEN 'PROD' THEN 1 WHEN 'PRD' THEN 1 WHEN 'PRODUCTION' THEN 1
+		WHEN 'UAT' THEN 2
+		WHEN 'STAGE' THEN 3 WHEN 'STAGING' THEN 3 WHEN 'TEST' THEN 3
+		WHEN 'DEV' THEN 4 WHEN 'DEVELOP' THEN 4
+		WHEN 'DEMO' THEN 9
+		ELSE 5 END`
+}
+
 func (h *K8sClusterHandler) List(c *gin.Context) {
 	rows, err := h.DB.Query(`SELECT k.id, k.name, COALESCE(k.prom_cluster_value,''), COALESCE(k.network_exposure,''), COALESCE(k.allow_secret_inventory,0), k.display_name, k.environment, k.provider, k.project_id,
 		k.cloud_account_id, COALESCE(a.name,''), k.location, k.endpoint, COALESCE(k.nodepool_label,''), COALESCE(k.cost_mode,''),
 		CASE WHEN k.kubeconfig_enc IS NULL OR k.kubeconfig_enc='' THEN 0 ELSE 1 END,
 		k.enabled
 		FROM k8s_clusters k LEFT JOIN cloud_accounts a ON a.id=k.cloud_account_id
-		ORDER BY k.environment, k.name`)
+		ORDER BY k.enabled DESC, ` + envRank("k.environment") + `, k.name`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -175,7 +230,8 @@ func (h *K8sClusterHandler) Create(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
-	WriteAudit(h.DB, c, "create_k8s_cluster", in.Name)
+	AuditCreated(c, "k8s_clusters", id)
+	SetAuditTarget(c, in.Name)
 	logx.J("k8s", "cluster_create", map[string]any{"id": id, "name": in.Name, "env": in.Environment, "provider": in.Provider})
 	c.JSON(http.StatusOK, gin.H{"id": id})
 }
@@ -213,7 +269,7 @@ func (h *K8sClusterHandler) Update(c *gin.Context) {
 		return
 	}
 	h.Pool.Invalidate(id) // 凭据/状态可能变，清连接缓存
-	WriteAudit(h.DB, c, "update_k8s_cluster", in.Name)
+	SetAuditTarget(c, in.Name)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -225,7 +281,7 @@ func (h *K8sClusterHandler) Delete(c *gin.Context) {
 	}
 	_, _ = h.DB.Exec(`DELETE FROM k8s_sync_state WHERE cluster_id=?`, id)
 	h.Pool.Invalidate(id)
-	WriteAudit(h.DB, c, "delete_k8s_cluster", c.Param("id"))
+	SetAuditTarget(c, c.Param("id"))
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

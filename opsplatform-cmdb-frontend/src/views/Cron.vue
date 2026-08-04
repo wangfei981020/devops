@@ -38,8 +38,8 @@
         </template></el-table-column>
         <el-table-column label="操作" width="110" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
-            <el-tooltip content="立即运行"><el-button link type="primary" :icon="VideoPlay" :loading="running[row.task_key]" @click="run(row)" /></el-tooltip>
-            <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEdit(row)" /></el-tooltip>
+            <el-tooltip v-if="canRun" content="立即运行"><el-button link type="primary" :icon="VideoPlay" :loading="running[row.task_key]" @click="run(row)" /></el-tooltip>
+            <el-tooltip v-if="canManage" content="编辑"><el-button link type="primary" :icon="Edit" @click="openEdit(row)" /></el-tooltip>
           </div>
         </template></el-table-column>
       </el-table>
@@ -79,7 +79,7 @@
         </template>
       </el-form>
       <template #footer>
-        <el-button :icon="VideoPlay" :loading="running[form.task_key]" @click="runFromDialog">立即运行一次</el-button>
+        <el-button v-if="canRun" :icon="VideoPlay" :loading="running[form.task_key]" @click="runFromDialog">立即运行一次</el-button>
         <el-button @click="dlg=false">取消</el-button>
         <el-button type="primary" @click="save">保存</el-button>
       </template>
@@ -88,14 +88,19 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useAuthStore } from '../stores/auth'
 import { Refresh, VideoPlay, Edit } from '@element-plus/icons-vue'
 import { listScheduledTasks, updateScheduledTask, runScheduledTask, listLarkGroups, listNotifyUsers } from '../api/cmdb'
 import { normalizeError } from '../api/http'
 import LoadError from '../components/LoadError.vue'
 import { usePaged } from '../composables/usePaged'
 
+// 值班常要手动补跑一次，但不该能改 cron 表达式——两个权限分开
+const auth = useAuthStore()
+const canManage = computed(() => auth.hasButton('manage_cron'))
+const canRun = computed(() => auth.hasButton('run_task'))
 const presets = [
   { v: '0 */6 * * *', l: '每 6 小时' },
   { v: '0 */12 * * *', l: '每 12 小时' },

@@ -247,8 +247,11 @@ func (h *ObsQueryHandler) podUsageMap(cid int) (map[string]podUse, error) {
 	// 浪费排行/闲置成本是拿实测用量去比 request，混进别的集群的同名 Pod 会直接算错钱。
 	lbl := promLabels(clusterSelector(h.DB, clusterLabel, cid), `container!=""`, `container!="POD"`)
 	out := map[string]podUse{}
+	// PROD-014：容器级指标被重复采集 3 份，不去重的话这里算出来的用量是真值的 3 倍，
+	// 而浪费排行/闲置成本正是拿它去比 request——结论会整个反过来
+	warnIfDuplicateSeries(base, token, lbl)
 	cpu, err := promInstant(base, token,
-		`sum by (namespace,pod) (rate(container_cpu_usage_seconds_total`+lbl+`[5m])) * 1000`)
+		dedupContainerSum("namespace,pod", `rate(container_cpu_usage_seconds_total`+lbl+`[5m])`)+` * 1000`)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +262,7 @@ func (h *ObsQueryHandler) podUsageMap(cid int) (map[string]podUse, error) {
 		out[k] = u
 	}
 	mem, err := promInstant(base, token,
-		`sum by (namespace,pod) (container_memory_working_set_bytes`+lbl+`) / 1024 / 1024`)
+		dedupContainerSum("namespace,pod", `container_memory_working_set_bytes`+lbl)+` / 1024 / 1024`)
 	if err != nil {
 		return out, nil // CPU 已经拿到，内存失败不至于整体报废
 	}

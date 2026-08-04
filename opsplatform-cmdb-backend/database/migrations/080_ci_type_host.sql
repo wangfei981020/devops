@@ -1,0 +1,14 @@
+-- 补登 host 这个 CI 类型（模型管理页与 cis 表实际内容对不上）
+--
+-- 缺口：ci_types 里只注册了 domain / certificate 两类，是一期的遗留。
+-- 但主机同步早就在往 cis 表写 type='host' 的行了（handlers/hosts.go 的
+-- `INSERT INTO cis (type, name, status) VALUES ('host', ...)`），从没在模型清单里登记过。
+--
+-- 后果是同一批数据在两个页面给出互相矛盾的数字：
+--   总览「配置项」= SELECT COUNT(*) FROM cis          → 16
+--   模型管理页 = 按 ci_types 逐类统计实例数           → 域名 6 + 证书 0 = 6
+-- 差的正好是 10 台主机——它们在台账里存在、能查能用，却不在"模型"里，
+-- 于是模型管理页看起来像是"这个 CMDB 只管域名和证书"，与实际能力严重不符。
+--
+-- INSERT IGNORE + code 唯一键：重复执行安全（runner 幂等自愈依赖这一点）。
+INSERT IGNORE INTO ci_types (code, name, icon, sort_order) VALUES ('host', '主机', 'Monitor', 3);

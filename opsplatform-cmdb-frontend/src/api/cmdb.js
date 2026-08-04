@@ -288,3 +288,13 @@ export const gkeAvailableVersions = (params) => http.get('/gke/available-version
 // 基线必须显式存快照：预案里的基线是现算的，升完再生成拿到的是升级后状态，没得比（CMDB-030）
 export const gkeSaveBaseline = (params) => http.post('/gke/upgrade/baseline', null, { params }).then((r) => r.data)
 export const gkeListBaselines = (params) => http.get('/gke/upgrade/baselines', { params }).then((r) => r.data)
+
+// 操作审计与变更回滚
+export const auditLogs = (params) => http.get('/audit-logs', { params }).then((r) => r.data)
+export const auditDetail = (id) => http.get(`/audit-logs/${id}`).then((r) => r.data)
+export const auditHistory = (params) => http.get('/audit-history', { params }).then((r) => r.data)
+export const revertChange = (cid, force) => http.post(`/audit-changes/${cid}/revert`, { force: !!force }).then((r) => r.data)
+
+// 域名批量续费（两步：先 preview 看清楚，再执行）
+export const previewBatchRenew = (body) => http.post('/domains/renew-batch/preview', body).then((r) => r.data)
+export const batchRenewDomains = (body) => http.post('/domains/renew-batch', body).then((r) => r.data)

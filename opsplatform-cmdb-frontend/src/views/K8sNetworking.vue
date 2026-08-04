@@ -15,6 +15,7 @@
         <el-input v-model="q" clearable placeholder="搜名称" style="width:200px" @keyup.enter="load" @clear="load" />
         <el-button :icon="Search" @click="load">查询</el-button>
       </div>
+      <LoadError :error="error" title="网络数据未加载" @retry="load" />
       <el-tabs v-model="tab" @tab-change="load">
         <el-tab-pane label="Service" name="svc">
           <el-table :data="svcPaged" size="small" v-loading="loading">
@@ -25,7 +26,7 @@
             <el-table-column prop="ports" label="端口" min-width="160" />
           </el-table>
           <Pager :total="services.length" v-model:page="svcPage" v-model:page-size="svcSize" />
-          <el-empty v-if="!loading && !services.length" description="无数据，先去集群管理点「同步」" />
+          <el-empty v-if="!loading && !error && !services.length" description="无数据，先去集群管理点「同步」" />
         </el-tab-pane>
         <el-tab-pane label="VirtualService (Istio)" name="vs">
           <el-table :data="vsPaged" size="small" v-loading="loading">
@@ -36,7 +37,7 @@
             <el-table-column prop="backends" label="后端(destination)" min-width="180"><template #default="{ row }">{{ row.backends || '—' }}</template></el-table-column>
           </el-table>
           <Pager :total="virtualservices.length" v-model:page="vsPage" v-model:page-size="vsSize" />
-          <el-empty v-if="!loading && !virtualservices.length" description="无 VirtualService（集群未装 Istio 则为空）" />
+          <el-empty v-if="!loading && !error && !virtualservices.length" description="无 VirtualService（集群未装 Istio 则为空）" />
         </el-tab-pane>
         <el-tab-pane label="Ingress" name="ing">
           <el-table :data="ingPaged" size="small" v-loading="loading">
@@ -47,7 +48,7 @@
             <el-table-column prop="tls" label="TLS Secret" min-width="160"><template #default="{ row }">{{ row.tls || '—' }}</template></el-table-column>
           </el-table>
           <Pager :total="ingresses.length" v-model:page="ingPage" v-model:page-size="ingSize" />
-          <el-empty v-if="!loading && !ingresses.length" description="无标准 Ingress（你用 Istio 请看 VirtualService）" />
+          <el-empty v-if="!loading && !error && !ingresses.length" description="无标准 Ingress（你用 Istio 请看 VirtualService）" />
         </el-tab-pane>
         <el-tab-pane label="Gateway" name="gw">
           <el-table :data="gwPaged" size="small" v-loading="loading">
@@ -58,7 +59,7 @@
             <el-table-column prop="addresses" label="地址" min-width="160"><template #default="{ row }">{{ row.addresses || '—' }}</template></el-table-column>
           </el-table>
           <Pager :total="gateways.length" v-model:page="gwPage" v-model:page-size="gwSize" />
-          <el-empty v-if="!loading && !gateways.length" description="无 Gateway（集群未装 Gateway API CRD 则为空）" />
+          <el-empty v-if="!loading && !error && !gateways.length" description="无 Gateway（集群未装 Gateway API CRD 则为空）" />
         </el-tab-pane>
         <el-tab-pane label="HTTPRoute" name="route">
           <el-table :data="routePaged" size="small" v-loading="loading">
@@ -69,7 +70,7 @@
             <el-table-column prop="backends" label="后端 Service" min-width="160"><template #default="{ row }">{{ row.backends || '—' }}</template></el-table-column>
           </el-table>
           <Pager :total="httproutes.length" v-model:page="routePage" v-model:page-size="routeSize" />
-          <el-empty v-if="!loading && !httproutes.length" description="无 HTTPRoute" />
+          <el-empty v-if="!loading && !error && !httproutes.length" description="无 HTTPRoute" />
         </el-tab-pane>
         <el-tab-pane label="暴露面" name="expose">
           <!-- 这个 tab 回答的不是「有哪些资源」而是「谁能从外面访问到什么」：
@@ -113,7 +114,7 @@
               <div v-for="(r, i) in row.risks" :key="i" class="risk-line">{{ r }}</div>
             </template></el-table-column>
           </el-table>
-          <el-empty v-if="!loading && !exposeItems.length" description="没有对外入口，或该筛选条件下无结果" :image-size="60" />
+          <el-empty v-if="!loading && !error && !exposeItems.length" description="没有对外入口，或该筛选条件下无结果" :image-size="60" />
         </el-tab-pane>
       </el-tabs>
     </el-card>
@@ -125,6 +126,10 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { listK8sClusters, listK8sServices, listK8sIngresses, listK8sGateways, listK8sHTTPRoutes, listK8sVirtualServices, listK8sNamespaces, exposeSurface } from '../api/cmdb'
+import { pickDefaultCluster } from '../composables/useClusterPick'
+import { useLoadState } from '../composables/useLoadState'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
 
@@ -135,15 +140,17 @@ const { page: vsPage, pageSize: vsSize, paged: vsPaged } = usePager(virtualservi
 const { page: ingPage, pageSize: ingSize, paged: ingPaged } = usePager(ingresses)
 const { page: gwPage, pageSize: gwSize, paged: gwPaged } = usePager(gateways)
 const { page: routePage, pageSize: routeSize, paged: routePaged } = usePager(httproutes)
-const clusterId = ref(null); const ns = ref(''); const q = ref(''); const tab = ref('svc'); const loading = ref(false)
+const clusterId = ref(null); const ns = ref(''); const q = ref(''); const tab = ref('svc')
+const { loading, error, run } = useLoadState()
 const exposeItems = ref([]); const exposeSummary = ref(null); const exposeOnly = ref('')
 
 async function onCluster() { ns.value = ''; namespaces.value = await listK8sNamespaces({ cluster_id: clusterId.value }); load() }
 
 async function load() {
   if (!clusterId.value) return
-  loading.value = true
-  try {
+  // 失败落到页面 error：这一页 6 个 tab 的空态各自都是结论（"集群未装 Istio"/"没有对外入口"），
+  // 接口挂掉时照原样显示，等于用一句确定的解释掩盖了一次加载失败。
+  await run(async () => {
     const p = { cluster_id: clusterId.value }
     if (ns.value) p.namespace = ns.value
     if (q.value) p.q = q.value
@@ -158,13 +165,17 @@ async function load() {
       exposeItems.value = r.items || []
       exposeSummary.value = r.summary || null
     }
-  } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+  })
+  if (error.value) {
+    services.value = []; virtualservices.value = []; ingresses.value = []
+    gateways.value = []; httproutes.value = []; exposeItems.value = []; exposeSummary.value = null
+  }
 }
 
 onMounted(async () => {
   try {
     clusters.value = await listK8sClusters()
-    if (clusters.value.length) { clusterId.value = clusters.value[0].id; onCluster() }
+    if (clusters.value.length) { clusterId.value = pickDefaultCluster(clusters.value); onCluster() }
   } catch (e) { ElMessage.error('加载集群失败') }
 })
 </script>

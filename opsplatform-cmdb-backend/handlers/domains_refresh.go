@@ -26,7 +26,7 @@ func (h *DomainHandler) Refresh(c *gin.Context) {
 		return
 	}
 	msg := refreshOneDomain(h.DB, ciid, name)
-	WriteAudit(h.DB, c, "refresh_domain", name)
+	SetAuditTarget(c, name)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "msg": msg})
 }
 
@@ -35,7 +35,7 @@ func (h *DomainHandler) Refresh(c *gin.Context) {
 // 证书到期请走「到期巡检」；单个域名的「刷到期」按钮仍会同时刷注册+证书（Refresh）。
 func (h *DomainHandler) RefreshAll(c *gin.Context) {
 	msg, failures, _ := refreshAllWhoisCore(context.Background(), h.DB, nil, nil)
-	WriteAudit(h.DB, c, "refresh_domain_all", msg)
+	SetAuditTarget(c, msg)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "msg": msg, "failures": failures})
 }
 

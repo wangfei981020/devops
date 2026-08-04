@@ -85,6 +85,7 @@ func (h *BasicHandler) CreateStatus(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	AuditCreated(c, "lifecycle_statuses", id)
 	c.JSON(201, gin.H{"id": id})
 }
 
@@ -158,6 +159,7 @@ func (h *BasicHandler) CreateProject(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	AuditCreated(c, "projects", id)
 	c.JSON(201, gin.H{"id": id})
 }
 
@@ -236,6 +238,7 @@ func (h *BasicHandler) CreateEnv(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	AuditCreated(c, "environments", id)
 	c.JSON(201, gin.H{"id": id})
 }
 
@@ -305,6 +308,7 @@ func (h *BasicHandler) CreateCdn(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	AuditCreated(c, "cdns", id)
 	c.JSON(201, gin.H{"id": id})
 }
 

@@ -48,16 +48,27 @@ func main() {
 	r.Use(handlers.AccessLog())
 	r.Use(handlers.CORS())
 
-	authH := handlers.NewAuthHandler(db, cfg.JWTSecret)
+	authH := handlers.NewAuthHandler(db, cfg.JWTSecret, cfg.PortalAPIURL, cfg.SessionHours, cipher)
 	authH.EnsureAdmin()
 
 	api := r.Group("/api")
 	authH.RegisterPublic(api)
+	// 运维平台单点登录入口：注册在登录中间件之前（拿 portal token 换 CMDB 会话）
+	authH.RegisterPortal(api)
 	// A+ 取证书：token 自鉴权，注册在登录中间件之前（目标机无需登录态拉取）
 	handlers.NewBundleHandler(db, cipher).RegisterPublic(api)
 	// MCP：自带 token 鉴权，注册在登录中间件之前（AI 客户端用 MCP token 连）
 	handlers.NewMCPHandler(db, cfg.JWTSecret, cfg.Port).RegisterPublic(api)
 	api.Use(authH.Middleware())
+	// 接口级权限校验：表驱动（handlers/perm.go），未映射的路由一律 403。
+	// 必须挂在 Middleware 之后——它要读会话里的权限快照。
+	api.Use(handlers.PermGuard(db))
+	// 变更追溯：写请求前后各拍一次行快照，自动 diff 后落 audit_changes。
+	// 必须在 PermGuard 之后——被权限挡下的请求由 denyPerm 单独记 denied，
+	// 不该在这里再记一条 success。
+	handlers.SetAuditCipher(cipher)
+	api.Use(handlers.AuditMiddleware(db))
+	authH.RegisterAuthed(api)
 	handlers.NewCIHandler(db).Register(api)
 	handlers.NewRelationHandler(db).Register(api)
 	handlers.NewRegistrarHandler(db, cipher).Register(api)
@@ -104,12 +115,22 @@ func main() {
 	harborH.RegisterAdmin(api) // Harbor 接入配置
 	mcpH := handlers.NewMCPHandler(db, cfg.JWTSecret, cfg.Port)
 	mcpH.RegisterAuthed(api)
+	handlers.NewAuditHandler(db).Register(api) // 操作审计查询 + 变更回滚
+	handlers.StartAuditCleanup(db)             // 按保留期清理（默认 0=永久，不删）
 	// 周期全量同步所有启用集群（阶段3），默认每 120s 一轮
 	go k8ssource.StartScheduler(db, k8sPool, k8ssource.DefaultSyncIntervalSec)
 	// 每 6h 刷新当月成本快照（跨月自动定格上月），供环比/报告用
 	go handlers.StartCostSnapshotScheduler(db)
 	// 每 6h 同步 CDN(Cloudflare) 的 Zone/DNS/设置
 	go handlers.StartCDNScheduler(db, cipher)
+
+	// 权限映射自检：把没被 perm.go 规则覆盖的路由打出来。
+	// fail-closed 下漏配 = 该接口直接 403，与其等用户报"页面打不开"，
+	// 不如启动时就在日志里列清单。免登录路由（登录/SSO/MCP/证书自取）不参与。
+	handlers.AuditRouteCheck(r.Routes())
+	handlers.AuditPermCheck(r.Routes(), []string{
+		"/api/login", "/api/portal-auth", "/api/mcp", "/api/certs/:id/bundle",
+	})
 
 	logx.Line("main", fmt.Sprintf("CMDB backend listening on %s", cfg.Port))
 	if err := http.ListenAndServe(cfg.Port, r); err != nil {

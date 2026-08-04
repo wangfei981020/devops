@@ -6,6 +6,7 @@
     </div>
 
     <el-card shadow="never">
+      <LoadError :error="error" title="查询失败" />
       <el-radio-group v-model="mode" style="margin-bottom:14px">
         <el-radio-button value="fwd">正向 · 按域名查链路</el-radio-button>
         <el-radio-button value="rev">反向 · 按节点查影响</el-radio-button>
@@ -175,10 +176,15 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { k8sTopology, k8sImpact, listK8sClusters, listK8sNodes, topoDomains } from '../api/cmdb'
+import { pickDefaultCluster } from '../composables/useClusterPick'
+import { useLoadState } from '../composables/useLoadState'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
 
-const mode = ref('fwd'); const loading = ref(false)
+const mode = ref('fwd')
+const { loading, error, run } = useLoadState()
 const domain = ref(''); const fwd = ref(null)
 const domainsAll = ref([]); const fProject = ref(''); const fEnv = ref('')
 const cdnRecs = computed(() => fwd.value?.cdn?.records || [])
@@ -311,7 +317,10 @@ const { page: revPage, pageSize: revSize, paged: revPaged } = usePager(revPods)
 async function runFwd() {
   if (!domain.value) { ElMessage.warning('输入域名'); return }
   loading.value = true
-  try { fwd.value = await k8sTopology(domain.value.trim()) } catch (e) { ElMessage.error('查询失败') } finally { loading.value = false }
+  // 失败清空并留下 error：保留上一次的链路图最危险——
+  // 换了域名查询失败却还显示着上一个域名的拓扑，会照着错的链路去排障。
+  const r = await run(() => k8sTopology(domain.value.trim()))
+  fwd.value = error.value ? null : r
 }
 
 async function onClusterRev() {
@@ -321,13 +330,14 @@ async function onClusterRev() {
 async function runRev() {
   if (!clusterId.value || !node.value) { ElMessage.warning('选集群和节点'); return }
   loading.value = true
-  try { rev.value = await k8sImpact(clusterId.value, node.value) } catch (e) { ElMessage.error('查询失败') } finally { loading.value = false }
+  const r = await run(() => k8sImpact(clusterId.value, node.value))
+  rev.value = error.value ? null : r
 }
 
 onMounted(async () => {
   try {
     clusters.value = await listK8sClusters()
-    if (clusters.value.length) { clusterId.value = clusters.value[0].id; onClusterRev() }
+    if (clusters.value.length) { clusterId.value = pickDefaultCluster(clusters.value); onClusterRev() }
   } catch (e) { /* ignore */ }
   try { domainsAll.value = await topoDomains() } catch (e) { domainsAll.value = [] }
 })

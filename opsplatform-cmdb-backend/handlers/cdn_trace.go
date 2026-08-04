@@ -102,7 +102,7 @@ func traceCDN(db *sql.DB, domain string) cdnTrace {
 				t.Basis = "CNAME 链上的 " + cur + " 属于我方纳管的 CDN 站点 " + zone + "，且已开启代理（橙云）——确证经过 CDN"
 			} else {
 				t.Basis = "CNAME 链上的 " + cur + " 在我方 CDN 站点 " + zone +
-					" 中有解析记录，但**未开启代理**（灰云）——流量直连源站，不经 CDN 防护与缓存"
+					" 中有解析记录，但「未开启代理」（灰云）——流量直连源站，不经 CDN 防护与缓存"
 			}
 			// 命中跳在 CDN 上配的回源地址。必须在这里取——闭环比对（回源 IP 是否等于
 			// 本集群网关 LB IP）用的是它，而不是下面 lookupIPs 拿到的边缘 IP。

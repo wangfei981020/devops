@@ -113,7 +113,7 @@ func (h *CDNHandler) SaveAccount(c *gin.Context) {
 				return
 			}
 		}
-		WriteAudit(h.DB, c, "update_cdn_account", in.Name)
+		SetAuditTarget(c, in.Name)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "id": in.ID})
 		return
 	}
@@ -133,7 +133,8 @@ func (h *CDNHandler) SaveAccount(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
-	WriteAudit(h.DB, c, "create_cdn_account", in.Name)
+	AuditCreated(c, "cdn_accounts", id)
+	SetAuditTarget(c, in.Name)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "id": id})
 }
 
@@ -146,7 +147,7 @@ func (h *CDNHandler) DeleteAccount(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "delete_cdn_account", id)
+	SetAuditTarget(c, id)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -175,7 +176,7 @@ func (h *CDNHandler) SyncAccount(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "sync_cdn_account", c.Param("id"))
+	SetAuditTarget(c, c.Param("id"))
 	c.JSON(http.StatusOK, gin.H{"ok": true, "zones": zones, "dns_records": records})
 }
 

@@ -57,7 +57,7 @@ func (h *NotifyHandler) Create(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "add_notify_user", in.Name)
+	SetAuditTarget(c, in.Name)
 	c.JSON(201, gin.H{"ok": true})
 }
 
@@ -80,6 +80,6 @@ func (h *NotifyHandler) Test(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "发送失败：" + err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "test_notify", "")
+	SetAuditTarget(c, "")
 	c.JSON(200, gin.H{"ok": true, "msg": "已发送，去飞书群看"})
 }

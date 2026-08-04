@@ -148,12 +148,16 @@ var noDrillHint = map[string]string{
 
 // HealthDetail GET /api/k8s/health/detail?cluster_id=&key=
 func (h *K8sResourceHandler) HealthDetail(c *gin.Context) {
-	cid := c.Query("cluster_id")
 	key := c.Query("key")
-	if cid == "" || key == "" {
+	if key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 和 key 必填"})
 		return
 	}
+	cidNum, ok2 := requireCluster(c, h.DB)
+	if !ok2 {
+		return
+	}
+	cid := itoa(cidNum)
 	if hint, ok := noDrillHint[key]; ok {
 		c.JSON(http.StatusOK, gin.H{"key": key, "rows": []any{}, "unsupported": hint})
 		return

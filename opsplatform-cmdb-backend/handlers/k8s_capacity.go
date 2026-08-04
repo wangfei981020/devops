@@ -95,11 +95,11 @@ func (h *K8sResourceHandler) NodeCapacity(c *gin.Context) {
 
 // NsOverview 命名空间/项目 Pod 概览：总/Running/失败/Pending + 失败清单(带原因)。
 func (h *K8sResourceHandler) NsOverview(c *gin.Context) {
-	cid := c.Query("cluster_id")
-	if cid == "" {
-		c.JSON(400, gin.H{"error": "cluster_id 必填"})
+	cidNum, ok := requireCluster(c, h.DB)
+	if !ok {
 		return
 	}
+	cid := itoa(cidNum)
 	ns := c.Query("namespace")
 	project := c.Query("project") // 按项目=该项目映射到的命名空间集合
 	where := "cluster_id=?"

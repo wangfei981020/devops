@@ -157,7 +157,7 @@ func (h *SyncHandler) CreateDNSRecord(c *gin.Context) {
 		h.refreshDomainDNSCache(ctx, ad, ciID, sourceID, domain)
 	}
 	logx.JCtx(c.Request.Context(), "dns_write", "create_done", map[string]any{"domain": domain, "type": in.Type, "name": in.Name, "data": in.Data, "dry_run": wa.DryRun()})
-	WriteAudit(h.DB, c, "dns_create", fmt.Sprintf("%s %s.%s → %s", in.Type, in.Name, domain, in.Data))
+	SetAuditTarget(c, fmt.Sprintf("%s %s.%s → %s", in.Type, in.Name, domain, in.Data))
 	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
 		"msg": writeResultMsg(wa, "已新增并写回")})
 }
@@ -225,7 +225,7 @@ func (h *SyncHandler) BatchCreateDNSRecord(c *gin.Context) {
 		h.refreshDomainDNSCache(ctx, ad, ciID, sourceID, domain)
 	}
 	logx.JCtx(c.Request.Context(), "dns_write", "batch_create_done", map[string]any{"domain": domain, "added": len(valid), "skipped": len(errs), "dry_run": wa.DryRun()})
-	WriteAudit(h.DB, c, "dns_batch_create", fmt.Sprintf("%s 新增%d条", domain, len(valid)))
+	SetAuditTarget(c, fmt.Sprintf("%s 新增%d条", domain, len(valid)))
 	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
 		"added": len(valid), "skipped": len(errs), "errors": errs,
 		"msg": writeResultMsg(wa, fmt.Sprintf("已批量新增 %d 条（跳过 %d 条）", len(valid), len(errs)))})
@@ -355,7 +355,11 @@ func (h *SyncHandler) BatchDeleteDNSRecords(c *gin.Context) {
 		h.refreshDomainDNSCache(ctx, ad, ciID, sourceID, domain)
 	}
 	logx.JCtx(c.Request.Context(), "dns_write", "batch_delete_done", map[string]any{"domain": domain, "deleted": deleted, "skipped_failed": len(errs), "dry_run": wa.DryRun()})
-	WriteAudit(h.DB, c, "dns_batch_delete", fmt.Sprintf("%s 删除%d条", domain, deleted))
+	for _, r := range recs {
+		auditDNSChange(c, "DELETE", domain, fmt.Sprint(r.ID),
+			map[string]interface{}{"domain": domain, "type": r.Type, "name": r.Name, "data": r.Data}, nil)
+	}
+	SetAuditTarget(c, fmt.Sprintf("%s 删除%d条", domain, deleted))
 	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
 		"deleted": deleted, "skipped": len(errs), "errors": errs,
 		"msg": writeResultMsg(wa, fmt.Sprintf("已批量删除 %d 条（跳过/失败 %d 条）", deleted, len(errs)))})
@@ -458,7 +462,7 @@ func (h *SyncHandler) BatchUpdateDNSRecords(c *gin.Context) {
 		h.refreshDomainDNSCache(ctx, ad, ciID, sourceID, domain)
 	}
 	logx.JCtx(c.Request.Context(), "dns_write", "batch_update_done", map[string]any{"domain": domain, "updated": updated, "failed": len(errs), "dry_run": wa.DryRun()})
-	WriteAudit(h.DB, c, "dns_batch_update", fmt.Sprintf("%s 编辑%d条", domain, updated))
+	SetAuditTarget(c, fmt.Sprintf("%s 编辑%d条", domain, updated))
 	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
 		"updated": updated, "failed": len(errs), "errors": errs,
 		"msg": writeResultMsg(wa, fmt.Sprintf("已批量编辑 %d 条（失败 %d 条）", updated, len(errs)))})
@@ -522,7 +526,12 @@ func (h *SyncHandler) UpdateDNSRecord(c *gin.Context) {
 		h.refreshDomainDNSCache(ctx, ad, domCiID, sourceID, domain)
 	}
 	logx.JCtx(c.Request.Context(), "dns_write", "update_done", map[string]any{"domain": domain, "type": rtype, "name": name, "old_data": oldData, "new_data": in.Data, "dry_run": wa.DryRun()})
-	WriteAudit(h.DB, c, "dns_update", fmt.Sprintf("%s %s.%s: %s → %s", rtype, name, domain, oldData, in.Data))
+	// 记业务字段而不是本地行——回滚时是拿这些字段调 DNS API 写回去，
+	// 本地 id 在缓存刷新后已经变了，留着也没用。
+	auditDNSChange(c, "UPDATE", domain, id,
+		map[string]interface{}{"domain": domain, "type": rtype, "name": name, "data": oldData},
+		map[string]interface{}{"domain": domain, "type": rtype, "name": name, "data": strings.TrimSpace(in.Data), "ttl": in.TTL})
+	SetAuditTarget(c, fmt.Sprintf("%s %s.%s: %s → %s", rtype, name, domain, oldData, in.Data))
 	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
 		"msg": writeResultMsg(wa, "已编辑并写回")})
 }
@@ -576,7 +585,9 @@ func (h *SyncHandler) DeleteDNSRecord(c *gin.Context) {
 		h.refreshDomainDNSCache(ctx, ad, domCiID, sourceID, domain)
 	}
 	logx.JCtx(c.Request.Context(), "dns_write", "delete_done", map[string]any{"domain": domain, "type": rtype, "name": name, "data": oldData, "dry_run": wa.DryRun()})
-	WriteAudit(h.DB, c, "dns_delete", fmt.Sprintf("%s %s.%s (%s)", rtype, name, domain, oldData))
+	auditDNSChange(c, "DELETE", domain, id,
+		map[string]interface{}{"domain": domain, "type": rtype, "name": name, "data": oldData}, nil)
+	SetAuditTarget(c, fmt.Sprintf("%s %s.%s (%s)", rtype, name, domain, oldData))
 	c.JSON(200, gin.H{"ok": true, "dry_run": wa.DryRun(), "env": wa.EnvLabel(),
 		"msg": writeResultMsg(wa, "已删除并写回")})
 }

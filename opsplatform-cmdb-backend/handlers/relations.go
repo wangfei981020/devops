@@ -77,6 +77,7 @@ func (h *RelationHandler) Create(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	AuditCreated(c, "ci_relations", id)
 	c.JSON(201, gin.H{"id": id})
 }
 

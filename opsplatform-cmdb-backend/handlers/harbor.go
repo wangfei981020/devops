@@ -136,6 +136,7 @@ func (h *HarborHandler) Save(c *gin.Context) {
 			return
 		}
 		nid, _ := res.LastInsertId()
+		AuditCreated(c, "harbor_registries", nid)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "id": nid})
 		return
 	}

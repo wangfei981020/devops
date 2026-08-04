@@ -133,6 +133,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { listK8sClusters, clusterHealth, configAudit, securityAudit, k8sSyncState, healthDetail } from '../api/cmdb'
+import { pickDefaultCluster } from '../composables/useClusterPick'
 import { normalizeError } from '../api/http'
 import LoadError from '../components/LoadError.vue'
 
@@ -202,7 +203,7 @@ async function loadClusters() {
   }
   if (!cid.value && clusters.value.length) {
     const q = Number(route.query.cluster_id)
-    cid.value = clusters.value.some((c) => c.id === q) ? q : clusters.value[0].id
+    cid.value = clusters.value.some((c) => c.id === q) ? q : pickDefaultCluster(clusters.value)
   }
 }
 

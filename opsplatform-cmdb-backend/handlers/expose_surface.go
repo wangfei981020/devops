@@ -58,11 +58,11 @@ type exposureItem struct {
 
 // ExposeSurface GET /api/k8s/expose-surface?cluster_id=&only=external|risky
 func (h *K8sResourceHandler) ExposeSurface(c *gin.Context) {
-	cid := c.Query("cluster_id")
-	if cid == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 必填"})
+	cidNum, ok := requireCluster(c, h.DB)
+	if !ok {
 		return
 	}
+	cid := itoa(cidNum)
 
 	svcAlive := h.loadServiceLiveness(cid) // ns/svcName -> 是否有存活后端
 	lbByVIP := h.loadCloudLBsByVIP()       // vip -> scheme（云侧权威内外网）

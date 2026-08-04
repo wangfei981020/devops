@@ -1,0 +1,11 @@
+-- 会话里保存运维平台的 token（AES 加密），供权限刷新使用
+--
+-- 为什么必须存：刷新权限要回头问运维平台"这个人现在有哪些权限"，
+-- 而运维平台的 /api/my/permissions 需要用户身份认证——单靠一个
+-- X-Operator 头是 401。没有这张凭据，refresh-permissions 就只能
+-- 一直沿用登录那一刻的旧快照：管理员在运维平台撤了权限，用户这边
+-- 毫无感知，直到会话自然过期为止。
+--
+-- 加密存：这等同于用户在运维平台的登录凭据，明文落库风险太大。
+-- 只在服务端解密使用，任何接口都不返回它。
+ALTER TABLE auth_sessions ADD COLUMN portal_token_enc TEXT NULL;

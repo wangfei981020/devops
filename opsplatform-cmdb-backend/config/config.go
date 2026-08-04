@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 )
 
 type Config struct {
@@ -12,6 +13,10 @@ type Config struct {
 	MySQLDSN   string
 	JWTSecret  string
 	AESKey     string // 凭据/私钥 AES 加密密钥（任意长度，crypto 内部派生 32 字节）
+	// 运维平台后端地址，如 http://opsplatform-backend:8080。留空则关闭 portal 登录，
+	// 只剩本地 admin 可用（权限校验随之全放行，见 handlers/perm.go 的降级说明）。
+	PortalAPIURL string
+	SessionHours int // 会话有效期（小时），默认 24
 }
 
 func Load() *Config {
@@ -21,7 +26,19 @@ func Load() *Config {
 		MySQLDSN:   buildDSN(),
 		JWTSecret:  getenv("JWT_SECRET", "cmdb-dev-jwt-secret-change-in-prod"),
 		AESKey:     getenv("CMDB_AES_KEY", "cmdb-dev-aes-key-change-in-prod"),
+
+		PortalAPIURL: getenv("PORTAL_API_URL", ""),
+		SessionHours: getenvInt("SESSION_HOURS", 24),
 	}
+}
+
+func getenvInt(k string, def int) int {
+	if v := os.Getenv(k); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
 }
 
 // buildDSN 从 MYSQL_* 拼 DSN；默认连本地 mysql-deploy 的 cmdb 库。

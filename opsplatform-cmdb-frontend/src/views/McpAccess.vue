@@ -24,7 +24,7 @@
           <el-input :model-value="tokenMasked" readonly>
             <template #append><el-button :disabled="!info.token" @click="copy(info.token)">复制</el-button></template>
           </el-input>
-          <el-button size="small" type="warning" plain style="margin-top:8px" @click="regen">重新生成 Token</el-button>
+          <el-button v-if="canMcp" size="small" type="warning" plain style="margin-top:8px" @click="regen">重新生成 Token</el-button>
           <span class="muted" style="margin-left:8px">
             Token 不显示明文，只能复制；重新生成后旧 token 立即失效
           </span>
@@ -67,12 +67,16 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
 import { mcpInfo, mcpRegenerate } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
 defineProps({ embedded: { type: Boolean, default: false } })
 
+// MCP Token 是机器身份、不受 RBAC 约束，拿到即可读全量数据，所以单独成码
+const auth = useAuthStore()
+const canMcp = computed(() => auth.hasButton('manage_mcp'))
 const app = useAppStore()
 const info = ref({ token: '', tools: 0 })
 const endpoint = computed(() => location.origin + '/api/mcp')

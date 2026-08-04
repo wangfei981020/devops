@@ -62,12 +62,21 @@ func syncAll(db *sql.DB, pool *Pool) {
 		}
 		results := SyncCluster(ctx, db, cs, dc, mc, x.id, x.label)
 		cancel()
-		failed := 0
+		// 失败的资源必须逐条打出来。原先只打 `failed:3`，光看日志根本不知道是哪三类、
+		// 为什么失败——详情虽然写进了 k8s_sync_state 表，但排障时人是先看日志的，
+		// 「3 类失败」这种计数除了让人去查库猜，没有任何用处。
+		failedItems := []string{}
 		for _, r := range results {
 			if r.Err != nil {
-				failed++
+				failedItems = append(failedItems, r.Resource)
+				logx.J("k8s_sched", "resource_failed", map[string]any{
+					"cluster_id": x.id, "resource": r.Resource, "err": truncErr(r.Err.Error()),
+				})
 			}
 		}
-		logx.J("k8s_sched", "synced", map[string]any{"cluster_id": x.id, "resources": len(results), "failed": failed})
+		logx.J("k8s_sched", "synced", map[string]any{
+			"cluster_id": x.id, "resources": len(results),
+			"failed": len(failedItems), "failed_resources": failedItems,
+		})
 	}
 }

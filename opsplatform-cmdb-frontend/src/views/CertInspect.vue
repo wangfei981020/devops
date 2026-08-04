@@ -35,6 +35,21 @@
       </div>
     </el-card>
 
+    <!-- 「检测失败」这一类往往是同一个原因批量命中（实测 113 条里全部是 DNS 解析不了），
+         逐条列出来等于让人在 113 行相同的报错里翻找。先按原因归类，点一下再看明细。 -->
+    <el-card v-if="!error && statusFilter === 'failed' && failReasons.length" shadow="never" style="margin-bottom:14px">
+      <template #header><b>失败原因分布</b>
+        <span class="muted" style="margin-left:8px">共 {{ failTotal }} 条，归为 {{ failReasons.length }} 类；点一类只看它</span>
+      </template>
+      <div class="reasons">
+        <el-tag v-for="r in failReasons" :key="r.key" size="large" effect="plain" class="reason"
+          :type="reasonFilter === r.key ? 'danger' : 'info'" @click="reasonFilter = reasonFilter === r.key ? '' : r.key">
+          {{ r.label }} <b style="margin-left:6px">{{ r.n }}</b>
+        </el-tag>
+        <el-button v-if="reasonFilter" link type="primary" style="margin-left:8px" @click="reasonFilter = ''">清除筛选</el-button>
+      </div>
+    </el-card>
+
     <el-card shadow="never">
       <LoadError :error="error" @retry="load" />
       <el-table v-if="!error" :data="paged" size="small" v-loading="loading">
@@ -62,8 +77,8 @@
         <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
             <template v-if="row.kind==='online'">
-              <el-tooltip v-if="!row.ignored" content="标记无需证书"><el-button link type="info" :icon="Hide" @click="openIgnore(row)" /></el-tooltip>
-              <el-tooltip v-else content="取消无需证书"><el-button link type="primary" :icon="View" @click="unignore(row)" /></el-tooltip>
+              <el-tooltip v-if="canCert && !row.ignored" content="标记无需证书"><el-button link type="info" :icon="Hide" @click="openIgnore(row)" /></el-tooltip>
+              <el-tooltip v-else-if="canCert" content="取消无需证书"><el-button link type="primary" :icon="View" @click="unignore(row)" /></el-tooltip>
               <el-tooltip content="去域名页"><el-button link type="primary" :icon="Link" @click="$router.push('/domains')" /></el-tooltip>
             </template>
             <el-tooltip v-else-if="row.kind==='domain'" content="去域名页"><el-button link type="primary" :icon="Link" @click="$router.push('/domains')" /></el-tooltip>
@@ -86,7 +101,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search, Sort, Hide, View, Link } from '@element-plus/icons-vue'
 import { listCertInspect, recordCertIgnore } from '../api/cmdb'
@@ -94,6 +110,8 @@ import { useAppStore } from '../stores/app'
 import { useLoadState } from '../composables/useLoadState'
 import LoadError from '../components/LoadError.vue'
 
+const auth = useAuthStore()
+const canCert = computed(() => auth.hasButton('manage_certs'))
 const { loading, error, run } = useLoadState()
 
 const app = useAppStore()
@@ -119,6 +137,8 @@ const statusTabs = [
 
 const rows = ref([])
 const statusFilter = ref('all'), kindFilter = ref('all'), keyword = ref(''), sortAsc = ref(true)
+// 失败原因筛选：只在「检测失败」tab 生效；切换 tab 时清掉，免得带着看不见的筛选条件
+const reasonFilter = ref('')
 const domainFilter = ref(null)
 const domainOptions = computed(() => [...new Set(rows.value.map((r) => r.domain).filter(Boolean))].sort())
 const page = ref(1), size = ref(50)
@@ -151,10 +171,40 @@ const counts = computed(() => {
   }
   return c
 })
+// 把一条 check_msg 归纳成"原因类别"。原始消息带着域名和 IP，逐字分组会得到
+// 和条数一样多的组（每条都不同），起不到归纳作用——必须先把可变部分抽掉。
+function reasonOf(msg) {
+  const m = (msg || '').trim()
+  if (!m) return { key: 'unknown', label: '未记录原因' }
+  if (/no such host|lookup .* on .*: /i.test(m)) return { key: 'dns', label: 'DNS 解析不到该域名' }
+  if (/i\/o timeout|context deadline exceeded/i.test(m)) return { key: 'timeout', label: '连接 443 超时' }
+  if (/connection refused/i.test(m)) return { key: 'refused', label: '443 端口拒绝连接' }
+  if (/certificate has expired|x509: certificate/i.test(m)) return { key: 'x509', label: '证书链校验失败' }
+  if (/handshake|tls/i.test(m)) return { key: 'tls', label: 'TLS 握手失败' }
+  if (/no route to host|network is unreachable/i.test(m)) return { key: 'unreachable', label: '网络不可达' }
+  // 认不出来的保留原文前缀，并且**必须能看见**——闷头归到"其他"会掩盖新出现的失败模式
+  return { key: 'other:' + m.slice(0, 40), label: m.slice(0, 40) }
+}
+const failItems = computed(() => enriched.value.filter((r) => r._st === 'failed'))
+const failTotal = computed(() => failItems.value.length)
+const failReasons = computed(() => {
+  const m = new Map()
+  for (const r of failItems.value) {
+    const { key, label } = reasonOf(r.check_msg)
+    const cur = m.get(key) || { key, label, n: 0 }
+    cur.n++
+    m.set(key, cur)
+  }
+  return [...m.values()].sort((a, b) => b.n - a.n)
+})
+
+watch(statusFilter, () => { reasonFilter.value = '' })
+
 const filtered = computed(() => {
   let list = enriched.value
   if (domainFilter.value) list = list.filter((r) => r.domain === domainFilter.value)
   if (kindFilter.value !== 'all') list = list.filter((r) => r.kind === kindFilter.value)
+  if (reasonFilter.value) list = list.filter((r) => reasonOf(r.check_msg).key === reasonFilter.value)
   // 「全部」= 未忽略的巡检项；已忽略的只在「已忽略」tab 看
   if (statusFilter.value === 'all') list = list.filter((r) => r._st !== 'ignored')
   else list = list.filter((r) => r._st === statusFilter.value)
@@ -189,4 +239,6 @@ onMounted(() => { load(); if (!app.statuses.length) app.loadStatuses() })
 <style scoped>
 .filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+.reasons { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.reason { cursor: pointer; }
 </style>

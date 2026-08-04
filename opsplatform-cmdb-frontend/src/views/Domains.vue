@@ -3,35 +3,36 @@
     <div class="page-head">
       <span class="page-title">域名</span>
       <div v-if="tab === 'records'">
-        <el-button v-if="selected.length && statusView !== 'ignored'" type="warning" :icon="EditPen" @click="openBulk">批量设置（{{ selected.length }}）</el-button>
-        <el-button v-if="selected.length && statusView !== 'ignored'" :icon="Hide" @click="openIgnore(selected)">批量忽略（{{ selected.length }}）</el-button>
-        <el-button v-if="selected.length && statusView === 'ignored'" type="success" :icon="View" @click="doUnignore(selected)">取消忽略（{{ selected.length }}）</el-button>
+        <el-button v-if="canRecords && selected.length && statusView !== 'ignored'" type="warning" :icon="EditPen" @click="openBulk">批量设置（{{ selected.length }}）</el-button>
+        <el-button v-if="canRecords && selected.length && statusView !== 'ignored'" :icon="Hide" @click="openIgnore(selected)">批量忽略（{{ selected.length }}）</el-button>
+        <el-button v-if="canRecords && selected.length && statusView === 'ignored'" type="success" :icon="View" @click="doUnignore(selected)">取消忽略（{{ selected.length }}）</el-button>
         <el-button v-if="selected.length" :icon="Close" @click="clearSel">清空选择（{{ selected.length }}）</el-button>
         <el-button :icon="Download" @click="exportCsv">导出Excel</el-button>
         <el-button :icon="Connection" @click="openRules">源站映射</el-button>
-        <el-button type="warning" :icon="Operation" @click="openAssign">批量分配</el-button>
-        <el-tooltip content="按域名匹配 K8s 入口(Istio VirtualService/Ingress/HTTPRoute)自动填模块(VS名=后端去-svc)，只补空的，不覆盖手填" placement="top">
+        <el-button v-if="canRecords" type="warning" :icon="Operation" @click="openAssign">批量分配</el-button>
+        <el-tooltip v-if="canManage" content="按域名匹配 K8s 入口(Istio VirtualService/Ingress/HTTPRoute)自动填模块(VS名=后端去-svc)，只补空的，不覆盖手填" placement="top">
           <el-button :icon="MagicStick" :loading="autoLinking" @click="autoLink">K8s自动关联模块</el-button>
         </el-tooltip>
-        <el-tooltip content="只刷库里已有域名的 DNS 解析；发现新域名请去「DNS 记录」页点右上「从数据源同步」" placement="top">
+        <el-tooltip v-if="canSync" content="只刷库里已有域名的 DNS 解析；发现新域名请去「DNS 记录」页点右上「从数据源同步」" placement="top">
           <el-button :icon="Refresh" :loading="syncingAll" @click="syncAll">刷新已有域名的解析</el-button>
         </el-tooltip>
-        <el-button type="primary" :icon="Plus" @click="openAdd">录入解析</el-button>
+        <el-button v-if="canRecords" type="primary" :icon="Plus" @click="openAdd">录入解析</el-button>
       </div>
       <div v-else>
-        <el-dropdown v-if="domSelected.length" style="margin-right:8px" @command="(v) => setDomStatus(domSelected, v === '__clear__' ? '' : v)">
+        <el-dropdown v-if="canManage && domSelected.length" style="margin-right:8px" @command="(v) => setDomStatus(domSelected, v === '__clear__' ? '' : v)">
           <el-button type="primary" :icon="EditPen">批量设使用状态（{{ domSelected.length }}）<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
           <template #dropdown><el-dropdown-menu>
             <el-dropdown-item v-for="s in app.domainStatuses" :key="s.id" :command="s.label"><span :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: s.color, marginRight:'6px' }" />{{ s.label }}</el-dropdown-item>
             <el-dropdown-item command="__clear__" divided>清除状态</el-dropdown-item>
           </el-dropdown-menu></template>
         </el-dropdown>
-        <el-button v-if="expiredDomains.length" type="warning" :icon="Hide" @click="ignoreExpired">一键忽略已过期（{{ expiredDomains.length }}）</el-button>
-        <el-tooltip content="只刷注册到期：数据源域名由同步维护(跳过)，仅查手动录入域名(RDAP→WHOIS+重试)；证书到期见「到期巡检」" placement="top">
+        <el-button v-if="canManage && expiredDomains.length" type="warning" :icon="Hide" @click="ignoreExpired">一键忽略已过期（{{ expiredDomains.length }}）</el-button>
+        <el-tooltip v-if="canSync" content="只刷注册到期：数据源域名由同步维护(跳过)，仅查手动录入域名(RDAP→WHOIS+重试)；证书到期见「到期巡检」" placement="top">
           <el-button :icon="Refresh" :loading="refreshingAll" @click="refreshAllDom">刷新到期</el-button>
         </el-tooltip>
+        <el-button v-if="canManage" type="warning" :icon="RefreshRight" @click="openBatchRenew">批量续费</el-button>
         <el-button :icon="Tickets" @click="openRenewLog">续费记录</el-button>
-        <el-button type="primary" :icon="Plus" @click="openAddDomain">录入域名</el-button>
+        <el-button v-if="canManage" type="primary" :icon="Plus" @click="openAddDomain">录入域名</el-button>
       </div>
     </div>
 
@@ -155,10 +156,10 @@
         <el-table-column label="操作" width="172" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
             <el-tooltip content="查看详情"><el-button link type="primary" :icon="View" @click="openDetail(row)" /></el-tooltip>
-            <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEdit(row)" /></el-tooltip>
-            <el-tooltip content="检测证书"><el-button link type="primary" :loading="checking[row.id]" :icon="CircleCheck" @click="checkCert(row)" /></el-tooltip>
-            <el-tooltip v-if="!row.ignored" content="忽略此解析"><el-button link type="warning" :icon="Hide" @click="openIgnore([row])" /></el-tooltip>
-            <el-tooltip v-else content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="doUnignore([row])" /></el-tooltip>
+            <el-tooltip v-if="canRecords" content="编辑"><el-button link type="primary" :icon="Edit" @click="openEdit(row)" /></el-tooltip>
+            <el-tooltip v-if="canCert" content="检测证书"><el-button link type="primary" :loading="checking[row.id]" :icon="CircleCheck" @click="checkCert(row)" /></el-tooltip>
+            <el-tooltip v-if="canRecords && !row.ignored" content="忽略此解析"><el-button link type="warning" :icon="Hide" @click="openIgnore([row])" /></el-tooltip>
+            <el-tooltip v-else-if="canRecords" content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="doUnignore([row])" /></el-tooltip>
             <el-tooltip v-if="row.origin === 'manual' || row.stale" :content="row.stale ? '移除（已移出账号）' : '删除'">
               <el-button link type="danger" :icon="Delete" @click="del(row)" />
             </el-tooltip>
@@ -216,10 +217,10 @@
             <el-table-column label="操作" width="150"><template #default="{ row }">
               <div style="display:flex;gap:8px;align-items:center">
                 <el-tooltip content="查看详情"><el-button link type="primary" :icon="View" @click="openDetail(row)" /></el-tooltip>
-                <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEdit(row)" /></el-tooltip>
-                <el-tooltip content="检测证书"><el-button link type="primary" :loading="checking[row.id]" :icon="CircleCheck" @click="checkCert(row)" /></el-tooltip>
-                <el-tooltip v-if="!row.ignored" content="忽略此解析"><el-button link type="warning" :icon="Hide" @click="openIgnore([row])" /></el-tooltip>
-                <el-tooltip v-else content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="doUnignore([row])" /></el-tooltip>
+                <el-tooltip v-if="canRecords" content="编辑"><el-button link type="primary" :icon="Edit" @click="openEdit(row)" /></el-tooltip>
+                <el-tooltip v-if="canCert" content="检测证书"><el-button link type="primary" :loading="checking[row.id]" :icon="CircleCheck" @click="checkCert(row)" /></el-tooltip>
+                <el-tooltip v-if="canRecords && !row.ignored" content="忽略此解析"><el-button link type="warning" :icon="Hide" @click="openIgnore([row])" /></el-tooltip>
+                <el-tooltip v-else-if="canRecords" content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="doUnignore([row])" /></el-tooltip>
               </div>
             </template></el-table-column>
           </el-table>
@@ -310,15 +311,15 @@
         </template></el-table-column>
         <el-table-column label="操作" width="180" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
-            <el-tooltip content="刷到期（WHOIS+443）"><el-button link type="primary" :loading="refreshingDom[row.ci_id]" :icon="Refresh" @click="refreshOneDom(row)" /></el-tooltip>
-            <el-tooltip v-if="canRenew(row)" content="续费 / 自动续费（写回 GoDaddy）"><el-button link type="warning" :icon="RefreshRight" @click="openRenew(row)" /></el-tooltip>
-            <template v-if="row.origin === 'manual'">
+            <el-tooltip v-if="canSync" content="刷到期（WHOIS+443）"><el-button link type="primary" :loading="refreshingDom[row.ci_id]" :icon="Refresh" @click="refreshOneDom(row)" /></el-tooltip>
+            <el-tooltip v-if="canManage && canRenew(row)" content="续费 / 自动续费（写回 GoDaddy）"><el-button link type="warning" :icon="RefreshRight" @click="openRenew(row)" /></el-tooltip>
+            <template v-if="canManage && row.origin === 'manual'">
               <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openEditDomain(row)" /></el-tooltip>
               <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
             </template>
-            <el-tooltip v-else-if="row.stale" content="移除（已移出账号）"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
-            <el-tooltip v-if="!row.ignored" content="忽略域名"><el-button link type="warning" :icon="Hide" @click="ignoreDomains([row], true)" /></el-tooltip>
-            <el-tooltip v-else content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="ignoreDomains([row], false)" /></el-tooltip>
+            <el-tooltip v-else-if="canManage && row.stale" content="移除（已移出账号）"><el-button link type="danger" :icon="Delete" @click="delDomain(row)" /></el-tooltip>
+            <el-tooltip v-if="canManage && !row.ignored" content="忽略域名"><el-button link type="warning" :icon="Hide" @click="ignoreDomains([row], true)" /></el-tooltip>
+            <el-tooltip v-else-if="canManage" content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="ignoreDomains([row], false)" /></el-tooltip>
           </div>
         </template></el-table-column>
       </el-table>
@@ -391,6 +392,75 @@
     </el-dialog>
 
     <!-- 续费记录台账（防超付可查：报价/订单号/到期前后/操作人） -->
+    <!-- 批量续费：两步（先预览确认，再执行），真金白银不做一步到位 -->
+    <el-dialog v-model="batchRenew.show" title="批量续费" width="880px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" show-icon style="margin-bottom:12px"
+        title="续费会真实扣费。请先「检查」确认清单无误，再执行；结果以订单号为准。" />
+
+      <div v-if="batchRenew.step === 'input'">
+        <el-form label-width="90px">
+          <el-form-item label="域名列表">
+            <el-input v-model="batchRenew.text" type="textarea" :rows="8"
+                      placeholder="一行一个，也支持逗号/空格分隔。大小写、http(s):// 前缀会自动规整。" />
+            <div class="muted" style="margin-top:4px">一次最多 {{ 50 }} 个；重复的只会处理一次</div>
+          </el-form-item>
+          <el-form-item label="续费年数">
+            <el-input-number v-model="batchRenew.period" :min="1" :max="10" controls-position="right" style="width:130px" />
+          </el-form-item>
+        </el-form>
+      </div>
+
+      <div v-else>
+        <div class="brsum">
+          <el-tag type="success" effect="plain">可续 {{ batchRenew.renewable }} 个</el-tag>
+          <el-tag v-if="cntBy('not_found')" type="danger" effect="plain">未找到 {{ cntBy('not_found') }}</el-tag>
+          <el-tag v-if="cntBy('unsupported')" type="warning" effect="plain">不支持写回 {{ cntBy('unsupported') }}</el-tag>
+          <el-tag v-if="cntBy('duplicated')" type="info" effect="plain">重复 {{ cntBy('duplicated') }}</el-tag>
+          <el-tag v-if="cntBy('renewed')" type="success">已续 {{ cntBy('renewed') }}</el-tag>
+          <el-tag v-if="cntBy('failed')" type="danger">失败 {{ cntBy('failed') }}</el-tag>
+          <span class="muted" style="margin-left:auto">续费年数：{{ batchRenew.period }} 年</span>
+        </div>
+        <el-alert v-if="batchRenew.warning" type="warning" :closable="false" show-icon
+                  style="margin-bottom:10px" :title="batchRenew.warning" />
+        <el-table :data="batchRenew.items" size="small" max-height="380" border>
+          <el-table-column prop="domain" label="域名" min-width="180" show-overflow-tooltip />
+          <el-table-column label="状态" width="110">
+            <template #default="{ row }">
+              <el-tag size="small" :type="brType(row.status)" effect="plain">{{ brLabel(row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="到期日" min-width="180">
+            <template #default="{ row }">
+              <span v-if="row.expiry_before">
+                {{ row.expiry_before }}
+                <span v-if="row.expiry_after"> → <b class="ok">{{ row.expiry_after }}</b></span>
+                <span v-else-if="row.expiry_expect" class="muted"> → {{ row.expiry_expect }}（预计）</span>
+              </span>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="订单号 / 说明" min-width="230" show-overflow-tooltip>
+            <template #default="{ row }">
+              <code v-if="row.order_id">{{ row.order_id }}</code>
+              <span v-else class="muted">{{ row.reason || '—' }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <template #footer>
+        <el-button @click="batchRenew.show = false">关闭</el-button>
+        <template v-if="batchRenew.step === 'input'">
+          <el-button type="primary" :loading="batchRenew.checking" @click="doPreviewBatch">检查</el-button>
+        </template>
+        <template v-else-if="batchRenew.step === 'preview'">
+          <el-button @click="batchRenew.step = 'input'">返回修改</el-button>
+          <el-button type="warning" :disabled="!batchRenew.renewable" :loading="batchRenew.running"
+                     @click="doBatchRenew">确认续费 {{ batchRenew.renewable }} 个（{{ batchRenew.period }} 年）</el-button>
+        </template>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="renewLog.show" title="续费记录" width="920px" :close-on-click-modal="false">
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:10px"
         title="平台报价为下单前挂牌估算；精确扣费以 GoDaddy 账单为准，凭订单号核对。到期「前→后」可核对是否只续了所选年数（防超付）。" />
@@ -672,12 +742,89 @@ import { useDomainFilter } from '../composables/useDomainFilter'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgnoreRecords, deleteRecord, checkRecordCert,
   syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains, bulkIgnoreDomains,
   listOriginRules, upsertOriginRule, deleteOriginRule, bulkDomainStatus,
-  godaddyDetail, renewDomain, setAutoRenew, listRenewals, autoLinkDomainModules } from '../api/cmdb'
+  godaddyDetail, renewDomain, setAutoRenew, listRenewals, autoLinkDomainModules,
+  previewBatchRenew, batchRenewDomains } from '../api/cmdb'
 import { normalizeError } from '../api/http'
 import LoadError from '../components/LoadError.vue'
 import { useAppStore } from '../stores/app'
+import { useAuthStore } from '../stores/auth'
 
 const app = useAppStore()
+// 按钮级权限。前端只管显隐，真正的拦截在后端 perm.go——
+// 少一个 v-if 是"看得见点了报错"的体验问题，不是安全问题。
+const auth = useAuthStore()
+const canManage = computed(() => auth.hasButton('manage_domains'))
+const canSync = computed(() => auth.hasButton('sync_domains'))
+const canCert = computed(() => auth.hasButton('manage_certs'))
+const canRecords = computed(() => auth.hasButton('manage_records'))
+
+// ── 批量续费 ──
+// 两步走：input（粘域名）→ preview（看清单）→ 执行。
+// 中间那一步不是多余的仪式：打错一个字母就会静默跳过某个该续的域名，
+// 而"跳过"在一屏结果里最容易被眼睛滑过去。
+const batchRenew = reactive({
+  show: false, step: 'input', text: '', period: 1,
+  items: [], renewable: 0, warning: '', checking: false, running: false,
+})
+
+function openBatchRenew() {
+  Object.assign(batchRenew, { show: true, step: 'input', text: '', period: 1,
+    items: [], renewable: 0, warning: '', checking: false, running: false })
+}
+
+function cntBy(st) { return batchRenew.items.filter((x) => x.status === st).length }
+function brLabel(st) {
+  return { ok: '可续费', renewed: '已续费', failed: '失败', not_found: '未找到',
+    unsupported: '不支持', duplicated: '重复' }[st] || st
+}
+function brType(st) {
+  return { ok: 'success', renewed: 'success', failed: 'danger', not_found: 'danger',
+    unsupported: 'warning', duplicated: 'info' }[st] || 'info'
+}
+
+async function doPreviewBatch() {
+  if (!batchRenew.text.trim()) { ElMessage.warning('请先粘贴域名'); return }
+  batchRenew.checking = true
+  try {
+    const r = await previewBatchRenew({ domains: batchRenew.text, period: batchRenew.period })
+    batchRenew.items = r.items || []
+    batchRenew.renewable = r.renewable || 0
+    batchRenew.warning = r.warning || ''
+    batchRenew.step = 'preview'
+    if (!batchRenew.renewable) ElMessage.warning('清单里没有可续费的域名，请检查')
+  } catch (e) {
+    ElMessage.error(e?.message || '检查失败')
+  } finally { batchRenew.checking = false }
+}
+
+async function doBatchRenew() {
+  // 二次确认写明数量和年数——这是花钱的操作，不能让人点得太顺手
+  try {
+    await app.showConfirm(
+      `将为 ${batchRenew.renewable} 个域名各续费 ${batchRenew.period} 年，这会真实扣费且无法回滚。确定继续？`,
+      '确认批量续费')
+  } catch (_) { return }
+  batchRenew.running = true
+  try {
+    const r = await batchRenewDomains({
+      domains: batchRenew.text, period: batchRenew.period,
+      confirm_count: batchRenew.renewable,   // 服务端会核对，对不上说明台账变过
+    })
+    batchRenew.items = r.items || []
+    batchRenew.renewable = 0
+    if (r.failed) ElMessage.warning(r.msg)
+    else ElMessage.success(r.msg)
+    load()
+  } catch (e) {
+    // 409 = 预览之后台账变了，必须重新看一遍
+    const d = e?.raw?.response?.data
+    if (e?.status === 409) {
+      batchRenew.items = d?.items || batchRenew.items
+      batchRenew.step = 'preview'
+    }
+    ElMessage.error(d?.error || e?.message || '批量续费失败')
+  } finally { batchRenew.running = false }
+}
 
 // 从 K8s 入口自动填模块(只补空的)
 const autoLinking = ref(false)
@@ -1192,6 +1339,9 @@ onMounted(load)
 </script>
 
 <style scoped>
+.brsum { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.brsum .muted { font-size: 12px; }
+.ok { color: #2f7d31; }
 .filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 .stale { text-decoration: line-through; color: #b0b3bb; }

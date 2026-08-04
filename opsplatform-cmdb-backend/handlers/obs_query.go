@@ -226,7 +226,7 @@ func (h *ObsQueryHandler) pvcAccuracy(usage map[string]map[string]float64, share
 		if sc, ok := shared[k]; ok {
 			out[k] = map[string]string{
 				"level": "node-fs",
-				"note": "该卷由 " + sc + " 分配，与宿主机共用文件系统，此处显示的是**宿主机整体水位**，" +
+				"note": "该卷由 " + sc + " 分配，与宿主机共用文件系统，此处显示的是「宿主机整体水位」，" +
 					"不代表本卷实际用量；同节点上的卷会看到相同数值",
 			}
 		}
@@ -317,12 +317,14 @@ func (h *ObsQueryHandler) PodUsage(c *gin.Context) {
 		return usage[k]
 	}
 	lbl := promLabels(sel, `container!=""`)
-	if cpu, err := promInstant(base, token, `sum by(namespace,pod)(rate(container_cpu_usage_seconds_total`+lbl+`[5m]))`); err == nil {
+	// PROD-014：同一容器有 3 条重复 series，不去重会虚高 3 倍
+	warnIfDuplicateSeries(base, token, lbl)
+	if cpu, err := promInstant(base, token, dedupContainerSum("namespace,pod", `rate(container_cpu_usage_seconds_total`+lbl+`[5m])`)); err == nil {
 		for _, s := range cpu {
 			get(s.Metric["namespace"] + "/" + s.Metric["pod"])["cpu_m"] = s.Value * 1000
 		}
 	}
-	if mem, err := promInstant(base, token, `sum by(namespace,pod)(container_memory_working_set_bytes`+lbl+`)`); err == nil {
+	if mem, err := promInstant(base, token, dedupContainerSum("namespace,pod", `container_memory_working_set_bytes`+lbl)); err == nil {
 		for _, s := range mem {
 			get(s.Metric["namespace"] + "/" + s.Metric["pod"])["mem_mi"] = s.Value / 1048576
 		}
@@ -376,6 +378,24 @@ func (h *ObsQueryHandler) NodeUsage(c *gin.Context) {
 		for _, s := range disk {
 			if k := nodeKey(s.Metric); k != "" {
 				get(k)["disk_pct"] = s.Value
+			}
+		}
+	}
+	// 光给百分比不够用：「88%」是 98GB 的 88% 还是 1TB 的 88%，处置动作完全不同
+	// （前者立刻要清，后者还能扛一阵）。把总量和已用量一并给出（CMDB-011）。
+	if total, err := promInstant(base, token,
+		`sum by(node,instance)(node_filesystem_size_bytes`+diskLbl+`) / 1024 / 1024 / 1024`); err == nil {
+		for _, s := range total {
+			if k := nodeKey(s.Metric); k != "" {
+				get(k)["disk_total_gb"] = s.Value
+			}
+		}
+	}
+	if used, err := promInstant(base, token,
+		`sum by(node,instance)(node_filesystem_size_bytes`+diskLbl+` - node_filesystem_avail_bytes`+diskLbl+`) / 1024 / 1024 / 1024`); err == nil {
+		for _, s := range used {
+			if k := nodeKey(s.Metric); k != "" {
+				get(k)["disk_used_gb"] = s.Value
 			}
 		}
 	}
@@ -482,16 +502,16 @@ func buildPromQL(target, ns, name, metric, selector, hostSel string) string {
 	case "pod":
 		lbl := promLabels(selector, fmt.Sprintf("namespace=%q,pod=%q", ns, name), `container!=""`)
 		if metric == "mem" {
-			return `sum(container_memory_working_set_bytes` + lbl + `)`
+			return dedupContainerSum("", `container_memory_working_set_bytes`+lbl)
 		}
-		return `sum(rate(container_cpu_usage_seconds_total` + lbl + `[5m]))`
+		return dedupContainerSum("", `rate(container_cpu_usage_seconds_total`+lbl+`[5m])`)
 	case "workload":
 		// 按 Pod 分组 → 图上一个服务的每个 Pod 各一条线
 		lbl := promLabels(selector, fmt.Sprintf("namespace=%q,pod=~%q", ns, name+"-.*"), `container!=""`)
 		if metric == "mem" {
-			return `sum by(pod)(container_memory_working_set_bytes` + lbl + `)`
+			return dedupContainerSum("pod", `container_memory_working_set_bytes`+lbl)
 		}
-		return `sum by(pod)(rate(container_cpu_usage_seconds_total` + lbl + `[5m]))`
+		return dedupContainerSum("pod", `rate(container_cpu_usage_seconds_total`+lbl+`[5m])`)
 	case "node":
 		// 节点：用 node-exporter 绝对用量(核/字节)，与 Pod 单位一致；按 node 标签匹配。
 		if metric == "mem" {

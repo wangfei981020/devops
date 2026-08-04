@@ -19,11 +19,16 @@
         <el-button :icon="Search" @click="reload">查询</el-button>
         <el-switch v-model="onlyBad" active-text="只看异常" style="margin-left:6px" @change="reload" />
         <span class="muted" style="margin-left:auto">
-          共 {{ ov.total }} · <b style="color:#67c23a">Running {{ ov.running }}</b>
-          <b v-if="ov.failed" style="color:#f56c6c;margin-left:8px">失败 {{ ov.failed }}</b>
-          <b v-if="ov.pending" style="color:#e6a23c;margin-left:8px">Pending {{ ov.pending }}</b>
+          <template v-if="error">共 — · <b style="color:#f56c6c">数据未加载</b></template>
+          <template v-else-if="!ov">共 — · <span style="color:#e6a23c">概览未取到</span></template>
+          <template v-else>
+            共 {{ ov.total }} · <b style="color:#67c23a">Running {{ ov.running }}</b>
+            <b v-if="ov.failed" style="color:#f56c6c;margin-left:8px">失败 {{ ov.failed }}</b>
+            <b v-if="ov.pending" style="color:#e6a23c;margin-left:8px">Pending {{ ov.pending }}</b>
+          </template>
         </span>
       </div>
+      <LoadError :error="error" title="Pod 未加载" @retry="load" />
       <el-table :data="rows" size="small" v-loading="loading" :row-class-name="rowClass">
         <el-table-column prop="namespace" label="命名空间" width="140" />
         <el-table-column prop="name" label="Pod" min-width="240" />
@@ -94,7 +99,7 @@
           </div>
         </div>
       </el-dialog>
-      <el-empty v-if="!loading && !rows.length" description="无数据，先去集群管理点「同步」" />
+      <el-empty v-if="!loading && !error && !rows.length" description="无数据，先去集群管理点「同步」" />
     </el-card>
   </div>
 </template>
@@ -104,17 +109,22 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { listK8sClusters, listK8sPods, listK8sNamespaces, listK8sNodes, k8sPodLogs, k8sPodEvents, k8sDiagnose, k8sPodUsage, k8sNsOverview } from '../api/cmdb'
+import { pickDefaultCluster } from '../composables/useClusterPick'
+import { useLoadState } from '../composables/useLoadState'
+import { normalizeError } from '../api/http'
+import LoadError from '../components/LoadError.vue'
 import Pager from '../components/Pager.vue'
 
 // Pod 量可上千 → 服务端分页；概览走 ns-overview(整集群/命名空间统计,不受当前页限制)
 const clusters = ref([]); const namespaces = ref([]); const nodeList = ref([]); const rows = ref([]); const usage = ref({}); const onlyBad = ref(false)
-const page = ref(1); const pageSize = ref(20); const total = ref(0); const ov = ref({ total: 0, running: 0, failed: 0, pending: 0 })
+const page = ref(1); const pageSize = ref(20); const total = ref(0); const ov = ref(null)
 function isBad(r) { return (r.phase !== 'Running' && r.phase !== 'Succeeded') || !!r.reason || r.restarts > 5 }
 function rowClass({ row }) { return isBad(row) ? 'bad-row' : '' }
 function reload() { page.value = 1; load() }
 function onPage(p) { page.value = p; load() }
 function onSize(s) { pageSize.value = s; page.value = 1; load() }
-const clusterId = ref(null); const ns = ref(''); const node = ref(''); const q = ref(''); const loading = ref(false)
+const clusterId = ref(null); const ns = ref(''); const node = ref(''); const q = ref('')
+const { loading, error, run } = useLoadState()
 const dlg = ref(false); const dlgMode = ref(''); const dlgTitle = ref(''); const dlgLoading = ref(false)
 const logText = ref(''); const events = ref([]); const diag = ref({})
 
@@ -147,24 +157,29 @@ async function onCluster() {
 
 async function load() {
   if (!clusterId.value) return
-  loading.value = true
-  try {
+  // 失败落到页面 error：否则「无数据，先去集群管理点同步」会把接口故障说成"这个集群没有 Pod"
+  const r = await run(() => {
     const p = { cluster_id: clusterId.value, page: page.value, page_size: pageSize.value }
     if (ns.value) p.namespace = ns.value
     if (node.value) p.node = node.value
     if (q.value) p.q = q.value
     if (onlyBad.value) p.bad = 1
-    const r = await listK8sPods(p)
-    rows.value = r.items || r; total.value = r.total ?? (r.items ? r.items.length : r.length)
-    loadUsage(); loadOverview()
-  } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+    return listK8sPods(p)
+  })
+  if (error.value) { rows.value = []; total.value = 0; ov.value = null; return }
+  rows.value = r.items || r; total.value = r.total ?? (r.items ? r.items.length : r.length)
+  loadUsage(); loadOverview()
 }
 
 async function loadOverview() {
   try {
     const o = await k8sNsOverview({ cluster_id: clusterId.value, namespace: ns.value })
     ov.value = o
-  } catch (e) { ov.value = { total: 0, running: 0, failed: 0, pending: 0 } }
+  } catch (e) {
+    // 取不到就置 null（模板显示 —），绝不退化成全 0：
+    // 「共 0 · Running 0」会被读成"这个命名空间一个 Pod 都没有"，而真相是概览没取到。
+    ov.value = null
+  }
 }
 
 async function loadUsage() {
@@ -193,7 +208,7 @@ function pctStyle(p) { return { color: p >= 85 ? '#f56c6c' : (p >= 60 ? '#e6a23c
 onMounted(async () => {
   try {
     clusters.value = await listK8sClusters()
-    if (clusters.value.length) { clusterId.value = clusters.value[0].id; onCluster() }
+    if (clusters.value.length) { clusterId.value = pickDefaultCluster(clusters.value); onCluster() }
   } catch (e) { ElMessage.error('加载集群失败') }
 })
 </script>

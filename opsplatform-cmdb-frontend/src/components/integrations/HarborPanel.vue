@@ -11,7 +11,7 @@
     </div>
 
     <div style="margin-bottom:10px">
-      <el-button type="primary" size="small" @click="open()">+ 添加 Harbor</el-button>
+      <el-button v-if="canIntegr" type="primary" size="small" @click="open()">+ 添加 Harbor</el-button>
       <el-button size="small" :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </div>
 
@@ -31,10 +31,10 @@
         <el-tag size="small" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '是' : '否' }}</el-tag>
       </template></el-table-column>
       <el-table-column label="操作" width="200" fixed="right"><template #default="{ row }">
-        <el-button link type="warning" size="small" :loading="busy['t' + row.id]" @click="test(row)">测试</el-button>
+        <el-button v-if="canIntegr" link type="warning" size="small" :loading="busy['t' + row.id]" @click="test(row)">测试</el-button>
         <el-button link type="success" size="small" :loading="busy['s' + row.id]" @click="showStatus(row)">状态</el-button>
-        <el-button link type="primary" size="small" @click="open(row)">编辑</el-button>
-        <el-button link type="danger" size="small" @click="del(row)">删除</el-button>
+        <el-button v-if="canIntegr" link type="primary" size="small" @click="open(row)">编辑</el-button>
+        <el-button v-if="canIntegr" link type="danger" size="small" @click="del(row)">删除</el-button>
       </template></el-table-column>
     </el-table>
     <el-empty v-if="!loading && !rows.length" description="还没接入 Harbor，点上面「添加」" :image-size="60" />
@@ -114,7 +114,8 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { computed, ref, reactive } from 'vue'
+import { useAuthStore } from '../../stores/auth'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import {
@@ -123,6 +124,9 @@ import {
 } from '../../api/cmdb'
 import { useAppStore } from '../../stores/app'
 
+// 接入凭据 = 各系统的钥匙，权限最高危；同步是另一回事，不能顺带给出去
+const auth = useAuthStore()
+const canIntegr = computed(() => auth.hasButton('manage_integrations'))
 const app = useAppStore()
 const rows = ref([]); const loading = ref(false); const busy = reactive({})
 const dlg = ref(false); const editing = ref(false)

@@ -6,7 +6,7 @@
     </div>
 
     <div style="margin-bottom:10px">
-      <el-button type="primary" size="small" @click="openReg">+ 添加注册商</el-button>
+      <el-button v-if="canIntegr" type="primary" size="small" @click="openReg">+ 添加注册商</el-button>
       <el-button size="small" :icon="Refresh" :loading="usageLoading" @click="loadUsage">刷新 API 用量</el-button>
       <span class="muted" style="margin-left:10px">客户端限流 50/分钟（GoDaddy 真限 60，留 10 缓冲）</span>
     </div>
@@ -31,8 +31,8 @@
       <el-table-column label="今日累计" width="90"><template #default="{ row }">{{ usage[row.id]?.today_total ?? '—' }}</template></el-table-column>
       <el-table-column label="最近限流" min-width="150"><template #default="{ row }">{{ usage[row.id]?.last_limited_at || '—' }}</template></el-table-column>
       <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }">
-        <el-button link type="primary" size="small" @click="editReg(row)">编辑</el-button>
-        <el-button link type="danger" size="small" @click="delReg(row)">删除</el-button>
+        <el-button v-if="canIntegr" link type="primary" size="small" @click="editReg(row)">编辑</el-button>
+        <el-button v-if="canIntegr" link type="danger" size="small" @click="delReg(row)">删除</el-button>
       </template></el-table-column>
     </el-table>
     <el-empty v-if="!loading && !registrars.length" description="还没配注册商" :image-size="60" />
@@ -64,12 +64,16 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import { useAuthStore } from '../../stores/auth'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { listRegistrars, createRegistrar, updateRegistrar, deleteRegistrar, sourceUsage } from '../../api/cmdb'
 import { useAppStore } from '../../stores/app'
 
+// 接入凭据 = 各系统的钥匙，权限最高危；同步是另一回事，不能顺带给出去
+const auth = useAuthStore()
+const canIntegr = computed(() => auth.hasButton('manage_integrations'))
 const app = useAppStore()
 const providers = ['godaddy', 'dnspod', 'aliyun', 'cloudflare', 'tencent']
 const credFields = {

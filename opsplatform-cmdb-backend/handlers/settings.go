@@ -47,6 +47,6 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 			return
 		}
 	}
-	WriteAudit(h.DB, c, "update_settings", "")
+	SetAuditTarget(c, "")
 	c.JSON(200, gin.H{"ok": true})
 }

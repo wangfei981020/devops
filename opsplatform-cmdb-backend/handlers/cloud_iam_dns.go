@@ -84,7 +84,7 @@ func (h *NetworkHandler) ListIAM(c *gin.Context) {
 		// 「查不到」和「没有风险」必须分开——IAM 一条都没有是不可能的，
 		// 只可能是没采到（无凭据 / 权限不足 / API 未启用）。
 		out["empty_hint"] = "没有任何 IAM 数据。任何 GCP 项目都至少有一条权限绑定，" +
-			"所以这说明**尚未采集成功**，而不是「没有风险」。请检查云账号凭据是否已配置，" +
+			"所以这说明「尚未采集成功」，而不是「没有风险」。请检查云账号凭据是否已配置，" +
 			"以及服务账号是否有 roles/iam.securityReviewer（或 roles/viewer）；采集日志见 [gcp-iam] 开头的行"
 	}
 	c.JSON(http.StatusOK, out)

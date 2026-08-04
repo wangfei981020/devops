@@ -11,7 +11,7 @@
       <el-menu class="nav" :default-active="route.path" router :collapse="collapsed" :collapse-transition="false"
                :default-openeds="['资产管理','系统管理']"
                background-color="transparent" text-color="#c0c4d0" active-text-color="#fff">
-        <template v-for="m in menus" :key="m.label || m.path">
+        <template v-for="m in visibleMenus" :key="m.label || m.path">
           <el-menu-item v-if="m.type === 'item'" :index="m.path">
             <el-icon><component :is="m.icon" /></el-icon>
             <template #title>{{ m.label }}</template>
@@ -51,9 +51,10 @@
 </template>
 
 <script setup>
-import { shallowRef, ref } from 'vue'
+import { shallowRef, ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Odometer, Connection, Lock, Share, DataAnalysis, Grid, Operation, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets, Cloudy, Location, Sort, TrendCharts } from '@element-plus/icons-vue'
+import { permOf as permOfPath } from './router'
+import { Odometer, Connection, Lock, Share, Grid, Operation, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets, Cloudy, Location, Sort, TrendCharts, Document } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
@@ -99,7 +100,10 @@ const menus = shallowRef([
   { type: 'item', path: '/event-center', label: '事件中心', icon: Bell },
   { type: 'item', path: '/k8s-usage', label: '资源使用率', icon: TrendCharts },
   { type: 'item', path: '/cost', label: '云成本', icon: Coin },
-  { type: 'item', path: '/dashboard', label: '展示台', icon: DataAnalysis },
+  // 「展示台」已删除：它和总览用的是同一个 /dashboard 接口，7 个 KPI 全部是总览的子集，
+  // 两个"独有"图表实测都是废的——按环境分布饼图 100% 落在「未分类」（cis.env 无人填写），
+  // 到期倒计时图整块空白；反而漏掉了总览里最该上墙的「线上证书检测失败」。
+  // /dashboard 路由保留为重定向到总览，老书签不至于 404。
   // ⚠️ 这里原来用 Setting（齿轮）。它的 SVG path 长 1403 字符，是全站 37 个菜单图标里
   // 唯一的断层离群值（中位数 185，第二名 443），在部分 Windows Chrome 上**渲染不出来**——
   // DOM、尺寸(24x18)、fill、opacity 全部正常，强制 fill:red 也依然不可见。
@@ -107,16 +111,41 @@ const menus = shallowRef([
   { type: 'group', label: '系统管理', icon: Operation, children: [
     { path: '/basic', label: '基础配置', icon: Tools },
     { path: '/integrations', label: '接入管理', icon: Cloudy },
-    { path: '/models', label: '模型管理', icon: Grid },
+    // 「模型管理」整页只有一个 2 行只读表格、无任何操作，已并入「基础配置 → CI 类型」卡片。
+    // /models 路由保留并重定向，老书签不至于 404。
     { path: '/notify', label: '通知', icon: Bell },
     { path: '/cron', label: '定时任务', icon: Clock },
     { path: '/task-runs', label: '执行记录', icon: Tickets },
+    { path: '/audit', label: '操作审计', icon: Document },
     // 「AI 接入」并进「接入管理」的 mcp tab：它就是一个接入点 + 一份凭据，
     // 和注册商/云账号/观测数据源同类，不值得单占一个菜单位。/mcp 路由保留做兼容跳转
     // 「设置」整页只剩一个指标导出白名单，已并进「基础配置」，菜单去掉这一项。
     // /settings 路由保留并重定向，老书签不至于 404
   ] },
 ])
+
+// 按权限过滤菜单。
+//
+//	分组本身不发权限：只要组里还有一个子项可见就渲染这个组，
+//	一个子项都不剩就整组隐藏——否则会出现点开是空的分组。
+//	路径 → 权限页代号复用 router 里那张表，两处只有一份真相。
+const visibleMenus = computed(() => {
+  if (auth.isLocal) return menus.value // 本地兜底账号看全部
+  const out = []
+  for (const m of menus.value) {
+    if (m.type === 'item') {
+      if (auth.hasMenu(permOfPath(m.path))) out.push(m)
+      continue
+    }
+    const children = m.children.filter(ch => auth.hasMenu(permOfPath(ch.path)))
+    if (children.length) out.push({ ...m, children })
+  }
+  return out
+})
+
+// 每次进入应用同步一次权限：管理员刚调过角色，用户刷新页面就能生效，
+// 不必等 24h 会话过期。失败静默——刷不到就沿用登录时的快照，不该把人挡在门外。
+onMounted(() => { auth.refreshPermissions?.().catch(() => {}) })
 
 function onCmd(c) {
   if (c === 'logout') { auth.logout(); router.replace('/login') }

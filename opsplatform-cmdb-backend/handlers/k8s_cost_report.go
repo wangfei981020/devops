@@ -98,7 +98,7 @@ func (h *K8sCostHandler) SnapshotNow(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "cost_snapshot", month)
+	SetAuditTarget(c, month)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "month": month, "rows": n})
 }
 

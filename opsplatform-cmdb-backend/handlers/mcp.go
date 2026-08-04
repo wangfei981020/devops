@@ -69,7 +69,7 @@ func (h *MCPHandler) Regenerate(c *gin.Context) {
 	_, _ = rand.Read(b)
 	tok := hex.EncodeToString(b)
 	_, _ = h.DB.Exec(`UPDATE mcp_config SET token=? WHERE id=1`, tok)
-	WriteAudit(h.DB, c, "regenerate_mcp_token", "")
+	SetAuditTarget(c, "")
 	c.JSON(http.StatusOK, gin.H{"token": tok})
 }
 
@@ -291,6 +291,9 @@ func (h *MCPHandler) callTool(c *gin.Context, req rpcReq) {
 	}
 	body, err := h.internalGet(tool.Path, q)
 	logx.J("mcp", "tool_call", map[string]any{"tool": p.Name, "args": p.Arguments, "err": errStr(err)})
+	// 标成 mcp：这是 AI 用机器身份调的，不是某个人在页面上点的，
+	// 审计里必须能一眼分开（MCP token 不受 RBAC 约束，它的调用更该被看见）
+	c.Set(ctxAuthSource, "mcp")
 	WriteAudit(h.DB, c, "mcp_tool:"+p.Name, tool.Path)
 	if err != nil {
 		c.JSON(http.StatusOK, rpcOK(req.ID, gin.H{"content": []gin.H{{"type": "text", "text": "调用失败: " + err.Error()}}, "isError": true}))

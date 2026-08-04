@@ -39,11 +39,11 @@ type healthFail func(item string, err error)
 
 // ClusterHealth GET /api/k8s/health?cluster_id=
 func (h *K8sResourceHandler) ClusterHealth(c *gin.Context) {
-	cid := c.Query("cluster_id")
-	if cid == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 必填"})
+	cidNum, ok := requireCluster(c, h.DB)
+	if !ok {
 		return
 	}
+	cid := itoa(cidNum)
 	var firstErr error
 	var firstItem string
 	fail := func(item string, err error) {

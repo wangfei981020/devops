@@ -3,7 +3,7 @@
     <div class="tip">证书签发用的 CA 账户。签发走 DNS-01 验证，验证时使用「域名注册商」tab 里配的凭据。</div>
 
     <div style="margin-bottom:10px">
-      <el-button type="primary" size="small" @click="openAcct">+ 添加账户</el-button>
+      <el-button v-if="canIntegr" type="primary" size="small" @click="openAcct">+ 添加账户</el-button>
     </div>
 
     <el-table :data="accounts" size="small" v-loading="loading">
@@ -13,7 +13,7 @@
         <el-tag size="small" :type="row.registered ? 'success' : 'info'">{{ row.registered ? '是' : '待签发' }}</el-tag>
       </template></el-table-column>
       <el-table-column label="操作" width="90" fixed="right"><template #default="{ row }">
-        <el-button link type="danger" size="small" @click="delAcct(row)">删除</el-button>
+        <el-button v-if="canIntegr" link type="danger" size="small" @click="delAcct(row)">删除</el-button>
       </template></el-table-column>
     </el-table>
     <el-empty v-if="!loading && !accounts.length" description="还没配 ACME 账户" :image-size="60" />
@@ -36,11 +36,15 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import { useAuthStore } from '../../stores/auth'
 import { ElMessage } from 'element-plus'
 import { listAcme, createAcme, deleteAcme } from '../../api/cmdb'
 import { useAppStore } from '../../stores/app'
 
+// 接入凭据 = 各系统的钥匙，权限最高危；同步是另一回事，不能顺带给出去
+const auth = useAuthStore()
+const canIntegr = computed(() => auth.hasButton('manage_integrations'))
 const app = useAppStore()
 const accounts = ref([]); const loading = ref(false)
 const acctDlg = ref(false); const acctForm = ref({})

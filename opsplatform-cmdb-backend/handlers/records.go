@@ -77,7 +77,7 @@ func (h *RecordHandler) UpsertOriginRule(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "origin_rule_upsert", in.Cname)
+	SetAuditTarget(c, in.Cname)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -241,7 +241,7 @@ func (h *RecordHandler) CheckAllCerts(c *gin.Context) {
 		}(r.id, r.host)
 	}
 	wg.Wait()
-	WriteAudit(h.DB, c, "check_all_certs", domain)
+	SetAuditTarget(c, domain)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "checked": len(recs), "success": ok, "failed": fail})
 }
 
@@ -336,7 +336,8 @@ func (h *RecordHandler) Create(c *gin.Context) {
 		return
 	}
 	id, _ := res.LastInsertId()
-	WriteAudit(h.DB, c, "create_record", in.Host)
+	AuditCreated(c, "domain_records", id)
+	SetAuditTarget(c, in.Host)
 	c.JSON(201, gin.H{"id": id})
 }
 
@@ -355,7 +356,7 @@ func (h *RecordHandler) Update(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "update_record", in.Host)
+	SetAuditTarget(c, in.Host)
 	c.JSON(200, gin.H{"ok": true})
 }
 
@@ -429,7 +430,7 @@ func (h *RecordHandler) BulkUpdate(c *gin.Context) {
 		return
 	}
 	n, _ := res.RowsAffected()
-	WriteAudit(h.DB, c, "bulk_update_records", "count="+strconv.FormatInt(n, 10))
+	SetAuditTarget(c, "count="+strconv.FormatInt(n, 10))
 	c.JSON(http.StatusOK, gin.H{"ok": true, "updated": n})
 }
 
@@ -466,7 +467,7 @@ func (h *RecordHandler) BulkIgnore(c *gin.Context) {
 	if !in.Ignored {
 		action = "unignore_records"
 	}
-	WriteAudit(h.DB, c, action, "count="+strconv.FormatInt(n, 10))
+	SetAuditTarget(c, action+" count="+strconv.FormatInt(n, 10))
 	c.JSON(http.StatusOK, gin.H{"ok": true, "updated": n})
 }
 
@@ -475,7 +476,7 @@ func (h *RecordHandler) Delete(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "delete_record", c.Param("id"))
+	SetAuditTarget(c, c.Param("id"))
 	c.JSON(200, gin.H{"ok": true})
 }
 

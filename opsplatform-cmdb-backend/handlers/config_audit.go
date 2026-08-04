@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -97,9 +96,8 @@ type refRow struct {
 // ConfigAudit 审计配置引用完整性。
 // 参数：cluster_id(必填)、namespace(可选)、include_unused(可选，默认不含未引用清单)
 func (h *K8sDiagHandler) ConfigAudit(c *gin.Context) {
-	cid, _ := strconv.Atoi(c.Query("cluster_id"))
-	if cid == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 必填"})
+	cid, ok := requireCluster(c, h.DB)
+	if !ok {
 		return
 	}
 	ns := c.Query("namespace")
@@ -249,7 +247,7 @@ func judgeRef(r refRow, idx map[string]cmEntry, sec secretInv, evidence map[stri
 // restartWarning 引用缺失但 Pod 还活着 = 定时炸弹：进程在跑只是因为它启动早于配置被删。
 func restartWarning(r refRow) string {
 	if r.badPods == 0 && len(r.pods) > 0 {
-		return "注意：这些 Pod 目前仍在运行（启动时该配置还在），但**下次重启会直接起不来**"
+		return "注意：这些 Pod 目前仍在运行（启动时该配置还在），但「下次重启会直接起不来」"
 	}
 	return "受影响 Pod 当前已处于异常状态"
 }

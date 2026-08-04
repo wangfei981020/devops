@@ -5,15 +5,15 @@
     <!-- Lark 群 -->
     <el-card shadow="never" style="margin-bottom:14px">
       <template #header><b>Lark 群</b><span class="muted" style="margin-left:8px">定时任务按群发通知，可加多个</span>
-        <el-button type="primary" size="small" style="float:right" @click="openGroup()">+ 添加群</el-button></template>
+        <el-button v-if="canManage" type="primary" size="small" style="float:right" @click="openGroup()">+ 添加群</el-button></template>
       <el-table :data="gPaged" size="small">
         <el-table-column prop="name" label="群名" width="180" />
         <el-table-column prop="webhook" label="Webhook" min-width="320" show-overflow-tooltip><template #default="{ row }"><span class="mono">{{ row.webhook }}</span></template></el-table-column>
         <el-table-column label="操作" width="170" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
-            <el-tooltip content="编辑"><el-button link type="primary" :icon="Edit" @click="openGroup(row)" /></el-tooltip>
-            <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delGroup(row)" /></el-tooltip>
-            <el-button link type="primary" :icon="Promotion" :loading="testingG[row.id]" @click="testGroup(row)">测试</el-button>
+            <el-tooltip v-if="canManage" content="编辑"><el-button link type="primary" :icon="Edit" @click="openGroup(row)" /></el-tooltip>
+            <el-tooltip v-if="canManage" content="删除"><el-button link type="danger" :icon="Delete" @click="delGroup(row)" /></el-tooltip>
+            <el-button v-if="canManage" link type="primary" :icon="Promotion" :loading="testingG[row.id]" @click="testGroup(row)">测试</el-button>
           </div>
         </template></el-table-column>
       </el-table>
@@ -36,13 +36,13 @@
       <el-form inline @submit.prevent="addUser" style="margin-bottom:12px">
         <el-form-item label="姓名"><el-input v-model="nu.name" style="width:140px" /></el-form-item>
         <el-form-item label="open_id"><el-input v-model="nu.open_id" placeholder="ou_xxxxxxxx" style="width:260px" /></el-form-item>
-        <el-button type="primary" :icon="Plus" @click="addUser">添加</el-button>
+        <el-button v-if="canManage" type="primary" :icon="Plus" @click="addUser">添加</el-button>
       </el-form>
       <el-table :data="uPaged" size="small">
         <el-table-column prop="name" label="姓名" width="160" />
         <el-table-column prop="open_id" label="open_id" min-width="260" />
         <el-table-column label="操作" width="80" fixed="right"><template #default="{ row }">
-          <el-tooltip content="删除"><el-button link type="danger" :icon="Delete" @click="delUser(row)" /></el-tooltip>
+          <el-tooltip v-if="canManage" content="删除"><el-button link type="danger" :icon="Delete" @click="delUser(row)" /></el-tooltip>
         </template></el-table-column>
       </el-table>
       <el-pagination v-if="users.length > uSize" v-model:current-page="uPage" v-model:page-size="uSize" :page-sizes="[10,20,50,100]"
@@ -53,6 +53,23 @@
     <!-- 通知规则 -->
     <el-card shadow="never">
       <template #header><b>通知规则</b></template>
+      <!-- 没有群 = 所有开关都是摆设。这一条必须显眼：规则页看起来配置齐全、开关全开，
+           但一个 Lark 群都没配时，飞书那一侧收不到任何东西——磁盘打满、节点 NotReady、
+           证书过期全都发不出去，而页面上没有任何迹象表明这一点。
+           这是典型的"沉默失效"：配置看着完整，实际不工作。 -->
+      <el-alert v-if="!groups.length" type="error" :closable="false" show-icon style="margin-bottom:14px"
+        title="下面的规则当前一条也发不出去">
+        <template #default>
+          还没有配置任何 Lark 群，所有告警投递都会落空（规则开关只控制"要不要发"，不解决"发给谁"）。
+          请先在本页最上方「Lark 群」添加至少一个群并点「测试」验证连通。
+        </template>
+      </el-alert>
+      <el-alert v-else-if="!users.length" type="warning" :closable="false" show-icon style="margin-bottom:14px"
+        title="告警能发出，但不会 @ 到任何人">
+        <template #default>
+          已配置 {{ groups.length }} 个群，但通知人为空——消息会进群，不会 @ 具体的人，紧急告警容易被漏看。
+        </template>
+      </el-alert>
       <el-form label-width="120px" style="max-width:620px">
         <el-form-item label="到期提醒天数">
           <el-input v-model="cfg.remind_days" placeholder="30,15,7,1" style="width:240px" />
@@ -85,7 +102,7 @@
           要连采集一起停，去「定时任务」页关任务。
         </el-alert>
 
-        <el-button type="primary" @click="saveCfg">保存规则</el-button>
+        <el-button v-if="canManage" type="primary" @click="saveCfg">保存规则</el-button>
       </el-form>
     </el-card>
   </div>
@@ -98,9 +115,12 @@ import { Plus, Delete, Promotion, Edit } from '@element-plus/icons-vue'
 import { getSettings, updateSettings, listNotifyUsers, createNotifyUser, deleteNotifyUser,
   listLarkGroups, createLarkGroup, updateLarkGroup, deleteLarkGroup, testLarkGroup } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { useAuthStore } from '../stores/auth'
 import { usePaged } from '../composables/usePaged'
 
 const app = useAppStore()
+const auth = useAuthStore()
+const canManage = computed(() => auth.hasButton('manage_notify'))
 const cfg = ref({}), users = ref([])
 const nu = ref({ name: '', open_id: '' })
 const groups = ref([]), testingG = ref({})

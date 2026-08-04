@@ -1615,6 +1615,46 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_probe_upgrades", "menu:probe_upgrades", "升级任务", "/probe/upgrades", "perm_menu_probe", "", 80},
 		{"perm_menu_probe_audit", "menu:probe_audit", "审计日志", "/probe/audit", "perm_menu_probe", "", 90},
 		{"perm_menu_probe_users", "menu:probe_users", "用户管理", "/probe/users", "perm_menu_probe", "", 100},
+
+		// CMDB 配置管理库（外部应用权限）
+		//
+		//	⚠️ 只能做两级：角色配置页 RolesView.vue 的菜单权限树只渲染 parent + children，
+		//	第三级不递归。CMDB 侧边栏是三层（分组→页），所以这里压平成两级，
+		//	分组信息放进名称前缀（[K8s] 节点），靠命名分组不靠层级。
+		//	新增菜单页时记得同步加一条，否则该页在 CMDB 里会因 fail-closed 打不开。
+		{"perm_menu_cmdb", "menu:cmdb", "CMDB", "/cmdb", "", "cmdb", 17},
+		{"perm_menu_cmdb_overview", "menu:cmdb_overview", "[总览] 总览", "/cmdb/overview", "perm_menu_cmdb", "", 10},
+		{"perm_menu_cmdb_hosts", "menu:cmdb_hosts", "[云资源] 主机", "/cmdb/hosts", "perm_menu_cmdb", "", 20},
+		{"perm_menu_cmdb_cloud_ips", "menu:cmdb_cloud_ips", "[云资源] IP 地址", "/cmdb/cloud-ips", "perm_menu_cmdb", "", 22},
+		{"perm_menu_cmdb_cloud_networks", "menu:cmdb_cloud_networks", "[云资源] VPC 网络", "/cmdb/cloud-networks", "perm_menu_cmdb", "", 24},
+		{"perm_menu_cmdb_cloud_firewalls", "menu:cmdb_cloud_firewalls", "[云资源] 防火墙", "/cmdb/cloud-firewalls", "perm_menu_cmdb", "", 26},
+		{"perm_menu_cmdb_cloud_lbs", "menu:cmdb_cloud_lbs", "[云资源] 负载均衡", "/cmdb/cloud-lbs", "perm_menu_cmdb", "", 28},
+		{"perm_menu_cmdb_cloud_audit", "menu:cmdb_cloud_audit", "[云资源] 云平台审计", "/cmdb/cloud-audit", "perm_menu_cmdb", "", 30},
+		{"perm_menu_cmdb_domains", "menu:cmdb_domains", "[资产] 域名", "/cmdb/domains", "perm_menu_cmdb", "", 40},
+		{"perm_menu_cmdb_dns_records", "menu:cmdb_dns_records", "[资产] DNS 记录", "/cmdb/dns-records", "perm_menu_cmdb", "", 42},
+		{"perm_menu_cmdb_cdn_sites", "menu:cmdb_cdn_sites", "[资产] CDN 站点", "/cmdb/cdn-sites", "perm_menu_cmdb", "", 44},
+		{"perm_menu_cmdb_certs", "menu:cmdb_certs", "[资产] 证书", "/cmdb/certs", "perm_menu_cmdb", "", 46},
+		{"perm_menu_cmdb_cert_inspect", "menu:cmdb_cert_inspect", "[资产] 到期巡检", "/cmdb/cert-inspect", "perm_menu_cmdb", "", 48},
+		{"perm_menu_cmdb_k8s_clusters", "menu:cmdb_k8s_clusters", "[K8s] 集群管理", "/cmdb/k8s-clusters", "perm_menu_cmdb", "", 60},
+		{"perm_menu_cmdb_version_upgrade", "menu:cmdb_version_upgrade", "[K8s] 版本与升级", "/cmdb/version-upgrade", "perm_menu_cmdb", "", 62},
+		{"perm_menu_cmdb_k8s_nodes", "menu:cmdb_k8s_nodes", "[K8s] 节点", "/cmdb/k8s-nodes", "perm_menu_cmdb", "", 64},
+		{"perm_menu_cmdb_k8s_workloads", "menu:cmdb_k8s_workloads", "[K8s] 工作负载", "/cmdb/k8s-workloads", "perm_menu_cmdb", "", 66},
+		{"perm_menu_cmdb_k8s_pods", "menu:cmdb_k8s_pods", "[K8s] Pod", "/cmdb/k8s-pods", "perm_menu_cmdb", "", 68},
+		{"perm_menu_cmdb_k8s_networking", "menu:cmdb_k8s_networking", "[K8s] 网络", "/cmdb/k8s-networking", "perm_menu_cmdb", "", 70},
+		{"perm_menu_cmdb_k8s_storage", "menu:cmdb_k8s_storage", "[K8s] 存储/伸缩", "/cmdb/k8s-storage", "perm_menu_cmdb", "", 72},
+		{"perm_menu_cmdb_k8s_events", "menu:cmdb_k8s_events", "[K8s] 事件", "/cmdb/k8s-events", "perm_menu_cmdb", "", 74},
+		{"perm_menu_cmdb_k8s_health", "menu:cmdb_k8s_health", "[K8s] 集群体检", "/cmdb/k8s-health", "perm_menu_cmdb", "", 76},
+		{"perm_menu_cmdb_k8s_topology", "menu:cmdb_k8s_topology", "[K8s] 全链路", "/cmdb/k8s-topology", "perm_menu_cmdb", "", 78},
+		{"perm_menu_cmdb_k8s_ns_project", "menu:cmdb_k8s_ns_project", "[K8s] 命名空间归属", "/cmdb/k8s-ns-project", "perm_menu_cmdb", "", 80},
+		{"perm_menu_cmdb_event_center", "menu:cmdb_event_center", "[观测] 事件中心", "/cmdb/event-center", "perm_menu_cmdb", "", 90},
+		{"perm_menu_cmdb_k8s_usage", "menu:cmdb_k8s_usage", "[观测] 资源使用率", "/cmdb/k8s-usage", "perm_menu_cmdb", "", 92},
+		{"perm_menu_cmdb_cost", "menu:cmdb_cost", "[观测] 云成本", "/cmdb/cost", "perm_menu_cmdb", "", 94},
+		{"perm_menu_cmdb_basic", "menu:cmdb_basic", "[系统] 基础配置", "/cmdb/basic", "perm_menu_cmdb", "", 100},
+		{"perm_menu_cmdb_integrations", "menu:cmdb_integrations", "[系统] 接入管理", "/cmdb/integrations", "perm_menu_cmdb", "", 102},
+		{"perm_menu_cmdb_notify", "menu:cmdb_notify", "[系统] 通知", "/cmdb/notify", "perm_menu_cmdb", "", 104},
+		{"perm_menu_cmdb_cron", "menu:cmdb_cron", "[系统] 定时任务", "/cmdb/cron", "perm_menu_cmdb", "", 106},
+		{"perm_menu_cmdb_task_runs", "menu:cmdb_task_runs", "[系统] 执行记录", "/cmdb/task-runs", "perm_menu_cmdb", "", 108},
+		{"perm_menu_cmdb_audit", "menu:cmdb_audit", "[系统] 操作审计", "/cmdb/audit", "perm_menu_cmdb", "", 110},
 	}
 
 	for _, perm := range menuPermissions {
@@ -1635,6 +1675,7 @@ func initDefaultRolesAndPermissions() {
 	}{
 		{"app_probe_platform", "probe", "探测平台", "http://localhost:30827", "probe", "运维工具", 16},
 		{"app_deploy_center", "deploy_center", "发布中心", "http://localhost:30826", "deploy_center", "运维工具", 15},
+		{"app_cmdb", "cmdb", "CMDB", "http://localhost:30829", "cmdb", "运维工具", 17},
 	}
 	for _, a := range defaultExternalApps {
 		DB.Exec(`INSERT IGNORE INTO external_apps (id, app_key, name, url, perm_code, group_name, sort_order, status)
@@ -1794,11 +1835,72 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_dc_manage_contacts", "deploy_center:manage_contacts", "[发布中心] 通知人管理", "允许增删改通知人"},
 		{"perm_btn_dc_manage_global", "deploy_center:manage_global", "[发布中心] 全局配置", "允许修改全局凭证/轮询策略"},
 		{"perm_btn_dc_prod_auto_sync", "deploy_center:prod_auto_sync", "[发布中心] PROD Auto Sync", "允许开关 PROD 环境的 Auto Sync（开启后 PROD 提交后自动触发 ArgoCD sync，不再需要手动同步）"},
+
+		// CMDB — 资产域
+		//
+		//	⚠️ manage_dns 和 issue_cert 单独成码、不并进 manage_domains：
+		//	前者直接写云端 DNS（改错就是线上解析挂），后者真去 CA 签发（有速率限制，
+		//	滥用会把域名打进 Let's Encrypt 的封禁窗口）。给"域名管理"不等于给这两个。
+		{"perm_btn_cmdb_manage_domains", "cmdb:manage_domains", "[CMDB] 域名管理", "允许增删改域名台账、续费、自动续费开关、批量状态/忽略"},
+		{"perm_btn_cmdb_sync_domains", "cmdb:sync_domains", "[CMDB] 域名同步刷新", "允许触发注册商同步与域名信息刷新"},
+		{"perm_btn_cmdb_manage_dns", "cmdb:manage_dns", "[CMDB] DNS 记录写入", "允许增删改 DNS 记录（含批量）。⚠️ 会直接写入云端 DNS，改错会导致线上解析异常"},
+		{"perm_btn_cmdb_manage_certs", "cmdb:manage_certs", "[CMDB] 证书管理", "允许录入/删除证书、复检、巡检忽略"},
+		{"perm_btn_cmdb_issue_cert", "cmdb:issue_cert", "[CMDB] 证书签发/续签", "允许发起 ACME 签发与续签。⚠️ 会真实调用 CA，受签发速率限制"},
+		{"perm_btn_cmdb_manage_cdn", "cmdb:manage_cdn", "[CMDB] CDN 配置管理", "允许增删改 CDN 站点与回源规则"},
+		{"perm_btn_cmdb_sync_cdn", "cmdb:sync_cdn", "[CMDB] CDN 同步", "允许触发 CDN 账号同步与连通性验证"},
+		{"perm_btn_cmdb_manage_records", "cmdb:manage_records", "[CMDB] 解析记录台账", "允许修改/删除解析记录台账，含批量操作"},
+
+		// CMDB — 云资源域
+		{"perm_btn_cmdb_manage_hosts", "cmdb:manage_hosts", "[CMDB] 主机/CI 管理", "允许增删改主机等配置项及其标签"},
+		{"perm_btn_cmdb_sync_cloud", "cmdb:sync_cloud", "[CMDB] 云资源同步", "允许触发云账号与云项目的资源同步"},
+		{"perm_btn_cmdb_manage_cloud_projects", "cmdb:manage_cloud_projects", "[CMDB] 云项目归属", "允许增删改云项目及其归属关系"},
+
+		// CMDB — K8s 域
+		{"perm_btn_cmdb_manage_clusters", "cmdb:manage_clusters", "[CMDB] 集群纳管", "允许增删改 K8s 集群接入。⚠️ 需填写 kubeconfig/ServiceAccount 凭据"},
+		{"perm_btn_cmdb_sync_k8s", "cmdb:sync_k8s", "[CMDB] 集群手动同步", "允许手动触发集群资源全量同步"},
+		{"perm_btn_cmdb_manage_ns_project", "cmdb:manage_ns_project", "[CMDB] 命名空间归属维护", "允许维护命名空间与项目的归属关系"},
+		{"perm_btn_cmdb_manage_upgrade", "cmdb:manage_upgrade", "[CMDB] 升级基线/计划", "允许设置 GKE 升级基线快照与版本计划覆盖"},
+		{"perm_btn_cmdb_k8s_diag", "cmdb:k8s_diag", "[CMDB] 实时诊断", "允许拉取实时日志/事件/Pod 详情。虽是只读，但绕过快照直连生产 apiserver，日志可能含业务数据"},
+
+		// CMDB — 成本域
+		{"perm_btn_cmdb_manage_cost_rates", "cmdb:manage_cost_rates", "[CMDB] 计价配置", "允许维护计算/磁盘费率、节点单价覆盖、重算成本快照"},
+
+		// CMDB — 接入/凭据域（最高危）
+		//
+		//	manage_mcp 单独成码：MCP Token 是机器身份、不走 RBAC，
+		//	拿到它等于拿到 CMDB 全量只读数据（跨集群、跨云账号）。
+		{"perm_btn_cmdb_manage_integrations", "cmdb:manage_integrations", "[CMDB] 接入凭据管理", "允许增删改注册商/云账号/CDN/ACME/观测数据源/Harbor 的接入凭据。⚠️ 等于持有各系统的钥匙"},
+		{"perm_btn_cmdb_manage_mcp", "cmdb:manage_mcp", "[CMDB] MCP Token 管理", "允许查看与重置 MCP Token。⚠️ Token 不受 RBAC 约束，持有即可读取全量数据"},
+
+		// CMDB — 系统域
+		//
+		//	manage_cron 与 run_task 分开：值班同学常要手动补跑一次同步，
+		//	但不该能改 cron 表达式把任务改成每分钟跑去打爆云厂商 API 配额。
+		{"perm_btn_cmdb_manage_basic", "cmdb:manage_basic", "[CMDB] 基础配置", "允许维护环境/项目/生命周期状态/CI 类型与关系定义/系统设置"},
+		{"perm_btn_cmdb_manage_notify", "cmdb:manage_notify", "[CMDB] 通知配置", "允许增删改通知人与 Lark 群，并发送测试消息"},
+		{"perm_btn_cmdb_manage_cron", "cmdb:manage_cron", "[CMDB] 定时任务配置", "允许修改定时任务的启停、周期与参数"},
+		{"perm_btn_cmdb_run_task", "cmdb:run_task", "[CMDB] 手动执行任务", "允许手动触发任务、取消执行、重试失败项"},
+
+		// CMDB — 审计域
+		//
+		//	能改 ≠ 能把别人的改动撤掉，所以回滚独立成码。
+		{"perm_btn_cmdb_revert_change", "cmdb:revert_change", "[CMDB] 变更回滚", "允许把一次变更回滚到变更前的内容。⚠️ 部分回滚会写入外部系统（如 Cloudflare DNS）"},
 	}
 
 	for _, perm := range buttonPermissions {
 		DB.Exec(`INSERT IGNORE INTO permissions (id, code, name, type, description) VALUES (?, ?, ?, 'button', ?)`,
 			perm.ID, perm.Code, perm.Name, perm.Description)
+	}
+
+	// 给 CMDB 的按钮权限排序。
+	//
+	//	角色配置页按 permissions.sort_order 排序，而上面的按钮种子统一不带 sort_order
+	//	（全是默认 0），同一批插入的 created_at 又同秒，结果退化成 MySQL 的返回顺序——
+	//	24 项乱序铺在弹窗里，勾"域名管理"得满屏找。
+	//	用 UPDATE 而不是让种子带上：种子是 INSERT IGNORE，行已存在时不会更新 sort_order。
+	for i, code := range cmdbButtonCodes {
+		DB.Exec(`UPDATE permissions SET sort_order = ? WHERE code = ? AND type = 'button'`,
+			(i+1)*10, code)
 	}
 
 	// 为超级管理员分配所有权限
@@ -1887,6 +1989,8 @@ func initDefaultRolesAndPermissions() {
 		}
 	}
 
+	initCMDBRoleTemplates()
+
 	// ===== 桌台维护记录 · API Key 行级权限改造（2026-05-27） =====
 	// 1) custom_rows 加 source_api_key_id 列
 	if _, err := DB.Exec(`ALTER TABLE custom_rows ADD COLUMN source_api_key_id VARCHAR(36) NULL`); err == nil {
@@ -1961,6 +2065,153 @@ func initDefaultRolesAndPermissions() {
 		if n, _ := res.RowsAffected(); n > 0 {
 			log.Printf("[Migration] user_roles: 清理已删用户的孤儿行 %d 条", n)
 		}
+	}
+}
+
+// cmdbMenuCodes / cmdbButtonCodes 是 CMDB 全部权限码，顺序即角色配置页的展示顺序。
+// 新增 CMDB 菜单页或操作时，这里和上面的种子两处都要加。
+var cmdbMenuCodes = []string{
+	"menu:cmdb_overview",
+	"menu:cmdb_hosts", "menu:cmdb_cloud_ips", "menu:cmdb_cloud_networks",
+	"menu:cmdb_cloud_firewalls", "menu:cmdb_cloud_lbs", "menu:cmdb_cloud_audit",
+	"menu:cmdb_domains", "menu:cmdb_dns_records", "menu:cmdb_cdn_sites",
+	"menu:cmdb_certs", "menu:cmdb_cert_inspect",
+	"menu:cmdb_k8s_clusters", "menu:cmdb_version_upgrade", "menu:cmdb_k8s_nodes",
+	"menu:cmdb_k8s_workloads", "menu:cmdb_k8s_pods", "menu:cmdb_k8s_networking",
+	"menu:cmdb_k8s_storage", "menu:cmdb_k8s_events", "menu:cmdb_k8s_health",
+	"menu:cmdb_k8s_topology", "menu:cmdb_k8s_ns_project",
+	"menu:cmdb_event_center", "menu:cmdb_k8s_usage", "menu:cmdb_cost",
+	"menu:cmdb_basic", "menu:cmdb_integrations", "menu:cmdb_notify",
+	"menu:cmdb_cron", "menu:cmdb_task_runs", "menu:cmdb_audit",
+}
+
+var cmdbButtonCodes = []string{
+	"cmdb:manage_domains", "cmdb:sync_domains", "cmdb:manage_dns",
+	"cmdb:manage_certs", "cmdb:issue_cert", "cmdb:manage_cdn",
+	"cmdb:sync_cdn", "cmdb:manage_records",
+	"cmdb:manage_hosts", "cmdb:sync_cloud", "cmdb:manage_cloud_projects",
+	"cmdb:manage_clusters", "cmdb:sync_k8s", "cmdb:manage_ns_project",
+	"cmdb:manage_upgrade", "cmdb:k8s_diag",
+	"cmdb:manage_cost_rates",
+	"cmdb:manage_integrations", "cmdb:manage_mcp",
+	"cmdb:manage_basic", "cmdb:manage_notify", "cmdb:manage_cron", "cmdb:run_task",
+	"cmdb:revert_change",
+}
+
+// initCMDBRoleTemplates 预置 CMDB 的 5 个角色模板。
+//
+//	和上面 role_admin / role_operator 的做法有一处**故意的不同**：权限只在角色
+//	「首次创建」时灌一次。INSERT IGNORE 只挡得住重复插入，挡不住"管理员在 UI 上
+//	取消了某条权限"——每次启动重灌会把人家的调整悄悄改回去，而且毫无提示。
+//	模板的职责是给一个起点，不是持续纠正。
+//
+//	is_system 取 0：这几个是模板不是内核角色，管理员应该能改名、能删掉不用的
+//	（rbac.go 里 is_system=1 的角色禁止改名和删除）。
+//
+//	⚠️ 角色名不能带"运维"二字：上面那段值班权限分配用 `name LIKE '%运维%'`
+//	匹配角色，叫"K8s 运维"会被顺带塞进值班记录权限。所以这里用"集群管理员"。
+func initCMDBRoleTemplates() {
+	allMenus, allButtons := cmdbMenuCodes, cmdbButtonCodes
+
+	// codes 拼接：第一项永远是父权限 menu:cmdb，缺了它 CMDB 侧 portal-auth 直接 403
+	codes := func(parts ...[]string) []string {
+		out := []string{"menu:cmdb"}
+		for _, p := range parts {
+			out = append(out, p...)
+		}
+		return out
+	}
+	except := func(src []string, drop ...string) []string {
+		out := make([]string, 0, len(src))
+		for _, s := range src {
+			skip := false
+			for _, d := range drop {
+				if s == d {
+					skip = true
+					break
+				}
+			}
+			if !skip {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+
+	templates := []struct {
+		ID, Code, Name, Desc string
+		Perms                []string
+	}{
+		{"role_cmdb_viewer", "cmdb_viewer", "CMDB 只读",
+			"看得到全部台账但改不了任何东西；不含云成本、接入凭据与操作审计",
+			codes(except(allMenus, "menu:cmdb_cost", "menu:cmdb_integrations", "menu:cmdb_audit"))},
+
+		{"role_cmdb_asset", "cmdb_asset", "CMDB 资产管理员",
+			"域名/证书/CDN 与云资源台账的日常维护。不含 DNS 写入与证书签发（那两项会直接改动线上解析和调用 CA）",
+			codes([]string{
+				"menu:cmdb_overview",
+				"menu:cmdb_domains", "menu:cmdb_dns_records", "menu:cmdb_cdn_sites",
+				"menu:cmdb_certs", "menu:cmdb_cert_inspect",
+				"menu:cmdb_hosts", "menu:cmdb_cloud_ips", "menu:cmdb_cloud_networks",
+				"menu:cmdb_cloud_firewalls", "menu:cmdb_cloud_lbs", "menu:cmdb_cloud_audit",
+			}, []string{
+				"cmdb:manage_domains", "cmdb:sync_domains", "cmdb:manage_certs",
+				"cmdb:manage_records", "cmdb:manage_cdn", "cmdb:sync_cdn",
+			})},
+
+		{"role_cmdb_cluster", "cmdb_cluster", "CMDB 集群管理员",
+			"K8s 多集群查看、体检与升级计划维护。不含集群纳管（纳管需要填写集群凭据）",
+			codes([]string{
+				"menu:cmdb_overview",
+				"menu:cmdb_k8s_clusters", "menu:cmdb_version_upgrade", "menu:cmdb_k8s_nodes",
+				"menu:cmdb_k8s_workloads", "menu:cmdb_k8s_pods", "menu:cmdb_k8s_networking",
+				"menu:cmdb_k8s_storage", "menu:cmdb_k8s_events", "menu:cmdb_k8s_health",
+				"menu:cmdb_k8s_topology", "menu:cmdb_k8s_ns_project",
+				"menu:cmdb_event_center", "menu:cmdb_k8s_usage", "menu:cmdb_cost",
+			}, []string{
+				"cmdb:sync_k8s", "cmdb:manage_ns_project", "cmdb:manage_upgrade", "cmdb:k8s_diag",
+			})},
+
+		{"role_cmdb_cost", "cmdb_cost", "CMDB 成本分析",
+			"只看云成本与资源使用率，不涉及任何资产明细与配置",
+			codes([]string{"menu:cmdb_overview", "menu:cmdb_cost", "menu:cmdb_k8s_usage"})},
+
+		{"role_cmdb_admin", "cmdb_admin", "CMDB 管理员",
+			"CMDB 全部菜单与操作权限，含接入凭据、MCP Token 与变更回滚",
+			codes(allMenus, allButtons)},
+	}
+
+	for _, t := range templates {
+		res, err := DB.Exec(
+			`INSERT IGNORE INTO roles (id, code, name, description, is_system) VALUES (?, ?, ?, ?, 0)`,
+			t.ID, t.Code, t.Name, t.Desc)
+		if err != nil {
+			log.Printf("[CMDB] 创建角色模板失败 %s: %v", t.Code, err)
+			continue
+		}
+		if affected, _ := res.RowsAffected(); affected == 0 {
+			continue // 角色已存在：不碰它的权限，避免覆盖管理员的调整
+		}
+
+		granted := 0
+		for _, code := range t.Perms {
+			var permID string
+			if err := DB.QueryRow("SELECT id FROM permissions WHERE code = ?", code).Scan(&permID); err != nil || permID == "" {
+				// 权限码写错或种子漏了，静默跳过等于角色少一块权限却没人知道
+				log.Printf("[CMDB] WARN 角色模板 %s 引用了不存在的权限码 %s，已跳过", t.Code, code)
+				continue
+			}
+			DB.Exec(`INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES (?, ?, ?)`,
+				"rp_"+t.ID+"_"+permID, t.ID, permID)
+			granted++
+		}
+
+		// 应用级准入：没有这条关联，用户就算有 menu:cmdb 也进不去
+		// （CMDB 侧 portal-auth 会调 external-apps/my 确认角色关联了 cmdb 应用）
+		DB.Exec(`INSERT IGNORE INTO role_external_apps (id, role_id, app_key) VALUES (?, ?, 'cmdb')`,
+			"rea_"+t.ID+"_cmdb", t.ID)
+
+		log.Printf("[CMDB] 创建角色模板: %s（%d 项权限）", t.Name, granted)
 	}
 }
 

@@ -3,7 +3,6 @@ package handlers
 import (
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -74,9 +73,8 @@ type secRow struct {
 // SecurityAudit 列出有安全风险属性的 Pod，按严重度排序。
 // 参数：cluster_id(必填)、namespace(可选)、include_platform(可选，1=包含平台组件)
 func (h *K8sResourceHandler) SecurityAudit(c *gin.Context) {
-	cid, _ := strconv.Atoi(c.Query("cluster_id"))
-	if cid == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "cluster_id 必填"})
+	cid, ok := requireCluster(c, h.DB)
+	if !ok {
 		return
 	}
 	q := `SELECT namespace,pod_name,workload,host_network,host_pid,host_ipc,

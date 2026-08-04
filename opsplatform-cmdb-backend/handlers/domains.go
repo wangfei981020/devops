@@ -78,7 +78,7 @@ func (h *DomainHandler) BulkIgnore(c *gin.Context) {
 	if in.Ignored == 0 {
 		act = "unignore_domain"
 	}
-	WriteAudit(h.DB, c, act, fmt.Sprintf("%d 个", len(in.CIIDs)))
+	SetAuditTarget(c, fmt.Sprintf("%s %d 个", act, len(in.CIIDs)))
 	c.JSON(200, gin.H{"ok": true, "count": len(in.CIIDs)})
 }
 
@@ -241,7 +241,11 @@ func (h *DomainHandler) Create(c *gin.Context) {
 		return
 	}
 	replaceLabelsDB(h.DB, ciID, in.Labels)
-	WriteAudit(h.DB, c, "create_domain", in.Name)
+	// 域名跨两张表：cis 存通用配置项属性，domains 存域名特有字段（注册商/到期日）。
+	// 两条都记，回滚时才能把这个域名完整还原回去。
+	AuditCreated(c, "cis", ciID)
+	AuditCreated(c, "domains", ciID)
+	SetAuditTarget(c, in.Name)
 	c.JSON(201, gin.H{"ci_id": ciID})
 }
 
@@ -291,7 +295,7 @@ func (h *DomainHandler) Delete(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	WriteAudit(h.DB, c, "delete_domain", ciID)
+	SetAuditTarget(c, ciID)
 	c.JSON(200, gin.H{"ok": true})
 }
 
