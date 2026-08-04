@@ -113,9 +113,23 @@ export function permOf(path) {
   return null
 }
 
+// firstAllowedPath 返回这个人**第一个进得去**的页面。
+//
+//	没有它会出两个死循环：
+//	  1. `/` 固定重定向到 /overview——没有总览权限的人一登录就被弹到无权访问页
+//	  2. 无权访问页的「返回总览」按钮同样弹回无权访问页，按几次都出不去
+//	ROUTE_PERM 的键序就是菜单顺序，取第一个能进的即可。
+//	一个都进不去才返回 /forbidden——那种情况本来就该看到"你没有任何权限"。
+export function firstAllowedPath(auth) {
+  for (const [path, page] of Object.entries(ROUTE_PERM)) {
+    if (auth.hasMenu(page)) return path
+  }
+  return '/forbidden'
+}
+
 const router = createRouter({ history: createWebHistory(), routes })
 
-router.beforeEach(async (to) => {
+router.beforeEach(async (to, from) => {
   // SSO 入口：运维平台跳转带 ?portal_token=xxx（与发布中心同一约定）
   const portalToken = to.query.portal_token
   if (portalToken) {
@@ -135,11 +149,24 @@ router.beforeEach(async (to) => {
   if (to.path === '/login' && t) return '/'
   if (to.meta.public || !t) return
 
+  const auth = useAuthStore()
+
+  // ⚠️ 必须**先**把权限对新，再做拦截判断。
+  // 原来这一步放在 App.vue 的 onMounted 里，比守卫晚跑，于是菜单按新权限渲染、
+  // 路由按旧快照拦截——"菜单里有这一项，点进去说无权访问"。
+  // 整个页面生命周期只拉一次，失败不阻断（见 auth.ensureFresh）。
+  await auth.ensureFresh()
+
   // 无权限的页面导到提示页，而不是让它渲染成一堆 403 报错或空白
   // （全站三态约定：失败态不能退化成空态）
-  const auth = useAuthStore()
   const page = permOf(to.path)
   if (page && !auth.hasMenu(page)) {
+    // 首页是所有人的默认落点，没权限时静默换成他进得去的第一个页面——
+    // 一登录就撞"无权访问"太劝退，而且那不是他主动要去的地方
+    if (to.path === '/overview' && from.path === '/') {
+      const alt = firstAllowedPath(auth)
+      if (alt !== '/forbidden') return { path: alt, replace: true }
+    }
     return { path: '/forbidden', query: { from: to.path }, replace: true }
   }
 })

@@ -25,6 +25,7 @@ const (
 	ctxUserID     = "user_id"
 	ctxAuthSource = "auth_source"
 	ctxIsAdmin    = "is_admin"
+	ctxRole       = "role"
 	ctxPerms      = "permissions"
 	ctxTokenHash  = "token_hash"
 	ctxPermCode   = "perm_code" // 本次请求命中的权限码，写进审计便于反查授权是否过宽
@@ -177,9 +178,9 @@ func (h *AuthHandler) issueSession(userID int, username, role, source string, pe
 		}
 	}
 	_, err := h.DB.Exec(
-		`INSERT INTO auth_sessions (user_id, username, token_hash, permissions, auth_source, expires_at, portal_token_enc)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		userID, username, hashToken(token), permJSON, source, expires, portalEnc)
+		`INSERT INTO auth_sessions (user_id, username, token_hash, permissions, auth_source, role, expires_at, portal_token_enc)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		userID, username, hashToken(token), permJSON, source, role, expires, portalEnc)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -209,12 +210,12 @@ func (h *AuthHandler) Middleware() gin.HandlerFunc {
 		th := hashToken(raw)
 
 		var userID int
-		var username, authSource string
+		var username, authSource, role string
 		var permJSON sql.NullString
 		err := h.DB.QueryRow(
-			`SELECT user_id, username, IFNULL(auth_source,'local'), permissions
+			`SELECT user_id, username, IFNULL(auth_source,'local'), IFNULL(role,''), permissions
 			 FROM auth_sessions WHERE token_hash=? AND expires_at > NOW()`, th).
-			Scan(&userID, &username, &authSource, &permJSON)
+			Scan(&userID, &username, &authSource, &role, &permJSON)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "登录已失效"})
 			return
@@ -229,8 +230,12 @@ func (h *AuthHandler) Middleware() gin.HandlerFunc {
 		c.Set(ctxAuthSource, authSource)
 		c.Set(ctxPerms, perms)
 		c.Set(ctxTokenHash, th)
-		// 本地账号 = 运维平台不可用时的兜底通道，不受权限码约束
-		c.Set(ctxIsAdmin, authSource == "local")
+		// 谁不受权限码约束：
+		//   local —— 运维平台不可用时的兜底通道
+		//   运维平台超管 —— 它在运维平台侧就是全通的，到了 CMDB 反而被自己的
+		//     权限表挡住说不过去。**漏了这一条**，SSO 超管会被锁死在无权访问页。
+		c.Set(ctxIsAdmin, authSource == "local" || role == "admin")
+		c.Set(ctxRole, role)
 		c.Next()
 	}
 }

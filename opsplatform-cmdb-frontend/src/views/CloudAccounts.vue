@@ -10,6 +10,7 @@
       <el-button type="primary" size="small" @click="openAcct()">+ 添加云账号</el-button>
       <span class="muted" style="margin-left:10px">全局共享：主机 / K8s / 成本 都用它。账号=业务分组；凭据(SA key)配在项目层，每 GCP project 一份</span>
     </div>
+    <LoadError :error="error" title="云账号未加载" @retry="load" />
     <el-card :shadow="embedded ? 'never' : 'never'" :body-style="embedded ? { padding: '0' } : {}">
       <el-table :data="accPaged" size="small" row-key="id" v-loading="loading"
         :expand-row-keys="expanded" @expand-change="onExpand">
@@ -78,6 +79,8 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useLoadState } from '../composables/useLoadState'
+import LoadError from '../components/LoadError.vue'
 import { listCloudAccounts, createCloudAccount, updateCloudAccount, deleteCloudAccount,
   createCloudProject, updateCloudProject, deleteCloudProject } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
@@ -89,7 +92,8 @@ import Pager from '../components/Pager.vue'
 defineProps({ embedded: { type: Boolean, default: false } })
 
 const app = useAppStore()
-const accounts = ref([]); const loading = ref(false); const expanded = ref([])
+const { loading, error, run } = useLoadState()
+const accounts = ref([]); const expanded = ref([])
 // 与「主机」页共用同一份同步实现：这里原本只发请求、不轮询进度、错误一律吞成「失败」，
 // 而同步失败发生在后台协程里，不轮询就永远看不到原因（比如 GCP 权限 403）。
 const { syncing, acctProg, projProg, syncAccount, syncProject, progressText } =
@@ -99,7 +103,9 @@ const acctDlg = ref(false); const acctEdit = ref(false); const acctForm = reacti
 const projDlg = ref(false); const projEdit = ref(false); const projAcct = ref(0)
 const projForm = reactive({ id: 0, name: '', project_id: '', cred_json: '' })
 
-async function load() { loading.value = true; try { accounts.value = await listCloudAccounts() } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false } }
+// 失败留在页面上：原来只弹 toast，3 秒后消失，列表显示为空，
+// 看起来像"还没配任何云账号"——而云账号是主机/K8s/成本三块的共同前提（CMDB-013）
+async function load() { await run(async () => { accounts.value = await listCloudAccounts() }) }
 function onExpand(row, rows) { expanded.value = rows.map(r => r.id) }
 
 function openAcct(row) { acctEdit.value = !!row; Object.assign(acctForm, row ? { ...row } : { id: 0, name: '', provider: 'gcp', billing_export_dataset: '' }); acctDlg.value = true }

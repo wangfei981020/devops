@@ -5,6 +5,7 @@
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </div>
     <div class="muted" style="margin-bottom:12px">云上 VPC 网络与子网，只读同步。展开看子网 CIDR。</div>
+    <LoadError :error="error" title="VPC 网络未加载" @retry="load" />
 
     <el-card shadow="never">
       <div class="filters">
@@ -42,12 +43,15 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useLoadState } from '../composables/useLoadState'
+import LoadError from '../components/LoadError.vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { listCloudNetworks, listCloudSubnets } from '../api/cmdb'
 import { providerLabel as plabel, providerStyle, projectStyle, regionStyle, typeStyle } from '../utils/cloud'
 import { usePaged } from '../composables/usePaged'
 
-const rows = ref([]), subnets = ref([]), loading = ref(false), fp = ref(null)
+const { loading, error, run } = useLoadState()
+const rows = ref([]), subnets = ref([]), fp = ref(null)
 
 const providers = computed(() => [...new Set(rows.value.map((r) => r.provider))].filter(Boolean))
 const filtered = computed(() => rows.value.filter((r) => !fp.value || r.provider === fp.value)
@@ -56,9 +60,11 @@ const { page, size, paged } = usePaged(filtered)
 function subnetsOf(row) { return subnets.value.filter((s) => s.network === row.name && s.project === row.project) }
 
 async function load() {
-  loading.value = true
-  try { rows.value = await listCloudNetworks(); subnets.value = await listCloudSubnets() }
-  catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+  // 同 CloudIps：失败不能退化成"暂无数据"（CMDB-013）
+  await run(async () => {
+    rows.value = await listCloudNetworks()
+    subnets.value = await listCloudSubnets()
+  })
 }
 onMounted(load)
 </script>

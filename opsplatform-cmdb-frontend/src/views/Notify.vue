@@ -109,7 +109,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Delete, Promotion, Edit } from '@element-plus/icons-vue'
 import { getSettings, updateSettings, listNotifyUsers, createNotifyUser, deleteNotifyUser,

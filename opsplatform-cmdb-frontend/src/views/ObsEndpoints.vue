@@ -10,6 +10,7 @@
       <el-button v-if="canIntegr" type="primary" size="small" @click="openAdd">+ 添加数据源</el-button>
       <span class="muted" style="margin-left:10px">Prometheus/VM · Loki · KubeSphere 只读地址，支持多条（按环境/集群区分）。本地不存历史，实时查这些源</span>
     </div>
+    <LoadError :error="error" title="数据源列表未加载" @retry="load" />
     <el-card shadow="never" :body-style="embedded ? { padding: '0' } : {}">
       <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column prop="name" label="名称" min-width="150" />
@@ -83,6 +84,8 @@
 import { computed, ref, reactive, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
+import { useLoadState } from '../composables/useLoadState'
+import LoadError from '../components/LoadError.vue'
 import { listObsEndpoints, createObsEndpoint, updateObsEndpoint, deleteObsEndpoint, testObsEndpoint, listK8sClusters } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 import { usePager } from '../composables/usePager'
@@ -95,7 +98,8 @@ const auth = useAuthStore()
 const canIntegr = computed(() => auth.hasButton('manage_integrations'))
 const app = useAppStore()
 const envs = ['PROD', 'UAT', 'TEST', 'DEV']
-const rows = ref([]); const clusters = ref([]); const loading = ref(false); const testing = reactive({})
+const { loading, error, run } = useLoadState()
+const rows = ref([]); const clusters = ref([]); const testing = reactive({})
 const { page, pageSize, paged } = usePager(rows)
 const dlg = ref(false); const editing = ref(false)
 const blank = () => ({ id: 0, name: '', type: 'prometheus', url: '', env: '', cluster_id: null, cluster_label: '', token: '', enabled: 1 })
@@ -103,10 +107,12 @@ const form = reactive(blank())
 
 function typeText(t) { return { prometheus: 'Prometheus/VM', loki: 'Loki', kubesphere: 'KubeSphere' }[t] || t }
 
+// 同上：数据源没拉到却显示空列表，会被当成"没接任何观测源"（CMDB-013）
 async function load() {
-  loading.value = true
-  try { rows.value = await listObsEndpoints(); clusters.value = await listK8sClusters() }
-  catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+  await run(async () => {
+    rows.value = await listObsEndpoints()
+    clusters.value = await listK8sClusters()
+  })
 }
 function openAdd() { editing.value = false; Object.assign(form, blank()); dlg.value = true }
 function openEdit(row) { editing.value = true; Object.assign(form, { ...blank(), ...row, cluster_id: row.cluster_id || null, token: '' }); dlg.value = true }

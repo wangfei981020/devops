@@ -169,12 +169,13 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { computed } from 'vue'
 import { listK8sClusters, createK8sCluster, updateK8sCluster, deleteK8sCluster, testK8sCluster, syncK8sCluster, listCloudAccounts, discoverGKE } from '../api/cmdb'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
+import { useLoadState } from '../composables/useLoadState'
+import LoadError from '../components/LoadError.vue'
 import { useAppStore } from '../stores/app'
 import { useAuthStore } from '../stores/auth'
 

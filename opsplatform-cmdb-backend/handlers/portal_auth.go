@@ -64,17 +64,30 @@ func (h *AuthHandler) PortalAuth(c *gin.Context) {
 		return
 	}
 
-	// ② 拉权限码 + ③ 应用准入。admin 跳过（运维平台超管天然全通）
+	// ② 拉权限码 + ③ 应用准入。
+	//
+	//	⚠️ 权限**一律要拉，admin 也不例外**。
+	//	这里原本写的是 `if role != "admin"`，理由是"运维平台超管天然全通"——
+	//	但下游没有任何东西兑现这句话：会话里存的是空权限，前端拿到
+	//	`permissions: {}` 就把菜单全隐了，中间件的 is_admin 当时也只认本地账号。
+	//	结果是 SSO 超管前后端双向锁死，卡在「无权访问」页上出不来。
+	//
+	//	现在的分工很清楚：
+	//	  权限码 —— 一律以运维平台为唯一真相，照实拉、照实存（菜单按它渲染）
+	//	  闸门   —— admin 豁免（见下），避免超管因为漏配 role_external_apps
+	//	           把自己关在门外，那是没法自助恢复的死局
 	perms := map[string]bool{}
+	p, okPerm := portalFetchPerms(portalURL, req.Token, username)
+	if okPerm {
+		perms = p
+	}
 	if role != "admin" {
-		p, ok := portalFetchPerms(portalURL, req.Token, username)
-		if !ok {
+		if !okPerm {
 			// 拉不到 ≠ 没权限，但两者都不能放行：问不到答案就当没答案
 			WriteAuditAs(h.DB, h.ctxWithUser(c, username), "auth.portal.denied", "权限服务不可达")
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "权限服务暂不可用，请稍后重试"})
 			return
 		}
-		perms = p
 		if !perms["menu:cmdb"] {
 			WriteAuditAs(h.DB, h.ctxWithUser(c, username), "auth.portal.denied", "缺少 menu:cmdb")
 			c.JSON(http.StatusForbidden, gin.H{"error": "您没有 CMDB 的访问权限，请联系管理员"})
@@ -91,6 +104,11 @@ func (h *AuthHandler) PortalAuth(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "您所在的角色未被授予访问 CMDB 的权限"})
 			return
 		}
+	} else if !okPerm {
+		// admin 放行了，但权限一条都没拉到——菜单会是空的。这种"能进去却什么都
+		// 看不见"最难排查，必须留下痕迹，别让人对着空菜单猜。
+		logx.Line("portal_auth", fmt.Sprintf(
+			"WARN 超管 %s 已放行，但权限拉取失败，菜单将按 is_admin 全量渲染（检查运维平台 /api/my/permissions 是否可达）", username))
 	}
 
 	userID, err := h.upsertPortalUser(username, displayName, role)
@@ -119,7 +137,11 @@ func (h *AuthHandler) PortalAuth(c *gin.Context) {
 		"role":         role,
 		"auth_source":  "portal",
 		"permissions":  perms,
-		"expires_at":   expires,
+		// is_admin 必须显式告诉前端。前端只看 permissions 表的话，
+		// 超管一旦权限拉取失败就会看到一个空菜单——而后端其实是放行的，
+		// 两边对"这个人能干什么"的理解不一致，最难查。
+		"is_admin":   role == "admin",
+		"expires_at": expires,
 	})
 }
 
@@ -130,7 +152,7 @@ func (h *AuthHandler) PortalAuth(c *gin.Context) {
 func (h *AuthHandler) RefreshPermissions(c *gin.Context) {
 	src, _ := c.Get(ctxAuthSource)
 	if src != "portal" || h.effectivePortalURL() == "" {
-		c.JSON(http.StatusOK, gin.H{"permissions": map[string]bool{}, "auth_source": src})
+		c.JSON(http.StatusOK, gin.H{"permissions": map[string]bool{}, "auth_source": src, "is_admin": true})
 		return
 	}
 	username, _ := c.Get(ctxUsername)
@@ -144,14 +166,14 @@ func (h *AuthHandler) RefreshPermissions(c *gin.Context) {
 	ptoken := h.portalTokenOfSession(c)
 	if ptoken == "" {
 		logx.Line("portal_auth", fmt.Sprintf("WARN 会话内无 portal token user=%s，无法刷新权限", uname))
-		c.JSON(http.StatusOK, gin.H{"permissions": permsFromCtx(c), "stale": true})
+		c.JSON(http.StatusOK, gin.H{"permissions": permsFromCtx(c), "stale": true, "is_admin": IsAdmin(c)})
 		return
 	}
 	perms, ok := portalFetchPerms(h.effectivePortalURL(), ptoken, uname)
 	if !ok {
 		// 拉不到就保持旧快照——刷新失败（网络抖动/portal token 过期）不该把人踢出去
 		logx.Line("portal_auth", fmt.Sprintf("WARN refresh perms failed user=%s，沿用会话内旧快照", uname))
-		c.JSON(http.StatusOK, gin.H{"permissions": permsFromCtx(c), "stale": true})
+		c.JSON(http.StatusOK, gin.H{"permissions": permsFromCtx(c), "stale": true, "is_admin": IsAdmin(c)})
 		return
 	}
 	// 刷新后失去 menu:cmdb = 已被取消 CMDB 访问权，直接失效会话
@@ -163,7 +185,7 @@ func (h *AuthHandler) RefreshPermissions(c *gin.Context) {
 	}
 	b, _ := json.Marshal(perms)
 	h.DB.Exec(`UPDATE auth_sessions SET permissions=? WHERE token_hash=?`, string(b), tokenHashFromCtx(c))
-	c.JSON(http.StatusOK, gin.H{"permissions": perms})
+	c.JSON(http.StatusOK, gin.H{"permissions": perms, "is_admin": IsAdmin(c)})
 }
 
 // effectivePortalURL 运维平台地址。**数据库配置优先，环境变量兜底**。

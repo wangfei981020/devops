@@ -132,7 +132,9 @@ const menus = shallowRef([
 //	一个子项都不剩就整组隐藏——否则会出现点开是空的分组。
 //	路径 → 权限页代号复用 router 里那张表，两处只有一份真相。
 const visibleMenus = computed(() => {
-  if (auth.isLocal) return menus.value // 本地兜底账号看全部
+  // isUnrestricted 而不是 isLocal：运维平台超管也不受权限码约束（和后端 IsAdmin 一致）。
+  // 这里用错会出现"后端放行、菜单却是空的"。
+  if (auth.isUnrestricted) return menus.value
   const out = []
   for (const m of menus.value) {
     if (m.type === 'item') {
@@ -145,9 +147,13 @@ const visibleMenus = computed(() => {
   return out
 })
 
-// 每次进入应用同步一次权限：管理员刚调过角色，用户刷新页面就能生效，
-// 不必等 24h 会话过期。失败静默——刷不到就沿用登录时的快照，不该把人挡在门外。
-onMounted(() => { auth.refreshPermissions?.().catch(() => {}) })
+// 权限同步已经前移到路由守卫（auth.ensureFresh），那里会在**做拦截判断之前**
+// 拉一次。这里保留调用只是兜底（比如直接挂载而没走守卫的场景），
+// ensureFresh 内部有去重，不会重复发请求。
+//
+// ⚠️ 别把它改回 refreshPermissions：那样又会变成"守卫先跑、刷新后到"，
+// 菜单和路由拦截依据不同的权限快照，出现"菜单里有、点进去被拦"。
+onMounted(() => { auth.ensureFresh?.().catch(() => {}) })
 
 function onCmd(c) {
   if (c === 'logout') { auth.logout(); router.replace('/login') }

@@ -5,6 +5,7 @@
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </div>
     <div class="muted" style="margin-bottom:12px">云负载均衡（转发规则），只读。点「详情」看前端转发规则与追溯到的后端实例。</div>
+    <LoadError :error="error" title="负载均衡列表未加载" @retry="load" />
 
     <el-card shadow="never">
       <div class="filters">
@@ -66,12 +67,15 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useLoadState } from '../composables/useLoadState'
+import LoadError from '../components/LoadError.vue'
 import { Refresh, View } from '@element-plus/icons-vue'
 import { listCloudLoadBalancers } from '../api/cmdb'
 import { providerLabel as plabel, providerStyle, projectStyle, regionStyle, typeStyle } from '../utils/cloud'
 import { usePaged } from '../composables/usePaged'
 
-const rows = ref([]), loading = ref(false), fp = ref(null), fs = ref(null)
+const { loading, error, run } = useLoadState()
+const rows = ref([]), fp = ref(null), fs = ref(null)
 const dlg = ref(false), detail = ref(null)
 
 const opts = computed(() => ({
@@ -84,8 +88,8 @@ function schemeLabel(s) { return ({ EXTERNAL: '外部', EXTERNAL_MANAGED: '外�
 function openDetail(row) { detail.value = row; dlg.value = true }
 
 async function load() {
-  loading.value = true
-  try { rows.value = await listCloudLoadBalancers() } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+  // 同 CloudIps：失败不能退化成"暂无数据"（CMDB-013）
+  await run(async () => { rows.value = await listCloudLoadBalancers() })
 }
 onMounted(load)
 </script>

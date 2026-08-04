@@ -5,6 +5,7 @@
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </div>
     <div class="muted" style="margin-bottom:12px">聚合各云资源的 IP（主机内外网 / 预留静态IP / 负载均衡 VIP），只读。<b style="color:#f56c6c">🔴闲置</b>=预留静态IP 没绑任何资源，仍在计费。</div>
+    <LoadError :error="error" title="IP 列表未加载" @retry="load" />
 
     <el-card shadow="never">
       <div class="filters">
@@ -38,12 +39,15 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useLoadState } from '../composables/useLoadState'
+import LoadError from '../components/LoadError.vue'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { listCloudIps } from '../api/cmdb'
 import { providerLabel as plabel, providerStyle, projectStyle, regionStyle, typeStyle } from '../utils/cloud'
 import { usePaged } from '../composables/usePaged'
 
-const rows = ref([]), loading = ref(false)
+const { loading, error, run } = useLoadState()
+const rows = ref([])
 const kw = ref(''), fp = ref(null), fk = ref(null), onlyIdle = ref(false)
 
 const opts = computed(() => ({
@@ -61,8 +65,10 @@ const idleCount = computed(() => rows.value.filter((r) => r.idle).length)
 function kindType(k) { return k.includes('VIP') ? 'warning' : k.includes('外网') ? 'primary' : 'info' }
 
 async function load() {
-  loading.value = true
-  try { rows.value = await listCloudIps() } catch (e) { ElMessage.error('加载失败') } finally { loading.value = false }
+  // 失败必须留在页面上。原来是 catch 里弹一下 toast——3 秒后消失，
+  // 表格显示"暂无数据"，看起来就像"云上真的没有 IP"。
+  // 这类系统最危险的失效模式就是故障时告诉运维"没问题"（CMDB-013）。
+  await run(async () => { rows.value = await listCloudIps() })
 }
 onMounted(load)
 </script>

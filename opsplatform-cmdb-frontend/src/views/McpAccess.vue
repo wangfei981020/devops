@@ -8,6 +8,8 @@
       把 CMDB 只读能力暴露成 MCP 工具，供你的 AI 界面 / Claude Code 连接查询
     </div>
 
+    <LoadError :error="error" title="MCP 接入信息未加载" @retry="load" />
+
     <el-card shadow="never" style="margin-bottom:14px" :body-style="embedded ? {padding:'14px'} : {}">
       <template #header><b>连接信息</b></template>
       <el-form label-width="120px" style="max-width:900px">
@@ -69,6 +71,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
+import { useLoadState } from '../composables/useLoadState'
+import LoadError from '../components/LoadError.vue'
 import { mcpInfo, mcpRegenerate } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
 
@@ -78,6 +82,7 @@ defineProps({ embedded: { type: Boolean, default: false } })
 const auth = useAuthStore()
 const canMcp = computed(() => auth.hasButton('manage_mcp'))
 const app = useAppStore()
+const { loading, error, run } = useLoadState()
 const info = ref({ token: '', tools: 0 })
 const endpoint = computed(() => location.origin + '/api/mcp')
 
@@ -92,7 +97,8 @@ const tokenMasked = computed(() => {
 const cmdFull = computed(() =>
   `claude mcp add --transport http cmdb ${endpoint.value} \\\n  --header "Authorization: Bearer ${info.value.token || '<token>'}"`)
 
-async function load() { try { info.value = await mcpInfo() } catch (e) { ElMessage.error('加载失败') } }
+// 同上：拿不到接入信息要说出来，不能显示成一个空面板（CMDB-013）
+async function load() { await run(async () => { info.value = await mcpInfo() }) }
 async function regen() {
   try { await app.showConfirm('重新生成 MCP Token？旧 token 立即失效，已配置的 AI 客户端要更新。'); const r = await mcpRegenerate(); info.value.token = r.token; ElMessage.success('已重新生成') }
   catch (e) { if (e !== 'cancel') ElMessage.error('失败') }
