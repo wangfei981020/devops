@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 
 	"opsplatform-cmdb-backend/logx"
 )
@@ -404,16 +403,17 @@ func narrowingArgs(args map[string]any) []string {
 
 // internalGet 用系统 JWT 调本进程 REST API（复用全部只读逻辑 + RBAC）。
 func (h *MCPHandler) internalGet(path string, q url.Values) (string, error) {
-	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"uid": 0, "username": "mcp", "exp": time.Now().Add(2 * time.Minute).Unix(),
-	})
-	signed, _ := tok.SignedString(h.secret)
+	// 带进程内回调令牌，不再自签 JWT。
+	//
+	//	原先这里签一个 2 分钟的 JWT 混过鉴权中间件。后来鉴权改成会话表之后
+	//	这条路就断了（进程内回调从不写会话表），MCP 全部工具返回"登录已失效"。
+	//	现在用一个只存在于内存、随进程重启失效的令牌，见 internal_auth.go。
 	u := "http://127.0.0.1" + h.port + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
 	rq, _ := http.NewRequest("GET", u, nil)
-	rq.Header.Set("Authorization", "Bearer "+signed)
+	rq.Header.Set("Authorization", "Bearer "+internalToken)
 	cli := &http.Client{Timeout: 30 * time.Second}
 	resp, err := cli.Do(rq)
 	if err != nil {

@@ -196,6 +196,16 @@ func (h *AuthHandler) Middleware() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未登录"})
 			return
 		}
+
+		// 进程内自调用（MCP 的 internalGet 回调 127.0.0.1 上的自己）。
+		// 这类请求不写会话表，中间件只认会话表的话，MCP 的 36 个工具
+		// 会全部返回"登录已失效"——见 internal_auth.go 的说明。
+		if isInternalCall(raw) {
+			setInternalIdentity(c)
+			c.Next()
+			return
+		}
+
 		th := hashToken(raw)
 
 		var userID int
