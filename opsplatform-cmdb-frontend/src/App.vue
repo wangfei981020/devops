@@ -116,6 +116,7 @@ const menus = shallowRef([
     { path: '/notify', label: '通知', icon: Bell },
     { path: '/cron', label: '定时任务', icon: Clock },
     { path: '/task-runs', label: '执行记录', icon: Tickets },
+    { path: '/users', label: '用户管理', icon: User },
     { path: '/audit', label: '操作审计', icon: Document },
     // 「AI 接入」并进「接入管理」的 mcp tab：它就是一个接入点 + 一份凭据，
     // 和注册商/云账号/观测数据源同类，不值得单占一个菜单位。/mcp 路由保留做兼容跳转

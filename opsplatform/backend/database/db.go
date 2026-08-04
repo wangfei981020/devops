@@ -1654,6 +1654,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_cmdb_notify", "menu:cmdb_notify", "[系统] 通知", "/cmdb/notify", "perm_menu_cmdb", "", 104},
 		{"perm_menu_cmdb_cron", "menu:cmdb_cron", "[系统] 定时任务", "/cmdb/cron", "perm_menu_cmdb", "", 106},
 		{"perm_menu_cmdb_task_runs", "menu:cmdb_task_runs", "[系统] 执行记录", "/cmdb/task-runs", "perm_menu_cmdb", "", 108},
+		{"perm_menu_cmdb_users", "menu:cmdb_users", "[系统] 用户管理", "/cmdb/users", "perm_menu_cmdb", "", 109},
 		{"perm_menu_cmdb_audit", "menu:cmdb_audit", "[系统] 操作审计", "/cmdb/audit", "perm_menu_cmdb", "", 110},
 	}
 
@@ -1884,6 +1885,7 @@ func initDefaultRolesAndPermissions() {
 		// CMDB — 审计域
 		//
 		//	能改 ≠ 能把别人的改动撤掉，所以回滚独立成码。
+		{"perm_btn_cmdb_manage_users", "cmdb:manage_users", "[CMDB] 用户管理", "允许改本地账号密码、踢用户下线、删除 SSO 影子账号。⚠️ 运维平台的 SSO 账号本体不在 CMDB 管理"},
 		{"perm_btn_cmdb_revert_change", "cmdb:revert_change", "[CMDB] 变更回滚", "允许把一次变更回滚到变更前的内容。⚠️ 部分回滚会写入外部系统（如 Cloudflare DNS）"},
 	}
 
@@ -2082,7 +2084,7 @@ var cmdbMenuCodes = []string{
 	"menu:cmdb_k8s_topology", "menu:cmdb_k8s_ns_project",
 	"menu:cmdb_event_center", "menu:cmdb_k8s_usage", "menu:cmdb_cost",
 	"menu:cmdb_basic", "menu:cmdb_integrations", "menu:cmdb_notify",
-	"menu:cmdb_cron", "menu:cmdb_task_runs", "menu:cmdb_audit",
+	"menu:cmdb_cron", "menu:cmdb_task_runs", "menu:cmdb_users", "menu:cmdb_audit",
 }
 
 var cmdbButtonCodes = []string{
@@ -2095,7 +2097,7 @@ var cmdbButtonCodes = []string{
 	"cmdb:manage_cost_rates",
 	"cmdb:manage_integrations", "cmdb:manage_mcp",
 	"cmdb:manage_basic", "cmdb:manage_notify", "cmdb:manage_cron", "cmdb:run_task",
-	"cmdb:revert_change",
+	"cmdb:manage_users", "cmdb:revert_change",
 }
 
 // initCMDBRoleTemplates 预置 CMDB 的 5 个角色模板。
@@ -2144,7 +2146,7 @@ func initCMDBRoleTemplates() {
 	}{
 		{"role_cmdb_viewer", "cmdb_viewer", "CMDB 只读",
 			"看得到全部台账但改不了任何东西；不含云成本、接入凭据与操作审计",
-			codes(except(allMenus, "menu:cmdb_cost", "menu:cmdb_integrations", "menu:cmdb_audit"))},
+			codes(except(allMenus, "menu:cmdb_cost", "menu:cmdb_integrations", "menu:cmdb_users", "menu:cmdb_audit"))},
 
 		{"role_cmdb_asset", "cmdb_asset", "CMDB 资产管理员",
 			"域名/证书/CDN 与云资源台账的日常维护。不含 DNS 写入与证书签发（那两项会直接改动线上解析和调用 CA）",

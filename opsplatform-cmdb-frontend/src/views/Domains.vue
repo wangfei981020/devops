@@ -426,6 +426,18 @@
           <el-tag v-if="cntBy('failed')" type="danger">失败 {{ cntBy('failed') }}</el-tag>
           <span class="muted" style="margin-left:auto">续费年数：{{ batchRenew.period }} 年</span>
         </div>
+        <!-- 花钱的操作必须在确认前把金额摆出来 -->
+        <div v-if="totalText" class="brtotal">
+          <span>预计域名费合计</span>
+          <b>{{ totalText }}</b>
+          <span class="muted">（{{ batchRenew.period }} 年 × {{ batchRenew.priced }} 个域名）</span>
+          <span v-if="batchRenew.unpriced" class="warn">
+            另有 {{ batchRenew.unpriced }} 个未取到报价，实扣以 GoDaddy 结算为准
+          </span>
+        </div>
+        <div v-if="totalText" class="muted" style="font-size:12px;margin-bottom:8px">
+          ⚠ 仅域名费估算，另加税费/ICANN 规费；实扣总额以 GoDaddy 账单为准
+        </div>
         <el-alert v-if="batchRenew.warning" type="warning" :closable="false" show-icon
                   style="margin-bottom:10px" :title="batchRenew.warning" />
         <el-table :data="batchRenew.items" size="small" max-height="380" border>
@@ -442,6 +454,18 @@
                 <span v-if="row.expiry_after"> → <b class="ok">{{ row.expiry_after }}</b></span>
                 <span v-else-if="row.expiry_expect" class="muted"> → {{ row.expiry_expect }}（预计）</span>
               </span>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="单价/年" width="110" align="right">
+            <template #default="{ row }">
+              <span v-if="row.price_per_year > 0">{{ row.currency || 'USD' }} {{ row.price_per_year.toFixed(2) }}</span>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="小计" width="110" align="right">
+            <template #default="{ row }">
+              <b v-if="row.price_per_year > 0">{{ row.currency || 'USD' }} {{ (row.price_per_year * batchRenew.period).toFixed(2) }}</b>
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
@@ -784,11 +808,20 @@ function openDomHist(row) {
 const batchRenew = reactive({
   show: false, step: 'input', text: '', period: 1,
   items: [], renewable: 0, warning: '', checking: false, running: false,
+  totals: {}, priced: 0, unpriced: 0,
+})
+
+// 总额按币种分开展示：混币种硬加出来的数没有意义
+const totalText = computed(() => {
+  const t = batchRenew.totals || {}
+  const parts = Object.entries(t).filter(([, v]) => v > 0).map(([cur, v]) => `${cur} ${v.toFixed(2)}`)
+  return parts.join(' + ')
 })
 
 function openBatchRenew() {
   Object.assign(batchRenew, { show: true, step: 'input', text: '', period: 1,
-    items: [], renewable: 0, warning: '', checking: false, running: false })
+    items: [], renewable: 0, warning: '', checking: false, running: false,
+    totals: {}, priced: 0, unpriced: 0 })
 }
 
 function cntBy(st) { return batchRenew.items.filter((x) => x.status === st).length }
@@ -820,7 +853,9 @@ async function doBatchRenew() {
   // 二次确认写明数量和年数——这是花钱的操作，不能让人点得太顺手
   try {
     await app.showConfirm(
-      `将为 ${batchRenew.renewable} 个域名各续费 ${batchRenew.period} 年，这会真实扣费且无法回滚。确定继续？`,
+      `将为 ${batchRenew.renewable} 个域名各续费 ${batchRenew.period} 年，`
+      + (totalText.value ? `预计域名费 ${totalText.value}` : '预计费用未知')
+      + `。这会真实扣费且无法回滚，确定继续？`,
       '确认批量续费')
   } catch (_) { return }
   batchRenew.running = true
@@ -1360,6 +1395,10 @@ onMounted(load)
 <style scoped>
 .brsum { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .brsum .muted { font-size: 12px; }
+.brtotal { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 8px;
+  background: #fdf6ec; border: 1px solid #f5dab1; border-radius: 4px; font-size: 13px; }
+.brtotal b { font-size: 15px; color: #b88230; }
+.brtotal .warn { color: #e6a23c; margin-left: auto; font-size: 12px; }
 .ok { color: #2f7d31; }
 .filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }

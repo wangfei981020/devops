@@ -115,6 +115,7 @@ func main() {
 	harborH.RegisterAdmin(api) // Harbor 接入配置
 	mcpH := handlers.NewMCPHandler(db, cfg.JWTSecret, cfg.Port)
 	mcpH.RegisterAuthed(api)
+	handlers.NewUserHandler(db).Register(api)  // 用户管理（区分本地账号与运维平台 SSO 影子账号）
 	handlers.NewAuditHandler(db).Register(api) // 操作审计查询 + 变更回滚
 	handlers.StartAuditCleanup(db)             // 按保留期清理（默认 0=永久，不删）
 	// 周期全量同步所有启用集群（阶段3），默认每 120s 一轮

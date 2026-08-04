@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -31,17 +32,19 @@ import (
 const batchRenewMax = 50
 
 type batchRenewItem struct {
-	Domain       string `json:"domain"`
-	CIID         int64  `json:"ci_id,omitempty"`
-	Status       string `json:"status"` // ok / not_found / unsupported / duplicated
-	Reason       string `json:"reason,omitempty"`
-	ExpiryBefore string `json:"expiry_before,omitempty"`
-	ExpiryExpect string `json:"expiry_expect,omitempty"` // 预计续到（preview 用）
-	ExpiryAfter  string `json:"expiry_after,omitempty"`  // 实际续到（执行后）
-	OrderID      string `json:"order_id,omitempty"`
-	DryRun       bool   `json:"dry_run,omitempty"`
-	Env          string `json:"env,omitempty"`
-	LedgerSaved  bool   `json:"ledger_saved,omitempty"`
+	Domain       string  `json:"domain"`
+	CIID         int64   `json:"ci_id,omitempty"`
+	Status       string  `json:"status"` // ok / not_found / unsupported / duplicated
+	Reason       string  `json:"reason,omitempty"`
+	ExpiryBefore string  `json:"expiry_before,omitempty"`
+	ExpiryExpect string  `json:"expiry_expect,omitempty"`  // 预计续到（preview 用）
+	ExpiryAfter  string  `json:"expiry_after,omitempty"`   // 实际续到（执行后）
+	PricePerYear float64 `json:"price_per_year,omitempty"` // 单价/年（估算，查不到为 0）
+	Currency     string  `json:"currency,omitempty"`
+	OrderID      string  `json:"order_id,omitempty"`
+	DryRun       bool    `json:"dry_run,omitempty"`
+	Env          string  `json:"env,omitempty"`
+	LedgerSaved  bool    `json:"ledger_saved,omitempty"`
 }
 
 // parseDomainList 从一坨文本里抽域名：换行/逗号/分号/空格都当分隔符。
@@ -100,6 +103,66 @@ func (h *SyncHandler) resolveBatchDomains(names []string, period int) []batchRen
 	return items
 }
 
+// fillBatchPrices 给可续费的域名取续费报价。
+//
+//	报价是**只读**的（GetRenewalPrice 不扣费），所以可以并发——
+//	这点和续费本身不同，续费必须串行。但仍然限并发数：
+//	一次 50 个域名同时打注册商 API 容易触发限流，反而一个价都拿不到。
+//
+//	取不到价不阻断：前端显示「—」即可。花钱前看不到金额是不行的，
+//	但"某个域名查不到价"不该让整批预览失败。
+func (h *SyncHandler) fillBatchPrices(ctx context.Context, items []batchRenewItem) {
+	sem := make(chan struct{}, 6)
+	var wg sync.WaitGroup
+	for i := range items {
+		if items[i].Status != "ok" {
+			continue
+		}
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			wa, _, domain, _, err := h.writeAdapterForDomain(fmt.Sprint(items[idx].CIID))
+			if err != nil {
+				return
+			}
+			p, err := wa.GetRenewalPrice(ctx, domain)
+			if err != nil || p.AmountMicro <= 0 {
+				logx.Line("domain_renew", fmt.Sprintf("批量预览取价失败 domain=%s: %v", domain, err))
+				return
+			}
+			// 并发写不同下标是安全的（各 goroutine 只碰自己那一个元素）
+			items[idx].PricePerYear = float64(p.AmountMicro) / 1_000_000.0
+			items[idx].Currency = p.Currency
+		}(i)
+	}
+	wg.Wait()
+}
+
+// sumBatchTotals 按币种汇总预计域名费，并返回取到价的域名个数。
+//
+//	混币种不硬加成一个数——USD 20 + CNY 150 加起来是没有意义的，
+//	前端按币种分别展示。取不到价的（PricePerYear<=0）不计入，
+//	由调用方用 renewable-priced 告诉用户"还有几个没算进去"。
+func sumBatchTotals(items []batchRenewItem, period int) (map[string]float64, int) {
+	totals := map[string]float64{}
+	priced := 0
+	for _, it := range items {
+		if it.Status != "ok" || it.PricePerYear <= 0 {
+			continue
+		}
+		cur := it.Currency
+		if cur == "" {
+			cur = "USD" // 厂商没返回币种时的兜底，与单个续费一致
+		}
+		totals[cur] += it.PricePerYear * float64(period)
+		priced++
+	}
+	return totals, priced
+}
+
 // PreviewBatchRenew POST /domains/renew-batch/preview
 // body {domains: "多行文本或数组", period}
 func (h *SyncHandler) PreviewBatchRenew(c *gin.Context) {
@@ -132,7 +195,16 @@ func (h *SyncHandler) PreviewBatchRenew(c *gin.Context) {
 			okCount++
 		}
 	}
-	out := gin.H{"items": items, "total": len(items), "renewable": okCount, "period": in.Period}
+
+	// 取报价：整体限时，超时的域名没价格但不影响其余
+	priceCtx, cancel := context.WithTimeout(c.Request.Context(), 25*time.Second)
+	h.fillBatchPrices(priceCtx, items)
+	cancel()
+
+	totals, priced := sumBatchTotals(items, in.Period)
+
+	out := gin.H{"items": items, "total": len(items), "renewable": okCount, "period": in.Period,
+		"totals": totals, "priced": priced, "unpriced": okCount - priced}
 	if over > 0 {
 		// 静默截断等于骗人：多出来的那些用户以为也会续
 		out["truncated"] = over
@@ -210,6 +282,11 @@ func (h *SyncHandler) BatchRenewDomains(c *gin.Context) {
 		return
 	}
 
+	// 执行前再取一次价：台账要记下单时的报价，而不是预览那一刻的
+	priceCtx, cancelPrice := context.WithTimeout(c.Request.Context(), 25*time.Second)
+	h.fillBatchPrices(priceCtx, items)
+	cancelPrice()
+
 	logx.JCtx(c.Request.Context(), "domain_renew", "batch_start", map[string]any{
 		"count": renewable, "period": in.Period, "operator": currentUser(c)})
 
@@ -220,7 +297,14 @@ func (h *SyncHandler) BatchRenewDomains(c *gin.Context) {
 		}
 		// 每个域名独立超时：一个卡住不该把后面的都拖死
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 40*time.Second)
-		res := h.renewOne(ctx, c, items[i].CIID, items[i].Domain, in.Period, in.QuotedCurrency, in.QuotedAmount)
+		// 报价按域名各自的来（台账要能对上每一笔实扣），
+		// 请求体里的 quoted_* 只作为取不到价时的兜底
+		qCur, qAmt := in.QuotedCurrency, in.QuotedAmount
+		if items[i].PricePerYear > 0 {
+			qCur = items[i].Currency
+			qAmt = items[i].PricePerYear * float64(in.Period)
+		}
+		res := h.renewOne(ctx, c, items[i].CIID, items[i].Domain, in.Period, qCur, qAmt)
 		cancel()
 
 		if res.Err != "" {

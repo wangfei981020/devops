@@ -298,3 +298,9 @@ export const revertChange = (cid, force) => http.post(`/audit-changes/${cid}/rev
 // 域名批量续费（两步：先 preview 看清楚，再执行）
 export const previewBatchRenew = (body) => http.post('/domains/renew-batch/preview', body).then((r) => r.data)
 export const batchRenewDomains = (body) => http.post('/domains/renew-batch', body).then((r) => r.data)
+
+// 用户管理（本地账号 vs 运维平台 SSO 影子账号）
+export const listUsers = () => http.get('/users').then((r) => r.data)
+export const changeUserPassword = (id, password) => http.put(`/users/${id}/password`, { password }).then((r) => r.data)
+export const kickUser = (id) => http.post(`/users/${id}/kick`).then((r) => r.data)
+export const deleteUser = (id) => http.delete(`/users/${id}`).then((r) => r.data)

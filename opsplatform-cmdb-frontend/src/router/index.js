@@ -50,6 +50,7 @@ const routes = [
   { path: '/obs-endpoints', redirect: { path: '/integrations', query: { tab: 'obs' } } },
   { path: '/mcp', redirect: { path: '/integrations', query: { tab: 'mcp' } } },
   { path: '/cloud-accounts', redirect: { path: '/integrations', query: { tab: 'cloud' } } },
+  { path: '/users', component: () => import('../views/Users.vue'), meta: { title: '用户管理' } },
   { path: '/audit', component: () => import('../views/Audit.vue'), meta: { title: '操作审计' } },
   { path: '/forbidden', component: () => import('../views/Forbidden.vue'),
     meta: { title: '无权访问' } },
@@ -97,6 +98,7 @@ const ROUTE_PERM = {
   '/notify': 'notify',
   '/cron': 'cron',
   '/task-runs': 'task_runs',
+  '/users': 'users',
   '/audit': 'audit',
 }
 

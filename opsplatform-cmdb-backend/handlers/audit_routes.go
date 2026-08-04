@@ -135,6 +135,13 @@ var auditRoutes = map[string]auditRoute{
 	"POST /api/relations":                {"relation.create", "relation", "ci_relations", "", "INSERT", "local"},
 	"DELETE /api/relations/:id":          {"relation.delete", "relation", "ci_relations", "id", "DELETE", "local"},
 
+	// ── 用户 ──
+	// 改密码/踢下线/删账号都不做行级快照：密码 hash 不该进审计快照，
+	// 会话是运行时状态、回滚它没有意义
+	"PUT /api/users/:id/password": {"user.change_password", "user", "", "id", "", "none"},
+	"POST /api/users/:id/kick":    {"user.kick", "user", "", "id", "", "none"},
+	"DELETE /api/users/:id":       {"user.delete", "user", "", "id", "", "none"},
+
 	// ── 通知 ──
 	"POST /api/notify-users":         {"notify_user.create", "notify_user", "notify_users", "", "INSERT", "local"},
 	"DELETE /api/notify-users/:id":   {"notify_user.delete", "notify_user", "notify_users", "id", "DELETE", "local"},

@@ -132,6 +132,7 @@ var permPrefixRules = []permRule{
 	{"/api/dashboard", "menu:cmdb_overview", ""},
 
 	// 审计：看审计要菜单权限；回滚是独立按钮权限——能改 ≠ 能把别人的改动撤掉
+	{"/api/users", "menu:cmdb_users", "cmdb:manage_users"},
 	{"/api/audit-logs", "menu:cmdb_audit", "cmdb:revert_change"},
 	{"/api/audit-changes", "menu:cmdb_audit", "cmdb:revert_change"},
 	// 对象详情页内嵌的变更历史：跟着对象走，不单独要审计菜单权限，
