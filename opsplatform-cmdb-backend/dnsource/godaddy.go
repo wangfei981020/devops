@@ -271,18 +271,48 @@ func (a *GoDaddy) RenewDomain(ctx context.Context, domain string, period int) (R
 	}
 	res := RenewResult{RawBody: truncateStr(string(body), 1000)}
 	if len(body) > 0 {
+		// ⚠️ orderId 用 flexStr 而不是 json.Number：GoDaddy 正常返回数字，
+		// 但只要哪天返回字符串型订单号，json.Number 就会让**整个 Unmarshal 失败**——
+		// 订单号、金额、币种一起静默丢掉。订单号是事后对账唯一的凭据，
+		// 丢了就只能拿日期去账单里翻。所以这里两种类型都收。
 		var raw struct {
-			OrderID  json.Number `json:"orderId"`
-			Total    int64       `json:"total"`
-			Currency string      `json:"currency"`
+			OrderID  flexStr `json:"orderId"`
+			Total    int64   `json:"total"`
+			Currency string  `json:"currency"`
 		}
-		if json.Unmarshal(body, &raw) == nil {
-			res.OrderID = raw.OrderID.String()
+		if err := json.Unmarshal(body, &raw); err != nil {
+			// 钱已经扣了却读不出订单号，必须留痕——不然事后连"当时厂商返回了什么"都查不到
+			logx.JCtx(ctx, "godaddy_write", "renew_parse_fail", map[string]any{
+				"domain": domain, "error": err.Error(), "raw": res.RawBody})
+		} else {
+			res.OrderID = string(raw.OrderID)
 			res.AmountMicro = raw.Total
 			res.Currency = raw.Currency
 		}
 	}
 	return res, nil
+}
+
+// flexStr 是个"数字和字符串都认"的字符串。
+// 厂商 JSON 里同一个字段换类型是常见事，不该因此把整条响应解析废掉。
+type flexStr string
+
+func (f *flexStr) UnmarshalJSON(b []byte) error {
+	s := string(b)
+	if s == "null" {
+		*f = ""
+		return nil
+	}
+	if len(s) >= 2 && s[0] == '"' {
+		var v string
+		if err := json.Unmarshal(b, &v); err != nil {
+			return err
+		}
+		*f = flexStr(v)
+		return nil
+	}
+	*f = flexStr(s) // 数字原样取字面量，避免走 float64 变成 1.234567e+06
+	return nil
 }
 
 // SetAutoRenew PATCH /v1/domains/{domain} —— 开/关自动续费（不扣费）。

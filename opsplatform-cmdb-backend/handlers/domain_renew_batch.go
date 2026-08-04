@@ -81,6 +81,19 @@ func getJob(id string) *batchRenewJob {
 // 出错时的代价太大。需要更多就分批做。
 const batchRenewMax = 50
 
+// batchRenewGap 两个域名之间的间隔；batchRenewRetries 每个域名最多**额外**重试几次。
+//
+//	为什么要间隔：GoDaddy 对写接口的限流比读接口严得多，连着打几次
+//	很容易被拒。而限流失败在批量结果里的样子就是"莫名其妙有一个没续上"。
+//
+//	⚠️ 重试有前置条件，不是无脑重试：必须 renewOne 已经**回查到期日确认没扣费**
+//	（res.SafeRetry）。续费是非幂等写，"失败了就再来一次"在这里等于第二次扣款。
+const (
+	batchRenewGap     = 3 * time.Second
+	batchRenewRetries = 2
+	batchRetryBackoff = 8 * time.Second
+)
+
 type batchRenewItem struct {
 	Domain       string  `json:"domain"`
 	CIID         int64   `json:"ci_id,omitempty"`
@@ -99,6 +112,9 @@ type batchRenewItem struct {
 	// 这类没有订单号，要人去账单核对，而且**绝不能重试**
 	Uncertain bool   `json:"uncertain,omitempty"`
 	Msg       string `json:"msg,omitempty"`
+	// Attempts：实际打了几次厂商接口。>1 说明重试过，展示出来是为了
+	// 让人在对账时知道"这个域名不止发过一次请求"，别把它当普通一次性操作看。
+	Attempts int `json:"attempts,omitempty"`
 }
 
 // parseDomainList 从一坨文本里抽域名：换行/逗号/分号/空格都当分隔符。
@@ -376,27 +392,35 @@ func (h *SyncHandler) runBatchRenew(job *batchRenewJob, period int, qCurIn strin
 	h.fillBatchPrices(priceCtx, job.Items)
 	cancelPrice()
 
+	first := true
 	for i := range job.Items {
 		if job.Items[i].Status != "ok" {
 			continue
 		}
+		// 域名之间留间隔：连着打注册商的写接口很容易撞限流，
+		// 而限流失败在批量里表现为"莫名其妙有一个没续上"。
+		// 域名数量本来就不大，这点时间换的是结果确定性。
+		if !first {
+			time.Sleep(batchRenewGap)
+		}
+		first = false
+
 		qCur, qAmt := qCurIn, qAmtIn
 		if job.Items[i].PricePerYear > 0 {
 			qCur = job.Items[i].Currency
 			qAmt = job.Items[i].PricePerYear * float64(period)
 		}
 
-		// 每个域名独立超时：一个卡住不该把后面的都拖死
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		res := h.renewOne(ctx, job.Operator, job.Items[i].CIID, job.Items[i].Domain, period, qCur, qAmt)
-		cancel()
+		res := h.renewOneWithRetry(job, i, period, qCur, qAmt)
 
 		batchJobsMu.Lock()
 		if res.Err != "" {
 			job.Items[i].Status = "failed"
 			job.Items[i].Reason = res.Err
+			job.Items[i].Attempts = res.Attempts
 			job.Failed++
 		} else {
+			job.Items[i].Attempts = res.Attempts
 			job.Items[i].OrderID = res.OrderID
 			job.Items[i].ExpiryAfter = res.ExpiryAfter
 			job.Items[i].DryRun = res.DryRun
@@ -418,17 +442,74 @@ func (h *SyncHandler) runBatchRenew(job *batchRenewJob, period int, qCurIn strin
 
 	batchJobsMu.Lock()
 	job.Finished = true
-	job.Msg = fmt.Sprintf("续费完成：成功 %d 个", job.Succeeded)
+	retried := 0
+	for _, it := range job.Items {
+		if it.Attempts > 1 {
+			retried++
+		}
+	}
+	// 结果必须把三态说全。原先只报一个成功数，"有一个没续上"就这么被吞掉了——
+	// 用户是看 GoDaddy 账单才发现少了一个的。
+	job.Msg = fmt.Sprintf("续费完成：共 %d 个，成功 %d 个", job.Total, job.Succeeded-job.Uncertain)
 	if job.Uncertain > 0 {
-		job.Msg += fmt.Sprintf("（其中 %d 个响应超时但已确认扣费，需去账单核对订单号）", job.Uncertain)
+		job.Msg += fmt.Sprintf("，待核对 %d 个（响应超时但已确认扣费，去账单按日期找订单号，切勿重试）", job.Uncertain)
 	}
 	if job.Failed > 0 {
-		job.Msg += fmt.Sprintf("，失败 %d 个", job.Failed)
+		job.Msg += fmt.Sprintf("，失败 %d 个（下方逐条列了原因）", job.Failed)
+	}
+	if retried > 0 {
+		job.Msg += fmt.Sprintf("；其中 %d 个重试过（重试前均已回查确认未扣费）", retried)
 	}
 	batchJobsMu.Unlock()
 
 	logx.Line("domain_renew", fmt.Sprintf("批量续费任务 %s 完成：成功 %d 待核对 %d 失败 %d",
 		job.ID, job.Succeeded, job.Uncertain, job.Failed))
+}
+
+// renewOneWithRetry 续一个域名，失败且**确认安全**时重试。
+//
+//	这是整个批量续费里最需要小心的地方。续费是非幂等写：
+//	同一个域名发两次请求 = 扣两笔钱。所以重试的门槛设得很高，
+//	必须同时满足两条，缺一不可：
+//
+//	  1. res.SafeRetry —— renewOne 已经回查厂商的到期日，**读到了**且还是旧值，
+//	     即这次请求确定没生效。"查不出来"不算，那种情况一律不重试。
+//	  2. 错误是瞬时类（限流/超时/5xx）—— 凭据错、域名不属于本账户这类
+//	     重试多少次都一样，白打 API 还多一次限流配额。
+//
+//	重试前退避一段时间：正是限流导致的失败，立刻重试必然又被拒。
+func (h *SyncHandler) renewOneWithRetry(job *batchRenewJob, idx, period int, qCur string, qAmt float64) renewOneResult {
+	it := &job.Items[idx]
+	var res renewOneResult
+
+	for attempt := 1; attempt <= batchRenewRetries+1; attempt++ {
+		// 每个域名每次尝试独立超时：一个卡住不该把后面的都拖死
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		res = h.renewOne(ctx, job.Operator, it.CIID, it.Domain, period, qCur, qAmt)
+		cancel()
+		res.Attempts = attempt
+
+		if res.Err == "" || !res.SafeRetry || attempt > batchRenewRetries {
+			if attempt > 1 {
+				logx.Line("domain_renew", fmt.Sprintf("批量续费 %s 第 %d 次尝试结束：err=%q uncertain=%v",
+					it.Domain, attempt, res.Err, res.Uncertain))
+			}
+			return res
+		}
+
+		logx.Line("domain_renew", fmt.Sprintf(
+			"批量续费 %s 第 %d 次失败但已确认未扣费，%v 后重试：%s",
+			it.Domain, attempt, batchRetryBackoff, res.Err))
+
+		// 让轮询的前端看得到"在重试"，而不是干等着以为卡死了
+		batchJobsMu.Lock()
+		it.Msg = fmt.Sprintf("第 %d 次尝试失败（已确认未扣费），正在重试…", attempt)
+		it.Attempts = attempt
+		batchJobsMu.Unlock()
+
+		time.Sleep(batchRetryBackoff)
+	}
+	return res
 }
 
 // BatchRenewStatus GET /domains/renew-batch/:id —— 轮询进度

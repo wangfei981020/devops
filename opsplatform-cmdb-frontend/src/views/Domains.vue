@@ -467,7 +467,10 @@
               <span v-if="row.expiry_before">
                 {{ row.expiry_before }}
                 <span v-if="row.expiry_after"> → <b class="ok">{{ row.expiry_after }}</b></span>
-                <span v-else-if="row.expiry_expect" class="muted"> → {{ row.expiry_expect }}（预计）</span>
+                <!-- 「（预计）」只在还没执行时给。失败的行继续显示预期到期日
+                     会让人以为续上了——恰恰是这次要修的那类误导。 -->
+                <span v-else-if="row.expiry_expect && row.status === 'ok'" class="muted"> → {{ row.expiry_expect }}（预计）</span>
+                <span v-else-if="row.status === 'failed'" class="fail-txt"> → 未续上</span>
               </span>
               <span v-else class="muted">—</span>
             </template>
@@ -484,13 +487,20 @@
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="订单号 / 说明" min-width="230" show-overflow-tooltip>
+          <el-table-column label="订单号 / 说明" min-width="240" show-overflow-tooltip>
             <template #default="{ row }">
+              <!-- ⚠️ 判据必须是 row.uncertain，不能是"msg 非空"。
+                   msg 在 dry-run 成功和"重试中"两种情况下也有值，
+                   按 msg 判会把它们误标成「已扣费」——那是最不该错的一格。 -->
               <code v-if="row.order_id">{{ row.order_id }}</code>
-              <el-tooltip v-else-if="row.msg" :content="row.msg">
+              <el-tooltip v-else-if="row.uncertain" :content="row.msg">
                 <span class="warn-txt">响应超时，已确认扣费 →去账单核对</span>
               </el-tooltip>
+              <span v-else-if="row.status === 'failed'" class="fail-txt">{{ row.reason }}</span>
+              <span v-else-if="row.msg" class="muted">{{ row.msg }}</span>
               <span v-else class="muted">{{ row.reason || '—' }}</span>
+              <el-tag v-if="row.attempts > 1" size="small" type="info" effect="plain"
+                      style="margin-left:6px">试了 {{ row.attempts }} 次</el-tag>
             </template>
           </el-table-column>
         </el-table>
@@ -889,15 +899,18 @@ async function doBatchRenew() {
     })
     if (r.job_id) {
       batchRenew.jobId = r.job_id
+      batchRenew.total = r.total || batchRenew.renewable
+      batchRenew.done = 0
       batchRenew.result = r.msg || '任务已提交，后台执行中…'
       batchRenew.resultType = 'info'
-      pollBatch()
+      pollBatch()          // running 保持 true，由 pollBatch 负责收尾
       return
     }
     batchRenew.items = r.items || []
     batchRenew.renewable = 0
     batchRenew.result = r.msg || '执行完成'
     batchRenew.resultType = r.failed ? 'error' : (r.uncertain ? 'warning' : 'success')
+    batchRenew.running = false
     load()
   } catch (e) {
     // 409 = 预览之后台账变了，必须重新看一遍
@@ -907,8 +920,67 @@ async function doBatchRenew() {
       batchRenew.step = 'preview'
     }
     ElMessage.error(d?.error || e?.message || '批量续费失败')
-  } finally { batchRenew.running = false }
+    batchRenew.running = false
+  }
+  // ⚠️ 这里刻意不用 finally：异步分支 return 时 finally 照样会执行，
+  // 会立刻把 running 置回 false——进度条根本不显示，看着像没在跑。
 }
+
+// pollBatch 轮询后台续费任务，直到 finished。
+//
+//	轮询 3 秒一次：单个域名续费本来就要十几秒，更密只是白打接口。
+//	弹窗关掉后**继续轮**（后台任务照跑），只是没人看；
+//	重新打开弹窗时还能接着看到最新进度。
+//
+//	网络抖动不中断轮询——连续失败到一定次数才放弃，并明确告诉用户
+//	"任务还在后台跑，结果去续费记录看"，而不是让人以为续费失败了。
+let pollTimer = null
+async function pollBatch() {
+  clearTimeout(pollTimer)
+  const jobId = batchRenew.jobId
+  let misses = 0
+
+  const tick = async () => {
+    if (batchRenew.jobId !== jobId) return   // 又发起了新任务，这条轮询作废
+    try {
+      const s = await batchRenewStatus(jobId)
+      misses = 0
+      batchRenew.items = s.items || batchRenew.items
+      batchRenew.done = s.done || 0
+      batchRenew.total = s.total || batchRenew.total
+      batchRenew.result = s.msg || `执行中… ${s.done}/${s.total}`
+      if (s.finished) {
+        batchRenew.running = false
+        batchRenew.renewable = 0
+        // 三态各有各的颜色：失败要红，待核对要黄（那是钱已经扣了但没订单号）
+        batchRenew.resultType = s.failed ? 'error' : (s.uncertain ? 'warning' : 'success')
+        load()                                // 到期日变了，刷新列表
+        return
+      }
+      batchRenew.resultType = 'info'
+    } catch (e) {
+      // 404 = 任务过期（超过 2h）或后端重启了。真实结果在续费记录里，
+      // 这里不能报"续费失败"——钱可能已经扣了，报错会诱导人去重试。
+      if (e?.status === 404) {
+        batchRenew.running = false
+        batchRenew.resultType = 'warning'
+        batchRenew.result = '进度已过期或服务重启，任务结果请到「续费记录」核对（不要直接重试）'
+        load()
+        return
+      }
+      if (++misses >= 5) {
+        batchRenew.running = false
+        batchRenew.resultType = 'warning'
+        batchRenew.result = '进度查询连续失败，但任务仍在后台执行，结果请看「续费记录」'
+        return
+      }
+    }
+    pollTimer = setTimeout(tick, 3000)
+  }
+  pollTimer = setTimeout(tick, 1500)
+}
+
+onBeforeUnmount(() => clearTimeout(pollTimer))
 
 // 从 K8s 入口自动填模块(只补空的)
 const autoLinking = ref(false)
@@ -1430,6 +1502,7 @@ onMounted(load)
 .brtotal b { font-size: 15px; color: #b88230; }
 .brtotal .warn { color: #e6a23c; margin-left: auto; font-size: 12px; }
 .warn-txt { color: #e6a23c; font-size: 12px; }
+.fail-txt { color: #f56c6c; font-size: 12px; }
 .ok { color: #2f7d31; }
 .filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }

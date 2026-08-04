@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -119,6 +120,33 @@ type renewOneResult struct {
 	LedgerSaved  bool
 	Msg          string
 	Err          string
+	// SafeRetry=true：**已经回查确认没扣费**，且错误是瞬时类（限流/超时/5xx）。
+	// 只有同时满足这两条才允许自动重试——少一条都可能变成第二次扣款。
+	SafeRetry bool
+	// Attempts 实际打了几次厂商接口（批量重试时由调用方填）
+	Attempts int
+}
+
+// isTransientRenewErr 判断这个错误重试一次有没有意义。
+//
+//	限流、超时、网关 5xx 是"等一会就好"，值得重试；
+//	凭据错、域名不属于该账户、余额不足是确定性失败，重试只是白打一次 API。
+//	注意：这个函数**只管"值不值得"**，"安不安全"由到期日回查负责，两者必须都成立。
+func isTransientRenewErr(err error) bool {
+	var rl *dnsource.RateLimitError
+	if errors.As(err, &rl) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	for _, k := range []string{
+		"timeout", "deadline exceeded", "connection reset", "eof", "broken pipe",
+		"too many requests", "429", "500", "502", "503", "504", "temporarily",
+	} {
+		if strings.Contains(s, k) {
+			return true
+		}
+	}
+	return false
 }
 
 // renewOne 续一个域名。单个续费和批量续费共用这一份——
@@ -157,7 +185,8 @@ func (h *SyncHandler) renewOne(ctx context.Context, operator string, ciID int64,
 		//	所以失败后必须回查到期日核对：到期日往前走了就是实际成功。
 		logx.JCtx(ctx, "domain_renew", "renew_fail", map[string]any{"domain": domain, "period": period, "error": err.Error()})
 
-		if newExp, ok := verifyRenewedByExpiry(ctx, wa, domain, expiryBefore.String, period); ok {
+		newExp, renewed, verified := verifyRenewedByExpiry(ctx, wa, domain, expiryBefore.String, period)
+		if renewed {
 			logx.JCtx(ctx, "domain_renew", "renew_fail_but_actually_done", map[string]any{
 				"domain": domain, "period": period, "expiry_before": expiryBefore.String,
 				"expiry_after": newExp, "error": err.Error()})
@@ -179,12 +208,23 @@ func (h *SyncHandler) renewOne(ctx context.Context, operator string, ciID int64,
 				Env: wa.EnvLabel(), LedgerSaved: ledgerOK,
 				Uncertain: true,
 				Msg: fmt.Sprintf("续费请求未收到响应（%s），但核对到期日已从 %s 变为 %s，"+
-					"判定**已实际扣费**。订单号请到 GoDaddy 账单按日期核对，不要重试。",
+					"判定已实际扣费。订单号请到 GoDaddy 账单按日期核对，不要重试。",
 					truncate(err.Error(), 80), expiryBefore.String, newExp),
 			}
 		}
+		// 走到这里 = 没扣费，或者没查出来。两者对"能不能自动重试"是相反的结论。
+		if verified {
+			// 只有这一条路径允许重试：我们**读到了**厂商侧的到期日，而且它还是旧值。
+			// 任何"查不出来"的情况都不给这个标记。
+			transient := isTransientRenewErr(err)
+			tail := "（已回查到期日确认未扣费；该错误重试也不会变，请先排查原因——凭据、域名归属、账户余额都可能）"
+			if transient {
+				tail = "（已回查到期日确认未扣费，属可重试的瞬时故障）"
+			}
+			return renewOneResult{Err: "续费失败：" + err.Error() + tail, SafeRetry: transient}
+		}
 		return renewOneResult{Err: "续费失败：" + err.Error() +
-			"（已回查到期日，未发现变化，判定未扣费；若账单上出现扣费请人工核对）"}
+			"（到期日回查也未成功，无法确认是否扣费，请到 GoDaddy 账单核对后再决定是否重试）"}
 	}
 	// 真续成功后拉最新到期日刷库（dry_run 不改厂商，跳过刷库）。
 	// GoDaddy 续费后到期日有延迟未即时更新——若拉到的没前进，用「原到期 + 续费年数」推算，避免台账显示前后相同。
@@ -243,9 +283,18 @@ func (h *SyncHandler) renewOne(ctx context.Context, operator string, ciID int64,
 //
 //	用**独立的 context**：调用方那个多半已经因超时被 cancel 了。
 //	先等几秒——厂商侧订单落库有延迟，立刻查往往还是旧值。
-func verifyRenewedByExpiry(parent context.Context, wa dnsource.WriteAdapter, domain, expiryBefore string, period int) (string, bool) {
+//	返回值三态，**不能压缩成两态**：
+//
+//	  renewed=true                → 已扣费（到期日前进了）
+//	  renewed=false, verified=true → 确认没扣费（成功读到到期日，还是旧值）
+//	  verified=false              → 查不出来（没基准，或详情接口也挂了）
+//
+//	区别在于「能不能重试」：只有中间那种是安全的。把"查了没变"和
+//	"根本没查成"混为一谈，就会在厂商整体故障时对着一个可能已扣费的
+//	域名再发一次续费——那是第二笔钱。
+func verifyRenewedByExpiry(parent context.Context, wa dnsource.WriteAdapter, domain, expiryBefore string, period int) (newExp string, renewed, verified bool) {
 	if expiryBefore == "" {
-		return "", false // 没有基准就无法判断，宁可报失败让人工核对
+		return "", false, false // 没有基准就无法判断，宁可报失败让人工核对
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 25*time.Second)
 	defer cancel()
@@ -254,7 +303,7 @@ func verifyRenewedByExpiry(parent context.Context, wa dnsource.WriteAdapter, dom
 	for i := 0; i < 3; i++ {
 		select {
 		case <-ctx.Done():
-			return "", false
+			return "", false, verified
 		case <-time.After(4 * time.Second):
 		}
 		d, err := wa.GetDomainDetail(ctx, domain)
@@ -263,10 +312,11 @@ func verifyRenewedByExpiry(parent context.Context, wa dnsource.WriteAdapter, dom
 		}
 		got := d.Expires.Format("2006-01-02")
 		if got > expiryBefore {
-			return got, true
+			return got, true, true
 		}
+		verified = true // 读到了、且还是旧值——这次续费确实没生效
 	}
-	return "", false
+	return "", false, verified
 }
 
 // addYearsDate 给 "YYYY-MM-DD" 加 n 年；解析失败返回空串。
