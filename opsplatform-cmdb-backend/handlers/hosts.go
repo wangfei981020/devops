@@ -808,8 +808,19 @@ func (h *HostHandler) syncOneProject(pid int64, st *hostSyncState) (name string,
 	}
 	stale = h.markStaleHosts(accountID, projectID, present)
 	// 顺带同步该 project 的网络资源（VPC/子网/防火墙/静态IP/负载均衡）
+	//
+	//	⚠️ 这里原来是 `if e == nil { ... }`，**没有 else 分支**——
+	//	拉网络资源失败就静默跳过：不打日志、不进 last_result，
+	//	而主机同步照样弹「同步完成：65 台」。
+	//	用户点了同步、看到成功提示，然后发现负载均衡还是旧数据，
+	//	完全不知道发生了什么。这类"一半成功也报全成功"的写法最难查。
+	netErr := ""
 	if nr, e := adapter.ListNetwork(ctx, projectID); e == nil {
 		SyncProjectNetwork(h.DB, provider, accountID, projectID, nr)
+	} else {
+		netErr = e.Error()
+		logx.Line("host_sync", fmt.Sprintf(
+			"WARN project=%s 网络资源（VPC/防火墙/负载均衡）同步失败，本次这些数据保持不变：%v", projectID, e))
 	}
 	// IAM 与 Cloud DNS 是 GCP 特有的，用类型断言而非往 Adapter 接口里加方法——
 	// 其它 provider 的对应概念不同，塞进同一个接口会逼它们实现空方法。
@@ -822,8 +833,13 @@ func (h *HostHandler) syncOneProject(pid int64, st *hostSyncState) (name string,
 		}
 	}
 	hsSet(st, func(s *hostSyncState) { s.Synced += len(insts); s.Stale += stale })
+	// 结果里必须带上网络资源那一步的成败——只报主机数会让人以为全同步好了
+	result := fmt.Sprintf("同步 %d 台，失效 %d", len(insts), stale)
+	if netErr != "" {
+		result += "；⚠️ 网络资源（VPC/防火墙/负载均衡）未同步：" + truncate(netErr, 120)
+	}
 	logExec(h.DB, "主机同步写", `UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`,
-		truncate(fmt.Sprintf("同步 %d 台，失效 %d", len(insts), stale), 250), pid)
+		truncate(result, 250), pid)
 	return name, len(insts), stale, nil
 }
 

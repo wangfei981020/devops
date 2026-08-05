@@ -157,6 +157,11 @@ func StartScheduler(db *sql.DB, cipher *crypto.Cipher, pool *k8ssource.Pool) {
 		"registrar_expiry_sync": func(ctx context.Context, p ProgressFn, _ []string) (string, []TaskFailure, bool) {
 			return registrarExpirySyncCore(ctx, db, cipher, p)
 		},
+		// 清理长期失效的主机记录。两道闸防误删：只清超过 N 天的，
+		// 且该 project 最近一次同步必须是成功的（见 host_stale_purge.go）
+		"stale_host_purge": func(ctx context.Context, p ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return purgeStaleHostsCore(ctx, db, p)
+		},
 		"dns_sync": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
 			return dnsSyncCore(ctx, db, cipher)
 		},
