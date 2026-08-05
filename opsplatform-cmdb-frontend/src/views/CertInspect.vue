@@ -69,10 +69,20 @@
           <span v-else class="muted">—</span>
         </template></el-table-column>
         <el-table-column label="状态" width="130"><template #default="{ row }">
-          <el-tag size="small" :type="ST[row._st].tag">{{ ST[row._st].l }}</el-tag>
+          <!-- 失败时把原因挂在标签上。接口一直带着 check_msg，页面却一个字不显示
+               （状态格只有一个"检测失败"标签，无 title 无 tooltip），
+               于是"为什么失败"只能靠上面的归类卡片猜（CMDB-041）。 -->
+          <el-tooltip v-if="row._st === 'failed' && row.check_msg" placement="top" :content="row.check_msg">
+            <el-tag size="small" type="danger" class="has-why">{{ ST[row._st].l }}</el-tag>
+          </el-tooltip>
+          <el-tag v-else size="small" :type="ST[row._st].tag">{{ ST[row._st].l }}</el-tag>
         </template></el-table-column>
-        <el-table-column label="无需证书原因" min-width="160" show-overflow-tooltip><template #default="{ row }">
-          <span v-if="row.ignored" class="muted">{{ row.ignore_reason || '—' }}</span>
+        <el-table-column label="原因" min-width="220" show-overflow-tooltip><template #default="{ row }">
+          <!-- 一列同时承载两种原因：失败原因（check_msg）和忽略原因。
+               它们互斥，合成一列比空着半列强 -->
+          <span v-if="row._st === 'failed' && row.check_msg" class="fail-why">{{ row.check_msg }}</span>
+          <span v-else-if="row.ignored" class="muted">{{ row.ignore_reason || '—' }}</span>
+          <span v-else class="muted">—</span>
         </template></el-table-column>
         <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
@@ -237,6 +247,8 @@ onMounted(() => { load(); if (!app.statuses.length) app.loadStatuses() })
 </script>
 
 <style scoped>
+.fail-why { color: #f56c6c; font-size: 12px; }
+.has-why { cursor: help; border-bottom: 1px dashed currentColor; }
 .filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 .reasons { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }

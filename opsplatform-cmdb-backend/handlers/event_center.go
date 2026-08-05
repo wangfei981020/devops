@@ -305,10 +305,37 @@ func (h *EventCenterHandler) collectK8sWarnings(ctx context.Context, days int, _
 			if cnt < 1 {
 				cnt = 1
 			}
-			add(evt{Source: "k8s", Level: "warning", Object: obj,
+			add(evt{Source: "k8s", Level: k8sEventLevel(e.Reason, cnt), Object: obj,
 				Title: e.Reason, Message: truncStr(e.Message, 240), Cluster: x.name, sortTs: ts, Count: cnt})
 		}
 	}
+}
+
+// k8sEventLevel 给 K8s Warning 事件分级。
+//
+//	原来一律写死 "warning"——不看 Reason 也不看次数。后果是
+//	`FailedToRetrieveImagePullSecret` 发生 **33.9 万次**和某个 Pod 偶发一次
+//	同级，全都淹在同一片黄色里，而前者是**明确坏掉的配置**：
+//	拉不到镜像密钥意味着那些 Pod 根本起不来。
+//
+//	两条判据：
+//	  1. Reason 本身就代表"确定性故障"（不是暂态、重试也好不了）→ critical
+//	  2. 任何 Reason 重复到一定量级 → 升级。偶发一次是噪音，
+//	     重复几千次就是一个持续存在的问题，不该和噪音同级。
+func k8sEventLevel(reason string, count int) string {
+	// 这些是"配置/环境坏了"，不会自愈，重试多少次都一样
+	switch reason {
+	case "FailedToRetrieveImagePullSecret", "FailedMount", "FailedAttachVolume",
+		"FailedCreatePodSandBox", "InvalidDiskCapacity", "FailedScheduling",
+		"NodeNotReady", "SystemOOM", "OOMKilling", "FailedKillPod":
+		return "critical"
+	}
+	// 重复量级：暂态问题不会累积到这个数。阈值取 1000——
+	// BackOff 之类的正常重试通常在几十到几百，上千说明它一直没恢复。
+	if count >= 1000 {
+		return "critical"
+	}
+	return "warning"
 }
 
 func expiryLevel(t time.Time) string {

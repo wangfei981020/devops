@@ -26,7 +26,11 @@
       <template #header><span style="font-weight:600">生命周期概览</span></template>
       <div class="stat-row">
         <span class="stat-title">项目：</span>
-        <el-tag v-for="s in projStats" :key="s.label" size="small" effect="plain" :style="chip(s.color)" style="margin-right:8px" class="clk" @click="$router.push('/domains')">{{ s.label }} {{ s.n }}</el-tag>
+        <!-- 带上筛选条件跳转。原来点哪个标签都跳到裸 /domains，
+             用户得在目标页重新找一遍刚才点的是什么——"跳过去了但没带着我点的东西"
+             比不能点更让人困惑（CMDB-20260805-012）。 -->
+        <el-tag v-for="s in projStats" :key="s.label" size="small" effect="plain" :style="chip(s.color)" style="margin-right:8px" class="clk"
+                @click="$router.push({ path: '/domains', query: { pstatus: s.label } })">{{ s.label }} {{ s.n }}</el-tag>
         <el-tag v-if="projNone" size="small" type="info" style="margin-right:8px">未设置 {{ projNone }}</el-tag>
       </div>
       <div class="stat-row" style="margin-top:8px">

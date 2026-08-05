@@ -805,6 +805,7 @@ import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Search, CircleCheck, Edit, Delete, EditPen, View, Download, Operation, CopyDocument, Hide, RefreshLeft, RefreshRight, Tickets, InfoFilled, Connection, ArrowDown, Close, MagicStick } from '@element-plus/icons-vue'
 import { registrarStyle, registrarColor, domainCatLabel, domainCatStyle } from '../utils/cloud'
+import { useRoute } from 'vue-router'
 import { useDomainFilter } from '../composables/useDomainFilter'
 import { listAllRecords, createRecord, updateRecord, bulkUpdateRecords, bulkIgnoreRecords, deleteRecord, checkRecordCert,
   syncDomainRecords, listDomains, listRegistrars, createDomain, updateDomain, deleteDomain, refreshDomain, refreshAllDomains, bulkIgnoreDomains,
@@ -1494,6 +1495,17 @@ function sortByCertExpiry(a, b) {
   if (!b.cert_expiry_at) return -1
   return new Date(a.cert_expiry_at) - new Date(b.cert_expiry_at)
 }
+// 接收从总览带过来的筛选条件。
+// 只认已有筛选器对应的字段——传一个页面上没有对应控件的参数，
+// 用户会看到"结果被筛过但找不到是哪个条件在生效"，那比不筛更糟。
+const route = useRoute()
+function applyQueryFilter() {
+  const q = route.query
+  if (q.pstatus) f.value.pstatus = String(q.pstatus)
+  if (q.kw) f.value.kw = String(q.kw)
+}
+applyQueryFilter()
+
 onMounted(load)
 </script>
 

@@ -19,9 +19,20 @@
         <el-select v-model="f.project" clearable placeholder="项目" style="width:150px"><el-option v-for="p in opts.project" :key="p" :label="p" :value="p" /></el-select>
         <el-select v-model="f.zone" clearable placeholder="区域" style="width:150px"><el-option v-for="z in opts.zone" :key="z" :label="z" :value="z" /></el-select>
         <el-select v-model="f.status" clearable placeholder="状态" style="width:130px"><el-option v-for="s in opts.status" :key="s" :label="s" :value="s" /></el-select>
+        <!-- 已销毁的机器默认藏起来：它们不计入成本、也不能操作，混在列表里
+             只会让"共 N 台"和实际在用的对不上。需要看历史时勾出来。 -->
+        <el-checkbox v-model="f.showStale" style="margin-left:4px">
+          显示已销毁
+          <span v-if="staleAll.length" class="muted">（{{ staleAll.length }}）</span>
+        </el-checkbox>
         <span class="muted" style="margin-left:auto" v-if="loadErr">共 — 台　月估合计 —</span>
         <span class="muted" style="margin-left:auto" v-else>
-          共 {{ filtered.length }} / {{ rows.length }} 台　月估合计 <b>${{ monthSum }}</b>
+          <!-- 台数必须和合计同口径。原来合计只算存活、台数却是全部，
+               于是"共 193 台 / $74,559"逐行加总永远对不上（逐行是 $129,105）——
+               看的人只会觉得这个数字算错了。 -->
+          共 <b>{{ liveHosts.length }}</b> 台在用
+          <span v-if="staleHosts.length" class="muted">（另有 {{ staleHosts.length }} 台已销毁）</span>
+          / {{ rows.length }} 台记录　月估合计 <b>${{ monthSum }}</b>
           <!-- 排除了多少要说出来：默默少算一笔和默默多算一笔一样让人不敢信 -->
           <el-tooltip v-if="staleHosts.length" placement="top"
             :content="`这些机器在云上已经不存在（同步时标记为已删），但历史记录还留着。它们不该计入当前成本。`">
@@ -55,7 +66,15 @@
         <el-table-column label="外网IP" width="130"><template #default="{ row }"><span class="mono">{{ row.external_ip || '—' }}</span></template></el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="stTag(row.status)" size="small">{{ stLabel(row.status) }}</el-tag></template></el-table-column>
         <el-table-column label="日均($)" width="90" align="right"><template #default="{ row }">${{ row.cost_daily }}</template></el-table-column>
-        <el-table-column label="本月估($)" width="100" align="right"><template #default="{ row }">${{ row.cost_month }}</template></el-table-column>
+        <el-table-column label="本月估($)" width="110" align="right"><template #default="{ row }">
+          <!-- 已销毁的机器仍显示单机成本会让人以为它计入了合计。
+               划掉并说明——留着数字是为了让人知道"这台曾经花多少"，
+               但必须一眼看出它不在合计里。 -->
+          <el-tooltip v-if="row.stale" content="这台已销毁，不计入上方月估合计">
+            <span class="cost-dead">${{ row.cost_month }}</span>
+          </el-tooltip>
+          <span v-else>${{ row.cost_month }}</span>
+        </template></el-table-column>
         <el-table-column label="累计($)" width="100" align="right"><template #default="{ row }">${{ row.cost_total }}</template></el-table-column>
         <el-table-column label="操作" width="70" fixed="right"><template #default="{ row }">
           <el-tooltip content="查看详情"><el-button link type="primary" :icon="View" @click="openDetail(row)" /></el-tooltip>
@@ -296,7 +315,9 @@ const canProj = computed(() => auth.hasButton('manage_cloud_projects'))
 const canRates = computed(() => auth.hasButton('manage_cost_rates'))
 const rows = ref([]), loading = ref(false)
 const loadErr = ref('')
-const f = ref({ kw: '', provider: null, project: null, zone: null, status: null })
+// showStale：已销毁的机器默认不显示。它们不计入成本、也不能操作，
+// 混在列表里只会让"共 N 台"和实际在用的对不上。
+const f = ref({ kw: '', provider: null, project: null, zone: null, status: null, showStale: false })
 const page = ref(1), size = ref(10)
 const dDlg = ref(false), detail = ref(null), detailCiid = ref(null), asOf = ref('')
 const acctDlg = ref(false), accounts = ref([])
@@ -319,8 +340,13 @@ const opts = computed(() => ({
   zone: [...new Set(rows.value.map((r) => r.zone).filter(Boolean))].sort(),
   status: [...new Set(rows.value.map((r) => r.status).filter(Boolean))].sort(),
 }))
+// staleAll 不受"显示已销毁"开关影响——开关是控制**列表显不显示**的，
+// 而这个数字要始终告诉人"有多少台已销毁"，否则勾掉之后它们就彻底消失了
+const staleAll = computed(() => rows.value.filter((r) => r.stale))
+
 const filtered = computed(() => rows.value.filter((r) => {
   const kw = f.value.kw?.toLowerCase()
+  if (r.stale && !f.value.showStale) return false
   return (!kw || r.name.toLowerCase().includes(kw) || (r.internal_ip || '').includes(kw) || (r.external_ip || '').includes(kw)) &&
     (!f.value.provider || r.provider === f.value.provider) &&
     (!f.value.project || projName(r) === f.value.project) &&
@@ -430,6 +456,7 @@ onMounted(load)
 .filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 .stale { text-decoration: line-through; color: #b0b3bb; }
+.cost-dead { text-decoration: line-through; color: #b0b3bb; cursor: help; }
 .warn-sum { color: #e6a23c; margin-left: 6px; cursor: help; }
 .muted { color: #909399; }
 .sec { font-size: 14px; margin: 18px 0 8px; display: flex; align-items: center; gap: 10px; }
