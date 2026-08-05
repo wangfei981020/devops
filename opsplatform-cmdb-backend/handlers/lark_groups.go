@@ -34,12 +34,21 @@ func (h *LarkGroupHandler) List(c *gin.Context) {
 		Name    string `json:"name"`
 		Webhook string `json:"webhook"`
 	}
+	// ⚠️ webhook URL 就是凭据：不需要任何额外鉴权，谁拿到谁就能往这个群发消息。
+	//	原来列表接口对所有人明发，只读账号也能拿到完整 URL 去投伪造告警
+	//	（CMDB-034）。默认掩码，只有能管通知的人拿真值。
+	//	在前端打码是假的——值已经在响应里了。
+	full := HasPerm(c, "cmdb:manage_notify")
 	out := []g{}
 	for rows.Next() {
 		var x g
-		if rows.Scan(&x.ID, &x.Name, &x.Webhook) == nil {
-			out = append(out, x)
+		if rows.Scan(&x.ID, &x.Name, &x.Webhook) != nil {
+			continue
 		}
+		if !full {
+			x.Webhook = maskWebhookURL(x.Webhook)
+		}
+		out = append(out, x)
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -68,6 +77,16 @@ func (h *LarkGroupHandler) Update(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	// 同 settings：界面上显示的是掩码，原样提交回来不能当成"用户要改成这个"。
+	// 留空也按"不改"处理（和其他凭据类字段的编辑约定一致）。
+	if in.Webhook == "" || isMasked(in.Webhook) {
+		if _, err := h.DB.Exec(`UPDATE lark_groups SET name=? WHERE id=?`, in.Name, c.Param("id")); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"ok": true})
 		return
 	}
 	if _, err := h.DB.Exec(`UPDATE lark_groups SET name=?, webhook=? WHERE id=?`, in.Name, in.Webhook, c.Param("id")); err != nil {

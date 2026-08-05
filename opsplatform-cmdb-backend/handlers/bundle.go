@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -25,7 +27,60 @@ func NewBundleHandler(db *sql.DB, cipher *crypto.Cipher) *BundleHandler {
 }
 
 func (h *BundleHandler) RegisterPublic(r *gin.RouterGroup) {
-	r.GET("/certs/:id/bundle", h.Bundle)
+	r.GET("/certs/:id/bundle", bundleRateLimit(), h.Bundle)
+}
+
+// bundleRateLimit 按来源 IP 限速。
+//
+//	正常用法是目标机定时拉一次（分钟级），所以限得很紧不影响使用；
+//	但能把"拿到一个 token 后逐个 ci_id 扫"的速度压下来，并在审计里
+//	留下明显的 429 尖峰。这不是防线（token 对了就能拿），是**减速带 + 信号**。
+func bundleRateLimit() gin.HandlerFunc {
+	const (
+		windowSec = 60
+		maxPerIP  = 30
+	)
+	type bucket struct {
+		start int64
+		n     int
+	}
+	var mu sync.Mutex
+	buckets := map[string]*bucket{}
+
+	return func(c *gin.Context) {
+		ip := c.ClientIP()
+		now := time.Now().Unix()
+		mu.Lock()
+		b := buckets[ip]
+		if b == nil || now-b.start >= windowSec {
+			b = &bucket{start: now}
+			buckets[ip] = b
+			// 顺手清理过期桶，避免被伪造 IP 打爆内存
+			for k, v := range buckets {
+				if now-v.start >= windowSec*5 {
+					delete(buckets, k)
+				}
+			}
+		}
+		b.n++
+		over := b.n > maxPerIP
+		mu.Unlock()
+
+		if over {
+			logx.J("cert_bundle", "rate_limited", map[string]any{"ip": ip, "ci_id": c.Param("id")})
+			c.AbortWithStatusJSON(http.StatusTooManyRequests,
+				gin.H{"error": "请求过于频繁，请稍后重试"})
+			return
+		}
+		c.Next()
+	}
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 // Bundle GET /certs/:id/bundle?part=version|fullchain|key
@@ -51,9 +106,19 @@ func (h *BundleHandler) Bundle(c *gin.Context) {
 		return
 	}
 	if token == "" || dbToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(dbToken)) != 1 {
+		// 失败也必须留痕：有人拿着错 token 逐个试 ci_id，就是在爆破私钥。
+		// 只记来源和 ci_id，绝不记 token 本身（日志会被更多人看到）。
+		logx.J("cert_bundle", "auth_failed", map[string]any{
+			"ci_id": id, "ip": c.ClientIP(), "ua": truncate(c.Request.UserAgent(), 80)})
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 		return
 	}
+	// ⚠️ 这个路由能拿到私钥且不走登录，所以每一次成功取证都要能追溯：
+	//	泄露发生后要回答的第一个问题是"到底有没有被导出过、谁导的"，
+	//	没有这条记录就只能靠猜。
+	logx.J("cert_bundle", "fetch", map[string]any{
+		"ci_id": id, "part": orDefault(c.Query("part"), "all"),
+		"ip": c.ClientIP(), "ua": truncate(c.Request.UserAgent(), 80), "version": version})
 	if version == 0 {
 		c.JSON(http.StatusConflict, gin.H{"error": "证书尚未签发"})
 		return

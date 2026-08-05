@@ -192,6 +192,18 @@ func (h *CertHandler) Get(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+	// ⚠️ deploy_token 是**证书私钥的通行证**，不是普通字段。
+	//
+	//	它给目标机自助拉证书用（GET /certs/:id/bundle 拿它自鉴权，那个路由
+	//	刻意不走登录中间件）。所以谁看见了这个 token，谁就能免登录下载私钥；
+	//	而证书列表能枚举 ci_id，逐个翻即可把全部私钥导出。
+	//
+	//	原来它对任何有 menu:cmdb_certs 的人可见——包括只读账号。只读账号能
+	//	导出生产证书私钥，这是实测出来的 P0（CMDB-033）。
+	//	现在只发给能管证书的人；其余人拿到掩码值，界面照样能显示"已生成"。
+	if !HasPerm(c, "cmdb:manage_certs") {
+		o.DeployToken = maskToken(o.DeployToken)
+	}
 	_ = json.Unmarshal([]byte(sans), &o.SANs)
 	if issued.Valid {
 		o.IssuedAt = issued.Time.Format("2006-01-02 15:04")
