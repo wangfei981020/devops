@@ -162,6 +162,11 @@ func StartScheduler(db *sql.DB, cipher *crypto.Cipher, pool *k8ssource.Pool) {
 		"stale_host_purge": func(ctx context.Context, p ProgressFn, _ []string) (string, []TaskFailure, bool) {
 			return purgeStaleHostsCore(ctx, db, p)
 		},
+		// 关系图谱自动建边：图谱页存在很久但 ci_relations 里只有 5 条手工边，
+		// 全链路关系从来没被生产出来过（见 relations_autolink.go）
+		"relations_auto_link": func(ctx context.Context, p ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return rebuildAutoRelationsCore(ctx, db, p)
+		},
 		"dns_sync": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
 			return dnsSyncCore(ctx, db, cipher)
 		},

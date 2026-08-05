@@ -18,7 +18,7 @@
         <el-select v-model="f.provider" clearable placeholder="厂商" style="width:120px"><el-option v-for="p in opts.provider" :key="p" :label="plabel(p)" :value="p" /></el-select>
         <el-select v-model="f.project" clearable placeholder="项目" style="width:150px"><el-option v-for="p in opts.project" :key="p" :label="p" :value="p" /></el-select>
         <el-select v-model="f.zone" clearable placeholder="区域" style="width:150px"><el-option v-for="z in opts.zone" :key="z" :label="z" :value="z" /></el-select>
-        <el-select v-model="f.status" clearable placeholder="状态" style="width:130px"><el-option v-for="s in opts.status" :key="s" :label="s" :value="s" /></el-select>
+        <el-select v-model="f.status" clearable placeholder="状态" style="width:130px"><el-option v-for="s in opts.status" :key="s" :label="stOptLabel(s)" :value="s" /></el-select>
         <!-- 已销毁的机器默认藏起来：它们不计入成本、也不能操作，混在列表里
              只会让"共 N 台"和实际在用的对不上。需要看历史时勾出来。 -->
         <el-checkbox v-model="f.showStale" style="margin-left:4px">
@@ -64,7 +64,16 @@
         <el-table-column label="磁盘" width="90" align="right"><template #default="{ row }">{{ row.disk_total_gb }}G</template></el-table-column>
         <el-table-column label="内网IP" width="130"><template #default="{ row }"><span class="mono">{{ row.internal_ip || '—' }}</span></template></el-table-column>
         <el-table-column label="外网IP" width="130"><template #default="{ row }"><span class="mono">{{ row.external_ip || '—' }}</span></template></el-table-column>
-        <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="stTag(row.status)" size="small">{{ stLabel(row.status) }}</el-tag></template></el-table-column>
+        <el-table-column label="状态" width="110"><template #default="{ row }">
+          <!-- 已销毁的机器 status 停在最后一次观测到的 RUNNING 上，直接渲染
+               会让同一行自相矛盾：名字划了删除线、打了「已删」，状态却是绿色「运行」。
+               生命周期状态优先，云上最后状态收进 tooltip 作为证据（CMDB-003）。 -->
+          <el-tooltip v-if="row.lifecycle === 'gone'" placement="top"
+            :content="`最近一次同步时 GCP 已查不到这台实例。销毁前最后观测到的状态：${stLabel(row.status)}。（判据是同步时云上没有返回它，也可能是被移出了该项目）`">
+            <el-tag type="info" size="small">已销毁</el-tag>
+          </el-tooltip>
+          <el-tag v-else :type="stTag(row.status)" size="small">{{ stLabel(row.status) }}</el-tag>
+        </template></el-table-column>
         <el-table-column label="日均($)" width="90" align="right"><template #default="{ row }">${{ row.cost_daily }}</template></el-table-column>
         <el-table-column label="本月估($)" width="110" align="right"><template #default="{ row }">
           <!-- 已销毁的机器仍显示单机成本会让人以为它计入了合计。
@@ -93,7 +102,13 @@
           <el-descriptions-item label="实例名">{{ detail.host.name }}</el-descriptions-item>
           <el-descriptions-item label="主机名">{{ detail.host.hostname || '—' }}</el-descriptions-item>
           <el-descriptions-item label="区域">{{ detail.host.zone }}</el-descriptions-item>
-          <el-descriptions-item label="状态"><el-tag :type="stTag(detail.host.status)" size="small">{{ stLabel(detail.host.status) }}</el-tag></el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <template v-if="detail.host.lifecycle === 'gone'">
+              <el-tag type="info" size="small">已销毁</el-tag>
+              <span class="muted" style="margin-left:6px">销毁前最后观测：{{ stLabel(detail.host.status) }}</span>
+            </template>
+            <el-tag v-else :type="stTag(detail.host.status)" size="small">{{ stLabel(detail.host.status) }}</el-tag>
+          </el-descriptions-item>
           <el-descriptions-item label="CPU">{{ detail.host.vcpu }} vCPU</el-descriptions-item>
           <el-descriptions-item label="内存">{{ gb(detail.host.mem_mb) }} GB</el-descriptions-item>
           <el-descriptions-item label="机型">{{ detail.host.machine_type }}</el-descriptions-item>
@@ -334,11 +349,15 @@ function stLabel(s) { return ({ RUNNING: '运行', TERMINATED: '停止', STOPPIN
 function stTag(s) { return s === 'RUNNING' ? 'success' : (s === 'TERMINATED' || s === 'STOPPING' ? 'info' : 'warning') }
 
 const projName = (r) => r.project_name || r.project
+// 筛选用的状态值：已销毁的机器不按它的 status（那是销毁前的最后观测值）参与，
+// 否则筛「运行」会把一堆已销毁的机器筛出来——列表上明明写着「已销毁」。
+const stKeyOf = (r) => (r.lifecycle === 'gone' ? '__gone' : r.status)
+const stOptLabel = (s) => (s === '__gone' ? '已销毁' : stLabel(s))
 const opts = computed(() => ({
   provider: [...new Set(rows.value.map((r) => r.provider).filter(Boolean))].sort(),
   project: [...new Set(rows.value.map(projName).filter(Boolean))].sort(),
   zone: [...new Set(rows.value.map((r) => r.zone).filter(Boolean))].sort(),
-  status: [...new Set(rows.value.map((r) => r.status).filter(Boolean))].sort(),
+  status: [...new Set(rows.value.map(stKeyOf).filter(Boolean))].sort(),
 }))
 // staleAll 不受"显示已销毁"开关影响——开关是控制**列表显不显示**的，
 // 而这个数字要始终告诉人"有多少台已销毁"，否则勾掉之后它们就彻底消失了
@@ -346,12 +365,14 @@ const staleAll = computed(() => rows.value.filter((r) => r.stale))
 
 const filtered = computed(() => rows.value.filter((r) => {
   const kw = f.value.kw?.toLowerCase()
-  if (r.stale && !f.value.showStale) return false
+  // 主动筛「已销毁」时不能再被"默认隐藏已销毁"挡掉——那会得到一张空表，
+  // 看起来像"没有已销毁的机器"，而顶上的计数明明写着 65 台
+  if (r.stale && !f.value.showStale && f.value.status !== '__gone') return false
   return (!kw || r.name.toLowerCase().includes(kw) || (r.internal_ip || '').includes(kw) || (r.external_ip || '').includes(kw)) &&
     (!f.value.provider || r.provider === f.value.provider) &&
     (!f.value.project || projName(r) === f.value.project) &&
     (!f.value.zone || r.zone === f.value.zone) &&
-    (!f.value.status || r.status === f.value.status)
+    (!f.value.status || stKeyOf(r) === f.value.status)
 }))
 const paged = computed(() => { const s = (page.value - 1) * size.value; return filtered.value.slice(s, s + size.value) })
 // ⚠️ 成本合计**必须排除 stale（已销毁）的机器**。

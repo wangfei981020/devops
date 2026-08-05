@@ -12,9 +12,11 @@
       <div v-show="!error && edges.length" ref="chartEl" style="width:100%;height:560px"></div>
       <el-empty v-if="!loading && !error && !edges.length" :image-size="70"
         description="暂无关系数据" >
-        <div class="muted" style="max-width:520px;line-height:1.7">
-          当前只建立「证书 → 域名」一种关系，申请/绑定证书时自动生成。
-          物理机→虚拟机→容器→应用的全链路关系尚未接入，所以这里为空属正常，不是故障。
+        <div class="muted" style="max-width:560px;line-height:1.7">
+          关系边由「关系图谱自动建边」任务生成（默认每天 5:00），来源是已采集的字段：
+          解析记录的源站 IP 命中主机内外网 IP 或负载均衡 VIP、以及负载均衡的后端实例。
+          <b>还没跑过就会是空的</b>——去「定时任务」里手动执行一次即可。
+          证书 → 域名的边在申请/绑定证书时生成，不依赖这个任务。
         </div>
       </el-empty>
     </el-card>
@@ -30,6 +32,15 @@ import { TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { listRelations } from '../api/cmdb'
 echarts.use([GraphChart, TooltipComponent, LegendComponent, CanvasRenderer])
+
+// CI 类型的中文名。认不出来的类型原样显示，不要吞掉——
+// 图上冒出一个没见过的类型，本身就是要让人看见的信息
+const CAT_LABEL = {
+  certificate: '证书', domain: '域名', host: '主机', loadbalancer: '负载均衡',
+}
+const REL_LABEL = {
+  protects: '保护', resolves_to: '解析到', backs: '后端', related: '关联',
+}
 
 const chartEl = ref(null)
 const edges = ref([])
@@ -77,27 +88,32 @@ function renderInner() {
     const lk = sk + '>' + dk + '>' + e.rel_type
     if (!linkSet.has(lk)) {
       linkSet.add(lk)
-      links.push({ source: sk, target: dk, label: { show: true, formatter: e.rel_type } })
+      links.push({ source: sk, target: dk, label: { show: true, formatter: REL_LABEL[e.rel_type] || e.rel_type } })
       degree[sk] = (degree[sk] || 0) + 1
       degree[dk] = (degree[dk] || 0) + 1
     }
   }
+  // 分类必须**由数据推出来**，不能写死。原来写死了 certificate/domain 两类、
+  // 且 `category: n.category === 'certificate' ? 0 : 1`——自动建边接进来的
+  // 主机、负载均衡会全被塞进 domain 那一类，图例和颜色都是错的。
+  const cats = [...new Set(Object.values(nodeMap).map(n => n.category))].sort()
+  const catIndex = Object.fromEntries(cats.map((c, i) => [c, i]))
   const data = Object.values(nodeMap).map(n => ({
     id: n.id,
     name: n.count > 1 && n.category === 'certificate' ? `${n.name} ×${n.count}` : n.name, // 同名证书标数量
-    category: n.category === 'certificate' ? 0 : 1,
+    category: catIndex[n.category],
     symbolSize: Math.min(64, 30 + (degree[n.id] || 1) * 7), // 连接越多越大
   }))
   chart.setOption({
     tooltip: {},
-    legend: [{ data: ['certificate', 'domain'], top: 8 }],
+    legend: [{ data: cats.map(c => CAT_LABEL[c] || c), top: 8 }],
     series: [{
       type: 'graph', layout: 'force', roam: true, draggable: true,
       force: { repulsion: 520, edgeLength: 190, gravity: 0.05, friction: 0.3 }, // 拉大间距不重叠
       label: { show: true, position: 'right', fontSize: 12 },
       labelLayout: { hideOverlap: true }, // 标签重叠时自动隐藏
       emphasis: { focus: 'adjacency', lineStyle: { width: 3 } },
-      categories: [{ name: 'certificate' }, { name: 'domain' }],
+      categories: cats.map(c => ({ name: CAT_LABEL[c] || c })),
       data,
       links,
       lineStyle: { color: '#bbb', curveness: 0.12 },

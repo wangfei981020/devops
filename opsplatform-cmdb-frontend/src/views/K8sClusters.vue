@@ -203,20 +203,34 @@ async function load() {
   // 空表格加一句「还没纳管集群」会让人以为纳管记录丢了，跑去重新添加。
   const r = await run(() => listK8sClusters())
   clusters.value = error.value ? [] : (r || [])
-  if (!error.value) {
-    try { cloudAccounts.value = await listCloudAccounts() } catch (e) { /* 无云账号不阻塞 */ }
-  }
+}
+
+// 云账号只有两个对话框（新增/编辑集群、从云账号发现 GKE）用得到，列表页本身
+// 一个字段都不依赖它。
+//
+//	原来它跟着 load() 无条件请求：只读账号没有 cmdb:manage_cloud_accounts，
+//	于是每次进这一页必然吃一个 403 + 一条 console error，而这个请求对他要看的
+//	内容毫无贡献。改成打开对话框时才拉——能打开对话框的必然有写权限。
+const accountsLoaded = ref(false)
+async function ensureCloudAccounts() {
+  if (accountsLoaded.value) return
+  try {
+    cloudAccounts.value = await listCloudAccounts()
+    accountsLoaded.value = true
+  } catch (e) { /* 无云账号/无权限都不阻塞对话框其余部分 */ }
 }
 
 function openAdd() {
   editing.value = false
   Object.assign(form, blank())
   dlg.value = true
+  ensureCloudAccounts()
 }
 function openEdit(row) {
   editing.value = true
   Object.assign(form, { ...blank(), ...row, cloud_account_id: row.cloud_account_id || null, kubeconfig: '' }) // 凭据不回显，留空=保留
   dlg.value = true
+  ensureCloudAccounts()
 }
 
 async function save() {
@@ -258,7 +272,7 @@ async function doSync(row) {
 const disDlg = ref(false); const disAcct = ref(null); const disProj = ref('')
 const disList = ref([]); const disSel = ref([]); const disLoading = ref(false); const disTried = ref(false)
 const disProjects = computed(() => (cloudAccounts.value.find(a => a.id === disAcct.value)?.projects) || [])
-function openDiscover() { disDlg.value = true; disList.value = []; disSel.value = []; disTried.value = false }
+function openDiscover() { disDlg.value = true; disList.value = []; disSel.value = []; disTried.value = false; ensureCloudAccounts() }
 async function doDiscover() {
   if (!disAcct.value || !disProj.value) { ElMessage.warning('选云账号和项目'); return }
   disLoading.value = true; disTried.value = true; disList.value = []

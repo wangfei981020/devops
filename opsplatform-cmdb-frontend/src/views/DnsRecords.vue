@@ -132,8 +132,12 @@
         </template></el-table-column>
         <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }">
           <div style="display:flex;gap:8px;align-items:center">
-            <el-tooltip v-if="row.origin !== 'manual' && !row.ignored" content="从数据源同步这个域名">
-              <el-button v-if="canSync" link type="primary" :icon="Refresh" :loading="syncingOne[row.ci_id]" @click="syncOne(row)">同步</el-button>
+            <!-- ⚠️ 条件必须写在 el-tooltip 自己身上，不能写在被它包住的按钮上。
+                 写在里面时：无权限的账号 tooltip 照样渲染，默认插槽却是空的，
+                 Element Plus 的 ElOnlyChild 会对每一行报一次 "no valid child node"——
+                 viewer 打开这页刷 40 条控制台警告，真错误全被淹掉。 -->
+            <el-tooltip v-if="canSync && row.origin !== 'manual' && !row.ignored" content="从数据源同步这个域名">
+              <el-button link type="primary" :icon="Refresh" :loading="syncingOne[row.ci_id]" @click="syncOne(row)">同步</el-button>
             </el-tooltip>
             <el-tooltip v-if="canDns && !row.ignored" content="忽略（同步跳过、不报未同步）"><el-button link type="warning" :icon="Hide" @click="ignoreDoms([row])" /></el-tooltip>
             <el-tooltip v-else-if="canDns" content="取消忽略"><el-button link type="success" :icon="RefreshLeft" @click="unignoreDoms([row])" /></el-tooltip>

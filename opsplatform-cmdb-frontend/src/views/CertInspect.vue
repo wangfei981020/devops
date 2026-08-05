@@ -37,9 +37,13 @@
 
     <!-- 「检测失败」这一类往往是同一个原因批量命中（实测 113 条里全部是 DNS 解析不了），
          逐条列出来等于让人在 113 行相同的报错里翻找。先按原因归类，点一下再看明细。 -->
-    <el-card v-if="!error && statusFilter === 'failed' && failReasons.length" shadow="never" style="margin-bottom:14px">
-      <template #header><b>失败原因分布</b>
+    <el-card v-if="!error && (statusFilter === 'failed' || statusFilter === 'inapplicable') && failReasons.length"
+      shadow="never" style="margin-bottom:14px">
+      <template #header><b>{{ statusFilter === 'inapplicable' ? '不适用原因分布' : '失败原因分布' }}</b>
         <span class="muted" style="margin-left:8px">共 {{ failTotal }} 条，归为 {{ failReasons.length }} 类；点一类只看它</span>
+        <span v-if="statusFilter === 'failed' && counts.inapplicable" class="muted" style="margin-left:8px">
+          另有 <b>{{ counts.inapplicable }}</b> 条解析到内网地址，公网探测本就不适用，已单列到「内网不适用」，不计在这里
+        </span>
       </template>
       <div class="reasons">
         <el-tag v-for="r in failReasons" :key="r.key" size="large" effect="plain" class="reason"
@@ -77,10 +81,18 @@
           </el-tooltip>
           <el-tag v-else size="small" :type="ST[row._st].tag">{{ ST[row._st].l }}</el-tag>
         </template></el-table-column>
-        <el-table-column label="原因" min-width="220" show-overflow-tooltip><template #default="{ row }">
+        <el-table-column label="原因" min-width="260"><template #default="{ row }">
           <!-- 一列同时承载两种原因：失败原因（check_msg）和忽略原因。
-               它们互斥，合成一列比空着半列强 -->
-          <span v-if="row._st === 'failed' && row.check_msg" class="fail-why">{{ row.check_msg }}</span>
+               它们互斥，合成一列比空着半列强。
+               归类结果放前面（一眼能分组），原始报文收进 tooltip（排查时才需要）。 -->
+          <template v-if="(row._st === 'failed' || row._st === 'inapplicable') && row.check_msg">
+            <el-tag size="small" effect="plain" :type="row._st === 'inapplicable' ? 'info' : 'danger'">
+              {{ reasonOfRow(row).label }}
+            </el-tag>
+            <el-tooltip placement="top" :content="row.check_msg">
+              <span class="fail-why">{{ row.check_msg }}</span>
+            </el-tooltip>
+          </template>
           <span v-else-if="row.ignored" class="muted">{{ row.ignore_reason || '—' }}</span>
           <span v-else class="muted">—</span>
         </template></el-table-column>
@@ -112,6 +124,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search, Sort, Hide, View, Link } from '@element-plus/icons-vue'
@@ -120,6 +133,7 @@ import { useAppStore } from '../stores/app'
 import { useLoadState } from '../composables/useLoadState'
 import LoadError from '../components/LoadError.vue'
 
+const route = useRoute()
 const auth = useAuthStore()
 const canCert = computed(() => auth.hasButton('manage_certs'))
 const { loading, error, run } = useLoadState()
@@ -137,12 +151,16 @@ const ST = {
   expiring:  { l: '30天内到期', tag: 'warning' },
   expired:   { l: '已过期',   tag: 'danger' },
   failed:    { l: '检测失败', tag: 'danger' },
+  // 内网地址被公网巡检器探测，连不上是必然的——这不是故障，混进"检测失败"
+  // 会让那个数字整列没法用（生产 148 条里约 70 条是这类，CMDB-041）
+  inapplicable: { l: '内网不适用', tag: 'info' },
   ignored:   { l: '无需证书',  tag: 'primary' },
   unknown:   { l: '未检测',   tag: 'info' },
 }
 const statusTabs = [
   { v: 'all', l: '全部' }, { v: 'expiring', l: '快到期' }, { v: 'expired', l: '已过期' },
-  { v: 'failed', l: '检测失败' }, { v: 'ignored', l: '无需证书' }, { v: 'ok', l: '正常' }, { v: 'unknown', l: '未检测' },
+  { v: 'failed', l: '检测失败' }, { v: 'inapplicable', l: '内网不适用' },
+  { v: 'ignored', l: '无需证书' }, { v: 'ok', l: '正常' }, { v: 'unknown', l: '未检测' },
 ]
 
 const rows = ref([])
@@ -161,6 +179,9 @@ function daysTo(d) { return Math.ceil((new Date(d) - Date.now()) / 86400000) }
 // 于是总览显示 158、本页显示 162，同一时刻同一指标对不上。
 function statusOf(r) {
   if (r.ignored) return 'ignored'
+  // scope 由后端判定（tls_error.go），前端不再自行推导内网——
+  // 判据是 origin_ip，前端本来就拿不到，硬猜必然和后端不一致
+  if (!r.expiry_at && r.check_msg && r.scope === 'internal') return 'inapplicable'
   if (!r.expiry_at) return r.check_msg ? 'failed' : 'unknown'
   const d = daysTo(r.expiry_at)
   if (d < 0) return 'expired'
@@ -181,8 +202,17 @@ const counts = computed(() => {
   }
   return c
 })
-// 把一条 check_msg 归纳成"原因类别"。原始消息带着域名和 IP，逐字分组会得到
-// 和条数一样多的组（每条都不同），起不到归纳作用——必须先把可变部分抽掉。
+// 把一条巡检项归纳成"原因类别"。
+//
+//	归类的**权威在后端**（handlers/tls_error.go）：只有它能看到 origin_ip，
+//	也只有它算出来的结果 MCP/AI 才拿得到。这里优先用后端给的 reason_key，
+//	下面那套正则只作为旧数据的兜底——接口升级前采的记录没有这两个字段。
+function reasonOfRow(r) {
+  if (r.reason_key) return { key: r.reason_key, label: r.reason_label || r.reason_key }
+  return reasonOf(r.check_msg)
+}
+// 兜底：原始消息带着域名和 IP，逐字分组会得到和条数一样多的组（每条都不同），
+// 起不到归纳作用——必须先把可变部分抽掉。
 function reasonOf(msg) {
   const m = (msg || '').trim()
   if (!m) return { key: 'unknown', label: '未记录原因' }
@@ -195,12 +225,14 @@ function reasonOf(msg) {
   // 认不出来的保留原文前缀，并且**必须能看见**——闷头归到"其他"会掩盖新出现的失败模式
   return { key: 'other:' + m.slice(0, 40), label: m.slice(0, 40) }
 }
-const failItems = computed(() => enriched.value.filter((r) => r._st === 'failed'))
+// 原因分布卡片对「检测失败」和「内网不适用」两个 tab 都要能用——
+// 后者也需要看清是哪些域名、为什么被判成内网
+const failItems = computed(() => enriched.value.filter((r) => r._st === statusFilter.value))
 const failTotal = computed(() => failItems.value.length)
 const failReasons = computed(() => {
   const m = new Map()
   for (const r of failItems.value) {
-    const { key, label } = reasonOf(r.check_msg)
+    const { key, label } = reasonOfRow(r)
     const cur = m.get(key) || { key, label, n: 0 }
     cur.n++
     m.set(key, cur)
@@ -214,7 +246,7 @@ const filtered = computed(() => {
   let list = enriched.value
   if (domainFilter.value) list = list.filter((r) => r.domain === domainFilter.value)
   if (kindFilter.value !== 'all') list = list.filter((r) => r.kind === kindFilter.value)
-  if (reasonFilter.value) list = list.filter((r) => reasonOf(r.check_msg).key === reasonFilter.value)
+  if (reasonFilter.value) list = list.filter((r) => reasonOfRow(r).key === reasonFilter.value)
   // 「全部」= 未忽略的巡检项；已忽略的只在「已忽略」tab 看
   if (statusFilter.value === 'all') list = list.filter((r) => r._st !== 'ignored')
   else list = list.filter((r) => r._st === statusFilter.value)
@@ -243,11 +275,26 @@ async function unignore(row) {
   try { await recordCertIgnore(row.record_id, { ignored: false }); ElMessage.success('已取消'); load() }
   catch (e) { ElMessage.error('操作失败') }
 }
-onMounted(() => { load(); if (!app.statuses.length) app.loadStatuses() })
+// 从总览的卡片跳过来时带着 ?status=&kind=，落地要直接停在那一类上。
+// 只认已知的枚举值，别人手改 URL 也不会把页面带进一个不存在的 tab。
+function applyQuery(q) {
+  if (q.status && statusTabs.some((s) => s.v === q.status)) statusFilter.value = q.status
+  if (q.kind && ['all', 'domain', 'online', 'acme'].includes(q.kind)) kindFilter.value = q.kind
+}
+onMounted(() => {
+  applyQuery(route.query)
+  load()
+  if (!app.statuses.length) app.loadStatuses()
+})
+// 同一页面内二次跳转（已经在本页时再点总览卡片）query 变了但组件不重建
+watch(() => route.query, (q) => applyQuery(q))
 </script>
 
 <style scoped>
-.fail-why { color: #f56c6c; font-size: 12px; }
+/* 归类标签在前、原文在后：原文一行放不下就截断，完整内容在 tooltip 里 */
+.fail-why { color: var(--el-text-color-secondary); font-size: 12px; margin-left: 6px;
+  display: inline-block; max-width: 100%; vertical-align: bottom;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .has-why { cursor: help; border-bottom: 1px dashed currentColor; }
 .filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }

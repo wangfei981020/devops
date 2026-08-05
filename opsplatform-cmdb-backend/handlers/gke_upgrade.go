@@ -237,6 +237,38 @@ func riskNoteFor(p poolState) string {
 }
 
 // Schedule 官网排期表 + 标注哪些集群锚在哪一格。
+// anchorRef 排期表某一格上锚定的集群。
+//
+//	⚠️ 它**不能只是个集群名**。锚定这件事有两处可能是推断出来的：
+//	  - 通道：GKE 上未加入发布通道（release_channel 为空/UNSPECIFIED）的集群，
+//	    按官方规则套 STABLE 列。空通道是**真值**——GKE API 就是这么返回的，
+//	    不存在"采下来就有了"，所以只能如实标成假定。
+//	  - 目标版本：GKE 只在升级临近时才填 minor_target_version，未入通道的常年为空，
+//	    这时用当前版本的下一个小版本推。
+//
+//	原来这两种情况和"确定锚定"长得一模一样，于是同一个页面的两个 tab 打架：
+//	排期表说「这 4 个集群锚定在 1.36 STABLE」像是确定事实，升级看板却说
+//	「未入通道、日期是推断」。渲染成事实比老实标"推断"更危险——照着它排期会排错。
+type anchorRef struct {
+	Name           string `json:"name"`
+	AssumedChannel bool   `json:"assumed_channel"` // 通道是套用 STABLE 的，不是集群真的在 STABLE
+	AssumedTarget  bool   `json:"assumed_target"`  // 目标版本是推的，不是 GKE 给的
+	Note           string `json:"note"`            // 给界面直接显示的说明，两处文案共用一份
+}
+
+// anchorNote 锚定依据的人话说明。空字符串 = 这一条是确定的。
+func anchorNote(assumedChannel, assumedTarget bool) string {
+	switch {
+	case assumedChannel && assumedTarget:
+		return "该集群未加入发布通道，按官方规则套用 STABLE 列；且 GKE 未给出目标版本，此处按当前版本的下一个小版本推算。实际升级时间可能有偏差。"
+	case assumedChannel:
+		return "该集群未加入发布通道，自动升级日期按 STABLE 通道推算，与实际可能有偏差。"
+	case assumedTarget:
+		return "GKE 尚未给出该集群的目标版本（通常升级临近时才会填），此处按当前版本的下一个小版本推算。"
+	}
+	return ""
+}
+
 func (h *GKEUpgradeHandler) Schedule(c *gin.Context) {
 	rows, err := h.DB.Query(`
 		SELECT id, minor_version, channel,
@@ -254,7 +286,7 @@ func (h *GKEUpgradeHandler) Schedule(c *gin.Context) {
 	defer rows.Close()
 
 	// 每个集群锚在 (目标小版本, 通道) 这一格上
-	anchors := map[string][]string{}
+	anchors := map[string][]anchorRef{}
 	ar, e := h.DB.Query(`
 		SELECT c.name, COALESCE(u.release_channel,''), COALESCE(u.minor_target_version,''),
 		       COALESCE(u.current_master_version,'')
@@ -279,18 +311,24 @@ func (h *GKEUpgradeHandler) Schedule(c *gin.Context) {
 			//
 			//	兜底：用当前版本的**下一个小版本**推。这是官方的升级路径
 			//	（GKE 小版本只能逐级升），锚到那一格是合理推断。
+			assumedTarget := false
 			if target == "" {
 				target = nextMinor(current)
+				assumedTarget = target != ""
 			}
 			if target == "" {
 				continue // 连当前版本都没有，确实无从推断
 			}
 			ch = strings.ToUpper(ch)
-			if ch == "" || ch == "UNSPECIFIED" {
+			assumedChannel := ch == "" || ch == "UNSPECIFIED"
+			if assumedChannel {
 				ch = "STABLE" // 未入通道按官方规则看 Stable 列
 			}
 			key := minorOf(target) + "|" + ch
-			anchors[key] = append(anchors[key], name)
+			anchors[key] = append(anchors[key], anchorRef{
+				Name: name, AssumedChannel: assumedChannel, AssumedTarget: assumedTarget,
+				Note: anchorNote(assumedChannel, assumedTarget),
+			})
 		}
 	}
 

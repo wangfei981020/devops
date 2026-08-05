@@ -125,9 +125,13 @@ const cardGroups = computed(() => [
     title: '线上探测（对线上域名实测 TLS 的结果）',
     tip: '与台账不是同一批对象，数量大于台账属正常',
     cards: [
-      { label: '线上证书 30 天内到期', num: data.value.online_cert_expiring || 0, color: '#e6a23c', to: '/cert-inspect' },
-      { label: '线上证书已过期', num: data.value.online_cert_expired || 0, color: '#f56c6c', to: '/cert-inspect' },
-      { label: '线上证书检测失败', num: data.value.online_cert_failed || 0, color: '#909399', to: '/cert-inspect' },
+      // 跳过去要**落在对应的那一类上**。原来三张卡都是裸 /cert-inspect，
+      // 落地是默认的「全部」tab，几百条里自己找刚才点的那 12 条——
+      // 卡片上的数字和落地页看到的对不上，等于没跳（CMDB-012）。
+      // kind=online 也要带：本页三类对象拉平在一起，总览这三张只统计线上证书。
+      { label: '线上证书 30 天内到期', num: data.value.online_cert_expiring || 0, color: '#e6a23c', to: { path: '/cert-inspect', query: { status: 'expiring', kind: 'online' } } },
+      { label: '线上证书已过期', num: data.value.online_cert_expired || 0, color: '#f56c6c', to: { path: '/cert-inspect', query: { status: 'expired', kind: 'online' } } },
+      { label: '线上证书检测失败', num: data.value.online_cert_failed || 0, color: '#909399', to: { path: '/cert-inspect', query: { status: 'failed', kind: 'online' } } },
     ],
   },
   {

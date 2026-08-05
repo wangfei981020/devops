@@ -547,10 +547,26 @@
             <el-table-column label="扩展支持截止" width="130">
               <template #default="{ row }">{{ row.eos_extended_raw || '—' }}</template>
             </el-table-column>
-            <el-table-column label="锚定集群" min-width="180">
+            <el-table-column min-width="200">
+              <!-- ▲ 原来既没图例也没 tooltip，没人知道它什么意思；集群名后面也
+                   看不出这一格是确定的还是推出来的。两处都补上。 -->
+              <template #header>
+                <span>锚定集群</span>
+                <el-tooltip placement="top"
+                  content="▲ = 该集群的自动升级会落在这一格。名字后面带 ⚠ 的表示这一格是推断出来的（未入发布通道按 STABLE 套，或目标版本 GKE 还没给），把鼠标放上去看依据。">
+                  <el-icon class="hint"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </template>
               <template #default="{ row }">
                 <span v-if="row.anchored_clusters && row.anchored_clusters.length">
-                  ▲ {{ row.anchored_clusters.join('、') }}
+                  ▲
+                  <template v-for="(a, i) in row.anchored_clusters" :key="a.name">
+                    <span v-if="i">、</span>
+                    <el-tooltip v-if="a.note" :content="a.note" placement="top">
+                      <span class="assumed">{{ a.name }} ⚠</span>
+                    </el-tooltip>
+                    <span v-else>{{ a.name }}</span>
+                  </template>
                 </span>
                 <span v-else class="muted">—</span>
               </template>
@@ -807,7 +823,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, QuestionFilled } from '@element-plus/icons-vue'
 import { useAppStore } from '../stores/app'
 import {
   gkeUpgradeOverview, gkeVersionSchedule, gkeOverrideSchedule,
@@ -1227,4 +1243,7 @@ onMounted(async () => { await reload(); loadHistory(); loadNodeHealth() })
 .extrapolate { white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.8;
   background: var(--el-fill-color-lighter); padding: 10px; border-radius: 4px; margin: 0 0 8px;
   font-family: inherit; }
+.hint { color: var(--el-text-color-secondary); vertical-align: -2px; margin-left: 4px; cursor: help; }
+/* 推断出来的锚定：和确定的锚定必须一眼分得出来 */
+.assumed { color: var(--el-color-warning); cursor: help; }
 </style>

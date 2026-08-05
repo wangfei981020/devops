@@ -977,6 +977,21 @@ func (h *HostHandler) markStaleHosts(accountID int, projectID string, present ma
 	return n
 }
 
+// 主机生命周期状态。和 status（云上原样值）是两个维度：
+// 一台机器可以 lifecycle=gone 而 status=RUNNING——那正是"销毁前最后一次
+// 看到它在运行"的意思，不是"它现在在运行"。
+const (
+	lifecyclePresent = "present" // 最近一次同步在云上见到了
+	lifecycleGone    = "gone"    // 最近一次同步云上没有它（stale=1）
+)
+
+func lifecycleOf(stale bool) string {
+	if stale {
+		return lifecycleGone
+	}
+	return lifecyclePresent
+}
+
 // ---------- 主机台账（只读） ----------
 
 type hostOut struct {
@@ -992,7 +1007,20 @@ type hostOut struct {
 	DiskTotalGB int               `json:"disk_total_gb"`
 	InternalIP  string            `json:"internal_ip"`
 	ExternalIP  string            `json:"external_ip"`
+	// Status 是**云上原样值**（RUNNING/TERMINATED/…），保持不动。
+	//
+	//	⚠️ 已销毁的机器不能靠改这个字段来表达。markStaleHosts 只置 stale=1，
+	//	status 停在最后一次同步到的 RUNNING 上，于是界面同一行自相矛盾：
+	//	名字划了删除线、打了「已删」标签，状态列却是绿色的「运行」（CMDB-003）。
+	//	但也不能把 status 覆写成 DESTROYED——
+	//	  1. TERMINATED 在 GCP 语义里是"已停机、实例还在、磁盘还计费"，
+	//	     借用它会把"销毁"和"关机"混成一个值；
+	//	  2. stale 是**推断**（同步时 GCP 没返回≠一定销毁，也可能同步本身坏了、
+	//	     或实例被移出了这个 project）。覆写掉真值，一旦是误标就再也查不到
+	//	     最后一次观测到的真实状态。
+	//	所以另出一个派生字段 Lifecycle，展示层以它为准，status 留作证据。
 	Status      string            `json:"status"`
+	Lifecycle   string            `json:"lifecycle"` // present=云上还在 / gone=云上已查不到
 	OS          string            `json:"os"`
 	Labels      map[string]string `json:"labels"`
 	AccountName string            `json:"account_name"`
@@ -1057,6 +1085,7 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 			return
 		}
 		o.Stale = stale == 1
+		o.Lifecycle = lifecycleOf(o.Stale)
 		o.IsK8sNode = isK8s == 1
 		o.Preemptible = preempt == 1
 		if labels.Valid && labels.String != "" {
@@ -1096,6 +1125,7 @@ func (h *HostHandler) HostDetail(c *gin.Context) {
 		return
 	}
 	o.Stale = stale == 1
+	o.Lifecycle = lifecycleOf(o.Stale)
 	o.Preemptible = preempt == 1
 	o.DeletionProtection = delProt == 1
 	o.NetworkTags = splitNonEmpty(tags)

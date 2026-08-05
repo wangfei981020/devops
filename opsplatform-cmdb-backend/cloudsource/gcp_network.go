@@ -154,9 +154,23 @@ func lbOf(r *compute.ForwardingRule) LoadBalancer {
 	if port == "" && len(r.Ports) > 0 {
 		port = strings.Join(r.Ports, ",")
 	}
+	// ⚠️ 转发规则的后端指向有**两个互斥字段**，只读 Target 会漏掉一大半。
+	//
+	//	target          → targetPool / target*Proxy（L4 网络LB、L7）
+	//	backendService  → 内部直通 LB（INTERNAL）和新版外部直通网络LB
+	//
+	//	原来只取了 target，于是所有 INTERNAL 转发规则的 Target 都是空串，
+	//	在 resolveLBBackends 里直接命中 `Target == "" → BackendState=none`，
+	//	被判成**"确认没有后端"**。生产 81 条里 48 条 none，绝大多数是这么来的——
+	//	g32-prod-tidb-ilb、doris-fe 这些明摆着有后端的内部 LB 全在里面。
+	//	把"没查"渲染成"没有"，比留空更误导（CMDB-042）。
+	target := lastSeg(r.Target)
+	if target == "" {
+		target = lastSeg(r.BackendService)
+	}
 	return LoadBalancer{
 		Name: r.Name, Scheme: r.LoadBalancingScheme, VIP: r.IPAddress, PortRange: port,
-		Protocol: r.IPProtocol, Target: lastSeg(r.Target), Region: region, SelfLink: r.SelfLink,
+		Protocol: r.IPProtocol, Target: target, Region: region, SelfLink: r.SelfLink,
 	}
 }
 

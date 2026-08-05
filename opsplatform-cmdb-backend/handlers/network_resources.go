@@ -167,28 +167,109 @@ func SyncProjectNetwork(db *sql.DB, provider string, accountID int, project stri
 			provider, accountID, project, a.Name, a.Address, a.Type, a.Status, a.Region, a.Users, a.SelfLink)
 	}
 	// 负载均衡 + 后端成员
-	logExec(db, "网络同步写", `DELETE FROM cloud_loadbalancers WHERE cloud_account_id=? AND project=?`, accountID, project)
-	logExec(db, "网络同步写", `DELETE FROM cloud_lb_backends WHERE cloud_account_id=? AND project=?`, accountID, project)
-	for _, l := range nr.LoadBalancers {
-		logExec(db, "网络同步写", `INSERT INTO cloud_loadbalancers (provider,cloud_account_id,project,name,scheme,vip,port_range,protocol,target,backend_state,backend_count,region,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
-			provider, accountID, project, l.Name, l.Scheme, l.VIP, l.PortRange, l.Protocol, l.Target,
-			l.BackendState, len(l.Backends), l.Region, l.SelfLink)
-		// 逐条插后端成员。⚠️ 这里要数实际插进去几条——logExec 出错只打日志、
-		// 返回 0，调用方原本不看返回值，于是"采集到了但一条也没存进去"
-		// 完全无声无息，界面上只表现为"这个 LB 没有后端"。
-		inserted := 0
-		for _, b := range l.Backends {
-			if n := logExec(db, "网络同步写", `INSERT INTO cloud_lb_backends (cloud_account_id,project,lb_name,instance,group_name,zone,synced_at) VALUES (?,?,?,?,?,?,NOW())`,
-				accountID, project, l.Name, b.Instance, b.Group, b.Zone); n > 0 {
-				inserted++
-			}
+	syncLoadBalancers(db, provider, accountID, project, nr.LoadBalancers)
+}
+
+// syncLoadBalancers 写负载均衡主表 + 后端成员明细。
+//
+//	## 为什么单拎出来、为什么用事务
+//
+//	生产上 7 个 LB 长期是「采集时追溯到 35 个后端，但 cloud_lb_backends 里
+//	一条都查不到」，而写入端**没有任何报错**（既无 exec_fail，也没触发
+//	"只存进 M 条"的告警）。丢的还不是零散几条，是**按 project 整批丢**。
+//
+//	原来的写法是「先 DELETE 整个 project，再逐条 INSERT」，两者之间没有事务。
+//	而网络同步是**按 project 并发跑**的：只要同一个 (account, project) 被两个
+//	worker 同时处理（project 在 cloud_account_projects 里重复登记、或定时任务
+//	和手动同步撞上），B 的 DELETE 就会插进 A 的「写完主表、正在插明细」的
+//	窗口里，把 A 已经插进去的成员删掉。主表的 backend_count=35 早已落库，
+//	明细却是空的——恰好就是生产看到的样子。
+//
+//	所以整段放进一个事务：DELETE 拿到的行锁会挡住另一个 worker 的 DELETE，
+//	不再有中间窗口。并且插完立刻**在同一事务里回读计数**——
+//	这是把"写没写进去"钉死的唯一办法，比事后猜有用得多。
+func syncLoadBalancers(db *sql.DB, provider string, accountID int, project string, lbs []cloudsource.LoadBalancer) {
+	tx, err := db.Begin()
+	if err != nil {
+		logx.J("network_sync", "lb_tx_begin_fail", map[string]any{
+			"account": accountID, "project": project, "err": err.Error()})
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
 		}
-		if inserted != len(l.Backends) {
-			logx.Line("network_sync", fmt.Sprintf(
-				"WARN LB %s (project=%s) 追溯到 %d 个后端但只存进 %d 条——界面会显示成没有后端",
-				l.Name, project, len(l.Backends), inserted))
+	}()
+
+	if _, err := tx.Exec(`DELETE FROM cloud_loadbalancers WHERE cloud_account_id=? AND project=?`, accountID, project); err != nil {
+		logx.J("network_sync", "lb_delete_fail", map[string]any{
+			"account": accountID, "project": project, "table": "cloud_loadbalancers", "err": err.Error()})
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM cloud_lb_backends WHERE cloud_account_id=? AND project=?`, accountID, project); err != nil {
+		logx.J("network_sync", "lb_delete_fail", map[string]any{
+			"account": accountID, "project": project, "table": "cloud_lb_backends", "err": err.Error()})
+		return
+	}
+
+	resolved, written := 0, 0
+	for _, l := range lbs {
+		if _, err := tx.Exec(`INSERT INTO cloud_loadbalancers (provider,cloud_account_id,project,name,scheme,vip,port_range,protocol,target,backend_state,backend_count,region,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
+			provider, accountID, project, l.Name, l.Scheme, l.VIP, l.PortRange, l.Protocol, l.Target,
+			l.BackendState, len(l.Backends), l.Region, l.SelfLink); err != nil {
+			logx.J("network_sync", "lb_insert_fail", map[string]any{
+				"account": accountID, "project": project, "lb": l.Name, "err": err.Error()})
+			return
+		}
+		resolved += len(l.Backends)
+		for _, b := range l.Backends {
+			if _, err := tx.Exec(`INSERT INTO cloud_lb_backends (cloud_account_id,project,lb_name,instance,group_name,zone,synced_at) VALUES (?,?,?,?,?,?,NOW())`,
+				accountID, project, l.Name, b.Instance, b.Group, b.Zone); err != nil {
+				// 一条明细写不进去就整批回滚：宁可这个 project 的 LB 保持上一轮的
+				// 旧数据，也不要留下"主表说有 35 个后端、明细只有 12 条"的残缺状态
+				logx.J("network_sync", "lb_backend_insert_fail", map[string]any{
+					"account": accountID, "project": project, "lb": l.Name,
+					"instance": b.Instance, "err": err.Error()})
+				return
+			}
+			written++
+		}
+		// 写入端和读取端各自打出自己用的 key，对不上时肉眼即可比对
+		if len(l.Backends) > 0 {
+			logx.J("network_sync", "lb_backends_written", map[string]any{
+				"key": lbKey(accountID, project, l.Name), "n": len(l.Backends), "state": l.BackendState})
 		}
 	}
+
+	// 回读校验：还在事务里，读到的就是这次真正写进去的行数
+	var back int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM cloud_lb_backends WHERE cloud_account_id=? AND project=?`,
+		accountID, project).Scan(&back); err != nil {
+		logx.J("network_sync", "lb_readback_fail", map[string]any{
+			"account": accountID, "project": project, "err": err.Error()})
+	} else if back != written {
+		logx.Line("network_sync", fmt.Sprintf(
+			"WARN project=%s 后端成员写入 %d 条，事务内回读只有 %d 条——写入环节丢数据",
+			project, written, back))
+	}
+
+	if err := tx.Commit(); err != nil {
+		logx.J("network_sync", "lb_commit_fail", map[string]any{
+			"account": accountID, "project": project, "err": err.Error(),
+			"note": "本次 LB 与后端成员全部回滚，库里仍是上一轮数据"})
+		return
+	}
+	committed = true
+	logx.J("network_sync", "lb_synced", map[string]any{
+		"account": accountID, "project": project,
+		"lbs": len(lbs), "backends_resolved": resolved, "backends_written": written})
+}
+
+// lbKey 后端成员的分组键，写入端和读取端必须用同一个函数拼，
+// 免得两边各写一份、某天悄悄改歪一个。
+func lbKey(accountID int, project, lbName string) string {
+	return itoa(accountID) + "/" + project + "/" + lbName
 }
 
 // projName 项目自定义名映射（account+project_id -> name），列表展示用。
@@ -307,23 +388,55 @@ func (h *NetworkHandler) ListAddresses(c *gin.Context) {
 
 func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 	// 预取所有后端成员（LEFT JOIN 主机表取内网IP），按 账号/项目/LB 分组
+	//
+	// ⚠️ 这段原来是 `brows, _ := h.DB.Query(...)`：查询失败被丢弃，backends 退化成
+	//	空 map，81 个 LB **全部**显示成没有后端。而这个 JOIN 是
+	//	`cis.name = b.instance`，两边都没有索引，行数一多就可能超时——
+	//	一次超时就让整页数据静默消失，且界面上看起来"就是没有后端"。
+	//	这正是"失败态退化成空态"的老毛病，也是 LB 后端修了几版都没修好的
+	//	候选原因之一。现在错误必须现形，并且往上传成失败态。
 	backends := map[string][]gin.H{}
-	if brows, _ := h.DB.Query(`
+	backendRows, scanFails := 0, 0
+	brows, berr := h.DB.Query(`
 		SELECT b.cloud_account_id, b.project, b.lb_name, b.instance, b.group_name, b.zone, COALESCE(h.internal_ip,'')
 		FROM cloud_lb_backends b
 		LEFT JOIN cis c ON c.type='host' AND c.name=b.instance
 		LEFT JOIN hosts h ON h.ci_id=c.id AND h.project=b.project AND h.stale=0
-		ORDER BY b.instance`); brows != nil {
-		for brows.Next() {
-			var aid int
-			var project, lb, inst, grp, zone, ip string
-			if brows.Scan(&aid, &project, &lb, &inst, &grp, &zone, &ip) == nil {
-				key := itoa(aid) + "/" + project + "/" + lb
-				backends[key] = append(backends[key], gin.H{"instance": inst, "group": grp, "zone": zone, "internal_ip": ip})
-			}
-		}
-		brows.Close()
+		ORDER BY b.instance`)
+	if berr != nil {
+		logx.J("network_sync", "lb_backends_query_fail", map[string]any{"err": berr.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "读取 LB 后端成员失败：" + berr.Error() + "（不是「没有后端」，是这次查询本身失败了）"})
+		return
 	}
+	for brows.Next() {
+		var aid int
+		var project, lb, inst, grp, zone, ip string
+		if err := brows.Scan(&aid, &project, &lb, &inst, &grp, &zone, &ip); err != nil {
+			scanFails++
+			continue
+		}
+		backendRows++
+		key := lbKey(aid, project, lb)
+		backends[key] = append(backends[key], gin.H{"instance": inst, "group": grp, "zone": zone, "internal_ip": ip})
+	}
+	// rows.Err() 从来没人查：迭代中途断开（超时、连接被掐）会让结果**静默截断**，
+	// 剩下的 LB 全变成"没有后端"，而这和"真的没有后端"在界面上一模一样
+	rowsErr := brows.Err()
+	brows.Close()
+	if rowsErr != nil {
+		logx.J("network_sync", "lb_backends_rows_err", map[string]any{
+			"err": rowsErr.Error(), "read_before_break": backendRows})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "读取 LB 后端成员时中断：" + rowsErr.Error() + "（已读 " + itoa(backendRows) + " 行，结果不完整）"})
+		return
+	}
+	if scanFails > 0 {
+		logx.J("network_sync", "lb_backends_scan_fail", map[string]any{
+			"count": scanFails, "note": "这些行被丢弃，对应 LB 会少显示后端"})
+	}
+	logx.J("network_sync", "lb_backends_loaded", map[string]any{
+		"rows": backendRows, "lb_keys": len(backends)})
 
 	rows, err := h.DB.Query(`SELECT id, provider, cloud_account_id, project, name, scheme, vip, port_range, protocol, target, IFNULL(backend_state,''), IFNULL(backend_count,0), region, self_link FROM cloud_loadbalancers ORDER BY provider, name`)
 	if err != nil {
@@ -337,7 +450,7 @@ func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 		var provider, project, name, scheme, vip, port, protocol, target, bState, region, selfLink string
 		var id, aid, bCount int
 		if rows.Scan(&id, &provider, &aid, &project, &name, &scheme, &vip, &port, &protocol, &target, &bState, &bCount, &region, &selfLink) == nil {
-			bs := backends[itoa(aid)+"/"+project+"/"+name]
+			bs := backends[lbKey(aid, project, name)]
 			if bs == nil {
 				bs = []gin.H{}
 			}
@@ -349,9 +462,14 @@ func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 			//	所以单列一个状态，并把采集时的计数摆出来供对照。
 			if bState == "ok" && len(bs) == 0 && bCount > 0 {
 				bState = "lost"
-				logx.Line("network_sync", fmt.Sprintf(
-					"WARN LB %s (account=%d project=%s) 采集时追溯到 %d 个后端，但 cloud_lb_backends 里查不到——数据在写入或读取环节丢失",
-					name, aid, project, bCount))
+				// 把读取端用的 key 原样打出来。写入端在 lb_backends_written 里打的是
+				// 同一个函数拼的 key——两条日志一比对，是"key 对不上"还是
+				// "根本没写进去"立刻就分得清，不用再猜。
+				logx.J("network_sync", "lb_backends_lost", map[string]any{
+					"lookup_key": lbKey(aid, project, name), "resolved_at_sync": bCount,
+					"loaded_rows_total": backendRows, "loaded_lb_keys": len(backends),
+					"note": "采集时追溯到了后端，按此 key 查不到明细——比对同 key 的 lb_backends_written 日志",
+				})
 			}
 			out = append(out, gin.H{"id": id, "provider": provider, "project": pn[itoa(aid)+"/"+project], "name": name,
 				"scheme": scheme, "vip": vip, "port_range": port, "protocol": protocol, "target": target, "region": region,

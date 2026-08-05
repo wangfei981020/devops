@@ -87,7 +87,10 @@ type mcpTool struct {
 var mcpTools = []mcpTool{
 	{"list_domains", "列域名(可按项目/状态/关键词筛)，看到期/CDN/证书", "/api/domains", []mcpParam{{"status", "string", "状态筛选", false}, {"q", "string", "关键词(域名/模块)", false}}, false},
 	{"list_certificates", "证书巡检:临期/过期/检测失败的证书", "/api/cert-inspect", nil, false},
-	{"list_hosts", "列主机(云VM):机型/IP/状态/项目", "/api/hosts", nil, false},
+	// ⚠️ lifecycle 必须写进描述：status 是云上最后一次观测值，已销毁的机器
+	// 它停在 RUNNING 上。判断"这台机器还在不在"只能看 lifecycle，
+	// 否则人看对了、AI 看错了（CMDB-003）。
+	{"list_hosts", "列主机(云VM):机型/IP/状态/项目;⚠️判断机器是否还存在看 lifecycle(present=在/gone=云上已查不到),不要看 status——status 是最后一次观测值,已销毁的机器它停在 RUNNING", "/api/hosts", nil, false},
 	// 云网络台账（GCP 只读采集）。判断"某服务是不是暴露在公网"必须看这里：
 	// scheme=EXTERNAL/INTERNAL 是权威答案，K8s 侧的 Service/注解只是间接线索。
 	{"list_loadbalancers", "列负载均衡:scheme(EXTERNAL=外网/INTERNAL=内网)+VIP+端口+后端实例——判断服务是否公网暴露看这个", "/api/cloud-loadbalancers", nil, false},
