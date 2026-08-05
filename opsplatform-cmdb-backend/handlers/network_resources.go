@@ -169,8 +169,8 @@ func SyncProjectNetwork(db *sql.DB, provider string, accountID int, project stri
 	logExec(db, "网络同步写", `DELETE FROM cloud_loadbalancers WHERE cloud_account_id=? AND project=?`, accountID, project)
 	logExec(db, "网络同步写", `DELETE FROM cloud_lb_backends WHERE cloud_account_id=? AND project=?`, accountID, project)
 	for _, l := range nr.LoadBalancers {
-		logExec(db, "网络同步写", `INSERT INTO cloud_loadbalancers (provider,cloud_account_id,project,name,scheme,vip,port_range,protocol,target,region,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())`,
-			provider, accountID, project, l.Name, l.Scheme, l.VIP, l.PortRange, l.Protocol, l.Target, l.Region, l.SelfLink)
+		logExec(db, "网络同步写", `INSERT INTO cloud_loadbalancers (provider,cloud_account_id,project,name,scheme,vip,port_range,protocol,target,backend_state,region,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
+			provider, accountID, project, l.Name, l.Scheme, l.VIP, l.PortRange, l.Protocol, l.Target, l.BackendState, l.Region, l.SelfLink)
 		for _, b := range l.Backends {
 			logExec(db, "网络同步写", `INSERT INTO cloud_lb_backends (cloud_account_id,project,lb_name,instance,group_name,zone,synced_at) VALUES (?,?,?,?,?,?,NOW())`,
 				accountID, project, l.Name, b.Instance, b.Group, b.Zone)
@@ -312,7 +312,7 @@ func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 		brows.Close()
 	}
 
-	rows, err := h.DB.Query(`SELECT id, provider, cloud_account_id, project, name, scheme, vip, port_range, protocol, target, region, self_link FROM cloud_loadbalancers ORDER BY provider, name`)
+	rows, err := h.DB.Query(`SELECT id, provider, cloud_account_id, project, name, scheme, vip, port_range, protocol, target, IFNULL(backend_state,''), region, self_link FROM cloud_loadbalancers ORDER BY provider, name`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -321,16 +321,18 @@ func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 	pn := h.projNames()
 	out := []gin.H{}
 	for rows.Next() {
-		var provider, project, name, scheme, vip, port, protocol, target, region, selfLink string
+		var provider, project, name, scheme, vip, port, protocol, target, bState, region, selfLink string
 		var id, aid int
-		if rows.Scan(&id, &provider, &aid, &project, &name, &scheme, &vip, &port, &protocol, &target, &region, &selfLink) == nil {
+		if rows.Scan(&id, &provider, &aid, &project, &name, &scheme, &vip, &port, &protocol, &target, &bState, &region, &selfLink) == nil {
 			bs := backends[itoa(aid)+"/"+project+"/"+name]
 			if bs == nil {
 				bs = []gin.H{}
 			}
 			out = append(out, gin.H{"id": id, "provider": provider, "project": pn[itoa(aid)+"/"+project], "name": name,
 				"scheme": scheme, "vip": vip, "port_range": port, "protocol": protocol, "target": target, "region": region,
-				"self_link": selfLink, "backends": bs})
+				// backend_state 让界面能区分「真的没后端」和「没追溯到」。
+				// 空字符串 = 这条是本次改动之前采集的，还没有状态信息。
+				"self_link": selfLink, "backends": bs, "backend_state": bState})
 		}
 	}
 	c.JSON(http.StatusOK, out)

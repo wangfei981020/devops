@@ -22,10 +22,14 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 	urlMapServices := map[string][]string{} // urlMap selfLink -> backendService URL 列表
 	groupInstances := map[string][]string{} // 实例组/NEG URL -> 实例名（懒加载缓存）
 
-	// try 包一层：失败不中断，但打日志（不再静默吞错）
+	// try 包一层：失败不中断，但打日志（不再静默吞错）。
+	// 同时记下"这次追溯是不是残缺的"——只打日志不够，界面上还得能区分
+	// 「真的没后端」和「没追到」，否则 81 个 LB 全空会被当成"LB 都挂空了"。
+	degraded := false
 	try := func(label string, fn func() error) {
 		if err := g.retry(ctx, lim, fn); err != nil {
 			log.Printf("[lb-backend] WARN 项目 %s 拉取 %s 失败: %v", projectID, label, err)
+			degraded = true
 		}
 	}
 
@@ -217,6 +221,22 @@ func (g *GCP) resolveLBBackends(ctx context.Context, svc *compute.Service, proje
 			}
 		}
 		lb.Backends = backends
+		switch {
+		case len(backends) > 0:
+			lb.BackendState = "ok"
+		case degraded:
+			// 上游某一跳拉失败了：这个 LB 到底有没有后端**我们不知道**，
+			// 绝不能显示成"无后端"
+			lb.BackendState = "unresolved"
+		case lb.Target == "":
+			lb.BackendState = "none"
+		case len(poolURLs) == 0 && len(serviceURLs) == 0:
+			// 有 target 但既不是 targetPool 也不是 backendService——
+			// 多半是服务型 NEG（GKE Service/Ingress 直连 Pod），当前追溯不了
+			lb.BackendState = "unsupported"
+		default:
+			lb.BackendState = "none"
+		}
 		// 有 target 却一个后端都没追到 → 打日志，便于排查（服务型后端/未知类型/权限等）
 		if len(backends) == 0 && lb.Target != "" {
 			log.Printf("[lb-backend] WARN LB %s (project=%s, target=%s) 未追溯到后端实例：命中 targetPool=%d backendService=%d（可能是无实例后端/服务型NEG，或状态不支持）",

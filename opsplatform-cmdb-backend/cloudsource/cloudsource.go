@@ -93,6 +93,17 @@ type LoadBalancer struct {
 	Region    string // 'global' 或区域
 	SelfLink  string
 	Backends  []LBBackend // 后端成员（实例），best-effort 追溯
+	// BackendState 追溯结果，用来区分「真的没有后端」和「没追溯到」。
+	//
+	//	  ok        —— 追到了，Backends 就是全部
+	//	  none      —— 确实没有后端（LB 挂空了，这本身是个问题）
+	//	  unresolved—— 追溯过程出错（权限/API 失败），**不知道有没有**
+	//	  unsupported— 服务型 NEG 等当前不支持追溯的类型
+	//
+	//	必须区分：81 个 LB 全显示"无后端"时，人第一反应是"这些 LB 都是空的"，
+	//	而实际可能只是拉后端的 API 全被拒了。把"没查到"渲染成"没有"，
+	//	是这套系统最危险的失效模式。
+	BackendState string
 }
 
 // LBBackend 负载均衡追溯到的一个后端实例

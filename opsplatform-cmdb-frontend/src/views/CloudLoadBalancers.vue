@@ -23,7 +23,28 @@
         <el-table-column label="前端 VIP" min-width="150"><template #default="{ row }"><span class="mono">{{ row.vip || '—' }}</span></template></el-table-column>
         <el-table-column label="端口" width="100"><template #default="{ row }"><span class="mono">{{ row.port_range || '—' }}</span></template></el-table-column>
         <el-table-column label="协议" width="80"><template #default="{ row }">{{ row.protocol || '—' }}</template></el-table-column>
-        <el-table-column label="后端" width="70" align="right"><template #default="{ row }">{{ (row.backends || []).length }}</template></el-table-column>
+        <!-- ⚠️ "0" 和"没查到"必须分开。生产上 81 个 LB 全显示后端为空，
+             人第一反应是"这些 LB 都挂空了"，但实际可能只是拉后端的 API 全被拒了。
+             把「没查到」渲染成「没有」是这套系统最危险的失效模式。 -->
+        <el-table-column label="后端" width="96" align="right"><template #default="{ row }">
+          <span v-if="(row.backends || []).length">{{ row.backends.length }}</span>
+          <el-tooltip v-else-if="row.backend_state === 'unresolved'" placement="top"
+                      content="追溯后端时 API 调用失败（多半是权限不足），这个 LB 到底有没有后端目前不知道——不是「没有」">
+            <span class="b-unknown">未知</span>
+          </el-tooltip>
+          <el-tooltip v-else-if="row.backend_state === 'unsupported'" placement="top"
+                      content="服务型后端（GKE Service/Ingress 直连 Pod 的 NEG），当前不支持追溯到实例">
+            <span class="muted">不适用</span>
+          </el-tooltip>
+          <el-tooltip v-else-if="row.backend_state === 'none'" placement="top"
+                      content="确认没有后端实例——这个 LB 是挂空的，值得查一下">
+            <span class="b-empty">0</span>
+          </el-tooltip>
+          <!-- 空状态码 = 本次改动前采集的老数据，还没有状态信息 -->
+          <el-tooltip v-else placement="top" content="这条是旧数据，重新同步后才有追溯状态">
+            <span class="muted">—</span>
+          </el-tooltip>
+        </template></el-table-column>
         <el-table-column label="操作" width="80"><template #default="{ row }">
           <el-button link type="primary" :icon="View" @click="openDetail(row)">详情</el-button>
         </template></el-table-column>
@@ -57,7 +78,16 @@
           <el-table-column label="实例组" min-width="150"><template #default="{ row }">{{ row.group || '—' }}</template></el-table-column>
           <el-table-column label="zone" width="130"><template #default="{ row }">{{ row.zone || '—' }}</template></el-table-column>
         </el-table>
-        <el-empty v-else description="未追溯到后端实例（可能是无实例后端 / 服务型后端，或需重新同步）" :image-size="50" />
+        <el-alert v-else-if="detail.backend_state === 'unresolved'" type="warning" :closable="false" show-icon
+          title="后端追溯失败，结果不可信"
+          description="拉取 targetPools / backendServices 的 API 调用出错了（多半是服务账号缺 compute 只读权限）。这个 LB 有没有后端目前无法确认——不要当成「没有后端」。请检查云账号权限后重新同步。" />
+        <el-alert v-else-if="detail.backend_state === 'unsupported'" type="info" :closable="false" show-icon
+          title="服务型后端，不支持追溯到实例"
+          description="这类 LB 直连 GKE Service/Ingress 的 NEG（Pod 级），没有虚拟机实例可追。要看它转发到哪里，请到 K8s「全链路」页查。" />
+        <el-alert v-else-if="detail.backend_state === 'none'" type="warning" :closable="false" show-icon
+          title="确认没有后端实例"
+          description="这个 LB 是挂空的——它有公网 VIP 却没有任何后端。要么是废弃资源（在计费），要么是后端被误删了，值得查一下。" />
+        <el-empty v-else description="这条是旧数据，重新同步后才有追溯状态" :image-size="50" />
       </template>
       <template #footer><el-button @click="dlg=false">关闭</el-button></template>
     </el-dialog>
@@ -95,6 +125,8 @@ onMounted(load)
 </script>
 
 <style scoped>
+.b-unknown { color: #e6a23c; font-weight: 600; cursor: help; }
+.b-empty { color: #f56c6c; font-weight: 600; cursor: help; }
 .filters { display:flex; gap:10px; align-items:center; margin-bottom:12px; }
 .grow { flex:1; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12px; }
