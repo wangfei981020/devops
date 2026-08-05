@@ -1635,6 +1635,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_cmdb_cdn_sites", "menu:cmdb_cdn_sites", "[资产] CDN 站点", "/cmdb/cdn-sites", "perm_menu_cmdb", "", 44},
 		{"perm_menu_cmdb_certs", "menu:cmdb_certs", "[资产] 证书", "/cmdb/certs", "perm_menu_cmdb", "", 46},
 		{"perm_menu_cmdb_cert_inspect", "menu:cmdb_cert_inspect", "[资产] 到期巡检", "/cmdb/cert-inspect", "perm_menu_cmdb", "", 48},
+		{"perm_menu_cmdb_relations", "menu:cmdb_relations", "[资产] 关系图谱", "/cmdb/relations", "perm_menu_cmdb", "", 49},
 		{"perm_menu_cmdb_k8s_clusters", "menu:cmdb_k8s_clusters", "[K8s] 集群管理", "/cmdb/k8s-clusters", "perm_menu_cmdb", "", 60},
 		{"perm_menu_cmdb_version_upgrade", "menu:cmdb_version_upgrade", "[K8s] 版本与升级", "/cmdb/version-upgrade", "perm_menu_cmdb", "", 62},
 		{"perm_menu_cmdb_k8s_nodes", "menu:cmdb_k8s_nodes", "[K8s] 节点", "/cmdb/k8s-nodes", "perm_menu_cmdb", "", 64},
@@ -2079,6 +2080,9 @@ var cmdbMenuCodes = []string{
 	"menu:cmdb_cloud_firewalls", "menu:cmdb_cloud_lbs", "menu:cmdb_cloud_audit",
 	"menu:cmdb_domains", "menu:cmdb_dns_records", "menu:cmdb_cdn_sites",
 	"menu:cmdb_certs", "menu:cmdb_cert_inspect",
+	// 关系图谱：原来跟「基础配置」共用 menu:cmdb_basic，只读角色因此自动获得
+	// 访问权。它展示的是资产间关系，该单独授权（CMDB-045）。
+	"menu:cmdb_relations",
 	"menu:cmdb_k8s_clusters", "menu:cmdb_version_upgrade", "menu:cmdb_k8s_nodes",
 	"menu:cmdb_k8s_workloads", "menu:cmdb_k8s_pods", "menu:cmdb_k8s_networking",
 	"menu:cmdb_k8s_storage", "menu:cmdb_k8s_events", "menu:cmdb_k8s_health",

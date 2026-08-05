@@ -108,9 +108,10 @@ const menus = shallowRef([
     { path: '/cdn-sites', label: 'CDN 站点', icon: Cloudy },
     { path: '/certs', label: '证书', icon: Lock },
     { path: '/cert-inspect', label: '到期巡检', icon: CircleCheck },
-    // 关系图谱冷藏：当前只有 域名→证书 一种关系、节点少、价值低；二期 M7 接入
-    // 物理→虚拟→容器→应用全链路后升级为「影响分析」再放出。路由/组件保留。
-    // { path: '/relations', label: '关系图谱', icon: Share },
+    // 关系图谱：二期 M7 接入物理→虚拟→容器→应用全链路后会升级为「影响分析」。
+    // 现在放出菜单入口——之前冷藏（只有路由没有入口）的状态更糟：
+    // 页面还在、URL 还能进，只是没人知道它存在，等于一个没人看管的入口。
+    { path: '/relations', label: '关系图谱', icon: Share },
   ] },
   { type: 'group', label: 'K8s', icon: Grid, children: [
     { path: '/k8s-clusters', label: '集群管理', icon: Cloudy },

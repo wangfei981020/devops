@@ -47,7 +47,7 @@ var allMenuCodes = []string{
 	"menu:cmdb_hosts", "menu:cmdb_cloud_ips", "menu:cmdb_cloud_networks",
 	"menu:cmdb_cloud_firewalls", "menu:cmdb_cloud_lbs", "menu:cmdb_cloud_audit",
 	"menu:cmdb_domains", "menu:cmdb_dns_records", "menu:cmdb_cdn_sites",
-	"menu:cmdb_certs", "menu:cmdb_cert_inspect",
+	"menu:cmdb_certs", "menu:cmdb_cert_inspect", "menu:cmdb_relations",
 	"menu:cmdb_k8s_clusters", "menu:cmdb_version_upgrade", "menu:cmdb_k8s_nodes",
 	"menu:cmdb_k8s_workloads", "menu:cmdb_k8s_pods", "menu:cmdb_k8s_networking",
 	"menu:cmdb_k8s_storage", "menu:cmdb_k8s_events", "menu:cmdb_k8s_health",

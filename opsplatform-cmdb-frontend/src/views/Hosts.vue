@@ -3,8 +3,11 @@
     <div class="page-head">
       <span class="page-title">主机</span>
       <div>
-        <el-button :icon="Money" @click="openRates">成本费率</el-button>
-        <el-button :icon="Cloudy" @click="openAccounts">云账号</el-button>
+        <!-- 这两个按钮原来没做权限判断，而 canHosts/canIntegr 早就声明好了——
+             纯粹是漏用（CMDB-035）。成本费率改的是全局计价、云账号存的是 SA key，
+             只读账号点了必然 403。一个点了必然失败的控件，比藏起来更糟。 -->
+        <el-button v-if="canHosts" :icon="Money" @click="openRates">成本费率</el-button>
+        <el-button v-if="canIntegr" :icon="Cloudy" @click="openAccounts">云账号</el-button>
       </div>
     </div>
     <div class="muted" style="margin-bottom:12px">GCP Compute 主机（只读同步，不能改/删）。成本为<b>估算·目录价</b>（可在「成本费率」调整）；真实账单待接 BigQuery。</div>

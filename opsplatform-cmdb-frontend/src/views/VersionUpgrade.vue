@@ -22,7 +22,7 @@
         <el-tag v-if="!sum.schedule_rows" size="small" type="danger" style="margin-left:6px">未同步</el-tag>
       </span>
       <el-button size="small" :loading="syncing.schedule" style="margin-left:8px"
-        @click="runTask('gke_schedule_sync', 'schedule')">同步排期表</el-button>
+        v-if="canUpgrade" @click="runTask('gke_schedule_sync', 'schedule')">同步排期表</el-button>
       <el-button v-if="canUpgrade" size="small" :loading="syncing.upgrade" @click="runTask('gke_upgrade_sync', 'upgrade')">采集集群</el-button>
     </div>
 
@@ -243,7 +243,7 @@
               :placeholder="verOpts.length ? '选择目标版本' : '目标版本（清单未采集，需手输）'">
               <el-option v-for="v in verOpts" :key="v" :label="v" :value="v" />
             </el-select>
-            <el-button size="small" type="primary" :loading="planLoading" @click="loadPlan">生成预案</el-button>
+            <el-button v-if="canUpgrade" size="small" type="primary" :loading="planLoading" @click="loadPlan">生成预案</el-button>
             <span class="muted" v-if="plan">生成于 {{ plan.generated_at }}</span>
           </div>
 

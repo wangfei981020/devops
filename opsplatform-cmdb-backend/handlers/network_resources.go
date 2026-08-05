@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -169,11 +170,23 @@ func SyncProjectNetwork(db *sql.DB, provider string, accountID int, project stri
 	logExec(db, "网络同步写", `DELETE FROM cloud_loadbalancers WHERE cloud_account_id=? AND project=?`, accountID, project)
 	logExec(db, "网络同步写", `DELETE FROM cloud_lb_backends WHERE cloud_account_id=? AND project=?`, accountID, project)
 	for _, l := range nr.LoadBalancers {
-		logExec(db, "网络同步写", `INSERT INTO cloud_loadbalancers (provider,cloud_account_id,project,name,scheme,vip,port_range,protocol,target,backend_state,region,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
-			provider, accountID, project, l.Name, l.Scheme, l.VIP, l.PortRange, l.Protocol, l.Target, l.BackendState, l.Region, l.SelfLink)
+		logExec(db, "网络同步写", `INSERT INTO cloud_loadbalancers (provider,cloud_account_id,project,name,scheme,vip,port_range,protocol,target,backend_state,backend_count,region,self_link,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
+			provider, accountID, project, l.Name, l.Scheme, l.VIP, l.PortRange, l.Protocol, l.Target,
+			l.BackendState, len(l.Backends), l.Region, l.SelfLink)
+		// 逐条插后端成员。⚠️ 这里要数实际插进去几条——logExec 出错只打日志、
+		// 返回 0，调用方原本不看返回值，于是"采集到了但一条也没存进去"
+		// 完全无声无息，界面上只表现为"这个 LB 没有后端"。
+		inserted := 0
 		for _, b := range l.Backends {
-			logExec(db, "网络同步写", `INSERT INTO cloud_lb_backends (cloud_account_id,project,lb_name,instance,group_name,zone,synced_at) VALUES (?,?,?,?,?,?,NOW())`,
-				accountID, project, l.Name, b.Instance, b.Group, b.Zone)
+			if n := logExec(db, "网络同步写", `INSERT INTO cloud_lb_backends (cloud_account_id,project,lb_name,instance,group_name,zone,synced_at) VALUES (?,?,?,?,?,?,NOW())`,
+				accountID, project, l.Name, b.Instance, b.Group, b.Zone); n > 0 {
+				inserted++
+			}
+		}
+		if inserted != len(l.Backends) {
+			logx.Line("network_sync", fmt.Sprintf(
+				"WARN LB %s (project=%s) 追溯到 %d 个后端但只存进 %d 条——界面会显示成没有后端",
+				l.Name, project, len(l.Backends), inserted))
 		}
 	}
 }
@@ -312,7 +325,7 @@ func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 		brows.Close()
 	}
 
-	rows, err := h.DB.Query(`SELECT id, provider, cloud_account_id, project, name, scheme, vip, port_range, protocol, target, IFNULL(backend_state,''), region, self_link FROM cloud_loadbalancers ORDER BY provider, name`)
+	rows, err := h.DB.Query(`SELECT id, provider, cloud_account_id, project, name, scheme, vip, port_range, protocol, target, IFNULL(backend_state,''), IFNULL(backend_count,0), region, self_link FROM cloud_loadbalancers ORDER BY provider, name`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -322,17 +335,31 @@ func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 	out := []gin.H{}
 	for rows.Next() {
 		var provider, project, name, scheme, vip, port, protocol, target, bState, region, selfLink string
-		var id, aid int
-		if rows.Scan(&id, &provider, &aid, &project, &name, &scheme, &vip, &port, &protocol, &target, &bState, &region, &selfLink) == nil {
+		var id, aid, bCount int
+		if rows.Scan(&id, &provider, &aid, &project, &name, &scheme, &vip, &port, &protocol, &target, &bState, &bCount, &region, &selfLink) == nil {
 			bs := backends[itoa(aid)+"/"+project+"/"+name]
 			if bs == nil {
 				bs = []gin.H{}
+			}
+			// ⚠️ 采集时追溯到了、读出来却没有 —— 这是**数据丢了**，不是"没有后端"。
+			//
+			//	把它显示成"没有后端"比修复前更误导：原来 81 个统一显示 0，
+			//	人知道这块不可信；标成"追溯成功"却给不出实例，排障会以为
+			//	"重新同步就有了"，而同步并不会改变结果。
+			//	所以单列一个状态，并把采集时的计数摆出来供对照。
+			if bState == "ok" && len(bs) == 0 && bCount > 0 {
+				bState = "lost"
+				logx.Line("network_sync", fmt.Sprintf(
+					"WARN LB %s (account=%d project=%s) 采集时追溯到 %d 个后端，但 cloud_lb_backends 里查不到——数据在写入或读取环节丢失",
+					name, aid, project, bCount))
 			}
 			out = append(out, gin.H{"id": id, "provider": provider, "project": pn[itoa(aid)+"/"+project], "name": name,
 				"scheme": scheme, "vip": vip, "port_range": port, "protocol": protocol, "target": target, "region": region,
 				// backend_state 让界面能区分「真的没后端」和「没追溯到」。
 				// 空字符串 = 这条是本次改动之前采集的，还没有状态信息。
-				"self_link": selfLink, "backends": bs, "backend_state": bState})
+				"self_link": selfLink, "backends": bs, "backend_state": bState,
+				// 采集时追溯到的条数，用来和实际返回的 backends 对账
+				"backend_count": bCount})
 		}
 	}
 	c.JSON(http.StatusOK, out)

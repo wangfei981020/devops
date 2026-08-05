@@ -79,7 +79,7 @@ const ROUTE_PERM = {
   '/cdn-sites': 'cdn_sites',
   '/certs': 'certs',
   '/cert-inspect': 'cert_inspect',
-  '/relations': 'basic',
+  '/relations': 'relations',
   '/k8s-clusters': 'k8s_clusters',
   '/version-upgrade': 'version_upgrade',
   '/k8s-nodes': 'k8s_nodes',

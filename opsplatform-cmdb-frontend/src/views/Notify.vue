@@ -1,5 +1,7 @@
 <template>
   <div class="page">
+    <el-alert v-if="!canManage" type="info" :closable="false" show-icon style="margin-bottom:12px"
+      title="以下配置为只读展示。修改通知设置需要「通知管理」权限，请联系管理员。" />
     <div class="page-head"><span class="page-title">通知</span></div>
 
     <!-- Lark 群 -->
@@ -72,28 +74,28 @@
       </el-alert>
       <el-form label-width="120px" style="max-width:620px">
         <el-form-item label="到期提醒天数">
-          <el-input v-model="cfg.remind_days" placeholder="30,15,7,1" style="width:240px" />
+          <el-input v-model="cfg.remind_days" :disabled="!canManage" placeholder="30,15,7,1" style="width:240px" />
           <span class="muted" style="margin-left:8px">逗号分隔，剩余天数命中即提醒</span>
         </el-form-item>
         <el-divider content-position="left"><span class="muted">证书 / 域名</span></el-divider>
-        <el-form-item label="证书即将到期"><el-switch v-model="ev.notify_cert_expiring" active-value="1" inactive-value="0" /></el-form-item>
-        <el-form-item label="续期成功通知"><el-switch v-model="ev.notify_renew_success" active-value="1" inactive-value="0" /></el-form-item>
-        <el-form-item label="续期失败告警"><el-switch v-model="ev.notify_renew_fail" active-value="1" inactive-value="0" /></el-form-item>
-        <el-form-item label="域名即将到期"><el-switch v-model="ev.notify_domain_expiring" active-value="1" inactive-value="0" /></el-form-item>
+        <el-form-item label="证书即将到期"><el-switch v-model="ev.notify_cert_expiring" :disabled="!canManage" active-value="1" inactive-value="0" /></el-form-item>
+        <el-form-item label="续期成功通知"><el-switch v-model="ev.notify_renew_success" :disabled="!canManage" active-value="1" inactive-value="0" /></el-form-item>
+        <el-form-item label="续期失败告警"><el-switch v-model="ev.notify_renew_fail" :disabled="!canManage" active-value="1" inactive-value="0" /></el-form-item>
+        <el-form-item label="域名即将到期"><el-switch v-model="ev.notify_domain_expiring" :disabled="!canManage" active-value="1" inactive-value="0" /></el-form-item>
 
         <!-- 这三类此前没有开关，想静音只能去「定时任务」把整个任务停掉，
              而停任务连数据采集也一起没了。关开关只停投递，任务照跑（CMDB-026） -->
         <el-divider content-position="left"><span class="muted">集群</span></el-divider>
         <el-form-item label="GKE 升级预警">
-          <el-switch v-model="ev.notify_gke_upgrade" active-value="1" inactive-value="0" />
+          <el-switch v-model="ev.notify_gke_upgrade" :disabled="!canManage" active-value="1" inactive-value="0" />
           <span class="muted" style="margin-left:8px">强制升级倒计时与版本偏斜</span>
         </el-form-item>
         <el-form-item label="磁盘水位告警">
-          <el-switch v-model="ev.notify_disk_watch" active-value="1" inactive-value="0" />
+          <el-switch v-model="ev.notify_disk_watch" :disabled="!canManage" active-value="1" inactive-value="0" />
           <span class="muted" style="margin-left:8px">盘满会直接打垮全站，建议保持开启</span>
         </el-form-item>
         <el-form-item label="节点健康预警">
-          <el-switch v-model="ev.notify_node_health" active-value="1" inactive-value="0" />
+          <el-switch v-model="ev.notify_node_health" :disabled="!canManage" active-value="1" inactive-value="0" />
           <span class="muted" style="margin-left:8px">节点 NotReady / 卡死，90 秒一轮</span>
         </el-form-item>
 

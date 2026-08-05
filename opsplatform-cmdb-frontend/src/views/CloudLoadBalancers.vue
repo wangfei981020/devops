@@ -28,6 +28,14 @@
              把「没查到」渲染成「没有」是这套系统最危险的失效模式。 -->
         <el-table-column label="后端" width="96" align="right"><template #default="{ row }">
           <span v-if="(row.backends || []).length">{{ row.backends.length }}</span>
+          <!-- ⚠️ 采集时追溯到了、读出来却没有 = 数据丢了，不是"没有后端"。
+               原来条件链**没有 ok 分支**，这种情况会掉到最后的兜底显示成
+               "这条是旧数据，重新同步后才有" —— 而重新同步并不会改变结果，
+               比修复前更误导（原来 81 个统一显示 0，人至少知道这块不可信）。 -->
+          <el-tooltip v-else-if="row.backend_state === 'lost'" placement="top"
+                      :content="`采集时追溯到 ${row.backend_count} 个后端实例，但读取时一条都查不到——数据在写入或读取环节丢了。重新同步不会改变结果，请反馈给平台维护者`">
+            <span class="b-lost">数据丢失</span>
+          </el-tooltip>
           <el-tooltip v-else-if="row.backend_state === 'unresolved'" placement="top"
                       content="追溯后端时 API 调用失败（多半是权限不足），这个 LB 到底有没有后端目前不知道——不是「没有」">
             <span class="b-unknown">未知</span>
@@ -78,6 +86,9 @@
           <el-table-column label="实例组" min-width="150"><template #default="{ row }">{{ row.group || '—' }}</template></el-table-column>
           <el-table-column label="zone" width="130"><template #default="{ row }">{{ row.zone || '—' }}</template></el-table-column>
         </el-table>
+        <el-alert v-else-if="detail.backend_state === 'lost'" type="error" :closable="false" show-icon
+          title="后端数据丢失，不是「没有后端」"
+          :description="`采集时确实追溯到了 ${detail.backend_count} 个后端实例（backend_state=ok 只在追溯成功时才写），但 cloud_lb_backends 表里一条都查不到。数据在写入或读取环节丢了。⚠️ 重新同步不会改变这个结果——请把这个 LB 的名字反馈给平台维护者。`" />
         <el-alert v-else-if="detail.backend_state === 'unresolved'" type="warning" :closable="false" show-icon
           title="后端追溯失败，结果不可信"
           description="拉取 targetPools / backendServices 的 API 调用出错了（多半是服务账号缺 compute 只读权限）。这个 LB 有没有后端目前无法确认——不要当成「没有后端」。请检查云账号权限后重新同步。" />
@@ -125,6 +136,7 @@ onMounted(load)
 </script>
 
 <style scoped>
+.b-lost { color: #f56c6c; font-weight: 600; cursor: help; text-decoration: underline wavy; }
 .b-unknown { color: #e6a23c; font-weight: 600; cursor: help; }
 .b-empty { color: #f56c6c; font-weight: 600; cursor: help; }
 .filters { display:flex; gap:10px; align-items:center; margin-bottom:12px; }

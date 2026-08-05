@@ -129,7 +129,10 @@ var permPrefixRules = []permRule{
 	{"/api/notify/", "menu:cmdb_notify", "cmdb:manage_notify"},
 	{"/api/scheduled-tasks", "menu:cmdb_cron", "cmdb:manage_cron"},
 	{"/api/task-runs", "menu:cmdb_task_runs", "cmdb:run_task"},
-	{"/api/relations", "menu:cmdb_basic", "cmdb:manage_basic"},
+	// 关系图谱有自己的权限码。原来跟「基础配置」共用 menu:cmdb_basic，
+	// 而只读角色本来就有基础配置权限，于是自动获得了关系图谱的访问权——
+	// 不是"没做校验"，是**分类不当**（CMDB-045）。
+	{"/api/relations", "menu:cmdb_relations", "cmdb:manage_basic"},
 	{"/api/dashboard", "menu:cmdb_overview", ""},
 
 	// 审计：看审计要菜单权限；回滚是独立按钮权限——能改 ≠ 能把别人的改动撤掉
