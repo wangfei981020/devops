@@ -115,6 +115,18 @@ func nodeHealthWatchCore(ctx context.Context, db *sql.DB, pool *k8ssource.Pool, 
 		}
 		totalNodes += len(nl.Items)
 
+		// ⚠️ 本轮 apiserver 里还在的节点名。
+		//	下面扫完之后要拿它清理"已经不存在的节点"——节点池轮换、缩容、
+		//	升级换机都会让节点直接消失，而不是先变 NotReady 再消失。
+		//	不清的话，它们在状态表里的 not_ready_since 一直挂着，
+		//	时长逐轮累加：生产上 UAT 有 17 个节点显示「NotReady 105 小时」，
+		//	而它们 7/31 就随节点池删掉了，实际 NotReady 数是 0
+		//	（同系统的实时巡检每轮都报 "NotReady 0 个"，两个数字自相矛盾）。
+		alive := make(map[string]bool, len(nl.Items))
+		for _, n := range nl.Items {
+			alive[n.Name] = true
+		}
+
 		for _, n := range nl.Items {
 			ready := nodeReady(&n)
 			pl := nodePool(&n)
@@ -137,6 +149,16 @@ func nodeHealthWatchCore(ctx context.Context, db *sql.DB, pool *k8ssource.Pool, 
 			a.Suggestion = notReadySuggestion(cl.Provider, dur)
 			alerts = append(alerts, a)
 			markAlerted(db, cl.ID, n.Name, "not_ready", "red", now)
+		}
+
+		// 清理已经不在集群里的节点。放在扫完之后做，且只在**本轮成功拿到节点列表**
+		// 时执行——上面 List 失败的分支已经 continue 了，不会走到这里。
+		// 这一点很重要：apiserver 一次抖动就把全部节点当成"已删除"清掉，
+		// 会让真正的 NotReady 计时被重置，比不清更糟。
+		if n := pruneGoneNodes(db, cl.ID, alive); n > 0 {
+			logx.J("node_health", "pruned_gone_nodes", map[string]any{
+				"cluster": cl.Name, "count": n,
+				"note": "这些节点已不在 apiserver 里（节点池轮换/缩容），清除其 NotReady 计时"})
 		}
 
 		// 磁盘趋势：只有接了 Prometheus 的集群能做（infra-01/02 目前没接，会走 skip 分支）
@@ -340,6 +362,38 @@ func clearNotReady(db *sql.DB, cid int, node string) {
 	                     WHERE cluster_id=? AND node_name=? AND not_ready_since IS NOT NULL`, cid, node); e != nil {
 		logx.J("node_health", "clear_not_ready_failed", map[string]any{"node": node, "err": e.Error()})
 	}
+}
+
+// pruneGoneNodes 删掉状态表里**本轮 apiserver 已经没有**的节点，返回清理条数。
+//
+//	为什么必须清：节点池轮换、缩容、升级换机时，节点是**直接消失**的，
+//	不会先变成 NotReady 再消失。而 not_ready_since 只在节点 Ready 时才被清除
+//	（clearNotReady），消失的节点谁也碰不到它，那一行就永远挂着，
+//	时长每轮累加——UAT 上因此显示「17 个节点 NotReady 105 小时」，实际是 0 个。
+//
+//	⚠️ 只能在本轮**成功拿到节点列表**时调用。apiserver 抖一下就把全部节点
+//	当成"已删除"清掉的话，真正的 NotReady 计时会被重置，比不清更糟。
+func pruneGoneNodes(db *sql.DB, cid int, alive map[string]bool) int {
+	rows, err := db.Query(`SELECT node_name FROM k8s_node_alert_state WHERE cluster_id=?`, cid)
+	if err != nil {
+		return 0
+	}
+	var gone []string
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil && !alive[name] {
+			gone = append(gone, name)
+		}
+	}
+	rows.Close()
+
+	n := 0
+	for _, name := range gone {
+		if _, e := db.Exec(`DELETE FROM k8s_node_alert_state WHERE cluster_id=? AND node_name=?`, cid, name); e == nil {
+			n++
+		}
+	}
+	return n
 }
 
 // shouldAlert 距上次告警是否已超过间隔。90 秒一轮，不去重会把群刷爆。
