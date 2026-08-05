@@ -104,14 +104,43 @@ const ROUTE_PERM = {
   '/audit': 'audit',
 }
 
+// PUBLIC_ROUTES 明确不需要权限的页面。
+//
+//	必须是**显式白名单**，不能靠"查不到权限码就放行"来兜——见下面 permOf 的说明。
+const PUBLIC_ROUTES = new Set(['/login', '/forbidden'])
+
 // permOf 支持带参数的详情页（/certs/123 归到 certs）。
 // 导出给 App.vue 过滤菜单用——路由拦截和菜单显隐必须依据同一张表，
 // 否则会出现"菜单上看得见、点进去被拦"这种自相矛盾的状态。
+//
+//	返回 null 表示**这个路径没有登记权限码**。注意 null 的含义是"不知道"，
+//	不是"不需要权限"——守卫必须把它当拒绝处理（见 beforeEach 的说明）。
 export function permOf(path) {
   if (ROUTE_PERM[path]) return ROUTE_PERM[path]
   if (path.startsWith('/certs/')) return 'certs'
   return null
 }
+
+// auditRoutePerms 启动自检：有没有路由忘了登记权限码。
+//
+//	守卫改成白名单制之后，忘登记的后果从"全员可见"变成"全员被拦"——
+//	方向是对的（安全），但对开发者一样难查：页面莫名其妙进不去。
+//	所以启动时把漏网的直接打出来，开发阶段一眼就能看见。
+function auditRoutePerms() {
+  const missing = []
+  for (const r of routes) {
+    const p = r.path
+    if (!p || p.startsWith('/:') || r.redirect) continue // 通配/重定向不需要权限码
+    if (PUBLIC_ROUTES.has(p)) continue
+    if (p.includes(':')) continue                        // 详情页由 permOf 的前缀分支覆盖
+    if (!ROUTE_PERM[p]) missing.push(p)
+  }
+  if (missing.length) {
+    console.error('[权限] 以下路由没有登记权限码，将被守卫拒绝访问：', missing,
+      '\n  → 请在 router/index.js 的 ROUTE_PERM 里补上，或加进 PUBLIC_ROUTES')
+  }
+}
+auditRoutePerms()
 
 // firstAllowedPath 返回这个人**第一个进得去**的页面。
 //
@@ -157,10 +186,25 @@ router.beforeEach(async (to, from) => {
   // 整个页面生命周期只拉一次，失败不阻断（见 auth.ensureFresh）。
   await auth.ensureFresh()
 
-  // 无权限的页面导到提示页，而不是让它渲染成一堆 403 报错或空白
-  // （全站三态约定：失败态不能退化成空态）
+  // ⚠️ 白名单制：**没登记权限码的路由一律拒绝**，不是放行。
+  //
+  //	原来写的是 `if (page && !auth.hasMenu(page))`——permOf 返回 null 时
+  //	整个判断被短路掉，等于默认放行。任何新加的路由忘配权限码就自动
+  //	对全员开放，而且不会有任何提示（CMDB-045）。
+  //	默认分支必须是拒绝：漏配的代价从"悄悄泄露"变成"页面进不去"，
+  //	后者会被立刻发现，前者可能永远发现不了。
+  //	公开页面走 PUBLIC_ROUTES 显式声明。
+  if (PUBLIC_ROUTES.has(to.path)) return
+  // 地址根本不存在（命中 catch-all）→ 显示「页面不存在」，不是「无权访问」。
+  // 这两件事对用户是完全不同的信息：一个是打错了地址，一个是要去找管理员。
+  // 少了这一条，白名单制会把所有 404 说成没权限（CMDB-018 治过的那类误导）。
+  if (to.name === 'NotFound') return
   const page = permOf(to.path)
-  if (page && !auth.hasMenu(page)) {
+  if (!page) {
+    console.error(`[权限] 路由 ${to.path} 未登记权限码，已拒绝访问`)
+    return { path: '/forbidden', query: { from: to.path }, replace: true }
+  }
+  if (!auth.hasMenu(page)) {
     // 首页是所有人的默认落点，没权限时静默换成他进得去的第一个页面——
     // 一登录就撞"无权访问"太劝退，而且那不是他主动要去的地方
     if (to.path === '/overview' && from.path === '/') {
