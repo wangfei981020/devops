@@ -25,6 +25,12 @@
             <el-option v-for="d in domainOpts" :key="d.name" :label="d.name + (d.module?' · '+d.module:'')" :value="d.name" />
           </el-select>
           <el-button type="primary" :icon="Search" :loading="loading" @click="runFwd">查链路</el-button>
+          <el-tooltip v-if="domainFilteredOut" placement="top"
+            content="这些是 DNS 记录里的裸 host 名、通配符和 IP，不是完整域名，选中也查不出链路，所以不列在这里">
+            <span class="muted" style="margin-left:8px;cursor:help">
+              （已隐藏 {{ domainFilteredOut }} 个非完整域名的条目）
+            </span>
+          </el-tooltip>
         </div>
         <div v-if="fwd">
           <!-- 竖排树型：主干（域名→CNAME→CDN→回源→网关→入口）从上往下走，
@@ -308,8 +314,30 @@ const envs = computed(() => {
   const src = fProject.value ? domainsAll.value.filter(d => d.project === fProject.value) : domainsAll.value
   return [...new Set(src.map(d => d.env).filter(Boolean))].sort()
 })
+// isQueryableDomain 只留能真正查链路的完整域名。
+//
+//	下拉里原来混了 889 个选项，其中有 `*`、`*-innter`（拼错的 inner）、
+//	`10.170.96.100`（IP）、`20-anchor`（裸 host 名）——这些是 DNS 记录的
+//	host 字段被直接当域名列出来了。
+//	它们不是"多余的选项"这么简单：选中任何一个都查不出链路，
+//	而用户不知道是**这条链路真的断了**还是**这个选项本来就不该存在**。
+//	一个查不出结果的选项，比没有这个选项更误导。
+function isQueryableDomain(name) {
+  const n = (name || '').trim()
+  if (!n) return false
+  if (n === '*' || n.startsWith('*-')) return false        // 通配/拼错的裸标记
+  if (!n.includes('.')) return false                        // 裸 host 名，看不出属于哪个主域名
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(n)) return false        // IP 不是域名
+  return true
+}
+
 const domainOpts = computed(() => domainsAll.value.filter(d =>
+  isQueryableDomain(d.name) &&
   (!fProject.value || d.project === fProject.value) && (!fEnv.value || d.env === fEnv.value)))
+
+// 被过滤掉多少要说出来——静默少掉几百个选项，用户会以为数据丢了
+const domainFilteredOut = computed(() =>
+  domainsAll.value.filter(d => !isQueryableDomain(d.name)).length)
 const clusters = ref([]); const nodes = ref([]); const clusterId = ref(null); const node = ref(''); const rev = ref(null)
 const revPods = computed(() => rev.value?.pods || [])
 const { page: revPage, pageSize: revSize, paged: revPaged } = usePager(revPods)

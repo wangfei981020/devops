@@ -295,7 +295,10 @@
           </template>
           <span v-else class="muted">—</span>
         </template></el-table-column>
-        <el-table-column label="解析数" width="90"><template #default="{ row }">
+        <!-- 改名的原因：DNS 记录页也有个「记录数」，同一个域名两处数字不同
+             （这里是业务域名条数，那边是全部 DNS 记录数）。两个都对，
+             但同名不同义会让人以为其中一个算错了（CMDB-20260805-014 #4）。 -->
+        <el-table-column label="业务域名数" width="110"><template #default="{ row }">
           <el-button link type="primary" @click="jumpToRecords(row)">{{ resoCountMap[row.ci_id] || 0 }}</el-button>
         </template></el-table-column>
         <el-table-column label="使用状态" width="180"><template #default="{ row }">

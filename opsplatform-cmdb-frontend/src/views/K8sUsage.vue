@@ -32,7 +32,14 @@
         </el-select>
         <el-date-picker v-if="rangeSel==='custom'" v-model="customRange" type="datetimerange" style="width:340px"
           start-placeholder="开始" end-placeholder="结束" value-format="x" />
-        <el-button type="primary" :icon="Search" :loading="loading" @click="query">查询</el-button>
+        <!-- 原来只在点击后弹一个 warning toast，三秒就没了，而按钮看着一直可点——
+             用户不知道是自己漏选了还是系统没反应。置灰 + 说明缺什么，可发现性高得多。 -->
+        <el-tooltip :disabled="!missingHint" :content="missingHint" placement="top">
+          <span>
+            <el-button type="primary" :icon="Search" :loading="loading"
+                       :disabled="!!missingHint" @click="query">查询</el-button>
+          </span>
+        </el-tooltip>
       </div>
       <div v-if="err" class="err">{{ err }}</div>
       <div v-if="summary" class="usum">
@@ -123,6 +130,15 @@ function fmtY(v) {
   if (m >= 1) return m.toFixed(1) + 'm'
   return m.toFixed(2) + 'm'
 }
+
+// 缺什么就说什么；都齐了返回空串 = 可以查了。
+// 和 query() 里的校验保持同一套条件——两处判据不一致的话，
+// 会出现"按钮亮着但点了报缺参数"。
+const missingHint = computed(() => {
+  if (!clusterId.value) return '请先选择数据源'
+  if (!name.value) return '请先选择' + targetLabel.value
+  return ''
+})
 
 async function query() {
   if (!clusterId.value) { ElMessage.warning('选数据源'); return }

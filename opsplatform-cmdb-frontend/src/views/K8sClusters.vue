@@ -13,7 +13,9 @@
         <el-table-column label="集群" min-width="180">
           <template #default="{ row }">
             <b>{{ row.display_name || row.name }}</b>
-            <div class="muted" v-if="row.display_name">{{ row.name }}</div>
+            <!-- 只在两者**不同**时才显示第二行。相同时会渲染成
+                 「g32-prod-cluster g32-prod-cluster」，看着像 bug（CMDB-20260805-014 #10）-->
+            <div class="muted" v-if="row.display_name && row.display_name !== row.name">{{ row.name }}</div>
           </template>
         </el-table-column>
         <el-table-column prop="environment" label="环境" width="90" />

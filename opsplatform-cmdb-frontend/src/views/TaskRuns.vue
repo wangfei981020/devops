@@ -69,7 +69,7 @@
       </el-table>
 
       <div class="pager">
-        <el-pagination background layout="prev, pager, next" :total="total"
+        <el-pagination background layout="total, prev, pager, next" :total="total"
           :page-size="q.limit" :current-page="page" @current-change="onPage" />
       </div>
     </el-card>
