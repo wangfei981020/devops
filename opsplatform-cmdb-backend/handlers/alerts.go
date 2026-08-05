@@ -46,7 +46,22 @@ func (h *AlertHandler) Register(r *gin.RouterGroup) {
 //	更糟——那是把故障伪装成正常。
 //	resolveEndpointFull 找不到数据源时返回 error，这里把它翻译成"未配置"。
 func n9eClient(db *sql.DB, cipher *crypto.Cipher, env string) (*n9e.Client, error) {
-	url, token, _, err := resolveEndpointFull(db, cipher, "n9e", env, 0)
+	// ⚠️ 告警和指标的定位方式不一样，这里必须用「不限定」。
+	//
+	//	夜莺是**全局告警系统**：一套实例覆盖所有集群，接入时自然会绑到
+	//	具体集群和环境上（生产那条 infra-n9e 绑的是 集群3 + PROD）。
+	//	而这里原本传的是 clusterID=0 —— 在 resolveEndpointFull 里，
+	//	0 的含义是"我要一个没绑集群的源"，于是绑了集群的 infra-n9e 被 continue 跳过；
+	//	env 传空时同理，绑了 PROD 的也被跳过。两个条件同时命中，
+	//	**只有"通用且不限环境"的数据源才认得出来**，而界面是鼓励选具体集群的。
+	//	结果就是生产明明接了夜莺，告警页永远显示"未接入"。
+	//
+	//	env 为空 = 用户选了"全部环境"，同样要按不限定处理。
+	lookupEnv := env
+	if lookupEnv == "" {
+		lookupEnv = anyEnv
+	}
+	url, token, _, err := resolveEndpointFull(db, cipher, "n9e", lookupEnv, anyCluster)
 	if err != nil {
 		logx.Line("alerts", fmt.Sprintf("夜莺接入未就绪（env=%s）：%v", env, err))
 		return nil, nil

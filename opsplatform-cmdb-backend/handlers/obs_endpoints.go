@@ -286,6 +286,18 @@ func resolveEndpoint(db *sql.DB, cipher *crypto.Cipher, typ, env string, cluster
 }
 
 // resolveEndpointFull 同 resolveEndpoint，额外返回该端点的 cluster_label（多集群共享源的隔离标签名）。
+// 「不限定」哨兵：调用方明确表示"任何集群/环境的数据源都能用"。
+//
+//	为什么要显式哨兵，而不是把 0 和 "" 当成不限定：
+//	Prometheus/Loki 靠 cluster+env 做**数据隔离**——集群 A 的查询绝不能落到
+//	集群 B 的源上（UAT 和 PROD 有大量同名 namespace，混了就是错数据）。
+//	那边传 0/"" 的含义是"这个集群没配 env"，不是"随便给我一个"。
+//	把两种含义混用，修好告警的同时会把指标查询弄错，而且不会报错。
+const (
+	anyCluster = -1
+	anyEnv     = "\x00any" // 不可能和真实 env 值相撞
+)
+
 func resolveEndpointFull(db *sql.DB, cipher *crypto.Cipher, typ, env string, clusterID int) (url, token, clusterLabel string, err error) {
 	rows, e := db.Query(`SELECT url, COALESCE(token_enc,''), env, cluster_id, COALESCE(cluster_label,'') FROM obs_endpoints WHERE type=? AND enabled=1`, typ)
 	if e != nil {
@@ -301,14 +313,14 @@ func resolveEndpointFull(db *sql.DB, cipher *crypto.Cipher, typ, env string, clu
 			continue
 		}
 		score := 0
-		if cid != 0 {
+		if cid != 0 && clusterID != anyCluster {
 			if cid == clusterID {
 				score += 2
 			} else {
 				continue // 指定了别的集群，不匹配
 			}
 		}
-		if e2 != "" {
+		if e2 != "" && env != anyEnv {
 			if e2 == env {
 				score += 1
 			} else {
