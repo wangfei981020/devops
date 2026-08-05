@@ -300,6 +300,8 @@ export const previewBatchRenew = (body) => http.post('/domains/renew-batch/previ
 export const batchRenewDomains = (body) => http.post('/domains/renew-batch', body).then((r) => r.data)
 
 // 用户管理（本地账号 vs 运维平台 SSO 影子账号）
+export const autoNsProjects = (clusterId, dryRun = true) =>
+  http.post(`/k8s/ns-projects/auto?cluster_id=${clusterId}&dry_run=${dryRun ? 1 : 0}`).then((r) => r.data)
 export const changeOwnPassword = (body) => http.put('/me/password', body).then((r) => r.data)
 export const listLocalRoles = () => http.get('/local-roles').then((r) => r.data)
 export const createUser = (body) => http.post('/users', body).then((r) => r.data)

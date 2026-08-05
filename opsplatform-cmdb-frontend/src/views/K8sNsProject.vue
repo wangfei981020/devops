@@ -36,15 +36,48 @@
       <Pager :total="rows.length" v-model:page="page" v-model:page-size="pageSize" />
       <el-empty v-if="!loading && !error && !rows.length" description="该集群还没同步命名空间，先去集群管理点「同步」" />
     </el-card>
+
+    <el-dialog v-model="auto.show" title="按名称自动归属（预览）" width="760px" :close-on-click-modal="false">
+      <div v-loading="auto.loading">
+        <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px">
+          <template #title>
+            将填充 <b>{{ auto.willApply }}</b> 个命名空间的归属；
+            已有归属的不会被覆盖，平台组件和无法判断的保持为空由你手工处理。
+          </template>
+        </el-alert>
+        <el-table :data="auto.items" size="small" max-height="420" border>
+          <el-table-column prop="namespace" label="命名空间" min-width="200" show-overflow-tooltip />
+          <el-table-column label="将归属到" width="130">
+            <template #default="{ row }">
+              <b v-if="row.project" class="ok">{{ row.project }}</b>
+              <span v-else-if="row.current" class="muted">{{ row.current }}</span>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="依据" width="110">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain" :type="ruleType(row.rule)">{{ ruleLabel(row.rule) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="reason" label="为什么" min-width="260" show-overflow-tooltip />
+        </el-table>
+      </div>
+      <template #footer>
+        <el-button @click="auto.show = false">取消</el-button>
+        <el-button type="primary" :disabled="!auto.willApply" :loading="auto.applying" @click="applyAuto">
+          确认填充 {{ auto.willApply }} 个
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
 import { MagicStick } from '@element-plus/icons-vue'
-import { listK8sClusters, listK8sNsProjects, setK8sNsProject, listProjects } from '../api/cmdb'
+import { listK8sClusters, listK8sNsProjects, setK8sNsProject, listProjects, autoNsProjects } from '../api/cmdb'
 import { pickDefaultCluster } from '../composables/useClusterPick'
 import { usePager } from '../composables/usePager'
 import { useLoadState } from '../composables/useLoadState'
@@ -61,11 +94,14 @@ const clusterId = ref(null)
 const unassigned = computed(() => rows.value.filter(r => !r.project).length)
 
 // 建议：命名空间名包含某项目名(或反之) → 建议该项目
-function suggest(nsName) {
-  const n = (nsName || '').toLowerCase()
-  const hit = projects.value.find(p => { const pn = (p.name || '').toLowerCase(); return pn && (n.includes(pn) || pn.includes(n)) })
-  return hit ? hit.name : ''
-}
+// ⚠️ 匹配规则已移到后端（handlers/ns_project_auto.go），前端不再自己判。
+//
+//	原来这里用的是**双向 includes**：`n.includes(pn) || pn.includes(n)`。
+//	那个判据太松——项目 `g32` 会吞掉 `g32x-foo` 这种毫不相干的命名空间，
+//	而归错的代价是成本报表把开销算到别人头上，比"未分配"更糟
+//	（未分配至少是诚实的）。
+//	后端那套是：精确同名 > `项目名-` 前缀（必须带分隔符）> 平台组件不归 > 留空。
+//	规则只有一份，前后端不会打架。
 
 async function load() {
   if (!clusterId.value) return
@@ -80,13 +116,40 @@ async function save(row) {
   } catch (e) { ElMessage.error('保存失败') }
 }
 
+// 先预览再落库：批量写映射会直接改变成本报表的归属结果，
+// 让人看清楚哪些会被填、按什么理由填，再决定要不要执行。
+const auto = reactive({ show: false, loading: false, applying: false, items: [], stat: {}, willApply: 0 })
+
 async function autoFill() {
-  let n = 0
-  for (const row of rows.value) {
-    if (!row.project) { const s = suggest(row.name); if (s) { row.project = s; await save(row); n++ } }
-  }
-  ElMessage.success(n ? `已智能填充 ${n} 个` : '没有可自动匹配的命名空间')
+  if (!clusterId.value) { ElMessage.warning('请先选择集群'); return }
+  auto.loading = true
+  auto.show = true
+  try {
+    const r = await autoNsProjects(clusterId.value, true)
+    if (r.error) { ElMessage.warning(r.error + (r.hint ? '——' + r.hint : '')); auto.show = false; return }
+    auto.items = r.items || []
+    auto.stat = r.stat || {}
+    auto.willApply = r.will_apply || 0
+  } catch (e) {
+    ElMessage.error(e?.raw?.response?.data?.error || e?.message || '预览失败')
+    auto.show = false
+  } finally { auto.loading = false }
 }
+
+async function applyAuto() {
+  auto.applying = true
+  try {
+    const r = await autoNsProjects(clusterId.value, false)
+    ElMessage.success(r.msg || `已归属 ${r.applied} 个`)
+    auto.show = false
+    load()
+  } catch (e) {
+    ElMessage.error(e?.raw?.response?.data?.error || e?.message || '执行失败')
+  } finally { auto.applying = false }
+}
+
+const ruleLabel = (r) => ({ exact: '同名', prefix: '前缀匹配', platform: '平台组件', none: '无法判断', keep: '已有归属' }[r] || r)
+const ruleType = (r) => ({ exact: 'success', prefix: 'success', platform: 'info', none: 'warning', keep: '' }[r] || '')
 
 onMounted(async () => {
   const ok = await run(async () => {

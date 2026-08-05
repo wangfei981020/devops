@@ -50,8 +50,9 @@ func (h *K8sResourceHandler) Register(r *gin.RouterGroup) {
 	r.GET("/k8s/pvcs", h.PVCs)
 	r.GET("/k8s/hpas", h.HPAs)
 	r.GET("/k8s/changes", h.Changes)
-	r.GET("/k8s/ns-projects", h.NsProjects)    // 命名空间→项目 映射(含未映射的命名空间)
-	r.POST("/k8s/ns-projects", h.SetNsProject) // upsert 单条映射
+	r.GET("/k8s/ns-projects", h.NsProjects)           // 命名空间→项目 映射(含未映射的命名空间)
+	r.POST("/k8s/ns-projects", h.SetNsProject)        // upsert 单条映射
+	r.POST("/k8s/ns-projects/auto", h.AutoNsProjects) // 按命名规律自动归属（默认只预览）
 }
 
 // Sync 手动全量采集一个集群（阶段2 手动触发；周期同步阶段3 接调度器）。
