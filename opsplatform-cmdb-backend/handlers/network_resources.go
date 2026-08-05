@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -36,7 +37,7 @@ func fwHighRisk(direction, action, protocols, sourceRanges string) bool {
 	if strings.ToUpper(direction) != "INGRESS" || action != "allow" {
 		return false
 	}
-	if !strings.Contains(sourceRanges, "0.0.0.0/0") {
+	if !fwSourceIsAnywhere(sourceRanges) {
 		return false
 	}
 	p := strings.ToLower(strings.TrimSpace(protocols))
@@ -44,6 +45,39 @@ func fwHighRisk(direction, action, protocols, sourceRanges string) bool {
 		return true // 全放行
 	}
 	return fwOpensSensitivePort(p)
+}
+
+// fwSourceIsAnywhere 源网段里有没有"任意来源"。
+//
+//	⚠️ 不能用 strings.Contains(s, "0.0.0.0/0") 硬比字符串。
+//	生产上 infra-it-04 的源写的是 `0.0.0.0`（**没有 /0**）——语义完全等同
+//	全网放行，但字符串对不上，于是它在高危清单里**根本没出现**。
+//	一条 source=0.0.0.0 + 全端口 + allow + 入站的规则被判成安全，
+//	这比少报一条更糟：清单看着挺干净，真高危却不在里面。
+//
+//	用 net/netip 解析成前缀再判：只要前缀长度为 0（覆盖整个地址空间）
+//	就是任意来源，v4 v6 都认。裸 IP 按 /32（/128）算，不算任意来源——
+//	只有 0.0.0.0 这个特殊值除外，GCP 里它就是 0.0.0.0/0 的省略写法。
+func fwSourceIsAnywhere(sourceRanges string) bool {
+	for _, raw := range strings.FieldsFunc(sourceRanges, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '\t'
+	}) {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		if pfx, err := netip.ParsePrefix(v); err == nil {
+			if pfx.Bits() == 0 {
+				return true // 0.0.0.0/0 或 ::/0
+			}
+			continue
+		}
+		// 不带掩码的写法：0.0.0.0 / :: 都等同全网
+		if addr, err := netip.ParseAddr(v); err == nil && addr.IsUnspecified() {
+			return true
+		}
+	}
+	return false
 }
 
 // fwOpensSensitivePort 解析防火墙的 protocols 串，判断是否放行了敏感端口。
