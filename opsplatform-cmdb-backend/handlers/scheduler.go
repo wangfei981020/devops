@@ -224,6 +224,34 @@ func RunTaskRetry(key string, targets []string) bool {
 	return true
 }
 
+// scheduleErrs 记录哪些任务因为 cron 表达式无效而**没能注册**。
+//
+//	查询接口据此把「下次执行」显示成「⚠ 未注册」+ 具体原因，
+//	而不是一个和"还没到时间"无法区分的 `—`。
+var (
+	scheduleErrsMu sync.RWMutex
+	scheduleErrs   = map[string]string{}
+)
+
+func (s *Scheduler) markUnscheduled(key string, err error) {
+	scheduleErrsMu.Lock()
+	defer scheduleErrsMu.Unlock()
+	scheduleErrs[key] = err.Error()
+}
+
+func (s *Scheduler) markScheduled(key string) {
+	scheduleErrsMu.Lock()
+	defer scheduleErrsMu.Unlock()
+	delete(scheduleErrs, key)
+}
+
+// ScheduleErrOf 取某个任务的注册错误；空串表示注册正常。
+func ScheduleErrOf(key string) string {
+	scheduleErrsMu.RLock()
+	defer scheduleErrsMu.RUnlock()
+	return scheduleErrs[key]
+}
+
 func (s *Scheduler) reload() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -247,8 +275,17 @@ func (s *Scheduler) reload() {
 		}
 		k := key
 		if _, err := s.cron.AddFunc(schedule, func() { s.run(k, "cron", nil) }); err != nil {
-			logx.Line("scheduler", fmt.Sprintf("scheduler add %s (%q): %v", key, schedule, err))
+			// ⚠️ 注册失败必须让人在**界面上**看见，不能只留一行日志。
+			//
+			//	表达式写错（比如 6 段 cron 交给 5 段解析器）时，任务是
+			//	**一次都不会跑**的，而页面上只表现为「下次执行」一个 `—`，
+			//	和"还没到时间"长得一模一样。日志没人天天看，
+			//	registrar_expiry_sync 就这么静默躺了好几天（CMDB-039）。
+			logx.Line("scheduler", fmt.Sprintf("WARN 任务 %s 的 cron 表达式 %q 无效，该任务不会被调度：%v", key, schedule, err))
+			s.markUnscheduled(k, err)
+			continue
 		}
+		s.markScheduled(k)
 	}
 	s.cron.Start()
 }

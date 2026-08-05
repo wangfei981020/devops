@@ -8,5 +8,5 @@
 -- 注册商 API 给的是它自己账本上的到期日，续费当场生效，一次请求拿回全部域名。
 -- 两个任务分工：本任务管数据源里的域名，WHOIS 那个兜底手工录入的域名。
 INSERT IGNORE INTO scheduled_tasks (task_key, name, schedule, enabled)
-VALUES ('registrar_expiry_sync', '域名到期同步（注册商 API）', '0 30 3 * * *', 1);
+VALUES ('registrar_expiry_sync', '域名到期同步（注册商 API）', '30 3 * * *', 1);
 

@@ -167,14 +167,18 @@ func (h *SchedHandler) List(c *gin.Context) {
 	}
 	defer rows.Close()
 	type taskOut struct {
-		Key           string `json:"task_key"`
-		Name          string `json:"name"`
-		Enabled       int    `json:"enabled"`
-		Schedule      string `json:"schedule"`
-		LastRunAt     string `json:"last_run_at"`
-		LastResult    string `json:"last_result"`
-		LastOk        int    `json:"last_ok"`
-		NextRunAt     string `json:"next_run_at"`
+		Key        string `json:"task_key"`
+		Name       string `json:"name"`
+		Enabled    int    `json:"enabled"`
+		Schedule   string `json:"schedule"`
+		LastRunAt  string `json:"last_run_at"`
+		LastResult string `json:"last_result"`
+		LastOk     int    `json:"last_ok"`
+		NextRunAt  string `json:"next_run_at"`
+		// ScheduleErr 非空 = 这个任务**根本没被注册**（cron 表达式无效），
+		// 一次都不会跑。必须和"还没到时间"分开：两者的 next_run_at 都是空，
+		// 前端一律显示 `—`，registrar_expiry_sync 就这么静默躺了好几天。
+		ScheduleErr   string `json:"schedule_err,omitempty"`
 		NotifyEnabled int    `json:"notify_enabled"`
 		LarkGroupID   *int   `json:"lark_group_id"`
 		NotifyWhen    string `json:"notify_when"`
@@ -198,9 +202,19 @@ func (h *SchedHandler) List(c *gin.Context) {
 			t.LarkGroupID = &v
 		}
 		if t.Enabled == 1 {
-			if sc, err := cron.ParseStandard(t.Schedule); err == nil {
+			// 解析失败不能静默：这里用的解析器和调度器注册时是同一个，
+			// 这里解析不了 = 调度器那边也注册不了 = 任务一次都不会跑。
+			sc, err := cron.ParseStandard(t.Schedule)
+			if err != nil {
+				t.ScheduleErr = fmt.Sprintf("cron 表达式无效：%v", err)
+			} else {
 				t.NextRunAt = sc.Next(now).Format("2006-01-02 15:04")
 			}
+		}
+		// 调度器侧的注册结果优先（它才是真正决定跑不跑的那一方）
+		if e := ScheduleErrOf(t.Key); e != "" {
+			t.ScheduleErr = "未被调度器注册：" + e
+			t.NextRunAt = ""
 		}
 		t.AtUserIDs = []int{}
 		urows, _ := h.DB.Query(`SELECT user_id FROM task_notify_users WHERE task_key=?`, t.Key)

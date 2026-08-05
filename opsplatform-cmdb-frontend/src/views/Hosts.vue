@@ -17,7 +17,14 @@
         <el-select v-model="f.zone" clearable placeholder="区域" style="width:150px"><el-option v-for="z in opts.zone" :key="z" :label="z" :value="z" /></el-select>
         <el-select v-model="f.status" clearable placeholder="状态" style="width:130px"><el-option v-for="s in opts.status" :key="s" :label="s" :value="s" /></el-select>
         <span class="muted" style="margin-left:auto" v-if="loadErr">共 — 台　月估合计 —</span>
-        <span class="muted" style="margin-left:auto" v-else>共 {{ filtered.length }} / {{ rows.length }} 台　月估合计 ${{ monthSum }}</span>
+        <span class="muted" style="margin-left:auto" v-else>
+          共 {{ filtered.length }} / {{ rows.length }} 台　月估合计 <b>${{ monthSum }}</b>
+          <!-- 排除了多少要说出来：默默少算一笔和默默多算一笔一样让人不敢信 -->
+          <el-tooltip v-if="staleHosts.length" placement="top"
+            :content="`这些机器在云上已经不存在（同步时标记为已删），但历史记录还留着。它们不该计入当前成本。`">
+            <span class="warn-sum">（已排除 {{ staleHosts.length }} 台已销毁，${{ staleMonthSum }}）</span>
+          </el-tooltip>
+        </span>
       </div>
     </el-card>
 
@@ -318,7 +325,18 @@ const filtered = computed(() => rows.value.filter((r) => {
     (!f.value.status || r.status === f.value.status)
 }))
 const paged = computed(() => { const s = (page.value - 1) * size.value; return filtered.value.slice(s, s + size.value) })
-const monthSum = computed(() => Math.round(filtered.value.reduce((n, r) => n + (r.cost_month || 0), 0)))
+// ⚠️ 成本合计**必须排除 stale（已销毁）的机器**。
+//
+//	stale 判定本身是对的——界面上这些行已经打了「已删」标签、还划了删除线。
+//	错在合计照加：生产上 $129,105 里有 $54,545 是 8/2 g32 升级后销毁的
+//	65 台旧节点池，虚高 42%。而这个数字是拿来做成本决策的。
+//
+//	不静默扣掉：被排除了多少台、多少钱都显式说出来。悄悄少一笔和悄悄多一笔
+//	一样糟——看到数字变小的人会怀疑是不是又算错了。
+const liveHosts = computed(() => filtered.value.filter((r) => !r.stale))
+const staleHosts = computed(() => filtered.value.filter((r) => r.stale))
+const monthSum = computed(() => Math.round(liveHosts.value.reduce((n, r) => n + (r.cost_month || 0), 0)))
+const staleMonthSum = computed(() => Math.round(staleHosts.value.reduce((n, r) => n + (r.cost_month || 0), 0)))
 
 async function load() {
   loading.value = true
@@ -409,6 +427,7 @@ onMounted(load)
 .filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 .stale { text-decoration: line-through; color: #b0b3bb; }
+.warn-sum { color: #e6a23c; margin-left: 6px; cursor: help; }
 .muted { color: #909399; }
 .sec { font-size: 14px; margin: 18px 0 8px; display: flex; align-items: center; gap: 10px; }
 </style>

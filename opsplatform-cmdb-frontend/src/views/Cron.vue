@@ -28,7 +28,13 @@
         </template></el-table-column>
         <el-table-column label="上次运行" width="150"><template #default="{ row }">
           {{ row.last_run_at || '—' }}
-          <div v-if="row.next_run_at" class="muted" style="font-size:12px">下次 {{ row.next_run_at }}</div>
+          <!-- ⚠️ "没到时间"和"根本没注册"必须分开：两者原本都显示成一个 `—`，
+               registrar_expiry_sync 的 cron 写成 6 段解析不了、一次没跑过，
+               界面上却看不出任何异常（CMDB-039）。 -->
+          <el-tooltip v-if="row.schedule_err" :content="row.schedule_err" placement="top">
+            <div class="sched-err">⚠ 未注册，不会执行</div>
+          </el-tooltip>
+          <div v-else-if="row.next_run_at" class="muted" style="font-size:12px">下次 {{ row.next_run_at }}</div>
         </template></el-table-column>
         <el-table-column label="结果" width="110"><template #default="{ row }">
           <el-tooltip v-if="row.last_run_at" :content="row.last_result">
@@ -170,5 +176,6 @@ onMounted(load)
 </script>
 
 <style scoped>
+.sched-err { color: #f56c6c; font-size: 12px; font-weight: 600; cursor: help; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 </style>
