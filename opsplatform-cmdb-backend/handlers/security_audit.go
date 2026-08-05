@@ -61,6 +61,48 @@ type secFinding struct {
 	Risks     []string `json:"risks"`
 	Platform  bool     `json:"platform_component"`
 	Note      string   `json:"note,omitempty"`
+	// PodCount 这条问题影响多少个 Pod（同一 workload 的副本归并成一条）。
+	// 必须显式给出：归并之后"16 条"变"1 条"，不说清影响面会显得问题变小了。
+	PodCount int `json:"pod_count"`
+	// SamplePods 归并掉的 Pod 名（最多留几个），排查时要能落到具体实例
+	SamplePods []string `json:"sample_pods,omitempty"`
+}
+
+// mergeByWorkload 把同一 (namespace, workload, 风险集合) 的多个 Pod 合成一条。
+//
+//	为什么要带上风险集合做键：同一个 workload 的不同 Pod **理论上**可能有
+//	不同的风险（比如滚动更新中新旧两版 spec 并存）。只按 ns+workload 合并
+//	会把其中一版的风险吞掉——那又是一种"少报"。
+//
+//	workload 为空的（裸 Pod、采集没关联上）不合并：它们本来就是独立对象，
+//	按 Pod 名各算一条才对。
+func mergeByWorkload(in []secFinding) []secFinding {
+	const maxSamples = 5
+	out := make([]secFinding, 0, len(in))
+	idx := map[string]int{}
+
+	for _, f := range in {
+		if f.Workload == "" {
+			f.PodCount = 1
+			out = append(out, f)
+			continue
+		}
+		key := f.Namespace + "\x00" + f.Workload + "\x00" + strings.Join(f.Risks, "|")
+		if i, ok := idx[key]; ok {
+			out[i].PodCount++
+			if len(out[i].SamplePods) < maxSamples {
+				out[i].SamplePods = append(out[i].SamplePods, f.Pod)
+			}
+			continue
+		}
+		f.PodCount = 1
+		f.SamplePods = []string{f.Pod}
+		// 合并后这一行代表的是 workload 而不是某个 Pod，Pod 字段留空避免误导
+		f.Pod = ""
+		idx[key] = len(out)
+		out = append(out, f)
+	}
+	return out
 }
 
 type secRow struct {
@@ -115,6 +157,17 @@ func (h *K8sResourceHandler) SecurityAudit(c *gin.Context) {
 		}
 		findings = append(findings, *f)
 	}
+
+	// ⚠️ 按 ns+workload 归并。
+	//
+	//	原来是**逐 Pod 一行**：一个 DaemonSet 在 16 个节点上就是 16 条，
+	//	而它其实是**同一个问题**（同一份 spec）。生产上 high=16 全是 filebeat
+	//	的 16 个副本，实际就 1 个问题；promtail 一家占了 35 行。
+	//	整体虚高 4.8 倍（523 → 112），这个数字是拿来排优先级的。
+	//
+	//	归并但不隐藏影响面：pod_count 和样例 Pod 名都带上，
+	//	否则"16 条变 1 条"会让人以为问题缩小了。
+	findings = mergeByWorkload(findings)
 
 	rank := map[string]int{"critical": 0, "high": 1, "medium": 2, "info": 3}
 	sort.SliceStable(findings, func(i, j int) bool {

@@ -89,8 +89,19 @@
               <el-tag size="small" :type="sevType(row.severity)">{{ row.severity }}</el-tag>
             </template></el-table-column>
             <el-table-column prop="namespace" label="命名空间" width="150" show-overflow-tooltip />
-            <el-table-column prop="workload" label="工作负载" min-width="180" show-overflow-tooltip>
-              <template #default="{ row }">{{ row.workload || row.pod }}</template>
+            <el-table-column prop="workload" label="工作负载" min-width="200" show-overflow-tooltip>
+              <template #default="{ row }">
+                {{ row.workload || row.pod }}
+                <!-- 同一 workload 的副本已归并成一条（原来一个 DaemonSet 在 16 个节点上
+                     就报 16 条，虚高 4.8 倍）。但**影响面必须留着**，
+                     否则"16 条变 1 条"会让人以为问题缩小了。 -->
+                <el-tooltip v-if="row.pod_count > 1" placement="top"
+                            :content="`同一份 spec 的 ${row.pod_count} 个副本是同一个问题，已合并为一条。样例：${(row.sample_pods||[]).join('、')}`">
+                  <el-tag size="small" type="warning" effect="plain" style="margin-left:6px">
+                    ×{{ row.pod_count }} Pod
+                  </el-tag>
+                </el-tooltip>
+              </template>
             </el-table-column>
             <el-table-column label="风险" min-width="360"><template #default="{ row }">
               <div v-for="(r, i) in row.risks" :key="i" class="risk-line">{{ r }}</div>
