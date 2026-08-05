@@ -386,23 +386,65 @@ func (h *NetworkHandler) ListAddresses(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// hostInternalIPs 取 "project/实例名" → 内网 IP。
+//
+//	刻意做成单表查询 + 内存匹配，不和 cloud_lb_backends 做 SQL JOIN：
+//	那个 JOIN 是跨表字符串比较，两张表的排序规则在生产库上并不一致，
+//	`c.name = b.instance` 会直接抛 Error 1267（见 ListLoadBalancers 的注释）。
+//
+//	带上 project 是为了避免跨项目同名实例串到一起——GKE 节点名带随机后缀，
+//	重名概率低但不是零，而串错内网 IP 是那种"看着对、其实指向另一台机器"的错。
+//	失败只影响内网 IP 这一列，不影响后端成员本身，所以不往上抛，但**必须留日志**。
+func (h *NetworkHandler) hostInternalIPs() map[string]string {
+	out := map[string]string{}
+	rows, err := h.DB.Query(`SELECT c.name, h.project, COALESCE(h.internal_ip,'')
+		FROM hosts h JOIN cis c ON c.id=h.ci_id
+		WHERE c.type='host' AND h.stale=0 AND COALESCE(h.internal_ip,'')<>''`)
+	if err != nil {
+		logx.J("network_sync", "host_ip_map_fail", map[string]any{
+			"err": err.Error(), "note": "LB 后端仍会返回，只是缺内网 IP 这一列"})
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, project, ip string
+		if rows.Scan(&name, &project, &ip) == nil {
+			out[project+"/"+name] = ip
+		}
+	}
+	if err := rows.Err(); err != nil {
+		logx.J("network_sync", "host_ip_map_truncated", map[string]any{
+			"err": err.Error(), "loaded": len(out)})
+	}
+	return out
+}
+
 func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
-	// 预取所有后端成员（LEFT JOIN 主机表取内网IP），按 账号/项目/LB 分组
+	// 预取所有后端成员，按 账号/项目/LB 分组；内网 IP 单独查一张表再在内存里配。
 	//
-	// ⚠️ 这段原来是 `brows, _ := h.DB.Query(...)`：查询失败被丢弃，backends 退化成
-	//	空 map，81 个 LB **全部**显示成没有后端。而这个 JOIN 是
-	//	`cis.name = b.instance`，两边都没有索引，行数一多就可能超时——
-	//	一次超时就让整页数据静默消失，且界面上看起来"就是没有后端"。
-	//	这正是"失败态退化成空态"的老毛病，也是 LB 后端修了几版都没修好的
-	//	候选原因之一。现在错误必须现形，并且往上传成失败态。
+	// ⚠️ 这段原来是一条三表 JOIN，而且是 `brows, _ := h.DB.Query(...)`——
+	//	查询失败被直接丢弃，backends 退化成空 map，81 个 LB **全部**显示成
+	//	"没有后端"。这就是 LB 后端修了好几版都没修好的真因，生产报的是：
+	//
+	//	  Error 1267 (HY000): Illegal mix of collations
+	//	  (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_unicode_ci,IMPLICIT) for operation '='
+	//
+	//	`cis`(迁移 002) 和 `cloud_lb_backends`(迁移 026) 建表时隔了很远，
+	//	落到生产库上排序规则并不一致，于是 `c.name = b.instance` 这个跨表比较
+	//	直接报错——**这条查询从来就没成功过一次**。本地两张表都是 0900_ai_ci，
+	//	所以本地怎么试都是好的，只有生产会炸。
+	//
+	//	修法不是加 COLLATE 打补丁，而是**把跨表字符串比较去掉**：
+	//	分成两条单表查询，在 Go 里用 map 配。好处是三重的——
+	//	  1. 不存在 collation 冲突（比较发生在 Go 里，不在 SQL 里）
+	//	  2. 顺带解决了这个 JOIN 两边都没索引、行数一多就可能超时的隐患
+	//	  3. 内网 IP 只是个锦上添花的展示字段，取不到也不该拖垮整张列表
 	backends := map[string][]gin.H{}
 	backendRows, scanFails := 0, 0
+	ipOfHost := h.hostInternalIPs() // 取不到就是空 map，后端成员照常返回，只是没有内网 IP
 	brows, berr := h.DB.Query(`
-		SELECT b.cloud_account_id, b.project, b.lb_name, b.instance, b.group_name, b.zone, COALESCE(h.internal_ip,'')
-		FROM cloud_lb_backends b
-		LEFT JOIN cis c ON c.type='host' AND c.name=b.instance
-		LEFT JOIN hosts h ON h.ci_id=c.id AND h.project=b.project AND h.stale=0
-		ORDER BY b.instance`)
+		SELECT cloud_account_id, project, lb_name, instance, group_name, zone
+		FROM cloud_lb_backends ORDER BY instance`)
 	if berr != nil {
 		logx.J("network_sync", "lb_backends_query_fail", map[string]any{"err": berr.Error()})
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -411,14 +453,15 @@ func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 	}
 	for brows.Next() {
 		var aid int
-		var project, lb, inst, grp, zone, ip string
-		if err := brows.Scan(&aid, &project, &lb, &inst, &grp, &zone, &ip); err != nil {
+		var project, lb, inst, grp, zone string
+		if err := brows.Scan(&aid, &project, &lb, &inst, &grp, &zone); err != nil {
 			scanFails++
 			continue
 		}
 		backendRows++
 		key := lbKey(aid, project, lb)
-		backends[key] = append(backends[key], gin.H{"instance": inst, "group": grp, "zone": zone, "internal_ip": ip})
+		backends[key] = append(backends[key], gin.H{"instance": inst, "group": grp, "zone": zone,
+			"internal_ip": ipOfHost[project+"/"+inst]})
 	}
 	// rows.Err() 从来没人查：迭代中途断开（超时、连接被掐）会让结果**静默截断**，
 	// 剩下的 LB 全变成"没有后端"，而这和"真的没有后端"在界面上一模一样

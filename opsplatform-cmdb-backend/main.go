@@ -90,6 +90,10 @@ func main() {
 	cdnH := handlers.NewCDNHandler(db, cipher)
 	cdnH.Register(api)      // CDN(Cloudflare) 只读接入
 	cdnH.RegisterRules(api) // CDN 规则台账 + 优化分析（Page Rules / Rulesets）
+	// 自检：库内字符串列的排序规则是否统一。不统一时跨表字符串比较会抛 Error 1267，
+	// 而这种失败在页面上只表现为"查不到数据"——LB 后端 81/81 全空就是这么来的。
+	go handlers.CheckCollations(db)
+
 	// K8s 模块（k8sinsight 合并，只读多集群）：阶段1 集群纳管
 	k8sPool := k8ssource.NewPool(db, cipher)
 	// 定时任务调度器：放在 Pool 之后启动，节点健康任务需要 Pool 直连集群
