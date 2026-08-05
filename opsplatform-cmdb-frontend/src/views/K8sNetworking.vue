@@ -83,9 +83,16 @@
               <el-radio-button value="external">只看外网</el-radio-button>
               <el-radio-button value="risky">只看有风险</el-radio-button>
             </el-radio-group>
+            <!-- ⚠️ summary 是**全量**统计（后端算的），列表是按上面的筛选条件过的。
+                 两个数不一样是正常的，但并排摆着不说明，人会以为哪个算错了
+                 （实测"共 128" vs 分页器"共 199 条"，CMDB-043）。
+                 所以先报当前列出多少，再报全量，并显式标出这是筛选后的。 -->
             <span v-if="exposeSummary" class="muted">
-              共 {{ exposeSummary.total }} · 外网 {{ exposeSummary.external }} · 内网 {{ exposeSummary.internal }}
-              · 未判定 {{ exposeSummary.unknown }} · 高危 {{ exposeSummary.high }}
+              当前列出 <b>{{ exposeItems.length }}</b>
+              <template v-if="exposeOnly">（已筛选：{{ exposeOnly === 'external' ? '只看外网' : '只看有风险' }}）</template>
+              　全部入口 {{ exposeSummary.total }} · 外网 {{ exposeSummary.external }}
+              · 内网 {{ exposeSummary.internal }} · 未判定 {{ exposeSummary.unknown }}
+              · 高危 {{ exposeSummary.high }}
             </span>
           </div>
           <el-table :data="exposeItems" size="small" v-loading="loading" max-height="560">

@@ -256,15 +256,34 @@ func (h *GKEUpgradeHandler) Schedule(c *gin.Context) {
 	// 每个集群锚在 (目标小版本, 通道) 这一格上
 	anchors := map[string][]string{}
 	ar, e := h.DB.Query(`
-		SELECT c.name, COALESCE(u.release_channel,''), COALESCE(u.minor_target_version,'')
+		SELECT c.name, COALESCE(u.release_channel,''), COALESCE(u.minor_target_version,''),
+		       COALESCE(u.current_master_version,'')
 		  FROM k8s_clusters c JOIN gke_cluster_upgrade u ON u.cluster_id=c.id
 		 WHERE c.provider='gke' AND c.enabled=1`)
 	if e == nil {
 		defer ar.Close()
 		for ar.Next() {
-			var name, ch, target string
-			if ar.Scan(&name, &ch, &target) != nil || target == "" {
+			var name, ch, target, current string
+			if ar.Scan(&name, &ch, &target, &current) != nil {
 				continue
+			}
+			// ⚠️ 目标版本为空时**不能直接跳过**。
+			//
+			//	GKE 只在"升级即将发生"时才填 minor_target_version，
+			//	而未入通道（UNSPECIFIED）的集群往往一直是空的。原来这里
+			//	`target == "" → continue`，导致 4 个集群一条都锚不上，
+			//	排期表 28 行 anchored_clusters 全 null，
+			//	升级窗口从真实的 2026-09（STABLE 列）退化成「第 4 季度内」——
+			//	而这个页面存在的唯一目的就是提前看见升级窗口，
+			//	报晚一个季度等于没有预警。
+			//
+			//	兜底：用当前版本的**下一个小版本**推。这是官方的升级路径
+			//	（GKE 小版本只能逐级升），锚到那一格是合理推断。
+			if target == "" {
+				target = nextMinor(current)
+			}
+			if target == "" {
+				continue // 连当前版本都没有，确实无从推断
 			}
 			ch = strings.ToUpper(ch)
 			if ch == "" || ch == "UNSPECIFIED" {

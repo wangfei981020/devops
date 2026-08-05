@@ -21,7 +21,15 @@
         <span class="muted" style="margin-left:auto">
           <!-- 失败时不能报「共 0」：0 是"这个集群没有工作负载"的断言（CMDB-013） -->
           <template v-if="error">共 — · <b style="color:#f56c6c">数据未加载</b></template>
-          <template v-else>共 {{ rows.length }} <b v-if="badCount" style="color:#f56c6c;margin-left:6px">异常 {{ badCount }}</b></template>
+          <!-- 计数必须和表格里实际显示的一致。原来「共 N」用的是未筛选的 rows，
+               而表格用的是筛选后的 display——勾上「只看异常」且没有异常时，
+               就会出现「共 207」和「暂无数据」同框（CMDB-043）。
+               筛选生效时把两个数都给出来，别让人怀疑是不是数据丢了。 -->
+          <template v-else>
+            共 {{ display.length }}
+            <span v-if="display.length !== rows.length" class="muted">/ {{ rows.length }}（已筛选）</span>
+            <b v-if="badCount" style="color:#f56c6c;margin-left:6px">异常 {{ badCount }}</b>
+          </template>
         </span>
       </div>
       <LoadError :error="error" title="工作负载未加载" @retry="load" />
@@ -69,7 +77,13 @@
         </el-table>
         <el-empty v-if="!chLoading && !error && !changes.length" description="暂无变更（首次纳管后、镜像/副本变化才会记录）" />
       </el-dialog>
+      <!-- 空态也要分两种：真没数据 vs 筛掉了。文案写死"先去同步"会让人
+           对着一个筛选器造成的空列表去点同步。 -->
       <el-empty v-if="!loading && !error && !rows.length" description="无数据，先去集群管理点「同步」" />
+      <el-empty v-else-if="!loading && !error && !display.length"
+                :description="`当前筛选条件下没有匹配项（共 ${rows.length} 个工作负载）`" :image-size="50">
+        <el-button v-if="onlyBad" link type="primary" @click="onlyBad = false">显示全部</el-button>
+      </el-empty>
     </el-card>
   </div>
 </template>
