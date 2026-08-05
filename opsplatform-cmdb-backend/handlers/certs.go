@@ -163,21 +163,24 @@ func (h *CertHandler) List(c *gin.Context) {
 func (h *CertHandler) Get(c *gin.Context) {
 	id := c.Param("id")
 	var o struct {
-		CIID           int64    `json:"ci_id"`
-		CN             string   `json:"cn"`
-		SANs           []string `json:"sans"`
-		CA             string   `json:"ca"`
-		Challenge      string   `json:"challenge"`
-		Status         string   `json:"status"`
-		IssuedAt       string   `json:"issued_at"`
-		ExpiryAt       string   `json:"expiry_at"`
-		AutoRenew      int      `json:"auto_renew"`
-		RenewDays      int      `json:"renew_days"`
-		LastError      string   `json:"last_error"`
-		DeployToken    string   `json:"deploy_token"`
-		ChallengeFqdn  string   `json:"challenge_fqdn"`
-		ChallengeValue string   `json:"challenge_value"`
-		History        []gin.H  `json:"history"`
+		CIID      int64    `json:"ci_id"`
+		CN        string   `json:"cn"`
+		SANs      []string `json:"sans"`
+		CA        string   `json:"ca"`
+		Challenge string   `json:"challenge"`
+		Status    string   `json:"status"`
+		IssuedAt  string   `json:"issued_at"`
+		ExpiryAt  string   `json:"expiry_at"`
+		AutoRenew int      `json:"auto_renew"`
+		RenewDays int      `json:"renew_days"`
+		LastError string   `json:"last_error"`
+		// ErrorReason 把上面那串 ACME 原始报文归纳成「是什么问题 + 该怎么办 + 值不值得重试」。
+		// 原始报文照旧留着（追溯要用），这是加一层解释而不是替换。
+		ErrorReason    *AcmeReason `json:"error_reason,omitempty"`
+		DeployToken    string      `json:"deploy_token"`
+		ChallengeFqdn  string      `json:"challenge_fqdn"`
+		ChallengeValue string      `json:"challenge_value"`
+		History        []gin.H     `json:"history"`
 	}
 	var sans string
 	var issued, exp sql.NullTime
@@ -204,6 +207,7 @@ func (h *CertHandler) Get(c *gin.Context) {
 	if !HasPerm(c, "cmdb:manage_certs") {
 		o.DeployToken = maskToken(o.DeployToken)
 	}
+	o.ErrorReason = classifyAcmeError(o.LastError, o.Challenge, o.CN)
 	_ = json.Unmarshal([]byte(sans), &o.SANs)
 	if issued.Valid {
 		o.IssuedAt = issued.Time.Format("2006-01-02 15:04")

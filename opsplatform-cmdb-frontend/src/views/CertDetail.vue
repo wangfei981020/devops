@@ -31,7 +31,26 @@
             <el-descriptions-item label="颁发时间">{{ cert.issued_at || '—' }}</el-descriptions-item>
             <el-descriptions-item label="到期时间">{{ cert.expiry_at || '—' }}</el-descriptions-item>
             <el-descriptions-item label="自动续期">{{ cert.auto_renew ? `开（到期前 ${cert.renew_days} 天）` : '关' }}</el-descriptions-item>
-            <el-descriptions-item v-if="cert.last_error" label="最近错误"><span style="color:#f56c6c">{{ cert.last_error }}</span></el-descriptions-item>
+            <el-descriptions-item v-if="cert.last_error" label="最近错误">
+              <!-- 原始 ACME 报文对人几乎没用：看得懂的不需要它，看不懂的也不知道该干嘛。
+                   归纳成「是什么问题 + 该怎么办 + 值不值得重试」，原文折叠在下面留作追溯。 -->
+              <div v-if="cert.error_reason" class="err-box">
+                <div class="err-title">
+                  {{ cert.error_reason.title }}
+                  <el-tag v-if="!cert.error_reason.retryable" type="danger" size="small" effect="plain">
+                    重试无效
+                  </el-tag>
+                </div>
+                <div class="err-detail">{{ cert.error_reason.detail }}</div>
+                <div class="err-action"><b>怎么办：</b>{{ cert.error_reason.action }}</div>
+                <el-collapse class="err-raw">
+                  <el-collapse-item title="原始报文（反馈问题时带上）">
+                    <pre class="raw">{{ cert.last_error }}</pre>
+                  </el-collapse-item>
+                </el-collapse>
+              </div>
+              <span v-else style="color:#f56c6c">{{ cert.last_error }}</span>
+            </el-descriptions-item>
           </el-descriptions>
         </el-card>
       </el-col>
