@@ -18,7 +18,12 @@ export const useAuthStore = defineStore('auth', {
   }),
   getters: {
     isLoggedIn: () => !!localStorage.getItem(TOKEN_KEY),
-    // 本地账号是运维平台不可用时的兜底通道，不受权限码约束（后端同样放行）
+    // 密码存在 CMDB 自己库里的账号。用途有二：
+    //   1. 不需要向运维平台刷权限（没有可刷的）
+    //   2. 能在 CMDB 里自助改密——SSO 用户的密码在运维平台，
+    //      这边改了也会被下次登录覆盖，所以干脆不给入口，给了才是骗人
+    // ⚠️ 注意它**不等于**"不受权限约束"，那个看 isUnrestricted。
+    // 本地账号能分配角色之后，这两件事就分开了。
     isLocal: (s) => s.user?.auth_source !== 'portal',
     // 受不受权限码约束，**只认后端给的 is_admin**，不要自己按 auth_source 推。
     //

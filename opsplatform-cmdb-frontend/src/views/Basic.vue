@@ -106,22 +106,28 @@
       <template #header><b>单点登录（运维平台）</b>
         <span class="muted" style="margin-left:8px">开启后可从运维平台点「CMDB」直接跳转登录</span>
       </template>
+      <!-- ⚠️ 这一整块原先漏了权限判断（CMDB-035）。本页其余卡片都用了 canManage，
+           唯独这里没有——而它恰恰是影响最大的：改运维平台地址等于换掉整个身份来源。
+           只读账号点了保存后端会 403，但按钮开着本身就是错的：
+           一个点了必然失败的控件，比藏起来更糟。 -->
+      <el-alert v-if="!canManage" type="info" :closable="false" show-icon style="margin-bottom:12px"
+        title="以下配置为只读展示。修改单点登录需要「基础配置管理」权限，请联系管理员。" />
       <el-form label-width="160px" style="max-width:760px">
         <el-form-item label="启用单点登录">
-          <el-switch v-model="ssoEnabled" />
+          <el-switch v-model="ssoEnabled" :disabled="!canManage" />
           <span class="muted" style="margin-left:10px">
             关掉后只能用本地账号登录（本地账号是运维平台不可用时的兜底通道，请保留）
           </span>
         </el-form-item>
         <el-form-item label="运维平台后端地址">
-          <el-input v-model="portalUrl" placeholder="http://opsplatform-backend:8080" />
+          <el-input v-model="portalUrl" :disabled="!canManage" placeholder="http://opsplatform-backend:8080" />
           <div class="muted">
             填运维平台<b>后端</b>地址（不是前端页面地址）。集群内可用 Service 名，如
             <code>http://opsplatform-backend:8080</code>；跨集群填可达的外部地址。<br>
             留空则回退到环境变量 <code>PORTAL_API_URL</code>；两者都空时 SSO 不可用。
           </div>
         </el-form-item>
-        <el-button type="primary" @click="saveSso">保存</el-button>
+        <el-button v-if="canManage" type="primary" @click="saveSso">保存</el-button>
       </el-form>
     </el-card>
 

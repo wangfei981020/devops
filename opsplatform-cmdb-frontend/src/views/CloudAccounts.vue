@@ -3,11 +3,11 @@
     <div v-if="!embedded" class="page-head">
       <span class="page-title">云账号</span>
       <span class="muted" style="margin-left:10px">全局共享：主机 / K8s / 成本 都用它。账号=业务分组；凭据(SA key)配在项目层，每 GCP project 一份</span>
-      <el-button type="primary" size="small" style="float:right" @click="openAcct()">+ 添加云账号</el-button>
+      <el-button v-if="canManage" type="primary" size="small" style="float:right" @click="openAcct()">+ 添加云账号</el-button>
     </div>
     <!-- 嵌进「接入管理」的 tab 时不重复显示页标题，但按钮和说明要留着 -->
     <div v-else style="margin-bottom:10px">
-      <el-button type="primary" size="small" @click="openAcct()">+ 添加云账号</el-button>
+      <el-button v-if="canManage" type="primary" size="small" @click="openAcct()">+ 添加云账号</el-button>
       <span class="muted" style="margin-left:10px">全局共享：主机 / K8s / 成本 都用它。账号=业务分组；凭据(SA key)配在项目层，每 GCP project 一份</span>
     </div>
     <LoadError :error="error" title="云账号未加载" @retry="load" />
@@ -19,7 +19,7 @@
             <div style="padding:8px 40px">
               <div style="display:flex;align-items:center;margin-bottom:8px">
                 <b>项目（凭据在此配）</b>
-                <el-button link type="primary" size="small" style="margin-left:10px" @click="openProj(row)">+ 添加项目</el-button>
+                <el-button v-if="canManage" link type="primary" size="small" style="margin-left:10px" @click="openProj(row)">+ 添加项目</el-button>
               </div>
               <el-table :data="row.projects" size="small">
                 <el-table-column prop="name" label="业务名" width="140" />
@@ -28,10 +28,10 @@
                 <el-table-column prop="host_count" label="主机数" width="80" />
                 <el-table-column prop="last_sync_at" label="最近同步" width="140"><template #default="{ row: p }">{{ p.last_sync_at || '—' }}</template></el-table-column>
                 <el-table-column label="操作" width="180"><template #default="{ row: p }">
-                  <el-button link type="success" size="small" :loading="syncing['p'+p.id]" @click="syncProject(row.id, p.id)">同步</el-button>
+                  <el-button v-if="canSync" link type="success" size="small" :loading="syncing['p'+p.id]" @click="syncProject(row.id, p.id)">同步</el-button>
                   <span v-if="projProg[p.id]" class="muted" style="font-size:11px">{{ progressText(projProg[p.id]) }}</span>
-                  <el-button link type="primary" size="small" @click="openProj(row, p)">编辑</el-button>
-                  <el-button link type="danger" size="small" @click="delProj(p)">删除</el-button>
+                  <el-button v-if="canManage" link type="primary" size="small" @click="openProj(row, p)">编辑</el-button>
+                  <el-button v-if="canManage" link type="danger" size="small" @click="delProj(p)">删除</el-button>
                 </template></el-table-column>
               </el-table>
               <el-empty v-if="!row.projects?.length" description="还没项目，点上面「添加项目」并配 SA key" :image-size="50" />
@@ -42,10 +42,10 @@
         <el-table-column prop="provider" label="厂商" width="90"><template #default="{ row }"><el-tag size="small">{{ row.provider }}</el-tag></template></el-table-column>
         <el-table-column label="项目数" width="90"><template #default="{ row }">{{ row.projects?.length || 0 }}</template></el-table-column>
         <el-table-column label="操作" width="220" fixed="right"><template #default="{ row }">
-          <el-button link type="success" size="small" :loading="syncing['a'+row.id]" @click="syncAccount(row.id)">同步全部</el-button>
+          <el-button v-if="canSync" link type="success" size="small" :loading="syncing['a'+row.id]" @click="syncAccount(row.id)">同步全部</el-button>
           <span v-if="acctProg[row.id]" class="muted" style="font-size:12px">同步中 {{ progressText(acctProg[row.id]) }}</span>
-          <el-button link type="primary" size="small" @click="openAcct(row)">编辑</el-button>
-          <el-button link type="danger" size="small" @click="delAcct(row)">删除</el-button>
+          <el-button v-if="canManage" link type="primary" size="small" @click="openAcct(row)">编辑</el-button>
+          <el-button v-if="canManage" link type="danger" size="small" @click="delAcct(row)">删除</el-button>
         </template></el-table-column>
       </el-table>
       <Pager :total="accounts.length" v-model:page="page" v-model:page-size="pageSize" />
@@ -77,13 +77,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useLoadState } from '../composables/useLoadState'
 import LoadError from '../components/LoadError.vue'
 import { listCloudAccounts, createCloudAccount, updateCloudAccount, deleteCloudAccount,
   createCloudProject, updateCloudProject, deleteCloudProject } from '../api/cmdb'
 import { useAppStore } from '../stores/app'
+import { useAuthStore } from '../stores/auth'
 import { useHostSync } from '../composables/useHostSync'
 import { usePager } from '../composables/usePager'
 import Pager from '../components/Pager.vue'
@@ -92,6 +93,13 @@ import Pager from '../components/Pager.vue'
 defineProps({ embedded: { type: Boolean, default: false } })
 
 const app = useAppStore()
+// 云账号里存的是 SA key（凭据），管理它等同换钥匙 → manage_integrations；
+// 「同步」只是跑一次采集，权限低一档 → sync_cloud。
+// 这一页原先**一个权限判断都没有**：只读账号看得到"添加/编辑/删除/同步"全套按钮，
+// 点了才被后端 403。一个点了必然失败的控件，比藏起来更糟（CMDB-035）。
+const auth = useAuthStore()
+const canManage = computed(() => auth.hasButton('manage_integrations'))
+const canSync = computed(() => auth.hasButton('sync_cloud'))
 const { loading, error, run } = useLoadState()
 const accounts = ref([]); const expanded = ref([])
 // 与「主机」页共用同一份同步实现：这里原本只发请求、不轮询进度、错误一律吞成「失败」，

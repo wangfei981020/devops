@@ -214,7 +214,10 @@ var permExactRules = map[string]string{
 //	"有权看主机页，却因为没有基础配置权限而拉不出环境下拉框"这种连坐。
 //	返回内容都是名称类元数据，集群列表里的 endpoint/凭据字段在 handler 侧已掩码。
 var permPublicRead = map[string]bool{
-	"GET /api/me":                  true,
+	"GET /api/me": true,
+	// 自助改密：改自己的密码不该要"管别人账号"的权限。
+	// 越权由 handler 自己防住——用户 id 取自会话，不从请求体拿。
+	"PUT /api/me/password":         true,
 	"GET /api/refresh-permissions": true,
 	"POST /api/logout":             true,
 	"GET /api/environments":        true,

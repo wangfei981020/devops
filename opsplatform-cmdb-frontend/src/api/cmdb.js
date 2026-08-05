@@ -300,6 +300,7 @@ export const previewBatchRenew = (body) => http.post('/domains/renew-batch/previ
 export const batchRenewDomains = (body) => http.post('/domains/renew-batch', body).then((r) => r.data)
 
 // 用户管理（本地账号 vs 运维平台 SSO 影子账号）
+export const changeOwnPassword = (body) => http.put('/me/password', body).then((r) => r.data)
 export const listLocalRoles = () => http.get('/local-roles').then((r) => r.data)
 export const createUser = (body) => http.post('/users', body).then((r) => r.data)
 export const changeUserRole = (id, roleCode) => http.put(`/users/${id}/role`, { role_code: roleCode }).then((r) => r.data)

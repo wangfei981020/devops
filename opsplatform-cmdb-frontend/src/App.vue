@@ -40,21 +40,49 @@
           <span class="user"><el-icon><User /></el-icon> {{ auth.user?.username || 'admin' }} <el-icon><ArrowDown /></el-icon></span>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="logout"><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item>
+              <!-- 改自己的密码不该要"管别人账号"的权限。原先只有用户管理页有改密入口，
+                   而那个页面要 cmdb:manage_users——只读账号完全没有改密的地方，
+                   只能找管理员代改，而代改意味着管理员知道了别人的新密码。 -->
+              <el-dropdown-item v-if="auth.isLocal" command="passwd">
+                <el-icon><Key /></el-icon> 修改密码
+              </el-dropdown-item>
+              <el-dropdown-item command="logout" divided><el-icon><SwitchButton /></el-icon> 退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
       </div>
       <div class="content"><router-view /></div>
     </main>
+
+    <el-dialog v-model="pwd.show" title="修改密码" width="440px" :close-on-click-modal="false">
+      <el-form label-width="90px">
+        <el-form-item label="当前密码">
+          <el-input v-model="pwd.old" type="password" show-password placeholder="验证身份用" />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="pwd.new1" type="password" show-password placeholder="至少 8 位" />
+        </el-form-item>
+        <el-form-item label="确认新密码">
+          <el-input v-model="pwd.new2" type="password" show-password />
+        </el-form-item>
+      </el-form>
+      <el-alert type="warning" :closable="false" show-icon
+        title="改完密码所有登录会话会立即失效（包括当前这个），需要用新密码重新登录" />
+      <template #footer>
+        <el-button @click="pwd.show = false">取消</el-button>
+        <el-button type="primary" :loading="pwd.saving" @click="savePwd">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { shallowRef, ref, computed, onMounted } from 'vue'
+import { shallowRef, ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { permOf as permOfPath } from './router'
-import { Odometer, Connection, Lock, Share, Grid, Operation, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets, Cloudy, Location, Sort, TrendCharts, Document, Warning } from '@element-plus/icons-vue'
+import { Key, Odometer, Connection, Lock, Share, Grid, Operation, Files, User, ArrowDown, SwitchButton, Fold, Expand, Coin, Tools, List, CircleCheck, Clock, Bell, Monitor, Tickets, Cloudy, Location, Sort, TrendCharts, Document, Warning } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { changeOwnPassword } from './api/cmdb'
 import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
@@ -155,8 +183,27 @@ const visibleMenus = computed(() => {
 // 菜单和路由拦截依据不同的权限快照，出现"菜单里有、点进去被拦"。
 onMounted(() => { auth.ensureFresh?.().catch(() => {}) })
 
+const pwd = reactive({ show: false, old: '', new1: '', new2: '', saving: false })
+
 function onCmd(c) {
   if (c === 'logout') { auth.logout(); router.replace('/login') }
+  if (c === 'passwd') Object.assign(pwd, { show: true, old: '', new1: '', new2: '', saving: false })
+}
+
+async function savePwd() {
+  if (pwd.new1.length < 8) { ElMessage.warning('新密码至少 8 位'); return }
+  if (pwd.new1 !== pwd.new2) { ElMessage.warning('两次输入的新密码不一致'); return }
+  pwd.saving = true
+  try {
+    const r = await changeOwnPassword({ old_password: pwd.old, new_password: pwd.new1 })
+    ElMessage.success(r?.msg || '密码已修改，请重新登录')
+    pwd.show = false
+    // 后端已经把所有会话作废了，本地状态必须跟着清，否则会带着废 token 到处 401
+    auth.logout()
+    router.replace('/login')
+  } catch (e) {
+    ElMessage.error(e?.raw?.response?.data?.error || e?.message || '修改失败')
+  } finally { pwd.saving = false }
 }
 </script>
 

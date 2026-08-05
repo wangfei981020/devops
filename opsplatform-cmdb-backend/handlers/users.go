@@ -36,6 +36,8 @@ func (h *UserHandler) Register(r *gin.RouterGroup) {
 	r.POST("/users", h.Create)
 	r.PUT("/users/:id/role", h.ChangeRole)
 	r.PUT("/users/:id/password", h.ChangePassword)
+	// 自助改密：任何登录用户都能改自己的，不要 manage_users
+	r.PUT("/me/password", h.ChangeOwnPassword)
 	r.POST("/users/:id/kick", h.Kick)
 	r.DELETE("/users/:id", h.Delete)
 }
@@ -228,6 +230,78 @@ func (h *UserHandler) ChangeRole(c *gin.Context) {
 	logx.Line("users", fmt.Sprintf("用户 %s 角色改为 %s，已作废 %d 个会话", username, in.RoleCode, killed))
 	c.JSON(200, gin.H{"ok": true, "sessions_killed": killed,
 		"msg": fmt.Sprintf("已改为该角色，并作废了 %d 个在线会话（该用户需重新登录）", killed)})
+}
+
+// ChangeOwnPassword PUT /api/me/password  {"old_password","new_password"}
+//
+//	自助改密。**不需要 cmdb:manage_users**——那个权限的含义是"能管别人的账号"，
+//	拿它来卡"改自己的密码"是错的：只读账号因此完全没有改密入口，
+//	密码只能找管理员代改，而管理员代改意味着他知道了别人的新密码。
+//
+//	与管理员代改的两点不同：
+//	  1. 必须验旧密码。管理员代改是"忘了密码"场景，自助改密是"我知道旧的想换新的"，
+//	     不验旧密码等于任何拿到会话的人都能顺手锁死账号。
+//	  2. 只能改自己的——用户 id 取自**会话**，不从请求体拿，避免越权改他人。
+func (h *UserHandler) ChangeOwnPassword(c *gin.Context) {
+	var in struct {
+		OldPassword string `json:"old_password"`
+		NewPassword string `json:"new_password"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": "请求体格式错误"})
+		return
+	}
+	if len(in.NewPassword) < 8 {
+		c.JSON(400, gin.H{"error": "新密码至少 8 位"})
+		return
+	}
+	if in.NewPassword == in.OldPassword {
+		c.JSON(400, gin.H{"error": "新密码不能和旧密码相同"})
+		return
+	}
+
+	uid := UserIDFromCtx(c)
+	if uid <= 0 {
+		c.JSON(401, gin.H{"error": "登录已失效"})
+		return
+	}
+	var username, src, hash string
+	if err := h.DB.QueryRow(`SELECT username, IFNULL(auth_source,'local'), password_hash FROM users WHERE id=?`, uid).
+		Scan(&username, &src, &hash); err != nil {
+		c.JSON(404, gin.H{"error": "用户不存在"})
+		return
+	}
+	if src != "local" {
+		c.JSON(400, gin.H{
+			"error": "你是通过运维平台登录的，密码请到运维平台修改",
+			"hint":  "CMDB 这边只是一条影子记录，改了也会在下次登录时被覆盖"})
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.OldPassword)) != nil {
+		logx.Line("users", fmt.Sprintf("WARN 自助改密旧密码错误 user=%s ip=%s", username, c.ClientIP()))
+		c.JSON(400, gin.H{"error": "旧密码不正确"})
+		return
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(in.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "密码加密失败"})
+		return
+	}
+	if _, err := h.DB.Exec(`UPDATE users SET password_hash=? WHERE id=?`, string(newHash), uid); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	// 同管理员代改：把该用户其余会话全踢掉（当前这个也一并作废，前端会跳登录页）。
+	// 改密码的场景之一就是"怀疑密码泄露"，不踢会话等于没改。
+	res, _ := h.DB.Exec(`DELETE FROM auth_sessions WHERE user_id=?`, uid)
+	killed := int64(0)
+	if res != nil {
+		killed, _ = res.RowsAffected()
+	}
+	SetAuditTarget(c, username+"（自助改密）")
+	logx.Line("users", fmt.Sprintf("用户 %s 自助修改密码，已作废 %d 个会话", username, killed))
+	c.JSON(200, gin.H{"ok": true, "msg": "密码已修改，请用新密码重新登录"})
 }
 
 // ChangePassword PUT /api/users/:id/password  {"password": "..."}

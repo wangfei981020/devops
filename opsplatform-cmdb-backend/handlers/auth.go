@@ -301,6 +301,19 @@ func IsAdmin(c *gin.Context) bool {
 	return false
 }
 
+// UserIDFromCtx 当前登录用户的 id；取不到返回 0。
+//
+//	自助改密这类"只能操作自己"的接口必须用它，**不能从请求体里取 id**——
+//	那样任何人都能改别人的密码。
+func UserIDFromCtx(c *gin.Context) int {
+	if v, ok := c.Get(ctxUserID); ok {
+		if n, ok := v.(int); ok {
+			return n
+		}
+	}
+	return 0
+}
+
 // UsernameFromCtx 当前操作人，取不到时返回 "-"（审计里能一眼看出是异常路径）
 func UsernameFromCtx(c *gin.Context) string {
 	if v, ok := c.Get(ctxUsername); ok {
