@@ -31,6 +31,33 @@ type expiringItem struct {
 // ⚠️ 这里的每一个数字都会被当成结论使用（"证书没过期"="不用管"）。
 // 所以查询失败**必须**返回 500，绝不能把失败降级成 0 —— 2026-07-31 生产 MySQL 盘写满时，
 // 本接口对前端报告"一切正常、计数全 0"，把故障说成了没问题（CMDB-013）。
+// countCertFailures 数线上证书检测失败，返回 (真失败, 内网不适用)。
+//
+//	判据复用 classifyTLSError——和到期巡检页是同一份代码。总览卡片和落地页
+//	必须给出同一个数字，否则点进去对不上，人只能两个都不信（CMDB-015 的教训）。
+func (h *DashboardHandler) countCertFailures() (failed, inapplicable int) {
+	rows, err := h.DB.Query(`SELECT COALESCE(cert_check_msg,''), COALESCE(origin_ip,'')
+		FROM domain_records
+		WHERE ignored=0 AND cert_ignored=0 AND cert_expiry_at IS NULL AND cert_check_msg<>''`)
+	if err != nil {
+		logx.J("dashboard", "query_fail", map[string]any{"item": "online_cert_failed", "err": err.Error()})
+		return 0, 0
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var msg, originIP string
+		if rows.Scan(&msg, &originIP) != nil {
+			continue
+		}
+		if classifyTLSError(msg, originIP).Scope == scopeInternal {
+			inapplicable++
+		} else {
+			failed++
+		}
+	}
+	return failed, inapplicable
+}
+
 func (h *DashboardHandler) Get(c *gin.Context) {
 	var firstErr error
 	fail := func(what string, err error) {
@@ -71,8 +98,20 @@ func (h *DashboardHandler) Get(c *gin.Context) {
 		// 边界上的项两边归类不同，于是同一指标两个页面给出不同的数。
 		"online_cert_expiring": count("online_cert_expiring", `SELECT COUNT(*) FROM domain_records WHERE ignored=0 AND cert_ignored=0 AND cert_expiry_at IS NOT NULL AND DATEDIFF(cert_expiry_at, NOW()) BETWEEN 0 AND 30`),
 		"online_cert_expired":  count("online_cert_expired", `SELECT COUNT(*) FROM domain_records WHERE ignored=0 AND cert_ignored=0 AND cert_expiry_at IS NOT NULL AND DATEDIFF(cert_expiry_at, NOW()) < 0`),
-		"online_cert_failed":   count("online_cert_failed", `SELECT COUNT(*) FROM domain_records WHERE ignored=0 AND cert_ignored=0 AND cert_expiry_at IS NULL AND cert_check_msg<>''`),
 	}
+
+	// 检测失败要和到期巡检页同口径：**内网地址的必然失败不算失败**。
+	//
+	//	这条统计原来是纯 SQL 数 `cert_check_msg<>''`，数出来 148；
+	//	而巡检页用 classifyTLSError 把其中 76 条内网地址单列成"不适用"后只剩 72。
+	//	卡片写 148、点进去 72，同一个指标两个数——CMDB-015 那次（快到期边界）
+	//	栽的就是"两边各写一份判据"，这次不能再犯：判据只有一份，在
+	//	classifyTLSError 里，这里把记录拉出来调它，不再用 SQL 复述一遍规则。
+	//	记录数是解析记录级别（生产几百条），一次全表扫描可接受。
+	failed, inapplicable := h.countCertFailures()
+	resp["online_cert_failed"] = failed
+	// 单独给出来，让卡片能写清"另有 N 条内网不适用"，而不是让人自己去发现差额
+	resp["online_cert_inapplicable"] = inapplicable
 
 	// 按环境分布
 	byEnv := map[string]int{}

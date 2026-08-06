@@ -15,7 +15,10 @@
           <el-col :span="6" v-for="c in g.cards" :key="c.label" style="margin-bottom:14px">
             <el-card shadow="never" :class="{clickable: c.to}" @click="c.to && $router.push(c.to)">
               <!-- 失败时显示 —，不显示 0：0 是"确实没有"的断言（CMDB-013） -->
-              <div class="stat"><div class="num" :style="{color: error ? '#c0c4cc' : c.color}">{{ num(c.num) }}</div><div class="lbl">{{ c.label }}</div></div>
+              <div class="stat"><div class="num" :style="{color: error ? '#c0c4cc' : c.color}">{{ num(c.num) }}</div><div class="lbl">{{ c.label }}</div>
+                <!-- 被排除在这个数字之外的量要当场说清，否则人得自己去发现差额 -->
+                <div v-if="c.sub && !error" class="sub">{{ c.sub }}</div>
+              </div>
             </el-card>
           </el-col>
         </el-row>
@@ -131,7 +134,12 @@ const cardGroups = computed(() => [
       // kind=online 也要带：本页三类对象拉平在一起，总览这三张只统计线上证书。
       { label: '线上证书 30 天内到期', num: data.value.online_cert_expiring || 0, color: '#e6a23c', to: { path: '/cert-inspect', query: { status: 'expiring', kind: 'online' } } },
       { label: '线上证书已过期', num: data.value.online_cert_expired || 0, color: '#f56c6c', to: { path: '/cert-inspect', query: { status: 'expired', kind: 'online' } } },
-      { label: '线上证书检测失败', num: data.value.online_cert_failed || 0, color: '#909399', to: { path: '/cert-inspect', query: { status: 'failed', kind: 'online' } } },
+      // ⚠️ 这个数必须和落地页一致。原来后端用纯 SQL 数 `cert_check_msg<>''`（148），
+      // 而巡检页把其中的内网地址单列成"不适用"后只剩 72——卡片写 148、点进去 72，
+      // 同一指标两个数，人只能两个都不信。后端已改为复用 classifyTLSError 同一份判据。
+      { label: '线上证书检测失败', num: data.value.online_cert_failed || 0, color: '#909399',
+        sub: data.value.online_cert_inapplicable ? `另有 ${data.value.online_cert_inapplicable} 条内网不适用` : '',
+        to: { path: '/cert-inspect', query: { status: 'failed', kind: 'online' } } },
     ],
   },
   {
@@ -164,6 +172,7 @@ onMounted(load)
 .clickable:hover { box-shadow: 0 2px 12px rgba(0,0,0,.1); }
 .num { font-size: 28px; font-weight: 700; }
 .lbl { color: #909399; font-size: 13px; margin-top: 4px; }
+.sub { color: #c0c4cc; font-size: 12px; margin-top: 2px; }
 .stat-row { display: flex; align-items: center; flex-wrap: wrap; }
 .stat-title { color: #606266; font-size: 13px; margin-right: 8px; min-width: 56px; }
 .clk { cursor: pointer; }

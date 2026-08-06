@@ -419,6 +419,57 @@ func (h *NetworkHandler) hostInternalIPs() map[string]string {
 	return out
 }
 
+// lbVIPToK8sService 取 LB 的 VIP → 它对应的 K8s Service（"集群 · 命名空间/服务名"）。
+//
+//	## 为什么要做这个交叉验证
+//
+//	GKE 的 Service type=LoadBalancer 会在 GCP 上生成转发规则，但它的后端是
+//	**Pod（NEG）**，不在任何实例组里——我们那套"转发规则 → targetPool/backendService
+//	→ 实例组 → 实例"的追溯路径天然看不到它。
+//
+//	看不到本来没什么，坏就坏在结论下得太满：详情弹窗写的是
+//	  「确认没有后端实例｜这个 LB 是挂空的——它有公网 VIP 却没有任何后端。
+//	    要么是废弃资源（在计费），要么是后端被误删了，值得查一下。」
+//	而实测这 8 条的 VIP **8/8 全部命中 K8s Service**，是 UAT 正在服务的
+//	Kafka / ZooKeeper / RocketMQ / Istio 内网入口。照着这句提示去"清理废弃资源"，
+//	删掉的是在跑的业务入口（CMDB-049）。
+//
+//	这正是那条老约定的反例——**把虚高换成虚低不算变好**：
+//	原来 81 条全空是"不敢下结论"，现在是"下了错误的结论"，后者危险得多。
+//
+//	数据 CMDB 自己就有（k8s_services.external_ip，迁移 051 加的列还带索引），
+//	不用新增任何采集。同样刻意不做 SQL JOIN，在 Go 里用 map 配——
+//	`cloud_loadbalancers.vip` 和 `k8s_services.external_ip` 又是一对跨表字符串比较。
+func (h *NetworkHandler) lbVIPToK8sService() map[string]string {
+	out := map[string]string{}
+	rows, err := h.DB.Query(`SELECT s.external_ip, s.namespace, s.name, COALESCE(c.display_name, c.name, '')
+		FROM k8s_services s LEFT JOIN k8s_clusters c ON c.id = s.cluster_id
+		WHERE COALESCE(s.external_ip,'') <> ''`)
+	if err != nil {
+		logx.J("network_sync", "lb_k8s_svc_map_fail", map[string]any{
+			"err": err.Error(), "note": "无法交叉验证，K8s 服务型 LB 会被误判成'没有后端'"})
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ip, ns, name, cluster string
+		if rows.Scan(&ip, &ns, &name, &cluster) != nil {
+			continue
+		}
+		// 一个 Service 可能有多个 external_ip（逗号分隔）
+		for _, one := range strings.Split(ip, ",") {
+			if one = strings.TrimSpace(one); one != "" {
+				label := ns + "/" + name
+				if cluster != "" {
+					label = cluster + " · " + label
+				}
+				out[one] = label
+			}
+		}
+	}
+	return out
+}
+
 func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 	// 预取所有后端成员，按 账号/项目/LB 分组；内网 IP 单独查一张表再在内存里配。
 	//
@@ -480,6 +531,7 @@ func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 	}
 	logx.J("network_sync", "lb_backends_loaded", map[string]any{
 		"rows": backendRows, "lb_keys": len(backends)})
+	k8sSvcOfVIP := h.lbVIPToK8sService()
 
 	rows, err := h.DB.Query(`SELECT id, provider, cloud_account_id, project, name, scheme, vip, port_range, protocol, target, IFNULL(backend_state,''), IFNULL(backend_count,0), region, self_link FROM cloud_loadbalancers ORDER BY provider, name`)
 	if err != nil {
@@ -514,11 +566,23 @@ func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 					"note": "采集时追溯到了后端，按此 key 查不到明细——比对同 key 的 lb_backends_written 日志",
 				})
 			}
+			// ⚠️ 判 "none"（确认没有后端）之前，先拿 VIP 对一次 K8s Service。
+			//
+			//	GKE 的 Service type=LoadBalancer 后端是 Pod（NEG），不在实例组里，
+			//	实例组这条追溯路径天然看不到——但它**有后端，而且在服务**。
+			//	实测生产 8 条 none 的 VIP 8/8 命中，全是 UAT 在跑的
+			//	Kafka / ZK / RocketMQ / Istio 内网入口，而弹窗写着"废弃资源，值得查一下"。
+			svc := k8sSvcOfVIP[vip]
+			if svc != "" && (bState == "none" || bState == "unsupported" || bState == "") && len(bs) == 0 {
+				bState = "k8s"
+			}
 			out = append(out, gin.H{"id": id, "provider": provider, "project": pn[itoa(aid)+"/"+project], "name": name,
 				"scheme": scheme, "vip": vip, "port_range": port, "protocol": protocol, "target": target, "region": region,
 				// backend_state 让界面能区分「真的没后端」和「没追溯到」。
 				// 空字符串 = 这条是本次改动之前采集的，还没有状态信息。
 				"self_link": selfLink, "backends": bs, "backend_state": bState,
+				// 命中的 K8s Service（"集群 · 命名空间/服务名"），空=没对上
+				"k8s_service": svc,
 				// 采集时追溯到的条数，用来和实际返回的 backends 对账
 				"backend_count": bCount})
 		}

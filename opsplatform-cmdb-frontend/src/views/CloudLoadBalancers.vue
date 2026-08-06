@@ -40,12 +40,18 @@
                       content="追溯后端时 API 调用失败（多半是权限不足），这个 LB 到底有没有后端目前不知道——不是「没有」">
             <span class="b-unknown">未知</span>
           </el-tooltip>
+          <!-- VIP 命中了 K8s Service：它有后端，只是后端是 Pod（NEG），
+               不在实例组里，我们这条追溯路径天然看不到。绝不能显示成 0 -->
+          <el-tooltip v-else-if="row.backend_state === 'k8s'" placement="top"
+                      :content="`K8s 服务型后端（NEG，成员是 Pod）：${row.k8s_service}。它有后端且在服务，只是不在实例组里，追溯不到实例名`">
+            <span class="b-k8s">K8s</span>
+          </el-tooltip>
           <el-tooltip v-else-if="row.backend_state === 'unsupported'" placement="top"
                       content="服务型后端（GKE Service/Ingress 直连 Pod 的 NEG），当前不支持追溯到实例">
             <span class="muted">不适用</span>
           </el-tooltip>
           <el-tooltip v-else-if="row.backend_state === 'none'" placement="top"
-                      content="确认没有后端实例——这个 LB 是挂空的，值得查一下">
+                      :content="`未追溯到任何后端实例，且 VIP 也没有对上任何 K8s Service。${schemeIsInternal(row.scheme) ? '内网' : '公网'} VIP 仍在占用，值得查一下是不是残留规则`">
             <span class="b-empty">0</span>
           </el-tooltip>
           <!-- 空状态码 = 本次改动前采集的老数据，还没有状态信息 -->
@@ -92,12 +98,23 @@
         <el-alert v-else-if="detail.backend_state === 'unresolved'" type="warning" :closable="false" show-icon
           title="后端追溯失败，结果不可信"
           description="拉取 targetPools / backendServices 的 API 调用出错了（多半是服务账号缺 compute 只读权限）。这个 LB 有没有后端目前无法确认——不要当成「没有后端」。请检查云账号权限后重新同步。" />
+        <el-alert v-else-if="detail.backend_state === 'k8s'" type="success" :closable="false" show-icon
+          title="K8s 服务型后端，它有后端且在服务"
+          :description="`这个 LB 的 VIP 对应 K8s Service ${detail.k8s_service}，后端是 Pod（NEG），不在任何实例组里，所以这里列不出实例名——但它不是挂空的。⚠️ 不要按「废弃资源」清理，删掉的会是正在服务的业务入口。要看它转发到哪些 Pod，去 K8s「全链路」页按服务名查。`" />
         <el-alert v-else-if="detail.backend_state === 'unsupported'" type="info" :closable="false" show-icon
           title="服务型后端，不支持追溯到实例"
           description="这类 LB 直连 GKE Service/Ingress 的 NEG（Pod 级），没有虚拟机实例可追。要看它转发到哪里，请到 K8s「全链路」页查。" />
+        <!-- ⚠️ 这段原来写的是「确认没有后端实例…要么是废弃资源（在计费），
+             要么是后端被误删了，值得查一下」。实测生产 8 条 none 的 VIP 全部
+             命中 K8s Service，是 UAT 正在服务的 Kafka/ZK/RocketMQ/Istio 入口——
+             照着那句话去清理会删掉在跑的业务（CMDB-049）。
+             现在 K8s 命中的走上面的分支；剩下真正对不上的，措辞也只说
+             "我们没追到"，不替人下"废弃资源"的结论。
+             另：原文写死"公网 VIP"，而这些恰恰是 10.170.x 的内网地址，
+             同一个弹窗上面就写着「类型：内部」，自相矛盾。 -->
         <el-alert v-else-if="detail.backend_state === 'none'" type="warning" :closable="false" show-icon
-          title="确认没有后端实例"
-          description="这个 LB 是挂空的——它有公网 VIP 却没有任何后端。要么是废弃资源（在计费），要么是后端被误删了，值得查一下。" />
+          title="未追溯到后端实例"
+          :description="`没有追溯到任何后端实例，VIP 也没有对上 K8s Service。这个 ${schemeIsInternal(detail.scheme) ? '内网' : '公网'} VIP 仍在占用。可能是残留的转发规则，也可能是我们暂时识别不了的后端类型——处置前请到 GCP 控制台核对该转发规则，不要仅凭这里就删。`" />
         <el-empty v-else description="这条是旧数据，重新同步后才有追溯状态" :image-size="50" />
       </template>
       <template #footer><el-button @click="dlg=false">关闭</el-button></template>
@@ -126,6 +143,9 @@ const opts = computed(() => ({
 const filtered = computed(() => rows.value.filter((r) => (!fp.value || r.provider === fp.value) && (!fs.value || r.scheme === fs.value)))
 const { page, size, paged } = usePaged(filtered)
 function schemeLabel(s) { return ({ EXTERNAL: '外部', EXTERNAL_MANAGED: '外部(托管)', INTERNAL: '内部', INTERNAL_MANAGED: '内部(托管)' }[s] || s || '—') }
+// VIP 是内网还是公网必须按 scheme 判，不能写死。原来「没有后端」的文案里写死了
+// "公网 VIP"，而那批恰恰全是 10.170.x 的内网地址，同一个弹窗上面还写着「类型：内部」
+function schemeIsInternal(s) { return String(s || '').startsWith('INTERNAL') }
 function openDetail(row) { detail.value = row; dlg.value = true }
 
 async function load() {
@@ -139,6 +159,8 @@ onMounted(load)
 .b-lost { color: #f56c6c; font-weight: 600; cursor: help; text-decoration: underline wavy; }
 .b-unknown { color: #e6a23c; font-weight: 600; cursor: help; }
 .b-empty { color: #f56c6c; font-weight: 600; cursor: help; }
+/* K8s 服务型后端：它是正常状态，不能用报警色——用中性偏正向的蓝 */
+.b-k8s { color: #409eff; font-weight: 600; cursor: help; }
 .filters { display:flex; gap:10px; align-items:center; margin-bottom:12px; }
 .grow { flex:1; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12px; }

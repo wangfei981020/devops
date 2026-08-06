@@ -584,7 +584,7 @@ func (h *HostHandler) SyncProject(c *gin.Context) {
 		}
 		h.finishHostSync(st, e)
 		finishManualRunLog(h.DB, runID, start, err,
-			fmt.Sprintf("同步 %s：%d 台，失效 %d", projName, synced, stale))
+			fmt.Sprintf("同步 %s：%d 台在用，已销毁 %d 台", projName, synced, stale))
 	}()
 	c.JSON(http.StatusAccepted, gin.H{"ok": true, "running": true, "msg": "已在后台同步，主机多约 1-3 分钟，完成后自动刷新"})
 }
@@ -653,7 +653,7 @@ func (h *HostHandler) SyncAccount(c *gin.Context) {
 			runErr = fmt.Errorf("%s", strings.Join(errs, "；"))
 		}
 		finishManualRunLog(h.DB, runID, start, runErr,
-			fmt.Sprintf("同步 %d 个项目：%d 台，失效 %d", len(jobs), totalSynced, totalStale))
+			fmt.Sprintf("同步 %d 个项目：%d 台在用，已销毁 %d 台", len(jobs), totalSynced, totalStale))
 	}()
 	resp := gin.H{"ok": true, "running": true, "projects": len(jobs),
 		"msg": "已在后台同步，主机多约 1-3 分钟，完成后自动刷新"}
@@ -806,7 +806,7 @@ func (h *HostHandler) syncOneProject(pid int64, st *hostSyncState) (name string,
 		h.upsertHost(accountID, name, in)
 		hsSet(st, func(s *hostSyncState) { s.Done++ })
 	}
-	stale = h.markStaleHosts(accountID, projectID, present)
+	newlyGone, stale := h.markStaleHosts(accountID, projectID, present)
 	// 顺带同步该 project 的网络资源（VPC/子网/防火墙/静态IP/负载均衡）
 	//
 	//	⚠️ 这里原来是 `if e == nil { ... }`，**没有 else 分支**——
@@ -834,7 +834,14 @@ func (h *HostHandler) syncOneProject(pid int64, st *hostSyncState) (name string,
 	}
 	hsSet(st, func(s *hostSyncState) { s.Synced += len(insts); s.Stale += stale })
 	// 结果里必须带上网络资源那一步的成败——只报主机数会让人以为全同步好了
-	result := fmt.Sprintf("同步 %d 台，失效 %d", len(insts), stale)
+	//
+	//	⚠️ 文案两处改动（同一个问题的两面）：
+	//	  「失效」→「已销毁」：和主机页的口径统一。stale=1 的含义就是"云上已查不到"，
+	//	    主机页已经显示成「已销毁」，同步结果这里还叫「失效」，看的人会以为是两回事，
+	//	    甚至以为同步本身出了问题。
+	//	  只报累计数 → 累计 + 本次新增：累计数每轮同步都一样（15、15、15…），
+	//	    既吓人又没有信息量；真正代表云上发生了变化的是**本次新增**。
+	result := hostSyncSummary(len(insts), stale, newlyGone)
 	if netErr != "" {
 		result += "；⚠️ 网络资源（VPC/防火墙/负载均衡）未同步：" + truncate(netErr, 120)
 	}
@@ -873,7 +880,7 @@ func SyncAllHostProjects(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailu
 		totalStale += stale
 	}
 	ok := !(totalSynced == 0 && len(failures) == len(pids)) // 全部项目都失败才算失败
-	msg := fmt.Sprintf("同步 %d 台主机（%d 个项目），失效 %d", totalSynced, len(pids), totalStale)
+	msg := fmt.Sprintf("同步 %d 台主机在用（%d 个项目），已销毁 %d 台", totalSynced, len(pids), totalStale)
 	if len(failures) > 0 {
 		msg += fmt.Sprintf("，%d/%d 个项目失败", len(failures), len(pids))
 	}
@@ -949,11 +956,44 @@ func (h *HostHandler) upsertHost(accountID int, projName string, in cloudsource.
 	}
 }
 
+// hostSyncSummary 同步结果文案。四处（项目级/账号级/批量/定时任务）共用一份，
+// 免得同一件事在不同入口有不同说法。
+//
+//	## 措辞是这条的重点，不是格式
+//
+//	原来写的是「同步 25 台，失效 15」，两个词都在误导：
+//	  · 「失效」——stale=1 的真实含义是"这次同步时云上已经查不到它了"，
+//	    主机页已经如实显示成「已销毁」。同一件事两个页面两种叫法，
+//	    看的人会以为是两回事，甚至以为是同步本身出了问题（"怎么又失效了 15 个"）。
+//	  · 数字是**累计**而不是本次新增。每一轮同步它都一模一样地出现 15、15、15，
+//	    既吓人又没有信息量。真正值得注意的是本次新增：那才代表云上刚发生了变化。
+func hostSyncSummary(live, gone, newlyGone int) string {
+	s := fmt.Sprintf("同步 %d 台在用", live)
+	if gone > 0 {
+		s += fmt.Sprintf("；已销毁 %d 台", gone)
+		if newlyGone > 0 {
+			s += fmt.Sprintf("（本次新增 %d）", newlyGone)
+		} else {
+			s += "（本次无新增）"
+		}
+	}
+	return s
+}
+
 // markStaleHosts 把该 (账号, project) 下 GCP 已无的实例标 stale（只影响这个 project，不碰其它 project）。
-func (h *HostHandler) markStaleHosts(accountID int, projectID string, present map[string]bool) int {
+//
+//	返回 (本次新判定为已销毁, 该 project 累计已销毁)。
+//
+//	⚠️ 这两个数必须分开。原来只返回一个数，而且是**每轮重新数一遍所有 !present 的行**，
+//	于是同步结果永远写着「同步 25 台，失效 15」——看上去像"这次又坏了 15 台"，
+//	实际是"库里有 15 台早就销毁了，这次仍然没看到"。它在每一轮同步里一模一样地出现，
+//	既吓人又没有信息量。真正值得注意的是**本次新增**：那才代表云上刚刚发生了变化。
+func (h *HostHandler) markStaleHosts(accountID int, projectID string, present map[string]bool) (newly, total int) {
 	rows, err := h.DB.Query(`SELECT ci_id, instance_id FROM hosts WHERE cloud_account_id=? AND project=?`, accountID, projectID)
 	if err != nil {
-		return 0
+		logx.J("host_sync", "mark_stale_query_fail", map[string]any{
+			"account": accountID, "project": projectID, "err": err.Error()})
+		return 0, 0
 	}
 	type row struct {
 		ciID int64
@@ -967,14 +1007,24 @@ func (h *HostHandler) markStaleHosts(accountID int, projectID string, present ma
 		}
 	}
 	rows.Close()
-	n := 0
 	for _, r := range all {
-		if !present[r.inst] {
-			logExec(h.DB, "主机同步写", `UPDATE hosts SET stale=1 WHERE ci_id=?`, r.ciID)
-			n++
+		if present[r.inst] {
+			continue
+		}
+		total++
+		// 加 `AND stale=0`：受影响行数 > 0 才是**这一轮新销毁的**。
+		// 不加的话每轮都会把同一批老记录重写一遍，本次新增永远等于累计。
+		if n := logExec(h.DB, "主机同步写", `UPDATE hosts SET stale=1 WHERE ci_id=? AND stale=0`, r.ciID); n > 0 {
+			newly++
 		}
 	}
-	return n
+	if newly > 0 {
+		logx.J("host_sync", "hosts_gone", map[string]any{
+			"account": accountID, "project": projectID, "newly_gone": newly, "total_gone": total,
+			"note": "云上已查不到这些实例，判定为已销毁；30 天后由 stale_host_purge 清理",
+		})
+	}
+	return newly, total
 }
 
 // 主机生命周期状态。和 status（云上原样值）是两个维度：
