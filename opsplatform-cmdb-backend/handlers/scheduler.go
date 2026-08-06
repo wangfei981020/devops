@@ -193,15 +193,15 @@ func StartScheduler(db *sql.DB, cipher *crypto.Cipher, pool *k8ssource.Pool) {
 		},
 	}
 	// 自愈①：启动时，之前进程遗留的「运行中」记录一律标「中断」（那些进程已随重启死掉）
-	if _, err := db.Exec(`UPDATE task_run_logs SET status='interrupted', summary='中断：服务重启', finished_at=NOW() WHERE status='running'`); err != nil {
+	if _, err := db.Exec(`UPDATE task_run_logs SET status=?, summary='中断：服务重启', finished_at=NOW() WHERE status=?`, taskStatusInterrupted, taskStatusRunning); err != nil {
 		logx.Line("scheduler", fmt.Sprintf("[scheduler] 启动清理遗留 running 记录失败: %v", err))
 	}
 	// 自愈②：每 5 分钟把 running 超过硬超时上限(30min)仍未收尾的标「中断」（兜底任何卡死）
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
 		for range t.C {
-			if _, err := db.Exec(`UPDATE task_run_logs SET status='interrupted', summary='中断：超时未收尾(自愈)', finished_at=NOW()
-				WHERE status='running' AND TIMESTAMPDIFF(SECOND, started_at, NOW()) > 1800`); err != nil {
+			if _, err := db.Exec(`UPDATE task_run_logs SET status=?, summary='中断：超时未收尾(自愈)', finished_at=NOW()
+				WHERE status=? AND TIMESTAMPDIFF(SECOND, started_at, NOW()) > 1800`, taskStatusInterrupted, taskStatusRunning); err != nil {
 				logx.Line("scheduler", fmt.Sprintf("[scheduler] 定期自愈卡死记录失败: %v", err))
 			}
 		}
@@ -334,7 +334,7 @@ func (s *Scheduler) run(key, trigger string, targets []string) {
 			msg := fmt.Sprintf("panic: %v", r)
 			s.exec("panic后更新scheduled_tasks", `UPDATE scheduled_tasks SET last_run_at=NOW(), last_result=?, last_ok=0 WHERE task_key=?`, truncate(msg, 250), key)
 			ns, ng, na := sendTaskNotify(s.db, key, "fail", msg)
-			s.finishRunLog(runID, "fail", msg, nil, nil, start, ns, ng, na)
+			s.finishRunLog(runID, taskStatusFail, msg, nil, nil, start, ns, ng, na)
 		}
 	}()
 	logx.Line("scheduler", fmt.Sprintf("[scheduler] 运行任务 %s (%s)", key, trigger))
@@ -344,7 +344,7 @@ func (s *Scheduler) run(key, trigger string, targets []string) {
 	result, failures, ok := fn(ctx, prog, targets)
 
 	// 状态判定：ctx 取消 → 已取消 / 超时；否则 ok/partial/fail
-	status := "ok"
+	status := taskStatusOK
 	switch {
 	case ctx.Err() == context.Canceled:
 		status, ok = "cancelled", false
@@ -352,12 +352,12 @@ func (s *Scheduler) run(key, trigger string, targets []string) {
 			result = "已手动取消"
 		}
 	case ctx.Err() == context.DeadlineExceeded:
-		status, ok = "timeout", false
+		status, ok = taskStatusTimeout, false
 		result = fmt.Sprintf("超时中止（上限 %s）；%s", taskTimeout(key), result)
 	case !ok:
-		status = "fail"
+		status = taskStatusFail
 	case len(failures) > 0:
-		status = "partial"
+		status = taskStatusPartial
 	}
 	okv := 0
 	if ok {
@@ -368,7 +368,7 @@ func (s *Scheduler) run(key, trigger string, targets []string) {
 	s.finishRunLog(runID, status, result, failures, sink.list(), start, ns, ng, na)
 
 	// D 自动重试：仅 fail/timeout（不含 partial/cancelled/ok）且非自动重试触发时，延迟后重跑一次
-	if (status == "fail" || status == "timeout") && trigger != "auto_retry" {
+	if (status == taskStatusFail || status == taskStatusTimeout) && trigger != "auto_retry" {
 		logx.Line("scheduler", fmt.Sprintf("[scheduler] 任务 %s %s，10s 后自动重试一次", key, status))
 		go func() { time.Sleep(10 * time.Second); s.run(key, "auto_retry", targets) }()
 	}
@@ -385,7 +385,7 @@ func (s *Scheduler) CancelTask(runID int64) bool {
 		return true
 	}
 	// 僵尸：直接收尾
-	res, err := s.db.Exec(`UPDATE task_run_logs SET status='cancelled', summary='已手动取消(强制收尾)', finished_at=NOW() WHERE id=? AND status='running'`, runID)
+	res, err := s.db.Exec(`UPDATE task_run_logs SET status=?, summary='已手动取消(强制收尾)', finished_at=NOW() WHERE id=? AND status=?`, taskStatusCancelled, runID, taskStatusRunning)
 	if err != nil {
 		logx.Line("scheduler", fmt.Sprintf("[scheduler] 强制取消记录 %d 失败: %v", runID, err))
 		return false
@@ -399,7 +399,7 @@ func (s *Scheduler) startRunLog(key, trigger string, start time.Time) int64 {
 	var name string
 	_ = s.db.QueryRow(`SELECT name FROM scheduled_tasks WHERE task_key=?`, key).Scan(&name)
 	res, err := s.db.Exec(`INSERT INTO task_run_logs (task_key, name, status, trigger_by, started_at, finished_at)
-		VALUES (?,?, 'running', ?, ?, ?)`, key, name, trigger, start, start)
+		VALUES (?,?,?,?,?,?)`, key, name, taskStatusRunning, trigger, start, start)
 	if err != nil {
 		logx.Line("scheduler", fmt.Sprintf("[scheduler] 写运行记录失败(task=%s): %v", key, err))
 		return 0
@@ -784,7 +784,7 @@ func sendTaskNotify(db *sql.DB, taskKey, status, result string) (state, groupNam
 	if notifyEnabled == 0 {
 		return "skipped", "", ""
 	}
-	ok := status == "ok" || status == "partial"
+	ok := status == taskStatusOK || status == taskStatusPartial
 	if notifyWhen == "fail" && ok {
 		return "skipped", "", ""
 	}
@@ -796,9 +796,9 @@ func sendTaskNotify(db *sql.DB, taskKey, status, result string) (state, groupNam
 		return "none", "", ""
 	}
 	statusText := "✅ 执行成功"
-	if status == "partial" {
+	if status == taskStatusPartial {
 		statusText = "⚠️ 部分成功"
-	} else if status == "fail" {
+	} else if status == taskStatusFail {
 		statusText = "❌ 执行失败"
 	}
 	atSeg, atNames := atMentionsForTask2(db, taskKey)

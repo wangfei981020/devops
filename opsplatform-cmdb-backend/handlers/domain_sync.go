@@ -190,11 +190,11 @@ func (h *SyncHandler) runSync(id int, adapter dnsource.Adapter, st *syncState) {
 		syncMu.Unlock()
 		// 写执行记录终态
 		if sched != nil && runID > 0 {
-			status := "ok"
+			status := taskStatusOK
 			if errStr != "" {
-				status = "fail"
+				status = taskStatusFail
 			} else if len(failures) > 0 {
-				status = "partial"
+				status = taskStatusPartial
 			}
 			summary := fmt.Sprintf("手动同步「%s」：%d 域名 / %d 条解析 / 新增 %d 条", srcName, st.Synced, st.Records, st.Imp)
 			if migratedCnt > 0 {

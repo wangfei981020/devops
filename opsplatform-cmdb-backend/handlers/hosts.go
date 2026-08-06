@@ -743,7 +743,7 @@ func startManualRunLog(db *sql.DB, taskKey, summary string) (int64, time.Time) {
 		name = summary
 	}
 	res, err := db.Exec(`INSERT INTO task_run_logs (task_key,name,status,trigger_by,started_at,finished_at)
-		VALUES (?,?,'running','manual',?,?)`, taskKey, name, start, start)
+		VALUES (?,?,?,'manual',?,?)`, taskKey, name, taskStatusRunning, start, start)
 	if err != nil {
 		logx.J("host", "manual_run_log_fail", map[string]any{
 			"task": taskKey, "err": err.Error(), "warn": "手动同步的执行记录没写进去，界面上会看不到这次执行",
@@ -759,9 +759,12 @@ func finishManualRunLog(db *sql.DB, runID int64, start time.Time, err error, sum
 	if runID == 0 {
 		return
 	}
-	status := "success"
+	// ⚠️ 必须和定时任务路径用同一套值。这里原来写的是 "success"/"failed"，
+	// 两个都不在前端的枚举里，于是手动触发的记录在「执行记录」页
+	// 筛「✅ 成功」时一条都看不到（CMDB-20260806-002）。
+	status := taskStatusOK
 	if err != nil {
-		status, summary = "failed", err.Error()
+		status, summary = taskStatusFail, err.Error()
 	}
 	if _, e := db.Exec(`UPDATE task_run_logs SET status=?, summary=?, duration_ms=?, progress='', finished_at=NOW() WHERE id=?`,
 		status, truncate(summary, 250), int(time.Since(start).Milliseconds()), runID); e != nil {
