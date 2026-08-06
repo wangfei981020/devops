@@ -195,6 +195,41 @@ func (h *K8sResourceHandler) NsProjects(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+
+	// 「建议」列的值由后端给，且**必须和「按名称智能填充」用同一套规则**。
+	//
+	//	这一列原来是前端自己算的（一个简陋的 includes 双向包含），
+	//	后来归属逻辑搬到后端（matchNsProject：精确 > 最长前缀 > 平台组件），
+	//	前端那个 suggest() 被删掉了，但模板里的调用漏掉了一处——
+	//	于是每行抛一个 `e.suggest is not a function`，整列静默空白。
+	//	异常发生在 slot 内被 Vue 捕获，其它列正常、页面不白屏，
+	//	只有这一列消失，比整页崩还难发现（CMDB-050）。
+	//
+	//	所以不是把 suggest() 加回前端，而是让后端来给：
+	//	否则「建议」列说 A、点智能填充填成 B，两套判据早晚打架——
+	//	这套系统已经在这上面栽过好几次（巡检口径、总览卡片）。
+	var projects []string
+	if prows, e := h.DB.Query(`SELECT name FROM projects ORDER BY name`); e != nil {
+		// 取不到项目列表 = 算不出建议。这时**整列留空**，不能给一个空字符串
+		// 假装"没有建议"——那是断言，而我们只是没查到。
+		logx.J("ns_project", "suggest_projects_fail", map[string]any{
+			"cluster": cid, "err": e.Error(), "note": "「建议」列本次为空，是查不到项目列表，不是没有可建议的项目"})
+	} else {
+		for prows.Next() {
+			var n string
+			if prows.Scan(&n) == nil && strings.TrimSpace(n) != "" {
+				projects = append(projects, n)
+			}
+		}
+		prows.Close()
+		for _, row := range out {
+			ns, _ := row["name"].(string)
+			p, rule, reason := matchNsProject(ns, projects)
+			row["suggest"] = p
+			row["suggest_rule"] = rule     // exact/prefix/platform/none，前端据此给不同措辞
+			row["suggest_reason"] = reason // 人话解释，鼠标放上去能看见依据
+		}
+	}
 	c.JSON(http.StatusOK, out)
 }
 

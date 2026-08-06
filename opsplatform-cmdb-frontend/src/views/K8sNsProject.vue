@@ -21,8 +21,25 @@
       </div>
       <el-table :data="paged" size="small" v-loading="loading">
         <el-table-column prop="name" label="命名空间" min-width="220" />
-        <el-table-column label="建议" width="160"><template #default="{ row }">
-          <span v-if="suggest(row.name)" class="muted">{{ suggest(row.name) }}</span><span v-else class="muted">—</span>
+        <!-- ⚠️ 这一列的值必须由后端给（row.suggest），不能前端自己算。
+             原来前端有个 suggest() 自己做包含匹配，后来归属规则搬到后端
+             （matchNsProject：精确 > 最长前缀 > 平台组件），前端那个函数被删了，
+             模板这一处调用漏改 → 每行抛 `suggest is not a function`，整列静默空白。
+             异常在 slot 内被 Vue 捕获，其它列正常、页面不白屏，最难发现（CMDB-050）。
+             改用后端值还顺带解决了两套判据的问题：这一列和「按名称智能填充」
+             的预览结果现在必然一致。 -->
+        <el-table-column label="建议" width="190"><template #default="{ row }">
+          <el-tooltip v-if="row.suggest" :content="row.suggest_reason || ''" placement="top">
+            <span class="sug">{{ row.suggest }}</span>
+          </el-tooltip>
+          <!-- 平台组件是"刻意不归属"，和"没匹配到"是两回事，不能都显示成 — -->
+          <el-tooltip v-else-if="row.suggest_rule === 'platform'" :content="row.suggest_reason || ''" placement="top">
+            <span class="muted">平台组件（不归属）</span>
+          </el-tooltip>
+          <el-tooltip v-else-if="row.suggest_rule === 'none'" :content="row.suggest_reason || ''" placement="top">
+            <span class="muted">无法判断</span>
+          </el-tooltip>
+          <span v-else class="muted">—</span>
         </template></el-table-column>
         <el-table-column label="项目归属" min-width="240"><template #default="{ row }">
           <el-select v-model="row.project" filterable clearable placeholder="选项目（空=未分配）" style="width:220px" @change="save(row)">
@@ -166,5 +183,7 @@ onMounted(async () => {
 .page-head { margin-bottom: 14px; }
 .page-title { font-size: 18px; font-weight: 600; }
 .muted { color: #909399; font-size: 12px; }
+/* 有具体建议的用可读的正文色：它是可以直接采纳的值，不是灰掉的附注 */
+.sug { color: var(--el-text-color-regular); font-size: 12px; cursor: help; }
 .bar { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
 </style>

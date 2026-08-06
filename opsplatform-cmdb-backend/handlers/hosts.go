@@ -577,14 +577,14 @@ func (h *HostHandler) SyncProject(c *gin.Context) {
 		// 手动触发也要进「执行记录」——之前只有定时任务写，手动点完在执行记录里
 		// 什么都看不到，用户无从判断到底跑没跑。
 		runID, start := startManualRunLog(h.DB, "host_sync", "手动同步项目 "+projName)
-		_, synced, stale, err := h.syncOneProject(pid, st)
+		r, err := h.syncOneProject(pid, st)
 		e := ""
 		if err != nil {
 			e = err.Error()
 		}
 		h.finishHostSync(st, e)
 		finishManualRunLog(h.DB, runID, start, err,
-			fmt.Sprintf("同步 %s：%d 台在用，已销毁 %d 台", projName, synced, stale))
+			projName+"："+hostSyncSummary(r.Synced, r.Gone, r.NewlyGone))
 	}()
 	c.JSON(http.StatusAccepted, gin.H{"ok": true, "running": true, "msg": "已在后台同步，主机多约 1-3 分钟，完成后自动刷新"})
 }
@@ -635,16 +635,17 @@ func (h *HostHandler) SyncAccount(c *gin.Context) {
 		// 串行跑：各项目虽用各自凭据，但共享 GCP API 配额，并发容易撞限流
 		runID, start := startManualRunLog(h.DB, "host_sync", "手动同步账号下全部项目")
 		var errs []string
-		totalSynced, totalStale := 0, 0
+		totalSynced, totalStale, totalNewlyGone := 0, 0, 0
 		for _, j := range jobs {
-			_, synced, stale, err := h.syncOneProject(j.pid, j.st)
+			r, err := h.syncOneProject(j.pid, j.st)
 			e := ""
 			if err != nil {
 				e = err.Error()
 				errs = append(errs, j.name+": "+e)
 			}
-			totalSynced += synced
-			totalStale += stale
+			totalSynced += r.Synced
+			totalStale += r.Gone
+			totalNewlyGone += r.NewlyGone
 			// 每个项目跑完就结束自己那份进度，前端能逐个看到完成
 			h.finishHostSync(j.st, e)
 		}
@@ -653,7 +654,7 @@ func (h *HostHandler) SyncAccount(c *gin.Context) {
 			runErr = fmt.Errorf("%s", strings.Join(errs, "；"))
 		}
 		finishManualRunLog(h.DB, runID, start, runErr,
-			fmt.Sprintf("同步 %d 个项目：%d 台在用，已销毁 %d 台", len(jobs), totalSynced, totalStale))
+			fmt.Sprintf("同步 %d 个项目：", len(jobs))+hostSyncSummary(totalSynced, totalStale, totalNewlyGone))
 	}()
 	resp := gin.H{"ok": true, "running": true, "projects": len(jobs),
 		"msg": "已在后台同步，主机多约 1-3 分钟，完成后自动刷新"}
@@ -770,43 +771,58 @@ func finishManualRunLog(db *sql.DB, runID int64, start time.Time, err error, sum
 	}
 }
 
+// projectSyncResult 单个 project 的同步结果。
+//
+//	⚠️ 用 struct 而不是并列返回值，是**为了让新增字段不需要改调用点签名**。
+//	上一版给同步结果加「本次新增已销毁」时，只有 1/3 的入口接上了——
+//	另外两处是 `_, synced, stale, err :=`，接住新值要改签名，
+//	比替换一行字符串麻烦，于是就被跳过了。结果同一件事在定时任务那条路径
+//	说得清清楚楚，在**人最常用的手动同步**入口还是老样子（CMDB-20260806-001）。
+type projectSyncResult struct {
+	Name      string
+	Synced    int // 云上还在的台数
+	Gone      int // 累计已销毁（云上查不到）
+	NewlyGone int // 其中本次新判定的
+}
+
 // syncOneProject 同步单个 project 行：解密凭据 → 列实例 → 逐台 upsert(报进度) → 标 stale → 网络资源。
 // st 非空时边跑边更新进度（后台异步用）；scheduler 全量同步传 nil。
-func (h *HostHandler) syncOneProject(pid int64, st *hostSyncState) (name string, synced, stale int, err error) {
+func (h *HostHandler) syncOneProject(pid int64, st *hostSyncState) (res projectSyncResult, err error) {
 	var accountID int
 	var provider, projectID, enc string
 	err = h.DB.QueryRow(`SELECT p.name, p.account_id, p.project_id, COALESCE(p.cred_enc,''), COALESCE(a.provider,'gcp')
 		FROM cloud_account_projects p LEFT JOIN cloud_accounts a ON a.id=p.account_id WHERE p.id=?`, pid).
-		Scan(&name, &accountID, &projectID, &enc, &provider)
+		Scan(&res.Name, &accountID, &projectID, &enc, &provider)
 	if err != nil {
-		return "", 0, 0, fmt.Errorf("项目不存在")
+		return res, fmt.Errorf("项目不存在")
 	}
 	if enc == "" {
-		return name, 0, 0, fmt.Errorf("该项目还没配置 service account 凭据")
+		return res, fmt.Errorf("该项目还没配置 service account 凭据")
 	}
 	credJSON, e := h.Cipher.Decrypt(enc)
 	if e != nil {
-		return name, 0, 0, fmt.Errorf("凭据解密失败")
+		return res, fmt.Errorf("凭据解密失败")
 	}
 	adapter, e := cloudsource.NewAdapter(provider, credJSON)
 	if e != nil {
-		return name, 0, 0, e
+		return res, e
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute) // 上千台也够
 	defer cancel()
 	insts, e := adapter.ListInstances(ctx, projectID)
 	if e != nil {
 		logExec(h.DB, "主机同步写", `UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`, truncate(e.Error(), 250), pid)
-		return name, 0, 0, e
+		return res, e
 	}
 	hsSet(st, func(s *hostSyncState) { s.Total += len(insts) })
 	present := map[string]bool{}
 	for _, in := range insts {
 		present[in.InstanceID] = true
-		h.upsertHost(accountID, name, in)
+		h.upsertHost(accountID, res.Name, in)
 		hsSet(st, func(s *hostSyncState) { s.Done++ })
 	}
-	newlyGone, stale := h.markStaleHosts(accountID, projectID, present)
+	res.NewlyGone, res.Gone = h.markStaleHosts(accountID, projectID, present)
+	res.Synced = len(insts)
 	// 顺带同步该 project 的网络资源（VPC/子网/防火墙/静态IP/负载均衡）
 	//
 	//	⚠️ 这里原来是 `if e == nil { ... }`，**没有 else 分支**——
@@ -832,7 +848,7 @@ func (h *HostHandler) syncOneProject(pid int64, st *hostSyncState) (name string,
 			SyncProjectIAMDNS(h.DB, accountID, projectID, bindings, zones)
 		}
 	}
-	hsSet(st, func(s *hostSyncState) { s.Synced += len(insts); s.Stale += stale })
+	hsSet(st, func(s *hostSyncState) { s.Synced += len(insts); s.Stale += res.Gone })
 	// 结果里必须带上网络资源那一步的成败——只报主机数会让人以为全同步好了
 	//
 	//	⚠️ 文案两处改动（同一个问题的两面）：
@@ -841,13 +857,13 @@ func (h *HostHandler) syncOneProject(pid int64, st *hostSyncState) (name string,
 	//	    甚至以为同步本身出了问题。
 	//	  只报累计数 → 累计 + 本次新增：累计数每轮同步都一样（15、15、15…），
 	//	    既吓人又没有信息量；真正代表云上发生了变化的是**本次新增**。
-	result := hostSyncSummary(len(insts), stale, newlyGone)
+	result := hostSyncSummary(res.Synced, res.Gone, res.NewlyGone)
 	if netErr != "" {
 		result += "；⚠️ 网络资源（VPC/防火墙/负载均衡）未同步：" + truncate(netErr, 120)
 	}
 	logExec(h.DB, "主机同步写", `UPDATE cloud_account_projects SET last_sync_at=NOW(), last_result=? WHERE id=?`,
 		truncate(result, 250), pid)
-	return name, len(insts), stale, nil
+	return res, nil
 }
 
 // SyncAllHostProjects 供定时任务(host_sync)调用：同步所有账号所有 project，返回摘要+失败明细+是否成功。
@@ -868,19 +884,20 @@ func SyncAllHostProjects(db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailu
 	if len(pids) == 0 {
 		return "没有配置云项目，跳过", nil, true
 	}
-	totalSynced, totalStale := 0, 0
+	totalSynced, totalStale, totalNewlyGone := 0, 0, 0
 	var failures []TaskFailure
 	for _, pid := range pids {
-		name, synced, stale, err := h.syncOneProject(pid, nil)
+		r, err := h.syncOneProject(pid, nil)
 		if err != nil {
-			failures = append(failures, TaskFailure{Target: name, Reason: truncate(err.Error(), 150)})
+			failures = append(failures, TaskFailure{Target: r.Name, Reason: truncate(err.Error(), 150)})
 			continue
 		}
-		totalSynced += synced
-		totalStale += stale
+		totalSynced += r.Synced
+		totalStale += r.Gone
+		totalNewlyGone += r.NewlyGone
 	}
 	ok := !(totalSynced == 0 && len(failures) == len(pids)) // 全部项目都失败才算失败
-	msg := fmt.Sprintf("同步 %d 台主机在用（%d 个项目），已销毁 %d 台", totalSynced, len(pids), totalStale)
+	msg := hostSyncSummary(totalSynced, totalStale, totalNewlyGone) + fmt.Sprintf("（%d 个项目）", len(pids))
 	if len(failures) > 0 {
 		msg += fmt.Sprintf("，%d/%d 个项目失败", len(failures), len(pids))
 	}

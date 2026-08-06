@@ -46,6 +46,14 @@ queueMicrotask performance crypto getComputedStyle matchMedia CustomEvent Event
 const BUILTIN_COMPONENTS = new Set(['Transition', 'TransitionGroup', 'Teleport',
   'Suspense', 'KeepAlive', 'Component', 'Slot'])
 
+// 模板表达式里可以直接调、但不在 <script setup> 里定义的东西：
+// Vue 暴露的、$ 开头的实例属性、以及作用域插槽/v-for 变量上的方法调用。
+// 这份名单宁可宽一点——检查 C 的价值在于抓 suggest() 这种"整个名字都不存在"的，
+// 为了多抓几个边角而误报，会让人开始忽略整个脚本。
+const TEMPLATE_GLOBALS = new Set(['$emit', '$slots', '$attrs', '$refs', '$router', '$route',
+  '$t', '$nextTick', '$forceUpdate', 'emit', 'slots', 'attrs',
+  'Boolean', 'Number', 'String', 'Array', 'Object'])
+
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
     if (name === 'node_modules' || name === 'dist' || name.startsWith('.')) continue
@@ -56,8 +64,21 @@ function walk(dir, out = []) {
   return out
 }
 
-const stripComments = (s) =>
-  s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+// 去掉注释、字符串和**正则字面量**。
+//
+//	⚠️ 正则那一条是补的：`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')`（千分位分隔）
+//	里的 `\B(` 会被下面的"函数调用"正则当成调用 `B(`，于是报一个不存在的问题。
+//	误报比不报更糟——防线一旦开始喊狼来了，人就会绕过它，
+//	而这道脚本的存在意义正是拦住那些"构建全绿、运行期才炸"的错。
+const stripNoise = (s) =>
+  s
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+    // 正则字面量：前面是运算符/分隔符才算（避免把除法当正则）
+    .replace(/([=(,:[!&|?{};]\s*)\/(?![/*])(?:\\.|\[(?:\\.|[^\]])*\]|[^/\\\n])+\/[gimsuy]*/g, '$1/RE/')
+    .replace(/`(?:\\.|[^`\\])*`/g, '``')
+    .replace(/'(?:\\.|[^'\\])*'/g, "''")
+    .replace(/"(?:\\.|[^"\\])*"/g, '""')
 
 /** 本文件里定义/引入了哪些名字 */
 function collectDefined(script) {
@@ -105,7 +126,7 @@ for (const file of walk(join(ROOT, 'src'))) {
   const scriptM = src.match(/<script[^>]*\bsetup\b[^>]*>([\s\S]*?)<\/script>/)
   if (!scriptM) continue
   const scriptRaw = scriptM[1]
-  const script = stripComments(scriptRaw)
+  const script = stripNoise(scriptRaw)
   const defined = collectDefined(script)
   const rel = relative(ROOT, file)
   const seen = new Set()
@@ -130,6 +151,41 @@ for (const file of walk(join(ROOT, 'src'))) {
       if (seen.has('c:' + comp)) continue
       seen.add('c:' + comp)
       problems.push({ file: rel, kind: '模板用了未 import 的组件', name: comp, line: 0 })
+    }
+  }
+
+  // C. 模板里调了 setup 根本没定义的方法
+  //
+  //	这是"运行期才炸"的第三种变体，前两条都盖不住它，而它最难发现：
+  //	K8sNsProject.vue 的模板调 `suggest(row.name)`，而 setup 里的 suggest()
+  //	在归属逻辑搬到后端时被删了，模板这一处漏改。异常发生在表格 slot 内、
+  //	被 Vue 捕获，**其它列正常、页面不白屏，只有那一列静默空白**——
+  //	比整页崩还难发现，生产上每打开一次刷 40 条 error 也没人注意到（CMDB-050）。
+  if (tplM) {
+    // ⚠️ 只能在**表达式**里找调用，不能扫整个模板。
+    //	模板里的纯文本和 HTML 注释同样长得像调用：
+    //	  正文 `覆盖 K8s(Pod/工作负载/节点)` → 会被当成调用 K8s()
+    //	  注释里举例写的 `suggest()`        → 会被当成真的在调
+    //	两者都误报过。所以先去掉 HTML 注释，再只取插值 {{ }} 和
+    //	指令/绑定/事件（v-* : @）的属性值。
+    const tplNoComment = tplM[1].replace(/<!--[\s\S]*?-->/g, '')
+    const exprs = []
+    const push = (text, idx) => exprs.push({ text: stripNoise(text), idx })
+    for (const m of tplNoComment.matchAll(/\{\{([\s\S]*?)\}\}/g)) push(m[1], m.index)
+    for (const m of tplNoComment.matchAll(/(?::|v-|@)[\w:.\-[\]]*\s*=\s*"([^"]*)"/g)) push(m[1], m.index)
+    for (const m of tplNoComment.matchAll(/(?::|v-|@)[\w:.\-[\]]*\s*=\s*'([^']*)'/g)) push(m[1], m.index)
+
+    for (const { text, idx } of exprs) {
+      for (const m of text.matchAll(/(?<![.\w$?])([A-Za-z_$][\w$]*)\s*\(/g)) {
+        const name = m[1]
+        if (defined.has(name) || BUILTINS.has(name) || MACROS.has(name)) continue
+        if (TEMPLATE_GLOBALS.has(name)) continue
+        if (seen.has('t:' + name)) continue
+        seen.add('t:' + name)
+        const line = src.slice(0, tplM.index).split('\n').length +
+          tplNoComment.slice(0, idx).split('\n').length - 1
+        problems.push({ file: rel, kind: '模板调用了 setup 未定义的方法', name, line })
+      }
     }
   }
 }

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -32,5 +33,53 @@ func TestHostSyncSummary(t *testing.T) {
 
 	if got := hostSyncSummary(25, 15, 3); !strings.Contains(got, "本次新增 3") {
 		t.Errorf("本次新增才是真正的变化信号：%q", got)
+	}
+}
+
+// ⚠️ 这条测的是**调用点有没有接上**，不是函数输出对不对。
+//
+//	上一版加了 hostSyncSummary()，注释还写着"四处共用一份"，
+//	但全仓只有 1 处真的调了它——另外两个手动同步入口仍是各自 fmt.Sprintf
+//	拼字面量，而**手动同步才是人最常用的入口**。
+//	三个用例全过却没拦住，因为单测只验函数输出，验不到"没人调它"
+//	（CMDB-20260806-001）。
+//
+//	所以直接扫源码：包内除了 hostSyncSummary 自己，任何地方都不许再出现
+//	拼这句文案的字面量。漏接会被这条当场按住。
+func TestNoInlineSyncSummaryLiterals(t *testing.T) {
+	src, err := os.ReadFile("hosts.go")
+	if err != nil {
+		t.Skipf("读不到 hosts.go：%v", err)
+	}
+	lines := strings.Split(string(src), "\n")
+	// hostSyncSummary 函数体本身是唯一允许出现这些字面量的地方
+	start, end := -1, -1
+	for i, ln := range lines {
+		if strings.HasPrefix(ln, "func hostSyncSummary(") {
+			start = i
+		} else if start >= 0 && end < 0 && ln == "}" {
+			end = i
+		}
+	}
+	if start < 0 {
+		t.Fatal("找不到 hostSyncSummary，这条防线失效了")
+	}
+
+	// 这些片段一旦在别处出现，说明有人又在手拼同步结果文案
+	banned := []string{`台在用`, `已销毁 %d`, `本次新增`, `失效 %d`}
+	for i, ln := range lines {
+		if i >= start && i <= end {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(ln), "//") {
+			continue // 注释里提到旧文案是在讲历史，不算
+		}
+		for _, b := range banned {
+			if strings.Contains(ln, b) {
+				t.Errorf("hosts.go:%d 又在手拼同步结果文案 %q：\n  %s\n"+
+					"→ 必须调 hostSyncSummary()，否则各入口说法不一致（这正是 CMDB-20260806-001）",
+					i+1, b, strings.TrimSpace(ln))
+			}
+		}
 	}
 }
