@@ -21,6 +21,11 @@ type ScheduleEmployee struct {
 	RoleEn      string            `json:"role_en"` // v763: 职位英文名，导出 Excel 的「组别/日期」列用
 	AvatarColor string            `json:"avatarColor"`
 	Shifts      map[string]string `json:"shifts"`
+	// v772: 时区历史（按生效日期升序）。前端按「格子日期」在这个列表里解析该天用哪个时区，
+	// 所以不能只给一个「当前时区」——那样历史月份的换算会被今天的时区追溯改写。
+	Timezones []EmployeeTimezone `json:"timezones"`
+	// Timezone v772: 今天生效的时区，只用于列表里显示一个标签，判定一律走 Timezones
+	Timezone string `json:"timezone"`
 }
 
 // HandleGetSchedule 获取排班数据
@@ -56,7 +61,16 @@ func HandleGetSchedule(w http.ResponseWriter, r *http.Request) {
 	// 使用下个月第1天减1天来获取当月最后一天
 	lastDay := time.Date(year, time.Month(month+1), 0, 0, 0, 0, 0, time.UTC).Day()
 	endDate := fmt.Sprintf("%04d-%02d-%02d", year, month, lastDay)
-	log.Printf("查询排班数据: year=%d, month=%d, startDate=%s, endDate=%s", year, month, startDate, endDate)
+
+	// v772: pad=1 时前后各多取一天。跨时区视图和覆盖空档检查都需要看到边界外的班次——
+	// 1 号凌晨有没有人在岗，取决于上个月最后一天的晚班；不多取这一天就会误报成空档。
+	// 表格只渲染当月，多出来的两天不会影响显示，也不会进统计。
+	if r.URL.Query().Get("pad") == "1" {
+		base := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+		startDate = base.AddDate(0, 0, -1).Format("2006-01-02")
+		endDate = base.AddDate(0, 0, lastDay).Format("2006-01-02")
+	}
+	log.Printf("查询排班数据: year=%d, month=%d, startDate=%s, endDate=%s, pad=%s", year, month, startDate, endDate, r.URL.Query().Get("pad"))
 
 	for i := range employees {
 		shifts, err := getEmployeeShifts(employees[i].ID, startDate, endDate)
@@ -358,6 +372,26 @@ func getScheduleEmployees() ([]ScheduleEmployee, error) {
 		emp.Shifts = make(map[string]string)
 		employees = append(employees, emp)
 	}
+
+	// v772: 挂上时区历史。查不到时区表不让整个排班页挂掉——降级成「全员默认时区」，
+	// 但必须 WARN，否则跨时区视图会安静地按北京时间显示欧洲同事的班次。
+	tzMap, tzErr := getAllEmployeeTimezones()
+	if tzErr != nil {
+		log.Printf("[排班] WARN 读取员工时区历史失败，全员按默认时区 %s 处理: %v", database.ScheduleDefaultTimezone, tzErr)
+	}
+	today := time.Now().Format("2006-01-02")
+	for i := range employees {
+		hist := tzMap[employees[i].ID]
+		if len(hist) == 0 {
+			hist = []EmployeeTimezone{{EmployeeID: employees[i].ID, Timezone: database.ScheduleDefaultTimezone, EffectiveFrom: "1970-01-01"}}
+			if tzErr == nil {
+				log.Printf("[排班] WARN 员工 %s(id=%d) 没有时区记录，按默认 %s 处理", employees[i].Name, employees[i].ID, database.ScheduleDefaultTimezone)
+			}
+		}
+		sortTimezones(hist)
+		employees[i].Timezones = hist
+		employees[i].Timezone = resolveTimezoneAt(hist, today)
+	}
 	return employees, nil
 }
 
@@ -462,6 +496,10 @@ type ShiftConfig struct {
 	TimeEn string `json:"time_en"` // v763: 英文说明，导出 Excel 图例的「时间」列用
 	Color  string `json:"color"`
 	IsDuty bool   `json:"isDuty"`
+	// IsWorking v772: 是否算「有人在岗」，覆盖空档检查用。
+	// ⚠️ 不能拿 IsDuty 顶替：IsDuty 是「值班」（A+ 是值班但 A 不是，两个都算在岗），
+	// 而 OD/OFF/H/PL/SL/AL/CT 这些休假类两个标记都不该为真。
+	IsWorking bool `json:"isWorking"`
 }
 
 // HandleGetShiftConfig 获取班次配置
@@ -472,7 +510,8 @@ func HandleGetShiftConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := database.DB.Query(`
-		SELECT code, label, name, time_range, COALESCE(time_en,''), color, is_duty
+		SELECT code, label, name, time_range, COALESCE(time_en,''), color, is_duty,
+		       COALESCE(is_working, CASE WHEN time_range IS NULL OR time_range = '' OR time_range = '-' THEN 0 ELSE 1 END)
 		FROM schedule_shift_configs
 		ORDER BY sort_order, id
 	`)
@@ -487,7 +526,8 @@ func HandleGetShiftConfig(w http.ResponseWriter, r *http.Request) {
 	var configs []ShiftConfig
 	for rows.Next() {
 		var cfg ShiftConfig
-		if err := rows.Scan(&cfg.Code, &cfg.Label, &cfg.Name, &cfg.Time, &cfg.TimeEn, &cfg.Color, &cfg.IsDuty); err != nil {
+		if err := rows.Scan(&cfg.Code, &cfg.Label, &cfg.Name, &cfg.Time, &cfg.TimeEn, &cfg.Color, &cfg.IsDuty, &cfg.IsWorking); err != nil {
+			log.Printf("[排班] WARN 扫描班次配置失败: %v", err)
 			continue
 		}
 		configs = append(configs, cfg)
@@ -537,10 +577,21 @@ func HandleSaveShiftConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			log.Printf("[排班] 班次 %s 未填英文说明，按时间段兜底为 %q", cfg.Code, timeEn)
 		}
+
+		// v772: 在岗标记与时间段必须自洽——没有可解析的时间段就贡献不了任何覆盖时段，
+		// 标成「在岗」只会让覆盖空档图显示成绿的、实际却没人。这里强制打回并 WARN。
+		isWorking := cfg.IsWorking
+		_, _, parsable := parseShiftTimeRange(cfg.Time)
+		if isWorking && !parsable {
+			log.Printf("[排班] WARN 班次 %s 时间段为 %q 无法解析，「在岗」标记被强制改为否（否则覆盖空档检查会漏报）", cfg.Code, cfg.Time)
+			isWorking = false
+		}
+		warnShiftDSTHazard(cfg.Code, cfg.Time)
+
 		_, err = tx.Exec(`
-			INSERT INTO schedule_shift_configs (code, label, name, time_range, time_en, color, is_duty, sort_order)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`, cfg.Code, cfg.Label, cfg.Name, cfg.Time, timeEn, cfg.Color, cfg.IsDuty, i)
+			INSERT INTO schedule_shift_configs (code, label, name, time_range, time_en, color, is_duty, is_working, sort_order)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, cfg.Code, cfg.Label, cfg.Name, cfg.Time, timeEn, cfg.Color, cfg.IsDuty, isWorking, i)
 		if err != nil {
 			tx.Rollback()
 			http.Error(w, err.Error(), http.StatusInternalServerError)

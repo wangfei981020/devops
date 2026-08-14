@@ -20,6 +20,12 @@ import (
 	"os"
 	"time"
 
+	// v772: 内嵌 IANA 时区库。跨时区排班要校验 Europe/Belgrade 这类时区名，
+	// 而 time.LoadLocation 依赖系统的 /usr/share/zoneinfo —— Alpine 基础镜像里没有这个目录，
+	// 且失败是静默的（只在 err 里）。内嵌进二进制比在 Dockerfile 里装 tzdata 稳，不依赖基础镜像。
+	// ⚠️ 代价：时区规则版本跟 Go 版本绑定。欧盟若真废除夏令时，需要升 Go 重新构建才生效。
+	_ "time/tzdata"
+
 	"opsplatform/database"
 	"opsplatform/handlers"
 	"opsplatform/storage"
@@ -194,6 +200,10 @@ func main() {
 	protected.HandleFunc("/schedule/batch", handlers.HandleBatchUpdateShift).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/schedule/config", handlers.HandleGetShiftConfig).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/schedule/config", handlers.HandleSaveShiftConfig).Methods("POST", "OPTIONS")
+	// v772: 员工时区（跨时区排班）
+	protected.HandleFunc("/schedule/timezones", handlers.HandleGetScheduleTimezones).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/schedule/timezone", handlers.HandleSaveScheduleTimezone).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/schedule/timezone", handlers.HandleDeleteScheduleTimezone).Methods("DELETE", "OPTIONS")
 	protected.HandleFunc("/schedule/contacts", handlers.HandleGetContacts).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/schedule/contacts", handlers.HandleAddContact).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/schedule/contacts/{id}", handlers.HandleUpdateContact).Methods("PUT", "OPTIONS")

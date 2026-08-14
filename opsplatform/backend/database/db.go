@@ -522,6 +522,65 @@ func createTables() error {
 		log.Printf("[排班] WARN 回填班次 time_en 兜底失败: %v", err)
 	}
 
+	// v772: 「是否在岗」标记。跨时区覆盖空档检查要判断哪些班次算有人在岗，
+	// 原有的 is_duty 语义是「值班」不是「在岗」，不能拿来当判据。
+	// 回填规则：time_range 是有效时间段（含「全天」）-> 在岗；'-' / 空 -> 不在岗（OD/OFF/H/PL/SL/AL/CT）。
+	DB.Exec(`ALTER TABLE schedule_shift_configs ADD COLUMN is_working BOOLEAN DEFAULT NULL COMMENT '是否算在岗(覆盖空档检查用)' AFTER is_duty`)
+	if res, err := DB.Exec(`
+		UPDATE schedule_shift_configs
+		SET is_working = CASE
+			WHEN time_range IS NULL OR time_range = '' OR time_range = '-' THEN 0
+			ELSE 1 END
+		WHERE is_working IS NULL
+	`); err == nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			// 回填结果打出来让人能核对，别让判据静默生效
+			rows, qerr := DB.Query(`SELECT code, time_range, is_working FROM schedule_shift_configs ORDER BY sort_order, id`)
+			if qerr == nil {
+				var working, idle []string
+				for rows.Next() {
+					var code, tr string
+					var isWorking bool
+					if rows.Scan(&code, &tr, &isWorking) != nil {
+						continue
+					}
+					if isWorking {
+						working = append(working, fmt.Sprintf("%s(%s)", code, tr))
+					} else {
+						idle = append(idle, code)
+					}
+				}
+				rows.Close()
+				log.Printf("[排班] 回填班次在岗标记 is_working: %d 行 | 在岗=%v | 不在岗=%v", n, working, idle)
+			}
+		}
+	} else {
+		log.Printf("[排班] WARN 回填班次 is_working 失败: %v", err)
+	}
+
+	// v772: 员工时区历史表（跨时区排班）
+	// ⚠️ 存 IANA 时区名（Europe/Belgrade），不存 UTC+2 这种固定偏移——冬夏令时切换后固定偏移会静默错 1 小时。
+	// ⚠️ 时区带生效日期：某人从欧洲搬回北京只是新增一条记录，历史排班的换算结果不会被追溯改写。
+	// 判定某天用哪个时区 = effective_from <= 该日 的最后一条。
+	// 员工表刻意不存「当前时区」冗余列——两处各存一份必然分叉。
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS schedule_employee_timezones (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			employee_id INT NOT NULL,
+			timezone VARCHAR(64) NOT NULL COMMENT 'IANA 时区名，如 Europe/Belgrade',
+			effective_from DATE NOT NULL COMMENT '从这天起生效（员工本人当地日期）',
+			created_by VARCHAR(64) DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uk_emp_from (employee_id, effective_from),
+			INDEX idx_emp (employee_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+	seedScheduleTimezones()
+
 	// 创建排班月度应工作天数配置表（v733: 排班统计分析功能）
 	// 每月一行，管理员手动填写本月应工作天数（用于统计页"达成 / 缺勤 / 超勤"判定）
 	_, err = DB.Exec(`
@@ -1735,6 +1794,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_schedule_export", "schedule:export", "[排班管理] 导出Excel", "允许导出排班表"},
 		{"perm_btn_schedule_reset", "schedule:reset", "[排班管理] 重置排班", "允许重置指定月份的排班数据"},
 		{"perm_btn_schedule_edit_shift", "schedule:edit_shift", "[排班管理] 编辑班次", "允许编辑单个班次"},
+		{"perm_btn_schedule_edit_timezone", "schedule:edit_timezone", "[排班管理] 设置员工时区", "允许设置员工所在时区及其生效日期（影响跨时区视图与覆盖空档判定）"},
 
 		// 排班统计分析
 		{"perm_btn_schedule_analytics_export", "schedule_analytics:export", "[排班统计] 导出Excel", "允许导出排班统计 Excel"},
@@ -2226,5 +2286,71 @@ func initCMDBRoleTemplates() {
 func Close() {
 	if DB != nil {
 		DB.Close()
+	}
+}
+
+// ScheduleDefaultTimezone 排班默认时区。员工没有任何时区记录时按这个算，
+// 保证加时区功能之前的历史排班语义完全不变。
+const ScheduleDefaultTimezone = "Asia/Shanghai"
+
+// scheduleSeedGroupBelgrade v772: ig 组在塞尔维亚，一次性种子用。
+const scheduleSeedGroupBelgrade = "ig"
+
+// seedScheduleTimezones 时区历史的初始回填。
+//
+//	① 每个员工兜底一条 1970-01-01 -> Asia/Shanghai，保证任何日期都能解析出时区；
+//	② ig 组一次性种子成 Europe/Belgrade，生效日期取该组最早的排班记录日期。
+//
+// ② 只在「还没有任何人配过非默认时区」时执行一次，之后管理员在界面上怎么改都不会被覆盖。
+func seedScheduleTimezones() {
+	// ① 兜底基线。唯一键 (employee_id, effective_from) 保证重复执行无副作用。
+	if res, err := DB.Exec(`
+		INSERT IGNORE INTO schedule_employee_timezones (employee_id, timezone, effective_from, created_by)
+		SELECT id, ?, '1970-01-01', 'system' FROM schedule_employees
+	`, ScheduleDefaultTimezone); err == nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			log.Printf("[排班] 时区基线回填: %d 名员工 -> %s (1970-01-01 起)", n, ScheduleDefaultTimezone)
+		}
+	} else {
+		log.Printf("[排班] WARN 时区基线回填失败: %v", err)
+	}
+
+	// ② ig 组种子。已经有人配过非默认时区就不再自动写，避免覆盖人工配置。
+	var configured int
+	if err := DB.QueryRow(`
+		SELECT COUNT(*) FROM schedule_employee_timezones WHERE timezone <> ?
+	`, ScheduleDefaultTimezone).Scan(&configured); err != nil {
+		log.Printf("[排班] WARN 检查已配置时区失败，跳过 ig 组种子: %v", err)
+		return
+	}
+	if configured > 0 {
+		return
+	}
+
+	// 生效日期统一取 ig 组最早的排班记录日期；该组一条排班都没有就用今天
+	var effectiveFrom string
+	if err := DB.QueryRow(`
+		SELECT COALESCE(DATE_FORMAT(MIN(s.shift_date), '%Y-%m-%d'), DATE_FORMAT(CURDATE(), '%Y-%m-%d'))
+		FROM schedule_employees e
+		JOIN schedule_shifts s ON s.employee_id = e.id
+		WHERE LOWER(TRIM(e.group_name)) = ?
+	`, scheduleSeedGroupBelgrade).Scan(&effectiveFrom); err != nil || effectiveFrom == "" {
+		log.Printf("[排班] WARN 取 %s 组最早排班日期失败，跳过时区种子: %v", scheduleSeedGroupBelgrade, err)
+		return
+	}
+
+	res, err := DB.Exec(`
+		INSERT IGNORE INTO schedule_employee_timezones (employee_id, timezone, effective_from, created_by)
+		SELECT id, 'Europe/Belgrade', ?, 'system'
+		FROM schedule_employees WHERE LOWER(TRIM(group_name)) = ?
+	`, effectiveFrom, scheduleSeedGroupBelgrade)
+	if err != nil {
+		log.Printf("[排班] WARN %s 组时区种子写入失败: %v", scheduleSeedGroupBelgrade, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("[排班] %s 组时区种子: %d 人 -> Europe/Belgrade (%s 起)。"+
+			"⚠️ 这是按组别自动推断的，请在排班页「员工 -> 时区」逐人核对生效日期与归属",
+			scheduleSeedGroupBelgrade, n, effectiveFrom)
 	}
 }

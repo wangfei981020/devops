@@ -445,6 +445,38 @@ func writeScheduleSheet(f *excelize.File, sheet string, month time.Time, employe
 		f.SetCellStyle(sheet, nameCell, nameCell, styles.legendCell)
 	}
 
+	// ===== 时区说明 v772 =====
+	// 图例里的时间是「员工本地时间」。不写这句的话，导出的表发给别人，
+	// 欧洲同事的 09:00 会被当成北京 09:00 理解，而这两者差 6~7 小时。
+	tzRow := legendTop + 1 + len(configs) + 1
+	monthStart := fmt.Sprintf("%04d-%02d-01", year, mon)
+	monthEnd := fmt.Sprintf("%04d-%02d-%02d", year, mon, lastDay)
+
+	tzHeadCell, _ := excelize.CoordinatesToCellName(colName, tzRow)
+	f.SetCellValue(sheet, tzHeadCell, "时区 / Time zone")
+	f.SetCellStyle(sheet, tzHeadCell, tzHeadCell, styles.legendHead)
+
+	noteCell, _ := excelize.CoordinatesToCellName(colName, tzRow+1)
+	f.SetCellValue(sheet, noteCell, "上表时间均为员工本地时间 / Times are in each employee's local time")
+	f.SetCellStyle(sheet, noteCell, noteCell, styles.legendCell)
+
+	tzLine := tzRow + 2
+	for _, emp := range employees {
+		atStart := resolveTimezoneAt(emp.Timezones, monthStart)
+		atEnd := resolveTimezoneAt(emp.Timezones, monthEnd)
+		desc := atStart
+		if atStart != atEnd {
+			// 本月内换过时区，两段都写出来，否则看表的人会以为整月都是同一个时区
+			desc = fmt.Sprintf("%s → %s（本月内变更）", atStart, atEnd)
+		}
+		empCell, _ := excelize.CoordinatesToCellName(colName, tzLine)
+		tzCell, _ := excelize.CoordinatesToCellName(colName+1, tzLine)
+		f.SetCellValue(sheet, empCell, emp.Name)
+		f.SetCellValue(sheet, tzCell, desc)
+		f.SetCellStyle(sheet, empCell, tzCell, styles.legendCell)
+		tzLine++
+	}
+
 	// ===== 版式：列宽 / 冻结 / 打印 =====
 	f.SetColWidth(sheet, "A", "A", 14)
 	f.SetColWidth(sheet, "B", "B", 16)

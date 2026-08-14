@@ -21,5 +21,9 @@
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.2",
     "vite": "^7.3.1"
+  },
+  "overridesComment": "nanoid <3.3.17 有死循环漏洞(GHSA-2v37-7h3g-55p8)，经 vite->postcss 传递引入。Dockerfile 构建时会删掉 lockfile 重新 npm install，所以必须锁在 package.json 里，改 lockfile 不起作用。",
+  "overrides": {
+    "nanoid": "^3.3.17"
   }
 }
