@@ -664,13 +664,16 @@ const dayDetail = computed(() => {
 function ddTime(ms, tz) {
   return formatTimeInTz(new Date(ms), tz)
 }
-// 班次的实际时段文字；跨到次日的把日期也带上，否则「00:00」看不出是哪天
+// 班次的实际时段文字。
+// ⚠️ 日期一律带上，不做「同一天就省略」的优化——跨时区下同屏会出现
+// 「8/17 15:00 → 8/18 00:00」和「06:00 – 15:00」两种写法，
+// 后者看不出是哪天，读的人得自己回想这是当天还是次日。统一带日期才不用猜。
 function ddRange(entry, tz) {
   const sd = formatDateInTz(entry.startUtc, tz)
   const ed = formatDateInTz(entry.endUtc, tz)
-  const s = `${formatTimeInTz(entry.startUtc, tz)}`
-  const e = `${formatTimeInTz(entry.endUtc, tz)}`
-  return sd === ed ? `${s} – ${e}` : `${md(sd)} ${s} → ${md(ed)} ${e}`
+  const s = formatTimeInTz(entry.startUtc, tz)
+  const e = formatTimeInTz(entry.endUtc, tz)
+  return `${md(sd)} ${s} → ${md(ed)} ${e}`
 }
 
 const coverageSummary = computed(() => {
@@ -1992,15 +1995,23 @@ watch(activeTab, (tab) => {
         <div class="dd-sec">
           <div class="dd-title">③ 今天的交接点 <span class="dd-sub">谁下、谁上、之后还剩几个人</span></div>
           <div class="dd-chg start">
-            <span class="dd-chg-t">00:00</span>
-            <span class="dd-chg-body">起始在岗</span>
+            <span class="dd-chg-t">
+              <b>{{ md(dayDetail.date) }} 00:00</b>
+              <em v-for="tz in activeTimezones.filter(z => z !== compareTz)" :key="tz">
+                / {{ md(formatDateInTz(new Date(dateStrToUtc(dayDetail.date, 0, compareTz)), tz)) }}
+                {{ ddTime(dateStrToUtc(dayDetail.date, 0, compareTz).getTime(), tz) }}
+              </em>
+            </span>
+            <span class="dd-chg-body">起始在岗（{{ tzShortLabel(compareTz) }} 零点这一刻已在班的人）</span>
             <span class="dd-chg-n" :class="{ zero: dayDetail.startCount === 0 }">{{ dayDetail.startCount }} 人</span>
           </div>
           <div v-for="(c, i) in dayDetail.changes" :key="'ch'+i" class="dd-chg" :class="{ danger: c.after === 0 }">
+            <!-- 日期一律带上：换班时刻在不同时区常常不是同一天，只写时分会看错 -->
             <span class="dd-chg-t">
-              {{ c.atDayEnd ? '24:00' : ddTime(c.t, compareTz) }}
-              <em v-if="c.atDayEnd">次日</em>
-              <em v-for="tz in activeTimezones.filter(z => z !== compareTz)" :key="tz">/ {{ ddTime(c.t, tz) }}</em>
+              <b>{{ md(formatDateInTz(new Date(c.t), compareTz)) }} {{ ddTime(c.t, compareTz) }}</b>
+              <em v-for="tz in activeTimezones.filter(z => z !== compareTz)" :key="tz">
+                / {{ md(formatDateInTz(new Date(c.t), tz)) }} {{ ddTime(c.t, tz) }}
+              </em>
             </span>
             <span class="dd-chg-body">
               <span v-if="c.off.length" class="dd-off">↓ {{ c.off.map(x => x.emp.name + '(' + x.entry.code + ')').join(' ') }}</span>
@@ -3411,7 +3422,9 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 .dd-chg { display: flex; align-items: center; gap: 10px; font-size: 11.5px; padding: 3px 0; }
 .dd-chg + .dd-chg { border-top: 1px dashed var(--border-color); }
 .dd-chg.start { color: var(--text-muted); }
-.dd-chg-t { width: 118px; flex-shrink: 0; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+/* 每个时刻要放「8/17 09:00 / 8/17 03:00」两个时区，比原来宽不少 */
+.dd-chg-t { width: 205px; flex-shrink: 0; font-variant-numeric: tabular-nums; line-height: 1.35; }
+.dd-chg-t b { font-weight: 600; color: var(--text-primary); }
 .dd-chg-t em { font-style: normal; font-weight: 400; color: var(--text-muted); font-size: 10.5px; margin-left: 3px; }
 .dd-chg-body { flex: 1; display: flex; gap: 10px; flex-wrap: wrap; }
 .dd-off { color: #f87171; }
