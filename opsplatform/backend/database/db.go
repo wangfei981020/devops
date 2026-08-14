@@ -579,6 +579,33 @@ func createTables() error {
 	if err != nil {
 		return err
 	}
+	// v774: 班次时间段的「按组 + 时区」覆盖表。
+	// ig 和 sl 不是一家公司，班次口径不同：两边 A(09:00-18:00)、B(15:00-24:00) 一致，
+	// 但 C 不一样——sl 的 C 是 24:00-09:00（当天末尾跨到次日凌晨），
+	// ig 的 C 是 00:00-09:00（当天开头就上）。同一个格子里的 C，两边差一整天。
+	//
+	// ⚠️ 为什么 key 里必须有时区：ig 组也有人在上海（人在国内、属于 ig），
+	// 他按北京口径排班，不能因为组名是 ig 就套用塞尔维亚的班次定义。
+	// 而时区是按日期解析的，所以「某人改时区之前按老口径、之后按新口径」是自动成立的，
+	// 历史排班不需要回溯修改。
+	_, err = DB.Exec(`
+		CREATE TABLE IF NOT EXISTS schedule_shift_overrides (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			group_name VARCHAR(64) NOT NULL COMMENT '组别',
+			timezone VARCHAR(64) NOT NULL COMMENT 'IANA 时区名',
+			code VARCHAR(8) NOT NULL COMMENT '班次代码',
+			time_range VARCHAR(32) NOT NULL COMMENT '该组该时区下这个班次的时间段',
+			name VARCHAR(32) DEFAULT '' COMMENT '该组对这个班次的叫法，空则用全局名称',
+			created_by VARCHAR(64) DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uk_group_tz_code (group_name, timezone, code)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`)
+	if err != nil {
+		return err
+	}
+
 	seedScheduleTimezones()
 
 	// 创建排班月度应工作天数配置表（v733: 排班统计分析功能）

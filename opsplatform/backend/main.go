@@ -204,6 +204,10 @@ func main() {
 	protected.HandleFunc("/schedule/timezones", handlers.HandleGetScheduleTimezones).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/schedule/timezone", handlers.HandleSaveScheduleTimezone).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/schedule/timezone", handlers.HandleDeleteScheduleTimezone).Methods("DELETE", "OPTIONS")
+	// v774: 班次时间段的按组+时区覆盖（ig 的 C 和 sl 的 C 不是一回事）
+	protected.HandleFunc("/schedule/shift-overrides", handlers.HandleGetShiftOverrides).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/schedule/shift-overrides", handlers.HandleSaveShiftOverride).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/schedule/shift-overrides", handlers.HandleDeleteShiftOverride).Methods("DELETE", "OPTIONS")
 	protected.HandleFunc("/schedule/contacts", handlers.HandleGetContacts).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/schedule/contacts", handlers.HandleAddContact).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/schedule/contacts/{id}", handlers.HandleUpdateContact).Methods("PUT", "OPTIONS")

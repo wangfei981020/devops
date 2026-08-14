@@ -79,6 +79,41 @@ const timezoneEmployee = ref(null)
 const timezoneForm = ref({ timezone: 'Asia/Shanghai', effective_from: '' })
 const tzOptionList = timezoneOptions()
 
+// v774: 班次时间段的「按组 + 时区」覆盖。
+// ig 和 sl 不是一家公司，班次口径不同：A/B 一致，C 不同——
+// sl 的一天从 09:00 开始（A→B→C，C 跨到次日凌晨），
+// ig 的一天从 00:00 开始（C→A→B，当天走完）。
+const shiftOverrides = ref([])
+
+// 解析某员工在某天的某个班次到底是什么时间段。
+// ⚠️ 时区按日期解析，所以「改时区之前按老口径、之后按新口径」自动成立，
+// 历史排班不需要回溯修改——这也是覆盖表 key 里必须带时区的原因。
+function resolveShiftDef(emp, dateStr, code) {
+  const base = shiftTypes.value.find(s => s.code === code)
+  if (!base) return null
+  const tz = resolveTimezoneAt(emp.timezones, dateStr)
+  const group = emp.group_name || '未分组'
+  const ov = shiftOverrides.value.find(o => o.group_name === group && o.timezone === tz && o.code === code)
+  if (!ov) return { ...base, tz, overridden: false }
+  return {
+    ...base,
+    time: ov.time_range || base.time,
+    name: ov.name || base.name,
+    tz,
+    overridden: true
+  }
+}
+
+// 某个 (组, 时区) 组合下的完整班次表，供归因、补法、完整性检查复用
+function shiftDefsFor(group, tz) {
+  return shiftTypes.value.map(base => {
+    const ov = shiftOverrides.value.find(o => o.group_name === group && o.timezone === tz && o.code === base.code)
+    return ov
+      ? { ...base, time: ov.time_range || base.time, name: ov.name || base.name, overridden: true }
+      : { ...base, overridden: false }
+  })
+}
+
 // 实际生效的查看时区；'local' 时为空，表示不做重排
 const effectiveViewTz = computed(() => (viewTz.value === 'local' ? '' : viewTz.value))
 // 对照/覆盖基准时区：跨时区视角下就是该时区，本地视角下用北京时间当基准
@@ -162,16 +197,17 @@ const shiftEntries = computed(() => {
     Object.keys(shifts).forEach(srcDate => {
       const code = shifts[srcDate]
       if (!code) return
-      const cfg = shiftTypes.value.find(s => s.code === code) || null
+      // v774: 时间段按 (组 + 该日时区) 解析，不同公司的同一个代码可能不是一回事
+      const cfg = resolveShiftDef(emp, srcDate, code)
       const tz = resolveTimezoneAt(emp.timezones, srcDate)
       const range = cfg ? parseTimeRange(cfg.time) : null
       if (range) {
         const startUtc = dateStrToUtc(srcDate, range.startMin, tz)
         const endUtc = new Date(startUtc.getTime() + range.durationMin * 60000)
-        list.push({ empId: emp.id, empName: emp.name, code, cfg, srcDate, tz, startUtc, endUtc, hasInterval: true, isWorking: !!cfg.isWorking })
+        list.push({ empId: emp.id, empName: emp.name, code, cfg, srcDate, tz, startUtc, endUtc, hasInterval: true, isWorking: !!cfg.isWorking, overridden: !!cfg.overridden })
       } else {
         // 休假类（OD/OFF/H/PL/SL/AL/CT）没有时间段，不参与换算，也不算在岗
-        list.push({ empId: emp.id, empName: emp.name, code, cfg, srcDate, tz, startUtc: null, endUtc: null, hasInterval: false, isWorking: false })
+        list.push({ empId: emp.id, empName: emp.name, code, cfg, srcDate, tz, startUtc: null, endUtc: null, hasInterval: false, isWorking: false, overridden: false })
       }
     })
     out[emp.id] = list
@@ -331,9 +367,12 @@ const activeTimezones = computed(() => {
 // 「24:00-09:00」的晚班是次日 0 点上班，所以某天凌晨的覆盖取决于前一天排了谁，
 // 这也是「格子里明明有 C 却报空档」的真正原因。
 function gapCauses(gap) {
-  const cfgs = shiftTypes.value.filter(s => s.isWorking && parseTimeRange(s.time))
   const cand = {}
-  for (const tz of activeTimezones.value) {
+  // v774: 班次时间段按 (组, 时区) 各不相同，所以要遍历真实存在的组合，
+  // 不能拿全局班次表套到所有时区上——那会算出「贝尔格莱德的 C 是 24:00-09:00」这种
+  // 该组根本不存在的班。
+  for (const { group, tz } of groupTzPairs.value) {
+    const cfgs = shiftDefsFor(group, tz).filter(s => s.isWorking && parseTimeRange(s.time))
     for (const cfg of cfgs) {
       const r = parseTimeRange(cfg.time)
       for (const d of [shiftDate(gap.dateStr, -1), gap.dateStr]) {
@@ -341,7 +380,9 @@ function gapCauses(gap) {
         const e = s + r.durationMin * 60000
         const ov = Math.min(e, gap.endUtc) - Math.max(s, gap.startUtc)
         if (ov <= 0) continue
-        const key = `${d}|${cfg.code}|${tz}`
+        // key 带上时间段：同一时区下若两个组对同一代码的定义相同就合并成一条，
+        // 定义不同（ig 的 C vs sl 的 C）则各算各的，不会互相盖掉
+        const key = `${d}|${cfg.code}|${tz}|${cfg.time}`
         if (!cand[key] || cand[key].hours < ov / 3600000) {
           cand[key] = {
             date: d, code: cfg.code, name: cfg.name, time: cfg.time, tz,
@@ -351,9 +392,12 @@ function gapCauses(gap) {
             // 15:00-24:00 这种是前一天下午上班、跨夜延续过来的。
             prevDay: d !== gap.dateStr,
             startsNextDay: r.startMin >= 1440,
-            // 那天真的有人排这个班吗——排了却仍空档，说明是别的原因
+            // 那天真的有人排这个班吗——排了却仍空档，说明是别的原因。
+            // 必须连时间段一起比：同一个 C，ig 的人和 sl 的人不是同一段时间
             who: employees.value
-              .filter(emp => emp.shifts?.[d] === cfg.code && resolveTimezoneAt(emp.timezones, d) === tz)
+              .filter(emp => emp.shifts?.[d] === cfg.code
+                && resolveTimezoneAt(emp.timezones, d) === tz
+                && resolveShiftDef(emp, d, cfg.code)?.time === cfg.time)
               .map(emp => emp.name)
           }
         }
@@ -395,18 +439,24 @@ const groupTimezones = computed(() => {
   return Object.keys(map).sort().map(name => ({ name, tzs: [...map[name]].sort() }))
 })
 
+// 当月真实存在的 (组, 时区) 组合。班次定义、完整性判定、补法建议都以它为准——
+// 拿全局班次表套所有时区会算出该组根本不存在的班。
+const groupTzPairs = computed(() =>
+  groupTimezones.value.flatMap(g => g.tzs.map(tz => ({ group: g.name, tz })))
+)
+
 // 「这段空档交给哪个组补、该排什么班」。
 // 不指定具体的人——只算出组 + 日期 + 班次，谁去上由人定。
 // 关键在于同一个班次代码落到不同时区是完全不同的绝对时段：
 // C 晚班在北京是 24:00-09:00，在贝尔格莱德也是 24:00-09:00，
 // 但换算成北京时间后一个是 00:00-09:00、另一个是 06:00-15:00，能补的空档不一样。
 function gapFixOptions(gap) {
-  const cfgs = shiftTypes.value.filter(s => s.isWorking && parseTimeRange(s.time))
   const gapHours = (gap.endUtc - gap.startUtc) / 3600000
   return groupTimezones.value.map(group => {
     const seen = {}
     group.tzs.forEach(tz => {
-      cfgs.forEach(cfg => {
+      // v774: 用这个组在这个时区下的真实班次定义
+      shiftDefsFor(group.name, tz).filter(s => s.isWorking && parseTimeRange(s.time)).forEach(cfg => {
         const r = parseTimeRange(cfg.time)
         ;[shiftDate(gap.dateStr, -1), gap.dateStr].forEach(d => {
           const s = dateStrToUtc(d, r.startMin, tz).getTime()
@@ -856,6 +906,21 @@ async function loadShiftConfig() {
       shiftTypes.value = res.data
     }
   } catch (e) { console.error(e) }
+  await loadShiftOverrides()
+}
+
+async function loadShiftOverrides() {
+  try {
+    const res = await api.get('/api/schedule/shift-overrides')
+    shiftOverrides.value = res.data || []
+    if (shiftOverrides.value.length) {
+      console.log('[排班] 班次组覆盖:', shiftOverrides.value.map(o => `${o.group_name}/${o.timezone}/${o.code}=${o.time_range}`).join(', '))
+    }
+  } catch (e) {
+    // 取不到就退回全局定义。必须 warn——静默退回会让 ig 的 C 按 sl 的口径算，差一整天
+    console.warn('[排班] 班次组覆盖读取失败，全部按全局班次定义计算（跨公司班次差异不会生效）', e)
+    shiftOverrides.value = []
+  }
 }
 
 async function updateShift(employeeId, dateStr, shiftType) {
@@ -1084,6 +1149,45 @@ function canBeWorking(cfg) {
   return parseTimeRange(cfg.time) !== null
 }
 
+// ===== v774 班次按组覆盖 =====
+const overrideForm = ref({ group_name: '', timezone: '', code: '', time_range: '', name: '' })
+
+function overrideBaseTime(code) {
+  return shiftTypes.value.find(s => s.code === code)?.time || ''
+}
+
+async function saveShiftOverride() {
+  const f = overrideForm.value
+  if (!f.group_name || !f.timezone || !f.code || !f.time_range) {
+    appStore.showToast('组别、时区、班次、时间段都要填', 'error')
+    return
+  }
+  try {
+    await api.post('/api/schedule/shift-overrides', f)
+    appStore.showToast('已保存', 'success')
+    overrideForm.value = { group_name: '', timezone: '', code: '', time_range: '', name: '' }
+    await loadShiftOverrides()
+  } catch (e) {
+    appStore.showToast('保存失败: ' + (e.response?.data || e.message), 'error')
+  }
+}
+
+async function deleteShiftOverride(o) {
+  const confirmed = await appStore.showConfirm({
+    type: 'danger', title: '删除班次覆盖',
+    message: `确定删除「${o.group_name} · ${o.timezone} · ${o.code} = ${o.time_range}」吗？删除后该组该时区下的 ${o.code} 将改用全局定义 ${overrideBaseTime(o.code)}。`,
+    confirmText: '删除', cancelText: '取消'
+  })
+  if (!confirmed) return
+  try {
+    await api.delete(`/api/schedule/shift-overrides?id=${o.id}`)
+    appStore.showToast('已删除', 'success')
+    await loadShiftOverrides()
+  } catch (e) {
+    appStore.showToast('删除失败: ' + (e.response?.data || e.message), 'error')
+  }
+}
+
 function removeShiftType(idx) {
   if (shiftTypes.value.length <= 1) {
     appStore.showToast('至少保留一个班次', 'warning')
@@ -1239,12 +1343,12 @@ function hasMissingShifts(dateStr) {
 }
 
 // v777: 按「时间段」把在岗班次归成类，同一时间段的班次互为等效。
-// A 早班和 A+ 值班都是 09:00-18:00，排了任一个这个时段就有人，
-// 不该要求两个都排。这样也不用把 A/B/C 写死在代码里——
-// 以后加班次只要时间段不同就自动多一类。
-const workingShiftClasses = computed(() => {
+// A 早班和 A+ 值班都是 09:00-18:00，排了任一个这个时段就有人，不该要求两个都排。
+// v774: 按 (组, 时区) 各算一套——ig 的 C 是 00:00-09:00、sl 的 C 是 24:00-09:00，
+// 归的类不一样，不能混在一起判。
+function workingShiftClassesFor(group, tz) {
   const map = {}
-  shiftTypes.value.forEach(s => {
+  shiftDefsFor(group, tz).forEach(s => {
     if (!s.isWorking || !parseTimeRange(s.time)) return
     const key = String(s.time).trim()
     if (!map[key]) map[key] = { time: key, codes: [], names: [] }
@@ -1252,32 +1356,80 @@ const workingShiftClasses = computed(() => {
     map[key].names.push(s.name)
   })
   return Object.values(map)
+}
+
+// 每个 (组, 时区) 当天缺哪几类班次。
+// ⚠️ 只对「人手够得着」的组合判定：某个组在某个时区的非组长人数少于班次类数时，
+// 它无论怎么排都凑不齐，天天告警等于没有告警——那种情况单独标成「人力不足」。
+const missingByGroupTz = computed(() => {
+  const result = {}
+  daysInMonth.value.forEach(d => {
+    const items = []
+    groupTzPairs.value.forEach(({ group, tz }) => {
+      const members = employees.value.filter(emp =>
+        (emp.group_name || '未分组') === group &&
+        resolveTimezoneAt(emp.timezones, d.dateStr) === tz &&
+        !isLeader(emp))
+      if (members.length === 0) return
+      const classes = workingShiftClassesFor(group, tz)
+      const lack = classes.filter(cls =>
+        !members.some(emp => cls.codes.includes(emp.shifts?.[d.dateStr])))
+      if (!lack.length) return
+      items.push({
+        group, tz, lack,
+        // ⚠️ 判据是「人数 <= 班次类数」而不是「<」：3 个人排 3 个班意味着谁都不能休假，
+        // 只要有一天有人请假就必然缺班，天天弹红标签等于没有告警（狼来了）。
+        // 这种是结构性人力不足，单独汇总提示一次，不在日历上逐天刷屏。
+        understaffed: members.length <= classes.length,
+        headcount: members.length,
+        need: classes.length
+      })
+    })
+    result[d.dateStr] = items
+  })
+  return result
+})
+
+// 结构性人力不足的 (组, 时区)：非组长人数不超过要排的班次类数，谁都不能休假。
+// 这类缺班不在日历上逐天报，而是在这里汇总说一次——否则要么天天刷屏、要么被静默吞掉。
+const understaffedGroups = computed(() => {
+  const map = {}
+  daysInMonth.value.forEach(d => {
+    ;(missingByGroupTz.value[d.dateStr] || []).forEach(it => {
+      if (!it.understaffed) return
+      const key = `${it.group}|${it.tz}`
+      if (!map[key]) map[key] = { group: it.group, tz: it.tz, headcount: it.headcount, need: it.need, days: 0 }
+      map[key].days++
+    })
+  })
+  return Object.values(map).sort((a, b) => b.days - a.days)
 })
 
 // 当天缺哪几类班次（已排除组长）。原来只返回 true/false，页面上只有一层淡黄色，
 // 既不说缺什么也没有悬停说明，等于没人看得懂。
 function missingShiftCodes(dateStr) {
-  const stats = localDailyStats.value[dateStr]
-  if (!stats) return []
-  return workingShiftClasses.value
-    .filter(cls => !cls.codes.some(c => (stats[c] || 0) > 0))
-    // 列宽只有 38px，标签上只显示这一类的主代码，等效代码放悬浮说明里
-    .map(cls => cls.codes[0])
+  const items = missingByGroupTz.value[dateStr] || []
+  // 列宽只有 38px：只显示真正「排得出却没排」的那些，人力不足的不在这里刷屏
+  const codes = new Set()
+  items.filter(it => !it.understaffed).forEach(it => it.lack.forEach(cls => codes.add(cls.codes[0])))
+  return [...codes]
 }
 
 function missingShiftTitle(dateStr) {
-  const lack = workingShiftClasses.value.filter(cls => {
-    const stats = localDailyStats.value[dateStr]
-    return stats && !cls.codes.some(c => (stats[c] || 0) > 0)
+  const items = missingByGroupTz.value[dateStr] || []
+  if (!items.length) return ''
+  const lines = [`${dateStr} 班次缺口（组长不计入）：`]
+  items.forEach(it => {
+    const head = `${it.group} · ${tzShortLabel(it.tz)}`
+    it.lack.forEach(cls => {
+      lines.push(cls.codes.length > 1
+        ? `  ${head} 缺 ${cls.codes.join(' 或 ')}（${cls.time}，排任一个都算）`
+        : `  ${head} 缺 ${cls.codes[0]} ${cls.names[0]}（${cls.time}）`)
+    })
+    if (it.understaffed) {
+      lines.push(`  ⚠️ ${head} 只有 ${it.headcount} 名非组长，要排满 ${it.need} 个时段人不够，不算漏排`)
+    }
   })
-  if (!lack.length) return ''
-  const lines = [`${dateStr} 缺班次：`]
-  lack.forEach(cls => {
-    lines.push(cls.codes.length > 1
-      ? `  ${cls.codes.join(' 或 ')}（${cls.time}，排任一个都算）`
-      : `  ${cls.codes[0]} ${cls.names[0]}（${cls.time}）`)
-  })
-  lines.push('每个时段都要有人；组长不计入，需要非组长的人真正排上')
   return lines.join('\n')
 }
 
@@ -1621,6 +1773,18 @@ watch(activeTab, (tab) => {
       </div>
       <!-- 图例是全局的，不同员工时区不同，这里只能标明口径；具体换算在员工行和格子的悬浮说明里 -->
       <div class="legend-tz-note">时间为员工本地时间</div>
+      <!-- v774: 有组用了不同的班次口径就在图例上说明，否则同一个 C 在表里代表两种时段却毫无提示 -->
+      <!-- v774: 人力结构性不足的组单独说一次。不逐天报，但也不能不报 -->
+      <div v-if="understaffedGroups.length" class="legend-understaffed"
+           :title="understaffedGroups.map(u => `${u.group} · ${tzShortLabel(u.tz)}：${u.headcount} 名非组长要排满 ${u.need} 个时段，本月有 ${u.days} 天排不齐。\n人数不超过班次数意味着谁都不能休假，这是人力配置问题，不是漏排，所以日历上不逐天标红。`).join('\n\n')">
+        ⚠️ {{ understaffedGroups.length }} 个组人力排不满
+        <span class="lon-detail">{{ understaffedGroups.map(u => `${u.group}/${tzShortLabel(u.tz)} ${u.headcount}人排${u.need}班`).join('；') }}</span>
+      </div>
+      <div v-if="shiftOverrides.length" class="legend-override-note"
+           :title="shiftOverrides.map(o => `${o.group_name} · ${tzShortLabel(o.timezone)} 的 ${o.code} = ${o.time_range}${o.name ? '（' + o.name + '）' : ''}，全局是 ${overrideBaseTime(o.code)}`).join('\n')">
+        ⚠️ 有 {{ shiftOverrides.length }} 条按组的班次差异
+        <span class="lon-detail">{{ shiftOverrides.map(o => `${o.group_name} 的 ${o.code}=${o.time_range}`).join('；') }}</span>
+      </div>
     </div>
 
     <div class="schedule-container">
@@ -2173,6 +2337,51 @@ watch(activeTab, (tab) => {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               添加班次
             </button>
+
+            <!-- v774: 按组 + 时区覆盖班次时间段 -->
+            <div class="ov-section">
+              <div class="ov-title">
+                按组覆盖
+                <span class="ov-hint">
+                  不同公司的班次口径可能不一样。比如 sl 的一天从 09:00 开始（C 是 24:00-09:00，跨到次日凌晨），
+                  ig 的一天从 0 点开始（C 是 00:00-09:00，当天就上完）。这里只填不一样的那几个，其余走上面的全局定义。
+                </span>
+              </div>
+
+              <div v-if="shiftOverrides.length" class="ov-list">
+                <div v-for="o in shiftOverrides" :key="o.id" class="ov-item">
+                  <span class="ov-grp">{{ o.group_name }}</span>
+                  <span class="ov-tz">{{ o.timezone }}</span>
+                  <span class="ov-code" :style="getShiftStyle(o.code)">{{ o.code }}</span>
+                  <span class="ov-time">{{ o.time_range }}</span>
+                  <span class="ov-name" v-if="o.name">称作「{{ o.name }}」</span>
+                  <span class="ov-base">全局是 {{ overrideBaseTime(o.code) || '未定义' }}</span>
+                  <button class="ov-del" title="删除，改回全局定义" @click="deleteShiftOverride(o)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div v-else class="ov-empty">还没有任何覆盖，所有组都按上面的全局班次定义计算。</div>
+
+              <div class="ov-form">
+                <select class="cfg-input ov-in-grp" v-model="overrideForm.group_name">
+                  <option value="">选组别</option>
+                  <option v-for="g in groupOptions" :key="g" :value="g">{{ g }}</option>
+                </select>
+                <select class="cfg-input ov-in-tz" v-model="overrideForm.timezone">
+                  <option value="">选时区</option>
+                  <option v-for="tz in tzOptionList" :key="tz" :value="tz">{{ tz }}</option>
+                </select>
+                <select class="cfg-input ov-in-code" v-model="overrideForm.code">
+                  <option value="">选班次</option>
+                  <option v-for="s in shiftTypes" :key="s.code" :value="s.code">{{ s.code }} {{ s.name }}</option>
+                </select>
+                <input type="text" class="cfg-input ov-in-time" v-model="overrideForm.time_range"
+                       :placeholder="overrideForm.code ? '全局: ' + overrideBaseTime(overrideForm.code) : '00:00-09:00'" />
+                <input type="text" class="cfg-input ov-in-name" v-model="overrideForm.name" placeholder="这组的叫法(可空)" />
+                <button type="button" class="btn btn-secondary ov-add" @click="saveShiftOverride">添加覆盖</button>
+              </div>
+            </div>
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-secondary" @click="showConfigModal = false">取消</button>
@@ -3074,6 +3283,48 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 .coverage-hour.thin { background: #a3e635; }
 .coverage-hour.gap { background: #ef4444; }
 
+/* v774: 班次按组覆盖 */
+.ov-section { margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 13px; }
+.ov-title { font-size: 13px; font-weight: 650; color: var(--text-primary); margin-bottom: 8px; }
+.ov-hint { display: block; font-size: 11.5px; font-weight: 400; color: var(--text-muted); line-height: 1.65; margin-top: 3px; }
+.ov-list { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+.ov-item {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 6px;
+  background: var(--bg-primary); font-size: 12px;
+}
+.ov-grp { font-weight: 700; color: var(--text-primary); }
+.ov-tz { color: var(--text-secondary); font-size: 11px; }
+.ov-code {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 18px; border-radius: 4px; font-size: 9px; font-weight: 700;
+}
+.ov-time { font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.ov-name { color: var(--text-secondary); font-size: 11px; }
+.ov-base { color: var(--text-muted); font-size: 10.5px; margin-left: auto; }
+.ov-del { border: none; background: transparent; color: var(--text-muted); cursor: pointer; padding: 2px; }
+.ov-del:hover { color: #ef4444; }
+.ov-del svg { width: 13px; height: 13px; }
+.ov-empty { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; }
+.ov-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* .cfg-input 自带 width:100%，不覆盖的话这几个控件会各占一整行 */
+.ov-form .cfg-input { width: auto; flex: 0 1 auto; padding: 6px 8px; font-size: 12px; }
+.ov-in-grp, .ov-in-code { width: 108px; }
+.ov-in-tz { width: 168px; }
+.ov-in-time { width: 132px; }
+.ov-in-name { width: 128px; }
+.ov-add { flex-shrink: 0; padding: 6px 12px; font-size: 12px; }
+
+.legend-override-note {
+  font-size: 11px; color: #eab308; align-self: center;
+  background: rgba(234, 179, 8, 0.14); border-radius: 4px; padding: 2px 8px; cursor: help;
+}
+.legend-understaffed {
+  font-size: 11px; color: #f87171; align-self: center;
+  background: rgba(239, 68, 68, 0.14); border-radius: 4px; padding: 2px 8px; cursor: help;
+}
+.lon-detail { color: var(--text-muted); margin-left: 5px; }
+
 /* v776: 组内的时区小节。比组标题浅一级，靠左缩进表示层级 */
 .tz-section-row td { background: var(--bg-primary); }
 .tz-section-cell {
@@ -3399,6 +3650,8 @@ body.light-mode .oc-leader { background: rgba(161, 98, 7, 0.14); color: #a16207;
 body.light-mode .oc-flow.off { color: #dc2626; }
 body.light-mode .oc-flow.on { color: #15803d; }
 body.light-mode .group-multi-tz { background: rgba(161, 98, 7, 0.14); color: #a16207; }
+body.light-mode .legend-override-note { background: rgba(161, 98, 7, 0.13); color: #a16207; }
+body.light-mode .legend-understaffed { background: rgba(220, 38, 38, 0.11); color: #dc2626; }
 /* 浅色下 --bg-primary 是透明的，小节行会和白色员工行糊在一起，必须给实底 */
 body.light-mode .tz-section-row td { background: #f8fafc; }
 body.light-mode .tz-section-cell { color: #64748b; }
