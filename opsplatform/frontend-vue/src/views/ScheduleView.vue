@@ -595,6 +595,18 @@ const nextChanges = computed(() => {
   }))
 })
 
+// 换班名单按「组 + 时区」拆开。同一个绝对时刻，A 组在贝尔格莱德是当地 09:00 上班、
+// B 组在上海是当地 15:00 上班——混成一行就看不出谁几点上，也看不出是哪个组。
+function groupChangeEvents(list) {
+  const map = {}
+  list.forEach(x => {
+    const group = x.emp.group_name || '未分组'
+    const key = `${group}|${x.entry.tz}`
+    ;(map[key] ||= { group, tz: x.entry.tz, items: [] }).items.push(x)
+  })
+  return Object.values(map).sort((a, b) => a.group.localeCompare(b.group) || a.tz.localeCompare(b.tz))
+}
+
 function humanDuration(ms) {
   const m = Math.max(0, Math.round(ms / 60000))
   if (m < 60) return `${m} 分钟`
@@ -1543,11 +1555,26 @@ watch(activeTab, (tab) => {
               </b>
               <span class="oc-in">{{ humanDuration(c.inMs) }}后</span>
             </div>
+            <!-- 按组和时区拆行，并给出各自的当地时刻 -->
             <div v-if="c.off.length" class="oc-flow off">
-              下班 <span v-for="x in c.off" :key="'off'+x.emp.id+x.entry.srcDate" class="oc-mini">{{ x.emp.name }}<i>{{ x.entry.code }}</i></span>
+              <span class="oc-flow-tag">下班</span>
+              <div class="oc-flow-groups">
+                <div v-for="g in groupChangeEvents(c.off)" :key="'off'+g.group+g.tz" class="oc-flow-line">
+                  <span class="oc-fg">{{ g.group }}</span>
+                  <span class="oc-ftz">{{ tzShortLabel(g.tz) }} {{ formatTimeInTz(new Date(c.at), g.tz) }}</span>
+                  <span v-for="x in g.items" :key="'off'+x.emp.id+x.entry.srcDate" class="oc-mini">{{ x.emp.name }}<i>{{ x.entry.code }}</i></span>
+                </div>
+              </div>
             </div>
             <div v-if="c.on.length" class="oc-flow on">
-              上班 <span v-for="x in c.on" :key="'on'+x.emp.id+x.entry.srcDate" class="oc-mini">{{ x.emp.name }}<i>{{ x.entry.code }}</i></span>
+              <span class="oc-flow-tag">上班</span>
+              <div class="oc-flow-groups">
+                <div v-for="g in groupChangeEvents(c.on)" :key="'on'+g.group+g.tz" class="oc-flow-line">
+                  <span class="oc-fg">{{ g.group }}</span>
+                  <span class="oc-ftz">{{ tzShortLabel(g.tz) }} {{ formatTimeInTz(new Date(c.at), g.tz) }}</span>
+                  <span v-for="x in g.items" :key="'on'+x.emp.id+x.entry.srcDate" class="oc-mini">{{ x.emp.name }}<i>{{ x.entry.code }}</i></span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -3085,9 +3112,17 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 .oc-change-head b.oc-at { color: var(--text-primary); font-variant-numeric: tabular-nums; font-weight: 600; }
 .oc-sep { color: var(--text-muted); font-weight: 400; margin-right: 4px; }
 .oc-in { font-size: 11px; color: var(--text-muted); }
-.oc-flow { font-size: 11.5px; color: var(--text-secondary); display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.oc-flow { font-size: 11.5px; display: flex; align-items: flex-start; gap: 6px; }
 .oc-flow.off { color: #f87171; }
 .oc-flow.on { color: #4ade80; }
+.oc-flow-tag { flex-shrink: 0; font-weight: 600; }
+.oc-flow-groups { display: flex; flex-direction: column; gap: 1px; }
+.oc-flow-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.oc-fg { color: var(--text-secondary); font-weight: 600; min-width: 30px; }
+.oc-ftz {
+  color: var(--text-muted); font-variant-numeric: tabular-nums;
+  font-size: 10.5px; min-width: 96px;
+}
 .oc-mini { color: var(--text-primary); display: inline-flex; align-items: center; gap: 3px; }
 .oc-mini i { font-style: normal; font-size: 9px; color: var(--text-muted); }
 
