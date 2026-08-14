@@ -550,6 +550,28 @@ func HandleSaveShiftConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// v775: 先查重再写。code 是唯一键，重复的话 MySQL 会报
+	// "Duplicate entry 'C' for key 'uk_code'"，这串东西对用户毫无意义，
+	// 而且它出现的典型场景是「想给某个组配不同的 C，就在全局表里又加了一个 C」——
+	// 那本来就该用班次的按组覆盖，不该在全局表里放两个同名代码。
+	seenCode := map[string]bool{}
+	for _, cfg := range configs {
+		code := strings.TrimSpace(cfg.Code)
+		if code == "" {
+			http.Error(w, "班次代码不能为空", http.StatusBadRequest)
+			return
+		}
+		if seenCode[code] {
+			log.Printf("[排班] WARN 班次配置里有重复代码 %q，已拒绝保存", code)
+			http.Error(w, fmt.Sprintf(
+				"班次代码 %q 重复了。同一个代码只能有一条全局定义；"+
+					"如果是想让某个组的 %s 用不同的时间段，请用下方「按组覆盖」，不要在这里加第二个 %s。",
+				code, code, code), http.StatusBadRequest)
+			return
+		}
+		seenCode[code] = true
+	}
+
 	// 开始事务
 	tx, err := database.DB.Begin()
 	if err != nil {

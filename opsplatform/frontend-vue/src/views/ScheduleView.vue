@@ -73,6 +73,8 @@ const customTz = ref('')
 const browserTz = browserTimezone()
 const showCoverage = ref(true)
 const coverageDetailDate = ref('')
+// 空档汇总默认收起——它有好几屏高，展开着会把单日拆解挤到看不见的地方
+const gapSummaryOpen = ref(false)
 // 员工时区弹窗
 const showTimezoneModal = ref(false)
 const timezoneEmployee = ref(null)
@@ -341,6 +343,14 @@ function gapInZone(gap, tz) {
   return { time: t, note: md(sd) }
 }
 
+// 空档段在某时区的简写钟点，如 18-03。日历列宽只有 38px，只能放缩写；
+// 完整时间（含跨天日期）在悬浮说明和下方汇总里。
+function gapShortInZone(gap, tz) {
+  const s = formatTimeInTz(new Date(gap.startUtc), tz).slice(0, 2)
+  const e = formatTimeInTz(new Date(gap.endUtc), tz).slice(0, 2)
+  return `${s}-${e}`
+}
+
 function shiftDate(dateStr, delta) {
   const [y, m, d] = dateStr.split('-').map(Number)
   const dt = new Date(Date.UTC(y, m - 1, d + delta))
@@ -567,15 +577,101 @@ function toggleCoverageDetail(dateStr) {
   coverageDetailDate.value = coverageDetailDate.value === dateStr ? '' : dateStr
 }
 
-const coverageDetailHours = computed(() => {
+// v777: 某一天的完整拆解。分两段看，缺一不可：
+//  ① 今天这 24 小时谁在岗——含前一天延续过来的班（凌晨那几个小时几乎都是前一天排的）
+//  ② 今天格子里排的班分别落到哪里——ig 的中班会溢出到次日 00:00，
+//     sl 的晚班整段都在次日，只看①的话根本看不出「今天排的夜班岗位有没有人」
+// 再加交接点，把人数掉到 0 的时刻直接标出来。
+const dayDetail = computed(() => {
   const d = coverageDetailDate.value
-  if (!d) return []
-  return (coverageByDay.value[d] || []).map((who, h) => ({
-    hour: `${String(h).padStart(2, '0')}:00`,
-    count: who.length,
-    who: who.join('、')
-  }))
+  if (!d) return null
+  const tz = compareTz.value
+  const dayStart = dateStrToUtc(d, 0, tz).getTime()
+  const dayEnd = dateStrToUtc(d, 1440, tz).getTime()
+  const span = dayEnd - dayStart || 1
+
+  // ① 覆盖今天的班次（可能来自前一天，也可能延续到明天）
+  const onDuty = []
+  employees.value.forEach(emp => {
+    ;(shiftEntries.value[emp.id] || []).forEach(e => {
+      if (!e.hasInterval || !e.isWorking) return
+      const s = e.startUtc.getTime()
+      const en = e.endUtc.getTime()
+      if (s >= dayEnd || en <= dayStart) return
+      onDuty.push({
+        emp, entry: e,
+        fromPrev: e.srcDate !== d,
+        left: Math.max(0, (s - dayStart) / span * 100),
+        width: Math.max(1, (Math.min(en, dayEnd) - Math.max(s, dayStart)) / span * 100),
+        cutLeft: s < dayStart,
+        cutRight: en > dayEnd
+      })
+    })
+  })
+  onDuty.sort((a, b) => a.entry.startUtc - b.entry.startUtc)
+
+  // ② 今天格子里排的（含休假，也含实际整段落在明天的）
+  const scheduled = []
+  employees.value.forEach(emp => {
+    const code = emp.shifts?.[d]
+    if (!code) return
+    const e = (shiftEntries.value[emp.id] || []).find(x => x.srcDate === d)
+    scheduled.push({
+      emp, code, entry: e,
+      // 这条排的班有没有整段落在今天之外——正是「今天排的夜班明天才干活」那种情况
+      spillsToNextDay: !!e && e.hasInterval && e.startUtc.getTime() >= dayEnd
+    })
+  })
+
+  // ③ 交接点：今天范围内每个上下班时刻，谁上谁下、之后剩几个
+  const evs = []
+  employees.value.forEach(emp => {
+    ;(shiftEntries.value[emp.id] || []).forEach(e => {
+      if (!e.hasInterval || !e.isWorking) return
+      const s = e.startUtc.getTime()
+      const en = e.endUtc.getTime()
+      if (s >= dayStart && s < dayEnd) evs.push({ t: s, type: 'on', emp, entry: e })
+      if (en > dayStart && en <= dayEnd) evs.push({ t: en, type: 'off', emp, entry: e })
+    })
+  })
+  const grouped = {}
+  evs.forEach(x => { (grouped[x.t] ||= []).push(x) })
+  // 零点那一刻已经在岗的人数：必须严格「早于」00:00 开始的才算。
+  // 用 <= 会把 00:00 整点上班的人算进起始人数，而他同时又出现在 00:00 那个交接点里，
+  // 于是一个人被数两遍，后面每一步的人数全部偏大。
+  let cur = onDuty.filter(o => o.entry.startUtc.getTime() < dayStart).length
+  const startCount = cur
+  const changes = Object.keys(grouped).map(Number).sort((a, b) => a - b).map(t => {
+    const g = grouped[t]
+    const before = cur
+    g.forEach(x => { cur += x.type === 'on' ? 1 : -1 })
+    return {
+      t, before, after: cur,
+      // 落在当天末尾那一刻的交接，显示成 24:00 并标「次日」——
+      // 直接写 00:00 会和当天开头那个 00:00 混淆
+      atDayEnd: t === dayEnd,
+      on: g.filter(x => x.type === 'on'),
+      off: g.filter(x => x.type === 'off')
+    }
+  })
+
+  return {
+    date: d, tz, onDuty, scheduled, changes, startCount,
+    hours: (coverageByDay.value[d] || []).map((who, h) => ({ h, count: who.length, who }))
+  }
 })
+
+function ddTime(ms, tz) {
+  return formatTimeInTz(new Date(ms), tz)
+}
+// 班次的实际时段文字；跨到次日的把日期也带上，否则「00:00」看不出是哪天
+function ddRange(entry, tz) {
+  const sd = formatDateInTz(entry.startUtc, tz)
+  const ed = formatDateInTz(entry.endUtc, tz)
+  const s = `${formatTimeInTz(entry.startUtc, tz)}`
+  const e = `${formatTimeInTz(entry.endUtc, tz)}`
+  return sd === ed ? `${s} – ${e}` : `${md(sd)} ${s} → ${md(ed)} ${e}`
+}
 
 const coverageSummary = computed(() => {
   let gapDays = 0
@@ -833,25 +929,6 @@ function isLeader(emp) {
   const role = emp.role || ''
   return role.includes('组长') || /leader/i.test(role)
 }
-
-// 漏排告警恒按员工本人当地日历判定，不随视角变——
-// 跨时区视角下班次会被重新归列，拿它判漏排会满屏误报。
-// ⚠️ v775: 排除组长。组长每天都排 A，算进去的话「今天有没有 A 班」永远成立，
-// 这个检查就等于没有——必须有一个非组长的人真正排 A 才算数。
-const localDailyStats = computed(() => {
-  const stats = {}
-  daysInMonth.value.forEach(d => {
-    const dayStat = {}
-    shiftTypes.value.forEach(t => { dayStat[t.code] = 0 })
-    employees.value.forEach(emp => {
-      if (isLeader(emp)) return
-      const shift = emp.shifts?.[d.dateStr]
-      if (shift) dayStat[shift] = (dayStat[shift] || 0) + 1
-    })
-    stats[d.dateStr] = dayStat
-  })
-  return stats
-})
 
 // 给底部"统计"格用：按 shiftTypes 顺序返回 [{code, count, color}, ...]，只含非零
 function dailyStatItems(dateStr) {
@@ -1128,12 +1205,28 @@ function goToToday() {
 }
 
 async function saveShiftConfig() {
+  // 前端先查一遍重复代码，不用等后端来回一趟才知道哪里错了
+  const seen = {}
+  for (const s of shiftTypes.value) {
+    const code = String(s.code || '').trim()
+    if (!code) {
+      appStore.showToast('有班次没填代码', 'error')
+      return
+    }
+    if (seen[code]) {
+      appStore.showToast(`班次代码「${code}」重复了。同一个代码只能有一条全局定义；想让某个组用不同时间段请用下方「按组覆盖」`, 'error')
+      return
+    }
+    seen[code] = true
+  }
   try {
     await api.post('/api/schedule/config', shiftTypes.value)
     showConfigModal.value = false
     appStore.showToast('班次配置已保存', 'success')
+    await loadShiftConfig()
   } catch (e) {
-    appStore.showToast('保存失败', 'error')
+    // 把后端说的原因带出来。原来只显示「保存失败」，等于让人自己猜
+    appStore.showToast('保存失败: ' + (e.response?.data || e.message), 'error')
   }
 }
 
@@ -1335,102 +1428,6 @@ async function resetSchedule() {
     console.error('重置排班失败:', e)
     appStore.showToast('重置排班失败: ' + (e.response?.data || e.message), 'error')
   }
-}
-
-function hasMissingShifts(dateStr) {
-  // v772: 用本地口径。跨时区视角下班次会重新归列，拿视角口径判漏排会满屏误报
-  return missingShiftCodes(dateStr).length > 0
-}
-
-// v777: 按「时间段」把在岗班次归成类，同一时间段的班次互为等效。
-// A 早班和 A+ 值班都是 09:00-18:00，排了任一个这个时段就有人，不该要求两个都排。
-// v774: 按 (组, 时区) 各算一套——ig 的 C 是 00:00-09:00、sl 的 C 是 24:00-09:00，
-// 归的类不一样，不能混在一起判。
-function workingShiftClassesFor(group, tz) {
-  const map = {}
-  shiftDefsFor(group, tz).forEach(s => {
-    if (!s.isWorking || !parseTimeRange(s.time)) return
-    const key = String(s.time).trim()
-    if (!map[key]) map[key] = { time: key, codes: [], names: [] }
-    map[key].codes.push(s.code)
-    map[key].names.push(s.name)
-  })
-  return Object.values(map)
-}
-
-// 每个 (组, 时区) 当天缺哪几类班次。
-// ⚠️ 只对「人手够得着」的组合判定：某个组在某个时区的非组长人数少于班次类数时，
-// 它无论怎么排都凑不齐，天天告警等于没有告警——那种情况单独标成「人力不足」。
-const missingByGroupTz = computed(() => {
-  const result = {}
-  daysInMonth.value.forEach(d => {
-    const items = []
-    groupTzPairs.value.forEach(({ group, tz }) => {
-      const members = employees.value.filter(emp =>
-        (emp.group_name || '未分组') === group &&
-        resolveTimezoneAt(emp.timezones, d.dateStr) === tz &&
-        !isLeader(emp))
-      if (members.length === 0) return
-      const classes = workingShiftClassesFor(group, tz)
-      const lack = classes.filter(cls =>
-        !members.some(emp => cls.codes.includes(emp.shifts?.[d.dateStr])))
-      if (!lack.length) return
-      items.push({
-        group, tz, lack,
-        // ⚠️ 判据是「人数 <= 班次类数」而不是「<」：3 个人排 3 个班意味着谁都不能休假，
-        // 只要有一天有人请假就必然缺班，天天弹红标签等于没有告警（狼来了）。
-        // 这种是结构性人力不足，单独汇总提示一次，不在日历上逐天刷屏。
-        understaffed: members.length <= classes.length,
-        headcount: members.length,
-        need: classes.length
-      })
-    })
-    result[d.dateStr] = items
-  })
-  return result
-})
-
-// 结构性人力不足的 (组, 时区)：非组长人数不超过要排的班次类数，谁都不能休假。
-// 这类缺班不在日历上逐天报，而是在这里汇总说一次——否则要么天天刷屏、要么被静默吞掉。
-const understaffedGroups = computed(() => {
-  const map = {}
-  daysInMonth.value.forEach(d => {
-    ;(missingByGroupTz.value[d.dateStr] || []).forEach(it => {
-      if (!it.understaffed) return
-      const key = `${it.group}|${it.tz}`
-      if (!map[key]) map[key] = { group: it.group, tz: it.tz, headcount: it.headcount, need: it.need, days: 0 }
-      map[key].days++
-    })
-  })
-  return Object.values(map).sort((a, b) => b.days - a.days)
-})
-
-// 当天缺哪几类班次（已排除组长）。原来只返回 true/false，页面上只有一层淡黄色，
-// 既不说缺什么也没有悬停说明，等于没人看得懂。
-function missingShiftCodes(dateStr) {
-  const items = missingByGroupTz.value[dateStr] || []
-  // 列宽只有 38px：只显示真正「排得出却没排」的那些，人力不足的不在这里刷屏
-  const codes = new Set()
-  items.filter(it => !it.understaffed).forEach(it => it.lack.forEach(cls => codes.add(cls.codes[0])))
-  return [...codes]
-}
-
-function missingShiftTitle(dateStr) {
-  const items = missingByGroupTz.value[dateStr] || []
-  if (!items.length) return ''
-  const lines = [`${dateStr} 班次缺口（组长不计入）：`]
-  items.forEach(it => {
-    const head = `${it.group} · ${tzShortLabel(it.tz)}`
-    it.lack.forEach(cls => {
-      lines.push(cls.codes.length > 1
-        ? `  ${head} 缺 ${cls.codes.join(' 或 ')}（${cls.time}，排任一个都算）`
-        : `  ${head} 缺 ${cls.codes[0]} ${cls.names[0]}（${cls.time}）`)
-    })
-    if (it.understaffed) {
-      lines.push(`  ⚠️ ${head} 只有 ${it.headcount} 名非组长，要排满 ${it.need} 个时段人不够，不算漏排`)
-    }
-  })
-  return lines.join('\n')
 }
 
 function hasDutyPerson(dateStr) {
@@ -1774,12 +1771,6 @@ watch(activeTab, (tab) => {
       <!-- 图例是全局的，不同员工时区不同，这里只能标明口径；具体换算在员工行和格子的悬浮说明里 -->
       <div class="legend-tz-note">时间为员工本地时间</div>
       <!-- v774: 有组用了不同的班次口径就在图例上说明，否则同一个 C 在表里代表两种时段却毫无提示 -->
-      <!-- v774: 人力结构性不足的组单独说一次。不逐天报，但也不能不报 -->
-      <div v-if="understaffedGroups.length" class="legend-understaffed"
-           :title="understaffedGroups.map(u => `${u.group} · ${tzShortLabel(u.tz)}：${u.headcount} 名非组长要排满 ${u.need} 个时段，本月有 ${u.days} 天排不齐。\n人数不超过班次数意味着谁都不能休假，这是人力配置问题，不是漏排，所以日历上不逐天标红。`).join('\n\n')">
-        ⚠️ {{ understaffedGroups.length }} 个组人力排不满
-        <span class="lon-detail">{{ understaffedGroups.map(u => `${u.group}/${tzShortLabel(u.tz)} ${u.headcount}人排${u.need}班`).join('；') }}</span>
-      </div>
       <div v-if="shiftOverrides.length" class="legend-override-note"
            :title="shiftOverrides.map(o => `${o.group_name} · ${tzShortLabel(o.timezone)} 的 ${o.code} = ${o.time_range}${o.name ? '（' + o.name + '）' : ''}，全局是 ${overrideBaseTime(o.code)}`).join('\n')">
         ⚠️ 有 {{ shiftOverrides.length }} 条按组的班次差异
@@ -1806,12 +1797,10 @@ watch(activeTab, (tab) => {
               <th class="sticky-name">姓名</th>
               <th class="sticky-role">职位</th>
               <th v-for="d in daysInMonth" :key="d.dateStr" class="th-day"
-                  :class="{ weekend: d.isWeekend, warning: hasMissingShifts(d.dateStr), today: d.isToday, 'gap-col': showCoverage && hasGap(d.dateStr) }"
-                  :title="[missingShiftTitle(d.dateStr), showCoverage && hasGap(d.dateStr) ? coverageDayTitle(d.dateStr) : ''].filter(Boolean).join('\n\n')">
+                  :class="{ weekend: d.isWeekend, today: d.isToday, 'gap-col': showCoverage && hasGap(d.dateStr) }"
+                  :title="showCoverage && hasGap(d.dateStr) ? coverageDayTitle(d.dateStr) : ''">
                 <div class="day-num">{{ d.day }}</div>
                 <div class="day-week">{{ weekDays[d.weekDay] }}</div>
-                <!-- 缺哪个班直接写出来，原来只有一层淡黄色底，没人看得懂 -->
-                <div v-if="hasMissingShifts(d.dateStr)" class="day-missing">缺{{ missingShiftCodes(d.dateStr).join('') }}</div>
               </th>
             </tr>
           </thead>
@@ -1885,7 +1874,7 @@ watch(activeTab, (tab) => {
                 {{ effectiveViewTz ? `在岗(${tzShortLabel(effectiveViewTz)})` : '统计' }}
               </td>
               <td class="sticky-role"></td>
-              <td v-for="d in daysInMonth" :key="d.dateStr" class="td-stats" :class="{ warning: hasMissingShifts(d.dateStr), today: d.isToday }">
+              <td v-for="d in daysInMonth" :key="d.dateStr" class="td-stats" :class="{ today: d.isToday }">
                 <div class="stats-mini">
                   <span v-for="it in dailyStatItems(d.dateStr)" :key="it.code" class="stat-item" :style="{ color: it.color }">
                     {{ it.code }}:{{ it.count }}
@@ -1895,8 +1884,9 @@ watch(activeTab, (tab) => {
             </tr>
             <!-- v772: 覆盖空档条。每天一根 24 格迷你条，红格 = 该小时全组无人在岗 -->
             <tr v-if="showCoverage" class="coverage-row">
-              <td class="sticky-name coverage-label" :title="`以 ${compareTz} 为基准，把每个人的班次按各自时区换算成绝对时间后逐小时数人头。红色 = 该小时无人在岗。`">
+              <td class="sticky-name coverage-label" :title="`以 ${compareTz} 为基准，把每个人的班次按各自时区换算成绝对时间后逐小时数人头。红色 = 该小时无人在岗。\n点任意一天可展开当天的完整拆解。`">
                 覆盖({{ tzShortLabel(compareTz) }})
+                <span class="row-hint">点日期看详情</span>
               </td>
               <td class="sticky-role"></td>
               <td v-for="d in daysInMonth" :key="d.dateStr" class="td-coverage"
@@ -1908,17 +1898,22 @@ watch(activeTab, (tab) => {
                 </div>
               </td>
             </tr>
-            <!-- v773: 空档时段常驻显示，不用点开。列宽只有 38px，用 06-09 的缩写 -->
-            <tr v-if="showCoverage" class="gap-row">
-              <td class="sticky-name gap-label" :title="`有空档的日期整列标红。时段按 ${compareTz} 计，其他时区的对照在下方汇总里。`">
-                空档
+            <!-- v773: 空档时段常驻显示，不用点开。列宽只有 38px，用 06-09 的缩写。
+                 v776: 每个时区各一行——同一段空档在北京和贝尔格莱德是不同的钟点，
+                 只给一个口径的话，另一边的人还得自己换算。 -->
+            <tr v-if="showCoverage" v-for="tz in activeTimezones" :key="'gaprow-' + tz" class="gap-row">
+              <td class="sticky-name gap-label"
+                  :title="`该行时段按 ${tz} 计。同一段空档在不同时区是不同的钟点，所以每个时区各列一行。`">
+                空档<span class="gap-label-tz">{{ tzShortLabel(tz) }}</span>
               </td>
               <td class="sticky-role"></td>
               <td v-for="d in daysInMonth" :key="d.dateStr" class="td-gap"
                   :class="{ today: d.isToday, 'gap-col': hasGap(d.dateStr) }"
                   :title="coverageDayTitle(d.dateStr)" @click="toggleCoverageDetail(d.dateStr)">
                 <template v-if="hasGap(d.dateStr)">
-                  <div v-for="g in coverageGapRanges(d.dateStr)" :key="g.short" class="gap-time">{{ g.short }}</div>
+                  <div v-for="g in coverageGapRanges(d.dateStr)" :key="g.short + tz" class="gap-time">
+                    {{ gapShortInZone(g, tz) }}
+                  </div>
                 </template>
                 <span v-else class="gap-dot">·</span>
               </td>
@@ -1927,14 +1922,107 @@ watch(activeTab, (tab) => {
         </table>
       </div>
 
-      <!-- v773: 空档汇总。按时段聚合成模式，双时区并排，附归因 -->
-      <div v-if="showCoverage && gapPatterns.length > 0" class="gap-summary">
-        <div class="gap-summary-head">
-          <span class="gs-title">空档汇总</span>
-          <span class="gs-sub">时段按 {{ compareTz }} 计；下面每条同时给出其他时区的对照，不用切视角</span>
+      <!-- v777: 某一天的完整拆解。两段式——今天谁在岗 + 今天格子里排的班落到哪里。
+           只看前者的话，「今天排的夜班岗位有没有人」永远看不出来 -->
+      <div v-if="showCoverage && dayDetail" class="day-detail">
+        <div class="dd-head">
+          <span class="dd-date">{{ dayDetail.date }}</span>
+          <span class="dd-gaps" v-if="coverageGaps(dayDetail.date).length">
+            空档 {{ coverageGaps(dayDetail.date).join('、') }}（{{ tzShortLabel(compareTz) }}）
+          </span>
+          <span class="dd-ok" v-else>全天有人在岗</span>
+          <button class="dd-close" @click="coverageDetailDate = ''">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
         </div>
 
-        <div v-for="p in gapPatterns" :key="p.text" class="gap-pattern">
+        <!-- ① 今天这 24 小时谁在岗 -->
+        <div class="dd-sec">
+          <div class="dd-title">① 今天这 24 小时谁在岗 <span class="dd-sub">按 {{ tzShortLabel(compareTz) }} 时间画；灰底=前一天排的班延续过来</span></div>
+          <div class="dd-ruler">
+            <span v-for="h in 9" :key="h" class="dd-tick">{{ String((h-1)*3).padStart(2,'0') }}</span>
+          </div>
+          <div v-if="dayDetail.onDuty.length === 0" class="dd-empty">这一天全天没有任何人在岗</div>
+          <div v-for="(o, i) in dayDetail.onDuty" :key="'od'+i" class="dd-row">
+            <span class="dd-who">
+              {{ o.emp.name }}
+              <i class="dd-code" :style="getShiftStyle(o.entry.code)">{{ o.entry.code }}</i>
+            </span>
+            <span class="dd-track">
+              <i class="dd-bar" :class="{ prev: o.fromPrev, cutl: o.cutLeft, cutr: o.cutRight }"
+                 :style="{ left: o.left + '%', width: o.width + '%' }"></i>
+            </span>
+            <span class="dd-meta">
+              {{ o.emp.group_name || '未分组' }}·{{ tzShortLabel(o.entry.tz) }}
+              <b>{{ ddRange(o.entry, compareTz) }}</b>
+              <em>本人 {{ o.entry.cfg.time }}</em>
+              <span v-if="o.fromPrev" class="dd-prevtag">{{ md(o.entry.srcDate) }} 排的</span>
+            </span>
+          </div>
+          <div class="dd-hours">
+            <span class="dd-hours-label">在岗</span>
+            <i v-for="h in dayDetail.hours" :key="h.h" class="dd-hour"
+               :class="h.count === 0 ? 'zero' : (h.count === 1 ? 'thin' : 'ok')"
+               :title="`${String(h.h).padStart(2,'0')}:00  ${h.count} 人  ${h.who.join('、') || '无人'}`">{{ h.count }}</i>
+          </div>
+        </div>
+
+        <!-- ② 今天格子里排的班，实际落到哪里 -->
+        <div class="dd-sec">
+          <div class="dd-title">② 今天格子里排的班，实际落在哪 <span class="dd-sub">排在今天 ≠ 今天干活，晚班常常整段落在明天</span></div>
+          <div v-if="dayDetail.scheduled.length === 0" class="dd-empty">今天没有任何排班</div>
+          <div v-for="(s, i) in dayDetail.scheduled" :key="'sc'+i" class="dd-line">
+            <span class="dd-who">
+              {{ s.emp.name }}
+              <i class="dd-code" :style="getShiftStyle(s.code)">{{ s.code }}</i>
+            </span>
+            <span class="dd-meta">
+              {{ s.emp.group_name || '未分组' }}·{{ tzShortLabel(resolveTimezoneAt(s.emp.timezones, dayDetail.date)) }}
+              <template v-if="s.entry && s.entry.hasInterval">
+                {{ s.entry.cfg.name }} 本人 {{ s.entry.cfg.time }}
+                → <b>{{ tzShortLabel(compareTz) }} {{ ddRange(s.entry, compareTz) }}</b>
+                <span v-if="s.spillsToNextDay" class="dd-spill">整段落在次日</span>
+              </template>
+              <template v-else>{{ s.entry?.cfg?.name || '' }}（不在岗）</template>
+            </span>
+          </div>
+        </div>
+
+        <!-- ③ 交接点 -->
+        <div class="dd-sec">
+          <div class="dd-title">③ 今天的交接点 <span class="dd-sub">谁下、谁上、之后还剩几个人</span></div>
+          <div class="dd-chg start">
+            <span class="dd-chg-t">00:00</span>
+            <span class="dd-chg-body">起始在岗</span>
+            <span class="dd-chg-n" :class="{ zero: dayDetail.startCount === 0 }">{{ dayDetail.startCount }} 人</span>
+          </div>
+          <div v-for="(c, i) in dayDetail.changes" :key="'ch'+i" class="dd-chg" :class="{ danger: c.after === 0 }">
+            <span class="dd-chg-t">
+              {{ c.atDayEnd ? '24:00' : ddTime(c.t, compareTz) }}
+              <em v-if="c.atDayEnd">次日</em>
+              <em v-for="tz in activeTimezones.filter(z => z !== compareTz)" :key="tz">/ {{ ddTime(c.t, tz) }}</em>
+            </span>
+            <span class="dd-chg-body">
+              <span v-if="c.off.length" class="dd-off">↓ {{ c.off.map(x => x.emp.name + '(' + x.entry.code + ')').join(' ') }}</span>
+              <span v-if="c.on.length" class="dd-on">↑ {{ c.on.map(x => x.emp.name + '(' + x.entry.code + ')').join(' ') }}</span>
+              <!-- 只有真的掉到 0 才叫「没人接」。有人下班但还剩几个人在岗，不构成断档 -->
+              <span v-if="c.after === 0" class="dd-noone">⚠️ 无人在岗</span>
+            </span>
+            <span class="dd-chg-n" :class="{ zero: c.after === 0 }">{{ c.before }} → {{ c.after }} 人</span>
+          </div>
+        </div>
+      </div>
+      <!-- v773: 空档汇总。按时段聚合成模式，双时区并排，附归因 -->
+      <div v-if="showCoverage && gapPatterns.length > 0" class="gap-summary">
+        <!-- 默认收起：它很长，展开着的话点日期展开的单日拆解会被挤到很下面 -->
+        <div class="gap-summary-head clickable" @click="gapSummaryOpen = !gapSummaryOpen">
+          <svg class="gs-caret" :class="{ open: gapSummaryOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          <span class="gs-title">空档汇总</span>
+          <span class="gs-count">{{ gapPatterns.length }} 种时段 · 共 {{ coverageSummary }} 天</span>
+          <span class="gs-sub">{{ gapSummaryOpen ? `时段按 ${compareTz} 计；每条同时给出其他时区的对照` : '点开看每段空档的归因和补法' }}</span>
+        </div>
+
+        <div v-show="gapSummaryOpen" v-for="p in gapPatterns" :key="p.text" class="gap-pattern">
           <div class="gp-head">
             <!-- 按空档时长分级：连续 6 小时以上无人和缺 1 小时不是一回事 -->
             <span class="gp-sev" :class="{ partial: p.hours < 6 }">无人在岗 {{ p.hours }} 小时</span>
@@ -2018,7 +2106,7 @@ watch(activeTab, (tab) => {
         </div>
 
         <!-- 全月人手分布：只标 0 人看不出「常年只有 1 人」这种隐患 -->
-        <div class="gp-profile">
+        <div v-show="gapSummaryOpen" class="gp-profile">
           <div class="gpp-title">
             全月每小时在岗人数（{{ tzShortLabel(compareTz) }}）
             <span class="gpp-legend">
@@ -2040,25 +2128,6 @@ watch(activeTab, (tab) => {
       </div>
 
       <!-- v772: 覆盖空档逐小时明细 -->
-      <div v-if="showCoverage && coverageDetailDate" class="coverage-detail">
-        <div class="coverage-detail-head">
-          <span>{{ coverageDetailDate }} 逐小时在岗（{{ compareTz }}）</span>
-          <span class="coverage-detail-gaps" v-if="coverageGaps(coverageDetailDate).length">
-            空档：{{ coverageGaps(coverageDetailDate).join('、') }}
-          </span>
-          <span class="coverage-detail-ok" v-else>全天有人在岗</span>
-          <button class="coverage-detail-close" @click="coverageDetailDate = ''">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
-        <div class="coverage-detail-grid">
-          <div v-for="h in coverageDetailHours" :key="h.hour" class="coverage-detail-cell" :class="{ gap: h.count === 0 }">
-            <div class="cd-hour">{{ h.hour }}</div>
-            <div class="cd-count">{{ h.count }}</div>
-            <div class="cd-who" :title="h.who">{{ h.who || '无人' }}</div>
-          </div>
-        </div>
-      </div>
     </div>
     </template>
 
@@ -3268,8 +3337,13 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
   font-weight: 600;
 }
 .td-coverage { cursor: pointer; padding: 3px 2px !important; }
-.td-coverage:hover { background: var(--bg-hover); }
+/* 这两行是唯一能展开单日拆解的入口，悬停要给足反馈，否则没人知道可以点 */
+.td-coverage:hover, .td-gap:hover { background: var(--bg-hover); outline: 1px solid var(--primary); outline-offset: -1px; }
 .td-coverage.active { outline: 2px solid var(--primary); outline-offset: -2px; }
+.row-hint {
+  display: block; font-size: 9px; font-weight: 400; color: var(--primary);
+  opacity: .85; line-height: 1.2; margin-top: 1px;
+}
 .coverage-bar {
   display: flex;
   height: 10px;
@@ -3282,6 +3356,77 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 /* 只有一个人在岗：不是空档但也没有冗余，单独一档色 */
 .coverage-hour.thin { background: #a3e635; }
 .coverage-hour.gap { background: #ef4444; }
+
+/* v777: 单日拆解面板 */
+.day-detail {
+  margin-top: 10px; border: 1px solid var(--border-color); border-radius: 8px;
+  background: var(--bg-card); overflow: hidden;
+}
+.dd-head {
+  display: flex; align-items: center; gap: 12px; padding: 9px 14px;
+  border-bottom: 1px solid var(--border-color); background: var(--bg-primary); font-size: 12.5px;
+}
+.dd-date { font-weight: 650; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.dd-gaps { color: #f87171; font-weight: 600; }
+.dd-ok { color: #4ade80; font-weight: 600; }
+.dd-close { margin-left: auto; border: none; background: transparent; color: var(--text-muted); cursor: pointer; padding: 2px; }
+.dd-close svg { width: 14px; height: 14px; }
+
+.dd-sec { padding: 11px 14px; }
+.dd-sec + .dd-sec { border-top: 1px solid var(--border-color); }
+.dd-title { font-size: 12px; font-weight: 650; color: var(--text-primary); margin-bottom: 8px; }
+.dd-sub { font-size: 11px; font-weight: 400; color: var(--text-muted); margin-left: 8px; }
+.dd-empty { font-size: 12px; color: var(--text-muted); }
+
+.dd-ruler { display: flex; margin-left: 104px; margin-right: 240px; margin-bottom: 3px; }
+.dd-tick { flex: 1; font-size: 9px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.dd-tick:last-child { flex: 0; }
+.dd-row { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+.dd-who { width: 96px; flex-shrink: 0; font-size: 11.5px; color: var(--text-primary); display: flex; align-items: center; gap: 5px; }
+.dd-code { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 15px; border-radius: 3px; font-size: 8.5px; font-weight: 700; font-style: normal; }
+.dd-track { flex: 1; height: 14px; background: var(--bg-primary); border-radius: 3px; position: relative; overflow: hidden; }
+.dd-bar { position: absolute; top: 0; bottom: 0; background: #3a84ff; border-radius: 3px; }
+.dd-bar.prev { background: #64748b; }
+.dd-bar.cutl { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.dd-bar.cutr { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.dd-meta { width: 232px; flex-shrink: 0; font-size: 10.5px; color: var(--text-muted); display: flex; gap: 5px; flex-wrap: wrap; align-items: baseline; }
+.dd-meta b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.dd-meta em { font-style: normal; opacity: .8; }
+.dd-prevtag { background: rgba(100,116,139,.25); border-radius: 3px; padding: 0 4px; }
+
+.dd-hours { display: flex; align-items: center; gap: 2px; margin-top: 7px; margin-left: 104px; margin-right: 240px; }
+.dd-hours-label { position: absolute; margin-left: -100px; font-size: 10.5px; color: var(--text-secondary); }
+.dd-hour {
+  flex: 1; text-align: center; font-size: 8.5px; font-style: normal;
+  line-height: 15px; border-radius: 2px; color: #0b1220; font-variant-numeric: tabular-nums; cursor: help;
+}
+.dd-hour.ok { background: #22c55e; }
+.dd-hour.thin { background: #eab308; }
+.dd-hour.zero { background: #ef4444; color: #fff; font-weight: 700; }
+
+.dd-line { display: flex; align-items: center; gap: 8px; font-size: 11.5px; margin-bottom: 3px; }
+.dd-line .dd-meta { width: auto; flex: 1; }
+.dd-spill { background: rgba(234,179,8,.18); color: #eab308; border-radius: 3px; padding: 0 5px; font-weight: 600; }
+
+.dd-chg { display: flex; align-items: center; gap: 10px; font-size: 11.5px; padding: 3px 0; }
+.dd-chg + .dd-chg { border-top: 1px dashed var(--border-color); }
+.dd-chg.start { color: var(--text-muted); }
+.dd-chg-t { width: 118px; flex-shrink: 0; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.dd-chg-t em { font-style: normal; font-weight: 400; color: var(--text-muted); font-size: 10.5px; margin-left: 3px; }
+.dd-chg-body { flex: 1; display: flex; gap: 10px; flex-wrap: wrap; }
+.dd-off { color: #f87171; }
+.dd-on { color: #4ade80; }
+.dd-noone { color: #f87171; font-weight: 700; }
+.dd-chg-n { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.dd-chg-n.zero { color: #f87171; font-weight: 700; }
+.dd-chg.danger { background: rgba(239,68,68,.10); }
+
+body.light-mode .dd-gaps, body.light-mode .dd-off, body.light-mode .dd-noone,
+body.light-mode .dd-chg-n.zero { color: #dc2626; }
+body.light-mode .dd-ok, body.light-mode .dd-on { color: #15803d; }
+body.light-mode .dd-spill { background: rgba(161,98,7,.14); color: #a16207; }
+body.light-mode .dd-hour.ok { background: #16a34a; color: #fff; }
+body.light-mode .dd-hour.thin { background: #ca8a04; color: #fff; }
 
 /* v774: 班次按组覆盖 */
 .ov-section { margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 13px; }
@@ -3318,10 +3463,6 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 .legend-override-note {
   font-size: 11px; color: #eab308; align-self: center;
   background: rgba(234, 179, 8, 0.14); border-radius: 4px; padding: 2px 8px; cursor: help;
-}
-.legend-understaffed {
-  font-size: 11px; color: #f87171; align-self: center;
-  background: rgba(239, 68, 68, 0.14); border-radius: 4px; padding: 2px 8px; cursor: help;
 }
 .lon-detail { color: var(--text-muted); margin-left: 5px; }
 
@@ -3414,10 +3555,6 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
   display: inline-block; width: 4px; height: 4px; border-radius: 50%;
   background: #eab308; margin-left: 3px; vertical-align: 2px;
 }
-.day-missing {
-  font-size: 8.5px; font-weight: 700; color: #d97706; line-height: 1.2;
-  letter-spacing: -0.02em;
-}
 
 /* v773: 有空档的日期整列标红，横向扫一眼就能定位 */
 .gap-col { background: rgba(239, 68, 68, 0.15) !important; }
@@ -3427,6 +3564,7 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 /* v773: 空档时段常驻行。列宽 38px，用 06-09 缩写 */
 .gap-row td { background: var(--bg-card); }
 .gap-label { font-size: 11px; font-weight: 600; color: #ef4444; }
+.gap-label-tz { font-weight: 400; color: var(--text-muted); font-size: 9.5px; margin-left: 4px; }
 .td-gap { cursor: pointer; padding: 2px 1px !important; line-height: 1.3; }
 .td-gap:hover { background: var(--bg-hover); }
 .gap-time {
@@ -3450,6 +3588,16 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 }
 .gs-title { font-size: 13px; font-weight: 650; color: var(--text-primary); }
 .gs-sub { font-size: 11.5px; color: var(--text-muted); }
+.gap-summary-head.clickable { cursor: pointer; user-select: none; }
+.gap-summary-head.clickable:hover { background: var(--bg-hover); }
+.gs-caret { width: 13px; height: 13px; color: var(--text-muted); transition: transform .18s; flex-shrink: 0; }
+.gs-caret.open { transform: rotate(90deg); }
+.gs-count {
+  font-size: 11.5px; font-weight: 600; color: #f87171;
+  background: rgba(239, 68, 68, 0.14); border-radius: 4px; padding: 1px 8px;
+}
+body.light-mode .gs-count { background: rgba(220, 38, 38, 0.11); color: #dc2626; }
+@media (prefers-reduced-motion: reduce) { .gs-caret { transition: none; } }
 
 .gap-pattern { padding: 13px 15px; display: flex; flex-direction: column; gap: 10px; }
 .gap-pattern + .gap-pattern { border-top: 1px solid var(--border-color); }
@@ -3546,60 +3694,6 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 .gpp-tick { font-size: 8.5px; color: var(--text-muted); text-align: center; height: 11px; font-variant-numeric: tabular-nums; }
 .gpp-col.bad .gpp-tick { color: #ef4444; font-weight: 600; }
 
-.coverage-detail {
-  margin-top: 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--bg-card);
-  overflow: hidden;
-}
-.coverage-detail-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border-color);
-  font-size: 12px;
-  color: var(--text-primary);
-  font-weight: 600;
-}
-.coverage-detail-gaps { color: #f87171; font-weight: 500; }
-.coverage-detail-ok { color: #4ade80; font-weight: 500; }
-.coverage-detail-close {
-  margin-left: auto;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 2px;
-}
-.coverage-detail-close svg { width: 14px; height: 14px; }
-.coverage-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
-  gap: 6px;
-  padding: 10px 12px;
-}
-.coverage-detail-cell {
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 5px 7px;
-  font-size: 11px;
-  background: var(--bg-primary);
-}
-.coverage-detail-cell.gap {
-  border-color: rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.08);
-}
-.cd-hour { color: var(--text-secondary); font-weight: 600; }
-.cd-count { font-size: 14px; font-weight: 700; color: var(--text-primary); }
-.coverage-detail-cell.gap .cd-count { color: #f87171; }
-.cd-who {
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* 时区弹窗 */
 .timezone-modal { max-width: 480px; }
@@ -3651,14 +3745,10 @@ body.light-mode .oc-flow.off { color: #dc2626; }
 body.light-mode .oc-flow.on { color: #15803d; }
 body.light-mode .group-multi-tz { background: rgba(161, 98, 7, 0.14); color: #a16207; }
 body.light-mode .legend-override-note { background: rgba(161, 98, 7, 0.13); color: #a16207; }
-body.light-mode .legend-understaffed { background: rgba(220, 38, 38, 0.11); color: #dc2626; }
-/* 浅色下 --bg-primary 是透明的，小节行会和白色员工行糊在一起，必须给实底 */
+body.light-mode /* 浅色下 --bg-primary 是透明的，小节行会和白色员工行糊在一起，必须给实底 */
 body.light-mode .tz-section-row td { background: #f8fafc; }
 body.light-mode .tz-section-cell { color: #64748b; }
 body.light-mode .tzs-name { color: #475569; }
-body.light-mode .coverage-detail-gaps { color: #dc2626; }
-body.light-mode .coverage-detail-ok { color: #16a34a; }
-body.light-mode .coverage-detail-cell.gap .cd-count { color: #dc2626; }
 body.light-mode .gap-col { background: rgba(220, 38, 38, 0.07) !important; }
 body.light-mode .gap-label,
 body.light-mode .gap-time,
