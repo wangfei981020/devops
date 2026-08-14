@@ -630,7 +630,11 @@ const dayDetail = computed(() => {
       if (!e.hasInterval || !e.isWorking) return
       const s = e.startUtc.getTime()
       const en = e.endUtc.getTime()
-      if (s >= dayStart && s < dayEnd) evs.push({ t: s, type: 'on', emp, entry: e })
+      // ⚠️ 上下班两个边界必须对称都取到 dayEnd。
+      // 原来上班写成 s < dayEnd、下班写成 en <= dayEnd，于是当天最后一刻
+      // 只统计了下班的人、漏掉同一刻接班的人（sl 的 C 班正好是次日 00:00 上班），
+      // 人数假掉到 0，把「全天有人在岗」的日子误标成无人接班。
+      if (s >= dayStart && s <= dayEnd) evs.push({ t: s, type: 'on', emp, entry: e })
       if (en > dayStart && en <= dayEnd) evs.push({ t: en, type: 'off', emp, entry: e })
     })
   })
