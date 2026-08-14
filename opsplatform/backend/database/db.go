@@ -2293,64 +2293,27 @@ func Close() {
 // 保证加时区功能之前的历史排班语义完全不变。
 const ScheduleDefaultTimezone = "Asia/Shanghai"
 
-// scheduleSeedGroupBelgrade v772: ig 组在塞尔维亚，一次性种子用。
-const scheduleSeedGroupBelgrade = "ig"
-
-// seedScheduleTimezones 时区历史的初始回填。
+// seedScheduleTimezones 时区历史的初始回填：
+// 每个员工兜底一条 1970-01-01 -> Asia/Shanghai，保证任何日期都能解析出时区。
 //
-//	① 每个员工兜底一条 1970-01-01 -> Asia/Shanghai，保证任何日期都能解析出时区；
-//	② ig 组一次性种子成 Europe/Belgrade，生效日期取该组最早的排班记录日期。
-//
-// ② 只在「还没有任何人配过非默认时区」时执行一次，之后管理员在界面上怎么改都不会被覆盖。
+// ⚠️ v773 移除了「ig 组自动设成 Europe/Belgrade」的一次性种子。
+// 那段按组名猜时区的逻辑造成过真实的错误：生产上 ig 组其实有人在上海，
+// 种子把整组从「该组最早排班日」起写成贝尔格莱德，管理员改回上海后
+// 中间仍留着一段 Belgrade，那几天的班次全部偏移 6 小时，凭空算出一堆覆盖空档。
+// 时区必须由人逐个设置——组名不能用来推断一个人在哪。
+// 这里只回填默认时区基线，不再对任何组做特殊处理。
 func seedScheduleTimezones() {
-	// ① 兜底基线。唯一键 (employee_id, effective_from) 保证重复执行无副作用。
+	// 唯一键 (employee_id, effective_from) 保证重复执行无副作用。
+	// 只补没有记录的员工，不会覆盖任何已有的时区设置。
 	if res, err := DB.Exec(`
 		INSERT IGNORE INTO schedule_employee_timezones (employee_id, timezone, effective_from, created_by)
 		SELECT id, ?, '1970-01-01', 'system' FROM schedule_employees
 	`, ScheduleDefaultTimezone); err == nil {
 		if n, _ := res.RowsAffected(); n > 0 {
-			log.Printf("[排班] 时区基线回填: %d 名员工 -> %s (1970-01-01 起)", n, ScheduleDefaultTimezone)
+			log.Printf("[排班] 时区基线回填: %d 名员工 -> %s (1970-01-01 起)，其余时区请在界面上逐人设置",
+				n, ScheduleDefaultTimezone)
 		}
 	} else {
 		log.Printf("[排班] WARN 时区基线回填失败: %v", err)
-	}
-
-	// ② ig 组种子。已经有人配过非默认时区就不再自动写，避免覆盖人工配置。
-	var configured int
-	if err := DB.QueryRow(`
-		SELECT COUNT(*) FROM schedule_employee_timezones WHERE timezone <> ?
-	`, ScheduleDefaultTimezone).Scan(&configured); err != nil {
-		log.Printf("[排班] WARN 检查已配置时区失败，跳过 ig 组种子: %v", err)
-		return
-	}
-	if configured > 0 {
-		return
-	}
-
-	// 生效日期统一取 ig 组最早的排班记录日期；该组一条排班都没有就用今天
-	var effectiveFrom string
-	if err := DB.QueryRow(`
-		SELECT COALESCE(DATE_FORMAT(MIN(s.shift_date), '%Y-%m-%d'), DATE_FORMAT(CURDATE(), '%Y-%m-%d'))
-		FROM schedule_employees e
-		JOIN schedule_shifts s ON s.employee_id = e.id
-		WHERE LOWER(TRIM(e.group_name)) = ?
-	`, scheduleSeedGroupBelgrade).Scan(&effectiveFrom); err != nil || effectiveFrom == "" {
-		log.Printf("[排班] WARN 取 %s 组最早排班日期失败，跳过时区种子: %v", scheduleSeedGroupBelgrade, err)
-		return
-	}
-
-	res, err := DB.Exec(`
-		INSERT IGNORE INTO schedule_employee_timezones (employee_id, timezone, effective_from, created_by)
-		SELECT id, 'Europe/Belgrade', ?, 'system'
-		FROM schedule_employees WHERE LOWER(TRIM(group_name)) = ?
-	`, effectiveFrom, scheduleSeedGroupBelgrade)
-	if err != nil {
-		log.Printf("[排班] WARN %s 组时区种子写入失败: %v", scheduleSeedGroupBelgrade, err)
-		return
-	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		log.Printf("[排班] %s 组时区种子: %d 人 -> Europe/Belgrade (%s 起)。"+
-			"⚠️ 这是按组别自动推断的，请在排班页「员工 -> 时区」逐人核对生效日期与归属",
-			scheduleSeedGroupBelgrade, n, effectiveFrom)
 	}
 }

@@ -642,8 +642,11 @@ async function saveTimezone() {
       effective_from: timezoneForm.value.effective_from
     })
     appStore.showToast('时区已保存', 'success')
+    // 保存即关闭，和「班次配置」等其他弹窗一致。
+    // 原来留在弹窗里是想让人接着加第二段时区历史，但那是少数情况，
+    // 多数人保存完看不到弹窗关掉会以为没存上。要加多段就再点开一次。
+    showTimezoneModal.value = false
     await loadSchedule()
-    timezoneEmployee.value = employees.value.find(e => e.id === emp.id) || null
   } catch (e) {
     appStore.showToast('保存失败: ' + (e.response?.data || e.message), 'error')
   }
@@ -1235,19 +1238,47 @@ function hasMissingShifts(dateStr) {
   return missingShiftCodes(dateStr).length > 0
 }
 
-// 当天缺哪几个班次（已排除组长）。原来只返回 true/false，页面上只有一层淡黄色，
+// v777: 按「时间段」把在岗班次归成类，同一时间段的班次互为等效。
+// A 早班和 A+ 值班都是 09:00-18:00，排了任一个这个时段就有人，
+// 不该要求两个都排。这样也不用把 A/B/C 写死在代码里——
+// 以后加班次只要时间段不同就自动多一类。
+const workingShiftClasses = computed(() => {
+  const map = {}
+  shiftTypes.value.forEach(s => {
+    if (!s.isWorking || !parseTimeRange(s.time)) return
+    const key = String(s.time).trim()
+    if (!map[key]) map[key] = { time: key, codes: [], names: [] }
+    map[key].codes.push(s.code)
+    map[key].names.push(s.name)
+  })
+  return Object.values(map)
+})
+
+// 当天缺哪几类班次（已排除组长）。原来只返回 true/false，页面上只有一层淡黄色，
 // 既不说缺什么也没有悬停说明，等于没人看得懂。
 function missingShiftCodes(dateStr) {
   const stats = localDailyStats.value[dateStr]
   if (!stats) return []
-  return ['A', 'B', 'C'].filter(c => !stats[c])
+  return workingShiftClasses.value
+    .filter(cls => !cls.codes.some(c => (stats[c] || 0) > 0))
+    // 列宽只有 38px，标签上只显示这一类的主代码，等效代码放悬浮说明里
+    .map(cls => cls.codes[0])
 }
 
 function missingShiftTitle(dateStr) {
-  const miss = missingShiftCodes(dateStr)
-  if (!miss.length) return ''
-  const names = miss.map(c => `${c} ${getShiftInfo(c)?.name || ''}`.trim()).join('、')
-  return `${dateStr} 缺班次：${names}\n（每天 A/B/C 三班都要有人；组长不计入，需要非组长的人真正排上）`
+  const lack = workingShiftClasses.value.filter(cls => {
+    const stats = localDailyStats.value[dateStr]
+    return stats && !cls.codes.some(c => (stats[c] || 0) > 0)
+  })
+  if (!lack.length) return ''
+  const lines = [`${dateStr} 缺班次：`]
+  lack.forEach(cls => {
+    lines.push(cls.codes.length > 1
+      ? `  ${cls.codes.join(' 或 ')}（${cls.time}，排任一个都算）`
+      : `  ${cls.codes[0]} ${cls.names[0]}（${cls.time}）`)
+  })
+  lines.push('每个时段都要有人；组长不计入，需要非组长的人真正排上')
+  return lines.join('\n')
 }
 
 function hasDutyPerson(dateStr) {
