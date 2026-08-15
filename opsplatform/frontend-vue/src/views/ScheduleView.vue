@@ -680,6 +680,12 @@ function ddRange(entry, tz) {
   return `${md(sd)} ${s} → ${md(ed)} ${e}`
 }
 
+// 本月有空档的具体日期。收起状态下只写「共 9 天」而不说是哪几天，
+// 很容易被误读成在说当前展开的那一天，所以直接列出来。
+const gapDays = computed(() =>
+  daysInMonth.value.filter(d => hasGap(d.dateStr)).map(d => d.dateStr)
+)
+
 const coverageSummary = computed(() => {
   let gapDays = 0
   daysInMonth.value.forEach(d => { if (coverageGaps(d.dateStr).length > 0) gapDays++ })
@@ -2033,8 +2039,16 @@ watch(activeTab, (tab) => {
         <div class="gap-summary-head clickable" @click="gapSummaryOpen = !gapSummaryOpen">
           <svg class="gs-caret" :class="{ open: gapSummaryOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           <span class="gs-title">空档汇总</span>
-          <span class="gs-count">{{ gapPatterns.length }} 种时段 · 共 {{ coverageSummary }} 天</span>
-          <span class="gs-sub">{{ gapSummaryOpen ? `时段按 ${compareTz} 计；每条同时给出其他时区的对照` : '点开看每段空档的归因和补法' }}</span>
+          <span class="gs-count">本月 {{ coverageSummary }} 天有空档</span>
+          <!-- 收起时把日期直接列出来，并且可点直接跳到那天的拆解；
+               只写「共 9 天」会让人以为在说当前展开的那一天 -->
+          <span v-if="!gapSummaryOpen" class="gs-days">
+            <button v-for="d in gapDays" :key="d" class="gs-day"
+                    :class="{ active: coverageDetailDate === d }"
+                    :title="`看 ${d} 当天的拆解`"
+                    @click.stop="toggleCoverageDetail(d)">{{ md(d) }}</button>
+          </span>
+          <span class="gs-sub">{{ gapSummaryOpen ? `时段按 ${compareTz} 计；每条同时给出其他时区的对照` : '点日期看当天拆解，点标题看归因和补法' }}</span>
         </div>
 
         <div v-show="gapSummaryOpen" v-for="p in gapPatterns" :key="p.text" class="gap-pattern">
@@ -2617,12 +2631,20 @@ watch(activeTab, (tab) => {
 .legend-time { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
 .legend-duty { background: #ef4444; color: white; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
 
-.schedule-container { flex: 1; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
+/* ⚠️ 不能用 flex: 1。它会把容器强行撑满视口剩余高度，
+   而里面的内容（表格 + 单日拆解 + 收起的空档汇总）往往矮得多，
+   多出来的部分就是一大片空白，看着像页面坏了。
+   改成按内容高度，页面自然收尾。 */
+.schedule-container { flex: 0 0 auto; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
 .loading-state, .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: var(--text-muted); }
 .empty-state svg { width: 48px; height: 48px; margin-bottom: 12px; opacity: 0.5; }
 .empty-state p { font-size: 13px; margin-top: 6px; }
 
-.schedule-table-wrapper { overflow: auto; max-height: calc(100vh - 320px); position: relative; }
+/* ⚠️ 不要设 max-height。原来是 calc(100vh - 320px)，320 是硬编码的——
+   页面上方后来加了「当前在岗」条和班次差异提示，这个魔数就不够了，
+   底部的统计/覆盖/空档几行被截在滚动区里，还造成表格和页面双层滚动。
+   不限高：横向照常滚动，纵向由页面统一滚，表头 sticky 依然生效。 */
+.schedule-table-wrapper { overflow: auto; position: relative; }
 .schedule-table { border-collapse: separate; border-spacing: 0; table-layout: fixed; width: max-content; }
 
 /* 用 colgroup 统一列宽 - 必须与sticky left值一致 */
@@ -3614,6 +3636,16 @@ body.light-mode .dd-hour.thin { background: #ca8a04; color: #fff; }
   background: rgba(239, 68, 68, 0.14); border-radius: 4px; padding: 1px 8px;
 }
 body.light-mode .gs-count { background: rgba(220, 38, 38, 0.11); color: #dc2626; }
+.gs-days { display: flex; gap: 4px; flex-wrap: wrap; }
+.gs-day {
+  font-size: 10.5px; padding: 1px 6px; border-radius: 4px; cursor: pointer;
+  background: rgba(239, 68, 68, 0.12); color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3); font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.gs-day:hover, .gs-day.active { background: #ef4444; color: #fff; }
+body.light-mode .gs-day { background: rgba(220, 38, 38, 0.1); color: #dc2626; border-color: rgba(220, 38, 38, 0.28); }
+body.light-mode .gs-day:hover, body.light-mode .gs-day.active { background: #dc2626; color: #fff; }
 @media (prefers-reduced-motion: reduce) { .gs-caret { transition: none; } }
 
 .gap-pattern { padding: 13px 15px; display: flex; flex-direction: column; gap: 10px; }

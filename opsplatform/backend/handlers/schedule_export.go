@@ -214,6 +214,12 @@ func HandleExportSchedule(w http.ResponseWriter, r *http.Request) {
 	if len(configs) == 0 {
 		log.Printf("[排班导出] WARN 班次配置为空，导出的表将没有颜色和图例")
 	}
+	// v776: 班次的按组覆盖。不带上的话，导出的图例只会写全局定义，
+	// 而 ig 的 C 实际是 00:00-09:00 —— 拿着这张表的人会按 24:00-09:00 理解，差一整天。
+	overrides, ovErr := getShiftOverridesForExport()
+	if ovErr != nil {
+		log.Printf("[排班导出] WARN 读取班次组覆盖失败，图例将只反映全局定义: %v", ovErr)
+	}
 
 	f := excelize.NewFile()
 	defer func() {
@@ -234,7 +240,7 @@ func HandleExportSchedule(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := writeScheduleSheet(f, sheet, m, employees, configs); err != nil {
+		if err := writeScheduleSheet(f, sheet, m, employees, configs, overrides); err != nil {
 			log.Printf("[排班导出] 写 sheet %s 失败: %v", sheet, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -302,6 +308,31 @@ func parseExportMonths(start, end string) ([]time.Time, error) {
 }
 
 // getShiftConfigs 读班次配置（颜色 / 英文说明 / 中文名都在这张表里）
+// getShiftOverridesForExport v776: 导出用的班次组覆盖。
+// 图例只列全局定义的话，ig 的 C 会被写成 24:00-09:00，而他们实际是 00:00-09:00——
+// 拿着这张表排班的人会差一整天，所以必须在表里把差异写清楚。
+func getShiftOverridesForExport() ([]ShiftOverride, error) {
+	rows, err := database.DB.Query(`
+		SELECT group_name, timezone, code, time_range, COALESCE(name,'')
+		FROM schedule_shift_overrides
+		ORDER BY group_name, timezone, code
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []ShiftOverride
+	for rows.Next() {
+		var o ShiftOverride
+		if err := rows.Scan(&o.GroupName, &o.Timezone, &o.Code, &o.TimeRange, &o.Name); err != nil {
+			log.Printf("[排班导出] WARN 扫描班次覆盖失败: %v", err)
+			continue
+		}
+		list = append(list, o)
+	}
+	return list, nil
+}
+
 func getShiftConfigs() ([]ShiftConfig, error) {
 	rows, err := database.DB.Query(`
 		SELECT code, label, name, time_range, COALESCE(time_en,''), color, is_duty
@@ -326,7 +357,7 @@ func getShiftConfigs() ([]ShiftConfig, error) {
 }
 
 // writeScheduleSheet 写一个月的排班表
-func writeScheduleSheet(f *excelize.File, sheet string, month time.Time, employees []ScheduleEmployee, configs []ShiftConfig) error {
+func writeScheduleSheet(f *excelize.File, sheet string, month time.Time, employees []ScheduleEmployee, configs []ShiftConfig, overrides []ShiftOverride) error {
 	styles, err := newExportStyles(f)
 	if err != nil {
 		return err
@@ -445,10 +476,64 @@ func writeScheduleSheet(f *excelize.File, sheet string, month time.Time, employe
 		f.SetCellStyle(sheet, nameCell, nameCell, styles.legendCell)
 	}
 
+	// ===== 班次差异说明 v776 =====
+	// 图例里的时间段是全局定义。某些组的班次口径不一样（ig 的 C 是当天 00:00-09:00，
+	// 全局是 24:00-09:00 跨到次日），不写出来的话看表的人会整整差一天。
+	ovRow := legendTop + 1 + len(configs) + 1
+	// 只列时间段真的和全局不同的。有些覆盖只是为了改叫法（ig 管 09:00-18:00 叫「中班」），
+	// 时段一模一样，写成「= 09:00-18:00（图例为 09:00-18:00）」纯属噪音，
+	// 会把真正有差异的那条（C）淹掉。
+	diffOverrides := make([]ShiftOverride, 0, len(overrides))
+	for _, o := range overrides {
+		base := ""
+		for _, c := range configs {
+			if c.Code == o.Code {
+				base = c.Time
+				break
+			}
+		}
+		if strings.TrimSpace(base) != strings.TrimSpace(o.TimeRange) {
+			diffOverrides = append(diffOverrides, o)
+		}
+	}
+	overrides = diffOverrides
+	if len(overrides) > 0 {
+		headCell, _ := excelize.CoordinatesToCellName(colName, ovRow)
+		f.SetCellValue(sheet, headCell, "班次差异 / Shift differences")
+		f.SetCellStyle(sheet, headCell, headCell, styles.legendHead)
+		ovRow++
+		noteCell, _ := excelize.CoordinatesToCellName(colName, ovRow)
+		f.SetCellValue(sheet, noteCell, "下列组的班次时间段与上方图例不同，以本节为准")
+		f.SetCellStyle(sheet, noteCell, noteCell, styles.legendCell)
+		ovRow++
+		for _, o := range overrides {
+			base := ""
+			for _, c := range configs {
+				if c.Code == o.Code {
+					base = c.Time
+					break
+				}
+			}
+			label := o.Code
+			if o.Name != "" {
+				label = fmt.Sprintf("%s（%s）", o.Code, o.Name)
+			}
+			gCell, _ := excelize.CoordinatesToCellName(colName, ovRow)
+			dCell, _ := excelize.CoordinatesToCellName(colName+1, ovRow)
+			f.SetCellValue(sheet, gCell, fmt.Sprintf("%s / %s", o.GroupName, o.Timezone))
+			f.SetCellValue(sheet, dCell, fmt.Sprintf("%s = %s（图例为 %s）", label, o.TimeRange, base))
+			f.SetCellStyle(sheet, gCell, dCell, styles.legendCell)
+			ovRow++
+		}
+		ovRow++
+		log.Printf("[排班导出] sheet=%s 写入班次差异说明 %d 条", sheet, len(overrides))
+	}
+
 	// ===== 时区说明 v772 =====
 	// 图例里的时间是「员工本地时间」。不写这句的话，导出的表发给别人，
 	// 欧洲同事的 09:00 会被当成北京 09:00 理解，而这两者差 6~7 小时。
-	tzRow := legendTop + 1 + len(configs) + 1
+	// 接在班次差异块之后。原来是从图例末尾硬算的，加了差异块后会写到同一批行上互相覆盖
+	tzRow := ovRow
 	monthStart := fmt.Sprintf("%04d-%02d-01", year, mon)
 	monthEnd := fmt.Sprintf("%04d-%02d-%02d", year, mon, lastDay)
 
