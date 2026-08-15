@@ -66,9 +66,12 @@ const showShiftPicker = ref(false)
 const shiftPickerTarget = ref({ empId: null, dateStr: '', x: 0, y: 0 })
 
 // ===== v772 跨时区排班 =====
-// viewTz = 'local' 表示「各自本地」，即每个格子按员工本人当地日历排（默认，也是唯一可编辑的视角）；
-// 其余取值是 IANA 时区名，此时格子按「班次开始时刻落在该时区的哪一天」重新归列。
-const viewTz = ref('local')
+// v778: 表格永远按员工本人当地日历排，不再有「按时区重排格子」这回事。
+// 原来切到别的时区会把班次按「开始时刻落在哪一天」重新归列，代价是表格变形：
+// sl 的 C 班（24:00 起）整体挪到次日、原格子空掉、前一天的班和当天的班挤进同一格，
+// 而排班表最不该乱的就是格子位置——用户因此完全看不懂自己的排班。
+// 现在这个选择只决定一件事：覆盖/空档按哪个时区的 24 小时来算。
+const coverageTz = ref(DEFAULT_TIMEZONE)
 const customTz = ref('')
 const browserTz = browserTimezone()
 const showCoverage = ref(true)
@@ -117,12 +120,14 @@ function shiftDefsFor(group, tz) {
 }
 
 // 实际生效的查看时区；'local' 时为空，表示不做重排
-const effectiveViewTz = computed(() => (viewTz.value === 'local' ? '' : viewTz.value))
+// 保留这个名字给旧调用点，但恒为空——格子不再重排
+const effectiveViewTz = computed(() => '')
 // 对照/覆盖基准时区：跨时区视角下就是该时区，本地视角下用北京时间当基准
-const compareTz = computed(() => effectiveViewTz.value || DEFAULT_TIMEZONE)
+const compareTz = computed(() => coverageTz.value || DEFAULT_TIMEZONE)
 // 跨时区视角下表格只读——在「北京 14 号」那一格点一下，系统无法判断你要改的是
 // 员工本地的 13 号还是 14 号，写回去必然有一半是错的。要改班必须切回「各自本地」。
-const gridEditable = computed(() => canEditShift.value && !effectiveViewTz.value)
+// 不再有只读视角，权限够就能改
+const gridEditable = computed(() => canEditShift.value)
 
 function tzShortLabel(tz) {
   if (!tz) return ''
@@ -217,17 +222,16 @@ const shiftEntries = computed(() => {
   return out
 })
 
-// 表格实际渲染用的格子内容：员工 -> 日期 -> 该格的班次列表。
-// 跨时区视角下按「开始时刻落在目标时区的哪一天」归列，所以一格可能有两个班次、
-// 也可能出现空格——这不是漏排，是同一段绝对时间在另一个时区里换了天。
+// 表格渲染用的格子内容：员工 -> 日期 -> 该格的班次。
+// v778: 一律落在【排班日期】上，不按时区重排。格子位置稳定，所见即所排。
+// 「这个班实际在绝对时间轴的哪一段」由格子的悬浮说明、覆盖行和单日拆解回答，
+// 不靠挪动格子来表达——挪格子会让表格变形，反而没人看得懂。
 const displayGrid = computed(() => {
-  const tz = effectiveViewTz.value
   const grid = {}
   employees.value.forEach(emp => {
     const cells = {}
     ;(shiftEntries.value[emp.id] || []).forEach(e => {
-      // 没有时间段的休假类无法重排，留在本人当地日期上
-      const key = (tz && e.hasInterval) ? formatDateInTz(e.startUtc, tz) : e.srcDate
+      const key = e.srcDate
       if (!cells[key]) cells[key] = []
       cells[key].push(e)
     })
@@ -508,6 +512,64 @@ function gapFixOptions(gap) {
 
 // 按「空档时段」聚合成模式：同一段时段往往在多天重复出现（比如每周五凌晨），
 // 逐天列 31 条没法看，聚合后一眼就是两三条规律。
+// v778: 把空档的「责任」前移到漏排的那一天。
+//
+// 问题背景：sl 的 C 班是 24:00-09:00，排在 17 号、干活在 18 号凌晨。
+// 于是排班的人在 17 号那列漏排了 C，系统却把红色标记打在 18 号——
+// 原因和后果差一天，排班时当场看不见，只能等 18 号变红再回头改 17 号。
+//
+// 这里反向映射：对每段空档，取归因里「当天确实没人排」的那些班次，
+// 按它们该排的日期归拢，挂回那一天的列上。
+const gapBlameByDay = computed(() => {
+  const map = {}
+  daysInMonth.value.forEach(d => {
+    coverageGapRanges(d.dateStr).forEach(g => {
+      gapCauses(g)
+        .filter(c => c.who.length === 0) // 排了却仍空档的不算漏排，是别的原因
+        .forEach(c => {
+          const item = (map[c.date] ||= { gaps: {}, options: [] })
+          item.gaps[`${g.dateStr}|${g.text}`] = { date: g.dateStr, text: g.text, short: g.short }
+          item.options.push({ ...c, gapDate: g.dateStr, gapText: g.text })
+        })
+    })
+  })
+  // 整理成数组，按空档日期排序
+  Object.values(map).forEach(v => { v.gapList = Object.values(v.gaps).sort((a, b) => a.date.localeCompare(b.date)) })
+  return map
+})
+
+function blameOf(dateStr) {
+  return gapBlameByDay.value[dateStr] || null
+}
+
+// 列上只放最精简的「→18 00-09」，完整说明进悬浮
+function blameShort(dateStr) {
+  const b = blameOf(dateStr)
+  if (!b) return ''
+  return b.gapList.map(g => `→${Number(g.date.slice(8))} ${g.short}`).join(' ')
+}
+
+function blameTitle(dateStr) {
+  const b = blameOf(dateStr)
+  if (!b) return ''
+  const lines = [`${dateStr} 漏排会导致以下空档：`]
+  b.gapList.forEach(g => {
+    lines.push(`  ${g.date} ${g.text}（${tzShortLabel(compareTz.value)}）`)
+  })
+  lines.push('', '这天可以排的班（排任一个就能补上）：')
+  const seen = new Set()
+  b.options
+    .sort((a, b2) => b2.hours - a.hours)
+    .forEach(c => {
+      const key = `${c.code}|${c.tz}|${c.time}`
+      if (seen.has(key)) return
+      seen.add(key)
+      lines.push(`  ${c.code} ${c.name}（${tzShortLabel(c.tz)} ${c.time}）· 可补 ${c.hours} 小时`)
+    })
+  lines.push('', '当天这些班次都没人排——排班时在本列直接补上即可，不用等次日报红。')
+  return lines.join('\n')
+}
+
 const gapPatterns = computed(() => {
   const map = {}
   const firstOfMonth = daysInMonth.value[0]?.dateStr
@@ -831,7 +893,7 @@ async function deleteTimezoneEntry(entry) {
 
 function applyCustomTz() {
   if (!customTz.value) return
-  viewTz.value = customTz.value
+  coverageTz.value = customTz.value
 }
 
 // isWorking v772: 是否算「有人在岗」，覆盖空档检查用。不能拿 isDuty 顶替——
@@ -1685,23 +1747,20 @@ watch(activeTab, (tab) => {
     <div class="tz-toolbar">
       <span class="tz-toolbar-label">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-        查看时区
+        空档按哪个时区算
       </span>
       <div class="tz-seg">
-        <button class="tz-seg-btn" :class="{ active: viewTz === 'local' }" @click="viewTz = 'local'" title="每个格子按员工本人当地日历排。这是唯一可以编辑班次的视角。">各自本地</button>
-        <button class="tz-seg-btn" :class="{ active: viewTz === 'Asia/Shanghai' }" @click="viewTz = 'Asia/Shanghai'" title="按北京时间重新归列：班次归到它「开始时刻」落在北京的那一天">北京</button>
-        <button class="tz-seg-btn" :class="{ active: viewTz === browserTz }" @click="viewTz = browserTz" :title="'按你浏览器所在时区 ' + browserTz + ' 重新归列'">我的时区</button>
+        <button class="tz-seg-btn" :class="{ active: coverageTz === 'Asia/Shanghai' }" @click="coverageTz = 'Asia/Shanghai'" title="覆盖与空档按北京时间的 24 小时判定">北京</button>
+        <button class="tz-seg-btn" :class="{ active: coverageTz === browserTz }" @click="coverageTz = browserTz" :title="'按你浏览器所在时区 ' + browserTz + ' 判定'">我的时区</button>
       </div>
       <select class="tz-custom" v-model="customTz" @change="applyCustomTz">
         <option value="">其他时区…</option>
         <option v-for="tz in tzOptionList" :key="tz" :value="tz">{{ tz }}</option>
       </select>
 
-      <!-- 跨时区视角下表格只读，把原因说清楚，否则用户会以为是权限问题或坏了 -->
-      <span v-if="effectiveViewTz" class="tz-readonly-hint">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        <!-- 文字必须整段包在一个 span 里：外层是 flex，裸文本节点和 <b> 会各自变成 flex item 被压成竖排 -->
-        <span>当前是 <b>{{ tzShortLabel(effectiveViewTz) }}</b> 视角，表格只读。班次按<b>开始时刻</b>归列：24:00 起的晚班本就落在次日（同时区的人也一样），一格可能出现两个班次、也可能是空格——这是同一段时间在这个时区里换了天，不是漏排。要改班请切回「各自本地」。</span>
+      <span class="tz-grid-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        <span>表格格子始终按<b>排班日期</b>显示，不随这里的选择挪动。想看某天绝对时间上谁在岗，点覆盖行的日期展开拆解。</span>
       </span>
 
       <label class="tz-coverage-toggle">
@@ -1869,7 +1928,7 @@ watch(activeTab, (tab) => {
                 </td>
                 <td class="sticky-role td-role">{{ emp.role || '运维工程师' }}</td>
                 <td v-for="d in daysInMonth" :key="d.dateStr" class="td-shift"
-                    :class="{ weekend: d.isWeekend, clickable: gridEditable, today: d.isToday, 'multi-shift': cellEntries(emp, d.dateStr).length > 1, 'gap-col': showCoverage && hasGap(d.dateStr) }"
+                    :class="{ weekend: d.isWeekend, clickable: gridEditable, today: d.isToday, 'gap-col': showCoverage && hasGap(d.dateStr) }"
                     @click="gridEditable && openShiftPicker(emp, d.dateStr, $event)">
                   <!-- 跨时区视角下一格可能有两个班次：前一天的晚班和当天的早班，在这个时区里落到了同一天 -->
                   <span v-for="(entry, i) in cellEntries(emp, d.dateStr)" :key="entry.srcDate + '-' + i"
@@ -1881,10 +1940,8 @@ watch(activeTab, (tab) => {
               </template>
             </template>
             <tr class="stats-row">
-              <td class="sticky-name stats-label" :title="effectiveViewTz
-                    ? `按 ${tzShortLabel(effectiveViewTz)} 时间统计当天在岗人数，仅供运营参考。考勤（应工作天数/达成/缺勤）在统计分析页，恒按员工本人当地日历算，不受视角影响。`
-                    : '按员工本人当地日历统计'">
-                {{ effectiveViewTz ? `在岗(${tzShortLabel(effectiveViewTz)})` : '统计' }}
+              <td class="sticky-name stats-label" title="按员工本人当地日历统计当天各班次人数">
+                统计
               </td>
               <td class="sticky-role"></td>
               <td v-for="d in daysInMonth" :key="d.dateStr" class="td-stats" :class="{ today: d.isToday }">
@@ -1911,6 +1968,23 @@ watch(activeTab, (tab) => {
                 </div>
               </td>
             </tr>
+            <!-- v778: 漏排影响。把空档的责任前移到漏排的那一天——
+                 sl 的 C 班排在今天、干活在明天凌晨，所以「今天漏排」的后果原本记在明天，
+                 排班的人在当天那一列什么都看不到。这一行把它标回当天。 -->
+            <tr v-if="showCoverage" class="blame-row">
+              <td class="sticky-name blame-label"
+                  title="这一天如果漏排某个班次，会导致哪天出现空档。红字表示「本列漏排 → 那天断档」，排班时在本列补上即可。">
+                漏排影响
+              </td>
+              <td class="sticky-role"></td>
+              <td v-for="d in daysInMonth" :key="d.dateStr" class="td-blame"
+                  :class="{ today: d.isToday, blamed: !!blameOf(d.dateStr) }"
+                  :title="blameTitle(d.dateStr)">
+                <span v-if="blameOf(d.dateStr)" class="blame-text">{{ blameShort(d.dateStr) }}</span>
+                <span v-else class="gap-dot">·</span>
+              </td>
+            </tr>
+
             <!-- v773: 空档时段常驻显示，不用点开。列宽只有 38px，用 06-09 的缩写。
                  v776: 每个时区各一行——同一段空档在北京和贝尔格莱德是不同的钟点，
                  只给一个口径的话，另一边的人还得自己换算。 -->
@@ -3277,7 +3351,7 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
   font-size: 12px;
   max-width: 160px;
 }
-.tz-readonly-hint {
+.tz-grid-note {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -3285,11 +3359,11 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
   min-width: 260px;
   padding: 4px 10px;
   border-radius: 6px;
-  background: rgba(245, 158, 11, 0.16);
-  color: #fbbf24;
+  background: rgba(59, 130, 246, 0.14);
+  color: #93c5fd;
   line-height: 1.5;
 }
-.tz-readonly-hint svg { width: 14px; height: 14px; flex-shrink: 0; }
+.tz-grid-note svg { width: 14px; height: 14px; flex-shrink: 0; }
 .tz-coverage-toggle {
   display: inline-flex;
   align-items: center;
@@ -3616,6 +3690,18 @@ body.light-mode .dd-hour.thin { background: #ca8a04; color: #fff; }
 }
 .gap-dot { color: var(--text-muted); font-size: 10px; }
 
+/* v778: 漏排影响行 */
+.blame-row td { background: var(--bg-card); }
+.blame-label { font-size: 11px; font-weight: 600; color: #eab308; }
+.td-blame { padding: 2px 1px !important; line-height: 1.25; }
+.td-blame.blamed { background: rgba(234, 179, 8, 0.14) !important; }
+.blame-text {
+  font-size: 8.5px; font-weight: 700; color: #eab308;
+  letter-spacing: -0.03em; font-variant-numeric: tabular-nums; cursor: help;
+}
+body.light-mode .blame-label, body.light-mode .blame-text { color: #a16207; }
+body.light-mode .td-blame.blamed { background: rgba(161, 98, 7, 0.12) !important; }
+
 /* v773: 空档汇总 */
 .gap-summary {
   margin-top: 10px;
@@ -3787,7 +3873,7 @@ body.light-mode .gs-day:hover, body.light-mode .gs-day.active { background: #dc2
    ⚠️ 本项目的主题是 body.light-mode 这个 class 切的、默认深色，
    不是跟随系统的 prefers-color-scheme——用媒体查询会导致
    「系统浅色 + 应用深色」和「系统深色 + 应用浅色」两种组合下配色全错。 */
-body.light-mode .tz-readonly-hint { background: rgba(245, 158, 11, 0.12); color: #b45309; }
+body.light-mode .tz-grid-note { background: rgba(37, 99, 235, 0.10); color: #1d4ed8; }
 body.light-mode .tz-gap-badge { background: rgba(239, 68, 68, 0.14); color: #dc2626; }
 body.light-mode .tz-badge.foreign { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
 body.light-mode .tz-badge.changed { background: rgba(180, 83, 9, 0.12); border-color: rgba(180, 83, 9, 0.4); color: #b45309; }
