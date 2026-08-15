@@ -3431,8 +3431,12 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
 .dd-meta em { font-style: normal; opacity: .8; }
 .dd-prevtag { background: rgba(100,116,139,.25); border-radius: 3px; padding: 0 4px; }
 
-.dd-hours { display: flex; align-items: center; gap: 2px; margin-top: 7px; margin-left: 104px; margin-right: 240px; }
-.dd-hours-label { position: absolute; margin-left: -100px; font-size: 10.5px; color: var(--text-secondary); }
+/* ⚠️ 这一行的标签绝不能用 position:absolute。它没有定位祖先，会以整个文档为基准，
+   被 margin-left:-100px 推到文档外，把 <html> 的 scrollHeight 撑大几百 px——
+   页面因此多出一条最外层滚动条，往下拉是一大片空白，看着像布局坏了。
+   改成正常的 flex 项，用固定宽度占位即可。 */
+.dd-hours { display: flex; align-items: center; gap: 2px; margin-top: 7px; margin-right: 240px; }
+.dd-hours-label { width: 96px; flex-shrink: 0; padding-right: 8px; font-size: 10.5px; color: var(--text-secondary); }
 .dd-hour {
   flex: 1; text-align: center; font-size: 8.5px; font-style: normal;
   line-height: 15px; border-radius: 2px; color: #0b1220; font-variant-numeric: tabular-nums; cursor: help;

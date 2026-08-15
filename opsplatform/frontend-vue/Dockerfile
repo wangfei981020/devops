@@ -2,6 +2,11 @@ FROM --platform=$BUILDPLATFORM node:22-alpine AS builder
 
 WORKDIR /app
 
+# 版本号注入。之前这里没有 ARG，构建时传的 --build-arg VERSION 是无效参数，
+# 页面上无从确认跑的是哪一版，排障时只能靠猜。
+ARG VERSION=dev
+ENV VITE_APP_VERSION=$VERSION
+
 COPY package*.json ./
 RUN rm -rf node_modules package-lock.json && npm install
 
