@@ -216,3 +216,38 @@ export function timezoneOptions() {
   }
   return common
 }
+
+/**
+ * 找出某个时区在给定区间内的冬夏令时切换点。
+ *
+ * 做法是逐日取当地正午的 UTC 偏移，偏移一变就说明前一天到这天之间切换了，
+ * 再回退一天用「哪天的正午偏移开始不同」定位到具体日期。
+ * 用正午而不是零点：切换发生在当地凌晨 2~3 点，用零点取值会踩在切换缝上。
+ *
+ * ⚠️ 只能用 IANA 时区名，规则来自浏览器自带的 tzdata，会随系统更新。
+ * 不要试图用固定偏移推算——那正是这个函数要帮人避开的坑。
+ */
+export function findDstTransitions(timeZone, fromDate, toDate) {
+  const out = []
+  const day = 86400000
+  let cursor = new Date(Date.UTC(fromDate.getUTCFullYear(), fromDate.getUTCMonth(), fromDate.getUTCDate(), 12))
+  let prev = tzOffsetMinutes(timeZone, cursor)
+  const end = toDate.getTime()
+  while (cursor.getTime() <= end) {
+    const next = new Date(cursor.getTime() + day)
+    const off = tzOffsetMinutes(timeZone, next)
+    if (off !== prev) {
+      out.push({
+        // 切换生效的那一天（当地日期）
+        date: `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`,
+        fromOffset: prev,
+        toOffset: off,
+        // 偏移变大 = 进入夏令时（钟拨快），变小 = 退回冬令时
+        toDst: off > prev
+      })
+      prev = off
+    }
+    cursor = next
+  }
+  return out
+}

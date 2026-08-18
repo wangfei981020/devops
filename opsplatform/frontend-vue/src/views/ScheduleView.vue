@@ -7,7 +7,7 @@ import ScheduleAnalyticsView from './ScheduleAnalyticsView.vue'
 import {
   DEFAULT_TIMEZONE, resolveTimezoneAt, parseTimeRange, dateStrToUtc,
   formatDateInTz, formatTimeInTz, tzOffsetLabel, tzOffsetMinutes, formatOffset,
-  browserTimezone, timezoneOptions
+  browserTimezone, timezoneOptions, findDstTransitions
 } from '@/utils/timezone'
 
 const appStore = useAppStore()
@@ -71,6 +71,131 @@ const shiftPickerTarget = ref({ empId: null, dateStr: '', x: 0, y: 0 })
 // sl 的 C 班（24:00 起）整体挪到次日、原格子空掉、前一天的班和当天的班挤进同一格，
 // 而排班表最不该乱的就是格子位置——用户因此完全看不懂自己的排班。
 // 现在这个选择只决定一件事：覆盖/空档按哪个时区的 24 小时来算。
+// v782: 顶部减负。
+//
+// 改之前顶上并排五条横幅（时区开关/班次对照/DST/在岗/图例），把表格顶到 y=724，
+// 1000px 的屏只剩 276px 看表，8 个人得滚动。实测数据见下面的取舍：
+//   · 「要操作」的（月份、批量排班）——每次都用，留在常驻行
+//   · 「要盯一眼」的（谁在岗、几天空档）——每次都看但只需一行摘要
+//   · 「要查」的（休假图例、DST、时区口径）——一个月看一次，收进展开层
+// 班次对照留常驻：它是 ig/sl 每天都要对的表，收起来等于白做。
+const panelOpen = ref(false)
+const moreMenuOpen = ref(false)
+
+// 在岗摘要：一行说清「现在几个人、谁、多久后换班」，详情在展开层里
+const onCallSummary = computed(() => {
+  if (!todayInView.value) return null
+  const list = onCallNow.value
+  const shown = list.slice(0, 2).map(o => `${o.emp.name} ${o.entry.code}`).join('、')
+  const next = nextChanges.value[0]
+  return {
+    count: list.length,
+    who: list.length === 0 ? '当前无人在岗' : shown + (list.length > 2 ? ` 等 ${list.length} 人` : ''),
+    nextIn: next ? humanDuration(next.inMs) : ''
+  }
+})
+
+// DST 提醒分两档：14 天内的顶到常驻（真要开始安排作息了），其余留在展开层。
+// 68 天后才发生的事天天占一整行，属于「重要但不紧急」被摆成了「紧急」。
+const dstUrgent = computed(() => dstNotices.value.filter(n => !n.passed && n.daysLeft <= 14))
+const dstLater = computed(() => dstNotices.value.filter(n => n.passed || n.daysLeft > 14))
+
+// 图例拆两半：上班班次已经在常驻的班次条里列全了，这里只留休假类，避免同一份信息出现两次
+const leaveShiftTypes = computed(() => shiftTypes.value.filter(s => !parseTimeRange(s.time)))
+
+// v781: 班次对照表 + 此刻时间。
+//
+// 排班按基准时区（北京）定义，海外同事需要随时能查「这个班对我是几点」。
+// 每行一个时区：基准时区排第一行，其余按名字排在后面。
+// 时间用「今天」来算，所以冬夏令时切换后这张表会自动跟着变，不用人工维护。
+const shiftMapTable = computed(() => {
+  const base = scheduleBaseTz.value
+  const tzs = [base, ...activeTimezones.value.filter(t => t !== base)]
+  const now = new Date(nowTick.value)
+  const today = formatDateInTz(now, base)
+  const codes = shiftTypes.value.filter(x => x.isWorking && parseTimeRange(x.time))
+  return {
+    codes: codes.map(c => ({ code: c.code, name: c.name })),
+    rows: tzs.map(tz => ({
+      tz,
+      isBase: tz === base,
+      clock: `${md(formatDateInTz(now, tz))} ${formatTimeInTz(now, tz)}`,
+      offset: tzOffsetLabel(tz, now),
+      cells: codes.map(c => {
+        // ⚠️ 基准行必须照搬班次配置原文，不能走换算。
+        // 「24:00-09:00」格式化后会变成「00:00-09:00」，把「当天末尾跨到次日」
+        // 显示成「当天凌晨」，整整差一天。只有换到别的时区时，当地钟点才该现算。
+        if (tz === base) return { code: c.code, text: c.time }
+        const r = parseTimeRange(c.time)
+        const st = dateStrToUtc(today, r.startMin, base)
+        const en = new Date(st.getTime() + r.durationMin * 60000)
+        return { code: c.code, text: `${formatTimeInTz(st, tz)}-${formatTimeInTz(en, tz)}` }
+      })
+    }))
+  }
+})
+
+// v780: 冬夏令时切换提醒。
+//
+// 排班按北京时间，海外同事的当地时间是换算出来的——所以他们那边一到切换日，
+// 同一个班次对应的当地时间会整体平移 1 小时。这事必须提前说，
+// 不能等当天才发现「今天怎么早了一小时」。
+//
+// 显示窗口：切换日前 3 个月 → 切换日后 1 个月（过了就自动消失，不用人工关）。
+const dstNotices = computed(() => {
+  const base = scheduleBaseTz.value
+  const now = new Date()
+  const from = new Date(now.getTime() - 400 * 86400000)
+  const to = new Date(now.getTime() + 400 * 86400000)
+  const out = []
+
+  activeTimezones.value.filter(tz => tz !== base).forEach(tz => {
+    let transitions
+    try {
+      transitions = findDstTransitions(tz, from, to)
+    } catch (e) {
+      console.warn(`[排班] 计算 ${tz} 的冬夏令时切换点失败，跳过提醒`, e)
+      return
+    }
+    transitions.forEach(t => {
+      const day = new Date(`${t.date}T12:00:00Z`)
+      const daysLeft = Math.round((day.getTime() - now.getTime()) / 86400000)
+      // 窗口：提前 92 天开始提示，切换后再留 31 天
+      if (daysLeft > 92 || daysLeft < -31) return
+      // 拿一个真实班次做例子，说明「同一个班，他们那边的时间会变成几点」
+      const sample = shiftTypes.value.find(x => x.isWorking && parseTimeRange(x.time))
+      let before = '', after = ''
+      if (sample) {
+        const r = parseTimeRange(sample.time)
+        const prevDay = new Date(day.getTime() - 3 * 86400000)
+        const nextDay = new Date(day.getTime() + 3 * 86400000)
+        const fmt = (d) => {
+          const ds = formatDateInTz(d, base)
+          const st = dateStrToUtc(ds, r.startMin, base)
+          const en = new Date(st.getTime() + r.durationMin * 60000)
+          return `${formatTimeInTz(st, tz)}-${formatTimeInTz(en, tz)}`
+        }
+        before = fmt(prevDay)
+        after = fmt(nextDay)
+      }
+      out.push({
+        tz, date: t.date, daysLeft,
+        toDst: t.toDst,
+        fromOffset: formatOffset(t.fromOffset),
+        toOffset: formatOffset(t.toOffset),
+        sampleCode: sample?.code || '', sampleTime: sample?.time || '',
+        before, after,
+        passed: daysLeft < 0
+      })
+    })
+  })
+  return out.sort((a, b) => a.daysLeft - b.daysLeft)
+})
+
+// v779: 排班基准时区。排班表上的班次时间一律按它解释——
+// 「我们按北京时间排，海外同事照着上」。改这个等于改全公司的排班口径，不是视图选项。
+const scheduleBaseTz = ref(DEFAULT_TIMEZONE)
+
 const coverageTz = ref(DEFAULT_TIMEZONE)
 const customTz = ref('')
 const browserTz = browserTimezone()
@@ -194,6 +319,16 @@ function employeeTzTitle(emp) {
 }
 
 // 把每个员工的每条排班展开成绝对时间区间。
+//
+// 🔴 v779 语义变更：班次时间一律按【排班基准时区】解释，不再按员工本人时区。
+// 排班表上的 A/B/C 就是北京时间的班次，海外同事也按北京时间上班——
+// 时区从此只回答一个问题：「这个班对他本人是几点」，纯显示用，不参与定义。
+//
+// 这样做的直接好处：
+//   · 全表只有一套时间轴，A+B+C 首尾相接又能铺满 24 小时
+//   · 冬夏令时不再影响排班和覆盖计算，只影响「显示给他看的当地时间」
+//   · 不需要按组给班次配不同时段（那是「各按各的本地时间上班」才需要的）
+//
 // ⚠️ 结束时刻 = 开始时刻 + 时长（绝对相加），不是把 09:00 和 18:00 分别换算——
 // 跨夏令时切换点的班次分别换算会让时长凭空多/少 1 小时。
 const shiftEntries = computed(() => {
@@ -204,17 +339,18 @@ const shiftEntries = computed(() => {
     Object.keys(shifts).forEach(srcDate => {
       const code = shifts[srcDate]
       if (!code) return
-      // v774: 时间段按 (组 + 该日时区) 解析，不同公司的同一个代码可能不是一回事
       const cfg = resolveShiftDef(emp, srcDate, code)
-      const tz = resolveTimezoneAt(emp.timezones, srcDate)
+      // empTz = 这个人在哪，只用于把基准时间换算成他的当地时间显示
+      const empTz = resolveTimezoneAt(emp.timezones, srcDate)
       const range = cfg ? parseTimeRange(cfg.time) : null
       if (range) {
-        const startUtc = dateStrToUtc(srcDate, range.startMin, tz)
+        // 注意这里用的是 scheduleBaseTz，不是 empTz
+        const startUtc = dateStrToUtc(srcDate, range.startMin, scheduleBaseTz.value)
         const endUtc = new Date(startUtc.getTime() + range.durationMin * 60000)
-        list.push({ empId: emp.id, empName: emp.name, code, cfg, srcDate, tz, startUtc, endUtc, hasInterval: true, isWorking: !!cfg.isWorking, overridden: !!cfg.overridden })
+        list.push({ empId: emp.id, empName: emp.name, code, cfg, srcDate, tz: empTz, startUtc, endUtc, hasInterval: true, isWorking: !!cfg.isWorking, overridden: !!cfg.overridden })
       } else {
         // 休假类（OD/OFF/H/PL/SL/AL/CT）没有时间段，不参与换算，也不算在岗
-        list.push({ empId: emp.id, empName: emp.name, code, cfg, srcDate, tz, startUtc: null, endUtc: null, hasInterval: false, isWorking: false, overridden: false })
+        list.push({ empId: emp.id, empName: emp.name, code, cfg, srcDate, tz: empTz, startUtc: null, endUtc: null, hasInterval: false, isWorking: false, overridden: false })
       }
     })
     out[emp.id] = list
@@ -249,23 +385,22 @@ function cellEntries(emp, dateStr) {
 function entryTitle(entry) {
   const name = entry.cfg?.name || entry.code
   if (!entry.hasInterval) {
-    return `${name} ${entry.code}\n无时间段，按本人当地日期 ${entry.srcDate} 显示`
+    return `${name} ${entry.code}\n${entry.srcDate} 休息，不在岗`
   }
-  const lines = [`${name} ${entry.code} · ${entry.cfg.time}`]
-  // ⚠️ 起始日期必须由 startUtc 换算，不能直接用 srcDate：
-  // 「24:00-09:00」的晚班排在 8/4，实际是从 8/5 00:00 开始的，
-  // 拿 srcDate 配换算出来的时间会显示成「8/4 00:00」，日期和时间对不上。
-  const localStart = formatDateInTz(entry.startUtc, entry.tz)
-  lines.push(`${tzShortLabel(entry.tz)}（${entry.tz}）：${localStart} ${formatTimeInTz(entry.startUtc, entry.tz)} → ${dayHint(entry.endUtc, entry.tz, localStart)}`)
-  if (entry.tz !== compareTz.value) {
-    const startDate = formatDateInTz(entry.startUtc, compareTz.value)
-    lines.push(`${tzShortLabel(compareTz.value)}（${compareTz.value}）：${startDate} ${formatTimeInTz(entry.startUtc, compareTz.value)} → ${dayHint(entry.endUtc, compareTz.value, startDate)}`)
+  // v779: 先说排班口径（基准时区），再说「对他本人是几点」。
+  // 顺序不能反——排班按基准时区定义，本人当地时间只是换算出来的参考。
+  const base = scheduleBaseTz.value
+  const baseStart = formatDateInTz(entry.startUtc, base)
+  const lines = [
+    `${name} ${entry.code} · ${entry.cfg.time}（${tzShortLabel(base)}）`,
+    `${tzShortLabel(base)}：${md(baseStart)} ${formatTimeInTz(entry.startUtc, base)} → ${dayHint(entry.endUtc, base, baseStart)}`
+  ]
+  if (entry.tz !== base) {
+    const empStart = formatDateInTz(entry.startUtc, entry.tz)
+    lines.push(`他本人（${tzShortLabel(entry.tz)}）：${md(empStart)} ${formatTimeInTz(entry.startUtc, entry.tz)} → ${dayHint(entry.endUtc, entry.tz, empStart)}`)
   }
-  if (entry.srcDate !== localStart) {
-    lines.push(`排班表上这条排在本人当地 ${entry.srcDate}（24:00 起的班从次日开始）`)
-  }
-  if (effectiveViewTz.value && entry.srcDate !== formatDateInTz(entry.startUtc, effectiveViewTz.value)) {
-    lines.push(`⚠️ 按开始时刻，这条在当前视角下归到了 ${formatDateInTz(entry.startUtc, effectiveViewTz.value)}`)
+  if (entry.srcDate !== baseStart) {
+    lines.push(`排在 ${md(entry.srcDate)} 这一格，24:00 起的班从次日 0 点开始`)
   }
   return lines.join('\n')
 }
@@ -1693,7 +1828,7 @@ watch(activeTab, (tab) => {
 </script>
 
 <template>
-  <div class="schedule-page">
+  <div class="schedule-page" @click="moreMenuOpen = false">
     <div class="page-header">
       <h2>排班管理</h2>
       <div class="page-tabs">
@@ -1711,75 +1846,120 @@ watch(activeTab, (tab) => {
         </button>
       </div>
       <div class="header-actions" v-show="activeTab === 'schedule'">
-        <button v-if="canConfigShift" class="btn btn-secondary" @click="showConfigModal = true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-          班次配置
-        </button>
+        <!-- v782: 只留每次都用的两个。班次配置/导出/重置进 ⋯ ——
+             尤其「重置排班」是危险且低频的操作，原来红色平铺在最显眼处，正好放反了。 -->
         <button v-if="canBatchSchedule" class="btn btn-secondary" @click="openBatchModal">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M9 16l2 2 4-4"/></svg>
           批量排班
-        </button>
-        <button v-if="canReset" class="btn btn-secondary btn-danger-outline" @click="resetSchedule">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-          重置排班
-        </button>
-        <button v-if="canExport" class="btn btn-secondary" @click="openExportModal">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          导出Excel
         </button>
         <button v-if="canAddEmployee" class="btn btn-primary" @click="openEmployeeModal('add')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           添加员工
         </button>
+        <div class="more-wrap">
+          <button class="btn btn-secondary btn-more" @click.stop="moreMenuOpen = !moreMenuOpen" title="更多操作">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+          </button>
+          <div v-if="moreMenuOpen" class="more-menu" @click.stop>
+            <button v-if="canConfigShift" class="more-item" @click="moreMenuOpen = false; showConfigModal = true">班次配置</button>
+            <button v-if="canExport" class="more-item" @click="moreMenuOpen = false; openExportModal()">导出 Excel</button>
+            <button v-if="canReset" class="more-item danger" @click="moreMenuOpen = false; resetSchedule()">重置排班</button>
+          </div>
+        </div>
       </div>
     </div>
+
+    
 
     <!-- 排班表内容 -->
     <template v-if="activeTab === 'schedule'">
-    <div class="month-nav">
-      <button class="nav-btn" @click="prevMonth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg></button>
-      <span class="current-month">{{ currentYear }}年{{ currentMonth }}月</span>
-      <button class="nav-btn" @click="nextMonth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button>
-      <button class="btn btn-text" @click="goToToday">今天</button>
-    </div>
-
-    <!-- v772: 跨时区视角切换 -->
-    <div class="tz-toolbar">
-      <span class="tz-toolbar-label">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-        空档按哪个时区算
-      </span>
-      <div class="tz-seg">
-        <button class="tz-seg-btn" :class="{ active: coverageTz === 'Asia/Shanghai' }" @click="coverageTz = 'Asia/Shanghai'" title="覆盖与空档按北京时间的 24 小时判定">北京</button>
-        <button class="tz-seg-btn" :class="{ active: coverageTz === browserTz }" @click="coverageTz = browserTz" :title="'按你浏览器所在时区 ' + browserTz + ' 判定'">我的时区</button>
+    <!-- v782: 顶部一行。月份 / 空档 / 在岗 / 展开开关 全在这儿，
+         原来这些是四条并排的横幅，把表格顶到了屏幕 72% 以下。 -->
+    <div class="sched-bar">
+      <div class="sb-month">
+        <button class="nav-btn" @click="prevMonth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg></button>
+        <span class="current-month">{{ currentYear }}年{{ currentMonth }}月</span>
+        <button class="nav-btn" @click="nextMonth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button>
+        <button class="btn btn-text" @click="goToToday">今天</button>
       </div>
-      <select class="tz-custom" v-model="customTz" @change="applyCustomTz">
-        <option value="">其他时区…</option>
-        <option v-for="tz in tzOptionList" :key="tz" :value="tz">{{ tz }}</option>
-      </select>
 
-      <span class="tz-grid-note">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-        <span>表格格子始终按<b>排班日期</b>显示，不随这里的选择挪动。想看某天绝对时间上谁在岗，点覆盖行的日期展开拆解。</span>
+      <button v-if="showCoverage && coverageSummary > 0" class="sb-gap" @click="panelOpen = true"
+              :title="`本月有 ${coverageSummary} 天存在无人在岗的时段（按 ${tzShortLabel(compareTz)} 时间）`">
+        <span class="sb-dot"></span>{{ coverageSummary }} 天有空档
+      </button>
+
+      <button v-if="onCallSummary" class="sb-oncall" @click="panelOpen = !panelOpen">
+        <b>在岗 {{ onCallSummary.count }} 人</b>
+        <span class="sb-who">{{ onCallSummary.who }}</span>
+        <em v-if="onCallSummary.nextIn">{{ onCallSummary.nextIn }}后换班</em>
+      </button>
+
+      <!-- 14 天内的冬夏令时切换顶到常驻：那时候真该开始安排作息了。
+           更远的留在展开层，否则「68 天后」天天占一整行。 -->
+      <span v-for="n in dstUrgent" :key="n.tz + n.date" class="sb-dst">
+        {{ tzShortLabel(n.tz) }} {{ n.date }} {{ n.toDst ? '进夏令时' : '退冬令时' }}
+        · {{ n.daysLeft === 0 ? '就是今天' : n.daysLeft + ' 天后' }}
       </span>
 
-      <label class="tz-coverage-toggle">
-        <input type="checkbox" v-model="showCoverage" />
-        覆盖空档检查
-        <span v-if="showCoverage && coverageSummary > 0" class="tz-gap-badge" :title="`本月有 ${coverageSummary} 天存在无人在岗的时段（按 ${tzShortLabel(compareTz)} 时间）`">{{ coverageSummary }} 天有空档</span>
-      </label>
+      <!-- 班次覆盖现在通常是空的（ig 改成按北京时间上 sl 的班后就不需要了），
+           但配置入口还在。真有人配了却不提示，表里同一个 C 会代表两种时段。 -->
+      <span v-if="shiftOverrides.length" class="sb-override"
+            :title="shiftOverrides.map(o => `${o.group_name} · ${tzShortLabel(o.timezone)} 的 ${o.code} = ${o.time_range}，全局是 ${overrideBaseTime(o.code)}`).join('\n')">
+        ⚠️ {{ shiftOverrides.length }} 条按组班次差异
+      </span>
+
+      <button class="sb-more" :class="{ open: panelOpen }" @click="panelOpen = !panelOpen">
+        班次说明
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
     </div>
 
-    <!-- v775: 当前在岗。按绝对时刻算，不依赖「今天」这个跨时区下有歧义的说法 -->
-    <div v-if="todayInView" class="oncall-bar">
-      <div class="oc-clocks">
-        <span class="oc-title">此刻</span>
-        <span v-for="tz in activeTimezones" :key="tz" class="oc-clock">
-          <b>{{ tzShortLabel(tz) }}</b> {{ nowInTz(tz) }}
+    <!-- v782: 班次条常驻两行。ig/sl 每天都要对这张表——收起来等于白做。 -->
+    <div class="shift-strip">
+      <span class="ss-note">班次一律按{{ tzShortLabel(scheduleBaseTz) }}时间</span>
+      <div class="ss-rows">
+        <div v-for="r in shiftMapTable.rows" :key="r.tz" class="ss-row" :class="{ base: r.isBase }">
+          <span class="ss-tz">
+            {{ tzShortLabel(r.tz) }}<em>{{ r.offset }}</em>
+            <i class="ss-clock">此刻 {{ r.clock }}</i>
+          </span>
+          <span v-for="c in r.cells" :key="c.code" class="ss-cell">
+            <i class="ss-code" :style="getShiftStyle(c.code)">{{ c.code }}</i>{{ c.text }}
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- v782: 展开层。一个月看一次的东西都在这儿 -->
+    <div v-if="panelOpen" class="sched-panel">
+      <div v-if="dstLater.length" class="sp-block">
+        <div class="sp-title">冬夏令时</div>
+        <div class="dst-bar in-panel">
+<div v-for="n in dstNotices" :key="n.tz + n.date" class="dst-item" :class="{ passed: n.passed, soon: !n.passed && n.daysLeft <= 14 }">
+        <span class="dst-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </span>
+        <span class="dst-main">
+          <b>{{ tzShortLabel(n.tz) }}</b>
+          {{ n.date }}
+          {{ n.toDst ? '进入夏令时' : '退回冬令时' }}
+          <span class="dst-off">{{ n.fromOffset }} → {{ n.toOffset }}</span>
+          <!-- 这里必须留出间距：UTC+1 和 69天后 挨在一起会读成「UTC+169」 -->
+          <span class="dst-when" v-if="!n.passed">{{ n.daysLeft === 0 ? '就是今天' : n.daysLeft + ' 天后' }}</span>
+          <span class="dst-when done" v-else>已于 {{ -n.daysLeft }} 天前切换</span>
+        </span>
+        <span class="dst-effect" v-if="n.sampleCode">
+          排班时间不变；{{ n.sampleCode }} 班（{{ tzShortLabel(scheduleBaseTz) }} {{ n.sampleTime }}）对他们
+          从 <b>{{ n.before }}</b> 变成 <b>{{ n.after }}</b>
         </span>
       </div>
+        </div>
+      </div>
 
-      <div class="oc-body">
+      <div v-if="todayInView" class="sp-block">
+        <div class="sp-title">在岗与换班</div>
+        <div class="oncall-bar in-panel">
+<div class="oc-body">
         <div class="oc-col">
           <div class="oc-col-title">在岗 {{ onCallNow.length }} 人</div>
           <div v-if="onCallNow.length === 0" class="oc-empty">当前无人在岗</div>
@@ -1788,8 +1968,11 @@ watch(activeTab, (tab) => {
             <span class="oc-shift" :style="getShiftStyle(o.entry.code)">{{ o.entry.code }}</span>
             <span class="oc-name">{{ o.emp.name }}</span>
             <span v-if="o.leader" class="oc-leader">组长</span>
-            <!-- 下班时刻按【本人当地】显示：张伟人在贝尔格莱德，给他看北京时间等于让他自己减 6 小时 -->
-            <span class="oc-tz">{{ tzShortLabel(o.entry.tz) }} {{ formatTimeInTz(o.entry.endUtc, o.entry.tz) }} 下班</span>
+            <!-- v779: 排班按基准时区，所以先给基准时间；人在别的时区再补一个「他那边几点」 -->
+            <span class="oc-tz">
+              {{ tzShortLabel(scheduleBaseTz) }} {{ formatTimeInTz(o.entry.endUtc, scheduleBaseTz) }} 下班
+              <em v-if="o.entry.tz !== scheduleBaseTz">（他 {{ formatTimeInTz(o.entry.endUtc, o.entry.tz) }}）</em>
+            </span>
             <span class="oc-left">{{ humanDuration(o.endsIn) }}后</span>
           </div>
         </div>
@@ -1831,22 +2014,46 @@ watch(activeTab, (tab) => {
           </div>
         </div>
       </div>
-    </div>
-
-    <div class="shift-legend">
-      <div v-for="s in shiftTypes" :key="s.code" class="legend-item" :style="{ '--shift-color': s.color }">
-        <span class="legend-code" :style="{ background: s.color, color: shiftTextColor(s.color) }">{{ s.code }}</span>
-        <span class="legend-name">{{ s.name }}</span>
-        <span class="legend-time" v-if="s.time && s.time !== '-'">{{ s.time }}</span>
-        <span class="legend-duty" v-if="s.isDuty">值班</span>
+        </div>
       </div>
-      <!-- 图例是全局的，不同员工时区不同，这里只能标明口径；具体换算在员工行和格子的悬浮说明里 -->
-      <div class="legend-tz-note">时间为员工本地时间</div>
-      <!-- v774: 有组用了不同的班次口径就在图例上说明，否则同一个 C 在表里代表两种时段却毫无提示 -->
-      <div v-if="shiftOverrides.length" class="legend-override-note"
-           :title="shiftOverrides.map(o => `${o.group_name} · ${tzShortLabel(o.timezone)} 的 ${o.code} = ${o.time_range}${o.name ? '（' + o.name + '）' : ''}，全局是 ${overrideBaseTime(o.code)}`).join('\n')">
-        ⚠️ 有 {{ shiftOverrides.length }} 条按组的班次差异
-        <span class="lon-detail">{{ shiftOverrides.map(o => `${o.group_name} 的 ${o.code}=${o.time_range}`).join('；') }}</span>
+
+      <div class="sp-block">
+        <div class="sp-title">休假与调休</div>
+        <div class="shift-legend in-panel">
+          <div v-for="s in leaveShiftTypes" :key="s.code" class="legend-item" :style="{ '--shift-color': s.color }">
+            <span class="legend-code" :style="{ background: s.color, color: shiftTextColor(s.color) }">{{ s.code }}</span>
+            <span class="legend-name">{{ s.name }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sp-block">
+        <div class="sp-title">空档检查口径</div>
+<div class="tz-toolbar">
+      <span class="tz-toolbar-label">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        空档按哪个时区算
+      </span>
+      <div class="tz-seg">
+        <button class="tz-seg-btn" :class="{ active: coverageTz === 'Asia/Shanghai' }" @click="coverageTz = 'Asia/Shanghai'" title="覆盖与空档按北京时间的 24 小时判定">北京</button>
+        <button class="tz-seg-btn" :class="{ active: coverageTz === browserTz }" @click="coverageTz = browserTz" :title="'按你浏览器所在时区 ' + browserTz + ' 判定'">我的时区</button>
+      </div>
+      <select class="tz-custom" v-model="customTz" @change="applyCustomTz">
+        <option value="">其他时区…</option>
+        <option v-for="tz in tzOptionList" :key="tz" :value="tz">{{ tz }}</option>
+      </select>
+
+      <span class="tz-grid-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        <span>表格格子始终按<b>排班日期</b>显示，不随这里的选择挪动。想看某天绝对时间上谁在岗，点覆盖行的日期展开拆解。</span>
+      </span>
+
+      <label class="tz-coverage-toggle">
+        <input type="checkbox" v-model="showCoverage" />
+        覆盖空档检查
+        <span v-if="showCoverage && coverageSummary > 0" class="tz-gap-badge" :title="`本月有 ${coverageSummary} 天存在无人在岗的时段（按 ${tzShortLabel(compareTz)} 时间）`">{{ coverageSummary }} 天有空档</span>
+      </label>
+    </div>
       </div>
     </div>
 
@@ -2041,8 +2248,8 @@ watch(activeTab, (tab) => {
             </span>
             <span class="dd-meta">
               {{ o.emp.group_name || '未分组' }}·{{ tzShortLabel(o.entry.tz) }}
-              <b>{{ ddRange(o.entry, compareTz) }}</b>
-              <em>本人 {{ o.entry.cfg.time }}</em>
+              <b>{{ ddRange(o.entry, scheduleBaseTz) }}</b>
+              <em v-if="o.entry.tz !== scheduleBaseTz">他那边 {{ ddRange(o.entry, o.entry.tz) }}</em>
               <span v-if="o.fromPrev" class="dd-prevtag">{{ md(o.entry.srcDate) }} 排的</span>
             </span>
           </div>
@@ -2066,8 +2273,11 @@ watch(activeTab, (tab) => {
             <span class="dd-meta">
               {{ s.emp.group_name || '未分组' }}·{{ tzShortLabel(resolveTimezoneAt(s.emp.timezones, dayDetail.date)) }}
               <template v-if="s.entry && s.entry.hasInterval">
-                {{ s.entry.cfg.name }} 本人 {{ s.entry.cfg.time }}
-                → <b>{{ tzShortLabel(compareTz) }} {{ ddRange(s.entry, compareTz) }}</b>
+                {{ s.entry.cfg.name }} {{ s.entry.cfg.time }}
+                → <b>{{ tzShortLabel(scheduleBaseTz) }} {{ ddRange(s.entry, scheduleBaseTz) }}</b>
+                <em v-if="resolveTimezoneAt(s.emp.timezones, dayDetail.date) !== scheduleBaseTz" class="dd-histz">
+                  他那边 {{ ddRange(s.entry, resolveTimezoneAt(s.emp.timezones, dayDetail.date)) }}
+                </em>
                 <span v-if="s.spillsToNextDay" class="dd-spill">整段落在次日</span>
               </template>
               <template v-else>{{ s.entry?.cfg?.name || '' }}（不在岗）</template>
@@ -3380,11 +3590,7 @@ body.light-mode .employee-row:hover .sticky-role { background: #f1f5f9; }
   color: #f87171;
   font-weight: 600;
 }
-.legend-tz-note {
-  color: var(--text-muted);
-  font-size: 11px;
-  align-self: center;
-}
+
 
 /* 姓名列的时区徽标。姓名列固定 120px，徽标必须排在姓名下面一行，
    横排会把 .emp-name 的 flex 宽度挤成 0，名字整列消失 */
@@ -3613,6 +3819,151 @@ body.light-mode .dd-hour.thin { background: #ca8a04; color: #fff; }
   border-radius: 3px; padding: 0 6px;
 }
 
+/* v782: 顶部一行（月份/空档/在岗/展开） */
+.sched-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 6px 12px; margin-bottom: 8px;
+  border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-card);
+}
+.sb-month { display: flex; align-items: center; gap: 6px; }
+.sb-month .current-month { font-size: 15px; font-weight: 650; color: var(--text-primary); min-width: 96px; text-align: center; }
+.sb-gap, .sb-oncall, .sb-more {
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+  border: 1px solid var(--border-color); border-radius: 6px; background: transparent;
+  padding: 4px 10px; font-size: 12px; color: var(--text-secondary);
+}
+.sb-gap { border-color: #ef4444; color: #f87171; font-weight: 600; }
+.sb-dot { width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
+.sb-oncall b { color: var(--text-primary); font-weight: 650; }
+.sb-who { color: var(--text-secondary); }
+.sb-oncall em { font-style: normal; color: var(--text-muted); }
+.sb-dst { font-size: 11.5px; color: #fbbf24; padding: 3px 8px; border-radius: 5px; background: rgba(251,191,36,.12); }
+.sb-override {
+  font-size: 11.5px; color: #fbbf24; padding: 3px 8px; border-radius: 5px;
+  background: rgba(251,191,36,.12); cursor: help;
+}
+.sb-more { margin-left: auto; }
+.sb-more svg { width: 13px; height: 13px; transition: transform .15s; }
+.sb-more.open svg { transform: rotate(180deg); }
+.sb-gap:hover, .sb-oncall:hover, .sb-more:hover { border-color: var(--primary-color); color: var(--text-primary); }
+
+/* 更多操作菜单 */
+.more-wrap { position: relative; }
+.btn-more { padding: 6px 9px; }
+.more-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 130px;
+  border: 1px solid var(--border-color); border-radius: 7px; background: var(--bg-card);
+  box-shadow: 0 8px 24px rgba(0,0,0,.28); padding: 4px; display: flex; flex-direction: column;
+}
+.more-item {
+  text-align: left; padding: 7px 10px; border: 0; background: transparent; cursor: pointer;
+  font-size: 12.5px; color: var(--text-primary); border-radius: 5px;
+}
+.more-item:hover { background: var(--bg-primary); }
+.more-item.danger { color: #f87171; }
+
+/* 班次条：常驻两行 */
+.shift-strip {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 6px 12px; margin-bottom: 8px;
+  border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-card);
+}
+.ss-note { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+.ss-rows { display: flex; flex-direction: column; gap: 3px; overflow-x: auto; }
+.ss-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.ss-row.base .ss-tz { color: var(--text-primary); }
+.ss-tz {
+  width: 210px; flex-shrink: 0; display: flex; align-items: baseline; gap: 5px;
+  font-weight: 650; color: var(--text-secondary);
+}
+.ss-tz em { font-style: normal; font-weight: 400; font-size: 10px; color: var(--text-muted); }
+.ss-clock { font-style: normal; font-weight: 400; font-size: 10.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ss-cell {
+  width: 136px; flex-shrink: 0; display: flex; align-items: center; gap: 5px;
+  font-variant-numeric: tabular-nums; color: var(--text-primary);
+}
+.ss-code {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 21px; height: 15px; border-radius: 3px; font-size: 8.5px; font-weight: 700; font-style: normal;
+}
+
+/* 展开层 */
+.sched-panel {
+  border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-card);
+  padding: 10px 12px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 12px;
+}
+.sp-block { display: flex; flex-direction: column; gap: 6px; }
+.sp-title { font-size: 11.5px; font-weight: 650; color: var(--text-muted); }
+.sched-panel .in-panel { margin: 0; border: 0; background: transparent; padding: 0; }
+.sched-panel .tz-toolbar { margin: 0; border: 0; background: transparent; padding: 0; }
+body.light-mode .sb-dst { background: rgba(217,119,6,.1); color: #b45309; }
+body.light-mode .more-menu { box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+
+/* v781: 此刻 + 班次对照表 */
+.shift-map {
+  border: 1px solid var(--border-color); border-radius: 8px;
+  background: var(--bg-card); margin-bottom: 8px; overflow: hidden;
+}
+.sm-head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 7px 13px; border-bottom: 1px solid var(--border-color); background: var(--bg-primary);
+}
+.sm-title { font-size: 12.5px; font-weight: 650; color: var(--text-primary); }
+.sm-sub { font-size: 11px; color: var(--text-muted); }
+.sm-grid { display: flex; flex-direction: column; overflow-x: auto; }
+.sm-row { display: flex; align-items: center; gap: 8px; padding: 5px 13px; font-size: 12px; }
+.sm-row + .sm-row { border-top: 1px solid var(--border-color); }
+.sm-row.sm-header { color: var(--text-muted); font-size: 11px; background: var(--bg-primary); }
+.sm-row.base { background: rgba(59, 130, 246, 0.07); }
+.sm-tz {
+  width: 150px; flex-shrink: 0; display: flex; align-items: baseline; gap: 5px;
+  font-weight: 650; color: var(--text-primary);
+}
+.sm-tz em { font-style: normal; font-weight: 400; font-size: 10px; color: var(--text-muted); }
+.sm-basetag {
+  font-size: 9px; font-weight: 700; padding: 0 5px; border-radius: 3px;
+  background: rgba(59, 130, 246, 0.2); color: #93c5fd;
+}
+.sm-clock {
+  width: 105px; flex-shrink: 0; font-variant-numeric: tabular-nums;
+  color: var(--text-secondary); font-weight: 600;
+}
+.sm-header .sm-clock { font-weight: 400; }
+/* ⚠️ 别给 sm-cell 用 flex:1。两行是要上下对照着读的，撑满整行会把相邻两个时间
+   拉开几百像素，视线跨过去很容易串行。固定列宽让两行数字严格对齐。 */
+.sm-cell {
+  width: 138px; flex-shrink: 0; font-variant-numeric: tabular-nums;
+  color: var(--text-primary); display: flex; align-items: center; gap: 5px;
+}
+.sm-header .sm-cell { color: var(--text-muted); }
+.sm-code {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 15px; border-radius: 3px; font-size: 8.5px; font-weight: 700; font-style: normal;
+}
+body.light-mode .sm-row.base { background: rgba(37, 99, 235, 0.06); }
+body.light-mode .sm-basetag { background: rgba(37, 99, 235, 0.14); color: #1d4ed8; }
+
+/* v780: 冬夏令时提醒条 */
+.dst-bar { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.dst-item {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 7px 13px; border-radius: 8px; font-size: 12px;
+  background: rgba(234, 179, 8, 0.13); border: 1px solid rgba(234, 179, 8, 0.32); color: #eab308;
+}
+.dst-item.soon { background: rgba(239, 68, 68, 0.13); border-color: rgba(239, 68, 68, 0.35); color: #f87171; }
+.dst-item.passed { background: var(--bg-card); border-color: var(--border-color); color: var(--text-muted); }
+.dst-icon { display: inline-flex; flex-shrink: 0; }
+.dst-icon svg { width: 15px; height: 15px; }
+.dst-main { font-variant-numeric: tabular-nums; }
+.dst-main b { font-weight: 700; }
+.dst-off { opacity: .9; margin-left: 4px; }
+.dst-when { font-weight: 700; margin-left: 10px; padding-left: 10px; border-left: 1px solid currentColor; }
+.dst-when.done { font-weight: 400; }
+.dst-effect { color: var(--text-secondary); margin-left: auto; }
+.dst-effect b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+body.light-mode .dst-item { background: rgba(161, 98, 7, 0.10); border-color: rgba(161, 98, 7, 0.28); color: #a16207; }
+body.light-mode .dst-item.soon { background: rgba(220, 38, 38, 0.09); border-color: rgba(220, 38, 38, 0.3); color: #dc2626; }
+
 /* v775: 当前在岗条 */
 .oncall-bar {
   border: 1px solid var(--border-color);
@@ -3645,6 +3996,8 @@ body.light-mode .dd-hour.thin { background: #ca8a04; color: #fff; }
   background: rgba(234, 179, 8, 0.18); color: #eab308;
 }
 .oc-tz { font-size: 10.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.oc-tz em { font-style: normal; opacity: .85; }
+.dd-histz { font-style: normal; color: var(--text-muted); }
 .oc-left { font-size: 11px; color: var(--text-secondary); margin-left: auto; font-variant-numeric: tabular-nums; }
 .oc-change { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; }
 .oc-change + .oc-change { border-top: 1px dashed var(--border-color); }

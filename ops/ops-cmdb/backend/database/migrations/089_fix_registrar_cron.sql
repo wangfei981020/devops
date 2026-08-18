@@ -1,0 +1,12 @@
+-- 修正 registrar_expiry_sync 的 cron 表达式：6 段 → 5 段。
+--
+-- 迁移 084 里我写成了 `0 30 3 * * *`（6 段，带秒）。调度器用的是
+-- robfig/cron 的**标准 5 段解析器**（cron.New() 没带 WithSeconds()），
+-- 6 段直接解析失败 → AddFunc 返回 error → 任务静默不注册。
+--
+-- 后果不是"晚点跑"，是**注册以来一次都没跑过**，而页面上只表现为
+-- 「下次执行」一栏一个 `—`，看起来跟"还没到时间"一模一样。
+-- 域名续费是扣费且非幂等的操作，到期日不准会直接影响决策。
+--
+-- 同表其余 11 个任务全是 5 段，只有这一条是 6 段。
+UPDATE scheduled_tasks SET schedule = '30 3 * * *' WHERE task_key = 'registrar_expiry_sync';

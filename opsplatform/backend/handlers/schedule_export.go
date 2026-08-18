@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -529,10 +530,11 @@ func writeScheduleSheet(f *excelize.File, sheet string, month time.Time, employe
 		log.Printf("[排班导出] sheet=%s 写入班次差异说明 %d 条", sheet, len(overrides))
 	}
 
-	// ===== 时区说明 v772 =====
-	// 图例里的时间是「员工本地时间」。不写这句的话，导出的表发给别人，
-	// 欧洲同事的 09:00 会被当成北京 09:00 理解，而这两者差 6~7 小时。
-	// 接在班次差异块之后。原来是从图例末尾硬算的，加了差异块后会写到同一批行上互相覆盖
+	// ===== 时区说明 v782 =====
+	// ⚠️ 这一节在 v772 写的是「上表时间均为员工本地时间」，那是旧语义。
+	// 现在排班一律按北京时间：ig 的人也上北京时间的班，冬夏令时都不变，
+	// 时区只用来告诉他们「这对你是几点」。那句旧文案是个会让人上错班的错误断言——
+	// 看表的人有理由相信它，然后在贝城 09:00 上班（实际该 03:00），整整差 6 小时。
 	tzRow := ovRow
 	monthStart := fmt.Sprintf("%04d-%02d-01", year, mon)
 	monthEnd := fmt.Sprintf("%04d-%02d-%02d", year, mon, lastDay)
@@ -542,10 +544,20 @@ func writeScheduleSheet(f *excelize.File, sheet string, month time.Time, employe
 	f.SetCellStyle(sheet, tzHeadCell, tzHeadCell, styles.legendHead)
 
 	noteCell, _ := excelize.CoordinatesToCellName(colName, tzRow+1)
-	f.SetCellValue(sheet, noteCell, "上表时间均为员工本地时间 / Times are in each employee's local time")
+	f.SetCellValue(sheet, noteCell, "上表班次时间均为北京时间，所有人按此时间上班")
 	f.SetCellStyle(sheet, noteCell, noteCell, styles.legendCell)
+	noteCell2, _ := excelize.CoordinatesToCellName(colName, tzRow+2)
+	f.SetCellValue(sheet, noteCell2, "All shift times are Beijing time (Asia/Shanghai); everyone works to this schedule")
+	f.SetCellStyle(sheet, noteCell2, noteCell2, styles.legendCell)
 
-	tzLine := tzRow + 2
+	// 班次当地时间对照。光给时区名没用——ig 的人要的是「我几点上班」。
+	mapRow := writeShiftLocalTimeMap(f, sheet, styles, colName, tzRow+4, year, time.Month(mon), lastDay, employees, configs)
+
+	tzLine := mapRow + 1
+	empHeadCell, _ := excelize.CoordinatesToCellName(colName, tzLine)
+	f.SetCellValue(sheet, empHeadCell, "员工时区 / Employee time zone")
+	f.SetCellStyle(sheet, empHeadCell, empHeadCell, styles.legendHead)
+	tzLine++
 	for _, emp := range employees {
 		atStart := resolveTimezoneAt(emp.Timezones, monthStart)
 		atEnd := resolveTimezoneAt(emp.Timezones, monthEnd)
@@ -622,4 +634,156 @@ func legendTimeEn(cfg ShiftConfig) string {
 	}
 	log.Printf("[排班导出] WARN 班次 %s 未设置英文说明，回退到时间段 %q", cfg.Code, cfg.Time)
 	return cfg.Time
+}
+
+// tzOffsetSegments 把一个月按该时区的 UTC 偏移切成若干段，返回每段的 [起始日, 结束日]。
+//
+// 为什么要分段：10 月底欧洲退回冬令时，同一个 10 月里前后两半跟北京的时差不一样
+// （UTC+2 → UTC+1）。不分段的话整月只能写一套当地时间，其中一半是错的——
+// 跟这个文件里那句被修掉的「员工本地时间」是同一类错误：一个看着确定、实则说反的断言。
+//
+// ⚠️ 取当地正午而不是零点：切换发生在当地凌晨 2~3 点，用零点取值会踩在切换缝上。
+// 和前端 timezone.js 的 findDstTransitions 是同一套做法，改一边要改另一边。
+func tzOffsetSegments(loc *time.Location, year int, mon time.Month, lastDay int) [][2]int {
+	segs := make([][2]int, 0, 2)
+	segStart := 1
+	prev := 0
+	for d := 1; d <= lastDay; d++ {
+		_, off := time.Date(year, mon, d, 12, 0, 0, 0, loc).Zone()
+		if d == 1 {
+			prev = off
+			continue
+		}
+		if off != prev {
+			segs = append(segs, [2]int{segStart, d - 1})
+			segStart = d
+			prev = off
+		}
+	}
+	return append(segs, [2]int{segStart, lastDay})
+}
+
+// shiftLocalTime 把一个按基准时区定义的班次，换算成目标时区的当地起止钟点。
+//
+// ⚠️ 结束时刻 = 开始时刻 + 时长（绝对时间相加），不能把起止各自换算——
+// 跨切换点的班次分别换算会凭空多出或少掉 1 小时。
+func shiftLocalTime(baseLoc, targetLoc *time.Location, year int, mon time.Month, day int, timeRange string) (string, bool) {
+	startMin, durationMin, ok := parseShiftTimeRange(timeRange)
+	if !ok {
+		return "", false
+	}
+	// startMin 可能是 1440（24:00 = 当天末尾），time.Date 会自动进位到次日，不要取模
+	st := time.Date(year, mon, day, 0, startMin, 0, 0, baseLoc)
+	en := st.Add(time.Duration(durationMin) * time.Minute)
+	return fmt.Sprintf("%s-%s", st.In(targetLoc).Format("15:04"), en.In(targetLoc).Format("15:04")), true
+}
+
+// writeShiftLocalTimeMap 写「班次当地时间对照」块，返回写完后的下一行行号。
+// 每个时区一行；该时区月内跨了冬夏令时切换就拆成多行，各自标日期范围。
+func writeShiftLocalTimeMap(f *excelize.File, sheet string, styles *exportStyles, colName, startRow int,
+	year int, mon time.Month, lastDay int, employees []ScheduleEmployee, configs []ShiftConfig) int {
+
+	baseTZ := database.ScheduleDefaultTimezone
+	baseLoc, err := time.LoadLocation(baseTZ)
+	if err != nil {
+		log.Printf("[排班导出] WARN 基准时区 %s 加载失败，跳过班次当地时间对照: %v", baseTZ, err)
+		return startRow
+	}
+
+	// 参与排班的班次才有对照意义，休假类（OFF/AL/SL…）没有时间段
+	working := make([]ShiftConfig, 0, len(configs))
+	for _, c := range configs {
+		if _, _, ok := parseShiftTimeRange(c.Time); ok {
+			working = append(working, c)
+		}
+	}
+	if len(working) == 0 {
+		return startRow
+	}
+
+	// 用到的时区去重，基准排第一，其余按名字排序保证每次导出顺序一致
+	monthStart := fmt.Sprintf("%04d-%02d-01", year, mon)
+	seen := map[string]bool{baseTZ: true}
+	others := make([]string, 0, 2)
+	for _, emp := range employees {
+		tz := resolveTimezoneAt(emp.Timezones, monthStart)
+		tzEnd := resolveTimezoneAt(emp.Timezones, fmt.Sprintf("%04d-%02d-%02d", year, mon, lastDay))
+		for _, t := range []string{tz, tzEnd} {
+			if t != "" && !seen[t] {
+				seen[t] = true
+				others = append(others, t)
+			}
+		}
+	}
+	sort.Strings(others)
+
+	row := startRow
+	headCell, _ := excelize.CoordinatesToCellName(colName, row)
+	f.SetCellValue(sheet, headCell, "班次当地时间对照 / Local time by zone")
+	f.SetCellStyle(sheet, headCell, headCell, styles.legendHead)
+	row++
+
+	// 表头：时区 | 日期范围 | 各班次代码
+	hdr := []string{"时区 / Zone", "日期 / Dates"}
+	for _, c := range working {
+		label := c.Code
+		if c.Name != "" {
+			label = fmt.Sprintf("%s %s", c.Code, c.Name)
+		}
+		hdr = append(hdr, label)
+	}
+	for i, h := range hdr {
+		cell, _ := excelize.CoordinatesToCellName(colName+i, row)
+		f.SetCellValue(sheet, cell, h)
+		f.SetCellStyle(sheet, cell, cell, styles.legendHead)
+	}
+	row++
+
+	writeRow := func(zoneLabel, dateLabel string, times []string) {
+		vals := append([]string{zoneLabel, dateLabel}, times...)
+		for i, v := range vals {
+			cell, _ := excelize.CoordinatesToCellName(colName+i, row)
+			f.SetCellValue(sheet, cell, v)
+			f.SetCellStyle(sheet, cell, cell, styles.legendCell)
+		}
+		row++
+	}
+
+	// 基准行：⚠️ 照搬班次配置原文，绝不走换算。
+	// 「24:00-09:00」格式化后会变成「00:00-09:00」，把「当天末尾跨到次日」
+	// 显示成「当天凌晨」，整整差一天。只有换到别的时区时当地钟点才该现算。
+	baseTimes := make([]string, 0, len(working))
+	for _, c := range working {
+		baseTimes = append(baseTimes, c.Time)
+	}
+	writeRow(baseTZ+"（排班基准）", "全月 / All", baseTimes)
+
+	for _, tz := range others {
+		loc, err := time.LoadLocation(tz)
+		if err != nil {
+			log.Printf("[排班导出] WARN 时区 %s 加载失败，该行只写时区名: %v", tz, err)
+			writeRow(tz, "—", make([]string, len(working)))
+			continue
+		}
+		segs := tzOffsetSegments(loc, year, mon, lastDay)
+		for _, seg := range segs {
+			dateLabel := "全月 / All"
+			if len(segs) > 1 {
+				dateLabel = fmt.Sprintf("%02d/%02d-%02d/%02d", int(mon), seg[0], int(mon), seg[1])
+			}
+			times := make([]string, 0, len(working))
+			for _, c := range working {
+				t, ok := shiftLocalTime(baseLoc, loc, year, mon, seg[0], c.Time)
+				if !ok {
+					t = "—"
+				}
+				times = append(times, t)
+			}
+			writeRow(tz, dateLabel, times)
+		}
+		if len(segs) > 1 {
+			log.Printf("[排班导出] sheet=%s 时区 %s 本月跨冬夏令时切换，拆成 %d 段写入", sheet, tz, len(segs))
+		}
+	}
+	return row
 }
