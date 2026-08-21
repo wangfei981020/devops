@@ -186,7 +186,7 @@ export function AuditPage() {
           <button
             type="button"
             onClick={() => setDetailFor(row.original)}
-            className="cursor-pointer text-[13px] text-brand underline-offset-2 hover:underline"
+            className="cursor-pointer text-[13px] text-brand-text underline-offset-2 hover:underline"
           >
             {row.original.change_count > 0
               ? t('audit:detail.entryWithCount', { count: row.original.change_count })

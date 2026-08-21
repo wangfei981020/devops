@@ -379,7 +379,7 @@ function PlannedPage() {
         </p>
         <a
           href="/overview"
-          className="mt-1 text-xs text-brand underline-offset-2 hover:underline"
+          className="mt-1 text-xs text-brand-text underline-offset-2 hover:underline"
         >
           {t('notFound.backHome')}
         </a>

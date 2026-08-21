@@ -80,7 +80,12 @@
    *	⚠️ 改这两个数必须重新实测 —— 用 canvas 让浏览器做色彩转换，
    *	   不要用正则从 oklch 串里抓数字当 RGB（会算出恒为 1.00 的假比率）。 */
   --ops-brand-l-light: 0.54;
-  --ops-brand-l-dark: 0.59;
+  /* ⚠️ 0.56 不是手感值：0.58 附近是死区（白字 4.41、深色字 4.36，两头都掉出 4.5）。
+     这个值一度被改成 **0.59** —— 正落在死区里，于是深色主题下
+     「主按钮的白字 4.24」和「品牌色当文字 3.77」双双不达标，
+     而上面那段死区说明原封不动地留着，没有任何东西报错（OPSCMDB-081）。
+     现在由 check-brand-l-sync 守卫保证它与 brand.ts 的 DEFAULT_L 不会再分叉。 */
+  --ops-brand-l-dark: 0.56;
   --ops-brand-c: 0.19;
   --ops-brand-h: 278; /* 靛蓝紫：与红/黄/绿色相距离最远，永不被误读成状态色 */
 
@@ -117,6 +122,22 @@
     oklch(calc(var(--ops-brand-l-light) - 0.08) var(--ops-brand-c) var(--ops-brand-h)),
     oklch(calc(var(--ops-brand-l-dark) - 0.08) var(--ops-brand-c) var(--ops-brand-h))
   );
+  /* 品牌色**当文字用**的那一档。
+   *
+   * 🔴 为什么不能直接用 accent-500：一个颜色没法同时当「主按钮底色」和「小字颜色」。
+   *	按钮要的是"底色够深、白字压得住"，文字要的是"够亮、在深底上读得清" ——
+   *	深色主题下这两个要求把亮度往相反方向拉。
+   *	实测：accent-500（L=0.56）当侧栏选中项的文字只有 **3.36**，
+   *	而把 L 调到能让它达标（≥0.62）就会让主按钮的白字掉出 4.5（OPSCMDB-081）。
+   *
+   * ⚠️ 浅色档沿用 accent-500（L=0.54，实测 4.68 达标）；
+   *	深色档单独抬到 0.68 → 5.06。**两个主题必须分别实测**，
+   *	不能测一个推另一个（本条档案就是这么发现三处缺陷不重叠的）。 */
+  --ops-brand-text: light-dark(
+    oklch(var(--ops-brand-l-light) var(--ops-brand-c) var(--ops-brand-h)),
+    oklch(0.68 var(--ops-brand-c) var(--ops-brand-h))
+  );
+
   --ops-accent-bg: light-dark(
     oklch(var(--ops-brand-l-light) var(--ops-brand-c) var(--ops-brand-h) / 0.1),
     oklch(var(--ops-brand-l-dark) var(--ops-brand-c) var(--ops-brand-h) / 0.14)
@@ -148,7 +169,11 @@
         正确做法：用 canvas 让浏览器做色彩转换。 */
   --ops-success: light-dark(oklch(0.53 0.15 152), oklch(0.72 0.16 152));
   --ops-success-bg: light-dark(oklch(0.72 0.16 152 / 0.16), oklch(0.72 0.16 152 / 0.14));
-  --ops-warning: light-dark(oklch(0.56 0.14 68), oklch(0.79 0.15 78));
+  /* ⚠️ 浅色档的 0.56 是**对着页面底色**调的（那样有 4.59），
+     但警告文字实际坐在 --ops-warning-bg 合成出来的浅橙上（rgb(247,235,211)），
+     对着那个底只有 4.06 —— 实测 4.04（OPSCMDB-081）。
+     语义色必须对着**它自己的 bg 档**测，不是对着页面底色测。0.52 → 4.80。 */
+  --ops-warning: light-dark(oklch(0.52 0.14 68), oklch(0.79 0.15 78));
   --ops-warning-bg: light-dark(oklch(0.79 0.15 78 / 0.2), oklch(0.79 0.15 78 / 0.14));
   --ops-danger: light-dark(oklch(0.55 0.19 22), oklch(0.66 0.19 22));
   --ops-danger-bg: light-dark(oklch(0.66 0.19 22 / 0.13), oklch(0.66 0.19 22 / 0.14));
@@ -286,6 +311,8 @@
   /* 品牌色**当文字用**时的别名（链接、选中态的菜单项）。
      与 --color-primary 同值，但分开命名，读代码时能看出是底色还是文字。 */
   --color-brand: var(--ops-accent-500);
+  /* 品牌色当文字用时走这一档（text-brand-text）—— 见 --ops-brand-text 的说明 */
+  --color-brand-text: var(--ops-brand-text);
   --color-danger-foreground: oklch(0.99 0 0);
   --color-secondary: var(--ops-secondary);
   --color-secondary-foreground: var(--ops-secondary-foreground);

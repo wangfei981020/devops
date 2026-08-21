@@ -226,7 +226,7 @@ function Runs({
                   <button
                     type="button"
                     onClick={() => onOpenLog(r)}
-                    className="cursor-pointer text-xs text-brand underline-offset-2 hover:underline"
+                    className="cursor-pointer text-xs text-brand-text underline-offset-2 hover:underline"
                   >
                     {t('pipelines:viewLog')}
                   </button>

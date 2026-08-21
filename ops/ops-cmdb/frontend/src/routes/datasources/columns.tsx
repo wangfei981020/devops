@@ -133,7 +133,7 @@ export function dataSourceColumns(t: TFn): ColumnDef<DataSource>[] {
             {d.kind === 'obs' ? (
               <a
                 href="/admin/obs-endpoints"
-                className="shrink-0 text-[11px] text-brand underline-offset-2 hover:underline"
+                className="shrink-0 text-[11px] text-brand-text underline-offset-2 hover:underline"
               >
                 {t('datasources:goTest')}
               </a>

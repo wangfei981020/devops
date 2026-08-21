@@ -253,7 +253,7 @@ function UsageChart({
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="1"
-                className="text-brand"
+                className="text-brand-text"
                 vectorEffect="non-scaling-stroke"
               />
             </svg>

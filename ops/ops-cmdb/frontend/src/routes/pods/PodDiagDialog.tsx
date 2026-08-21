@@ -223,7 +223,7 @@ function DiagnoseView({ target, t }: { target: PodTarget; t: TFn }) {
                 {sg.link ? (
                   <a
                     href={sg.link}
-                    className="ml-1.5 cursor-pointer text-brand underline-offset-2 hover:underline"
+                    className="ml-1.5 cursor-pointer text-brand-text underline-offset-2 hover:underline"
                   >
                     {t('pods:diag.goThere')}
                   </a>

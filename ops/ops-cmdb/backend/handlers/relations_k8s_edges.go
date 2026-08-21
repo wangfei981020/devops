@@ -131,9 +131,18 @@ func collectK8sEdges(sc *store.Scoped) ([]autoEdge, k8sEdgeStats, []TaskFailure)
 	var st k8sEdgeStats
 	var failures []TaskFailure
 
-	// 集群 id → 名字。CI 名里要带集群，否则跨集群同名对象会被合并成一个点
+	// 集群 id → **技术名**。CI 名里要带集群，否则跨集群同名对象会被合并成一个点。
+	//
+	// 🔴 这里原来取的是 `COALESCE(display_name, name)`，于是 CI 名长这样：
+	//	    G32 生产/game/game-ing
+	//	把**可改的别名**写进了 CI 的身份里 —— 别名一改，同一个对象下次采集
+	//	就会算成一条新 CI，旧的变孤儿，关系边跟着断，而且不会报任何错（OPSCMDB-082）。
+	//	技术名（k8s_clusters.name）才是稳定标识，也才是 kubectl / PromQL 里用的那个。
+	//
+	// ⚠️ 别名不是不要了 —— 它由前端的 clusterLabel() 在**展示时**加注，
+	//	而不是写进数据。存量 CI 名由迁移 091 改写。
 	clusterName := map[int]string{}
-	if rows, err := sc.Query(`SELECT id, COALESCE(display_name, name) FROM k8s_clusters WHERE tenant_id = ?`); err == nil {
+	if rows, err := sc.Query(`SELECT id, name FROM k8s_clusters WHERE tenant_id = ?`); err == nil {
 		for rows.Next() {
 			var id int
 			var n string

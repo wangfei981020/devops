@@ -405,7 +405,7 @@ function NodeOverrideBlock({ t }: { t: (k: string, p?: Record<string, unknown>) 
         <button
           type="button"
           onClick={() => setShowAll((v) => !v)}
-          className="cursor-pointer text-xs text-brand underline-offset-2 hover:underline"
+          className="cursor-pointer text-xs text-brand-text underline-offset-2 hover:underline"
         >
           {showAll
             ? t('costrates:nodes.showNotable')

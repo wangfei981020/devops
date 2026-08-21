@@ -360,7 +360,15 @@ export function ReconPage({ session }: { session: Session }) {
       },
       {
         id: 'service',
-        header: t('opsversion:recon.service'),
+        // 「=镜像名最后一段」原来每行重复一遍，挪到表头说一次就够
+        header: () => (
+          <span>
+            {t('opsversion:recon.service')}
+            <span className="ml-1 font-normal text-muted-foreground">
+              {t('opsversion:recon.serviceHint')}
+            </span>
+          </span>
+        ),
         accessorFn: (r) => r.ServiceKey,
         cell: ({ row }) => {
           // 🔴 行首判定色带 —— 本产品的标志性读法。
@@ -372,7 +380,7 @@ export function ReconPage({ session }: { session: Session }) {
           return (
             <div className="flex items-stretch gap-2">
               <span className={`w-[3px] shrink-0 rounded-[1px] ${STRIPE[kind]}`} aria-hidden />
-              <div>
+              <div className="min-w-0">
                 <button
                   type="button"
                   onClick={() => setDrill(row.original)}
@@ -380,16 +388,26 @@ export function ReconPage({ session }: { session: Session }) {
                 >
                   {row.original.ServiceKey}
                 </button>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] text-muted-foreground">
-                    {t('opsversion:recon.serviceHint')}
+                <div className="flex items-center gap-2">
+                  {/* 🔴 结论要有**文字**，不能只靠颜色。
+                      导出的 Excel 有「结论」列白纸黑字写着，界面上原来只有
+                      3px 色带 —— 人得靠颜色猜是哪一档，色盲更是完全读不到。
+
+                      ⚠️ 放在服务名底下而不是最右一列：视线从左边进入，
+                         色带和结论文字挨着一次读完；平台多要横滚时，
+                         首列是钉住的，放最右的话横滚一下结论就看不见了。 */}
+                  <span className={`text-[11px] font-semibold ${STAT[kind]}`}>
+                    {t(`opsversion:verdict.${kind}`)}
                   </span>
-                  {/* 整行忽略入口。放在服务名底下而不是操作列 ——
-                      「不比这个服务」是对**这个服务**的决定，挨着名字最好懂。 */}
+                  {/* 整行忽略入口。
+                      ⚠️ 改成 hover 才出现：它原来常驻，100 行就重复 100 遍，
+                         和「=镜像名最后一段」两条小字把表体填满了噪音。
+                         用 focus-within 兜键盘用户 —— 只认 hover 的话
+                         Tab 过来的人根本触发不了这个按钮。 */}
                   <button
                     type="button"
                     onClick={() => ig.ignoreServices([row.original.ServiceKey])}
-                    className="cursor-pointer text-[11px] text-muted-foreground underline-offset-2 hover:text-danger hover:underline"
+                    className="cursor-pointer text-[11px] text-muted-foreground opacity-0 underline-offset-2 group-hover/row:opacity-100 focus:opacity-100 hover:text-danger hover:underline"
                   >
                     {t('opsversion:ignore.rowAction')}
                   </button>
@@ -760,6 +778,12 @@ export function ReconPage({ session }: { session: Session }) {
                   </div>
                 ) : (
                 <DataTable
+                  // 🔴 只给**要处理的**行上底色，一致的保持素底。
+                  //    四种都铺满（照搬导出）的话，占一半的「一致」最抢眼，
+                  //    注意力分配是反的。定义见 styles.css 的 .ops-row-*
+                  rowClassName={(r) =>
+                    r.Verdict === 'same' ? undefined : `ops-row ops-row-${r.Verdict}`
+                  }
                   columns={columns}
                   data={visibleRows}
                   rowKey={(r) => r.ServiceKey}

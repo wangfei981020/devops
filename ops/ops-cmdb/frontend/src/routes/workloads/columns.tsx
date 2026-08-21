@@ -115,7 +115,7 @@ export function workloadColumns(t: TFn, _locale: Locale): ColumnDef<Workload>[] 
               })
               window.location.href = `/k8s/pods?${qs.toString()}`
             }}
-            className="cursor-pointer text-[13px] text-brand underline-offset-2 hover:underline"
+            className="cursor-pointer text-[13px] text-brand-text underline-offset-2 hover:underline"
           >
             {t('workloads:action.viewPods')}
           </button>
@@ -134,7 +134,7 @@ function ManifestButton({ w, label }: { w: Workload; label: string }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="cursor-pointer rounded-[var(--radius)] px-1.5 py-0.5 text-[11px] text-brand underline-offset-2 hover:underline"
+        className="cursor-pointer rounded-[var(--radius)] px-1.5 py-0.5 text-[11px] text-brand-text underline-offset-2 hover:underline"
       >
         {label}
       </button>

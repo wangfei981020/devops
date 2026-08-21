@@ -129,7 +129,7 @@ export function ByDomainView({
                   <button
                     type="button"
                     onClick={() => setOpenFor(d)}
-                    className="min-w-[220px] cursor-pointer text-left text-[13px] font-medium text-brand underline-offset-2 hover:underline"
+                    className="min-w-[220px] cursor-pointer text-left text-[13px] font-medium text-brand-text underline-offset-2 hover:underline"
                   >
                     {d.name}
                   </button>

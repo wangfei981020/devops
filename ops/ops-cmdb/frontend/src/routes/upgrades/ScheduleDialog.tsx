@@ -184,7 +184,7 @@ export function ScheduleBody() {
         <button
           type="button"
           onClick={() => setShowAll((v) => !v)}
-          className="mr-auto cursor-pointer text-xs text-brand underline-offset-2 hover:underline"
+          className="mr-auto cursor-pointer text-xs text-brand-text underline-offset-2 hover:underline"
         >
           {showAll
             ? t('upgrades:schedule.showNotable')

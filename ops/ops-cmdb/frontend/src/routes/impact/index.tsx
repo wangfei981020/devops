@@ -162,7 +162,7 @@ function ResourcePicker({
               onClick={() => onPick(e.ci_id)}
               className={`flex cursor-pointer items-center gap-1 rounded-[var(--radius)] border px-2 py-0.5 text-xs transition-colors duration-150 ${
                 e.ci_id === currentId
-                  ? 'border-brand bg-brand/10 text-brand'
+                  ? 'border-brand bg-brand/10 text-brand-text'
                   : 'border-border text-foreground hover:bg-secondary'
               }`}
             >

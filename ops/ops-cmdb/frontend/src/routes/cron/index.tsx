@@ -165,7 +165,7 @@ function BrokenBar({
       <button
         type="button"
         onClick={onToggle}
-        className="cursor-pointer text-xs text-brand underline-offset-2 hover:underline"
+        className="cursor-pointer text-xs text-brand-text underline-offset-2 hover:underline"
       >
         {onlyBroken ? t('cron:showAll') : t('cron:showBrokenOnly')}
       </button>

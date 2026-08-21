@@ -323,7 +323,7 @@ function StaleBanner({
       <button
         type="button"
         onClick={onGoDatasources}
-        className="cursor-pointer text-xs text-brand underline-offset-2 hover:underline"
+        className="cursor-pointer text-xs text-brand-text underline-offset-2 hover:underline"
       >
         {t('hosts:note.staleAction')}
       </button>

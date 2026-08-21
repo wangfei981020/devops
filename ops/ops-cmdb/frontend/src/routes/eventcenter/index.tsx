@@ -111,7 +111,7 @@ export function EventCenterPage() {
             onClick={() => setSearch({ upcoming: search.upcoming ? '' : '1', page: 1 })}
             className={`cursor-pointer rounded-[var(--radius)] border px-2.5 py-1 text-xs transition-colors duration-150 ${
               search.upcoming
-                ? 'border-brand bg-brand/10 text-brand'
+                ? 'border-brand bg-brand/10 text-brand-text'
                 : 'border-border text-muted-foreground hover:bg-secondary'
             }`}
           >

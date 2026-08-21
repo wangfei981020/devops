@@ -144,7 +144,7 @@ function Report({ r, t, clusterId }: { r: HealthReport; t: TFn; clusterId: numbe
                 <button
                   type="button"
                   onClick={() => setDrill({ key: f.key, title: f.title })}
-                  className="tabular cursor-pointer text-xs text-brand underline-offset-2 hover:underline"
+                  className="tabular cursor-pointer text-xs text-brand-text underline-offset-2 hover:underline"
                 >
                   {/* ⚠️ 计数必须带单位。
                       光一个「33」挨着后面的分类「工作负载」，会被读成"33 个工作负载"，

@@ -18,6 +18,13 @@ export interface DataTableProps<T> {
   onRowClick?: (row: T) => void
   selectedKey?: string | null
   /**
+   * 每行额外的样式，用来做「整行底色」这类按行结论上色的表达。
+   *
+   * ⚠️ 请用**半透明**底色。实色会盖掉 hover 和选中的反馈，
+   *    而那两个是交互表格里最基本的两个信号。
+   */
+  rowClassName?: (row: T) => string | undefined
+  /**
    * 超过这个行数就开虚拟滚动。
    *
    * 50 是经验阈值：再少的话虚拟化的开销和闪烁反而不划算，
@@ -79,6 +86,7 @@ export function DataTable<T>({
   rowKey,
   onRowClick,
   selectedKey,
+  rowClassName,
   virtualizeThreshold = 400,
   rowHeight = 40,
   maxHeight = 560,
@@ -172,9 +180,12 @@ export function DataTable<T>({
         className={cn(
           'group/row border-b border-border transition-colors duration-150',
           onRowClick && 'cursor-pointer',
-          // 选中行用左侧色条 + 淡底，不整行染色 ——
-          // 整行染色会把状态徽章的颜色盖掉，而那才是这一行最该被读到的信息。
+          // 选中行用左侧色条 + 淡底 —— 选中是**交互状态**，
+          // 它要盖过 rowClassName 给的那层"数据状态"底色。
           selected ? 'bg-brand-bg' : 'hover:bg-secondary',
+          // 数据状态底色（按行结论上色）排在最后：优先级最低，
+          // 半透明且 hover/选中时自己让位，见产品侧的 .ops-row-*
+          !selected && rowClassName?.(row.original),
         )}
         aria-selected={selected || undefined}
       >

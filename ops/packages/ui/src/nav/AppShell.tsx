@@ -404,7 +404,7 @@ function NavGroupBlock({
               aria-label={t(item.labelKey)}
               className={cn(
                 'grid place-items-center rounded-[var(--radius)] py-1.5',
-                active ? 'bg-brand-bg text-brand' : 'text-foreground/70 hover:bg-secondary',
+                active ? 'bg-brand-bg text-brand-text' : 'text-foreground/70 hover:bg-secondary',
                 item.planned ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
               )}
             >
@@ -437,12 +437,12 @@ function NavGroupBlock({
             <span className="shrink-0 text-muted-foreground/60" aria-hidden="true">
               ·
             </span>
-            <span className="truncate text-brand normal-case">{t(activeItem.labelKey)}</span>
+            <span className="truncate text-brand-text normal-case">{t(activeItem.labelKey)}</span>
             <span className="size-1.5 shrink-0 rounded-full bg-brand" aria-hidden="true" />
           </>
         ) : null}
         {!open && groupBadge > 0 ? (
-          <span className="rounded-full bg-brand-bg px-1.5 text-[10px] font-medium text-brand tabular-nums">
+          <span className="rounded-full bg-brand-bg px-1.5 text-[10px] font-medium text-brand-text tabular-nums">
             {groupBadge}
           </span>
         ) : null}
@@ -471,7 +471,7 @@ function NavGroupBlock({
                   'flex w-full items-center gap-2.5 rounded-[var(--radius)] px-2 py-1.5 text-left text-[13px]',
                   'transition-colors duration-150',
                   active
-                    ? 'bg-brand-bg font-medium text-brand'
+                    ? 'bg-brand-bg font-medium text-brand-text'
                     : 'text-foreground/75 hover:bg-secondary hover:text-foreground',
                   item.planned && 'cursor-not-allowed opacity-40 hover:bg-transparent',
                   !item.planned && 'cursor-pointer',
@@ -481,7 +481,7 @@ function NavGroupBlock({
                 <span className="truncate">{t(item.labelKey)}</span>
                 {/* 0 不渲染：常驻的「0」会让人对角标脱敏 */}
                 {badges?.[item.key] ? (
-                  <span className="ml-auto rounded-full bg-brand-bg px-1.5 text-[10px] font-medium text-brand tabular-nums">
+                  <span className="ml-auto rounded-full bg-brand-bg px-1.5 text-[10px] font-medium text-brand-text tabular-nums">
                     {badges[item.key]}
                   </span>
                 ) : null}

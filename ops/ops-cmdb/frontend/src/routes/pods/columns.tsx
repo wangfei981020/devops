@@ -186,7 +186,7 @@ function PodManifestButton({ p, label }: { p: Pod; label: string }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="cursor-pointer rounded-[var(--radius)] px-1.5 py-0.5 text-[11px] text-brand underline-offset-2 hover:underline"
+        className="cursor-pointer rounded-[var(--radius)] px-1.5 py-0.5 text-[11px] text-brand-text underline-offset-2 hover:underline"
       >
         {label}
       </button>
