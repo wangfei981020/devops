@@ -17,13 +17,10 @@
   },
   "verdict": {
     "same": "Same",
-    "behind": "Behind",
-    "ahead": "Ahead",
-    "missing_here": "Not in this column",
-    "missing_base": "Not in baseline",
-    "unknown": "Undecidable",
-    "conflict": "Name conflict",
-    "no_data": "No data",
+    "diff": "Different",
+    "missing": "Missing",
+    "unknown": "Undeterminable",
+    "ignored": "Ignored",
     "deploying": "Deploying"
   },
   "verdictHint": {
@@ -623,5 +620,13 @@
   },
   "boot": {
     "failTitle": "Cannot reach the server"
+  },
+  "cellState": {
+    "version": "Has version",
+    "missing": "Not here",
+    "no_data": "Not collected",
+    "unversioned": "Unversioned tag",
+    "conflict": "Name conflict",
+    "ignored": "Ignored"
   }
 }

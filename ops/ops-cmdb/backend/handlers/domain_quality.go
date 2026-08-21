@@ -11,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ops-cmdb-backend/logx"
+
+	"ops-cmdb-backend/internal/httpx"
 )
 
 // ─────────────────────────────────────────────────────────────────
@@ -78,6 +80,7 @@ func (h *DomainQualityHandler) DomainQuality(c *gin.Context) {
 		// 后者说明 blackbox 没在采。混成一句"暂无数据"两件事都没法处置
 		c.JSON(http.StatusOK, gin.H{
 			"ok": false, "configured": false,
+			"hint_key": "error.noProbeDataSource",
 			"hint": "尚未接入 Prometheus/VictoriaMetrics 数据源，拿不到拨测数据。" +
 				"请到「管理 → 观测端点」添加一个 type=prometheus 的接入点",
 		})
@@ -89,10 +92,17 @@ func (h *DomainQualityHandler) DomainQuality(c *gin.Context) {
 	// 拨测成功与否
 	okRows, okErr := promInstant(base, token, `probe_success`)
 	if certErr != nil && okErr != nil {
-		c.JSON(http.StatusBadGateway, gin.H{
-			"ok": false, "configured": true,
-			"error": "拉取拨测指标失败：" + certErr.Error(),
-		})
+		// 🔴 必须走结构化错误：只塞 `error_key` 的话，前端的
+		//	normalizeError 认不出这是个结构化错误（没有 code / message_key），
+		//	会退到"按状态码兜底"，界面上显示的是通用的
+		//	「The upstream returned an error … → 502」——
+		//	而真正能指导下一步的那句（DNS 解析不到 vmselect）就丢了（实测）。
+		httpx.FailKeyWith(c, httpx.CodeUpstreamError, "error.probeMetricsFetchFailed",
+			map[string]any{"reason": certErr.Error()},
+			map[string]any{
+				"ok": false, "configured": true,
+				"error": "拉取拨测指标失败：" + certErr.Error(),
+			})
 		return
 	}
 

@@ -1,3 +1,4 @@
+import { formatList } from '@ops/i18n'
 import { Badge } from '@ops/ui'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useState } from 'react'
@@ -94,7 +95,7 @@ function RoleRow({ role, t }: { role: Role; t: TFn }) {
               <dt className="w-[72px] shrink-0 text-muted-foreground">{g.label}</dt>
               {/* whitespace-normal：这一串可能很长，必须折行 */}
               <dd className="min-w-0 flex-1 whitespace-normal break-words text-foreground">
-                {g.names.join('、')}
+                {formatList(t, g.names)}
               </dd>
             </div>
           ))}

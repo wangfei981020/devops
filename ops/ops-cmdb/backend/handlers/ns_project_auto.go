@@ -122,9 +122,10 @@ func (h *K8sResourceHandler) AutoNsProjects(c *gin.Context) {
 	}
 	if len(projects) == 0 {
 		c.JSON(http.StatusOK, gin.H{
-			"error":    "还没有任何项目，无法自动归属",
-			"hint_key": "namespaces:hint.createProjectFirst",
-			"hint":     "先到「基础配置 → 项目」建好项目，再回来自动匹配",
+			"error_key": "error.noProjectsForAutoAssign",
+			"error":     "还没有任何项目，无法自动归属",
+			"hint_key":  "namespaces:hint.createProjectFirst",
+			"hint":      "先到「基础配置 → 项目」建好项目，再回来自动匹配",
 		})
 		return
 	}
@@ -177,7 +178,9 @@ func (h *K8sResourceHandler) AutoNsProjects(c *gin.Context) {
 		logx.Line("ns_project", "自动归属 cluster="+itoa(cid)+" 写入 "+itoa(n)+" 条")
 		SetAuditTarget(c, "集群 "+itoa(cid)+" 自动归属 "+itoa(n)+" 个命名空间")
 		c.JSON(http.StatusOK, gin.H{"applied": n, "items": out, "stat": stat,
-			"msg": "已归属 " + itoa(n) + " 个命名空间；平台组件和无法判断的仍为空，需要人工处理"})
+			"msg_key":    "namespaces:autoAssigned",
+			"msg_params": map[string]any{"count": n},
+			"msg":        "已归属 " + itoa(n) + " 个命名空间；平台组件和无法判断的仍为空，需要人工处理"})
 		return
 	}
 

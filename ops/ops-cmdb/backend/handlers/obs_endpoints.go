@@ -86,6 +86,25 @@ func (h *ObsHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// obsPatch 部分更新用。
+//
+// 🔴 指针 = 三态。用普通类型的话：
+//
+//	不传 enabled → 被写成"启用"，于是**任何一次保存都会把停用的源打开**；
+//	不传 type/url → 被写成空串，建出一条"显示已启用但永远查不到数据"的记录
+//	（obsTypes 上面的注释正是在说这种失效模式）。
+//	而界面上只显示"已保存"（OPSCMDB-083）。
+type obsPatch struct {
+	Name         *string `json:"name"`
+	Type         *string `json:"type"`
+	URL          *string `json:"url"`
+	Env          *string `json:"env"`
+	ClusterID    *int    `json:"cluster_id"`
+	ClusterLabel *string `json:"cluster_label"`
+	Token        string  `json:"token"` // 空=保留原 token（这一项本来就是二态，不用指针）
+	Enabled      *int    `json:"enabled"`
+}
+
 type obsIn struct {
 	Name         string `json:"name"`
 	Type         string `json:"type"`
@@ -107,6 +126,16 @@ var obsTypes = map[string]string{
 	"loki":       "Loki",
 	"kubesphere": "KubeSphere",
 	"n9e":        "夜莺 Nightingale",
+}
+
+// obsTypeKeys 认得的类型清单（排过序，用于报错时告诉调用方可选值）。
+func obsTypeKeys() []string {
+	out := make([]string, 0, len(obsTypes))
+	for k := range obsTypes {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func normalizeObsType(t string) (string, bool) {
@@ -177,14 +206,23 @@ func (h *ObsHandler) Update(c *gin.Context) {
 		return
 	}
 	id, _ := strconv.Atoi(c.Param("id"))
-	var in obsIn
+	var in obsPatch
 	if err := c.ShouldBindJSON(&in); err != nil {
 		httpx.Fail(c, httpx.CodeBadRequest, err, nil)
 		return
 	}
-	enabled := 1
-	if in.Enabled != nil {
-		enabled = *in.Enabled
+	if requireNonBlank(c, "name", in.Name) || requireNonBlank(c, "url", in.URL) {
+		return
+	}
+	// 传了 type 就必须是认得的那几种 —— 否则会存出一条永远查不到数据、
+	// 界面上却显示"已启用"的记录（Create 一直有这道校验，Update 没有）
+	if in.Type != nil {
+		k, ok := normalizeObsType(*in.Type)
+		if !ok {
+			httpx.Invalid(c, "type", strings.Join(obsTypeKeys(), "|"))
+			return
+		}
+		in.Type = &k
 	}
 	if in.Token != "" {
 		e, err := h.Cipher.Encrypt(in.Token)
@@ -197,9 +235,30 @@ func (h *ObsHandler) Update(c *gin.Context) {
 			return
 		}
 	}
+	p := &patchSet{}
+	p.Add("name", in.Name)
+	p.Add("type", in.Type)
+	p.Add("url", in.URL)
+	p.Add("env", in.Env)
+	p.Add("cluster_id", in.ClusterID)
+	if in.ClusterLabel != nil {
+		lbl := strings.TrimSpace(*in.ClusterLabel)
+		p.Add("cluster_label", &lbl)
+	}
+	p.Add("enabled", in.Enabled)
+	if p.Empty() {
+		// token 单独更新过就算改动，不再要求别的字段
+		if in.Token != "" {
+			SetAuditTarget(c, strconv.Itoa(id))
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+			return
+		}
+		httpx.Invalid(c, "body", "至少要传一个要改的字段")
+		return
+	}
 	// ★ 越权修复：原为 `WHERE id=?`，任何租户都能改别人的观测数据源（内含 token）
-	res, err := sc.Exec(`UPDATE obs_endpoints SET name=?,type=?,url=?,env=?,cluster_id=?,cluster_label=?,enabled=? WHERE tenant_id = ? AND id=?`,
-		in.Name, in.Type, in.URL, in.Env, in.ClusterID, strings.TrimSpace(in.ClusterLabel), enabled, id)
+	res, err := sc.Exec(`UPDATE obs_endpoints SET `+p.SQL()+` WHERE tenant_id = ? AND id=?`,
+		append(p.Args(), id)...)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -208,7 +267,12 @@ func (h *ObsHandler) Update(c *gin.Context) {
 		httpx.NotFound(c, "endpoint")
 		return
 	}
-	SetAuditTarget(c, in.Name)
+	// 没传 name 时回落到 id：审计目标空着等于没记
+	if n := derefStr(in.Name); n != "" {
+		SetAuditTarget(c, n)
+	} else {
+		SetAuditTarget(c, strconv.Itoa(id))
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

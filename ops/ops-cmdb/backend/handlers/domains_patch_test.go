@@ -99,3 +99,29 @@ func TestPatchSetSkipsNil(t *testing.T) {
 		t.Fatal("空 patchSet 的 Empty() 该是 true")
 	}
 }
+
+// TestPatchSetFloatSkipsNil 费率类字段用 float64 时的三态。
+//
+// 🔴 `cloud_compute_rates` 只传 vcpu 费率的话，用普通 float64 会把
+// 内存费率写成 0 —— 那等于在成本核算里把内存算成免费的，
+// 而账面上一切正常，没有任何报错（OPSCMDB-083）。
+func TestPatchSetFloatSkipsNil(t *testing.T) {
+	v := 0.031
+	p := &patchSet{}
+	p.Add("vcpu_hour_usd", &v)
+	p.Add("ram_gb_hour_usd", (*float64)(nil))
+	if got := p.SQL(); got != "vcpu_hour_usd=?" {
+		t.Fatalf("没传的费率被写进了 SET：%q", got)
+	}
+	if len(p.Args()) != 1 || p.Args()[0].(float64) != v {
+		t.Fatalf("Args = %#v", p.Args())
+	}
+
+	// 反向：显式传 0 是合法的（某些机型内存确实不单独计价）
+	zero := 0.0
+	p2 := &patchSet{}
+	p2.Add("ram_gb_hour_usd", &zero)
+	if p2.Empty() {
+		t.Fatal("显式传 0 被当成了没传 —— 那就再也改不成 0 了")
+	}
+}

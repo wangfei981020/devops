@@ -10,6 +10,11 @@
  * 391 处存量是没遵守这条约定的历史，用基线锁住：**只挡新增**。
  * 每迁移一批就把基线调低，差值不能留着当"白送的额度"。
  *
+ * ⭐ **ops-cmdb 已经清零**（2026-08-21）。基线留在这里是为了别的产品，
+ *	以及万一有人往回加。清零不代表"响应里没有中文了"——
+ *	留给 MCP / AI 的中文原句仍然在，只是每一句都配了 `*_key`，
+ *	或者所在的函数标了 `//ops:mcp-only`（那种输出只有 AI 会读）。
+ *
  * ⚠️ 迁移不是"翻译几句"。中英混排比全中文更难读，所以粒度必须是**页面级**：
  *	一个页面涉及的所有文案一次迁完，那个页面才算英文可用（OPSCMDB-054）。
  *
@@ -51,7 +56,7 @@ const KEYS = ['hint', 'error', 'msg', 'message', 'summary', 'note', 'reason', 'd
  * 数字来自本守卫自己的口径 —— 换成别的数法就对不上了。
  */
 const BASELINE = new Map([
-  ['ops-cmdb', 33],
+  ['ops-cmdb', 0],
 ])
 
 // ⚠️ 基线里包含两类**有意保留**的中文，加起来约 29 处：
@@ -106,6 +111,15 @@ function hasPairedKey(src, idx, key) {
     j++
   }
   const block = src.slice(i, j)
+  // ⚠️ 走 httpx.Fail / FailKey / FailKeyWith 时，`message_key` 是**函数参数**，
+  //	不是同块里的字面量 —— 按"块里有没有 message_key"找是找不到的，
+  //	于是**最规范的那种写法**（结构化错误 + extra 里带中文给 MCP）
+  //	反而被算成未迁移。这三个函数一定会发 message_key，直接认。
+  if (key === 'error' || key === 'message') {
+    const lead = src.slice(Math.max(0, i - 300), i)
+    const at = lead.lastIndexOf('httpx.Fail')
+    if (at >= 0 && !lead.slice(at).includes('c.JSON')) return true
+  }
   // ⚠️ `error` / `message` 的配对键还有一个：结构化错误用的是 `message_key`
   //	（见 internal/httpx/errors.go 的 APIError）。只认 `error_key` 的话，
   //	用标准形态写的那些会被算成"未配对"，数字降不下来 —— 而它们恰恰是最规范的。
@@ -113,12 +127,49 @@ function hasPairedKey(src, idx, key) {
   return new RegExp(`"${key}_key"`).test(block)
 }
 
+/**
+ * 这一处是不是落在标了 `//ops:mcp-only` 的函数里。
+ *
+ * 🔴 那种输出**只有 AI 会读**，翻译它没有意义，也不该占着"还差多少"的名额。
+ *
+ * ⚠️ 必须是**显式声明**，不能靠"前端调不调这个路由"去推断 ——
+ *	实测那个推断在插值路径（`/api/cdn/accounts/${id}/verify`）上会误判成
+ *	MCP-only，据此豁免等于悄悄放过真的界面文案。
+ *	声明式的判据即使写错了，至少在代码里看得见。
+ */
+function inMCPOnlyFunc(src, idx) {
+  const before = src.slice(0, idx)
+  const at = before.lastIndexOf('\nfunc ')
+  if (at < 0) return false
+  const lines = before.slice(0, at + 1).split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i].trim()
+    if (l === '') continue
+    if (!l.startsWith('//')) break
+    if (/^\/\/\s*ops:mcp-only\b/.test(l)) return true
+  }
+  return false
+}
+
 function inLogCall(src, idx) {
   const before = src.slice(Math.max(0, idx - 400), idx)
   const logAt = Math.max(before.lastIndexOf('logx.'), before.lastIndexOf('log.Printf('))
-  if (logAt < 0) return false
-  // 日志调用和当前位置之间不能夹着 c.JSON —— 那说明日志已经结束，这是另一句
-  return !before.slice(logAt).includes('c.JSON')
+  if (logAt >= 0 && !before.slice(logAt).includes('c.JSON')) return true
+  // 🔴 还有一种写法：**先把 map 建好、再交给日志**。
+  //
+  //	detail := map[string]any{"note": "库内排序规则不统一…"}
+  //	…
+  //	logx.J("db", "collation_mismatch", detail)      ← 日志调用在**后面**
+  //
+  //	只往前看的话，这种会被当成响应文案报出来 —— 而它根本不是响应
+  //	（`CheckCollations` 连 gin.Context 都没有，是启动期自检）。
+  //	往后看一段：这个 map 的变量名如果紧接着被喂给日志，就不算。
+  const varDecl = /(\w+)\s*:?=\s*map\[string\]any\{[^{}]*$/.exec(before)
+  if (varDecl) {
+    const after = src.slice(idx, idx + 1200)
+    if (new RegExp(`log(?:x)?\\.\\w+\\([^)]*\\b${varDecl[1]}\\b`).test(after)) return true
+  }
+  return false
 }
 
 const root = resolve(process.argv[2] ?? '.')
@@ -142,6 +193,8 @@ for (const [product, baseline] of BASELINE) {
       //	不排除的话这个守卫会引导人把日志也"翻译"掉（我自己就差点改了两处），
       //	结果是英文界面没变好，日志反而变成了一串看不懂的 key。
       if (inLogCall(src, m.index)) continue
+      // 标了 ops:mcp-only 的函数：读者只有 AI，翻译它没有意义
+      if (inMCPOnlyFunc(src, m.index)) continue
       // 🔴 有配对的 `<key>_key` 就不算：界面读 key（可翻译），
       //	中文那句是留给 MCP / 直接调 API 的人的，删掉反而是倒退。
       if (hasPairedKey(src, m.index, m[1])) continue

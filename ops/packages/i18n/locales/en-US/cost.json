@@ -59,5 +59,9 @@
   "unattributedEnv": "These hosts have no environment set (PROD/UAT…). Fill it in on the host record so they can be split here.",
   "unattributedProject": "These costs are not attributed to any business project yet. Business projects are the dictionary used for cost attribution — create them under Admin → Basic settings and assign hosts to them. (Note: this is NOT the same as the GCP project on the host.)",
   "unpricedNote_one": "{{count}} host has no matching rate and counts as 0 — it is not free, we simply cannot price it",
-  "unpricedNote_other": "{{count}} hosts have no matching rate and count as 0 — they are not free, we simply cannot price them"
+  "unpricedNote_other": "{{count}} hosts have no matching rate and count as 0 — they are not free, we simply cannot price them",
+  "moverAdded": "Added {{spec}}",
+  "moverRemoved": "Removed",
+  "idleDefinitionNote": "Idle = actually paid − already allocated by request. This part is bought but not requested by any workload; it is the upper bound of what scaling down can save. Calibrate requests first, then shrink nodes.",
+  "regionUnknown": "(region not recorded)"
 }

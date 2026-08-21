@@ -547,6 +547,9 @@ func (h *NetworkHandler) lbVIPToK8sService() map[string]string {
 	return out
 }
 
+// 界面的负载均衡页走的是 /cloud-lb-list（openapi 那套），不是这个。
+//
+//ops:mcp-only /cloud-loadbalancers 只有 MCP 在用。
 func (h *NetworkHandler) ListLoadBalancers(c *gin.Context) {
 	// 预取所有后端成员，按 账号/项目/LB 分组；内网 IP 单独查一张表再在内存里配。
 	//

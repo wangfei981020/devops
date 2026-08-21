@@ -1,3 +1,4 @@
+import { keyedText } from '../../lib/hintText.js'
 import { tError } from '@ops/i18n'
 import { toErrorInfo } from '@ops/api'
 import { Badge, Banner, Button, Dialog, Select, Skeleton } from '@ops/ui'
@@ -238,7 +239,9 @@ function AttributionView({ month, t }: { month: string; t: TFn }) {
                       </Badge>
                     </td>
                     {/* 原因由后端给：前端另编一套说法会和账对不上 */}
-                    <td className="px-3 py-1.5 text-xs text-muted-foreground">{m.reason || '—'}</td>
+                    <td className="px-3 py-1.5 text-xs text-muted-foreground">
+                      {keyedText(t, m, 'reason') || '—'}
+                    </td>
                   </tr>
                 ))}
               </tbody>

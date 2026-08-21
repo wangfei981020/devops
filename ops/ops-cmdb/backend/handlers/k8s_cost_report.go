@@ -287,13 +287,18 @@ func (h *K8sCostHandler) Attribution(c *gin.Context) {
 			}
 		} else {
 			movers = append(movers, gin.H{"resource": cr.key, "cluster": cr.cluster, "type": cr.typ, "project": cr.biz,
-				"old": 0.0, "new": round2(cr.cost), "delta": round2(cr.cost), "reason": "新增 " + cr.spec})
+				"old": 0.0, "new": round2(cr.cost), "delta": round2(cr.cost),
+				"reason_key":    "cost:moverAdded",
+				"reason_params": map[string]any{"spec": cr.spec},
+				"reason":        "新增 " + cr.spec})
 		}
 	}
 	for k, pr := range old {
 		if !seen[k] {
 			movers = append(movers, gin.H{"resource": pr.key, "cluster": pr.cluster, "type": pr.typ, "project": pr.biz,
-				"old": round2(pr.cost), "new": 0.0, "delta": round2(-pr.cost), "reason": "移除"})
+				"old": round2(pr.cost), "new": 0.0, "delta": round2(-pr.cost),
+				"reason_key": "cost:moverRemoved",
+				"reason":     "移除"})
 		}
 	}
 	// 🔴 按维度聚合。

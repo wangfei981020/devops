@@ -57,7 +57,11 @@ func (h *ObsQueryHandler) PipelineRuns(c *gin.Context) {
 	cid, _ := strconv.Atoi(c.Query("cluster_id"))
 	ns := c.Query("namespace")
 	if cid == 0 || ns == "" {
-		c.JSON(400, gin.H{"error": "cluster_id/namespace 必填（namespace 是 DevOps 项目对应的命名空间，形如 test-test-devopsj2q22）"})
+		httpx.FailKeyWith(c, httpx.CodeBadRequest, "error.pipelineRunsRequired", nil,
+			map[string]any{
+				// 中文原句留给 MCP / 直接调 API 的人（他们读不到语言包）
+				"error": "cluster_id/namespace 必填（namespace 是 DevOps 项目对应的命名空间，形如 test-test-devopsj2q22）",
+			})
 		return
 	}
 	// ⚠️ limit 不能开大。
@@ -187,7 +191,11 @@ func (h *ObsQueryHandler) PipelineLog(c *gin.Context) {
 	cid, _ := strconv.Atoi(c.Query("cluster_id"))
 	ns, pl, run := c.Query("namespace"), c.Query("pipeline"), c.Query("run")
 	if cid == 0 || ns == "" || pl == "" || run == "" {
-		c.JSON(400, gin.H{"error": "cluster_id/namespace/pipeline/run 必填（run 是 Jenkins 构建号，从 pipeline_runs 拿）"})
+		httpx.FailKeyWith(c, httpx.CodeBadRequest, "error.pipelineLogRequired", nil,
+			map[string]any{
+				"error":    "cluster_id/namespace/pipeline/run 必填（run 是 Jenkins 构建号）",
+				"mcp_hint": "run 是 Jenkins 构建号，从 pipeline_runs 拿",
+			})
 		return
 	}
 	code, body, err := h.ksGet(cid, fmt.Sprintf(devopsLogAPI, url.PathEscape(ns), url.PathEscape(pl), url.PathEscape(run)))
@@ -197,7 +205,8 @@ func (h *ObsQueryHandler) PipelineLog(c *gin.Context) {
 	}
 	if code != 200 {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "status": code,
-			"error": "取构建日志失败：确认 pipeline 名和 run（Jenkins 构建号）正确，且该次构建的日志未被 Jenkins 的保留策略清理"})
+			"error_key": "error.pipelineLogFetchFailed",
+			"error":     "取构建日志失败：确认 pipeline 名和 run（Jenkins 构建号）正确，且该次构建的日志未被 Jenkins 的保留策略清理"})
 		return
 	}
 

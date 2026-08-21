@@ -51,5 +51,6 @@
   "stuckNote_other": "{{count}} 个卡在 Terminating",
   "terminatingHint": "删除卡住，会一直占着这个名字",
   "title": "命名空间",
-  "total_other": "共 {{count}} 个命名空间"
+  "total_other": "共 {{count}} 个命名空间",
+  "autoAssigned": "已归属 {{count}} 个命名空间；平台组件和无法判断的仍为空，需要人工处理。"
 }

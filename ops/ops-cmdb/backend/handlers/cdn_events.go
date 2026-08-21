@@ -136,7 +136,10 @@ func (h *CDNHandler) CDNTraffic(c *gin.Context) {
 	err := h.DB.QueryRow(`SELECT zone_id, account_id FROM cdn_zones WHERE name=? LIMIT 1`, zone).
 		Scan(&zoneID, &accountID)
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusOK, gin.H{"ok": false, "error": "CMDB 里没有这个站点: " + zone})
+		c.JSON(http.StatusOK, gin.H{"ok": false,
+			"error_key":    "error.zoneNotInCMDB",
+			"error_params": map[string]any{"zone": zone},
+			"error":        "CMDB 里没有这个站点: " + zone})
 		return
 	}
 	if err != nil {
@@ -176,7 +179,11 @@ func (h *CDNHandler) CDNTraffic(c *gin.Context) {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "realtime": true,
 			"type": typeName, "field_count": len(names), "fields": names,
-			"hint": "拿到字段名后用 fields 参数指定，如 fields=datetime,clientIP,originResponseDurationMs"})
+			// `fields` 是调用方自己传的查询参数，界面上没有这个入口 ——
+			// 这句是给 MCP / 直接调 API 的人的，界面版说人能做的事
+			"hint_key": "cdn:pickFieldsHint",
+			"hint":     "选择要看的字段后重新查询",
+			"mcp_hint": "拿到字段名后用 fields 参数指定，如 fields=datetime,clientIP,originResponseDurationMs"})
 		return
 	}
 

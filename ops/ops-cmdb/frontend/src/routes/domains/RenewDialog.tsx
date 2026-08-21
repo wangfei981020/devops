@@ -1,5 +1,5 @@
 import { toErrorInfo } from '@ops/api'
-import { tError, useTranslation } from '@ops/i18n'
+import { tError, useTranslation , formatList } from '@ops/i18n'
 import { Badge, Banner, Dialog, Field, Select, TextArea } from '@ops/ui'
 import { useState } from 'react'
 import { WriteButton } from '../../components/WriteButton.js'
@@ -346,10 +346,10 @@ function RenewProgress({
           <span className="font-medium">{t('domains:renew.overpayNote.title')}</span>
           <span className="mt-0.5 block">{t('domains:renew.overpayNote.body')}</span>
           <span className="mt-1 block">
-            {items
-              .filter((i) => i.overpay_note)
-              .map((i) => i.domain)
-              .join('、')}
+            {formatList(
+              t,
+              items.filter((i) => i.overpay_note).map((i) => i.domain),
+            )}
           </span>
         </Banner>
       ) : null}

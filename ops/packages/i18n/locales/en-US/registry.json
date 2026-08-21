@@ -65,5 +65,7 @@
   },
   "title": "Image registry",
   "usedUnknown": "Not readable",
-  "usedUnknownHint": "Storage usage requires admin permission (/quotas), while a robot account is the recommended way to connect Harbor — that is the correct setup. ⚠️ Not readable does NOT mean the project is empty: the repository count on the right is real."
+  "usedUnknownHint": "Storage usage requires admin permission (/quotas), while a robot account is the recommended way to connect Harbor — that is the correct setup. ⚠️ Not readable does NOT mean the project is empty: the repository count on the right is real.",
+  "gcNeverRan": "Garbage collection has never run — deleted images are still taking up disk.",
+  "quotaUnlimitedNote": "A quota of -1 means this project has no quota limit; Harbor will not block it no matter how much it uses. Judge it by overall storage usage rather than by percentage."
 }

@@ -110,5 +110,9 @@
     "create": "Create",
     "needName": "Enter a vendor name",
     "none": "No CDN vendor exists yet. Accounts hang off a vendor, so create one here first."
-  }
+  },
+  "tokenValid": "Token is valid.",
+  "zonesPartiallyFailed": "{{count}} zone(s) couldn't be read and are missing from this list — that is not the same as having no zones.",
+  "pickFieldsHint": "Pick the fields you want and run the query again.",
+  "tokenCheckRealtimeNote": "This result comes from probing Cloudflare live; it does not read the CMDB database. After the check passes, run a CDN account sync so the query endpoints reflect the new permissions."
 }

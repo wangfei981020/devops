@@ -234,8 +234,11 @@ func (h *ObsQueryHandler) IdleCost(c *gin.Context) {
 			"idle_yearly_usd":       round2(idle * 12),
 			"cpu_request_pct":       pct(float64(reqCPU), float64(a.cpuCapM)),
 			"mem_request_pct":       pct(float64(reqMem), float64(a.memCapMi)),
+			// ⚠️ 界面版不提工具名（运维在网页里执行不了），工具链另放 mcp_note
+			"note_key": "cost:idleDefinitionNote",
 			"note": "闲置 = 实付 − 已按 request 分摊。这部分买了但没有任何工作负载申请，" +
-				"是缩容能直接省下的上限；先用 resource_waste 校准 request，再缩节点。",
+				"是缩容能直接省下的上限；先校准 request，再缩节点。",
+			"mcp_note": "闲置 = 实付 − 已按 request 分摊；先用 resource_waste 校准 request，再缩节点。",
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

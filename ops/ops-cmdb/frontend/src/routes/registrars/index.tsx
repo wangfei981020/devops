@@ -1,3 +1,4 @@
+import { actionMessage } from '../../lib/actionMessage.js'
 import { toErrorInfo } from '@ops/api'
 import { tError, useTranslation } from '@ops/i18n'
 import {
@@ -444,7 +445,7 @@ function RegistrarSync({
           ) : null}
         </span>
       ) : sync.isSuccess ? (
-        <span className="text-[11px] text-success">{sync.data?.msg ?? t('common:write.saved')}</span>
+        <span className="text-[11px] text-success">{actionMessage(t, sync.data)}</span>
       ) : null}
       <ApiUsage id={id} t={t} />
       <WriteButton

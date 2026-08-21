@@ -1,5 +1,5 @@
 import { toErrorInfo } from '@ops/api'
-import { tError, useTranslation } from '@ops/i18n'
+import { tError, useTranslation , formatList } from '@ops/i18n'
 import {
   AsyncBoundary,
   Badge,
@@ -183,10 +183,10 @@ function ResourcePicker({
       {kw.trim().length >= 2 && !entries.isPending && list.length === 0 && unlinked.length > 0 ? (
         <span className="max-w-[560px] text-xs text-warning">
           {t('impact:existsButUnlinked', {
-            names: unlinked
-              .slice(0, 3)
-              .map((e) => e.name)
-              .join('、'),
+            names: formatList(
+              t,
+              unlinked.slice(0, 3).map((e) => e.name),
+            ),
             count: unlinked.length,
           })}
         </span>

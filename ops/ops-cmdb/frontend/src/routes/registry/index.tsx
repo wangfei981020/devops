@@ -1,3 +1,4 @@
+import { keyedText } from '../../lib/hintText.js'
 import { toErrorInfo } from '@ops/api'
 import { formatNumber, formatRelativeTime, tError, type Locale, useTranslation } from '@ops/i18n'
 import { AsyncBoundary, Badge, EmptyState, type LoadError, Select, Skeleton, fromQuery } from '@ops/ui'
@@ -139,7 +140,7 @@ export function RegistryPage() {
             {t('registry:status.components', { n: status.data.component_count ?? 0 })}
           </span>
           {gc?.issue ? (
-            <span className="text-warning">{gc.issue}</span>
+            <span className="text-warning">{keyedText(t, gc, 'issue')}</span>
           ) : gc?.last_at ? (
             <span className="text-muted-foreground">{t('registry:status.gcAt', { at: gc.last_at })}</span>
           ) : null}

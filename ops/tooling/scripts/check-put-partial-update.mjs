@@ -28,6 +28,10 @@
  *
  * 存量 25 处是同一形态，逐个改要连带改前端与调用方，分批做。
  * 这里只挡**新增**：基线只能降不能升。
+ *
+ * ⭐ **ops-cmdb 已清零**（2026-08-21）：剩下的 6 条是逐个判过、
+ *	确认"整体替换语义成立"的（理由写在各自那行上面），
+ *	另外 4 条属于 ops-alert —— 那个产品的调用方我没有验证过，先只锁住不许新增。
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
@@ -43,27 +47,21 @@ const BASELINE = new Set([
   'ops-alert/backend/internal/api/msgtemplate.go:updateMsgTemplate',
   'ops-alert/backend/internal/api/oidc_admin.go:saveOIDCConfig',
   'ops-alert/backend/internal/api/rules.go:updateRule',
+  // 判过：那条 UPDATE 写的是审计记录里的**变更前值**，回滚本身就是它的语义，
+  //	不是"按请求体改字段"。请求体只有一个 force 开关。不改。
   'ops-cmdb/backend/handlers/audit_api.go:RevertChange',
-  'ops-cmdb/backend/handlers/basic.go:UpdateCdn',
-  'ops-cmdb/backend/handlers/basic.go:UpdateEnv',
-  'ops-cmdb/backend/handlers/basic.go:UpdateProject',
-  'ops-cmdb/backend/handlers/basic.go:UpdateStatus',
-  'ops-cmdb/backend/handlers/cdn.go:SaveAccount',
+  // 判过：`ignored=false` 时**故意**把 reason 一起清掉 —— 取消忽略后
+  //	留着旧理由才是错的。这是有意的整体语义。不改。
   'ops-cmdb/backend/handlers/cert_inspect.go:Ignore',
-  'ops-cmdb/backend/handlers/ci.go:Update',
+  // 判过：批量忽略的请求体**就是** {ids, ignored, reason} 三件套，
+  //	一次动作整体提交，没有"只传一半"的用法。不改。
   'ops-cmdb/backend/handlers/domains.go:BulkIgnore',
-  'ops-cmdb/backend/handlers/gke_upgrade.go:OverrideSchedule',
-  'ops-cmdb/backend/handlers/harbor.go:Save',
-  'ops-cmdb/backend/handlers/hosts.go:UpdateAccount',
-  'ops-cmdb/backend/handlers/hosts.go:UpdateComputeRate',
+  // 判过：project_id 必填，name 缺省时回落成 project_id（不是静默清空）——
+  //	整体替换语义成立，不改。
   'ops-cmdb/backend/handlers/hosts.go:UpdateProject',
-  'ops-cmdb/backend/handlers/k8s_clusters.go:Update',
-  'ops-cmdb/backend/handlers/obs_endpoints.go:Update',
-  'ops-cmdb/backend/handlers/records.go:BulkIgnore',
-  'ops-cmdb/backend/handlers/records.go:Update',
+  'ops-cmdb/backend/handlers/records.go:BulkIgnore', // 判过：同 domains.go:BulkIgnore，不改
+  // 判过：只有 role_code 一个业务字段，没有"其余字段被清空"这回事。不改。
   'ops-cmdb/backend/handlers/users.go:ChangeRole',
-  'ops-cmdb/backend/internal/api/automate/notify/lark.go:Update',
-  'ops-cmdb/backend/internal/api/inventory/registrar/handler.go:Update',
 ])
 
 function walkGo(dir, out = []) {

@@ -397,6 +397,9 @@ func (h *MCPHandler) toolSchemas(role string) []gin.H {
 	return out
 }
 
+// 里面的提示会提到参数名和工具链，那正是这一侧最有用的东西。
+//
+//ops:mcp-only callTool 的产出只进 MCP 响应，读者是 AI 和运维；
 func (h *MCPHandler) callTool(c *gin.Context, req rpcReq, actor, role string) {
 	var p struct {
 		Name      string                 `json:"name"`
@@ -481,6 +484,10 @@ func (h *MCPHandler) callTool(c *gin.Context, req rpcReq, actor, role string) {
 // 一次调用就能拿到可直接分析的数据。
 //
 // 只裁剪顶层为数组的响应；对象响应（诊断、成本汇总等）原样返回。
+//
+//	这句提示只会出现在 MCP 响应里。
+//
+//ops:mcp-only `fields` 是 MCP 工具专有的裁剪参数，界面上没有这个入口；
 func applyFields(body, fields string) string {
 	if strings.TrimSpace(fields) == "" {
 		return body
@@ -576,6 +583,8 @@ func str(v any) string {
 // 起因是真实踩过的坑：list_virtualservices(namespace=istio-system) 返回 []，
 // 于是被判定成「这个集群没用 Istio」，实际 VS 都定义在各业务 ns 下，全集群有 144 条，
 // 整张入口拓扑就这么被漏掉了。空数组本身不区分「真没有」和「过滤错了」，这里补上区分。
+//
+//ops:mcp-only 同上：只在 MCP 响应里出现。
 func (h *MCPHandler) hintIfNarrowedToEmpty(tool *mcpTool, q url.Values, args map[string]any, body, actor, role string) string {
 	if tool.Text || strings.TrimSpace(body) != "[]" {
 		return body
@@ -746,6 +755,11 @@ var sourceBackedTools = map[string]struct{ table, hint string }{
 // hintIfSourceMissing 空结果且没有过滤条件时，检查底层数据源接没接。
 //
 // 三态：没接数据源 / 接了但没同步 / 确实 0 条 —— 前两者都不能渲染成第三者。
+// hintIfSourceMissing 空结果时补一句「是没接入还是没同步」。
+//
+//	提工具名（data_freshness）正是这里最有用的东西，不该按界面文案的规矩改。
+//
+//ops:mcp-only 这段文案只会出现在 MCP 响应里，读者是 AI 和运维；
 func (h *MCPHandler) hintIfSourceMissing(tool *mcpTool, body string) string {
 	src, ok := sourceBackedTools[tool.Name]
 	if !ok {

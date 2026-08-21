@@ -32,15 +32,75 @@ type Input struct {
 }
 
 // 判定 → 中文标签。与界面用同一套词，避免「界面说落后、表里说 behind」
+// verdictLabel 行结论的中文。
+//
+// 🔴 判定本身在 compare.RowVerdict —— 这里**只负责翻译**，不许再算一遍。
+//    （原来导出有自己一套判定，界面另一套，迟早分叉且不报错。）
 var verdictLabel = map[compare.Verdict]string{
-	compare.VerdictSame:     "一致",
-	compare.VerdictBehind:   "落后",
-	compare.VerdictAhead:    "超前",
-	compare.VerdictMissing:  "该列没有",
-	compare.VerdictExtra:    "基准没有",
-	compare.VerdictUnknown:  "无法判定",
-	compare.VerdictConflict: "同名冲突",
-	compare.VerdictNoData:   "数据不可用",
+	compare.VerdictSame:    "一致",
+	compare.VerdictDiff:    "不一致",
+	compare.VerdictMissing: "缺失",
+	compare.VerdictUnknown: "无法判定",
+	compare.VerdictIgnored: "已忽略",
+}
+
+// cellText 一格显示什么。
+//
+// 🔴 三种空态**各有各的字**，不能都写「—」：
+//
+//	—      这一列确实没有这个服务   → 找对方确认
+//	未采集  我们没采到               → 查我们自己的采集
+//	已忽略  主动决定不比             → 什么都不用做
+//
+// 都写「—」的话，对方 token 过期会被读成「对方把服务全下线了」——
+// 处理方向正好反了。
+func cellText(c compare.Cell) string {
+	switch c.State {
+	case compare.CellIgnored:
+		return "已忽略"
+	case compare.CellNoData:
+		return "未采集"
+	case compare.CellMissing:
+		return "—"
+	}
+	// ⚠️ 非版本化 tag / 同名冲突**照样显示版本号** —— 它是真的，
+	//    只是不能拿来判定是否同一制品。
+	if t := c.Tag(); t != "" {
+		return t
+	}
+	return "—"
+}
+
+// styleOf 行结论对应的底色。整行都用它。
+func styleOf(st *styles, v compare.Verdict) int {
+	switch v {
+	case compare.VerdictSame:
+		return st.same
+	case compare.VerdictDiff:
+		return st.diff
+	case compare.VerdictMissing:
+		return st.missing
+	case compare.VerdictIgnored:
+		return st.ignored
+	default: // unknown
+		return st.noData
+	}
+}
+
+// monoStyleOf 同上，等宽 —— 版本号那几列用，位数才对得齐。
+func monoStyleOf(st *styles, v compare.Verdict) int {
+	switch v {
+	case compare.VerdictSame:
+		return st.sameMono
+	case compare.VerdictDiff:
+		return st.diffMono
+	case compare.VerdictMissing:
+		return st.missingMono
+	case compare.VerdictIgnored:
+		return st.ignoredMono
+	default:
+		return st.noDataMono
+	}
 }
 
 // Build 生成 xlsx 字节流。

@@ -45,15 +45,26 @@ export interface Snapshot {
 }
 
 /**
- * 判定结果。**七态 + no_data**，一个都不能少。
+ * 一行的结论。**五态，一个都不能少。**
  *
- * 🔴 `missing_here`（对方确实没部署）与 `no_data`（我们没读到）**必须分开**：
- * 混成一个的话，对方 token 过期会显示成"对方把服务全下线了"。
+ * 🔴 没有基准，判定**没有方向** —— 只能说"这几列彼此一不一样"，
+ * 说不了"谁落后谁"。这张表可能是别的两家公司之间的对账，
+ * 我方根本不在里面，那时"落后 8 个版本"这句话没有主语。
+ *
+ * ⚠️ 判定由**后端**算（compare.RowVerdict），前端不许再算一遍。
  */
-export type Verdict =
-  | 'same' | 'behind' | 'ahead'
-  | 'missing_here' | 'missing_base'
-  | 'unknown' | 'conflict' | 'no_data'
+export type Verdict = 'same' | 'diff' | 'missing' | 'unknown' | 'ignored'
+
+/**
+ * 一格的状态。
+ *
+ * 🔴 `missing`（对方确实没部署）与 `no_data`（我们没读到）**必须分开**：
+ * 混成一个的话，对方 token 过期会显示成"对方把服务全下线了"——
+ * 处理方向正好反了（查我们自己 vs 找对方确认）。
+ */
+export type CellState =
+  | 'version' | 'missing' | 'no_data'
+  | 'unversioned' | 'conflict' | 'ignored'
 
 /**
  * 差异归因：这个版本的镜像推没推到对方那边。
@@ -67,9 +78,8 @@ export type SyncAttr = 'synced' | 'sync_failed' | 'not_synced' | 'unknown'
 
 export interface Cell {
   Column: CompareColumn
-  Verdict: Verdict
+  State: CellState
   Snap: Snapshot | null
-  Delta: number | null
   /** 声明的 tag 与实际在跑的不一致 = 正在滚动更新。附加标记，不是主判定 */
   Deploying: boolean
   Note: string
@@ -81,14 +91,23 @@ export interface Cell {
 export interface Row {
   ServiceKey: string
   Cells: Cell[]
+  /** 这一行的结论。**判定的唯一出口** —— 前端只翻译成颜色，不再自己算 */
+  Verdict: Verdict
+  /** 需不需要人去看（结论不是"一致"也不是"已忽略"）。「只看差异」筛的就是它 */
   HasDiff: boolean
 }
 
 export interface CompareResult {
-  baseline: string
   columns: CompareColumn[]
   rows: Row[]
+  /** 按**行**统计（一行一个结论），不是按格子 */
   summary: Partial<Record<Verdict, number>>
+  /**
+   * 被**逐格忽略**的格子数。
+   * 🔴 单独给：summary 按行统计，只忽略了某一列的格子在里面完全看不见，
+   *    而「忽略必须看得见」是硬要求。
+   */
+  ignored_cells?: number
   /** 采集失败的列。🔴 必须在页面顶部显著提示 —— 整列 no_data 时
    *  表面只是几个灰格子，但结论已经不完整了 */
   unhealthy_columns: CompareColumn[] | null

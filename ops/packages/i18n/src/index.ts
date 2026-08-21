@@ -299,18 +299,7 @@ export function tError(
   for (const [k, v] of Object.entries(params)) {
     if (!Array.isArray(v)) continue
     const items = v.map((x) => String(x))
-    try {
-      // ⚠️ 用**完整** key（带命名空间）。写成 `locale.bcp47` 依赖 common 是默认命名空间 ——
-      //	某个产品换了默认 ns 就查不到，然后静默回退到英文逗号，
-      //	中文界面上出现 "a, b, c" 而没有任何报错（单测抓到过）。
-      const tag = t('common:locale.bcp47')
-      mapped[k] = new Intl.ListFormat(tag.includes('locale.bcp47') ? undefined : tag, {
-        style: 'narrow',
-        type: 'conjunction',
-      }).format(items)
-    } catch {
-      mapped[k] = items.join(', ')
-    }
+    mapped[k] = formatList(t, items)
   }
   for (const [name, ns] of Object.entries(MACHINE_PARAMS)) {
     const raw = params[name]
@@ -333,4 +322,30 @@ export function tError(
     mapped[name] = hit === key || hit === bare ? raw : hit
   }
   return t(messageKey, mapped)
+}
+
+/**
+ * 按**当前语言**的习惯把一串词连起来。
+ *
+ * ⚠️ 不要写 `list.join('、')`：那个顿号在英文界面上是错的，
+ *	而它**不会报任何错**，只是看着像机器凑的翻译。实测全库有 5 处这么写。
+ *	`Intl.ListFormat` 还会处理连接词（a, b and c）。
+ *
+ * ⚠️ 用**完整** key（带命名空间）取 BCP-47 标签。写成 `locale.bcp47`
+ *	依赖 common 是默认命名空间 —— 某个产品换了默认 ns 就查不到，
+ *	然后静默回退到英文逗号，中文界面上出现 "a, b, c"（单测抓到过）。
+ */
+export function formatList(
+  t: (key: string, params?: Record<string, unknown>) => string,
+  items: string[],
+): string {
+  try {
+    const tag = t('common:locale.bcp47')
+    return new Intl.ListFormat(tag.includes('locale.bcp47') ? undefined : tag, {
+      style: 'narrow',
+      type: 'conjunction',
+    }).format(items)
+  } catch {
+    return items.join(', ')
+  }
 }

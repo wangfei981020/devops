@@ -1,3 +1,4 @@
+import { actionMessage } from '../../lib/actionMessage.js'
 import { hintText } from '../../lib/hintText.js'
 import { toErrorInfo } from '@ops/api'
 import { tError, useTranslation } from '@ops/i18n'
@@ -107,7 +108,7 @@ export function NsProjectDialog({
 
         {auto.data?.applied != null && !previewed ? (
           <Banner tone="info">
-            <span>{auto.data.msg}</span>
+            <span>{actionMessage(t, auto.data)}</span>
           </Banner>
         ) : null}
 

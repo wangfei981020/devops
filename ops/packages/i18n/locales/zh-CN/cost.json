@@ -56,5 +56,9 @@
   "unattributed": "未归属",
   "unattributedEnv": "这些主机没有填环境（PROD/UAT 等）。去主机台账里补上，这里才分得开。",
   "unattributedProject": "这些成本还没有归到任何「业务项目」。业务项目是成本归属用的字典，去「系统管理 → 基础配置」里建好，再给主机指定，这里才会分开显示。（注意：它和主机上的 GCP 云项目不是一回事。）",
-  "unpricedNote_other": "{{count}} 台机器没匹配到费率，按 0 计入 —— 它们不是免费的，是算不出来的"
+  "unpricedNote_other": "{{count}} 台机器没匹配到费率，按 0 计入 —— 它们不是免费的，是算不出来的",
+  "moverAdded": "新增 {{spec}}",
+  "moverRemoved": "移除",
+  "idleDefinitionNote": "闲置 = 实付 − 已按 request 分摊。这部分买了但没有任何工作负载申请，是缩容能直接省下的上限；先校准 request，再缩节点。",
+  "regionUnknown": "（未记录区域）"
 }

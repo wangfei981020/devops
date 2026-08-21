@@ -1,6 +1,12 @@
 package handlers
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/gin-gonic/gin"
+
+	"ops-cmdb-backend/internal/httpx"
+)
 
 // 部分更新（PATCH 语义）的 SET 子句拼装。
 //
@@ -28,7 +34,7 @@ type patchSet struct {
 }
 
 // Add 字段非 nil 时才加进 SET。expr 缺省是 `col=?`，需要包一层（如
-// `expiry_at=NULLIF(?, '')`）时用 AddExpr。
+// `expiry_at=NULLIF(?, ”)`）时用 AddExpr。
 func (p *patchSet) Add(col string, v any) {
 	switch t := v.(type) {
 	case *string:
@@ -46,13 +52,18 @@ func (p *patchSet) Add(col string, v any) {
 			return
 		}
 		p.push(col+"=?", *t)
+	case *float64:
+		if t == nil {
+			return
+		}
+		p.push(col+"=?", *t)
 	default:
 		// 其它类型显式传 AddExpr，别在这里猜
 		panic("patchSet.Add: 不支持的类型，请用 AddExpr")
 	}
 }
 
-// AddExpr 自定义 SET 表达式（如 `expiry_at=NULLIF(?, '')`）。cond 为 false 时跳过。
+// AddExpr 自定义 SET 表达式（如 `expiry_at=NULLIF(?, ”)`）。cond 为 false 时跳过。
 func (p *patchSet) AddExpr(cond bool, expr string, args ...any) {
 	if !cond {
 		return
@@ -78,3 +89,25 @@ func (p *patchSet) SQL() string { return strings.Join(p.cols, ", ") }
 
 // Args 与 SQL() 顺序对应的参数。
 func (p *patchSet) Args() []any { return p.args }
+
+// requireNonBlank 传了就不能是空白。
+//
+// 🔴 三态里"显式清空"对**身份字段**是非法的：一个名字为空的字典项
+//
+//	在界面上只会显示成一行空白，谁都不知道它是什么。想删走 DELETE。
+//	返回 true 表示已经写过错误响应，调用方直接 return。
+func requireNonBlank(c *gin.Context, field string, v *string) bool {
+	if v != nil && strings.TrimSpace(*v) == "" {
+		httpx.Invalid(c, field, "非空")
+		return true
+	}
+	return false
+}
+
+// derefInt *int 取值，nil 当 0。只在已确认语义的分支里用。
+func derefInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
+}

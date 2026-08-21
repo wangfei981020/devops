@@ -1,3 +1,4 @@
+import { actionMessage } from '../../lib/actionMessage.js'
 import { toErrorInfo } from '@ops/api'
 import { tError, type Locale, useTranslation } from '@ops/i18n'
 import {
@@ -154,7 +155,7 @@ export function DomainsPage() {
                 结果直接显示在按钮旁边，不弹窗——这一页本来就是在看域名状态 */}
             {sync.isSuccess || autoLink.isSuccess ? (
               <span className="text-xs text-success">
-                {sync.data?.msg ?? autoLink.data?.msg ?? t('common:write.saved')}
+                {actionMessage(t, sync.data ?? autoLink.data)}
               </span>
             ) : null}
             {sync.isError || autoLink.isError ? (

@@ -117,16 +117,30 @@ func (h *BasicHandler) UpdateStatus(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	// 🔴 指针 = 三态：没传（不动它）/ 显式清空 / 改成它。
+	//	用普通类型的话，只想改排序就会把名字一起清空（OPSCMDB-083）。
 	var in struct {
-		Label     string `json:"label"`
-		Color     string `json:"color"`
-		SortOrder int    `json:"sort_order"`
+		Label     *string `json:"label"`
+		Color     *string `json:"color"`
+		SortOrder *int    `json:"sort_order"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := sc.Exec(`UPDATE lifecycle_statuses SET label=?, color=?, sort_order=? WHERE tenant_id = ? AND id=?`, in.Label, in.Color, in.SortOrder, c.Param("id")); err != nil {
+	if requireNonBlank(c, "label", in.Label) {
+		return
+	}
+	p := &patchSet{}
+	p.Add("label", in.Label)
+	p.Add("color", in.Color)
+	p.Add("sort_order", in.SortOrder)
+	if p.Empty() {
+		httpx.Invalid(c, "body", "至少要传一个要改的字段")
+		return
+	}
+	if _, err := sc.Exec(`UPDATE lifecycle_statuses SET `+p.SQL()+` WHERE tenant_id = ? AND id=?`,
+		append(p.Args(), c.Param("id"))...); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -217,18 +231,34 @@ func (h *BasicHandler) UpdateProject(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	// 🔴 指针 = 三态：没传（不动它）/ 显式清空 / 改成它。
+	//	用普通类型的话，只想改排序就会把名字一起清空（OPSCMDB-083）。
 	var in struct {
-		Name      string `json:"name"`
-		Remark    string `json:"remark"`
-		Color     string `json:"color"`
-		SortOrder int    `json:"sort_order"`
-		Status    string `json:"status"`
+		Name      *string `json:"name"`
+		Remark    *string `json:"remark"`
+		Color     *string `json:"color"`
+		SortOrder *int    `json:"sort_order"`
+		Status    *string `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := sc.Exec(`UPDATE projects SET name=?, remark=?, color=?, sort_order=?, status=? WHERE tenant_id = ? AND id=?`, in.Name, in.Remark, in.Color, in.SortOrder, in.Status, c.Param("id")); err != nil {
+	if requireNonBlank(c, "name", in.Name) {
+		return
+	}
+	p := &patchSet{}
+	p.Add("name", in.Name)
+	p.Add("remark", in.Remark)
+	p.Add("color", in.Color)
+	p.Add("sort_order", in.SortOrder)
+	p.Add("status", in.Status)
+	if p.Empty() {
+		httpx.Invalid(c, "body", "至少要传一个要改的字段")
+		return
+	}
+	if _, err := sc.Exec(`UPDATE projects SET `+p.SQL()+` WHERE tenant_id = ? AND id=?`,
+		append(p.Args(), c.Param("id"))...); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -348,21 +378,39 @@ func (h *BasicHandler) UpdateEnv(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	// 🔴 指针 = 三态：没传（不动它）/ 显式清空 / 改成它。
+	//	用普通类型的话，只想改排序就会把名字一起清空（OPSCMDB-083）。
 	var in struct {
-		Code string `json:"code"`
-		Name string `json:"name"`
-		// NameEn 可选。留空则英文界面回退显示中文名 ——
-		// 绝大多数客户只用一种语言，不该逼他们每个字典项填两遍
-		NameEn    string `json:"name_en"`
-		TagType   string `json:"tag_type"`
-		Color     string `json:"color"`
-		SortOrder int    `json:"sort_order"`
+		Code      *string `json:"code"`
+		Name      *string `json:"name"`
+		NameEn    *string `json:"name_en"`
+		TagType   *string `json:"tag_type"`
+		Color     *string `json:"color"`
+		SortOrder *int    `json:"sort_order"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := sc.Exec(`UPDATE environments SET code=?, name=?, name_en=?, tag_type=?, color=?, sort_order=? WHERE tenant_id = ? AND id=?`, in.Code, in.Name, in.NameEn, in.TagType, in.Color, in.SortOrder, c.Param("id")); err != nil {
+	if requireNonBlank(c, "code", in.Code) {
+		return
+	}
+	if requireNonBlank(c, "name", in.Name) {
+		return
+	}
+	p := &patchSet{}
+	p.Add("code", in.Code)
+	p.Add("name", in.Name)
+	p.Add("name_en", in.NameEn)
+	p.Add("tag_type", in.TagType)
+	p.Add("color", in.Color)
+	p.Add("sort_order", in.SortOrder)
+	if p.Empty() {
+		httpx.Invalid(c, "body", "至少要传一个要改的字段")
+		return
+	}
+	if _, err := sc.Exec(`UPDATE environments SET `+p.SQL()+` WHERE tenant_id = ? AND id=?`,
+		append(p.Args(), c.Param("id"))...); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -519,15 +567,28 @@ func (h *BasicHandler) UpdateCdn(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	// 🔴 指针 = 三态：没传（不动它）/ 显式清空 / 改成它。
+	//	用普通类型的话，只想改排序就会把名字一起清空（OPSCMDB-083）。
 	var in struct {
-		Name      string `json:"name"`
-		SortOrder int    `json:"sort_order"`
+		Name      *string `json:"name"`
+		SortOrder *int    `json:"sort_order"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := sc.Exec(`UPDATE cdns SET name=?, sort_order=? WHERE tenant_id = ? AND id=?`, in.Name, in.SortOrder, c.Param("id")); err != nil {
+	if requireNonBlank(c, "name", in.Name) {
+		return
+	}
+	p := &patchSet{}
+	p.Add("name", in.Name)
+	p.Add("sort_order", in.SortOrder)
+	if p.Empty() {
+		httpx.Invalid(c, "body", "至少要传一个要改的字段")
+		return
+	}
+	if _, err := sc.Exec(`UPDATE cdns SET `+p.SQL()+` WHERE tenant_id = ? AND id=?`,
+		append(p.Args(), c.Param("id"))...); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

@@ -53,9 +53,10 @@ func (h *GKEUpgradePlanHandler) SaveBaseline(c *gin.Context) {
 	b := h.baseline(cid)
 	// 没采过 Pod 的基线存下来也没用——比对时两边都是 0，看不出任何东西
 	if !b.PodsCollected {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "该集群尚未成功采集过 Pod，此时的基线无法用于事后比对。请先执行一次采集",
-		})
+		httpx.FailKeyWith(c, httpx.CodeBadRequest, "error.baselineNeedsPods", nil,
+			map[string]any{
+				"error": "该集群尚未成功采集过 Pod，此时的基线无法用于事后比对。请先执行一次采集",
+			})
 		return
 	}
 	payload, err := json.Marshal(b)

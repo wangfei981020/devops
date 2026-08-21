@@ -1,3 +1,4 @@
+import { actionMessage } from '../../lib/actionMessage.js'
 import { toErrorInfo } from '@ops/api'
 import { tError, useTranslation } from '@ops/i18n'
 import { Banner, Button, Dialog, MenuItem, MenuSeparator, MutationError, Popover } from '@ops/ui'
@@ -36,7 +37,7 @@ export function CertRowActions({ c }: { c: Cert }) {
           {tError(t, toErrorInfo(renew.error).messageKey, toErrorInfo(renew.error).params)}
         </span>
       ) : renew.isSuccess ? (
-        <span className="text-xs text-success">{renew.data?.msg ?? t('common:write.saved')}</span>
+        <span className="text-xs text-success">{actionMessage(t, renew.data)}</span>
       ) : null}
 
       <Popover

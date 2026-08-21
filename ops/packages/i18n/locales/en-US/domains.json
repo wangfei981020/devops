@@ -236,5 +236,6 @@
   "view": {
     "ledger": "Ledger",
     "quality": "Access quality"
-  }
+  },
+  "renewStarted": "Started renewing {{count}} domain(s). You can close this dialog — the job continues in the background."
 }

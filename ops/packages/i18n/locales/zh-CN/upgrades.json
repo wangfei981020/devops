@@ -126,5 +126,7 @@
       "notReady": "NotReady 持续",
       "repairIn": "距自动修复"
     }
-  }
+  },
+  "overrideCleared": "已取消覆盖，下次同步会用官网值。",
+  "nodeHealthLeadTimeNote": "NotReady 只能比 GKE 的自动修复早 5~8 分钟；磁盘趋势能提前几小时到几天；突然宕机没有前兆，做不到提前发现，只能靠事后的自动修复记录。"
 }

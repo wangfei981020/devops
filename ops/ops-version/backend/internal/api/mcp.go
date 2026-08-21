@@ -310,12 +310,6 @@ func (s *Server) callTool(ctx context.Context, scope auth.Scope, name string, ra
 				return nil, err
 			}
 			plan.Columns = append(plan.Columns, col)
-			if c.Org == p.BI && c.Env == p.BE {
-				plan.Baseline = col
-			}
-		}
-		if plan.Baseline.OrgName == "" {
-			plan.Baseline = plan.Columns[0]
 		}
 		data, err := s.St.LoadSnapshots(ctx, plan.Columns)
 		if err != nil {
@@ -344,7 +338,19 @@ func (s *Server) callTool(ctx context.Context, scope auth.Scope, name string, ra
 			summary[string(k)] = v
 		}
 		out := map[string]any{
-			"baseline": plan.Baseline.Key(), "summary": summary, "rows": rows,
+			"summary": summary, "rows": rows,
+			// 🔴 口径必须跟着结果一起给 AI。
+			//
+			//    判定是**无基准**的：只说"这几列彼此一不一样"，说不了"谁落后谁"。
+			//    不写清楚的话，AI 会按常识把 diff 解释成"落后"并给出方向，
+			//    而这张表可能是别的两家公司之间的对账，我方根本不在里面。
+			"verdict_scale": map[string]string{
+				"same":    "这几列的 tag 完全相同",
+				"diff":    "这几列都有，但 tag 不全相同。⚠️ 不含方向 —— 跨公司是两个 Harbor、两条流水线，版本号不可比，说不了谁新谁旧",
+				"missing": "至少有一列确实没有这个服务",
+				"unknown": "至少有一列没法比：整列采集失败 / 非版本化 tag / 同名冲突",
+				"ignored": "整行被人为忽略，主动不比",
+			},
 			// 🔴 把「这次筛过」写进返回体。
 			//    summary 给的是**全量**计数（一致 160），rows 给的是筛后的（可能是空）——
 			//    不说清楚的话，AI 看到 summary.same=160 而 rows=[] 会自己编一个解释。
@@ -444,7 +450,7 @@ func (s *Server) callTool(ctx context.Context, scope auth.Scope, name string, ra
 // 两处各写一遍的话，AI 通过 MCP 看到的状态会和界面上的不一致 ——
 // 而"AI 说没问题、界面上标着采集失败"这种矛盾最难取信于人。
 func columnOf(in store.Org, env string) compare.Column {
-	c := compare.Column{OrgID: in.ID, OrgName: in.Name, Env: env}
+	c := compare.Column{OrgID: in.ID, OrgName: in.Name, Env: env, IsSelf: in.IsSelf}
 	if e, found := envOf(in, env, 0); found && e.LastCollectStatus != "" {
 		c.SyncStatus, c.SyncError = e.LastCollectStatus, e.LastCollectError
 		if e.LastCollectAt.Valid {
@@ -533,12 +539,9 @@ func mcpRows(res compare.Result, onlyDiff bool, limit int) ([]map[string]any, in
 		}
 		cells := []map[string]any{}
 		for _, c := range row.Cells {
-			m := map[string]any{"column": c.Column.Key(), "verdict": string(c.Verdict)}
+			m := map[string]any{"column": c.Column.Key(), "state": string(c.State)}
 			if c.Snap != nil {
 				m["tag"] = c.Snap.Tag
-			}
-			if c.Delta != nil {
-				m["delta"] = *c.Delta
 			}
 			if c.Note != "" {
 				m["note"] = c.Note
@@ -548,7 +551,11 @@ func mcpRows(res compare.Result, onlyDiff bool, limit int) ([]map[string]any, in
 			}
 			cells = append(cells, m)
 		}
-		rows = append(rows, map[string]any{"service": row.ServiceKey, "cells": cells})
+		// 🔴 行结论要给出来。AI 自己按 cells 去推的话，
+		//    它推的那套顺序和我们的不一样（缺失 > 不一致 > 无法判定 > 一致），
+		//    而这个顺序是被真实数据推翻过两次才定下来的。
+		rows = append(rows, map[string]any{
+			"service": row.ServiceKey, "verdict": string(row.Verdict), "cells": cells})
 	}
 	return rows, truncated
 }

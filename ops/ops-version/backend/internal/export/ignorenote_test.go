@@ -36,7 +36,7 @@ func TestNotesListsIgnoredRows(t *testing.T) {
 	base := compare.Column{OrgID: 1, OrgName: "SL", Env: "UAT", SyncStatus: "success"}
 	other := compare.Column{OrgID: 2, OrgName: "印尼", Env: "UAT", SyncStatus: "success"}
 	in := Input{
-		Plan:   compare.Plan{Columns: []compare.Column{base, other}, Baseline: base},
+		Plan:   compare.Plan{Columns: []compare.Column{base, other}},
 		Result: compare.Result{IgnoredRows: []string{"bi-report", "wallet"}},
 		Now:    time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC),
 	}
@@ -56,7 +56,7 @@ func TestNotesListsIgnoredRows(t *testing.T) {
 func TestNotesNoIgnoreLineWhenEmpty(t *testing.T) {
 	base := compare.Column{OrgID: 1, OrgName: "SL", Env: "UAT", SyncStatus: "success"}
 	in := Input{
-		Plan:   compare.Plan{Columns: []compare.Column{base}, Baseline: base},
+		Plan:   compare.Plan{Columns: []compare.Column{base}},
 		Result: compare.Result{},
 		Now:    time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC),
 	}
@@ -68,8 +68,8 @@ func TestNotesNoIgnoreLineWhenEmpty(t *testing.T) {
 // ignoredCellCount 数的是**实际忽略了几个格子**，不是配了几条规则
 func TestIgnoredCellCountFromResult(t *testing.T) {
 	r := compare.Result{Rows: []compare.Row{
-		{Cells: []compare.Cell{{Verdict: compare.VerdictSame}, {Verdict: compare.VerdictIgnored}}},
-		{Cells: []compare.Cell{{Verdict: compare.VerdictIgnored}, {Verdict: compare.VerdictIgnored}}},
+		{Cells: []compare.Cell{{State: compare.CellVersion}, {State: compare.CellIgnored}}},
+		{Cells: []compare.Cell{{State: compare.CellIgnored}, {State: compare.CellIgnored}}},
 	}}
 	if n := ignoredCellCount(r); n != 3 {
 		t.Errorf("忽略格子数 = %d，要 3", n)

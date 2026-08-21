@@ -1,3 +1,4 @@
+import { actionMessage } from '../../lib/actionMessage.js'
 import { toErrorInfo } from '@ops/api'
 import { tError, useTranslation } from '@ops/i18n'
 import { Badge, Banner, Dialog, Field, Select } from '@ops/ui'
@@ -196,7 +197,7 @@ export function DomainOpsDialog({ d, onClose }: { d: Domain; onClose: () => void
 
         {done ? (
           <Banner tone={done.overpay_note || done.warning ? 'warn' : 'info'}>
-            <span className="font-medium">{done.msg ?? t('common:write.saved')}</span>
+            <span className="font-medium">{actionMessage(t, done)}</span>
             {done.order_id ? (
               <span className="mt-0.5 block tabular">
                 {t('domains:ops.orderId')}: {done.order_id}

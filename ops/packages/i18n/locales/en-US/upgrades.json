@@ -128,5 +128,7 @@
       "notReady": "NotReady for",
       "repairIn": "Auto-repair in"
     }
-  }
+  },
+  "overrideCleared": "Override cleared. The next sync will use the upstream value.",
+  "nodeHealthLeadTimeNote": "NotReady only gives you 5–8 minutes over GKE's own auto-repair; disk trends give hours to days; a sudden hard failure gives no warning at all and can only be seen afterwards in the auto-repair record."
 }

@@ -433,7 +433,8 @@ func (h *DomainHandler) Delete(c *gin.Context) {
 // Sync 从注册商同步域名：第一期先支持手动录入，自动同步按 provider 接入（迭代）。
 func (h *DomainHandler) Sync(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"synced": 0,
-		"msg":    "自动同步需按注册商 provider 接入，当前请用手动录入；凭据已可配置供证书签发使用",
+		"synced":  0,
+		"msg_key": "registrars:syncNotSupported",
+		"msg":     "自动同步需按注册商 provider 接入，当前请用手动录入；凭据已可配置供证书签发使用",
 	})
 }

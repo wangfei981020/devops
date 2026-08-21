@@ -28,16 +28,12 @@ func writeReadme(f *excelize.File, in Input, st *styles) error {
 		{"比对方案", in.PlanName},
 		{"导出时间", fmtTime(in.Now)},
 		{"导出人", in.Operator},
-		{"基准列", in.Plan.Baseline.Key()},
 	}
 	// 🔴 筛过的导出必须在第一页说清楚。不说的话，收到附件的人
 	//    会把一份「只含落后服务」的清单当成全量，然后得出「其余都一致」的结论。
 	if in.FilterNote != "" {
 		rows = append(rows, [2]string{"⚠️ 本次为筛选后导出",
 			in.FilterNote + " —— 未列出的服务不代表没有差异，只是这次没导"})
-	}
-	if in.Plan.BaselinePin != "" {
-		rows = append(rows, [2]string{"手工版本基线", in.Plan.BaselinePin + "（忽略基准列的实际版本，所有列与它比）"})
 	}
 
 	// 🔴 被忽略的东西必须在这里点名。
@@ -75,25 +71,23 @@ func writeReadme(f *excelize.File, in Input, st *styles) error {
 		{"", ""},
 		{"比对 key", "镜像名的最后一段。registry 地址、Harbor 项目名、namespace、workload 名四者双方都可能不一致，全部剥掉不参与比对"},
 		{"", ""},
-		// 🔴 两页用**两套词**，必须分开写清楚是哪一页的。
+		// 🔴 只有**一套**口径 —— 比对矩阵和差异明细现在用同一套判定。
 		//
-		//    比对矩阵没有基准（它可能是别的两家公司之间的对账，我方不在里面），
-		//    所以只能说"这几列彼此一不一样"，判定是无方向的；
-		//    差异明细仍以基准为参照，才谈得上"落后几个版本"。
-		//    把两套混在一张口径表里，看表的人会去矩阵页找「落后」而找不到。
-		{"判定口径 · 比对矩阵", ""},
+		//    改之前是两套（矩阵无基准、明细相对基准），说明页得分两段写。
+		//    基准整个删掉之后两页统一了，这里也跟着合并 ——
+		//    留着"判定口径 · 差异明细"那一段会解释一堆**已经不存在的词**
+		//    （落后 / 基准没有），看表的人会去表里找而找不到。
+		{"判定口径", ""},
 		{"一致", "这几列的 tag 完全相同"},
 		{"缺失", "至少有一列确实没有这个服务（该列采集是成功的）。⚠️ 这一档排在「不一致」前面：这种行里往往两者都有，而说「不一致」会让人以为这几列都有、只是版本不同"},
-		{"不一致", "这几列都有这个服务，但 tag 不全相同。⚠️ 不说谁新谁旧 —— 跨公司是两个 Harbor、两条流水线，版本号本来就不可比"},
+		{"不一致", "这几列都有这个服务，但 tag 不全相同。⚠️ 不说谁新谁旧 —— 没有基准列，而跨公司是两个 Harbor、两条流水线，版本号本来就不可比"},
 		{"无法判定", "至少有一列没法拿来比：整列采集失败、非版本化 tag（latest / v3 这类，指向的内容随时会变）、或同名冲突。⚠️ 排在最后：它说的是「不知道」，不该盖掉已经查实的缺失或差异"},
 		{"已忽略", "人为决定不比这一格，不是数据缺失。忽略的格子不参与该行的结论"},
 		{"", ""},
-		{"判定口径 · 差异明细", ""},
-		{"落后 / 超前", "tag 与「基准列」不同。只有双方构建号都解析得出时才给出「差几个版本」，否则只说不同"},
-		{"该列没有", "该列采集成功，但确实没有这个服务"},
-		{"基准没有", "基准列没有，别的列有"},
-		{"同名冲突", "同一个镜像名在多个 workload 上跑着不同版本，通常是 ns 规则误抓。此时任何判定都是猜的，所以拒绝判定"},
-		{"数据不可用", "我们没采到这一列的数据，不代表对方没有部署。与「该列没有」是两回事：前者要查我们自己的采集，后者要找对方确认"},
+		{"格子里的字", ""},
+		{"—", "这一列确实没有这个服务 → 找对方确认"},
+		{"未采集", "我们没采到这一列 → 查我们自己的采集。⚠️ 与「—」是两回事，处理方向相反"},
+		{"已忽略", "主动决定不比 → 什么都不用做"},
 		{"", ""},
 		{"发布中", "声明的 tag 与实际在跑的 tag 不一致 = 正在滚动更新，或滚动卡住了。这是附加标记，一个服务可以既「一致」又「发布中」。⚠️ 只在差异明细里体现，比对矩阵不显示它——它几分钟就自愈，标出来会制造假的待办"},
 		{"", ""},
@@ -169,11 +163,9 @@ func writeMatrix(f *excelize.File, in Input, st *styles) error {
 
 		// 先把整行翻成矩阵格子，再算结论 ——
 		// 结论要看全行，所以不能边写边判。
-		cells := make([]matrixCell, len(row.Cells))
-		for ci, c := range row.Cells {
-			cells[ci] = matrixCellOf(c)
-		}
-		conc := matrixVerdict(cells)
+		// 🔴 结论直接读 row.Verdict —— compare 已经算好了。
+		//    导出这边**不许再算一遍**：两套判定必然分叉，而分叉时不报错。
+		conc := verdictLabel[row.Verdict]
 
 		// 服务名列不上色（和收表人已经习惯的那两版表一致），只用等宽
 		_ = f.SetCellValue(sh, cell("A", r), row.ServiceKey)
@@ -181,13 +173,13 @@ func writeMatrix(f *excelize.File, in Input, st *styles) error {
 
 		// 整行同色，颜色由行结论定 —— 不再是每格各自一个颜色。
 		// 没有基准就没有"这一格相对谁如何"，颜色只能表达行的结论。
-		for ci, m := range cells {
+		for ci, c := range row.Cells {
 			col := colName(ci + 1)
-			_ = f.SetCellValue(sh, cell(col, r), m.Text)
-			_ = f.SetCellStyle(sh, cell(col, r), cell(col, r), concMonoStyleOf(st, conc))
+			_ = f.SetCellValue(sh, cell(col, r), cellText(c))
+			_ = f.SetCellStyle(sh, cell(col, r), cell(col, r), monoStyleOf(st, row.Verdict))
 		}
 		_ = f.SetCellValue(sh, cell(last, r), conc)
-		_ = f.SetCellStyle(sh, cell(last, r), cell(last, r), concStyleOf(st, conc))
+		_ = f.SetCellStyle(sh, cell(last, r), cell(last, r), styleOf(st, row.Verdict))
 	}
 
 	// 冻结首行 + 首列：横向有 N 列、纵向上百行，不冻结就没法看
@@ -199,16 +191,27 @@ func writeMatrix(f *excelize.File, in Input, st *styles) error {
 	return nil
 }
 
-// writeDiff 只列有差异的行，附带原因。
+// writeDiff 只列需要人处理的行，附带每列的版本和归因。
 //
 // 矩阵一屏放不下上百行，而真正要处理的通常只有十几行。
+//
+// 🔴 原来这一页有「基准版本」「差几个版本」两列 —— 已删。
+// 没有基准就没有"落后几个版本"，而跨公司两边是两个 Harbor、两条流水线，
+// 版本号本来就不可比，那个数字在跨公司场景里是假的。
 func writeDiff(f *excelize.File, in Input, st *styles) error {
 	const sh = "差异明细"
 	if _, err := f.NewSheet(sh); err != nil {
 		return err
 	}
-	heads := []string{"服务", "列", "判定", "该列版本", "基准版本", "差几个版本", "归因", "归因说明", "说明"}
-	widths := []float64{40, 28, 12, 34, 34, 12, 14, 52, 52}
+	// 每列一栏版本号 + 结论 + 归因
+	heads := []string{"服务"}
+	widths := []float64{40}
+	for _, c := range in.Plan.Columns {
+		heads = append(heads, c.Key())
+		widths = append(widths, 30)
+	}
+	heads = append(heads, "结论", "归因", "归因说明", "说明")
+	widths = append(widths, 12, 14, 52, 52)
 	for i, h := range heads {
 		c := colName(i)
 		_ = f.SetCellValue(sh, cell(c, 1), h)
@@ -217,44 +220,79 @@ func writeDiff(f *excelize.File, in Input, st *styles) error {
 	_ = f.SetCellStyle(sh, "A1", cell(colName(len(heads)-1), 1), st.head)
 
 	r := 2
-	baseKey := in.Plan.Baseline.Key()
 	for _, row := range in.Result.Rows {
-		baseTag := "—"
-		if row.Base != nil {
-			baseTag = row.Base.Tag
+		// 一致的和已忽略的不列 —— 这一页是"要处理的清单"
+		if !row.HasDiff {
+			continue
 		}
-		for _, c := range row.Cells {
-			// 基准列自己不算差异；一致的也不列
-			if c.Column.Key() == baseKey || c.Verdict == compare.VerdictSame {
-				continue
-			}
-			tag := "—"
-			if c.Snap != nil {
-				tag = c.Snap.Tag
-			}
-			delta := "—"
-			if c.Delta != nil {
-				delta = strconv.Itoa(abs(*c.Delta))
-			}
-			vals := []any{row.ServiceKey, c.Column.Key(), verdictLabel[c.Verdict], tag, baseTag, delta,
-				syncLabel[c.Sync], c.SyncNote, c.Note}
-			for i, v := range vals {
-				_ = f.SetCellValue(sh, cell(colName(i), r), v)
-			}
-			_ = f.SetCellStyle(sh, cell("C", r), cell("C", r), styleOf(st, c.Verdict))
-			// 归因用自己的一套色：是我们的锅才标红
-			if c.Sync != "" {
-				_ = f.SetCellStyle(sh, cell("G", r), cell("G", r), syncStyleOf(st, c.Sync))
-			}
-			_ = f.SetCellStyle(sh, cell("H", r), cell("I", r), st.wrap)
-			r++
+		_ = f.SetCellValue(sh, cell("A", r), row.ServiceKey)
+		_ = f.SetCellStyle(sh, cell("A", r), cell("A", r), st.mono)
+		for ci, c := range row.Cells {
+			col := colName(ci + 1)
+			_ = f.SetCellValue(sh, cell(col, r), cellText(c))
+			_ = f.SetCellStyle(sh, cell(col, r), cell(col, r), monoStyleOf(st, row.Verdict))
 		}
+		vc := colName(len(in.Plan.Columns) + 1)
+		_ = f.SetCellValue(sh, cell(vc, r), verdictLabel[row.Verdict])
+		_ = f.SetCellStyle(sh, cell(vc, r), cell(vc, r), styleOf(st, row.Verdict))
+
+		// 归因取这一行里**最该被看到**的那一条。
+		// ⚠️ 一行可能有多列各有各的归因，但这一页一行只有一格 ——
+		//    取"我们这边要处理的"那条（not_synced / failed 优先于 unknown），
+		//    否则一个 unknown 会把真正要处理的那条挤掉。
+		sync, note, detail := pickSync(row.Cells)
+		_ = f.SetCellValue(sh, cell(colName(len(in.Plan.Columns)+2), r), syncLabel[sync])
+		if sync != "" {
+			_ = f.SetCellStyle(sh, cell(colName(len(in.Plan.Columns)+2), r),
+				cell(colName(len(in.Plan.Columns)+2), r), syncStyleOf(st, sync))
+		}
+		_ = f.SetCellValue(sh, cell(colName(len(in.Plan.Columns)+3), r), note)
+		_ = f.SetCellValue(sh, cell(colName(len(in.Plan.Columns)+4), r), detail)
+		_ = f.SetCellStyle(sh, cell(colName(len(in.Plan.Columns)+3), r),
+			cell(colName(len(in.Plan.Columns)+4), r), st.wrap)
+		r++
 	}
 	if r == 2 {
-		_ = f.SetCellValue(sh, "A2", "本次比对没有差异")
+		_ = f.SetCellValue(sh, "A2", "本次比对没有需要处理的行")
 	}
 	_ = f.SetPanes(sh, &excelize.Panes{Freeze: true, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
 	return nil
+}
+
+// pickSync 一行里最该被看到的那条归因。
+//
+// 🔴 "我们这边要处理的"优先：not_synced / failed 排在 unknown 前面。
+// 不排的话，一个 unknown 会把真正的行动项挤掉 ——
+// 而 unknown 恰恰是最常见的那个（没绑规则的平台每一行都是它）。
+func pickSync(cells []compare.Cell) (compare.SyncAttr, string, string) {
+	best := -1
+	rankOf := func(a compare.SyncAttr) int {
+		switch a {
+		case compare.SyncAttrFailed:
+			return 3
+		case compare.SyncAttrNotSynced:
+			return 2
+		case compare.SyncAttrSynced:
+			return 1
+		case compare.SyncAttrUnknown:
+			return 0
+		}
+		return -1
+	}
+	var pick compare.Cell
+	for _, c := range cells {
+		if rk := rankOf(c.Sync); rk > best {
+			best, pick = rk, c
+		}
+	}
+	if best < 0 {
+		// 🔴 一格归因都没有，通常是**这次比对的列全是我方**
+		//    （我方 UAT vs 我方 PROD 这种），那时"推给对方"无从谈起。
+		//    ⚠️ 留空白的话，看表的人会以为归因功能坏了 ——
+		//       说清楚"不适用"和留空白是两回事。
+		return "", "不适用：镜像同步说的是「我方推给对方」，这次比对的列里没有外部平台", ""
+	}
+	return pick.Sync, pick.SyncNote, pick.Note
 }
 
 // writeDetails 每列一个 Pod 级明细 sheet —— 对应原脚本的 RANCHER_XX sheet。
@@ -350,38 +388,6 @@ func syncStyleOf(st *styles, a compare.SyncAttr) int {
 		return st.noData
 	}
 }
-
-func styleOf(st *styles, v compare.Verdict) int {
-	switch v {
-	case compare.VerdictSame:
-		return st.same
-	case compare.VerdictBehind, compare.VerdictAhead:
-		return st.diff
-	case compare.VerdictConflict:
-		return st.conflict
-	case compare.VerdictMissing, compare.VerdictExtra:
-		return st.missing
-	default: // unknown / no_data —— 灰，既不是故障也不是缺失
-		return st.noData
-	}
-}
-
-// rank 行结论取最该被看到的那一个。与前端 verdict.ts 的 ORDER 保持一致。
-func rank(v compare.Verdict) int {
-	switch v {
-	case compare.VerdictConflict:
-		return 4
-	case compare.VerdictBehind, compare.VerdictAhead:
-		return 3
-	case compare.VerdictUnknown, compare.VerdictNoData:
-		return 2
-	case compare.VerdictMissing, compare.VerdictExtra:
-		return 1
-	default:
-		return 0
-	}
-}
-
 func abs(n int) int {
 	if n < 0 {
 		return -n
@@ -434,7 +440,7 @@ func ignoredCellCount(r compare.Result) int {
 	n := 0
 	for _, row := range r.Rows {
 		for _, c := range row.Cells {
-			if c.Verdict == compare.VerdictIgnored {
+			if c.State == compare.CellIgnored {
 				n++
 			}
 		}

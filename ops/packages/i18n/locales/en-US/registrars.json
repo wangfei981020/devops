@@ -67,5 +67,6 @@
     "hint": "These counters are per-replica and in-memory: they reset on restart and each replica counts separately (the cross-replica quota is a different layer). So “0 today” does not mean “no sync ran today” — another replica may have done the work. The rate-limited marker is the signal that matters: once the vendor quota is exhausted, syncs slow down or fail while the domain list still looks fine.",
     "limited": "rate-limited at {{at}}",
     "text": "API usage {{minute}}/{{limit}} per minute · {{today}} today"
-  }
+  },
+  "syncNotSupported": "Automatic sync has to be built per registrar; for now enter records by hand. Credentials can already be configured for certificate issuance."
 }

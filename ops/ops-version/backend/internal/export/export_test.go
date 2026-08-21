@@ -21,7 +21,7 @@ func sampleInput() Input {
 	base := col(1, "我方", "UAT", "success")
 	other := col(2, "A公司", "PROD", "success")
 	dead := col(3, "B公司", "PROD", "auth_failed")
-	plan := compare.Plan{Columns: []compare.Column{base, other, dead}, Baseline: base}
+	plan := compare.Plan{Columns: []compare.Column{base, other, dead}}
 
 	b := 114
 	o := 110
@@ -230,21 +230,24 @@ func TestFilteredExportSaysSo(t *testing.T) {
 func TestMatrixVersionCellHasNoVerdict(t *testing.T) {
 	base := compare.Column{OrgID: 1, OrgName: "SL", Env: "UAT", SyncStatus: "success"}
 	c2 := compare.Column{OrgID: 2, OrgName: "印尼", Env: "UAT", SyncStatus: "success"}
-	d := -2
+	cells := []compare.Cell{
+		{Column: base, State: compare.CellVersion,
+			Snap: &compare.Snapshot{Tag: "20260819174536-53"}},
+		{Column: c2, State: compare.CellVersion,
+			Snap: &compare.Snapshot{Tag: "20260819054132-51"}},
+	}
 	res := compare.Result{
 		Summary: map[compare.Verdict]int{},
 		Rows: []compare.Row{{
 			ServiceKey: "g66-frontend",
-			Cells: []compare.Cell{
-				{Column: base, Verdict: compare.VerdictSame,
-					Snap: &compare.Snapshot{Tag: "20260819174536-53"}},
-				{Column: c2, Verdict: compare.VerdictBehind, Delta: &d,
-					Snap: &compare.Snapshot{Tag: "20260819054132-51"}},
-			},
+			Cells:      cells,
+			// ⚠️ 结论由 compare 算，这里照它算一次而不是硬写 ——
+			//    硬写的话这个测试就锁不住"导出读的是 row.Verdict"。
+			Verdict: compare.RowVerdict(cells),
 		}},
 	}
 	blob, err := Build(Input{
-		Result: res, Plan: compare.Plan{Columns: []compare.Column{base, c2}, Baseline: base},
+		Result: res, Plan: compare.Plan{Columns: []compare.Column{base, c2}},
 		PlanName: "t", Operator: "tester", Now: time.Now(),
 	})
 	if err != nil {

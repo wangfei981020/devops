@@ -109,5 +109,9 @@
     "create": "新建",
     "needName": "填个厂商名",
     "none": "还没有任何 CDN 厂商。账号要挂在厂商下面，先在这里建一个。"
-  }
+  },
+  "tokenValid": "token 有效。",
+  "zonesPartiallyFailed": "有 {{count}} 个站点读取失败，没有包含在列表里（不是没有站点）。",
+  "pickFieldsHint": "选择要看的字段后重新查询。",
+  "tokenCheckRealtimeNote": "本结果为实时探测 Cloudflare 所得，不读 CMDB 库。体检通过后还需要触发一次 CDN 账号同步，查询接口才会反映新权限。"
 }

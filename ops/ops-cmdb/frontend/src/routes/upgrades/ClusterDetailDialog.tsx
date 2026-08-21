@@ -1,4 +1,4 @@
-import { tError } from '@ops/i18n'
+import { tError , formatList } from '@ops/i18n'
 import { toErrorInfo } from '@ops/api'
 import { Badge, Banner, Button, Dialog, DrawerSection, Select, Skeleton } from '@ops/ui'
 import { useState } from 'react'
@@ -466,7 +466,7 @@ function EstimateLine({ est, t }: { est: { min_minutes: number; max_minutes: num
       {est.basis ? <span className="ml-2 text-xs text-muted-foreground">{est.basis}</span> : null}
       {(est.incomplete ?? []).length > 0 ? (
         <p className="mt-0.5 text-xs text-warning">
-          {t('upgrades:detail.incomplete', { list: (est.incomplete ?? []).join('、') })}
+          {t('upgrades:detail.incomplete', { list: formatList(t, est.incomplete ?? []) })}
         </p>
       ) : null}
     </div>

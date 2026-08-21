@@ -24,6 +24,8 @@ import (
 	"ops-cmdb-backend/internal/store"
 
 	"ops-cmdb-backend/logx"
+
+	"ops-cmdb-backend/internal/httpx"
 )
 
 type GKEUpgradeHandler struct {
@@ -383,27 +385,55 @@ func (h *GKEUpgradeHandler) Schedule(c *gin.Context) {
 // OverrideSchedule 手工覆盖某一格的自动升级日期（官网解析出错时的兜底）。
 // 打上 is_manual=1 后，定时同步不再冲掉这一行。
 func (h *GKEUpgradeHandler) OverrideSchedule(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
-	var in struct {
-		AutoUpgradeRaw string `json:"auto_upgrade_raw"`
-		AutoUpgradeAt  string `json:"auto_upgrade_at"`
-		Precision      string `json:"auto_upgrade_precision"`
-	}
-	if err := c.ShouldBindJSON(&in); err != nil || id == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "参数错误", "error_key": "error.badRequest"})
+	// 🔴 必须用租户作用域的 sc，不能用裸的 h.DB：
+	//	SQL 里写着 `WHERE tenant_id = ?` 但裸 DB 不会注入那个参数 ——
+	//	实测这个接口一直返回 `sql: expected 5 arguments, got 4`，
+	//	而它包在 `200 + {ok:false}` 里，界面上只显示一句失败，
+	//	看起来像"这次没改成"，不像"这个功能从来就没work过"（OPSCMDB-085）。
+	//	旁边的 ClearOverride 用的就是 sc.Exec，两处写法不一致才是根因。
+	sc, err := h.Store.Tenant(c.Request.Context())
+	if err != nil {
+		httpx.Fail(c, httpx.CodeBadRequest, err, nil)
 		return
 	}
-	if in.Precision == "" {
-		in.Precision = "day"
+	id, _ := strconv.Atoi(c.Param("id"))
+	// 指针 = 三态：没传（不动它）/ 显式清空 / 改成它（OPSCMDB-083）。
+	// 只想改一句原文却把生效日期一起清掉，日程会静默变成"没有日期"。
+	var in struct {
+		AutoUpgradeRaw *string `json:"auto_upgrade_raw"`
+		AutoUpgradeAt  *string `json:"auto_upgrade_at"`
+		Precision      *string `json:"auto_upgrade_precision"`
 	}
-	if _, err := h.DB.Exec(`UPDATE gke_version_schedule
-		   SET auto_upgrade_raw=?, auto_upgrade_at=?, auto_upgrade_precision=?, is_manual=1
-		 WHERE tenant_id = ? AND id=?`, in.AutoUpgradeRaw, nullDate(in.AutoUpgradeAt), in.Precision, id); err != nil {
+	if err := c.ShouldBindJSON(&in); err != nil || id == 0 {
+		// ⚠️ 走 httpx：只塞 error_key 前端认不出这是结构化错误，
+		//	会按状态码兜底显示通用句子（check-error-key-on-failure）
+		httpx.FailKeyWith(c, httpx.CodeBadRequest, "error.badRequest", nil,
+			map[string]any{"ok": false, "error": "参数错误"})
+		return
+	}
+	p := &patchSet{}
+	p.Add("auto_upgrade_raw", in.AutoUpgradeRaw)
+	// 空串 = 显式清掉日期（存 NULL），与"没传"是两回事
+	p.AddExpr(in.AutoUpgradeAt != nil, "auto_upgrade_at=?", nullDate(derefStr(in.AutoUpgradeAt)))
+	if in.Precision != nil {
+		prec := *in.Precision
+		if prec == "" {
+			prec = "day"
+		}
+		p.Add("auto_upgrade_precision", &prec)
+	}
+	if p.Empty() {
+		httpx.Invalid(c, "body", "至少要传一个要改的字段")
+		return
+	}
+	if _, err := sc.Exec(`UPDATE gke_version_schedule SET `+p.SQL()+`, is_manual=1
+		 WHERE tenant_id = ? AND id=?`, append(p.Args(), id)...); err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
 	logx.J("gke_schedule", "manual_override", map[string]any{
-		"id": id, "raw": in.AutoUpgradeRaw, "at": in.AutoUpgradeAt, "precision": in.Precision,
+		"id": id, "raw": derefStr(in.AutoUpgradeRaw), "at": derefStr(in.AutoUpgradeAt),
+		"precision": derefStr(in.Precision),
 	})
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -421,7 +451,7 @@ func (h *GKEUpgradeHandler) ClearOverride(c *gin.Context) {
 		return
 	}
 	logx.J("gke_schedule", "manual_override_cleared", map[string]any{"id": id})
-	c.JSON(http.StatusOK, gin.H{"ok": true, "msg": "已取消覆盖，下次同步会用官网值"})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "msg_key": "upgrades:overrideCleared", "msg": "已取消覆盖，下次同步会用官网值"})
 }
 
 // ---------------------------------------------------------------------------

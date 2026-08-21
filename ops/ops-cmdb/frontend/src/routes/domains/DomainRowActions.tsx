@@ -1,3 +1,4 @@
+import { actionMessage } from '../../lib/actionMessage.js'
 import { toErrorInfo } from '@ops/api'
 import { tError, useTranslation } from '@ops/i18n'
 import { Banner, Dialog, MenuItem, MenuSeparator, MutationError, Popover } from '@ops/ui'
@@ -58,7 +59,7 @@ export function DomainRowActions({ d }: { d: Domain }) {
           {tError(t, toErrorInfo(failed.error).messageKey, toErrorInfo(failed.error).params)}
         </span>
       ) : ok ? (
-        <span className="text-xs text-success">{ok.data?.msg ?? t('common:write.saved')}</span>
+        <span className="text-xs text-success">{actionMessage(t, ok.data)}</span>
       ) : null}
 
       <Popover

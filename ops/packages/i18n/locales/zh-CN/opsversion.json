@@ -17,13 +17,10 @@
   },
   "verdict": {
     "same": "一致",
-    "behind": "落后",
-    "ahead": "超前",
-    "missing_here": "该列没有",
-    "missing_base": "基准没有",
+    "diff": "不一致",
+    "missing": "缺失",
     "unknown": "无法判定",
-    "conflict": "同名冲突",
-    "no_data": "数据不可用",
+    "ignored": "已忽略",
     "deploying": "发布中"
   },
   "verdictHint": {
@@ -623,5 +620,13 @@
   },
   "boot": {
     "failTitle": "连不上服务端"
+  },
+  "cellState": {
+    "version": "有版本",
+    "missing": "这列没有",
+    "no_data": "未采集",
+    "unversioned": "非版本化 tag",
+    "conflict": "同名冲突",
+    "ignored": "已忽略"
   }
 }

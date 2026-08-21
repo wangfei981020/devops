@@ -113,8 +113,21 @@ func buildDSN() string {
 	// 对外表现成 Cloudflare 524。有了读超时，卡死的查询会在 30s 内失败并释放连接，
 	// 接口快速报错而不是拖成 524——故障依然是故障，但可见、可诊断、不放大。
 	// 30s 的取值：实测最慢的采集查询约 1.3s，正常查询远低于此，30s 只兜异常。
+	// 🔴 clientFoundRows=true：让 RowsAffected 返回**匹配到的**行数，
+	//	而不是"值真的变了的"行数。
+	//
+	//	全库有 22 处把 `RowsAffected()==0` 当成"这条记录不存在"来返回 404。
+	//	MySQL 默认只数**改变过**的行 —— 于是「保存但没有任何改动」会返回
+	//	`404 集群不存在`，而那条记录明明在那儿（实测：把 display_name
+	//	改成它已有的值 → 404）。
+	//
+	//	改成 PATCH 语义（OPSCMDB-083）之后这个坑更容易踩到：
+	//	一次只写一两列，"新值等于旧值"的概率高得多。
+	//
+	// ⚠️ 逐处改 22 个判据不如在这里改一次：那 22 处的**意图**都是"存在性"，
+	//	而 clientFoundRows 正是给这个意图准备的开关。
 	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local&time_zone=%s"+
-		"&timeout=5s&readTimeout=30s&writeTimeout=30s",
+		"&clientFoundRows=true&timeout=5s&readTimeout=30s&writeTimeout=30s",
 		u, pw, h, p, db, url.QueryEscape("'+08:00'"))
 }
 

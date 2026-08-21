@@ -138,12 +138,12 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 // ─────────────── MCP 令牌 ───────────────
 
 type MCPToken struct {
-	ID         int64      `json:"id"`
-	Name       string     `json:"name"`
-	Prefix     string     `json:"prefix"`
-	RoleCode   string     `json:"role_code"`
-	Visible    string     `json:"visible_orgs"`
-	Enabled    bool       `json:"enabled"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Prefix   string `json:"prefix"`
+	RoleCode string `json:"role_code"`
+	Visible  string `json:"visible_orgs"`
+	Enabled  bool   `json:"enabled"`
 	// ExpiresAt nil = 永不过期。
 	//
 	// 🔴 必须出到界面上：这是发给外部接入方和 AI 的长期凭据，
@@ -210,12 +210,10 @@ type PlanCol struct {
 }
 
 type ComparePlan struct {
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	Columns     []PlanCol `json:"columns"`
-	Baseline    PlanCol   `json:"baseline"`
-	BaselinePin string    `json:"baseline_pin"`
-	OnlyDiff    bool      `json:"only_diff"`
+	ID       int64     `json:"id"`
+	Name     string    `json:"name"`
+	Columns  []PlanCol `json:"columns"`
+	OnlyDiff bool      `json:"only_diff"`
 	// Ignores 人为忽略项，随方案存。可解除 —— 对方以后上线了这个服务，
 	// 不该逼人重建整个方案。
 	Ignores   compare.IgnoreSet `json:"ignores"`
@@ -225,7 +223,7 @@ type ComparePlan struct {
 
 func (s *Store) ListPlans(ctx context.Context) ([]ComparePlan, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, columns_json, baseline_json, baseline_pin, only_diff,
+		SELECT id, name, columns_json, only_diff,
 		       ignores_json, created_by, created_at
 		  FROM comparison_plans WHERE deleted_at IS NULL ORDER BY id DESC`)
 	if err != nil {
@@ -235,16 +233,15 @@ func (s *Store) ListPlans(ctx context.Context) ([]ComparePlan, error) {
 	out := []ComparePlan{}
 	for rows.Next() {
 		var p ComparePlan
-		var cj, bj string
+		var cj string
 		var ij sql.NullString
 		var od int
-		if err := rows.Scan(&p.ID, &p.Name, &cj, &bj,
-			&p.BaselinePin, &od, &ij, &p.CreatedBy, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &cj,
+			&od, &ij, &p.CreatedBy, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		p.OnlyDiff = od == 1
 		_ = json.Unmarshal([]byte(cj), &p.Columns)
-		_ = json.Unmarshal([]byte(bj), &p.Baseline)
 		// NULL / 空串 = 没有忽略规则。留空 IgnoreSet，不是 nil map ——
 		// IgnoredCell 读 nil map 不会崩，但前端拿到 `"cells":null` 又是一次白屏。
 		p.Ignores = compare.IgnoreSet{Services: []string{}, Cells: map[string][]string{}}
@@ -270,13 +267,12 @@ func (s *Store) SavePlan(ctx context.Context, id int64, p ComparePlan, actor str
 		return 0, fmt.Errorf("至少要两列才能对比")
 	}
 	cj, _ := json.Marshal(p.Columns)
-	bj, _ := json.Marshal(p.Baseline)
 	ij, _ := json.Marshal(p.Ignores)
 	if id == 0 {
 		res, err := s.db.ExecContext(ctx, `
-			INSERT INTO comparison_plans (name, columns_json, baseline_json, baseline_pin,
+			INSERT INTO comparison_plans (name, columns_json,
 			  only_diff, ignores_json, created_by)
-			VALUES (?,?,?,?,?,?,?)`, p.Name, string(cj), string(bj), p.BaselinePin,
+			VALUES (?,?,?,?,?)`, p.Name, string(cj),
 			boolToInt(p.OnlyDiff), string(ij), actor)
 		if err != nil {
 			return 0, err
@@ -284,9 +280,9 @@ func (s *Store) SavePlan(ctx context.Context, id int64, p ComparePlan, actor str
 		return res.LastInsertId()
 	}
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE comparison_plans SET name=?, columns_json=?, baseline_json=?, baseline_pin=?,
+		UPDATE comparison_plans SET name=?, columns_json=?,
 		  only_diff=?, ignores_json=?
-		 WHERE id=?`, p.Name, string(cj), string(bj), p.BaselinePin,
+		 WHERE id=?`, p.Name, string(cj),
 		boolToInt(p.OnlyDiff), string(ij), id)
 	return id, err
 }

@@ -328,17 +328,26 @@ func (h *HostHandler) UpdateComputeRate(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	// 🔴 指针 = 三态。用 float64 的话，只传 vcpu 费率会把内存费率**静默置 0** ——
+	//	那等于在成本核算里把内存算成免费的，而账面上一切正常（OPSCMDB-083）。
 	var in struct {
-		VcpuHour  float64 `json:"vcpu_hour_usd"`
-		RamGbHour float64 `json:"ram_gb_hour_usd"`
+		VcpuHour  *float64 `json:"vcpu_hour_usd"`
+		RamGbHour *float64 `json:"ram_gb_hour_usd"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	p := &patchSet{}
+	p.Add("vcpu_hour_usd", in.VcpuHour)
+	p.Add("ram_gb_hour_usd", in.RamGbHour)
+	if p.Empty() {
+		httpx.Invalid(c, "body", "至少要传一个要改的字段")
+		return
+	}
 	// 人工改过的标 confirmed（不再是 estimate 待核对）
-	res, err := sc.Exec(`UPDATE cloud_compute_rates SET vcpu_hour_usd=?, ram_gb_hour_usd=?, note='confirmed' WHERE tenant_id = ? AND id=?`,
-		in.VcpuHour, in.RamGbHour, c.Param("id"))
+	res, err := sc.Exec(`UPDATE cloud_compute_rates SET `+p.SQL()+`, note='confirmed' WHERE tenant_id = ? AND id=?`,
+		append(p.Args(), c.Param("id"))...)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -574,16 +583,27 @@ func (h *HostHandler) UpdateAccount(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	// 指针 = 三态：没传（不动它）/ 显式清空 / 改成它（OPSCMDB-083）
 	var in struct {
-		Name      string `json:"name"`
-		BillingDS string `json:"billing_export_dataset"`
+		Name      *string `json:"name"`
+		BillingDS *string `json:"billing_export_dataset"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	res, err := sc.Exec(`UPDATE cloud_accounts SET name=?, billing_export_dataset=? WHERE tenant_id = ? AND id=?`,
-		in.Name, in.BillingDS, c.Param("id"))
+	if requireNonBlank(c, "name", in.Name) {
+		return
+	}
+	p := &patchSet{}
+	p.Add("name", in.Name)
+	p.Add("billing_export_dataset", in.BillingDS)
+	if p.Empty() {
+		httpx.Invalid(c, "body", "至少要传一个要改的字段")
+		return
+	}
+	res, err := sc.Exec(`UPDATE cloud_accounts SET `+p.SQL()+` WHERE tenant_id = ? AND id=?`,
+		append(p.Args(), c.Param("id"))...)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

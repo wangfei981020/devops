@@ -1,3 +1,4 @@
+import { keyedText } from '../../lib/hintText.js'
 import { tError } from '@ops/i18n'
 import { toErrorInfo } from '@ops/api'
 import { Badge, Banner, Skeleton } from '@ops/ui'
@@ -119,7 +120,9 @@ export function NodeHealthPanel({ t }: { t: TFn }) {
       ) : null}
 
       {d?.thresholds?.note ? (
-        <p className="mt-1.5 text-xs text-muted-foreground">{d.thresholds.note}</p>
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          {keyedText(t, d.thresholds, 'note')}
+        </p>
       ) : null}
     </section>
   )

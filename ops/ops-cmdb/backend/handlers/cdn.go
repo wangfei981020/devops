@@ -92,42 +92,56 @@ func (h *CDNHandler) SaveAccount(c *gin.Context) {
 		return
 	}
 	var in struct {
-		ID         int    `json:"id"`
-		CDNID      int    `json:"cdn_id"`
-		Name       string `json:"name"`
-		Token      string `json:"token"`
-		AccountTag string `json:"account_tag"`
-		Enabled    *bool  `json:"enabled"`
+		ID         int     `json:"id"`
+		CDNID      int     `json:"cdn_id"`
+		Name       string  `json:"name"`
+		Token      string  `json:"token"`
+		AccountTag *string `json:"account_tag"` // 指针：区分"没传"与"清空"
+		Enabled    *bool   `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil || in.Name == "" || in.CDNID == 0 {
 		httpx.Required(c, "cdn_id/name")
 		return
 	}
+	// 新建时的缺省：没说就是启用。
+	// ⚠️ **更新时不能用这个缺省** —— 见下面 patchSet 那段的说明。
 	enabled := 1
 	if in.Enabled != nil && !*in.Enabled {
 		enabled = 0
 	}
 	if in.ID > 0 {
-		// token 留空表示不修改，避免前端不回显导致误清空
-		if in.Token == "" {
-			// ★ 越权修复：原为 `WHERE id=?`，任何租户都能改别人的 CDN 账号
-			_, err := sc.Exec(`UPDATE cdn_accounts SET cdn_id=?, name=?, account_tag=?, enabled=? WHERE tenant_id = ? AND id=?`,
-				in.CDNID, in.Name, in.AccountTag, enabled, in.ID)
-			if err != nil {
-				c.JSON(500, gin.H{"error": err.Error()})
-				return
+		p := &patchSet{}
+		// name / cdn_id 上面已强制必填，这里一定有值
+		p.Add("cdn_id", &in.CDNID)
+		p.Add("name", &in.Name)
+		// 🔴 account_tag 与 enabled 都按**三态**处理：
+		//
+		//	`enabled` 原来是 `没传 → 视为 true`。于是停用了一个账号之后，
+		//	任何一次不带 enabled 的保存都会把它**重新启用** ——
+		//	而界面上只显示"已保存"，没人会想到自己刚把它打开了（OPSCMDB-083）。
+		//	`account_tag` 同理：不传就被空串覆盖。
+		p.Add("account_tag", in.AccountTag)
+		if in.Enabled != nil {
+			v := 0
+			if *in.Enabled {
+				v = 1
 			}
-		} else {
+			p.Add("enabled", &v)
+		}
+		// token 留空表示不修改，避免前端不回显导致误清空
+		if in.Token != "" {
 			enc, err := h.Cipher.Encrypt(in.Token)
 			if err != nil {
 				httpx.Fail(c, httpx.CodeInternal, fmt.Errorf("加密失败: %w", err), nil)
 				return
 			}
-			if _, err := sc.Exec(`UPDATE cdn_accounts SET cdn_id=?, name=?, cred_enc=?, account_tag=?, enabled=? WHERE tenant_id = ? AND id=?`,
-				in.CDNID, in.Name, enc, in.AccountTag, enabled, in.ID); err != nil {
-				c.JSON(500, gin.H{"error": err.Error()})
-				return
-			}
+			p.Add("cred_enc", &enc)
+		}
+		// ★ 越权修复：原为 `WHERE id=?`，任何租户都能改别人的 CDN 账号
+		if _, err := sc.Exec(`UPDATE cdn_accounts SET `+p.SQL()+` WHERE tenant_id = ? AND id=?`,
+			append(p.Args(), in.ID)...); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
 		}
 		SetAuditTarget(c, in.Name)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "id": in.ID})
@@ -143,7 +157,7 @@ func (h *CDNHandler) SaveAccount(c *gin.Context) {
 		return
 	}
 	res, err := sc.Insert(`INSERT INTO cdn_accounts (tenant_id,cdn_id,name,cred_enc,account_tag,enabled) VALUES (?,?,?,?,?,?)`,
-		in.CDNID, in.Name, enc, in.AccountTag, enabled)
+		in.CDNID, in.Name, enc, derefStr(in.AccountTag), enabled)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -192,7 +206,11 @@ func (h *CDNHandler) VerifyAccount(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "token 有效"})
+	// ⚠️ 字段名必须是 `msg`：前端的 actionMessage 读的是 msg / msg_key
+	//	（lib/actionMessage.ts）。原来发的是 `message`，于是这条提示
+	//	在界面上从来没显示过，一直落到"已保存"那句兜底文案上。
+	c.JSON(http.StatusOK, gin.H{"ok": true,
+		"msg_key": "cdn:tokenValid", "msg": "token 有效"})
 }
 
 func (h *CDNHandler) SyncAccount(c *gin.Context) {
@@ -485,7 +503,9 @@ func (h *CDNHandler) ListZones(c *gin.Context) {
 	if scanErrs > 0 {
 		// 少了几行必须说出来，否则"库里有 4 个、界面显示 1 个"没人会发现
 		c.JSON(http.StatusOK, gin.H{"items": out, "scan_errors": scanErrs,
-			"warning": fmt.Sprintf("有 %d 个站点读取失败，未包含在列表里（不是没有站点）", scanErrs)})
+			"warning_key":    "cdn:zonesPartiallyFailed",
+			"warning_params": map[string]any{"count": scanErrs},
+			"warning":        fmt.Sprintf("有 %d 个站点读取失败，未包含在列表里（不是没有站点）", scanErrs)})
 		return
 	}
 	c.JSON(http.StatusOK, out)

@@ -56,5 +56,6 @@
   "terminatingHint": "Deletion is stuck; the name stays taken",
   "title": "Namespaces",
   "total_one": "{{count}} namespace",
-  "total_other": "{{count}} namespaces"
+  "total_other": "{{count}} namespaces",
+  "autoAssigned": "Assigned {{count}} namespace(s). Platform components and ones that couldn't be determined are still empty and need a human."
 }

@@ -24,11 +24,28 @@
  *   Action:  / Title: / Detail: / Note: / Hint: / Reason: / Msg:
  *   以及语言包（packages/i18n/locales/**）里的任何值
  *
- * `MCPHint:` 字段是**豁免**的 —— 那个字段存在的意义就是装工具链。
+ * `MCPHint:` / `mcp_hint` / `mcp_note` 字段是**豁免**的 —— 那些字段存在的意义就是装工具链。
  * 这也是修法：不要删掉工具提示，把它挪到给 AI 的字段里。
+ *
+ * # 显式豁免：`//ops:mcp-only`
+ *
+ * 有些输出**只有 AI 会读**（MCP 传输层自己拼的提示、没有界面入口的接口）。
+ * 给那个函数的注释里加一行 `//ops:mcp-only`，本守卫就跳过它。
+ *
+ * ⚠️ 必须是**显式声明**，不能靠"前端调不调这个路由"去推断：
+ *	实测那个推断在**插值路径**（`/api/cdn/accounts/${id}/verify`）上会误判成
+ *	MCP-only，据此豁免等于悄悄放过真的泄漏。声明式的判据错了至少看得见。
  *
  * ⚠️ 只匹配**独立出现**的工具名（前后是非标识符字符）。
  * `list_pods` 出现在 `/api/list_pods` 这种路径里不算。
+ *
+ * 🔴 **拼接串要整段看**：Go 里长文案普遍写成
+ *
+ *	"note": "闲置 = 实付 − 已按 request 分摊…" +
+ *		"…先用 resource_waste 校准 request，再缩节点。"
+ *
+ *	只抓第一段的话，工具名藏在第二段就完全扫不到 —— 实测漏掉一处
+ *	（`/k8s/idle-cost` 是成本页在调的，运维在网页里执行不了 resource_waste）。
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
@@ -105,7 +122,7 @@ if (tools.size === 0) {
  *	判据只认一种写法，等于只防住一半（OPSCMDB-054 迁移时撞见）。
  */
 const HUMAN_FIELDS =
-  /(?:\b(Action|Title|Detail|Note|Hint|Reason|Msg|Summary|Label)|"(action|title|detail|note|hint|reason|msg|summary|label)")\s*:\s*"([^"]*)"/g
+  /(?:\b(Action|Title|Detail|Note|Hint|Reason|Msg|Summary|Label)|"(action|title|detail|note|hint|reason|msg|summary|label)")\s*:\s*("(?:[^"\\\\]|\\\\.)*"(?:\s*\+\s*(?:\n\s*)?"(?:[^"\\\\]|\\\\.)*")*)/g
 
 /**
  * 这一处是不是在一次**日志**调用里。
@@ -125,12 +142,34 @@ function inLogCall(src, idx) {
   return !before.slice(at).includes('c.JSON')
 }
 
+/**
+ * 这一处是不是落在标了 `//ops:mcp-only` 的函数里。
+ *
+ * 判据：往前找最近的 `func ` 定义，看它**上方的注释块**里有没有那行标记。
+ */
+function inMCPOnlyFunc(src, idx) {
+  const before = src.slice(0, idx)
+  const at = before.lastIndexOf('\nfunc ')
+  if (at < 0) return false
+  // 函数定义上方连续的注释行
+  const head = before.slice(0, at + 1)
+  const lines = head.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i].trim()
+    if (l === '') continue
+    if (!l.startsWith('//')) break
+    if (/^\/\/\s*ops:mcp-only\b/.test(l)) return true
+  }
+  return false
+}
+
 const hits = []
 
 for (const f of files.filter((x) => x.endsWith('.go') && inScope(x))) {
   const src = readFileSync(f, 'utf8')
   for (const m of src.matchAll(HUMAN_FIELDS)) {
     if (inLogCall(src, m.index)) continue
+    if (inMCPOnlyFunc(src, m.index)) continue
     const field = m[1] ?? m[2]
     const text = m[3]
     for (const tool of tools) {

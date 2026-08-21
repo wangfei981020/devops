@@ -12,7 +12,7 @@ func rowsOf(n int, diff bool) compare.Result {
 		r.Rows = append(r.Rows, compare.Row{
 			ServiceKey: string(rune('a'+i%26)) + string(rune('0'+i/26)),
 			HasDiff:    diff,
-			Cells:      []compare.Cell{{Verdict: compare.VerdictSame}},
+			Cells:      []compare.Cell{{State: compare.CellVersion}},
 		})
 	}
 	return r

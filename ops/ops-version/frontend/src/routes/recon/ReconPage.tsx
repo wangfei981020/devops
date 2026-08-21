@@ -21,7 +21,7 @@ import {
   loadFreshness, refreshColumns,
 } from './useFreshness.js'
 import { VerdictCell } from './VerdictCell.js'
-import { KIND, STAT, STRIPE, rowKind } from './verdict.js'
+import { STAT, STRIPE, VERDICT_ORDER } from './verdict.js'
 import {
   type ColumnChoice,
   type CompareResult,
@@ -41,10 +41,8 @@ interface PlanResp {
   name: string
   /** ⚠️ project_id 可选：加项目层之前存的方案里没有这个字段 */
   columns: { org_id: number; project_id?: number; env: string }[]
-  baseline: { org_id: number; project_id?: number; env: string }
   /** ⚠️ 可能是 null：老方案没有忽略规则 */
   ignores: { services: string[] | null; cells: Record<string, string[]> | null } | null
-  baseline_pin: string
   only_diff: boolean
 }
 
@@ -62,7 +60,6 @@ function parseServices(s: string): string[] {
 export function ReconPage({ session }: { session: Session }) {
   const { t } = useTranslation()
   const [picked, setPicked] = useState<Set<string> | null>(null)
-  const [baseline, setBaseline] = useState<string>('')
   const [onlyDiff, setOnlyDiff] = useState(false)
   const [result, setResult] = useState<CompareResult | null>(null)
   // ─── 忽略 ───
@@ -142,7 +139,6 @@ export function ReconPage({ session }: { session: Session }) {
     qc.invalidateQueries({ queryKey: ['col-freshness'] })
     return res.filter((r) => r.state === 'failed')
   }
-  const base = baseline || (choices[0] ? colKey(choices[0]) : '')
 
   /**
    * StableKey（orgID/projectID/env）翻成给人看的列名。
@@ -174,15 +170,13 @@ export function ReconPage({ session }: { session: Session }) {
   const compare = useMutation({
     mutationFn: async () => {
       const cols = choices.filter((c) => selected.has(colKey(c)))
-      const b = choices.find((c) => colKey(c) === base) ?? cols[0]
       // 没有可比的列时直接拒绝，别发一个注定 400 的请求
-      if (!b) throw new Error('no column selected')
+      if (cols.length === 0) throw new Error('no column selected')
       await refreshIfNeeded(cols)
       return api<CompareResult>('/api/compare', {
         method: 'POST',
         body: JSON.stringify({
           columns: cols.map((c) => ({ org_id: c.orgId, project_id: c.projectId, env: c.env })),
-          baseline: { org_id: b.orgId, project_id: b.projectId, env: b.env },
           only_diff: onlyDiff,
           service_include: parseServices(svcFilter),
           ignores: ig.ignores,
@@ -215,7 +209,6 @@ export function ReconPage({ session }: { session: Session }) {
       return hit ? colKey(hit) : `${c.org_id}/${c.project_id ?? 0}/${c.env}`
     }
     setPicked(new Set(p.columns.map(planKey)))
-    setBaseline(planKey(p.baseline))
     setOnlyDiff(p.only_diff)
     // 忽略规则跟着方案回来 —— 这正是把它存进方案的意义。
     // ⚠️ 后端给的可能是 null（老方案没这个字段），必须兜底。
@@ -225,14 +218,13 @@ export function ReconPage({ session }: { session: Session }) {
     })
   }
 
-  // 保存当前的列组合与基准。id 为空 = 新建，否则覆盖那个方案。
-  // 🔴 保存的是**选择**（哪些列、谁是基准），不是某一次的对账结果 ——
+  // 保存当前的列组合。id 为空 = 新建，否则覆盖那个方案。
+  // 🔴 保存的是**选择**（哪些列、忽略了什么），不是某一次的对账结果 ——
   //    结果每次刷新都会变，存下来只会变成一份很快就骗人的旧数据。
   const savePlan = useMutation({
     mutationFn: async (mode: 'create' | 'update') => {
       const cols = choices.filter((c) => selected.has(colKey(c)))
-      const b = choices.find((c) => colKey(c) === base) ?? cols[0]
-      if (!b) throw new Error(t('opsversion:recon.needColumn'))
+      if (cols.length === 0) throw new Error(t('opsversion:recon.needColumn'))
       const name = mode === 'create' ? planName.trim() : (current?.name ?? '')
       if (!name) throw new Error(t('opsversion:recon.planNameRequired'))
       return api<{ id: number }>(
@@ -242,8 +234,6 @@ export function ReconPage({ session }: { session: Session }) {
           body: JSON.stringify({
             name,
             columns: cols.map((c) => ({ org_id: c.orgId, project_id: c.projectId, env: c.env })),
-            baseline: { org_id: b.orgId, project_id: b.projectId, env: b.env },
-            baseline_pin: '',
             only_diff: onlyDiff,
             // 忽略规则随方案存 —— 这正是它存在的意义：
             // 下次套用这个方案，不必再把「对方不跑这套」重勾一遍
@@ -296,8 +286,7 @@ export function ReconPage({ session }: { session: Session }) {
     setErr('')
     try {
       const cols = choices.filter((c) => selected.has(colKey(c)))
-      const b = choices.find((c) => colKey(c) === base) ?? cols[0]
-      if (!b || cols.length < 2) throw new Error(t('opsversion:recon.needTwoColumns'))
+      if (cols.length < 2) throw new Error(t('opsversion:recon.needTwoColumns'))
       // 导出同样先刷 —— 导出的文件会被转发、存档，
       // 数据时点写在 Excel 第一页，但前提是这份数据本身足够新
       await refreshIfNeeded(cols)
@@ -305,8 +294,6 @@ export function ReconPage({ session }: { session: Session }) {
         method: 'POST',
         body: JSON.stringify({
           columns: cols.map((c) => ({ org_id: c.orgId, project_id: c.projectId, env: c.env })),
-          baseline: { org_id: b.orgId, project_id: b.projectId, env: b.env },
-          baseline_pin: '',
           only_diff: false,
           plan_name: current?.name ?? '',
           // 🔴 导出的必须是**界面上看到的那些**。
@@ -338,13 +325,11 @@ export function ReconPage({ session }: { session: Session }) {
     const kw = keyword.trim().toLowerCase()
     return allRows.filter((r) => {
       if (kw && !r.ServiceKey.toLowerCase().includes(kw)) return false
-      if (verdictPick) {
-        // 基准列自己不算 —— 它永远是 same，否则点「一致」会把每一行都留下
-        const hit = r.Cells.some(
-          (c, i) => i > 0 && c.Verdict === verdictPick,
-        )
-        if (!hit) return false
-      }
+      // 🔴 按**行结论**筛，不再逐格找。
+      //    原来是"这一行有没有某种判定的格子"，而现在一行只有一个结论 ——
+      //    点统计条上的「不一致 26」就该正好留下 26 行，
+      //    逐格找的话会因为一行有多种格子而对不上。
+      if (verdictPick && r.Verdict !== verdictPick) return false
       return true
     })
   }, [allRows, keyword, verdictPick])
@@ -381,7 +366,9 @@ export function ReconPage({ session }: { session: Session }) {
           // 🔴 行首判定色带 —— 本产品的标志性读法。
           // 一行有 N 个格子，人先扫这条带子决定「这一行要不要细看」，
           // 再横向读具体版本号。150 行的表里这是唯一能一眼定位问题行的东西。
-          const kind = rowKind(row.original.Cells.map((c) => c.Verdict))
+          // 结论由后端算好（compare.RowVerdict），前端只翻译成颜色。
+          // 前端自己再算一遍必然和后端分叉，而分叉时不报错。
+          const kind = row.original.Verdict
           return (
             <div className="flex items-stretch gap-2">
               <span className={`w-[3px] shrink-0 rounded-[1px] ${STRIPE[kind]}`} aria-hidden />
@@ -430,21 +417,20 @@ export function ReconPage({ session }: { session: Session }) {
             <div>{c.OrgName}</div>
             <div className="text-[11px] font-normal text-muted-foreground">
               {c.ProjectName ? `${c.ProjectName} · ${c.Env}` : c.Env}
-              {colId === result?.baseline ? ` · ${t('opsversion:recon.baseline')}` : ''}
             </div>
           </div>
         ),
-        accessorFn: (r) => r.Cells[idx]?.Verdict ?? '',
+        accessorFn: (r) => r.Cells[idx]?.Snap?.Tag ?? '',
         cell: ({ row }) => {
           const cell = row.original.Cells[idx]
           if (!cell) return <span>—</span>
-          // ⚠️ 基准列不给忽略入口：基准是比对的参照物，忽略它整行就没意义了
-          //    （后端也会拒，这里不显示是为了不让人点了没反应）。
-          const isBase = colId === result?.baseline
+          // 🔴 没有基准之后**任何列都能忽略**。
+          //    原来第一列（基准）不给入口，理由是"忽略了参照物整行就没意义"——
+          //    现在是横着比这几列彼此，没有参照物这回事。
           return (
             <div className="group/cell relative">
               <VerdictCell cell={cell} columnFailed={failedCols.has(colId)} />
-              {!isBase && (
+              {(
                 <button
                   type="button"
                   title={t('opsversion:ignore.cellAction')}
@@ -531,16 +517,6 @@ export function ReconPage({ session }: { session: Session }) {
                     {t('opsversion:recon.planSave')}
                   </Button>
                 ))}
-              <span className="text-xs text-muted-foreground">{t('opsversion:recon.baseline')}</span>
-              <Select
-                label={t('opsversion:recon.baseline')}
-                value={base}
-                onChange={setBaseline}
-                options={choices.map((c) => ({
-                  value: colKey(c),
-                  label: colLabel(c),
-                }))}
-              />
               <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <input
                   type="checkbox"
@@ -669,11 +645,8 @@ export function ReconPage({ session }: { session: Session }) {
                     是最自然的下一步。做成纯展示的话，人看到「落后 44」
                     还得自己去表里翻那 44 行在哪。 */}
                 <div className="flex flex-wrap overflow-hidden rounded-lg border border-border bg-card">
-                  {(
-                    ['same', 'behind', 'ahead', 'missing_here', 'missing_base',
-                     'unknown', 'conflict', 'no_data'] as const
-                  ).map((v) => {
-                    const kind = KIND[v] ?? 'none'
+                  {VERDICT_ORDER.map((v) => {
+                    const kind = v
                     const n = result.summary[v] ?? 0
                     const on = verdictPick === v
                     return (

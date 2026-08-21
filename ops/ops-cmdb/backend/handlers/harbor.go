@@ -101,14 +101,17 @@ func (h *HarborHandler) List(c *gin.Context) {
 
 func (h *HarborHandler) Save(c *gin.Context) {
 	var in struct {
-		Name       string `json:"name"`
-		URL        string `json:"url"`
-		Username   string `json:"username"`
-		Password   string `json:"password"`
-		Env        string `json:"env"`
-		ClusterID  int    `json:"cluster_id"`
-		SkipVerify bool   `json:"skip_verify"`
-		Enabled    *bool  `json:"enabled"`
+		Name     string `json:"name"`
+		URL      string `json:"url"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+		// 🔴 以下几项用指针：nil = 没传（更新时不动它）。
+		//	`enabled` 原来"没传 = 启用"，于是停用了一个仓库之后，
+		//	任何一次不带 enabled 的保存都会把它重新打开（OPSCMDB-083）。
+		Env        *string `json:"env"`
+		ClusterID  *int    `json:"cluster_id"`
+		SkipVerify *bool   `json:"skip_verify"`
+		Enabled    *bool   `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -119,12 +122,13 @@ func (h *HarborHandler) Save(c *gin.Context) {
 		httpx.RequiredAll(c, "name", "url")
 		return
 	}
+	// 新建时的缺省：没说就是启用、且校验证书。更新走 patchSet，不用这两个值。
 	enabled := 1
 	if in.Enabled != nil && !*in.Enabled {
 		enabled = 0
 	}
 	skip := 0
-	if in.SkipVerify {
+	if in.SkipVerify != nil && *in.SkipVerify {
 		skip = 1
 	}
 
@@ -144,7 +148,8 @@ func (h *HarborHandler) Save(c *gin.Context) {
 			}
 		}
 		res, err := sc.Insert(`INSERT INTO harbor_registries(tenant_id,name,url,username,password_enc,env,cluster_id,skip_verify,enabled)
-			VALUES(?,?,?,?,?,?,?,?,?)`, in.Name, in.URL, in.Username, nullIfEmpty(enc), in.Env, in.ClusterID, skip, enabled)
+			VALUES(?,?,?,?,?,?,?,?,?)`, in.Name, in.URL, in.Username, nullIfEmpty(enc),
+			derefStr(in.Env), derefInt(in.ClusterID), skip, enabled)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -155,26 +160,33 @@ func (h *HarborHandler) Save(c *gin.Context) {
 		return
 	}
 
+	p := &patchSet{}
+	// name / url 上面已强制必填
+	p.Add("name", &in.Name)
+	p.Add("url", &in.URL)
+	p.Add("username", &in.Username)
+	p.Add("env", in.Env)
+	p.Add("cluster_id", in.ClusterID)
+	if in.SkipVerify != nil {
+		p.Add("skip_verify", ptrInt(b2int(*in.SkipVerify)))
+	}
+	if in.Enabled != nil {
+		p.Add("enabled", ptrInt(b2int(*in.Enabled)))
+	}
 	// 密码留空 = 不改动已存的密码。否则每次编辑其它字段都得重输密码。
-	if in.Password == "" {
-		// ★ 越权修复：原为 `WHERE id=?`，任何租户都能改别人的镜像仓库配置
-		_, err := sc.Exec(`UPDATE harbor_registries SET name=?,url=?,username=?,env=?,cluster_id=?,skip_verify=?,enabled=? WHERE tenant_id = ? AND id=?`,
-			in.Name, in.URL, in.Username, in.Env, in.ClusterID, skip, enabled, id)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-	} else {
+	if in.Password != "" {
 		enc, err := h.Cipher.Encrypt(in.Password)
 		if err != nil {
 			httpx.Fail(c, httpx.CodeInternal, fmt.Errorf("加密失败: %w", err), nil)
 			return
 		}
-		if _, err := sc.Exec(`UPDATE harbor_registries SET name=?,url=?,username=?,password_enc=?,env=?,cluster_id=?,skip_verify=?,enabled=? WHERE tenant_id = ? AND id=?`,
-			in.Name, in.URL, in.Username, enc, in.Env, in.ClusterID, skip, enabled, id); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
+		p.Add("password_enc", &enc)
+	}
+	// ★ 越权修复：原为 `WHERE id=?`，任何租户都能改别人的镜像仓库配置
+	if _, err := sc.Exec(`UPDATE harbor_registries SET `+p.SQL()+` WHERE tenant_id = ? AND id=?`,
+		append(p.Args(), id)...); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "id": id})
 }
@@ -403,7 +415,9 @@ func (h *HarborHandler) Status(c *gin.Context) {
 			}
 			out["gc"] = g
 		} else {
-			out["gc"] = gin.H{"last_status": "never", "issue": "从未执行过 GC——删掉的镜像一直占着磁盘"}
+			out["gc"] = gin.H{"last_status": "never",
+				"issue_key": "registry:gcNeverRan",
+				"issue":     "从未执行过 GC——删掉的镜像一直占着磁盘"}
 		}
 	}
 	c.JSON(http.StatusOK, out)
@@ -500,6 +514,7 @@ func (h *HarborHandler) Projects(c *gin.Context) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UsedPct > out[j].UsedPct })
 	resp := gin.H{"ok": true, "registry": cl.name, "count": len(out), "projects": out,
+		"note_key": "registry:quotaUnlimitedNote",
 		"note": "quota_gb = -1 表示该项目未设配额限制，用量再高也不会被 Harbor 拦；" +
 			"此时应看整体存储水位而非百分比"}
 	// ⚠️ 读不到配额时要**在响应里说出来**。

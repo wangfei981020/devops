@@ -410,13 +410,16 @@ func (h *K8sDiagHandler) Manifest(c *gin.Context) {
 		// ⚠️ 界面上的人执行不了 config_audit / query_prometheus ——
 		//	工具链只进 mcp_hint，hint 给的是他在网页里真能做的下一步
 		//	（check-mcp-text-leak）
-		c.JSON(http.StatusForbidden, gin.H{
-			"error_key": "error.secretContentRefused",
-			"error":     "拒绝返回 Secret 内容（CMDB 只读设计：Secret 内容永不经过本服务）",
-			"hint_key":  "error.secretContentRefusedHint",
-			"hint":      "去「配置合规」页可以确认这个 Secret 是否存在、有哪些键名，但不会显示值",
-			"mcp_hint":  "查 Secret 是否存在/键名，用 config_audit；或用 query_prometheus 查 kube_secret_info",
-		})
+		// ⚠️ 非 2xx 必须走 httpx.Fail*：只塞 `error_key` 的话前端认不出这是结构化错误
+		//	（没有 code / message_key），会退到"按状态码兜底"，
+		//	界面上显示的是通用的「HTTP 403」而不是这句话（check-error-key-on-failure）
+		httpx.FailKeyWith(c, httpx.CodeForbidden, "error.secretContentRefused", nil,
+			map[string]any{
+				"error":    "拒绝返回 Secret 内容（CMDB 只读设计：Secret 内容永不经过本服务）",
+				"hint_key": "error.secretContentRefusedHint",
+				"hint":     "去「配置合规」页可以确认这个 Secret 是否存在、有哪些键名，但不会显示值",
+				"mcp_hint": "查 Secret 是否存在/键名，用 config_audit；或用 query_prometheus 查 kube_secret_info",
+			})
 		return
 	}
 

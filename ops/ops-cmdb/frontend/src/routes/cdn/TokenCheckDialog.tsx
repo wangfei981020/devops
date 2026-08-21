@@ -1,3 +1,4 @@
+import { keyedText } from '../../lib/hintText.js'
 import { toErrorInfo } from '@ops/api'
 import { Badge, Banner, Button, Dialog, Skeleton } from '@ops/ui'
 import { useEffect } from 'react'
@@ -80,7 +81,7 @@ export function CdnTokenCheckDialog({ onClose, t }: { onClose: () => void; t: TF
               不说清楚的话「体检通过了但列表还是 403」会被当成 bug */}
           {d?.note ? (
             <Banner tone="info">
-              <span>{d.note}</span>
+              <span>{keyedText(t, d, 'note')}</span>
             </Banner>
           ) : null}
 

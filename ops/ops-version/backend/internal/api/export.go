@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"ops-version-backend/internal/compare"
@@ -64,7 +65,7 @@ func (s *Server) exportHandler(w http.ResponseWriter, r *http.Request) {
 		Now:        now,
 	})
 	if err != nil {
-		s.St.Audit(r.Context(), userOf(r).Username, "recon.export", plan.Baseline.Key(), nil, err, clientIP(r))
+		s.St.Audit(r.Context(), userOf(r).Username, "recon.export", planTarget(plan), nil, err, clientIP(r))
 		fail(w, http.StatusInternalServerError, "internal", "生成 Excel 失败: "+err.Error())
 		return
 	}
@@ -73,7 +74,7 @@ func (s *Server) exportHandler(w http.ResponseWriter, r *http.Request) {
 	for _, c := range plan.Columns {
 		cols = append(cols, c.Key())
 	}
-	s.St.Audit(r.Context(), userOf(r).Username, "recon.export", plan.Baseline.Key(),
+	s.St.Audit(r.Context(), userOf(r).Username, "recon.export", planTarget(plan),
 		map[string]any{"columns": cols, "rows": len(res.Rows), "bytes": len(blob)}, nil, clientIP(r))
 
 	name := fmt.Sprintf("版本比对_%s.xlsx", now.Format("20060102_150405"))
@@ -176,4 +177,16 @@ func (s *Server) exportInventory(w http.ResponseWriter, r *http.Request) {
 		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	w.Header().Set("Content-Length", fmt.Sprint(len(blob)))
 	_, _ = w.Write(blob)
+}
+
+// planTarget 审计里记这次比对的对象。
+//
+// 🔴 原来记的是基准列。没有基准之后记**参与的列**——
+// 审计要能回答"谁在什么时候比了哪几个平台"，只记一列本来就不够。
+func planTarget(plan compare.Plan) string {
+	keys := make([]string, 0, len(plan.Columns))
+	for _, c := range plan.Columns {
+		keys = append(keys, c.Key())
+	}
+	return strings.Join(keys, " vs ")
 }

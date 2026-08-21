@@ -63,5 +63,7 @@
   },
   "title": "镜像仓库",
   "usedUnknown": "读不到",
-  "usedUnknownHint": "存储用量需要管理员权限（/quotas），而接入 Harbor 推荐用 robot 账号——那是正确做法。⚠️ 读不到不代表项目是空的：右边的仓库数是真实的。"
+  "usedUnknownHint": "存储用量需要管理员权限（/quotas），而接入 Harbor 推荐用 robot 账号——那是正确做法。⚠️ 读不到不代表项目是空的：右边的仓库数是真实的。",
+  "gcNeverRan": "从未执行过 GC——删掉的镜像一直占着磁盘。",
+  "quotaUnlimitedNote": "配额为 -1 表示该项目没有设配额限制，用量再高也不会被 Harbor 拦；此时应看整体存储水位而不是百分比。"
 }

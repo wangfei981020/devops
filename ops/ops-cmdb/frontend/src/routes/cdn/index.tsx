@@ -1,3 +1,4 @@
+import { actionMessage } from '../../lib/actionMessage.js'
 import { toErrorInfo } from '@ops/api'
 import { tError, useTranslation } from '@ops/i18n'
 import {
@@ -262,7 +263,7 @@ function AccountActions({
           {tError(t, toErrorInfo(err).messageKey, toErrorInfo(err).params)}
         </span>
       ) : done ? (
-        <span className="text-[11px] text-success">{done.msg ?? t('common:write.saved')}</span>
+        <span className="text-[11px] text-success">{actionMessage(t, done)}</span>
       ) : null}
       <WriteButton perm={PERM} size="sm" onClick={() => verify.mutate(id)}>
         {t('cdn:action.verify')}

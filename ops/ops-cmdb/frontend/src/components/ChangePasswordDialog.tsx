@@ -1,3 +1,4 @@
+import { actionMessage } from '../lib/actionMessage.js'
 import { toErrorInfo } from '@ops/api'
 import { tError, useTranslation } from '@ops/i18n'
 import { Banner, Button, Dialog, Field } from '@ops/ui'
@@ -55,7 +56,7 @@ export function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
         }
       >
         <Banner tone="info">
-          <span>{mut.data?.msg ?? t('user.pw.doneBody')}</span>
+          <span>{actionMessage(t, mut.data, 'user.pw.doneBody')}</span>
         </Banner>
       </Dialog>
     )

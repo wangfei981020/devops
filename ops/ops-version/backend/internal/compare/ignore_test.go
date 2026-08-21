@@ -6,7 +6,7 @@ func planOf(ign IgnoreSet) Plan {
 	base := Column{OrgID: 1, OrgName: "SL", Env: "UAT", SyncStatus: "success"}
 	c2 := Column{OrgID: 2, OrgName: "印尼", Env: "UAT", SyncStatus: "success"}
 	c3 := Column{OrgID: 3, OrgName: "马来", Env: "UAT", SyncStatus: "success"}
-	return Plan{Columns: []Column{base, c2, c3}, Baseline: base, Ignores: ign}
+	return Plan{Columns: []Column{base, c2, c3}, Ignores: ign}
 }
 
 // 🔴 单元格忽略**只影响那一格**，同一行其他列照常判定。
@@ -25,21 +25,24 @@ func TestIgnoreCellDoesNotAffectOtherColumns(t *testing.T) {
 		t.Fatalf("行数 = %d，要 1", len(res.Rows))
 	}
 	cells := res.Rows[0].Cells
-	if cells[1].Verdict != VerdictIgnored {
-		t.Errorf("印尼列应为 ignored，实得 %s", cells[1].Verdict)
+	if cells[1].State != CellIgnored {
+		t.Errorf("印尼列应为 ignored，实得 %s", cells[1].State)
 	}
-	if cells[2].Verdict != VerdictBehind {
-		t.Errorf("马来列应照常判成 behind，实得 %s —— 忽略串到别的列了", cells[2].Verdict)
+	if cells[2].State != CellVersion {
+		t.Errorf("马来列应照常参与比对，实得 %s —— 忽略串到别的列了", cells[2].State)
 	}
-	// 忽略的格子不进分母，也不算差异
-	if res.Rows[0].Comparable != 1 {
-		t.Errorf("可比列数 = %d，要 1（忽略的不进分母）", res.Rows[0].Comparable)
+	// 🔴 忽略的格子**不参与行结论**，但其余列的差异照常算出来。
+	//    "印尼不跑 wallet" 不该让 "SL vs 马来的 wallet 差异" 也跟着消失。
+	if got := res.Rows[0].Verdict; got != VerdictDiff {
+		t.Errorf("行结论 = %s，SL(v2) vs 马来(v1) 应为 diff（忽略印尼不影响它们）", got)
 	}
 	if !res.Rows[0].HasDiff {
-		t.Error("马来落后了，这一行应当算有差异")
+		t.Error("马来和 SL 版本不同，这一行应当算有差异")
 	}
-	if res.Summary[VerdictIgnored] != 1 {
-		t.Errorf("统计里应有 1 个 ignored，实得 %d —— 忽略必须看得见", res.Summary[VerdictIgnored])
+	// 🔴 逐格忽略在 Summary（按行统计）里是看不见的 —— 这一行的结论是 diff。
+	//    所以必须有独立的计数，否则"忽略了什么"就藏起来了。
+	if res.IgnoredCells != 1 {
+		t.Errorf("IgnoredCells = %d，要 1 —— 忽略必须看得见", res.IgnoredCells)
 	}
 }
 
@@ -70,23 +73,27 @@ func TestIgnoreBeatsNoData(t *testing.T) {
 	p.Columns[1].SyncStatus = "auth_failed" // 印尼列采集失败
 	data := map[string][]Snapshot{"SL/UAT": {snap("wallet", "v2", 2, true)}, "马来/UAT": {snap("wallet", "v2", 2, true)}}
 	res := Compare(p, data)
-	if got := res.Rows[0].Cells[1].Verdict; got != VerdictIgnored {
+	if got := res.Rows[0].Cells[1].State; got != CellIgnored {
 		t.Errorf("忽略应优先于 no_data，实得 %s —— 会让人去查一个不需要处理的采集失败", got)
 	}
 }
 
-// 基准列不允许被忽略 —— 忽略了基准，整行就没有参照物
-func TestBaselineColumnCannotBeIgnored(t *testing.T) {
+// 🔴 没有基准之后，**任何列都可以被忽略**。
+//
+// 原来第一列（基准）不许忽略，理由是"忽略了基准整行就没有参照物"。
+// 现在判定是横着比这几列彼此，没有参照物这回事 —— 那条限制跟着删掉。
+func TestAnyColumnCanBeIgnored(t *testing.T) {
 	p := planOf(IgnoreSet{Cells: map[string][]string{"wallet": {"1/0/UAT"}}})
 	data := map[string][]Snapshot{
 		"SL/UAT": {snap("wallet", "v2", 2, true)}, "印尼/UAT": {snap("wallet", "v1", 1, true)}, "马来/UAT": {snap("wallet", "v2", 2, true)},
 	}
 	res := Compare(p, data)
-	if got := res.Rows[0].Cells[0].Verdict; got == VerdictIgnored {
-		t.Error("基准列被忽略了 —— 整行失去参照物")
+	if got := res.Rows[0].Cells[0].State; got != CellIgnored {
+		t.Errorf("第一列 = %s，要 ignored —— 没有基准了，哪一列都能忽略", got)
 	}
-	if got := res.Rows[0].Cells[1].Verdict; got != VerdictBehind {
-		t.Errorf("其余列应照常判定，实得 %s", got)
+	// 剩下 印尼(v1) vs 马来(v2) 仍要比出差异
+	if got := res.Rows[0].Verdict; got != VerdictDiff {
+		t.Errorf("行结论 = %s，剩余两列 tag 不同应为 diff", got)
 	}
 }
 

@@ -341,6 +341,25 @@ func (h *RecordHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// recordPatch 部分更新用。全指针 —— nil = 没传（不动它）。
+//
+// ⚠️ 同一个文件里的 BulkUpdate 早就是"只更新显式给出的字段"（它的注释写着），
+//
+//	而单条 Update 是无条件覆盖 —— **两种语义并存**，调用方无从预期。
+//	与 OPSCMDB-085 的根因同型：同文件里两种写法并存，先坏的那个没人发现。
+type recordPatch struct {
+	Host       *string `json:"host"`
+	RecordType *string `json:"record_type"`
+	CdnID      *int    `json:"cdn_id"`
+	Cname      *string `json:"cname"`
+	OriginIP   *string `json:"origin_ip"`
+	CertExpiry *string `json:"cert_expiry_at"`
+	Project    *string `json:"project"`
+	Env        *string `json:"env"`
+	Module     *string `json:"module"`
+	LifeStatus *string `json:"life_status"`
+}
+
 type recordIn struct {
 	Host       string `json:"host"`
 	RecordType string `json:"record_type"`
@@ -395,17 +414,40 @@ func (h *RecordHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	var in recordIn
+	var in recordPatch
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	if requireNonBlank(c, "host", in.Host) {
+		return
+	}
+	p := &patchSet{}
+	p.Add("host", in.Host)
+	p.Add("record_type", in.RecordType)
+	p.AddExpr(in.CdnID != nil, "cdn_id=?", nullableInt(in.CdnID))
+	p.Add("cname", in.Cname)
+	p.Add("origin_ip", in.OriginIP)
+	// 空串 = 显式清掉手填的证书到期日
+	p.AddExpr(in.CertExpiry != nil, "cert_expiry_at=NULLIF(?, '')", derefStr(in.CertExpiry))
+	p.Add("project", in.Project)
+	p.Add("env", in.Env)
 	// 手动改:模块/使用中状态标记为 manual(区分自动关联)
-	res, err := sc.Exec(`UPDATE domain_records SET host=?, record_type=?, cdn_id=?, cname=?, origin_ip=?,
-		cert_expiry_at=NULLIF(?, ''), project=?, env=?, module=?, module_source='manual',
-		life_status=?, status_source=IF(?<>'', 'manual', status_source), operator=? WHERE tenant_id = ? AND id=?`,
-		in.Host, in.RecordType, nullableInt(in.CdnID), in.Cname, in.OriginIP, in.CertExpiry,
-		in.Project, in.Env, in.Module, in.LifeStatus, in.LifeStatus, currentUser(c), c.Param("id"))
+	if in.Module != nil {
+		p.Add("module", in.Module)
+		p.AddExpr(true, "module_source='manual'")
+	}
+	if in.LifeStatus != nil {
+		p.Add("life_status", in.LifeStatus)
+		p.AddExpr(true, "status_source=IF(?<>'', 'manual', status_source)", *in.LifeStatus)
+	}
+	if p.Empty() {
+		httpx.Invalid(c, "body", "至少要传一个要改的字段")
+		return
+	}
+	p.AddExpr(true, "operator=?", currentUser(c))
+	res, err := sc.Exec(`UPDATE domain_records SET `+p.SQL()+` WHERE tenant_id = ? AND id=?`,
+		append(p.Args(), c.Param("id"))...)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -414,7 +456,11 @@ func (h *RecordHandler) Update(c *gin.Context) {
 		httpx.NotFound(c, "record")
 		return
 	}
-	SetAuditTarget(c, in.Host)
+	if hst := derefStr(in.Host); hst != "" {
+		SetAuditTarget(c, hst)
+	} else {
+		SetAuditTarget(c, c.Param("id"))
+	}
 	c.JSON(200, gin.H{"ok": true})
 }
 

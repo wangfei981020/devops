@@ -34,6 +34,15 @@ type Column struct {
 	// Filter 这个项目吃哪些服务。取数时用它从该「平台×环境」的全量快照里筛出本列的部分。
 	Filter ProjectFilter
 
+	// IsSelf 这一列是不是**我方**。
+	//
+	// 🔴 归因（"镜像推没推给对方"）的源只能是我方 —— 只有我方的镜像
+	//    才是我们推出去的。原来这个角色由"基准列"兼任，默认基准就是我方；
+	//    没有基准之后必须显式标出来。
+	// ⚠️ 参与列里一个 IsSelf 都没有时（别的两家公司之间对比），
+	//    归因不成立，要显式说"无法判断"而不是"未同步"。
+	IsSelf bool
+
 	// 该组织最近一次采集的结果。
 	// 🔴 采集失败时整列都是 NoData，**不能让它退化成「这些服务没部署」** ——
 	//    那会把「我们没看到」显示成「对方没有」，是最会骗人的一种错。
@@ -79,32 +88,59 @@ type Snapshot struct {
 	ObservedAt  time.Time
 }
 
-// Verdict 判定结果。**八态，一个都不能少。**
+// Verdict **一行**的结论。
+//
+// 🔴 没有基准，所以判定**没有方向**：只能说"这几列彼此一不一样"，
+// 说不了"谁落后谁"。原来那套（behind / ahead / missing_base）全是
+// 相对基准的，而这张表可能是别的两家公司之间的对账，我方根本不在里面 ——
+// 那时"落后 8 个版本"这句话没有主语。
+//
+// ⚠️ 与 CellState 分工：Verdict 描述**一行**，CellState 描述**一格**。
+// 合成一个的话，"这一格没采到"和"这一行没法判定"会共用一个值，
+// 而它们一个是原因、一个是结论。
 type Verdict string
 
 const (
-	VerdictSame     Verdict = "same"         // 一致
-	VerdictBehind   Verdict = "behind"       // 落后
-	VerdictAhead    Verdict = "ahead"        // 超前
-	VerdictMissing  Verdict = "missing_here" // 该列没有这个服务
-	VerdictExtra    Verdict = "missing_base" // 基准没有，对方有
-	VerdictUnknown  Verdict = "unknown"      // 非版本化 tag，无法判定
-	VerdictConflict Verdict = "conflict"     // 同名冲突，拒绝判定
-	// VerdictNoData 该列采集失败，什么都不知道。
-	// 🔴 与 VerdictMissing 严格区分：前者是"我们没看到"，后者是"对方确实没有"。
-	//    混成一个的话，对方 token 过期会显示成"对方把服务全下线了"。
-	VerdictNoData Verdict = "no_data"
-	// VerdictIgnored 人为忽略：这个服务（或这个服务在这一列）不参与比对。
+	VerdictSame    Verdict = "same"    // 这几列的 tag 完全相同
+	VerdictDiff    Verdict = "diff"    // 都有，但 tag 不全相同
+	VerdictMissing Verdict = "missing" // 至少一列确实没有这个服务
+	// VerdictUnknown 至少有一列没法拿来比：整列采集失败 / 非版本化 tag / 同名冲突。
 	//
-	// 🔴 与 VerdictMissing / VerdictNoData 同样必须严格区分，三者说的是三件事：
-	//   missing  = 对方确实没有这个服务          → 要么正常、要么该找对方确认
-	//   no_data  = 我们没采到                     → 查我们自己的采集
-	//   ignored  = **我们主动决定不比**            → 什么都不用做
-	// 合并任何两个，都会让"要处理的"和"不用管的"混在一起。
-	// ⚠️ 忽略必须**看得见**：统计里单列一格，界面常驻"已忽略 N 个"。
-	//    藏起来的话，几个月后没人说得清某个服务为什么不在表里。
+	// 🔴 只在其余列都一致时才会出现 —— 已经查实的缺失或差异不会被它盖掉。
+	//    （这条被真实数据推翻过一次：优先级写反时，一列采集失败
+	//    就让每一行都成了"无法判定"，而好几行明明比得出差异。）
+	VerdictUnknown Verdict = "unknown"
+	// VerdictIgnored 整行的格子全被人为忽略。
+	//
+	// ⚠️ 必须和 VerdictUnknown 分开：忽略是"不用管"，无法判定是"要去查"。
 	VerdictIgnored Verdict = "ignored"
 )
+
+// CellState **一格**的状态：这一格显示什么、能不能拿来比。
+type CellState string
+
+const (
+	// CellVersion 有版本号，参与比对
+	CellVersion CellState = "version"
+	// CellMissing 这一列确实没有这个服务（该列采集是成功的）
+	CellMissing CellState = "missing"
+	// CellNoData 我们没采到这一列。
+	//
+	// 🔴 与 CellMissing 严格区分：前者是"我们没看到"，后者是"对方确实没有"。
+	//    混成一个的话，对方 token 过期会显示成"对方把服务全下线了"——
+	//    处理方向正好相反（查我们自己 vs 找对方确认）。
+	CellNoData CellState = "no_data"
+	// CellUnversioned 非版本化 tag（latest / stable / v3）。
+	// 有版本号、要显示，但两边字符串相同也不代表是同一个镜像。
+	CellUnversioned CellState = "unversioned"
+	// CellConflict 同名冲突：命中多个 workload 且版本不一致，拒绝判定
+	CellConflict CellState = "conflict"
+	// CellIgnored 人为忽略，主动不比
+	CellIgnored CellState = "ignored"
+)
+
+// Comparable 这一格的版本号能不能拿去和别的列比。
+func (s CellState) Comparable() bool { return s == CellVersion }
 
 // SyncAttr 差异的**归因**：这个版本的镜像到底推没推到对方那边。
 //
@@ -142,15 +178,9 @@ type SyncFact struct {
 
 // Cell 一个格子。
 type Cell struct {
-	Column  Column
-	Verdict Verdict
-	Snap    *Snapshot // NoData / Missing 时为 nil
-
-	// Delta 落后/超前几个版本。仅当双方 BuildNo 都可解析时有意义。
-	// 🔴 解析不出时必须为 nil 而不是 0 —— 0 会被读成"差 0 个版本"即一致。
-	Delta *int
-	// DaysBehind 基准那个版本发布至今的天数，需要变更历史才有
-	DaysBehind *int
+	Column Column
+	State  CellState
+	Snap   *Snapshot // Missing / NoData / Ignored 时为 nil
 
 	// Deploying 声明的 tag 与实际在跑的不一致 = 正在滚动更新，或滚动卡住了。
 	// 这是**附加标记**不是主判定：一个服务可以既"一致"又"发布中"。
@@ -165,28 +195,31 @@ type Cell struct {
 	SyncNote string
 }
 
+// Tag 这一格的版本号；没有则空串。
+func (c Cell) Tag() string {
+	if c.Snap == nil {
+		return ""
+	}
+	return c.Snap.Tag
+}
+
 // Row 一个服务在所有列上的横切。
 type Row struct {
 	ServiceKey string
-	Base       *Snapshot // 基准列上的快照，可能为 nil（基准没有这个服务）
 	Cells      []Cell
 
-	// HasDiff 除基准外是否存在任何非 same 的判定（NoData 不算差异，它是"不知道"）
+	// Verdict 这一行的结论。**判定的唯一出口** ——
+	// 界面、导出、MCP 全都读它，不许各自再算一遍。
+	Verdict Verdict
+
+	// HasDiff 这一行需不需要人去看（结论不是"一致"也不是"已忽略"）。
+	// 「只看差异」筛的就是它。
 	HasDiff bool
-	// Consistent / Comparable 用于「一致性 N/M」这种汇总。
-	// 分母刻意排除 NoData：拿不到数据的列不该拉低一致率，否则一个组织挂了
-	// 会让整张表看起来"差异激增"，掩盖真正的差异。
-	Consistent int
-	Comparable int
 }
 
 // Plan 对账方案。
 type Plan struct {
-	Columns  []Column
-	Baseline Column
-	// BaselinePin 手工版本基线（"这次交付大家都该是这个 tag"）。
-	// 非空时忽略 Baseline 列的实际版本，所有列都跟这个 tag 比。
-	BaselinePin string
+	Columns []Column
 	// Aliases 各组织的服务名别名：orgID → (该组织上的名字 → 标准名)
 	Aliases map[int64]map[string]string
 
@@ -232,6 +265,14 @@ type Result struct {
 	// 🔴 必须单独返回并在 UI 顶部显著提示：整列 NoData 时，
 	//    表面上只是几个灰格子，但结论已经不完整了。
 	UnhealthyColumns []Column
+
+	// IgnoredCells 被**逐格忽略**的格子数。
+	//
+	// 🔴 必须单独给。Summary 现在按**行**统计，而一行只有全部格子
+	//    都被忽略时结论才是 ignored —— 只忽略了某一列的格子在 Summary 里
+	//    完全看不见。而「忽略必须看得见」是硬要求：藏起来的话，
+	//    几个月后没人说得清某个格子为什么是空的。
+	IgnoredCells int
 
 	// IgnoredRows 被**整行忽略**的服务名。
 	// 🔴 必须返回：这些服务不在 Rows 里，如果连名字都不给，
@@ -289,54 +330,54 @@ func Compare(plan Plan, data map[string][]Snapshot) Result {
 	sort.Strings(keys)
 	sort.Strings(res.IgnoredRows)
 
-	baseCol := plan.Baseline.Key()
+	// 🔴 我方那一列 —— 归因（"镜像推没推过去"）的源。
+	//
+	//    原来归因用的是**基准列**的 tag，默认基准就是我方。没有基准之后
+	//    只能挂 is_self：只有我方的镜像才是我们推出去的。
+	//    ⚠️ 参与列里没有我方时（就是"别的两家公司之间对比"），
+	//       归因根本不成立 —— 那时显式说"无法判断"，不能退化成"未同步"。
+	selfCols := map[string]bool{}
+	for _, c := range plan.Columns {
+		if c.IsSelf {
+			selfCols[c.Key()] = true
+		}
+	}
+
 	for _, key := range keys {
 		row := Row{ServiceKey: key}
-		var base *Snapshot
-		if b, ok := byCol[baseCol][key]; ok {
-			base = &b
-			row.Base = base
-		}
 
 		for _, c := range plan.Columns {
 			cell := Cell{Column: c}
 			switch {
-			case c.Key() != baseCol && plan.Ignores.IgnoredCell(key, c.StableKey()):
+			case plan.Ignores.IgnoredCell(key, c.StableKey()):
 				// 🔴 判在最前面：忽略是**人为决定**，优先于任何数据状态。
 				//    放在 Healthy 之后的话，采集失败的列会显示成"数据不可用"
 				//    而不是"已忽略" —— 而后者根本不需要人去处理。
-				// ⚠️ 基准列不允许忽略：基准是比对的参照物，忽略它整行就没有意义了。
-				cell.Verdict = VerdictIgnored
+				cell.State = CellIgnored
 				cell.Note = "已忽略：这一列不参与比对"
 
 			case !c.Healthy():
 				// 🔴 先判这个。采集失败的列不能进入任何版本比较分支，
 				//    否则会拿空数据算出"该列没有这个服务"。
-				cell.Verdict = VerdictNoData
+				cell.State = CellNoData
 				cell.Note = syncNote(c)
 
 			default:
 				s, has := byCol[c.Key()][key]
-				switch {
-				case !has:
+				if !has {
 					// 🔴 这里**绝不能 continue**。
 					//
 					// 曾经写成「当前列没有且基准列也没有 → continue」，
-					// 命中的正是「基准列自己没有这个服务」的情况（key 来自其他列）。
 					// 结果那一行少一格，前端按列顺序渲染时**整行错位** ——
 					// 把别的列的版本显示在了这一列下面。
 					// 数据看着完全正常，只是对应错了列，是最难发现的一类错。
 					//
 					// 每一列都必须产出一个 cell，行与列严格对齐。
-					cell.Verdict = VerdictMissing
+					cell.State = CellMissing
 					cell.Note = "该组织未部署此服务"
-				case base == nil && plan.BaselinePin == "":
-					cell.Verdict = VerdictExtra
+				} else {
 					cell.Snap = &s
-					cell.Note = "基准侧没有此服务"
-				default:
-					cell.Snap = &s
-					cell.Verdict, cell.Delta, cell.Note = judge(base, &s, plan.BaselinePin, c.Key() == baseCol)
+					cell.State, cell.Note = classify(&s)
 				}
 				if cell.Snap != nil && cell.Snap.RunningTag != "" && cell.Snap.RunningTag != cell.Snap.Tag {
 					cell.Deploying = true
@@ -346,49 +387,162 @@ func Compare(plan Plan, data map[string][]Snapshot) Result {
 					cell.Note += "发布中：声明 " + cell.Snap.Tag + "，实跑 " + cell.Snap.RunningTag
 				}
 			}
-
-			// 归因：只对**有差异**的格子做。一致的格子没什么可归因的，
-			// 而 NoData 连「有没有差异」都不知道，谈归因是无稽之谈。
-			if cell.Verdict != VerdictSame && cell.Verdict != VerdictNoData &&
-				cell.Verdict != VerdictIgnored && c.Key() != baseCol {
-				cell.Sync, cell.SyncNote = attribute(plan, c.OrgID, key, base)
+			if cell.State == CellIgnored {
+				res.IgnoredCells++
 			}
-
 			row.Cells = append(row.Cells, cell)
-			if c.Key() != baseCol {
-				res.Summary[cell.Verdict]++
-				switch cell.Verdict {
-				case VerdictSame:
-					row.Consistent++
-					row.Comparable++
-				case VerdictNoData:
-					// 不计入分母：拿不到数据不是"不一致"
-				case VerdictIgnored:
-					// 同样不计入分母，且**不算差异** —— 我们主动决定不比的东西，
-					// 既不该拉低一致率，也不该出现在"有差异"的行里。
-					// ⚠️ 但它进 Summary（上面那行 res.Summary[cell.Verdict]++），
-					//    所以统计条上会有独立的一格"已忽略 N"，不会凭空消失。
-				default:
-					row.Comparable++
-					row.HasDiff = true
-				}
-			}
 		}
+
+		// 🔴 行结论**统一在这里算一次**，界面/导出/MCP 都读它。
+		//    各自再算一遍必然分叉，而分叉时没有任何报错。
+		row.Verdict = RowVerdict(row.Cells)
+		row.HasDiff = row.Verdict != VerdictSame && row.Verdict != VerdictIgnored
+		res.Summary[row.Verdict]++
+
+		// 归因：只对**需要人处理**的行做。一致的没什么可归因的，
+		// 已忽略的我们主动不比。
+		if row.HasDiff {
+			attributeRow(plan, &row, selfCols)
+		}
+
 		res.Rows = append(res.Rows, row)
 	}
 	return res
 }
 
-// attribute 归因：基准那个版本的镜像，推到这个组织了没有。
+// RowVerdict 一行的结论 —— **无基准，横着看这几列彼此一不一样**。
 //
-// 🔴 判的是**基准列的 tag**（我方要交付的那个版本），不是对方当前跑的 tag。
+// 顺序：**缺失 > 不一致 > 无法判定 > 一致**。
+//
+// 🔴 这个顺序被真实数据推翻过两次，两次都是同一个形状 ——
+// **优先级高的那一档把低的那一档的事实盖掉了**：
+//
+//	① 「无法判定」曾排最前。三列里一列采集失败，整张表每一行都成了
+//	   「无法判定」，而好几行在另外两列之间明明差着版本。
+//	   → 一个采不到的列不该污染整张表。
+//
+//	② 「不一致」曾排在「缺失」前。真数据一跑：判为「不一致」的 26 行
+//	   **全部**同时含缺失格子 —— 这些服务在一半平台上压根不存在，
+//	   而结论只说"版本不同"。
+//
+// ⚠️ ② 的判据不是"谁更重要"（两个都是行动项），是**误导性不对称**：
+//
+//	说「不一致」暗示这几列都有、只是版本不同 —— 那是假信息；
+//	说「缺失」不暗示版本相同，人会去看具体格子 —— 不误导。
+//	两害相权，选不会骗人的那个。
+//
+// ⚠️ 两次都是跑真实数据才发现的，两次单测都是绿的。
+func RowVerdict(cells []Cell) Verdict {
+	var tags []string
+	var unjudgeable, missing bool
+	ignored, total := 0, 0
+
+	for _, c := range cells {
+		total++
+		switch c.State {
+		case CellIgnored:
+			ignored++
+		case CellNoData, CellUnversioned, CellConflict:
+			unjudgeable = true
+		case CellMissing:
+			missing = true
+		case CellVersion:
+			tags = append(tags, c.Tag())
+		}
+	}
+
+	if total > 0 && ignored == total {
+		return VerdictIgnored
+	}
+	if missing {
+		return VerdictMissing
+	}
+	if hasDiff(tags) {
+		return VerdictDiff
+	}
+	if unjudgeable {
+		// 其余列都一致，但有一列不知道 —— 不能说"一致"，
+		// 那等于替一个没查到的列打包票。
+		return VerdictUnknown
+	}
+	if len(tags) == 0 {
+		// 一个可比的版本都没有，且没被忽略、没缺失、没有不可判定的 ——
+		// 理论上到不了这里，兜底成"无法判定"而不是"一致"。
+		return VerdictUnknown
+	}
+	return VerdictSame
+}
+
+// hasDiff 参与比对的版本号是否不全相同。
+//
+// ⚠️ 少于两个时恒为 false：只配了一个平台、或其余列全被忽略，
+// 都没有"不一致"可言 —— 那不是"一致"也不是"不一致"，是无从比较，
+// 交给后面几档去定。
+func hasDiff(tags []string) bool {
+	for i := 1; i < len(tags); i++ {
+		if tags[i] != tags[0] {
+			return true
+		}
+	}
+	return false
+}
+
+// classify 一格有快照时，它是什么状态。
+func classify(s *Snapshot) (CellState, string) {
+	if s.HasConflict {
+		// 🔴 冲突优先于一切：同一个镜像名命中多个 workload 且版本不同，
+		//    通常是 ns 规则误抓。此时任何版本判定都是猜的，必须拒绝。
+		return CellConflict, "同名冲突：命中多个 workload 且版本不一致，拒绝判定"
+	}
+	if !s.IsVersioned {
+		// 非版本化 tag（latest/stable/...）指向的内容随时会变，
+		// 🔴 两边字符串相同**不代表跑的是同一个镜像**，不能判绿
+		return CellUnversioned, "非版本化 tag，无法判定是否同一制品"
+	}
+	return CellVersion, ""
+}
+
+// attributeRow 给一行里需要处理的格子做归因。
+//
+// 🔴 源是**我方**（is_self）那一列的版本，不是"基准"——
+// 只有我方的镜像才是我们推出去的。
+func attributeRow(plan Plan, row *Row, selfCols map[string]bool) {
+	// 我方在这次比对里跑的是哪个版本
+	selfTag := ""
+	for _, c := range row.Cells {
+		if selfCols[c.Column.Key()] && c.State.Comparable() {
+			selfTag = c.Tag()
+			break
+		}
+	}
+	for i := range row.Cells {
+		c := &row.Cells[i]
+		if selfCols[c.Column.Key()] || c.State == CellIgnored || c.State == CellNoData {
+			continue
+		}
+		c.Sync, c.SyncNote = attribute(plan, c.Column.OrgID, row.ServiceKey, selfTag, len(selfCols) > 0)
+	}
+}
+
+// attribute 归因：**我方**那个版本的镜像，推到这个组织了没有。
+//
+// 🔴 判的是**我方的 tag**（我们要交付的那个版本），不是对方当前跑的 tag。
 // 判对方当前 tag 是错的：对方跑着旧版本，那个旧版本当然同步成功过 ——
 // 那样每一行都会显示「已同步」，这个功能就完全失去意义。
-// 要问的是「我方最新那个版本，推过去了吗」。
-func attribute(plan Plan, orgID int64, serviceKey string, base *Snapshot) (SyncAttr, string) {
-	// 基准侧本来就没有这个服务，无所谓「推没推过去」
-	if base == nil || base.Tag == "" {
-		return SyncAttrUnknown, "基准侧没有此服务，无法判断同步状态"
+// 要问的是「我方那个版本，推过去了吗」。
+//
+// ⚠️ hasSelf=false 表示这次比对里**根本没有我方**（别的两家公司之间对比）。
+// 那时归因不成立，必须显式说出来 —— 退化成「未同步」的话，
+// 人会跑去查我们的复制规则，而我们压根不是这次比对的一方。
+func attribute(plan Plan, orgID int64, serviceKey, selfTag string, hasSelf bool) (SyncAttr, string) {
+	if !hasSelf {
+		return SyncAttrUnknown,
+			"这次比对里没有我方的列 —— 镜像同步是「我方推给对方」，" +
+				"两家外部平台之间推没推过，我们无从知道"
+	}
+	// 我方本来就没有这个服务（或它的 tag 不可比），无所谓「推没推过去」
+	if selfTag == "" {
+		return SyncAttrUnknown, "我方没有此服务（或版本不可比），无法判断同步状态"
 	}
 
 	facts, ok := plan.SyncFacts[orgID]
@@ -408,7 +562,7 @@ func attribute(plan Plan, orgID int64, serviceKey string, base *Snapshot) (SyncA
 		return SyncAttrUnknown, "没有这个平台的复制记录，无法判断镜像是否已同步"
 	}
 
-	f, hit := facts[serviceKey+"\x00"+base.Tag]
+	f, hit := facts[serviceKey+"\x00"+selfTag]
 	if !hit {
 		// 🔴 再分一层：这个**服务**在复制记录里出现过吗？
 		//
@@ -471,7 +625,6 @@ func includeService(patterns []string, key string) bool {
 	}
 	return false
 }
-
 // matchService 与采集层用同一套通配语义：g32-* / *-canary / *mid* / 全等。
 // 两处语义不一致的话，人在两个输入框里写同样的东西会得到不同结果。
 func matchService(pat, s string) bool {
@@ -493,47 +646,6 @@ func matchService(pat, s string) bool {
 	default:
 		return pat == s
 	}
-}
-
-// judge 单格判定。
-func judge(base, s *Snapshot, pin string, isBase bool) (Verdict, *int, string) {
-	if s.HasConflict {
-		// 🔴 冲突优先于一切：同一个镜像名命中多个 workload 且版本不同，
-		//    通常是 ns 规则误抓。此时任何版本判定都是猜的，必须拒绝。
-		return VerdictConflict, nil, "同名冲突：命中多个 workload 且版本不一致，拒绝判定"
-	}
-	if isBase {
-		return VerdictSame, nil, ""
-	}
-
-	baseTag := base.Tag
-	if pin != "" {
-		baseTag = pin
-	}
-
-	if !s.IsVersioned || (pin == "" && !base.IsVersioned) {
-		// 非版本化 tag（latest/stable/...）指向的内容随时会变，
-		// 🔴 两边字符串相同**不代表跑的是同一个镜像**，不能判绿
-		return VerdictUnknown, nil, "非版本化 tag，无法判定是否同一制品"
-	}
-	if s.Tag == baseTag {
-		return VerdictSame, nil, ""
-	}
-
-	// 只有双方构建号都解析得出，才谈得上"差几个版本"
-	var bn *int
-	if pin == "" && base.BuildNo != nil && s.BuildNo != nil {
-		d := *s.BuildNo - *base.BuildNo
-		bn = &d
-	}
-	if bn == nil {
-		return VerdictBehind, nil, "版本不同（构建号无法解析，只能判不同，算不出差几个版本）"
-	}
-	if *bn < 0 {
-		d := -*bn
-		return VerdictBehind, &d, ""
-	}
-	return VerdictAhead, bn, ""
 }
 
 // syncNote 把采集失败翻译成人话。

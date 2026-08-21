@@ -148,11 +148,16 @@ func (h *CostOverviewHandler) Overview(c *gin.Context) {
 			//
 			// ⚠️ region 可能是空的（实测就有一台）。空串直接塞进去，
 			// 界面上会渲染成「缺费率的区域：」后面什么都没有 —— 一个更费解的提示。
-			// 空要显式说成"未记录区域"：那本身就是个要查的问题
+			// 空要显式说出来：那本身就是个要查的问题
 			// （主机采集没拿到 region，费率自然永远匹配不上）。
+			//
+			// 🔴 用**哨兵值**而不是中文串：这个数组会被拼进界面上的一句英文里，
+			//	塞中文进去就成了「regions without rates: (未记录区域)」——
+			//	一句中英混排（与 OPSCMDB-062 同一种缺陷，实测截到）。
+			//	由前端按 locale 把这个哨兵渲染成人话。
 			r := region
 			if strings.TrimSpace(r) == "" {
-				r = "(未记录区域)"
+				r = regionUnknownSentinel
 			}
 			if len(out.FallbackRegions) < 8 && !containsStr(out.FallbackRegions, r) {
 				out.FallbackRegions = append(out.FallbackRegions, r)
@@ -186,3 +191,10 @@ func (h *CostOverviewHandler) Overview(c *gin.Context) {
 
 	c.JSON(http.StatusOK, out)
 }
+
+// regionUnknownSentinel 主机没采到 region 时的占位。
+//
+// ⚠️ 不要换成任何自然语言：它会被拼进界面文案，由前端按 locale 渲染
+//
+//	（`cost:regionUnknown`）。后端塞一句中文进去，英文界面就中英混排。
+const regionUnknownSentinel = "__unknown_region__"

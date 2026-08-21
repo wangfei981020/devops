@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"ops-cmdb-backend/dnsource"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -74,6 +75,16 @@ var Providers = map[string]string{
 	"aliyun":     "阿里云",
 	"cloudflare": "Cloudflare",
 	"other":      "其他（仅登记，不自动同步）",
+}
+
+// patchIn 更新用。name/provider 必填（provider 上面就在校验），
+// enabled 用指针 —— 不传就不动它，否则任何一次保存都会把停用的注册商重新启用。
+type patchIn struct {
+	Name       string         `json:"name"`
+	Provider   string         `json:"provider"`
+	Credential map[string]any `json:"credential"`
+	DryRun     *bool          `json:"dry_run"`
+	Enabled    *int           `json:"enabled"`
 }
 
 type in struct {
@@ -171,7 +182,7 @@ func (h *Handler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "id 不合法"})
 		return
 	}
-	var body in
+	var body patchIn
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -184,8 +195,21 @@ func (h *Handler) Update(c *gin.Context) {
 
 	// ★ 越权修复：原来是 `WHERE id=?`，任何租户都能改别人的注册商。
 	// 现在 tenant_id 由 store 层注入，改不到别人的行 —— 影响 0 行即视为不存在。
-	res, err := sc.Exec(`UPDATE registrars SET name=?, provider=?, enabled=? WHERE tenant_id = ? AND id=?`,
-		body.Name, body.Provider, body.Enabled, id)
+	// ⚠️ provider 上面已强制校验（传了就必须是认得的），所以这里一定有值。
+	//	name 与 enabled 用请求体里的值 —— 但 name 为空要拦下：
+	//	一个没有名字的注册商在列表里认不出来（OPSCMDB-083）。
+	if strings.TrimSpace(body.Name) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name 不能为空"})
+		return
+	}
+	cols := []string{"name=?", "provider=?"}
+	args := []any{body.Name, body.Provider}
+	if body.Enabled != nil {
+		cols = append(cols, "enabled=?")
+		args = append(args, *body.Enabled)
+	}
+	res, err := sc.Exec(`UPDATE registrars SET `+strings.Join(cols, ", ")+
+		` WHERE tenant_id = ? AND id=?`, append(args, id)...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

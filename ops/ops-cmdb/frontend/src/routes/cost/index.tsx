@@ -1,5 +1,5 @@
 import { toErrorInfo } from '@ops/api'
-import { formatCurrency, formatNumber, tError, type Locale, useTranslation } from '@ops/i18n'
+import { formatCurrency, formatNumber, tError, type Locale, useTranslation , formatList } from '@ops/i18n'
 import { AsyncBoundary, type LoadError, Skeleton, fromQuery } from '@ops/ui'
 import { Button } from '@ops/ui'
 import { useState } from 'react'
@@ -81,7 +81,15 @@ export function CostPage() {
                 <p className="mt-1 text-xs text-warning">
                   {t('cost:fallbackNote', {
                     count: d.fallback_priced_hosts,
-                    regions: (d.fallback_regions ?? []).join('、') || '—',
+                    regions:
+                      formatList(
+                        t,
+                        (d.fallback_regions ?? []).map((r) =>
+                          // 后端用哨兵表示"主机没采到 region"，由这里按 locale 渲染 ——
+                          // 后端塞中文进去会让这句英文变成中英混排（OPSCMDB-054）
+                          r === '__unknown_region__' ? t('cost:regionUnknown') : r,
+                        ),
+                      ) || '—',
                   })}
                 </p>
               ) : null}

@@ -425,10 +425,12 @@ func (h *SyncHandler) BatchRenewDomains(c *gin.Context) {
 		return
 	}
 	if in.ConfirmCount > 0 && in.ConfirmCount != renewable {
-		c.JSON(http.StatusConflict, gin.H{
-			"error": fmt.Sprintf("可续费数量已变化（确认时 %d 个，现在 %d 个），请重新预览后再执行", in.ConfirmCount, renewable),
-			"items": items,
-		})
+		httpx.FailKeyWith(c, httpx.CodeConflict, "error.renewCountChanged",
+			map[string]any{"confirmed": in.ConfirmCount, "now": renewable},
+			map[string]any{
+				"error": fmt.Sprintf("可续费数量已变化（确认时 %d 个，现在 %d 个），请重新预览后再执行", in.ConfirmCount, renewable),
+				"items": items,
+			})
 		return
 	}
 
@@ -454,7 +456,9 @@ func (h *SyncHandler) BatchRenewDomains(c *gin.Context) {
 	SetAuditTarget(c, fmt.Sprintf("批量续费 %d 个域名 %d 年（任务 %s）", renewable, in.Period, job.ID))
 	c.JSON(http.StatusAccepted, gin.H{
 		"job_id": job.ID, "total": renewable, "accepted": true,
-		"msg": fmt.Sprintf("已开始为 %d 个域名续费，可关闭弹窗，任务在后台继续", renewable),
+		"msg_key":    "domains:renewStarted",
+		"msg_params": map[string]any{"count": renewable},
+		"msg":        fmt.Sprintf("已开始为 %d 个域名续费，可关闭弹窗，任务在后台继续", renewable),
 	})
 }
 

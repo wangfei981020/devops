@@ -257,6 +257,10 @@ func dimKey(it costItem, dim string) string {
 	return it.BizProject
 }
 
+// 界面的成本总览走的是另一个接口（cost_overview.go 的 /cost/overview）——
+// 两个同名不同实现，改之前先确认改的是哪一个。
+//
+//ops:mcp-only /k8s/cost/overview 只有 MCP 在用。
 func (h *K8sCostHandler) Overview(c *gin.Context) {
 	sc, err := h.Store.Tenant(c.Request.Context())
 	if err != nil {

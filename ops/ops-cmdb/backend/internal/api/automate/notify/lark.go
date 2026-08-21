@@ -16,6 +16,7 @@ package notify
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -139,24 +140,41 @@ func (h *LarkHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "id 不合法"})
 		return
 	}
+	// 指针 = 三态：没传（不动它）/ 显式清空 / 改成它。
+	// 用普通 string 时，只想换 webhook 就会把群名清空 —— 通知列表里
+	// 那一行会变成一个没有名字的群，谁也认不出它是哪个（OPSCMDB-083）。
 	var in struct {
-		Name    string `json:"name"`
-		Webhook string `json:"webhook"`
+		Name    *string `json:"name"`
+		Webhook string  `json:"webhook"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if in.Name != nil && strings.TrimSpace(*in.Name) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name 不能为空"})
+		return
+	}
 
 	// 界面上显示的是掩码，原样提交回来不能当成"用户要改成这个" ——
 	// 否则一次编辑就把真 webhook 覆盖成了一串星号。留空同样按"不改"处理。
-	var res interface{ RowsAffected() (int64, error) }
-	if in.Webhook == "" || isMaskedValue(in.Webhook) {
-		res, err = sc.Exec(`UPDATE lark_groups SET name=? WHERE tenant_id = ? AND id=?`, in.Name, id)
-	} else {
-		res, err = sc.Exec(`UPDATE lark_groups SET name=?, webhook=? WHERE tenant_id = ? AND id=?`,
-			in.Name, in.Webhook, id)
+	cols := []string{}
+	args := []any{}
+	if in.Name != nil {
+		cols = append(cols, "name=?")
+		args = append(args, *in.Name)
 	}
+	if in.Webhook != "" && !isMaskedValue(in.Webhook) {
+		cols = append(cols, "webhook=?")
+		args = append(args, in.Webhook)
+	}
+	if len(cols) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "至少要传一个要改的字段"})
+		return
+	}
+	var res interface{ RowsAffected() (int64, error) }
+	res, err = sc.Exec(`UPDATE lark_groups SET `+strings.Join(cols, ", ")+
+		` WHERE tenant_id = ? AND id=?`, append(args, id)...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

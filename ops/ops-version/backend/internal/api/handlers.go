@@ -470,8 +470,14 @@ type planCol struct {
 type compareReq struct {
 	// 列自由组合，不假设「同环境对同环境」
 	Columns     []planCol `json:"columns"`
-	Baseline    planCol   `json:"baseline"`
-	BaselinePin string    `json:"baseline_pin"`
+	// 🔴 baseline / baseline_pin 已删。
+	//
+	//    判定改成横着比这几列彼此，没有参照物这回事。
+	//    ⚠️ 留着这两个字段"收下但不读"是最坏的选项：
+	//       老前端或外部脚本照旧传，服务端静默丢弃 ——
+	//       调用方以为自己指定了基准，而结果完全是另一套语义，
+	//       且没有任何报错。字段删掉之后，多传的键被 JSON 解码忽略，
+	//       但至少代码里不存在"看起来会用"的入口。
 	// PlanName 仅用于导出时写进「数据说明」页，让收到附件的人知道这是哪个方案
 	PlanName string `json:"plan_name"`
 	// ServiceInclude 只比这些服务（镜像名最后一段），支持 * 通配。留空 = 全部
@@ -517,7 +523,6 @@ func (s *Server) buildPlan(r *http.Request, req compareReq) (compare.Plan, int, 
 
 	scope := userOf(r).Scope()
 	plan := compare.Plan{
-		BaselinePin:    req.BaselinePin,
 		ServiceInclude: req.ServiceInclude,
 		Ignores:        req.Ignores,
 	}
@@ -537,7 +542,7 @@ func (s *Server) buildPlan(r *http.Request, req compareReq) (compare.Plan, int, 
 		//    然后被当成真实数据参与判定，一致率也跟着失真。
 		//    ⚠️ 老数据（012 迁移前采的）没有环境级记录，回落到平台级，
 		//    否则升级后所有列都会显示成"从未采集"。
-		col := compare.Column{OrgID: in.ID, OrgName: in.Name, Env: c.Env}
+		col := compare.Column{OrgID: in.ID, OrgName: in.Name, Env: c.Env, IsSelf: in.IsSelf}
 		envProj := int64(0)
 		if env, found := envOf(in, c.Env, c.ProjectID); found {
 			envProj = env.ProjectID
@@ -564,13 +569,6 @@ func (s *Server) buildPlan(r *http.Request, req compareReq) (compare.Plan, int, 
 			}
 		}
 		plan.Columns = append(plan.Columns, col)
-		if c.OrgID == req.Baseline.OrgID && c.Env == req.Baseline.Env &&
-			c.ProjectID == req.Baseline.ProjectID {
-			plan.Baseline = col
-		}
-	}
-	if plan.Baseline.OrgName == "" {
-		plan.Baseline = plan.Columns[0] // 没指定就拿第一列当基准
 	}
 
 	// 归因数据：这些组织的镜像同步记录。
@@ -654,8 +652,7 @@ func (s *Server) compareHandler(w http.ResponseWriter, r *http.Request) {
 		summary[string(k)] = v
 	}
 	ok(w, map[string]any{
-		"baseline": plan.Baseline.Key(),
-		"columns":  plan.Columns,
+		"columns": plan.Columns,
 		"rows":     rows,
 		"summary":  summary,
 		// 🔴 结果几乎全是「没有」时给一句提示。
@@ -672,18 +669,25 @@ func (s *Server) compareHandler(w http.ResponseWriter, r *http.Request) {
 		//    而通配规则（`bi-*`）命中了哪些更是完全看不见。
 		//    ⚠️ 兜成 []：nil 序列化成 null，前端 .length 会炸。
 		"ignored_rows": orEmptyStrings(res.IgnoredRows),
+		// 🔴 逐格忽略的数量必须单独给。summary 按**行**统计，
+		//    只忽略了某一列的格子在里面完全看不见 ——
+		//    而「忽略必须看得见」是硬要求：藏起来的话，几个月后
+		//    没人说得清某个格子为什么是空的。
+		"ignored_cells": res.IgnoredCells,
 	})
 }
 
 // mostlyMissing 判断这次比对是不是「几乎全是没有」。
 //
-// 判据：非基准格子里，missing_here + missing_base 占了八成以上，且总量够大
+// 判据：结论为「缺失」的**行**占了八成以上，且总量够大
 // （少量服务时本来就容易全是 missing，提示反而是噪音）。
+//
+// ⚠️ Summary 现在按**行**统计（一行一个结论），不再按格子。
 func mostlyMissing(res compare.Result) bool {
 	total, missing := 0, 0
 	for k, v := range res.Summary {
 		total += v
-		if k == compare.VerdictMissing || k == compare.VerdictExtra {
+		if k == compare.VerdictMissing {
 			missing += v
 		}
 	}

@@ -88,8 +88,12 @@ func (h *CDNHandler) ProbeToken(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"realtime": true,
+		// ⚠️ 界面版不提工具名（运维在网页里执行不了），工具链另放 mcp_note
+		"note_key": "cdn:tokenCheckRealtimeNote",
 		"note": "本结果为实时探测 Cloudflare 所得，不读 CMDB 库。" +
-			"若要让 list_cdn_rules 等查询接口也反映新权限，体检通过后还需触发一次 CDN 账号同步。",
+			"体检通过后还需触发一次 CDN 账号同步，查询接口才会反映新权限。",
+		"mcp_note": "本结果为实时探测所得，不读 CMDB 库；若要让 list_cdn_rules 等查询接口也反映新权限，" +
+			"体检通过后还需触发一次 CDN 账号同步。",
 		"accounts": results,
 	})
 }

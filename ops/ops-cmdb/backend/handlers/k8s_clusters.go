@@ -178,6 +178,37 @@ func (h *K8sClusterHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// k8sClusterPatch 部分更新用。全指针 —— nil = 没传（不动它）。
+//
+// 🔴 这个处理器此前用 `IF(?=”, 旧值, 新值)` 打过一次补丁，只护住了 GKE
+//
+//	连接四件套；`name` / `prom_cluster_value` / `allow_secret_inventory` 等
+//	仍是无条件覆盖。其中两个的后果特别隐蔽：
+//	  · prom_cluster_value 被清空 → 所有带集群隔离的查询**静默返回空**（生产踩过）
+//	  · allow_secret_inventory 是**安全开关**，被静默翻动不该发生在任何方向
+//
+// ⚠️ 换成指针后 SQL 里的 `IF(?=”, …)` 就不需要了 —— "没传就别动"
+//
+//	本来就该由类型表达，而不是由 SQL 表达式模拟。
+type k8sClusterPatch struct {
+	Name             *string `json:"name"`
+	PromClusterValue *string `json:"prom_cluster_value"`
+	NetworkExposure  *string `json:"network_exposure"`
+	AllowSecretInv   *bool   `json:"allow_secret_inventory"`
+	DisplayName      *string `json:"display_name"`
+	Environment      *string `json:"environment"`
+	Provider         *string `json:"provider"`
+	ProjectID        *string `json:"project_id"`
+	CloudAccountID   *int    `json:"cloud_account_id"`
+	Location         *string `json:"location"`
+	Endpoint         *string `json:"endpoint"`
+	CaData           *string `json:"ca_data"`
+	NodepoolLabel    *string `json:"nodepool_label"`
+	CostMode         *string `json:"cost_mode"`
+	Kubeconfig       string  `json:"kubeconfig"` // 空=保留原值（本来就是二态）
+	Enabled          *int    `json:"enabled"`
+}
+
 type k8sClusterIn struct {
 	Name string `json:"name"`
 	// 该集群在 Prometheus 指标里 cluster 标签的取值。与 name 不一致时必须填，
@@ -246,14 +277,13 @@ func (h *K8sClusterHandler) Update(c *gin.Context) {
 		return
 	}
 	id, _ := strconv.Atoi(c.Param("id"))
-	var in k8sClusterIn
+	var in k8sClusterPatch
 	if err := c.ShouldBindJSON(&in); err != nil {
 		httpx.Fail(c, httpx.CodeBadRequest, err, nil)
 		return
 	}
-	enabled := 1
-	if in.Enabled != nil {
-		enabled = *in.Enabled
+	if requireNonBlank(c, "name", in.Name) {
+		return
 	}
 	// 凭据留空=保留原值；填了=加密覆盖
 	if in.Kubeconfig != "" {
@@ -267,32 +297,37 @@ func (h *K8sClusterHandler) Update(c *gin.Context) {
 			return
 		}
 	}
-	// ⚠️ GKE 的连接四件套（project_id / cloud_account_id / endpoint / ca_data）
-	// **空值一律保留原值**，与上面 kubeconfig 的处理一致。
-	//
-	// 原来是无条件覆盖：编辑弹窗只提交名称/环境/位置那几项，
-	// 这四个字段在 JSON 里不存在 → Go 零值 → UPDATE 把它们擦成 0 和空串。
-	// 于是「从云账号发现」纳管好、已经采到节点的集群，**只要有人点一次编辑保存，
-	// 就会退回"未配置连接方式"**，而界面上看不出是刚刚被自己擦掉的。
-	// 生产上就是这么丢的（16 个节点已采到，集群却显示未配置）。
-	//
-	// 用 IF(?='' , 旧值, 新值) 而不是改成指针类型：改指针要动 Create 和所有调用方，
-	// 而这里要的语义很窄——"没传就别动"。
-	res, err := sc.Exec(`UPDATE k8s_clusters SET name=?, prom_cluster_value=?, network_exposure=?, allow_secret_inventory=?,
-		display_name=?, environment=?, provider=?,
-		project_id=IF(?='', project_id, ?),
-		cloud_account_id=IF(?=0, cloud_account_id, ?),
-		location=?,
-		endpoint=IF(?='', endpoint, ?),
-		ca_data=IF(?='', ca_data, ?),
-		nodepool_label=?, cost_mode=?, enabled=? WHERE tenant_id = ? AND id=?`,
-		in.Name, in.PromClusterValue, in.NetworkExposure, b2int(in.AllowSecretInv), in.DisplayName, in.Environment, in.Provider,
-		in.ProjectID, in.ProjectID,
-		in.CloudAccountID, in.CloudAccountID,
-		in.Location,
-		in.Endpoint, in.Endpoint,
-		in.CaData, in.CaData,
-		in.NodepoolLabel, in.CostMode, enabled, id)
+	p := &patchSet{}
+	p.Add("name", in.Name)
+	p.Add("prom_cluster_value", in.PromClusterValue)
+	p.Add("network_exposure", in.NetworkExposure)
+	if in.AllowSecretInv != nil {
+		p.Add("allow_secret_inventory", ptrInt(b2int(*in.AllowSecretInv)))
+	}
+	p.Add("display_name", in.DisplayName)
+	p.Add("environment", in.Environment)
+	p.Add("provider", in.Provider)
+	p.Add("project_id", in.ProjectID)
+	p.Add("cloud_account_id", in.CloudAccountID)
+	p.Add("location", in.Location)
+	p.Add("endpoint", in.Endpoint)
+	p.Add("ca_data", in.CaData)
+	p.Add("nodepool_label", in.NodepoolLabel)
+	p.Add("cost_mode", in.CostMode)
+	p.Add("enabled", in.Enabled)
+	if p.Empty() {
+		if in.Kubeconfig != "" {
+			// 只换了凭据也算改动
+			h.Pool.Invalidate(id)
+			SetAuditTarget(c, strconv.Itoa(id))
+			c.JSON(200, gin.H{"ok": true})
+			return
+		}
+		httpx.Invalid(c, "body", "至少要传一个要改的字段")
+		return
+	}
+	res, err := sc.Exec(`UPDATE k8s_clusters SET `+p.SQL()+` WHERE tenant_id = ? AND id=?`,
+		append(p.Args(), id)...)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -302,7 +337,12 @@ func (h *K8sClusterHandler) Update(c *gin.Context) {
 		return
 	}
 	h.Pool.Invalidate(id) // 凭据/状态可能变，清连接缓存
-	SetAuditTarget(c, in.Name)
+	// 没传 name 时回落到 id：审计目标空着等于没记
+	if n := derefStr(in.Name); n != "" {
+		SetAuditTarget(c, n)
+	} else {
+		SetAuditTarget(c, strconv.Itoa(id))
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -443,3 +483,6 @@ func b2int(b bool) int {
 	}
 	return 0
 }
+
+// ptrInt 取地址的小工具（patchSet.Add 只收指针）。
+func ptrInt(v int) *int { return &v }

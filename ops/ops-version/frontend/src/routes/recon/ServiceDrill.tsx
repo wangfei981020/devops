@@ -3,7 +3,7 @@ import { AsyncBoundary, Badge, Dialog, Skeleton, fromQuery } from '@ops/ui'
 import { useQuery } from '@tanstack/react-query'
 import { api, toLoadError } from '../../lib/api.js'
 import { type Row, respColKey } from './types.js'
-import { CHIP, KIND } from './verdict.js'
+import { CHIP } from './verdict.js'
 
 interface Change {
   org_id: number
@@ -78,7 +78,9 @@ export function ServiceDrill({ row, onClose }: { row: Row; onClose: () => void }
               </thead>
               <tbody>
                 {row.Cells.map((c) => {
-                  const kind = KIND[c.Verdict] ?? 'none'
+                  // 🔴 这里标的是**这一格的状态**（有没有、采没采到、能不能比），
+                  //    不是行结论 —— 行结论是整行一个，标在弹窗标题上。
+                  const bad = c.State === 'conflict'
                   return (
                     <tr key={respColKey(c.Column)} className="border-b border-border">
                       <td className="px-2 py-1.5">
@@ -88,11 +90,15 @@ export function ServiceDrill({ row, onClose }: { row: Row; onClose: () => void }
                             : c.Column.OrgName}
                         </div>
                         <div className="text-[10.5px] text-muted-foreground">{c.Column.Env}</div>
-                        <span
-                          className={`mt-0.5 inline-flex items-center rounded-[2px] py-px pr-[5px] pl-1 text-[10.5px] font-semibold ${CHIP[kind]}`}
-                        >
-                          {t(`opsversion:verdict.${c.Verdict}`)}
-                        </span>
+                        {c.State !== 'version' && (
+                          <span
+                            className={`mt-0.5 inline-flex items-center rounded-[2px] py-px pr-[5px] pl-1 text-[10.5px] font-semibold ${
+                              bad ? CHIP.diff : CHIP.unknown
+                            }`}
+                          >
+                            {t(`opsversion:cellState.${c.State}`)}
+                          </span>
+                        )}
                       </td>
                       <td className="px-2 py-1.5 font-mono text-foreground">
                         {c.Snap?.Tag || '—'}

@@ -31,3 +31,28 @@ export function hintText(
   if (o?.hint_key) return t(o.hint_key)
   return o?.hint ?? ''
 }
+
+/**
+ * 后端给的说明：`*_key` 优先，取不到才用中文原句。
+ *
+ * ⚠️ 中文原句是留给 MCP / 直接调 API 的人的（他们读不到语言包），
+ *	界面直接渲染它，英文界面上就是一句中文（OPSCMDB-054）。
+ */
+export function keyedText(
+  t: (k: string, p?: Record<string, unknown>) => string,
+  // ⚠️ 用 Record<string, unknown> 会要求调用方的接口带索引签名，
+  //	而那些接口都是具名的（Mover / HarborGC …）。这里只读两三个字段，
+  //	用一个宽松的入参类型，别逼调用方去改数据模型。
+  o: object | undefined | null,
+  field: string,
+): string {
+  if (!o) return ''
+  const rec = o as Record<string, unknown>
+  const key = rec[`${field}_key`]
+  if (typeof key === 'string' && key !== '') {
+    const params = rec[`${field}_params`]
+    return t(key, (params as Record<string, unknown>) ?? undefined)
+  }
+  const raw = rec[field]
+  return typeof raw === 'string' ? raw : ''
+}

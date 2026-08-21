@@ -48,7 +48,8 @@ func (h *CDNHandler) DomainCheck(c *gin.Context) {
 	owned := h.ownedIngressIPs()
 	if len(owned) == 0 {
 		c.JSON(http.StatusOK, gin.H{
-			"ok": false,
+			"ok":        false,
+			"error_key": "error.noIngressIPsCollected",
 			"error": "没有采集到任何入口 IP（K8s LoadBalancer / 云 LB VIP / 静态 IP / 主机外网 IP 都为空），" +
 				"无法判断解析目标是否仍属于我们；请先确认 K8s 与云资源同步正常",
 		})

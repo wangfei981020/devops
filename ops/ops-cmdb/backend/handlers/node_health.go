@@ -580,6 +580,7 @@ func (h *GKEHistoryHandler) NodeHealthState(c *gin.Context) {
 			"not_ready_alert_after": "3 分钟",
 			"gke_repair_threshold":  "约 10 分钟",
 			"disk_predict_window":   "24 小时内满盘",
+			"note_key":              "upgrades:nodeHealthLeadTimeNote",
 			"note": "NotReady 只能比 GKE 的自动修复早 5~8 分钟；磁盘趋势能提前几小时到几天；" +
 				"突然宕机无前兆，做不到提前发现，只能靠事后的自动修复记录。",
 		},

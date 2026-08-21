@@ -112,6 +112,27 @@ func (h *CIHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, ci)
 }
 
+// ciPatch 部分更新用。
+//
+// 🔴 字段必须是**指针**：nil = 没传（不动它），非 nil 指向零值 = 显式清空。
+//
+//	CI 是所有资源的公共实体，name 被清空影响面比域名那次更大 ——
+//	列表、搜索、关系图、审计目标全都靠它（OPSCMDB-083）。
+//
+// ⚠️ 刻意**不含 type**：Update 本来就不改 CI 的类型，
+//
+//	加进来等于凭空多一条"能把主机改成域名"的路径。
+type ciPatch struct {
+	Name    *string           `json:"name"`
+	Project *string           `json:"project"`
+	Env     *string           `json:"env"`
+	Module  *string           `json:"module"`
+	Owner   *string           `json:"owner"`
+	Status  *string           `json:"status"`
+	Remark  *string           `json:"remark"`
+	Labels  map[string]string `json:"labels"`
+}
+
 type ciInput struct {
 	Type    string            `json:"type"`
 	Name    string            `json:"name"`
@@ -159,22 +180,45 @@ func (h *CIHandler) Update(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	var in ciInput
+	var in ciPatch
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := sc.Exec(`UPDATE cis SET name=?, project=?, env=?, module=?, owner=?, status=?, remark=? WHERE tenant_id = ? AND id=?`,
-		in.Name, in.Project, in.Env, in.Module, in.Owner, in.Status, in.Remark, id); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+	if requireNonBlank(c, "name", in.Name) {
 		return
+	}
+	p := &patchSet{}
+	p.Add("name", in.Name)
+	p.Add("project", in.Project)
+	p.Add("env", in.Env)
+	p.Add("module", in.Module)
+	p.Add("owner", in.Owner)
+	p.Add("status", in.Status)
+	p.Add("remark", in.Remark)
+	if p.Empty() && in.Labels == nil {
+		httpx.Invalid(c, "body", "至少要传一个要改的字段")
+		return
+	}
+	if !p.Empty() {
+		if _, err := sc.Exec(`UPDATE cis SET `+p.SQL()+` WHERE tenant_id = ? AND id=?`,
+			append(p.Args(), id)...); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	if in.Labels != nil {
 		if iid, err := parseID(id); err == nil {
 			replaceLabelsDB(h.DB, iid, in.Labels)
 		}
 	}
-	SetAuditTarget(c, in.Name)
+	// ⚠️ 没传 name 时回落到 id：审计目标空着的话，这条记录在审计页上
+	//	就是一行"改了某个东西"，等于没记（改成 PATCH 语义后才会出现这种情况）
+	if n := derefStr(in.Name); n != "" {
+		SetAuditTarget(c, n)
+	} else {
+		SetAuditTarget(c, "ci:"+id)
+	}
 	c.JSON(200, gin.H{"ok": true})
 }
 
