@@ -1,0 +1,60 @@
+{
+  "column": {
+    "cluster": "Cluster",
+    "name": "Namespace",
+    "phase": "Status",
+    "pods": "Pods",
+    "workloads": "Workloads"
+  },
+  "empty": {
+    "filtered": "No namespaces match the current filters. Try widening them.",
+    "noSource": "No namespaces collected yet. Check on the Clusters page that the cluster is onboarded and its credentials are valid.",
+    "title": "No namespaces"
+  },
+  "error": {
+    "title": "Could not load namespaces"
+  },
+  "filter": {
+    "cluster": "Cluster",
+    "phase": "Status",
+    "searchPlaceholder": "Search namespace or project"
+  },
+  "hint": {
+    "createProjectFirst": "There are no projects yet, so nothing can be matched. Create them under Basic Settings → Projects first, then come back."
+  },
+  "noProject": "No project",
+  "noProjectHint": "No owning project recorded. Cost attribution, alert routing, and decommission review all depend on this link",
+  "nsproject": {
+    "allAssigned": "Every namespace is already assigned",
+    "autoApply_one": "Apply {{count}} change",
+    "autoApply_other": "Apply {{count}} changes",
+    "autoPreview": "Auto-match (preview first)",
+    "col": {
+      "ns": "Namespace",
+      "project": "Project",
+      "suggest": "Suggestion"
+    },
+    "desc": "Which business project each namespace belongs to. All cost attribution depends on it — anything unassigned lands in \"unassigned\".",
+    "entry": "Assign projects",
+    "needData": "No namespaces collected for this cluster yet — check the cluster is connected",
+    "nothingToApply": "Nothing can be auto-assigned",
+    "pickCluster": "Select a specific cluster above first",
+    "previewHint": "This is only a preview; nothing has been written. The rows with a suggestion below are the ones that would change — platform components and undecidable ones stay blank and need a human.",
+    "previewTitle_one": "{{count}} namespace can be auto-assigned by naming pattern",
+    "previewTitle_other": "{{count}} namespaces can be auto-assigned by naming pattern",
+    "rule": {
+      "none": "No suggestion",
+      "platform": "Platform component"
+    },
+    "title": "Namespace attribution",
+    "unassigned": "Unassigned"
+  },
+  "podsBad_one": "{{count}} unhealthy",
+  "podsBad_other": "{{count}} unhealthy",
+  "stuckNote_one": "{{count}} stuck in Terminating",
+  "stuckNote_other": "{{count}} stuck in Terminating",
+  "terminatingHint": "Deletion is stuck; the name stays taken",
+  "title": "Namespaces",
+  "total_one": "{{count}} namespace",
+  "total_other": "{{count}} namespaces"
+}

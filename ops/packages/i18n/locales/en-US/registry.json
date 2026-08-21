@@ -1,0 +1,69 @@
+{
+  "action": {
+    "add": "Connect a registry",
+    "pickFirst": "Select a registry first"
+  },
+  "artifacts_one": "{{count}} artifact",
+  "artifacts_other": "{{count}} artifacts",
+  "col": {
+    "artifacts": "Artifacts",
+    "lastPush": "Last push",
+    "pulls": "Pulls",
+    "pullsHint": "Cumulative docker pulls recorded by Harbor. A long-standing 0 means no environment uses this image",
+    "repo": "Repository"
+  },
+  "dialog": {
+    "add": "Connect an image registry",
+    "desc": "Connect a Harbor instance to see project quotas, images and push activity.",
+    "edit": "Edit registry connection",
+    "testAfterSave": "Saving only means the configuration was stored. A wrong address, an expired password or a disabled account only surface the next time data is actually fetched — so run \"Test connection\" right after saving."
+  },
+  "empty": {
+    "noSource": "Use “Connect registry” on this page to add a Harbor endpoint; quotas and repositories then show live.",
+    "title": "No image registry connected"
+  },
+  "emptyRepos": {
+    "reason": "The project exists but nothing has been pushed yet.",
+    "title": "No repositories in this project"
+  },
+  "error": {
+    "projects": "Could not load project quotas (Harbor may be unreachable)",
+    "repos": "Could not load repositories"
+  },
+  "field": {
+    "enabled": "Enabled",
+    "env": "Environment",
+    "envAny": "Any environment",
+    "envHint": "Distinguishes multiple registries, e.g. prod / uat. Optional.",
+    "envLoadFailed": "Failed to load the environment dictionary; only \"Any\" is selectable",
+    "name": "Name",
+    "password": "Password",
+    "passwordHint": "Prefer a read-only robot account over an administrator.",
+    "required": "Name and URL are required",
+    "skipVerify": "Skip TLS certificate verification",
+    "skipVerifyHint": "Only tick this when Harbor uses a self-signed certificate. It also lets a man-in-the-middle through — be clear about that cost.",
+    "url": "URL",
+    "urlHint": "The Harbor address including scheme. A wrong port simply reads as \"cannot connect\", with no more detail.",
+    "username": "Username"
+  },
+  "filter": {
+    "project": "Project",
+    "registry": "Registry"
+  },
+  "liveNote": "Queried live from Harbor; nothing is stored",
+  "noQuota": "No quota set",
+  "public": "Public",
+  "publicHint": "Public projects allow anonymous image pulls. Confirm this is intentional — otherwise anyone can pull these images.",
+  "quota": "Project quotas",
+  "repoList": "Repositories",
+  "repos_one": "{{count}} repo",
+  "repos_other": "{{count}} repos",
+  "staleHint": "Not pushed for a long time does not mean it is safe to delete — a rollback may depend on an old tag.",
+  "status": {
+    "components": "{{n}} components",
+    "gcAt": "last GC {{at}}"
+  },
+  "title": "Image registry",
+  "usedUnknown": "Not readable",
+  "usedUnknownHint": "Storage usage requires admin permission (/quotas), while a robot account is the recommended way to connect Harbor — that is the correct setup. ⚠️ Not readable does NOT mean the project is empty: the repository count on the right is real."
+}

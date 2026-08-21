@@ -1,0 +1,82 @@
+{
+  "title": "AI access (MCP)",
+  "hint": "Let AI clients such as Claude Code connect read-only. Each integration gets its own token and its own role, and the role decides what it can see.",
+  "toolCount": "{{avail}} available now, {{total}} in the product",
+  "neverUsed": "Never used",
+  "field": {
+    "endpoint": "Endpoint",
+    "transport": "Transport",
+    "tools": "Tools",
+    "name": "Integration name",
+    "nameHint": "Say who uses it, for example \"Claude Code — Ops team\". Nobody will dare disable an unnamed token, because nobody knows who it would cut off.",
+    "role": "Role",
+    "roleHint": "The role decides what this integration can read, using exactly the same permission codes as people. An AI will not judge whether it should look at something — it will use whatever it receives, so this sets the ceiling. When unsure, pick read-only.",
+    "token": "Token",
+    "lastUsed": "Last used",
+    "snippet": "Client configuration",
+    "snippetHint": "Copy this whole block into your AI client's MCP configuration. Typing it from the docs is where it goes wrong: a missing /api or a misspelled header both fail in a way that just looks like \"cannot connect\".",
+    "createdBy": "created by {{who}} {{when}}",
+    "expires": "Expires"
+  },
+  "action": {
+    "newToken": "New integration",
+    "disable": "Disable",
+    "enable": "Enable",
+    "copy": "Copy configuration",
+    "copied": "Copied",
+    "savedIt": "I saved it"
+  },
+  "state": {
+    "disabled": "Disabled",
+    "unrestricted": "Unrestricted",
+    "expired": "Expired",
+    "expiringSoon": "Expiring soon"
+  },
+  "role": {
+    "unrestricted": "Unrestricted (pre-upgrade)"
+  },
+  "tier": {
+    "title": "This license includes the core tool set",
+    "body": "The community edition covers inventory tools — what hosts, clusters, pods and domains exist, and when the data was collected — and is usable on its own. Diagnostics, cost attribution, log search, security auditing and upgrade planning, the tools that show what is wrong, require an enterprise license. Tools that are not included never appear in the tool list, so the AI will not try to call them."
+  },
+  "empty": {
+    "title": "No AI integrations yet",
+    "reason": "Create a token and paste the generated configuration into your AI client to get started."
+  },
+  "dialog": {
+    "newTitle": "New AI integration",
+    "createdTitle": "{{name}} created",
+    "deleteTitle": "Delete this integration",
+    "newDesc": "The token is shown only once after creation — copy it into your AI client right away."
+  },
+  "created": {
+    "onceTitle": "This token is shown only once",
+    "onceBody": "Once you close this window it cannot be retrieved — only its hash is stored. If it is lost, delete this integration and create another.",
+    "closeWarning": "Cannot be viewed again after closing"
+  },
+  "delete": {
+    "body": "After deleting \"{{name}}\", the next call from any client using it will be refused. This cannot be undone.",
+    "inUse": "This integration is in active use: last call {{at}} from {{ip}}. Deleting it cuts that off immediately."
+  },
+  "error": {
+    "info": "Cannot load MCP service status",
+    "tokens": "Cannot load the token list"
+  },
+  "toolsForToken": "{{n}} tools available",
+  "toolsForTokenHint": "Computed from this token's role — the number its tools/list actually returns. The figure at the top is the licence ceiling.",
+  "neverExpires": "Never expires",
+  "changeRole": {
+    "title": "Change the role of “{{name}}”?",
+    "body": "Change to “{{to}}”.",
+    "impact": "A different role changes which tools this token can call — things it could read may become unavailable, or vice versa. Connected AI clients pick up the new role on their next call; no reconnect needed."
+  },
+  "expiry": {
+    "title": "Set expiry for “{{name}}”",
+    "desc": "After expiry the token is rejected outright (401), not just flagged in the UI.",
+    "hint": "Leave empty for no expiry",
+    "current": "Currently: expires {{when}}",
+    "currentNever": "Currently: never expires",
+    "clearWarn": "Leaving this empty makes the token permanent. This credential can read the entire inventory — make sure that is what you want",
+    "createNeverWarn": "Empty means no expiry. This token can read the entire inventory and will never expire — consider setting a date"
+  }
+}

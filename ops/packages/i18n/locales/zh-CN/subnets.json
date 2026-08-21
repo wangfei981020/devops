@@ -1,0 +1,40 @@
+{
+  "title": "子网",
+  "total_other": "共 {{count}} 个子网",
+  "stale": "云上已删除",
+  "staleNote_other": "{{count}} 个已从云上消失（台账保留，可能仍被引用）",
+  "column": {
+    "name": "子网",
+    "cidr": "网段",
+    "network": "VPC",
+    "region": "区域",
+    "project": "云项目"
+  },
+  "filter": {
+    "searchPlaceholder": "搜索子网名、网段或 VPC",
+    "region": "区域",
+    "project": "云项目"
+  },
+  "error": {
+    "title": "子网列表没能加载出来"
+  },
+  "empty": {
+    "title": "没有子网",
+    "filtered": "当前筛选条件下没有子网。放宽条件再看看。",
+    "noSource": "还没采到任何子网。先到「管理 / 云账号」确认云账号已接入且配了 SA key。"
+  },
+  "vpc": {
+    "title": "VPC（{{count}}）",
+    "counts": "{{subnets}} 子网 / {{fws}} 规则",
+    "empty": "没查到 VPC。通常意味着云账号还没采到，而不是真的没有 VPC。"
+  },
+  "mode": {
+    "custom": "自定义子网",
+    "auto": "自动子网"
+  },
+  "modeHint": {
+    "custom": "VPC 的子网模式：custom —— 子网都是人工创建的，网段由你决定",
+    "auto": "VPC 的子网模式：auto —— GCP 会在每个区域各自动建一个子网。看到没印象的子网时，多半就是它自动建的",
+    "unknown": "VPC 的子网模式：{{mode}}（这个取值我们还没登记说明，原样显示）"
+  }
+}

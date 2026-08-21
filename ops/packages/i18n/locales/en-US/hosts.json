@@ -1,0 +1,119 @@
+{
+  "column": {
+    "cluster": "Cluster / node pool",
+    "costDetail": "Total / Daily",
+    "cpu": "CPU usage",
+    "disk": "Disk",
+    "lastSync": "Last sync",
+    "machineType": "Machine type",
+    "memory": "Memory usage",
+    "monthlyCost": "Monthly cost",
+    "name": "Hostname",
+    "network": "Region / Public IP",
+    "privateIp": "Private IP",
+    "project": "Project / Provider",
+    "spec": "Spec",
+    "status": "Status"
+  },
+  "cost": {
+    "daily": "{{v}}/day",
+    "totalSuffix": "total"
+  },
+  "costSource": {
+    "bigquery": "Billed",
+    "estimate": "Estimated"
+  },
+  "detail": {
+    "bootDisk": "Boot",
+    "cost": "Cost",
+    "costDaily": "Daily",
+    "costEstimate": "Estimated from machine type and disks — not an actual bill",
+    "costHourly": "Hourly",
+    "costMonth": "Monthly",
+    "costTotal": "Accrued",
+    "createdAt": "Created",
+    "dataDisk": "Data",
+    "disks": "Disks",
+    "domains": "Related domains",
+    "labels": "Labels",
+    "mountPoint": "Mount point",
+    "network": "Network",
+    "no": "No",
+    "noDomains": "No domain resolves to this host",
+    "noLabels": "No labels",
+    "noPods": "No pods on this node",
+    "nodeNotIngested": "This machine is a cluster node, but the cluster is not ingested yet, so what runs on it is unknown",
+    "os": "OS",
+    "podCountDrift": "Node reports {{reported}}, we collected {{listed}} — the two come from different sync rounds; trust the newer one",
+    "podCount_one": "{{count}} pod",
+    "podCount_other": "{{count}} pods",
+    "pods": "Pods on this node",
+    "preemptible": "Preemptible",
+    "restarts_one": "{{count}} restart",
+    "restarts_other": "{{count}} restarts",
+    "spec": "Spec",
+    "title": "Host detail",
+    "yes": "Yes",
+    "zone": "Zone"
+  },
+  "disk": {
+    "boot": "Boot",
+    "count_one": "{{count}} disk",
+    "count_other": "{{count}} disks",
+    "data": "Data",
+    "fullest": "Fullest {{percent}}%",
+    "none": "None"
+  },
+  "empty": {
+    "action": "Clear filters",
+    "hint": "Nothing matches the current filters. Clear them to see all {{total}} hosts.",
+    "title": "No hosts match these filters"
+  },
+  "emptyNoSource": {
+    "action": "Configure data sources",
+    "hint": "Host data comes from clusters and cloud accounts. Neither is configured yet, so there is nothing to show.",
+    "title": "No clusters connected yet"
+  },
+  "error": {
+    "hint": "The cluster may be unreachable, or the stored credentials may have expired.",
+    "title": "Could not load hosts"
+  },
+  "filter": {
+    "all": "All",
+    "cluster": "Cluster",
+    "destroyed": "Destroyed",
+    "machineType": "Machine type",
+    "matchedOnly_one": "{{count}} host matches",
+    "matchedOnly_other": "{{count}} hosts match",
+    "matched_one": "{{count}} of {{total}} host matches",
+    "matched_other": "{{count}} of {{total}} hosts match",
+    "project": "Project",
+    "provider": "Provider",
+    "running": "Running",
+    "searchPlaceholder": "Search by hostname or IP",
+    "stopped": "Stopped"
+  },
+  "note": {
+    "destroyedExcluded_one": "{{count}} destroyed host excluded; cost covers managed resources only",
+    "destroyedExcluded_other": "{{count}} destroyed hosts excluded; cost covers managed resources only",
+    "stale": "{{count}} on this page not refreshed for over {{hours}}h",
+    "staleAction": "Sync from data sources"
+  },
+  "staleHint": "Not refreshed for over {{hours}}h — may not reflect the current state. Collected at {{at}}",
+  "status": {
+    "destroyed": "Destroyed",
+    "diskPressure": "Disk pressure",
+    "notReady": "NotReady",
+    "running": "Running",
+    "stopped": "Stopped"
+  },
+  "sync": {
+    "started": "Sync started in the background. It usually takes 1–3 minutes when there are many hosts; this page refreshes automatically when it finishes."
+  },
+  "title": "Hosts",
+  "value": {
+    "billingStopped": "Billing stopped",
+    "noPublicIp": "No public IP",
+    "notApplicable": "—"
+  }
+}

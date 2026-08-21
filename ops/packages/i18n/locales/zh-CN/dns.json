@@ -1,0 +1,89 @@
+{
+  "byDomain": {
+    "daysLeft": "（剩 {{n}} 天）",
+    "empty": {
+      "filtered": "当前搜索条件下没有匹配的域名",
+      "none": "注册商台账里还没有域名。先到「域名」页添加或同步。",
+      "title": "没有域名"
+    },
+    "expiryUnknown": "到期日读不出",
+    "ledger": "台账 {{n}} 条",
+    "ledgerHint": "主机头台账里登记的业务解析条数（含项目/环境/负责人）。与注册商侧真实解析是两张表——台账有、注册商侧没有，说明这条解析实际不存在或还没同步。",
+    "neverSynced": "从没同步过",
+    "records": "{{n}} 条记录",
+    "searchPlaceholder": "搜域名…",
+    "sync": "同步",
+    "total": "共 {{count}} 个域名"
+  },
+  "col": {
+    "effective": "生效",
+    "effectiveHint": "只有域名 NS 指向的那一方才生效，另一方的记录改了没有任何效果",
+    "name": "记录名",
+    "proxied": "经 CDN",
+    "source": "来源",
+    "type": "类型",
+    "value": "解析目标"
+  },
+  "consistency": {
+    "authorityIncomplete": "「配了但不生效」这份清单不完整",
+    "conflictActionKnown": "这个域名的 NS 指向 {{authoritative}}（{{ns}}），只有那一方的记录生效，其余各方改了不会有任何效果。",
+    "conflictActionUnknown": "先确认这个域名的 NS 实际指向哪一方——只有 NS 指向的那一边才生效，另一边的记录是无效配置，改了不会有任何效果。（我们没采到这个域名的 NS 记录，所以判不出是哪一方。）",
+    "conflictHint": "同一个域名在 Cloudflare 和 GCP Cloud DNS 上都有记录且目标不同。只有 NS 指向的那一边真正生效，另一边改了不会有任何效果——排查「改了没生效」时先确认自己改的是生效的那一边。",
+    "conflictIssue": "同一个域名的同一类型记录，在 {{a}} 和 {{b}} 上目标不一致。",
+    "conflicts_other": "{{count}} 个域名在两边配了不同的解析",
+    "ineffective": "{{count}} 条解析配在了不生效的一方",
+    "ineffectiveAction": "要么把记录改到 {{authoritative}} 上，要么把 NS 切到 {{configured}}。在这一方继续改不会有任何效果。",
+    "ineffectiveIssue": "这些记录配在 {{configured}}，但这个域名的 NS 指向 {{authoritative}}——只有 NS 指向的那一方才生效。",
+    "more": "还有 {{n}} 条",
+    "notComparable": "这次比对不成立",
+    "oneSidedIssue": "只有 {{provider}} 这一侧配了这个类型的记录。",
+    "scope": "比对覆盖面（按 FQDN 计，同一 FQDN 下多条记录只算一个）：GCP {{gcp}} · Cloudflare {{cf}} · GoDaddy {{gd}}",
+    "splitNs": "{{count}} 个域名的 NS 同时指向多方",
+    "splitNsIssue": "NS 同时指向多方，解析结果取决于递归解析器问到了哪一台——这本身就是个要修的配置。"
+  },
+  "direct": "直连",
+  "effective": {
+    "no": "不生效",
+    "noNote": "该域名的 NS 指向 {{authoritative}}（{{ns}}），这一方的记录不生效，改了不会有任何效果",
+    "unknown": "判不出",
+    "unknownHint": "没采到该域名的 NS 记录，判不出这一方生不生效。⚠️ 这不等于「生效」",
+    "yes": "生效"
+  },
+  "empty": {
+    "partialError": "至少有一个来源没能读取成功，所以这里是空的——这不代表没有解析记录。展开上方的错误信息，或稍后重试。",
+    "reason": "两个来源都没有数据。可能是还没接入 Cloudflare / GCP 云账号，也可能是凭据缺少读取 DNS 的权限。这不代表这些域名没有解析记录。",
+    "title": "没有取到任何解析记录"
+  },
+  "error": {
+    "title": "解析记录没能加载出来"
+  },
+  "filter": {
+    "source": "来源",
+    "type": "类型"
+  },
+  "proxied": "经 CDN",
+  "searchPlaceholder": "搜索域名或解析目标",
+  "source": {
+    "cloudflare": "Cloudflare",
+    "gcp": "GCP Cloud DNS",
+    "godaddy": "GoDaddy（注册商）"
+  },
+  "suspicious": {
+    "label": "可疑",
+    "loopback": "环回或未指定地址。解析到这里等于让访问者连自己，外部完全访问不到",
+    "privateRange": "私网地址。如果这是个公网域名，外部访问者永远连不上；内部域名指向私网则是正常的——请按用途确认",
+    "publicResolver": "这是一个公共 DNS 解析器的地址（8.8.8.8 / 1.1.1.1 之类）。把域名的 A 记录指到这里，访问请求根本到不了业务——几乎可以肯定是占位或误配"
+  },
+  "title": "DNS 解析",
+  "view": {
+    "all": "全部记录",
+    "allHint": "三方（GoDaddy / Cloudflare / GCP）并列，含「配了但不生效」判定",
+    "byDomain": "按域名",
+    "byDomainHint": "这个域名下有哪些解析——日常增删改走这里"
+  },
+  "zones": {
+    "label": "GCP 托管区：",
+    "records": "{{n}} 条",
+    "visibility": "可见性：{{v}}"
+  }
+}

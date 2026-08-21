@@ -1,0 +1,113 @@
+{
+  "action": {
+    "addAccount": "接入 CDN 账号",
+    "analysis": "规则分析",
+    "forensics": "实时取证",
+    "tokenCheck": "Token 体检",
+    "verify": "测连通"
+  },
+  "analysis": {
+    "certs": "边缘证书",
+    "col": {
+      "expires": "到期",
+      "hosts": "覆盖域名",
+      "issuer": "签发者",
+      "status": "状态"
+    },
+    "daysLeft": "还剩 {{n}} 天",
+    "domains": "域名走向",
+    "entry": "CDN 分析",
+    "expiredDays": "已过期 {{n}} 天",
+    "loadFailed": "这部分没取到",
+    "noCerts": "没有采到边缘证书",
+    "noFindings": "没有发现问题",
+    "noRules": "没有采到规则",
+    "notViaCdn": "没走 CDN",
+    "ruleCheck": "规则体检",
+    "rules": "规则",
+    "snapshotNote": "读的是上次同步的 Cloudflare 快照，不是实时状态。改完 CF 配置要先同步再看。",
+    "title": "CDN 分析"
+  },
+  "dialog": {
+    "accountDesc": "接入之后，站点、解析记录、规则和边缘证书会由定时任务同步进来。",
+    "addAccount": "接入 CDN 账号",
+    "editAccount": "编辑 CDN 账号",
+    "syncNote": "保存不会立刻同步。站点数据由「DNS 记录同步」任务定期拉取，也可以去定时任务页手动触发一次。"
+  },
+  "disabled": "已停用",
+  "empty": {
+    "reason": "通常是还没接入 Cloudflare 凭据（系统管理 → 数据接入），或者凭据缺少读取站点的权限。这不代表你们没有在用 CDN——先确认接入状态再下结论。",
+    "title": "没有取到任何 CDN 站点"
+  },
+  "error": {
+    "title": "CDN 站点没能加载出来"
+  },
+  "field": {
+    "accountName": "账号名称",
+    "accountTag": "Account Tag",
+    "accountTagHint": "Cloudflare 的账号标识。多账号时用来区分，单账号可留空。",
+    "enabled": "启用",
+    "nameRequired": "名称必填",
+    "token": "API Token",
+    "tokenHint": "建议用只读 Token（Zone:Read + DNS:Read）。它本身就是凭据，不要贴进工单。",
+    "vendor": "厂商",
+    "vendorHint": "目前只实现了 Cloudflare 的适配。选别的能存下来，但同步时会被拒——先说清楚，免得事后撞上。",
+    "vendorRequired": "先选或新建一个厂商"
+  },
+  "forensics": {
+    "clientIP": "客户端 IP",
+    "desc": "逐条请求时序与安全事件，实时查 Cloudflare。⚠️ 对方说「请求早就发出去了，你们很久才收到」时，用边缘收到的时刻把总延迟切成两段——中间那段本来谁也看不见。",
+    "host": "主机头",
+    "hostHint": "留空 = 该站点全部",
+    "minutes": "时间窗（分钟）",
+    "minutesHint": "先用 60 验证能查到数据",
+    "notRunYet": "填好条件后点「查询」。⚠️ 这个查询实时打 Cloudflare，不会自动执行。",
+    "path": "路径",
+    "query": "查询",
+    "summary": "共 {{total}} 条 · 时间窗 {{window}}",
+    "tab": {
+      "security": "安全事件",
+      "traffic": "请求时序"
+    },
+    "title": "CDN 实时取证",
+    "zone": "站点"
+  },
+  "hint": "Cloudflare 上的站点：状态、套餐、NS、SSL 模式。排查域名类问题时的最前面一跳。",
+  "lastSync": "最后同步",
+  "neverSynced": "从未同步",
+  "noNs": "未取到 NS",
+  "noToken": "未配令牌",
+  "paused": "已暂停",
+  "recordsUnknown": "记录数未采到",
+  "records_other": "{{count}} 条记录",
+  "section": {
+    "accounts": "CDN 账号"
+  },
+  "sslFlexible": "回源明文",
+  "title": "CDN 站点",
+  "tokenCheck": {
+    "allPass": "{{n}} 项全部通过",
+    "cannotProbe": "无法体检",
+    "desc": "逐项探测 token 到底有哪些权限。⚠️ 这是实时打 Cloudflare 的结果，不读 CMDB 库——所以改完 CF 权限可以马上来这里确认。",
+    "expiresOn": "token 到期 {{at}}",
+    "failed": "体检请求失败",
+    "need": "需要勾选",
+    "noAccounts": "⚠️ 接口没有返回任何账号。这不等于「都正常」，请确认 CDN 账号是否已接入。",
+    "noChecks": "⚠️ 没有返回任何检查项。这不等于「全部通过」。",
+    "notSent": "请求没发出去",
+    "probedAt": "探测站点 {{zone}} · {{at}}",
+    "recheck": "重新体检",
+    "slow": "正在逐个账号逐项探测 Cloudflare，可能要几十秒。请不要重复点——每次点都是一次真实请求。",
+    "someFail": "{{n}} 项不通过",
+    "title": "CDN Token 权限体检",
+    "verdict": {
+      "error": "请求出错 —— 不是权限问题，先查令牌是否有效、网络是否可达",
+      "no_permission": "权限不足 —— 去 CF 控制台勾上面那一项"
+    }
+  },
+  "vendor": {
+    "create": "新建",
+    "needName": "填个厂商名",
+    "none": "还没有任何 CDN 厂商。账号要挂在厂商下面，先在这里建一个。"
+  }
+}

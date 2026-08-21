@@ -1,0 +1,84 @@
+{
+  "title": "Single sign-on",
+  "hint": "Let this system sign users in through your existing identity provider (Okta, Keycloak, Entra ID, and so on). This system is only the relying party; it does not become an identity provider itself.",
+  "localAlwaysOn": {
+    "title": "Local accounts always keep working",
+    "body": "Local username and password sign-in stays available after you turn on single sign-on. When the identity provider is down, misconfigured, or its certificate has expired, that is the only way back in — which is why it cannot be switched off."
+  },
+  "section": {
+    "connect": "Connect an identity provider",
+    "mapping": "Claim mapping",
+    "jit": "Create accounts on first sign-in"
+  },
+  "field": {
+    "issuer": "Issuer URL",
+    "issuerHint": "The provider's base URL. Enter it and press Discover; the remaining endpoints are fetched for you. HTTPS only, and it cannot resolve to a private address.",
+    "clientId": "Client ID",
+    "clientSecret": "Client secret",
+    "secretHint": "Write-only. No endpoint ever reads it back.",
+    "redirectUri": "Redirect URI",
+    "redirectHint": "Register this line verbatim in the provider's application. One wrong character and sign-in fails with redirect_uri_mismatch, which reports neither the expected nor the actual value.",
+    "scopes": "Scopes",
+    "scopesHint": "Must include openid, otherwise the provider returns no id_token and sign-in stops at the last step.",
+    "usernameClaim": "Username comes from",
+    "usernameClaimHint": "Which claim in the id_token to use as the username. Providers differ widely: Okta usually has preferred_username, others use sub or email. If it is wrong, the sign-in error lists the claims the provider actually sent.",
+    "nameClaim": "Display name comes from",
+    "jit": "Create an account automatically when someone from the provider signs in for the first time",
+    "jitRole": "Role for auto-created accounts",
+    "jitRoleHint": "This sets their ceiling. When unsure, leave it read-only — granting more later is easier than taking it back.",
+    "enable": "Enable single sign-on",
+    "allowPrivate": "Internal identity provider",
+    "allowPrivateHint": "Tick this when the provider is on a private network or reachable only over HTTP. It is off by default to block one specific risk: this probe is sent by the server, so without a limit anyone could point it at an internal address and use it to scan the network. Self-hosted Keycloak or AD FS is a normal case — just tick it."
+  },
+  "action": {
+    "discover": "Discover"
+  },
+  "discover": {
+    "ok": "Endpoints retrieved from the provider"
+  },
+  "jit": {
+    "seatsTitle": "This affects seat usage",
+    "seatsBody": "Once enabled, anyone in the identity provider consumes a seat by signing in once, with no approval step. Exceeding your licensed seats does not block sign-in, but it is logged — and it is usually discovered at renewal. If your headcount is manageable, leave this off and create accounts by hand."
+  },
+  "state": {
+    "on": "Enabled",
+    "off": "Not enabled"
+  },
+  "error": {
+    "title": "Cannot load the single sign-on configuration"
+  },
+  "login": {
+    "button": "Sign in with {{name}}",
+    "buttonFallback": "Sign in with SSO",
+    "or": "or",
+    "failedTitle": "Single sign-on did not complete",
+    "reason": {
+      "sso_disabled": "Single sign-on is not enabled. Use a local account, or ask an administrator to turn it on.",
+      "idp_unreachable": "Cannot reach the identity provider. This is usually outbound network access or an allowlist on their side, not a problem with your account.",
+      "state_invalid": "This sign-in attempt has expired or was already used. Start again — waiting too long invalidates it.",
+      "missing_code": "The identity provider returned no authorization code. Please sign in again.",
+      "idp_returned_error": "The identity provider rejected this sign-in. If you cancelled the prompt, just try again; otherwise ask an administrator to check the application settings.",
+      "code_exchange_failed": "Exchanging the authorization code failed. Usually the client secret or redirect URI does not match what is registered with the provider; an administrator needs to check.",
+      "id_token_invalid": "The token from the identity provider failed verification and sign-in was refused. This is a security check; please contact an administrator.",
+      "no_subject": "The token from the identity provider carries no user identifier, so you cannot be identified.",
+      "username_claim_missing": "No username available: the configured claim is not present in what the provider returned. An administrator needs to change \"Username comes from\".",
+      "user_resolve_failed": "Your identity was verified, but you have no account here and automatic account creation is off. Ask an administrator to create one.",
+      "session_failed": "Your identity was verified, but the session could not be created. Try again, and contact an administrator if it keeps failing.",
+      "state_save_failed": "Could not start sign-in — the server failed to store this attempt. Please try again.",
+      "unknown": "Sign-in did not complete and no reason was reported. Try again or use a local account."
+    }
+  },
+  "lastError": {
+    "title": "Most recent sign-in failure",
+    "at": "When",
+    "who": "User",
+    "claimsTitle": "Claims the provider actually returned",
+    "claimsHint": "Set \"Username comes from\" above to one of these. This list comes from a real sign-in attempt, so it beats the documentation.",
+    "cleared": "This clears itself after the next successful sign-in."
+  },
+  "redirectMismatch": {
+    "title": "The scheme in this callback URL is wrong — registering it as-is will break login",
+    "body": "This page is served over {{page}}, but the URL above was computed as {{uri}}. The usual cause is a gateway terminating TLS without forwarding the X-Forwarded-Proto header, so the backend inferred the wrong scheme. Register this instead:",
+    "fix": "Register the corrected line above with your identity provider, and have ops add X-Forwarded-Proto on the reverse proxy — otherwise it will be recomputed wrong every time."
+  }
+}

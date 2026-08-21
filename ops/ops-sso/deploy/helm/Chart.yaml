@@ -1,0 +1,7 @@
+apiVersion: v2
+name: ops-sso
+description: OpsPlane SSO —— 前后端同一个 chart，一次发布、一次回滚
+type: application
+version: 0.2.0
+# appVersion 由 CI 用 --set 覆盖，这里只是缺省占位
+appVersion: "0.1.0"

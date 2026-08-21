@@ -1,0 +1,20 @@
+<!--
+  Trigon favicon —— 16/32px 专用，不是主标记的等比缩小版。
+
+  两处和 mark.svg 不同，都是为了小尺寸下还能读出中心孔：
+   1. 中心孔从 r=2.4 放大到 3.2 —— 主标记的孔缩到 16px 只剩约 3px 直径，
+      会糊成一个实心三角，失去全部识别点。
+   2. 去掉渐变，用单色 —— 16px 上跨越 16 个像素的渐变只会让边缘发灰。
+
+  小图标从来不能靠缩放大图标得到，这是两套东西。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="none" role="img" aria-label="Trigon">
+  <path
+    d="M12 4.2 L18.7 15.8 L5.3 15.8 Z M15.2 12 A3.2 3.2 0 1 1 8.8 12 A3.2 3.2 0 1 1 15.2 12 Z"
+    fill="#5F60E0"
+    fill-rule="evenodd"
+    stroke="#5F60E0"
+    stroke-width="2.6"
+    stroke-linejoin="round"
+  />
+</svg>

@@ -1,0 +1,28 @@
+{
+  "column": {
+    "count": "Count",
+    "last": "Last seen",
+    "message": "Message",
+    "object": "Object",
+    "reason": "Reason"
+  },
+  "empty": {
+    "filtered": "No events match the current filters.",
+    "noSource": "No events collected yet. Note that Kubernetes keeps events in etcd for only one hour — right after onboarding a cluster this may be empty until the next collection.",
+    "title": "No Warning events"
+  },
+  "error": {
+    "title": "Could not load events"
+  },
+  "filter": {
+    "cluster": "Cluster",
+    "namespace": "Namespace",
+    "reason": "Reason",
+    "searchPlaceholder": "Search object, reason or message"
+  },
+  "firstAt": "first {{at}}",
+  "title": "Events",
+  "total_one": "{{count}} event",
+  "total_other": "{{count}} events",
+  "warningOnly": "Only Warning events are collected and retained (Normal is far too noisy and not useful for triage)"
+}

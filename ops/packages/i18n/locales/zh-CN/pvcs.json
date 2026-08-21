@@ -1,0 +1,44 @@
+{
+  "brokenNote_other": "{{count}} 个卷有问题",
+  "column": {
+    "capacity": "容量",
+    "name": "存储卷",
+    "status": "状态",
+    "storageClass": "存储类",
+    "usage": "使用"
+  },
+  "costHint": "按容量 × 该区域该 storageClass 的单价估算。删掉它每月就省这么多——先做快照再删。",
+  "empty": {
+    "filtered": "当前筛选条件下没有存储卷。放宽条件再看看。",
+    "noSource": "还没采到任何存储卷。先到「集群」页确认集群已纳管且凭据有效。",
+    "title": "没有存储卷"
+  },
+  "error": {
+    "title": "存储卷列表没能加载出来"
+  },
+  "filter": {
+    "cluster": "集群",
+    "health": "状态",
+    "searchPlaceholder": "搜索名称或存储类"
+  },
+  "health": {
+    "lost": "卷已丢失",
+    "ok": "正常",
+    "orphan": "无使用者",
+    "pending": "等待绑定"
+  },
+  "inUse": "使用中",
+  "live": {
+    "header": "实际使用",
+    "pickCluster": "选定单个集群后才显示 —— 用量是按集群查 Prometheus 的",
+    "unavailable": "查不到"
+  },
+  "noVolumeName": "PV 名没采到",
+  "orphan": "当前无使用者",
+  "orphanHint": "当前没有 Pod 挂载它。⚠️ 这不等于可以删：定时任务的卷、刚 drain 完的服务都会短暂没人用。",
+  "orphanNote": "{{count}} 个无人使用但仍在计费",
+  "orphanNoteOn": "已只看无人使用的 {{count}} 个 · 点击取消",
+  "perMonth": "${{usd}}/月",
+  "title": "存储卷",
+  "total_other": "共 {{count}} 个存储卷"
+}

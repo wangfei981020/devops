@@ -1,0 +1,444 @@
+package dnsource
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"ops-cmdb-backend/logx"
+)
+
+// GoDaddy 数据源 adapter。API: https://api.godaddy.com（测试 https://api.ote-godaddy.com），
+// 认证头 Authorization: sso-key KEY:SECRET（经典 API 密钥）。
+type GoDaddy struct {
+	key    string
+	secret string
+	base   string // 空则用生产 godaddyBase；OTE 测试填 https://api.ote-godaddy.com
+	dryRun bool   // 写回预演：只打日志不真发（生产护栏）
+	lim    *Limiter
+}
+
+const godaddyBase = "https://api.godaddy.com"
+
+var gdClient = &http.Client{Timeout: 15 * time.Second}
+
+// baseURL 返回该源的 API 根地址（默认生产）。
+func (a *GoDaddy) baseURL() string {
+	if a.base != "" {
+		return a.base
+	}
+	return godaddyBase
+}
+
+// DryRun / EnvLabel 实现 WriteAdapter 的元信息。
+func (a *GoDaddy) DryRun() bool { return a.dryRun }
+func (a *GoDaddy) EnvLabel() string {
+	if a.base != "" && a.base != godaddyBase {
+		return "OTE测试(" + a.base + ")"
+	}
+	return "生产"
+}
+
+// transientRetries 瞬时错误的重试次数与退避。
+//
+// 🔴 只对**瞬时**错误重试：429（厂商限流）、5xx（对方故障）、网络超时。
+//
+//	凭据错误（401/403）、域名不存在（404）是**终态** —— 重试一万次也一样，
+//	只会把一轮同步拖长并且多打对方几次。
+//
+//	生产实测：62 个域名里 19 个（31%）撞 429 拿不到解析记录，
+//	而当前实现"一轮拉不到就算了，下一轮再从头撞一次"——
+//	于是这批域名的解析数据长期陈旧，且**哪些域名是新鲜的不可预期**
+//	（取决于每轮的请求顺序与限流窗口，OPSCMDB-057）。
+//
+// ⚠️ 退避要**够长**。GoDaddy 的限流窗口是分钟级，
+//
+//	退 200ms 再打只是再撞一次，还多消耗一次配额。
+var transientRetries = []time.Duration{2 * time.Second, 8 * time.Second, 20 * time.Second}
+
+// isTransient 这个错误值不值得重试。
+func isTransient(status int, err error) bool {
+	if err != nil {
+		// 网络层错误（超时、连接重置）—— 对方可能只是抖了一下
+		return true
+	}
+	return status == http.StatusTooManyRequests || status >= 500
+}
+
+func (a *GoDaddy) do(ctx context.Context, path string, out any) error {
+	var lastErr error
+	// 首次 + 三次重试。⚠️ 每次重试都要重新走 lim.Wait ——
+	//	跳过限流器直接重打，等于用重试把自己的保护绕过去了。
+	for attempt := 0; attempt <= len(transientRetries); attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(transientRetries[attempt-1]):
+			}
+			logx.JCtx(ctx, "godaddy", "retry", map[string]any{
+				"env": a.EnvLabel(), "path": path, "attempt": attempt,
+				"after": transientRetries[attempt-1].String(), "last_error": lastErr.Error(),
+			})
+		}
+		status, err := a.doOnce(ctx, path, out)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !isTransient(status, nil) && status != 0 {
+			return err // 终态错误：立刻返回，别浪费配额
+		}
+		if status == 0 && !isTransient(0, err) {
+			return err
+		}
+	}
+	// ⚠️ 重试用尽后必须把**试了几次**说出来。
+	//	只报最后一次的错误，看日志的人会以为只打了一次，
+	//	进而低估限流的严重程度。
+	return fmt.Errorf("%w（已重试 %d 次仍失败）", lastErr, len(transientRetries))
+}
+
+// doOnce 单次请求。返回 (HTTP 状态码, 错误)；状态码为 0 表示没拿到响应。
+func (a *GoDaddy) doOnce(ctx context.Context, path string, out any) (int, error) {
+	// 撞客户端限流时节流等待（不再直接失败），让全量同步能完整跑完；仍守住 50/分钟不打爆 GoDaddy。
+	if err := a.lim.Wait(ctx); err != nil {
+		return 0, err // 仅 ctx 取消/超时才返回
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, a.baseURL()+path, nil)
+	req.Header.Set("Authorization", fmt.Sprintf("sso-key %s:%s", a.key, a.secret))
+	req.Header.Set("Accept", "application/json")
+	resp, err := gdClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return resp.StatusCode, fmt.Errorf("GoDaddy 返回 429（厂商限流），请稍后再试")
+	}
+	if resp.StatusCode >= 300 {
+		return resp.StatusCode, fmt.Errorf("GoDaddy API %d: %s", resp.StatusCode, truncateStr(string(body), 200))
+	}
+	return resp.StatusCode, json.Unmarshal(body, out)
+}
+
+// doWrite 发写请求（PUT/PATCH/DELETE），不关心响应体。
+func (a *GoDaddy) doWrite(ctx context.Context, method, path string, payload any) error {
+	_, err := a.doWriteBody(ctx, method, path, payload)
+	return err
+}
+
+// doWriteBody 发写请求并返回响应体（续费要抓订单号）。dryRun 时只打日志不真发（生产护栏），返回空体。
+// 全链路诊断日志：环境 + 方法 + 路径 + 报文，出错带 GoDaddy 响应体。
+func (a *GoDaddy) doWriteBody(ctx context.Context, method, path string, payload any) ([]byte, error) {
+	var bodyStr string
+	var reader io.Reader
+	if payload != nil {
+		b, _ := json.Marshal(payload)
+		bodyStr = string(b)
+		reader = bytes.NewReader(b)
+	}
+	if a.dryRun {
+		logx.JCtx(ctx, "godaddy_write", "dry_run", map[string]any{"env": a.EnvLabel(), "method": method, "url": a.baseURL() + path, "body": bodyStr, "dry_run": true})
+		return nil, nil
+	}
+	logx.JCtx(ctx, "godaddy_write", "request", map[string]any{"env": a.EnvLabel(), "method": method, "url": a.baseURL() + path, "body": bodyStr, "dry_run": false})
+	if err := a.lim.Wait(ctx); err != nil {
+		return nil, err
+	}
+	req, _ := http.NewRequestWithContext(ctx, method, a.baseURL()+path, reader)
+	req.Header.Set("Authorization", fmt.Sprintf("sso-key %s:%s", a.key, a.secret))
+	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := gdClient.Do(req)
+	if err != nil {
+		logx.JCtx(ctx, "godaddy_write", "fail", map[string]any{"env": a.EnvLabel(), "method": method, "path": path, "error": err.Error()})
+		return nil, err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, fmt.Errorf("GoDaddy 返回 429（厂商限流），请稍后再试")
+	}
+	if resp.StatusCode >= 300 {
+		logx.JCtx(ctx, "godaddy_write", "fail", map[string]any{"env": a.EnvLabel(), "method": method, "path": path, "status": resp.StatusCode, "resp": truncateStr(string(respBody), 300)})
+		return nil, fmt.Errorf("GoDaddy API %d: %s", resp.StatusCode, truncateStr(string(respBody), 200))
+	}
+	logx.JCtx(ctx, "godaddy_write", "success", map[string]any{"env": a.EnvLabel(), "method": method, "path": path, "status": resp.StatusCode, "resp": truncateStr(string(respBody), 200)})
+	return respBody, nil
+}
+
+// ---- WriteAdapter：按「类型+主机名」整组读改写（GoDaddy typed records 语义）----
+
+// gdRecord GoDaddy typed records 端点的记录体（type/name 在 URL，body 只带 data/ttl/priority）。
+type gdRecord struct {
+	Data     string `json:"data"`
+	TTL      int    `json:"ttl,omitempty"`
+	Priority *int   `json:"priority,omitempty"`
+}
+
+// GetGroup GET /v1/domains/{domain}/records/{type}/{name} —— 取某 (type,name) 当前记录组。
+func (a *GoDaddy) GetGroup(ctx context.Context, domain, rtype, name string) ([]DNSRecord, error) {
+	path := fmt.Sprintf("/v1/domains/%s/records/%s/%s", domain, rtype, url.PathEscape(name))
+	var raw []gdRecord
+	if err := a.do(ctx, path, &raw); err != nil {
+		logx.JCtx(ctx, "godaddy_read", "get_group_fail", map[string]any{"env": a.EnvLabel(), "type": rtype, "name": name, "domain": domain, "error": err.Error()})
+		return nil, err
+	}
+	out := make([]DNSRecord, 0, len(raw))
+	for _, r := range raw {
+		out = append(out, DNSRecord{Type: rtype, Name: name, Data: r.Data, TTL: r.TTL, Priority: r.Priority})
+	}
+	return out, nil
+}
+
+// ReplaceGroup PUT /v1/domains/{domain}/records/{type}/{name} —— 整组替换（新增/编辑）。
+// 传空组会被 GoDaddy 拒（PUT 需≥1条）；删空场景走 DeleteGroup。
+func (a *GoDaddy) ReplaceGroup(ctx context.Context, domain, rtype, name string, recs []DNSRecord) error {
+	path := fmt.Sprintf("/v1/domains/%s/records/%s/%s", domain, rtype, url.PathEscape(name))
+	body := make([]gdRecord, 0, len(recs))
+	for _, r := range recs {
+		body = append(body, gdRecord{Data: r.Data, TTL: r.TTL, Priority: r.Priority})
+	}
+	return a.doWrite(ctx, http.MethodPut, path, body)
+}
+
+// DeleteGroup DELETE /v1/domains/{domain}/records/{type}/{name} —— 删整组。
+func (a *GoDaddy) DeleteGroup(ctx context.Context, domain, rtype, name string) error {
+	path := fmt.Sprintf("/v1/domains/%s/records/%s/%s", domain, rtype, url.PathEscape(name))
+	return a.doWrite(ctx, http.MethodDelete, path, nil)
+}
+
+// gdFullRecord PATCH /records 的记录体（type/name 在 body 里，与 typed PUT 不同）。
+type gdFullRecord struct {
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	Data     string `json:"data"`
+	TTL      int    `json:"ttl,omitempty"`
+	Priority *int   `json:"priority,omitempty"`
+}
+
+// AddRecords PATCH /v1/domains/{domain}/records —— 一次追加多条（批量新增）。追加语义，不去重。
+func (a *GoDaddy) AddRecords(ctx context.Context, domain string, recs []DNSRecord) error {
+	body := make([]gdFullRecord, 0, len(recs))
+	for _, r := range recs {
+		body = append(body, gdFullRecord{Type: r.Type, Name: r.Name, Data: r.Data, TTL: r.TTL, Priority: r.Priority})
+	}
+	return a.doWrite(ctx, http.MethodPatch, "/v1/domains/"+domain+"/records", body)
+}
+
+// ---- 域名续费 / 自动续费 ----
+
+// GetDomainDetail GET /v1/domains/{domain} —— 取到期/自动续费/状态。
+func (a *GoDaddy) GetDomainDetail(ctx context.Context, domain string) (DomainDetail, error) {
+	var raw struct {
+		Expires   string `json:"expires"`
+		RenewAuto bool   `json:"renewAuto"`
+		Privacy   bool   `json:"privacy"`
+		Status    string `json:"status"`
+	}
+	if err := a.do(ctx, "/v1/domains/"+domain, &raw); err != nil {
+		logx.JCtx(ctx, "godaddy_read", "domain_detail_fail", map[string]any{"env": a.EnvLabel(), "domain": domain, "error": err.Error()})
+		return DomainDetail{}, err
+	}
+	d := DomainDetail{RenewAuto: raw.RenewAuto, Privacy: raw.Privacy, Status: raw.Status}
+	if raw.Expires != "" {
+		if t, err := time.Parse(time.RFC3339, raw.Expires); err == nil {
+			d.Expires = &t
+		}
+	}
+	return d, nil
+}
+
+// GetRenewalPrice 取续费挂牌价（估算）。available 端点只对"可注册"域名返回价，
+// 已拥有的域名(available:false)不带价——此时按 TLD 查一个合成可用域名的挂牌价当估算
+// （续费价按 TLD 定，同后缀一个价）。查不到返回零值不报错（前端展示"以厂商结算为准"）。
+func (a *GoDaddy) GetRenewalPrice(ctx context.Context, domain string) (RenewalPrice, error) {
+	tld := ""
+	if i := strings.LastIndex(domain, "."); i >= 0 && i+1 < len(domain) {
+		tld = domain[i+1:]
+	}
+	// 挂牌价按 TLD 定，缓存 6h，避免每次开续费弹窗都打一次 GoDaddy
+	if tld != "" {
+		if v, ok := priceCache.Load(tld); ok {
+			if e := v.(priceCacheEntry); time.Since(e.at) < 6*time.Hour {
+				return e.p, nil
+			}
+		}
+	}
+	if p := a.priceOf(ctx, domain); p.AmountMicro > 0 {
+		if tld != "" {
+			priceCache.Store(tld, priceCacheEntry{p: p, at: time.Now()})
+		}
+		return p, nil
+	}
+	// 兜底：owned 域名拿不到价 → 按后缀查合成可用域名
+	if tld != "" {
+		synth := fmt.Sprintf("cmdbpricechk%d.%s", time.Now().UnixNano(), tld)
+		if p := a.priceOf(ctx, synth); p.AmountMicro > 0 {
+			logx.JCtx(ctx, "godaddy_read", "price_tld_fallback", map[string]any{"env": a.EnvLabel(), "domain": domain, "tld": tld, "amount_micro": p.AmountMicro, "currency": p.Currency})
+			priceCache.Store(tld, priceCacheEntry{p: p, at: time.Now()})
+			return p, nil
+		}
+	}
+	return RenewalPrice{}, nil
+}
+
+type priceCacheEntry struct {
+	p  RenewalPrice
+	at time.Time
+}
+
+// priceCache: TLD → 挂牌价（6h TTL）。续费价按 TLD 定，无需每次开弹窗都查厂商。
+var priceCache sync.Map
+
+// priceOf 查单个域名的挂牌价（available 端点）。查不到/失败返回零值。
+func (a *GoDaddy) priceOf(ctx context.Context, domain string) RenewalPrice {
+	var raw struct {
+		RenewalPrice int64  `json:"renewalPrice"`
+		Price        int64  `json:"price"`
+		Currency     string `json:"currency"`
+	}
+	if err := a.do(ctx, "/v1/domains/available?domain="+url.QueryEscape(domain), &raw); err != nil {
+		logx.JCtx(ctx, "godaddy_read", "price_fail", map[string]any{"env": a.EnvLabel(), "domain": domain, "error": err.Error()})
+		return RenewalPrice{}
+	}
+	amt := raw.RenewalPrice
+	if amt == 0 {
+		amt = raw.Price
+	}
+	return RenewalPrice{AmountMicro: amt, Currency: raw.Currency}
+}
+
+// RenewDomain POST /v1/domains/{domain}/renew —— 续费 period 年。⚠️会真实扣费；dry_run 时只打日志不真扣。
+// 抓 GoDaddy 返回的订单号（金额字段厂商不一定给）留档，供防超付核对。
+func (a *GoDaddy) RenewDomain(ctx context.Context, domain string, period int) (RenewResult, error) {
+	if period <= 0 {
+		period = 1
+	}
+	body, err := a.doWriteBody(ctx, http.MethodPost, "/v1/domains/"+domain+"/renew", map[string]int{"period": period})
+	if err != nil {
+		return RenewResult{}, err
+	}
+	res := RenewResult{RawBody: truncateStr(string(body), 1000)}
+	if len(body) > 0 {
+		// ⚠️ orderId 用 flexStr 而不是 json.Number：GoDaddy 正常返回数字，
+		// 但只要哪天返回字符串型订单号，json.Number 就会让**整个 Unmarshal 失败**——
+		// 订单号、金额、币种一起静默丢掉。订单号是事后对账唯一的凭据，
+		// 丢了就只能拿日期去账单里翻。所以这里两种类型都收。
+		var raw struct {
+			OrderID  flexStr `json:"orderId"`
+			Total    int64   `json:"total"`
+			Currency string  `json:"currency"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			// 钱已经扣了却读不出订单号，必须留痕——不然事后连"当时厂商返回了什么"都查不到
+			logx.JCtx(ctx, "godaddy_write", "renew_parse_fail", map[string]any{
+				"domain": domain, "error": err.Error(), "raw": res.RawBody})
+		} else {
+			res.OrderID = string(raw.OrderID)
+			res.AmountMicro = raw.Total
+			res.Currency = raw.Currency
+		}
+	}
+	return res, nil
+}
+
+// flexStr 是个"数字和字符串都认"的字符串。
+// 厂商 JSON 里同一个字段换类型是常见事，不该因此把整条响应解析废掉。
+type flexStr string
+
+func (f *flexStr) UnmarshalJSON(b []byte) error {
+	s := string(b)
+	if s == "null" {
+		*f = ""
+		return nil
+	}
+	if len(s) >= 2 && s[0] == '"' {
+		var v string
+		if err := json.Unmarshal(b, &v); err != nil {
+			return err
+		}
+		*f = flexStr(v)
+		return nil
+	}
+	*f = flexStr(s) // 数字原样取字面量，避免走 float64 变成 1.234567e+06
+	return nil
+}
+
+// SetAutoRenew PATCH /v1/domains/{domain} —— 开/关自动续费（不扣费）。
+func (a *GoDaddy) SetAutoRenew(ctx context.Context, domain string, enabled bool) error {
+	return a.doWrite(ctx, http.MethodPatch, "/v1/domains/"+domain, map[string]bool{"renewAuto": enabled})
+}
+
+func (a *GoDaddy) ListDomains(ctx context.Context) ([]Domain, error) {
+	// 拉账户下**全部状态**的域名（不再限 ACTIVE，否则新注册/待验证等中间态域名会被漏掉）。
+	// GoDaddy 列表按域名字母序、游标(marker)翻页：每页取 limit 条，marker=上页最后一个域名，
+	// 直到某页不足 limit 即为最后一页。
+	const pageSize = 1000
+	out := make([]Domain, 0, pageSize)
+	marker := ""
+	for {
+		path := fmt.Sprintf("/v1/domains?limit=%d", pageSize)
+		if marker != "" {
+			path += "&marker=" + url.QueryEscape(marker)
+		}
+		var raw []struct {
+			Domain  string `json:"domain"`
+			Status  string `json:"status"`
+			Expires string `json:"expires"`
+		}
+		if err := a.do(ctx, path, &raw); err != nil {
+			return nil, err
+		}
+		for _, d := range raw {
+			dm := Domain{Name: d.Domain, Status: d.Status}
+			if d.Expires != "" {
+				if t, err := time.Parse(time.RFC3339, d.Expires); err == nil {
+					dm.ExpiresAt = &t
+				}
+			}
+			out = append(out, dm)
+		}
+		if len(raw) < pageSize {
+			break // 最后一页
+		}
+		marker = raw[len(raw)-1].Domain
+	}
+	return out, nil
+}
+
+func (a *GoDaddy) ListRecords(ctx context.Context, domain string) ([]DNSRecord, error) {
+	var raw []struct {
+		Type     string `json:"type"`
+		Name     string `json:"name"`
+		Data     string `json:"data"`
+		TTL      int    `json:"ttl"`
+		Priority *int   `json:"priority,omitempty"`
+	}
+	if err := a.do(ctx, "/v1/domains/"+domain+"/records", &raw); err != nil {
+		return nil, err
+	}
+	out := make([]DNSRecord, 0, len(raw))
+	for _, r := range raw {
+		out = append(out, DNSRecord{Type: r.Type, Name: r.Name, Data: r.Data, TTL: r.TTL, Priority: r.Priority})
+	}
+	return out, nil
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
+}

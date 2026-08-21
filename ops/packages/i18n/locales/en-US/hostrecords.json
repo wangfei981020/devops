@@ -1,0 +1,115 @@
+{
+  "bulk": {
+    "attrDesc": "Only the fields you set are changed; the rest keep their current value.",
+    "attrTitle": "Set attribution for {{count}} records",
+    "autoDerive": "Empty = clear the manual value, fall back to auto-derived",
+    "cdn": "CDN vendor",
+    "clear": "Clear",
+    "cname": "Origin CNAME",
+    "cnameHint": "Same as above. Unchecked = leave this field alone.",
+    "doIgnore": "Ignore",
+    "ignore": "Ignore",
+    "ignoreDesc": "Ignored records are skipped by sync and no longer reported by expiry inspection.",
+    "ignoreTitle": "Ignore {{count}} records",
+    "ignoreWarn": "Ignoring is neither deleting nor marking as fine — it means \"we have decided not to deal with this for now\". Ignored records stop appearing in alerts, so write down why, or nobody will know six months from now.",
+    "keep": "Keep unchanged",
+    "moduleHint": "Empty means keep unchanged. To clear the module, enter a single space and save.",
+    "needReason": "A reason is required",
+    "nothingSet": "Nothing set, so there is nothing to save",
+    "originIp": "Origin IP",
+    "originIpHint": "A manual value overrides the auto-derived one. Empty + checked = clear it and fall back to auto.",
+    "reason": "Reason",
+    "reasonHint": "Write it for yourself six months from now.",
+    "reasonPlaceholder": "Decommissioned, letting the domain lapse",
+    "setAttr": "Set attribution",
+    "setThis": "Set this",
+    "unignore": "Un-ignore"
+  },
+  "cert": {
+    "check": "Check certificate",
+    "checkFailed": "Certificate probe failed",
+    "ignore": "Ignore cert alerts",
+    "ignoreNote": "Once ignored, expiry checks stop reporting this entry. Nothing about its actual state changes — we have simply decided not to act on it.",
+    "ignoreTitle": "Ignore certificate alerts",
+    "needReason": "A reason is required",
+    "reason": "Reason",
+    "reasonHint": "Nobody will remember why in six months. Be specific (e.g. internal-only host, decommissioned, pending cleanup).",
+    "unignore": "Stop ignoring",
+    "unignoreNote": "This entry will be included in certificate expiry checks again.",
+    "unignoreTitle": "Restore certificate alerts"
+  },
+  "col": {
+    "env": "Env",
+    "fqdn": "Hostname",
+    "host": "Host",
+    "module": "Module",
+    "origin": "Origin IP",
+    "project": "Project",
+    "state": "State",
+    "stateHint": "Flags exceptions only: ignored / domain left the account / domain parked. A dash means no exception — not missing data"
+  },
+  "coverage": {
+    "allDone": "All {{total}} host records have a project and module",
+    "next": "Next: run “Auto-link modules” on the Domains page, or check the last relations_auto_link run under Scheduled tasks",
+    "noneAtAll": "None of the {{total}} host records has a project or module. This is not a few missing rows — module auto-linking has never run or is not taking effect",
+    "partial": "Of {{total}}: {{noProject}} without a project, {{noModule}} without a module"
+  },
+  "del": {
+    "note": "⚠️ This deletes the CMDB ledger entry only; the actual DNS record is untouched and will likely reappear on the next sync. To stop resolution, use \"DNS records\" on the domain page.",
+    "title": "Delete ledger entry"
+  },
+  "empty": {
+    "noIgnored": "No ignored records",
+    "noIgnoredReason": "Every hostname is under normal management; none have been manually skipped.",
+    "reason": "Hostnames are synced in from the domains' DNS records. If a sync has never run, this is empty — it does not mean you have no hostnames. Run \"Sync now\" from the domains page.",
+    "title": "No hostnames in the ledger"
+  },
+  "error": {
+    "title": "The hostname ledger could not be loaded"
+  },
+  "filter": {
+    "scope": "Scope"
+  },
+  "form": {
+    "certExpiry": "Certificate expiry (manual)",
+    "certExpiryHint": "Leave empty if unknown. An automatic probe overrides this value.",
+    "createTitle": "Add host",
+    "desc": "Record who owns this host, which project it belongs to, and whether it is still in use.",
+    "domain": "Domain",
+    "domainHint": "Cannot be changed later",
+    "editTitle": "Edit host",
+    "env": "Environment",
+    "hostHint": "@ for the apex; e.g. www, api",
+    "lifeUnset": "Not set",
+    "needDomain": "Select a domain",
+    "needHost": "Host is required",
+    "notDns": "This is the ledger, not DNS. Nothing here is written back to any DNS provider — to change real resolution, use \"DNS records\" on the domain page.",
+    "originHint": "Manually recorded origin IP. When empty, the list shows a guess, labelled as such",
+    "type": "Record type"
+  },
+  "guessed": "(guessed)",
+  "ignored": "Ignored",
+  "noProject": "Unassigned",
+  "noProjectHint": "No owning project recorded. Cost attribution, alert routing, and decommission review all depend on this link",
+  "originRules": {
+    "cname": "Origin CNAME",
+    "cnameHint": "The domain the CDN points back to.",
+    "desc": "Origin CNAME → origin IP. Used as a fallback when DNS cannot resolve the origin.",
+    "empty": "No origin rules yet. They are only needed when DNS cannot resolve the origin.",
+    "entry": "Origin rules",
+    "ip": "Origin IP",
+    "needBoth": "Both fields are required",
+    "title": "Origin rules",
+    "unused": "Unused",
+    "used_one": "{{count}} record uses it",
+    "used_other": "{{count}} records use it"
+  },
+  "scope": {
+    "active": "Managed",
+    "ignored": "Ignored"
+  },
+  "searchPlaceholder": "Search hostname, project or module",
+  "selected_one": "{{count}} selected",
+  "selected_other": "{{count}} selected",
+  "stale": "Stale"
+}

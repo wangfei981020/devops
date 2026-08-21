@@ -1,0 +1,157 @@
+{
+  "acme": {
+    "add": "Add account",
+    "ca": "CA",
+    "caHint": "Must match the CA recorded on the certificate exactly — renewal looks the account up by CA, and a mismatch is the same as having none.",
+    "desc": "The account used for automatic certificate renewal. Without one, the renewal task fails for every certificate.",
+    "email": "Email",
+    "emailHint": "The CA sends expiry and revocation notices here, so use an address that is actually monitored.",
+    "emptyBody": "The automatic renewal task fails for every certificate with \"no matching ACME account\". That failure is only visible in the scheduled task's run history — the certificate list itself looks fine, until they actually expire.",
+    "emptyTitle": "No ACME account configured",
+    "entry": "ACME accounts",
+    "needEmail": "Enter an email",
+    "noKey": "Missing account key",
+    "title": "ACME accounts"
+  },
+  "action": {
+    "dnsReady": "DNS challenge ready",
+    "download": "Download bundle",
+    "downloadHint": "Download the certificate bundle (zip: cert + private key + chain). Contains a private key; the download is audited",
+    "renewNow": "Renew now"
+  },
+  "apply": {
+    "account": "ACME account",
+    "accountHint": "Renewal looks up the account by CA, so the certificate's CA follows the account you pick",
+    "autoRenew": "Auto-renew",
+    "challenge": "Challenge",
+    "challengeHint": "dns-01 supports wildcards; http-01 requires the domain to be reachable from the internet",
+    "cn": "Common name (CN)",
+    "cnHint": "For a wildcard use *.example.com, which requires dns-01",
+    "desc": "Requests from the CA over ACME. Issuance is asynchronous; watch the status in the list.",
+    "domain": "Link to domain",
+    "domainHint": "Linking shows in the graph which domain this certificate protects",
+    "entry": "Request certificate",
+    "needAccount": "Pick an ACME account",
+    "needCn": "Common name is required",
+    "noAccount": {
+      "noKey": "The existing ACME accounts have no account key, so they are inert. Add the key before requesting.",
+      "none": "There is no ACME account yet. Create one via \"ACME accounts\" on this page — without it, auto-renewal fails for every certificate.",
+      "title": "Cannot request certificates yet"
+    },
+    "noDomain": "Do not link",
+    "noEmail": "(no email)",
+    "quotaNote": "CAs rate-limit issuance (Let's Encrypt: 5 per week per domain set). Requests and renewals consume quota, failures included — which is why neither is retried automatically.",
+    "sans": "Additional names (SAN)",
+    "sansHint": "One per line. No need to repeat the CN",
+    "staging": "Environment",
+    "stagingHint": "Staging is for rehearsing the flow and does not consume production quota",
+    "stagingOff": "Production",
+    "stagingOn": "Staging",
+    "stagingWarn": "⚠️ Staging certificates are not trusted by browsers. Use them to rehearse the flow only; never deploy them.",
+    "submit": "Submit request",
+    "title": "Request certificate"
+  },
+  "autoRenew": "Auto-renew",
+  "caveat": {
+    "title": "A whole column of data is missing from this list"
+  },
+  "column": {
+    "ca": "Issuer",
+    "cn": "Certificate",
+    "expiry": "Expiry",
+    "health": "Status",
+    "renew": "Renewal"
+  },
+  "daysLeft_one": "{{count}} day left",
+  "daysLeft_other": "{{count}} days left",
+  "del": {
+    "notRevoke": {
+      "body": "Only the CMDB record is removed. The issued certificate remains trusted until it expires — if the private key leaked, revoke it at the CA.",
+      "title": "This is not a revocation"
+    },
+    "title": "Delete certificate record"
+  },
+  "dnsReady": {
+    "confirm": "I added it, continue",
+    "hint": "Add the TXT record below at your DNS provider, wait for it to propagate, then continue.",
+    "noChallenge": {
+      "body": "Status {{status}}, challenge {{challenge}}. Either validation has not started, or this certificate does not use dns-01.",
+      "title": "No DNS challenge pending"
+    },
+    "noChallengeBlock": "No challenge record yet — releasing now would fail",
+    "recordName": "Name",
+    "recordType": "Type",
+    "recordValue": "Value",
+    "title": "Release DNS validation",
+    "tooEarlyWarn": "⚠️ Continuing before the TXT record propagates fails validation and burns one CA quota unit. Confirm with dig first."
+  },
+  "empty": {
+    "filtered": "No certificates match the current filters. Try widening them.",
+    "noSource": "This page lists certificates we manage (issued via ACME or registered by hand) — there really are none.\nCertificates actually serving traffic are not here; they are under \"Expiry inspection\" in this page's toolbar (probed from the domain and CDN side, several hundred of them).\nTo get data here, issue via ACME or register one by hand under \"Domains & ingress → Certificates\".",
+    "title": "No certificates"
+  },
+  "error": {
+    "title": "Could not load certificates"
+  },
+  "expiredDaysAgo_one": "expired {{count}} day ago",
+  "expiredDaysAgo_other": "expired {{count}} days ago",
+  "filter": {
+    "health": "Status",
+    "searchPlaceholder": "Search common name or SAN"
+  },
+  "health": {
+    "expired": "Expired",
+    "failing": "Renewal failing",
+    "ok": "Valid",
+    "soon": "Expiring soon",
+    "unknown": "Expiry unknown"
+  },
+  "inspect": {
+    "allRows": "Show all",
+    "col": {
+      "expiry": "Expires",
+      "fqdn": "Domain",
+      "msg": "Result",
+      "source": "Source"
+    },
+    "daysLeft": "{{n}} days left",
+    "desc": "Expiry dates probed from port 443, plus what the inventory records. Note: this is NOT the Runtime / Inspection page — that one checks scheduled-task health.",
+    "entry": "Expiry inspection",
+    "expiredDays": "expired {{n}} days ago",
+    "ignored": "Ignored",
+    "internalNote": "{{count}} more resolve to internal addresses — a public prober cannot reach them by definition, so they do not count as probe failures.",
+    "kind": {
+      "acme": "Issued by us",
+      "domain": "Domain registration",
+      "managed": "Ledger",
+      "online": "Live probe"
+    },
+    "loadFailed": "Could not load inspection data",
+    "managed": "Inventory",
+    "neverProbed": "never probed",
+    "none": "Nothing needs attention",
+    "online": "Probed",
+    "onlyIssues": "Only what needs action",
+    "probeFailed": "probe failed",
+    "probeTitle": "The expiry dates below are incomplete",
+    "rowCount": "Showing {{shown}} of {{total}}",
+    "title": "Certificate expiry inspection"
+  },
+  "manualRenew": "Manual",
+  "neverUpdated": "Ledger never updated",
+  "probe": {
+    "alsoFailed": " A further {{failed}} probes failed.",
+    "neverTaskDisabled": "{{never}} certificates have never been probed: the scheduled job \"Certificate expiry check (443)\" is disabled and has never run. Their expiry dates are unknown — not absent — which means expiry warnings are not working at all right now. Go to Operations → Scheduled tasks, find that job, enable it and run it once.",
+    "neverTaskNotRun": "{{never}} certificates have never been probed: the job \"Certificate expiry check (443)\" is enabled but has never executed. Go to Operations → Scheduled tasks, find that row and use \"Run now\" to verify it.",
+    "neverUnknownTask": "{{never}} certificates have never been probed. Their expiry dates are unknown — which is not the same as having no expiry date.",
+    "partialSinceLastRun": "{{never}} certificates have no probe result even though the job last ran at {{lastRun}} — so those targets were not covered by that run, or the results were not written back.",
+    "someFailed": "{{failed}} probes failed, so their expiry dates are unavailable. See the \"Result\" column for why (targets resolving to internal addresses do not count as failures)."
+  },
+  "renewFailing": "Renewal failing",
+  "title": "Certificates",
+  "total_one": "{{count}} certificate",
+  "total_other": "{{count}} certificates",
+  "updatedAt": "Ledger updated {{at}}",
+  "urgentNote_one": "{{count}} needs attention now",
+  "urgentNote_other": "{{count}} need attention now"
+}

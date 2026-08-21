@@ -1,0 +1,8 @@
+apiVersion: v2
+name: ops-alert
+description: OpsAlert · 告警与事件响应平台 —— 前后端同一个 chart，一次发布、一次回滚
+type: application
+version: 0.2.0
+# 缺省版本。发布时用 --set global.imageTag=<版本> 覆盖（前后端共用一个值）。
+# ⚠️ helm 没有 --set appVersion，所以这里是回落值而不是发布入口
+appVersion: "0.2.0"

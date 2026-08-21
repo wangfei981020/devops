@@ -1,0 +1,228 @@
+# ############################################################################
+# ###                                                                      ###
+# ###                     生  产  （ P R O D ）                             ###
+# ###                                                                      ###
+# ###   GKE / 对外走域名 + Ingress，Service 一律 ClusterIP                   ###
+# ###                                                                      ###
+# ############################################################################
+#
+#   helm upgrade --install opsalert ops/ops-alert/deploy/helm \
+#     -n <namespace> --create-namespace \
+#     -f ops/ops-alert/deploy/helm/values-prod.yaml \
+#     --set global.tag=v0.3.1
+#
+#   ops/tooling/scripts/verify-deploy.sh ops-alert <namespace> v0.3.1
+#
+# ⚠️ 本文件**完整自包含**：上线前读这一个文件就是最终配置，
+#    不需要再去 values.yaml 推断哪些值被继承了。
+#    与 values-local.yaml 的键集合由 check-values-parity.mjs 比对。
+#
+# ⚠️ 生产**不开 NodePort**：它在每个节点上开一个端口，等于绕过 Ingress
+#    的鉴权与 WAF，是一条容易被忘掉的公网暴露面。
+# ############################################################################
+
+requireEnvValues: false
+
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  imageRegistry: marks26
+  # 私有仓库要在目标 namespace 建好 pull secret 再填这里
+  imagePullSecrets: []
+  tag: ""
+
+frontend:
+  replicaCount: 3
+  image:
+    repository: ops-alert-frontend
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+    nodePort: null
+
+  # ⚠️ 数字沿用 ops-cmdb 的实测（同样是 nginx + Vite 产物，形态一致）：
+  # 生产实测前端 cpu 0.037m / mem 26.8Mi。
+  # request 贴着实际值会让调度器超卖节点，所以留了余量。
+  # 本产品尚未上生产，等有实测数据再校准。
+  resources:
+    requests:
+      # ⚠️ request 同时是 HPA 算利用率的分母，给太小会让阈值够不着
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      # ⚠️ CPU limit 超过就限流（cfs throttling），表现为偶发的请求变慢，
+      # 监控上看不出是被限流的。给 4 倍留突发空间，同时挡住失控进程吃满节点
+      cpu: 200m
+      memory: 192Mi
+
+  # CPU 与内存双指标，任一超 70% 扩容。
+  #
+  # ⚠️ 两个都要：静态服务几乎不吃 CPU，只挂 CPU 等于没有保护。
+  # 原配置 cpu request 10m × 70% = 阈值 7m，而实测 0.037m —— 差 190 倍，
+  # 那个 HPA 数学上不可能触发。现在 request 50m、阈值 35m 才够得着。
+  #
+  # ⚠️ 内存指标基本是单向的（RSS 涨上去很难落回来），扩了多半不会自己缩。
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+  securityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+
+backend:
+  # ── 敏感配置 ──
+  #
+  # ⚠️ 生产**不把密码写进这个文件**（它进 git）。先手工建好 Secret：
+  #
+  #   kubectl create secret generic ops-alert-backend-secret -n <ns> \
+  #     --from-literal=MYSQL_HOST=<主机> \
+  #     --from-literal=MYSQL_PORT=3306 \
+  #     --from-literal=MYSQL_USER=<账号> \
+  #     --from-literal=MYSQL_PASSWORD=<密码> \
+  #     --from-literal=MYSQL_DATABASE=<库名> \
+  #     --from-literal=JWT_SECRET=$(openssl rand -hex 32) \
+  #     --from-literal=ALERT_AES_KEY=$(openssl rand -hex 16) \
+  #     --from-literal=ADMIN_PASSWORD=<初始管理员密码>
+  #
+  # 也可以走 create=true + 一个不进 git 的 -f 文件，或密封方案（sealed-secrets）。
+  #
+  # ⚠️ ALERT_AES_KEY 换掉之后**已存的数据源凭据全部解不开**，
+  #    表现为规则查询突然全部失败而配置看着没动过。轮换要连带重填凭据。
+  secret:
+    create: false
+    existingSecret: ops-alert-backend-secret
+    mysql:
+      host: ""
+      port: 3306
+      user: ""
+      password: ""
+      database: ""
+    jwtSecret: ""
+    aesKey: ""
+    adminPassword: ""
+  replicaCount: 3
+  image:
+    repository: ops-alert-backend
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+    metricsPort: 8088
+
+  # 检测引擎按调度周期批量查数据源，比纯 API 服务吃资源。
+  #
+  # ⚠️ CPU limit 给到 request 的 5 倍而不是不设：
+  # 查询确实是突发型的，限太死会让整批规则一起变慢，而"规则执行慢"在界面上
+  # 只表现为上次执行时间往后飘，很难联想到 CPU 限流。
+  # 但完全不设 limit 的容器可以吃满整个节点，把同节点的服务一起拖垮 ——
+  # 留足突发空间的同时保留这道兜底。
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+  securityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+
+  # 额外的 envFrom（主 Secret 已由 chart 自动引用，这里只放追加的）
+  envFrom: []
+  env:
+    - name: OPS_LICENSE_ENV
+      value: prod
+    # 业务时区。影响的是**墙上时钟判定**：日报几点发、日报里「昨天」的边界。
+    #
+    # ⚠️ 界面上的时间显示不看它，走浏览器本地时区 —— 那是对的：
+    # 在马尼拉值班的人该看到马尼拉时间，而不是被强制显示上海时间。
+    #
+    # ⚠️ 必须是 IANA 名字（Asia/Shanghai、Asia/Manila、Europe/London）。
+    # 名字解析不了时进程**直接退出**，不会退回 UTC —— 退回 UTC 的后果是
+    # 日报在错误的时刻发出去，而没有任何一处会说出来。
+    - name: TZ
+      value: Asia/Shanghai
+
+proxyTimeoutSeconds: 120
+
+podAntiAffinity:
+  enabled: true
+  # 生产是多节点，用 required 强制副本分散 ——
+  # 全部落在同一节点时，那个节点一挂服务就整体不可用，PDB 也救不了
+  required: true
+
+nodeSelector: {}
+tolerations: []
+podAnnotations: {}
+
+# 指标采集。集群里有 kube-prometheus-stack 时打开
+metrics:
+  enabled: false
+  scrapeKind: ServiceMonitor
+  interval: 30s
+  labels: {}
+
+# 用 Ingress 还是 Istio 由集群形态决定，两者只开一个
+istio:
+  enabled: false
+  annotations: {}
+  # ⚠️ 跨 namespace 必须写成 <ns>/<gateway名>：只写名字时 Istio 会在
+  # 本 namespace 找，找不到就静默不生效——对象创建成功、域名不通、没有报错
+  gateways:
+    - istio-system/infra-istio-ingressgateway-inner
+  hosts:
+    - alert.example.com
+  matchPrefix:
+    - "/"
+  # 检测引擎可能慢查（大集群全量拉取），比默认给得宽
+  timeout: 180s
+
+  retries:
+    attempts: 3
+    perTryTimeout: 60s
+    # ⚠️ 只重试连接类失败。把 5xx 也重试的话，一个失败的写操作会被重放，
+    # 而告警系统的写操作（认领、静默）不是幂等的
+    retryOn: connect-failure,refused-stream
+    allowUnsafeRetryOn: false
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+  hosts:
+    - host: alert.example.com          # ← 换成真实域名
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: opsalert-tls
+      hosts:
+        - alert.example.com            # ← 与上面保持一致

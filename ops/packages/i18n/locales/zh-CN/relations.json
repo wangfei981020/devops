@@ -1,0 +1,95 @@
+{
+  "ciType": {
+    "certificate": "证书",
+    "domain": "域名",
+    "host": "主机",
+    "k8s_ingress": "Ingress",
+    "k8s_service": "Service",
+    "loadbalancer": "负载均衡"
+  },
+  "column": {
+    "dst": "终点",
+    "origin": "来源",
+    "rel": "关系",
+    "relType": "关系类型",
+    "src": "起点"
+  },
+  "coverageNote": "只显示已记录的关系；没有记录不代表资源是孤立的",
+  "del": {
+    "manualNote": "这是人工登记的边，删掉就没了 —— 采集不会把它补回来。",
+    "syncNote": "⚠️ 这条边是采集推出来的，删掉后下一轮同步还会回来。要它不再出现，得改现实里的配置。",
+    "title": "删除关系"
+  },
+  "domains": {
+    "collapse": "收起",
+    "expand": "展开查看",
+    "hint": "从主机头台账推出来的对外域名。里面会混有通配符（*）、根记录（@）、以及 ACME 校验用的一串哈希——它们都是真实存在的解析记录，不是脏数据。带模块的排在前面，那是已经登记了归属的那批。",
+    "noMatch": "没有匹配「{{kw}}」的域名",
+    "searchPlaceholder": "搜索域名或模块",
+    "title": "对外域名（{{n}}）",
+    "truncated": "还有 {{n}} 条没显示，用上面的搜索框缩小范围"
+  },
+  "empty": {
+    "filtered": "当前筛选条件下没有关系。",
+    "noSource": "还没有建立任何资源关系。这不代表资源之间没有依赖，只代表我们还没记录。",
+    "title": "没有关系记录"
+  },
+  "error": {
+    "title": "关系列表没能加载出来"
+  },
+  "filter": {
+    "relType": "关系类型",
+    "searchPlaceholder": "搜索资源名"
+  },
+  "form": {
+    "desc": "图上大部分边是采集推出来的。这里补的是推不出来的那些 —— 跨系统依赖、外部服务。",
+    "direction": "{{src}} —{{rel}}→ {{dst}}",
+    "entry": "手工建关系",
+    "needDst": "请选择目标对象",
+    "needSrc": "请选择源对象",
+    "noMatch": "没搜到。CI 的名字可能和界面上显示的不一样，换个关键词试试",
+    "pickHint": "按名字搜，选中后显示在下面",
+    "relTypeHint": "方向有意义：A protects B 和 B protects A 不是一回事",
+    "sameCi": "两端不能是同一个对象",
+    "searchCi": "输入至少 2 个字搜索",
+    "title": "手工建一条关系"
+  },
+  "graph": {
+    "dir": "方向",
+    "empty": "没有查到关系。这不等于该对象是孤立的 —— 也可能是建边任务还没跑过。",
+    "entry": "起点",
+    "entryHint": "可用 host: / lb: / domain: / cert: / svc: / ing: 前缀限定类型",
+    "forward": "正向（它依赖谁）",
+    "hops": "跳数",
+    "hopsN": "{{count}} 跳",
+    "noEntry": "没搜到。换个关键词，或用 host: / lb: / domain: / cert: / svc: / ing: 前缀限定类型",
+    "noMembers": "这个池节点没有成员明细",
+    "noPick": "未选起点",
+    "pickFirst": "先在左边选一个起点。拓扑图是从某个对象出发看它连到哪，没有全局版本。",
+    "pool": "{{count}} 个",
+    "reverse": "反向（谁依赖它）",
+    "searchPlaceholder": "搜对象名，如 host:dev-",
+    "stats": "显示 {{shown}} 条边（原始 {{raw}} 条，折叠了 {{pooled}} 个池节点）",
+    "svgLabel": "资源关系拓扑图",
+    "typeMore": "至少输入 2 个字再搜 —— 空关键词会把全表拉回来"
+  },
+  "origin": {
+    "manual": "人工登记",
+    "sync": "采集推断"
+  },
+  "relType": {
+    "backs": "后端是",
+    "protects": "保护",
+    "resolves_to": "解析到",
+    "routes_to": "转发到"
+  },
+  "rel_type": {
+    "all": "全部"
+  },
+  "title": "资源图谱",
+  "total_other": "共 {{count}} 条关系",
+  "view": {
+    "graph": "图",
+    "list": "列表"
+  }
+}

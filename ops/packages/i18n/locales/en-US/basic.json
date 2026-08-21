@@ -1,0 +1,76 @@
+{
+  "action": {
+    "addEnv": "Add environment",
+    "addProject": "Add project",
+    "addStatus": "Add status",
+    "editEnv": "Edit environment",
+    "editProject": "Edit project",
+    "editStatus": "Edit status"
+  },
+  "builtinNote": "Built-in, read-only",
+  "cannotDelete": "This item is still in use and was not deleted",
+  "createFailed": "Create failed",
+  "deleteFailed": "Delete failed",
+  "desc": {
+    "ciTypes": "Types for manually-registered ledger entities and the relation graph. Cloud resources (subnets / IPs / firewalls / CDN) and K8s resources (nodes / pods / volumes) are NOT registered here — collectors write them into their own tables with full attributes, so registering them again would create a second source of truth. Four types here is the designed boundary, not a gap.",
+    "envs": "Environment labels for assets (PROD / UAT / …). The code appears verbatim in APIs and MCP; the display name is only for humans.",
+    "projects": "Business projects, used for cost attribution and asset grouping.",
+    "settings": "Reminder cadence, audit retention, notification outlet. Set once and forget.",
+    "statuses": "Whether an asset still exists (in use / destroyed). This is what answers \"is this machine still there\"."
+  },
+  "dialog": {
+    "envDesc": "Environments tag assets and drive filtering.",
+    "projectDesc": "Business projects drive cost attribution and asset grouping.",
+    "statusDesc": "Lifecycle statuses are a configurable dictionary, not built in. Objects already tagged follow the change."
+  },
+  "empty": {
+    "ciTypes": "With no CI types, assets cannot be categorised. This usually means the migration seed did not land.",
+    "envs": "With no environments, every page that filters by environment will return nothing.",
+    "projects": "With no business projects, all cost attribution falls into \"unassigned\".",
+    "statuses": "Without lifecycle statuses, in-use and destroyed assets cannot be told apart — destroyed machines keep counting toward cost."
+  },
+  "emptyTitle": "Nothing configured yet",
+  "error": {
+    "title": "Basic settings could not be loaded"
+  },
+  "field": {
+    "code": "Code",
+    "codeChangeHint": "⚠️ The code is what the API and MCP actually use. Changing it breaks saved filter links.",
+    "codeHint": "Uppercase, e.g. STAGING. It appears verbatim in APIs, MCP and filter parameters — do not change it after creation, as that is effectively a new one and every existing reference breaks.",
+    "label": "Label",
+    "name": "Name",
+    "nameEn": "English name",
+    "nameEnHint": "Optional. Shown in the English UI; falls back to the Chinese name when empty. This is data, not copy — an environment you create yourself will never be in the language pack.",
+    "required": "Required fields are incomplete",
+    "scope": "Applies to",
+    "scopeHint": "domain / host / cert … Cannot be changed later: it decides which object type this status applies to",
+    "tagType": "Badge style",
+    "tagTypeHint": "Use \"Danger\" for production — the point of the badge is to make it obvious what you are touching.",
+    "tagTypePreview": "Preview"
+  },
+  "hint": "Dictionaries for environments, projects and CI types. Every dropdown in the product draws from here — hard-coding an enum anywhere in the UI will drift from this.",
+  "section": {
+    "ciTypes": "CI types",
+    "envs": "Environments",
+    "projects": "Business projects",
+    "settings": "System settings",
+    "statuses": "Lifecycle statuses"
+  },
+  "settings": {
+    "auditRetention": "Audit retention (days)",
+    "auditRetentionHint": "⚠️ 0 means never purge, not purge immediately — the two readings are opposite. With never-purge the audit table grows forever.",
+    "noChange": "Nothing changed yet",
+    "remindDays": "Expiry reminder days",
+    "remindDaysHint": "Comma separated, e.g. 30,15,7,1 — one reminder on each of those days before expiry. Empty means no reminders.",
+    "webhook": "Lark webhook",
+    "webhookHint": "The global fallback outlet. A group bound to a specific task takes precedence."
+  },
+  "tagType": {
+    "danger": "Danger",
+    "info": "Neutral",
+    "primary": "Info",
+    "success": "OK",
+    "warning": "Warning"
+  },
+  "title": "Basic settings"
+}

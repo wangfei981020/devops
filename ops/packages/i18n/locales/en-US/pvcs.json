@@ -1,0 +1,46 @@
+{
+  "brokenNote_one": "{{count}} volume needs attention",
+  "brokenNote_other": "{{count}} volumes need attention",
+  "column": {
+    "capacity": "Capacity",
+    "name": "Volume",
+    "status": "Status",
+    "storageClass": "Storage class",
+    "usage": "Usage"
+  },
+  "costHint": "Estimated from capacity × the rate for this region and storage class. Deleting it saves this much per month — snapshot first.",
+  "empty": {
+    "filtered": "No volumes match the current filters. Try widening them.",
+    "noSource": "No volumes collected yet. Check on the Clusters page that the cluster is onboarded.",
+    "title": "No volumes"
+  },
+  "error": {
+    "title": "Could not load volumes"
+  },
+  "filter": {
+    "cluster": "Cluster",
+    "health": "Status",
+    "searchPlaceholder": "Search name or storage class"
+  },
+  "health": {
+    "lost": "Lost",
+    "ok": "Bound",
+    "orphan": "No user",
+    "pending": "Pending"
+  },
+  "inUse": "In use",
+  "live": {
+    "header": "Actual used",
+    "pickCluster": "Select a single cluster — usage is queried from Prometheus per cluster",
+    "unavailable": "Unavailable"
+  },
+  "noVolumeName": "PV name not collected",
+  "orphan": "No current user",
+  "orphanHint": "No pod currently mounts it. ⚠️ That does not mean it is safe to delete — job volumes and freshly drained services are briefly unused too.",
+  "orphanNote": "{{count}} unused but still billed",
+  "orphanNoteOn": "Showing {{count}} unused · click to clear",
+  "perMonth": "${{usd}}/mo",
+  "title": "Volumes",
+  "total_one": "{{count}} volume",
+  "total_other": "{{count}} volumes"
+}

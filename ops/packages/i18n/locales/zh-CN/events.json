@@ -1,0 +1,27 @@
+{
+  "column": {
+    "count": "次数",
+    "last": "最后发生",
+    "message": "消息",
+    "object": "对象",
+    "reason": "原因"
+  },
+  "empty": {
+    "filtered": "当前筛选条件下没有事件。",
+    "noSource": "还没采到事件。注意 k8s 的事件只在 etcd 里留 1 小时——集群刚接入时这里可能是空的，等下一轮采集。",
+    "title": "没有 Warning 事件"
+  },
+  "error": {
+    "title": "事件列表没能加载出来"
+  },
+  "filter": {
+    "cluster": "集群",
+    "namespace": "命名空间",
+    "reason": "原因",
+    "searchPlaceholder": "搜索对象、原因或消息"
+  },
+  "firstAt": "首次 {{at}}",
+  "title": "事件",
+  "total_other": "共 {{count}} 条事件",
+  "warningOnly": "只采集并保留 Warning 事件（Normal 量太大且排障用不上）"
+}

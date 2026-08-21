@@ -1,0 +1,60 @@
+{
+  "byEnv": "按环境",
+  "byProject": "按项目",
+  "destroyedNote_other": "已排除 {{count}} 台已销毁主机（不再产生费用）",
+  "drill": {
+    "actual": "实付 {{v}}",
+    "allocated": "已分摊 {{v}}",
+    "anchorMismatch": "你选的是 {{asked}}，但后端返回的是 {{got}} 的数据。这多半是参数没被识别——先别用这个数字对账。",
+    "attribution": "归因",
+    "byDim": "按 {{dim}} 分组",
+    "col": {
+      "cluster": "集群",
+      "cost": "成本",
+      "delta": "变化",
+      "new": "本月",
+      "object": "对象",
+      "old": "上月",
+      "owner": "归属",
+      "reason": "原因",
+      "resource": "资源",
+      "type": "类型"
+    },
+    "deltaTotal": "环比变化合计 {{delta}}",
+    "detail": "明细",
+    "detailCount": "共 {{n}} 条，合计 {{total}}（按金额倒序）",
+    "dim": "维度",
+    "dimCluster": "集群",
+    "dimProject": "业务项目",
+    "dimResource": "资源",
+    "dimType": "资源类型",
+    "entry": "成本下钻",
+    "estimateNote": "按机型与磁盘估算，不是云账单。单价来自我们维护的费率表，机型对不上时会回退到默认档。",
+    "idle": "闲置",
+    "idleAmount": "每月 {{monthly}} / 每年 {{yearly}}",
+    "idlePct": "闲置 {{pct}}%",
+    "loadFailed": "这部分没取到",
+    "month": "月份",
+    "report": "报表",
+    "title": "成本下钻",
+    "trend": "趋势",
+    "vsPrev": "上月 {{prev}}"
+  },
+  "error": {
+    "title": "成本总览没能加载出来"
+  },
+  "estimateHint": "按机型与磁盘估算，不是云账单。单价来自我们维护的费率表，机型对不上时会回退到默认档。",
+  "fallbackNote": "其中 {{count}} 台按 default 档估价（缺费率的区域：{{regions}}）——这些数看着正常，但用的不是该区域的真实价格。去「成本单价」补上对应区域的费率。",
+  "hosts_other": "{{count}} 台",
+  "perMonth": "每月（估算）",
+  "snapshot": {
+    "action": "立即打快照",
+    "done": "已打快照，覆盖 {{count}} 项",
+    "hint": "成本环比要靠每月快照。没有快照时报表看着像「没数据」，其实是原料没备。"
+  },
+  "title": "成本总览",
+  "unattributed": "未归属",
+  "unattributedEnv": "这些主机没有填环境（PROD/UAT 等）。去主机台账里补上，这里才分得开。",
+  "unattributedProject": "这些成本还没有归到任何「业务项目」。业务项目是成本归属用的字典，去「系统管理 → 基础配置」里建好，再给主机指定，这里才会分开显示。（注意：它和主机上的 GCP 云项目不是一回事。）",
+  "unpricedNote_other": "{{count}} 台机器没匹配到费率，按 0 计入 —— 它们不是免费的，是算不出来的"
+}

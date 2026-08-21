@@ -1,0 +1,54 @@
+{
+  "title": "Cloud accounts",
+  "hint": "For GCP the service-account key belongs to a project, not the account — permissions are granted per project.",
+  "addProject": "Add project",
+  "projectCount_one": "{{count}} project",
+  "projectCount_other": "{{count}} projects",
+  "noCred_one": "{{count}} missing credential",
+  "noCred_other": "{{count}} missing credentials",
+  "credOk": "Key configured",
+  "credMissing": "No key",
+  "hosts_one": "{{count}} host",
+  "hosts_other": "{{count}} hosts",
+  "neverSynced": "Never synced",
+  "syncQueued": "Sync queued. It runs in the background and data arrives gradually — success here only means the job was accepted.",
+  "syncing": "Syncing…",
+  "syncPreparing": "Syncing: fetching the instance list from the provider…",
+  "syncProgress": "Syncing: {{done}}/{{total}} hosts written",
+  "syncFailed": "Sync failed: {{error}}",
+  "syncDone": "Sync finished: {{synced}} hosts in use",
+  "syncDoneStale": "Sync finished: {{synced}} hosts in use, {{stale}} no longer exist in the cloud",
+  "addTitle": "Add cloud account",
+  "addDesc": "The account is just a grouping; to collect anything, add a project under it and configure a key.",
+  "addProjectTitle": "Add a project under “{{account}}”",
+  "addProjectDesc": "The key is encrypted before storage and the API never reads it back.",
+  "deleteImpact": "This account has {{count}} project(s). Deleting it stops their collection immediately. Already collected hosts are kept but will gradually be marked destroyed.",
+  "field": {
+    "name": "Account name",
+    "nameHint": "A human-facing name such as “Production GCP”. Can be changed later.",
+    "dataset": "Billing export dataset",
+    "datasetHint": "The BigQuery billing export table. Without it costs can only be estimated from machine types.",
+    "projectId": "Project ID",
+    "projectIdHint": "The GCP Project ID (not the display name). A wrong value makes collection fail with 404 forever.",
+    "saKey": "Service account key (JSON)",
+    "saKeyHint": "Paste the whole JSON. compute.viewer is the minimum required role; leave blank to add the key later.",
+    "displayName": "Display name",
+    "saKeyKeepHint": "Leave empty to keep the existing credential. Only a non-empty value replaces it — the API never reads stored credentials back."
+  },
+  "error": {
+    "title": "Could not load cloud accounts"
+  },
+  "empty": {
+    "title": "No cloud account connected",
+    "reason": "Until one is connected, the Hosts, Networks and Load balancer pages stay empty.",
+    "action": "Add the first cloud account"
+  },
+  "delProject": {
+    "title": "Delete this cloud project",
+    "body": "After deleting \"{{project}}\", collection stops for every resource in it. Already-collected data is kept but never updates again — those hosts still look normal in the list, with \"last synced\" frozen at this moment."
+  },
+  "needCred": "This project has no SA key yet, so a sync would return nothing",
+  "editProjectTitle": "Edit project {{project}}",
+  "editProjectDesc": "Change the display name or rotate credentials.",
+  "totalHosts": "{{projects}} projects, {{hosts}} hosts in use in total"
+}

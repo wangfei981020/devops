@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trigon — 品牌标记</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0A0B0D;
+    --surface: #131519;
+    --card: #1A1D22;
+    --border: #2B3037;
+    --text: #F2F4F7;
+    --muted: #6B7280;
+    --brand: #5F60E0;
+    --brand-light: #7E86EC;
+    --brand-dark: #4B47C5;
+    --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+            "PingFang SC", "HarmonyOS Sans SC", system-ui, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  }
+  html[data-theme="light"] {
+    color-scheme: light;
+    --bg: #FBFBFC; --surface: #FFFFFF; --card: #FFFFFF;
+    --border: #E6E8EC; --text: #171A1F; --muted: #6B7280;
+    --brand: #5A5AD9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--font); font-size: 14px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 40px 24px 80px; }
+  header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; margin-bottom: 32px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin: 6px 0 0; max-width: 60ch; }
+  button.toggle {
+    font: inherit; font-size: 12px; cursor: pointer; color: var(--text);
+    background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px;
+    transition: background 120ms ease-out;
+  }
+  button.toggle:hover { background: var(--surface); }
+  section { margin-top: 36px; }
+  h2 { font-size: 12px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase;
+       color: var(--muted); margin: 0 0 12px; }
+  .grid { display: grid; gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+  .card .label { font-size: 11px; color: var(--muted); margin-top: 14px; font-family: var(--mono); }
+  .row { display: flex; align-items: flex-end; gap: 32px; flex-wrap: wrap; }
+  .sizes { display: flex; align-items: flex-end; gap: 28px; }
+  .size-item { text-align: center; }
+  .size-item .n { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 8px; }
+  .grid-3 { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+  .sw { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; width: 132px; }
+  .sw i { display: block; height: 44px; }
+  .sw span { display: block; padding: 6px 8px; font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .onbg { display: flex; gap: 12px; flex-wrap: wrap; }
+  .onbg > div { width: 116px; height: 88px; border-radius: 8px; display: grid; place-items: center;
+                border: 1px solid var(--border); }
+  .tabbar { display: flex; align-items: center; gap: 8px; background: var(--surface);
+            border: 1px solid var(--border); border-radius: 8px 8px 0 0; padding: 8px 12px; width: 300px; }
+  .tabbar .t { display: flex; align-items: center; gap: 7px; background: var(--card);
+               border-radius: 6px; padding: 5px 10px; font-size: 12px; flex: 1; }
+  .note { border: 1px solid var(--border); border-left: 2px solid var(--brand);
+          border-radius: 6px; background: var(--surface); padding: 12px 14px;
+          font-size: 12.5px; color: var(--muted); margin-top: 12px; }
+  .note b { color: var(--text); font-weight: 600; }
+  .note ul { margin: 6px 0 0; padding-left: 18px; }
+  .note li { margin: 3px 0; }
+  code { font-family: var(--mono); font-size: 11.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>Trigon — 品牌标记</h1>
+      <p class="sub">三角测量控制点符号：用多个已知点交叉定位一个未知点。这正是 CMDB 在做的事——云 API、集群、指标源各说一套，交叉印证出资产的真实状态。</p>
+    </div>
+    <button class="toggle" id="themeToggle">切换到浅色</button>
+  </header>
+
+  <section>
+    <h2>主标记</h2>
+    <div class="card">
+      <div class="row">
+        <div class="sizes">
+          <div class="size-item">
+            <svg viewBox="0 0 24 24" width="112" height="112" fill="none"><defs><linearGradient id="g112" x1="4" y1="3" x2="20" y2="18" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#7E86EC"/><stop offset="1" stop-color="#4B47C5"/></linearGradient></defs><path d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z" fill="url(#g112)" fill-rule="evenodd" stroke="url(#g112)" stroke-width="3" stroke-linejoin="round"/></svg>
+            <div class="n">112</div>
+          </div>
+          <div class="size-item">
+            <svg viewBox="0 0 24 24" width="48" height="48" fill="none"><path d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z" fill="url(#g112)" fill-rule="evenodd" stroke="url(#g112)" stroke-width="3" stroke-linejoin="round"/></svg>
+            <div class="n">48</div>
+          </div>
+          <div class="size-item">
+            <svg viewBox="0 0 24 24" width="32" height="32" fill="none"><path d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z" fill="url(#g112)" fill-rule="evenodd" stroke="url(#g112)" stroke-width="3" stroke-linejoin="round"/></svg>
+            <div class="n">32</div>
+          </div>
+          <div class="size-item">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none"><path d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z" fill="url(#g112)" fill-rule="evenodd" stroke="url(#g112)" stroke-width="3" stroke-linejoin="round"/></svg>
+            <div class="n">24</div>
+          </div>
+          <div class="size-item">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z" fill="url(#g112)" fill-rule="evenodd" stroke="url(#g112)" stroke-width="3" stroke-linejoin="round"/></svg>
+            <div class="n">16</div>
+          </div>
+        </div>
+      </div>
+      <div class="label">mark.svg — 中心是挖空的负空间，不是叠上去的圆点</div>
+    </div>
+    <div class="note">
+      <div><b>为什么中心用挖空而不是叠一个点</b><br>
+      叠色的话，深色底要一版、浅色底要另一版、放在照片或彩色卡片上还要第三版。挖空则永远露出背景本身，一个文件通吃所有场景。<br><b>但主标记的孔撑不到 16px</b> —— 上面最右那个已经糊成实心三角了。小图标必须单独做，见下。</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>组合标</h2>
+    <div class="card">
+      <svg viewBox="0 0 132 32" width="198" height="48" fill="none">
+        <g transform="translate(4 4)">
+          <path d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z" fill="url(#g112)" fill-rule="evenodd" stroke="url(#g112)" stroke-width="3" stroke-linejoin="round"/>
+        </g>
+        <text x="40" y="22" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="19" font-weight="600" letter-spacing="-0.4" fill="currentColor">Trigon</text>
+      </svg>
+      <div class="label">logo-horizontal.svg — 字标投产前必须转曲</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>小尺寸专用（favicon）</h2>
+    <div class="card">
+      <div class="sizes">
+        <div class="size-item">
+          <svg viewBox="0 0 24 24" width="64" height="64" fill="none"><path d="M12 4.2 L18.7 15.8 L5.3 15.8 Z M15.2 12 A3.2 3.2 0 1 1 8.8 12 A3.2 3.2 0 1 1 15.2 12 Z" fill="#5F60E0" fill-rule="evenodd" stroke="#5F60E0" stroke-width="2.6" stroke-linejoin="round"/></svg>
+          <div class="n">64</div>
+        </div>
+        <div class="size-item">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="none"><path d="M12 4.2 L18.7 15.8 L5.3 15.8 Z M15.2 12 A3.2 3.2 0 1 1 8.8 12 A3.2 3.2 0 1 1 15.2 12 Z" fill="#5F60E0" fill-rule="evenodd" stroke="#5F60E0" stroke-width="2.6" stroke-linejoin="round"/></svg>
+          <div class="n">32</div>
+        </div>
+        <div class="size-item">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none"><path d="M12 4.2 L18.7 15.8 L5.3 15.8 Z M15.2 12 A3.2 3.2 0 1 1 8.8 12 A3.2 3.2 0 1 1 15.2 12 Z" fill="#5F60E0" fill-rule="evenodd" stroke="#5F60E0" stroke-width="2.6" stroke-linejoin="round"/></svg>
+          <div class="n">24</div>
+        </div>
+        <div class="size-item">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M12 4.2 L18.7 15.8 L5.3 15.8 Z M15.2 12 A3.2 3.2 0 1 1 8.8 12 A3.2 3.2 0 1 1 15.2 12 Z" fill="#5F60E0" fill-rule="evenodd" stroke="#5F60E0" stroke-width="2.6" stroke-linejoin="round"/></svg>
+          <div class="n">16</div>
+        </div>
+      </div>
+      <div class="label">favicon.svg — 孔放大到 r=3.2、去掉渐变改单色</div>
+    </div>
+    <div class="note">
+      <div><b>小图标不能靠缩放大图标得到，这是两套东西。</b><br>
+      主标记的孔 r=2.4 缩到 16px 只剩约 3px 直径，糊成实心三角；渐变跨越 16 个像素也只会让边缘发灰。
+      favicon 版把孔放大、改单色，16px 下仍能读出中心。<br>
+      <b>另：线性（描边）版已废弃</b> —— 白色三角形加中心点在深色底上第一眼读成警告图标 ⚠️，对品牌标记是硬伤。品牌标记只保留实心版。</div>
+    </div>
+
+  <section>
+    <h2>各种底色上的表现</h2>
+    <div class="card">
+      <div class="onbg">
+        <div style="background:#0A0B0D"><svg viewBox="0 0 24 24" width="44" height="44" fill="none"><path d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z" fill="url(#g112)" fill-rule="evenodd" stroke="url(#g112)" stroke-width="3" stroke-linejoin="round"/></svg></div>
+        <div style="background:#FFFFFF"><svg viewBox="0 0 24 24" width="44" height="44" fill="none"><path d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z" fill="url(#g112)" fill-rule="evenodd" stroke="url(#g112)" stroke-width="3" stroke-linejoin="round"/></svg></div>
+        <div style="background:#5F60E0"><svg viewBox="0 0 24 24" width="44" height="44" fill="none"><path d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z" fill="#fff" fill-rule="evenodd" stroke="#fff" stroke-width="3" stroke-linejoin="round"/></svg></div>
+        <div style="background:#171A1F"><svg viewBox="0 0 24 24" width="44" height="44" fill="none"><path d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z" fill="#fff" fill-rule="evenodd" stroke="#fff" stroke-width="3" stroke-linejoin="round"/></svg></div>
+      </div>
+      <div class="label">品牌渐变 / 反白单色。在品牌色自身之上必须用反白版，渐变会糊掉</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>浏览器标签（16px 实景）</h2>
+    <div class="card">
+      <div class="tabbar">
+        <div class="t">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z" fill="url(#g112)" fill-rule="evenodd" stroke="url(#g112)" stroke-width="3" stroke-linejoin="round"/></svg>
+          Trigon CMDB
+        </div>
+      </div>
+      <div class="label">16px 下中心孔仍可辨，标签栏里能一眼认出</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>品牌色</h2>
+    <div class="card">
+      <div class="swatches">
+        <div class="sw"><i style="background:#7E86EC"></i><span>#7E86EC · 400 hover</span></div>
+        <div class="sw"><i style="background:#5F60E0"></i><span>#5F60E0 · 500 深色主题</span></div>
+        <div class="sw"><i style="background:#5A5AD9"></i><span>#5A5AD9 · 500 浅色主题</span></div>
+        <div class="sw"><i style="background:#4B47C5"></i><span>#4B47C5 · 600 active</span></div>
+      </div>
+      <div class="label">与 packages/design 的 tokens 同源：oklch(0.56 0.19 278) 及其推导档</div>
+    </div>
+    <div class="note">
+      <div><b>这些 hex 是给外部工具用的（Figma、印刷、PPT）。</b><br>
+      代码里一律走 <code>--ops-brand-*</code> token，不要复制 hex 进组件——
+      白标换色时硬编码的那一处不会跟着变，而且肉眼看不出来。<code>check-hardcoded-colors.mjs</code> 会拦。</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>使用规则</h2>
+    <div class="note">
+      <div>
+        <ul>
+          <li><b>最小尺寸 16px。</b>再小中心孔会糊成实心三角，失去识别点。</li>
+          <li><b>留白 ≥ 标记宽度的 1/4。</b>贴边会和相邻元素读成一个整体。</li>
+          <li><b>不要旋转。</b>三角测量点符号永远尖端朝上，转了就不再是那个符号。</li>
+          <li><b>不要加投影。</b>深色底上投影不可见，浅色底上会让边缘发脏。</li>
+          <li><b>不要拉伸。</b>等边是这个符号的一部分，变成等腰就读不出三角测量的含义。</li>
+          <li><b>白标场景</b>：客户 logo 替换的是整个组合标，中心孔的挖空逻辑不变。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  const btn = document.getElementById('themeToggle')
+  btn.addEventListener('click', () => {
+    const root = document.documentElement
+    const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'
+    root.setAttribute('data-theme', next)
+    btn.textContent = next === 'dark' ? '切换到浅色' : '切换到深色'
+  })
+</script>
+</body>
+</html>

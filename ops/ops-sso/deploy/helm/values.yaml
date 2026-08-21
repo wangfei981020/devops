@@ -1,0 +1,214 @@
+# ============================================================================
+# OpsPlane CMDB
+#
+# 前后端放在**同一个 chart**，理由：
+#  1. 前端 nginx 要反代后端，同 chart 里 Service 名可以自动生成，不用人填。
+#     地址靠手工同步是上一代反复出问题的根源（env / Secret / ConfigMap 三处，
+#     第三处最常漏）。
+#  2. 前后端是一个产品的两半，API 变了前端必须跟着变。分两个 chart 会出现
+#     「前端升了后端没升」，而这类版本错配在测试环境很难复现。
+#  3. helm rollback 一条命令回到完整的上一版。
+#
+# 单 chart 不影响独立升级：--set frontend.image.tag=v2 只会滚前端，
+# 因为配置校验和只挂在各自的 Deployment 上。
+# ============================================================================
+
+nameOverride: ""
+# 钉死资源名前缀。不设的话资源名会是「release名-chart名-组件」，
+# 用 `helm install sso` 装出来就成了 sso-ops-sso-frontend —— 又长又重复，
+# 而且换个 release 名所有资源名就变，kubectl 的肌肉记忆全废。
+fullnameOverride: "ops-sso"
+# ---------------------------------------------------------------------------
+# 全局：所有组件共用的东西只在这里配一次
+# ---------------------------------------------------------------------------
+global:
+  # 镜像仓库前缀（不含镜像名）。各组件的 image.repository 只写镜像名。
+  # ⚠️ 前后端各写一份完整地址的话，换仓库要改两处，而只改一处不会报错
+  imageRegistry: localhost:8070/opsplatform-dev
+  # 拉私有仓库用的 Secret，前后端共用
+  imagePullSecrets: []
+
+# ---------------------------------------------------------------------------
+# 前端
+# ---------------------------------------------------------------------------
+frontend:
+  # 静态服务无状态，多副本零额外代价，没理由跑单点
+  replicaCount: 2
+
+  image:
+    repository: ops-sso-frontend
+    tag: ""            # 留空用 Chart.appVersion；CI 一律显式 --set
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP    # 本地用 NodePort，见 values-local.yaml
+    port: 80
+    nodePort: null
+
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      # 不设 CPU limit：nginx 的 CPU 是突发型的，
+      # 设了会在流量尖峰被限流，表现为偶发的请求变慢
+      memory: 128Mi
+
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  securityContext:
+    # ⚠️ 只写 runAsNonRoot，**不写 runAsUser** —— uid 由 Dockerfile 定义，
+    # 这里再写一遍必然分叉（CONVENTIONS §4.5：实际撞到过 10001 vs 65532）。
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+
+# ---------------------------------------------------------------------------
+# 后端
+#
+# enabled=false 时**不部署后端**，前端反代到 external 指定的地址。
+# 这是当前的实际状态：新前端在 ops/ops-sso，而后端仍在
+# enterprise/ops-sso（已经跑在集群里）。等后端搬过来再打开。
+#
+# enabled=true 时后端与前端同 chart 部署，前端自动指向它，无需改任何地址。
+# ---------------------------------------------------------------------------
+backend:
+  # SSO 的后端是**本产品自己的**，不像 CMDB 那样指向外部服务。
+  enabled: true
+
+  external:
+    # 跨 namespace 必须用 FQDN，短名只在同 namespace 内可解析
+    host: ops-sso-backend.ops-sso.svc.cluster.local
+    port: 8080
+
+  replicaCount: 2
+  image:
+    repository: ops-sso-backend
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  service:
+    port: 8080
+    metricsPort: 8088
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  securityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+
+  # 环境变量走 Secret 引用，不要把凭据写进 values
+  envFrom: []
+  env: []
+
+# ---------------------------------------------------------------------------
+# 通用
+# ---------------------------------------------------------------------------
+
+# 后端可能慢查（大集群全量拉取），比 nginx 默认 60s 给得宽
+proxyTimeoutSeconds: 120
+
+# 尽量把副本分散到不同节点。用 preferred 而非 required：
+# 本地单节点集群用 required 会让第二个副本永远 Pending
+podAntiAffinity:
+  enabled: true
+  required: false
+
+nodeSelector: {}
+tolerations: []
+podAnnotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: cmdb.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# ── 网关数据面 ────────────────────────────────────────────
+#
+# 与后端同一个镜像、不同入口（command 换成 /usr/local/bin/gateway）。
+# 两个镜像的话，判定代码会出现版本差 —— 而那正是两者必须完全一致的部分。
+gateway:
+  enabled: true
+
+  # ⚠️ 默认 2，不要调成 1。它在每个受保护应用的请求路径上，
+  # 单副本时一次滚动升级 = 一次全公司登录中断。
+  replicaCount: 2
+
+  service:
+    type: ClusterIP     # 本地要暴露的话在 values-local.yaml 里改
+    port: 8081
+    metricsPort: 8089
+    nodePort: null
+
+  # ⚠️ 生产建议配 OAP_ANCHOR_KEY（Ed25519 种子，32 字节十六进制，**放 Secret**）。
+  # 不配的话审计哈希链防不住"整条链从某点起全部重算"——
+  # 有库权限的人重写 audit_logs 之后，链自洽、校验照样通过。
+  # 配了之后还要**把锚点导出到本系统之外**（控制台 · 访问审计 里有导出），
+  # 存在同一个库里的锚点，能重写链的人一样能改。
+  #
+  # ⚠️ 生产必须在这里给 OAP_ISSUER，否则后端**拒绝启动**（这是故意的）。
+  #
+  #   env:
+  #     - name: OAP_ISSUER
+  #       value: https://gate.你的域名
+  #
+  # 它同时是三样东西：id_token 里的 iss、discovery 文档里所有端点的前缀、
+  # 以及每个下游配置里填的那一行。三者必须逐字符一致。
+  # 上生产后改它 = 所有下游同时验签失败 + 已签出的 token 立刻作废，
+  # 所以这是一次要协调全部接入方的变更，不是改个配置。
+  # 校验规则见 internal/config/issuer.go：生产下必须 https、不能是本机地址、
+  # 末尾斜杠会被去掉（多一个斜杠下游就认不出来）。
+  env: []
+  envFrom: []
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  securityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault

@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>命名与文字标 — 方案</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0A0B0D; --surface: #131519; --card: #1A1D22; --border: #2B3037;
+    --text: #F2F4F7; --muted: #7A828E; --dim: #545B66;
+    --brand: #5F60E0; --brand-light: #7E86EC; --brand-dark: #4B47C5;
+    --ok: #4ADE80; --warn: #E8B948; --bad: #F0664F;
+    --ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "PingFang SC", "HarmonyOS Sans SC", system-ui, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+    --geo: "Futura", "Avenir Next", "Century Gothic", var(--ui);
+    --neutral: "Helvetica Neue", "Inter", -apple-system, sans-serif;
+    --humanist: "Optima", "Avenir Next", "Gill Sans", var(--ui);
+  }
+  html[data-theme="light"] {
+    color-scheme: light;
+    --bg: #FBFBFC; --surface: #FFFFFF; --card: #FFFFFF; --border: #E4E7EB;
+    --text: #14171C; --muted: #5C6470; --dim: #98A0AC; --brand: #5A5AD9;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:var(--ui);
+         font-size:14px; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 44px 24px 96px; }
+
+  header { display:flex; align-items:flex-end; justify-content:space-between; gap:24px;
+           flex-wrap:wrap; padding-bottom:28px; border-bottom:1px solid var(--border); }
+  h1 { font-size:21px; font-weight:600; margin:0; letter-spacing:-0.015em; }
+  .sub { color:var(--muted); font-size:13px; margin:8px 0 0; max-width:62ch; }
+  button.toggle { font:inherit; font-size:12px; cursor:pointer; color:var(--text);
+    background:var(--card); border:1px solid var(--border); border-radius:6px; padding:7px 13px;
+    transition: background 120ms ease-out; }
+  button.toggle:hover { background:var(--surface); }
+
+  .cand { margin-top:44px; }
+  .cand-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  .cand-name { font-size:17px; font-weight:600; letter-spacing:-0.01em; }
+  .tag { font-size:10.5px; font-weight:500; letter-spacing:.05em; text-transform:uppercase;
+         padding:3px 7px; border-radius:4px; }
+  .tag-rec { background:color-mix(in oklch, var(--brand) 18%, transparent); color:var(--brand-light); }
+  .tag-alt { background:var(--surface); color:var(--muted); border:1px solid var(--border); }
+  .cand-why { color:var(--muted); font-size:13px; margin:0 0 16px; max-width:70ch; }
+  .cand-why b { color:var(--text); font-weight:600; }
+
+  .stage { background:var(--card); border:1px solid var(--border); border-radius:10px;
+           padding:36px 32px; display:flex; flex-direction:column; gap:34px; }
+  .variant { display:flex; align-items:center; gap:28px; flex-wrap:wrap; }
+  .variant .meta { font-family:var(--mono); font-size:10.5px; color:var(--dim); min-width:150px; }
+
+  /* ---- 文字标本体 ---- */
+  .wm { display:inline-flex; align-items:center; line-height:1; white-space:nowrap; }
+  .wm-lower { font-size:46px; font-weight:600; letter-spacing:-0.03em; }
+  .wm-upper { font-size:38px; font-weight:500; letter-spacing:.13em; text-transform:uppercase; }
+  .wm-geo   { font-family:var(--geo); }
+  .wm-neu   { font-family:var(--neutral); }
+  .wm-hum   { font-family:var(--humanist); }
+  .wm-ui    { font-family:var(--ui); }
+  .brandc   { color:var(--brand-light); }
+
+  /* O 替换成靶心：用 em 单位，跟着字号缩放 */
+  .target { display:inline-block; vertical-align:baseline; }
+  .target svg { display:block; }
+
+  .note { border:1px solid var(--border); border-left:2px solid var(--brand);
+          border-radius:6px; background:var(--surface); padding:13px 15px;
+          font-size:12.5px; color:var(--muted); margin-top:14px; }
+  .note b { color:var(--text); font-weight:600; }
+  .risk { font-size:12px; color:var(--muted); margin-top:12px; display:flex; gap:8px; align-items:flex-start; }
+  .risk .dot { width:6px; height:6px; border-radius:50%; margin-top:6px; flex:none; }
+
+  .apps { display:flex; gap:14px; flex-wrap:wrap; margin-top:4px; }
+  .app { width:88px; text-align:center; }
+  .app .box { width:88px; height:88px; border-radius:19px; display:grid; place-items:center;
+              background:linear-gradient(150deg,#7E86EC,#4B47C5); }
+  .app .n { font-family:var(--mono); font-size:10px; color:var(--dim); margin-top:8px; }
+  .tabbar { display:flex; align-items:center; gap:8px; background:var(--surface);
+            border:1px solid var(--border); border-radius:8px 8px 0 0; padding:8px 12px; width:290px; }
+  .tabbar .t { display:flex; align-items:center; gap:7px; background:var(--card);
+               border-radius:6px; padding:5px 10px; font-size:12px; flex:1; }
+  code { font-family:var(--mono); font-size:11.5px; }
+  h2.sec { font-size:12px; font-weight:500; letter-spacing:.06em; text-transform:uppercase;
+           color:var(--muted); margin:56px 0 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>命名与文字标 · 方案</h1>
+      <p class="sub">Trigon 描述的是我们的方法（三角测量），不是客户的收获，而且和 AI 无关。下面三个都直接指向「一份完整可信、能喂给 AI 的基础设施底账」。字体为本机预览，最终需选定授权字体并转曲。</p>
+    </div>
+    <button class="toggle" id="themeToggle">切换到浅色</button>
+  </header>
+
+  <!-- ============ Corpus ============ -->
+  <div class="cand">
+    <div class="cand-head">
+      <span class="cand-name">Corpus</span>
+      <span class="tag tag-rec">推荐</span>
+      <span class="meta" style="font-family:var(--mono);font-size:11px;color:var(--dim)">/ˈkɔːpəs/ · 拉丁语「全体」</span>
+    </div>
+    <p class="cand-why">
+      一个词同时说清两层身份：对运维是<b>资产全集</b>，对 AI <b>corpus 字面就是训练语料库</b>。
+      你要做的是「AI 运维数据平面」——名字自己把定位讲完了，不需要副标题解释。
+      而且 <b>O 可以做成同心圆靶心</b>，字母即符号，文字标和 app 图标共用一个形。
+    </p>
+
+    <div class="stage">
+      <div class="variant">
+        <span class="meta">A · 小写 + 靶心 O</span>
+        <span class="wm wm-lower wm-ui">c<span class="target" style="width:.56em;height:.56em">
+          <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+            <circle cx="16" cy="16" r="13.4" stroke="currentColor" stroke-width="5.2"/>
+            <circle cx="16" cy="16" r="4" fill="#7E86EC"/>
+          </svg></span>rpus</span>
+      </div>
+
+      <div class="variant">
+        <span class="meta">B · 小写 · 全品牌色</span>
+        <span class="wm wm-lower wm-ui brandc">c<span class="target" style="width:.56em;height:.56em">
+          <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+            <circle cx="16" cy="16" r="13.4" stroke="currentColor" stroke-width="5.2"/>
+            <circle cx="16" cy="16" r="4" fill="currentColor"/>
+          </svg></span>rpus</span>
+      </div>
+
+      <div class="variant">
+        <span class="meta">C · 大写宽字距（权威感）</span>
+        <span class="wm wm-upper wm-geo">C<span class="target" style="width:.72em;height:.72em;margin:0 .05em">
+          <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+            <circle cx="16" cy="16" r="13.5" stroke="currentColor" stroke-width="3"/>
+            <circle cx="16" cy="16" r="4" fill="#7E86EC"/>
+          </svg></span>RPUS</span>
+      </div>
+
+      <div class="variant">
+        <span class="meta">D · 纯字（无靶心对照）</span>
+        <span class="wm wm-lower wm-ui">corpus</span>
+      </div>
+
+      <div class="variant">
+        <span class="meta">E · 靶心单独作图标</span>
+        <div class="apps">
+          <div class="app">
+            <div class="box">
+              <svg viewBox="0 0 32 32" width="46" height="46" fill="none">
+                <circle cx="16" cy="16" r="13" stroke="#fff" stroke-width="4"/>
+                <circle cx="16" cy="16" r="4.2" fill="#fff"/>
+              </svg>
+            </div>
+            <div class="n">app icon</div>
+          </div>
+          <div class="app">
+            <div class="box" style="background:var(--card);border:1px solid var(--border)">
+              <svg viewBox="0 0 32 32" width="46" height="46" fill="none">
+                <circle cx="16" cy="16" r="13" stroke="#7E86EC" stroke-width="4"/>
+                <circle cx="16" cy="16" r="4.2" fill="#7E86EC"/>
+              </svg>
+            </div>
+            <div class="n">深色底</div>
+          </div>
+          <div class="app" style="width:auto">
+            <div class="tabbar" style="height:88px;border-radius:19px;align-items:center">
+              <div class="t">
+                <svg viewBox="0 0 32 32" width="16" height="16" fill="none">
+                  <circle cx="16" cy="16" r="12" stroke="#7E86EC" stroke-width="5"/>
+                  <circle cx="16" cy="16" r="4" fill="#7E86EC"/>
+                </svg>
+                Corpus
+              </div>
+            </div>
+            <div class="n">16px 标签栏</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="risk">
+      <span class="dot" style="background:var(--warn)"></span>
+      <span><b style="color:var(--text)">商标：我查不了，只能说我知道的</b> —— 有 Corpus 法律 AI、地名 Corpus Christi；
+      基础设施 / DevOps 领域我没见过同名产品。第 9、42 类必须你自己正式检索。</span>
+    </div>
+  </div>
+
+  <!-- ============ Factum ============ -->
+  <div class="cand">
+    <div class="cand-head">
+      <span class="cand-name">Factum</span>
+      <span class="tag tag-alt">备选</span>
+      <span class="meta" style="font-family:var(--mono);font-size:11px;color:var(--dim)">/ˈfæktəm/ · 拉丁语「事实」，fact 的词源</span>
+    </div>
+    <p class="cand-why">
+      直指 single source of truth，语义最不含糊。<b>代价是它只说了 CMDB，没说 AI</b>，
+      而且 -um 结尾在中文语境里念起来偏硬。
+    </p>
+    <div class="stage">
+      <div class="variant">
+        <span class="meta">A · 小写</span>
+        <span class="wm wm-lower wm-ui">factum</span>
+      </div>
+      <div class="variant">
+        <span class="meta">B · 大写宽字距</span>
+        <span class="wm wm-upper wm-neu">Factum</span>
+      </div>
+      <div class="variant">
+        <span class="meta">C · 句点收尾（"事实，句号"）</span>
+        <span class="wm wm-lower wm-ui">factum<span class="brandc">.</span></span>
+      </div>
+    </div>
+    <div class="risk">
+      <span class="dot" style="background:var(--warn)"></span>
+      <span>我知道的：Factum Global（咨询）、Factum Books。软件类看着较空，仍需正式检索。</span>
+    </div>
+  </div>
+
+  <!-- ============ Verity ============ -->
+  <div class="cand">
+    <div class="cand-head">
+      <span class="cand-name">Verity</span>
+      <span class="tag tag-alt">备选</span>
+      <span class="meta" style="font-family:var(--mono);font-size:11px;color:var(--dim)">/ˈverəti/ · 真相、真实性</span>
+    </div>
+    <p class="cand-why">
+      三个里最好懂，英文母语者零解释成本，气质也最"可信赖"。
+      <b>但商标风险最高</b>：Verity 曾是知名搜索公司（被 Autonomy 收购），残留权利要重点查。
+    </p>
+    <div class="stage">
+      <div class="variant">
+        <span class="meta">A · 小写</span>
+        <span class="wm wm-lower wm-ui">verity</span>
+      </div>
+      <div class="variant">
+        <span class="meta">B · 人文体（信赖感）</span>
+        <span class="wm wm-lower wm-hum" style="font-weight:500">Verity</span>
+      </div>
+      <div class="variant">
+        <span class="meta">C · 大写宽字距</span>
+        <span class="wm wm-upper wm-geo">Verity</span>
+      </div>
+    </div>
+    <div class="risk">
+      <span class="dot" style="background:var(--bad)"></span>
+      <span><b style="color:var(--text)">高风险</b> —— 在先商标很可能仍然有效，先查再谈设计。</span>
+    </div>
+  </div>
+
+  <h2 class="sec">推荐方案放大看</h2>
+  <div class="stage" style="padding:56px 32px; align-items:center">
+    <span class="wm wm-ui" style="font-size:76px;font-weight:600;letter-spacing:-0.035em">
+      c<span class="target" style="width:.56em;height:.56em">
+        <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+          <circle cx="16" cy="16" r="13.4" stroke="currentColor" stroke-width="5.2"/>
+          <circle cx="16" cy="16" r="4" fill="#7E86EC"/>
+        </svg></span>rpus
+    </span>
+    <span style="color:var(--muted);font-size:13px;letter-spacing:.02em">
+      基础设施底账 · 给人看，也给 AI 用
+    </span>
+  </div>
+
+  <div class="note">
+    <div><b>关于字体，有件事得先说清楚</b><br>
+    上面全是本机字体的临时效果，换台电脑就会变样。正式的文字标必须做三件事：
+    ① 选一款有商用授权的字体（Inter 免费可商用、Futura/Avenir 需购买）；
+    ② 手工调字距，尤其 <code>r-p</code> 和 <code>p-u</code> 之间；
+    ③ <b>转成曲线</b>——否则任何没装该字体的机器都会静默回退成别的字形，logo 走样且不报错。</div>
+  </div>
+
+  <div class="note">
+    <div><b>商标这件事我帮不上忙。</b><br>
+    我没有检索商标数据库的能力，上面写的风险只来自我的训练知识，<b>不能作为可注册性的依据</b>。
+    你真要注册的话，请自己走：中国商标网（第 9 类计算机软件 + 第 42 类 SaaS）、USPTO、EUIPO，
+    再顺手查 <code>.com</code> 域名和 GitHub 组织名有没有被占。这三样任一被占，名字就得换。</div>
+  </div>
+
+</div>
+
+<script>
+  const btn = document.getElementById('themeToggle')
+  btn.addEventListener('click', () => {
+    const r = document.documentElement
+    const next = r.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'
+    r.setAttribute('data-theme', next)
+    btn.textContent = next === 'dark' ? '切换到浅色' : '切换到深色'
+  })
+</script>
+</body>
+</html>

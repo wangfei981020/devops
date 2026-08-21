@@ -1,0 +1,42 @@
+{
+  "title": "Subnets",
+  "total_one": "{{count}} subnet",
+  "total_other": "{{count}} subnets",
+  "stale": "Deleted in cloud",
+  "staleNote_one": "{{count}} no longer exists in the cloud (kept: it may still be referenced)",
+  "staleNote_other": "{{count}} no longer exist in the cloud (kept: they may still be referenced)",
+  "column": {
+    "name": "Subnet",
+    "cidr": "CIDR",
+    "network": "VPC",
+    "region": "Region",
+    "project": "Project"
+  },
+  "filter": {
+    "searchPlaceholder": "Search subnet, CIDR or VPC",
+    "region": "Region",
+    "project": "Project"
+  },
+  "error": {
+    "title": "Could not load subnets"
+  },
+  "empty": {
+    "title": "No subnets",
+    "filtered": "No subnets match the current filters. Try widening them.",
+    "noSource": "No subnets collected. Check the cloud account is connected under Admin / Cloud accounts."
+  },
+  "vpc": {
+    "title": "VPCs ({{count}})",
+    "counts": "{{subnets}} subnets / {{fws}} rules",
+    "empty": "No VPCs found. That usually means the cloud account has not been collected yet, not that there are none."
+  },
+  "mode": {
+    "custom": "Custom subnets",
+    "auto": "Auto subnets"
+  },
+  "modeHint": {
+    "custom": "VPC subnet mode: custom — every subnet was created manually, and you choose the ranges",
+    "auto": "VPC subnet mode: auto — GCP creates a subnet in every region automatically. An unfamiliar subnet is usually one of these",
+    "unknown": "VPC subnet mode: {{mode}} (no description recorded for this value; shown as-is)"
+  }
+}

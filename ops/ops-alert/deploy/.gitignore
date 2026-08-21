@@ -1,0 +1,4 @@
+# 从 secret.example.yaml 复制出来的真实凭据，绝不入库。
+# ⚠️ 路径相对本目录 —— 写成 ops/*/deploy/secret.yaml 是按仓库根写的，
+#    放在子目录里匹配不到任何东西，而 .gitignore 不匹配时不会有任何提示。
+secret.yaml

@@ -1,0 +1,5 @@
+# GO-2026-5932: golang.org/x/crypto/openpgp 子包已停止维护的信息类告示（非 CVE，无修复版本）。
+# 本项目仅使用 golang.org/x/crypto/bcrypt（main.go 的 seedAdmin 与登录接口做密码哈希），
+# 未 import openpgp —— `go list -deps ./... | grep -c openpgp` = 0，实际链接的是 bcrypt。
+# 与 ops-cmdb/backend 的同一条豁免同源；升级 x/crypto 无法消除（该子包本身不会再修）。
+GO-2026-5932

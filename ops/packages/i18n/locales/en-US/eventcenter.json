@@ -1,0 +1,36 @@
+{
+  "title": "Event center",
+  "hint": "What has happened on the platform recently: expiries, image changes, collection failures and cluster alerts, on one timeline.",
+  "upcoming": "Not yet happened",
+  "filter": {
+    "days": "Time range",
+    "lastDays": "Last {{days}} days",
+    "source": "Source",
+    "level": "Level",
+    "searchPlaceholder": "Search object, title or message"
+  },
+  "source": {
+    "expiry": "Expiry",
+    "change": "Change",
+    "sync": "Collection",
+    "k8s": "Cluster",
+    "alert": "Alert"
+  },
+  "level": {
+    "critical": "Critical",
+    "warning": "Warning",
+    "info": "Info"
+  },
+  "empty": {
+    "title": "No events in this period",
+    "quiet": "Nothing expired, changed, failed to collect or alerted in the last {{days}} days. That is good news — but if you are chasing something that already happened, widen the time range and look again.",
+    "filtered": "No events match the current filters. Widen the source or level — when looking only at Critical, many useful leads sit at Warning."
+  },
+  "error": {
+    "title": "The event center could not be loaded"
+  },
+  "upcomingOnly": "Still actionable: {{count}}",
+  "upcomingOnlyOn": "Showing {{count}} still-actionable · click to clear",
+  "truncated": "Too many events — only {{shown}} of {{total}} returned (limit {{limit}}). This is NOT the full list; narrow the time range or filter by source.",
+  "merged": "{{count}} duplicate events were merged into the ×N rows (same object reporting the same thing repeatedly). The smaller total is expected, nothing was lost."
+}

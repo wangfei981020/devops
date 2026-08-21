@@ -1,0 +1,187 @@
+# ############################################################################
+# ###                                                                      ###
+# ###                     本  地  （ L O C A L ）                           ###
+# ###                                                                      ###
+# ###   docker-desktop / namespace ops-alert                               ###
+# ###   镜像仓库 localhost:8070/opsplatform-dev                             ###
+# ###   入口 NodePort 30835（经 k8s-proxy，见 k8s-proxy/README.md）          ###
+# ###                                                                      ###
+# ############################################################################
+#
+#   helm upgrade --install opsalert ops/ops-alert/deploy/helm \
+#     -n ops-alert --create-namespace \
+#     -f ops/ops-alert/deploy/helm/values-local.yaml \
+#     --set global.tag=v0.3.1
+#
+#   部署后校验跑起来的是不是刚推的镜像：
+#     ops/tooling/scripts/verify-deploy.sh ops-alert ops-alert v0.3.1
+#
+# ⚠️ 本文件**完整自包含**，不依赖 values.yaml 继承。
+#    与 values-prod.yaml 的键集合由 check-values-parity.mjs 比对。
+# ############################################################################
+
+# 已指定环境文件，解除 values.yaml 里的哨兵
+requireEnvValues: false
+
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  imageRegistry: localhost:8070/opsplatform-dev
+  imagePullSecrets: []
+  # 版本号：前后端共用一个。发布时 --set global.tag=<版本> 覆盖
+  tag: ""
+
+frontend:
+  # 单节点集群跑 2 副本是刻意的：多副本相关的问题（滚动更新期间新旧并存、
+  # 会话粘性）只有在多副本下才会暴露，本地就该照生产的形态验证。
+  replicaCount: 2
+  image:
+    repository: ops-alert-frontend
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    type: NodePort
+    port: 80
+    nodePort: 30835
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      # 本地给宽松些：docker-desktop 上 CPU 本来就紧张，
+      # 限太死会让开发时的构建/查询一起变慢
+      cpu: 500m
+      memory: 128Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    # 本地不开 HPA，这个值只为与 prod 保持同一套键（见文件头说明）
+    targetMemoryUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: false          # 本地单节点，PDB 会挡住滚动更新
+    minAvailable: 1
+  securityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+
+backend:
+  # ── 敏感配置 ──
+  # 本地由 chart 直接生成，省掉手工建 Secret 这一步。
+  # ⚠️ 这些值只用于本地 docker-desktop，**不要**照抄到生产：
+  #    生产走 create=false + existingSecret，密码不进 git。
+  secret:
+    create: true
+    existingSecret: ""
+    mysql:
+      host: host.docker.internal
+      port: 3306
+      user: alert_user
+      password: "Alert@2026#Ops"
+      database: opsalert
+    jwtSecret: alert-dev-jwt-secret-change-in-prod
+    # ⚠️ 必须与本地库里已加密的数据源凭据用的是同一把钥匙。
+    # 换掉它不会报错，只会让所有数据源"查询失败"，而配置看着完全没动过 ——
+    # 切到 chart 生成 Secret 时我差点踩这个：默认值和线上那把不一样。
+    aesKey: "alert-dev-aes-key-change-in-prod"
+    adminPassword: "Admin@2026"
+  replicaCount: 2
+  image:
+    repository: ops-alert-backend
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+    metricsPort: 8088
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+  securityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+  # 额外的 envFrom（主 Secret 已由 chart 自动引用，这里只放追加的）
+  envFrom: []
+  env:
+    # 本地一律用 dev 验签公钥。产品默认只信 prod ——
+    # 这道隔离让"测试用的 license 漏到生产"不再依赖人记得
+    - name: OPS_LICENSE_ENV
+      value: dev
+    # 业务时区。影响的是**墙上时钟判定**：日报几点发、日报里「昨天」的边界。
+    #
+    # ⚠️ 界面上的时间显示不看它，走浏览器本地时区 —— 那是对的：
+    # 在马尼拉值班的人该看到马尼拉时间，而不是被强制显示上海时间。
+    #
+    # ⚠️ 必须是 IANA 名字（Asia/Shanghai、Asia/Manila、Europe/London）。
+    # 名字解析不了时进程**直接退出**，不会退回 UTC —— 退回 UTC 的后果是
+    # 日报在错误的时刻发出去，而没有任何一处会说出来。
+    - name: TZ
+      value: Asia/Shanghai
+
+proxyTimeoutSeconds: 120
+
+podAntiAffinity:
+  enabled: true
+  # 单节点集群上 required 会让第二个副本永远 Pending
+  required: false
+
+nodeSelector: {}
+tolerations: []
+podAnnotations: {}
+
+metrics:
+  enabled: false
+  scrapeKind: ServiceMonitor
+  interval: 30s
+  labels: {}
+
+istio:
+  enabled: false
+  annotations: {}
+  # ⚠️ 跨 namespace 必须写成 <ns>/<gateway名>：只写名字时 Istio 会在
+  # 本 namespace 找，找不到就静默不生效——对象创建成功、域名不通、没有报错
+  gateways:
+    - istio-system/infra-istio-ingressgateway-inner
+  hosts:
+    - alert.example.com
+  matchPrefix:
+    - "/"
+  # 检测引擎可能慢查（大集群全量拉取），比默认给得宽
+  timeout: 180s
+
+  retries:
+    attempts: 3
+    perTryTimeout: 60s
+    # ⚠️ 只重试连接类失败。把 5xx 也重试的话，一个失败的写操作会被重放，
+    # 而告警系统的写操作（认领、静默）不是幂等的
+    retryOn: connect-failure,refused-stream
+    allowUnsafeRetryOn: false
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: alert.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []

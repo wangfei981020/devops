@@ -1,0 +1,25 @@
+// 开发期 workspace：把共享库与各产品串起来，改共享库立刻在产品里生效，
+// 不用发私有 module registry（单人维护，registry 是纯负担）。
+//
+// ⚠️ go.work 只作用于开发期。发布构建时各产品用自己 go.mod 里的 replace + vendor，
+//    客户拿到的镜像里没有外部依赖。
+//
+// ⚠️ 加产品时必须同步这里，且路径要真实存在 —— 早先这份文件还指着
+//    ../ops-data-plane/backend 和 ../ops-release-plane/backend（都不存在），
+//    `go work sync` 直接失败，而平时单独 build 各产品又不报错，
+//    所以这种坏法可以躺很久没人发现。
+go 1.25.8
+
+// ⚠️ enterprise/ 下的产品也必须在这里。它们原本挂在 enterprise/ops-kit/go.work 上，
+//    连着另一份 licensekit 快照 —— 两份内核各自演进，而 go.mod 里的 replace
+//    写法一字不差（都是 ../../ops-kit/licensekit），只是相对起点不同，
+//    看代码根本发现不了。那份快照已删除，这里是唯一的串接点。
+use (
+	../../enterprise/ops-access-plane/backend
+	../../enterprise/ops-alert-plane/backend
+	../../enterprise/ops-data-plane/backend
+	../../enterprise/ops-release-plane/backend
+	../ops-cmdb/backend
+	../ops-sso/backend
+	./licensekit
+)

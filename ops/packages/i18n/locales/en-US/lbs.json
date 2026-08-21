@@ -1,0 +1,50 @@
+{
+  "title": "Load balancers",
+  "total_one": "{{count}} load balancer",
+  "total_other": "{{count}} load balancers",
+  "noBackendHint": "unreachable",
+  "emptyNote_one": "{{count}} has no backend",
+  "emptyNote_other": "{{count}} have no backends",
+  "unknownNote_one": "{{count}} has no backend data collected (not the same as having none)",
+  "unknownNote_other": "{{count}} have no backend data collected (not the same as having none)",
+  "health": {
+    "empty": "No backends",
+    "unknown": "Backends not collected",
+    "stale": "Deleted in cloud",
+    "ok": "Healthy",
+    "viaTarget": "Served via target",
+    "k8s": "K8s service backend",
+    "lost": "Backend data lost"
+  },
+  "column": {
+    "name": "Load balancer",
+    "scheme": "Scheme",
+    "backends": "Backends",
+    "health": "Status",
+    "project": "Project"
+  },
+  "filter": {
+    "searchPlaceholder": "Search name or VIP",
+    "scheme": "Scheme",
+    "health": "Status"
+  },
+  "error": {
+    "title": "Could not load load balancers"
+  },
+  "empty": {
+    "title": "No load balancers",
+    "filtered": "No load balancers match the current filters. Try widening them.",
+    "noSource": "No load balancers collected. Check the cloud account is connected under Admin / Cloud accounts."
+  },
+  "why": {
+    "empty": "Target is empty and there are confirmed zero backends — this LB cannot serve traffic. A real problem.",
+    "unknown": "Backends were never collected, or an upstream hop failed during resolution. We do not know whether it has backends — do not read this as \"none\".",
+    "viaTarget": "It has a target, but not a targetPool/backendService (FortiGate forwarding rule, Gateway API target proxy). Traffic is carried by that target; structurally there should be no GCP backend service — not a fault.",
+    "k8s": "The VIP matched a K8s Service. A GKE Service of type=LoadBalancer is backed by Pods (NEG), not instance groups, so instances cannot be traced — but it is serving.",
+    "lost": "Backends were resolved at collection time but cannot be read back — the data was lost, so this row backend verdict is untrustworthy. Re-syncing will not change it; investigate the collection write path.",
+    "stale": "Already deleted in the cloud; only the ledger entry remains.",
+    "ok": "Instance backends were resolved."
+  },
+  "allPorts": "All ports",
+  "allPortsHint": "1-65535 means every port on this VIP is forwarded. Worth confirming separately: usually only the few ports actually in use need to be open."
+}

@@ -1,0 +1,43 @@
+{
+  "title": "Requested vs actual",
+  "needsMetrics": "Requires real usage from Prometheus — without it there is no such thing as waste",
+  "cpu": "CPU {{used}}/{{req}}m",
+  "mem": "Mem {{used}}/{{req}}Mi",
+  "filter": {
+    "cluster": "Cluster",
+    "searchPlaceholder": "Search namespace or workload",
+    "sort": "Sort"
+  },
+  "error": {
+    "title": "Could not load usage comparison"
+  },
+  "empty": {
+    "title": "Nothing to compare",
+    "noMetrics": "No metrics source connected for this cluster. We only know what was requested, not what is actually used — any waste figure derived from requests alone would be made up. Connect Prometheus under Administration / Data sources."
+  },
+  "rowCount": "Showing {{shown}} of {{total}} workloads",
+  "suggestPair": "{{cpu}}m / {{mem}}Mi",
+  "col": {
+    "namespace": "Namespace",
+    "workload": "Workload",
+    "replicas": "Replicas",
+    "cpu": "CPU used/req",
+    "mem": "Mem used/req",
+    "suggest": "Suggested request (per replica)"
+  },
+  "sort": {
+    "cpuWaste": "CPU wasted",
+    "memWaste": "Memory wasted",
+    "cpuPct": "Lowest CPU usage",
+    "memPct": "Lowest memory usage"
+  },
+  "summary": {
+    "title": "Total waste in this cluster",
+    "cpu": "CPU",
+    "mem": "Memory",
+    "line": "requested {{req}}, actual {{used}}",
+    "wasted": "wasted {{v}}",
+    "factor": "suggested request = actual × {{f}}",
+    "missing": "No summary returned this time. The rows below are still usable, but the total cannot be computed — that is NOT the same as \"no waste\"."
+  }
+}

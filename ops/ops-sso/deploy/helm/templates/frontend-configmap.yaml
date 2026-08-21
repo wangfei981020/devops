@@ -1,0 +1,150 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sso.frontend.fullname" . }}-nginx
+  labels:
+    {{- include "sso.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+data:
+  nginx.conf: |
+    # nginx-unprivileged：非 root、监听 8080
+    worker_processes auto;
+    error_log /dev/stderr warn;
+    pid /tmp/nginx.pid;
+
+    events {
+      worker_connections 1024;
+    }
+
+    http {
+      include       /etc/nginx/mime.types;
+      default_type  application/octet-stream;
+
+      # readOnlyRootFilesystem 下所有可写路径都要落到 emptyDir 挂的 /tmp，
+      # 否则 nginx 启动时写临时目录失败，直接 CrashLoop。
+      client_body_temp_path /tmp/client_temp;
+      proxy_temp_path       /tmp/proxy_temp;
+      fastcgi_temp_path     /tmp/fastcgi_temp;
+      uwsgi_temp_path       /tmp/uwsgi_temp;
+      scgi_temp_path        /tmp/scgi_temp;
+
+      log_format json escape=json '{"time":"$time_iso8601","status":$status,'
+        '"method":"$request_method","uri":"$uri","rt":$request_time,'
+        '"ua":"$http_user_agent","xff":"$http_x_forwarded_for"}';
+      access_log /dev/stdout json;
+
+      # ★ 转发协议：**上游给了就用上游的**，没给才用自己的 scheme。
+      #
+      # 直接写 `proxy_set_header X-Forwarded-Proto $scheme` 是错的：
+      # 这个 Pod 自己永远是明文 http（TLS 在更外面一层终止），
+      # 于是外面明明是 https，传到后端的却是 http。
+      # 后端靠这个头决定会话 Cookie 要不要带 Secure ——
+      # **表现是浏览器走 https、Cookie 却没有 Secure：看着一切正常，那道防线是空的。**
+      # 实测撞到过：本地给 SSO 加了 https 入口之后，Cookie 上的 Secure 一直没出现。
+      map $http_x_forwarded_proto $fwd_proto {
+        ""      $scheme;
+        default $http_x_forwarded_proto;
+      }
+
+      sendfile on;
+      tcp_nopush on;
+      keepalive_timeout 65;
+      server_tokens off;
+
+      gzip on;
+      gzip_vary on;
+      gzip_min_length 1024;
+      gzip_types text/plain text/css application/javascript application/json
+                 image/svg+xml application/wasm;
+
+      server {
+        listen 8080;
+        server_name _;
+        root /usr/share/nginx/html;
+
+        # 探针专用端点。不要拿 / 做探针：它会返回整个 index.html，
+        # 探针流量白占带宽，日志也被刷满。
+        location = /healthz {
+          access_log off;
+          add_header Content-Type text/plain;
+          return 200 'ok';
+        }
+
+        # 带内容哈希的产物可以长缓存，改动必然换文件名
+        location /assets/ {
+          expires 1y;
+          add_header Cache-Control "public, immutable";
+          try_files $uri =404;
+        }
+
+        # ⚠️ index.html 与 version.json 绝不能缓存。
+        # 缓存了会出这种事故：发新版后用户手里是旧 index.html，
+        # 它引用的 assets 哈希文件已经不存在了 → 整页白屏，
+        # 且只发生在老用户身上，新访客一切正常，极难复现。
+        location = /console.html {
+        add_header Cache-Control "no-store";
+      }
+        location = /portal.html {
+          add_header Cache-Control "no-store, must-revalidate";
+        }
+        location = /version.json {
+          add_header Cache-Control "no-store";
+        }
+
+        # 后端地址由 chart 推导（见 _helpers.tpl 的 sso.backendAddr），
+        # 不是人填的。改部署形态时这里自动跟着变。
+        location /api/ {
+          proxy_pass http://{{ include "sso.backendAddr" . }};
+          proxy_http_version 1.1;
+          # Host 用 $http_host 不用 $host —— $host 不含端口，而本地每个系统
+          # 靠端口区分（约定 §2.x）。X-Forwarded-Proto 见上面 map 的说明。
+          proxy_set_header Host              $http_host;
+          proxy_set_header X-Real-IP         $remote_addr;
+          proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $fwd_proto;
+          proxy_set_header Connection        "";
+          proxy_read_timeout {{ .Values.proxyTimeoutSeconds }}s;
+          proxy_send_timeout {{ .Values.proxyTimeoutSeconds }}s;
+          # SSE / 流式响应不能被缓冲，否则告警推送要等缓冲区满才到前端
+          proxy_buffering off;
+        }
+
+        # SPA 兜底：前端路由的深链直接访问时也要返回 index.html
+      # ── 双入口 ──────────────────────────────────────────
+      #
+      # 产物里是 portal.html + console.html 两个壳，共用 /assets 下的 chunk。
+      # 三段顺序不能换：assets 最先（否则被 SPA 兜底吃掉），然后 /console，
+      # 最后才是根路径兜底。
+      location /console {
+        try_files $uri /console.html;
+      }
+
+      # OIDC 协议端点在**根路径**，不在 /api 下 —— 下游按 issuer 拼出来的就是这些。
+      # 少代理一条，discovery 宣告的端点就会 404，而下游只报一句含糊的 failed to fetch。
+      location /oidc/ {
+        proxy_pass http://{{ include "sso.backendAddr" . }};
+        proxy_http_version 1.1;
+        # ⚠️ $http_host 而不是 $host：$host 不含端口。
+        # ops-sso 是 OIDC provider，issuer 和 redirect_uri 都要靠它拼 ——
+        # 端口丢了，接入方拿到的 issuer 就是错的，而报错只有一句 mismatch。
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Proto $fwd_proto;
+      }
+      location /.well-known/ {
+        proxy_pass http://{{ include "sso.backendAddr" . }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto $fwd_proto;
+      }
+
+      # 门户兜底。放最后，前面几段都没命中才轮到它。
+      #
+      # 刻意不写 $uri/ ：目录索引会命中 nginx 自带的欢迎页 index.html，
+      # 于是访问 / 看到「Welcome to nginx!」而不是门户 —— 已经撞过一次。
+      # 双入口下也没有"目录"这个概念，两个壳都是具名文件。
+      location / {
+        try_files $uri /portal.html;
+      }
+      }
+    }

@@ -1,0 +1,50 @@
+{
+  "action": {
+    "queued": "已触发，正在后台跑",
+    "runNow": "立即运行",
+    "running": "上一次触发还在跑，等它结束",
+    "triggerFailed": "触发失败",
+    "viewRuns": "看执行记录"
+  },
+  "brokenNote_other": "{{count}} 个任务需要处理",
+  "column": {
+    "lastRun": "上次执行",
+    "name": "任务",
+    "ops": "操作",
+    "result": "结果",
+    "schedule": "调度",
+    "state": "状态"
+  },
+  "disabledNeverHint": "停用且从没跑过——它负责的那项检查一直没有在做",
+  "empty": {
+    "filtered": "当前筛选条件下没有任务。",
+    "noSource": "还没有登记任何定时任务。",
+    "title": "没有定时任务"
+  },
+  "error": {
+    "title": "任务列表没能加载出来"
+  },
+  "filter": {
+    "searchPlaceholder": "搜索任务名",
+    "state": "状态"
+  },
+  "neverHint": "没被调度到过，靠它采的数据一直是空的",
+  "neverRun": "从没跑过",
+  "notifyOff": "不通知",
+  "notifyOffHint": "这个任务已关闭飞书通知——它失败时不会有任何人收到消息，只能靠人主动来看这一页。",
+  "overdueHint": "调度器可能停了：任务不会报错，只是不再执行",
+  "state": {
+    "all": "全部",
+    "disabled": "已停用",
+    "failed": "上次失败",
+    "never": "从没跑过",
+    "ok": "正常",
+    "overdue": "早该跑了",
+    "skipped": "已跳过"
+  },
+  "title": "巡检",
+  "total_other": "共 {{count}} 个任务",
+  "notCancellable": "该记录不是运行中或已结束。",
+  "retryTriggered": "已触发重试 {{count}} 项，稍后刷新看新记录。",
+  "runTriggered": "已触发，稍后刷新看结果。"
+}

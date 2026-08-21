@@ -1,0 +1,53 @@
+{{- include "alert.requireEnv" . }}
+{{- if (.Values.metrics | default dict).enabled }}
+{{- /*
+让采集端抓后端指标。支持两种采集端，用 metrics.scrapeKind 选：
+
+  ServiceMonitor   Prometheus Operator（kube-prometheus-stack）
+  VMServiceScrape  VictoriaMetrics Operator 的原生 CRD
+
+# 为什么两种都要，而不是只发 ServiceMonitor
+
+VM operator 默认会把 ServiceMonitor 自动转成 VMServiceScrape
+（VM_ENABLEDPROMETHEUSCONVERTER_SERVICESCRAPE，默认 true），所以只发
+ServiceMonitor 在 VM 环境下**通常**也能工作。
+
+但那是一层隐式依赖：转换器被关掉时（有些团队为了避免和 Prometheus 双采而关），
+ServiceMonitor 照样创建成功、没有任何报错，只是没人来抓。
+把 VMServiceScrape 做成一等选项，是为了让"用哪个采集端"成为一个
+**显式写在 values 里的决定**，而不是依赖对方的默认配置。
+
+⚠️ 两种只能选一个。都发的话，Prometheus 和 vmagent 会同时抓同一个端点，
+指标进两套库、告警可能重复触发，而两边看着都正常。
+*/}}
+{{- $kind := .Values.metrics.scrapeKind -}}
+{{- if not (has $kind (list "ServiceMonitor" "VMServiceScrape")) -}}
+{{- fail (printf "metrics.scrapeKind 只能是 ServiceMonitor 或 VMServiceScrape，当前是 %q" $kind) -}}
+{{- end -}}
+apiVersion: {{ if eq $kind "VMServiceScrape" }}operator.victoriametrics.com/v1beta1{{ else }}monitoring.coreos.com/v1{{ end }}
+kind: {{ $kind }}
+metadata:
+  name: {{ include "alert.backend.fullname" . }}
+  labels:
+    {{- include "alert.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+    {{- with .Values.metrics.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "alert.backend.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: {{ .Values.metrics.path }}
+      interval: {{ .Values.metrics.interval }}
+      scrapeTimeout: {{ .Values.metrics.scrapeTimeout }}
+      {{- with .Values.metrics.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

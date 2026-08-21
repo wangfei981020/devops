@@ -1,0 +1,40 @@
+{
+  "atMax": "At max",
+  "blockingCount": "{{count}} PDB(s) with zero budget",
+  "blockingHint": "Evicting any pod of these workloads will be rejected right now — a node drain will stall here. Scale them up first, or relax the policy temporarily.",
+  "cluster": "Cluster",
+  "col": {
+    "allowed": "Disruptions allowed",
+    "healthy": "Healthy/expected",
+    "machine": "Machine type",
+    "nodes": "Nodes",
+    "object": "Object",
+    "policy": "Policy",
+    "pool": "Pool",
+    "replicas": "Replicas (min–max)",
+    "risk": "Risk",
+    "target": "Targets",
+    "version": "Version"
+  },
+  "empty": {
+    "hpa": "No HPAs in this cluster. Every workload has a fixed replica count; scaling is manual.",
+    "pdb": "No PDBs in this cluster. ⚠️ That is not the same as safe — it means nothing protects these workloads during eviction, and a rolling upgrade may take all pods of a service down at once.",
+    "pool": "No node pools found. Self-managed clusters have no node-pool concept — this is not a collection gap."
+  },
+  "floor": "(floor {{n}})",
+  "hint": {
+    "hpa": "Workloads already at max replicas cannot absorb more traffic",
+    "pdb": "Check before draining a node: zero-budget entries will block the drain outright",
+    "pool": "Machine type, count and version — version drift is what you want to catch before an upgrade"
+  },
+  "notCollected": {
+    "body": "Nothing on this tab can be trusted right now — a blank list means neither \"no PDBs\" nor \"safe to drain\". Verify collection is running for this cluster first.",
+    "title": "PDBs have never been collected for this cluster"
+  },
+  "selectorAll": "Empty selector = matches every Pod in the namespace",
+  "tab": {
+    "hpa": "HPA",
+    "pdb": "PDB",
+    "pool": "Node pools"
+  }
+}

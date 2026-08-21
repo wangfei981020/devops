@@ -1,0 +1,249 @@
+# ============================================================================
+# OpsAlert · 告警与事件响应平台
+#
+# 前后端放在**同一个 chart**，理由：
+#  1. 前端 nginx 要反代后端，同 chart 里 Service 名可以自动生成，不用人填。
+#     地址靠手工同步是上一代反复出问题的根源（env / Secret / ConfigMap 三处，
+#     第三处最常漏）。
+#  2. 前后端是一个产品的两半，API 变了前端必须跟着变。分两个 chart 会出现
+#     「前端升了后端没升」，而这类版本错配在测试环境很难复现。
+#  3. helm rollback 一条命令回到完整的上一版。
+#
+# 单 chart 不影响独立升级：--set frontend.image.tag=v2 只会滚前端，
+# 因为配置校验和只挂在各自的 Deployment 上。
+#
+# ============================================================================
+# ⚠️ 这个文件是 chart 的**默认值**，作用只有一个：保证结构齐全，模板不会 nil。
+#
+# 真正的配置在环境文件里，每个环境一份、**完整自包含**：
+#   values-local.yaml   本地（docker-desktop）
+#   values-prod.yaml    生产（GKE）
+# 生产上线时读 values-prod.yaml 一个文件就够，不需要对着这里推断最终值。
+#
+# # 为什么不能把这个文件删掉
+#
+# ops-cmdb 试过：清成只剩一个哨兵键之后，chart 就没有任何默认值 ——
+# 环境文件少写一个可选键，模板直接报
+# `nil pointer evaluating interface {}.enabled`，而报错完全不提是哪个键。
+# 生产第一次安装就撞上了。
+# 更要紧的是这是要卖的产品：客户会写自己的 values，而且一定是残缺的，
+# chart 不能因为对方少写一个可选键就装不上。
+#
+# # 这里的值全是「最安全的关闭态」
+#
+# 入口关、指标采集关、镜像仓库为空、副本最小。单独用这个文件装出来的东西
+# **跑不起来**，而这正是要的：requireEnvValues 会让它直接失败，
+# 而不是装出一个看起来正常、实际连不上任何东西的实例。
+# ============================================================================
+
+# 哨兵：环境文件必须把它设成 false。
+# 忘了传 -f 时 helm 会直接 fail 并说清该传哪个文件，
+# 而不是用上面那套关闭态默认值装出一个跑不起来的实例。
+requireEnvValues: true
+
+nameOverride: ""
+fullnameOverride: ""
+# ---------------------------------------------------------------------------
+# 全局：所有组件共用的东西只在这里配一次
+# ---------------------------------------------------------------------------
+global:
+  # 镜像仓库前缀（不含镜像名）。各组件的 image.repository 只写镜像名。
+  # ⚠️ 前后端各写一份完整地址的话，换仓库要改两处，而只改一处不会报错
+  # ⚠️ 默认留空：装不出能跑的东西是刻意的，见文件头说明
+  imageRegistry: ""
+  # 拉私有仓库用的 Secret，前后端共用
+  imagePullSecrets: []
+  # 版本号。**前后端共用这一个**——它们是同一个产品的两半，
+  # 一次发布、一次回滚。发布时用 --set global.tag=v0.2.0 覆盖。
+  #
+  # ⚠️ 留空则回落到 Chart.appVersion。组件级 image.tag 仍可单独设置
+  # （应急回滚某一半），但两边不一致时 chart 会直接渲染失败，
+  # 见 _helpers.tpl 的 alert.checkVersions —— 线上真出过
+  # backend v0.1.4 配 frontend v0.1.7，界面上只表现为某块永远是空的。
+  tag: ""
+
+# ---------------------------------------------------------------------------
+# 前端
+# ---------------------------------------------------------------------------
+frontend:
+  # 骨架里给最小值，真实副本数由环境文件决定
+  replicaCount: 1
+
+  image:
+    repository: ops-alert-frontend
+    tag: ""            # 留空用 Chart.appVersion；CI 一律显式 --set
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP    # 本地用 NodePort，见 values-local.yaml
+    port: 80
+    nodePort: null
+
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      # 不设 CPU limit：nginx 的 CPU 是突发型的，
+      # 设了会在流量尖峰被限流，表现为偶发的请求变慢
+      memory: 128Mi
+
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  securityContext:
+    # ⚠️ 只写 runAsNonRoot，**不写 runAsUser**（CONVENTIONS §4.5）。
+    # uid 由 Dockerfile 单点定义（前端 101 / 后端 10001）。
+    # 两处各写一个数必然分叉，而且分叉后两种身份都能跑，没人会发现 ——
+    # 直到某个按属主授权的地方失败，报错却只说 permission denied。
+    #
+    # 顺带解决了 gid：不指定 runAsUser 时进程用镜像里那个用户自己的组，
+    # 不会落进 gid 0（指定一个镜像里不存在的 uid 才会）。
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+
+# ---------------------------------------------------------------------------
+# 后端
+#
+# ⚠️ 后端**总是**随本 chart 部署，前端反代到同 chart 的 Service。
+#
+# 早先这里有 enabled=false + external.host，用来把前端指向另行部署的后端
+# （当时后端还在 enterprise/ops-data-plane）。后端搬进 ops/ops-alert/backend 之后
+# 这条路只剩坏处：前端可能指着一个**别的产品**的后端，
+# 而它缺字段的表现只是"这块永远是空的"，不报错也不 404。
+# 前后端是一个产品的两半，一起部署、一起回滚。
+# ---------------------------------------------------------------------------
+backend:
+  # ── 敏感配置：数据库、会话密钥、凭据加密密钥 ──
+  #
+  # 全部集中在**一个 Secret** 里，名字由 chart 推导，envFrom 自动引用。
+  # 数据库拆成五个键（主机/端口/账号/密码/库名），DSN 由后端在
+  # config/config.go 的 buildDSN 里拼 —— 拼接规则（超时、时区、字符集）
+  # 是代码的事，不该让每个部署的人重新拼一遍。
+  secret:
+    # false = 引用已存在的 Secret（生产推荐：密码不进 git）
+    # true  = 由 chart 生成，值取自下面这些字段
+    create: false
+    # ⚠️ 默认给出**约定的 Secret 名**而不是空串。
+    #
+    # 空串会让 chart 用自带默认值渲染时直接失败（create=false 就必须有
+    # existingSecret），于是「拿到 chart 先 helm template 看一眼」这个
+    # 最基本的动作都做不了 —— 而客户手写的 values 一定是残缺的。
+    # 给了名字之后，忘记建 Secret 的后果是 Pod 起不来并明确说
+    # "secret not found"，比渲染期的模板报错好懂得多。
+    existingSecret: ops-alert-backend-secret
+    mysql:
+      host: ""
+      port: 3306
+      user: ""
+      password: ""
+      database: ""
+    jwtSecret: ""
+    aesKey: ""
+    adminPassword: ""
+  replicaCount: 1
+  image:
+    repository: ops-alert-backend
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  service:
+    port: 8080
+    metricsPort: 8088
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  securityContext:
+    # 同前端：uid 只在 Dockerfile 定义（后端 10001），这里不写 runAsUser。
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+
+  # 环境变量走 Secret 引用，不要把凭据写进 values
+  envFrom: []
+  env: []
+
+# ---------------------------------------------------------------------------
+# 通用
+# ---------------------------------------------------------------------------
+
+# 后端可能慢查（大集群全量拉取），比 nginx 默认 60s 给得宽
+proxyTimeoutSeconds: 120
+
+# 尽量把副本分散到不同节点。用 preferred 而非 required：
+# 本地单节点集群用 required 会让第二个副本永远 Pending
+podAntiAffinity:
+  enabled: true
+  required: false
+
+nodeSelector: {}
+tolerations: []
+podAnnotations: {}
+
+# 指标采集。关闭态：没有 Prometheus Operator 的集群装上去也不会报错
+metrics:
+  enabled: false
+  # ServiceMonitor（kube-prometheus-stack）或 PodMonitor
+  scrapeKind: ServiceMonitor
+  interval: 30s
+  labels: {}
+
+# Istio 形态的入口。与 ingress 并存而不是二选一：
+# 两种入口在不同集群里都用得上，装哪个由环境文件决定
+istio:
+  enabled: false
+  annotations: {}
+  # ⚠️ 跨 namespace 必须写成 <ns>/<gateway名>：只写名字时 Istio 会在
+  # 本 namespace 找，找不到就静默不生效——对象创建成功、域名不通、没有报错
+  gateways:
+    - istio-system/infra-istio-ingressgateway-inner
+  hosts:
+    - alert.example.com
+  matchPrefix:
+    - "/"
+  # 检测引擎可能慢查（大集群全量拉取），比默认给得宽
+  timeout: 180s
+
+  retries:
+    attempts: 3
+    perTryTimeout: 60s
+    # ⚠️ 只重试连接类失败。把 5xx 也重试的话，一个失败的写操作会被重放，
+    # 而告警系统的写操作（认领、静默）不是幂等的
+    retryOn: connect-failure,refused-stream
+    allowUnsafeRetryOn: false
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: alert.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []

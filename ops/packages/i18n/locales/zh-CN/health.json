@@ -1,0 +1,30 @@
+{
+  "checksRan": "共跑了 {{count}} 项检查",
+  "clear": {
+    "reason": "结论只覆盖已采集到的数据。任何一项检查查不成，这一页会直接报错，而不是说「没问题」。",
+    "title": "本次体检没有发现问题"
+  },
+  "critical_other": "严重 {{count}}",
+  "detail": {
+    "empty": "这一项当前没有明细行 —— 支持下钻且查询成功，确实是 0 条。"
+  },
+  "error": {
+    "title": "集群体检没能完成"
+  },
+  "filter": {
+    "cluster": "集群"
+  },
+  "info_other": "提示 {{count}}",
+  "summary": "本次体检",
+  "title": "集群健康",
+  "unit": {
+    "hpa_other": "{{count}} 个 HPA",
+    "image_other": "{{count}} 个镜像",
+    "node_other": "{{count}} 个节点",
+    "pod_other": "{{count}} 个 Pod",
+    "pvc_other": "{{count}} 个卷",
+    "resource_other": "{{count}} 类资源",
+    "workload_other": "{{count}} 个工作负载"
+  },
+  "warning_other": "警告 {{count}}"
+}

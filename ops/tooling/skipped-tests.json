@@ -1,0 +1,26 @@
+{
+  "ops-video-manager/backend/probe/targets_test.go": {
+    "why": "抽样逻辑要连真库才能验证 —— 它决定探测会不会打满出网带宽",
+    "how": "TEST_DSN='ops_video_manager:<密码>@tcp(127.0.0.1:3306)/ops_video_manager?parseTime=true' go test ./probe/",
+    "warning": "⚠️ 不能走 k8s-proxy 的 30306：源 IP 会变成 10.244.0.1，账号按来源限制会拒绝。必须直连宿主机 3306。",
+    "incident": "2026-08-18：这几条一直静默跳过，导致抽样路径的两个 SQL bug（列名重复 / SELECT * 多带一列）从未被发现。本地永远走全探分支（候选 8 < 阈值 50），而生产上千桌台必然走抽样 → CDN 层整个探不了。"
+  },
+  "ops-cmdb/backend/internal/cluster/lease_db_test.go": {
+    "why": "租约选主要连真库才能验证 —— 它决定多副本下会不会有两个 leader 同时跑定时任务",
+    "how": "TEST_MYSQL_DSN='<user>:<pass>@tcp(127.0.0.1:3306)/<db>?parseTime=true' go test ./internal/cluster/",
+    "status": "⚠️ 未验证。ops-cmdb 在生产运行，这条路径靠的是代码审查而非测试。",
+    "owner_note": "本轮（2026-08-18）由 ops-video-manager 的守卫顺带发现，未动手修。"
+  },
+  "ops-cmdb/backend/internal/store/schema_test.go": {
+    "why": "schema 一致性检查 —— 比对迁移文件与实际表结构是否漂移",
+    "how": "TEST_MYSQL_DSN='<user>:<pass>@tcp(127.0.0.1:3306)/<db>?parseTime=true' go test ./internal/store/",
+    "status": "🔴 未验证，且这一条最值得跑。生产库若与迁移文件漂移，表现是「某个字段写进去了但读不出来」这类静默故障。",
+    "owner_note": "本轮（2026-08-18）由 ops-video-manager 的守卫顺带发现，未动手修。"
+  },
+  "ops-version/backend/providers/kite_test.go": {
+    "why": "对接 Kite 的真实接口测试",
+    "how": "KITE_ENDPOINT=<地址> go test ./providers/",
+    "status": "⚠️ 未验证。ops-version 尚未上生产，优先级低于上面两条。",
+    "owner_note": "本轮（2026-08-18）由 ops-video-manager 的守卫顺带发现，未动手修。"
+  }
+}

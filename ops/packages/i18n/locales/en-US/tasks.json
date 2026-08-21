@@ -1,0 +1,52 @@
+{
+  "action": {
+    "queued": "Triggered, running in background",
+    "runNow": "Run now",
+    "running": "Previous trigger is still running",
+    "triggerFailed": "Trigger failed",
+    "viewRuns": "View runs"
+  },
+  "brokenNote_one": "{{count}} task needs attention",
+  "brokenNote_other": "{{count}} tasks need attention",
+  "column": {
+    "lastRun": "Last run",
+    "name": "Task",
+    "ops": "Actions",
+    "result": "Result",
+    "schedule": "Schedule",
+    "state": "Status"
+  },
+  "disabledNeverHint": "Disabled and never ran — the check it owns has never been performed",
+  "empty": {
+    "filtered": "No tasks match the current filters.",
+    "noSource": "No scheduled tasks registered yet.",
+    "title": "No scheduled tasks"
+  },
+  "error": {
+    "title": "Could not load tasks"
+  },
+  "filter": {
+    "searchPlaceholder": "Search task",
+    "state": "Status"
+  },
+  "neverHint": "Never scheduled — whatever it collects has been empty all along",
+  "neverRun": "Never ran",
+  "notifyOff": "No alerts",
+  "notifyOffHint": "Lark notification is off for this task — a failure reaches nobody; someone has to come look at this page.",
+  "overdueHint": "The scheduler may be down: the task does not error, it simply stops running",
+  "state": {
+    "all": "All",
+    "disabled": "Disabled",
+    "failed": "Last run failed",
+    "never": "Never ran",
+    "ok": "OK",
+    "overdue": "Overdue",
+    "skipped": "Skipped"
+  },
+  "title": "Inspections",
+  "total_one": "{{count}} task",
+  "total_other": "{{count}} tasks",
+  "notCancellable": "That run is neither in progress nor finished, so there is nothing to cancel.",
+  "retryTriggered": "Retry triggered for {{count}} item(s). Refresh shortly to see the new run.",
+  "runTriggered": "Triggered. Refresh shortly to see the result."
+}

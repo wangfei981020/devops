@@ -1,0 +1,56 @@
+{
+  "column": {
+    "cluster": "集群 / 数据源",
+    "object": "对象",
+    "owner": "归属",
+    "rule": "规则 / 责任组",
+    "severity": "级别",
+    "summary": "摘要",
+    "time": "触发时间",
+    "value": "触发值"
+  },
+  "count": "显示 {{shown}} / 夜莺侧共 {{total}} 条",
+  "empty": {
+    "filtered": "当前筛选条件下没有告警。放宽条件或清空筛选再看。",
+    "noSource": "还没接入告警系统。这里的空「不代表没有告警」——去「管理 / 观测端点」接入夜莺等告警源后才会有数据。",
+    "quiet": "告警系统已接入，当前没有活跃告警。",
+    "title": "没有告警"
+  },
+  "error": {
+    "title": "告警列表没能加载出来"
+  },
+  "filter": {
+    "allEnv": "全部环境",
+    "allSeverity": "全部级别",
+    "env": "环境",
+    "envsUnavailable": "环境清单取不到",
+    "searchPlaceholder": "搜索规则、对象、责任组或标签",
+    "state": "视图",
+    "window": "时间窗"
+  },
+  "filteredOut": {
+    "keyword": "关键词筛掉 {{n}} 条",
+    "severity": "级别筛掉 {{n}} 条"
+  },
+  "hint": {
+    "n9eNotConfigured": "尚未接入夜莺。到「管理 → 观测端点」添加一个类型为 n9e 的接入点，这一页就会有数据。"
+  },
+  "noOwnerTag": "规则未带业务标签",
+  "notified_other": "已通知 {{count}} 次",
+  "recovered": "已恢复",
+  "recoveredAt": "已恢复 · {{at}}",
+  "sourceNote": "来自已接入的告警系统，我们只读不改",
+  "state": {
+    "current": "当前",
+    "history": "历史"
+  },
+  "title": "告警",
+  "total_other": "共 {{count}} 条告警",
+  "truncated": "只取回了一部分，你看到的不是全部",
+  "window": {
+    "d30": "近 30 天",
+    "d7": "近 7 天",
+    "h24": "近 24 小时",
+    "h6": "近 6 小时"
+  }
+}

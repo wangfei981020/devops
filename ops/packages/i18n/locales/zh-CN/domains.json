@@ -1,0 +1,231 @@
+{
+  "action": {
+    "checkCerts": "检测该域名下证书",
+    "refresh": "从注册商刷新",
+    "syncRecords": "同步解析记录"
+  },
+  "autoLink": "自动关联模块",
+  "chain": {
+    "cdn": "CDN",
+    "cname": "回源 CNAME",
+    "desc": "从域名一路串到 Pod 和节点：CDN / 证书 / 入口 / Service / Pod / 节点。⚠️ 边缘证书和源站证书是两张不同的证书，到期时间互相独立。",
+    "edge": "边缘接入",
+    "edgeCert": "CDN 边缘证书到期",
+    "entry": "全链路",
+    "morePods": "还有 {{n}} 个",
+    "noChain": "没有匹配到任何 K8s 入口",
+    "noChainHint": "⚠️ 这不等于「这个域名没人用」。两种常见情况：(1) 它根本不走 K8s（纯 CDN 回源到 VM）；(2) Ingress/VirtualService 的 host 写法没匹配上（如用了通配符）。下线前必须先排除这两种。",
+    "noPod": "🔴 没有 Pod —— 打不通",
+    "noService": "⚠️ 这个入口没有关联到任何 Service",
+    "noTls": "未配 TLS",
+    "notRecorded": "未登记",
+    "origin": "源站 IP",
+    "originCert": "源站证书到期",
+    "pods": "{{n}} 个 Pod / {{nodes}} 个节点",
+    "title": "{{domain}} 的全链路"
+  },
+  "column": {
+    "cert": "证书到期",
+    "env": "环境",
+    "expiry": "注册到期",
+    "module": "模块",
+    "name": "域名",
+    "owner": "负责人",
+    "project": "项目",
+    "records": "解析记录",
+    "resolve": "解析"
+  },
+  "daysLeft_other": "还剩 {{count}} 天",
+  "del": {
+    "desc": "{{domain}}",
+    "note": "⚠️ 删除的是 CMDB 里的台账记录，域名本身不受影响 —— 不会从注册商注销，也不会停止续费。下次同步时若注册商那边还在，它会被重新采回来。",
+    "title": "删除域名记录"
+  },
+  "dns": {
+    "add": "新增记录",
+    "badLines": "{{count}} 行解析不出来（这些行不会被提交）",
+    "bulkAdd": "批量新增",
+    "bulkDelete": "批量删除",
+    "bulkHint": "一行一条：类型 主机名 记录值 [TTL] [优先级]，空格分隔。一次最多 200 条。",
+    "bulkTtl": "批量改 TTL",
+    "col": {
+      "data": "记录值",
+      "name": "主机名",
+      "priority": "优先级",
+      "type": "类型"
+    },
+    "desc": "注册商侧的 DNS。改动会实时写回注册商，不是只改本地台账。",
+    "dryRunNote": "当前数据源（{{env}}）是预演模式：并没有真的写回注册商。",
+    "empty": "没有解析记录。可能是这个域名确实没配，也可能是还没从注册商同步过 —— 先执行一次「同步解析记录」再看。",
+    "entry": "解析记录",
+    "fixBadFirst": "先改掉解析不出来的行，避免只写进去一部分",
+    "nameHint": "@ 表示根域名",
+    "needData": "记录值不能为空",
+    "needLines": "先粘贴要新增的记录",
+    "needSelect": "先选中要操作的记录",
+    "protected": "受保护",
+    "protectedWhy": "NS / SOA / _acme-challenge 由注册商或证书签发流程使用，CMDB 禁止写回。",
+    "selectAll": "全选",
+    "selected": "已选 {{count}} 条",
+    "title": "{{domain}} 的解析记录",
+    "ttlHint": "最小 600 秒（注册商限制）",
+    "willAdd": "将新增 {{count}} 条",
+    "willUpdate": "将修改 {{count}} 条"
+  },
+  "empty": {
+    "filtered": "当前筛选条件下没有域名。放宽条件再看看。",
+    "noSource": "还没有纳管任何域名。到「管理 / 注册商」接入 GoDaddy 等注册商后，同步会自动带进来。",
+    "title": "没有域名"
+  },
+  "error": {
+    "title": "域名列表没能加载出来"
+  },
+  "expiredDaysAgo_other": "已过期 {{count}} 天",
+  "filter": {
+    "health": "状态",
+    "searchPlaceholder": "搜索域名"
+  },
+  "form": {
+    "createTitle": "新增域名",
+    "desc": "注册商同步不到的域名（别处买的、内部域名）在这里手工录入。",
+    "editTitle": "编辑域名",
+    "expiryHint": "留空 = 不知道到期日。⚠️ 不要为了字段完整填今天",
+    "nameHint": "如 example.com。建后不可改",
+    "needName": "请填写域名"
+  },
+  "health": {
+    "certSoon": "证书将到期",
+    "expired": "已过期",
+    "ignored": "已忽略",
+    "ok": "正常",
+    "soon": "即将到期",
+    "unknown": "到期日未知",
+    "unresolved": "解析异常"
+  },
+  "ignored": "已忽略",
+  "ops": {
+    "autoRenew": "自动续费",
+    "autoRenewHint": "改的是注册商那边的开关，立即生效。",
+    "confirm": {
+      "body": "将为 {{domain}} 续费 {{count}} 年。该操作不可撤销，且失败后不能直接重试。",
+      "ok": "确认扣费续费",
+      "title": "确认续费（会真实扣费）"
+    },
+    "desc": "注册商侧的实时状态。续费会真实扣费。",
+    "detailDegraded": {
+      "body": "到期日和自动续费开关这次没取到 —— 这不代表它们是关的。别据此判断要不要手工续费，先解决取数问题。",
+      "title": "注册商侧状态读不出来"
+    },
+    "dryRun": {
+      "body": "当前数据源（{{env}}）是预演模式：点续费不会真的扣费，也不会真的续上。",
+      "title": "预演模式"
+    },
+    "entry": "续费与自动续费",
+    "estimate": "约 {{amount}} {{currency}}",
+    "expires": "注册商到期日",
+    "failNote": "⚠️ 失败不等于没扣费。重试前请先回查注册商那边的到期日是否已经前进，确认没扣才能再点一次。",
+    "noPrice": "续费价读不到，扣费金额以注册商账单为准",
+    "orderId": "订单号",
+    "privacy": "隐私保护",
+    "registrarStatus": "注册商状态",
+    "renewNow": "续费",
+    "turnOffAuto": "关闭自动续费",
+    "turnOnAuto": "开启自动续费"
+  },
+  "quality": {
+    "certDays": "证书剩 {{n}} 天",
+    "errorTitle": "拉取拨测数据失败",
+    "expiring": "证书 30 天内到期",
+    "explain": "这一页比的是「我们登记的」和「客户端实际拿到的」。数据读自现成的 blackbox 拨测，不新建拨测，也不做实时监控墙——那是夜莺和告警平台的事。证书到期日是客户端真实拿到的那张，与台账登记的不一致就说明证书换了但没生效。",
+    "failing": "拨测失败",
+    "matched": "已对上台账",
+    "matchedTitle": "已对上台账的拨测目标（证书快到期的排前）",
+    "noSource": "尚未接入 Prometheus 数据源",
+    "noTls": "无 TLS 拨测",
+    "probeFailed": "拨测失败",
+    "probed": "拨测目标",
+    "truncated": "只列出前 {{shown}} 条，共 {{total}} 条",
+    "unledgered": "失管域名",
+    "unledgeredHint": "这些域名正在被拨测（说明有人在用），但注册商台账里查不到——可能是别人注册的、也可能是我们的但没登记。两种都要确认。",
+    "unledgeredTitle": "失管域名：有人在拨测，台账里没有",
+    "unprobed": "监控盲区",
+    "unprobedHint": "这些域名配了解析（说明在用），却没有任何拨测覆盖——它挂了我们不会知道。已迁走/未使用的域名不计入。",
+    "unprobedTitle": "监控盲区：台账里有解析，但没有任何拨测"
+  },
+  "renew": {
+    "attempts": {
+      "one": "已尝试 {{count}} 次",
+      "other": "已尝试 {{count}} 次"
+    },
+    "attempts_other": "（发起过 {{count}} 次请求）",
+    "confirm_other": "确认续费 {{count}} 个域名",
+    "desc": "给一批域名续期。这是真扣费的操作，必须先预览确认。",
+    "domains": "域名清单",
+    "domainsHint": "一行一个，也可以用逗号/空格分隔。找不到的、不支持自动续费的会在预览里单独列出来。",
+    "entry": "续费（会扣费）",
+    "execFailed": "没能开始续费",
+    "jobDone": "续费任务已结束。逐条结果见下方，订单号请留存对账。",
+    "jobRunning": "正在续费：{{finished}} / {{total}}。可以关掉这个窗口，任务在后台继续。",
+    "moneyWarning": {
+      "body": "点下去之后厂商就开始扣款了，无法撤销。另外：续费失败不等于没扣费——网络超时的时候钱可能已经出去了，所以系统不会自动重试，失败的域名要人工回查到期日确认之后再处理。",
+      "title": "这一步会真的扣费"
+    },
+    "multiCurrency": "（多个币种，不能相加）",
+    "needDomains": "先填域名",
+    "noPrice": "查不到报价",
+    "nothingToRenew": "没有可续费的域名",
+    "overpayNote": {
+      "body": "这些域名续费成功了，但厂商侧的到期日比按所选年数推算的多出很多，可能被重复扣款。请到厂商账单核对实际订单数量。⚠️ 它们已经续上了，不要再点一次续费。",
+      "title": "有域名的到期日比预期多了一截，疑似多续费"
+    },
+    "period": "续期年数",
+    "preview": "预览",
+    "status": {
+      "duplicated": "重复",
+      "failed": "失败",
+      "not_found": "台账里没有",
+      "ok": "可续",
+      "renewed": "已续费",
+      "uncertain": "已扣费待确认",
+      "unsupported": "不支持自动续费"
+    },
+    "title": "批量续费",
+    "uncertainNote": {
+      "body": "厂商没有返回确认，但回查到期日发现已经续上了。这类没有订单号，请去厂商账单里核对。⚠️ 绝对不要对它们再点一次续费——那是第二次扣款。",
+      "title": "有域名处于「已扣费但未确认」状态"
+    },
+    "unpriced_other": "其中 {{count}} 个查不到报价——它们照样会被续费，只是现在不知道要花多少钱。介意的话先单独确认这几个。",
+    "willRenew_other": "将续费 {{count}} 个",
+    "years_other": "{{count}} 年"
+  },
+  "renewals": {
+    "col": {
+      "amount": "金额",
+      "at": "时间",
+      "domain": "域名",
+      "operator": "操作人",
+      "status": "结果",
+      "years": "年数"
+    },
+    "desc": "扣过费的历史台账。⚠️「不确定」= 已发出扣费但没拿到厂商确认，重试前必须回查到期日。",
+    "entry": "续费记录",
+    "loadFailed": "续费记录没取到",
+    "none": "还没有续费记录",
+    "title": "续费记录"
+  },
+  "sync": {
+    "started": "已在后台开始同步。域名较多时约 1–2 分钟，完成后这一页会自动刷新。"
+  },
+  "title": "域名",
+  "total_other": "共 {{count}} 个域名",
+  "unknownColumns": {
+    "cert": "「证书到期」列：443 端口的证书探测没有结果。负责它的是「证书到期检测（443）」这个定时任务——去「运行 → 定时任务」确认它是否启用并跑过。到期日未知意味着没有任何证书临期提醒。",
+    "resolve": "「解析」列：解析状态从没检测过。这一列由 DNS 同步任务填充——去「运行 → 定时任务」确认「DNS 解析同步」是否在跑；如果 CDN 账号刚接入，还没同步过也会是这样。",
+    "title": "有整列显示「未知」——不是这些域名没有，是对应的检测没跑"
+  },
+  "urgentNote_other": "{{count}} 个需要立刻处理",
+  "view": {
+    "ledger": "台账",
+    "quality": "访问质量对账"
+  }
+}

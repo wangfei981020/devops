@@ -1,0 +1,84 @@
+{
+  "title": "单点登录",
+  "hint": "让本系统接入公司已有的身份源（飞书、Okta、Keycloak 等），用它来登录。本系统只是依赖方，不会变成身份源本身。",
+  "localAlwaysOn": {
+    "title": "本地账号始终保留",
+    "body": "开启单点登录之后，本地用户名密码仍然可以登录。身份源不可用、配置写错、证书过期时，这是唯一进得来的门——所以它不提供关闭选项。"
+  },
+  "section": {
+    "connect": "连接身份源",
+    "mapping": "身份字段对应",
+    "jit": "首次登录自动建号"
+  },
+  "field": {
+    "issuer": "Issuer 地址",
+    "issuerHint": "身份源的根地址，填完点右边探测，其余端点会自动取。只接受 https，且不能指向内网。",
+    "clientId": "Client ID",
+    "clientSecret": "Client Secret",
+    "secretHint": "只写入，任何接口都不会把它读出来。",
+    "redirectUri": "回调地址",
+    "redirectHint": "把这一行原样登记到身份源的应用里。差一个字符，登录时对方只会回一句 redirect_uri_mismatch，既不说期望值也不说实际值。",
+    "scopes": "Scopes",
+    "scopesHint": "必须包含 openid，否则对方不会返回 id_token，登录会停在最后一步。",
+    "usernameClaim": "用户名取自",
+    "usernameClaimHint": "id_token 里的哪个字段当用户名。不同身份源差别很大：Okta 常用 preferred_username，飞书用 sub 或 email。填错时登录会失败，错误里会列出对方实际给了哪些字段。",
+    "nameClaim": "显示名取自",
+    "jit": "身份源里的人首次登录时，自动在本系统建账号",
+    "jitRole": "自动建号时给的角色",
+    "jitRoleHint": "给的是能力上限。不确定就保持只读——事后加权限比事后收回容易。",
+    "enable": "启用单点登录",
+    "allowPrivate": "内网身份源",
+    "allowPrivateHint": "身份源在内网、或地址是 http 时勾选。默认不勾是为了拦住一类风险：这个探测请求由服务端发出，不加限制的话，随手填一个内网地址就能拿它去探内网。自建 Keycloak / AD FS 属于正常情况，勾上即可。"
+  },
+  "action": {
+    "discover": "探测"
+  },
+  "discover": {
+    "ok": "已取到身份源的端点"
+  },
+  "jit": {
+    "seatsTitle": "这会影响席位用量",
+    "seatsBody": "打开之后，身份源里任何一个人点一次登录就会占用一个席位，不需要任何人审批。超出授权席位不会阻断登录，但会记进日志——通常是续费时才被发现。人数可控的话，建议关闭它、手动建号。"
+  },
+  "state": {
+    "on": "已启用",
+    "off": "未启用"
+  },
+  "error": {
+    "title": "读不到单点登录配置"
+  },
+  "login": {
+    "button": "使用 {{name}} 登录",
+    "buttonFallback": "使用单点登录",
+    "or": "或",
+    "failedTitle": "单点登录没有完成",
+    "reason": {
+      "sso_disabled": "单点登录当前未启用。请用本地账号登录，或联系管理员开启。",
+      "idp_unreachable": "连不上身份源。多半是网络出不去或对方要求白名单，不是你的账号有问题。",
+      "state_invalid": "这次登录的凭证已失效或已被用过。重新点一次登录即可——停留太久会过期。",
+      "missing_code": "身份源没有返回授权码。请重新登录一次。",
+      "idp_returned_error": "身份源拒绝了这次登录。若你取消了授权，重新点一次即可；否则请联系管理员核对应用配置。",
+      "code_exchange_failed": "换取令牌失败。通常是 Client Secret 或回调地址与身份源那边登记的不一致，需要管理员核对。",
+      "id_token_invalid": "身份源返回的令牌未通过校验，登录已被拒绝。这属于安全校验拦截，请联系管理员。",
+      "no_subject": "身份源返回的令牌里没有用户标识，无法确定你是谁。",
+      "username_claim_missing": "取不到用户名：配置里指定的字段在身份源返回的信息中不存在。需要管理员改「用户名取自」。",
+      "user_resolve_failed": "你的身份已通过验证，但本系统里没有对应账号，且未开启自动建号。请让管理员为你建号。",
+      "session_failed": "身份验证通过，但创建会话失败。请重试，若持续失败请联系管理员。",
+      "state_save_failed": "登录发起失败（服务端未能保存本次登录凭证）。请重试。",
+      "unknown": "登录未完成，原因未知。请重试或改用本地账号登录。"
+    }
+  },
+  "lastError": {
+    "title": "最近一次登录失败",
+    "at": "时间",
+    "who": "用户",
+    "claimsTitle": "身份源实际返回了这些字段",
+    "claimsHint": "把上面的「用户名取自」改成其中一个即可。这份清单来自真实的一次登录，比文档准。",
+    "cleared": "成功登录一次后这条会自动消失。"
+  },
+  "redirectMismatch": {
+    "title": "上面这个回调地址的协议不对，照它登记会登录失败",
+    "body": "当前页面用的是 {{page}}，而这一行算出来的是 {{uri}}。真因通常是入口网关终止了 TLS 但没有转发 X-Forwarded-Proto 头，后端因此推错了协议。应当登记的是：",
+    "fix": "请把上面这一行（已改成正确协议）登记到身份源，并让运维在反向代理上补上 X-Forwarded-Proto；否则每次重算都还是错的。"
+  }
+}

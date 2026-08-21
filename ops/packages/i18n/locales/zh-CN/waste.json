@@ -1,0 +1,43 @@
+{
+  "title": "申请 vs 实测",
+  "needsMetrics": "需要 Prometheus 实测用量：没有它就无从谈起「浪费」",
+  "cpu": "CPU {{used}}/{{req}}m",
+  "mem": "内存 {{used}}/{{req}}Mi",
+  "filter": {
+    "cluster": "集群",
+    "searchPlaceholder": "搜索命名空间或工作负载",
+    "sort": "排序"
+  },
+  "error": {
+    "title": "用量对比没能加载出来"
+  },
+  "empty": {
+    "title": "没有可对比的数据",
+    "noMetrics": "这个集群还没接指标源。我们只知道申请了多少，不知道实际用了多少——而只看申请值算出来的「浪费」是凭空捏造的。去「管理 / 观测端点」接 Prometheus。"
+  },
+  "rowCount": "显示 {{shown}} / 共 {{total}} 个工作负载",
+  "suggestPair": "{{cpu}}m / {{mem}}Mi",
+  "col": {
+    "namespace": "命名空间",
+    "workload": "工作负载",
+    "replicas": "副本",
+    "cpu": "CPU 实测/申请",
+    "mem": "内存 实测/申请",
+    "suggest": "建议 request（单副本）"
+  },
+  "sort": {
+    "cpuWaste": "CPU 浪费量",
+    "memWaste": "内存浪费量",
+    "cpuPct": "CPU 使用率最低",
+    "memPct": "内存使用率最低"
+  },
+  "summary": {
+    "title": "这个集群一共浪费了多少",
+    "cpu": "CPU",
+    "mem": "内存",
+    "line": "申请 {{req}}，实测 {{used}}",
+    "wasted": "浪费 {{v}}",
+    "factor": "建议 request = 实测 × {{f}}",
+    "missing": "这次没拿到汇总数据。下面的明细仍然可用，但「一共浪费多少」这个数暂时算不出来——不是「没有浪费」。"
+  }
+}

@@ -1,0 +1,35 @@
+<!--
+  Trigon 横版组合标（标记 + 字标）。
+
+  ⚠️ 字标这里用 <text> 是为了方便你改字试效果。
+  正式投产前必须**转曲**（把文字转成 path），否则换台机器没装同款字体
+  就会静默回退成别的字形 —— logo 走样且没有任何报错。
+
+  间距：标记与文字的间隙取标记宽度的 1/2，这是组合标的常规比例，
+  再紧会糊成一团，再松就读成两个独立元素。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 132 32" width="132" height="32" fill="none"
+     role="img" aria-label="Trigon">
+  <defs>
+    <linearGradient id="trigonBrandH" x1="6" y1="6" x2="26" y2="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7E86EC"/>
+      <stop offset="1" stop-color="#4B47C5"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(4 4)">
+    <path
+      d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z"
+      fill="url(#trigonBrandH)"
+      fill-rule="evenodd"
+      stroke="url(#trigonBrandH)"
+      stroke-width="3"
+      stroke-linejoin="round"
+    />
+  </g>
+
+  <text x="40" y="22"
+        font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+        font-size="19" font-weight="600" letter-spacing="-0.4"
+        fill="currentColor">Trigon</text>
+</svg>

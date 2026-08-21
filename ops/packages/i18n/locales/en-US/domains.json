@@ -1,0 +1,240 @@
+{
+  "action": {
+    "checkCerts": "Check certificates",
+    "refresh": "Refresh from registrar",
+    "syncRecords": "Sync DNS records"
+  },
+  "autoLink": "Auto-link modules",
+  "chain": {
+    "cdn": "CDN",
+    "cname": "Origin CNAME",
+    "desc": "From the domain all the way to pods and nodes: CDN / certificates / ingress / service / pod / node. Edge and origin certificates are two different certificates with independent expiry.",
+    "edge": "Edge",
+    "edgeCert": "CDN edge cert expiry",
+    "entry": "Full chain",
+    "morePods": "+{{n}} more",
+    "noChain": "No K8s ingress matched",
+    "noChainHint": "This does not mean the domain is unused. Two common cases: (1) it does not go through K8s at all (CDN straight to a VM); (2) the Ingress/VirtualService host pattern did not match (e.g. a wildcard). Rule both out before decommissioning.",
+    "noPod": "No pods — unreachable",
+    "noService": "This ingress is not linked to any Service",
+    "noTls": "No TLS",
+    "notRecorded": "Not recorded",
+    "origin": "Origin IP",
+    "originCert": "Origin cert expiry",
+    "pods": "{{n}} pods / {{nodes}} nodes",
+    "title": "Full chain for {{domain}}"
+  },
+  "column": {
+    "cert": "Certificate",
+    "env": "Environment",
+    "expiry": "Registration",
+    "module": "Module",
+    "name": "Domain",
+    "owner": "Owner",
+    "project": "Project",
+    "records": "Records",
+    "resolve": "DNS"
+  },
+  "daysLeft_one": "{{count}} day left",
+  "daysLeft_other": "{{count}} days left",
+  "del": {
+    "desc": "{{domain}}",
+    "note": "⚠️ This deletes the CMDB record only. The domain itself is untouched — not released at the registrar, renewal not stopped. It will be re-imported on the next sync if it still exists there.",
+    "title": "Delete domain record"
+  },
+  "dns": {
+    "add": "Add record",
+    "badLines": "{{count}} line(s) could not be parsed (they will not be submitted)",
+    "bulkAdd": "Bulk add",
+    "bulkDelete": "Bulk delete",
+    "bulkHint": "One per line: TYPE HOST VALUE [TTL] [PRIORITY], whitespace separated. Max 200.",
+    "bulkTtl": "Bulk edit TTL",
+    "col": {
+      "data": "Value",
+      "name": "Host",
+      "priority": "Priority",
+      "type": "Type"
+    },
+    "desc": "Registrar-side DNS. Changes are written back to the registrar immediately, not just to the local record.",
+    "dryRunNote": "This data source ({{env}}) is in dry-run: nothing was actually written to the registrar.",
+    "empty": "No DNS records. Either this domain has none, or it has never been synced from the registrar — run \"Sync DNS records\" first.",
+    "entry": "DNS records",
+    "fixBadFirst": "Fix the unparsable lines first so you do not submit only part of them",
+    "nameHint": "@ means the apex",
+    "needData": "Value is required",
+    "needLines": "Paste the records to add",
+    "needSelect": "Select records first",
+    "protected": "Protected",
+    "protectedWhy": "NS / SOA / _acme-challenge are used by the registrar or the certificate issuance flow; CMDB refuses to write them.",
+    "selectAll": "Select all",
+    "selected": "{{count}} selected",
+    "title": "DNS records for {{domain}}",
+    "ttlHint": "Minimum 600s (registrar limit)",
+    "willAdd": "Will add {{count}}",
+    "willUpdate": "Will update {{count}}"
+  },
+  "empty": {
+    "filtered": "No domains match the current filters. Try widening them.",
+    "noSource": "No domains yet. Connect a registrar (e.g. GoDaddy) under Admin / Registrars and they will sync in.",
+    "title": "No domains"
+  },
+  "error": {
+    "title": "Could not load domains"
+  },
+  "expiredDaysAgo_one": "expired {{count}} day ago",
+  "expiredDaysAgo_other": "expired {{count}} days ago",
+  "filter": {
+    "health": "Status",
+    "searchPlaceholder": "Search domain"
+  },
+  "form": {
+    "createTitle": "Add domain",
+    "desc": "Domains the registrar cannot sync (bought elsewhere, internal) are entered here.",
+    "editTitle": "Edit domain",
+    "expiryHint": "Leave empty if unknown. Do not fill today's date just to complete the field",
+    "nameHint": "e.g. example.com. Cannot be changed later",
+    "needName": "Domain name is required"
+  },
+  "health": {
+    "certSoon": "Certificate expiring",
+    "expired": "Expired",
+    "ignored": "Ignored",
+    "ok": "OK",
+    "soon": "Expiring soon",
+    "unknown": "Expiry unknown",
+    "unresolved": "Resolution failing"
+  },
+  "ignored": "Ignored",
+  "ops": {
+    "autoRenew": "Auto-renew",
+    "autoRenewHint": "This changes the switch at the registrar, effective immediately.",
+    "confirm": {
+      "body": "Renew {{domain}} for {{count}} year(s). This cannot be undone and cannot be safely retried on failure.",
+      "ok": "Charge and renew",
+      "title": "Confirm renewal (real charge)"
+    },
+    "desc": "Live state at the registrar. Renewing charges real money.",
+    "detailDegraded": {
+      "body": "Expiry and auto-renew could not be read this time — that does not mean they are off. Fix the read before deciding whether to renew manually.",
+      "title": "Registrar state unavailable"
+    },
+    "dryRun": {
+      "body": "This data source ({{env}}) is in dry-run: renewing charges nothing and renews nothing.",
+      "title": "Dry-run mode"
+    },
+    "entry": "Renewal & auto-renew",
+    "estimate": "approx. {{amount}} {{currency}}",
+    "expires": "Registrar expiry",
+    "failNote": "⚠️ A failure does not mean you were not charged. Before retrying, check whether the expiry date at the registrar has already moved forward.",
+    "noPrice": "Renewal price unavailable; the registrar invoice is authoritative",
+    "orderId": "Order ID",
+    "privacy": "WHOIS privacy",
+    "registrarStatus": "Registrar status",
+    "renewNow": "Renew",
+    "turnOffAuto": "Disable auto-renew",
+    "turnOnAuto": "Enable auto-renew"
+  },
+  "quality": {
+    "certDays": "{{n}}d left",
+    "errorTitle": "Failed to fetch probe data",
+    "expiring": "Cert expiring in 30d",
+    "explain": "This compares what we registered against what clients actually receive. Data comes from existing blackbox probes — no new probing, and deliberately not a real-time monitoring wall (that is what the alerting platforms are for). The certificate expiry shown is the one clients actually get; a mismatch with the ledger means the cert was replaced but never took effect.",
+    "failing": "Probe failing",
+    "matched": "Matched ledger",
+    "matchedTitle": "Probe targets matched to the ledger (soonest cert expiry first)",
+    "noSource": "No Prometheus data source configured",
+    "noTls": "No TLS probe",
+    "probeFailed": "Probe failed",
+    "probed": "Probe targets",
+    "truncated": "Showing first {{shown}} of {{total}}",
+    "unledgered": "Unledgered",
+    "unledgeredHint": "These domains are being probed (so someone uses them) but do not appear in the registrar ledger — they may belong to someone else, or be ours but unregistered. Both need confirming.",
+    "unledgeredTitle": "Unledgered: probed by someone, absent from the ledger",
+    "unprobed": "Unprobed",
+    "unprobedHint": "These domains have DNS records (so they are in use) but no probe covers them — if they go down we will not know. Migrated/unused domains are excluded.",
+    "unprobedTitle": "Blind spots: DNS records exist but nothing probes them"
+  },
+  "renew": {
+    "attempts": {
+      "one": "{{count}} attempt",
+      "other": "{{count}} attempts"
+    },
+    "attempts_one": "({{count}} request sent)",
+    "attempts_other": "({{count}} requests sent)",
+    "confirm_one": "Renew {{count}} domain",
+    "confirm_other": "Renew {{count}} domains",
+    "desc": "Renew a batch of domains. This charges real money, so a preview is required first.",
+    "domains": "Domain list",
+    "domainsHint": "One per line, or separated by commas/spaces. Unknown domains and ones that cannot be auto-renewed are listed separately in the preview.",
+    "entry": "Renew (charges money)",
+    "execFailed": "Could not start the renewal",
+    "jobDone": "The renewal job has finished. Per-domain results are below — keep the order IDs for reconciliation.",
+    "jobRunning": "Renewing: {{finished}} / {{total}}. You can close this window; the job continues in the background.",
+    "moneyWarning": {
+      "body": "Once you confirm, the registrar starts billing and it cannot be undone. Also: a failed renewal does not mean nothing was charged — on a network timeout the money may already be gone, which is why nothing is retried automatically. Failed domains need a human to re-check the expiry date first.",
+      "title": "This step charges real money"
+    },
+    "multiCurrency": "(multiple currencies, cannot be summed)",
+    "needDomains": "Enter domains first",
+    "noPrice": "No price available",
+    "nothingToRenew": "Nothing can be renewed",
+    "overpayNote": {
+      "body": "These domains were renewed successfully, but the registrar's expiry date is far beyond what the selected term implies, so you may have been charged more than once. Check the registrar invoice for the actual number of orders. ⚠️ They are already renewed — do not renew them again.",
+      "title": "Some domains expire later than expected — possible double charge"
+    },
+    "period": "Renewal period",
+    "preview": "Preview",
+    "status": {
+      "duplicated": "Duplicate",
+      "failed": "Failed",
+      "not_found": "Not in inventory",
+      "ok": "Renewable",
+      "renewed": "Renewed",
+      "uncertain": "Charged, unconfirmed",
+      "unsupported": "Auto-renew unsupported"
+    },
+    "title": "Batch renewal",
+    "uncertainNote": {
+      "body": "The registrar returned no confirmation, but re-checking the expiry date shows the renewal went through. These have no order ID — reconcile them against the registrar's invoice. ⚠️ Never renew them again: that is a second charge.",
+      "title": "Some domains are charged but unconfirmed"
+    },
+    "unpriced_one": "{{count}} of them has no price quote — it will still be renewed, you just do not know the cost yet. Handle it separately if that matters.",
+    "unpriced_other": "{{count}} of them have no price quote — they will still be renewed, you just do not know the cost yet. Handle them separately if that matters.",
+    "willRenew_one": "Will renew {{count}} domain",
+    "willRenew_other": "Will renew {{count}} domains",
+    "years_one": "{{count}} year",
+    "years_other": "{{count}} years"
+  },
+  "renewals": {
+    "col": {
+      "amount": "Amount",
+      "at": "Time",
+      "domain": "Domain",
+      "operator": "Operator",
+      "status": "Result",
+      "years": "Years"
+    },
+    "desc": "Ledger of charges made. Note: “uncertain” means the charge was sent but not confirmed — re-check the expiry date before retrying.",
+    "entry": "Renewal history",
+    "loadFailed": "Could not load renewal history",
+    "none": "No renewals yet",
+    "title": "Renewal history"
+  },
+  "sync": {
+    "started": "Sync started in the background. It usually takes 1–2 minutes when there are many domains; this page refreshes automatically when it finishes."
+  },
+  "title": "Domains",
+  "total_one": "{{count}} domain",
+  "total_other": "{{count}} domains",
+  "unknownColumns": {
+    "cert": "\"Cert expiry\" column: the port-443 certificate probe has no results. It is owned by the scheduled task \"Certificate expiry check (443)\" — verify it is enabled and has run. Unknown expiry dates mean there are NO certificate expiry warnings at all.",
+    "resolve": "\"Resolve\" column: resolution status was never checked. This column is filled by the DNS sync task — verify it is running under Runtime / Inspection. A freshly connected CDN account that has not synced yet looks the same.",
+    "title": "A whole column shows \"unknown\" — this does not mean the domains lack it, it means the corresponding check never ran"
+  },
+  "urgentNote_one": "{{count}} needs attention now",
+  "urgentNote_other": "{{count}} need attention now",
+  "view": {
+    "ledger": "Ledger",
+    "quality": "Access quality"
+  }
+}

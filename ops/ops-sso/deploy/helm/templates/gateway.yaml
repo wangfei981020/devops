@@ -1,0 +1,123 @@
+{{- if .Values.gateway.enabled }}
+# 网关数据面。
+#
+# ⚠️ **必须至少两副本**（values 里默认 2，PDB minAvailable 1）。
+# 它在每一个受保护应用的请求路径上 —— 单副本时，一次滚动升级
+# 就是一次全公司登录中断。这不是"高可用锦上添花"，
+# 是"这个组件的可用性等于全公司的可用性"。
+#
+# 与后端的分工：后端是控制面（配策略、发 token、查审计），
+# 网关是数据面（每个请求都过它，做判定与头部注入）。
+# 两者共用同一套判定代码，所以"门户上看得见、点进去被拒"不会发生。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sso.fullname" . }}-gateway
+  labels:
+    {{- include "sso.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.gateway.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "sso.gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sso.gateway.selectorLabels" . | nindent 8 }}
+      annotations:
+        # 配置变了要重建 Pod。少了这行，改完 values 执行 upgrade
+        # 会显示成功，但 Pod 还跑着旧配置 —— 典型的"没报错但没生效"。
+        checksum/config: {{ toJson .Values.gateway | sha256sum }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      {{- include "sso.antiAffinity" (list . (include "sso.gateway.selectorLabels" .)) | nindent 6 }}
+      containers:
+        - name: gateway
+          image: {{ include "sso.image" (dict "ctx" . "img" .Values.backend.image) | quote }}
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          # 与后端**同一个镜像**，只是换入口。
+          # 两个镜像的话，判定代码会出现版本差 —— 而判定代码正是
+          # 两者必须完全一致的那部分。
+          command: ["/usr/local/bin/gateway"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.gateway.service.port }}
+            - name: metrics
+              containerPort: {{ .Values.gateway.service.metricsPort }}
+          {{- with .Values.gateway.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.gateway.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # 探针走 metrics 端口，理由同后端：业务端口 hang 死时探活仍可用。
+          startupProbe:
+            httpGet: { path: /health, port: metrics }
+            periodSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            httpGet: { path: /ready, port: metrics }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: metrics }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.gateway.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sso.fullname" . }}-gateway
+  labels:
+    {{- include "sso.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  type: {{ .Values.gateway.service.type }}
+  ports:
+    - port: {{ .Values.gateway.service.port }}
+      targetPort: http
+      name: http
+      {{- if and (eq .Values.gateway.service.type "NodePort") .Values.gateway.service.nodePort }}
+      nodePort: {{ .Values.gateway.service.nodePort }}
+      {{- end }}
+    - port: {{ .Values.gateway.service.metricsPort }}
+      targetPort: metrics
+      name: metrics
+  selector:
+    {{- include "sso.gateway.selectorLabels" . | nindent 4 }}
+{{- if .Values.gateway.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "sso.fullname" . }}-gateway
+  labels: {{- include "sso.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.gateway.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "sso.gateway.selectorLabels" . | nindent 6 }}
+{{- end }}
+{{- end }}

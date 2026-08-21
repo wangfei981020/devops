@@ -1,0 +1,319 @@
+# ############################################################################
+# ###                                                                      ###
+# ###                  生  产  （ P R O D U C T I O N ）                    ###
+# ###                                                                      ###
+# ###   GKE infra-01 / cluster_id=3 / namespace devops                     ###
+# ###   镜像仓库 harbor.slileisure.com/devops                               ###
+# ###   入口 Istio · 只挂内网网关                                            ###
+# ###                                                                      ###
+# ############################################################################
+#
+# 部署方式（二选一，效果相同）：
+#
+#   A. 直接指定（推荐，仓库里保持三个文件不动）
+#      helm upgrade --install cmdb ops/ops-cmdb/deploy/helm \
+#        -n devops -f ops/ops-cmdb/deploy/helm/values-prod.yaml \
+#        --set global.tag=vX
+#
+#   B. 改名成 values.yaml 再部署（chart 自动加载它，不用 -f）
+#      mv values-prod.yaml values.yaml && rm values-local.yaml
+#      helm upgrade --install cmdb . -n devops \
+#        --set global.tag=vX
+#
+#      ⚠️ B 方案改完之后，这个目录里的 values.yaml **就是生产配置**。
+#      别把它拷回仓库、也别在这个目录里做本地部署 ——
+#      那会拿生产的镜像仓库、生产的 Secret 名、Istio 入口去装到别处，
+#      而这些错误不会立刻报出来。
+#
+# ⚠️ 本文件**完整自包含**，不依赖任何其它 values 文件继承。
+#    读这一个文件就能回答"生产到底是什么配置"。
+#    与 values-local.yaml 的键集合由 check-values-parity.mjs 比对，
+#    只在一个文件里加了键会构建失败。
+# ############################################################################
+
+# ⚠️ 必须为 false。chart 自带的 values.yaml 里是 true，
+# 忘了传 -f 时模板直接 fail，而不是拿一份空配置去部署
+requireEnvValues: false
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# 全局：所有组件共用的东西只配一次
+# ---------------------------------------------------------------------------
+global:
+  # 完整镜像地址 = imageRegistry + 组件的 image.repository + tag
+  #   harbor.slileisure.com/devops/ops-cmdb-backend:v0.45.0
+  #
+  # ⚠️ 前后端各写一份完整地址的话，换仓库要改两处，而**只改一处不会报错**：
+  # 改了的正常拉，没改的还在拉旧仓库 —— 两个镜像都能起来，只是版本对不上
+  imageRegistry: harbor.slileisure.com/devops
+
+  # 前后端统一 tag。组件级 image.tag 留空时用这里的值；
+  # 两边都填且不一致时 chart 直接 fail（见 _helpers.tpl 的 cmdb.requireSameTag）。
+  # ⚠️ 2026-08-18 之前这个字段是不生效的（helper 只读组件级），设了没反应也不报错
+  tag: ""
+
+  # 直接拉 marks26（私有仓）时才需要：
+  #   kubectl -n devops create secret docker-registry marks26-pull \
+  #     --docker-server=docker.io --docker-username=marks26 --docker-password='<token>'
+  #   再把 imageRegistry 改成 marks26
+  # imagePullSecrets:
+  #   - name: marks26-pull
+  imagePullSecrets: []
+
+# ---------------------------------------------------------------------------
+# 前端
+# ---------------------------------------------------------------------------
+frontend:
+  # ⚠️ 开了 HPA 后这个值只在**第一次创建**时生效，之后副本数由 HPA 接管
+  # （minReplicas=2，所以实际最少是 2）
+  replicaCount: 1
+
+  image:
+    # 只写镜像名，仓库前缀来自 global.imageRegistry
+    repository: ops-cmdb-frontend
+    tag: ""            # 留空用 Chart.appVersion；发布一律显式 --set
+    pullPolicy: IfNotPresent
+
+  service:
+    # ⚠️ 生产**不开 NodePort**：它在每个节点上开一个端口，
+    # 等于绕过网关的鉴权，是一条容易被忘掉的公网暴露面
+    type: ClusterIP
+    port: 80
+    nodePort: null
+
+  # ⚠️ request 是 HPA 算利用率的**分母**，不只是调度依据。
+  # 给太小会让阈值低到真实负载够不着；贴着实测值给又会超卖节点
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      # ⚠️ CPU limit 超过就**限流**（cfs throttling），表现为偶发的请求变慢，
+      # 而且监控上看不出是被限流的
+      cpu: 200m
+      memory: 256Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+    # 内存也要有阈值：静态服务几乎不吃 CPU，只看 CPU 等于没有保护。
+    # ⚠️ 内存指标基本是单向的（RSS 涨上去很难落回来），扩了多半不会自己缩
+    targetMemoryUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # securityContext 见 templates/_helpers.tpl 的 cmdb.securityContext：
+  # 前后端完全一致，只有一份。uid 由 Dockerfile 单点定义（前端 101 / 后端 10001），
+  # 这里只写 runAsNonRoot、不写 runAsUser —— 两处各写一个数必然分叉
+
+# ---------------------------------------------------------------------------
+# 后端
+# ---------------------------------------------------------------------------
+backend:
+  # 同前端：开了 HPA 后只在第一次创建时生效
+  replicaCount: 1
+
+  image:
+    repository: ops-cmdb-backend
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  service:
+    port: 8080
+    metricsPort: 8088
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      # 后端是突发型：平时几乎不动，定时任务跑集群全量采集时冲高。
+      # CPU 给 5 倍让采集那几分钟不被限流
+      cpu: 1000m
+      memory: 1Gi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # securityContext 见 templates/_helpers.tpl 的 cmdb.securityContext
+
+  # 凭据一律走 Secret，不写进 values（见文末「上线前置」）
+  envFrom:
+    - secretRef:
+        name: ops-cmdb-backend-secret
+
+  env:
+    # 生产只信 prod 验签公钥。dev 签的 license 装进生产会直接验签失败
+    # 日志等级：debug|info|warn。
+    #
+    # ⚠️ 当前是 debug —— 为了排查节点心跳误报（OPSCMDB-025/027）。
+    # 判定类日志会把「输入 + 依据 + 结论」三样都打出来，
+    # 每个节点每轮采集一行（16 台 / 2 分钟 ≈ 每天 1.2 万行）。
+    # 排查完改成 info 即可，**不需要重新构建镜像**。
+    - name: LOG_LEVEL
+      value: debug
+    - name: OPS_LICENSE_ENV
+      value: prod
+    # 🔴 本地 admin 的口令。
+    #
+    #	这个账号是运维平台/SSO 挂掉时的**兜底通道**，权限校验对它**全放行**。
+    #	代码里**没有默认口令**：不设这个变量就不会创建这个账号
+    #	（handlers/auth.go 的 EnsureAdmin）。
+    #
+    #	⚠️ 曾经它有默认值 admin123，而这份 values 里根本没有这个变量 ——
+    #	于是生产 admin 一直用着写在源码里的口令，且没有任何报错或告警。
+    #	（验收会话 NEW-2；这正是"静默地不安全"最典型的形态。）
+    #
+    #	⚠️ 口令走 Secret，**不要**在这里写 value 明文：
+    #	values 文件会进 git、会被 helm get values 读出来。
+    #	建库：kubectl -n <ns> create secret generic ops-cmdb-admin \
+    #	        --from-literal=password='<至少 12 位>'
+    #
+    #	⚠️ optional: true —— 没建这个 Secret 时 Pod 照常启动，
+    #	只是不创建 admin 账号。设成必需的话，忘了建 Secret 会让整个服务起不来，
+    #	那是拿可用性去换一个兜底入口，代价反了。
+    - name: ADMIN_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: ops-cmdb-admin
+          key: password
+          optional: true
+    # ⚠️ **不要**在生产设 OPS_ENV=dev。
+    # 设了会把「密钥仍是源码默认值」的启动校验降级成一条 WARN，
+    # 服务照常启动、登录能登、监控全绿 —— 只是签名密钥用的是公开源码里那个
+
+# ---------------------------------------------------------------------------
+# 通用
+# ---------------------------------------------------------------------------
+
+# 采集后端指标（后端 8088，与健康端点同端口）。
+#
+# 生产 monitoring 里 Prometheus 与 VictoriaMetrics **两套都在跑**
+# （kube-prometheus-stack 0.83 + victoria-metrics-operator v0.66）。
+# 当前发 ServiceMonitor：VM operator 的 Prometheus 转换器开着，两边都能采到。
+#
+# ⚠️ VM 完全替代 Prometheus 后，scrapeKind 与 labels **两个都要改**，
+# 只改一个的表现是"指标悄悄没了"。
+metrics:
+  enabled: true
+
+  # ServiceMonitor（Prometheus Operator）或 VMServiceScrape（VictoriaMetrics Operator）
+  scrapeKind: ServiceMonitor
+
+  # ⚠️ 必须匹配采集端的选择器。不匹配时对象照样创建成功、kubectl get 一切正常、
+  # 没有任何报错，只是永远没人来抓 —— 和"根本没建"表现完全一样。
+  #   Prometheus:      kubectl get prometheus -A -o jsonpath='{.items[*].spec.serviceMonitorSelector}'
+  #   VictoriaMetrics: kubectl get vmagent -A -o jsonpath='{.items[*].spec.serviceScrapeSelector}'
+  labels:
+    release: kube-prometheus-stack
+
+  path: /metrics
+  interval: 30s
+  # ⚠️ 必须小于 interval，否则 Operator 会拒绝这个对象
+  scrapeTimeout: 10s
+  relabelings: []
+
+# 后端可能慢查（大集群全量拉取），比 nginx 默认 60s 给得宽。
+# ⚠️ 必须小于 istio.timeout，否则网关先掐断，报错指向网关而非真正的慢查询
+proxyTimeoutSeconds: 120
+
+# 生产是多节点，用 required 强制副本分散 ——
+# 全部落在同一节点时，那个节点一挂服务就整体不可用，PDB 也救不了
+podAntiAffinity:
+  enabled: true
+  required: true
+
+nodeSelector: {}
+tolerations: []
+podAnnotations: {}
+
+# 入口二选一：ingress（标准 K8s）或 istio（VirtualService），两个都开会被模板拒绝。
+#
+# ⚠️ 该集群**没有 nginx ingress controller**。开了 ingress 不会报错：
+# 对象正常创建、kubectl get ingress 看着正常，只是没有任何控制器去处理它，域名就是不通
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: cmdb.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+istio:
+  enabled: true
+  annotations: {}
+
+  # ⚠️ 跨 namespace 必须写成 <ns>/<gateway名>，只写名字时 Istio 会在
+  # **本 namespace** 找，找不到不会报错，域名就是不通。
+  #
+  # ⚠️ 只挂内网网关。旧 CMDB 额外挂了 -extra（公网），新版在公网暴露之前
+  # 要先用修好的判定重跑一遍高危清单 —— 之前两轮生产验证查出的两个 P0
+  # 都是接口把凭据发给了不该看的人
+  gateways:
+    - istio-system/infra-istio-ingressgateway-inner
+
+  # ⚠️ 必须落在网关 listener 的 hosts 通配范围内，否则 Istio **静默丢弃**：
+  # VirtualService 创建成功、kubectl get vs 一切正常、访问就是不通。
+  #   kubectl -n istio-system get gateway infra-istio-ingressgateway-inner \
+  #     -o jsonpath='{.spec.servers[*].hosts}'
+  #
+  # TLS 不用配：inner 网关 443 上已有 *.slileisure.com 与 *.sl-devops.com 通配证书
+  hosts:
+    - cmdb.example.com          # ← 换成真实域名
+
+  matchPrefix:
+    - "/"
+
+  # ⚠️ 必须大于 proxyTimeoutSeconds（120）
+  timeout: 180s
+
+  retries:
+    attempts: 3
+    perTryTimeout: 60s
+    # ⚠️ 刻意**不含 5xx**。
+    #
+    # connect-failure / refused-stream 是安全的：请求根本没到应用，重发无副作用。
+    # 5xx 意味着应用收到了、处理了、然后失败 —— 对非幂等写（域名续费是真扣费）
+    # 重发就是重复扣款，而且这层重试在应用日志里和"用户手点三次"长得一样
+    retryOn: connect-failure,refused-stream
+    # 真要开 5xx 重试必须显式声明，让它是一个有人签字的决定
+    allowUnsafeRetryOn: false
+
+# ── 上线前置（helm 装不上去的部分）─────────────────────────────────
+#
+# 1. Secret `ops-cmdb-backend-secret`（本 chart 不创建，凭据不进 git）：
+#      MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASSWORD / MYSQL_DATABASE
+#      JWT_SECRET     —— 会话签名
+#      CMDB_AES_KEY   —— 加密云凭据与证书私钥。⚠️ 变量名是 CMDB_AES_KEY 不是
+#                        AES_KEY，写错等于没配。⚠️ 换了它，库里已存的凭据全部解不开
+#
+#    ⚠️ 漏配会**拒绝启动**并打印原因（config.checkSecrets）。这是刻意的：
+#      源码里的开发默认值不会让服务报错——登录能登、页面能开、监控全绿，
+#      只是密钥写在将要公开的 CE 源码里
+#
+# 2. 生产 MySQL 库先建好，排序规则统一 utf8mb4_0900_ai_ci
+#    （不统一时跨表字符串比较抛 Error 1267，页面上只表现为"查不到数据"）。
+#    迁移由后端启动时自动跑，不要手动改 schema_migrations —— 对不上会让 pod 起不来
+#
+# 3. 镜像要多架构：本地 arm64、生产 GKE amd64，单架构上去是 exec format error。
+#    转推 Harbor 必须用 `docker buildx imagetools create`，
+#    `docker pull && tag && push` 只会搬当前机器架构那一个
+#
+# 详见 docs/runbooks/ops-cmdb-prod-deploy.md

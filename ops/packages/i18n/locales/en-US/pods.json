@@ -1,0 +1,80 @@
+{
+  "column": {
+    "age": "Started",
+    "cluster": "Cluster",
+    "name": "Pod",
+    "node": "Node",
+    "phase": "Status",
+    "resources": "req · limit",
+    "restarts": "Restarts"
+  },
+  "diag": {
+    "aiBadge": "AI verdict",
+    "aiCaveat": "⚠️ This is the model inferring from available material, not something stated in the logs. Confidence is capped at medium. Verify the evidence before acting on it.",
+    "aiGate": "AI fallback",
+    "byAI": "Determined by AI ({{model}}) — not a rule match",
+    "byRule": "Verdict from: {{rule}}",
+    "col": {
+      "count": "Count",
+      "message": "Message",
+      "reason": "Reason",
+      "time": "Last seen"
+    },
+    "container": "Container",
+    "diagnose": "Diagnosis",
+    "entry": "Diagnose",
+    "events": "Events",
+    "evidence": "Evidence",
+    "extracted": "Errors found in logs",
+    "goThere": "Go there",
+    "initSuffix": " (Init)",
+    "loadFailed": "Could not load this section",
+    "logs": "Logs",
+    "noEvents": "No events on this pod right now",
+    "noEventsHint": "K8s keeps events for about an hour by default — an empty list does not mean nothing happened. See Cluster events for older ones.",
+    "noLogs": "No log output (the container may not have started, or logs go to files)",
+    "noMatch": "No rule matched",
+    "noMatchHint": "This does NOT mean the pod is healthy — plenty of failures are outside the rule set. Check the logs and events below yourself.",
+    "previous": "Previous container",
+    "providerRule": "rule engine",
+    "readOnlyNote": "CMDB only proposes; act in the cloud console or with kubectl.",
+    "suggestions": "Suggestions",
+    "tail": "Lines"
+  },
+  "empty": {
+    "filtered": "No pods match the current filters. Try widening them.",
+    "noSource": "No pods collected yet. Check on the Clusters page that the cluster is onboarded and its credentials are valid.",
+    "title": "No pods"
+  },
+  "error": {
+    "title": "Could not load pods"
+  },
+  "filter": {
+    "cluster": "Cluster",
+    "health": "Health",
+    "namespace": "Namespace",
+    "node": "Node",
+    "searchPlaceholder": "Search pod, workload or node",
+    "workload": "Workload"
+  },
+  "health": {
+    "bad": "Unhealthy",
+    "ok": "Healthy",
+    "restarted": "Restarted"
+  },
+  "live": {
+    "header": "Live usage",
+    "pickCluster": "Select a single cluster — usage is queried from Prometheus per cluster",
+    "unavailable": "Unavailable"
+  },
+  "notScheduled": "Not scheduled",
+  "resources": {
+    "bestEffort": "No requests",
+    "bestEffortHint": "BestEffort: no request/limit set; evicted first under node memory pressure"
+  },
+  "restartHint": "{{n}} restarts total",
+  "restartRateHint": "{{n}} restarts total, about {{perDay}} per day. Absolute counts are diluted by age — 20k restarts over 3 months is not the same as 20k in a day",
+  "title": "Pods",
+  "total_one": "{{count}} pod",
+  "total_other": "{{count}} pods"
+}

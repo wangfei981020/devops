@@ -1,0 +1,56 @@
+{
+  "column": {
+    "entry": "入口",
+    "exposure": "暴露",
+    "name": "服务",
+    "ports": "端口",
+    "type": "类型"
+  },
+  "empty": {
+    "filtered": "当前筛选条件下没有服务。放宽条件再看看。",
+    "noSource": "还没采到任何服务。先到「集群」页确认集群已纳管且凭据有效。",
+    "title": "没有服务"
+  },
+  "error": {
+    "title": "服务列表没能加载出来"
+  },
+  "exposure": {
+    "exposed": "对外可达",
+    "internal": "仅内部",
+    "pending": "等待中"
+  },
+  "filter": {
+    "cluster": "集群",
+    "exposure": "暴露",
+    "namespace": "命名空间",
+    "searchPlaceholder": "搜索服务名、主机名或 IP"
+  },
+  "headless": "Headless（无 VIP）",
+  "ingress": {
+    "desc": "对外域名不在 Service 上——Istio 在 VirtualService 的 hosts，Gateway API 在 HTTPRoute 的 hostnames。",
+    "entry": "入口与域名",
+    "gw": "Gateway",
+    "ing": "Ingress",
+    "loadFailed": "这部分没取到",
+    "noGw": "这个集群没有 Gateway",
+    "noHost": "未指定 host（按路径匹配的默认后端）",
+    "noIng": "这个集群没有原生 Ingress。可能全部走 Istio / Gateway API，看另外三档。",
+    "noRoute": "这个集群没有 HTTPRoute",
+    "noTls": "无 TLS",
+    "noVs": "这个集群没有 VirtualService（可能没用 Istio）",
+    "parent": "挂在",
+    "pickCluster": "先在上面选一个具体集群",
+    "route": "HTTPRoute",
+    "title": "入口与域名",
+    "viaGw": "经 {{gw}}",
+    "vs": "VirtualService"
+  },
+  "internalOnly": "仅集群内",
+  "internalVip": "VIP 在内网",
+  "moreHosts_other": "另有 {{count}} 个",
+  "pendingLb": "等待外部 IP",
+  "pendingLbHint": "云侧一直没分配，常见于配额用尽或子网无空闲 IP",
+  "pendingNote_other": "{{count}} 个负载均衡卡在等待外部 IP",
+  "title": "服务与入口",
+  "total_other": "共 {{count}} 个服务"
+}

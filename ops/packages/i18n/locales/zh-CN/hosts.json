@@ -1,0 +1,113 @@
+{
+  "column": {
+    "cluster": "集群 / 节点池",
+    "costDetail": "累计 / 日均",
+    "cpu": "CPU 用量",
+    "disk": "磁盘",
+    "lastSync": "最后同步",
+    "machineType": "机型",
+    "memory": "内存用量",
+    "monthlyCost": "月成本",
+    "name": "主机名",
+    "network": "区域 / 外网 IP",
+    "privateIp": "内网 IP",
+    "project": "项目 / 厂商",
+    "spec": "规格",
+    "status": "状态"
+  },
+  "cost": {
+    "daily": "日均 {{v}}",
+    "totalSuffix": "累计"
+  },
+  "costSource": {
+    "bigquery": "账单",
+    "estimate": "估算"
+  },
+  "detail": {
+    "bootDisk": "系统盘",
+    "cost": "成本",
+    "costDaily": "每天",
+    "costEstimate": "按机型与磁盘估算，非账单实际值",
+    "costHourly": "每小时",
+    "costMonth": "每月",
+    "costTotal": "累计",
+    "createdAt": "创建时间",
+    "dataDisk": "数据盘",
+    "disks": "磁盘",
+    "domains": "关联域名",
+    "labels": "标签",
+    "mountPoint": "挂载点",
+    "network": "网络",
+    "no": "否",
+    "noDomains": "没有域名解析到这台机器",
+    "noLabels": "没有标签",
+    "noPods": "节点上没有 Pod",
+    "nodeNotIngested": "这台机器是集群节点，但该集群还没接入采集，所以看不到上面跑着什么",
+    "os": "操作系统",
+    "podCountDrift": "节点自报 {{reported}} 个，这里采到 {{listed}} 个 —— 两份数据来自不同轮次的同步，以时间较新的为准",
+    "podCount_other": "{{count}} 个 Pod",
+    "pods": "该节点的 Pod",
+    "preemptible": "抢占式",
+    "restarts_other": "重启 {{count}} 次",
+    "spec": "规格",
+    "title": "主机详情",
+    "yes": "是",
+    "zone": "可用区"
+  },
+  "disk": {
+    "boot": "系统盘",
+    "count_other": "{{count}} 盘",
+    "data": "数据盘",
+    "fullest": "最满 {{percent}}%",
+    "none": "无"
+  },
+  "empty": {
+    "action": "清除筛选",
+    "hint": "当前筛选条件下没有主机。清除筛选条件可以看到全部 {{total}} 台。",
+    "title": "没有符合条件的主机"
+  },
+  "emptyNoSource": {
+    "action": "去配置数据源",
+    "hint": "主机数据来自集群与云账号，现在两者都还没配置，所以这里是空的。",
+    "title": "尚未接入任何集群"
+  },
+  "error": {
+    "hint": "集群可能不可达，也可能是凭据已过期。",
+    "title": "无法读取主机列表"
+  },
+  "filter": {
+    "all": "全部",
+    "cluster": "集群",
+    "destroyed": "已销毁",
+    "machineType": "机型",
+    "matchedOnly_other": "匹配 {{count}} 台",
+    "matched_other": "匹配 {{count}} 台，共 {{total}} 台",
+    "project": "项目",
+    "provider": "厂商",
+    "running": "运行中",
+    "searchPlaceholder": "搜索主机名或 IP",
+    "stopped": "已停止"
+  },
+  "note": {
+    "destroyedExcluded_other": "已排除 {{count}} 台已销毁主机，成本按在管资源计",
+    "stale": "本页 {{count}} 台的数据超过 {{hours}} 小时没更新",
+    "staleAction": "去数据源页同步"
+  },
+  "staleHint": "这条数据已超过 {{hours}} 小时没更新，可能不是当前状态。采集时刻：{{at}}",
+  "status": {
+    "destroyed": "已销毁",
+    "diskPressure": "磁盘压力",
+    "notReady": "NotReady",
+    "running": "运行中",
+    "stopped": "已停止"
+  },
+  "sync": {
+    "started": "已在后台开始同步。主机数量多时约 1–3 分钟，完成后这一页会自动刷新。"
+  },
+  "title": "主机",
+  "value": {
+    "billingStopped": "已停止计费",
+    "noPublicIp": "无外网 IP",
+    "notApplicable": "—"
+  }
+}

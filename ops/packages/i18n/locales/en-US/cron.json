@@ -1,0 +1,73 @@
+{
+  "action": {
+    "disable": "Disable",
+    "enable": "Enable",
+    "hideRuns": "Hide history",
+    "runNow": "Run now",
+    "showRuns": "Run history"
+  },
+  "allHealthy": "All {{count}} tasks healthy",
+  "brokenCount": "{{count}} tasks need attention ({{fail}} failed last run, {{never}} never ran)",
+  "disabled": "Disabled",
+  "empty": {
+    "reason": "Having none usually means the task seed did not land with the migrations, not that this system needs no scheduled work. Collection and expiry inspection will not run at all — check the migrate lines in the backend startup log.",
+    "title": "No scheduled tasks"
+  },
+  "error": {
+    "runs": "The run history could not be loaded",
+    "title": "The task list could not be loaded"
+  },
+  "health": {
+    "fail": "Last run failed",
+    "never": "Never run",
+    "ok": "Healthy"
+  },
+  "hint": "The platform's own background jobs: collection, inspection, renewal, cleanup. Each task's run history sits right beneath it — no page switching.",
+  "lastRun": "Last run",
+  "neverRun": "Never run",
+  "nextRun": "Next run",
+  "runs": {
+    "cancel": "Cancel run",
+    "empty": "This task has no run history yet. That is expected for a newly added task, or when older records have aged out.",
+    "findingNote": "Above are problems this run found — not the run itself failing",
+    "noTarget": "(no target recorded)",
+    "notify": {
+      "failed": "⚠️ Lark delivery failed",
+      "none": "⚠️ No Lark outlet available — reminder was not delivered",
+      "skipped": "not delivered per config"
+    },
+    "notifyAt": "Notified at {{at}}",
+    "notifySent": "sent to {{group}}",
+    "okButNotDelivered": "The task itself succeeded, but its result was delivered nowhere — no destination configured, or delivery failed. Whatever it found, nobody will see it.",
+    "retryFailures": "Retry failed items"
+  },
+  "settings": {
+    "atUsers": "Mention",
+    "atUsersHint": "Only enabled recipients are listed. Disabled users are never mentioned.",
+    "desc": "Schedule and failure notifications. Only changed fields are submitted.",
+    "entry": "Settings",
+    "larkGroup": "Send to group",
+    "noAtUsers": "Mention nobody",
+    "noAtUsersAvailable": "No enabled recipients",
+    "noGroup": "No group",
+    "noGroupsHint": "No Lark group configured yet — add one on the Notifications page",
+    "notifyEnabled": "Send Lark notification after each run",
+    "notifyWhen": "When to notify",
+    "saveFailed": "Save failed: {{err}}",
+    "schedule": "Schedule",
+    "scheduleHint": "Cron expression, 5 fields: min hour day month weekday. Validated server-side.",
+    "scheduleShape": "Got {{n}} fields; cron needs 5 (min hour day month weekday)",
+    "title": "Settings: {{name}}",
+    "whenAlways": "Every run",
+    "whenFail": "Only on failure"
+  },
+  "showAll": "Show all",
+  "showBrokenOnly": "Show only these",
+  "title": "Scheduled tasks",
+  "trigger": {
+    "auto_retry": "Auto retry",
+    "cron": "Scheduled",
+    "manual": "Manual",
+    "startup": "On startup"
+  }
+}

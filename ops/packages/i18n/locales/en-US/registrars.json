@@ -1,0 +1,71 @@
+{
+  "action": {
+    "add": "Connect a registrar"
+  },
+  "delete": {
+    "body": "After deleting \"{{name}}\", expiry dates synced through it stop updating — those domains stay in the list, but their data goes stale and expiry reminders stop working with it. The domain records themselves are not deleted."
+  },
+  "dialog": {
+    "add": "Connect a registrar",
+    "del": "Delete this registrar",
+    "desc": "Once configured, domain expiry dates are refreshed by the DNS sync scheduled task.",
+    "edit": "Edit registrar"
+  },
+  "disabled": "Disabled",
+  "dryRun": "Dry run",
+  "dryRunBadgeHint": "Dry-run is ON: write requests (renewal, DNS write-back) are logged only — never sent to the registrar, never charged. Expiry sync is unaffected (it reads the registrar and writes our own DB). Turning it off makes renewals charge for real, irreversibly.",
+  "empty": {
+    "reason": "Expiry dates have to be synced from a registrar. Without one, expiry reminders and auto-renewal do not work at all, while the domain list still looks normal — only \"last synced\" stays stuck in the past.",
+    "title": "No registrar connected"
+  },
+  "error": {
+    "title": "The registrar list could not be loaded"
+  },
+  "field": {
+    "cloudflareHint": "⚠️ Cloudflare here is registration-only. Its API Token is configured on the CDN sites page (Token + Account ID) — that is the real integration point.",
+    "dryRun": "Dry run",
+    "dryRunHint": "With this on, renewals and write-backs are only logged — no requests are sent and nothing is charged. Leave it on for the first sync to confirm the data lines up, then turn it off.",
+    "enabled": "Enabled",
+    "key": "API key / access key",
+    "keyHint": "Issued from the registrar console. Prefer a read-only or domain-management-only key.",
+    "name": "Name",
+    "nameRequired": "Name is required",
+    "noSyncSelected": "⚠️ No sync adapter for this provider yet: it will show as Enabled but expiry dates will not update. If you only need a record, choose \"Other\".",
+    "provider": "Provider",
+    "providerHint": "Decides which API is used to sync. \"Other\" means record-only with no automatic sync — a deliberate choice, not a fallback.",
+    "secret": "API secret"
+  },
+  "hasCred": "Credential set",
+  "hint": "Where domain expiry dates are synced from. Without one, expiry dates never update, while the domains themselves look perfectly normal in the list.",
+  "live": "Renewals charge for real",
+  "liveBadgeHint": "Dry-run is OFF: renewing here charges real money, irreversibly. Renewal is non-idempotent — a failure does NOT mean you were not charged; re-check the expiry date before retrying. To rehearse, enable \"Dry-run\" in Edit.",
+  "noCred": "No credential",
+  "noSync": "No auto-sync",
+  "noSyncHint": "No sync adapter for this provider yet; domain expiry will not update automatically",
+  "provider": {
+    "aliyun": "Alibaba Cloud",
+    "cloudflare": "Cloudflare",
+    "godaddy": "GoDaddy",
+    "namecheap": "Namecheap",
+    "other": "Other (record only, no auto-sync)"
+  },
+  "supportedHint": "Only GoDaddy syncs expiry dates automatically. Namecheap / Aliyun / Cloudflare can be recorded, but their expiry dates will not update on their own.",
+  "sync": {
+    "done": "Done: {{domains}} domains / {{records}} records",
+    "imported": "{{n}} new",
+    "interrupted": "Sync interrupted — the replica running it ({{replica}}) exited. Click sync again",
+    "lastFail": "Last automatic sync: {{at}} — {{status}}. Expiry dates were NOT updated",
+    "lastOk": "Last automatic sync: {{at}} — succeeded",
+    "neverRan": "Expiry sync has never run",
+    "neverRanHint": "The scheduled task \"Domain expiry sync (registrar API)\" has no run history — domain expiry dates have never been updated, so expiry reminders cannot work either. Check whether it is enabled under Runtime / Inspection and trigger it once.",
+    "progress": "Syncing {{done}}/{{total}}",
+    "stale": "{{n}} domains missing at registrar",
+    "staleHint": "These domains no longer appear in the registrar API — possibly transferred out, expired, or the account lost access. Ledger rows are kept, but expiry reminders no longer apply to them. Needs manual review."
+  },
+  "title": "Registrar connections",
+  "usage": {
+    "hint": "These counters are per-replica and in-memory: they reset on restart and each replica counts separately (the cross-replica quota is a different layer). So “0 today” does not mean “no sync ran today” — another replica may have done the work. The rate-limited marker is the signal that matters: once the vendor quota is exhausted, syncs slow down or fail while the domain list still looks fine.",
+    "limited": "rate-limited at {{at}}",
+    "text": "API usage {{minute}}/{{limit}} per minute · {{today}} today"
+  }
+}

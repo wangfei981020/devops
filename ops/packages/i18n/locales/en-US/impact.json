@@ -1,0 +1,18 @@
+{
+  "title": "Changing {{name}} affects",
+  "depth": "{{depth}} hop",
+  "noRelations": "We have no relation records for this resource. That does not mean changing it is safe — only that the relations have not been collected or recorded.",
+  "none": "No affected resources found along recorded relations.",
+  "truncated": "Only 3 hops were followed; anything further is not listed.",
+  "pick": {
+    "title": "Pick a resource",
+    "reason": "Search for a resource by name above. This page then walks the recorded relations three hops out to show what touching it would affect. ⚠️ Only resources that already have relations can be analysed — relations are recorded conservatively, so a resource can be findable yet have nothing to walk."
+  },
+  "error": {
+    "title": "Could not compute the impact"
+  },
+  "searchPlaceholder": "Search resources by name (hosts, domains, certs, load balancers…)",
+  "current": "Current: {{name}}",
+  "noMatch": "No matching resource",
+  "existsButUnlinked": "Found {{names}} ({{count}} total), but they have no recorded relations yet, so their impact can't be analysed — the resources do exist, they just aren't linked."
+}

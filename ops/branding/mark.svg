@@ -1,0 +1,26 @@
+<!--
+  Trigon 主标记 —— 三角测量控制点符号。
+
+  实心三角形 + 负空间中心孔。
+  为什么用挖空而不是叠一个圆点：叠色在深浅两种背景上要各画一版，
+  挖空则永远露出背景色，一个文件通吃深色底、浅色底、彩色底和照片。
+
+  几何：等边三角形，重心落在 (12,12)，中心孔与重心同心。
+  外描边 3px + linejoin round 把尖角磨圆 —— 尖角在小尺寸下会锯齿化成毛刺。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" role="img" aria-label="Trigon">
+  <defs>
+    <linearGradient id="trigonBrand" x1="4" y1="3" x2="20" y2="18" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7E86EC"/>
+      <stop offset="1" stop-color="#4B47C5"/>
+    </linearGradient>
+  </defs>
+  <path
+    d="M12 4 L18.93 16 L5.07 16 Z M14.4 12 A2.4 2.4 0 1 1 9.6 12 A2.4 2.4 0 1 1 14.4 12 Z"
+    fill="url(#trigonBrand)"
+    fill-rule="evenodd"
+    stroke="url(#trigonBrand)"
+    stroke-width="3"
+    stroke-linejoin="round"
+  />
+</svg>

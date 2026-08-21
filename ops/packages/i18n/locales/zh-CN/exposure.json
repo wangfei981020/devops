@@ -1,0 +1,39 @@
+{
+  "title": "暴露面",
+  "total_other": "共 {{count}} 个公网入口",
+  "protectionUnknown": "防护状态判不了：还没接 CDN/WAF 数据源",
+  "unknown": "判不了",
+  "protected": "有防护",
+  "unprotected": "无防护",
+  "kind": {
+    "lb": "负载均衡",
+    "service": "服务",
+    "host": "主机",
+    "all": "全部"
+  },
+  "column": {
+    "kind": "类型",
+    "name": "资源",
+    "endpoint": "公网入口",
+    "ports": "端口",
+    "protected": "防护",
+    "scope": "归属"
+  },
+  "filter": {
+    "searchPlaceholder": "搜索资源或入口",
+    "kind": "类型"
+  },
+  "error": {
+    "title": "暴露面没能加载出来"
+  },
+  "empty": {
+    "title": "没有公网入口",
+    "filtered": "当前筛选条件下没有记录。",
+    "noSource": "在已接入的数据里没有发现公网可达的入口。没接入的部分不在统计内。"
+  },
+  "portsUnknown": "未探测",
+  "portsUnknownHint": "这条入口开了哪些端口由防火墙规则决定，本页还没有关联防火墙数据。去「计算与网络 → 防火墙」按这个地址查它的放行规则。⚠️ 空不代表没有端口对外。",
+  "allPorts": "全端口",
+  "allPortsHint": "1-65535 = 这个入口上所有端口都对公网开放。实测 52 条公网入口里有 26 条是这样，占一半——通常只需要放行实际用到的那几个端口。",
+  "scopeConstant": "当前结果里只有一个取值"
+}

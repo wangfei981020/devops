@@ -1,0 +1,90 @@
+{
+  "byDomain": {
+    "daysLeft": "({{n}}d left)",
+    "empty": {
+      "filtered": "No domain matches the current search",
+      "none": "No domains in the registrar ledger yet. Add or sync them on the Domains page.",
+      "title": "No domains"
+    },
+    "expiryUnknown": "Expiry unreadable",
+    "ledger": "{{n}} in ledger",
+    "ledgerHint": "Business records registered in the host-record ledger (with project/env/owner). Separate from the registrar-side records — present here but absent there means the record does not actually exist yet, or has not been synced.",
+    "neverSynced": "Never synced",
+    "records": "{{n}} records",
+    "searchPlaceholder": "Search domains…",
+    "sync": "Sync",
+    "total": "{{count}} domains"
+  },
+  "col": {
+    "effective": "Effective",
+    "effectiveHint": "Only the provider the domain’s NS points at takes effect; edits elsewhere do nothing",
+    "name": "Name",
+    "proxied": "Proxied",
+    "source": "Source",
+    "type": "Type",
+    "value": "Target"
+  },
+  "consistency": {
+    "authorityIncomplete": "The “configured but not effective” list is incomplete",
+    "conflictActionKnown": "This domain’s NS points at {{authoritative}} ({{ns}}). Only that side’s records take effect; edits anywhere else do nothing.",
+    "conflictActionUnknown": "First determine which side this domain’s NS actually points at — only that side takes effect, and records on the other side are dead configuration. (We have not collected this domain’s NS records, so the direction cannot be determined here.)",
+    "conflictHint": "These names exist in both Cloudflare and GCP Cloud DNS with different targets. Only the side the NS delegation points to is live; edits on the other side have no effect at all. When chasing \"I changed it and nothing happened\", first confirm you edited the live side.",
+    "conflictIssue": "The same name and type point to different targets on {{a}} and {{b}}.",
+    "conflicts_one": "{{count}} domain resolves differently on each side",
+    "conflicts_other": "{{count}} domains resolve differently on each side",
+    "ineffective": "{{count}} records configured on a provider that is not authoritative",
+    "ineffectiveAction": "Either move the records to {{authoritative}}, or switch the NS to {{configured}}. Editing them on this side has no effect at all.",
+    "ineffectiveIssue": "These records live on {{configured}}, but the domain’s NS points at {{authoritative}} — only the NS-designated side takes effect.",
+    "more": "+{{n}} more",
+    "notComparable": "This comparison did not happen",
+    "oneSidedIssue": "Only {{provider}} has records of this type configured.",
+    "scope": "Comparison scope (by FQDN; multiple records under one FQDN count once): GCP {{gcp}} · Cloudflare {{cf}} · GoDaddy {{gd}}",
+    "splitNs": "{{count}} domains have NS pointing at more than one provider",
+    "splitNsIssue": "The NS records point at more than one provider, so which one answers depends on the recursive resolver — that is itself a configuration to fix."
+  },
+  "direct": "Direct",
+  "effective": {
+    "no": "Not effective",
+    "noNote": "This domain’s NS points at {{authoritative}} ({{ns}}) — records here have no effect",
+    "unknown": "Unknown",
+    "unknownHint": "No NS records collected for this domain, so this cannot be determined. This is not the same as “effective”",
+    "yes": "Effective"
+  },
+  "empty": {
+    "partialError": "At least one source failed to load, which is why this is empty — it does not mean there are no records. Check the error above, or retry shortly.",
+    "reason": "Neither source returned data. Either the Cloudflare / GCP account is not connected yet, or the credential lacks DNS read permission. This does not mean these domains have no records.",
+    "title": "No DNS records retrieved"
+  },
+  "error": {
+    "title": "DNS records could not be loaded"
+  },
+  "filter": {
+    "source": "Source",
+    "type": "Type"
+  },
+  "proxied": "Proxied",
+  "searchPlaceholder": "Search by name or target",
+  "source": {
+    "cloudflare": "Cloudflare",
+    "gcp": "GCP Cloud DNS",
+    "godaddy": "GoDaddy (registrar)"
+  },
+  "suspicious": {
+    "label": "Suspicious",
+    "loopback": "Loopback or unspecified address. Resolving here sends visitors back to themselves; nothing external can reach it",
+    "privateRange": "Private range address. On a public domain nothing outside can reach it; on an internal domain this is normal — check the intended use",
+    "publicResolver": "This is a public DNS resolver address (8.8.8.8 / 1.1.1.1 and friends). Pointing a domain’s A record here means traffic never reaches your service — almost certainly a placeholder or misconfiguration"
+  },
+  "title": "DNS records",
+  "view": {
+    "all": "All records",
+    "allHint": "GoDaddy / Cloudflare / GCP side by side, with the \"configured but not effective\" check",
+    "byDomain": "By domain",
+    "byDomainHint": "What records exist under this domain — day-to-day edits happen here"
+  },
+  "zones": {
+    "label": "GCP zones:",
+    "records": "{{n}}",
+    "visibility": "Visibility: {{v}}"
+  }
+}

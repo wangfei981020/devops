@@ -1,0 +1,56 @@
+{
+  "tab": {
+    "metrics": "指标 PromQL",
+    "logs": "日志 LogQL"
+  },
+  "hint": {
+    "metrics": "直接查 Prometheus / VictoriaMetrics",
+    "logs": "直接查 Loki"
+  },
+  "cluster": "集群",
+  "rangeLabel": "时间范围",
+  "run": "执行",
+  "range": {
+    "15": "最近 15 分钟",
+    "60": "最近 1 小时",
+    "360": "最近 6 小时",
+    "1440": "最近 24 小时"
+  },
+  "promql": "PromQL",
+  "logql": "LogQL",
+  "example": {
+    "metrics": "例：sum by (namespace) (rate(container_cpu_usage_seconds_total[5m]))。查询会被自动限制在所选集群内",
+    "logs": "例：{namespace=\"doris\"} |= \"error\"。宽匹配的聚合查询很容易把数据源拖垮，先缩小标签范围"
+  },
+  "findMetric": "找指标名",
+  "findMetricHint": "写查询前先确认指标存在 —— 指标名错了返回的也是空，看着像「组件正常」",
+  "search": "搜索",
+  "matched": "匹配 {{matched}} 个（Prometheus 共 {{total}} 个）",
+  "sent": "实际发出的查询（可能已注入集群选择器）",
+  "notIsolated": "⚠️ 这次查询没能限制在所选集群内 —— 结果里可能混着其它集群的数据，别直接当成本集群的指标",
+  "col": {
+    "labels": "序列",
+    "value": "最新值"
+  },
+  "seriesCount": "共 {{count}} 条序列",
+  "lineCount": "共 {{count}} 行",
+  "noLogs": "没有匹配的日志行。可能是标签名写错、时间范围太短、或这段时间确实没有日志 —— 这三种情况不一样，别直接当成「服务没报错」。",
+  "lokiFailed": "查询 Loki 失败",
+  "starter": {
+    "title": "还没查过。下面几条可以直接点，也顺带确认数据源通不通：",
+    "cpuTop": "CPU 用量最高的 10 个 Pod",
+    "memTop": "内存占用最高的 10 个 Pod",
+    "restarts": "重启次数最多的 10 个容器",
+    "nodeCpu": "各节点 CPU 使用率",
+    "errors": "全部命名空间里含 error 的日志",
+    "oom": "被 OOM 杀掉的容器（事件日志）",
+    "warnEvents": "全部 Warning 事件"
+  },
+  "labelValues": {
+    "label": "看标签取值",
+    "hint": "填标签名，如 namespace / pod / job",
+    "query": "列出取值",
+    "count": "共 {{n}} 个取值（点一个直接追加进查询）",
+    "empty": "⚠️ 标签 {{label}} 没有任何取值。可能是标签名写错了，也可能这个数据源上确实没有它——先用一个你确定存在的标签（如 job）验证一下"
+  }
+}

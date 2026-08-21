@@ -1,0 +1,153 @@
+# ============================================================================
+# ⚠️ 这个文件是 chart 的**默认值**，作用只有一个：保证结构齐全，模板不会 nil pointer。
+#
+# 真正的配置在环境文件里，每个环境一份、完整自包含：
+#   values-local.yaml   本地（docker-desktop）
+#   values-prod.yaml    生产（GKE infra-01 / devops）
+#
+# # 为什么这里必须有完整结构
+#
+# 第一版把这个文件清成了只有一个哨兵键。结果是 chart **没有任何默认值** ——
+# 环境文件里少写一个键，模板就报 `nil pointer evaluating interface {}.enabled`，
+# 而那个报错完全不提"你少配了哪个键"。
+# 生产第一次安装就撞上了（NOTES.txt 访问 .Values.ingress.enabled）。
+#
+# ⚠️ 更要紧的是这是个要卖的产品：客户会写自己的 values 文件，而且一定是残缺的。
+# chart 不能因为对方少写一个可选键就装不上。
+#
+# # 这里的值全部是"最安全的关闭态"
+#
+# 入口关、指标采集关、副本数最小、镜像仓库为空 —— 单独用这个文件装出来的东西
+# 跑不起来（拉不到镜像），这是刻意的：让"忘了传 -f"变成一次响亮的失败。
+# ============================================================================
+
+requireEnvValues: true
+
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  imageRegistry: ""
+
+  # 前后端统一 tag。组件级 image.tag 留空时用这里的值；
+  # 两边都填且不一致时 chart 直接 fail（见 _helpers.tpl 的 cmdb.requireSameTag）。
+  # ⚠️ 2026-08-18 之前这个字段是不生效的（helper 只读组件级），设了没反应也不报错
+  tag: ""
+  imagePullSecrets: []
+
+frontend:
+  replicaCount: 1
+
+  image:
+    repository: ops-cmdb-frontend
+    tag: ""            # 留空用 Chart.appVersion；发布一律显式 --set
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 80
+    nodePort: null
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+backend:
+  replicaCount: 1
+
+  image:
+    repository: ops-cmdb-backend
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  service:
+    port: 8080
+    metricsPort: 8088
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  envFrom:
+    - secretRef:
+        name: ops-cmdb-backend-secret
+
+  env:
+    - name: OPS_LICENSE_ENV
+      value: prod
+metrics:
+  enabled: false
+  scrapeKind: ServiceMonitor
+  labels:
+    release: kube-prometheus-stack
+
+  path: /metrics
+  interval: 30s
+  scrapeTimeout: 10s
+  relabelings: []
+
+proxyTimeoutSeconds: 120
+
+podAntiAffinity:
+  enabled: true
+  required: true
+
+nodeSelector: {}
+tolerations: []
+podAnnotations: {}
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: cmdb.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+istio:
+  enabled: false
+  annotations: {}
+  gateways:
+    - istio-system/infra-istio-ingressgateway-inner
+  hosts:
+    - cmdb.example.com          # ← 换成真实域名
+
+  matchPrefix:
+    - "/"
+  timeout: 180s
+
+  retries:
+    attempts: 3
+    perTryTimeout: 60s
+    retryOn: connect-failure,refused-stream
+    allowUnsafeRetryOn: false

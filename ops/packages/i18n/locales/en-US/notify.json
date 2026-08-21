@@ -1,0 +1,64 @@
+{
+  "action": {
+    "addGroup": "Add group",
+    "addUser": "Add person",
+    "test": "Send test",
+    "testBlocked": "Add a Lark group first"
+  },
+  "delete": {
+    "group": "After deleting \"{{name}}\", every scheduled task bound to this group stops sending notifications, while the tasks themselves keep reporting success. Make sure those tasks have been pointed at another group.",
+    "user": "After removing \"{{name}}\", alerts no longer @-mention them. Messages already sent are unaffected."
+  },
+  "dialog": {
+    "addGroup": "Add a Lark group",
+    "addGroupDesc": "Send a test immediately after adding — saving only means the URL was stored.",
+    "addUser": "Add a person to mention",
+    "addUserDesc": "Used to @-mention specific people in alert messages.",
+    "delGroup": "Delete this group",
+    "delUser": "Remove this person"
+  },
+  "empty": {
+    "groupReason": "Inspection and alert results have nowhere to go. Scheduled tasks will run and report success, but the results reach nobody.",
+    "groupTitle": "No Lark group configured",
+    "reason": "Alerts still reach the group; nobody is @-mentioned. That is fine for a small team.",
+    "title": "No people configured"
+  },
+  "error": {
+    "groups": "Lark groups could not be loaded",
+    "title": "The list could not be loaded"
+  },
+  "fallbackOnly": {
+    "body": "Inspection results go to the fallback webhook configured under Basic Settings → System. Note that the fallback is neither visible nor testable from this page — verify it there. A group bound to a specific task takes precedence over the fallback.",
+    "title": "No Lark group here, but a global fallback endpoint is in use"
+  },
+  "field": {
+    "bothRequired": "Both fields are required",
+    "groupName": "Group name",
+    "groupNameHint": "A name for humans, such as \"Ops alerts\".",
+    "openId": "Lark open_id",
+    "openIdHint": "From the Lark admin console or API, starting with ou_. A wrong value raises no error — the mention simply does not reach anyone.",
+    "userName": "Name",
+    "webhook": "Webhook URL",
+    "webhookHint": "The Lark group bot webhook. ⚠️ It is a credential in itself: anyone holding it can post to that group, so keep it out of tickets and chat logs."
+  },
+  "group": {
+    "test": "Send test message",
+    "testSent": "Sent — check the group"
+  },
+  "hint": "Who receives inspection and alert results. When this is empty, tasks still run and still report success — nobody just receives anything.",
+  "noGroup": {
+    "body": "Inspection results such as a filling disk or an expiring certificate cannot be delivered, while the scheduled tasks themselves still report success and raise no error. This is a silent failure: you find out when it matters.",
+    "title": "No Lark group configured"
+  },
+  "section": {
+    "groups": "Lark groups",
+    "groupsHint": "Where alerts are delivered. Always send a test after adding one.",
+    "users": "People to mention",
+    "usersHint": "Who gets @-mentioned. Optional — messages still go out without it."
+  },
+  "test": {
+    "failed": "The test message could not be delivered",
+    "sent": "Sent — check the group to confirm it actually arrived. A success response only means Lark accepted the request."
+  },
+  "title": "Notification targets"
+}

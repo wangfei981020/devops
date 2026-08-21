@@ -1,0 +1,47 @@
+{
+  "title": "负载均衡",
+  "total_other": "共 {{count}} 个负载均衡",
+  "noBackendHint": "打不通",
+  "emptyNote_other": "{{count}} 个确认无后端",
+  "unknownNote_other": "{{count}} 个后端未采到（不代表没有后端）",
+  "health": {
+    "empty": "无后端",
+    "unknown": "后端未采到",
+    "stale": "云上已删除",
+    "ok": "正常",
+    "viaTarget": "由 target 承载",
+    "k8s": "K8s 服务后端",
+    "lost": "后端数据丢失"
+  },
+  "column": {
+    "name": "负载均衡",
+    "scheme": "类型",
+    "backends": "后端",
+    "health": "状态",
+    "project": "云项目"
+  },
+  "filter": {
+    "searchPlaceholder": "搜索名称或 VIP",
+    "scheme": "类型",
+    "health": "状态"
+  },
+  "error": {
+    "title": "负载均衡列表没能加载出来"
+  },
+  "empty": {
+    "title": "没有负载均衡",
+    "filtered": "当前筛选条件下没有负载均衡。放宽条件再看看。",
+    "noSource": "还没采到任何负载均衡。先到「管理 / 云账号」确认云账号已接入且配了 SA key。"
+  },
+  "why": {
+    "empty": "target 为空、确认一个后端都没有 —— 这条 LB 打不通，是真问题",
+    "unknown": "后端没采过，或追溯时上游某一跳拉失败了。有没有后端我们不知道，别当成「没有」",
+    "viaTarget": "有 target，但它不是 targetPool/backendService（FortiGate 转发规则、Gateway API 的 target proxy）。流量由那个 target 承载，结构上就不该有 GCP 后端服务 —— 不是故障",
+    "k8s": "VIP 对上了 K8s Service。GKE 的 Service type=LoadBalancer 后端是 Pod（NEG），不在实例组里，所以追溯不到实例 —— 但它正在服务",
+    "lost": "采集时追溯到了后端，读出来却没有 —— 数据丢了，这一条的后端结论不可信。重新同步不会改变结果，需要查采集写入",
+    "stale": "云上已经删除，只是台账里还留着",
+    "ok": "追溯到了实例后端"
+  },
+  "allPorts": "全端口",
+  "allPortsHint": "1-65535 = 该 VIP 上所有端口都对外转发。安全上这值得单独确认：通常只需要放行实际用到的那几个端口。"
+}

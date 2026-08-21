@@ -1,0 +1,77 @@
+{
+  "capacityValue": "{{cpu}} cores / {{mem}} Gi",
+  "collectionStaleHint": "CMDB collection has stopped; the node itself may be fine — check collection first",
+  "column": {
+    "allocatable": "Allocatable",
+    "capacity": "Capacity",
+    "cluster": "Cluster",
+    "conditions": "Pressure",
+    "cpuPacking": "CPU requests",
+    "heartbeat": "Last heartbeat",
+    "host": "Host",
+    "kubelet": "kubelet",
+    "memPacking": "Memory requests",
+    "name": "Node",
+    "pods": "Pods",
+    "pool": "Node pool",
+    "status": "Status"
+  },
+  "empty": {
+    "filtered": "No nodes match the current filters. Try widening them.",
+    "noSource": "No nodes collected yet. Check on the Clusters page that the cluster is onboarded and its credentials are valid.",
+    "title": "No nodes"
+  },
+  "error": {
+    "title": "Could not load nodes"
+  },
+  "filter": {
+    "cluster": "Cluster",
+    "pool": "Node pool",
+    "searchPlaceholder": "Search node, IP or pool",
+    "status": "Status"
+  },
+  "impact": {
+    "domains": "Public domains",
+    "entry": "Impact",
+    "ingresses": "Ingress / routes",
+    "noDomains": "No public domains found. Either these services are internal, or Ingress / VirtualService has not been collected yet — the drain risk differs completely between the two, so do not read this as \"no impact\".",
+    "noPods": "No pods collected on this node. It may genuinely be empty, or collection may not have run yet.",
+    "none": "None",
+    "pods": "Pods on this node ({{count}})",
+    "services": "Services",
+    "title": "What breaks if this node goes down",
+    "workloads": "Workloads"
+  },
+  "live": {
+    "header": "Live usage",
+    "pickCluster": "Select a single cluster — usage is queried from Prometheus per cluster",
+    "unavailable": "Unavailable"
+  },
+  "packing": {
+    "lim": "limits {{pct}}%  {{used}} {{unit}}",
+    "limExtremeHint": "Limits total {{pct}}% of node capacity — well beyond routine overcommit. Simultaneous peaks will contend heavily and throttling on this node is amplified",
+    "limOverHint": "Limits total more than 1.5× node capacity. Limits are ceilings, not reservations, so overcommit is normal — but containers will contend for CPU if they all peak together",
+    "req": "requests {{pct}}%  {{used}}/{{total}} {{unit}}"
+  },
+  "podDrift": "reports {{reported}}",
+  "poolNone": "No pool",
+  "staleHint": "last reported {{status}}, heartbeat stopped",
+  "staleNote_one": "{{count}} nodes have untrustworthy status (heartbeat or collection stopped)",
+  "staleNote_other": "{{count}} nodes have untrustworthy status (heartbeat or collection stopped)",
+  "status": {
+    "pressure": "Under pressure",
+    "stale": "Unreachable",
+    "uncollected": "Collection stale",
+    "untrusted": "Untrusted"
+  },
+  "title": "Nodes",
+  "total_one": "{{count}} node",
+  "total_other": "{{count}} nodes",
+  "unit": {
+    "cores": "cores",
+    "gib": "Gi"
+  },
+  "unlinked": "Not linked",
+  "unlinkedHint": "No matching machine in the host inventory. Usually a self-managed box that is not in the cloud inventory, or a node whose name and internal IP both differ from the instance.",
+  "usageUnavailable": "Actual usage needs Prometheus (shown here is request/limit packing, not real usage)"
+}

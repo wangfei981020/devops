@@ -1,0 +1,75 @@
+{
+  "capacityValue": "{{cpu}} 核 / {{mem}} Gi",
+  "collectionStaleHint": "CMDB 采集停了，节点本身可能正常——先查采集",
+  "column": {
+    "allocatable": "可分配",
+    "capacity": "容量",
+    "cluster": "集群",
+    "conditions": "压力位",
+    "cpuPacking": "CPU requests",
+    "heartbeat": "最后心跳",
+    "host": "关联主机",
+    "kubelet": "kubelet",
+    "memPacking": "内存 requests",
+    "name": "节点",
+    "pods": "Pod",
+    "pool": "节点池",
+    "status": "状态"
+  },
+  "empty": {
+    "filtered": "当前筛选条件下没有节点。放宽条件再看看。",
+    "noSource": "还没采到任何节点。先到「集群」页确认集群已纳管且凭据有效。",
+    "title": "没有节点"
+  },
+  "error": {
+    "title": "节点列表没能加载出来"
+  },
+  "filter": {
+    "cluster": "集群",
+    "pool": "节点池",
+    "searchPlaceholder": "搜索节点名、IP 或节点池",
+    "status": "状态"
+  },
+  "impact": {
+    "domains": "对外域名",
+    "entry": "影响面",
+    "ingresses": "Ingress / 路由",
+    "noDomains": "没查到对外域名。可能这些服务确实不对外，也可能 Ingress / VirtualService 还没采到 —— 这两种情况下驱逐的风险完全不同，别据此认为「没影响」。",
+    "noPods": "这个节点上没有采到 Pod。可能确实是空节点，也可能是采集还没跑到。",
+    "none": "无",
+    "pods": "节点上的 Pod（{{count}}）",
+    "services": "Service",
+    "title": "这个节点挂了会影响谁",
+    "workloads": "工作负载"
+  },
+  "live": {
+    "header": "实时用量",
+    "pickCluster": "选定单个集群后才显示 —— 用量是按集群查 Prometheus 的",
+    "unavailable": "查不到"
+  },
+  "packing": {
+    "lim": "limits {{pct}}%  {{used}} {{unit}}",
+    "limExtremeHint": "limits 之和达到节点容量的 {{pct}}%——已经不是常规超卖了。同时打满时会严重争抢，且节点上任何一个容器的限流都会被放大",
+    "limOverHint": "limits 之和超过节点容量 1.5 倍。limit 是上限不是预留，超卖本身正常，但同时打满时容器会互相抢 CPU",
+    "req": "requests {{pct}}%  {{used}}/{{total}} {{unit}}"
+  },
+  "podDrift": "自报 {{reported}}",
+  "poolNone": "无节点池",
+  "staleHint": "上次上报为 {{status}}，但心跳已停",
+  "staleNote_other": "{{count}} 个节点状态不可信（心跳停了或采集停了）",
+  "status": {
+    "pressure": "有资源压力",
+    "stale": "失联",
+    "uncollected": "采集已过期",
+    "untrusted": "状态不可信"
+  },
+  "title": "节点",
+  "total_other": "共 {{count}} 个节点",
+  "unit": {
+    "cores": "核",
+    "gib": "Gi"
+  },
+  "unlinked": "未关联",
+  "unlinkedHint": "在主机台账里找不到这台机器。常见原因：自建机不在云台账里，或者节点名与实例名、内网 IP 都对不上。",
+  "usageUnavailable": "实际用量需接 Prometheus（当前显示的是 request/limit 装箱率，不是真实用量）"
+}

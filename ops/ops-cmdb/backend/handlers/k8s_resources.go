@@ -1,0 +1,454 @@
+package handlers
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"net/http"
+	"ops-cmdb-backend/internal/httpx"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"ops-cmdb-backend/internal/store"
+
+	"ops-cmdb-backend/crypto"
+	"ops-cmdb-backend/k8ssource"
+	"ops-cmdb-backend/logx"
+)
+
+// K8sResourceHandler 负责集群资源同步 + 只读列表查询。
+type K8sResourceHandler struct {
+	Store *store.Store
+	DB    *sql.DB
+	Pool  *k8ssource.Pool
+	// 体检要取节点磁盘水位，得解 Prometheus 数据源的 token
+	Cipher *crypto.Cipher
+}
+
+func NewK8sResourceHandler(st *store.Store, db *sql.DB, pool *k8ssource.Pool, cipher *crypto.Cipher) *K8sResourceHandler {
+	return &K8sResourceHandler{Store: st, DB: db, Pool: pool, Cipher: cipher}
+}
+
+func (h *K8sResourceHandler) Register(r *gin.RouterGroup) {
+	r.POST("/k8s/clusters/:id/sync", h.Sync)
+	r.GET("/k8s/node-pools", h.NodePools)
+	r.GET("/k8s/nodes", h.Nodes)
+	r.GET("/k8s/namespaces", h.Namespaces)
+	r.GET("/k8s/sync-state", h.SyncState)         // 采集新鲜度:这份数据能不能信
+	r.GET("/k8s/expose-surface", h.ExposeSurface) // 暴露面:谁能从外面访问到什么
+	r.GET("/k8s/orphans", h.ListOrphans)          // 孤儿资源:还在占资源/计费但没人用
+	r.GET("/k8s/security-audit", h.SecurityAudit) // 安全上下文:特权容器/hostPath/capabilities
+	r.GET("/k8s/health/detail", h.HealthDetail)   // 体检项下钻：汇总数字→具体清单
+	r.GET("/k8s/health", h.ClusterHealth)         // 集群体检总入口
+	r.GET("/k8s/workloads", h.Workloads)
+	r.GET("/k8s/pods", h.Pods)
+	r.GET("/k8s/services", h.Services)
+	r.GET("/k8s/ingresses", h.Ingresses)
+	r.GET("/k8s/gateways", h.Gateways)
+	r.GET("/k8s/httproutes", h.HTTPRoutes)
+	r.GET("/k8s/virtualservices", h.VirtualServices)
+	r.GET("/k8s/node-capacity", h.NodeCapacity) // 节点 可分配 vs 已request vs limit → 够不够/装箱
+	r.GET("/k8s/ns-overview", h.NsOverview)     // 命名空间/项目 Pod 概览:总/Running/失败/Pending+原因
+	r.GET("/k8s/pvcs", h.PVCs)
+	r.GET("/k8s/hpas", h.HPAs)
+	r.GET("/k8s/changes", h.Changes)
+	r.GET("/k8s/ns-projects", h.NsProjects)           // 命名空间→项目 映射(含未映射的命名空间)
+	r.POST("/k8s/ns-projects", h.SetNsProject)        // upsert 单条映射
+	r.POST("/k8s/ns-projects/auto", h.AutoNsProjects) // 按命名规律自动归属（默认只预览）
+}
+
+// Sync 手动全量采集一个集群（阶段2 手动触发；周期同步阶段3 接调度器）。
+func (h *K8sResourceHandler) Sync(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	var poolLabel string
+	if err := h.DB.QueryRow(`SELECT COALESCE(nodepool_label,'') FROM k8s_clusters WHERE id=?`, id).Scan(&poolLabel); err != nil {
+		httpx.NotFound(c, "cluster")
+		return
+	}
+	cs, err := h.Pool.ClientFor(id)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	dc, err := h.Pool.DynamicFor(id)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 120*time.Second)
+	defer cancel()
+	mc, mcErr := h.Pool.MetadataFor(id)
+	if mcErr != nil {
+		mc = nil
+	}
+	results := k8ssource.SyncCluster(ctx, h.DB, cs, dc, mc, id, poolLabel)
+	summary := gin.H{}
+	failed := 0
+	for _, r := range results {
+		if r.Err != nil {
+			failed++
+			summary[r.Resource] = "err: " + r.Err.Error()
+		} else {
+			summary[r.Resource] = r.Count
+		}
+	}
+	SetAuditTarget(c, c.Param("id"))
+	logx.J("k8s", "cluster_sync", map[string]any{"cluster_id": id, "failed": failed, "summary": summary})
+	c.JSON(http.StatusOK, gin.H{"ok": failed == 0, "summary": summary})
+}
+
+// ---- 只读列表（通用扫描）----
+
+func (h *K8sResourceHandler) NodePools(c *gin.Context) {
+	h.list(c, `SELECT id,cluster_id,name,machine_type,node_count,version FROM k8s_node_pools`,
+		[]filter{{"cluster_id", "cluster_id", true}}, "cluster_id,name", []string{"name"})
+}
+
+func (h *K8sResourceHandler) Nodes(c *gin.Context) {
+	// health 是派生结论列：conditions 为空既可能是「无压力」也可能是「没采到」，
+	// 空字符串对调用方（尤其 AI）有歧义，这里直接给出可采信的判定，免得各方自己解析 conditions_json。
+	h.list(c, `SELECT id,cluster_id,name,pool,internal_ip,roles,machine_type,cpu_cap,mem_cap,os_image,kubelet_version,ready_status,last_heartbeat,conditions,COALESCE(conditions_json,'') AS conditions_json,pod_count,stuck,
+		CASE
+			WHEN stuck=1 THEN CONCAT('异常:卡死/失联(Ready=',ready_status,')')
+			WHEN ready_status<>'Ready' THEN CONCAT('异常:未就绪(Ready=',ready_status,')')
+			WHEN COALESCE(conditions,'')<>'' THEN CONCAT('异常:存在压力(',conditions,')')
+			ELSE '正常'
+		END AS health,
+		COALESCE((SELECT c.id FROM cis c WHERE c.type='host' AND c.name=k8s_nodes.name LIMIT 1),0) AS host_ci_id FROM k8s_nodes`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"pool", "pool", false}}, "cluster_id,pool,name", []string{"name", "internal_ip", "pool"})
+}
+
+func (h *K8sResourceHandler) Namespaces(c *gin.Context) {
+	h.list(c, `SELECT id,cluster_id,name,phase FROM k8s_namespaces`,
+		[]filter{{"cluster_id", "cluster_id", true}}, "cluster_id,name", []string{"name"})
+}
+
+func (h *K8sResourceHandler) Workloads(c *gin.Context) {
+	h.list(c, `SELECT id,cluster_id,namespace,kind,name,replicas_desired,replicas_ready,image,image_tag,status FROM k8s_workloads`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}, {"kind", "kind", false}}, "namespace,name", []string{"name", "image", "namespace"})
+}
+
+func (h *K8sResourceHandler) Pods(c *gin.Context) {
+	extra := []string{}
+	if c.Query("bad") == "1" { // 只看异常:非 Running/Succeeded 或有失败原因 或重启多
+		extra = append(extra, "(phase NOT IN ('Running','Succeeded') OR COALESCE(reason,'')<>'' OR restarts>5)")
+	}
+	h.list(c, `SELECT id,cluster_id,namespace,name,node_name,workload,phase,COALESCE(reason,'') AS reason,cpu_req_m,mem_req_mi,cpu_lim_m,mem_lim_mi,restarts,pod_ip,start_time FROM k8s_pods`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}, {"node_name", "node", false}, {"workload", "workload", false}}, "namespace,name", []string{"name", "pod_ip", "node_name", "workload"}, extra...)
+}
+
+func (h *K8sResourceHandler) Services(c *gin.Context) {
+	h.list(c, `SELECT id,cluster_id,namespace,name,type,cluster_ip,COALESCE(external_ip,'') AS external_ip,
+		COALESCE(lb_type,'') AS lb_type,ports FROM k8s_services`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}}, "namespace,name",
+		[]string{"name", "cluster_ip", "external_ip"})
+}
+
+func (h *K8sResourceHandler) Ingresses(c *gin.Context) {
+	h.list(c, `SELECT id,cluster_id,namespace,name,hosts,tls,svc_names FROM k8s_ingresses`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}}, "namespace,name", []string{"name", "hosts"})
+}
+
+func (h *K8sResourceHandler) Gateways(c *gin.Context) {
+	// api_group 区分 Gateway API 与 Istio Gateway：两者是完全不同的资源，
+	// 但排查「这个 VirtualService 的 Gateway 在哪」时要一起看，所以放同一个列表。
+	// Istio 的 gateway_class 列放的是 spec.selector（由哪个网关负载承载）。
+	h.list(c, `SELECT id,cluster_id,namespace,name,gateway_class,listeners,addresses,api_group FROM k8s_gateways`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false},
+			{"api_group", "api_group", false}}, "api_group,namespace,name", []string{"name", "gateway_class"})
+}
+
+func (h *K8sResourceHandler) HTTPRoutes(c *gin.Context) {
+	h.list(c, `SELECT id,cluster_id,namespace,name,hostnames,parents,backends FROM k8s_httproutes`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}}, "namespace,name", []string{"name", "hostnames"})
+}
+
+func (h *K8sResourceHandler) VirtualServices(c *gin.Context) {
+	h.list(c, `SELECT id,cluster_id,namespace,name,hosts,gateways,backends FROM k8s_virtualservices`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}}, "namespace,name", []string{"name", "hosts"})
+}
+
+func (h *K8sResourceHandler) PVCs(c *gin.Context) {
+	h.list(c, `SELECT id,cluster_id,namespace,name,status,capacity,storage_class,volume_name FROM k8s_pvcs`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}}, "namespace,name", []string{"name", "storage_class"})
+}
+
+func (h *K8sResourceHandler) HPAs(c *gin.Context) {
+	h.list(c, `SELECT id,cluster_id,namespace,name,target_kind,target_name,min_replicas,max_replicas,current_replicas FROM k8s_hpas`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}}, "namespace,name", []string{"name", "target_name"})
+}
+
+// NsProjects 列出某集群所有命名空间 + 已配的项目归属（未配的 project 为空，前端提醒）。
+func (h *K8sResourceHandler) NsProjects(c *gin.Context) {
+	cid, ok := requireCluster(c, h.DB)
+	if !ok {
+		return
+	}
+	rows, err := h.DB.Query(`SELECT n.name, COALESCE(m.project,'') AS project
+		FROM k8s_namespaces n LEFT JOIN k8s_ns_project m ON m.cluster_id=n.cluster_id AND m.namespace=n.name
+		WHERE n.cluster_id=? ORDER BY n.name`, cid)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	out, err := scanRows(rows)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 「建议」列的值由后端给，且**必须和「按名称智能填充」用同一套规则**。
+	//
+	//	这一列原来是前端自己算的（一个简陋的 includes 双向包含），
+	//	后来归属逻辑搬到后端（matchNsProject：精确 > 最长前缀 > 平台组件），
+	//	前端那个 suggest() 被删掉了，但模板里的调用漏掉了一处——
+	//	于是每行抛一个 `e.suggest is not a function`，整列静默空白。
+	//	异常发生在 slot 内被 Vue 捕获，其它列正常、页面不白屏，
+	//	只有这一列消失，比整页崩还难发现（CMDB-050）。
+	//
+	//	所以不是把 suggest() 加回前端，而是让后端来给：
+	//	否则「建议」列说 A、点智能填充填成 B，两套判据早晚打架——
+	//	这套系统已经在这上面栽过好几次（巡检口径、总览卡片）。
+	var projects []string
+	if prows, e := h.DB.Query(`SELECT name FROM projects ORDER BY name`); e != nil {
+		// 取不到项目列表 = 算不出建议。这时**整列留空**，不能给一个空字符串
+		// 假装"没有建议"——那是断言，而我们只是没查到。
+		logx.J("ns_project", "suggest_projects_fail", map[string]any{
+			"cluster": cid, "err": e.Error(), "note": "「建议」列本次为空，是查不到项目列表，不是没有可建议的项目"})
+	} else {
+		for prows.Next() {
+			var n string
+			if prows.Scan(&n) == nil && strings.TrimSpace(n) != "" {
+				projects = append(projects, n)
+			}
+		}
+		prows.Close()
+		for _, row := range out {
+			ns, _ := row["name"].(string)
+			p, rule, reason := matchNsProject(ns, projects)
+			row["suggest"] = p
+			row["suggest_rule"] = rule     // exact/prefix/platform/none，前端据此给不同措辞
+			row["suggest_reason"] = reason // 人话解释，鼠标放上去能看见依据
+		}
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// SetNsProject upsert 一条命名空间→项目映射（project 传空=清除归属）。
+func (h *K8sResourceHandler) SetNsProject(c *gin.Context) {
+	var in struct {
+		ClusterID int    `json:"cluster_id"`
+		Namespace string `json:"namespace"`
+		Project   string `json:"project"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.ClusterID == 0 || in.Namespace == "" {
+		httpx.Required(c, "cluster_id/namespace")
+		return
+	}
+	_, err := h.DB.Exec(`INSERT INTO k8s_ns_project (cluster_id,namespace,project) VALUES (?,?,?)
+		ON DUPLICATE KEY UPDATE project=VALUES(project)`, in.ClusterID, in.Namespace, in.Project)
+	if err != nil {
+		// 重名是用户输错了，不是服务端故障：报 500 会让人去找运维，
+		// 而原始的 "Duplicate entry 'x' for key 'k8s_ns_project.code'" 既泄露表结构又看不懂
+		if isDupKeyErr(err) {
+			failDuplicate(c, "命名空间归属", in.Namespace, 0)
+			return
+		}
+		httpx.Fail(c, httpx.CodeInternal, errors.New(SafeErr("新增命名空间归属", err)), nil)
+		return
+	}
+	SetAuditTarget(c, in.Namespace+"→"+in.Project)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *K8sResourceHandler) Changes(c *gin.Context) {
+	h.list(c, `SELECT id,cluster_id,namespace,kind,name,field,old_value,new_value,source,changed_at FROM k8s_changes`,
+		[]filter{{"cluster_id", "cluster_id", true}, {"namespace", "namespace", false}, {"kind", "kind", false}, {"name", "name", false}},
+		"changed_at DESC", []string{"name", "new_value"})
+}
+
+type filter struct {
+	col   string // 数据库列
+	param string // query 参数名
+	isInt bool
+}
+
+// list 通用列表：按 filters 拼 WHERE + q 关键词模糊(searchCols) + orderBy，扫描为 []map。
+func (h *K8sResourceHandler) list(c *gin.Context, base string, filters []filter, orderBy string, searchCols []string, extraWhere ...string) {
+	// cluster_id 在这里是**选填**（不传=跨集群全量），但一旦传了就必须指向真实存在的集群：
+	// 否则 `?cluster_id=999` 会安静地返回 []，前端渲染成「无数据」，与「这个集群真的空」无从区分。
+	if raw := strings.TrimSpace(c.Query("cluster_id")); raw != "" {
+		cid, err := strconv.Atoi(raw)
+		if err != nil || cid <= 0 {
+			httpx.Invalid(c, "cluster_id", "number")
+			return
+		}
+		if clusterGone(c, h.DB, cid) {
+			return
+		}
+	}
+	where := append([]string{}, extraWhere...)
+	args := []any{}
+	for _, f := range filters {
+		v := c.Query(f.param)
+		if v == "" {
+			continue
+		}
+		if f.isInt {
+			iv, err := strconv.Atoi(v)
+			if err != nil {
+				continue
+			}
+			where = append(where, f.col+"=?")
+			args = append(args, iv)
+		} else {
+			where = append(where, f.col+"=?")
+			args = append(args, v)
+		}
+	}
+	if q := strings.TrimSpace(c.Query("q")); q != "" && len(searchCols) > 0 {
+		ors := []string{}
+		for _, col := range searchCols {
+			ors = append(ors, col+" LIKE ?")
+			args = append(args, "%"+q+"%")
+		}
+		where = append(where, "("+strings.Join(ors, " OR ")+")")
+	}
+	whereSQL := ""
+	if len(where) > 0 {
+		whereSQL = " WHERE " + strings.Join(where, " AND ")
+	}
+	// 服务端分页(opt-in)：带 page 参数时返回 {items,total,...} + LIMIT/OFFSET；否则原样返回数组(向后兼容)。
+	if pageStr := c.Query("page"); pageStr != "" {
+		page, _ := strconv.Atoi(pageStr)
+		if page < 1 {
+			page = 1
+		}
+		size, _ := strconv.Atoi(c.Query("page_size"))
+		if size < 1 || size > 500 {
+			size = 20
+		}
+		total := 0
+		// COUNT(*) 复用同一 base 的 FROM/WHERE
+		from := topLevelFrom(base)
+		// total 失败不能吞：吞了会变成"共 0 条"但表里有数据，前端分页器直接失真。
+		if err := h.DB.QueryRow("SELECT COUNT(*)"+from+whereSQL, args...).Scan(&total); err != nil {
+			logx.J("k8s_list", "count_fail", map[string]any{"from": from, "err": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		q := base + whereSQL
+		if orderBy != "" {
+			q += " ORDER BY " + orderBy
+		}
+		q += " LIMIT ? OFFSET ?"
+		rows, err := h.DB.Query(q, append(args, size, (page-1)*size)...)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+		items, err := scanRows(rows)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": items, "total": total, "page": page, "page_size": size})
+		return
+	}
+	sqlStr := base + whereSQL
+	if orderBy != "" {
+		sqlStr += " ORDER BY " + orderBy
+	}
+	rows, err := h.DB.Query(sqlStr, args...)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	out, err := scanRows(rows)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// scanRows 把结果集扫描为 []map[string]any，自动处理 NULL 与时间格式。
+func scanRows(rows *sql.Rows) ([]map[string]any, error) {
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	out := []map[string]any{}
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, err
+		}
+		m := map[string]any{}
+		for i, col := range cols {
+			m[col] = normVal(vals[i])
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+func normVal(v any) any {
+	switch t := v.(type) {
+	case nil:
+		return nil
+	case []byte:
+		return string(t)
+	case time.Time:
+		return t.Format("2006-01-02 15:04:05")
+	default:
+		return t
+	}
+}
+
+// topLevelFrom 取 SELECT 语句里**最外层**的 FROM 子句（含之后的全部内容）。
+//
+// # 为什么不能用 strings.Index 找第一个 " FROM "
+//
+// 选择列表里可以有带 FROM 的子查询：
+//
+//	SELECT id, name,
+//	       COALESCE((SELECT c.id FROM cis c WHERE ...),0) AS host_ci_id
+//	  FROM k8s_nodes
+//	                    ↑ 真正的 FROM 在这里，但第一个 " FROM " 在子查询里
+//
+// 取到第一个的话，COUNT(*) 会被拼成
+// `SELECT COUNT(*) FROM cis c WHERE ...),0) AS host_ci_id FROM k8s_nodes`
+// —— 语法错误，整个分页请求 500。
+//
+// 这个 bug 在 Nodes 接口上一直存在，因为此前没有调用方真的传 page 参数：
+// 不带 page 走的是另一条不拼 COUNT 的分支，一切正常。
+// 「有代码但没人走」的路径就是这样长期带病的。
+//
+// 做法：扫描到括号深度为 0 的那个 FROM。
+func topLevelFrom(q string) string {
+	up := strings.ToUpper(q)
+	depth := 0
+	for i := 0; i < len(up); i++ {
+		switch up[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+		if depth == 0 && strings.HasPrefix(up[i:], " FROM ") {
+			return q[i:]
+		}
+	}
+	return q // 找不到就原样返回，让 SQL 自己报错，而不是安静地算错
+}

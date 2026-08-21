@@ -1,0 +1,101 @@
+# 本地 docker-desktop 集群。
+#
+# 与生产的差别只有三处：NodePort 暴露、副本数、后端连宿主机的 MySQL。
+# 其余一律走 values.yaml，避免"本地能跑生产不能跑"这类只在上线当天暴露的差异。
+
+# 镜像仓库只在这里配一次，所有组件共用。
+# ⚠️ 各组件写全路径的话换仓库要改多处，而只改一处不会报错
+global:
+  imageRegistry: localhost:8070/opsplatform-dev
+  imagePullSecrets: []
+
+# ⚠️ 30834。30832 是旧版 SSO（enterprise/ops-access-plane，不动），30833 是 CMDB。
+# 新端口必须在 k8s-proxy 的**三处**同步：nginx.conf 加 server 块 +
+# docker-compose.yml 加 ports + README.md 端口表，然后 docker compose up -d。
+# 只改一处的表现是「Pod Running 但连不上」。
+frontend:
+  replicaCount: 1 # 本地不需要两副本，省内存
+  service:
+    type: NodePort
+    nodePort: 30834
+  podDisruptionBudget:
+    enabled: false # 单副本时 PDB 会挡住节点排空
+
+backend:
+  # SSO 的后端是本产品自己的，不是外部服务 —— 与 CMDB 相反。
+  enabled: true
+  replicaCount: 1
+  podDisruptionBudget:
+    enabled: false
+  env:
+    # 本地 MySQL 在宿主机的 mysql-deploy 容器里
+    - name: DB_HOST
+      value: host.docker.internal
+    - name: DB_PORT
+      value: "3306"
+    - name: DB_NAME
+      value: ops_sso
+    - name: DB_USER
+      value: access
+    - name: RUN_MODE
+      value: dev
+    # 本地用 dev 验签公钥，才能装签发台用 dev 私钥签的测试授权。
+    # ⚠️ 只在本地：留空或任何非 "dev" 的值都按 prod 处理（安全默认）。
+    # ⚠️ OAP_ANCHOR_KEY（审计锚点私钥）**不在这里配** —— 它已经在
+    # Secret ops-sso-secrets 里。私钥只能有一处来源：两处各写一个值，
+    # 迟早分叉，而分叉的表现是"换了个公钥重新签"，旧锚点全部对不上，
+    # 看起来像链被人动过。（同一个坑：容器 uid 在 Dockerfile 和 chart 里
+    # 各写一个数，实际撞到过。）
+    - name: OPS_LICENSE_ENV
+      value: dev
+    - name: OAP_ISSUER
+      # ⚠️ issuer 上生产后改不了：它同时是 id_token 的 iss、discovery 里
+      # 所有端点的前缀、以及下游配置里填的那一行。改了之后所有下游验签失败，
+      # 而报错只说"iss 不匹配"。本地用 NodePort 地址，生产的值待定。
+      # ⚠️ 用**局域网 IP** 而不是 localhost。
+      # issuer 这一个字符串要同时被两方访问到，且必须完全一致：
+      #   浏览器  —— 被下游跳到 <issuer>/oidc/authorize 去登录
+      #   下游服务 —— 从它自己的容器里去拉 discovery / jwks / 换 token
+      # localhost 对下游容器指的是**它自己**，永远拉不到我们。
+      # 局域网 IP 两边都能到，且不用改 hosts、不用 DNS。
+      # 代价：IP 会随 DHCP 变，变了要改这里 —— 这正好说明 issuer 是部署期配置。
+      #
+      # ★ https 不是可选项：Harbor 的认证配置页强制 OIDC Endpoint 以 https:// 开头
+      #   （前端表单校验；后端其实不拦，但绕过校验意味着那一页以后每次保存都被挡）。
+      #   同类要求别的下游多半也有，所以本地也用 https —— 生产上它必然是 https，
+      #   本地形态一致才不会出现「本地能跑生产不能跑」。
+      #   TLS 由 k8s-proxy 的 nginx 终止（自签证书，见 k8s-proxy/nginx.conf 的 30834 块），
+      #   Pod 里仍然是明文 http，chart 不用改。
+      value: https://192.168.55.101:30834
+  envFrom:
+    - secretRef:
+        name: ops-sso-secrets
+
+gateway:
+  # 本地也保持 2 副本：正是要在本地就验证"滚动升级不中断"，
+  # 而单副本永远验不出来。它很轻（128Mi），两份不心疼。
+  replicaCount: 2
+  # ⚠️ 网关**不要**加 NodePort。本地是 kind 集群，NodePort 要在建集群时
+  # 用 extraPortMappings 映射，事后加是不通的（试过：连接被拒）。
+  # 而且给 service 开 NodePort 会**连 metrics 端口一起暴露**（自动分配一个），
+  # 那是不该对外的。验证网关走集群内发流量即可。
+  service:
+    type: ClusterIP
+  envFrom:
+    - secretRef:
+        name: ops-sso-secrets
+  env:
+    # ⚠️ 网关**自己直连数据库**（判定要读策略），不是通过后端转发。
+    # 它认的是 DB_DSN 整串，不是拆开的 DB_HOST/DB_NAME ——
+    # 名字对不上时的表现是「连接数据库失败」，看不出是少了哪个变量。
+    - name: DB_DSN
+      value: "access:$(DB_PASSWORD)@tcp(host.docker.internal:3306)/ops_sso?charset=utf8mb4&parseTime=true&loc=Local"
+    - name: GATEWAY_NAME
+      value: local
+
+podAntiAffinity:
+  enabled: true
+  required: false # 本地单节点，required 会让第二个副本永远 Pending
+
+ingress:
+  enabled: false

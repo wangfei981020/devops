@@ -1,0 +1,40 @@
+{
+  "checksRan": "{{count}} checks ran",
+  "clear": {
+    "reason": "The conclusion covers collected data only. If any single check fails, this page reports an error rather than saying all good.",
+    "title": "No problems found in this check"
+  },
+  "critical_one": "{{count}} critical",
+  "critical_other": "{{count}} critical",
+  "detail": {
+    "empty": "No detail rows for this item — drill-down is supported and the query succeeded, so it is genuinely zero."
+  },
+  "error": {
+    "title": "Health check did not complete"
+  },
+  "filter": {
+    "cluster": "Cluster"
+  },
+  "info_one": "{{count}} info",
+  "info_other": "{{count}} info",
+  "summary": "This check",
+  "title": "Cluster health",
+  "unit": {
+    "hpa_one": "{{count}} HPA",
+    "hpa_other": "{{count}} HPAs",
+    "image_one": "{{count}} image",
+    "image_other": "{{count}} images",
+    "node_one": "{{count}} node",
+    "node_other": "{{count}} nodes",
+    "pod_one": "{{count}} pod",
+    "pod_other": "{{count}} pods",
+    "pvc_one": "{{count}} volume",
+    "pvc_other": "{{count}} volumes",
+    "resource_one": "{{count}} resource type",
+    "resource_other": "{{count}} resource types",
+    "workload_one": "{{count}} workload",
+    "workload_other": "{{count}} workloads"
+  },
+  "warning_one": "{{count}} warning",
+  "warning_other": "{{count}} warnings"
+}

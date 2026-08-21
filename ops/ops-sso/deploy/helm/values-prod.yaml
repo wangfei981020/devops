@@ -1,0 +1,87 @@
+# 生产（GKE）
+#
+#   helm upgrade --install cmdb ops/ops-sso/deploy/helm \
+#     -n <namespace> \
+#     -f ops/ops-sso/deploy/helm/values-prod.yaml \
+#     --set frontend.image.tag=v1 --set backend.image.tag=v1
+#
+# 对外走域名，Service 一律 ClusterIP —— 生产**不开 NodePort**：
+# NodePort 会在每个节点上开一个端口，等于绕过 Ingress 的鉴权与 WAF，
+# 是一条容易被忘掉的公网暴露面。
+
+# 镜像仓库只在这里配一次，所有组件共用。
+# ⚠️ 各组件写全路径的话换仓库要改多处，而只改一处不会报错
+global:
+  imageRegistry: marks26
+  imagePullSecrets: []
+
+frontend:
+  replicaCount: 3
+  service:
+    type: ClusterIP
+
+  # 生产显式写死，不继承 values.yaml —— 上线前读的是这个文件，
+  # 资源配置要翻另一个文件才知道的话，迟早被人按错误假设改动。
+  #
+  # ⚠️ 数字沿用 ops-cmdb 的实测（同样是 nginx + Vite 产物，形态一致）：
+  # 生产实测前端 cpu 0.037m / mem 26.8Mi。
+  # 原来 memory request 是 32Mi，只比实测高 16% —— request 贴着实际值
+  # 会让调度器超卖节点。本产品尚未上生产，等有实测数据再校准。
+  resources:
+    requests:
+      # ⚠️ request 同时是 HPA 算利用率的分母，给太小会让阈值够不着
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      # ⚠️ CPU limit 超过就限流（cfs throttling），表现为偶发的请求变慢，
+      # 监控上看不出是被限流的。给 4 倍留突发空间，同时挡住失控进程吃满节点
+      cpu: 200m
+      memory: 192Mi
+
+  # CPU 与内存双指标，任一超 70% 扩容。
+  #
+  # ⚠️ 两个都要：静态服务几乎不吃 CPU，只挂 CPU 等于没有保护。
+  # 原配置 cpu request 10m × 70% = 阈值 7m，而实测 0.037m —— 差 190 倍，
+  # 那个 HPA 数学上不可能触发。现在 request 50m、阈值 35m 才够得着。
+  #
+  # ⚠️ 内存指标基本是单向的（RSS 涨上去很难落回来），扩了多半不会自己缩。
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+backend:
+  # 后端代码搬进 ops/ops-sso/backend 之后改成 true。
+  # 改完前端的反代地址会自动指向本 chart 的后端，无需改任何地址配置。
+  enabled: false
+  external:
+    host: ops-sso-backend.ops-sso.svc.cluster.local
+    port: 8080
+
+# 生产是多节点，用 required 强制副本分散 ——
+# 全部落在同一节点时，那个节点一挂服务就整体不可用，PDB 也救不了
+podAntiAffinity:
+  enabled: true
+  required: true
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+  hosts:
+    - host: cmdb.example.com          # ← 换成真实域名
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: cmdb-tls
+      hosts:
+        - cmdb.example.com            # ← 与上面保持一致

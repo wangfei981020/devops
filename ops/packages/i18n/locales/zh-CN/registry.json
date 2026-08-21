@@ -1,0 +1,67 @@
+{
+  "action": {
+    "add": "接入仓库",
+    "pickFirst": "先选一个仓库"
+  },
+  "artifacts_other": "{{count}} 版本",
+  "col": {
+    "artifacts": "版本数",
+    "lastPush": "最后推送",
+    "pulls": "拉取次数",
+    "pullsHint": "这个仓库被 docker pull 的累计次数（Harbor 统计）。长期为 0 说明没有任何环境在用它",
+    "repo": "仓库"
+  },
+  "dialog": {
+    "add": "接入镜像仓库",
+    "desc": "接入一个 Harbor，用来看项目配额、镜像和推送情况。",
+    "edit": "编辑仓库接入",
+    "testAfterSave": "保存只代表配置写进库了。地址打错、密码过期、账号被禁用，都要等到下次真去拉数据时才暴露——所以保存后请立刻点一次「测试连通性」。"
+  },
+  "empty": {
+    "noSource": "用本页的「接入仓库」添加一个 Harbor 地址后，这里会实时显示项目配额与仓库清单。",
+    "title": "还没接入镜像仓库"
+  },
+  "emptyRepos": {
+    "reason": "项目建好了但还没推过镜像。",
+    "title": "这个项目下没有仓库"
+  },
+  "error": {
+    "projects": "项目配额没能加载出来（Harbor 可能不可达）",
+    "repos": "仓库列表没能加载出来"
+  },
+  "field": {
+    "enabled": "启用",
+    "env": "环境",
+    "envAny": "不限环境",
+    "envHint": "用来在多个仓库之间区分，比如 prod / uat。可留空。",
+    "envLoadFailed": "环境字典加载失败，当前只能选「不限环境」——这不代表系统里没有别的环境",
+    "name": "名称",
+    "password": "密码",
+    "passwordHint": "建议用只读机器人账号，不要用管理员。",
+    "required": "名称和地址必填",
+    "skipVerify": "跳过 TLS 证书校验",
+    "skipVerifyHint": "只有在 Harbor 用自签证书时才勾。勾上之后中间人也一并被放行了——这个代价要清楚。",
+    "url": "地址",
+    "urlHint": "Harbor 的访问地址，含协议。写错端口时表现是\"连不上\"，不会有更具体的提示。",
+    "username": "用户名"
+  },
+  "filter": {
+    "project": "项目",
+    "registry": "仓库"
+  },
+  "liveNote": "实时查询 Harbor，不落库",
+  "noQuota": "未设配额",
+  "public": "公开",
+  "publicHint": "公开项目不用登录就能拉取镜像。确认这是有意为之——否则任何人都能拿到里面的镜像。",
+  "quota": "项目配额",
+  "repoList": "仓库",
+  "repos_other": "{{count}} 个仓库",
+  "staleHint": "长期没推送不等于可以删——回滚可能就指着某个老版本。",
+  "status": {
+    "components": "{{n}} 个组件",
+    "gcAt": "上次 GC {{at}}"
+  },
+  "title": "镜像仓库",
+  "usedUnknown": "读不到",
+  "usedUnknownHint": "存储用量需要管理员权限（/quotas），而接入 Harbor 推荐用 robot 账号——那是正确做法。⚠️ 读不到不代表项目是空的：右边的仓库数是真实的。"
+}

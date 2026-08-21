@@ -1,0 +1,33 @@
+{
+  "title": "Resource usage",
+  "hint": "Live Prometheus queries — CPU/memory curves for K8s (pods, workloads, nodes) and plain hosts.",
+  "cluster": "Source",
+  "target": "Target",
+  "targetNode": "Node",
+  "targetPod": "Pod",
+  "targetWorkload": "Workload",
+  "targetHost": "Host",
+  "metric": "Metric",
+  "memory": "Memory",
+  "range": "Range",
+  "namePlaceholder": "Enter an object name",
+  "pickTarget": "Pick a source and enter an object name.",
+  "notConfigured": "No metrics source connected — empty here does not mean zero usage",
+  "noSeries": "No series in this time range. Expand the PromQL below and run it on the Query page to see which part comes back empty.",
+  "peak": "peak {{v}} {{unit}}",
+  "name": "Object",
+  "pickName": "Pick a node…",
+  "showPromql": "Show the PromQL that was executed",
+  "points_one": "{{count}} point",
+  "points_other": "{{count}} points",
+  "hostRank": {
+    "title": "Non-K8s host usage ({{n}} hosts, by memory desc). Click a row for its time series",
+    "host": "Host",
+    "spec": "Spec",
+    "mem": "Memory",
+    "cannot": "Cannot read host usage",
+    "empty": "No host metrics found",
+    "noMetric": "No metrics",
+    "noMetricHint": "No usage metrics collected for this host — this is not “idle”. Confirm what it is actually running before downsizing; treating “unknown” as “idle” is the worst way to use this table"
+  }
+}

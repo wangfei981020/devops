@@ -1,0 +1,171 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sso.frontend.fullname" . }}
+  labels:
+    {{- include "sso.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  {{- if not .Values.frontend.autoscaling.enabled }}
+  replicas: {{ .Values.frontend.replicaCount }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # 先起新的再停旧的，滚动期间容量不下降。
+      # 静态前端很轻，多一个副本的开销可忽略，不值得为省这点资源冒中断风险。
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "sso.frontend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # nginx.conf 变了要触发滚动 —— ConfigMap 更新本身不会重启 Pod，
+        # 少了这个校验和，改完配置以为生效了其实没有。
+        checksum/config: {{ include (print $.Template.BasePath "/frontend-configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "sso.frontend.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # 优雅退出：nginx 收到 SIGTERM 立刻断连接，
+      # 先睡 5 秒让 Endpoints 摘除生效，避免滚动更新时零星 502。
+      terminationGracePeriodSeconds: 30
+      {{- include "sso.antiAffinity" (list . (include "sso.frontend.selectorLabels" .)) | nindent 6 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: nginx
+          image: {{ include "sso.image" (dict "ctx" . "img" .Values.frontend.image) | quote }}
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+          # 三种探针职责不同，参数不能共用一套：
+          #   startup   保护慢启动的容器不被 liveness 杀掉
+          #   readiness 决定是否接流量，失败就摘出 Endpoints
+          #   liveness  只在真死了才重启，阈值必须比 readiness 宽松
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 15
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.frontend.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            # readOnlyRootFilesystem 下 nginx 需要的可写目录必须显式挂出来
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: {{ include "sso.frontend.fullname" . }}-nginx
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sso.frontend.fullname" . }}
+  labels:
+    {{- include "sso.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  type: {{ .Values.frontend.service.type }}
+  ports:
+    - port: {{ .Values.frontend.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+      {{- if and (eq .Values.frontend.service.type "NodePort") .Values.frontend.service.nodePort }}
+      nodePort: {{ .Values.frontend.service.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "sso.frontend.selectorLabels" . | nindent 4 }}
+{{- /*
+PDB 判据要看**实际会有几个副本**：开了 HPA 时 replicaCount 只在
+第一次创建时生效，之后由 minReplicas 决定。只看 replicaCount 会出现
+"跑着多副本却一个 PDB 都没有"，而 helm 一切正常、kubectl get pdb 是空的。
+*/}}
+{{- $asFrontend := .Values.frontend.autoscaling | default dict }}
+{{- $effPdb := ternary (int ($asFrontend.minReplicas | default 0)) (int .Values.frontend.replicaCount) ($asFrontend.enabled | default false) }}
+{{- if and .Values.frontend.podDisruptionBudget.enabled (gt $effPdb 1) }}
+---
+# ⚠️ 只在副本数 > 1 时创建。
+# 单副本 + minAvailable:1 会让节点排空永远卡住 —— 驱逐这唯一的 Pod 违反 PDB，
+# 不驱逐节点就下不掉。这是集群升级时最常见的卡死。
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "sso.frontend.fullname" . }}
+  labels:
+    {{- include "sso.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  minAvailable: {{ .Values.frontend.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "sso.frontend.selectorLabels" . | nindent 6 }}
+{{- end }}
+{{- if .Values.frontend.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "sso.frontend.fullname" . }}
+  labels:
+    {{- include "sso.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "sso.frontend.fullname" . }}
+  minReplicas: {{ .Values.frontend.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.frontend.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.frontend.autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleDown:
+      # 缩容给长稳定窗口：静态服务流量是尖峰型的，
+      # 缩太快会在下一个尖峰立刻又扩，来回抖动
+      stabilizationWindowSeconds: 300
+{{- end }}

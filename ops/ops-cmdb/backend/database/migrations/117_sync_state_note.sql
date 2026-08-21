@@ -1,0 +1,22 @@
+-- k8s_sync_state 加「跳过说明」列。
+--
+-- # 为什么需要它
+--
+-- 采集里有一类分支是**优雅跳过**：CRD 没装、没权限、开关没开，
+-- 这时不算失败（返回 nil），也不该清掉已有数据。但原来跳过之后
+-- **什么都不记**，于是 sync_state 里留下的是 ok=1 / err='' / count=0 ——
+-- 和"这个集群确实没有这种资源"完全一样。
+--
+-- 实测后果（OPSCMDB-031 P0-11）：某个集群明明在用 Gateway API
+-- （GCP 侧的 gkegw1-* 负载均衡和防火墙规则都采到了，那些正是它的产物），
+-- 但 K8s 侧的 Gateway / HTTPRoute 一条都没有，而 data_freshness 报
+-- `gateways: ok=true, count=6` / `httproutes: ok=true, count=0` ——
+-- **采集自称成功**，所以这个缺失不会被任何新鲜度检查发现。
+--
+-- 排查"这个域名从哪进来"时，Istio VirtualService 查得到、Ingress 查得到、
+-- Gateway API 查不到，而且没有任何提示说这一类没采。
+--
+-- ⚠️ 用单独一列而不是塞进 err：
+-- err 非空的语义是"这一轮失败了"，很多判定依赖它。
+-- 把说明塞进去会让「跳过」看起来像「失败」，那是另一种误导。
+ALTER TABLE k8s_sync_state ADD COLUMN skip_note VARCHAR(500) NOT NULL DEFAULT '';

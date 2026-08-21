@@ -1,0 +1,71 @@
+{
+  "title": "Cost rates",
+  "hint": "Every number on the cost pages is computed from these rates.",
+  "warn": {
+    "title": "A wrong rate raises no error",
+    "body": "It just makes the whole cost report quietly wrong, and people use that report to make downsizing and budget decisions. Also: when region+machine family finds no rate, the cost falls back to the default tier — the number looks perfectly normal but the price may not be right. The cost overview page now flags how many hosts were priced that way and which regions lack rates."
+  },
+  "section": {
+    "compute": "Compute rates",
+    "computeHint": "By region + machine family.",
+    "disk": "Disk rates",
+    "diskHint": "By region + disk type.",
+    "nodes": "Node cost overrides",
+    "nodesHint": "Shows only what needs attention: manually overridden, and no matching rate. Covers K8s nodes only — non-node VMs are not checked here"
+  },
+  "action": {
+    "addCompute": "Add compute rate",
+    "addDisk": "Add disk rate"
+  },
+  "col": {
+    "region": "Region",
+    "family": "Machine family",
+    "vcpuHour": "vCPU / hour",
+    "ramHour": "RAM GB / hour",
+    "diskType": "Disk type",
+    "gbMonth": "GB / month"
+  },
+  "field": {
+    "regionHint": "Must match the cloud's region code, e.g. asia-east1. A typo raises no error — hosts in that region just never match a rate and get priced from the default tier, so the cost looks normal while using another region's price.",
+    "familyHint": "The family prefix, e.g. n2, e2, c3. Matched by prefix, so n2-standard-8 is not needed.",
+    "diskTypeHint": "For example pd-balanced or pd-ssd, matching the cloud disk type code.",
+    "required": "Required fields are incomplete"
+  },
+  "dialog": {
+    "desc": "Rates come from the cloud provider's price list. Reconcile against an invoice before changing them rather than guessing."
+  },
+  "empty": {
+    "computeTitle": "No compute rates configured",
+    "computeReason": "There is not a single compute rate in the table (not even a default tier), so compute cost for every host and node is counted as 0 — the cost page will look like \"these machines are free\" rather than \"rates are not configured yet\". Configure at least a default tier so uncovered regions get a fallback estimate.",
+    "diskTitle": "No disk rates configured",
+    "diskReason": "Storage cost for every disk and PVC is 0. Storage is usually the most under-counted part of the bill."
+  },
+  "error": {
+    "compute": "Compute rates could not be loaded",
+    "disk": "Disk rates could not be loaded"
+  },
+  "snapshot": {
+    "take": "Take cost snapshot",
+    "done_one": "{{count}} row snapshotted",
+    "done_other": "{{count}} rows snapshotted"
+  },
+  "nodes": {
+    "node": "Node",
+    "cluster": "Cluster",
+    "monthly": "Monthly",
+    "source": "Source",
+    "manual": "Manual override",
+    "noRate": "No rate matched",
+    "override": "Override",
+    "showAll_one": "Show all {{count}} node",
+    "showAll_other": "Show all {{count}} nodes",
+    "showNotable": "Only what needs attention",
+    "allByRate": "All {{count}} K8s nodes are priced from the rate table, with no manual overrides and no unmatched rates",
+    "overrideTitle": "Override monthly cost for \"{{name}}\"",
+    "overrideDesc": "Once overridden, this node no longer follows the rate table — later rate changes will not affect it.",
+    "zeroHint": "Enter 0 to remove the override and go back to rate-based pricing.",
+    "scopeCaveat": "This holds for K8s nodes only. Non-node VMs in the host inventory are outside this check — they are also priced from the rate table, but nothing verifies that they match",
+    "countsExplain": "(why does this count differ from the cost overview?)",
+    "countsExplainHint": "The three counts use different scopes and are all correct: the cost overview covers the whole host inventory (including non-node VMs); this section reads the K8s node table only; is_k8s_node marks hosts that appear in both. A machine may exist in only one of the two (managed node-pool nodes never enter the host inventory)"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "allClear": {
+    "reason": "This conclusion covers only the data sources that are connected. Anything not ingested is not counted — see Data freshness below.",
+    "title": "Nothing needs attention right now"
+  },
+  "attention": "Needs attention",
+  "certScopeNote": "\"Certificates issued by us\" counts only ACME-issued or hand-registered ones. Certificates actually serving traffic are a separate scope (probed from the domain and CDN side) — see \"Expiry inspection\" on the Certificates page.",
+  "error": {
+    "title": "Could not load the situation overview"
+  },
+  "freshness": "Data freshness",
+  "freshnessHint": "The inventory is a snapshot, not live. Every number above is as of these timestamps.",
+  "generatedAt": "as of {{time}}",
+  "inv": {
+    "certs": "Certificates issued by us",
+    "clusters": "Clusters",
+    "domains": "Domains",
+    "hosts": "Hosts",
+    "nodes": "Nodes",
+    "pods": "Pods"
+  },
+  "inventory": "Inventory",
+  "item": {
+    "certsExpired": "Certificates expired",
+    "certsFailing": "Certificate renewal failing",
+    "certsUnknown": "Certificates with unknown expiry",
+    "clustersNotIngested": "Clusters onboarded but not collected",
+    "domainsExpired": "Domains expired",
+    "domainsExpiring": "Domains expiring within 30 days — renewal costs money and expiry is irreversible",
+    "domainsUnresolved": "Domains not resolving",
+    "lbsEmpty": "Load balancers with no backends (unreachable)",
+    "lbsUnknown": "Load balancer backends not collected",
+    "nodesStale": "Nodes unreachable — status cannot be trusted",
+    "nsTerminating": "Namespaces stuck in Terminating",
+    "podsBad": "Unhealthy pods",
+    "pvcsBroken": "Volumes lost or pending",
+    "tasksNeverRan": "Scheduled jobs that have never run — everything depending on them is empty",
+    "workloadsDown": "Workloads down (0 ready)"
+  },
+  "notCounted": "not counted",
+  "notCountedNote_one": "{{count}} check could not be counted. That is not zero — we simply did not see it this time. Fix the data source before trusting this page.",
+  "notCountedNote_other": "{{count}} checks could not be counted. Those are not zero — we simply did not see them this time. Fix the data sources before trusting this page.",
+  "onlineCertExpired": "{{n}} live certificates have already expired",
+  "onlineCertExpiring": "{{n}} expiring within 30 days",
+  "onlineCertOk": "No probed live certificates are expired or expiring within 30 days",
+  "onlineCertUnprobed": "{{n}} live certificates have never been probed, so their expiry dates are unknown — \"nothing expiring\" does not hold. Enable \"Certificate expiry check (443)\" under Operations → Scheduled tasks.",
+  "onlineCertUnprobedShort": "{{n}} more never probed (expiry unknown)",
+  "source": {
+    "certs": "Certificates",
+    "domains": "Domains",
+    "hosts": "Cloud hosts",
+    "k8s": "Cluster resources"
+  },
+  "staleHint": "{{actual}} without an update (threshold {{hours}}h) — data may be stale",
+  "title": "Situation",
+  "view": "View"
+}

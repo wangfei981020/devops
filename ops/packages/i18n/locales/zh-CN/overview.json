@@ -1,0 +1,56 @@
+{
+  "allClear": {
+    "reason": "这是在已接入的数据源范围内的结论。没接入的部分不在统计里，见下方「数据新鲜度」。",
+    "title": "当前没有需要关注的事"
+  },
+  "attention": "需要关注",
+  "certScopeNote": "「我方签发的证书」只算 ACME 签发或手工登记的那些。线上实际在跑的证书是另一个口径（从域名和 CDN 侧探测），在「域名与入口 → 证书」页的「到期巡检」里看。",
+  "error": {
+    "title": "全局态势没能加载出来"
+  },
+  "freshness": "数据新鲜度",
+  "freshnessHint": "台账是快照不是实时。上面所有数字都截至这些时刻。",
+  "generatedAt": "数据截至 {{time}}",
+  "inv": {
+    "certs": "我方签发的证书",
+    "clusters": "集群",
+    "domains": "域名",
+    "hosts": "主机",
+    "nodes": "节点",
+    "pods": "Pod"
+  },
+  "inventory": "家底",
+  "item": {
+    "certsExpired": "证书已过期",
+    "certsFailing": "证书自动续期失败",
+    "certsUnknown": "证书读不出到期日",
+    "clustersNotIngested": "集群已纳管但没采到数据",
+    "domainsExpired": "域名已过期",
+    "domainsExpiring": "域名 30 天内到期——续费要花钱，过期不可逆",
+    "domainsUnresolved": "域名解析异常",
+    "lbsEmpty": "负载均衡确认无后端（打不通）",
+    "lbsUnknown": "负载均衡后端未采到",
+    "nodesStale": "节点失联，状态已不可信",
+    "nsTerminating": "命名空间卡在 Terminating",
+    "podsBad": "Pod 异常",
+    "pvcsBroken": "存储卷丢失或待绑定",
+    "tasksNeverRan": "定时任务从来没跑过——依赖它的数据全是空的",
+    "workloadsDown": "工作负载全挂（就绪 0）"
+  },
+  "notCounted": "未统计出",
+  "notCountedNote_other": "有 {{count}} 项没能统计出来。它们不是「0 条」，而是我们这次没看到——先修数据源再看这一页。",
+  "onlineCertExpired": "🔴 线上有 {{n}} 张证书已过期",
+  "onlineCertExpiring": "{{n}} 张 30 天内到期",
+  "onlineCertOk": "✓ 线上探测到的证书里，没有已过期或 30 天内到期的",
+  "onlineCertUnprobed": "有 {{n}} 条线上证书从来没探测过，到期日未知——所以「没有临期证书」这个结论不成立。去「运行 → 定时任务」启用「证书到期检测（443）」。",
+  "onlineCertUnprobedShort": "另有 {{n}} 个从没探测过（到期日未知）",
+  "source": {
+    "certs": "证书",
+    "domains": "域名",
+    "hosts": "云主机",
+    "k8s": "集群资源"
+  },
+  "staleHint": "已 {{actual}} 未更新（阈值 {{hours}} 小时），数据可能不准",
+  "title": "全局态势",
+  "view": "查看"
+}

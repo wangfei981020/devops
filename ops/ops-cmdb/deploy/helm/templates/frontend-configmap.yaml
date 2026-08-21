@@ -1,0 +1,106 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cmdb.frontend.fullname" . }}-nginx
+  labels:
+    {{- include "cmdb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+data:
+  nginx.conf: |
+    # nginx-unprivileged：非 root、监听 8080
+    worker_processes auto;
+    error_log /dev/stderr warn;
+    pid /tmp/nginx.pid;
+
+    events {
+      worker_connections 1024;
+    }
+
+    http {
+      include       /etc/nginx/mime.types;
+      default_type  application/octet-stream;
+
+      # readOnlyRootFilesystem 下所有可写路径都要落到 emptyDir 挂的 /tmp，
+      # 否则 nginx 启动时写临时目录失败，直接 CrashLoop。
+      client_body_temp_path /tmp/client_temp;
+      proxy_temp_path       /tmp/proxy_temp;
+      fastcgi_temp_path     /tmp/fastcgi_temp;
+      uwsgi_temp_path       /tmp/uwsgi_temp;
+      scgi_temp_path        /tmp/scgi_temp;
+
+      log_format json escape=json '{"time":"$time_iso8601","status":$status,'
+        '"method":"$request_method","uri":"$uri","rt":$request_time,'
+        '"ua":"$http_user_agent","xff":"$http_x_forwarded_for"}';
+      access_log /dev/stdout json;
+
+      sendfile on;
+      tcp_nopush on;
+      keepalive_timeout 65;
+      server_tokens off;
+
+      gzip on;
+      gzip_vary on;
+      gzip_min_length 1024;
+      gzip_types text/plain text/css application/javascript application/json
+                 image/svg+xml application/wasm;
+
+      server {
+        listen 8080;
+        server_name _;
+        root /usr/share/nginx/html;
+
+        # 探针专用端点。不要拿 / 做探针：它会返回整个 index.html，
+        # 探针流量白占带宽，日志也被刷满。
+        location = /healthz {
+          access_log off;
+          add_header Content-Type text/plain;
+          return 200 'ok';
+        }
+
+        # 带内容哈希的产物可以长缓存，改动必然换文件名
+        location /assets/ {
+          expires 1y;
+          add_header Cache-Control "public, immutable";
+          try_files $uri =404;
+        }
+
+        # ⚠️ index.html 与 version.json 绝不能缓存。
+        # 缓存了会出这种事故：发新版后用户手里是旧 index.html，
+        # 它引用的 assets 哈希文件已经不存在了 → 整页白屏，
+        # 且只发生在老用户身上，新访客一切正常，极难复现。
+        location = /index.html {
+          add_header Cache-Control "no-store, must-revalidate";
+        }
+        location = /version.json {
+          add_header Cache-Control "no-store";
+        }
+
+        # 后端地址由 chart 推导（见 _helpers.tpl 的 cmdb.backendAddr），
+        # 不是人填的。改部署形态时这里自动跟着变。
+        location /api/ {
+          proxy_pass http://{{ include "cmdb.backendAddr" . }};
+          proxy_http_version 1.1;
+          # ⚠️ $http_host 而不是 $host：$host **不含端口**。
+          # 后端要用它拼 OIDC 的 redirect_uri，端口丢了就拼成
+          # http://localhost/api/auth/sso/callback（少了 :30833），
+          # 身份源那边只会回一句 redirect_uri_mismatch ——
+          # 那句话既不说期望值也不说实际值，纯靠猜。
+          # 任何"后端需要知道自己对外是什么地址"的功能都栽在这一行上。
+          proxy_set_header Host              $http_host;
+          proxy_set_header X-Real-IP         $remote_addr;
+          proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header X-Forwarded-Host  $http_host;
+          proxy_set_header Connection        "";
+          proxy_read_timeout {{ .Values.proxyTimeoutSeconds }}s;
+          proxy_send_timeout {{ .Values.proxyTimeoutSeconds }}s;
+          # SSE / 流式响应不能被缓冲，否则告警推送要等缓冲区满才到前端
+          proxy_buffering off;
+        }
+
+        # SPA 兜底：前端路由的深链直接访问时也要返回 index.html
+        location / {
+          try_files $uri $uri/ /index.html;
+        }
+      }
+    }

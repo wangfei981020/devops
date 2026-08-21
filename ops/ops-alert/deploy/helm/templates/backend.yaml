@@ -1,0 +1,147 @@
+{{- include "alert.requireEnv" . }}
+{{- include "alert.checkVersions" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "alert.backend.fullname" . }}
+  labels:
+    {{- include "alert.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "alert.backend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "alert.backend.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 60
+      # Pod 级安全上下文：容器级那份的**兜底**。
+      #
+      # 两处都写不是冗余：容器级 securityContext 是 values 里可被覆盖的，
+      # 有人为了排障临时改一版就可能把 runAsNonRoot 丢掉，
+      # 而 Pod 级这份留在模板里、覆盖不到，kubelet 仍会拒绝以 root 启动的镜像。
+      # 也是 Pod Security Standards "restricted" 要求的形态。
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      {{- include "alert.antiAffinity" (list . (include "alert.backend.selectorLabels" .)) | nindent 6 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: backend
+          image: {{ include "alert.image" (dict "ctx" . "img" .Values.backend.image) | quote }}
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.service.port }}
+            - name: metrics
+              containerPort: {{ .Values.backend.service.metricsPort }}
+          envFrom:
+            # 数据库、JWT、AES 密钥全在这一个 Secret 里，名字由 chart 推导
+            - secretRef:
+                name: {{ include "alert.secretName" . }}
+            {{- with .Values.backend.envFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.backend.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # ⚠️ 多副本下这三件事必须成立，否则副本越多问题越多：
+          #  1. 定时采集任务要选主（leases 表已就绪），不然 N 个副本重复采集
+          #  2. 数据库迁移要加锁，多副本同时启动会抢跑
+          #  3. license 状态要定期从 DB 热加载，不能只在启动时读，
+          #     否则激活后要重启全部副本才生效
+          # 详见 docs/plans/opsplane-rewrite-plan.md §6
+          # ⚠️ 健康端点在 **metrics 端口（8088）**，不是业务端口。
+          # 这是后端有意的设计：业务端口 hang 死时探活仍然可用，
+          # 不至于把"卡住"表现成"进程没了"。探针打错端口的表现是
+          # 一直 404 → CrashLoop，而应用其实完全正常。
+          startupProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 3
+            failureThreshold: 40      # 迁移可能跑很久，给足时间
+          readinessProbe:
+            httpGet: { path: /readyz, port: metrics }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.backend.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "alert.backend.fullname" . }}
+  labels:
+    {{- include "alert.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.backend.service.port }}
+      targetPort: http
+      name: http
+    - port: {{ .Values.backend.service.metricsPort }}
+      targetPort: metrics
+      name: metrics
+  selector:
+    {{- include "alert.backend.selectorLabels" . | nindent 4 }}
+{{- /*
+PDB 判据要看**实际会有几个副本**：开了 HPA 时 replicaCount 只在
+第一次创建时生效，之后由 minReplicas 决定。只看 replicaCount 会出现
+"跑着多副本却一个 PDB 都没有"，而 helm 一切正常、kubectl get pdb 是空的。
+*/}}
+{{- $asBackend := .Values.backend.autoscaling | default dict }}
+{{- $effPdb := ternary (int ($asBackend.minReplicas | default 0)) (int .Values.backend.replicaCount) ($asBackend.enabled | default false) }}
+{{- if and .Values.backend.podDisruptionBudget.enabled (gt $effPdb 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "alert.backend.fullname" . }}
+  labels:
+    {{- include "alert.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  minAvailable: {{ .Values.backend.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "alert.backend.selectorLabels" . | nindent 6 }}
+{{- end }}

@@ -1,0 +1,73 @@
+{
+  "action": {
+    "disable": "停用",
+    "enable": "启用",
+    "hideRuns": "收起记录",
+    "runNow": "立即执行",
+    "showRuns": "执行记录"
+  },
+  "allHealthy": "{{count}} 个任务都正常",
+  "brokenCount": "{{count}} 个任务需要处理（{{fail}} 个上次失败，{{never}} 个从没跑过）",
+  "disabled": "已停用",
+  "empty": {
+    "reason": "一条都没有通常意味着任务种子没有随迁移落库，而不是这个系统不需要定时任务。采集、到期巡检这些会因此完全不工作，请检查后端启动日志里 migrate 开头的行。",
+    "title": "没有任何定时任务"
+  },
+  "error": {
+    "runs": "执行记录没能加载出来",
+    "title": "定时任务列表没能加载出来"
+  },
+  "health": {
+    "fail": "上次失败",
+    "never": "从没跑过",
+    "ok": "正常"
+  },
+  "hint": "平台自己的后台任务：采集、巡检、续期、清理。每条任务的执行记录就在它下面，不用切页面。",
+  "lastRun": "上次执行",
+  "neverRun": "从没跑过",
+  "nextRun": "下次执行",
+  "runs": {
+    "cancel": "取消执行",
+    "empty": "这条任务还没有执行记录。刚建的任务、或者记录已经过了保留期，都会是这样。",
+    "findingNote": "以上是这次跑出来的问题，不是任务本身失败",
+    "noTarget": "（未记录对象）",
+    "notify": {
+      "failed": "⚠️ 飞书投递失败",
+      "none": "⚠️ 没有可用的飞书出口，提醒未送达",
+      "skipped": "按配置未投递"
+    },
+    "notifyAt": "通知发送于 {{at}}",
+    "notifySent": "已发到 {{group}}",
+    "okButNotDelivered": "任务本身执行成功了，但结果没有送达任何地方——没配投递出口，或投递失败。也就是说：这次的发现没有人会收到。",
+    "retryFailures": "重跑失败项"
+  },
+  "settings": {
+    "atUsers": "@ 谁",
+    "atUsersHint": "只列启用中的通知人。停用的人即使选中也不会被 @。",
+    "desc": "执行频率与失败通知。改动只提交你动过的项。",
+    "entry": "设置",
+    "larkGroup": "发送到群",
+    "noAtUsers": "不 @ 任何人",
+    "noAtUsersAvailable": "没有启用中的通知人",
+    "noGroup": "不指定群",
+    "noGroupsHint": "还没有配置飞书群，先到「通知」页添加",
+    "notifyEnabled": "任务结束后发飞书通知",
+    "notifyWhen": "通知时机",
+    "saveFailed": "保存失败：{{err}}",
+    "schedule": "执行频率",
+    "scheduleHint": "cron 表达式，5 字段：分 时 日 月 周。合法性由后端校验。",
+    "scheduleShape": "当前是 {{n}} 个字段，cron 需要 5 个（分 时 日 月 周）",
+    "title": "设置：{{name}}",
+    "whenAlways": "每次都发",
+    "whenFail": "只在失败时发"
+  },
+  "showAll": "看全部",
+  "showBrokenOnly": "只看这些",
+  "title": "定时任务",
+  "trigger": {
+    "auto_retry": "自动重试",
+    "cron": "定时",
+    "manual": "手动",
+    "startup": "启动时"
+  }
+}

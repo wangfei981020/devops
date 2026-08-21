@@ -1,0 +1,29 @@
+{
+  "cluster": "集群",
+  "project": "DevOps 项目",
+  "pickProject": "选一个项目",
+  "scope": "范围",
+  "onlyFailed": "只看失败",
+  "allRuns": "全部构建",
+  "pickFirst": "先选一个 DevOps 项目（共 {{n}} 个）。⚠️ 运行记录要按项目拉，没法一次看全部。",
+  "summary": "已拉取 {{total}} 次构建，其中失败 {{failed}} 次",
+  "noRuns": "这批里没有符合条件的构建",
+  "viewLog": "看日志",
+  "col": {
+    "pipeline": "流水线",
+    "run": "构建号",
+    "phase": "状态",
+    "creator": "触发人",
+    "start": "开始"
+  },
+  "log": {
+    "title": "{{pipeline}} #{{run}} 的构建日志",
+    "desc": "实时从 KubeSphere 取。默认只给尾部若干行 + 从全文抽出的报错行。",
+    "errors": "抽出的报错行",
+    "noErrors": "⚠️ 没有从日志里抽出报错行。这不等于「日志里没有错误」——可能是这次的失败模式没被抽取规则覆盖，请看下面的日志尾部。",
+    "tailNote": "全文共 {{lines}} 行 / {{bytes}} 字节，下面是尾部"
+  },
+  "noProjects": "这个集群下没有找到 DevOps 项目",
+  "clickRunForLog": "点某次构建可以看它的日志；run 是 Jenkins 构建号。",
+  "pickProjectForRuns": "选一个项目查看它的构建记录，再点具体某次构建看日志。"
+}

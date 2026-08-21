@@ -1,0 +1,32 @@
+{
+  "title": "资源使用率",
+  "hint": "实时查 Prometheus，覆盖 K8s（Pod/工作负载/节点）与传统主机的 CPU/内存曲线。",
+  "cluster": "数据源",
+  "target": "对象",
+  "targetNode": "节点",
+  "targetPod": "Pod",
+  "targetWorkload": "工作负载",
+  "targetHost": "主机",
+  "metric": "指标",
+  "memory": "内存",
+  "range": "时间范围",
+  "namePlaceholder": "输入对象名称",
+  "pickTarget": "先选数据源并填一个对象名称。",
+  "notConfigured": "没有接入指标源——这里的空不代表用量为 0",
+  "noSeries": "这个时间范围内没有序列。可以展开下面的 PromQL，去「查询」页跑一遍确认是哪一步为空。",
+  "peak": "峰值 {{v}} {{unit}}",
+  "name": "对象名称",
+  "pickName": "选一个节点…",
+  "showPromql": "查看实际执行的 PromQL",
+  "points_other": "{{count}} 个点",
+  "hostRank": {
+    "title": "非 K8s 主机用量排行（{{n}} 台，按内存占用降序）。点一行看它的时序",
+    "host": "主机",
+    "spec": "规格",
+    "mem": "内存",
+    "cannot": "取不到主机用量",
+    "empty": "没有查到任何主机指标",
+    "noMetric": "未采到",
+    "noMetricHint": "⚠️ 这台机器没采到用量指标——不是「空闲」。缩容前必须先确认它到底在不在跑，把「不知道」当成「最闲」是这张表最坏的用法"
+  }
+}

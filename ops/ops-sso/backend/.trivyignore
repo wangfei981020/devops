@@ -1,0 +1,17 @@
+# Trivy 例外清单。
+#
+# ⚠️ 只允许放「已核实不适用」的条目，且必须写明：为什么不适用、怎么复核。
+# 一条没有依据的 ignore，等于把整个扫描变成摆设 —— 下一个人会照着加第二条。
+
+# GO-2026-5932 · golang.org/x/crypto/openpgp 已无人维护、设计上不安全
+#
+# 不适用的依据：我们只用了同一模块下的 bcrypt，**没有任何代码路径引用 openpgp**。
+# Trivy 按 module 粒度报告，而漏洞在 package 粒度。
+#
+# 复核命令（改依赖后必须重跑，输出必须是 0）：
+#   go list -deps ./cmd/server ./cmd/gateway | grep -c openpgp
+#
+# 该 advisory 永远不会有 fixed version（上游明确表示不再维护），
+# 所以这不是"暂时豁免"，是长期结论。若哪天真的需要 openpgp，
+# 必须删掉这条例外并另找库。
+GO-2026-5932

@@ -1,0 +1,36 @@
+-- 把 scheduled_tasks 归到平台租户（tenant_id=0）。
+--
+-- # 问题
+--
+-- 迁移 096 给**每张表**都加了 `tenant_id NOT NULL DEFAULT 1`，scheduled_tasks 也被一视同仁
+-- 落到了租户 1。但调度器是**平台级组件**：它所有的写操作都走
+-- `platformScope()`（`store.PlatformTenant = 0`），cron 触发的执行记录也确实
+-- 落在 `task_run_logs.tenant_id = 0`（实测 532 条）。
+--
+-- 于是这条写回永远匹配 0 行：
+--
+--   UPDATE scheduled_tasks SET last_run_at=NOW(), ... WHERE tenant_id = 0 AND task_key = ?
+--                                                                     ↑ 行其实在租户 1
+--
+-- 后果：`last_run_at` / `last_result` / `last_ok` 从多租户改造之后就再没更新过。
+-- 实测 `disk_watch` 在 task_run_logs 里跑了 234 次，`scheduled_tasks.last_run_at` 仍是 NULL，
+-- 而界面照着它显示「**从没跑过 · 没被调度到过，靠它采的数据一直是空的**」——
+-- 一个每 30 分钟跑一次的任务被说成从没跑过，且给出了斩钉截铁的错误结论。
+--
+-- ⚠️ 这个问题在此之前还叠了一层：那条 UPDATE 连 `tenant_id = ?` 都没写，
+-- 被 `Scoped.checkFilter` 直接拒掉，而 `Scheduler.exec` 只记一行日志就返回。
+-- 两层叠加 = 静默失败了几个月。写回的 SQL 与 exec 的日志已在 v0.61.1 一并修掉。
+--
+-- # 为什么是把数据移到 0，而不是让调度器改用租户 1
+--
+-- 调度器按设计就是平台组件（`ForJob(..., PlatformTenant, "scheduler")`），
+-- 它的执行记录已经在租户 0；让它改读租户 1 等于把平台任务塞进某个租户，
+-- 将来真有第二个租户时会更乱。
+--
+-- 读取侧不受影响：任务注册（scheduler.go:313）与列表接口（scheduled_tasks.go:174）
+-- 用的都是**不带租户过滤的裸查询**，移动之后照常读得到。
+--
+-- ⚠️ 遗留（需产品决定，本迁移不处理）：手动点「立即执行」写的执行记录用的是
+-- **请求者的租户**（实测租户 1 有 7 条），而 cron 写的是租户 0。
+-- 同一个任务的手动与定时记录因此落在两个租户下，按租户过滤时只看得到一半。
+UPDATE scheduled_tasks SET tenant_id = 0 WHERE tenant_id <> 0;

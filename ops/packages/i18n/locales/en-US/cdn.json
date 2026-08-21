@@ -1,0 +1,114 @@
+{
+  "action": {
+    "addAccount": "Connect a CDN account",
+    "analysis": "Rule analysis",
+    "forensics": "Live forensics",
+    "tokenCheck": "Token check",
+    "verify": "Test connection"
+  },
+  "analysis": {
+    "certs": "Edge certificates",
+    "col": {
+      "expires": "Expires",
+      "hosts": "Hosts",
+      "issuer": "Issuer",
+      "status": "Status"
+    },
+    "daysLeft": "{{n}} days left",
+    "domains": "Domain routing",
+    "entry": "CDN analysis",
+    "expiredDays": "expired {{n}} days ago",
+    "loadFailed": "Could not load this section",
+    "noCerts": "No edge certificates collected",
+    "noFindings": "Nothing found",
+    "noRules": "No rules collected",
+    "notViaCdn": "Not via CDN",
+    "ruleCheck": "Rule check",
+    "rules": "Rules",
+    "snapshotNote": "Reads the last synced Cloudflare snapshot, not live state. Sync after changing CF config before reading this.",
+    "title": "CDN analysis"
+  },
+  "dialog": {
+    "accountDesc": "Once connected, zones, DNS records, rules and edge certificates are synced in by the scheduled task.",
+    "addAccount": "Connect a CDN account",
+    "editAccount": "Edit CDN account",
+    "syncNote": "Saving does not sync immediately. Zone data is pulled by the DNS sync task, or you can trigger it once from the scheduled tasks page."
+  },
+  "disabled": "Disabled",
+  "empty": {
+    "reason": "Usually the Cloudflare credential is not connected yet (System → Data sources), or it lacks permission to read zones. This does not mean you are not using a CDN — confirm the connection before concluding anything.",
+    "title": "No CDN sites retrieved"
+  },
+  "error": {
+    "title": "CDN sites could not be loaded"
+  },
+  "field": {
+    "accountName": "Account name",
+    "accountTag": "Account tag",
+    "accountTagHint": "The Cloudflare account identifier. Useful with multiple accounts; leave empty if you have one.",
+    "enabled": "Enabled",
+    "nameRequired": "Name is required",
+    "token": "API token",
+    "tokenHint": "Prefer a read-only token (Zone:Read + DNS:Read). It is a credential in itself — keep it out of tickets.",
+    "vendor": "Vendor",
+    "vendorHint": "Only the Cloudflare adapter is implemented. Other vendors can be saved but sync will refuse them — better to know now than to hit it later.",
+    "vendorRequired": "Pick or create a vendor first"
+  },
+  "forensics": {
+    "clientIP": "Client IP",
+    "desc": "Per-request timings and security events, queried live from Cloudflare. When the other side says “we sent it long ago, you received it late”, the edge receive time splits the total latency into two halves that nobody could see before.",
+    "host": "Host",
+    "hostHint": "Empty = whole zone",
+    "minutes": "Window (minutes)",
+    "minutesHint": "Try 60 first to confirm data is available",
+    "notRunYet": "Set the filters and press Query. This hits Cloudflare live and does not run automatically.",
+    "path": "Path",
+    "query": "Query",
+    "summary": "{{total}} records · window {{window}}",
+    "tab": {
+      "security": "Security events",
+      "traffic": "Request timings"
+    },
+    "title": "CDN live forensics",
+    "zone": "Zone"
+  },
+  "hint": "Cloudflare zones: status, plan, name servers and SSL mode. The first hop when investigating a domain problem.",
+  "lastSync": "Last synced",
+  "neverSynced": "Never synced",
+  "noNs": "No name servers retrieved",
+  "noToken": "No token",
+  "paused": "Paused",
+  "recordsUnknown": "Record count not collected",
+  "records_one": "{{count}} record",
+  "records_other": "{{count}} records",
+  "section": {
+    "accounts": "CDN accounts"
+  },
+  "sslFlexible": "Plaintext to origin",
+  "title": "CDN sites",
+  "tokenCheck": {
+    "allPass": "All {{n}} checks passed",
+    "cannotProbe": "Cannot probe",
+    "desc": "Probes exactly which permissions the token has. This queries Cloudflare live rather than the CMDB snapshot — so you can verify a permission change right after making it.",
+    "expiresOn": "token expires {{at}}",
+    "failed": "Probe request failed",
+    "need": "Needs permission",
+    "noAccounts": "No accounts returned. This does not mean everything is fine — check whether any CDN account is connected.",
+    "noChecks": "No checks returned. This does not mean everything passed.",
+    "notSent": "request never sent",
+    "probedAt": "Probed zone {{zone}} · {{at}}",
+    "recheck": "Re-check",
+    "slow": "Probing each account against Cloudflare — this can take tens of seconds. Please do not click repeatedly; every click is a real request.",
+    "someFail": "{{n}} checks failed",
+    "title": "CDN token permission check",
+    "verdict": {
+      "error": "Request failed — not a permission issue; check the token and network first",
+      "no_permission": "Missing permission — tick the item above in the CF console"
+    }
+  },
+  "vendor": {
+    "create": "Create",
+    "needName": "Enter a vendor name",
+    "none": "No CDN vendor exists yet. Accounts hang off a vendor, so create one here first."
+  }
+}

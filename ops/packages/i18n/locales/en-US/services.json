@@ -1,0 +1,59 @@
+{
+  "column": {
+    "entry": "Entry point",
+    "exposure": "Exposure",
+    "name": "Service",
+    "ports": "Ports",
+    "type": "Type"
+  },
+  "empty": {
+    "filtered": "No services match the current filters. Try widening them.",
+    "noSource": "No services collected yet. Check on the Clusters page that the cluster is onboarded.",
+    "title": "No services"
+  },
+  "error": {
+    "title": "Could not load services"
+  },
+  "exposure": {
+    "exposed": "Reachable",
+    "internal": "Internal",
+    "pending": "Pending"
+  },
+  "filter": {
+    "cluster": "Cluster",
+    "exposure": "Exposure",
+    "namespace": "Namespace",
+    "searchPlaceholder": "Search service, host or IP"
+  },
+  "headless": "Headless (no VIP)",
+  "ingress": {
+    "desc": "Public domains do not live on Services — Istio puts them in VirtualService hosts, Gateway API in HTTPRoute hostnames.",
+    "entry": "Ingress & domains",
+    "gw": "Gateway",
+    "ing": "Ingress",
+    "loadFailed": "Could not load this section",
+    "noGw": "No Gateways in this cluster",
+    "noHost": "No host (path-based default backend)",
+    "noIng": "No native Ingress in this cluster. It may route entirely through Istio / Gateway API — check the other tabs.",
+    "noRoute": "No HTTPRoutes in this cluster",
+    "noTls": "No TLS",
+    "noVs": "No VirtualServices in this cluster (Istio may not be in use)",
+    "parent": "parent",
+    "pickCluster": "Pick a specific cluster above first",
+    "route": "HTTPRoute",
+    "title": "Ingress & domains",
+    "viaGw": "via {{gw}}",
+    "vs": "VirtualService"
+  },
+  "internalOnly": "Cluster-internal",
+  "internalVip": "private VIP",
+  "moreHosts_one": "{{count}} more",
+  "moreHosts_other": "{{count}} more",
+  "pendingLb": "Awaiting external IP",
+  "pendingLbHint": "The cloud never assigned one — usually quota exhausted or no free IP in the subnet",
+  "pendingNote_one": "{{count}} load balancer is stuck awaiting an external IP",
+  "pendingNote_other": "{{count}} load balancers are stuck awaiting an external IP",
+  "title": "Services & ingress",
+  "total_one": "{{count}} service",
+  "total_other": "{{count}} services"
+}

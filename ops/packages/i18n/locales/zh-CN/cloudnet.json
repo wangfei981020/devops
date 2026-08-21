@@ -1,0 +1,68 @@
+{
+  "fw": {
+    "allInstances": "作用于 VPC 内全部实例",
+    "col": {
+      "allowed": "放行",
+      "direction": "方向",
+      "name": "规则",
+      "priority": "优先级",
+      "source": "来源网段"
+    },
+    "disabled": "已禁用",
+    "empty": {
+      "reason": "任何 VPC 都至少有默认规则，所以一条都没有几乎只能是采集没成功——不是「没有规则」。请检查云账号凭据，以及服务账号是否有 compute.viewer。",
+      "title": "没有取到任何防火墙规则"
+    },
+    "error": "防火墙规则没能加载出来",
+    "risky": "高危",
+    "riskyOnly": "只看高危 {{count}} 条",
+    "riskyOnlyOn": "已只看高危 {{count}} 条 · 点击取消",
+    "searchPlaceholder": "搜索规则名、放行端口或来源网段",
+    "targets": "目标"
+  },
+  "iam": {
+    "allBindings": "全部授权",
+    "col": {
+      "member": "成员",
+      "project": "项目",
+      "risk": "风险",
+      "role": "角色"
+    },
+    "empty": {
+      "noIssuesReason": "在已采集到的授权里没有发现 owner/editor 这类过宽角色，也没有 allUsers 公开授权。⚠️ 这个结论只对已采集到的项目成立——切到「全部授权」确认采集范围是否覆盖了你关心的项目。",
+      "noIssuesTitle": "当前没有识别到风险授权",
+      "reason": "任何 GCP 项目都至少有一条权限绑定，所以这说明尚未采集成功，而不是没有风险。请检查云账号凭据，以及服务账号是否有 roles/iam.securityReviewer。",
+      "title": "没有取到任何 IAM 授权"
+    },
+    "error": "权限审计没能加载出来",
+    "filter": {
+      "noDataToFilter": "还没有采集到任何 IAM 授权，没有可筛的内容。先按下方说明把采集打通",
+      "scope": "范围"
+    },
+    "issuesOnly": "仅风险项",
+    "risky": "过宽"
+  },
+  "ips": {
+    "col": {
+      "ip": "IP",
+      "kind": "类型",
+      "owner": "使用者",
+      "region": "区域",
+      "usage": "使用情况"
+    },
+    "empty": {
+      "reason": "通常是还没接入云账号，或者凭据缺少读取网络资源的权限。这不代表你们没有静态 IP——预留但未使用的 IP 会一直计费，接入后建议先看「仅闲置」。",
+      "title": "没有取到任何 IP"
+    },
+    "error": "IP 台账没能加载出来",
+    "filter": {
+      "usage": "使用情况"
+    },
+    "gkeName": "GKE 自动生成",
+    "gkeNameHint": "这是 GKE 为转发规则/后端服务自动生成的内部名，不是你起的名字。要知道它属于哪个服务，去「集群 → 服务与入口」按这个 IP 反查，或在 GCP 控制台的负载均衡里搜这串名字。",
+    "idle": "闲置",
+    "idleOnly": "仅闲置",
+    "inUse": "使用中",
+    "searchPlaceholder": "搜索 IP、使用者或项目"
+  }
+}

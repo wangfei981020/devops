@@ -1,0 +1,37 @@
+{
+  "action": {
+    "viewPods": "View pods"
+  },
+  "column": {
+    "cluster": "Cluster",
+    "health": "Health",
+    "image": "Image",
+    "name": "Workload",
+    "replicas": "Ready/Desired"
+  },
+  "downNote": "{{count}} fully down (desired >0 but 0 ready)",
+  "downNoteOn": "Showing {{count}} fully down · click to clear",
+  "empty": {
+    "filtered": "No workloads match the current filters. Try widening them.",
+    "noSource": "No workloads collected yet. Check on the Clusters page that the cluster is onboarded and its credentials are valid.",
+    "title": "No workloads"
+  },
+  "error": {
+    "title": "Could not load workloads"
+  },
+  "filter": {
+    "cluster": "Cluster",
+    "health": "Health",
+    "namespace": "Namespace",
+    "searchPlaceholder": "Search name or image"
+  },
+  "health": {
+    "degraded": "Degraded",
+    "down": "Down",
+    "ok": "Healthy",
+    "scaledZero": "Scaled to 0"
+  },
+  "title": "Workloads",
+  "total_one": "{{count}} workload",
+  "total_other": "{{count}} workloads"
+}

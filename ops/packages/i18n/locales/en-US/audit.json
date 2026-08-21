@@ -1,0 +1,98 @@
+{
+  "acceptedNote": "Accepted — outcome unknown yet. Check the run history under Scheduled tasks.",
+  "changed": {
+    "only": "With field changes only"
+  },
+  "changes": {
+    "confirmBody": "This restores #{{pk}} in {{table}} to its value before the change. The rollback is itself a write and leaves a new audit entry.",
+    "confirmTitle": "Confirm this rollback",
+    "desc": "Exactly which fields this operation changed. Revertible ones get a rollback button.",
+    "empty": "This entry has no field-level detail (usually a read or an external call).",
+    "forceHint": "Overwrite even if someone else changed this record after this change. ⚠️ Ticking this means their later edit is wiped out by the rollback — without it the system refuses, which is a safeguard, not a failure.",
+    "revert": "Roll back",
+    "revertFailed": "The rollback did not succeed",
+    "reverted": "Rolled back, and a new audit entry was recorded",
+    "title": "Field-level changes"
+  },
+  "column": {
+    "action": "Action",
+    "actor": "Actor",
+    "at": "Time",
+    "changes": "Fields",
+    "detail": "Detail",
+    "status": "Result",
+    "target": "Target",
+    "time": "Time",
+    "who": "Actor"
+  },
+  "detail": {
+    "acceptedBody": "The request was accepted; the actual work runs in the background — \"accepted\" does not mean it succeeded. Check the run history under Scheduled tasks for the real outcome.",
+    "after": "After",
+    "before": "Before",
+    "changes": "What changed",
+    "countMismatch": "⚠️ The record claims {{count}} changes but none could be loaded. That is an inconsistency, not \"no changes\".",
+    "duration": "Duration",
+    "endpoint": "Endpoint",
+    "entry": "View",
+    "entryWithCount": "View ({{count}} changes)",
+    "errorTitle": "Failure reason",
+    "field": "Field",
+    "maskedChanged": "Changed (sensitive field — the audit records that it changed, never the value)",
+    "noActor": "(system)",
+    "noDiff": "⚠️ The change record exists but no field values were captured — the snapshot failed; it does not mean nothing changed.",
+    "noPerm": "(no permission code)",
+    "noSnapshot": "This kind of operation does not modify a single row, so there is no before/after to compare. It acts on an external system (registrar, DNS, CA) or is a trigger action; see the endpoint result above and the run history.",
+    "permCode": "Granted by",
+    "target": "Target",
+    "targetType": "Target type",
+    "title": "Operation detail",
+    "whatHappened": "What happened"
+  },
+  "empty": {
+    "filtered": "Nothing matches the current filters.",
+    "none": "No write operation has been performed yet.",
+    "title": "No audit entries"
+  },
+  "error": {
+    "title": "Could not load the audit log"
+  },
+  "filter": {
+    "changed": "Changes",
+    "searchPlaceholder": "Search actor, action or target",
+    "source": "Source",
+    "status": "Result",
+    "window": "Time range"
+  },
+  "objectHistory": {
+    "changedOnly": "Changed (sensitive field — value not shown)",
+    "desc": "Who changed which fields on this object, and when. Only audited write operations are recorded — field changes written back by collection jobs are not.",
+    "entry": "Change history",
+    "loadFailed": "Could not load change history",
+    "noDiff": "The operation was recorded, but no field-level diff was captured",
+    "none": "No changes recorded for this object",
+    "noneHint": "This does not mean nobody ever changed it: only audited write operations appear here, not values written back by collection jobs.",
+    "title": "Change history for {{name}}"
+  },
+  "source": {
+    "local": "Local account",
+    "mcp": "AI (MCP)",
+    "portal": "Ops platform",
+    "system": "System"
+  },
+  "status": {
+    "accepted": "Accepted",
+    "fail": "Failed",
+    "success": "Success"
+  },
+  "title": "Audit log",
+  "total_one": "{{count}} entry",
+  "total_other": "{{count}} entries",
+  "window": {
+    "all": "All time",
+    "d30": "Last 30d",
+    "d7": "Last 7d",
+    "h24": "Last 24h",
+    "h6": "Last 6h"
+  },
+  "writeOnlyNote": "Scope: every write operation, plus every AI call via MCP — including read-only queries, because what the AI took must be traceable. Humans browsing read-only pages is not recorded, so not finding \"which page someone viewed\" is expected."
+}

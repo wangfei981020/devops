@@ -1,0 +1,417 @@
+package handlers
+
+import (
+	"context"
+	"database/sql"
+	"net/http"
+	"sort"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"ops-cmdb-backend/crypto"
+	"ops-cmdb-backend/k8ssource"
+	"ops-cmdb-backend/logx"
+)
+
+// EventCenterHandler 事件中心：聚合平台各处事件成统一时间线(到期/变更/同步失败/K8s Warning)。
+// AI 排障入口:一次拉到"最近平台出了什么事"，再钻具体诊断。
+type EventCenterHandler struct {
+	DB     *sql.DB
+	Pool   *k8ssource.Pool
+	Cipher *crypto.Cipher // 解密夜莺接入的 token
+}
+
+func NewEventCenterHandler(db *sql.DB, pool *k8ssource.Pool, cipher *crypto.Cipher) *EventCenterHandler {
+	return &EventCenterHandler{DB: db, Pool: pool, Cipher: cipher}
+}
+
+func (h *EventCenterHandler) Register(r *gin.RouterGroup) {
+	r.GET("/k8s/event-center", h.List) // days,level(critical/warning/info),source(expiry/change/sync/k8s/alert)
+}
+
+type evt struct {
+	Time    string `json:"time"`
+	Source  string `json:"source"` // expiry/change/sync/k8s
+	Level   string `json:"level"`  // critical/warning/info
+	Object  string `json:"object"`
+	Title   string `json:"title"`
+	Message string `json:"message"`
+	Cluster string `json:"cluster,omitempty"`
+	// ClusterDisplay 集群别名；技术名在 Cluster 里。
+	// ⚠️ 两个值都要给：拍成一个 COALESCE 前端就拿不到技术名了（OPSCMDB-078）
+	ClusterDisplay string `json:"cluster_display,omitempty"`
+	// Upcoming=true 表示这条是「还没发生的预告」（到期类），不是已发生的事件。
+	// 到期事件的时间戳是**到期日**（未来），混在按时间倒序的时间线里会永远霸占顶部——
+	// 一条 7 天后才到期的证书，看起来像刚刚发生的最新严重事件（实测过 3 条 2026-08-09 排在最前）。
+	Upcoming bool `json:"upcoming"`
+	// Count 为合并掉的同类条数（同来源+对象+标题+详情），>1 时前端显示 ×N。
+	Count int `json:"count"`
+	// LevelWhy 这一条**为什么**是这个级别。
+	//
+	//	🔴 一片红而不说为什么，等于要求人自己去背映射表 ——
+	//	而背不出来的结果是不再看颜色（OPSCMDB-031 P2-37）。
+	//	说清楚"它现在是停的"还是"重复了 N 次所以不是暂态"，
+	//	红色才重新有信号价值。
+	LevelWhy string `json:"level_why,omitempty"`
+	sortTs   time.Time
+}
+
+// List 聚合事件。days 默认30(到期/变更窗口);K8s Warning 取各启用集群实时(有界)。
+// eventCenterLimit 单次返回的事件条数上限。超出会在响应里以 truncated=true 明确标出，
+// 绝不静默丢弃——静默截断让人以为看到的就是全部（CMDB-019，与 CMDB-007 同类问题）。
+const eventCenterLimit = 500
+
+// workloadChangeLimit 工作负载变更这一路的取数上限。它是"最近的变更"，
+// 时间倒序取前 N 条即可，但同样不该假装那就是全部——超过时打日志留痕。
+const workloadChangeLimit = 300
+
+func (h *EventCenterHandler) List(c *gin.Context) {
+	days := 30
+	if d, e := strconv.Atoi(c.Query("days")); e == nil && d > 0 && d <= 365 {
+		days = d
+	}
+	srcFilter := c.Query("source")
+	lvlFilter := c.Query("level")
+	want := func(src, lvl string) bool {
+		return (srcFilter == "" || srcFilter == src) && (lvlFilter == "" || lvlFilter == lvl)
+	}
+	events := []evt{}
+	now := time.Now()
+	add := func(e evt) {
+		if want(e.Source, e.Level) {
+			// 预告（到期日在未来）只显示到「天」：证书到期时刻精确到秒毫无意义，
+			// 反而让人误以为那一刻发生过什么事。
+			e.Upcoming = e.sortTs.After(now)
+			if e.Upcoming {
+				e.Time = e.sortTs.Format("2006-01-02")
+			} else {
+				e.Time = e.sortTs.Format("2006-01-02 15:04:05")
+			}
+			events = append(events, e)
+		}
+	}
+
+	// 1. 到期:证书(线上探测) + 域名注册
+	// Object 必须是完整 FQDN：domain_records.host 只是子域前缀（@ / www / mond），
+	// 单独拿出来会得到「证书 @ 即将到期」这种没法处置的告警，必须 JOIN 出根域名拼全。
+	if rows, _ := h.DB.Query(`SELECT r.host, c.name, r.cert_expiry_at FROM domain_records r
+		JOIN cis c ON c.id=r.domain_ci_id
+		WHERE r.cert_expiry_at IS NOT NULL AND r.cert_ignored=0 AND r.cert_expiry_at <= NOW()+INTERVAL ? DAY
+		ORDER BY r.cert_expiry_at`, days); rows != nil {
+		for rows.Next() {
+			var host, domain string
+			var exp sql.NullTime
+			if rows.Scan(&host, &domain, &exp) == nil && exp.Valid {
+				add(evt{Source: "expiry", Level: expiryLevel(exp.Time), Object: recordFQDN(host, domain),
+					Title: "证书到期", Message: "证书 " + exp.Time.Format("2006-01-02") + " 到期", sortTs: exp.Time})
+			}
+		}
+		rows.Close()
+	}
+	if rows, _ := h.DB.Query(`SELECT c.name, d.expiry_at FROM cis c JOIN domains d ON d.ci_id=c.id
+		WHERE c.type='domain' AND d.stale=0 AND d.ignored=0 AND d.expiry_at IS NOT NULL AND d.expiry_at <= NOW()+INTERVAL ? DAY
+		ORDER BY d.expiry_at`, days); rows != nil {
+		for rows.Next() {
+			var name string
+			var exp sql.NullTime
+			if rows.Scan(&name, &exp) == nil && exp.Valid {
+				add(evt{Source: "expiry", Level: expiryLevel(exp.Time), Object: name,
+					Title: "域名到期", Message: "域名注册 " + exp.Time.Format("2006-01-02") + " 到期", sortTs: exp.Time})
+			}
+		}
+		rows.Close()
+	}
+
+	// 2. 工作负载变更
+	if rows, _ := h.DB.Query(`SELECT namespace,kind,name,field,old_value,new_value,changed_at FROM k8s_changes
+		WHERE changed_at >= NOW()-INTERVAL ? DAY ORDER BY changed_at DESC LIMIT ?`, days, workloadChangeLimit); rows != nil {
+		for rows.Next() {
+			var ns, kind, name, field, ov, nv string
+			var ts time.Time
+			if rows.Scan(&ns, &kind, &name, &field, &ov, &nv, &ts) == nil {
+				fn := map[string]string{"image": "镜像", "replicas": "副本"}[field]
+				if fn == "" {
+					fn = field
+				}
+				add(evt{Source: "change", Level: "info", Object: ns + "/" + name,
+					Title: kind + " " + fn + "变更", Message: ov + " → " + nv, sortTs: ts})
+			}
+		}
+		rows.Close()
+	}
+
+	// 3. 同步失败:K8s 采集失败 + 云项目同步失败
+	if rows, _ := h.DB.Query(`SELECT s.resource, s.err, s.last_sync, COALESCE(k.name,''), COALESCE(k.display_name,k.name)
+		FROM k8s_sync_state s JOIN k8s_clusters k ON k.id=s.cluster_id WHERE s.ok=0 AND s.err<>''`); rows != nil {
+		for rows.Next() {
+			var res, errMsg, cl, clDisp string
+			var ts sql.NullTime
+			if rows.Scan(&res, &errMsg, &ts, &cl, &clDisp) == nil {
+				t := time.Now()
+				if ts.Valid {
+					t = ts.Time
+				}
+				add(evt{Source: "sync", Level: "warning", Object: cl + "/" + res,
+					Title: "K8s 采集失败", Message: truncStr(errMsg, 200), Cluster: cl, ClusterDisplay: clDisp, sortTs: t})
+			}
+		}
+		rows.Close()
+	}
+	if rows, _ := h.DB.Query(`SELECT project_id, last_result, last_sync_at FROM cloud_account_projects
+		WHERE last_result<>'' AND (last_result LIKE '%error%' OR last_result LIKE '%失败%' OR last_result LIKE '%fail%' OR last_result LIKE '%denied%')`); rows != nil {
+		for rows.Next() {
+			var pid, lr string
+			var ts sql.NullTime
+			if rows.Scan(&pid, &lr, &ts) == nil {
+				t := time.Now()
+				if ts.Valid {
+					t = ts.Time
+				}
+				add(evt{Source: "sync", Level: "warning", Object: pid,
+					Title: "云项目同步失败", Message: truncStr(lr, 200), sortTs: t})
+			}
+		}
+		rows.Close()
+	}
+
+	// 4. K8s Warning 事件(各启用集群实时,有界)
+	if srcFilter == "" || srcFilter == "k8s" {
+		if lvlFilter == "" || lvlFilter == "warning" {
+			h.collectK8sWarnings(c.Request.Context(), days, &events, add)
+		}
+	}
+
+	// 5. 夜莺告警（当前活跃的）。没接入夜莺就自动跳过，不影响其他来源。
+	// 只取活跃的：事件中心看的是"最近发生了什么"，
+	// 把几千条已恢复的历史告警灌进来会把其他来源全淹掉。
+	if srcFilter == "" || srcFilter == "alert" {
+		h.collectAlerts(c.Request.Context(), h.Cipher, add)
+	}
+
+	// 合并完全同类的重复条目（同来源+对象+标题+详情）。
+	// 实测同一个 Pod 的 Unhealthy 会重复 3 条、同一域名的证书到期重复 2 条，
+	// 时间线被同一件事刷屏，真正不同的事件被挤出视野。合并后用 ×N 表示发生次数，
+	// 时间取最近一次——丢的是重复，不是信息。
+	rawTotal := len(events)
+	merged := make([]evt, 0, len(events))
+	seen := map[string]int{}
+	for _, e := range events {
+		k := e.Source + "\x00" + e.Object + "\x00" + e.Title + "\x00" + e.Message
+		if e.Count < 1 {
+			e.Count = 1 // 非 K8s 来源没有原生次数，按 1 次算
+		}
+		if i, ok := seen[k]; ok {
+			merged[i].Count += e.Count
+			if e.sortTs.After(merged[i].sortTs) {
+				merged[i].sortTs, merged[i].Time = e.sortTs, e.Time
+			}
+			continue
+		}
+		seen[k] = len(merged)
+		merged = append(merged, e)
+	}
+	events = merged
+
+	// 排序分两段：已发生的按时间倒序（最新在前）排在上面；
+	// 未发生的预告按到期时间正序（最紧迫在前）排在下面。
+	// 预告绝不能靠"时间戳更大"插到已发生事件前面——那是在用未来的日期伪装成最新消息。
+	sort.Slice(events, func(i, j int) bool {
+		a, b := events[i], events[j]
+		if a.Upcoming != b.Upcoming {
+			return !a.Upcoming
+		}
+		if a.Upcoming {
+			return a.sortTs.Before(b.sortTs)
+		}
+		return a.sortTs.After(b.sortTs)
+	})
+
+	// 上限仍然保留（一次返回上万条对前端没意义），但**必须显式告知被截断了**。
+	// 原先 count 返回的是截断后的长度，于是「近 30 天」正好 500 条看起来像真实总数，
+	// 使用者拿到的是"这就是全部"的错觉（CMDB-019）。
+	// 分级计数在**截断之前**统计：数字必须反映选定时间范围内的真实总量，
+	// 不能是"当前这页有几条"——否则严重事件被截掉后，计数也跟着变小（CMDB-019）。
+	byLevel := map[string]int{"critical": 0, "warning": 0, "info": 0}
+	upcoming := 0
+	for _, e := range events {
+		byLevel[e.Level]++
+		if e.Upcoming {
+			upcoming++
+		}
+	}
+	total := len(events)
+	truncated := false
+	if total > eventCenterLimit {
+		events = events[:eventCenterLimit]
+		truncated = true
+		logx.J("event_center", "truncated", map[string]any{"total": total, "limit": eventCenterLimit, "days": days})
+	}
+	// count 保持"本次返回条数"的语义不变（前端老代码在用），total 才是截断前的真实总量。
+	// raw_total/merged_away 把"合并掉了多少条"摆在明面上：
+	// 合并后 total 变小是预期行为，但不能让人以为事件凭空少了（同 CMDB-019 的态度）。
+	c.JSON(http.StatusOK, gin.H{
+		"events": events, "count": len(events),
+		"total": total, "truncated": truncated, "limit": eventCenterLimit,
+		"by_level": byLevel,
+		// upcoming 是"尚未发生的到期预告"条数，已从时间线顶部移到末尾单独成段。
+		"upcoming":    upcoming,
+		"raw_total":   rawTotal,
+		"merged_away": rawTotal - total,
+	})
+}
+
+func (h *EventCenterHandler) collectK8sWarnings(ctx context.Context, days int, _ *[]evt, add func(evt)) {
+	rows, err := h.DB.Query(`SELECT id, COALESCE(display_name,name) FROM k8s_clusters WHERE enabled=1`)
+	if err != nil {
+		return
+	}
+	type cl struct {
+		id   int
+		name string
+	}
+	cls := []cl{}
+	for rows.Next() {
+		var x cl
+		if rows.Scan(&x.id, &x.name) == nil {
+			cls = append(cls, x)
+		}
+	}
+	rows.Close()
+	cutoff := time.Now().AddDate(0, 0, -days)
+	for _, x := range cls {
+		cs, err := h.Pool.ClientFor(x.id)
+		if err != nil {
+			continue // 集群不可达:跳过,不影响其它源
+		}
+		cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		list, err := cs.CoreV1().Events("").List(cctx, metav1.ListOptions{Limit: 300})
+		cancel()
+		if err != nil {
+			continue
+		}
+		for i := range list.Items {
+			e := &list.Items[i]
+			if e.Type != "Warning" {
+				continue
+			}
+			ts := e.LastTimestamp.Time
+			if ts.IsZero() {
+				ts = e.EventTime.Time
+			}
+			if ts.Before(cutoff) {
+				continue
+			}
+			obj := e.InvolvedObject.Kind + " " + e.InvolvedObject.Name
+			if e.InvolvedObject.Namespace != "" {
+				obj = e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
+			}
+			// K8s 自己就记了同一事件重复发生的次数（Event.Count），直接带出来。
+			// 不带的话「BackOff 重启」发生 200 次和发生 1 次在时间线上长得一模一样，
+			// 而这个次数恰恰是判断"偶发还是一直在崩"的关键。
+			cnt := int(e.Count)
+			if cnt < 1 {
+				cnt = 1
+			}
+			lvl, why := k8sEventLevelWithReason(e.Reason, cnt)
+			add(evt{Source: "k8s", Level: lvl, LevelWhy: why, Object: obj,
+				Title: e.Reason, Message: truncStr(e.Message, 240), Cluster: x.name, sortTs: ts, Count: cnt})
+		}
+	}
+}
+
+// k8sEventLevel 给 K8s Warning 事件分级。
+//
+// # 这个函数被改过两次，两次都是同一个错误的两个方向
+//
+//	第一版：一律 "warning"。于是 `FailedToRetrieveImagePullSecret` 发生
+//	33.9 万次和某个 Pod 偶发一次同级，全淹在同一片黄色里。
+//
+//	第二版（修上面那条）：把一批 Reason 无条件判 critical，
+//	外加"任何 Reason 重复 ≥1000 次就升 critical"。
+//	于是**首屏 14 行全是红色「严重」**——红色就此失去了信号价值
+//	（OPSCMDB-031 P2-37）。
+//
+//	🔴 两次都错在同一件事：**拿一个维度去替代另一个维度**。
+//	次数衡量的是"持续了多久"，不是"多严重"；
+//	Reason 衡量的是"哪一类问题"，也不是"现在是不是停的"。
+//
+// # 现在的判据：分两层，各自只回答自己那一问
+//
+//	down    工作负载**现在就是停的**（OOM、节点失联、沙箱建不起来）→ 永远 critical
+//	broken  配置/环境坏了，重试不会好（拉不到密钥、挂不上盘）
+//	        → **持续**才 critical，偶发一次是滚动更新期间的正常抖动
+//	其余    warning。次数由界面上的 `×N` 呈现量级，不再拿它去改颜色
+//
+//	⚠️ `FailedScheduling` 从"确定性故障"里挪出来了：它是最常见的暂态之一
+//	（节点池扩容后就好了）。一次调度失败判成"严重"，等于把自动扩容的
+//	正常过程报成事故。
+//
+//	⚠️ 降级只作用于**低次数**的那些。持续发生的一条也不会被降 ——
+//	这次改动严格地只减少误报，不会藏起任何真的在持续的问题。
+func k8sEventLevel(reason string, count int) string {
+	lvl, _ := k8sEventLevelWithReason(reason, count)
+	return lvl
+}
+
+// eventDownReasons 工作负载**现在就是停的**。一次也是 critical。
+var eventDownReasons = map[string]string{
+	"OOMKilling":             "容器被 OOM 杀掉了，它现在不在运行",
+	"SystemOOM":              "节点整体内存耗尽，上面的容器会被连带杀掉",
+	"NodeNotReady":           "节点失联，它上面的 Pod 都不可用",
+	"FailedCreatePodSandBox": "Pod 沙箱建不起来，容器一个都没启动",
+	"FailedKillPod":          "Pod 删不掉，会一直占着名字和资源",
+}
+
+// eventBrokenReasons 配置/环境坏了，重试不会自己好。
+//
+//	⚠️ 但**偶发一次不算**：滚动更新、节点漂移期间这些都会短暂出现。
+//	持续出现才说明它真的坏了。
+var eventBrokenReasons = map[string]string{
+	"FailedToRetrieveImagePullSecret": "取不到镜像拉取密钥，这批 Pod 起不来",
+	"FailedMount":                     "卷挂不上，容器起不来",
+	"FailedAttachVolume":              "盘挂不上节点，Pod 调度到这里就起不来",
+	"InvalidDiskCapacity":             "磁盘容量识别异常",
+	"FailedScheduling":                "一直排不上调度，说明资源确实不够（不是扩容中的暂态）",
+}
+
+// eventBrokenPersistThreshold 「坏了」这一类要重复到多少次才算持续。
+//
+//	取 20：滚动更新期间同一个 Reason 通常出现个位数次，
+//	而真正坏掉的配置会稳定地每次重试都报一次。
+//	⚠️ 不用 1000 —— 那个数太大，一个真坏了但 Pod 数不多的服务永远够不到。
+const eventBrokenPersistThreshold = 20
+
+// k8sEventLevelWithReason 除了级别，还给出**为什么是这个级别**。
+//
+//	界面上一片红而不说为什么，等于要求人自己去背这张映射表。
+func k8sEventLevelWithReason(reason string, count int) (level, why string) {
+	if why, ok := eventDownReasons[reason]; ok {
+		return "critical", why
+	}
+	if why, ok := eventBrokenReasons[reason]; ok {
+		if count >= eventBrokenPersistThreshold {
+			return "critical", why + "（已重复 " + strconv.Itoa(count) + " 次，不是暂态）"
+		}
+		// 偶发：说清楚"再多几次就是真的坏了"，别让人以为它无关紧要
+		return "warning", why + "——目前只出现 " + strconv.Itoa(count) +
+			" 次，滚动更新/节点漂移期间会短暂出现；持续出现才是配置真的坏了"
+	}
+	return "warning", ""
+}
+
+func expiryLevel(t time.Time) string {
+	if time.Until(t) <= 7*24*time.Hour {
+		return "critical"
+	}
+	return "warning"
+}
+
+func truncStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}

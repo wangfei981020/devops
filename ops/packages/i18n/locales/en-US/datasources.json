@@ -1,0 +1,59 @@
+{
+  "title": "Data sources",
+  "total_one": "{{count}} data source",
+  "total_other": "{{count}} data sources",
+  "configured": "Configured",
+  "noCredential": "No credential",
+  "neverSynced": "Never synced",
+  "stale": "Sync stalled",
+  "ok": "OK",
+  "disabled": "Disabled",
+  "noCredNote_one": "{{count}} data source has no credential and collects nothing",
+  "noCredNote_other": "{{count}} data sources have no credentials and collect nothing",
+  "kind": {
+    "cloud": "Cloud account",
+    "cluster": "Cluster",
+    "obs": "Observability",
+    "all": "All"
+  },
+  "column": {
+    "kind": "Kind",
+    "name": "Data source",
+    "credential": "Credential",
+    "lastSync": "Last sync",
+    "state": "Status"
+  },
+  "filter": {
+    "searchPlaceholder": "Search data source",
+    "kind": "Kind"
+  },
+  "error": {
+    "title": "Could not load data sources"
+  },
+  "empty": {
+    "title": "No data sources",
+    "filtered": "Nothing matches the current filters.",
+    "noSource": "No data source connected yet. Every list page stays empty until the first one is configured."
+  },
+  "inherited": "From cloud account",
+  "inheritedHint": "GKE authenticates via the bound cloud account service account; no kubeconfig needed",
+  "health": {
+    "ok": "OK",
+    "no_credential": "No credential",
+    "stale": "Sync stalled",
+    "never_synced": "Never synced",
+    "disabled": "Disabled",
+    "not_applicable": "No sync needed"
+  },
+  "noCredNote": "{{count}} data sources really have no credential and cannot collect anything",
+  "goTest": "Test connectivity",
+  "notConfigured": "Not configured",
+  "notConfiguredOkHint": "This kind of source needs no credential here: K8s clusters use an in-cluster ServiceAccount or inherit the cloud account, and internal Prometheus/Loki usually have no auth",
+  "typeHint": {
+    "gke": "GKE cluster — authenticates via the bound cloud account’s service account; no kubeconfig stored",
+    "generic": "Generic K8s cluster (self-hosted / k3s) — authenticates with the kubeconfig stored here, a different mechanism from GKE",
+    "prometheus": "Prometheus-compatible endpoint (incl. VictoriaMetrics). Queried on demand, so having no sync record is normal",
+    "loki": "Loki log endpoint. Queried on demand, so having no sync record is normal",
+    "gcp": "GCP cloud account. SA keys are configured per project, not per account — GCP grants permissions per project"
+  }
+}

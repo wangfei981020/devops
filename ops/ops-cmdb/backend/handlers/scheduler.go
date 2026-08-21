@@ -1,0 +1,1462 @@
+package handlers
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/robfig/cron/v3"
+
+	"ops-cmdb-backend/crypto"
+	"ops-cmdb-backend/dnsource"
+	"ops-cmdb-backend/internal/cluster"
+	"ops-cmdb-backend/internal/store"
+	"ops-cmdb-backend/k8ssource"
+	"ops-cmdb-backend/logx"
+	"ops-cmdb-backend/notify"
+)
+
+// Scheduler 用 cron 调度可配置定时任务（scheduled_tasks 表）。
+// 任务可在前端开关 / 改频率 / 立即运行；改配置后热重载。
+// TaskFailure 单条失败明细（target=失败对象，可用于重试；reason=具体原因）。
+type TaskFailure struct {
+	Target string `json:"target"`
+	Reason string `json:"reason"`
+}
+
+// TaskFinding 任务「发现的问题」，与 TaskFailure 严格区分：
+//
+//	TaskFailure = 这次没跑成的目标（连不上/超时），需要重试
+//	TaskFinding = 这次跑成了、并且查出来的问题（磁盘 94%、节点 NotReady），需要处置
+//
+// 做这个是因为告警任务此前只把明细拼进飞书文本，历史里只留下一句
+// 「危险 1 项、偏高 3 项」——不知道是哪个盘，等于没有告警。
+// 而且告警抑制期内飞书根本不发，那一轮就彻底查不到超标对象了。
+type TaskFinding struct {
+	Level  string `json:"level"`            // critical / warning / info
+	Target string `json:"target"`           // 对象，如「dev-k8s · 节点 node17」
+	Value  string `json:"value,omitempty"`  // 数值，如「93.6%」
+	Detail string `json:"detail,omitempty"` // 补充说明
+}
+
+// findingSink 收集一次任务运行期间的所有 finding。
+// 走 context 传递而不是改 taskFn 签名：需要 finding 的只有告警类任务（3 个），
+// 让其余 8 个任务陪着改签名不划算。
+type findingSink struct {
+	mu    sync.Mutex
+	items []TaskFinding
+}
+
+type findingKey struct{}
+
+// withFindingSink 在任务开跑时把收集器塞进 ctx。
+func withFindingSink(ctx context.Context) (context.Context, *findingSink) {
+	sink := &findingSink{}
+	return context.WithValue(ctx, findingKey{}, sink), sink
+}
+
+// AddFinding 由各任务的核心函数调用，上报一个发现项。ctx 里没有收集器时静默忽略
+// （比如被单元测试或其它入口直接调用），不影响主流程。
+func AddFinding(ctx context.Context, f TaskFinding) {
+	sink, _ := ctx.Value(findingKey{}).(*findingSink)
+	if sink == nil {
+		return
+	}
+	sink.mu.Lock()
+	sink.items = append(sink.items, f)
+	sink.mu.Unlock()
+}
+
+func (fs *findingSink) list() []TaskFinding {
+	if fs == nil {
+		return nil
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	return append([]TaskFinding{}, fs.items...)
+}
+
+// SummarizeFindings 把 finding 列表压成一句带对象名的摘要。
+// 「危险 1 项、偏高 3 项」看不出要处置什么，必须带上前几个对象；
+// 全量明细在 findings 字段里，页面上能点开看。
+func SummarizeFindings(items []TaskFinding, maxShow int) string {
+	if len(items) == 0 {
+		return ""
+	}
+	parts := []string{}
+	for i, f := range items {
+		if i >= maxShow {
+			parts = append(parts, fmt.Sprintf("等 %d 项", len(items)))
+			break
+		}
+		one := f.Target
+		if f.Value != "" {
+			one += " " + f.Value
+		}
+		parts = append(parts, one)
+	}
+	return strings.Join(parts, "、")
+}
+
+// ProgressFn 进度回调：done=已处理，total=总数。核心函数边跑边上报，前端实时看进度。
+type ProgressFn func(done, total int)
+
+// taskFn 核心函数签名：ctx 用于超时/取消（核心函数在循环里 select ctx.Done() 及时中止）；
+// prog 上报进度；targets 非空=只处理这些对象（重试用），nil=全量。
+type taskFn func(ctx context.Context, prog ProgressFn, targets []string) (string, []TaskFailure, bool)
+
+type Scheduler struct {
+	// st 后台任务的租户入口。定时任务没有会话，租户从数据里逐个读，
+	// 每一轮用 store.ForJob 构造只覆盖单个租户的上下文。
+	st *store.Store
+	// leader 决定本副本要不要真的执行 cron 任务。
+	//
+	//	多副本下每个 Pod 都会注册同一份 cron，到点各触发一次。
+	//	主机同步是 3 倍云 API 调用，证书续期会被 ACME 限速，
+	//	而域名续费是**非幂等写，等于扣 3 次钱**。
+	//	所以 cron 触发的任务只有 leader 执行；手动触发不受此限
+	//	（是人明确点的，且写的是触发者自己那条记录）。
+	leader  *cluster.Leader
+	db      *sql.DB
+	cipher  *crypto.Cipher
+	mu      sync.Mutex
+	cron    *cron.Cron
+	funcs   map[string]taskFn
+	running map[int64]context.CancelFunc // runID -> cancel（供「取消执行」中止运行中的任务）
+	runMu   sync.Mutex
+}
+
+// taskTimeout 各任务硬超时（超过则中止并标「超时」，防止永久卡"运行中"）。
+func taskTimeout(key string) time.Duration {
+	switch key {
+	case "inspect", "refresh_expiry", "registrar_expiry_sync", "dns_sync", "host_sync":
+		return 25 * time.Minute // 逐个连 443/WHOIS/同步，量大给足
+	case "gke_upgrade_sync":
+		// 每集群 3 次 API + 每节点池 1 次 fetchNodePoolUpgradeInfo，4 集群约 10 个池，给足余量
+		return 15 * time.Minute
+	default:
+		return 5 * time.Minute
+	}
+}
+
+var sched *Scheduler // 全局单例，供 API 热重载 / 立即运行
+
+// StartScheduler 初始化调度器并按 scheduled_tasks 注册 cron。非阻塞（cron 在后台 goroutine）。
+// StartScheduler 启动调度器。
+//
+// leader 可为 nil（单副本部署 / 测试）：那种情况下所有 cron 任务照常执行。
+// 显式允许 nil 而不是要求调用方硬造一个，是为了让单副本的行为
+// 不依赖于"恰好选上了"——否则本地起服务会因为抢不到租约而什么都不跑。
+func StartScheduler(st *store.Store, db *sql.DB, cipher *crypto.Cipher, pool *k8ssource.Pool, leader *cluster.Leader) {
+	nodeHealthPool = pool // 节点健康任务要直连集群，见 node_health.go
+	sched = &Scheduler{st: st, leader: leader, db: db, cipher: cipher, running: map[int64]context.CancelFunc{}}
+	sched.funcs = map[string]taskFn{
+		"refresh_expiry": func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) {
+			return refreshAllWhoisCore(ctx, db, p, t)
+		},
+		"auto_renew": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return renewDue(st, db, cipher)
+		},
+		"remind": func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) {
+			return remindExpiry(db), nil, true
+		},
+		"inspect": func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) {
+			return inspectAllCertsCore(ctx, st, db, p, t)
+		},
+		// 从注册商 API 拿到期日：比 WHOIS 权威且续费后当场生效，
+		// WHOIS 那条路留给不属于任何数据源的手工域名
+		"registrar_expiry_sync": func(ctx context.Context, p ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return registrarExpirySyncCore(ctx, db, cipher, p)
+		},
+		// 清理长期失效的主机记录。两道闸防误删：只清超过 N 天的，
+		// 且该 project 最近一次同步必须是成功的（见 host_stale_purge.go）
+		"stale_host_purge": func(ctx context.Context, p ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return purgeStaleHostsCore(ctx, db, p)
+		},
+		// 关系图谱自动建边：图谱页存在很久但 ci_relations 里只有 5 条手工边，
+		// 全链路关系从来没被生产出来过（见 relations_autolink.go）
+		"relations_auto_link": func(ctx context.Context, p ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			// 逐租户重建，各自的图互不相干
+			var msgs []string
+			var allFail []TaskFailure
+			allOK := true
+			sched.forEachTenantScope("relations_rebuild", func(tsc *store.Scoped) {
+				m, f, ok := rebuildAutoRelationsCore(store.ForJob(ctx, tsc.TenantID(), "relations_rebuild"), st, db, p)
+				msgs = append(msgs, fmt.Sprintf("租户 %d：%s", tsc.TenantID(), m))
+				allFail = append(allFail, f...)
+				allOK = allOK && ok
+			})
+			return strings.Join(msgs, "；"), allFail, allOK
+		},
+		"dns_sync": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return dnsSyncCore(ctx, st, db, cipher)
+		},
+		"host_sync": func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) {
+			return SyncAllHostProjects(st, db, cipher)
+		},
+		// 磁盘用量单独成任务，不并进 host_sync：
+		// 前者依赖云凭据、后者依赖 Prometheus，任一挂掉不该拖累另一个。
+		// 合成一个任务的话，云凭据过期会连带让磁盘用量也停止更新，
+		// 而那时看到的是一个"成功但数据不更新"的任务，最难排查。
+		"host_disk_usage": func(context.Context, ProgressFn, []string) (string, []TaskFailure, bool) {
+			return SyncHostDiskUsage(db, cipher)
+		},
+		// GKE 版本与升级：排期表同步不依赖云凭据，集群采集依赖 SA key，故拆成两个任务
+		"gke_schedule_sync": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return gkeScheduleSyncCore(ctx, db)
+		},
+		"gke_upgrade_sync": func(ctx context.Context, p ProgressFn, t []string) (string, []TaskFailure, bool) {
+			return gkeUpgradeSyncCore(ctx, db, cipher, p, t)
+		},
+		"gke_upgrade_remind": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return gkeUpgradeRemindCore(ctx, db)
+		},
+		// 磁盘水位巡检：盘满是能直接打垮整个平台的故障，且此前完全没有告警（CMDB-012）
+		"disk_watch": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return diskWatchCore(ctx, st, db, cipher)
+		},
+		// 节点健康是分钟级任务，自己直连集群（k8s_nodes 表 120s 才刷一次，撑不起 3 分钟判定）
+		"node_health_watch": func(ctx context.Context, p ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return nodeHealthWatchCore(ctx, db, nodeHealthPool, cipher, p)
+		},
+	}
+	// 自愈①：启动时，之前进程遗留的「运行中」记录一律标「中断」（那些进程已随重启死掉）
+	sched.forEachTenantScope("scheduler_heal_boot", func(sc *store.Scoped) {
+		if _, err := sc.Exec(`UPDATE task_run_logs SET status=?, summary='中断：服务重启', finished_at=NOW() WHERE tenant_id = ? AND status=?`,
+			taskStatusInterrupted, taskStatusRunning); err != nil {
+			logx.Line("scheduler", fmt.Sprintf("[scheduler] 启动清理遗留 running 记录失败: %v", err))
+		}
+	})
+	// 自愈②：每 5 分钟把 running 超过硬超时上限(30min)仍未收尾的标「中断」（兜底任何卡死）
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		for range t.C {
+			sched.forEachTenantScope("scheduler_heal_tick", func(sc *store.Scoped) {
+				if _, err := sc.Exec(`UPDATE task_run_logs SET status=?, summary='中断：超时未收尾(自愈)', finished_at=NOW()
+					WHERE tenant_id = ? AND status=? AND TIMESTAMPDIFF(SECOND, started_at, NOW()) > 1800`,
+					taskStatusInterrupted, taskStatusRunning); err != nil {
+					logx.Line("scheduler", fmt.Sprintf("[scheduler] 定期自愈卡死记录失败: %v", err))
+				}
+			})
+		}
+	}()
+	sched.reload()
+}
+
+// ReloadScheduler 改了 scheduled_tasks 配置后重建 cron（供 API 调用）。
+func ReloadScheduler() {
+	if sched != nil {
+		sched.reload()
+	}
+}
+
+// RunTaskNow 立即异步全量跑一次指定任务（供 API「立即运行」调用）。
+func RunTaskNow(key string) bool {
+	if sched == nil || sched.funcs[key] == nil {
+		return false
+	}
+	go sched.run(key, "manual", nil)
+	return true
+}
+
+// RunTaskRetry 只重试指定失败对象（供 API「重试失败项」调用），生成一条 trigger=retry 的新记录。
+func RunTaskRetry(key string, targets []string) bool {
+	if sched == nil || sched.funcs[key] == nil {
+		return false
+	}
+	go sched.run(key, "retry", targets)
+	return true
+}
+
+// scheduleErrs 记录哪些任务因为 cron 表达式无效而**没能注册**。
+//
+//	查询接口据此把「下次执行」显示成「⚠ 未注册」+ 具体原因，
+//	而不是一个和"还没到时间"无法区分的 `—`。
+var (
+	scheduleErrsMu sync.RWMutex
+	scheduleErrs   = map[string]string{}
+)
+
+func (s *Scheduler) markUnscheduled(key string, err error) {
+	scheduleErrsMu.Lock()
+	defer scheduleErrsMu.Unlock()
+	scheduleErrs[key] = err.Error()
+}
+
+func (s *Scheduler) markScheduled(key string) {
+	scheduleErrsMu.Lock()
+	defer scheduleErrsMu.Unlock()
+	delete(scheduleErrs, key)
+}
+
+// ScheduleErrOf 取某个任务的注册错误；空串表示注册正常。
+func ScheduleErrOf(key string) string {
+	scheduleErrsMu.RLock()
+	defer scheduleErrsMu.RUnlock()
+	return scheduleErrs[key]
+}
+
+func (s *Scheduler) reload() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cron != nil {
+		s.cron.Stop()
+	}
+	s.cron = cron.New()
+	rows, err := s.db.Query(`SELECT task_key, schedule FROM scheduled_tasks WHERE enabled=1`)
+	if err != nil {
+		logx.Line("scheduler", fmt.Sprintf("scheduler reload query: %v", err))
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, schedule string
+		if rows.Scan(&key, &schedule) != nil {
+			continue
+		}
+		if s.funcs[key] == nil {
+			continue
+		}
+		k := key
+		if _, err := s.cron.AddFunc(schedule, func() { s.runIfLeader(k) }); err != nil {
+			// ⚠️ 注册失败必须让人在**界面上**看见，不能只留一行日志。
+			//
+			//	表达式写错（比如 6 段 cron 交给 5 段解析器）时，任务是
+			//	**一次都不会跑**的，而页面上只表现为「下次执行」一个 `—`，
+			//	和"还没到时间"长得一模一样。日志没人天天看，
+			//	registrar_expiry_sync 就这么静默躺了好几天（CMDB-039）。
+			logx.Line("scheduler", fmt.Sprintf("WARN 任务 %s 的 cron 表达式 %q 无效，该任务不会被调度：%v", key, schedule, err))
+			s.markUnscheduled(k, err)
+			continue
+		}
+		s.markScheduled(k)
+	}
+	s.cron.Start()
+}
+
+// exec 执行 UPDATE/DELETE 并在出错时打日志（不再吞错）。desc 用于日志定位。
+// exec 调度器自身的记账写入。
+//
+// # 为什么走 Platform 而不是 Scoped
+//
+// cron 触发的任务是**平台行为**：一次触发，内部逐租户处理。
+// 这条运行记录记的是"这次触发跑了没有、跑了多久"，不属于任何单个租户，
+// 所以用 tenant_id = 0。
+//
+// 而用户在界面上点「立即执行」，那条记录属于点击的人所在的租户 ——
+// 走 startManualRunLog(sc, ...)，两条路径刻意分开。
+//
+//	⚠️ 不要图省事把这里改成某个具体租户的作用域：
+//	那样别的租户在「执行记录」里就看不到定时任务跑过，
+//	会以为同步压根没运行。
+//
+//	也不能走 Platform()：那条路只放行白名单里的平台表，
+//	而 task_run_logs 是租户表（用户要能看自己的执行历史）。
+//	平台级的行就用约定的 tenant_id = 0，和 audit_logs 一个口径。
+func (s *Scheduler) platformScope() (*store.Scoped, error) {
+	return s.st.Tenant(store.ForJob(context.Background(), store.PlatformTenant, "scheduler"))
+}
+
+// forEachTenantScope 对「平台 + 所有启用租户」逐个执行 fn。
+//
+// 用于跨租户的**记账修复**：进程崩溃会给每个租户都留下「运行中」的僵尸记录，
+// 只清 tenant 0 的话，别的租户界面上会永远卡在运行中。
+//
+//	⚠️ 即便这种明显无害的维护操作，也不给它一个「看得见所有租户」的作用域。
+//	一旦存在那种作用域，下一个人就会拿它去写业务逻辑。
+//	逐租户跑的成本只是一次租户列表查询。
+func (s *Scheduler) forEachTenantScope(job string, fn func(*store.Scoped)) {
+	ctx := context.Background()
+	tenants := []store.TenantID{store.PlatformTenant}
+	rows, err := s.st.Platform(job).Query(ctx, store.ActiveTenantsQuery)
+	if err != nil {
+		// ⚠️ 这里失败意味着**所有租户都不会被处理**，而不是"少处理了一个"。
+		//    用 WARN 级别并写明后果 —— 之前这条只是一行普通日志，
+		//    真出问题时（列名写错）功能整个不工作，却看不出严重性。
+		logx.J("scheduler", "tenant_list_fail", map[string]any{
+			"job": job, "err": err.Error(),
+			"warn": "取不到租户列表，本轮对所有租户都不会执行",
+		})
+		return
+	}
+	for rows.Next() {
+		var t store.TenantID
+		if rows.Scan(&t) == nil && t != store.PlatformTenant {
+			tenants = append(tenants, t)
+		}
+	}
+	rows.Close()
+	for _, t := range tenants {
+		sc, err := s.st.Tenant(store.ForJob(ctx, t, job))
+		if err != nil {
+			logx.Line("scheduler", fmt.Sprintf("[scheduler] %s 租户 %d 取作用域失败: %v", job, t, err))
+			continue
+		}
+		fn(sc)
+	}
+}
+
+func (s *Scheduler) exec(desc, query string, args ...any) {
+	sc, err := s.platformScope()
+	if err != nil {
+		logx.Line("scheduler", fmt.Sprintf("[scheduler] %s 取作用域失败: %v", desc, err))
+		return
+	}
+	if _, err := sc.Exec(query, args...); err != nil {
+		// ⚠️ 这里曾经只写一行 logx.Line 就算完，于是「写回 last_run_at」和四条清理语句
+		// 因为漏了 tenant_id 过滤被 checkFilter 拒掉之后，**静默失败了几个月**：
+		// 任务明明跑了 234 次，界面却显示「从没跑过」；保留策略一条都没生效。
+		// 用结构化日志并单独标 tag，让它能被日志检索捞出来 —— 静默是它活这么久的唯一原因。
+		logx.J("scheduler", "exec_failed", map[string]any{
+			"desc": desc, "err": err.Error(),
+			"note": "调度器写库失败。若是 tenant filter 报错，说明这条 SQL 漏了 tenant_id = ?",
+		})
+	}
+}
+
+// runIfLeader cron 的入口：只有 leader 真的执行。
+//
+//	跳过时**要打日志**。否则"任务没跑"和"任务跑了但没产出"在现象上
+//	一模一样，排查时无从判断这个副本是主动让位还是出了故障。
+func (s *Scheduler) runIfLeader(key string) {
+	if s.leader != nil && !s.leader.IsLeader() {
+		logx.J("scheduler", "skip_not_leader", map[string]any{
+			"task": key, "reason": "本副本不是 leader，由持有租约的副本执行",
+		})
+		return
+	}
+	s.run(key, "cron", nil)
+}
+
+func (s *Scheduler) run(key, trigger string, targets []string) {
+	fn := s.funcs[key]
+	if fn == nil {
+		return
+	}
+	start := time.Now()
+	runID := s.startRunLog(key, trigger, start) // 先写「运行中」记录，前端可实时看进度/耗时
+	// 硬超时 + 可取消：注册 cancel 供「取消执行」中止；超时/取消都会让核心函数在循环里退出
+	ctx, cancel := context.WithTimeout(context.Background(), taskTimeout(key))
+	ctx, sink := withFindingSink(ctx)
+	if runID > 0 {
+		s.runMu.Lock()
+		s.running[runID] = cancel
+		s.runMu.Unlock()
+	}
+	defer func() {
+		cancel()
+		if runID > 0 {
+			s.runMu.Lock()
+			delete(s.running, runID)
+			s.runMu.Unlock()
+		}
+		if r := recover(); r != nil {
+			logx.Line("scheduler", fmt.Sprintf("[scheduler] 任务 %s panic: %v", key, r))
+			msg := fmt.Sprintf("panic: %v", r)
+			s.exec("panic后更新scheduled_tasks", `UPDATE scheduled_tasks SET last_run_at=NOW(), last_result=?, last_ok=0 WHERE tenant_id = ? AND task_key=?`, truncate(msg, 250), key)
+			ns, ng, na := sendTaskNotify(s.db, key, "fail", msg)
+			s.finishRunLog(runID, taskStatusFail, msg, nil, nil, start, ns, ng, na)
+		}
+	}()
+	logx.Line("scheduler", fmt.Sprintf("[scheduler] 运行任务 %s (%s)", key, trigger))
+	prog := func(done, total int) {
+		s.exec("更新进度", `UPDATE task_run_logs SET progress=? WHERE tenant_id = ? AND id=?`, fmt.Sprintf("%d/%d", done, total), runID)
+	}
+	result, failures, ok := fn(ctx, prog, targets)
+
+	// 状态判定：ctx 取消 → 已取消 / 超时；否则 ok/partial/fail
+	status := taskStatusOK
+	switch {
+	case ctx.Err() == context.Canceled:
+		status, ok = "cancelled", false
+		if result == "" {
+			result = "已手动取消"
+		}
+	case ctx.Err() == context.DeadlineExceeded:
+		status, ok = taskStatusTimeout, false
+		result = fmt.Sprintf("超时中止（上限 %s）；%s", taskTimeout(key), result)
+	case isSkipped(failures):
+		// 跑完了但没得出结论（依赖没配、没有可检查对象）。
+		// ⚠️ 既不是 ok 也不是 fail —— 见 taskStatusSkipped 的注释。
+		// failures 只是承载哨兵，不该显示成失败明细
+		status, failures = taskStatusSkipped, nil
+	case !ok:
+		status = taskStatusFail
+	case len(failures) > 0:
+		// ⚠️ partial = **部分**成功，前提是至少有一项成功了。
+		// 任务自己知道成功了几项，调用方不知道 —— 所以"一项都没成"
+		// 必须由任务返回 ok=false 来表态（见 renewDue 结尾）。
+		// 否则 0 成功 / N 失败会被记成 partial，在界面上显示成绿色的「正常」。
+		status = taskStatusPartial
+	}
+	// ⚠️ 跳过**不算成功**。算成功的话「定时任务」列表页会显示绿色的「正常」，
+	// 而它一次都没采到过数据 —— 那正是 OPSCMDB-006
+	okv := 0
+	if ok && status != taskStatusSkipped {
+		okv = 1
+	}
+	// ⚠️ `tenant_id = ?` 不能省：Scoped.Exec 会先跑 checkFilter，缺这个条件的语句
+	// **直接被拒**（ErrMissingTenantFilter），而 s.exec 只记一行日志就返回 ——
+	// 于是这条写回从多租户改造（迁移 096）之后一直在静默失败：
+	// task_run_logs 里 disk_watch 跑了 234 次，scheduled_tasks.last_run_at 却始终是 NULL，
+	// 界面照着它显示「从没跑过 · 没被调度到过，靠它采的数据一直是空的」。
+	// 租户值由 Scoped 按占位符位置自动注入，不要自己传。
+	s.exec("更新scheduled_tasks", `UPDATE scheduled_tasks SET last_run_at=NOW(), last_result=?, last_ok=? WHERE tenant_id = ? AND task_key=?`, truncate(result, 250), okv, key)
+	ns, ng, na := sendTaskNotify(s.db, key, status, result)
+	s.finishRunLog(runID, status, result, failures, sink.list(), start, ns, ng, na)
+
+	// D 自动重试：仅 fail/timeout（不含 partial/cancelled/ok）且非自动重试触发时，退避后重跑
+	//
+	//	# ⚠️ 为什么不能固定 10 秒
+	//
+	//	原来是「10 秒后重试一次」。实测 registrar_expiry_sync 连续失败 5 天、
+	//	每天 2 次（03:30:00 定时 + 03:30:10 自动重试），**一次都没救回来**——
+	//	因为故障持续时间远超 10 秒，重试只是陪着主任务一起失败
+	//	（OPSCMDB-031 P0-16）。10 秒只够挡住"恰好这一瞬网络抖了"，
+	//	而真实故障（对端限流、凭据临时失效、上游重启）都是分钟级的。
+	//
+	//	改成递增退避、多试几次：1min → 5min → 15min。
+	//	上界 15 分钟是因为再长就跨到下一个调度周期了，那时定时任务自己会跑。
+	//
+	//	⚠️ 重试**救不回来时必须让人看见**。退避重试降低了"手动去点一下"的必要性，
+	//	但也让静默失败更容易被容忍 —— 所以最后一次重试仍失败时留一条显式日志，
+	//	sendTaskNotify 那条路也照常走（每次重试都会走）。
+	if (status == taskStatusFail || status == taskStatusTimeout) && trigger != "auto_retry" {
+		go s.autoRetry(key, targets)
+	}
+}
+
+// autoRetryDelays 自动重试的退避间隔。
+//
+//	⚠️ 不要改成"无限重试" —— 一个凭据已经失效的任务无限重试，
+//	既打爆对端，又把 task_run_logs 灌满，还会让"失败"这件事因为
+//	每分钟都在发生而彻底失去信号意义。
+var autoRetryDelays = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
+
+func (s *Scheduler) autoRetry(key string, targets []string) {
+	for i, d := range autoRetryDelays {
+		logx.Line("scheduler", fmt.Sprintf("[scheduler] 任务 %s 失败，%v 后自动重试（第 %d/%d 次）",
+			key, d, i+1, len(autoRetryDelays)))
+		time.Sleep(d)
+		s.run(key, "auto_retry", targets)
+		// 重试成功就收手。判据看库里最新一条的状态 ——
+		// s.run 是同步跑完才返回的，这时 last_ok 已经写回去了
+		var ok int
+		if s.db.QueryRow(`SELECT COALESCE(last_ok,0) FROM scheduled_tasks WHERE task_key=?`, key).Scan(&ok) == nil && ok == 1 {
+			logx.Line("scheduler", fmt.Sprintf("[scheduler] 任务 %s 第 %d 次自动重试成功", key, i+1))
+			return
+		}
+	}
+	// 全部重试用完还是失败：这是"需要人介入"的信号，必须显式说出来。
+	// 只留一行普通日志的话，它会淹在正常日志里 —— 用 WARN 前缀便于检索。
+	logx.Line("scheduler", fmt.Sprintf(
+		"[scheduler] WARN 任务 %s 自动重试 %d 次全部失败，需要人工介入（去定时任务页展开执行记录看失败原因）",
+		key, len(autoRetryDelays)))
+}
+
+// CancelTask 取消运行中的任务：有活 goroutine 就 cancel 其 ctx（会正常收尾为「已取消」）；
+// 若已是僵尸（goroutine 没了）则直接强制把记录标「已取消」。返回是否处理。
+func (s *Scheduler) CancelTask(runID int64) bool {
+	s.runMu.Lock()
+	cancel, alive := s.running[runID]
+	s.runMu.Unlock()
+	if alive {
+		cancel()
+		return true
+	}
+	// 僵尸：直接收尾
+	sc, err := s.platformScope()
+	if err != nil {
+		logx.Line("scheduler", fmt.Sprintf("[scheduler] 强制取消取作用域失败: %v", err))
+		return false
+	}
+	res, err := sc.Exec(`UPDATE task_run_logs SET status=?, summary='已手动取消(强制收尾)', finished_at=NOW() WHERE tenant_id = ? AND id=? AND status=?`,
+		taskStatusCancelled, runID, taskStatusRunning)
+	if err != nil {
+		logx.Line("scheduler", fmt.Sprintf("[scheduler] 强制取消记录 %d 失败: %v", runID, err))
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
+}
+
+// startRunLog 任务开跑先插一条 running 记录，返回 id。
+func (s *Scheduler) startRunLog(key, trigger string, start time.Time) int64 {
+	sc, err := s.platformScope()
+	if err != nil {
+		logx.Line("scheduler", fmt.Sprintf("[scheduler] 写运行记录取作用域失败(task=%s): %v", key, err))
+		return 0
+	}
+	var name string
+	_ = sc.QueryRow(`SELECT name FROM scheduled_tasks WHERE tenant_id = ? AND task_key=?`, key).Scan(&name)
+	res, err := sc.Insert(`INSERT INTO task_run_logs (tenant_id, task_key, name, status, trigger_by, started_at, finished_at)
+		VALUES (?,?,?,?,?,?,?)`, key, name, taskStatusRunning, trigger, start, start)
+	if err != nil {
+		logx.Line("scheduler", fmt.Sprintf("[scheduler] 写运行记录失败(task=%s): %v", key, err))
+		return 0
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
+// finishRunLog 任务跑完把 running 记录更新为终态（含失败明细/通知投递/耗时）。
+func (s *Scheduler) finishRunLog(runID int64, status, summary string, failures []TaskFailure, findings []TaskFinding, start time.Time, notifyState, notifyGroup, notifyAt string) {
+	var failJSON any
+	if len(failures) > 0 {
+		if b, err := json.Marshal(failures); err == nil {
+			failJSON = string(b)
+		}
+	}
+	var findJSON any
+	if len(findings) > 0 {
+		if b, err := json.Marshal(findings); err == nil {
+			findJSON = string(b)
+		}
+	}
+	dur := int(time.Since(start).Milliseconds())
+	s.exec("收尾更新运行记录", `UPDATE task_run_logs SET status=?, summary=?, failures=?, findings=?, duration_ms=?, notify_state=?, notify_group=?, notify_at=?, progress='', finished_at=NOW() WHERE tenant_id = ? AND id=?`,
+		// summary 是 TEXT（迁移 077）：带对象名的摘要很容易超过原来的 250 字符上限，
+		// 截断会先切掉排在最后的「N 个集群未接入监控」，反而制造"全查过了"的假象。
+		// scheduled_tasks.last_result 那列仍是 VARCHAR(255)，所以那边保持 250 不变。
+		status, truncate(summary, 2000), failJSON, findJSON, dur, notifyState, notifyGroup, notifyAt, runID)
+	// 保留策略：只留 90 天历史
+	s.exec("清理90天前记录", `DELETE FROM task_run_logs WHERE tenant_id = ? AND finished_at < DATE_SUB(NOW(), INTERVAL 90 DAY)`)
+	s.purgeHistory()
+}
+
+// purgeHistory 回收只增不删的历史表。
+//
+// task_run_logs 早就有 90 天保留，但 k8s_changes 和 cert_history 一直是纯追加、
+// 没有任何回收——增速不快（实测 k8s_changes 约 78 条/天），短期不致命，
+// 但和 CMDB-012 是同一类问题：没人给它设上界，就总有一天会撑满盘。
+// 保留期按用途给：工作负载变更主要用于近期排障，证书历史要覆盖一个签发周期（一年）。
+func (s *Scheduler) purgeHistory() {
+	s.exec("清理180天前工作负载变更",
+		`DELETE FROM k8s_changes WHERE tenant_id = ? AND changed_at < DATE_SUB(NOW(), INTERVAL 180 DAY)`)
+	s.exec("清理365天前证书历史",
+		`DELETE FROM cert_history WHERE tenant_id = ? AND at < DATE_SUB(NOW(), INTERVAL 365 DAY)`)
+	// 节点增删事件同样只增不删。保留一年：升级窗口是按年规划的，
+	// 排明年的升级时要能翻出今年同一批集群的实测节奏。
+	s.exec("清理365天前节点版本变更事件",
+		`DELETE FROM k8s_node_version_events WHERE tenant_id = ? AND detected_at < DATE_SUB(NOW(), INTERVAL 365 DAY)`)
+}
+
+// ---- 任务核心函数 ----
+
+// refreshAllWhoisCore 刷新域名注册到期。
+// 关键优化：**数据源(origin=sync)域名跳过**——它们的到期日由 DNS 同步维护（GoDaddy API 权威值）；
+// 只对 origin=manual 或到期日为空的域名走 RDAP→WHOIS。查询链路 domainExpiry，失败自动退避重试≤3 次。
+// targets 非空=只刷这些域名（重试用）。prog 上报进度。
+func refreshAllWhoisCore(ctx context.Context, db *sql.DB, prog ProgressFn, targets []string) (string, []TaskFailure, bool) {
+	// 只查数据源覆盖不到的：手动录入，或(不知何故)没有到期日的
+	q := `SELECT c.id, c.name FROM cis c JOIN domains d ON d.ci_id=c.id
+		WHERE c.type='domain' AND d.stale=0 AND (d.origin='manual' OR d.expiry_at IS NULL)`
+	rows, err := db.Query(q)
+	if err != nil {
+		return "查询域名失败: " + err.Error(), nil, false
+	}
+	type item struct {
+		id   int64
+		name string
+	}
+	var items []item
+	tgSet := map[string]bool{}
+	for _, t := range targets {
+		tgSet[t] = true
+	}
+	for rows.Next() {
+		var it item
+		if rows.Scan(&it.id, &it.name) == nil {
+			if len(targets) == 0 || tgSet[it.name] {
+				items = append(items, it)
+			}
+		}
+	}
+	rows.Close()
+
+	total := len(items)
+	if total == 0 {
+		var syncN int
+		_ = db.QueryRow(`SELECT COUNT(*) FROM cis c JOIN domains d ON d.ci_id=c.id
+			WHERE c.type='domain' AND d.stale=0 AND d.origin='sync'`).Scan(&syncN)
+		return fmt.Sprintf("0 个手动域名需 WHOIS；数据源域名（%d 个）到期日已由「DNS 记录同步」用厂商权威到期日更新", syncN), nil, true
+	}
+	var mu sync.Mutex
+	var failures []TaskFailure
+	var done int32
+	n := int32(0)
+	sem := make(chan struct{}, 6) // 并发 6，防慢查询拖垮整体
+	var wg sync.WaitGroup
+	for _, it := range items {
+		if ctx.Err() != nil { // 超时/取消：停止派发剩余
+			break
+		}
+		wg.Add(1)
+		go func(it item) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				return
+			}
+			t, reason := expiryWithRetry(it.name, 3) // 自动退避重试最多 3 次
+			if t != nil {
+				_, _ = db.Exec(`UPDATE domains SET expiry_at=? WHERE ci_id=?`, *t, it.id) // 成功才更新；失败保留旧值
+				atomic.AddInt32(&n, 1)
+			} else {
+				mu.Lock()
+				failures = append(failures, TaskFailure{Target: it.name, Reason: reason})
+				mu.Unlock()
+			}
+			if prog != nil {
+				prog(int(atomic.AddInt32(&done, 1)), total)
+			}
+		}(it)
+	}
+	wg.Wait()
+	return fmt.Sprintf("已刷新 %d/%d 个域名的注册到期（数据源域名已跳过）", n, total), failures, true
+}
+
+// expiryWithRetry 查到期日，失败自动退避重试最多 maxRetry 次（2s→4s→8s）。
+func expiryWithRetry(domain string, maxRetry int) (*time.Time, string) {
+	backoff := 2 * time.Second
+	var reason string
+	for attempt := 0; attempt <= maxRetry; attempt++ {
+		var t *time.Time
+		t, reason = domainExpiry(domain)
+		if t != nil {
+			return t, ""
+		}
+		if attempt < maxRetry {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	return nil, reason
+}
+
+// inspectAllCertsCore 连 443 检测证书到期：主域名(domains) + 所有业务域名解析(domain_records)。
+// targets 非空=只检测这些 fqdn（重试用）。prog 上报进度。
+func inspectAllCertsCore(ctx context.Context, st *store.Store, db *sql.DB, prog ProgressFn, targetList []string) (string, []TaskFailure, bool) {
+	type target struct {
+		tenant store.TenantID
+		id     int64
+		fqdn   string
+		isMain bool // true=写 domains 表，false=写 domain_records 表
+	}
+	var targets []target
+	// 目标清单带上租户号，回写时各归各家 —— 这个任务是并发跑的，
+	// 不能先建一个作用域给所有 goroutine 共用。
+	pf := st.Platform("cert_inspect")
+	drows, err := pf.Query(ctx, `SELECT c.tenant_id, c.id, c.name FROM cis c JOIN domains d ON d.ci_id=c.id WHERE c.type='domain' AND d.stale=0 AND d.ignored=0`)
+	if err != nil {
+		return "查询域名失败: " + err.Error(), nil, false
+	}
+	for drows.Next() {
+		var t store.TenantID
+		var id int64
+		var name string
+		if drows.Scan(&t, &id, &name) == nil {
+			targets = append(targets, target{t, id, name, true})
+		}
+	}
+	drows.Close()
+	rrows, err := pf.Query(ctx, `SELECT r.tenant_id, r.id, r.host, c.name FROM domain_records r JOIN cis c ON c.id=r.domain_ci_id JOIN domains dd ON dd.ci_id=r.domain_ci_id WHERE c.type='domain' AND r.ignored=0 AND dd.ignored=0`)
+	if err == nil {
+		for rrows.Next() {
+			var t store.TenantID
+			var id int64
+			var host, domain string
+			if rrows.Scan(&t, &id, &host, &domain) == nil {
+				targets = append(targets, target{t, id, recordFQDN(host, domain), false})
+			}
+		}
+		rrows.Close()
+	}
+	// 重试：只保留指定 fqdn
+	if len(targetList) > 0 {
+		want := map[string]bool{}
+		for _, t := range targetList {
+			want[t] = true
+		}
+		var filtered []target
+		for _, t := range targets {
+			if want[t.fqdn] {
+				filtered = append(filtered, t)
+			}
+		}
+		targets = filtered
+	}
+	total := len(targets)
+
+	var ok, fail, done int32
+	var fmu sync.Mutex
+	var failures []TaskFailure
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for _, t := range targets {
+		if ctx.Err() != nil { // 超时/取消：停止派发剩余
+			break
+		}
+		wg.Add(1)
+		go func(tg target) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				return
+			}
+			sc, serr := st.Tenant(store.ForJob(ctx, tg.tenant, "cert_inspect"))
+			if serr != nil {
+				fmu.Lock()
+				failures = append(failures, TaskFailure{Target: tg.fqdn, Reason: "取租户作用域失败：" + serr.Error()})
+				fmu.Unlock()
+				atomic.AddInt32(&fail, 1)
+				return
+			}
+			if ct, cmsg := tlsCertExpiry(tg.fqdn); ct != nil {
+				if tg.isMain {
+					_, _ = sc.Exec(`UPDATE domains SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg=? WHERE tenant_id = ? AND ci_id=?`, *ct, truncate(cmsg, 250), tg.id)
+				} else {
+					_, _ = sc.Exec(`UPDATE domain_records SET cert_expiry_at=?, cert_check_at=NOW(), cert_check_msg=? WHERE tenant_id = ? AND id=?`, *ct, truncate(cmsg, 250), tg.id)
+				}
+				atomic.AddInt32(&ok, 1)
+			} else {
+				if tg.isMain {
+					_, _ = sc.Exec(`UPDATE domains SET cert_check_at=NOW(), cert_check_msg=? WHERE tenant_id = ? AND ci_id=?`, truncate(cmsg, 250), tg.id)
+				} else {
+					_, _ = sc.Exec(`UPDATE domain_records SET cert_check_at=NOW(), cert_check_msg=? WHERE tenant_id = ? AND id=?`, truncate(cmsg, 250), tg.id)
+				}
+				atomic.AddInt32(&fail, 1)
+				fmu.Lock()
+				failures = append(failures, TaskFailure{Target: tg.fqdn, Reason: truncate(cmsg, 120)})
+				fmu.Unlock()
+			}
+			if prog != nil {
+				prog(int(atomic.AddInt32(&done, 1)), total)
+			}
+		}(t)
+	}
+	wg.Wait()
+	msg := fmt.Sprintf("检测 %d 张证书（主域名+业务域名），成功 %d / 失败 %d", total, ok, fail)
+	if len(failures) > 0 {
+		const topN = 8
+		msg += "\n失败 TOP（完整见执行记录）："
+		for i, f := range failures {
+			if i >= topN {
+				break
+			}
+			msg += fmt.Sprintf("\n· %s — %s", f.Target, f.Reason)
+		}
+		if len(failures) > topN {
+			msg += fmt.Sprintf("\n…另 %d 条，详见「执行记录」", len(failures)-topN)
+		}
+		msg += "\n提示：常年失败多为内网/无需证书的解析，可在到期巡检标「无需证书」不再计入"
+	}
+	return msg, failures, true
+}
+
+// dnsSyncCore 定时全量同步所有数据源的 DNS 记录（复用 SyncHandler 的方法）。
+func dnsSyncCore(parent context.Context, st *store.Store, db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool) {
+	sh := NewSyncHandler(st, db, cipher)
+	// 各租户各自的注册商凭据，逐租户跑 —— 见 store.ForEachTenant。
+	//
+	//	⚠️ 原来这里用 Platform() 查 registrars（租户表），查询直接被拒，
+	//	DNS 记录同步从多租户改造以后一次都没成功过。
+	type src struct {
+		tenant store.TenantID
+		id     int
+		name   string
+	}
+	var srcs []src
+	tenantCount := store.CountActiveTenants(parent, st, "dns_sync")
+	failedTenants, ferr := store.ForEachTenant(parent, st, "dns_sync", func(sc *store.Scoped, t store.TenantID) error {
+		rows, err := sc.Query(`SELECT id, name FROM registrars WHERE tenant_id = ? ORDER BY id`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			x := src{tenant: t}
+			if rows.Scan(&x.id, &x.name) == nil {
+				srcs = append(srcs, x)
+			}
+		}
+		return nil
+	})
+	if ferr != nil {
+		return "查询数据源失败: " + ferr.Error(), nil, false
+	}
+	if store.AllFailed(failedTenants, tenantCount) {
+		return fmt.Sprintf("全部 %d 个租户都取不到数据源，本轮没有同步任何解析（详见日志 tag=store）", tenantCount),
+			[]TaskFailure{{Target: "所有租户", Reason: "取数据源失败"}}, false
+	}
+	if len(srcs) == 0 {
+		return "没有配置数据源，跳过", nil, true
+	}
+	totalD, totalR, totalImp, migratedCnt := 0, 0, 0, 0
+	var newRecList []string // 本次新增的业务解析（供摘要列出）
+	var failures []TaskFailure
+	// ⚠️ failures 里混着两种粒度：**数据源级**（凭据错/适配器初始化失败/列域名失败）
+	//	和**域名级**（单个域名拉解析失败）。摘要里必须分开数，否则会出现
+	//	「19/1 个数据源失败」这种分子大于分母、根本读不通的句子（OPSCMDB-031 NEW-4 生产实测）。
+	//
+	//	而且这两件事的处置完全不同：一个源整体挂掉要去查凭据/连通性，
+	//	19 个域名各自失败通常是厂商限流。混成一个数字，
+	//	**两种故障长得一模一样**。
+	srcFailed := 0 // 数据源级失败数（分母是 len(srcs)）
+	for _, s := range srcs {
+		if parent.Err() != nil { // 超时/取消：停止后续数据源
+			break
+		}
+		id := s.id
+		sc, serr := st.Tenant(store.ForJob(parent, s.tenant, "dns_sync"))
+		if serr != nil {
+			failures = append(failures, TaskFailure{Target: s.name, Reason: "取租户作用域失败：" + serr.Error()})
+			srcFailed++
+			continue
+		}
+		provider, cred, err := LoadCredential(db, cipher, id)
+		if err != nil {
+			failures = append(failures, TaskFailure{Target: s.name, Reason: "读取凭据失败"})
+			srcFailed++
+			continue
+		}
+		adapter, err := dnsource.NewAdapter(provider, cred, dnsource.LimiterFor(id))
+		if err != nil {
+			failures = append(failures, TaskFailure{Target: s.name, Reason: "初始化适配器失败：" + truncate(err.Error(), 120)})
+			srcFailed++
+			continue
+		}
+		ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
+		domains, err := adapter.ListDomains(ctx)
+		if err != nil {
+			cancel()
+			failures = append(failures, TaskFailure{Target: s.name, Reason: "列域名失败：" + truncate(err.Error(), 120)})
+			srcFailed++
+			continue
+		}
+		ignoredSet := sh.ignoredDomainSet(id) // 已忽略的域名定时同步也跳过
+		present := map[string]bool{}
+		for _, d := range domains {
+			if ignoredSet[d.Name] {
+				continue
+			}
+			if isDomainGone(d.Status) {
+				sh.markDomainGone(d.Name, id, d.Status)
+				logx.Line("scheduler", fmt.Sprintf("[domain-sync] 域名 %s 判为已移出账号（GoDaddy status=%s）", d.Name, d.Status))
+				continue
+			}
+			if !isDomainActive(d.Status) && !isDomainPending(d.Status) {
+				logx.Line("scheduler", fmt.Sprintf("[domain-sync] WARN 域名 %s 状态未识别（GoDaddy status=%s），暂按活跃处理", d.Name, d.Status))
+			}
+			ciID, err := sh.upsertDomainCI(d.Name, id, d.ExpiresAt, d.Status)
+			if err != nil {
+				continue
+			}
+			present[d.Name] = true
+			totalD++
+			recs, err := adapter.ListRecords(ctx, d.Name)
+			if err != nil {
+				// 区分 DNS 已迁走(Cloudflare 等，正常) 与真失败
+				if mig, reason := classifyRecordFetchErr(d.Name, err); mig {
+					migratedCnt++
+					_, _ = sc.Exec(`UPDATE domains SET dns_migrated=1 WHERE tenant_id = ? AND ci_id=?`, ciID)
+				} else {
+					failures = append(failures, TaskFailure{Target: d.Name, Reason: "拉解析失败：" + reason})
+				}
+			} else {
+				sh.refreshDNSRecords(ciID, id, recs)
+				totalR += len(recs)
+				imp := sh.importBusinessRecords(sc, ciID, d.Name, recs)
+				totalImp += len(imp)
+				newRecList = append(newRecList, imp...)
+				migrated := 0
+				if len(recs) == 0 && dnsMigratedFromGoDaddy(d.Name) {
+					migrated = 1
+					migratedCnt++
+				}
+				_, _ = db.Exec(`UPDATE domains SET dns_migrated=? WHERE ci_id=?`, migrated, ciID)
+			}
+			// 扫到就更新同步时刻（records 成败都更）
+			_, _ = db.Exec(`UPDATE domains SET last_synced_at=NOW() WHERE ci_id=?`, ciID)
+		}
+		sh.markStaleDomains(id, present)
+		cancel()
+	}
+	ok := !(totalD == 0 && len(failures) == len(srcs)) // 全部源都失败才算失败
+	msg := fmt.Sprintf("同步 %d 域名 / %d DNS 记录 / 新增 %d 条解析", totalD, totalR, totalImp)
+	if migratedCnt > 0 {
+		msg += fmt.Sprintf(" / %d 个DNS已迁走(Cloudflare等,正常)", migratedCnt)
+	}
+	if len(newRecList) > 0 {
+		const topN = 10
+		msg += "\n新增业务解析："
+		for i, r := range newRecList {
+			if i >= topN {
+				break
+			}
+			msg += "\n· " + r
+		}
+		if len(newRecList) > topN {
+			msg += fmt.Sprintf("\n…另 %d 条，详见「执行记录」", len(newRecList)-topN)
+		}
+	}
+	// ⚠️ 说清**是哪个源、为什么**，不要只报比例。
+	//
+	//	原来只写「1/1 个数据源失败」。巡检页和定时任务页显示的都是这句话，
+	//	于是"哪个源坏了""超时还是 401"在**任何界面上都看不到**，
+	//	只能等下一次 cron 或者去翻后端日志（P1-40）。
+	//	failures 里本来就有 Target 和 Reason，拼进来就行 —— 数据一直都在。
+	if len(failures) > 0 {
+		// 分子分母口径必须一致：数据源级的比 len(srcs)，域名级的单独说个数。
+		domFailed := len(failures) - srcFailed
+		var parts []string
+		if srcFailed > 0 {
+			parts = append(parts, fmt.Sprintf("%d/%d 个数据源失败", srcFailed, len(srcs)))
+		}
+		if domFailed > 0 {
+			parts = append(parts, fmt.Sprintf("%d 个域名拉解析失败", domFailed))
+		}
+		msg += "\n" + strings.Join(parts, "；") + "：" + failureBrief(failures, 3)
+	}
+	return msg, failures, ok
+}
+
+// failureBrief 把失败明细压成一行摘要，最多 max 条。
+//
+//	给**摘要**用（列表页只显示这一句）。完整清单在执行记录的 failures 里，
+//	那边不截断。这里截断是因为 20 个源全失败时，摘要会长到没人读。
+//
+//	⚠️ 截断了必须说还有多少条，否则「失败：a、b、c」看着像只有三个坏了。
+func failureBrief(failures []TaskFailure, max int) string {
+	parts := make([]string, 0, max+1)
+	for i, f := range failures {
+		if i >= max {
+			parts = append(parts, fmt.Sprintf("等共 %d 个", len(failures)))
+			break
+		}
+		if f.Reason == "" {
+			parts = append(parts, f.Target)
+			continue
+		}
+		parts = append(parts, f.Target+"（"+f.Reason+"）")
+	}
+	return strings.Join(parts, "；")
+}
+
+// sendTaskNotify 任务跑完发 Lark 卡片到该任务配置的群，带 ✅/⚠️/❌ + 结果 + @人。
+// status: ok / partial / fail。返回(投递状态, 群名, @人名单)供历史记录。
+// 投递状态：sent=已送达 / failed=Lark报错 / skipped=按配置不发 / none=未配置群
+func sendTaskNotify(db *sql.DB, taskKey, status, result string) (state, groupName, atNames string) {
+	var name, notifyWhen string
+	var notifyEnabled int
+	// groupID 只为 Scan 占位：出口的解析已统一交给 larkWebhookForTask，
+	// 这里不再自己判 groupID 是否有效（那样会绕过全局兜底）
+	var groupID sql.NullInt64
+	if err := db.QueryRow(`SELECT name, notify_enabled, lark_group_id, notify_when FROM scheduled_tasks WHERE task_key=?`,
+		taskKey).Scan(&name, &notifyEnabled, &groupID, &notifyWhen); err != nil {
+		return "none", "", ""
+	}
+	if notifyEnabled == 0 {
+		return "skipped", "", ""
+	}
+	ok := status == taskStatusOK || status == taskStatusPartial
+	if notifyWhen == "fail" && ok {
+		return "skipped", "", ""
+	}
+	// ⚠️ 这是「取投递出口」的**第三处**实现，前两处（taskWebhook /
+	//	larkWebhookForTask）都因为漏了全局兜底而导致提醒发不出去（P0-20）。
+	//
+	//	这一处更隐蔽：任务本身跑成功了、结果也算出来了
+	//	（实测 remind 命中 3 项证书到期），只是那张结果卡片没发出去，
+	//	notify_state 记成 none。而任务状态是绿色的 ok ——
+	//	**「任务成功」被当成了「提醒送达」**，这正是 P0-15
+	//	「域名到期三条通路全断」里最后没被发现的那一环。
+	//
+	//	统一走 larkWebhookForTask：它先看任务绑的群，再退回全局兜底。
+	//	三处各写一份的话，下次还会漏第四处。
+	webhook, group := larkWebhookForTask(db, taskKey)
+	groupName = group
+	if webhook == "" {
+		return "none", "", ""
+	}
+	statusText := "✅ 执行成功"
+	if status == taskStatusPartial {
+		statusText = "⚠️ 部分成功"
+	} else if status == taskStatusFail {
+		statusText = "❌ 执行失败"
+	}
+	atSeg, atNames := atMentionsForTask2(db, taskKey)
+	text := fmt.Sprintf("【CMDB 定时任务】%s %s\n时间：%s\n结果：%s", statusText, name, time.Now().Format("2006-01-02 15:04"), result)
+	text += atSeg
+	if err := notify.SendFeishu(webhook, text); err != nil {
+		return "failed", groupName, atNames
+	}
+	return "sent", groupName, atNames
+}
+
+// atMentionsForTask2 同 atMentionsForTask，额外返回 @人名字（用于历史记录展示）。
+func atMentionsForTask2(db *sql.DB, taskKey string) (seg, names string) {
+	rows, err := db.Query(`SELECT u.name, u.open_id FROM task_notify_users t JOIN notify_users u ON u.id=t.user_id
+		WHERE t.task_key=? AND u.enabled=1 AND u.open_id<>''`, taskKey)
+	if err != nil {
+		return "", ""
+	}
+	defer rows.Close()
+	var b strings.Builder
+	var ns []string
+	for rows.Next() {
+		var nm, oid string
+		if rows.Scan(&nm, &oid) == nil {
+			b.WriteString(fmt.Sprintf(`<at user_id="%s"></at>`, oid))
+			ns = append(ns, nm)
+		}
+	}
+	if b.Len() == 0 {
+		// 没配 @人 时告警只会静静躺在群里。半夜的节点崩溃预警没人 @ 就等于没发出去，
+		// 所以这里必须留痕，别让「配置漏了」表现得和「本来就不用 @」一样。
+		logx.J("scheduler", "no_at_mentions", map[string]any{
+			"task": taskKey,
+			"note": "该任务未配置通知人，告警将不 @ 任何人；去「管理 → 通知人」添加并在定时任务里关联",
+		})
+		return "", ""
+	}
+	return "\n" + b.String(), strings.Join(ns, "、")
+}
+
+// atMentionsForTask 拼该任务指定的 @人（飞书 open_id）。
+func atMentionsForTask(db *sql.DB, taskKey string) string {
+	rows, err := db.Query(`SELECT u.open_id FROM task_notify_users t JOIN notify_users u ON u.id=t.user_id
+		WHERE t.task_key=? AND u.enabled=1 AND u.open_id<>''`, taskKey)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	var b strings.Builder
+	for rows.Next() {
+		var oid string
+		if rows.Scan(&oid) == nil {
+			b.WriteString(fmt.Sprintf(`<at user_id="%s"></at>`, oid))
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "\n" + b.String()
+}
+
+func getSetting(db *sql.DB, key string) string {
+	var v string
+	_ = db.QueryRow(`SELECT v FROM settings WHERE k=?`, key).Scan(&v)
+	return v
+}
+
+// renewDue 续期 auto_renew 且 expiry_at - now < renew_days 天的证书。
+// 返回摘要（列出续了哪几张 + 新到期日 + 需手动部署提示）、失败明细、ok（任务是否正常跑）。
+func renewDue(st *store.Store, db *sql.DB, cipher *crypto.Cipher) (string, []TaskFailure, bool) {
+	ctx := context.Background()
+	// 续期是逐租户做的，各用各的 ACME 账户 —— 逐租户枚举，见 store.ForEachTenant。
+	//
+	//	⚠️ 原来这里用 Platform() 查 certificates（租户表），查询直接被拒，
+	//	**证书自动续期从多租户改造以后一次都没跑成功过**，
+	//	而界面上这个任务一直显示「正常」（last_ok 默认值是 1）。
+	//	这是这批 bug 里后果最重的一个：证书到期不会自动续。
+	type job struct {
+		tenant               store.TenantID
+		certCIID, domainCIID int64
+		ca, cn               string
+	}
+	var jobs []job
+	tenantCount := store.CountActiveTenants(ctx, st, "cert_auto_renew")
+	failedTenants, ferr := store.ForEachTenant(ctx, st, "cert_auto_renew", func(sc *store.Scoped, t store.TenantID) error {
+		rows, err := sc.Query(`
+			SELECT t.ci_id, COALESCE(r.dst_ci_id, 0), t.ca, t.cn
+			FROM certificates t
+			LEFT JOIN ci_relations r ON r.src_ci_id=t.ci_id AND r.rel_type='protects'
+			WHERE t.tenant_id = ? AND t.auto_renew=1 AND t.status='active' AND t.expiry_at IS NOT NULL
+			  AND t.expiry_at < DATE_ADD(NOW(), INTERVAL t.renew_days DAY)
+			  AND t.challenge NOT IN ('manual-dns','http-01')`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			j := job{tenant: t}
+			if rows.Scan(&j.certCIID, &j.domainCIID, &j.ca, &j.cn) == nil {
+				jobs = append(jobs, j)
+			}
+		}
+		return nil
+	})
+	if ferr != nil {
+		return "查询待续期证书失败：" + truncate(ferr.Error(), 160), nil, false
+	}
+	// ⚠️ 全部租户失败必须报失败。报成"无到期证书，未触发续期"的话，
+	// 证书会一路到期而没有任何人被提醒 —— 这是这批任务里后果最重的一个
+	if store.AllFailed(failedTenants, tenantCount) {
+		return fmt.Sprintf("全部 %d 个租户都查不到证书，本轮没有检查任何证书（详见日志 tag=store）", tenantCount),
+			[]TaskFailure{{Target: "所有租户", Reason: "查询待续期证书失败"}}, false
+	}
+
+	if len(jobs) == 0 {
+		return "本次扫描无到期前阈值内的证书，未触发续期", nil, true
+	}
+
+	webhook := taskWebhook(db, "auto_renew")
+	var okNames []string
+	var failures []TaskFailure
+	for _, j := range jobs {
+		sc, serr := st.Tenant(store.ForJob(ctx, j.tenant, "cert_auto_renew"))
+		if serr != nil {
+			failures = append(failures, TaskFailure{Target: j.cn, Reason: "取租户作用域失败：" + serr.Error()})
+			continue
+		}
+		var acctID int
+		if err := sc.QueryRow(`SELECT id FROM acme_accounts WHERE tenant_id = ? AND ca=? ORDER BY id LIMIT 1`, j.ca).Scan(&acctID); err != nil {
+			failures = append(failures, TaskFailure{Target: j.cn, Reason: "无对应 ACME 账户（ca=" + j.ca + "）"})
+			continue
+		}
+		logx.Line("scheduler", fmt.Sprintf("auto-renew cert %s (ci %d, tenant %d)", j.cn, j.certCIID, j.tenant))
+		if errMsg := issueCertCore(sc, db, cipher, j.certCIID, j.domainCIID, acctID, false, "renew"); errMsg != "" {
+			failures = append(failures, TaskFailure{Target: j.cn, Reason: truncate(errMsg, 160)})
+			notifyEvent(db, webhook, "auto_renew", "notify_renew_fail", fmt.Sprintf("❌ 证书自动续期失败：%s\n原因：%s", j.cn, errMsg))
+		} else {
+			var newExp string
+			_ = sc.QueryRow(`SELECT DATE_FORMAT(expiry_at,'%Y-%m-%d') FROM certificates WHERE tenant_id = ? AND ci_id=?`, j.certCIID).Scan(&newExp)
+			okNames = append(okNames, fmt.Sprintf("%s（%s，新到期 %s）", j.cn, j.ca, newExp))
+			notifyEvent(db, webhook, "auto_renew", "notify_renew_success",
+				fmt.Sprintf("✅ 证书自动续期成功：%s（%s，新到期 %s）\n⚠️ 已重新签发，请手动更新/部署到目标（K8s Secret / 服务器）", j.cn, j.ca, newExp))
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "续期成功 %d / 失败 %d（共 %d 张到期）", len(okNames), len(failures), len(jobs))
+	if len(okNames) > 0 {
+		b.WriteString("\n已重签（⚠️ 需手动更新/部署到目标）：")
+		for _, n := range okNames {
+			b.WriteString("\n✅ " + n)
+		}
+	}
+	if len(failures) > 0 {
+		b.WriteString("\n失败：")
+		for _, f := range failures {
+			fmt.Fprintf(&b, "\n❌ %s — %s", f.Target, f.Reason)
+		}
+	}
+	// ⚠️ 一张都没续成 = 任务失败，不是「部分成功」。
+	//
+	// 状态判定那里的规则是「有 failures 就记 partial」，而 partial 的字面意思是
+	// **部分**成功 —— 0 成功 / 2 失败被记成 partial，界面上就是一个绿色的「正常」，
+	// 而实际情况是这些证书正在走向过期且没有任何人被提醒。
+	// 调用方看不到成功数，只有这里知道，所以由这里表态。
+	allFailed := len(failures) > 0 && len(okNames) == 0
+	return b.String(), failures, !allFailed
+}
+
+// taskWebhook 取某任务的 Lark 投递出口：任务绑的群优先，取不到则用全局兜底。
+//
+//	⚠️ 这里原来只有那条 JOIN，没有兜底 —— 同 larkWebhookForTask 的 P0-20，
+//	两个函数各写了一份"取投递出口"的逻辑，两份都漏了兜底。
+//	统一到 larkWebhookForTask，避免第三次分叉。
+func taskWebhook(db *sql.DB, taskKey string) string {
+	webhook, _ := larkWebhookForTask(db, taskKey)
+	return webhook
+}
+
+type remindItem struct {
+	name   string
+	days   int
+	expiry string // 到期日 YYYY-MM-DD
+}
+
+// remindDot 按剩余天数给严重度色点：🔴已过期或≤7 / 🟠≤15 / 🟡其它
+func remindDot(days int) string {
+	switch {
+	case days <= 7:
+		return "🔴"
+	case days <= 15:
+		return "🟠"
+	default:
+		return "🟡"
+	}
+}
+
+// remindPhrase 到期措辞：已过期 N 天 / 今天到期 / 还有 N 天到期
+func remindPhrase(days int) string {
+	switch {
+	case days < 0:
+		return fmt.Sprintf("已过期 %d 天", -days)
+	case days == 0:
+		return "今天到期"
+	default:
+		return fmt.Sprintf("还有 %d 天到期", days)
+	}
+}
+
+// remindExpiry 证书/域名剩余天数 ≤ 最大阈值（含已过期）时发飞书提醒，每天一张汇总卡直到续期/续费。
+// 返回一张按「证书/域名」分组、组内按剩余天数升序的多行汇总摘要（作为任务结果卡片发送）。
+func remindExpiry(db *sql.DB) string {
+	webhook := taskWebhook(db, "remind")
+	if webhook == "" {
+		// ⚠️ 说清是**两处都没配**：只说"未配置群"会让人去绑群，
+		// 而配全局兜底出口往往更省事，他不知道还有这条路
+		return "没有可用的飞书出口（任务未绑群，基础配置里也没有全局兜底），跳过"
+	}
+	// 取最大阈值作为提醒窗口：剩余天数 ≤ maxTh（含已过期，DATEDIFF 为负）就每天提醒，直到续期/续费。
+	// 不再按精确天数（== 1/7/15/30）命中，避免"错过当天=永不再提醒 + 已过期不报"。
+	maxTh := 0
+	for _, s := range strings.Split(getSetting(db, "remind_days"), ",") {
+		if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n > maxTh {
+			maxTh = n
+		}
+	}
+	if maxTh <= 0 {
+		return "未配置提醒阈值(remind_days)，跳过"
+	}
+
+	var certs, doms []remindItem
+	// 证书：≤maxTh 天（含已过期）
+	crows, _ := db.Query(`
+		SELECT t.cn, DATEDIFF(t.expiry_at, NOW()), DATE_FORMAT(t.expiry_at,'%Y-%m-%d')
+		FROM certificates t WHERE t.expiry_at IS NOT NULL`)
+	if crows != nil {
+		for crows.Next() {
+			var it remindItem
+			if crows.Scan(&it.name, &it.days, &it.expiry) == nil && it.days <= maxTh {
+				certs = append(certs, it)
+			}
+		}
+		crows.Close()
+	}
+
+	// 域名（已忽略 / 已移出账号的不提醒）：≤maxTh 天（含已过期）
+	drows, _ := db.Query(`
+		SELECT c.name, DATEDIFF(d.expiry_at, NOW()), DATE_FORMAT(d.expiry_at,'%Y-%m-%d')
+		FROM cis c JOIN domains d ON d.ci_id=c.id
+		WHERE c.type='domain' AND d.expiry_at IS NOT NULL AND COALESCE(d.ignored,0)=0 AND COALESCE(d.stale,0)=0`)
+	if drows != nil {
+		for drows.Next() {
+			var it remindItem
+			if drows.Scan(&it.name, &it.days, &it.expiry) == nil && it.days <= maxTh {
+				doms = append(doms, it)
+			}
+		}
+		drows.Close()
+	}
+
+	total := len(certs) + len(doms)
+	if total == 0 {
+		return fmt.Sprintf("正常：无 %d 天内到期项（含已过期）", maxTh)
+	}
+	sort.SliceStable(certs, func(i, j int) bool { return certs[i].days < certs[j].days })
+	sort.SliceStable(doms, func(i, j int) bool { return doms[i].days < doms[j].days })
+
+	// 汇总卡：命中 N 项 —— 证书 x · 域名 y + 分组多行（只发一张卡，避免逐条每天刷屏）
+	var counts []string
+	if len(certs) > 0 {
+		counts = append(counts, fmt.Sprintf("证书 %d", len(certs)))
+	}
+	if len(doms) > 0 {
+		counts = append(counts, fmt.Sprintf("域名 %d", len(doms)))
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "命中 %d 项 —— %s（≤%d 天每天提醒，直到续期/续费）", total, strings.Join(counts, " · "), maxTh)
+	if len(certs) > 0 {
+		b.WriteString("\n\n证书")
+		for _, it := range certs {
+			fmt.Fprintf(&b, "\n%s %s %s（%s）", remindDot(it.days), it.name, remindPhrase(it.days), it.expiry)
+		}
+	}
+	if len(doms) > 0 {
+		b.WriteString("\n\n域名（请到注册商续费）")
+		for _, it := range doms {
+			fmt.Fprintf(&b, "\n%s %s %s（%s）", remindDot(it.days), it.name, remindPhrase(it.days), it.expiry)
+		}
+	}
+	return b.String()
+}
+
+// alertEnabled 该类告警的事件开关是否打开。默认开（settings 没存该 key 时按开处理），显式 '0' 才关。
+//
+// 为什么单独抽出来：GKE 升级预警 / 磁盘水位 / 节点健康这三类是后加的，
+// 当初直接调了 notify.SendFeishu，绕过了 notifyEvent 的开关检查，
+// 结果「想关掉某类告警」只能去定时任务页把整个任务停掉——而停任务连数据采集也一起没了（CMDB-026）。
+// 这三个发送点各自的 @ 人逻辑不同（有的用 atMentionsForTask、有的用 atMentionsForTask2、有的不 @），
+// 所以不能直接套 notifyEvent，改成各自在发送前问一次这个函数。
+//
+// 事件 key 一览（settings 表）：
+//
+//	notify_cert_expiring / notify_renew_success / notify_renew_fail / notify_domain_expiring
+//	notify_gke_upgrade   / notify_disk_watch    / notify_node_health
+func alertEnabled(db *sql.DB, eventKey string) bool {
+	if getSetting(db, eventKey) == "0" {
+		logx.J("notify", "alert_muted", map[string]any{
+			"event": eventKey, "note": "该类告警已在「通知」页关闭，本次不投递（任务仍照常执行）",
+		})
+		return false
+	}
+	return true
+}
+
+// notifyEvent 按事件开关决定是否发送；发送时 @ 通知人（阶段②增强）。
+// 事件 key 对应 settings：notify_cert_expiring / notify_renew_success / notify_renew_fail / notify_domain_expiring
+func notifyEvent(db *sql.DB, webhook, taskKey, eventKey, text string) {
+	if webhook == "" {
+		return
+	}
+	// 默认开（settings 没存该 key 时按开处理），显式 '0' 才关
+	if getSetting(db, eventKey) == "0" {
+		return
+	}
+	// ⚠️ 投递失败必须留痕，不能 `_ =` 丢掉。
+	//
+	//	这条路走的是到期提醒、续费结果这类**事件级**通知。
+	//	丢掉错误的后果是：飞书拒了消息（hook 被重置、机器人被移出群），
+	//	而系统里没有任何痕迹 —— 没人会知道那条到期提醒没送到。
+	//	SendFeishu 现在会检查飞书返回的 code（原来只看网络错误，
+	//	于是 HTTP 200 + code≠0 也算成功），所以这里的 err 是真有内容的。
+	if err := notify.SendFeishu(webhook, text+atMentionsForTask(db, taskKey)); err != nil {
+		logx.J("notify", "event_deliver_failed", map[string]any{
+			"task": taskKey, "event": eventKey, "err": err.Error(),
+			"note": "这条事件通知没有送达，接收方不会知道发生了什么",
+		})
+	}
+}
+
+// atMentions 拼接启用的通知人 @（飞书 open_id）。阶段②：notify_users 表。
+func atMentions(db *sql.DB) string {
+	rows, err := db.Query(`SELECT open_id FROM notify_users WHERE enabled=1 AND open_id<>''`)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	var b strings.Builder
+	for rows.Next() {
+		var oid string
+		if rows.Scan(&oid) == nil {
+			b.WriteString(fmt.Sprintf(`<at user_id="%s"></at>`, oid))
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "\n" + b.String()
+}
+
+// ── 迁移期桥接 ──────────────────────────────────────────────
+// 下面这些导出封装供已迁移到 internal/ 的包调用。
+// 等对应逻辑本身也迁走后，连同原函数一并删除。
+
+// GetSetting 读全局设置。
+func GetSetting(db *sql.DB, key string) string { return getSetting(db, key) }
+
+// AtMentions 拼接通知人 @ 文本。
+func AtMentions(db *sql.DB) string { return atMentions(db) }

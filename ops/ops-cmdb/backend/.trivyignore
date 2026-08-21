@@ -1,0 +1,13 @@
+# # 2026-08-12 复核（推 marks26 前）：go list -deps 里 openpgp 计数仍为 0；
+# 二进制里 grep 到的 8 个 openpgp 符号是 miekg/dns.OPENPGPKEY（DNS 记录类型），
+# 与 x/crypto/openpgp 无关 —— 这个假阳性值得记下来，下次别又被它绕进去。
+GO-2026-5932: golang.org/x/crypto/openpgp 子包已停止维护的信息类告示（非 CVE，无修复版本）。
+# 本项目仅使用 golang.org/x/crypto/bcrypt（handlers/auth.go 密码哈希），未 import openpgp。
+# govulncheck 符号级复核确认不可达：No vulnerabilities found。
+# 2026-07-30 复核：依赖已升到 v0.54.0（仍是最新，go list -m -u 无更新），
+# `go list -deps . | grep -c openpgp` = 0，实际链接的是 bcrypt/chacha20poly1305/sha3/hkdf/ocsp/cryptobyte，结论不变。
+# 2026-08-12 复核（推 marks26 前）：go list -deps 里 openpgp 计数仍为 0；
+# 二进制里 grep 到的 8 个 openpgp 符号是 miekg/dns.OPENPGPKEY（DNS 记录类型），
+# 与 x/crypto/openpgp 无关 —— 这个假阳性值得记下来，下次别又被它绕进去。
+# 2026-08-19 复核（v0.105.1）：go list -deps 里 openpgp 计数仍为 0；x/crypto 已是最新 v0.55.0（无更新可升）。
+GO-2026-5932

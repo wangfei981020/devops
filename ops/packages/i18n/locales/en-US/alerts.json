@@ -1,0 +1,58 @@
+{
+  "column": {
+    "cluster": "Cluster / Source",
+    "object": "Object",
+    "owner": "Owner",
+    "rule": "Rule / Owner group",
+    "severity": "Severity",
+    "summary": "Summary",
+    "time": "Triggered",
+    "value": "Value"
+  },
+  "count": "Showing {{shown}} of {{total}} upstream",
+  "empty": {
+    "filtered": "No alerts match the current filters. Widen or clear them to see more.",
+    "noSource": "No alert source connected. Empty here does NOT mean there are no alerts — connect one under Admin / Observability endpoints.",
+    "quiet": "Alert source is connected and there are no active alerts right now.",
+    "title": "No alerts"
+  },
+  "error": {
+    "title": "Could not load alerts"
+  },
+  "filter": {
+    "allEnv": "All environments",
+    "allSeverity": "All severities",
+    "env": "Environment",
+    "envsUnavailable": "Environment list unavailable",
+    "searchPlaceholder": "Search rule, object, owner group or tag",
+    "state": "View",
+    "window": "Time range"
+  },
+  "filteredOut": {
+    "keyword": "{{n}} filtered by keyword",
+    "severity": "{{n}} filtered by severity"
+  },
+  "hint": {
+    "n9eNotConfigured": "Nightingale is not connected yet. Add an endpoint of type n9e under Admin → Observability Endpoints and this page will start showing data."
+  },
+  "noOwnerTag": "Rule carries no business tags",
+  "notified_one": "notified {{count}} time",
+  "notified_other": "notified {{count}} times",
+  "recovered": "Recovered",
+  "recoveredAt": "Recovered · {{at}}",
+  "sourceNote": "Read from the connected alerting system; we never modify it",
+  "state": {
+    "current": "Current",
+    "history": "History"
+  },
+  "title": "Alerts",
+  "total_one": "{{count}} alert",
+  "total_other": "{{count}} alerts",
+  "truncated": "Only part of the alerts were fetched — this is not the full list",
+  "window": {
+    "d30": "Last 30d",
+    "d7": "Last 7d",
+    "h24": "Last 24h",
+    "h6": "Last 6h"
+  }
+}

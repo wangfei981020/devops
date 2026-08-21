@@ -1,0 +1,51 @@
+{
+  "title": "云账号",
+  "hint": "GCP 的 SA key 配在项目上，不是账号上——权限本来就是按 project 给的。",
+  "addProject": "添加项目",
+  "projectCount_other": "{{count}} 个项目",
+  "noCred_other": "{{count}} 个缺凭据",
+  "credOk": "已配 SA key",
+  "credMissing": "缺 SA key",
+  "hosts_other": "{{count}} 台",
+  "neverSynced": "从没同步过",
+  "syncQueued": "同步任务已排队。它在后台跑，数据会陆续进来——这里显示成功只代表任务收下了。",
+  "syncing": "同步中…",
+  "syncPreparing": "同步中：正在向云厂商拉取实例清单…",
+  "syncProgress": "同步中：已写入 {{done}}/{{total}} 台",
+  "syncFailed": "同步失败：{{error}}",
+  "syncDone": "同步完成：{{synced}} 台在用",
+  "syncDoneStale": "同步完成：{{synced}} 台在用，{{stale}} 台在云上已不存在",
+  "addTitle": "添加云账号",
+  "addDesc": "账号本身只是个分组；真正采数据要在它下面添加项目并配 SA key。",
+  "addProjectTitle": "在「{{account}}」下添加项目",
+  "addProjectDesc": "SA key 落库前会加密，接口永远不会把它读回来。",
+  "deleteImpact": "这个账号下有 {{count}} 个项目，删除后它们的采集会立刻停止。已经采到的主机记录不会被删，但会逐渐变成「已销毁」。",
+  "field": {
+    "name": "账号名称",
+    "nameHint": "给人看的名字，比如「生产 GCP」。可以随时改。",
+    "dataset": "账单导出数据集",
+    "datasetHint": "BigQuery 里的账单导出表。不填就只能按机型估算成本，填了才能对上真实账单。",
+    "projectId": "项目 ID",
+    "projectIdHint": "GCP 控制台里的 Project ID（不是显示名）。填错的话采集会一直报 404。",
+    "saKey": "服务账号密钥（JSON）",
+    "saKeyHint": "整段 JSON 粘进来。需要的最小权限是 compute.viewer；留空则先建项目、之后再配。",
+    "displayName": "显示名",
+    "saKeyKeepHint": "留空 = 保持现有凭据不变。填了才会替换 —— 接口永远不会把已存的凭据读回来"
+  },
+  "error": {
+    "title": "云账号列表没能加载出来"
+  },
+  "empty": {
+    "title": "还没接入云账号",
+    "reason": "接入之后，主机、网络、负载均衡这些页面才会有数据。现在它们都是空的。",
+    "action": "添加第一个云账号"
+  },
+  "delProject": {
+    "title": "删除这个云项目",
+    "body": "删除「{{project}}」后，这个项目下所有资源的采集会停止。已采集的历史数据不会被删，但从此不再更新——而那些主机在列表里看起来仍然正常，只是「最后同步」停在删除这一刻。"
+  },
+  "needCred": "这个项目还没配 SA key，同步不会有结果",
+  "editProjectTitle": "编辑项目 {{project}}",
+  "editProjectDesc": "改显示名或轮换凭据。",
+  "totalHosts": "{{projects}} 个项目合计 {{hosts}} 台在用"
+}

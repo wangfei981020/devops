@@ -1,0 +1,153 @@
+{
+  "acme": {
+    "add": "添加账号",
+    "ca": "CA",
+    "caHint": "必须和证书上记录的 CA 完全一致——续期时按 ca 找账号，对不上就等于没配。",
+    "desc": "证书自动续期用的账号。没有它，续期任务会逐张证书失败。",
+    "email": "邮箱",
+    "emailHint": "CA 用它给你发到期/吊销通知，填一个真的能收到的。",
+    "emptyBody": "证书自动续期任务会逐张证书失败，报「无对应 ACME 账户」。这个失败只在定时任务的执行记录里看得到，证书列表本身一切正常——直到它们真的过期。",
+    "emptyTitle": "还没有任何 ACME 账号",
+    "entry": "ACME 账号",
+    "needEmail": "填一个邮箱",
+    "noKey": "缺账号私钥",
+    "title": "ACME 账号"
+  },
+  "action": {
+    "dnsReady": "DNS 验证已就绪",
+    "download": "下载证书包",
+    "downloadHint": "下载证书包（zip：证书 + 私钥 + 中间 CA 链）。⚠️ 里面含私钥，下载会记审计",
+    "renewNow": "立即续期"
+  },
+  "apply": {
+    "account": "ACME 账号",
+    "accountHint": "续期时按 CA 找账号，所以证书的 CA 跟着这里选的账号走",
+    "autoRenew": "自动续期",
+    "challenge": "验证方式",
+    "challengeHint": "dns-01 支持泛域名；http-01 要求域名已能从公网访问",
+    "cn": "主域名（CN）",
+    "cnHint": "泛域名写 *.example.com，需要用 dns-01",
+    "desc": "通过 ACME 向 CA 申请。签发是异步的，提交后在列表里看状态。",
+    "domain": "关联到域名",
+    "domainHint": "关联后能在图谱里看到这张证书护着哪个域名",
+    "entry": "申请证书",
+    "needAccount": "请选择 ACME 账号",
+    "needCn": "请填写主域名",
+    "noAccount": {
+      "noKey": "现有的 ACME 账号都还没有账号私钥，等于摆设。先补上私钥再来申请。",
+      "none": "一个 ACME 账号都还没有。先用这一页的「ACME 账号」建一个 —— 没有它，自动续期会逐张证书失败。",
+      "title": "还不能申请证书"
+    },
+    "noDomain": "不关联",
+    "noEmail": "（未填邮箱）",
+    "quotaNote": "CA 有签发频率限制（Let's Encrypt：同一组域名 5 次/周）。申请和续期都会消耗配额，失败也算 —— 所以这两个动作都不会自动重试。",
+    "sans": "附加域名（SAN）",
+    "sansHint": "一行一个。主域名不用重复写",
+    "staging": "签发环境",
+    "stagingHint": "测试环境用于验流程，不消耗正式配额",
+    "stagingOff": "正式",
+    "stagingOn": "测试（staging）",
+    "stagingWarn": "⚠️ 测试环境签出来的证书浏览器不认，只能用来验证流程，别往生产上部署。",
+    "submit": "提交申请",
+    "title": "申请证书"
+  },
+  "autoRenew": "自动续期",
+  "caveat": {
+    "title": "这份清单里有一整列信息是缺的"
+  },
+  "column": {
+    "ca": "签发者",
+    "cn": "证书",
+    "expiry": "到期",
+    "health": "状态",
+    "renew": "续期"
+  },
+  "daysLeft_other": "还剩 {{count}} 天",
+  "del": {
+    "notRevoke": {
+      "body": "只会删掉 CMDB 里的记录。已经签发的那张证书在有效期内「仍然被信任」—— 私钥若已泄露，必须去 CA 那边真正吊销。",
+      "title": "这不是吊销"
+    },
+    "title": "删除证书记录"
+  },
+  "dnsReady": {
+    "confirm": "我已加好，继续验证",
+    "hint": "到 DNS 服务商那边加上下面这条 TXT 记录，等它生效之后再点「继续验证」。",
+    "noChallenge": {
+      "body": "当前状态 {{status}}、验证方式 {{challenge}}。可能还没走到验证这一步，也可能这张证书用的不是 dns-01。",
+      "title": "没有待验证的 DNS 记录"
+    },
+    "noChallengeBlock": "还没有拿到验证记录，现在放行必然失败",
+    "recordName": "主机记录",
+    "recordType": "类型",
+    "recordValue": "记录值",
+    "title": "DNS 验证放行",
+    "tooEarlyWarn": "⚠️ 点早了（TXT 还没生效）验证会失败，而失败要消耗一次 CA 配额。可以先用 dig 确认解析出来了再点。"
+  },
+  "empty": {
+    "filtered": "当前筛选条件下没有证书。放宽条件再看看。",
+    "noSource": "这一页管的是「我方纳管的证书」（ACME 签发或手工登记的），确实一张都没有。\n线上实际在跑的证书不在这里——它们在本页工具栏的「到期巡检」里（从域名和 CDN 侧探测出来的，约数百条）。\n要在这里有数据，需要通过 ACME 签发，或在「域名与入口 → 证书」里手工登记。",
+    "title": "没有证书"
+  },
+  "error": {
+    "title": "证书列表没能加载出来"
+  },
+  "expiredDaysAgo_other": "已过期 {{count}} 天",
+  "filter": {
+    "health": "状态",
+    "searchPlaceholder": "搜索通用名或 SAN"
+  },
+  "health": {
+    "expired": "已过期",
+    "failing": "续期失败",
+    "ok": "正常",
+    "soon": "即将到期",
+    "unknown": "读不出到期日"
+  },
+  "inspect": {
+    "allRows": "看全部",
+    "col": {
+      "expiry": "到期",
+      "fqdn": "域名",
+      "msg": "检测结果",
+      "source": "来源"
+    },
+    "daysLeft": "还剩 {{n}} 天",
+    "desc": "实际探测 443 拿到的证书到期日，以及台账里登记的。⚠️ 与「运行 / 巡检」不是一回事——那个查的是定时任务健康。",
+    "entry": "到期巡检",
+    "expiredDays": "已过期 {{n}} 天",
+    "ignored": "已忽略",
+    "internalNote": "另有 {{count}} 条解析到内网地址——公网巡检器连不上它们是必然的，不算检测失败。",
+    "kind": {
+      "acme": "我方签发",
+      "domain": "域名注册",
+      "managed": "台账",
+      "online": "线上实测"
+    },
+    "loadFailed": "巡检数据没取到",
+    "managed": "台账",
+    "neverProbed": "从没探过",
+    "none": "没有需要关注的证书",
+    "online": "实测",
+    "onlyIssues": "只看要处理的",
+    "probeFailed": "探测失败",
+    "probeTitle": "下面的到期日不完整",
+    "rowCount": "显示 {{shown}} / 共 {{total}} 条",
+    "title": "证书到期巡检"
+  },
+  "manualRenew": "手动续期",
+  "neverUpdated": "台账从未更新过",
+  "probe": {
+    "alsoFailed": " 另有 {{failed}} 条探测失败。",
+    "neverTaskDisabled": "有 {{never}} 条从来没有探测过——负责探测的定时任务「证书到期检测（443）」被停用，而且一次都没跑过。这些到期日是「未知」，不是「没有到期日」，也就是说现在没有任何证书临期提醒。去「运行 → 定时任务」找到「证书到期检测（443）」这一行，点「启用」并跑一次。",
+    "neverTaskNotRun": "有 {{never}} 条从来没有探测过：探测任务「证书到期检测（443）」已启用，但一次都没执行过。去「运行 → 定时任务」找到那一行点「立即运行」验一次。",
+    "neverUnknownTask": "有 {{never}} 条从来没有探测过，它们的到期日是「未知」，不是「没有到期日」。",
+    "partialSinceLastRun": "有 {{never}} 条没有探测结果，而探测任务上次执行于 {{lastRun}}——说明这些目标在那次探测里没被覆盖到，或者探测结果没有写回。",
+    "someFailed": "有 {{failed}} 条探测失败，到期日不可用；失败原因见「检测结果」列（解析到内网地址的那些不算失败）。"
+  },
+  "renewFailing": "续期失败",
+  "title": "证书",
+  "total_other": "共 {{count}} 张证书",
+  "updatedAt": "台账更新于 {{at}}",
+  "urgentNote_other": "{{count}} 张需要立刻处理"
+}

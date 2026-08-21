@@ -1,0 +1,96 @@
+{
+  "ciType": {
+    "certificate": "Certificate",
+    "domain": "Domain",
+    "host": "Host",
+    "k8s_ingress": "Ingress",
+    "k8s_service": "Service",
+    "loadbalancer": "Load balancer"
+  },
+  "column": {
+    "dst": "To",
+    "origin": "Origin",
+    "rel": "Relation",
+    "relType": "Relation",
+    "src": "From"
+  },
+  "coverageNote": "Only recorded relations are shown; no record does not mean a resource is isolated",
+  "del": {
+    "manualNote": "This edge was entered by hand; deleting it is final — collection will not recreate it.",
+    "syncNote": "⚠️ This edge was inferred by collection and will come back on the next sync. To remove it for good, change the underlying configuration.",
+    "title": "Delete relation"
+  },
+  "domains": {
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "hint": "External domains derived from the host-record inventory. Wildcards (*), root records (@) and ACME validation hashes appear here too — these are real DNS records, not junk. Entries with a module come first; those are the ones with recorded ownership.",
+    "noMatch": "No domains match “{{kw}}”",
+    "searchPlaceholder": "Search domain or module",
+    "title": "Public domains ({{n}})",
+    "truncated": "{{n}} more not shown — narrow it down with the search box above"
+  },
+  "empty": {
+    "filtered": "No relations match the current filters.",
+    "noSource": "No resource relations recorded yet. That does not mean there are no dependencies — only that we have not recorded them.",
+    "title": "No relations recorded"
+  },
+  "error": {
+    "title": "Could not load relations"
+  },
+  "filter": {
+    "relType": "Relation type",
+    "searchPlaceholder": "Search resource"
+  },
+  "form": {
+    "desc": "Most edges are inferred by collection. Add the ones it cannot infer — cross-system dependencies, external services.",
+    "direction": "{{src}} —{{rel}}→ {{dst}}",
+    "entry": "Add relation",
+    "needDst": "Pick a target",
+    "needSrc": "Pick a source",
+    "noMatch": "No match. A CI's name may differ from what the UI shows — try another keyword",
+    "pickHint": "Search by name; the selection shows below",
+    "relTypeHint": "Direction matters: A protects B is not the same as B protects A",
+    "sameCi": "Source and target must differ",
+    "searchCi": "Type at least 2 characters",
+    "title": "Add a relation by hand"
+  },
+  "graph": {
+    "dir": "Direction",
+    "empty": "No relations found. That does not mean the object is isolated — the edge-building job may not have run.",
+    "entry": "Start from",
+    "entryHint": "Prefix with host: / lb: / domain: / cert: / svc: / ing: to filter by type",
+    "forward": "Forward (what it depends on)",
+    "hops": "Hops",
+    "hopsN": "{{count}} hop(s)",
+    "noEntry": "No match. Try another keyword, or prefix with host: / lb: / domain: / cert: / svc: / ing:",
+    "noMembers": "No member detail for this pool node",
+    "noPick": "No start selected",
+    "pickFirst": "Pick a starting object on the left. The graph shows what one object connects to; there is no global view.",
+    "pool": "{{count}} members",
+    "reverse": "Reverse (what depends on it)",
+    "searchPlaceholder": "Search by name, e.g. host:dev-",
+    "stats": "{{shown}} edges shown (of {{raw}} raw; {{pooled}} pooled nodes)",
+    "svgLabel": "Resource relationship topology",
+    "typeMore": "Type at least 2 characters — an empty keyword would pull the whole table"
+  },
+  "origin": {
+    "manual": "Manual",
+    "sync": "Inferred"
+  },
+  "relType": {
+    "backs": "backs",
+    "protects": "protects",
+    "resolves_to": "resolves to",
+    "routes_to": "routes to"
+  },
+  "rel_type": {
+    "all": "All"
+  },
+  "title": "Resource graph",
+  "total_one": "{{count}} relation",
+  "total_other": "{{count}} relations",
+  "view": {
+    "graph": "Graph",
+    "list": "List"
+  }
+}

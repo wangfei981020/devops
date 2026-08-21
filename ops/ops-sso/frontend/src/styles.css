@@ -1,0 +1,7 @@
+/* 设计系统 tokens（内含 @import 'tailwindcss'） */
+@import '@ops/design/tokens.css';
+
+/* Tailwind v4 默认只扫描本项目的源码。
+   共享组件包里的类名不扫进来，@ops/ui 的样式会整片丢失 ——
+   而且是静默丢失：组件渲染正常，只是没有任何样式。 */
+@source '../../../packages/ui/src';

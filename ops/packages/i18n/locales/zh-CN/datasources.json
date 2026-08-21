@@ -1,0 +1,57 @@
+{
+  "title": "数据源",
+  "total_other": "共 {{count}} 个数据源",
+  "configured": "已配置",
+  "noCredential": "缺凭据",
+  "neverSynced": "从没同步过",
+  "stale": "同步停摆",
+  "ok": "正常",
+  "disabled": "已停用",
+  "noCredNote_other": "{{count}} 个数据源没有凭据，采不到任何东西",
+  "kind": {
+    "cloud": "云账号",
+    "cluster": "集群",
+    "obs": "观测端点",
+    "all": "全部"
+  },
+  "column": {
+    "kind": "类别",
+    "name": "数据源",
+    "credential": "凭据",
+    "lastSync": "最后同步",
+    "state": "状态"
+  },
+  "filter": {
+    "searchPlaceholder": "搜索数据源",
+    "kind": "类别"
+  },
+  "error": {
+    "title": "数据源列表没能加载出来"
+  },
+  "empty": {
+    "title": "没有数据源",
+    "filtered": "当前筛选条件下没有数据源。",
+    "noSource": "还没接入任何数据源。所有列表页都会是空的，直到这里配上第一个。"
+  },
+  "inherited": "继承云账号",
+  "inheritedHint": "GKE 用绑定云账号的 service account 认证，不需要单独存 kubeconfig",
+  "health": {
+    "ok": "正常",
+    "no_credential": "缺凭据",
+    "stale": "同步停摆",
+    "never_synced": "从未同步",
+    "disabled": "已停用",
+    "not_applicable": "无需同步"
+  },
+  "noCredNote": "{{count}} 个数据源确实缺凭据，采不到任何东西",
+  "goTest": "去测连通性",
+  "notConfigured": "未配置",
+  "notConfiguredOkHint": "这类数据源不需要在这里配凭据：K8s 集群走集群内 ServiceAccount 或继承云账号，内网 Prometheus / Loki 通常无鉴权",
+  "typeHint": {
+    "gke": "GKE 集群，用绑定云账号的 service account 认证，不存 kubeconfig",
+    "generic": "通用 K8s 集群（自建 / k3s 等），用这里存的 kubeconfig 认证——与 GKE 是两种不同的接入方式",
+    "prometheus": "Prometheus 兼容端点（含 VictoriaMetrics）。被查询时才用，没有同步记录是正常的",
+    "loki": "Loki 日志端点。被查询时才用，没有同步记录是正常的",
+    "gcp": "GCP 云账号。⚠️ SA key 配在项目上不是账号上——权限本来就是按 project 给的"
+  }
+}

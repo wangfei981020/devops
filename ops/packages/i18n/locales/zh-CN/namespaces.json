@@ -1,0 +1,55 @@
+{
+  "column": {
+    "cluster": "集群",
+    "name": "命名空间",
+    "phase": "状态",
+    "pods": "Pod",
+    "workloads": "工作负载"
+  },
+  "empty": {
+    "filtered": "当前筛选条件下没有命名空间。放宽条件再看看。",
+    "noSource": "还没采到任何命名空间。先到「集群」页确认集群已纳管且凭据有效。",
+    "title": "没有命名空间"
+  },
+  "error": {
+    "title": "命名空间列表没能加载出来"
+  },
+  "filter": {
+    "cluster": "集群",
+    "phase": "状态",
+    "searchPlaceholder": "搜索命名空间或项目"
+  },
+  "hint": {
+    "createProjectFirst": "还没有任何项目，没法自动归属。先到「基础配置 → 项目」把项目建好，再回来自动匹配。"
+  },
+  "noProject": "未归属",
+  "noProjectHint": "没有登记归属项目。成本归集、告警找人、下线评估都要靠这条关联，缺了就没人认领",
+  "nsproject": {
+    "allAssigned": "所有命名空间都已归属",
+    "autoApply_other": "确认写入 {{count}} 条",
+    "autoPreview": "自动匹配（先预览）",
+    "col": {
+      "ns": "命名空间",
+      "project": "归属项目",
+      "suggest": "系统建议"
+    },
+    "desc": "命名空间归到哪个业务项目。成本归属全靠它——没有归属的，钱会全部落进「未归属」。",
+    "entry": "归属管理",
+    "needData": "这个集群还没采到命名空间，先确认集群已纳管",
+    "nothingToApply": "没有可自动归属的",
+    "pickCluster": "先在上面选一个具体集群",
+    "previewHint": "这只是预览，还没有写入。下面表格里带建议的就是会被写入的那些——平台组件和判断不了的会保持空白，需要人工处理。",
+    "previewTitle_other": "按命名规律可以自动归属 {{count}} 个",
+    "rule": {
+      "none": "无建议",
+      "platform": "平台组件"
+    },
+    "title": "命名空间归属",
+    "unassigned": "未归属"
+  },
+  "podsBad_other": "{{count}} 异常",
+  "stuckNote_other": "{{count}} 个卡在 Terminating",
+  "terminatingHint": "删除卡住，会一直占着这个名字",
+  "title": "命名空间",
+  "total_other": "共 {{count}} 个命名空间"
+}

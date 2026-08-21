@@ -1,0 +1,156 @@
+/* 设计系统 tokens（内含 @import 'tailwindcss'） */
+@import '@ops/design/tokens.css';
+
+/* Tailwind v4 默认只扫描本项目源码。共享组件包的类名不扫进来，
+   @ops/ui 的样式会**静默**整片丢失——组件照样渲染，只是没有样式。 */
+@source '../../../packages/ui/src';
+
+/* ===========================================================================
+ * 简报页专用排版。
+ *
+ * # 为什么值得单独一套
+ *
+ * OpsPlane 那套（卡片网格 + 数据表格 + 无衬线）是「查东西」的界面：
+ * 你知道要找什么，界面帮你找到。而值班时的第一眼要回答的是另一个问题
+ * ——「现在到底有没有事」，那是一句结论，不是一张表。
+ *
+ * 所以这一页按**编辑排版**组织：一句大字结论、一条时间轴、一段收尾说明。
+ * 没有卡片、没有徽章堆、没有等宽栅格。
+ *
+ * ⚠️ 字体走系统栈，不引 Google Fonts：这套要装进客户内网，
+ * 外部字体拉不到时整页比例会垮，而那时没人会想到是字体没加载。
+ * =========================================================================== */
+.brief {
+  --brief-serif:
+    'Songti SC', 'Source Han Serif SC', 'Noto Serif CJK SC', 'SimSun', Georgia,
+    'Times New Roman', serif;
+}
+
+/* 结论。字号大到不需要读第二眼就知道有没有事 */
+.brief-verdict {
+  font-family: var(--brief-serif);
+  /* 让换行点落在语义边界上，避免"口。"这种一个字加句号单独成行 */
+  text-wrap: balance;
+  font-size: clamp(30px, 4.4vw, 52px);
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  font-weight: 500;
+}
+
+/* 时间轴脊柱。一条线串起所有事件 —— 告警本来就是时间序列，
+   而表格会把"先后"这个最重要的维度压成一列可排序的字段。 */
+.brief-spine {
+  position: relative;
+  padding-left: 28px;
+}
+.brief-spine::before {
+  content: '';
+  position: absolute;
+  inset-block: 6px 0;
+  inset-inline-start: 5px;   /* 圆点 11px 宽，中心正好落在这条线上 */
+  width: 1px;
+  background: var(--color-border);
+}
+.brief-node::before {
+  content: '';
+  position: absolute;
+  /* ⚠️ 参照是 .brief-node 自己，而它已经被 .brief-spine 的 padding-left: 28px
+     推到了脊柱线右边。写 0 会把圆点画在正文第一个字上 ——
+     实测第一版就是这样：时间 13:17:19 的开头被圆点盖住，看起来像 3:17:19，
+     而"时间少了一位"这种错没人会往 CSS 定位上想。
+     回退 28px 让圆点落回脊柱线，再减去半径差让它压在线中心。 */
+  inset-inline-start: -28px;
+  margin-top: 7px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--color-background);
+  background: var(--color-muted-foreground);
+}
+.brief-node[data-tone='danger']::before { background: var(--color-danger); }
+.brief-node[data-tone='warning']::before { background: var(--color-warning); }
+.brief-node[data-tone='ok']::before { background: var(--color-success); }
+
+/* 数字用衬线大字：它是结论的一部分，不是表格里的一个单元格 */
+.brief-figure {
+  font-family: var(--brief-serif);
+  font-size: 34px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 分隔靠一条细线和大留白，不用卡片边框 —— 卡片会把连续的叙述切成碎块 */
+.brief-rule {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  margin: 0;
+}
+
+/* ===========================================================================
+ * 告警控制台配色（OpsAlert 专属）
+ *
+ * # 为什么在这里覆盖，而不是改 @ops/design
+ *
+ * @ops/design 是共享包，CMDB / SSO / 发布中心都在用它。
+ * 改那里等于把所有产品一起换皮 —— 而我们要的恰恰是"这个产品看起来不一样"。
+ *
+ * # 为什么只覆盖 12 档中性色和状态色
+ *
+ * tokens.css 的结构是：中性 12 档（--ops-n0..n900）→ 语义 token
+ * （background / card / border / muted-foreground…）→ 组件。
+ * 覆盖最底下这一层，上面全部自动跟着变，@ops/ui 的组件一行都不用改。
+ * 直接覆盖语义 token 的话要写几十条，而且漏掉一条就出现色彩断层。
+ *
+ * ⚠️ 必须保持 light-dark() 包裹：主题切换靠的就是它。
+ * 写成单值会让深色/浅色其中一边直接失效，而**不会有任何报错**。
+ *
+ * 色相取 258（蓝灰）而不是原来的 265：告警控制台要的是监控台的冷调，
+ * 与 CMDB 的偏紫中性拉开距离。深色底 #0B1220 不是纯黑 ——
+ * 纯黑上的分隔线要么看不见要么发灰，而这套界面靠分隔线组织密集信息。
+ * =========================================================================== */
+:root {
+  /* 中性 12 档：浅色由亮到暗，深色由暗到亮 */
+  --ops-n0: light-dark(#F7F9FC, #0B1220);   /* 页面底 */
+  --ops-n50: light-dark(#FFFFFF, #101A2C);  /* 侧栏、顶栏 */
+  --ops-n100: light-dark(#FFFFFF, #111B2E); /* 卡片 */
+  --ops-n150: light-dark(#EFF3F9, #16223A); /* 次级面 / hover */
+  --ops-n200: light-dark(#DCE3ED, #1E2D4A); /* 分隔线 */
+  --ops-n300: light-dark(#C6D0DE, #26385C); /* 强分隔线 */
+  --ops-n400: light-dark(#A9B5C7, #3B4E75);
+  --ops-n500: light-dark(#7C8CA6, #5F7192); /* 三级文字 */
+  --ops-n600: light-dark(#5F7089, #7A8CAC);
+  --ops-n700: light-dark(#4A5A73, #93A4C0); /* 二级文字 */
+  --ops-n800: light-dark(#2A3648, #C4CFE2);
+  --ops-n900: light-dark(#0E1626, #E8EEF9); /* 主文字 */
+
+  /* 状态色：告警产品里这四个是一套**体系**，不是随手配的强调色。
+     色相彼此拉开，色盲下也能靠明度区分。 */
+  --ops-danger: light-dark(#D42D45, #F0455A);   /* firing */
+  --ops-warning: light-dark(#B87503, #F5A524);  /* pending */
+  --ops-success: light-dark(#0E9F7E, #2DD4A7);  /* resolved */
+  --ops-info: light-dark(#2B6FE0, #4C8DFF);
+
+  /* 品牌色跟着走蓝：靛蓝紫是 CMDB 的标识，这里换成告警蓝。
+     ⚠️ 三个数一起改，只改 h 会让明度对比掉出 4.5:1（见 tokens.css 的实测表）。 */
+  --ops-brand-h: 250;
+  --ops-brand-c: 0.17;
+  --ops-brand-l-light: 0.52;
+  --ops-brand-l-dark: 0.62;
+}
+
+/* ── 实时指示灯的脉冲 ──────────────────────────────────────────
+   这是全站唯一一个持续动画。它有职责：告诉值班的人数据还在动。
+   ⚠️ 必须尊重 prefers-reduced-motion —— 一个永不停止的动画对
+   前庭功能敏感的人是真的难受，而且这盏灯的信息量靠颜色和文字
+   已经传达完整了，动画只是锦上添花。 */
+@keyframes ops-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--color-success); }
+  70%  { box-shadow: 0 0 0 5px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.animate-ops-pulse {
+  animation: ops-pulse 2.4s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-ops-pulse { animation: none; }
+}

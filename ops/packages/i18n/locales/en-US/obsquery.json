@@ -1,0 +1,56 @@
+{
+  "tab": {
+    "metrics": "Metrics (PromQL)",
+    "logs": "Logs (LogQL)"
+  },
+  "hint": {
+    "metrics": "Queries Prometheus / VictoriaMetrics directly",
+    "logs": "Queries Loki directly"
+  },
+  "cluster": "Cluster",
+  "rangeLabel": "Time range",
+  "run": "Run",
+  "range": {
+    "15": "Last 15 min",
+    "60": "Last 1 hour",
+    "360": "Last 6 hours",
+    "1440": "Last 24 hours"
+  },
+  "promql": "PromQL",
+  "logql": "LogQL",
+  "example": {
+    "metrics": "e.g. sum by (namespace) (rate(container_cpu_usage_seconds_total[5m])). Scoped to the selected cluster automatically",
+    "logs": "e.g. {namespace=\"doris\"} |= \"error\". Broad aggregate queries can overwhelm the data source — narrow the selector first"
+  },
+  "findMetric": "Find a metric",
+  "findMetricHint": "Confirm the metric exists first — a wrong name also returns empty, which reads as \"component healthy\"",
+  "search": "Search",
+  "matched": "{{matched}} matched (of {{total}} in Prometheus)",
+  "sent": "Query actually sent (may include an injected cluster selector)",
+  "notIsolated": "⚠️ This query could not be scoped to the selected cluster — results may include other clusters' data.",
+  "col": {
+    "labels": "Series",
+    "value": "Latest value"
+  },
+  "seriesCount": "{{count}} series",
+  "lineCount": "{{count}} lines",
+  "noLogs": "No matching log lines. Wrong label, too short a range, or genuinely no logs — three different things, so do not read it as \"no errors\".",
+  "lokiFailed": "Loki query failed",
+  "starter": {
+    "title": "Nothing queried yet. These run as-is, and double as a data-source check:",
+    "cpuTop": "Top 10 pods by CPU",
+    "memTop": "Top 10 pods by memory",
+    "restarts": "Top 10 containers by restarts",
+    "nodeCpu": "CPU usage per node",
+    "errors": "Logs containing “error” across all namespaces",
+    "oom": "OOM-killed containers (event logs)",
+    "warnEvents": "All Warning events"
+  },
+  "labelValues": {
+    "label": "Label values",
+    "hint": "Label name, e.g. namespace / pod / job",
+    "query": "List values",
+    "count": "{{n}} values (click one to append it to the query)",
+    "empty": "Label {{label}} has no values. The name may be wrong, or this data source may genuinely not have it — try a label you know exists (such as job) to check"
+  }
+}

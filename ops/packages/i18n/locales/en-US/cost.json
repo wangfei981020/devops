@@ -1,0 +1,63 @@
+{
+  "byEnv": "By environment",
+  "byProject": "By project",
+  "destroyedNote_one": "{{count}} destroyed host excluded (no longer billed)",
+  "destroyedNote_other": "{{count}} destroyed hosts excluded (no longer billed)",
+  "drill": {
+    "actual": "Actual {{v}}",
+    "allocated": "Allocated {{v}}",
+    "anchorMismatch": "You selected {{asked}}, but the server returned data for {{got}}. The parameter was likely ignored — do not reconcile against this figure.",
+    "attribution": "Attribution",
+    "byDim": "Grouped by {{dim}}",
+    "col": {
+      "cluster": "Cluster",
+      "cost": "Cost",
+      "delta": "Change",
+      "new": "Current",
+      "object": "Object",
+      "old": "Previous",
+      "owner": "Owner",
+      "reason": "Reason",
+      "resource": "Resource",
+      "type": "Type"
+    },
+    "deltaTotal": "Total change vs previous month: {{delta}}",
+    "detail": "Line items",
+    "detailCount": "{{n}} items, {{total}} total (highest first)",
+    "dim": "Dimension",
+    "dimCluster": "Cluster",
+    "dimProject": "Business project",
+    "dimResource": "Resource",
+    "dimType": "Resource type",
+    "entry": "Cost breakdown",
+    "estimateNote": "Estimated from machine types and disks — not the cloud bill. Rates come from our own table; unmatched machine types fall back to a default tier.",
+    "idle": "Idle",
+    "idleAmount": "{{monthly}}/mo · {{yearly}}/yr",
+    "idlePct": "{{pct}}% idle",
+    "loadFailed": "Could not load this section",
+    "month": "Month",
+    "report": "Report",
+    "title": "Cost breakdown",
+    "trend": "Trend",
+    "vsPrev": "previous {{prev}}"
+  },
+  "error": {
+    "title": "Could not load the cost overview"
+  },
+  "estimateHint": "Estimated from machine type and disks — not a cloud bill. Prices come from our rate table and fall back to a default tier when the machine type is unknown.",
+  "fallbackNote": "{{count}} of them were priced from the default tier (regions without rates: {{regions}}) — those numbers look normal but do not use that region’s real price. Add rates for those regions under Cost rates.",
+  "hosts_one": "{{count}} host",
+  "hosts_other": "{{count}} hosts",
+  "perMonth": "per month (estimated)",
+  "snapshot": {
+    "action": "Take snapshot now",
+    "done": "Snapshot taken, {{count}} items",
+    "hint": "Month-over-month cost needs monthly snapshots. Without them the report looks empty when really the input is missing."
+  },
+  "title": "Cost overview",
+  "unattributed": "Unattributed",
+  "unattributedEnv": "These hosts have no environment set (PROD/UAT…). Fill it in on the host record so they can be split here.",
+  "unattributedProject": "These costs are not attributed to any business project yet. Business projects are the dictionary used for cost attribution — create them under Admin → Basic settings and assign hosts to them. (Note: this is NOT the same as the GCP project on the host.)",
+  "unpricedNote_one": "{{count}} host has no matching rate and counts as 0 — it is not free, we simply cannot price it",
+  "unpricedNote_other": "{{count}} hosts have no matching rate and count as 0 — they are not free, we simply cannot price them"
+}

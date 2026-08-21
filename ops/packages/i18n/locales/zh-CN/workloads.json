@@ -1,0 +1,36 @@
+{
+  "action": {
+    "viewPods": "查看 Pod"
+  },
+  "column": {
+    "cluster": "集群",
+    "health": "健康度",
+    "image": "镜像",
+    "name": "工作负载",
+    "replicas": "就绪/期望"
+  },
+  "downNote": "{{count}} 个全挂（期望副本 >0 但就绪 0）",
+  "downNoteOn": "已只看全挂的 {{count}} 个 · 点击取消",
+  "empty": {
+    "filtered": "当前筛选条件下没有工作负载。放宽条件再看看。",
+    "noSource": "还没采到任何工作负载。先到「集群」页确认集群已纳管且凭据有效。",
+    "title": "没有工作负载"
+  },
+  "error": {
+    "title": "工作负载列表没能加载出来"
+  },
+  "filter": {
+    "cluster": "集群",
+    "health": "健康度",
+    "namespace": "命名空间",
+    "searchPlaceholder": "搜索名称或镜像"
+  },
+  "health": {
+    "degraded": "降级",
+    "down": "全挂",
+    "ok": "正常",
+    "scaledZero": "已缩到 0"
+  },
+  "title": "工作负载",
+  "total_other": "共 {{count}} 个工作负载"
+}

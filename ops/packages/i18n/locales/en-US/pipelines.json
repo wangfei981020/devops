@@ -1,0 +1,29 @@
+{
+  "cluster": "Cluster",
+  "project": "DevOps project",
+  "pickProject": "Pick a project",
+  "scope": "Scope",
+  "onlyFailed": "Failed only",
+  "allRuns": "All runs",
+  "pickFirst": "Pick a DevOps project first ({{n}} available). Runs are fetched per project — they cannot all be listed at once.",
+  "summary": "{{total}} runs fetched, {{failed}} failed",
+  "noRuns": "No matching runs in this batch",
+  "viewLog": "View log",
+  "col": {
+    "pipeline": "Pipeline",
+    "run": "Build",
+    "phase": "Status",
+    "creator": "Triggered by",
+    "start": "Started"
+  },
+  "log": {
+    "title": "Build log for {{pipeline}} #{{run}}",
+    "desc": "Fetched live from KubeSphere. Shows the tail plus error lines extracted from the full log.",
+    "errors": "Extracted error lines",
+    "noErrors": "No error lines were extracted. This does not mean the log has no errors — this failure mode may not be covered by the extraction rules. Check the tail below.",
+    "tailNote": "Full log: {{lines}} lines / {{bytes}} bytes. Tail shown below"
+  },
+  "noProjects": "No DevOps projects found in this cluster",
+  "clickRunForLog": "Select a build to see its log. “run” is the Jenkins build number.",
+  "pickProjectForRuns": "Pick a project to see its builds, then select a build to read its log."
+}

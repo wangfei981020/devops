@@ -1,0 +1,113 @@
+{
+  "bulk": {
+    "attrDesc": "只改你选的那几项，没选的保持原值。",
+    "attrTitle": "批量设置 {{count}} 条的归属",
+    "autoDerive": "留空 = 清掉手填值，回到自动推算",
+    "cdn": "CDN 厂商",
+    "clear": "清空",
+    "cname": "回源 CNAME",
+    "cnameHint": "同上。不勾选 = 这一项不动。",
+    "doIgnore": "确认忽略",
+    "ignore": "批量忽略",
+    "ignoreDesc": "忽略之后同步会跳过它们，到期巡检也不再报。",
+    "ignoreTitle": "忽略 {{count}} 条",
+    "ignoreWarn": "忽略不是删除，也不是「正常」——它是「我们决定暂时不管」。被忽略的记录不再出现在告警里，所以必须写清楚为什么，否则半年后没人知道这条为什么不响了。",
+    "keep": "保持不变",
+    "moduleHint": "留空 = 保持不变。要清空模块，填一个空格再保存。",
+    "needReason": "必须写忽略原因",
+    "nothingSet": "三项都没设，没有可保存的改动",
+    "originIp": "源站 IP",
+    "originIpHint": "手填会盖过自动推算。留空并勾选 = 清掉手填、回到自动推算。",
+    "reason": "忽略原因",
+    "reasonHint": "写给半年后的自己看。",
+    "reasonPlaceholder": "已下线，等域名到期自然释放",
+    "setAttr": "批量归属",
+    "setThis": "设置这一项",
+    "unignore": "取消忽略"
+  },
+  "cert": {
+    "check": "检测证书",
+    "checkFailed": "证书探测失败",
+    "ignore": "忽略证书告警",
+    "ignoreNote": "忽略后，证书到期巡检不再报这条。客观状态一点没变 —— 只是我们决定暂时不管它。",
+    "ignoreTitle": "忽略这条的证书告警",
+    "needReason": "忽略必须写理由",
+    "reason": "忽略理由",
+    "reasonHint": "半年后没人记得当初为什么忽略，写清楚是哪种情况（比如：内网域名不对外、已下线待清理）。",
+    "unignore": "取消忽略",
+    "unignoreNote": "恢复之后，这条会重新进入证书到期巡检。",
+    "unignoreTitle": "恢复证书告警"
+  },
+  "col": {
+    "env": "环境",
+    "fqdn": "主机头",
+    "host": "主机名",
+    "module": "模块",
+    "origin": "源站 IP",
+    "project": "项目",
+    "state": "状态",
+    "stateHint": "只标例外：已忽略 / 域名已移出账号 / 域名停放。显示「—」表示这一条没有例外，不是「数据没采到」"
+  },
+  "coverage": {
+    "allDone": "{{total}} 条主机头都已登记归属项目和模块",
+    "next": "下一步：去「域名」页点「自动关联模块」，或在「定时任务」里看 relations_auto_link 上次执行的结果",
+    "noneAtAll": "{{total}} 条主机头「一条都没有」登记归属项目和模块。这不是漏了几条，是自动关联模块没跑过或没生效",
+    "partial": "{{total}} 条里：{{noProject}} 条没有归属项目、{{noModule}} 条没有模块"
+  },
+  "del": {
+    "note": "⚠️ 删除的是 CMDB 台账，真正的 DNS 解析不受影响 —— 下次同步时这条多半会重新出现。要停解析请去域名页的「解析记录」。",
+    "title": "删除台账记录"
+  },
+  "empty": {
+    "noIgnored": "没有被忽略的记录",
+    "noIgnoredReason": "所有主机头都在正常管理中，没有人为跳过的。",
+    "reason": "主机头是从域名的解析记录同步进来的。还没有同步过的话这里就是空的——这不代表你们没有主机头。可以到域名页点一次「立即同步」。",
+    "title": "台账里还没有主机头"
+  },
+  "error": {
+    "title": "主机头台账没能加载出来"
+  },
+  "filter": {
+    "scope": "范围"
+  },
+  "form": {
+    "certExpiry": "证书到期日（手工登记）",
+    "certExpiryHint": "留空 = 不知道。自动探测到的值会覆盖这里填的",
+    "createTitle": "新增主机头",
+    "desc": "登记这个主机头归谁、属于哪个项目、还用不用。",
+    "domain": "所属域名",
+    "domainHint": "建后不可改",
+    "editTitle": "编辑主机头",
+    "env": "环境",
+    "hostHint": "@ 表示根域名，如 www、api",
+    "lifeUnset": "未设置",
+    "needDomain": "请选择所属域名",
+    "needHost": "请填写主机名",
+    "notDns": "这里是台账，不是 DNS。填的内容不会写回任何解析服务商 —— 要改真实解析请去域名页的「解析记录」。",
+    "originHint": "手工登记的源站 IP。留空时列表会显示推测值并标注",
+    "type": "记录类型"
+  },
+  "guessed": "（推测）",
+  "ignored": "已忽略",
+  "noProject": "未归属",
+  "noProjectHint": "没有登记归属项目。成本归集、告警找人、下线评估都要靠这条关联，缺了就没人认领",
+  "originRules": {
+    "cname": "回源 CNAME",
+    "cnameHint": "CDN 回源指向的那个域名。",
+    "desc": "回源 CNAME → 源站 IP。DNS 查不到源站时用它兜底推断。",
+    "empty": "还没有回源规则。DNS 查得到的时候不需要它。",
+    "entry": "回源规则",
+    "ip": "源站 IP",
+    "needBoth": "两项都要填",
+    "title": "回源规则",
+    "unused": "没人用",
+    "used_other": "{{count}} 条在用"
+  },
+  "scope": {
+    "active": "在管的",
+    "ignored": "已忽略的"
+  },
+  "searchPlaceholder": "搜索主机头、项目或模块",
+  "selected_other": "已选 {{count}} 条",
+  "stale": "已失联"
+}

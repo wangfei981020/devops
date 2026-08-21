@@ -1,0 +1,55 @@
+{
+  "title": "Observability endpoints",
+  "hint": "Sources for metrics, logs and alerts. Without them the usage, waste and alert pages stay empty.",
+  "disabled": "Disabled",
+  "types": {
+    "prometheus": "Prometheus / VictoriaMetrics",
+    "loki": "Loki",
+    "kubesphere": "KubeSphere",
+    "n9e": "Nightingale"
+  },
+  "addTitle": "Add endpoint",
+  "editTitle": "Edit “{{name}}”",
+  "addDesc": "Test the connection after saving — an endpoint with a wrong address behaves exactly like a missing one, but looks fine in the list.",
+  "deleteImpact": "Pages that depend on this source (usage, waste, alerts) lose their data immediately.",
+  "field": {
+    "name": "Name",
+    "type": "Type",
+    "typeHint": "Must be picked from the list. A single typo would create a record that never works while showing as enabled.",
+    "url": "URL",
+    "urlHint": "The backend reaches it from inside the cluster — use a cluster-internal address, not the one your browser can open.",
+    "env": "Environment",
+    "envHint": "Restrict this source to one environment. Empty = any. Options come from the environment dictionary in Admin → Basic config",
+    "clusterLabel": "Cluster isolation label",
+    "clusterLabelHint": "When several clusters share one data source, which label name selects this cluster (commonly \"cluster\"). The label value comes from the cluster config, not here. Leave empty if this source holds data for only one cluster. ⚠️ A wrong value returns 0 rows silently, with no error",
+    "token": "Access token",
+    "tokenHint": "Fill in if authentication is required. Blank means unchanged (edit) or not configured (new).",
+    "enabled": "Enabled",
+    "clusterLabelNone": "Empty (this source holds one cluster only)",
+    "labelProbed": "{{name}} (exists in the data source)",
+    "labelProbing": "Probing available label names…",
+    "labelProbeAfterSave": "Reopen after saving to probe real label names from the source",
+    "labelNotApplicable": "Only Prometheus / VictoriaMetrics have label names",
+    "envAny": "Any environment",
+    "envLoadFailed": "Failed to load the environment dictionary; only \"Any\" is selectable — this does not mean no others exist",
+    "clusterLabelNoneShort": "Any",
+    "clusterLabelHelp": "When this source holds data from several clusters, enter a label name (e.g. cluster) to tell them apart. Leave empty if the source only has one cluster — queries then add no cluster condition."
+  },
+  "error": {
+    "title": "Could not load observability endpoints"
+  },
+  "empty": {
+    "title": "No observability endpoint connected",
+    "reason": "Connect Prometheus for resource usage and waste; connect Nightingale for the alerts page.",
+    "action": "Add the first one"
+  },
+  "col": {
+    "source": "Data source"
+  },
+  "test": {
+    "took": "{{ms}} ms",
+    "via": "via {{path}}"
+  },
+  "labelsOnlyProm": "Only Prometheus / VictoriaMetrics data sources expose label names to probe.",
+  "labelsFiltered": "Showing only labels whose name contains “cluster”. This source has {{total}} labels in total; you can type any other name by hand."
+}

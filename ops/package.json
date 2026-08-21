@@ -1,0 +1,30 @@
+{
+  "name": "ops",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.20.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter './packages/*' build && pnpm -r --filter './ops-*/frontend' build",
+    "dev:cmdb": "pnpm --filter ops-cmdb-frontend dev",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "check:i18n": "node tooling/scripts/check-i18n.mjs",
+    "check:tokens": "node tooling/scripts/check-hardcoded-colors.mjs",
+    "check:errors": "node tooling/scripts/check-error-keys.mjs",
+    "check:license": "node tooling/scripts/check-license-keys.mjs",
+    "check:perms": "node tooling/scripts/check-perm-codes.mjs",
+    "dev:sso": "pnpm --filter ops-sso-frontend dev",
+    "check:markup": "node tooling/scripts/check-locale-markup.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.0",
+    "@types/node": "^26.2.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

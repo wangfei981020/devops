@@ -1,0 +1,40 @@
+{
+  "title": "Exposure",
+  "total_one": "{{count}} public entry point",
+  "total_other": "{{count}} public entry points",
+  "protectionUnknown": "Protection status cannot be determined — no CDN/WAF source connected",
+  "unknown": "Unknown",
+  "protected": "Protected",
+  "unprotected": "Unprotected",
+  "kind": {
+    "lb": "Load balancer",
+    "service": "Service",
+    "host": "Host",
+    "all": "All"
+  },
+  "column": {
+    "kind": "Kind",
+    "name": "Resource",
+    "endpoint": "Public endpoint",
+    "ports": "Ports",
+    "protected": "Protection",
+    "scope": "Scope"
+  },
+  "filter": {
+    "searchPlaceholder": "Search resource or endpoint",
+    "kind": "Kind"
+  },
+  "error": {
+    "title": "Could not load the exposure list"
+  },
+  "empty": {
+    "title": "No public entry points",
+    "filtered": "Nothing matches the current filters.",
+    "noSource": "No publicly reachable entry point found in the connected data. Anything not ingested is not covered."
+  },
+  "portsUnknown": "Not probed",
+  "portsUnknownHint": "Which ports this entry exposes is decided by firewall rules, and this page has not joined firewall data yet. Look up this address under Compute & network → Firewalls. ⚠️ Empty does NOT mean no ports are exposed.",
+  "allPorts": "All ports",
+  "allPortsHint": "1-65535 means every port on this entry is open to the internet. 26 of the 52 public entries are like this — usually only the few ports actually in use need to be open.",
+  "scopeConstant": "single value in current results"
+}

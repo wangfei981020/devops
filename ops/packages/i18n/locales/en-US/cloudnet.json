@@ -1,0 +1,68 @@
+{
+  "fw": {
+    "allInstances": "Applies to all instances in the VPC",
+    "col": {
+      "allowed": "Allowed",
+      "direction": "Direction",
+      "name": "Rule",
+      "priority": "Priority",
+      "source": "Source ranges"
+    },
+    "disabled": "Disabled",
+    "empty": {
+      "reason": "Every VPC has at least default rules, so an empty list almost certainly means collection failed — not that there are no rules. Check the cloud credential and whether the service account has compute.viewer.",
+      "title": "No firewall rules retrieved"
+    },
+    "error": "Firewall rules could not be loaded",
+    "risky": "High risk",
+    "riskyOnly": "High-risk only ({{count}})",
+    "riskyOnlyOn": "Showing {{count}} high-risk · click to clear",
+    "searchPlaceholder": "Search rule name, allowed ports or source ranges",
+    "targets": "Targets"
+  },
+  "iam": {
+    "allBindings": "All bindings",
+    "col": {
+      "member": "Member",
+      "project": "Project",
+      "risk": "Risk",
+      "role": "Role"
+    },
+    "empty": {
+      "noIssuesReason": "Among the bindings collected, no overly broad roles such as owner/editor and no allUsers grants were found. ⚠️ This holds only for the projects actually collected — switch to \"All bindings\" to confirm the projects you care about are covered.",
+      "noIssuesTitle": "No risky bindings identified",
+      "reason": "Every GCP project has at least one binding, so this means collection has not succeeded — not that there is no risk. Check the cloud credential and whether the service account has roles/iam.securityReviewer.",
+      "title": "No IAM bindings retrieved"
+    },
+    "error": "The permission audit could not be loaded",
+    "filter": {
+      "noDataToFilter": "No IAM bindings collected yet, so there is nothing to filter. Follow the note below to get collection working first",
+      "scope": "Scope"
+    },
+    "issuesOnly": "Issues only",
+    "risky": "Overly broad"
+  },
+  "ips": {
+    "col": {
+      "ip": "IP",
+      "kind": "Kind",
+      "owner": "Owner",
+      "region": "Region",
+      "usage": "Usage"
+    },
+    "empty": {
+      "reason": "Usually the cloud account is not connected yet, or the credential lacks permission to read network resources. This does not mean you have no static IPs — reserved but unattached addresses keep billing, so check \"Idle only\" once connected.",
+      "title": "No IP addresses retrieved"
+    },
+    "error": "The IP inventory could not be loaded",
+    "filter": {
+      "usage": "Usage"
+    },
+    "gkeName": "GKE-generated",
+    "gkeNameHint": "This is an internal name GKE generates for forwarding rules / backend services, not a name you chose. To find which service it belongs to, look up this IP under Clusters → Services & ingress, or search the name in the GCP load balancing console.",
+    "idle": "Idle",
+    "idleOnly": "Idle only",
+    "inUse": "In use",
+    "searchPlaceholder": "Search IP, owner or project"
+  }
+}

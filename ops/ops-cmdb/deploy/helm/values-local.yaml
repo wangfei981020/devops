@@ -1,0 +1,208 @@
+# ############################################################################
+# ###                                                                      ###
+# ###                     本  地  （ L O C A L ）                           ###
+# ###                                                                      ###
+# ###   docker-desktop / namespace ops-cmdb                                ###
+# ###   镜像仓库 localhost:8070/opsplatform-dev                             ###
+# ###   入口 NodePort 30833（经 k8s-proxy，见 k8s-proxy/README.md）          ###
+# ###                                                                      ###
+# ############################################################################
+#
+#   helm upgrade --install cmdb ops/ops-cmdb/deploy/helm \
+#     -n ops-cmdb --create-namespace \
+#     -f ops/ops-cmdb/deploy/helm/values-local.yaml \
+#     --set global.tag=vX
+#
+# ⚠️ 本文件**完整自包含**，不依赖任何其它 values 文件继承。
+#    与 values-prod.yaml 的键集合由 check-values-parity.mjs 比对。
+# ############################################################################
+
+# ⚠️ 必须为 false，见 values.yaml 里的说明
+requireEnvValues: false
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# 全局
+# ---------------------------------------------------------------------------
+global:
+  # 本地 Harbor。完整地址 = 这里 + 组件的 image.repository + tag
+  imageRegistry: localhost:8070/opsplatform-dev
+
+  # 前后端统一 tag。组件级 image.tag 留空时用这里的值；
+  # 两边都填且不一致时 chart 直接 fail（见 _helpers.tpl 的 cmdb.requireSameTag）。
+  # ⚠️ 2026-08-18 之前这个字段是不生效的（helper 只读组件级），设了没反应也不报错
+  tag: ""
+  imagePullSecrets: []
+
+# ---------------------------------------------------------------------------
+# 前端
+# ---------------------------------------------------------------------------
+frontend:
+  # 单节点集群跑 2 副本是刻意的：多副本相关的问题（会话、粘性、
+  # 滚动更新期间新旧并存）只有在多副本下才会暴露，本地就该照生产的形态验证。
+  #
+  # ⚠️ 开了 HPA 之后只在**第一次创建**时生效，之后副本数由 HPA 接管
+  replicaCount: 2
+
+  image:
+    repository: ops-cmdb-frontend
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  service:
+    # 本地用 NodePort 固定端口，不要临时 port-forward ——
+    # 端口随机会导致每次验证的地址都不一样
+    type: NodePort
+    port: 80
+    nodePort: 30833
+
+  # ⚠️ 保持改造前的数值，这次「去继承」重构不应带来任何行为变化。
+  # 与生产不同是正常的：生产按实测调过，本地只求跑得起来
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 192Mi
+
+  # 本地也开自动扩容 —— 形态和生产一致才验得出问题。
+  #
+  # ⚠️ 需要 metrics-server。docker-desktop 默认没装，没装时 HPA 显示
+  # `<unknown>/70%` 并且**永远不扩容**，而 kubectl get hpa 不会报错。
+  # 装法（kubelet 证书是自签，必须加 --kubelet-insecure-tls）：
+  #   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+  #   kubectl -n kube-system patch deploy metrics-server --type=json \
+  #     -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+  #
+  # maxReplicas 比生产小：单节点扩到 8 个副本只是把同一台机器的资源
+  # 切得更碎，验不出任何东西，还会让别的服务起不来
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # securityContext 见 templates/_helpers.tpl 的 cmdb.securityContext
+
+# ---------------------------------------------------------------------------
+# 后端
+# ---------------------------------------------------------------------------
+backend:
+  replicaCount: 2
+
+  image:
+    repository: ops-cmdb-backend
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  service:
+    port: 8080
+    metricsPort: 8088
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # securityContext 见 templates/_helpers.tpl 的 cmdb.securityContext
+
+  # 与 ops-data-plane 连同一个本地库（同一份种子数据）。
+  # 定时任务不会跑两遍：两边共用 leases 表选主，同名 lease 只有一个持有者
+  envFrom:
+    - secretRef:
+        name: ops-cmdb-backend-secret
+
+  env:
+    # 本地一律用 dev 验签公钥。产品默认只信 prod ——
+    # 这道隔离让"测试用的 license 漏到生产"不再依赖人记得：
+    # dev 签的 token 装进生产环境会直接验签失败
+    # 日志等级：debug|info|warn。
+    #
+    # ⚠️ 当前是 debug —— 为了排查节点心跳误报（OPSCMDB-025/027）。
+    # 判定类日志会把「输入 + 依据 + 结论」三样都打出来，
+    # 每个节点每轮采集一行（16 台 / 2 分钟 ≈ 每天 1.2 万行）。
+    # 排查完改成 info 即可，**不需要重新构建镜像**。
+    - name: LOG_LEVEL
+      value: debug
+    - name: OPS_LICENSE_ENV
+      value: dev
+    # 允许使用源码里的开发默认密钥（JWT_SECRET / CMDB_AES_KEY）。
+    # ⚠️ 不设这个，后端会**拒绝启动** —— 默认按生产处理是刻意的：
+    # 生产忘了配 Secret 的那次必须是响的，而不是静默用公开源码里的密钥跑起来
+    - name: OPS_ENV
+      value: dev
+
+# ---------------------------------------------------------------------------
+# 通用
+# ---------------------------------------------------------------------------
+
+# ⚠️ 本地关掉：docker-desktop 没有 ServiceMonitor/VMServiceScrape 的 CRD，
+# 打开会让 helm install 直接失败（这是好事，比静默跳过强）
+metrics:
+  enabled: false
+  scrapeKind: ServiceMonitor
+  labels: {}
+  path: /metrics
+  interval: 30s
+  scrapeTimeout: 10s
+  relabelings: []
+
+# ⚠️ 必须小于 istio.timeout
+proxyTimeoutSeconds: 120
+
+# 单节点集群上 required 会让第二个副本永远 Pending
+podAntiAffinity:
+  enabled: true
+  required: false
+
+nodeSelector: {}
+tolerations: []
+podAnnotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: cmdb.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# 本地不装 Istio，入口走 NodePort
+istio:
+  enabled: false
+  annotations: {}
+  gateways: []
+  hosts: []
+  matchPrefix:
+    - "/"
+  timeout: 180s
+  retries:
+    attempts: 3
+    perTryTimeout: 60s
+    retryOn: connect-failure,refused-stream
+    allowUnsafeRetryOn: false

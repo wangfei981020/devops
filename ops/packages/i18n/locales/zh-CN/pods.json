@@ -1,0 +1,79 @@
+{
+  "column": {
+    "age": "启动于",
+    "cluster": "集群",
+    "name": "Pod",
+    "node": "节点",
+    "phase": "状态",
+    "resources": "req · limit",
+    "restarts": "重启"
+  },
+  "diag": {
+    "aiBadge": "AI 判定",
+    "aiCaveat": "⚠️ 这是模型根据现有材料的推断，不是日志里写着的事实。置信度已封顶为「中」。照做之前先核对一下证据。",
+    "aiGate": "AI 兜底",
+    "byAI": "由 AI 判定（{{model}}）——不是规则命中",
+    "byRule": "判定来源：{{rule}}",
+    "col": {
+      "count": "次数",
+      "message": "消息",
+      "reason": "原因",
+      "time": "最后发生"
+    },
+    "container": "容器",
+    "diagnose": "诊断",
+    "entry": "排障",
+    "events": "事件",
+    "evidence": "依据",
+    "extracted": "日志里的报错",
+    "goThere": "前往",
+    "initSuffix": "（Init）",
+    "loadFailed": "这部分没取到",
+    "logs": "日志",
+    "noEvents": "这个 Pod 当前没有事件",
+    "noEventsHint": "K8s 事件默认只保留 1 小时，空列表不代表没发生过。要看更早的去「集群事件」页。",
+    "noLogs": "没有日志输出（容器可能还没启动，或日志都写到了文件里）",
+    "noMatch": "规则库没有命中",
+    "noMatchHint": "这不代表这个 Pod 没问题——规则库覆盖不到的故障多得是。请结合下面的日志和事件自行判断。",
+    "previous": "上一个容器实例",
+    "providerRule": "规则引擎",
+    "readOnlyNote": "CMDB 只给方案不代执行，动手请到控制台或 kubectl。",
+    "suggestions": "建议",
+    "tail": "行数"
+  },
+  "empty": {
+    "filtered": "当前筛选条件下没有 Pod。放宽条件再看看。",
+    "noSource": "还没采到任何 Pod。先到「集群」页确认集群已纳管且凭据有效。",
+    "title": "没有 Pod"
+  },
+  "error": {
+    "title": "Pod 列表没能加载出来"
+  },
+  "filter": {
+    "cluster": "集群",
+    "health": "健康度",
+    "namespace": "命名空间",
+    "node": "节点",
+    "searchPlaceholder": "搜索 Pod、工作负载或节点",
+    "workload": "工作负载"
+  },
+  "health": {
+    "bad": "异常",
+    "ok": "正常",
+    "restarted": "重启过"
+  },
+  "live": {
+    "header": "实时用量",
+    "pickCluster": "选定单个集群后才显示 —— 用量是按集群查 Prometheus 的",
+    "unavailable": "查不到"
+  },
+  "notScheduled": "未调度",
+  "resources": {
+    "bestEffort": "未配资源",
+    "bestEffortHint": "BestEffort：没有配 request/limit，节点内存压力时最先被驱逐"
+  },
+  "restartHint": "累计重启 {{n}} 次",
+  "restartRateHint": "累计重启 {{n}} 次，平均每天 {{perDay}} 次。⚠️ 绝对次数会被存在时长稀释——跑了 3 个月的 2 万次和跑了 1 天的 2 万次是两回事",
+  "title": "Pod",
+  "total_other": "共 {{count}} 个 Pod"
+}

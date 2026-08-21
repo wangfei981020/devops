@@ -1,0 +1,39 @@
+{{- include "cmdb.requireEnv" . }}
+{{- if (.Values.ingress | default dict).enabled }}
+# 生产形态：Service 走 ClusterIP，由 Ingress + 域名对外暴露。
+# /api 不单独配路由 —— 它由前端 nginx 反代到后端，
+# 在 Ingress 上再切一刀会让"前端能通、接口 404"这类问题多一个排查层。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "cmdb.fullname" . }}
+  labels:
+    {{- include "cmdb.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range (.Values.ingress | default dict).hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "cmdb.frontend.fullname" $ }}
+                port:
+                  number: {{ $.Values.frontend.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

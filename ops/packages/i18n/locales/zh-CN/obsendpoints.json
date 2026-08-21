@@ -1,0 +1,55 @@
+{
+  "title": "观测端点",
+  "hint": "指标、日志、告警的数据源。没有它们，用量、浪费、告警这些页面都是空的。",
+  "disabled": "已停用",
+  "types": {
+    "prometheus": "Prometheus / VictoriaMetrics",
+    "loki": "Loki",
+    "kubesphere": "KubeSphere",
+    "n9e": "夜莺 Nightingale"
+  },
+  "addTitle": "添加观测端点",
+  "editTitle": "编辑「{{name}}」",
+  "addDesc": "保存后记得点「测试连通性」——地址配错的数据源和没配一样，但界面上它看着是好的。",
+  "deleteImpact": "依赖这个源的页面（用量、浪费、告警）会立刻没有数据。",
+  "field": {
+    "name": "名称",
+    "type": "类型",
+    "typeHint": "必须从列表里选。打错一个字母会建出一条永远不工作的记录，而它显示为「已启用」。",
+    "url": "地址",
+    "urlHint": "后端从集群内访问它，填集群内可达的地址（不是你浏览器能打开的那个）。",
+    "env": "环境",
+    "envHint": "限定这个源只服务某个环境。留空 = 不限环境。选项来自「管理 → 基础配置」的环境字典，要加新环境请去那里加",
+    "clusterLabel": "集群隔离标签",
+    "clusterLabelHint": "多集群共用一个数据源时，用哪个「标签名」把本集群的数据筛出来（常见是 cluster）。标签的取值来自集群自身配置，不在这里填。留空表示这个源只有一个集群的数据。⚠️ 填错时查询不会报错，只会静默返回 0 条",
+    "token": "访问令牌",
+    "tokenHint": "需要鉴权时填。留空表示不变（编辑）或不配（新建）。",
+    "enabled": "启用",
+    "clusterLabelNone": "留空（该源只有一个集群的数据）",
+    "labelProbed": "{{name}}（数据源里确实存在）",
+    "labelProbing": "正在从数据源探测可用标签名…",
+    "labelProbeAfterSave": "保存后重新打开，可从数据源探测出真实存在的标签名",
+    "labelNotApplicable": "只有 Prometheus / VictoriaMetrics 有标签名的概念",
+    "envAny": "不限环境",
+    "envLoadFailed": "环境字典加载失败，当前只能选「不限环境」——这不代表系统里没有别的环境",
+    "clusterLabelNoneShort": "不限",
+    "clusterLabelHelp": "这个源同时装着多个集群的数据时，填一个标签名（如 cluster）用来区分。留空表示该源只有一个集群的数据，查询时不加集群条件。"
+  },
+  "error": {
+    "title": "观测端点列表没能加载出来"
+  },
+  "empty": {
+    "title": "还没接入观测端点",
+    "reason": "接入 Prometheus 之后，资源用量、闲置与浪费才有数据；接入夜莺之后，告警页才有数据。",
+    "action": "添加第一个"
+  },
+  "col": {
+    "source": "数据源"
+  },
+  "test": {
+    "took": "{{ms}} ms",
+    "via": "探通路径 {{path}}"
+  },
+  "labelsOnlyProm": "只有 Prometheus / VictoriaMetrics 类型的数据源才有标签名可探测。",
+  "labelsFiltered": "只列出名字里含 cluster 的标签。该源共有 {{total}} 个标签，其余可手工填写。"
+}
