@@ -190,6 +190,23 @@ func (h *OverviewHandler) buildOverview() situationOut {
 		count(`SELECT COUNT(*) FROM k8s_clusters c WHERE c.enabled = 1
 			AND NOT EXISTS (SELECT 1 FROM k8s_nodes n WHERE n.cluster_id = c.id)`))
 
+	// 🔴 接入配错：集群的指标标签值在观测端点里不存在。
+	//
+	//	后果不是"报错"，是**所有带集群条件的查询静默返回空** ——
+	//	而空看起来和"这个集群确实没有东西"一模一样。生产上因此让
+	//	磁盘水位/用量/OOM 全线失效，挂了多久没人知道（OPSCMDB-044）。
+	//
+	// ⚠️ 判定不在这里做，读的是 integration_check 任务落库的结果。
+	//	在这里现探的话，每次打开首页都要去打一圈外部数据源。
+	add("integrationBroken", "high", "/k8s/clusters",
+		count(`SELECT COUNT(*) FROM integration_issues WHERE kind = 'cluster_label'`))
+
+	// ⚠️ 「没核对成」要单独报，不能并进上面那条，也不能不报。
+	//	并进去 → 把"不知道"说成"有问题"；不报 → 把"不知道"说成"没问题"。
+	//	两者都是在首页上给一个没看过的维度发合格证。
+	add("integrationUnverified", "medium", "/admin/obs-endpoints",
+		count(`SELECT COUNT(*) FROM integration_issues WHERE kind = 'unverified'`))
+
 	// 命名空间卡在 Terminating：会一直占着名字让同名重建失败
 	add("nsTerminating", "medium", "/k8s/namespaces?phase=Terminating",
 		count(`SELECT COUNT(*) FROM k8s_namespaces WHERE phase = 'Terminating'`))

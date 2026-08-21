@@ -211,6 +211,7 @@ func callAI(ctx context.Context, cfg aiConfig, prompt string) (aiAnswer, diag.AI
 	usage.ElapsedMS = time.Since(started).Milliseconds()
 	cost, known := diag.AICost(cfg.Model, usage.InputTokens, usage.OutputTokens)
 	usage.CostUSD = cost
+	usage.CostKnown = known
 	if !known {
 		// ⚠️ 不认得的型号计 0 并 WARN。编一个价钱比不记更坏：
 		//	账单和我们记的数对不上时，人会信我们记的那个
@@ -290,7 +291,7 @@ func (h *K8sDiagHandler) maybeAI(
 
 	prompt := aiPrompt(dc)
 	ans, usage, err := callAI(ctx, cfg, prompt)
-	budget.Charge(usage.CostUSD)
+	budget.Charge(usage.CostUSD, usage.CostKnown)
 
 	rec := diag.AICallRecord{
 		At: time.Now(), Cluster: cid, Object: obj, Gate: gate,
@@ -362,11 +363,14 @@ func (h *K8sDiagHandler) recordAICall(rec diag.AICallRecord) {
 		return
 	}
 	if _, err := h.DB.Exec(
+		// ⚠️ cost_known 必须存：cost_usd=0 有两种含义（真没花钱 / 认不出型号按 0 记），
+		//	只存金额的话，对账时分不开这两件事
 		`INSERT INTO ai_call_logs (at, cluster_id, object, model, input_tokens, output_tokens,
-		    cost_usd, elapsed_ms, gate_code, err, detail)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		    cost_usd, cost_known, elapsed_ms, gate_code, err, detail)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		rec.At, rec.Cluster, rec.Object, rec.Usage.Model,
-		rec.Usage.InputTokens, rec.Usage.OutputTokens, rec.Usage.CostUSD, rec.Usage.ElapsedMS,
+		rec.Usage.InputTokens, rec.Usage.OutputTokens, rec.Usage.CostUSD,
+		b2int(rec.Usage.CostKnown), rec.Usage.ElapsedMS,
 		rec.Gate.Code, rec.Err, string(blob)); err != nil {
 		// 写不进去不该让诊断失败，但必须留痕 ——
 		// 否则"AI 花了钱"这件事会连一条记录都没有

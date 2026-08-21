@@ -506,19 +506,34 @@ func clusterSelectorParts(db *sql.DB, clusterLabel string, clusterID int) (label
 //
 // 返回 nil 表示值存在（空结果另有原因，比如 exporter 没部署）；否则返回可直接给人看的诊断。
 func verifyClusterValue(base, token, label, value string) map[string]any {
+	bad, _ := verifyClusterValueEx(base, token, label, value)
+	return bad
+}
+
+// verifyClusterValueEx 同上，另外告诉调用方**这次自检到底做成了没有**。
+//
+// 🔴 为什么必须区分：`verifyClusterValue` 在自检本身失败时返回 nil，
+//
+//	而 nil 的含义是"没发现问题" —— 对**按需触发**的调用方这是对的
+//	（别拿不确定的结论去覆盖真实的空结果），但对**巡检**就完全错了：
+//	巡检会把它报成"核对 4 个集群，0 个有问题"，而实际上一个都没核对成
+//	（本地实测：数据源 DNS 解析不了，四个集群全部"通过"）。
+//	把"没检查成"渲染成"检查通过"，正是这个产品要防的那种失效。
+func verifyClusterValueEx(base, token, label, value string) (bad map[string]any, verified bool) {
 	code, body, err := obsGet(base+"/api/v1/label/"+url.PathEscape(label)+"/values", token, 15*time.Second)
 	if err != nil || code != 200 {
-		return nil // 自检本身失败就不猜了，别拿一个不确定的结论去覆盖真实的空结果
+		return nil, false // 自检本身失败就不猜了，别拿一个不确定的结论去覆盖真实的空结果
 	}
 	var r struct {
 		Data []string `json:"data"`
 	}
 	if json.Unmarshal([]byte(body), &r) != nil || len(r.Data) == 0 {
-		return nil
+		// 解析不了 / 一个取值都没有 —— 同样不算"核对过"
+		return nil, false
 	}
 	for _, v := range r.Data {
 		if v == value {
-			return nil
+			return nil, true
 		}
 	}
 	sort.Strings(r.Data)
@@ -532,7 +547,7 @@ func verifyClusterValue(base, token, label, value string) map[string]any {
 			"这个空不代表组件正常。数据源里可选的值：%s。"+
 			"请在「集群 → 集群」里编辑该集群，把「指标里的集群标签值」改成正确的那个。",
 			label, value, strings.Join(r.Data, ", ")),
-	}
+	}, true
 }
 
 // promLabels 把集群选择器与查询级条件拼成 PromQL 的 {...} 片段；全空时返回空串。

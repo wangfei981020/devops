@@ -169,6 +169,8 @@ type AIBudget struct {
 	MaxCalls int
 	// MaxCostUSD 本轮成本上限（美元）。<=0 表示不按金额限制，只看次数。
 	MaxCostUSD float64
+	// unknownCost 本轮出现过价目表里没有的型号 —— 金额不可核算，见 Charge。
+	unknownCost bool
 
 	used     int
 	costUSD  float64
@@ -193,6 +195,13 @@ func (b *AIBudget) Take() bool {
 		b.stopNote = fmt.Sprintf("本轮 AI 调用次数已达上限 %d 次", b.MaxCalls)
 		return false
 	}
+	// 上一次调用用的是价目表里没有的型号 —— 成本记成了 0，金额闸门等于没有。
+	// 不知道花了多少就不再花（见 Charge 的说明）。
+	if b.unknownCost {
+		b.skipped++
+		b.stopNote = "上一次调用的型号不在价目表里，本轮成本无法核算，已停止继续调用"
+		return false
+	}
 	if b.MaxCostUSD > 0 && b.costUSD >= b.MaxCostUSD {
 		b.skipped++
 		b.stopNote = fmt.Sprintf("本轮 AI 成本已达上限 US$%.4f", b.MaxCostUSD)
@@ -203,13 +212,27 @@ func (b *AIBudget) Take() bool {
 }
 
 // Charge 记一次实际花费。⚠️ 必须在拿到用量之后调用，而不是估算。
-func (b *AIBudget) Charge(costUSD float64) {
+//
+// known=false 表示**价目表里没有这个型号**，本次成本按 0 记。
+//
+// 🔴 那样金额上限就失效了：`Charge(0)` 永远累加不到 MaxCostUSD，
+//
+//	一轮 sweep 能一直调下去，只剩次数上限拦着。换个新模型（价目表还没跟上）
+//	就正好落进这个洞 —— 而"用了新模型"恰恰是最可能花超的时候。
+//
+// ⚠️ 修法不是编一个价钱（那比不记更坏：账单对不上时人会信我们记的那个），
+//
+//	而是让**未知型号本身成为停止条件**：不知道花了多少，就不能继续花。
+func (b *AIBudget) Charge(costUSD float64, known bool) {
 	if b == nil {
 		return
 	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.costUSD += costUSD
-	b.mu.Unlock()
+	if !known {
+		b.unknownCost = true
+	}
 }
 
 // Summary 本轮账单。**跳过数 >0 时必须显示给人看**。
@@ -232,7 +255,12 @@ type AIUsage struct {
 	InputTokens  int     `json:"input_tokens"`
 	OutputTokens int     `json:"output_tokens"`
 	CostUSD      float64 `json:"cost_usd"`
-	ElapsedMS    int64   `json:"elapsed_ms"`
+	// CostKnown 这个型号在价目表里认得。
+	//
+	// ⚠️ false 时 CostUSD 是 0，但那**不是"没花钱"** —— 是"不知道花了多少"。
+	//	落库和界面上都要能分开这两件事，否则账单对不上时没人查得出来。
+	CostKnown bool  `json:"cost_known"`
+	ElapsedMS int64 `json:"elapsed_ms"`
 }
 
 // 每百万 token 的单价（美元）。

@@ -222,6 +222,12 @@ func StartScheduler(st *store.Store, db *sql.DB, cipher *crypto.Cipher, pool *k8
 		"disk_watch": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
 			return diskWatchCore(ctx, st, db, cipher)
 		},
+		// 接入自检：跨对象核对「集群标签值 ↔ 观测端点」。
+		// ⚠️ 判定逻辑一直有，但只在有人去查那个集群时才跑 ——
+		//	这个任务把它改成定时全量跑一遍并落库（OPSCMDB-044）。
+		"integration_check": func(ctx context.Context, _ ProgressFn, _ []string) (string, []TaskFailure, bool) {
+			return integrationCheckCore(ctx, st, db, cipher)
+		},
 		// 节点健康是分钟级任务，自己直连集群（k8s_nodes 表 120s 才刷一次，撑不起 3 分钟判定）
 		"node_health_watch": func(ctx context.Context, p ProgressFn, _ []string) (string, []TaskFailure, bool) {
 			return nodeHealthWatchCore(ctx, db, nodeHealthPool, cipher, p)

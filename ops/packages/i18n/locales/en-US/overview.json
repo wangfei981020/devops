@@ -35,7 +35,9 @@
     "podsBad": "Unhealthy pods",
     "pvcsBroken": "Volumes lost or pending",
     "tasksNeverRan": "Scheduled jobs that have never run — everything depending on them is empty",
-    "workloadsDown": "Workloads down (0 ready)"
+    "workloadsDown": "Workloads down (0 ready)",
+    "integrationBroken": "Clusters whose metric label value doesn't exist in the observability endpoint — every cluster-scoped query silently returns empty",
+    "integrationUnverified": "Clusters the integration self-check couldn't verify (label values unreadable) — this does not mean the config is correct, only that it wasn't checked"
   },
   "notCounted": "not counted",
   "notCountedNote_one": "{{count}} check could not be counted. That is not zero — we simply did not see it this time. Fix the data source before trusting this page.",

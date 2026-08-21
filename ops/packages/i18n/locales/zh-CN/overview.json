@@ -35,7 +35,9 @@
     "podsBad": "Pod 异常",
     "pvcsBroken": "存储卷丢失或待绑定",
     "tasksNeverRan": "定时任务从来没跑过——依赖它的数据全是空的",
-    "workloadsDown": "工作负载全挂（就绪 0）"
+    "workloadsDown": "工作负载全挂（就绪 0）",
+    "integrationBroken": "集群的指标标签值在观测端点里不存在——所有带集群条件的查询都会静默返回空",
+    "integrationUnverified": "接入自检没能核对的集群（数据源读不到标签取值）——不代表配置是对的，只代表没查成"
   },
   "notCounted": "未统计出",
   "notCountedNote_other": "有 {{count}} 项没能统计出来。它们不是「0 条」，而是我们这次没看到——先修数据源再看这一页。",

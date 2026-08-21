@@ -2,6 +2,7 @@ import { useTranslation } from '@ops/i18n'
 import { Button } from '@ops/ui'
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api.js'
+import { Preferences } from '../../layouts/Preferences.js'
 import { useAppTitle, useBranding, useFavicon } from '../../lib/branding.js'
 
 /**
@@ -152,7 +153,13 @@ export function LoginPage({ onSignedIn }: { onSignedIn: () => void }) {
       </aside>
 
       {/* 右栏：表单 */}
-      <main className="flex flex-1 items-center justify-center p-6">
+      <main className="relative flex flex-1 items-center justify-center p-6">
+        {/* 🔴 登录页也要能切语言 —— 看不懂中文的人**连登录框都读不了**，
+            等他登进去再切已经晚了。主题同理：夜里打开一屏白光是劝退的。
+            ⚠️ 放右上角绝对定位，不占表单的位置，也不影响窄屏（左栏隐藏时它还在）。 */}
+        <div className="absolute top-4 right-4">
+          <Preferences />
+        </div>
         <form onSubmit={submit} className="w-full max-w-sm">
           {/* 窄屏下的紧凑品牌行 —— 左栏隐藏时它顶上 */}
           <div className="mb-6 flex items-center gap-2 md:hidden">

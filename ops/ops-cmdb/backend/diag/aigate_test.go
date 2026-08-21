@@ -98,7 +98,7 @@ func TestAIBudgetCostCap(t *testing.T) {
 	if !b.Take() {
 		t.Fatal("首次应当放行")
 	}
-	b.Charge(0.02) // 一次就超了
+	b.Charge(0.02, true) // 一次就超了
 	if b.Take() {
 		t.Fatal("成本超限后必须挡住")
 	}
@@ -170,5 +170,40 @@ func TestForcedGateOverridesRuleMatch(t *testing.T) {
 	}
 	if d := ShouldCallAIForced(hasErr, true); !d.Allowed {
 		t.Fatalf("强制复核应放行，实际 %+v", d)
+	}
+}
+
+// TestAIBudgetStopsOnUnknownModelPrice 价目表里没有的型号 → 成本记 0，
+// 于是金额上限**永远触发不了**。
+//
+// 🔴 这个洞的形状：`Charge(0)` 累加不到 MaxCostUSD，一轮 sweep 能一直调下去，
+// 只剩次数上限拦着。而"用了价目表还没跟上的新模型"恰恰是最可能花超的时候。
+//
+// ⚠️ 修法不是编一个价钱（那比不记更坏），而是让"不知道花了多少"本身成为停止条件。
+func TestAIBudgetStopsOnUnknownModelPrice(t *testing.T) {
+	// 金额上限设得很高，确保挡住它的不是金额而是"不可核算"
+	b := NewAIBudget(10, 100)
+	if !b.Take() {
+		t.Fatal("首次应当放行")
+	}
+	b.Charge(0, false) // 认不出的型号：成本按 0 记
+	if b.Take() {
+		t.Fatal("型号不在价目表里、成本无法核算时，必须停止继续调用")
+	}
+	_, _, skipped, note := b.Summary()
+	if skipped != 1 {
+		t.Errorf("skipped = %d，want 1", skipped)
+	}
+	if !strings.Contains(note, "价目表") {
+		t.Errorf("停止原因没说清楚：%q", note)
+	}
+
+	// 反向：认得的型号照常按金额判，别把这条改成"一旦 Charge 过就停"
+	b2 := NewAIBudget(10, 100)
+	for i := 0; i < 3; i++ {
+		if !b2.Take() {
+			t.Fatalf("第 %d 次被误挡：认得的型号且远未超额", i+1)
+		}
+		b2.Charge(0.001, true)
 	}
 }

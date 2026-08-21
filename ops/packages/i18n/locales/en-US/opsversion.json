@@ -46,7 +46,6 @@
   },
   "recon": {
     "title": "Version Comparison",
-    "baseline": "Baseline",
     "plan": "Plan",
     "unsaved": "— unsaved —",
     "onlyDiff": "Diff only",
@@ -61,7 +60,7 @@
     "planUpdate": "Update plan",
     "planDelete": "Delete plan",
     "planName": "Plan name",
-    "planSaveHint": "Saves the column set and baseline, not this run’s results — results change on every refresh",
+    "planSaveHint": "Saves the column set and ignore rules, not this run's results — results change on every refresh",
     "planDeleteHint": "The column set will have to be picked again; existing results are unaffected",
     "needColumn": "Select at least one column",
     "planNameRequired": "Plan name is required",
@@ -71,7 +70,7 @@
     "needTwoColumns": "Select at least two columns to export",
     "servicePh": "Only these services (optional)",
     "serviceHelp": "By service name (last segment of the image name); wallet-* / *-backend / *api* supported. Comma or space separated. Empty = all",
-    "mostlyMissing": "Almost every cell in this run is \"missing\" — usually that means the wrong columns were selected (two unrelated platforms put side by side), not that neither side deployed anything. Check the columns and baseline.",
+    "mostlyMissing": "Almost every row in this run is judged \"missing\" — usually that means the wrong columns were selected (two unrelated platforms put side by side), not that neither side deployed anything. Check which columns you picked.",
     "searchPh": "Search in results",
     "rowCount": "{{n}} rows",
     "rowFiltered": "{{n}} of {{total}} rows (filtered)",
@@ -264,7 +263,7 @@
     "or": "or",
     "showPw": "Show password",
     "hidePw": "Hide password",
-    "pitch": "Compare service versions across companies and environments — see who is behind, and by how much.",
+    "pitch": "Compare service versions across companies and environments — see at a glance which ones differ and which exist on only one side.",
     "feat": {
       "compare": {
         "name": "Compare",
@@ -314,7 +313,7 @@
   },
   "sync": {
     "title": "Source Harbor",
-    "hint": "The side we push images from. Sync records are what tell \"they are behind\" apart from \"we never pushed it\"",
+    "hint": "The side we push images from. Sync records are what tell \"their version differs\" apart from \"we never pushed it\"",
     "add": "Add Harbor",
     "edit": "Edit",
     "delete": "Delete Harbor",

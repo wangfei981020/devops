@@ -11,6 +11,7 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { AppShell } from './layouts/AppShell.js'
+import { Preferences } from './layouts/Preferences.js'
 import { NAV } from './layouts/nav.js'
 import { api, toLoadError } from './lib/api.js'
 import { type Perm, type Session, can } from './lib/session.js'
@@ -191,6 +192,11 @@ function RootLayout() {
           {/* 数据范围被限定时要让人知道 —— 否则「怎么少了几个组织」会被当成故障。
               这条即使窄屏也保留：它影响的是"看到的数据全不全" */}
           {session.scoped && <Badge tone="warn">{t('opsversion:user.scoped')}</Badge>}
+          {/* 主题 / 语言 / 密度。
+              ⚠️ 窄屏**不隐藏**：用户名和角色徽章窄屏可以收起（它们是"我是谁"，
+                 悬停就能看到），但切语言是"我看不看得懂这个界面"——
+                 恰恰是窄屏上更需要的。三个图标按钮总共 96px，收起省不下什么。 */}
+          <Preferences />
           <Button onClick={signOut}>{t('opsversion:login.signOut')}</Button>
         </div>
       }
