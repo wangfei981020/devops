@@ -64,5 +64,15 @@
     "idleOnly": "Idle only",
     "inUse": "In use",
     "searchPlaceholder": "Search IP, owner or project"
+  },
+  "ipKind": {
+    "external_static": "External (static)",
+    "internal_static": "Internal (static)",
+    "external": "External",
+    "internal": "Internal",
+    "vip": "VIP"
+  },
+  "misc": {
+    "unbound": "— (not attached)"
   }
 }

@@ -206,11 +206,18 @@ export function CdnPage() {
                     刻意用数组渲染而不是只显示 risk 那一条：
                     既 paused 又 flexible 的站点两条都要说。
                   */}
-                  {(z.risks ?? []).map((r) => (
-                    <p key={r} className="mt-0.5 text-[11px] text-danger">
-                      {r}
-                    </p>
-                  ))}
+                  {/* 优先渲染结构化条目；老版本后端只发 risks 时回落到它 */}
+                  {z.risk_keys && z.risk_keys.length > 0
+                    ? z.risk_keys.map((rk) => (
+                        <p key={rk.key} className="mt-0.5 text-[11px] text-danger">
+                          {t(rk.key, rk.params)}
+                        </p>
+                      ))
+                    : (z.risks ?? []).map((r) => (
+                        <p key={r} className="mt-0.5 text-[11px] text-danger">
+                          {r}
+                        </p>
+                      ))}
                 </div>
                 <span className="tabular w-[110px] shrink-0 text-right text-xs text-muted-foreground">
                   {/* undefined = 没采到，0 = 确实没有记录。不能都显示成 0 */}

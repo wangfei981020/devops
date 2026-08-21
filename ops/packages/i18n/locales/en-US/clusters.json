@@ -125,5 +125,29 @@
     "notApplicable": "—"
   },
   "versionDriftHint": "Nodes in this cluster run {{n}} different kubelet versions: {{list}}. A mix means an upgrade is in progress — or stuck, which will not resolve on its own",
-  "versionMore": "+{{n}} more"
+  "versionMore": "+{{n}} more",
+  "audit": {
+    "basis": {
+      "cmInventory": "CMDB holds the full ConfigMap inventory for this cluster and this name is not in it — a definitive verdict.",
+      "keyNotInInventory": "The ConfigMap exists, but {{key}} is not among the key names recorded in the inventory.",
+      "ksmInventory": "The name is absent from kube-state-metrics' kube_secret_info (that metric is derived by KSM watching the APIServer directly, and it is confirmed to cover this namespace) — a definitive verdict that does not depend on event retention.",
+      "secretInventory": "Secret inventory is enabled for this cluster and this name is not in it — a definitive verdict.",
+      "eventEvidenceOnly": "Cluster events contain a “not found” record for this Secret. With no Secret inventory available, that is the only evidence there is."
+    },
+    "issue": {
+      "cmMissing": "The referenced ConfigMap does not exist (referenced from: {{source}}).",
+      "keyMissing": "The referenced key {{key}} does not exist in the ConfigMap.",
+      "secretMissing": "The referenced Secret does not exist (referenced from: {{source}}).",
+      "pullSecretMissing": "The image pull secret does not exist, so images cannot be pulled — this is the direct cause of ImagePullBackOff."
+    },
+    "action": {
+      "checkNameOrCreate": "Check whether it was never created, or whether the name or namespace is wrong.",
+      "addKey": "Add the key, or fix the key name being referenced.",
+      "createPullSecret": "Create the pull secret in namespace {{ns}}. If several namespaces share the same registry, check whether this one was missed."
+    },
+    "restart": {
+      "timeBomb": "⚠️ These Pods are still running (the config was there when they started), but **they will fail to start on the next restart**.",
+      "alreadyBad": "The affected Pods are already in a failing state."
+    }
+  }
 }

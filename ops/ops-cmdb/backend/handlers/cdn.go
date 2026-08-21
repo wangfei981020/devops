@@ -487,16 +487,23 @@ func (h *CDNHandler) ListZones(c *gin.Context) {
 		// ssl=flexible 表示 CF 到源站是明文，用户看到的是小锁但回源没有加密
 		// 风险可以同时成立多条。原来是后一个 if 直接覆盖前一个 ——
 		// 一个既 paused 又 flexible 的站点只会显示其中一条
+		// 🔴 风险条目要发**结构化**的（key + 参数），不能只发拼好的中文句子。
+		//	英文界面直接渲染那句中文，实测在 CDN 站点页看得到（OPSCMDB-054）。
+		//	中文原句保留给 MCP / 直接调 API 的人 —— 他们读不到语言包。
 		risks := []string{}
+		riskKeys := []gin.H{}
 		if strings.EqualFold(ssl, "flexible") {
 			risks = append(risks, "SSL 模式为 flexible：CDN 到源站是明文传输，浏览器却显示已加密，建议改为 full/strict")
+			riskKeys = append(riskKeys, gin.H{"key": "cdn:risk.sslFlexible"})
 		}
 		if status != "active" {
 			risks = append(risks, "Zone 状态为 "+status+"（非 active），配置可能未生效")
+			riskKeys = append(riskKeys, gin.H{"key": "cdn:risk.zoneNotActive", "params": gin.H{"status": status}})
 		}
 		if len(risks) > 0 {
 			item["risk"] = strings.Join(risks, "；")
 			item["risks"] = risks
+			item["risk_keys"] = riskKeys
 		}
 		out = append(out, item)
 	}

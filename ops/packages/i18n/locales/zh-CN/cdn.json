@@ -113,5 +113,9 @@
   "tokenValid": "token 有效。",
   "zonesPartiallyFailed": "有 {{count}} 个站点读取失败，没有包含在列表里（不是没有站点）。",
   "pickFieldsHint": "选择要看的字段后重新查询。",
-  "tokenCheckRealtimeNote": "本结果为实时探测 Cloudflare 所得，不读 CMDB 库。体检通过后还需要触发一次 CDN 账号同步，查询接口才会反映新权限。"
+  "tokenCheckRealtimeNote": "本结果为实时探测 Cloudflare 所得，不读 CMDB 库。体检通过后还需要触发一次 CDN 账号同步，查询接口才会反映新权限。",
+  "risk": {
+    "sslFlexible": "SSL 模式为 flexible：CDN 到源站是明文传输，浏览器却显示已加密，建议改为 full/strict。",
+    "zoneNotActive": "站点状态为 {{status}}（不是 active），配置可能没有生效。"
+  }
 }

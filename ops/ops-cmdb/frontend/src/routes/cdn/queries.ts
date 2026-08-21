@@ -31,6 +31,14 @@ export interface CdnZone {
    */
   risk?: string
   risks?: string[]
+  /**
+   * 结构化的风险条目（key + 参数）。
+   *
+   * 🔴 优先用它：`risks` 是后端拼好的**中文**句子，英文界面上原样显示中文
+   *	（OPSCMDB-054，走查 20 页时在这一页实测看见）。
+   *	中文那份保留是给 MCP / 直接调 API 的人的。
+   */
+  risk_keys?: { key: string; params?: Record<string, unknown> }[]
   account?: string
   zone_id?: string
   synced_at?: string

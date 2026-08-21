@@ -121,5 +121,29 @@
     "notApplicable": "—"
   },
   "versionDriftHint": "这个集群的节点上同时跑着 {{n}} 个 kubelet 版本：{{list}}。多版本并存意味着正在升级，或者升级卡住了——后者不会自己好",
-  "versionMore": "还有 {{n}} 个版本"
+  "versionMore": "还有 {{n}} 个版本",
+  "audit": {
+    "basis": {
+      "cmInventory": "CMDB 有本集群完整的 ConfigMap 名录，其中不存在该名称——这是确定性判定。",
+      "keyNotInInventory": "ConfigMap 存在，但名录记录的键名里没有 {{key}}。",
+      "ksmInventory": "kube-state-metrics 的 kube_secret_info 里不存在该名称（该指标由 KSM 直接 watch APIServer 得出，且已确认覆盖本命名空间）——这是确定性判定，不依赖事件保留期。",
+      "secretInventory": "该集群已开启 Secret 名录，其中不存在该名称——这是确定性判定。",
+      "eventEvidenceOnly": "集群事件里出现过该 Secret 的 not found 记录（没有 Secret 名录，这是唯一可用的依据）。"
+    },
+    "issue": {
+      "cmMissing": "引用的 ConfigMap 不存在（来源：{{source}}）。",
+      "keyMissing": "引用的键 {{key}} 在 ConfigMap 里不存在。",
+      "secretMissing": "引用的 Secret 不存在（来源：{{source}}）。",
+      "pullSecretMissing": "镜像拉取密钥不存在，镜像拉不下来——这是 ImagePullBackOff 的直接原因。"
+    },
+    "action": {
+      "checkNameOrCreate": "确认是不是漏建了，或者名称／命名空间写错了。",
+      "addKey": "补上这个键，或者修正引用的键名。",
+      "createPullSecret": "在命名空间 {{ns}} 下创建这个拉取密钥；若多个命名空间共用同一个仓库，检查是不是漏了这个命名空间。"
+    },
+    "restart": {
+      "timeBomb": "⚠️ 这些 Pod 目前还在运行（它们启动时该配置还在），但**下次重启会直接起不来**。",
+      "alreadyBad": "受影响的 Pod 当前已经处于异常状态。"
+    }
+  }
 }

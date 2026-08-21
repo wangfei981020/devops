@@ -398,13 +398,30 @@ func (s *Server) callTool(ctx context.Context, scope auth.Scope, name string, ra
 		if err := decodeArgs(raw, &p); err != nil {
 			return nil, err
 		}
+		// 🔴 每一列必须带上**项目**，否则同一个平台的多个项目会产出
+		//    完全相同的 Key()（"PA/UAT"），后果是双重重复：
+		//      ① LoadSnapshots 按 Key 建 map，后面的查询结果覆盖前面的
+		//      ② 外层遍历 cols 时，每个同名 Column 都从同一份数据里再取一遍
+		//
+		//    生产实测（2026-08-21）：PA 有 3 个项目、SL 有 2 个，
+		//    查一个只部署在一处的服务，返回 **11 条**（PA/UAT × 9 + SL/UAT × 2）——
+		//    AI 会以为这个服务有 11 个部署。
 		var cols []compare.Column
 		for _, in := range insts {
 			if !scope.CanSee(in.ID) {
 				continue
 			}
+			projName := map[int64]string{}
+			if ps, e := s.St.ListProjects(ctx, in.ID); e == nil {
+				for _, pr := range ps {
+					projName[pr.ID] = pr.Name
+				}
+			}
 			for _, e := range in.Envs {
-				cols = append(cols, columnOf(in, e.Env))
+				col := columnOf(in, e.Env)
+				col.ProjectID = e.ProjectID
+				col.ProjectName = projName[e.ProjectID]
+				cols = append(cols, col)
 			}
 		}
 		data, err := s.St.LoadSnapshots(ctx, cols)

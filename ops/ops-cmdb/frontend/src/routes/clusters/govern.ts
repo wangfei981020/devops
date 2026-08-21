@@ -159,6 +159,15 @@ export function useSecurityAudit(cid: number, enabled: boolean, includePlatform 
  */
 export interface ConfigAudit {
   capability?: Record<string, unknown>
+  /**
+   * 🔴 后端发的是 `findings`，而这里原来只声明了 `items` ——
+   *	字段名对不上，于是**这一整块从来没有被渲染过**：
+   *	严重度、判定依据、处置建议、受影响 Pod 全都算了但没人看见（OPSCMDB-054 走查时发现）。
+   *
+   * ⚠️ `basis` 尤其重要：同一个「Secret 不存在」，依据是 KSM 名录还是事件佐证，
+   *	可信度完全不同 —— 后端刻意分开写了，界面上必须能看到。
+   */
+  findings?: ConfigFinding[]
   items?: {
     kind?: string
     namespace?: string
@@ -191,4 +200,24 @@ export function useConfigAudit(cid: number, enabled: boolean, includeUnused = fa
     staleTime: 60_000,
     retry: shouldRetry,
   })
+}
+
+/** 配置引用审计的一条结论。中文字段给 MCP，`*_key` 给界面按 locale 渲染 */
+export interface ConfigFinding {
+  severity?: string
+  status?: string
+  namespace?: string
+  ref_kind?: string
+  ref_name?: string
+  ref_key?: string
+  source?: string
+  pods?: string[]
+  pod_count?: number
+  basis?: string
+  issue?: string
+  action?: string
+  basis_key?: string
+  issue_key?: string
+  action_key?: string
+  params?: Record<string, unknown>
 }

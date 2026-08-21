@@ -114,5 +114,9 @@
   "tokenValid": "Token is valid.",
   "zonesPartiallyFailed": "{{count}} zone(s) couldn't be read and are missing from this list — that is not the same as having no zones.",
   "pickFieldsHint": "Pick the fields you want and run the query again.",
-  "tokenCheckRealtimeNote": "This result comes from probing Cloudflare live; it does not read the CMDB database. After the check passes, run a CDN account sync so the query endpoints reflect the new permissions."
+  "tokenCheckRealtimeNote": "This result comes from probing Cloudflare live; it does not read the CMDB database. After the check passes, run a CDN account sync so the query endpoints reflect the new permissions.",
+  "risk": {
+    "sslFlexible": "SSL mode is “flexible”: traffic from the CDN to the origin is unencrypted, while the browser still shows a padlock. Switch to full/strict.",
+    "zoneNotActive": "Zone status is {{status}} (not active) — the configuration may not have taken effect."
+  }
 }

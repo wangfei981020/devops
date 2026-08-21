@@ -99,11 +99,16 @@ export function CloudIpsPage() {
                       <tr key={`${r.ip}-${r.kind}`} className="border-b border-border">
                         <td className="px-4 py-2 font-mono text-xs">{r.ip}</td>
                         <td className="px-4 py-2">
-                          {/* kind 原样透传：VIP / STATIC 是运维在云控制台里认的词 */}
-                          <Badge tone="mute">{r.kind ?? '—'}</Badge>
+                          {/* 🔴 优先用码值按 locale 渲染；没有码值才回落到后端那份中文
+                              （老版本后端不发 kind_code）。原样透传会让英文界面显示中文 */}
+                          <Badge tone="mute">
+                            {r.kind_code
+                              ? t(`cloudnet:ipKind.${r.kind_code}`)
+                              : (r.kind ?? '—')}
+                          </Badge>
                         </td>
                         <td className="truncate px-4 py-2">
-                          <OwnerCell owner={r.owner} t={t} />
+                          <OwnerCell owner={r.owner} unbound={r.owner_unbound} t={t} />
                         </td>
                         <td className="px-4 py-2 text-xs text-muted-foreground">
                           {r.region || '—'}
@@ -160,11 +165,15 @@ export function CloudIpsPage() {
  */
 function OwnerCell({
   owner,
+  unbound,
   t,
 }: {
   owner?: string
+  unbound?: boolean
   t: (k: string, o?: Record<string, unknown>) => string
 }) {
+  // 「未绑定」是占位符不是负责人名 —— 后端标了 unbound 就按 locale 渲染
+  if (unbound) return <span className="text-muted-foreground">{t('cloudnet:misc.unbound')}</span>
   if (!owner) return <span className="text-muted-foreground">—</span>
   if (!isGKEGeneratedName(owner)) return <span>{owner}</span>
   return (

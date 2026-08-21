@@ -83,6 +83,13 @@ type configFinding struct {
 	Basis     string   `json:"basis"` // 判定依据——依据不同可信度不同，必须写明
 	Issue     string   `json:"issue"`
 	Action    string   `json:"action"`
+	// 🔴 上面三个是**给 MCP / 直接调 API 的人**的中文原句；
+	//	界面读下面这三个 key（+ Params）按 locale 渲染。
+	//	原来只发中文，英文界面上就是三列中文（OPSCMDB-054）。
+	BasisKey  string         `json:"basis_key,omitempty"`
+	IssueKey  string         `json:"issue_key,omitempty"`
+	ActionKey string         `json:"action_key,omitempty"`
+	Params    map[string]any `json:"params,omitempty"` // 三个 key 共用一份插值参数
 }
 
 // refRow 一条聚合后的引用（同名同键的多个 Pod 合并）。
@@ -199,6 +206,9 @@ func judgeRef(r refRow, idx map[string]cmEntry, sec secretInv, evidence map[stri
 			base.Basis = "CMDB 有本集群完整 ConfigMap 名录，其中不存在该名称——这是确定性判定"
 			base.Issue = "引用的 ConfigMap 不存在（来源：" + r.source + "）"
 			base.Action = "确认是否漏建、或名称/命名空间写错；" + restartWarning(r)
+			base.BasisKey, base.IssueKey, base.ActionKey =
+				"clusters:audit.basis.cmInventory", "clusters:audit.issue.cmMissing", "clusters:audit.action.checkNameOrCreate"
+			base.Params = map[string]any{"source": r.source, "restart": restartWarningKey(r)}
 			return &base
 		}
 		if r.key != "" && !cm.hasKey(r.key) {
@@ -206,6 +216,9 @@ func judgeRef(r refRow, idx map[string]cmEntry, sec secretInv, evidence map[stri
 			base.Basis = "ConfigMap 存在，但名录记录的键名里没有 " + r.key
 			base.Issue = "引用的键 " + r.key + " 在 ConfigMap 中不存在"
 			base.Action = "补上该键，或修正引用的键名；" + restartWarning(r)
+			base.BasisKey, base.IssueKey, base.ActionKey =
+				"clusters:audit.basis.keyNotInInventory", "clusters:audit.issue.keyMissing", "clusters:audit.action.addKey"
+			base.Params = map[string]any{"key": r.key, "restart": restartWarningKey(r)}
 			return &base
 		}
 		return nil
@@ -216,14 +229,8 @@ func judgeRef(r refRow, idx map[string]cmEntry, sec secretInv, evidence map[stri
 		if !sec.names[key] {
 			base.Severity, base.Status = "high", "missing"
 			base.Basis = sec.basis()
-			base.Issue = "引用的 Secret 不存在（来源：" + r.source + "）"
-			if r.source == "imagePullSecret" {
-				base.Issue = "镜像拉取密钥不存在，镜像拉不下来（ImagePullBackOff 的直接原因）"
-				base.Action = "在命名空间 " + r.ns + " 下创建该拉取密钥；" +
-					"若多个命名空间共用同一仓库，检查是否漏了这个命名空间"
-				return &base
-			}
-			base.Action = "确认是否漏建、或名称/命名空间写错；" + restartWarning(r)
+			base.BasisKey = sec.basisKey()
+			fillSecretMissing(&base, r)
 			return &base
 		}
 		return nil // 名录里有，确定存在
@@ -231,14 +238,8 @@ func judgeRef(r refRow, idx map[string]cmEntry, sec secretInv, evidence map[stri
 	if evidenceOK && evidence[key] {
 		base.Severity, base.Status = "high", "missing"
 		base.Basis = "集群事件中出现该 Secret 的 not found 记录（无 Secret 名录，此为唯一可用依据）"
-		base.Issue = "引用的 Secret 不存在（来源：" + r.source + "）"
-		if r.source == "imagePullSecret" {
-			base.Issue = "镜像拉取密钥不存在，镜像拉不下来（ImagePullBackOff 的直接原因）"
-			base.Action = "在命名空间 " + r.ns + " 下创建该拉取密钥；" +
-				"若多个命名空间共用同一仓库，检查是否漏了这个命名空间"
-			return &base
-		}
-		base.Action = "确认是否漏建、或名称/命名空间写错；" + restartWarning(r)
+		base.BasisKey = "clusters:audit.basis.eventEvidenceOnly"
+		fillSecretMissing(&base, r)
 		return &base
 	}
 	return nil
@@ -250,6 +251,40 @@ func restartWarning(r refRow) string {
 		return "注意：这些 Pod 目前仍在运行（启动时该配置还在），但「下次重启会直接起不来」"
 	}
 	return "受影响 Pod 当前已处于异常状态"
+}
+
+// restartWarningKey 同 restartWarning，给界面用的 key。
+//
+// ⚠️ 它是拼进 action 里的**后半句**，所以单独作为参数传给前端，
+//
+//	由前端拼完整句子 —— 而不是后端拼好一整句中文发过去。
+func restartWarningKey(r refRow) string {
+	if r.badPods == 0 && len(r.pods) > 0 {
+		return "clusters:audit.restart.timeBomb"
+	}
+	return "clusters:audit.restart.alreadyBad"
+}
+
+// fillSecretMissing 填「Secret 不存在」这一类的文案（中文 + key）。
+//
+// ⚠️ 两处判定（名录可用 / 只有事件佐证）的 Issue 与 Action 完全一样，
+//
+//	只有 Basis 不同。抽出来避免两边改不同步 —— 原来就是两份复制。
+func fillSecretMissing(base *configFinding, r refRow) {
+	if r.source == "imagePullSecret" {
+		base.Issue = "镜像拉取密钥不存在，镜像拉不下来（ImagePullBackOff 的直接原因）"
+		base.Action = "在命名空间 " + r.ns + " 下创建该拉取密钥；" +
+			"若多个命名空间共用同一仓库，检查是否漏了这个命名空间"
+		base.IssueKey, base.ActionKey =
+			"clusters:audit.issue.pullSecretMissing", "clusters:audit.action.createPullSecret"
+		base.Params = map[string]any{"ns": r.ns}
+		return
+	}
+	base.Issue = "引用的 Secret 不存在（来源：" + r.source + "）"
+	base.Action = "确认是否漏建、或名称/命名空间写错；" + restartWarning(r)
+	base.IssueKey, base.ActionKey =
+		"clusters:audit.issue.secretMissing", "clusters:audit.action.checkNameOrCreate"
+	base.Params = map[string]any{"source": r.source, "restart": restartWarningKey(r)}
 }
 
 type cmEntry struct {
@@ -305,6 +340,14 @@ func (s secretInv) basis() string {
 			"且已确认覆盖本命名空间）——这是确定性判定，不依赖事件 TTL"
 	}
 	return "该集群已开启 Secret 名录，其中不存在该名称——这是确定性判定"
+}
+
+// basisKey 同 basis，给界面用。
+func (s secretInv) basisKey() string {
+	if s.source == "ksm" {
+		return "clusters:audit.basis.ksmInventory"
+	}
+	return "clusters:audit.basis.secretInventory"
 }
 
 func (h *K8sDiagHandler) loadSecretIndex(cid int, ns string) secretInv {

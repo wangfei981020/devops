@@ -680,17 +680,24 @@ func (h *NetworkHandler) ListIPs(c *gin.Context) {
 			var provider, project, address, atype, status, region, users, name string
 			var aid int
 			if rows.Scan(&provider, &aid, &project, &address, &atype, &status, &region, &users, &name) == nil {
-				kind := "外网(静态)"
+				// 🔴 kind 是**枚举**、owner 的"未绑定"是**占位符**，都不是自由文案 ——
+				//	必须发码值让前端按 locale 渲染。原来直接发中文，
+				//	英文界面上就是「外网(静态)  —（未绑定）」（OPSCMDB-054，实测看见）。
+				//	中文那份保留给 MCP / 直接调 API 的人。
+				kind, kindCode := "外网(静态)", "external_static"
 				if strings.EqualFold(atype, "INTERNAL") {
-					kind = "内网(静态)"
+					kind, kindCode = "内网(静态)", "internal_static"
 				}
 				owner := users
 				idle := status != "IN_USE" // 预留但没绑 → 闲置计费
+				unbound := false
 				if owner == "" && idle {
 					owner = "—（未绑定）"
+					unbound = true
 				}
 				out = append(out, gin.H{"provider": provider, "project": pn[itoa(aid)+"/"+project], "ip": address,
-					"kind": kind, "owner": owner, "region": region, "idle": idle, "name": name})
+					"kind": kind, "kind_code": kindCode, "owner": owner, "owner_unbound": unbound,
+					"region": region, "idle": idle, "name": name})
 			}
 		}
 		rows.Close()
@@ -704,10 +711,10 @@ func (h *NetworkHandler) ListIPs(c *gin.Context) {
 			if rows.Scan(&provider, &aid, &project, &name, &in, &ex, &region, &vpc) == nil {
 				p := pn[itoa(aid)+"/"+project]
 				if in != "" {
-					out = append(out, gin.H{"provider": provider, "project": p, "ip": in, "kind": "内网", "owner": name, "region": region, "idle": false, "vpc": vpc})
+					out = append(out, gin.H{"provider": provider, "project": p, "ip": in, "kind": "内网", "kind_code": "internal", "owner": name, "region": region, "idle": false, "vpc": vpc})
 				}
 				if ex != "" {
-					out = append(out, gin.H{"provider": provider, "project": p, "ip": ex, "kind": "外网", "owner": name, "region": region, "idle": false, "vpc": vpc})
+					out = append(out, gin.H{"provider": provider, "project": p, "ip": ex, "kind": "外网", "kind_code": "external", "owner": name, "region": region, "idle": false, "vpc": vpc})
 				}
 			}
 		}
@@ -719,7 +726,7 @@ func (h *NetworkHandler) ListIPs(c *gin.Context) {
 			var provider, project, name, vip, region string
 			var aid int
 			if rows.Scan(&provider, &aid, &project, &name, &vip, &region) == nil {
-				out = append(out, gin.H{"provider": provider, "project": pn[itoa(aid)+"/"+project], "ip": vip, "kind": "VIP", "owner": name, "region": region, "idle": false})
+				out = append(out, gin.H{"provider": provider, "project": pn[itoa(aid)+"/"+project], "ip": vip, "kind": "VIP", "kind_code": "vip", "owner": name, "region": region, "idle": false})
 			}
 		}
 		rows.Close()

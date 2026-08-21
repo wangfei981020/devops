@@ -7,7 +7,16 @@ export interface CloudIp {
   ip?: string
   /** VIP / STATIC / HOST_EXTERNAL …… 原样透传 */
   kind?: string
+  /**
+   * kind 的**码值**（external_static / internal_static / external / internal / vip）。
+   *
+   * 🔴 优先用它渲染：`kind` 是后端拼好的中文，英文界面上就是「外网(静态)」
+   *	（OPSCMDB-054，走查 20 页时实测看见）。
+   */
+  kind_code?: string
   owner?: string
+  /** owner 是"未绑定"这个**占位符**而不是真的负责人 —— 按 locale 渲染 */
+  owner_unbound?: boolean
   project?: string
   provider?: string
   region?: string

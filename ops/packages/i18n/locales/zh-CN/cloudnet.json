@@ -64,5 +64,15 @@
     "idleOnly": "仅闲置",
     "inUse": "使用中",
     "searchPlaceholder": "搜索 IP、使用者或项目"
+  },
+  "ipKind": {
+    "external_static": "外网（静态）",
+    "internal_static": "内网（静态）",
+    "external": "外网",
+    "internal": "内网",
+    "vip": "VIP"
+  },
+  "misc": {
+    "unbound": "—（未绑定）"
   }
 }
