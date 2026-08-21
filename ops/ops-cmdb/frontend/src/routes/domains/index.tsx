@@ -1,3 +1,4 @@
+import { keyedText } from '../../lib/hintText.js'
 import { actionMessage } from '../../lib/actionMessage.js'
 import { toErrorInfo } from '@ops/api'
 import { tError, type Locale, useTranslation } from '@ops/i18n'
@@ -154,8 +155,14 @@ export function DomainsPage() {
             {/* 同步 / 自动关联：低频但必须有入口。
                 结果直接显示在按钮旁边，不弹窗——这一页本来就是在看域名状态 */}
             {sync.isSuccess || autoLink.isSuccess ? (
-              <span className="text-xs text-success">
-                {actionMessage(t, sync.data ?? autoLink.data)}
+              <span className="flex flex-col text-xs">
+                <span className="text-success">{actionMessage(t, sync.data ?? autoLink.data)}</span>
+                {/* 一条都没填上时后端会说明原因 —— 那句话比"已完成"有用得多 */}
+                {keyedText(t, autoLink.data, 'reason') !== '' ? (
+                  <span className="mt-0.5 max-w-[420px] text-warning">
+                    {keyedText(t, autoLink.data, 'reason')}
+                  </span>
+                ) : null}
               </span>
             ) : null}
             {sync.isError || autoLink.isError ? (

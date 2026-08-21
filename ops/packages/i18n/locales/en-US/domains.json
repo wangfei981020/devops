@@ -237,5 +237,9 @@
     "ledger": "Ledger",
     "quality": "Access quality"
   },
-  "renewStarted": "Started renewing {{count}} domain(s). You can close this dialog — the job continues in the background."
+  "renewStarted": "Started renewing {{count}} domain(s). You can close this dialog — the job continues in the background.",
+  "autoLinkResult": {
+    "noIngressData": "There is no K8s ingress data to match against — not a single VirtualService, Ingress or HTTPRoute. This isn't “no match found”, it's “nothing to compare with”: check that the cluster is onboarded and that ingress objects are within the collection scope.",
+    "noHostMatch": "Found {{routes}} K8s ingress record(s), but none of their hosts matches a domain in the ledger. These domains most likely aren't served through a K8s ingress at all (CDN straight to origin, or configured in another cluster)."
+  }
 }

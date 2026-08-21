@@ -59,7 +59,33 @@ func (h *DomainHandler) AutoLinkModules(c *gin.Context) {
 		}
 	}
 	SetAuditTarget(c, "filled="+strconv.Itoa(filled))
-	c.JSON(http.StatusOK, gin.H{"ok": true, "filled": filled, "scanned": len(recs), "details": details})
+	out := gin.H{"ok": true, "filled": filled, "scanned": len(recs), "details": details}
+
+	// 🔴 扫了但一条都没填上时，必须说清是**哪种**没填上。
+	//
+	//	生产上 828 条跑完得到 `filled: 0`，人无从判断是
+	//	  ① 根本没有 K8s 入口数据可比对（采集没接 / 集群没纳管）
+	//	  ② 有入口数据，但域名对不上（台账里的域名不在任何 VS/Ingress 上）
+	//	这两种的下一步完全相反：①去接采集，②去看域名是不是配在别处。
+	//	不说的话，一次"成功但什么都没做"的调用和"确实没什么可做"长得一样（OPSCMDB-079）。
+	if filled == 0 && len(recs) > 0 {
+		var ingressRows int
+		_ = sc.QueryRow(`SELECT
+			(SELECT COUNT(*) FROM k8s_virtualservices WHERE tenant_id = ?) +
+			(SELECT COUNT(*) FROM k8s_ingresses WHERE tenant_id = ?) +
+			(SELECT COUNT(*) FROM k8s_httproutes WHERE tenant_id = ?)`).Scan(&ingressRows)
+		if ingressRows == 0 {
+			out["reason_key"] = "domains:autoLinkResult.noIngressData"
+			out["reason"] = "没有可比对的 K8s 入口数据（VirtualService / Ingress / HTTPRoute 一条都没有）。" +
+				"这不是「没有匹配」，是**没得比** —— 先确认集群已纳管且入口对象在采集范围内"
+		} else {
+			out["reason_key"] = "domains:autoLinkResult.noHostMatch"
+			out["reason_params"] = gin.H{"routes": ingressRows}
+			out["reason"] = "有 " + strconv.Itoa(ingressRows) + " 条 K8s 入口记录，但没有一条的 host 与台账里的域名对得上。" +
+				"多半是这些域名根本没配在 K8s 入口上（走 CDN 直接回源、或配在别的集群）"
+		}
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // inferModule 按域名从 VS/Ingress/HTTPRoute 反推模块名，返回(模块, 来源)。

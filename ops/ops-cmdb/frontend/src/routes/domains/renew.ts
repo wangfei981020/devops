@@ -157,14 +157,28 @@ export function useBulkStatus() {
  *
  * ⚠️ 只补空的，不覆盖已有值 —— 人工填过的不该被自动推断盖掉。
  */
+/**
+ * 自动关联的结果。
+ *
+ * ⚠️ `filled: 0` 必须能说清是**哪种** 0：
+ *	没有可比对的入口数据（没得比）vs 有数据但域名对不上。
+ *	两者的下一步完全相反，只显示"已完成"等于什么都没说（OPSCMDB-079）。
+ */
+export interface AutoLinkResult {
+  ok?: boolean
+  filled?: number
+  scanned?: number
+  msg?: string
+  reason_key?: string
+  reason_params?: Record<string, unknown>
+  reason?: string
+}
+
 export function useAutoLinkModules() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () =>
-      apiAction<{ ok?: boolean; filled?: number; msg?: string }>(
-        '/api/domains/auto-link-modules',
-        'POST',
-      ),
+      apiAction<AutoLinkResult>('/api/domains/auto-link-modules', 'POST'),
     onSuccess: () => void qc.invalidateQueries(),
   })
 }
