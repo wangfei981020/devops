@@ -42,5 +42,6 @@
   "perMonth": "${{usd}}/mo",
   "title": "Volumes",
   "total_one": "{{count}} volume",
-  "total_other": "{{count}} volumes"
+  "total_other": "{{count}} volumes",
+  "sharedFsNote": "This volume is provisioned by {{sc}} and shares the host filesystem. The figure shown is the host's overall usage, not this volume's — every volume on the same node shows the same number."
 }

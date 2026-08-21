@@ -345,7 +345,10 @@ func (h *AuthHandler) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		raw := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
 		if raw == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未登录"})
+			// 结构化错误：界面按 message_key 翻译，中文那句留给 MCP / 直接调 API 的人
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"code": httpx.CodeUnauthorized, "message_key": "error.unauthorized",
+				"error": "未登录"})
 			return
 		}
 
@@ -368,7 +371,9 @@ func (h *AuthHandler) Middleware() gin.HandlerFunc {
 			 FROM auth_sessions WHERE token_hash=? AND expires_at > NOW()`, th).
 			Scan(&userID, &username, &authSource, &role, &permJSON)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "登录已失效"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"code": httpx.CodeUnauthorized, "message_key": "error.sessionExpired",
+				"error": "登录已失效"})
 			return
 		}
 

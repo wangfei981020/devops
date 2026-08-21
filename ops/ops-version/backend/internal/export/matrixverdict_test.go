@@ -66,7 +66,11 @@ func TestMatrixVerdict(t *testing.T) {
 		//    而其中好几行在另外两列之间明明差着版本。
 		{"既不一致又采集失败：确凿的差异不能被盖掉", []matrixCell{ver("v1"), ver("v2"), dead}, concDiff},
 		{"既缺失又采集失败：确凿的缺失不能被盖掉", []matrixCell{ver("v1"), missing, dead}, concMissing},
-		{"既不一致又缺失：差异更常是行动项", []matrixCell{ver("v1"), ver("v2"), missing}, concDiff},
+		// 🔴 真数据抓到的：判为「不一致」的 26 行**全部**同时含缺失格子。
+		//    判据是误导性不对称 —— 说「不一致」暗示这几列都有、只是版本不同
+		//    （假信息）；说「缺失」不暗示版本相同（不误导）。
+		{"既不一致又缺失：缺失不会骗人，不一致会", []matrixCell{ver("v1"), ver("v2"), missing}, concMissing},
+		{"三缺一且其余不同", []matrixCell{ver("v1"), ver("v2"), ver("v3"), missing}, concMissing},
 
 		// 两个都是非版本化 tag，没有任何可比的东西
 		{"全是非版本化 tag", []matrixCell{dead, dead}, concUnknown},

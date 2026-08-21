@@ -40,5 +40,6 @@
   "orphanNoteOn": "已只看无人使用的 {{count}} 个 · 点击取消",
   "perMonth": "${{usd}}/月",
   "title": "存储卷",
-  "total_other": "共 {{count}} 个存储卷"
+  "total_other": "共 {{count}} 个存储卷",
+  "sharedFsNote": "该卷由 {{sc}} 分配，与宿主机共用文件系统。这里显示的是宿主机整体水位，不代表本卷实际用量；同节点上的卷会看到相同数值。"
 }

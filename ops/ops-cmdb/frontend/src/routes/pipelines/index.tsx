@@ -1,3 +1,4 @@
+import { hintText } from '../../lib/hintText.js'
 import { toErrorInfo } from '@ops/api'
 import { clusterLabel } from '../../lib/clusterLabel.js'
 import { type Locale, formatRelativeTime, useTranslation } from '@ops/i18n'
@@ -101,8 +102,8 @@ export function PipelinesPage() {
              原样显示它比前端能编的任何文案都准确 */
           <Banner tone="warn">
             <span className="font-medium">{t('pipelines:noProjects')}</span>
-            {projects.data?.hint ? (
-              <span className="mt-0.5 block">{projects.data.hint}</span>
+            {hintText(t, projects.data) ? (
+              <span className="mt-0.5 block">{hintText(t, projects.data)}</span>
             ) : null}
           </Banner>
         ) : ns === '' ? (

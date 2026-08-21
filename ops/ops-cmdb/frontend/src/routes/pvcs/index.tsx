@@ -227,9 +227,29 @@ function PvcLiveCell({
   const used = pickUsage(m, k, 'used_gi')
   if (pct === undefined) return <span className="text-[11px] text-muted-foreground">—</span>
   const tone = pct >= 90 ? 'text-danger' : pct >= 75 ? 'text-warning' : 'text-foreground'
+  // 🔴 `node-fs` = 这个数字是**宿主机整体水位**，不是本卷用量。
+  //	后端一直在返回这个说明，界面此前完全没显示 —— 于是一个几乎空着的卷
+  //	会因为宿主机盘满而显示成 92%，看着就该扩容（OPSCMDB-084）。
+  const acc = m?.accuracy?.[k]
+  const caveat =
+    acc?.level === 'node-fs'
+      ? acc.note_key
+        ? t(acc.note_key, acc.note_params)
+        : (acc.note ?? '')
+      : ''
   return (
-    <span className={`tabular text-[11px] whitespace-nowrap ${tone}`}>
+    <span
+      className={`tabular text-[11px] whitespace-nowrap ${caveat !== '' ? 'text-muted-foreground' : tone}`}
+      title={caveat || undefined}
+    >
       {pct.toFixed(0)}%{used !== undefined ? ` · ${used.toFixed(1)}Gi` : ''}
+      {caveat !== '' ? (
+        // 数字本身要降调（它不代表本卷），并给一个看得见的标记 ——
+        // 只放 title 的话，不悬停就完全看不出这个数字的含义变了
+        <span className="ml-1 text-warning" aria-label={caveat}>
+          ⚠
+        </span>
+      ) : null}
     </span>
   )
 }

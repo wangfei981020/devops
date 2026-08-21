@@ -51,7 +51,7 @@ const KEYS = ['hint', 'error', 'msg', 'message', 'summary', 'note', 'reason', 'd
  * 数字来自本守卫自己的口径 —— 换成别的数法就对不上了。
  */
 const BASELINE = new Map([
-  ['ops-cmdb', 40],
+  ['ops-cmdb', 33],
 ])
 
 // ⚠️ 基线里包含两类**有意保留**的中文，加起来约 29 处：
@@ -105,7 +105,12 @@ function hasPairedKey(src, idx, key) {
     else if (src[j] === '}') d--
     j++
   }
-  return new RegExp(`"${key}_key"`).test(src.slice(i, j))
+  const block = src.slice(i, j)
+  // ⚠️ `error` / `message` 的配对键还有一个：结构化错误用的是 `message_key`
+  //	（见 internal/httpx/errors.go 的 APIError）。只认 `error_key` 的话，
+  //	用标准形态写的那些会被算成"未配对"，数字降不下来 —— 而它们恰恰是最规范的。
+  if ((key === 'error' || key === 'message') && /"message_key"/.test(block)) return true
+  return new RegExp(`"${key}_key"`).test(block)
 }
 
 function inLogCall(src, idx) {

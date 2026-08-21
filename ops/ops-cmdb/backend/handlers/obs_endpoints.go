@@ -645,7 +645,7 @@ func (h *ObsHandler) LabelNames(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"ok": true, "supported": false, "names": []string{},
 			// 中文那句留给 MCP / 直接调 API 的人；界面读 note_key（OPSCMDB-054）
-			"note_key": "obsendpoints.labelsOnlyProm",
+			"note_key": "obsendpoints:labelsOnlyProm",
 			"note":     "只有 Prometheus / VictoriaMetrics 类型的数据源才有标签名可探测",
 		})
 		return
@@ -699,7 +699,7 @@ func (h *ObsHandler) LabelNames(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"ok": true, "supported": true,
 		"names": cand, "all_count": len(parsed.Data),
-		"note_key":    "obsendpoints.labelsFiltered",
+		"note_key":    "obsendpoints:labelsFiltered",
 		"note_params": map[string]any{"total": len(parsed.Data)},
 		"note":        "只列出名字里含 cluster 的标签。该源共有 " + itoa(len(parsed.Data)) + " 个标签，其余可手工填写",
 	})

@@ -257,6 +257,8 @@ export function useCdnTokenCheck() {
 export interface CdnTrafficResult {
   ok?: boolean
   error?: string
+  /** ⚠️ 优先于 hint —— hint 是后端还没迁的中文原句（OPSCMDB-054） */
+  hint_key?: string
   hint?: string
   realtime?: boolean
   zone?: string

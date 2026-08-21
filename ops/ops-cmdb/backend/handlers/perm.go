@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"ops-cmdb-backend/internal/httpx"
 	"ops-cmdb-backend/logx"
 )
 
@@ -424,7 +425,9 @@ func denyPerm(db *sql.DB, c *gin.Context, code string) {
 			c.ClientIP(), actorSourceOf(c), c.Request.Method, c.FullPath(), code)
 	}
 	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-		"error": "没有操作权限", "need": code,
+		"code": httpx.CodeForbidden, "message_key": "error.forbiddenNeed",
+		"params": map[string]any{"need": code},
+		"error":  "没有操作权限", "need": code,
 	})
 }
 

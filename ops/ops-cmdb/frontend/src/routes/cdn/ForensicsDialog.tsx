@@ -1,3 +1,4 @@
+import { hintText } from '../../lib/hintText.js'
 import { toErrorInfo } from '@ops/api'
 import { Badge, Banner, Button, Dialog, Field, Select, Skeleton, TextInput } from '@ops/ui'
 import { useState } from 'react'
@@ -172,7 +173,8 @@ function TrafficResult({ m, t }: { m: ReturnType<typeof useCdnTraffic>; t: TFn }
         <span className="font-medium">{d.error}</span>
         {/* hint 里写着「权限不足需 Zone·Zone Analytics·Read，用 token 体检验」——
             这是下一步动作，比错误本身有用 */}
-        {d.hint ? <span className="mt-0.5 block">{d.hint}</span> : null}
+        {/* hint_key 优先：hint 是后端还没迁的中文原句（见 lib/hintText.ts） */}
+        {hintText(t, d) ? <span className="mt-0.5 block">{hintText(t, d)}</span> : null}
       </Banner>
     )
   }

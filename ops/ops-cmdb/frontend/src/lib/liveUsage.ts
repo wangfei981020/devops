@@ -27,8 +27,18 @@ export interface UsageMap {
   usage?: Record<string, Record<string, number>>
   empty_hint?: string
   cluster_label_error?: unknown
-  /** PVC 专有：用量数据的可信度说明 */
-  accuracy?: unknown
+  /**
+   * PVC 专有：这个数字有多可信，按 key 给。
+   *
+   * 🔴 `level: "node-fs"` 表示**这不是本卷的用量**，而是宿主机整体水位
+   *	（该卷与宿主机共用文件系统）。不显示这个说明的话，
+   *	人会据此判断某个 PVC 快满了 —— 而它可能几乎是空的。
+   *	后端一直在算并返回它，前端此前声明成 unknown 且从未渲染（OPSCMDB-084）。
+   */
+  accuracy?: Record<
+    string,
+    { level?: string; note_key?: string; note_params?: Record<string, unknown>; note?: string }
+  >
 }
 
 type Kind = 'pod' | 'node' | 'pvc'

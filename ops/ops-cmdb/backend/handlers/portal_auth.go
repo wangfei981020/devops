@@ -51,6 +51,7 @@ func (h *AuthHandler) PortalAuth(c *gin.Context) {
 	if portalURL == "" {
 		logx.Line("portal_auth", "未配置运维平台地址，SSO 不可用（环境变量 PORTAL_API_URL 和「基础配置→单点登录」都为空）")
 		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"code": httpx.CodeUpstreamError, "message_key": "error.ssoNotEnabled",
 			"error":    "未开启单点登录",
 			"hint_key": "common:hint.enableSsoFirst",
 			"hint":     "请用本地管理员登录后，到「基础配置 → 单点登录」填写运维平台地址并启用",

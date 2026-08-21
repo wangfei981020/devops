@@ -42,7 +42,7 @@ func (h *SchedHandler) Cancel(c *gin.Context) {
 	} else {
 		// 中文那句留给 MCP / 直接调 API 的人；界面读 msg_key（OPSCMDB-054）
 		c.JSON(200, gin.H{"ok": false,
-			"msg_key": "tasks.notCancellable",
+			"msg_key": "tasks:notCancellable",
 			"msg":     "该记录不是运行中或已结束"})
 	}
 }
@@ -76,7 +76,7 @@ func (h *SchedHandler) RetryFailures(c *gin.Context) {
 	}
 	SetAuditTarget(c, taskKey)
 	c.JSON(200, gin.H{"ok": true,
-		"msg_key":    "tasks.retryTriggered",
+		"msg_key":    "tasks:retryTriggered",
 		"msg_params": map[string]any{"count": len(targets)},
 		"msg":        fmt.Sprintf("已触发重试 %d 项，稍后刷新看新记录", len(targets))})
 }
@@ -373,6 +373,6 @@ func (h *SchedHandler) Run(c *gin.Context) {
 	}
 	SetAuditTarget(c, key)
 	c.JSON(200, gin.H{"ok": true,
-		"msg_key": "tasks.runTriggered",
+		"msg_key": "tasks:runTriggered",
 		"msg":     "已触发，稍后刷新看结果"})
 }

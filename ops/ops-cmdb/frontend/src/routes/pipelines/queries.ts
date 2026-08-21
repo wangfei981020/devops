@@ -79,6 +79,8 @@ export function useDevOpsProjects(clusterId: number) {
          * 🔴 项目为 0 时后端会说清**为什么**（命名空间没采到 / 这个集群确实没装 DevOps）。
          * 前端必须显示它 —— 只说「共 0 个」等于让人去选一个不存在的东西。
          */
+        /** ⚠️ 优先于 hint —— hint 是后端还没迁的中文原句（OPSCMDB-054） */
+        hint_key?: string
         hint?: string
       }>(`/api/devops/projects?cluster_id=${clusterId}`),
     staleTime: 60_000,

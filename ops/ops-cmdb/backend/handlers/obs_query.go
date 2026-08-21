@@ -100,6 +100,9 @@ func (h *ObsQueryHandler) HostUsage(c *gin.Context) {
 	}
 	if len(rows) == 0 {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "items": []any{},
+			"error_key": "error.noHostMetrics",
+			// 中文原句留给 MCP / 直接调 API 的人；它里面提到的 prom_labels 是工具名，
+			// 界面版本换成人能做的说法（check-mcp-text-leak）
 			"error": "没查到任何主机指标。可能是：数据源里主机指标没有 env/project/team 标签，" +
 				"或筛选条件(env/project/team)写错了——标签值通常是小写，具体取值可在数据源里用 prom_labels 查"})
 		return
@@ -228,8 +231,10 @@ func (h *ObsQueryHandler) pvcAccuracy(usage map[string]map[string]float64, share
 	out := map[string]any{}
 	for k := range usage {
 		if sc, ok := shared[k]; ok {
-			out[k] = map[string]string{
-				"level": "node-fs",
+			out[k] = map[string]any{
+				"level":       "node-fs",
+				"note_key":    "pvcs:sharedFsNote",
+				"note_params": map[string]any{"sc": sc},
 				"note": "该卷由 " + sc + " 分配，与宿主机共用文件系统，此处显示的是「宿主机整体水位」，" +
 					"不代表本卷实际用量；同节点上的卷会看到相同数值",
 			}
@@ -697,6 +702,7 @@ func (h *ObsQueryHandler) Loki(c *gin.Context) {
 	code, body, err := obsGet(u, token, 45*time.Second)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error(),
+			"hint_key": "error.lokiQueryFailedHint",
 			"hint": "查询失败。若是超时：LogQL 的标签匹配太宽（如 namespace=~\".+\"）会让 Loki " +
 				"扫描全部数据流，请收窄标签或缩短时间窗（minutes）后重试。" +
 				"⚠️ 这是查询失败，不是「没有日志」"})

@@ -163,7 +163,7 @@ func (h *ObsQueryHandler) PipelineRuns(c *gin.Context) {
 		"count": len(out), "items": out,
 		// 界面上的人点行就能看日志，不需要（也执行不了）工具名；
 		// 工具链另放 mcp_hint 给 AI（check-mcp-text-leak）
-		"hint_key": "pipelines.clickRunForLog",
+		"hint_key": "pipelines:clickRunForLog",
 		"hint":     "点某次构建可以看它的日志；run 是 Jenkins 构建号",
 		"mcp_hint": "用 pipeline + run 调 pipeline_log 看失败原因；run 是 Jenkins 构建号"}
 	if matched > len(out) {
@@ -436,7 +436,7 @@ func (h *ObsQueryHandler) DevOpsProjects(c *gin.Context) {
 		}
 	}
 	res := gin.H{"ok": true, "count": len(out), "projects": out,
-		"hint_key": "pipelines.pickProjectForRuns",
+		"hint_key": "pipelines:pickProjectForRuns",
 		"hint":     "选一个项目查看它的构建记录，再点具体某次构建看日志",
 		"mcp_hint": "拿 namespace 去调 pipeline_runs 看失败的构建，再用 pipeline_log 取根因"}
 	if len(out) == 0 {
