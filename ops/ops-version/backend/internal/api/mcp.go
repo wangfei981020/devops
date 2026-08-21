@@ -104,7 +104,13 @@ func (s *Server) mcpHandler(w http.ResponseWriter, r *http.Request) {
 			Name string          `json:"name"`
 			Args json.RawMessage `json:"arguments"`
 		}
-		_ = json.Unmarshal(req.Params, &p)
+		// 🔴 -32602 = Invalid params（JSON-RPC 标准码）。
+		//    原来是 `_ =` 丢掉错误 —— 参数类型不对时那个字段静默变零值，
+		//    调用方以为自己传了、实际没生效。
+		if err := decodeArgs(req.Params, &p); err != nil {
+			rpcErr(w, req.ID, -32602, err.Error())
+			return
+		}
 		res, err := s.callTool(r.Context(), scope, p.Name, p.Args)
 		logx.Info("mcp", "tool_call", map[string]any{
 			"client": name, "tool": p.Name, "ok": err == nil})
@@ -257,7 +263,9 @@ func (s *Server) callTool(ctx context.Context, scope auth.Scope, name string, ra
 
 	case "list_versions":
 		var p struct{ Org, Env, Project string }
-		_ = json.Unmarshal(raw, &p)
+		if err := decodeArgs(raw, &p); err != nil {
+			return nil, err
+		}
 		in, okk := byName[p.Org]
 		if !okk {
 			return nil, fmt.Errorf("找不到组织 %q（可能不存在，或该令牌的数据范围看不到它）", p.Org)
@@ -299,7 +307,9 @@ func (s *Server) callTool(ctx context.Context, scope auth.Scope, name string, ra
 			// Limit 最多返回多少行。0 = 用默认上限。
 			Limit int `json:"limit"`
 		}
-		_ = json.Unmarshal(raw, &p)
+		if err := decodeArgs(raw, &p); err != nil {
+			return nil, err
+		}
 		if len(p.Columns) < 2 {
 			return nil, fmt.Errorf("至少要两列才能对比")
 		}
@@ -385,7 +395,9 @@ func (s *Server) callTool(ctx context.Context, scope auth.Scope, name string, ra
 		var p struct {
 			Service string `json:"service"`
 		}
-		_ = json.Unmarshal(raw, &p)
+		if err := decodeArgs(raw, &p); err != nil {
+			return nil, err
+		}
 		var cols []compare.Column
 		for _, in := range insts {
 			if !scope.CanSee(in.ID) {
@@ -429,7 +441,9 @@ func (s *Server) callTool(ctx context.Context, scope auth.Scope, name string, ra
 			Service string `json:"service"`
 			Limit   int    `json:"limit"`
 		}
-		_ = json.Unmarshal(raw, &p)
+		if err := decodeArgs(raw, &p); err != nil {
+			return nil, err
+		}
 		var iid int64
 		if p.Org != "" {
 			in, okk := byName[p.Org]
@@ -588,4 +602,40 @@ func (s *Server) setMCPTokenExpiry(w http.ResponseWriter, r *http.Request) {
 	s.St.Audit(r.Context(), userOf(r).Username, "mcp_token.set_expiry",
 		strconv.FormatInt(id, 10), map[string]any{"days": days}, nil, clientIP(r))
 	ok(w, map[string]any{"ok": true, "days": days})
+}
+
+// decodeArgs 解析工具参数，**类型不对就报错**。
+//
+// 🔴 原来是 `_ = json.Unmarshal(raw, &p)` —— 错误直接丢掉。
+//
+//	Go 的行为是：类型不匹配时那个字段保持零值、返回 error，
+//	而**其余字段照常解析成功**。于是错误被吞之后，
+//	调用方看到的是「大部分参数生效了，就那一个没生效」。
+//
+// 生产实测（2026-08-21）：MCP 客户端把 limit 传成字符串 "1"，
+// 服务端 p.Limit 静默变 0 → 走默认上限 200 →
+// **AI 传 limit=1 拿回 71 行**，而工具描述里明明警告过
+// 「全量结果 7 万余字符会撑爆上下文」。columns 和 only_diff 都好好的，
+// 唯独 limit 不声不响地没了。
+//
+// ⚠️ 这类"参数被静默忽略"比直接报错危险得多：报错了调用方会改，
+//
+//	静默忽略则是它以为自己已经限制了，然后拿着全量继续往下走。
+func decodeArgs(raw []byte, v any) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(raw, v); err != nil {
+		// 🔴 把**哪个参数、要什么类型**说清楚。
+		//    只回 "invalid arguments" 的话，调用方得自己一个个试。
+		var te *json.UnmarshalTypeError
+		if errors.As(err, &te) {
+			return fmt.Errorf(
+				"参数 %q 类型不对：收到 %s，需要 %s。"+
+					"⚠️ 数字参数要传数字，不能传字符串（如 limit: 1，不是 limit: \"1\"）",
+				te.Field, te.Value, te.Type)
+		}
+		return fmt.Errorf("参数解析失败：%w", err)
+	}
+	return nil
 }

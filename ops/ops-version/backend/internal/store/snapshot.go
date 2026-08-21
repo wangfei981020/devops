@@ -10,6 +10,8 @@ import (
 	"ops-version-backend/internal/compare"
 	"ops-version-backend/internal/imageref"
 	"ops-version-backend/providers"
+
+	"ops-version-backend/logx"
 )
 
 // SaveSnapshots 把一次采集的结果全量写入某个 (组织, 环境)，并算出变更历史。
@@ -219,7 +221,12 @@ func (s *Store) LoadSnapshots(ctx context.Context, cols []compare.Column) (map[s
 			sp.IsVersioned = versioned == 1
 			sp.HasConflict = conflict.Valid && conflict.String != ""
 			if wl.Valid {
-				_ = json.Unmarshal([]byte(wl.String), &sp.Workloads)
+				if err := json.Unmarshal([]byte(wl.String), &sp.Workloads); err != nil {
+					// workloads 坏了 → 导出的明细里这个服务"没有工作负载"，
+					// 而那看起来只是数据少了一点，不像是坏了
+					logx.Warn("store", "workloads_broken", map[string]any{
+						"service": sp.ServiceKey, "org_id": c.OrgID, "env": c.Env, "err": err.Error()})
+				}
 			}
 			list = append(list, sp)
 		}

@@ -159,7 +159,10 @@ function Body({ s, t, locale }: { s: Situation; t: TFn; locale: Locale }) {
           */}
           {['hosts', 'k8s', 'domains', 'certs'].map((k) => {
             const at = s.freshness[k]
-            const stale = at ? isStale(at, STALE_AFTER_H[k] ?? 6) : false
+            // 🔴 没有阈值就**不判**。回落到一个猜的数会产出看似确定的误报
+            //	（原来写死 6 小时，而云主机每天才同步一次 —— OPSCMDB-069）
+            const thr = s.staleAfterH[k]
+            const stale = at && thr !== undefined ? isStale(at, thr) : false
             return (
               <div key={k} className="flex items-baseline gap-3 text-[13px]">
                 <span className="w-[88px] shrink-0 text-muted-foreground">
@@ -185,7 +188,7 @@ function Body({ s, t, locale }: { s: Situation; t: TFn; locale: Locale }) {
                       <span className="text-[11px] text-warning">
                         {t('overview:staleHint', {
                           actual: staleFor(at, locale),
-                          hours: STALE_AFTER_H[k] ?? 6,
+                          hours: thr,
                         })}
                       </span>
                     ) : null}
@@ -203,21 +206,14 @@ function Body({ s, t, locale }: { s: Situation; t: TFn; locale: Locale }) {
   )
 }
 
-/**
- * 各类数据「多久没更新就算旧」的阈值（小时）。
- *
- * ⚠️ 按采集频率给，不要统一成一个数：
- * 集群资源两分钟一轮，超过 1 小时就明显不对；
- * 主机同步是小时级的，6 小时才算旧；
- * 证书 443 探测是每天一次，48 小时内都正常。
- * 统一阈值会让高频的那类漏报、低频的那类天天误报。
- */
-const STALE_AFTER_H: Record<string, number> = {
-  hosts: 6,
-  k8s: 1,
-  domains: 24,
-  certs: 48,
-}
+// 🔴 这里原来有一张写死的阈值表（`STALE_AFTER_H`）。已删除 —— 阈值改由后端
+//	按定时任务的**实际 cron 周期**算出来（`stale_after_h`）。
+//
+//	那张表把「这个任务多久跑一次」复制了一份，而复制的那份不会跟着改：
+//	表里给云主机写的是 6 小时，而 host_sync 是 `0 3 * * *`（每天一次）——
+//	每天有 18 小时在报「数据可能已过期」，而那时数据完全正常（OPSCMDB-069）。
+//
+// ⚠️ 别再加回来。要调阈值就去调那个任务的 cron，或改后端的宽限系数。
 
 function isStale(at: string, hours: number) {
   const ms = new Date(at).getTime()

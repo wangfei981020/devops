@@ -12,6 +12,8 @@ import (
 
 	"ops-version-backend/internal/auth"
 	"ops-version-backend/internal/compare"
+
+	"ops-version-backend/logx"
 )
 
 // ─────────────── 用户 ───────────────
@@ -241,12 +243,24 @@ func (s *Store) ListPlans(ctx context.Context) ([]ComparePlan, error) {
 			return nil, err
 		}
 		p.OnlyDiff = od == 1
-		_ = json.Unmarshal([]byte(cj), &p.Columns)
+		// 🔴 库里的 JSON 坏了不能静默变空。
+		//    columns_json 解析失败 → p.Columns 空 → 方案打开后**一列都没有**，
+		//    而界面上看着就像"这个方案本来就没配列"，没人会想到去查库。
+		// ⚠️ 不中断整个查询：一个方案坏了不该让方案列表整个打不开。
+		if err := json.Unmarshal([]byte(cj), &p.Columns); err != nil {
+			logx.Warn("store", "plan_columns_broken", map[string]any{
+				"plan_id": p.ID, "name": p.Name, "err": err.Error(), "raw": clipText(cj, 200)})
+		}
 		// NULL / 空串 = 没有忽略规则。留空 IgnoreSet，不是 nil map ——
 		// IgnoredCell 读 nil map 不会崩，但前端拿到 `"cells":null` 又是一次白屏。
 		p.Ignores = compare.IgnoreSet{Services: []string{}, Cells: map[string][]string{}}
 		if ij.Valid && strings.TrimSpace(ij.String) != "" {
-			_ = json.Unmarshal([]byte(ij.String), &p.Ignores)
+			if err := json.Unmarshal([]byte(ij.String), &p.Ignores); err != nil {
+				// 忽略规则坏了 → 那些本该被忽略的服务突然全冒出来，
+				// 表现是"我明明忽略过的又回来了"，而这最容易被当成功能 bug
+				logx.Warn("store", "plan_ignores_broken", map[string]any{
+					"plan_id": p.ID, "name": p.Name, "err": err.Error()})
+			}
 			if p.Ignores.Services == nil {
 				p.Ignores.Services = []string{}
 			}

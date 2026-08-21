@@ -23,6 +23,17 @@ export interface Situation {
   inventory: Record<string, number | null>
   /** 各类数据最后一次采集的时刻；缺 key = 那类数据没接入 */
   freshness: Record<string, string>
+  /**
+   * 各类数据「多久没更新算旧」，按**它自己的采集周期**算，单位小时。
+   *
+   * 🔴 这个值必须来自后端：cron 表达式只有后端知道。
+   *	前端原来写死一张常量表（云主机 6 小时），而 host_sync 是每天一次 ——
+   *	每天有 18 小时在误报「数据可能已过期」（OPSCMDB-069）。
+   *
+   * ⚠️ 某一项**没有**阈值时不做过期判定，而不是回落到一个猜的数：
+   *	拿错阈值判出来的「过期」比不判更坏，它看起来是个确定的判断。
+   */
+  staleAfterH: Record<string, number>
   generatedAt: string
 }
 
@@ -35,6 +46,7 @@ interface RawSituation {
   }[]
   inventory?: Record<string, number | null>
   freshness?: Record<string, string>
+  stale_after_h?: Record<string, number>
   generated_at?: string
 }
 
@@ -69,6 +81,7 @@ export function useSituation() {
         })),
         inventory: d.inventory ?? {},
         freshness: d.freshness ?? {},
+        staleAfterH: d.stale_after_h ?? {},
         generatedAt: d.generated_at ?? '',
       }
     },

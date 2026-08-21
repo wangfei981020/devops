@@ -7,7 +7,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/robfig/cron/v3"
 	"ops-cmdb-backend/logx"
+	"strings"
 )
 
 // 全局态势。
@@ -55,6 +57,17 @@ type situationOut struct {
 	// Freshness 各类数据最后一次采集的时刻。台账是快照不是实时，
 	// 首页尤其要显示它 —— 否则整页数字看起来都像"此刻"
 	Freshness map[string]string `json:"freshness"`
+	// StaleAfterH 各类数据「多久没更新才算旧」，按**它自己的采集周期**算，单位小时。
+	//
+	// 🔴 前端原来用一张写死的常量表（云主机 6 小时），而 host_sync 是
+	//	`0 3 * * *` —— 每天凌晨三点跑一次，周期 24 小时。
+	//	拿 6h 阈值去判一个 24h 周期的信号，结果是**每天有 18 小时在误报**：
+	//	09:00 就开始说"数据可能已过期"，而那时数据完全正常（OPSCMDB-069）。
+	//
+	// ⚠️ 阈值必须由后端给：cron 表达式只有后端知道。
+	//	前端写死一个数，等于把"这个任务多久跑一次"复制了一份，
+	//	而复制的那份不会跟着改。
+	StaleAfterH map[string]float64 `json:"stale_after_h"`
 
 	GeneratedAt string `json:"generated_at"`
 }
@@ -78,6 +91,7 @@ func (h *OverviewHandler) buildOverview() situationOut {
 		Attention:   []attentionItem{},
 		Inventory:   map[string]*int64{},
 		Freshness:   map[string]string{},
+		StaleAfterH: map[string]float64{},
 		GeneratedAt: time.Now().Format(time.RFC3339),
 	}
 
@@ -295,6 +309,46 @@ func (h *OverviewHandler) buildOverview() situationOut {
 		}
 		// t 为 NULL = 这一类确实没采过。不放进 map，前端显示"未接入"，这是对的
 	}
+
+	// staleFor 按定时任务的实际周期算出「多久算旧」。
+	//
+	// taskKey 为空表示这类数据不由定时任务驱动（常驻采集），用一个短的固定值。
+	// 任务查不到或 cron 解析不了时**不给阈值** —— 前端据此不做 stale 判定，
+	// 而不是回落到一个猜的数：拿错阈值判出来的"过期"比不判更坏。
+	staleFor := func(key, taskKey string) {
+		if taskKey == "" {
+			out.StaleAfterH[key] = 1 // 分钟级采集，1 小时没动就确实不对了
+			return
+		}
+		var schedule string
+		if h.DB.QueryRow(`SELECT schedule FROM scheduled_tasks WHERE task_key=?`, taskKey).
+			Scan(&schedule) != nil {
+			logx.J("overview", "stale_threshold_unknown", map[string]any{
+				"key": key, "task": taskKey,
+				"note": "查不到这个定时任务，本项不做过期判定——拿猜的阈值判出来的「过期」比不判更坏",
+			})
+			return
+		}
+		hours, ok := cronPeriodHours(schedule)
+		if !ok {
+			logx.J("overview", "stale_threshold_unparsable", map[string]any{
+				"key": key, "task": taskKey, "schedule": schedule,
+				"note": "cron 表达式解析不出周期，本项不做过期判定",
+			})
+			return
+		}
+		out.StaleAfterH[key] = hours * 1.5
+	}
+	// 阈值 = 该类数据对应的定时任务周期 × 宽限系数。
+	//
+	// ⚠️ 系数取 1.5 而不是 1.0：任务本身要跑一会儿，且允许一次失败重试。
+	//	正好等于周期的话，每个周期末尾都会闪一下"过期"。
+	//	⚠️ 也不能取太大 —— 取 2 就意味着连续两次没跑成才报，那太晚了。
+	staleFor("hosts", "host_sync")
+	staleFor("k8s", "") // 集群资源是常驻采集（分钟级），不挂在定时任务上
+	staleFor("domains", "dns_sync")
+	staleFor("certs", "inspect")
+
 	fresh("hosts", `SELECT MAX(synced_at) FROM hosts`)
 	fresh("k8s", `SELECT MAX(synced_at) FROM k8s_nodes`)
 	fresh("domains", `SELECT MAX(last_synced_at) FROM domains`)
@@ -349,4 +403,39 @@ func sortAttention(items []attentionItem) {
 			items[j-1], items[j] = items[j], items[j-1]
 		}
 	}
+}
+
+// cronPeriodHours 由 cron 表达式算出它的**实际触发间隔**（小时）。
+//
+// 🔴 不解析表达式本身，而是让 cron 库连算两次下次触发时刻求差。
+//
+//	自己解析要处理 `*/30`、`0 3,15 * * *`、`@every 90s`、`@daily` 各种形态，
+//	漏一种就会算出一个错的周期 —— 而错的阈值比没有阈值更坏
+//	（它看起来是个确定的判断）。让库去算，我们只量结果。
+//
+// ⚠️ 间隔不均匀的表达式（`0 3,15 * * *` 是 12h/12h，但 `0 3,4 * * *` 是 1h/23h）
+//
+//	取**最大**的那一段：按最短那段判会在长间隔里误报，而误报正是这条要修的问题。
+//	所以连算三次，取两段间隔里大的那个。
+func cronPeriodHours(expr string) (float64, bool) {
+	sched, err := cron.ParseStandard(strings.TrimSpace(expr))
+	if err != nil {
+		return 0, false
+	}
+	// 从一个固定基准往后推，避免"现在几点"影响结果
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local)
+	t1 := sched.Next(base)
+	t2 := sched.Next(t1)
+	t3 := sched.Next(t2)
+	if t1.IsZero() || t2.IsZero() || t3.IsZero() {
+		return 0, false
+	}
+	gap := t2.Sub(t1)
+	if g2 := t3.Sub(t2); g2 > gap {
+		gap = g2
+	}
+	if gap <= 0 {
+		return 0, false
+	}
+	return gap.Hours(), true
 }
