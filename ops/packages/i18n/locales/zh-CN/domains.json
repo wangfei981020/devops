@@ -231,6 +231,7 @@
   "renewStarted": "已开始为 {{count}} 个域名续费，可以关闭弹窗，任务在后台继续。",
   "autoLinkResult": {
     "noIngressData": "没有可比对的 K8s 入口数据（VirtualService / Ingress / HTTPRoute 一条都没有）。这不是「没有匹配」，是没得比——先确认集群已纳管、且入口对象在采集范围内。",
-    "noHostMatch": "有 {{routes}} 条 K8s 入口记录，但没有一条的 host 与台账里的域名对得上。多半是这些域名根本没配在 K8s 入口上（走 CDN 直接回源，或配在别的集群）。"
+    "noHostMatch": "有 {{routes}} 条 K8s 入口记录，但没有一条的 host 与台账里的域名对得上。多半是这些域名根本没配在 K8s 入口上（走 CDN 直接回源，或配在别的集群）。",
+    "countFailed": "一条都没填上，但也没能统计可比对的入口数量——所以说不出是「没得比」还是「对不上」。"
   }
 }

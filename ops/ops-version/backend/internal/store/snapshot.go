@@ -165,11 +165,32 @@ func (s *Store) LoadSnapshots(ctx context.Context, cols []compare.Column) (map[s
 			out[c.Key()] = nil
 			continue
 		}
-		rows, err := s.db.QueryContext(ctx, `
-			SELECT service_key, tag, running_tag, digest, build_no, is_versioned,
+		// 🔴 ProjectID==0 = **不限项目，查这个平台该环境下的全部**。
+		//
+		//    原来无条件拼 `project_id=?`，于是 ProjectID=0 时查的是
+		//    `project_id=0` —— 而真实数据的 project_id 是 1、2……
+		//    **一行都查不到，还不报错**。
+		//
+		//    生产实测（2026-08-21）：
+		//      list_versions(org=SL, env=UAT)              → count 0
+		//      list_versions(org=SL, env=UAT, project=G32) → count 102
+		//
+		//    而 MCP 的 project 参数是**可选**的 —— 最自然的那种调用返回空，
+		//    AI 会照着回答「这个平台没部署任何服务」。
+		//    applyProjectFilter 的注释写的是「留空 = 跨项目全量」，
+		//    **设计意图对，实现没跟上**。
+		//
+		// ⚠️ 界面不受影响：它构造 Column 时 ProjectID 是真实值。
+		q := `SELECT service_key, tag, running_tag, digest, build_no, is_versioned,
 			       namespace, workloads, conflict_detail, observed_at
 			  FROM service_versions
-			 WHERE org_id=? AND project_id=? AND env=?`, c.OrgID, c.ProjectID, c.Env)
+			 WHERE org_id=? AND env=?`
+		args := []any{c.OrgID, c.Env}
+		if c.ProjectID != 0 {
+			q += ` AND project_id=?`
+			args = append(args, c.ProjectID)
+		}
+		rows, err := s.db.QueryContext(ctx, q, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -203,6 +224,9 @@ func (s *Store) LoadSnapshots(ctx context.Context, cols []compare.Column) (map[s
 			list = append(list, sp)
 		}
 		rows.Close()
+		if c.ProjectID == 0 {
+			list = markCrossProjectConflicts(list)
+		}
 		out[c.Key()] = list
 	}
 	return out, nil
@@ -284,4 +308,39 @@ func (s *Store) ListPods(ctx context.Context, orgID, projectID int64, env string
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// markCrossProjectConflicts 跨项目查询时，同名服务版本不一致要标成冲突。
+//
+// 🔴 不标的话它们会**静默互相覆盖**：调用方按 service_key 建索引，
+// 后读到的那条盖掉先读到的，而结果看不出少了什么 ——
+// 拿到的是"某一个项目的版本"，却以为是"这个平台的版本"。
+//
+// 标成 HasConflict 之后判定会走 CellConflict → 行结论「无法判定」，
+// 也就是**明说这里判不了**，而不是给一个看着正常的错答案。
+//
+// ⚠️ 只在 ProjectID==0（不限项目）时做。指定了项目就不存在跨项目同名的问题。
+func markCrossProjectConflicts(list []compare.Snapshot) []compare.Snapshot {
+	seen := map[string]int{} // service_key → 在 list 里的下标
+	dup := map[string]bool{}
+	for i, sp := range list {
+		j, ok := seen[sp.ServiceKey]
+		if !ok {
+			seen[sp.ServiceKey] = i
+			continue
+		}
+		// 同名且版本不同 —— 两个项目跑着不同版本，合并成一条就是撒谎
+		if list[j].Tag != sp.Tag {
+			dup[sp.ServiceKey] = true
+		}
+	}
+	if len(dup) == 0 {
+		return list
+	}
+	for i := range list {
+		if dup[list[i].ServiceKey] {
+			list[i].HasConflict = true
+		}
+	}
+	return list
 }

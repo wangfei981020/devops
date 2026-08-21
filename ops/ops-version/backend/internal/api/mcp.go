@@ -150,10 +150,15 @@ func mcpTools(role string) []map[string]any {
 		}},
 		{auth.PermView, map[string]any{
 			"name": "compare_versions",
-			"description": "比对：给一组列（平台+环境的自由组合）和一个基准列，返回每个服务的判定结果。" +
-				"判定有七种：一致/落后/超前/该列没有/基准没有/无法判定(非版本化tag)/同名冲突。" +
-				"默认只返回**有差异的**服务（only_diff=true）；summary 里给的是全量计数，据此可知总共多少服务。" +
-				"注意：某列采集失败时返回 no_data，这表示「我们没看到」而不是「对方没部署」，不要当成缺失。",
+			"description": "比对：给一组列（平台+环境的自由组合），返回每个服务的判定结果。" +
+				"**没有基准列** —— 判定是横着比这几列彼此一不一样，不带方向，" +
+				"说不了「谁落后谁」（跨公司是两个 Harbor、两条流水线，版本号本来就不可比）。" +
+				"行结论五态：same/diff/missing/unknown/ignored，含义见返回体里的 verdict_scale。" +
+				"每一格另有 state（version/missing/no_data/unversioned/conflict/ignored）说明这一格为什么能比或不能比。" +
+				"默认只返回**有差异的**服务（only_diff=true）；summary 里给的是全量计数（按行），据此可知总共多少服务。" +
+				"⚠️ 某列采集失败时该格 state=no_data，这表示「我们没看到」而不是「对方没部署」，不要当成缺失。" +
+				"⚠️ 一个平台下可能有多个项目；不传 project 就是跨项目全量，" +
+				"此时同名服务若版本不一致会标成 conflict（判不了），要精确结果请指定 project。",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -165,8 +170,6 @@ func mcpTools(role string) []map[string]any {
 							"env": map[string]any{"type": "string"},
 						}},
 					},
-					"baseline_org": map[string]any{"type": "string", "description": "基准组织名"},
-					"baseline_env": map[string]any{"type": "string", "description": "基准环境"},
 					"only_diff": map[string]any{"type": "boolean",
 						"description": "只返回有差异的服务。**默认 true** —— 全量结果很大（实测 160 个服务三列 = 7 万余字符），" +
 							"传 false 之前请先确认真的需要全量。"},
@@ -286,8 +289,9 @@ func (s *Server) callTool(ctx context.Context, scope auth.Scope, name string, ra
 	case "compare_versions":
 		var p struct {
 			Columns []struct{ Org, Env, Project string } `json:"columns"`
-			BI      string                               `json:"baseline_org"`
-			BE      string                               `json:"baseline_env"`
+			// 🔴 baseline_org / baseline_env 已删。判定不再有基准 ——
+			//    留着"收下但不读"最坏：老调用方照旧传，服务端静默丢弃，
+			//    它以为自己指定了基准，而结果完全是另一套语义且不报错。
 			// 🔴 用指针：要区分「没传」和「显式传了 false」。
 			//    用 bool 的话零值就是 false，改不了默认值 ——
 			//    而这条问题的核心正是「默认值是反的」。

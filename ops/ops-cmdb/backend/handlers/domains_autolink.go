@@ -69,11 +69,19 @@ func (h *DomainHandler) AutoLinkModules(c *gin.Context) {
 	//	这两种的下一步完全相反：①去接采集，②去看域名是不是配在别处。
 	//	不说的话，一次"成功但什么都没做"的调用和"确实没什么可做"长得一样（OPSCMDB-079）。
 	if filled == 0 && len(recs) > 0 {
-		var ingressRows int
-		_ = sc.QueryRow(`SELECT
-			(SELECT COUNT(*) FROM k8s_virtualservices WHERE tenant_id = ?) +
-			(SELECT COUNT(*) FROM k8s_ingresses WHERE tenant_id = ?) +
-			(SELECT COUNT(*) FROM k8s_httproutes WHERE tenant_id = ?)`).Scan(&ingressRows)
+		// ⚠️ 三张表分开数：租户句柄只注入**一个** tenant_id，
+		//	写成一条带三个 `?` 的子查询会因参数个数不匹配而报错 ——
+		//	而我第一版用 `_ =` 吞掉了那个错，ingressRows 保持 0，
+		//	于是「有 2 条入口」被报成「一条都没有」。
+		//	**把错误吞成 0** 正是这条问题本身的形态，我在修它时又写了一遍。
+		ingressRows, cntErr := countIngressObjects(sc)
+		if cntErr != nil {
+			// 数不出来就说数不出来，别拿一个不确定的 0 去下结论
+			out["reason_key"] = "domains:autoLinkResult.countFailed"
+			out["reason"] = "一条都没填上，但也没能统计可比对的入口数量：" + cntErr.Error()
+			c.JSON(http.StatusOK, out)
+			return
+		}
 		if ingressRows == 0 {
 			out["reason_key"] = "domains:autoLinkResult.noIngressData"
 			out["reason"] = "没有可比对的 K8s 入口数据（VirtualService / Ingress / HTTPRoute 一条都没有）。" +
@@ -139,4 +147,21 @@ func firstModuleFromBackends(csv string) string {
 		}
 	}
 	return ""
+}
+
+// countIngressObjects 数三张入口表的总行数。
+//
+// ⚠️ 必须**分开数**：租户作用域句柄每条语句只注入一个 tenant_id，
+//
+//	一条 SQL 里放三个 `WHERE tenant_id = ?` 会参数个数不匹配。
+func countIngressObjects(sc *store.Scoped) (int, error) {
+	total := 0
+	for _, tbl := range []string{"k8s_virtualservices", "k8s_ingresses", "k8s_httproutes"} {
+		var n int
+		if err := sc.QueryRow(`SELECT COUNT(*) FROM ` + tbl + ` WHERE tenant_id = ?`).Scan(&n); err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	return total, nil
 }
