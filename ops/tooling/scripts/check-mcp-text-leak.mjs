@@ -91,6 +91,16 @@ const inScope = (f) =>
 const tools = new Set()
 for (const f of files.filter((x) => x.endsWith('mcp.go'))) {
   const src = readFileSync(f, 'utf8')
+  // 写法二：`"name": "list_orgs",` —— map[string]any 形式的工具定义。
+  //
+  // 🔴 只认写法一的后果实测过：ops-version 用的是写法二，
+  //    于是这道守卫提取到的 100 个工具名**全是别的产品的**，
+  //    ops-version 的 5 个一个都没抓到 —— 而它照样打印
+  //    「✓ 100 个 MCP 工具名都没出现在文案里（范围 ops-version）」。
+  //    范围写着它，检查的却是别人。绿色的谎，正是本文件要防的东西。
+  for (const m of src.matchAll(/"name":\s*"([a-z][a-z0-9_]{3,})"/g)) {
+    if (m[1].includes('_')) tools.add(m[1])
+  }
   for (const m of src.matchAll(/\{"([a-z][a-z0-9_]{3,})",\s*"[^"]*",\s*"\/api\//g)) {
     // ⚠️ 只收**带下划线**的工具名。
     //
@@ -188,12 +198,25 @@ for (const f of files.filter((x) => x.endsWith('.go') && inScope(x))) {
   }
 }
 
+/**
+ * 语言包里**按 key 豁免**的字段。
+ *
+ * 🔴 判据是「这条文案的读者是不是集成方」，不是「它在哪个文件」。
+ *	MCP 令牌页的用法说明就是写给要接 MCP 的人看的 —— 不列工具名，
+ *	对方还得自己去调 tools/list。这类文案里出现工具名是它的职责，不是泄漏。
+ *
+ * ⚠️ 豁免只能精确到 key，不能整个文件跳过：同一份语言包里 99% 的文案
+ *	仍然是给普通用户看的，整份放过等于把这道守卫对语言包关掉。
+ */
+const LOCALE_EXEMPT_KEYS = ['"usage"', '"mcpUsage"', '"toolList"']
+
 // 语言包里也不该有：那是纯粹给人看的
 for (const f of files.filter((x) => x.includes('/i18n/locales/') && x.endsWith('.json'))) {
   const src = readFileSync(f, 'utf8')
   for (const tool of tools) {
     const re = new RegExp(`(^|[^\\w/])${tool}([^\\w]|$)`)
     for (const [i, line] of src.split('\n').entries()) {
+      if (LOCALE_EXEMPT_KEYS.some((k) => line.trimStart().startsWith(k))) continue
       if (re.test(line)) {
         hits.push({
           file: relative(ROOT, f),

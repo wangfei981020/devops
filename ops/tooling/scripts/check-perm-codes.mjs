@@ -28,6 +28,13 @@ const SOURCES = [
     backend: 'ops-cmdb/backend/handlers/perm.go',
     nav: 'ops-cmdb/frontend/src/layouts/nav.ts',
   },
+  {
+    // 🔴 补上：这个产品此前**从没被这道守卫查过** ——
+    //    SOURCES 里没有它，而守卫照样对全仓打印 ✓。
+    product: 'ops-version',
+    backend: 'ops-version/backend/internal/auth/rbac.go',
+    nav: 'ops-version/frontend/src/layouts/nav.ts',
+  },
 ]
 
 let failed = 0
@@ -38,7 +45,16 @@ for (const src of SOURCES) {
   if (backendSrc === null || navSrc === null) continue
 
   // 后端认识的菜单码：permPrefixRules 和逐路由表里出现的所有 menu:*
-  const known = new Set(backendSrc.match(/menu:[a-z0-9_]+/g) ?? [])
+  // ⚠️ 两种形态都要认：
+  //   menu:xxx                    —— 菜单前缀式
+  //   PermXxx Perm = "org.write"  —— 扁平式
+  // 只认一种的后果实测过：在用扁平式的产品上抽到 0 个，
+  // 而守卫**照样报"共 N 处不一致"**，让人以为是权限码写错了，
+  // 实际是提取正则不认这个产品的写法。
+  const known = new Set([
+    ...(backendSrc.match(/menu:[a-z0-9_]+/g) ?? []),
+    ...[...backendSrc.matchAll(/Perm\w+\s+Perm\s*=\s*"([a-z][a-z0-9._]*)"/g)].map((m) => m[1]),
+  ])
   // 前端用到的码。
   //
   // ⚠️ 不要写「key 后面紧跟 perm」这种依赖字段顺序的正则：
@@ -51,7 +67,7 @@ for (const src of SOURCES) {
   }
 
   if (known.size === 0) {
-    console.error(`✗ ${src.product}: 后端 ${src.backend} 里一个 menu:* 都没抽到（正则失效？）`)
+    console.error(`✗ ${src.product}: 后端 ${src.backend} 里一个权限码都没抽到（正则失效？）`)
     failed++
     continue
   }
@@ -77,12 +93,18 @@ for (const src of SOURCES) {
   // 每个菜单项都有 path，所以 path 的个数就是菜单项数。
   // 抽到的 perm 少于菜单项数 = 有项没配，或者正则又漏了 ——
   // 这一刀是为了让"防线自己失效"变成一个显式失败，而不是一句 ✓。
-  const itemCount = (navSrc.match(/path: '[^']*'/g) ?? []).length
-  const permCount = [...navSrc.matchAll(/perm: '[^']*'/g)].length
-  if (permCount !== itemCount) {
+  // ⚠️ **不能断言"每个菜单项都有 perm"** —— perm 是可选的：
+  //    不挂 perm 的菜单对所有登录用户可见，那是合法设计，不是漏配。
+  //    实测撞到过：按某个产品的写法断言 perm 数 == 菜单项数，
+  //    换个产品就把"公开菜单"报成"漏配权限"。
+  //
+  // 真正要防的是**正则失效**：nav.ts 明明有菜单项，却一个都没抽到。
+  // 菜单项的特征是 `key: 'xxx'`（路由在 router 里映射）或 `path: 'xxx'`，两种都认。
+  const itemCount =
+    (navSrc.match(/key: '[^']*'/g) ?? []).length + (navSrc.match(/path: '[^']*'/g) ?? []).length
+  if (itemCount === 0) {
     console.error(
-      `✗ ${src.product}: ${itemCount} 个菜单项只抽到 ${permCount} 个 perm` +
-        `（要么有项漏配，要么 nav.ts 的写法变了、本脚本的正则该跟着改）`,
+      `✗ ${src.product}: nav.ts 里一个菜单项都没抽到 —— 写法变了，本脚本的正则该跟着改`,
     )
     failed++
   }
