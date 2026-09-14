@@ -57,6 +57,7 @@
     </div>
 
     <!-- 新增/编辑 Modal -->
+    <Transition name="modal">
     <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
       <div class="modal">
         <div class="modal-header">
@@ -97,8 +98,10 @@
         </form>
       </div>
     </div>
+    </Transition>
 
     <!-- 扫描发现 Modal -->
+    <Transition name="modal">
     <div v-if="showDiscover" class="modal-overlay" @click.self="showDiscover = false">
       <div class="modal" style="width: 720px; max-width: 90vw;">
         <div class="modal-header">
@@ -156,6 +159,7 @@
         </div>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
 

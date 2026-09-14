@@ -5,10 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -18,9 +20,10 @@ import (
 	"opsplatform-alert-backend/alert"
 	"opsplatform-alert-backend/database"
 	"opsplatform-alert-backend/es"
-	"opsplatform-alert-backend/lark"
 	lokiclient "opsplatform-alert-backend/loki"
 	"opsplatform-alert-backend/models"
+	"opsplatform-alert-backend/notify"
+	"opsplatform-alert-backend/safego"
 )
 
 // handlerLokiClientFunc creates a getLokiClient closure for use with QueryNamespacedLoki
@@ -100,13 +103,14 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 		r.recovery_enabled, COALESCE(r.recovery_title,''), COALESCE(r.recovery_template,''),
 		r.severity, COALESCE(r.group_by,''), COALESCE(r.expected_groups,''), COALESCE(r.query_concurrency,5), COALESCE(r.alert_interval,''), r.dedup_field, r.dedup_ttl, r.max_alerts, COALESCE(r.prometheus_config,''), COALESCE(r.route_config,''), COALESCE(r.namespaces,''), COALESCE(r.namespace_concurrency,3), COALESCE(r.label_filters,''), COALESCE(r.project_id,0),
 		COALESCE(r.realtime_enabled,0), COALESCE(r.threshold_ms,0), COALESCE(r.report_enabled,0), COALESCE(r.report_schedule,''), COALESCE(r.report_mode,'separate'), COALESCE(r.report_title,''), COALESCE(r.report_template,''),
+		COALESCE(r.stack_context_enabled,0), COALESCE(r.stack_max_lines,200), COALESCE(r.stack_head_lines,12), COALESCE(r.stack_tail_lines,8), COALESCE(r.stack_boundary_pattern,''), COALESCE(r.stack_window_sec,5),
 		r.status, r.last_run_at, r.last_error, r.created_at, r.updated_at,
 		COALESCE(e.name,'(已删除)') as es_name, COALESCE(lk.name,'') as loki_name,
 		COALESCE(l.name,'(已删除)') as lark_name
 		FROM alert_rules r
 		LEFT JOIN es_connections e ON r.es_connection_id = e.id
 		LEFT JOIN loki_connections lk ON r.loki_connection_id = lk.id
-		LEFT JOIN lark_configs l ON r.lark_config_id = l.id
+		LEFT JOIN notify_channels l ON r.lark_config_id = l.id
 		WHERE 1=1`
 
 	queryArgs := []interface{}{}
@@ -152,62 +156,96 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
 			&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.LabelFilters, &rule.ProjectID,
 			&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
+			&rule.StackContextEnabled, &rule.StackMaxLines, &rule.StackHeadLines, &rule.StackTailLines, &rule.StackBoundaryPattern, &rule.StackWindowSec,
 			&rule.Status, &rule.LastRunAt, &rule.LastError,
 			&rule.CreatedAt, &rule.UpdatedAt, &esName, &lokiName, &larkName)
 		if err != nil {
 			continue
 		}
 
+		// Show every bound channel, not just the legacy primary one. One query
+		// per row returns both the ids and the names together, instead of the
+		// two separate round trips (channel names here, then channel_ids via
+		// loadRuleChannelIDs below) this used to make.
+		var channelIDs []int
+		var channelNames []string
+		chRows, chErr := database.DB.Query(`SELECT rc.channel_id, c.name FROM alert_rule_channels rc
+			JOIN notify_channels c ON c.id = rc.channel_id WHERE rc.rule_id = ? ORDER BY c.id`, rule.ID)
+		if chErr == nil {
+			for chRows.Next() {
+				var cid int
+				var cname string
+				if chRows.Scan(&cid, &cname) == nil {
+					channelIDs = append(channelIDs, cid)
+					channelNames = append(channelNames, cname)
+				}
+			}
+			if err := chRows.Err(); err != nil {
+				log.Printf("[ListRules] channel rows iteration error for rule %d: %v", rule.ID, err)
+			}
+			chRows.Close()
+		}
+		if len(channelNames) > 0 {
+			larkName = strings.Join(channelNames, " + ")
+		}
+
 		item := map[string]interface{}{
-			"id":                 rule.ID,
-			"name":               rule.Name,
-			"data_source_type":   rule.DataSourceType,
-			"es_connection_id":   rule.ESConnectionID,
-			"loki_connection_id": rule.LokiConnectionID,
-			"lark_config_id":     rule.LarkConfigID,
-			"es_index":          rule.ESIndex,
-			"schedule":          rule.Schedule,
-			"time_range":        rule.TimeRange,
-			"query_dsl":         rule.QueryDSL,
-			"keyword":           rule.Keyword,
-			"logql":             rule.LogQL,
-			"filter_fields":     rule.FilterFields,
-			"extract_fields":    rule.ExtractFields,
-			"message_title":     rule.MessageTitle,
-			"message_template":  rule.MessageTemplate,
-			"at_users":          rule.AtUsers,
-			"at_all":            rule.AtAll,
-			"alert_mode":         rule.AlertMode,
-			"recovery_enabled":   rule.RecoveryEnabled,
-			"recovery_title":     rule.RecoveryTitle,
-			"recovery_template":  rule.RecoveryTemplate,
-			"severity":           rule.Severity,
-			"group_by":           rule.GroupBy,
-			"expected_groups":    rule.ExpectedGroups,
-			"query_concurrency":  rule.QueryConcurrency,
-			"alert_interval":     rule.AlertInterval,
-			"dedup_field":       rule.DedupField,
-			"dedup_ttl":         rule.DedupTTL,
-			"max_alerts":         rule.MaxAlerts,
-			"prometheus_config":  rule.PrometheusConfig,
-			"route_config":            rule.RouteConfig,
-			"namespaces":              rule.Namespaces,
-			"namespace_concurrency":   rule.NamespaceConcurrency,
-			"label_filters":           rule.LabelFilters,
-			"project_id":              rule.ProjectID,
-			"realtime_enabled":   rule.RealtimeEnabled,
-			"threshold_ms":       rule.ThresholdMs,
-			"report_enabled":     rule.ReportEnabled,
-			"report_schedule":    rule.ReportSchedule,
-			"report_mode":        rule.ReportMode,
-			"report_title":       rule.ReportTitle,
-			"report_template":    rule.ReportTemplate,
-			"status":             rule.Status,
-			"created_at":        rule.CreatedAt,
-			"updated_at":        rule.UpdatedAt,
-			"es_connection_name":   esName,
-			"loki_connection_name": lokiName,
-			"lark_config_name":  larkName,
+			"id":                     rule.ID,
+			"name":                   rule.Name,
+			"data_source_type":       rule.DataSourceType,
+			"es_connection_id":       rule.ESConnectionID,
+			"loki_connection_id":     rule.LokiConnectionID,
+			"lark_config_id":         rule.LarkConfigID,
+			"es_index":               rule.ESIndex,
+			"schedule":               rule.Schedule,
+			"time_range":             rule.TimeRange,
+			"query_dsl":              rule.QueryDSL,
+			"keyword":                rule.Keyword,
+			"logql":                  rule.LogQL,
+			"filter_fields":          rule.FilterFields,
+			"extract_fields":         rule.ExtractFields,
+			"message_title":          rule.MessageTitle,
+			"message_template":       rule.MessageTemplate,
+			"at_users":               rule.AtUsers,
+			"at_all":                 rule.AtAll,
+			"alert_mode":             rule.AlertMode,
+			"recovery_enabled":       rule.RecoveryEnabled,
+			"recovery_title":         rule.RecoveryTitle,
+			"recovery_template":      rule.RecoveryTemplate,
+			"severity":               rule.Severity,
+			"group_by":               rule.GroupBy,
+			"expected_groups":        rule.ExpectedGroups,
+			"query_concurrency":      rule.QueryConcurrency,
+			"alert_interval":         rule.AlertInterval,
+			"dedup_field":            rule.DedupField,
+			"dedup_ttl":              rule.DedupTTL,
+			"max_alerts":             rule.MaxAlerts,
+			"prometheus_config":      rule.PrometheusConfig,
+			"route_config":           rule.RouteConfig,
+			"namespaces":             rule.Namespaces,
+			"namespace_concurrency":  rule.NamespaceConcurrency,
+			"label_filters":          rule.LabelFilters,
+			"project_id":             rule.ProjectID,
+			"realtime_enabled":       rule.RealtimeEnabled,
+			"threshold_ms":           rule.ThresholdMs,
+			"report_enabled":         rule.ReportEnabled,
+			"report_schedule":        rule.ReportSchedule,
+			"report_mode":            rule.ReportMode,
+			"report_title":           rule.ReportTitle,
+			"report_template":        rule.ReportTemplate,
+			"stack_context_enabled":  rule.StackContextEnabled,
+			"stack_max_lines":        rule.StackMaxLines,
+			"stack_head_lines":       rule.StackHeadLines,
+			"stack_tail_lines":       rule.StackTailLines,
+			"stack_boundary_pattern": rule.StackBoundaryPattern,
+			"stack_window_sec":       rule.StackWindowSec,
+			"status":                 rule.Status,
+			"created_at":             rule.CreatedAt,
+			"updated_at":             rule.UpdatedAt,
+			"es_connection_name":     esName,
+			"loki_connection_name":   lokiName,
+			"lark_config_name":       larkName,
+			"channel_ids":            channelIDs,
 		}
 
 		if rule.LastRunAt.Valid {
@@ -253,6 +291,7 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''),
 		dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), COALESCE(label_filters,''), COALESCE(project_id,0),
 		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
+		COALESCE(stack_context_enabled,0), COALESCE(stack_max_lines,200), COALESCE(stack_head_lines,12), COALESCE(stack_tail_lines,8), COALESCE(stack_boundary_pattern,''), COALESCE(stack_window_sec,5),
 		status, last_run_at, last_error, created_at, updated_at
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType, &rule.ESConnectionID,
@@ -264,12 +303,15 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
 		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.LabelFilters, &rule.ProjectID,
 		&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
+		&rule.StackContextEnabled, &rule.StackMaxLines, &rule.StackHeadLines, &rule.StackTailLines, &rule.StackBoundaryPattern, &rule.StackWindowSec,
 		&rule.Status, &rule.LastRunAt, &rule.LastError,
 		&rule.CreatedAt, &rule.UpdatedAt)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, "规则不存在: "+err.Error())
 		return
 	}
+
+	rule.ChannelIDs = loadRuleChannelIDs(rule.ID)
 
 	log.Printf("[GetRule] id=%d namespaces='%s' namespace_concurrency=%d", rule.ID, rule.Namespaces, rule.NamespaceConcurrency)
 	jsonSuccess(w, rule)
@@ -301,8 +343,8 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "LogQL查询不能为空")
 		return
 	}
-	if req.LarkConfigID == 0 {
-		jsonError(w, http.StatusBadRequest, "请选择Lark配置")
+	if len(req.ChannelIDs) == 0 && req.LarkConfigID == 0 {
+		jsonError(w, http.StatusBadRequest, "请选择通知渠道")
 		return
 	}
 
@@ -331,29 +373,81 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 	if req.ReportMode == "" {
 		req.ReportMode = "separate"
 	}
+	// Stack context defaults mirror the column defaults in the schema. The
+	// INSERT below lists these columns explicitly, so an unset (zero-value)
+	// field from an older client would otherwise write 0 instead of falling
+	// back to the schema default.
+	if req.StackMaxLines == 0 {
+		req.StackMaxLines = 200
+	}
+	if req.StackHeadLines == 0 {
+		req.StackHeadLines = 12
+	}
+	if req.StackTailLines == 0 {
+		req.StackTailLines = 8
+	}
+	if req.StackWindowSec == 0 {
+		req.StackWindowSec = 5
+	}
 
-	result, err := database.DB.Exec(`INSERT INTO alert_rules
+	// Placeholder only: saveRuleChannelsTx picks the real primary channel
+	// (lowest-id Lark one) and rewrites lark_config_id inside the same
+	// transaction, so this value never becomes visible on its own.
+	primaryChannel := req.LarkConfigID
+	if len(req.ChannelIDs) > 0 {
+		primaryChannel = req.ChannelIDs[0]
+	}
+
+	// The rule row and its channel bindings must commit or roll back together:
+	// a rule with no bindings, or a rule that never got inserted, would each be
+	// a broken half-write visible to the client as either a phantom success or
+	// a phantom failure.
+	tx, err := database.DB.Begin()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "创建失败: "+err.Error())
+		return
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(`INSERT INTO alert_rules
 		(name, data_source_type, es_connection_id, loki_connection_id, lark_config_id,
 		es_index, schedule, time_range,
 		query_dsl, keyword, logql, filter_fields, extract_fields,
 		message_title, message_template, at_users, at_all,
 		alert_mode, recovery_enabled, recovery_title, recovery_template,
 		severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, route_config, namespaces, namespace_concurrency, label_filters, project_id,
-		realtime_enabled, threshold_ms, report_enabled, report_schedule, report_mode, report_title, report_template, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, req.LarkConfigID,
+		realtime_enabled, threshold_ms, report_enabled, report_schedule, report_mode, report_title, report_template,
+		stack_context_enabled, stack_max_lines, stack_head_lines, stack_tail_lines, stack_boundary_pattern, stack_window_sec, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, primaryChannel,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
 		req.FilterFields, req.ExtractFields, req.MessageTitle,
 		req.MessageTemplate, req.AtUsers, req.AtAll,
 		req.AlertMode, req.RecoveryEnabled, req.RecoveryTitle, req.RecoveryTemplate,
 		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.AlertInterval, req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.Namespaces, req.NamespaceConcurrency, req.LabelFilters, req.ProjectID,
-		req.RealtimeEnabled, req.ThresholdMs, req.ReportEnabled, req.ReportSchedule, req.ReportMode, req.ReportTitle, req.ReportTemplate)
+		req.RealtimeEnabled, req.ThresholdMs, req.ReportEnabled, req.ReportSchedule, req.ReportMode, req.ReportTitle, req.ReportTemplate,
+		req.StackContextEnabled, req.StackMaxLines, req.StackHeadLines, req.StackTailLines, req.StackBoundaryPattern, req.StackWindowSec)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "创建失败: "+err.Error())
 		return
 	}
 
 	id, _ := result.LastInsertId()
+
+	if err := saveRuleChannelsTx(tx, int(id), req.ChannelIDs, req.LarkConfigID); err != nil {
+		// A rejected channel id is the client's mistake, not a server fault.
+		if isChannelValidationError(err) {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		jsonError(w, http.StatusInternalServerError, "保存通知渠道失败: "+err.Error())
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		jsonError(w, http.StatusInternalServerError, "创建失败: "+err.Error())
+		return
+	}
 
 	// Reload in engine
 	if ruleEngine != nil {
@@ -372,6 +466,10 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "无效的请求")
 		return
 	}
+	if len(req.ChannelIDs) == 0 && req.LarkConfigID == 0 {
+		jsonError(w, http.StatusBadRequest, "请选择通知渠道")
+		return
+	}
 
 	log.Printf("[UpdateRule] id=%d namespaces='%s' namespace_concurrency=%d logql='%s'", id, req.Namespaces, req.NamespaceConcurrency, req.LogQL)
 
@@ -381,17 +479,66 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 	if req.ReportMode == "" {
 		req.ReportMode = "separate"
 	}
+	// Same defaulting as create: the UPDATE below lists these columns
+	// explicitly, so a client that doesn't know about stack context yet
+	// (an older UI tab, an automation script) would otherwise zero out an
+	// already-configured rule's line limits on every save.
+	if req.StackMaxLines == 0 {
+		req.StackMaxLines = 200
+	}
+	if req.StackHeadLines == 0 {
+		req.StackHeadLines = 12
+	}
+	if req.StackTailLines == 0 {
+		req.StackTailLines = 8
+	}
+	if req.StackWindowSec == 0 {
+		req.StackWindowSec = 5
+	}
 
-	_, err := database.DB.Exec(`UPDATE alert_rules SET
+	primaryChannel := req.LarkConfigID
+	if len(req.ChannelIDs) > 0 {
+		primaryChannel = req.ChannelIDs[0]
+	}
+
+	// Same reasoning as create: the rule row and its channel bindings must
+	// commit or roll back together, or a failed channel save leaves
+	// lark_config_id already overwritten while the client is told it failed.
+	tx, err := database.DB.Begin()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "更新失败: "+err.Error())
+		return
+	}
+	defer tx.Rollback()
+
+	// An UPDATE matching no rows is not an error in MySQL, and RowsAffected is
+	// 0 both for "no such rule" and for "nothing actually changed" — so neither
+	// can tell us the rule exists. Without this check, saveRuleChannelsTx below
+	// happily writes alert_rule_channels rows for a rule id that was never
+	// there (PUT /api/alert-rules/99999, or one operator deleting a rule while
+	// another saves it from an open tab), and those orphans then make the
+	// referenced channel undeletable forever.
+	var existingID int
+	if err := tx.QueryRow("SELECT id FROM alert_rules WHERE id = ? FOR UPDATE", id).Scan(&existingID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			jsonError(w, http.StatusNotFound, "告警规则不存在")
+			return
+		}
+		jsonError(w, http.StatusInternalServerError, "更新失败: "+err.Error())
+		return
+	}
+
+	_, err = tx.Exec(`UPDATE alert_rules SET
 		name=?, data_source_type=?, es_connection_id=?, loki_connection_id=?, lark_config_id=?,
 		es_index=?, schedule=?, time_range=?, query_dsl=?, keyword=?, logql=?,
 		filter_fields=?, extract_fields=?, message_title=?,
 		message_template=?, at_users=?, at_all=?,
 		alert_mode=?, recovery_enabled=?, recovery_title=?, recovery_template=?,
 		severity=?, group_by=?, expected_groups=?, query_concurrency=?, alert_interval=?, dedup_field=?, dedup_ttl=?, max_alerts=?, prometheus_config=?, route_config=?, namespaces=?, namespace_concurrency=?, label_filters=?, project_id=?,
-		realtime_enabled=?, threshold_ms=?, report_enabled=?, report_schedule=?, report_mode=?, report_title=?, report_template=?
+		realtime_enabled=?, threshold_ms=?, report_enabled=?, report_schedule=?, report_mode=?, report_title=?, report_template=?,
+		stack_context_enabled=?, stack_max_lines=?, stack_head_lines=?, stack_tail_lines=?, stack_boundary_pattern=?, stack_window_sec=?
 		WHERE id=?`,
-		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, req.LarkConfigID,
+		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, primaryChannel,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
 		req.FilterFields, req.ExtractFields, req.MessageTitle,
 		req.MessageTemplate, req.AtUsers, req.AtAll,
@@ -399,8 +546,24 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.AlertInterval,
 		req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.Namespaces, req.NamespaceConcurrency, req.LabelFilters, req.ProjectID,
 		req.RealtimeEnabled, req.ThresholdMs, req.ReportEnabled, req.ReportSchedule, req.ReportMode, req.ReportTitle, req.ReportTemplate,
+		req.StackContextEnabled, req.StackMaxLines, req.StackHeadLines, req.StackTailLines, req.StackBoundaryPattern, req.StackWindowSec,
 		id)
 	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "更新失败: "+err.Error())
+		return
+	}
+
+	if err := saveRuleChannelsTx(tx, id, req.ChannelIDs, req.LarkConfigID); err != nil {
+		// A rejected channel id is the client's mistake, not a server fault.
+		if isChannelValidationError(err) {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		jsonError(w, http.StatusInternalServerError, "保存通知渠道失败: "+err.Error())
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
 		jsonError(w, http.StatusInternalServerError, "更新失败: "+err.Error())
 		return
 	}
@@ -417,7 +580,41 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 func HandleDeleteAlertRule(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
 
-	// Remove from engine and clean Redis keys
+	// The rule row and its alert_rule_channels bindings must be removed together:
+	// leaving the join rows behind orphans them, and a later delete of the
+	// channel they reference is then permanently refused by the "channel in
+	// use" guard in notify_channels.go, even though the rule no longer exists.
+	tx, err := database.DB.Begin()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "删除失败: "+err.Error())
+		return
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM alert_rule_channels WHERE rule_id = ?", id); err != nil {
+		jsonError(w, http.StatusInternalServerError, "删除失败: "+err.Error())
+		return
+	}
+
+	result, err := tx.Exec("DELETE FROM alert_rules WHERE id = ?", id)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "删除失败: "+err.Error())
+		return
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		jsonError(w, http.StatusNotFound, "规则不存在")
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		jsonError(w, http.StatusInternalServerError, "删除失败: "+err.Error())
+		return
+	}
+
+	// Only touch the engine and Redis once the database delete has actually
+	// committed. RemoveRule/CleanupRuleRedisKeys report no error and cannot be
+	// rolled back, so doing this before the DB delete could succeed risks
+	// forgetting a rule that failed to delete and is still supposed to run.
 	if ruleEngine != nil {
 		ruleEngine.RemoveRule(id)
 		if engine, ok := ruleEngine.(interface{ CleanupRuleRedisKeys(int) }); ok {
@@ -425,7 +622,6 @@ func HandleDeleteAlertRule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	database.DB.Exec("DELETE FROM alert_rules WHERE id = ?", id)
 	SaveAuditLog(r, "delete_rule", "rule", fmt.Sprintf("ID=%d", id), "删除告警规则")
 	jsonSuccess(w, nil)
 }
@@ -465,11 +661,12 @@ func HandleRunAlertRule(w http.ResponseWriter, r *http.Request) {
 
 	// Trigger execution in a goroutine
 	if ruleEngine != nil {
-		go func() {
+		// Manual runs bypass cron entirely, so they carry their own guard.
+		safego.Go("manual rule run", func() {
 			if engine, ok := ruleEngine.(interface{ ExecuteRule(int) }); ok {
 				engine.ExecuteRule(id)
 			}
-		}()
+		})
 	}
 
 	jsonSuccess(w, map[string]string{"message": "规则已触发执行"})
@@ -504,7 +701,7 @@ func HandlePreviewReport(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleSendReport aggregates a day's stats and sends the report to Lark immediately.
+// HandleSendReport aggregates a day's stats and sends the report to the rule's notification channels immediately.
 func HandleSendReport(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(mux.Vars(r)["id"])
 	day := reportDay(r)
@@ -520,7 +717,7 @@ func HandleSendReport(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandlePreviewAlertRule executes query and renders template without sending to Lark
+// HandlePreviewAlertRule executes query and renders template without sending anything
 func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 	var req models.CreateAlertRuleReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -677,8 +874,8 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 
 		type ContainerResult struct {
 			Name     string                 `json:"name"`
-			Status   string                 `json:"status"`   // "ok" or "alert"
-			Source   string                 `json:"source"`    // "30m" / "24h" / "3d" / "no_history"
+			Status   string                 `json:"status"` // "ok" or "alert"
+			Source   string                 `json:"source"` // "30m" / "24h" / "3d" / "no_history"
 			Hit      map[string]interface{} `json:"hit,omitempty"`
 			Rendered string                 `json:"rendered,omitempty"`
 		}
@@ -843,29 +1040,47 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 	jsonSuccess(w, resp)
 }
 
-// HandleTestSendAlertRule queries data source and sends one real alert to Lark
+// HandleTestSendAlertRule queries data source and sends one real alert to the selected notification channels
 func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 	var req models.CreateAlertRuleReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "无效的请求")
 		return
 	}
-	if req.LarkConfigID == 0 {
-		jsonError(w, http.StatusBadRequest, "请选择 Lark 配置")
+	// This endpoint tests an unsaved form, so the channels come from the request
+	// body rather than from alert_rule_channels.
+	channelIDs := req.ChannelIDs
+	if len(channelIDs) == 0 && req.LarkConfigID > 0 {
+		channelIDs = []int{req.LarkConfigID}
+	}
+	if len(channelIDs) == 0 {
+		jsonError(w, http.StatusBadRequest, "请选择通知渠道")
+		return
+	}
+
+	var channels []models.NotifyChannel
+	for _, cid := range channelIDs {
+		var c models.NotifyChannel
+		qErr := database.DB.QueryRow(`SELECT id, channel_type, name, webhook_url, secret,
+			lark_type, bot_token, chat_id, thread_id, proxy_url, status
+			FROM notify_channels WHERE id = ? AND status = 1`, cid).Scan(
+			&c.ID, &c.ChannelType, &c.Name, &c.WebhookURL, &c.Secret,
+			&c.LarkType, &c.BotToken, &c.ChatID, &c.ThreadID, &c.ProxyURL, &c.Status)
+		if qErr != nil {
+			jsonError(w, http.StatusBadRequest, fmt.Sprintf("通知渠道 %d 不存在或已禁用", cid))
+			return
+		}
+		channels = append(channels, c)
+	}
+
+	senderObj, err := notify.NewMulti(channels)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "通知渠道无效: "+err.Error())
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-
-	// Get Lark config
-	var larkCfg models.LarkConfig
-	err := database.DB.QueryRow(`SELECT id, name, webhook_url, secret, lark_type FROM lark_configs WHERE id = ?`,
-		req.LarkConfigID).Scan(&larkCfg.ID, &larkCfg.Name, &larkCfg.WebhookURL, &larkCfg.Secret, &larkCfg.LarkType)
-	if err != nil {
-		jsonError(w, http.StatusBadRequest, "Lark 配置不存在")
-		return
-	}
 
 	// Query data source
 	timeRange := req.TimeRange
@@ -921,7 +1136,6 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 			if req.AtUsers != "" {
 				json.Unmarshal([]byte(req.AtUsers), &atUsers)
 			}
-			senderObj := lark.NewSender(larkCfg)
 			severity := req.Severity
 			if severity == "" {
 				severity = "S2"
@@ -946,10 +1160,10 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 			}
 
 			jsonSuccess(w, map[string]interface{}{
-				"message":   fmt.Sprintf("测试发送成功！命中 %d 条，按容器聚合为 %d 条告警，已发送 %d 条", totalHits, len(results), sentCount),
-				"hit_count": totalHits,
+				"message":     fmt.Sprintf("测试发送成功！命中 %d 条，按容器聚合为 %d 条告警，已发送 %d 条", totalHits, len(results), sentCount),
+				"hit_count":   totalHits,
 				"alert_count": len(results),
-				"sent_count": sentCount,
+				"sent_count":  sentCount,
 			})
 			return
 		}
@@ -1045,7 +1259,6 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 		if req.AtUsers != "" {
 			json.Unmarshal([]byte(req.AtUsers), &atUsers)
 		}
-		senderObj := lark.NewSender(larkCfg)
 
 		for _, containerName := range expectedList {
 			// Check this container in timeRange
@@ -1097,7 +1310,7 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 		}
 
 		jsonSuccess(w, map[string]interface{}{
-			"message":      fmt.Sprintf("正常: %d 个，告警: %d 个，已发送 %d 条告警到 Lark", len(okGroups), len(alertGroups), sentCount),
+			"message":      fmt.Sprintf("正常: %d 个，告警: %d 个，已发送 %d 条告警到所选渠道", len(okGroups), len(alertGroups), sentCount),
 			"would_alert":  len(alertGroups) > 0,
 			"ok_groups":    okGroups,
 			"alert_groups": alertGroups,
@@ -1124,8 +1337,8 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 
 	if alertMode == "not_found" && len(rawHits) > 0 {
 		jsonSuccess(w, map[string]interface{}{
-			"message":   fmt.Sprintf("当前 %s 内搜到 %d 条日志，not_found 模式下不会触发告警", timeRange, len(rawHits)),
-			"hit_count": len(rawHits),
+			"message":     fmt.Sprintf("当前 %s 内搜到 %d 条日志，not_found 模式下不会触发告警", timeRange, len(rawHits)),
+			"hit_count":   len(rawHits),
 			"would_alert": false,
 		})
 		return
@@ -1166,21 +1379,20 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal([]byte(req.AtUsers), &atUsers)
 	}
 
-	// Send to Lark
-	sender := lark.NewSender(larkCfg)
+	// Send via the fan-out sender built at the top of this handler.
 	severity := req.Severity
 	if severity == "" {
 		severity = "info"
 	}
-	resp, sErr := sender.SendCard(title, message, severity, atUsers, req.AtAll == 1)
+	resp, sErr := senderObj.SendCard(title, message, severity, atUsers, req.AtAll == 1)
 	if sErr != nil {
 		jsonError(w, http.StatusBadRequest, "发送失败: "+sErr.Error())
 		return
 	}
 
 	jsonSuccess(w, map[string]interface{}{
-		"message":  "测试告警已发送到 Lark",
-		"response": resp,
+		"message":   "测试告警已发送到所选渠道",
+		"response":  resp,
 		"hit_count": len(rawHits),
 	})
 }
@@ -1353,14 +1565,9 @@ func previewExtractFields(hit map[string]interface{}, extractFieldsJSON string) 
 
 func previewRenderTemplate(tmplStr string, vars map[string]interface{}) string {
 	if tmplStr == "" {
-		var sb strings.Builder
-		for k, v := range vars {
-			if k == "_id" || k == "_index" {
-				continue
-			}
-			sb.WriteString(fmt.Sprintf("**%s:** %v\n", k, v))
-		}
-		return sb.String()
+		// Shared with the engine's own no-template path, so what the preview
+		// and test-send show is byte-for-byte what a real alert would send.
+		return alert.RenderVarsDefault(vars)
 	}
 	tmpl, err := template.New("preview").Parse(tmplStr)
 	if err != nil {
@@ -1400,7 +1607,8 @@ func HandleExportAlertRules(w http.ResponseWriter, r *http.Request) {
 		recovery_enabled, COALESCE(recovery_title,''), COALESCE(recovery_template,''),
 		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''),
 		dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), COALESCE(label_filters,''), COALESCE(project_id,0),
-		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,'')
+		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
+		COALESCE(stack_context_enabled,0), COALESCE(stack_max_lines,200), COALESCE(stack_head_lines,12), COALESCE(stack_tail_lines,8), COALESCE(stack_boundary_pattern,''), COALESCE(stack_window_sec,5)
 		FROM alert_rules WHERE id IN (%s)`, strings.Join(placeholders, ","))
 
 	rows, err := database.DB.Query(query, args...)
@@ -1423,7 +1631,12 @@ func HandleExportAlertRules(w http.ResponseWriter, r *http.Request) {
 			&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval,
 			&rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts, &rule.PrometheusConfig, &rule.RouteConfig,
 			&rule.Namespaces, &rule.NamespaceConcurrency, &rule.LabelFilters, &rule.ProjectID,
-			&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate)
+			&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
+			&rule.StackContextEnabled, &rule.StackMaxLines, &rule.StackHeadLines, &rule.StackTailLines, &rule.StackBoundaryPattern, &rule.StackWindowSec)
+		// Import reads channel_ids, so export has to write it: without this a
+		// Lark+Telegram rule silently degrades to a single channel on the
+		// round trip through lark_config_id.
+		rule.ChannelIDs = loadRuleChannelIDs(id)
 		exported = append(exported, rule)
 	}
 
@@ -1476,28 +1689,68 @@ func HandleImportAlertRules(w http.ResponseWriter, r *http.Request) {
 		if rule.ReportMode == "" {
 			rule.ReportMode = "separate"
 		}
+		// Same stack-context defaulting as create/update: an exported rule
+		// from before this feature existed won't carry these fields at all,
+		// so treat their zero values as "use the schema default" rather than
+		// literally writing 0.
+		if rule.StackMaxLines == 0 {
+			rule.StackMaxLines = 200
+		}
+		if rule.StackHeadLines == 0 {
+			rule.StackHeadLines = 12
+		}
+		if rule.StackTailLines == 0 {
+			rule.StackTailLines = 8
+		}
+		if rule.StackWindowSec == 0 {
+			rule.StackWindowSec = 5
+		}
 
-		result, err := database.DB.Exec(`INSERT INTO alert_rules
-			(name, data_source_type, es_connection_id, loki_connection_id, lark_config_id,
-			es_index, schedule, time_range,
-			query_dsl, keyword, logql, filter_fields, extract_fields,
-			message_title, message_template, at_users, at_all,
-			alert_mode, recovery_enabled, recovery_title, recovery_template,
-			severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, route_config, namespaces, namespace_concurrency, label_filters, project_id,
-			realtime_enabled, threshold_ms, report_enabled, report_schedule, report_mode, report_title, report_template, status)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-			rule.Name, rule.DataSourceType, rule.ESConnectionID, rule.LokiConnectionID, rule.LarkConfigID,
-			rule.ESIndex, rule.Schedule, rule.TimeRange, rule.QueryDSL, rule.Keyword, rule.LogQL,
-			rule.FilterFields, rule.ExtractFields, rule.MessageTitle,
-			rule.MessageTemplate, rule.AtUsers, rule.AtAll,
-			rule.AlertMode, rule.RecoveryEnabled, rule.RecoveryTitle, rule.RecoveryTemplate,
-			rule.Severity, rule.GroupBy, rule.ExpectedGroups, rule.QueryConcurrency, rule.AlertInterval, rule.DedupField, rule.DedupTTL, rule.MaxAlerts, rule.PrometheusConfig, rule.RouteConfig, rule.Namespaces, rule.NamespaceConcurrency, rule.LabelFilters, rule.ProjectID,
-			rule.RealtimeEnabled, rule.ThresholdMs, rule.ReportEnabled, rule.ReportSchedule, rule.ReportMode, rule.ReportTitle, rule.ReportTemplate)
+		id, err := func() (int64, error) {
+			tx, err := database.DB.Begin()
+			if err != nil {
+				return 0, err
+			}
+			defer tx.Rollback()
+
+			result, err := tx.Exec(`INSERT INTO alert_rules
+				(name, data_source_type, es_connection_id, loki_connection_id, lark_config_id,
+				es_index, schedule, time_range,
+				query_dsl, keyword, logql, filter_fields, extract_fields,
+				message_title, message_template, at_users, at_all,
+				alert_mode, recovery_enabled, recovery_title, recovery_template,
+				severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, route_config, namespaces, namespace_concurrency, label_filters, project_id,
+				realtime_enabled, threshold_ms, report_enabled, report_schedule, report_mode, report_title, report_template,
+				stack_context_enabled, stack_max_lines, stack_head_lines, stack_tail_lines, stack_boundary_pattern, stack_window_sec, status)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+				rule.Name, rule.DataSourceType, rule.ESConnectionID, rule.LokiConnectionID, rule.LarkConfigID,
+				rule.ESIndex, rule.Schedule, rule.TimeRange, rule.QueryDSL, rule.Keyword, rule.LogQL,
+				rule.FilterFields, rule.ExtractFields, rule.MessageTitle,
+				rule.MessageTemplate, rule.AtUsers, rule.AtAll,
+				rule.AlertMode, rule.RecoveryEnabled, rule.RecoveryTitle, rule.RecoveryTemplate,
+				rule.Severity, rule.GroupBy, rule.ExpectedGroups, rule.QueryConcurrency, rule.AlertInterval, rule.DedupField, rule.DedupTTL, rule.MaxAlerts, rule.PrometheusConfig, rule.RouteConfig, rule.Namespaces, rule.NamespaceConcurrency, rule.LabelFilters, rule.ProjectID,
+				rule.RealtimeEnabled, rule.ThresholdMs, rule.ReportEnabled, rule.ReportSchedule, rule.ReportMode, rule.ReportTitle, rule.ReportTemplate,
+				rule.StackContextEnabled, rule.StackMaxLines, rule.StackHeadLines, rule.StackTailLines, rule.StackBoundaryPattern, rule.StackWindowSec)
+			if err != nil {
+				return 0, err
+			}
+			ruleID, _ := result.LastInsertId()
+
+			// A rule that fails to get a channel binding must not be reported as
+			// created: it would sit in the database with no way to notify anyone.
+			if err := saveRuleChannelsTx(tx, int(ruleID), rule.ChannelIDs, rule.LarkConfigID); err != nil {
+				return 0, fmt.Errorf("保存通知渠道失败: %v", err)
+			}
+			if err := tx.Commit(); err != nil {
+				return 0, err
+			}
+			return ruleID, nil
+		}()
+
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("第%d条 '%s': %v", i+1, rule.Name, err))
 			continue
 		}
-		id, _ := result.LastInsertId()
 		created = append(created, id)
 	}
 
@@ -1508,4 +1761,146 @@ func HandleImportAlertRules(w http.ResponseWriter, r *http.Request) {
 		"total":   len(req.Rules),
 		"success": len(created),
 	})
+}
+
+// sqlExecer is satisfied by both *sql.DB and *sql.Tx, so saveRuleChannelsTx can
+// run either standalone or as part of a caller's larger transaction. Query is
+// part of it because the channel ids have to be validated against
+// notify_channels inside the caller's transaction, not on a separate connection.
+type sqlExecer interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+	Query(query string, args ...interface{}) (*sql.Rows, error)
+}
+
+// channelValidationError marks a bad request (an unusable channel id) as
+// opposed to a database failure, so the handlers can answer 400 instead of 500.
+type channelValidationError struct{ msg string }
+
+func (e *channelValidationError) Error() string { return e.msg }
+
+// isChannelValidationError reports whether err is a client mistake.
+func isChannelValidationError(err error) bool {
+	var e *channelValidationError
+	return errors.As(err, &e)
+}
+
+// saveRuleChannelsTx rewrites a rule's channel bindings using the given executor.
+// It filters out non-positive and duplicate ids FIRST, then falls back to
+// fallbackID only if nothing valid remains, then validates that the resulting
+// set is non-empty. This ordering matters: channel_ids like [0] or [0, 5] must
+// not let a zero slip through into lark_config_id or leave the rule with a
+// silently-empty binding. It also keeps the legacy alert_rules.lark_config_id
+// in sync with one of the bound channels, so a rollback to the previous binary
+// still finds a usable channel.
+func saveRuleChannelsTx(exec sqlExecer, ruleID int, channelIDs []int, fallbackID int) error {
+	seen := map[int]bool{}
+	var valid []int
+	for _, cid := range channelIDs {
+		if cid <= 0 || seen[cid] {
+			continue
+		}
+		seen[cid] = true
+		valid = append(valid, cid)
+	}
+	if len(valid) == 0 && fallbackID > 0 {
+		valid = []int{fallbackID}
+	}
+	if len(valid) == 0 {
+		return &channelValidationError{"至少要选择一个通知渠道"}
+	}
+
+	// Sort so the binding is deterministic. Every reader (loadRuleChannelIDs,
+	// the rule list query) orders by channel_id; if the writer kept the order
+	// the client happened to send, the primary channel chosen below would
+	// depend on which tag the operator clicked first, and re-saving a rule
+	// unchanged could silently move it — which changes routing, because
+	// engine.go compares route_config's lark_id against lark_config_id.
+	sort.Ints(valid)
+
+	// There is no foreign key on alert_rule_channels, so a binding to a
+	// deleted or disabled channel would be accepted here and only surface at
+	// run time ("all N bound notification channels are disabled") — or, for a
+	// deleted channel, leave an orphan row that blocks channel deletion for
+	// good. Validate inside the caller's transaction instead.
+	types, err := loadChannelTypes(exec, valid)
+	if err != nil {
+		return err
+	}
+	for _, cid := range valid {
+		if _, ok := types[cid]; !ok {
+			return &channelValidationError{fmt.Sprintf("通知渠道 #%d 不存在或已禁用", cid)}
+		}
+	}
+
+	// alert_rules.lark_config_id is the rollback path: it is the only binding
+	// the previous binary can see, and it can only use a Lark channel. Prefer
+	// the lowest-id Lark channel among the bound ones and fall back to the
+	// lowest id overall only when the rule binds no Lark channel at all.
+	primary := valid[0]
+	for _, cid := range valid {
+		if types[cid] == "lark" {
+			primary = cid
+			break
+		}
+	}
+
+	if _, err := exec.Exec("DELETE FROM alert_rule_channels WHERE rule_id = ?", ruleID); err != nil {
+		return err
+	}
+	for _, cid := range valid {
+		if _, err := exec.Exec("INSERT INTO alert_rule_channels (rule_id, channel_id) VALUES (?, ?)", ruleID, cid); err != nil {
+			return err
+		}
+	}
+	if _, err := exec.Exec("UPDATE alert_rules SET lark_config_id = ? WHERE id = ?", primary, ruleID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// loadChannelTypes returns channel_type keyed by id for the enabled channels
+// among ids. An id missing from the result is either unknown or disabled.
+func loadChannelTypes(exec sqlExecer, ids []int) (map[int]string, error) {
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := exec.Query(fmt.Sprintf(
+		"SELECT id, channel_type FROM notify_channels WHERE status = 1 AND id IN (%s)",
+		strings.Join(placeholders, ",")), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	types := map[int]string{}
+	for rows.Next() {
+		var id int
+		var ct string
+		if err := rows.Scan(&id, &ct); err != nil {
+			return nil, err
+		}
+		types[id] = ct
+	}
+	return types, rows.Err()
+}
+
+// loadRuleChannelIDs returns a rule's bound channel IDs, ordered.
+func loadRuleChannelIDs(ruleID int) []int {
+	rows, err := database.DB.Query(
+		"SELECT channel_id FROM alert_rule_channels WHERE rule_id = ? ORDER BY channel_id", ruleID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

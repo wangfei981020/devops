@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <Transition name="modal-fade">
+    <Transition name="modal">
       <div v-if="visible" class="modal-overlay" @click.self="handleCancel">
         <div class="confirm-dialog">
           <div class="confirm-icon" :class="'icon-' + type">
@@ -124,10 +124,5 @@ defineExpose({ confirm, prompt })
 .confirm-actions .btn {
   min-width: 80px;
   justify-content: center;
-}
-.modal-fade-enter-active, .modal-fade-leave-active { transition: all 0.2s ease; }
-.modal-fade-enter-from, .modal-fade-leave-to { opacity: 0; }
-.modal-fade-enter-from .confirm-dialog, .modal-fade-leave-to .confirm-dialog {
-  transform: scale(0.95);
 }
 </style>

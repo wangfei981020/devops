@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opsplatform-alert-backend/models"
+	"opsplatform-alert-backend/timezone"
 )
 
 // Client wraps Loki HTTP API
@@ -48,7 +49,7 @@ type QueryResult struct {
 
 // Stream represents a Loki log stream
 type Stream struct {
-	Labels map[string]string        `json:"labels"`
+	Labels  map[string]string        `json:"labels"`
 	Entries []map[string]interface{} `json:"entries"`
 }
 
@@ -74,8 +75,15 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// QueryRange executes a LogQL query_range
+// QueryRange executes a LogQL query_range, newest first.
 func (c *Client) QueryRange(ctx context.Context, logql string, start, end time.Time, limit int) (*QueryResult, error) {
+	return c.QueryRangeDirection(ctx, logql, start, end, limit, "backward")
+}
+
+// QueryRangeDirection executes a LogQL query_range in the given direction.
+// Fetching the lines that FOLLOW a match needs "forward"; alert matching itself
+// wants "backward" so the newest hit wins.
+func (c *Client) QueryRangeDirection(ctx context.Context, logql string, start, end time.Time, limit int, direction string) (*QueryResult, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -85,7 +93,10 @@ func (c *Client) QueryRange(ctx context.Context, logql string, start, end time.T
 	params.Set("start", fmt.Sprintf("%d", start.UnixNano()))
 	params.Set("end", fmt.Sprintf("%d", end.UnixNano()))
 	params.Set("limit", fmt.Sprintf("%d", limit))
-	params.Set("direction", "backward")
+	if direction != "forward" {
+		direction = "backward"
+	}
+	params.Set("direction", direction)
 
 	reqURL := fmt.Sprintf("%s/loki/api/v1/query_range?%s", c.baseURL, params.Encode())
 	log.Printf("[Loki] Query: %s", reqURL)
@@ -239,14 +250,28 @@ func (r *QueryResult) ToHits() []map[string]interface{} {
 			for k, v := range entry {
 				hit[k] = v
 			}
+			// Keep the label SET intact alongside the flattened copies: a context
+			// query needs to rebuild this stream's selector, and once flattened the
+			// labels are indistinguishable from the entry's own fields.
+			labels := make(map[string]string, len(s.Labels))
+			for k, v := range s.Labels {
+				labels[k] = v
+			}
+			hit["__stream_labels"] = labels
 			// Map "line" to "message" for template compatibility
 			if line, ok := entry["line"]; ok {
 				hit["message"] = line
 			}
-			// Parse timestamp: convert nanosecond string to readable time
+			// Parse timestamp: convert nanosecond string to readable time.
+			// FormatWithZone, not a bare layout: this value is rendered straight
+			// into an alert card, right next to a log line carrying the source
+			// system's own (often UTC) timestamp. Without the offset the two read
+			// as a several-hour discrepancy rather than one instant in two zones.
+			// It also makes the field follow the platform's configured display
+			// zone, which every other rendered time already does.
 			if ts, ok := entry["timestamp"].(string); ok {
 				if nsec, err := strconv.ParseInt(ts, 10, 64); err == nil {
-					formatted := time.Unix(0, nsec).Format("2006/01/02 15:04:05")
+					formatted := timezone.FormatWithZone(time.Unix(0, nsec))
 					hit["@timestamp"] = formatted
 					hit["timestamp"] = formatted
 				} else {

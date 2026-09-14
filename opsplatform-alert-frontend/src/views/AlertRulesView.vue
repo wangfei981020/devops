@@ -96,7 +96,7 @@
                   <th class="col-name">规则名称</th>
                   <th class="col-project">项目</th>
                   <th class="col-ds">数据源</th>
-                  <th class="col-lark">Lark 配置</th>
+                  <th class="col-lark">通知渠道</th>
                   <th class="col-schedule">执行周期</th>
                   <th class="col-severity">级别</th>
                   <th class="col-lastrun">上次执行</th>
@@ -122,7 +122,7 @@
                     <span v-if="(rule.data_source_type || 'es') === 'loki'" class="badge badge-warning">Loki</span>
                     <span v-else class="badge badge-info">ES</span>
                   </td>
-                  <td class="col-lark">{{ rule.lark_config_name }}</td>
+                  <td class="col-lark">{{ rule.lark_config_name || '-' }}</td>
                   <td class="col-schedule">{{ rule.schedule }}</td>
                   <td class="col-severity"><span class="badge" :class="severityClass(rule.severity)">{{ severityLabel(rule.severity) }}</span></td>
                   <td class="col-lastrun">
@@ -182,6 +182,7 @@
     </main>
 
     <!-- Project Modal -->
+    <Transition name="modal">
     <div v-if="showProjectModal" class="modal-overlay" @click.self="showProjectModal = false">
       <div class="modal" style="min-width: 400px;">
         <div class="modal-header">
@@ -208,7 +209,9 @@
         </form>
       </div>
     </div>
+    </Transition>
     <!-- Import Modal -->
+    <Transition name="modal">
     <div v-if="showImportModal" class="modal-overlay" @click.self="showImportModal = false">
       <div class="modal" style="min-width: 700px; max-width: 900px;">
         <div class="modal-header">
@@ -237,10 +240,10 @@
               </select>
             </div>
             <div class="flex items-center gap-2" style="margin-bottom: 8px;">
-              <label class="form-label" style="margin: 0; white-space: nowrap;">目标 Lark</label>
+              <label class="form-label" style="margin: 0; white-space: nowrap;">目标渠道</label>
               <select v-model.number="importLarkId" class="form-select" style="width: 200px;">
                 <option :value="0">不修改</option>
-                <option v-for="lk in larkConfigs" :key="lk.id" :value="lk.id">{{ lk.name }}</option>
+                <option v-for="lk in channels" :key="lk.id" :value="lk.id">{{ lk.name }}</option>
               </select>
             </div>
             <div class="flex items-center gap-2" style="margin-bottom: 8px;">
@@ -285,6 +288,7 @@
         </div>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
 
@@ -292,6 +296,8 @@
 import { ref, computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
+import { severityClass, severityLabel } from '../utils/severity'
+import { formatTime } from '../utils/datetime'
 import { useToast, useConfirm } from '../stores/ui'
 import { Plus, Bell, Play, Pencil, FileText, Trash2, Folder, ChevronRight, X, Flame, CheckCircle, Download, Upload } from 'lucide-vue-next'
 
@@ -410,7 +416,7 @@ const importProjectId = ref(0)
 const importLarkId = ref(0)
 const importLokiId = ref(0)
 const importMessageTitle = ref('')
-const larkConfigs = ref([])
+const channels = ref([])
 const lokiConnections = ref([])
 
 const isAllSelected = computed(() => rules.value.length > 0 && selectedIds.value.length === rules.value.length)
@@ -448,8 +454,8 @@ async function exportRules() {
 
 async function loadLarkConfigs() {
   try {
-    const res = await api.get('/lark-configs', { params: { limit: 500 } })
-    if (res.code === 0) larkConfigs.value = res.data || []
+    const res = await api.get('/notify-channels', { params: { limit: 500 } })
+    if (res.code === 0) channels.value = res.data || []
   } catch (e) { /* ignore */ }
 }
 
@@ -478,6 +484,7 @@ function parseImport() {
     for (const rule of parsed) {
       if (importProjectId.value > 0) rule.project_id = importProjectId.value
       if (importLarkId.value > 0) rule.lark_config_id = importLarkId.value
+      if (importLarkId.value > 0) rule.channel_ids = [importLarkId.value]
       if (importLokiId.value > 0) rule.loki_connection_id = importLokiId.value
       if (importMessageTitle.value) rule.message_title = importMessageTitle.value
       // Add suffix to name to avoid conflict
@@ -588,17 +595,6 @@ async function deleteRule(rule) {
 
 function viewLogs(rule) {
   router.push({ path: '/alert-logs', query: { rule_id: rule.id } })
-}
-
-function severityClass(s) {
-  return { S1: 'badge-danger', S2: 'badge-warning', S3: 'badge-info' }[s] || 'badge-gray'
-}
-function severityLabel(s) {
-  return { S1: 'S1 灾难', S2: 'S2 严重', S3: 'S3 警告' }[s] || s
-}
-function formatTime(t) {
-  if (!t) return '-'
-  return new Date(t).toLocaleString('zh-CN')
 }
 
 onMounted(() => {
@@ -788,7 +784,11 @@ onMounted(() => {
   flex-shrink: 0;
   border-left: 1px solid var(--border, #e2e8f0);
   background: var(--bg-card, #fff);
-  box-shadow: -2px 0 4px rgba(0,0,0,0.05);
+  /* The columns to the left scroll underneath this panel. A pure-black 5%
+     shadow was too faint to read as an edge, so the boundary looked like a
+     clipped cell rather than a frozen column. Slate-tinted to match the
+     shadow scale, with a negative spread so it stays a crisp edge. */
+  box-shadow: -6px 0 12px -6px rgba(15, 23, 42, 0.16);
 }
 
 .rules-table {
@@ -818,7 +818,7 @@ onMounted(() => {
 .col-name { min-width: 180px; }
 .col-project { min-width: 80px; }
 .col-ds { min-width: 60px; }
-.col-lark { min-width: 100px; }
+.col-lark { min-width: 160px; }
 .col-schedule { min-width: 90px; }
 .col-severity { min-width: 70px; }
 .col-lastrun { min-width: 130px; }

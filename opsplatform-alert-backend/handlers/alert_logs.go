@@ -123,41 +123,23 @@ func HandleListAlertLogs(w http.ResponseWriter, r *http.Request) {
 	jsonPaginated(w, list, total, page, limit)
 }
 
-// HandleGetAlertStats returns alert statistics
+// HandleGetAlertStats returns alert statistics.
+//
+// The dashboard has moved to /dashboard, which returns these same counts inside
+// a larger payload. This endpoint stays because an existing installation may
+// have scripts or dashboards pointing at it, and it now shares the one
+// implementation with /dashboard rather than carrying a second copy of the same
+// queries — the two were already drifting: "today" was still being counted in
+// the database session's day here while the dashboard had moved to the
+// platform's display timezone, so the same platform reported two different
+// numbers depending on which URL you asked.
 func HandleGetAlertStats(w http.ResponseWriter, r *http.Request) {
+	counts := dashboardCounts()
+
 	stats := map[string]interface{}{}
-
-	// Total rules
-	var totalRules, enabledRules int
-	database.DB.QueryRow("SELECT COUNT(*) FROM alert_rules").Scan(&totalRules)
-	database.DB.QueryRow("SELECT COUNT(*) FROM alert_rules WHERE status = 1").Scan(&enabledRules)
-
-	// Today's alerts
-	var todayTotal, todaySuccess, todayFailed int
-	database.DB.QueryRow("SELECT COUNT(*) FROM alert_logs WHERE DATE(created_at) = CURDATE()").Scan(&todayTotal)
-	database.DB.QueryRow("SELECT COUNT(*) FROM alert_logs WHERE DATE(created_at) = CURDATE() AND status = 'success'").Scan(&todaySuccess)
-	database.DB.QueryRow("SELECT COUNT(*) FROM alert_logs WHERE DATE(created_at) = CURDATE() AND status = 'failed'").Scan(&todayFailed)
-
-	// ES connections
-	var esTotal, esActive int
-	database.DB.QueryRow("SELECT COUNT(*) FROM es_connections").Scan(&esTotal)
-	database.DB.QueryRow("SELECT COUNT(*) FROM es_connections WHERE status = 1").Scan(&esActive)
-
-	// Lark configs
-	var larkTotal, larkActive int
-	database.DB.QueryRow("SELECT COUNT(*) FROM lark_configs").Scan(&larkTotal)
-	database.DB.QueryRow("SELECT COUNT(*) FROM lark_configs WHERE status = 1").Scan(&larkActive)
-
-	stats["rules_total"] = totalRules
-	stats["rules_enabled"] = enabledRules
-	stats["today_alerts"] = todayTotal
-	stats["today_success"] = todaySuccess
-	stats["today_failed"] = todayFailed
-	stats["es_connections"] = esTotal
-	stats["es_active"] = esActive
-	stats["lark_configs"] = larkTotal
-	stats["lark_active"] = larkActive
-
+	for k, v := range counts {
+		stats[k] = v
+	}
 	jsonSuccess(w, stats)
 }
 

@@ -1,43 +1,45 @@
 <template>
-  <div class="index-selector">
-    <div class="form-row" style="margin-bottom: 6px;">
-      <div class="form-group" style="margin-bottom: 0;">
-        <label class="form-label" style="font-size: 12px;">项目环境</label>
-        <select v-model="selectedProject" class="form-select" @change="onProjectChange">
-          <option value="">全部</option>
-          <option v-for="p in projects" :key="p.code" :value="p.code">
-            {{ p.display_name }} ({{ p.code }})
-          </option>
-        </select>
-      </div>
-      <div class="form-group" style="margin-bottom: 0;">
-        <label class="form-label" style="font-size: 12px;">索引 (共 {{ filteredIndices.length }})</label>
-        <div style="position: relative;">
-          <input
-            v-model="indexSearch"
-            class="form-input"
-            placeholder="搜索索引名..."
-            @focus="dropdownOpen = true"
-            @blur="onBlur"
-          />
-          <div v-if="dropdownOpen && filteredIndices.length > 0" class="dropdown-list">
-            <div
-              v-for="idx in displayedIndices"
-              :key="idx"
-              class="dropdown-item"
-              @mousedown.prevent="selectIndex(idx)"
-            >
-              {{ idx }}
-            </div>
-            <div v-if="filteredIndices.length > 50" class="dropdown-more">
-              ...还有 {{ filteredIndices.length - 50 }} 条，请继续输入过滤
-            </div>
+  <!-- One set of three fields, laid out two ways. Nested (the default) keeps
+       its own grid, for callers that put this under a single "ES 索引" label.
+       Flat drops to display:contents so the three fields join the caller's
+       grid directly and line up with its other fields. -->
+  <div class="index-selector" :class="{ 'index-selector-flat': flat }">
+    <div class="form-group index-field">
+      <label class="form-label">项目环境</label>
+      <select v-model="selectedProject" class="form-select" @change="onProjectChange">
+        <option value="">全部</option>
+        <option v-for="p in projects" :key="p.code" :value="p.code">
+          {{ p.display_name }} ({{ p.code }})
+        </option>
+      </select>
+    </div>
+    <div class="form-group index-field">
+      <label class="form-label">索引 (共 {{ filteredIndices.length }})</label>
+      <div class="index-search">
+        <input
+          v-model="indexSearch"
+          class="form-input"
+          placeholder="搜索索引名..."
+          @focus="dropdownOpen = true"
+          @blur="onBlur"
+        />
+        <div v-if="dropdownOpen && filteredIndices.length > 0" class="dropdown-list">
+          <div
+            v-for="idx in displayedIndices"
+            :key="idx"
+            class="dropdown-item"
+            @mousedown.prevent="selectIndex(idx)"
+          >
+            {{ idx }}
+          </div>
+          <div v-if="filteredIndices.length > 50" class="dropdown-more">
+            ...还有 {{ filteredIndices.length - 50 }} 条，请继续输入过滤
           </div>
         </div>
       </div>
     </div>
-    <div class="form-group" style="margin-bottom: 0;">
-      <label class="form-label" style="font-size: 12px;">索引值 (高级模式可手填通配符)</label>
+    <div class="form-group index-field">
+      <label class="form-label">索引值 (高级模式可手填通配符)</label>
       <input v-model="advancedValue" class="form-input" placeholder="* 或 prod-app-g32-*" @input="onAdvancedInput" />
     </div>
   </div>
@@ -50,6 +52,9 @@ import api from '../api'
 const props = defineProps({
   modelValue: { type: String, default: '*' },
   esConnectionId: { type: Number, default: 0 },
+  // Let the three fields join the caller's own form grid instead of nesting
+  // a second grid inside one of its cells.
+  flat: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:modelValue'])
 
@@ -122,33 +127,52 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.index-selector { width: 100%; }
+/* Nested: keep the old two-up-then-full-width shape and the smaller labels,
+   because here the three fields are sub-fields under a caller's own label. */
+.index-selector:not(.index-selector-flat) {
+  width: 100%;
+  display: grid;
+  /* Three across when the caller gives the group a full-width row, folding to
+     two and then one as the space narrows. */
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--space-12) var(--space-16);
+  align-items: start;
+}
+.index-selector:not(.index-selector-flat) .index-field { margin-bottom: 0; }
+.index-selector:not(.index-selector-flat) .form-label { font-size: var(--fs-12); }
+
+/* Flat: the three fields become grid items of the caller's own .form-row,
+   so they line up with its other fields and share its label size. */
+.index-selector-flat { display: contents; }
+
+.index-search { position: relative; }
+
 .dropdown-list {
   position: absolute;
   top: 100%;
   left: 0;
   right: 0;
-  background: white;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 6px;
   max-height: 280px;
   overflow-y: auto;
   z-index: 1000;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  box-shadow: var(--shadow-md);
   margin-top: 2px;
 }
 .dropdown-item {
-  padding: 6px 12px;
+  padding: var(--space-6) var(--space-12);
   cursor: pointer;
-  font-size: 13px;
-  font-family: monospace;
+  font-size: var(--fs-14);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
-.dropdown-item:hover { background: #f1f5f9; }
+.dropdown-item:hover { background: var(--bg); }
 .dropdown-more {
-  padding: 6px 12px;
-  font-size: 12px;
-  color: #64748b;
-  background: #f8fafc;
+  padding: var(--space-6) var(--space-12);
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+  background: var(--bg);
   font-style: italic;
 }
 </style>

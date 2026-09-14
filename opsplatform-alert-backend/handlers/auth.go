@@ -20,6 +20,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"opsplatform-alert-backend/config"
 	"opsplatform-alert-backend/database"
+	"opsplatform-alert-backend/safego"
 )
 
 var cfg *config.Config
@@ -32,7 +33,7 @@ type contextKey string
 
 const (
 	contextUserID   contextKey = "userID"
-	contextUsername  contextKey = "username"
+	contextUsername contextKey = "username"
 	contextUserRole contextKey = "userRole"
 )
 
@@ -389,7 +390,6 @@ func fetchPortalPermissionsForUser(portalURL string, userID int, username string
 	return fetchPortalPermissions(portalURL, tok, username)
 }
 
-
 // AuthMiddleware validates JWT tokens
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -491,8 +491,9 @@ func parseSameSite(s string) http.SameSite {
 }
 
 func init() {
-	// Clean expired sessions periodically
-	go func() {
+	// Clean expired sessions periodically. A panic in here would both kill
+	// the process and stop sessions ever being swept again.
+	safego.Go("session sweeper", func() {
 		for {
 			time.Sleep(30 * time.Minute)
 			if database.DB != nil {
@@ -505,7 +506,7 @@ func init() {
 				}
 			}
 		}
-	}()
+	})
 }
 
 // aesDecrypt decrypts AES-256-GCM encrypted base64 string

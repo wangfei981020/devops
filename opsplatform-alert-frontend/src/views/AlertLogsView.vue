@@ -6,6 +6,7 @@
           <select v-model="filters.status" class="form-select" style="width: 120px;" @change="page = 1; loadLogs()">
             <option value="">全部状态</option>
             <option value="success">成功</option>
+            <option value="partial">部分成功</option>
             <option value="failed">失败</option>
           </select>
           <select v-model="filters.severity" class="form-select" style="width: 120px;" @change="page = 1; loadLogs()">
@@ -58,9 +59,7 @@
                 <span class="badge" :class="severityClass(log.severity)">{{ severityLabel(log.severity) }}</span>
               </td>
               <td>
-                <span class="badge" :class="log.status === 'success' ? 'badge-success' : 'badge-danger'">
-                  {{ log.status === 'success' ? '成功' : '失败' }}
-                </span>
+                <span class="badge" :class="statusClass(log.status)">{{ statusLabel(log.status) }}</span>
               </td>
               <td>
                 <div class="truncate" style="max-width: 400px;" :title="log.message">{{ log.message }}</div>
@@ -87,6 +86,7 @@
     </div>
 
     <!-- Detail Modal -->
+    <Transition name="modal">
     <div v-if="detailLog" class="modal-overlay">
       <div class="modal" style="min-width: 700px; max-height: 90vh; display: flex; flex-direction: column;">
         <div class="modal-header" style="position: sticky; top: 0; background: var(--bg-card, #fff); z-index: 10; flex-shrink: 0; border-bottom: 1px solid var(--border, #e2e8f0);">
@@ -97,7 +97,7 @@
           <div style="display: grid; grid-template-columns: 100px 1fr; gap: 8px; font-size: 14px;">
             <div class="text-secondary">规则:</div><div>{{ detailLog.rule_name }} (ID: {{ detailLog.rule_id }})</div>
             <div class="text-secondary">级别:</div><div><span class="badge" :class="severityClass(detailLog.severity)">{{ severityLabel(detailLog.severity) }}</span></div>
-            <div class="text-secondary">状态:</div><div><span class="badge" :class="detailLog.status === 'success' ? 'badge-success' : 'badge-danger'">{{ detailLog.status }}</span></div>
+            <div class="text-secondary">状态:</div><div><span class="badge" :class="statusClass(detailLog.status)">{{ statusLabel(detailLog.status) }}</span></div>
             <div class="text-secondary">时间:</div><div>{{ detailLog.created_at }}</div>
           </div>
 
@@ -117,14 +117,33 @@
           </div>
 
           <div v-if="detailLog.lark_response" class="form-group">
-            <label class="form-label">Lark 响应</label>
-            <pre style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap;">{{ detailLog.lark_response }}</pre>
+            <label class="form-label">发送响应</label>
+            <table v-if="sendResults(detailLog.lark_response)" style="width:100%; font-size:12px;">
+              <thead>
+                <tr><th>渠道</th><th>类型</th><th>结果</th><th>详情</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="(r, i) in sendResults(detailLog.lark_response)" :key="i">
+                  <td>{{ r.channel_name }}</td>
+                  <td>{{ r.channel_type === 'telegram' ? 'Telegram' : 'Lark' }}</td>
+                  <td>
+                    <span class="badge" :class="r.status === 'success' ? 'badge-success' : 'badge-danger'">
+                      {{ r.status === 'success' ? '成功' : '失败' }}
+                    </span>
+                  </td>
+                  <td><span class="truncate" :title="r.error || r.response">{{ r.error || r.response }}</span></td>
+                </tr>
+              </tbody>
+            </table>
+            <pre v-else style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap;">{{ detailLog.lark_response }}</pre>
           </div>
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- Clean Logs Modal -->
+    <Transition name="modal">
     <div v-if="showCleanModal" class="modal-overlay">
       <div class="modal" style="min-width: 500px;">
         <div class="modal-header">
@@ -163,6 +182,7 @@
             <select v-model="cleanForm.status" class="form-select" @change="cleanPreviewCount = null">
               <option value="">全部</option>
               <option value="success">成功</option>
+              <option value="partial">部分成功</option>
               <option value="failed">失败</option>
             </select>
           </div>
@@ -179,6 +199,7 @@
         </div>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
 
@@ -186,6 +207,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
+import { severityClass, severityLabel, statusClass, statusLabel } from '../utils/severity'
+import { formatTime } from '../utils/datetime'
 import { useToast, useConfirm } from '../stores/ui'
 import { FileText, X } from 'lucide-vue-next'
 
@@ -328,18 +351,20 @@ async function confirmClean() {
   cleanLoading.value = false
 }
 
-function severityClass(s) {
-  return { S1: 'badge-danger', S2: 'badge-warning', S3: 'badge-info', info: 'badge-info', warning: 'badge-warning', critical: 'badge-danger' }[s] || 'badge-gray'
-}
-function severityLabel(s) {
-  return { S1: 'S1 灾难', S2: 'S2 严重', S3: 'S3 警告', info: '信息', warning: '警告', critical: '严重' }[s] || s
-}
-function formatTime(t) {
-  if (!t) return '-'
-  return new Date(t).toLocaleString('zh-CN')
-}
 function formatJSON(s) {
   try { return JSON.stringify(JSON.parse(s), null, 2) } catch { return s }
+}
+
+// Rows written before multi-channel support hold a raw platform response,
+// not a SendResult array; fall back to the <pre> block for those.
+function sendResults(raw) {
+  if (!raw || !raw.trim().startsWith('[')) return null
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) && parsed.length && parsed[0].channel_id !== undefined ? parsed : null
+  } catch (e) {
+    return null
+  }
 }
 
 onMounted(() => {

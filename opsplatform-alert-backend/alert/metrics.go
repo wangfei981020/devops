@@ -63,7 +63,7 @@ func InitMetrics() {
 
 	Metrics.alertSuccess = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "alert_send_success_total",
-		Help: "Total successful alert sends to Lark",
+		Help: "Total successful alert sends across all notification channels",
 	}, labels)
 
 	Metrics.alertFailed = prometheus.NewCounterVec(prometheus.CounterOpts{

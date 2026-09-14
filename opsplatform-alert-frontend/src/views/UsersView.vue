@@ -68,6 +68,7 @@
     </div>
 
     <!-- Add/Edit User Modal -->
+    <Transition name="modal">
     <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
       <div class="modal">
         <div class="modal-header">
@@ -103,8 +104,10 @@
         </form>
       </div>
     </div>
+    </Transition>
 
     <!-- Reset Password Modal -->
+    <Transition name="modal">
     <div v-if="showResetPwd" class="modal-overlay" @click.self="showResetPwd = false">
       <div class="modal" style="min-width: 400px;">
         <div class="modal-header">
@@ -123,12 +126,14 @@
         </form>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
 import api from '../api'
+import { formatTime } from '../utils/datetime'
 import { useToast, useConfirm } from '../stores/ui'
 import { UserPlus, Pencil, KeyRound, ShieldOff, ShieldCheck, Trash2, X } from 'lucide-vue-next'
 
@@ -244,10 +249,6 @@ async function deleteUser(user) {
   }
 }
 
-function formatTime(t) {
-  if (!t) return '-'
-  return new Date(t).toLocaleString('zh-CN')
-}
 
 onMounted(loadUsers)
 </script>

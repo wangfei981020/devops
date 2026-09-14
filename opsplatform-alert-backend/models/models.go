@@ -59,6 +59,54 @@ type LarkConfig struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// NotifyChannel 统一通知渠道（lark / telegram）
+type NotifyChannel struct {
+	ID          int    `json:"id"`
+	ChannelType string `json:"channel_type"` // "lark" or "telegram"
+	Name        string `json:"name"`
+	// Lark
+	WebhookURL string `json:"webhook_url"`
+	Secret     string `json:"secret,omitempty"`
+	LarkType   string `json:"lark_type"` // "feishu" or "larksuite"
+	// Telegram
+	BotToken string `json:"bot_token,omitempty"`
+	ChatID   string `json:"chat_id"`
+	ThreadID int    `json:"thread_id"` // forum topic, 0 = none
+	ProxyURL string `json:"proxy_url"`
+
+	Description string    `json:"description"`
+	Status      int       `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// ToLarkConfig adapts a lark-typed channel to the legacy LarkConfig the
+// lark package consumes. The lark package is intentionally left untouched.
+func (c NotifyChannel) ToLarkConfig() LarkConfig {
+	return LarkConfig{
+		ID:          c.ID,
+		Name:        c.Name,
+		WebhookURL:  c.WebhookURL,
+		Secret:      c.Secret,
+		LarkType:    c.LarkType,
+		Description: c.Description,
+		Status:      c.Status,
+	}
+}
+
+type CreateNotifyChannelReq struct {
+	ChannelType string `json:"channel_type"`
+	Name        string `json:"name"`
+	WebhookURL  string `json:"webhook_url"`
+	Secret      string `json:"secret"`
+	LarkType    string `json:"lark_type"`
+	BotToken    string `json:"bot_token"`
+	ChatID      string `json:"chat_id"`
+	ThreadID    int    `json:"thread_id"`
+	ProxyURL    string `json:"proxy_url"`
+	Description string `json:"description"`
+}
+
 // FilterField ES查询过滤字段
 type FilterField struct {
 	Field string `json:"field"` // ES字段路径
@@ -73,10 +121,11 @@ type ExtractField struct {
 	Pattern string `json:"pattern"` // 正则表达式，可选
 }
 
-// AtUser Lark @用户
+// AtUser 告警 @用户
 type AtUser struct {
-	Name   string `json:"name"`    // 显示名
-	UserID string `json:"user_id"` // Lark open_id 或 user_id
+	Name       string `json:"name"`        // 显示名
+	UserID     string `json:"user_id"`     // Lark open_id 或 user_id
+	TelegramID string `json:"telegram_id"` // Telegram 数字 user id
 }
 
 // AlertRule 告警规则
@@ -125,6 +174,13 @@ type AlertRule struct {
 	ReportMode      string `json:"report_mode"`
 	ReportTitle     string `json:"report_title"`
 	ReportTemplate  string `json:"report_template"`
+	// Error stack context (Loki only)
+	StackContextEnabled  int    `json:"stack_context_enabled"`
+	StackMaxLines        int    `json:"stack_max_lines"`
+	StackHeadLines       int    `json:"stack_head_lines"`
+	StackTailLines       int    `json:"stack_tail_lines"`
+	StackBoundaryPattern string `json:"stack_boundary_pattern"`
+	StackWindowSec       int    `json:"stack_window_sec"`
 	Status          int            `json:"status"`
 	LastRunAt       sql.NullTime   `json:"last_run_at"`
 	LastError       sql.NullString `json:"last_error"`
@@ -134,6 +190,7 @@ type AlertRule struct {
 	// Join fields (not in DB)
 	ESConnectionName string `json:"es_connection_name,omitempty"`
 	LarkConfigName   string `json:"lark_config_name,omitempty"`
+	ChannelIDs       []int  `json:"channel_ids,omitempty"` // 从 alert_rule_channels 装配
 }
 
 // AlertLog 告警日志
@@ -198,6 +255,7 @@ type CreateAlertRuleReq struct {
 	ESConnectionID   int    `json:"es_connection_id"`
 	LokiConnectionID int    `json:"loki_connection_id"`
 	LarkConfigID     int    `json:"lark_config_id"`
+	ChannelIDs       []int  `json:"channel_ids"` // 多渠道；为空时回退到 [LarkConfigID]
 	ESIndex          string `json:"es_index"`
 	Schedule         string `json:"schedule"`
 	TimeRange        string `json:"time_range"`
@@ -235,6 +293,12 @@ type CreateAlertRuleReq struct {
 	ReportMode           string `json:"report_mode"`
 	ReportTitle          string `json:"report_title"`
 	ReportTemplate       string `json:"report_template"`
+	StackContextEnabled  int    `json:"stack_context_enabled"`
+	StackMaxLines        int    `json:"stack_max_lines"`
+	StackHeadLines       int    `json:"stack_head_lines"`
+	StackTailLines       int    `json:"stack_tail_lines"`
+	StackBoundaryPattern string `json:"stack_boundary_pattern"`
+	StackWindowSec       int    `json:"stack_window_sec"`
 }
 
 type APIResponse struct {

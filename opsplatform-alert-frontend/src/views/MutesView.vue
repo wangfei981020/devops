@@ -76,6 +76,7 @@
     </div>
 
     <!-- Edit Mute Modal -->
+    <Transition name="modal">
     <div v-if="editMute" class="modal-overlay" @click.self="editMute = null">
       <div class="modal" style="min-width: 380px;">
         <div class="modal-header">
@@ -107,12 +108,14 @@
         </div>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import api from '../api'
+import { formatTime } from '../utils/datetime'
 import { useToast, useConfirm } from '../stores/ui'
 import { ShieldOff } from 'lucide-vue-next'
 
@@ -223,10 +226,6 @@ async function removeMute(m) {
   }
 }
 
-function formatTime(t) {
-  if (!t) return '-'
-  return new Date(t).toLocaleString('zh-CN')
-}
 
 function remainTime(t) {
   if (!t) return '-'

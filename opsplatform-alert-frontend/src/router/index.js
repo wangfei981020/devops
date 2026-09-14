@@ -16,12 +16,16 @@ const routes = [
       { path: 'es-connections', name: 'ESConnections', component: () => import('../views/ESConnectionsView.vue'), meta: { menuKey: 'connections' } },
       { path: 'loki-connections', name: 'LokiConnections', component: () => import('../views/LokiConnectionsView.vue'), meta: { menuKey: 'connections' } },
       { path: 'es-projects', name: 'ESProjects', component: () => import('../views/ESProjectsView.vue'), meta: { menuKey: 'es_projects' } },
-      { path: 'lark-configs', name: 'LarkConfigs', component: () => import('../views/LarkConfigsView.vue'), meta: { menuKey: 'lark' } },
+      { path: 'notify-channels', name: 'NotifyChannels', component: () => import('../views/NotifyChannelsView.vue'), meta: { menuKey: 'lark' } },
+      { path: 'lark-configs', redirect: '/notify-channels' },
       { path: 'alert-logs', name: 'AlertLogs', component: () => import('../views/AlertLogsView.vue'), meta: { menuKey: 'logs' } },
       { path: 'mutes', name: 'Mutes', component: () => import('../views/MutesView.vue'), meta: { menuKey: 'mutes' } },
       { path: 'contacts', name: 'Contacts', component: () => import('../views/ContactsView.vue'), meta: { menuKey: 'contacts' } },
       { path: 'audit-logs', name: 'AuditLogs', component: () => import('../views/AuditLogsView.vue'), meta: { menuKey: 'audit' } },
       { path: 'users', name: 'Users', component: () => import('../views/UsersView.vue'), meta: { menuKey: 'users' } },
+      // Settings sit behind the same menu key as account management: changing
+      // the display timezone also changes when scheduled rules fire.
+      { path: 'settings', name: 'Settings', component: () => import('../views/SettingsView.vue'), meta: { menuKey: 'users' } },
     ]
   }
 ]

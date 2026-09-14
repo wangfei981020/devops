@@ -6,6 +6,17 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	// The timezone database, compiled into the binary.
+	//
+	// Without it time.LoadLocation depends on the host carrying
+	// /usr/share/zoneinfo, and the platform's display timezone — which also
+	// decides when every scheduled rule fires — would quietly fall back to UTC
+	// on an image that does not ship it. The current base image happens to, so
+	// this changes nothing today; it stops a base-image bump from silently
+	// moving every customer's schedules and timestamps.
+	_ "time/tzdata"
 
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -13,6 +24,7 @@ import (
 	"opsplatform-alert-backend/config"
 	"opsplatform-alert-backend/database"
 	"opsplatform-alert-backend/handlers"
+	"opsplatform-alert-backend/timezone"
 )
 
 func main() {
@@ -27,6 +39,16 @@ func main() {
 	if err := database.InitMySQL(cfg); err != nil {
 		log.Fatalf("Failed to init MySQL: %v", err)
 	}
+
+	// Load the display timezone before anything renders a timestamp or builds a
+	// cron schedule. The stored setting wins; the env var only seeds a fresh
+	// install. A bad stored value must not take the platform down — fall back
+	// to UTC and say so loudly.
+	tzName := database.GetSetting(database.SettingDisplayTimezone, cfg.DisplayTimezone)
+	if err := timezone.Set(tzName); err != nil {
+		log.Printf("[Timezone] %v，回退到 UTC", err)
+	}
+	log.Printf("[Timezone] 显示时区 %s，当前时间 %s", timezone.DisplayName(), timezone.FormatWithZone(time.Now()))
 
 	// Init Redis
 	if err := database.InitRedis(cfg); err != nil {
@@ -43,6 +65,7 @@ func main() {
 	engine := alert.NewEngine()
 	handlers.SetAlertEngine(engine)
 	handlers.SetRuleEngine(engine)
+	handlers.SetScheduleRebuilder(engine)
 
 	if err := engine.Start(); err != nil {
 		log.Fatalf("Failed to start alert engine: %v", err)
@@ -70,8 +93,10 @@ func main() {
 	// User info
 	protected.HandleFunc("/users/me", handlers.HandleGetCurrentUser).Methods("GET")
 
-	// Dashboard stats
+	// Dashboard stats. /stats stays as it was for existing callers; /dashboard
+	// is a superset that also carries the health checks the dashboard renders.
 	protected.HandleFunc("/stats", handlers.HandleGetAlertStats).Methods("GET")
+	protected.HandleFunc("/dashboard", handlers.HandleGetDashboard).Methods("GET")
 
 	// ES Connections
 	protected.HandleFunc("/es-connections", handlers.HandleListESConnections).Methods("GET")
@@ -81,13 +106,21 @@ func main() {
 	protected.HandleFunc("/es-connections/{id}/toggle", handlers.HandleToggleESConnection).Methods("PUT")
 	protected.HandleFunc("/es-connections/test", handlers.HandleTestESConnection).Methods("POST")
 
-	// Lark Configs
-	protected.HandleFunc("/lark-configs", handlers.HandleListLarkConfigs).Methods("GET")
-	protected.HandleFunc("/lark-configs", handlers.HandleCreateLarkConfig).Methods("POST")
-	protected.HandleFunc("/lark-configs/{id}", handlers.HandleUpdateLarkConfig).Methods("PUT")
-	protected.HandleFunc("/lark-configs/{id}", handlers.HandleDeleteLarkConfig).Methods("DELETE")
-	protected.HandleFunc("/lark-configs/{id}/toggle", handlers.HandleToggleLarkConfig).Methods("PUT")
-	protected.HandleFunc("/lark-configs/test", handlers.HandleTestLarkConfig).Methods("POST")
+	// Notify Channels (Lark / Telegram)
+	protected.HandleFunc("/notify-channels", handlers.HandleListNotifyChannels).Methods("GET")
+	protected.HandleFunc("/notify-channels", handlers.HandleCreateNotifyChannel).Methods("POST")
+	protected.HandleFunc("/notify-channels/test", handlers.HandleTestNotifyChannel).Methods("POST")
+	protected.HandleFunc("/notify-channels/{id}", handlers.HandleUpdateNotifyChannel).Methods("PUT")
+	protected.HandleFunc("/notify-channels/{id}", handlers.HandleDeleteNotifyChannel).Methods("DELETE")
+	protected.HandleFunc("/notify-channels/{id}/toggle", handlers.HandleToggleNotifyChannel).Methods("PUT")
+
+	// Legacy aliases: keep old clients and bookmarks working.
+	protected.HandleFunc("/lark-configs", handlers.HandleListNotifyChannels).Methods("GET")
+	protected.HandleFunc("/lark-configs", handlers.HandleCreateNotifyChannel).Methods("POST")
+	protected.HandleFunc("/lark-configs/test", handlers.HandleTestNotifyChannel).Methods("POST")
+	protected.HandleFunc("/lark-configs/{id}", handlers.HandleUpdateNotifyChannel).Methods("PUT")
+	protected.HandleFunc("/lark-configs/{id}", handlers.HandleDeleteNotifyChannel).Methods("DELETE")
+	protected.HandleFunc("/lark-configs/{id}/toggle", handlers.HandleToggleNotifyChannel).Methods("PUT")
 
 	// Loki Connections
 	protected.HandleFunc("/loki-connections", handlers.HandleListLokiConnections).Methods("GET")
@@ -145,6 +178,12 @@ func main() {
 	admin.HandleFunc("/users/{id}/toggle", handlers.HandleToggleUser).Methods("PUT")
 	admin.HandleFunc("/users/{id}/reset-password", handlers.HandleResetPassword).Methods("POST")
 	admin.HandleFunc("/users/{id}", handlers.HandleDeleteUser).Methods("DELETE")
+
+	// Platform settings. Reading is open to anyone signed in — the UI needs the
+	// display timezone to render any timestamp at all — but changing it is an
+	// admin action, since it also decides when scheduled rules fire.
+	protected.HandleFunc("/settings", handlers.HandleGetSettings).Methods("GET")
+	admin.HandleFunc("/settings", handlers.HandleUpdateSettings).Methods("PUT")
 
 	// Alert Contacts
 	protected.HandleFunc("/alert-contacts", handlers.HandleListContacts).Methods("GET")

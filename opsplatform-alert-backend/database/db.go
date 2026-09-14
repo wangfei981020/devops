@@ -13,7 +13,15 @@ import (
 var DB *sql.DB
 
 func InitMySQL(cfg *config.Config) error {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local",
+	// Read and write instants in UTC, end to end. TIMESTAMP columns already
+	// keep UTC internally and convert on the way out using the session zone, so
+	// pinning the session to +00:00 and telling the driver to label rows UTC
+	// makes the value Go sees the actual instant. Leaving these to default
+	// meant the session followed the server's zone while the driver labelled
+	// rows with the process's — two clocks that only agree by accident, and a
+	// timestamp read back shifted by the difference. The zone a person sees is
+	// a rendering choice, applied later, by package timezone.
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=UTC&time_zone=%%27%%2B00%%3A00%%27",
 		cfg.MySQLUser, cfg.MySQLPassword, cfg.MySQLHost, cfg.MySQLPort, cfg.MySQLDatabase)
 
 	var err error
@@ -88,6 +96,39 @@ func createTables() error {
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
+		// 统一通知渠道表（ID 空间沿用 lark_configs，勿改 AUTO_INCREMENT 起点逻辑）
+		`CREATE TABLE IF NOT EXISTS notify_channels (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			channel_type VARCHAR(20) NOT NULL DEFAULT 'lark' COMMENT 'lark / telegram',
+			name VARCHAR(100) NOT NULL COMMENT '渠道名称',
+			webhook_url VARCHAR(500) DEFAULT '' COMMENT 'Lark Webhook URL',
+			secret VARCHAR(200) DEFAULT '' COMMENT 'Lark 签名密钥',
+			lark_type VARCHAR(20) DEFAULT '' COMMENT 'feishu=国内版 larksuite=国际版',
+			bot_token VARCHAR(200) DEFAULT '' COMMENT 'Telegram Bot Token',
+			chat_id VARCHAR(64) DEFAULT '' COMMENT 'Telegram chat_id，群组为负数',
+			thread_id INT DEFAULT 0 COMMENT 'Telegram 论坛话题 message_thread_id，0=不指定',
+			proxy_url VARCHAR(200) DEFAULT '' COMMENT '出网代理，留空直连',
+			description VARCHAR(500) DEFAULT '' COMMENT '描述',
+			status TINYINT DEFAULT 1 COMMENT '1=启用 0=禁用',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			INDEX idx_channel_type (channel_type)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+		// 规则 ↔ 渠道 多对多
+		`CREATE TABLE IF NOT EXISTS alert_rule_channels (
+			rule_id INT NOT NULL COMMENT '告警规则ID',
+			channel_id INT NOT NULL COMMENT '通知渠道ID',
+			PRIMARY KEY (rule_id, channel_id),
+			INDEX idx_channel (channel_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+		// 一次性迁移标记，防止 autoMigrate 每次启动重复搬数据
+		`CREATE TABLE IF NOT EXISTS schema_migrations (
+			name VARCHAR(190) PRIMARY KEY,
+			applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
 		// 告警规则
 		`CREATE TABLE IF NOT EXISTS alert_rules (
 			id INT AUTO_INCREMENT PRIMARY KEY,
@@ -159,8 +200,8 @@ func createTables() error {
 			severity VARCHAR(20) DEFAULT 'warning' COMMENT '告警级别',
 			message TEXT COMMENT '告警消息内容',
 			es_raw TEXT COMMENT 'ES原始数据',
-			lark_response TEXT COMMENT 'Lark发送响应',
-			status VARCHAR(20) DEFAULT 'success' COMMENT 'success/failed',
+			lark_response TEXT COMMENT '各渠道发送结果JSON数组（列名保留兼容历史数据）',
+			status VARCHAR(20) DEFAULT 'success' COMMENT 'success/partial/failed',
 			error_msg TEXT COMMENT '错误信息',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			INDEX idx_rule_id (rule_id),
@@ -213,7 +254,9 @@ func createTables() error {
 	}
 
 	// Auto-migrate: add columns if missing
-	autoMigrate()
+	if err := autoMigrate(); err != nil {
+		return err
+	}
 
 	// Ensure default admin exists
 	ensureDefaultAdmin()
@@ -222,7 +265,7 @@ func createTables() error {
 	return nil
 }
 
-func autoMigrate() {
+func autoMigrate() error {
 	// Each entry: table, column, column definition
 	migrations := []struct {
 		table  string
@@ -254,8 +297,23 @@ func autoMigrate() {
 		{"alert_rules", "report_mode", "VARCHAR(16) DEFAULT 'separate' COMMENT '性能告警:日报模式 separate/merged'"},
 		{"alert_rules", "report_title", "VARCHAR(255) DEFAULT '' COMMENT '性能告警:日报标题'"},
 		{"alert_rules", "report_template", "TEXT COMMENT '性能告警:日报模板'"},
+		{"alert_rules", "stack_context_enabled", "TINYINT DEFAULT 0 COMMENT '错误栈上下文: 总开关'"},
+		{"alert_rules", "stack_max_lines", "INT DEFAULT 200 COMMENT '错误栈上下文: 采集阶段的安全阈值(防止边界正则不匹配拖入整段日志), 不是展示裁剪'"},
+		{"alert_rules", "stack_head_lines", "INT DEFAULT 12 COMMENT '错误栈上下文: 超长时保留的头部行数'"},
+		{"alert_rules", "stack_tail_lines", "INT DEFAULT 8 COMMENT '错误栈上下文: 超长时保留的尾部行数'"},
+		{"alert_rules", "stack_boundary_pattern", "VARCHAR(500) DEFAULT '' COMMENT '错误栈上下文: 新日志行正则, 空则用内置默认'"},
+		{"alert_rules", "stack_window_sec", "INT DEFAULT 5 COMMENT '错误栈上下文: 向后取多少秒'"},
 		{"users", "auth_source", "VARCHAR(20) DEFAULT 'local' COMMENT '认证来源: local/portal'"},
 		{"users", "portal_token", "TEXT COMMENT '运维平台Portal Token(用于刷新权限)'"},
+		{"alert_contacts", "telegram_id", "VARCHAR(64) DEFAULT '' COMMENT 'Telegram user id（数字），用于 @提醒'"},
+		// Recorded in the row rather than in Redis: a reminder that fires twice
+		// because a cache was cleared is worse than one that arrives a little
+		// late, and this has to survive a restart.
+		{"alert_mutes", "reminded_at", "TIMESTAMP NULL COMMENT '到期提醒发送时间，NULL 表示未提醒'"},
+		// The day a rule's report was last sent for, as a YYYYMMDD key. Claimed
+		// with a conditional update so a Redis outage cannot turn one report
+		// into one per replica.
+		{"alert_rules", "last_report_day", "VARCHAR(8) DEFAULT '' COMMENT '最近已发送日报的日期(YYYYMMDD)，用于跨副本去重'"},
 	}
 
 	// Ensure alert_projects table exists
@@ -267,6 +325,15 @@ func autoMigrate() {
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 		INDEX idx_parent (parent_id)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`)
+
+	// Platform settings, keyed by name. Small and read rarely — the values are
+	// cached in process and only re-read when an operator changes one.
+	DB.Exec(`CREATE TABLE IF NOT EXISTS system_settings (
+		setting_key VARCHAR(64) PRIMARY KEY COMMENT '设置项键名',
+		setting_value VARCHAR(200) NOT NULL DEFAULT '' COMMENT '设置值',
+		updated_by VARCHAR(100) DEFAULT '' COMMENT '最后修改人',
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`)
 
 	// Ensure audit_logs table exists
@@ -303,6 +370,130 @@ func autoMigrate() {
 			}
 		}
 	}
+
+	if err := migrateLarkConfigsToChannels(); err != nil {
+		return err
+	}
+	return migrateStackMaxLinesTo200()
+}
+
+// migrateLarkConfigsToChannels copies lark_configs into notify_channels keeping
+// the original IDs, then backfills alert_rule_channels from alert_rules.lark_config_id.
+// Preserving IDs is what keeps existing route_config JSON (which stores lark_id)
+// pointing at the right channel.
+// All operations are transactional: the marker is recorded only after both data
+// migrations succeed, so a failed migration leaves no marker behind and will retry
+// on the next boot.
+// Every failure path returns an error, and the caller aborts startup on it. That
+// is deliberate: booting with an empty notify_channels table looks healthy but
+// silently delivers nothing, and an operator rebuilding the channels by hand
+// takes ids 1, 2… which collide with the retry on the next boot and misalign the
+// id space that route_config's lark_id depends on. A crashloop is visible.
+func migrateLarkConfigsToChannels() error {
+	migrationName := "2026_09_07_lark_configs_to_notify_channels"
+
+	// Check if migration already ran
+	var count int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE name = ?", migrationName).Scan(&count); err != nil {
+		return fmt.Errorf("[Migration] cannot read schema_migrations: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+
+	// Start transaction
+	tx, err := DB.Begin()
+	if err != nil {
+		return fmt.Errorf("[Migration] cannot start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Copy lark_configs to notify_channels. INSERT IGNORE keeps the copy
+	// idempotent: a channel row that already carries one of these ids (a retry
+	// after a partial run, or a hand-rebuilt table) must not abort the boot.
+	res, err := tx.Exec(`INSERT IGNORE INTO notify_channels
+		(id, channel_type, name, webhook_url, secret, lark_type, description, status, created_at)
+		SELECT id, 'lark', name, webhook_url, secret, lark_type, description, status, created_at
+		FROM lark_configs`)
+	if err != nil {
+		return fmt.Errorf("[Migration] copy lark_configs -> notify_channels failed: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	log.Printf("[Migration] Copied %d lark_configs into notify_channels", n)
+
+	// Backfill alert_rule_channels (JOIN to lark_configs to avoid orphaned rows)
+	res, err = tx.Exec(`INSERT IGNORE INTO alert_rule_channels (rule_id, channel_id)
+		SELECT ar.id, ar.lark_config_id FROM alert_rules ar
+		JOIN lark_configs lc ON lc.id = ar.lark_config_id`)
+	if err != nil {
+		return fmt.Errorf("[Migration] backfill alert_rule_channels failed: %w", err)
+	}
+	n, _ = res.RowsAffected()
+	log.Printf("[Migration] Backfilled %d alert_rule_channels rows", n)
+
+	// Record the migration as applied (only after data migrations succeed)
+	if _, err := tx.Exec("INSERT INTO schema_migrations (name) VALUES (?)", migrationName); err != nil {
+		return fmt.Errorf("[Migration] cannot record migration: %w", err)
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("[Migration] cannot commit migration transaction: %w", err)
+	}
+
+	log.Printf("[Migration] Migration %s completed successfully", migrationName)
+	return nil
+}
+
+// migrateStackMaxLinesTo200 raises stack_max_lines from the old default of 30
+// to the new default of 200 on rows that still sit at exactly 30.
+//
+// stack_max_lines is a collection-time safety valve (stop an unmatched boundary
+// regex from dragging an entire log stream into one alert), not a presentation
+// setting. At 30 it was tight enough to front-truncate a realistic deep Java
+// stack before ElideMiddle ever got to keep the tail — throwing away the root
+// cause the feature exists to preserve. See alert/stackcontext.go. Changing the
+// column's DEFAULT does not touch existing rows, so this backfills them once.
+// Only rows still at exactly 30 are touched; an operator who deliberately chose
+// a different value keeps it.
+func migrateStackMaxLinesTo200() error {
+	migrationName := "2026_09_07_stack_max_lines_to_200"
+
+	// Check if migration already ran
+	var count int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE name = ?", migrationName).Scan(&count); err != nil {
+		return fmt.Errorf("[Migration] cannot read schema_migrations: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+
+	// Start transaction
+	tx, err := DB.Begin()
+	if err != nil {
+		return fmt.Errorf("[Migration] cannot start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec("UPDATE alert_rules SET stack_max_lines = 200 WHERE stack_max_lines = 30")
+	if err != nil {
+		return fmt.Errorf("[Migration] raise stack_max_lines default failed: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	log.Printf("[Migration] Raised stack_max_lines 30 -> 200 on %d alert_rules rows", n)
+
+	// Record the migration as applied (only after the data migration succeeds)
+	if _, err := tx.Exec("INSERT INTO schema_migrations (name) VALUES (?)", migrationName); err != nil {
+		return fmt.Errorf("[Migration] cannot record migration: %w", err)
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("[Migration] cannot commit migration transaction: %w", err)
+	}
+
+	log.Printf("[Migration] Migration %s completed successfully", migrationName)
+	return nil
 }
 
 func ensureDefaultAdmin() {
