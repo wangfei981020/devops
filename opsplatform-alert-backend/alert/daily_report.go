@@ -12,8 +12,9 @@ import (
 	"time"
 
 	"opsplatform-alert-backend/database"
-	"opsplatform-alert-backend/lark"
 	"opsplatform-alert-backend/models"
+	"opsplatform-alert-backend/notify"
+	"opsplatform-alert-backend/timezone"
 )
 
 // processPerformanceHit handles a single hit in performance-alert mode.
@@ -52,7 +53,7 @@ func processPerformanceHit(ctx context.Context, rule *models.AlertRule, hit map[
 		return false
 	}
 
-	today := time.Now().Format("20060102")
+	today := reportDayKey(0)
 
 	// Accumulate to daily stats bucket (HSETNX: same tid only counted once even across overlapping queries)
 	if rule.ReportEnabled == 1 {
@@ -89,13 +90,52 @@ func processPerformanceHit(ctx context.Context, rule *models.AlertRule, hit map[
 
 // domainStats holds aggregated stats for one domain over one day
 type domainStats struct {
-	Domain  string `json:"domain"`
-	Count   int    `json:"count"`
-	MinMs   int    `json:"min_ms"`
-	AvgMs   int    `json:"avg_ms"`
-	MaxMs   int    `json:"max_ms"`
-	Date    string `json:"date"`
+	Domain   string `json:"domain"`
+	Count    int    `json:"count"`
+	MinMs    int    `json:"min_ms"`
+	AvgMs    int    `json:"avg_ms"`
+	MaxMs    int    `json:"max_ms"`
+	Date     string `json:"date"`
 	SendTime string `json:"send_time"`
+}
+
+// claimDailyReport records that this rule's report for a given day is being
+// sent, and reports whether this caller is the one that gets to send it.
+//
+// The Redis lease already keeps two replicas from sweeping at once, but it fails
+// open by design — an unreachable Redis lets every replica through, and a daily
+// report duplicated across replicas is the most visible duplicate this platform
+// can produce: it lands in the group N times, once, with no second chance to
+// take it back. This is the guarantee that does not depend on Redis being up.
+//
+// The claim is taken before sending. A report that goes out and then fails to
+// record would be sent again by the next replica; one that is claimed and then
+// fails to send is missed for a day, and a missing daily summary is recoverable
+// where an inbox of duplicates is not.
+func claimDailyReport(ruleID int, day string) bool {
+	res, err := database.DB.Exec(
+		`UPDATE alert_rules SET last_report_day = ?
+		 WHERE id = ? AND COALESCE(last_report_day, '') <> ?`, day, ruleID, day)
+	if err != nil {
+		// Losing the database is not a reason to skip the report; the lease
+		// above is still in play and a missing summary is the worse outcome.
+		log.Printf("[Report] Rule %d: cannot claim %s (%v); sending anyway", ruleID, day, err)
+		return true
+	}
+	n, _ := res.RowsAffected()
+	return n == 1
+}
+
+// reportDayKey is the bucket a day's stats live under, offset days from today.
+//
+// The day boundary follows the platform's display timezone, the same one the
+// report's own schedule is interpreted in. Taking it from the process zone
+// instead — as this did — means the job fires at 00:30 where the team is while
+// the date it reports on rolls over somewhere else, so a report can cover the
+// wrong day or read a bucket nothing was ever written to. Both the write and the
+// read go through here so they cannot drift apart.
+func reportDayKey(offsetDays int) string {
+	return time.Now().In(timezone.Location()).AddDate(0, 0, offsetDays).Format("20060102")
 }
 
 // dayToDateStr converts a "20060102" day key to "2006-01-02".
@@ -111,7 +151,7 @@ func dayToDateStr(day string) string {
 // (for cleanup). Read-only: it does not modify Redis.
 func aggregateDailyStats(ctx context.Context, ruleID int, day string) ([]domainStats, []string) {
 	dateStr := dayToDateStr(day)
-	sendTimeStr := time.Now().Format("2006-01-02 15:04:05")
+	sendTimeStr := timezone.FormatWithZone(time.Now())
 
 	domainsKey := fmt.Sprintf("alert:daily_stats_domains:%d:%s", ruleID, day)
 	domains, err := database.RDB.SMembers(ctx, domainsKey).Result()
@@ -164,13 +204,16 @@ func aggregateDailyStats(ctx context.Context, ruleID int, day string) ([]domainS
 	return statsList, domains
 }
 
-// sendReportCards sends aggregated report card(s) to Lark (separate or merged). Returns sent count.
+// sendReportCards sends aggregated report card(s) to the rule's notification channels (separate or merged). Returns sent count.
 func sendReportCards(rule *models.AlertRule, statsList []domainStats, dateStr, sendTimeStr string) (int, error) {
-	larkCfg, err := getLarkConfigByID(rule.LarkConfigID)
+	channels, err := getChannelsForRule(rule.ID, rule.LarkConfigID)
 	if err != nil {
-		return 0, fmt.Errorf("lark config error: %w", err)
+		return 0, fmt.Errorf("notify channel error: %w", err)
 	}
-	sender := lark.NewSender(*larkCfg)
+	sender, err := notify.NewMulti(channels)
+	if err != nil {
+		return 0, fmt.Errorf("notify channel error: %w", err)
+	}
 	atUsers := resolveAtUsers(rule.AtUsers)
 	atAll := rule.AtAll == 1
 
@@ -228,7 +271,7 @@ func BuildDailyReportCards(ruleID int, day string) ([]ReportCard, int, error) {
 	statsList, _ := aggregateDailyStats(ctx, ruleID, day)
 
 	dateStr := dayToDateStr(day)
-	sendTimeStr := time.Now().Format("2006-01-02 15:04:05")
+	sendTimeStr := timezone.FormatWithZone(time.Now())
 	title := rule.ReportTitle
 	if title == "" {
 		title = "每日性能报告"
@@ -265,7 +308,7 @@ func SendDailyReportNow(ruleID int, day string) (int, int, error) {
 		return 0, 0, nil
 	}
 	dateStr := dayToDateStr(day)
-	sendTimeStr := time.Now().Format("2006-01-02 15:04:05")
+	sendTimeStr := timezone.FormatWithZone(time.Now())
 	sent, err := sendReportCards(rule, statsList, dateStr, sendTimeStr)
 	return sent, len(statsList), err
 }
@@ -282,8 +325,14 @@ func sendDailyReport(ruleID int) {
 		return
 	}
 
-	// Report is for the day before now
-	yesterday := time.Now().AddDate(0, 0, -1).Format("20060102")
+	// Report is for the day before now.
+	yesterday := reportDayKey(-1)
+
+	if !claimDailyReport(ruleID, yesterday) {
+		log.Printf("[Report] Rule %d: report for %s already sent, skipping", ruleID, yesterday)
+		return
+	}
+
 	statsList, domains := aggregateDailyStats(ctx, ruleID, yesterday)
 	if len(statsList) == 0 {
 		log.Printf("[Report] Rule %d: nothing to send for %s", rule.ID, yesterday)
@@ -292,7 +341,7 @@ func sendDailyReport(ruleID int) {
 	}
 
 	dateStr := dayToDateStr(yesterday)
-	sendTimeStr := time.Now().Format("2006-01-02 15:04:05")
+	sendTimeStr := timezone.FormatWithZone(time.Now())
 	sendReportCards(rule, statsList, dateStr, sendTimeStr)
 
 	cleanupReportKeys(ctx, rule.ID, yesterday, domains)

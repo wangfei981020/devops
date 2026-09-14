@@ -52,6 +52,7 @@
     </div>
 
     <!-- Modal -->
+    <Transition name="modal">
     <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
       <div class="modal">
         <div class="modal-header">
@@ -103,6 +104,7 @@
         </form>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
 

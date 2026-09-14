@@ -71,6 +71,9 @@ defineExpose({ show, close })
   color: inherit; display: flex;
 }
 .toast-close:hover { opacity: 1; }
-.toast-fade-enter-active, .toast-fade-leave-active { transition: all 0.3s ease; }
+.toast-fade-enter-active, .toast-fade-leave-active {
+  transition: opacity var(--dur, 180ms) var(--ease, cubic-bezier(0.2, 0, 0, 1)),
+    transform var(--dur, 180ms) var(--ease, cubic-bezier(0.2, 0, 0, 1));
+}
 .toast-fade-enter-from, .toast-fade-leave-to { opacity: 0; transform: translateX(-50%) translateY(-20px); }
 </style>

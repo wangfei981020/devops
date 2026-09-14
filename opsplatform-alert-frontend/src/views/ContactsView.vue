@@ -26,6 +26,7 @@
             <tr>
               <th>姓名</th>
               <th>Lark ID</th>
+              <th>Telegram ID</th>
               <th>备注</th>
               <th>操作</th>
             </tr>
@@ -34,6 +35,7 @@
             <tr v-for="item in list" :key="item.id">
               <td style="font-weight: 500;">{{ item.name }}</td>
               <td class="text-sm"><span class="truncate" :title="item.lark_id">{{ item.lark_id }}</span></td>
+              <td class="text-sm">{{ item.telegram_id || '-' }}</td>
               <td class="text-sm text-secondary">{{ item.description || '-' }}</td>
               <td>
                 <div class="actions">
@@ -50,11 +52,13 @@
         <div class="text-sm text-secondary">
           <strong>使用说明：</strong>在告警规则的"@用户"字段填写姓名数组即可，如：<code>["Bruce","Cesar"]</code>
           <br>系统会自动根据姓名查找对应的 Lark ID 进行 @通知。
+          <br>Telegram 渠道按 Telegram ID @人；两个 ID 可只填其一。
         </div>
       </div>
     </div>
 
     <!-- Modal -->
+    <Transition name="modal">
     <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
       <div class="modal">
         <div class="modal-header">
@@ -68,10 +72,15 @@
               <input v-model="form.name" class="form-input" placeholder="如: Bruce" required />
             </div>
             <div class="form-group">
-              <label class="form-label">Lark ID *</label>
-              <input v-model="form.lark_id" class="form-input" placeholder="ou_xxxxx" required />
+              <label class="form-label">Lark ID</label>
+              <input v-model="form.lark_id" class="form-input" placeholder="ou_xxxxx" />
               <div class="form-hint">飞书管理后台获取的 open_id 或 user_id</div>
             </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Telegram ID</label>
+            <input v-model="form.telegram_id" class="form-input" placeholder="987654321" />
+            <div class="form-hint">Telegram 数字用户 ID；留空则该联系人不会被 Telegram @到</div>
           </div>
           <div class="form-group">
             <label class="form-label">备注</label>
@@ -86,7 +95,9 @@
         </form>
       </div>
     </div>
+    </Transition>
     <!-- Batch Modal -->
+    <Transition name="modal">
     <div v-if="showBatchModal" class="modal-overlay" @click.self="showBatchModal = false">
       <div class="modal" style="max-width: 560px;">
         <div class="modal-header">
@@ -94,8 +105,8 @@
           <button class="btn-icon" @click="showBatchModal = false"><X :size="18" /></button>
         </div>
         <div style="padding: 0 24px;">
-          <div class="form-hint" style="margin-bottom: 8px;">每行一条，格式：<code>姓名,Lark ID</code>，已存在的姓名会更新 Lark ID</div>
-          <textarea v-model="batchText" class="form-input" rows="10" placeholder="Bruce,ou_xxxxx&#10;Cesar,ou_yyyyy&#10;Alice,ou_zzzzz" style="font-family: monospace; font-size: 13px;"></textarea>
+          <div class="form-hint" style="margin-bottom: 8px;">每行一条，格式：<code>姓名,Lark ID,Telegram ID</code>，已存在的姓名会更新 ID；Lark ID 与 Telegram ID 可只填其一</div>
+          <textarea v-model="batchText" class="form-input" rows="10" placeholder="Bruce,ou_xxxxx,987654321&#10;Cesar,ou_yyyyy,&#10;Alice,,123456789" style="font-family: monospace; font-size: 13px;"></textarea>
           <div v-if="batchPreview.length > 0" style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
             解析到 <strong>{{ batchPreview.length }}</strong> 条记录
           </div>
@@ -108,6 +119,7 @@
         </div>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
 
@@ -125,7 +137,7 @@ const showModal = ref(false)
 const editId = ref(null)
 const submitting = ref(false)
 
-const form = ref({ name: '', lark_id: '', phone: '', email: '', description: '' })
+const form = ref({ name: '', lark_id: '', telegram_id: '', phone: '', email: '', description: '' })
 const showBatchModal = ref(false)
 const batchText = ref('')
 const batchSubmitting = ref(false)
@@ -136,10 +148,10 @@ const batchPreview = computed(() => {
     .map(line => line.trim())
     .filter(line => line && line.includes(','))
     .map(line => {
-      const [name, lark_id] = line.split(',').map(s => s.trim())
-      return { name, lark_id }
+      const [name, lark_id, telegram_id] = line.split(',').map(s => s.trim())
+      return { name, lark_id, telegram_id: telegram_id || '' }
     })
-    .filter(item => item.name && item.lark_id)
+    .filter(item => item.name && (item.lark_id || item.telegram_id))
 })
 
 async function handleBatchSubmit() {
@@ -162,7 +174,7 @@ async function handleBatchSubmit() {
 
 function resetForm() {
   editId.value = null
-  form.value = { name: '', lark_id: '', phone: '', email: '', description: '' }
+  form.value = { name: '', lark_id: '', telegram_id: '', phone: '', email: '', description: '' }
 }
 
 async function loadList() {
@@ -176,11 +188,15 @@ async function loadList() {
 
 function editItem(item) {
   editId.value = item.id
-  form.value = { name: item.name, lark_id: item.lark_id, phone: item.phone, email: item.email, description: item.description }
+  form.value = { name: item.name, lark_id: item.lark_id, telegram_id: item.telegram_id, phone: item.phone, email: item.email, description: item.description }
   showModal.value = true
 }
 
 async function handleSubmit() {
+  if (!form.value.lark_id && !form.value.telegram_id) {
+    toast.error('请至少填写 Lark ID 或 Telegram ID')
+    return
+  }
   submitting.value = true
   try {
     let res

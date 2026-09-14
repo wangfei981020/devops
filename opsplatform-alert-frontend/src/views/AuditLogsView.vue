@@ -30,6 +30,9 @@
               <option value="create_lark">创建Lark</option>
               <option value="update_lark">更新Lark</option>
               <option value="delete_lark">删除Lark</option>
+              <option value="create_channel">创建渠道</option>
+              <option value="update_channel">更新渠道</option>
+              <option value="delete_channel">删除渠道</option>
             </optgroup>
             <optgroup label="屏蔽管理">
               <option value="create_mute">添加屏蔽</option>
@@ -107,6 +110,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import api from '../api'
+import { formatTime } from '../utils/datetime'
 
 const logs = ref([])
 const loading = ref(false)
@@ -150,6 +154,10 @@ const actionMap = {
   update_lark: ['更新Lark', 'badge-warning'],
   delete_lark: ['删除Lark', 'badge-danger'],
   toggle_lark: ['切换Lark', 'badge-info'],
+  create_channel: ['创建渠道', 'badge-primary'],
+  update_channel: ['更新渠道', 'badge-warning'],
+  delete_channel: ['删除渠道', 'badge-danger'],
+  toggle_channel: ['切换渠道', 'badge-info'],
   create_mute: ['添加屏蔽', 'badge-warning'],
   delete_mute: ['取消屏蔽', 'badge-info'],
   create_user: ['创建用户', 'badge-primary'],
@@ -170,10 +178,6 @@ function actionClass(action) {
   return actionMap[action]?.[1] || 'badge-info'
 }
 
-function formatTime(t) {
-  if (!t) return '-'
-  return new Date(t).toLocaleString('zh-CN')
-}
 
 onMounted(loadLogs)
 </script>

@@ -38,6 +38,11 @@ type Config struct {
 	// Cookie
 	CookieSecure   bool
 	CookieSameSite string
+
+	// DisplayTimezone is the initial value for the platform's display zone on a
+	// fresh install. Once an operator sets it in the UI the stored setting wins,
+	// so this only seeds the first boot.
+	DisplayTimezone string
 }
 
 func Load() *Config {
@@ -74,6 +79,8 @@ func Load() *Config {
 
 		CookieSecure:   getEnv("COOKIE_SECURE", "false") == "true",
 		CookieSameSite: getEnv("COOKIE_SAMESITE", "lax"),
+
+		DisplayTimezone: getEnv("DISPLAY_TIMEZONE", ""),
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"opsplatform-alert-backend/models"
+	"opsplatform-alert-backend/timezone"
 )
 
 // Sender sends messages to Lark/Feishu
@@ -37,6 +38,40 @@ func (s *Sender) genSign(timestamp int64) (string, error) {
 
 // SendCard sends an interactive card message
 func (s *Sender) SendCard(title, content string, severity string, atUsers []models.AtUser, atAll bool) (string, error) {
+	build := func(body string) map[string]interface{} {
+		return s.buildCard(title, body, severity, atUsers, atAll)
+	}
+
+	card := build(content)
+	if body, err := json.Marshal(card); err == nil && len(body) > maxCardBytes {
+		// Say so in the log: the reader of a truncated card can see the marker,
+		// but the operator asking "why is the stack cut" needs the numbers, and
+		// a rule whose cards are cut every time wants its max_alerts lowered.
+		fitted := truncateCardContent(build, content)
+		card = build(fitted)
+		log.Printf("[Lark] card over %d bytes (%d), content truncated from %d to %d runes",
+			maxCardBytes, len(body), len([]rune(content)), len([]rune(fitted)))
+	}
+
+	// Add signature if secret is set
+	if s.config.Secret != "" {
+		ts := time.Now().Unix()
+		sign, err := s.genSign(ts)
+		if err != nil {
+			return "", fmt.Errorf("failed to generate sign: %w", err)
+		}
+		card["timestamp"] = fmt.Sprintf("%d", ts)
+		card["sign"] = sign
+	}
+
+	return s.send(card)
+}
+
+// buildCard assembles the card payload for one body of content. It is a
+// separate function because the size check has to marshal a candidate card,
+// not just the content: what Lark measures is the whole JSON body, and the
+// header, mentions and footer all count towards it.
+func (s *Sender) buildCard(title, content string, severity string, atUsers []models.AtUser, atAll bool) map[string]interface{} {
 	// Build card elements
 	elements := []interface{}{}
 
@@ -53,6 +88,9 @@ func (s *Sender) SendCard(title, content string, severity string, atUsers []mode
 			atContent = "<at id=all>所有人</at>"
 		} else {
 			for _, u := range atUsers {
+				if u.UserID == "" {
+					continue
+				}
 				atContent += fmt.Sprintf("<at id=%s>%s</at> ", u.UserID, u.Name)
 			}
 		}
@@ -73,7 +111,7 @@ func (s *Sender) SendCard(title, content string, severity string, atUsers []mode
 		"elements": []interface{}{
 			map[string]interface{}{
 				"tag":     "plain_text",
-				"content": fmt.Sprintf("告警时间: %s", time.Now().Format("2006-01-02 15:04:05")),
+				"content": fmt.Sprintf("告警时间: %s", timezone.FormatWithZone(time.Now())),
 			},
 		},
 	})
@@ -105,7 +143,7 @@ func (s *Sender) SendCard(title, content string, severity string, atUsers []mode
 		titleContent = titlePrefix + " " + title
 	}
 
-	card := map[string]interface{}{
+	return map[string]interface{}{
 		"msg_type": "interactive",
 		"card": map[string]interface{}{
 			"header": map[string]interface{}{
@@ -118,19 +156,6 @@ func (s *Sender) SendCard(title, content string, severity string, atUsers []mode
 			"elements": elements,
 		},
 	}
-
-	// Add signature if secret is set
-	if s.config.Secret != "" {
-		ts := time.Now().Unix()
-		sign, err := s.genSign(ts)
-		if err != nil {
-			return "", fmt.Errorf("failed to generate sign: %w", err)
-		}
-		card["timestamp"] = fmt.Sprintf("%d", ts)
-		card["sign"] = sign
-	}
-
-	return s.send(card)
 }
 
 // SendText sends a simple text message
@@ -141,6 +166,9 @@ func (s *Sender) SendText(text string, atUsers []models.AtUser, atAll bool) (str
 		atSection = "<at user_id=\"all\">所有人</at>"
 	} else {
 		for _, u := range atUsers {
+			if u.UserID == "" {
+				continue
+			}
 			atSection += fmt.Sprintf("<at user_id=\"%s\">%s</at> ", u.UserID, u.Name)
 		}
 	}

@@ -1,21 +1,22 @@
 <template>
   <div>
     <div class="card">
+      <!-- The page header already says 日志查询; the card's own header carries
+           the thing that actually sets context — which source is being queried. -->
       <div class="card-header">
-        <div class="card-title">日志查询</div>
+        <div class="flex gap-2">
+          <button class="btn btn-sm" :class="dataSource === 'es' ? 'btn-primary' : 'btn-outline'" @click="dataSource = 'es'">Elasticsearch</button>
+          <button class="btn btn-sm" :class="dataSource === 'loki' ? 'btn-primary' : 'btn-outline'" @click="dataSource = 'loki'">Loki</button>
+        </div>
         <button v-if="result" class="btn btn-primary btn-sm" @click="createRuleFromQuery">
           <Plus :size="14" /> 基于此查询创建告警规则
         </button>
       </div>
 
-      <!-- Data Source Toggle -->
-      <div class="flex gap-2 mb-4">
-        <button class="btn btn-sm" :class="dataSource === 'es' ? 'btn-primary' : 'btn-outline'" @click="dataSource = 'es'">Elasticsearch</button>
-        <button class="btn btn-sm" :class="dataSource === 'loki' ? 'btn-primary' : 'btn-outline'" @click="dataSource = 'loki'">Loki</button>
-      </div>
-
       <!-- ES Form -->
       <template v-if="dataSource === 'es'">
+        <!-- IndexSelector runs flat here, so its three fields become cells of
+             this same grid: 连接 | 项目环境 on one line, 索引 | 索引值 below. -->
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">ES 连接</label>
@@ -26,10 +27,7 @@
               </option>
             </select>
           </div>
-          <div class="form-group">
-            <label class="form-label">ES 索引</label>
-            <IndexSelector v-model="form.es_index" :es-connection-id="form.es_connection_id" />
-          </div>
+          <IndexSelector v-model="form.es_index" :es-connection-id="form.es_connection_id" flat />
         </div>
         <div class="form-group">
           <label class="form-label">搜索关键词</label>
@@ -100,15 +98,27 @@
         </div>
       </template>
 
-      <!-- Shared: Time range -->
-      <div class="form-group">
-        <label class="form-label">时间范围</label>
-        <div class="flex gap-2 items-center">
+      <!-- Shared: time range and result size, both as ordinary label-above
+           fields so the last row matches every row above it. -->
+      <div class="form-row form-row-2-1">
+        <div class="form-group">
+          <label class="form-label">时间范围</label>
           <div class="time-quick-btns">
-            <button v-for="t in timeOptions" :key="t.value" class="btn btn-sm"
+            <button v-for="t in timeOptions" :key="t.value" class="btn"
               :class="form.time_range === t.value ? 'btn-primary' : 'btn-outline'"
               @click="form.time_range = t.value">{{ t.label }}</button>
           </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">返回条数</label>
+          <select v-model.number="form.size" class="form-select">
+            <option :value="20">20</option>
+            <option :value="50">50</option>
+            <option :value="100">100</option>
+            <option :value="200">200</option>
+            <option :value="500">500</option>
+            <option :value="1000">1000</option>
+          </select>
         </div>
       </div>
       <div v-if="form.time_range === 'custom'" class="form-row">
@@ -122,23 +132,12 @@
         </div>
       </div>
 
-      <div class="flex gap-2 items-center" style="margin-top: 8px;">
+      <div class="form-actions">
         <button class="btn btn-primary" @click="search" :disabled="searching">
           <Search :size="16" /> {{ searching ? '查询中...' : '查询' }}
         </button>
         <button class="btn btn-outline" @click="resetForm">重置</button>
-        <div class="flex items-center gap-2">
-          <span class="text-sm text-secondary">返回条数:</span>
-          <select v-model.number="form.size" class="form-select" style="width: 100px;">
-            <option :value="20">20</option>
-            <option :value="50">50</option>
-            <option :value="100">100</option>
-            <option :value="200">200</option>
-            <option :value="500">500</option>
-            <option :value="1000">1000</option>
-          </select>
-        </div>
-        <span v-if="result" class="text-sm text-secondary" style="line-height: 36px;">
+        <span v-if="result" class="form-actions-note">
           共 {{ result.total }} 条，显示 {{ result.count }} 条
         </span>
       </div>
@@ -213,6 +212,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
+import { formatTime } from '../utils/datetime'
 import { useToast } from '../stores/ui'
 import { Search, Plus, X } from 'lucide-vue-next'
 import IndexSelector from '../components/IndexSelector.vue'
@@ -376,11 +376,13 @@ function getMessage(hit) {
 }
 function formatTimestamp(ts) {
   if (!ts) return '-'
-  // Loki timestamp is nanoseconds string
+  // A hit's @timestamp is structured data, not log text, so it renders in the
+  // platform's display zone like every other instant. Loki reports it as a
+  // nanosecond string.
   if (typeof ts === 'string' && ts.length > 13) {
-    return new Date(parseInt(ts) / 1000000).toLocaleString('zh-CN')
+    return formatTime(new Date(parseInt(ts) / 1000000))
   }
-  return new Date(ts).toLocaleString('zh-CN')
+  return formatTime(ts)
 }
 function cleanObj(obj) {
   if (typeof obj === 'string') return cleanAnsi(obj)
@@ -416,6 +418,15 @@ onMounted(loadOptions)
 </script>
 
 <style scoped>
-.time-quick-btns { display: flex; gap: 4px; flex-wrap: wrap; }
-.time-quick-btns .btn { padding: 4px 10px; font-size: 12px; }
+/* These sit in a grid cell beside a select, so they take the input's own
+   metrics — same font size, same vertical padding — and the row comes out
+   level instead of a strip of small chips next to a full-height control. */
+.time-quick-btns { display: flex; gap: var(--space-6); flex-wrap: wrap; }
+.time-quick-btns .btn {
+  padding: var(--space-8) var(--space-12);
+  font-size: var(--fs-14);
+  /* Pins the content box to 18px so the chip lands on the select's 36px
+     rather than 2px over it. */
+  line-height: 18px;
+}
 </style>

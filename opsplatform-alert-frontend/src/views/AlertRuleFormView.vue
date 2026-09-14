@@ -8,7 +8,7 @@
 
       <form @submit.prevent="handleSubmit">
         <!-- 基本信息 -->
-        <h3 style="margin-bottom: 12px; font-size: 15px; color: var(--text-secondary);">基本信息</h3>
+        <h3 class="form-section form-section-flush">基本信息</h3>
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">规则名称 *</label>
@@ -81,34 +81,65 @@
           </div>
         </div>
 
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">Lark 配置 *</label>
-            <select v-model="form.lark_config_id" class="form-select" required>
-              <option :value="0" disabled>请选择 Lark 配置</option>
-              <option v-for="c in larkConfigs" :key="c.id" :value="c.id">
-                {{ c.name }} ({{ c.lark_type }})
-              </option>
-            </select>
-          </div>
+        <div class="form-group">
+          <label class="form-label">通知渠道 *</label>
+          <TransitionGroup tag="div" name="tag" class="namespace-tags">
+            <span v-for="cid in form.channel_ids" :key="cid" class="ns-tag">
+              {{ channelLabel(cid) }}
+              <button type="button" class="ns-tag-remove" @click="removeChannel(cid)">&times;</button>
+            </span>
+            <div class="ns-input-wrap" key="channel-input-wrap">
+              <select v-model.number="channelPicker" class="form-select channel-picker" @change="addChannel">
+                <option :value="0">+ 添加渠道</option>
+                <option v-for="c in availableChannels" :key="c.id" :value="c.id">
+                  {{ c.name }} ({{ c.channel_type === 'telegram' ? 'Telegram' : 'Lark' }})
+                </option>
+              </select>
+            </div>
+          </TransitionGroup>
+          <div class="form-hint" :class="{ 'form-hint-attn': submitAttempted && !form.channel_ids.length }">可同时选择多个渠道，告警会逐个发送；某个渠道失败不影响其他渠道</div>
         </div>
 
         <!-- 搜索配置 -->
-        <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">搜索配置</h3>
+        <h3 class="form-section">搜索配置</h3>
 
         <!-- ES 搜索配置 -->
         <template v-if="form.data_source_type === 'es'">
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">ES 索引</label>
-              <IndexSelector v-model="form.es_index" :es-connection-id="form.es_connection_id" />
-              <div class="form-hint">支持通配符（高级模式），多个用逗号分隔</div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">搜索关键词</label>
-              <input v-model="form.keyword" class="form-input" placeholder='如: "搜不到指定格式日志" OR "跳局"' />
-              <div class="form-hint">支持 Lucene 语法，AND/OR/NOT</div>
-            </div>
+          <div class="form-notice">
+            <strong>查询构建规则：</strong>关键词 + 过滤字段会自动拼接生成查询；一旦填写「自定义查询 DSL」，将完全替换关键词和过滤字段的自动构建结果（两者均被忽略）。
+          </div>
+          <!-- ES 索引 keeps its group label, so it takes a full-width row of
+               its own and spreads its three fields across it. Sharing a row
+               with a single-field neighbour left that neighbour's half empty. -->
+          <div class="form-group">
+            <label class="form-label">ES 索引</label>
+            <IndexSelector v-model="form.es_index" :es-connection-id="form.es_connection_id" />
+            <div class="form-hint">支持通配符（高级模式），多个用逗号分隔</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">搜索关键词</label>
+            <input v-model="form.keyword" class="form-input" placeholder='如: "搜不到指定格式日志" OR "跳局"' />
+            <div class="form-hint">支持 Lucene 语法，AND/OR/NOT</div>
+          </div>
+
+          <!-- 过滤字段：仅 ES 使用，queryLoki 不读取此字段 -->
+          <div class="form-group">
+            <label class="form-label">过滤字段 (JSON)</label>
+            <textarea v-model="form.filter_fields" class="form-textarea" rows="3"
+              :class="{ 'has-error': filterFieldsError }"
+              placeholder='[{"field":"kubernetes.namespace","value":"g32-uat","op":"match"}]'></textarea>
+            <div class="form-hint">op 支持: match(默认), term, wildcard, exists</div>
+            <div v-if="filterFieldsError" class="form-error">{{ filterFieldsError }}</div>
+          </div>
+
+          <!-- 自定义 DSL：仅 ES 使用，queryLoki 不读取此字段 -->
+          <div class="form-group">
+            <label class="form-label">自定义查询 DSL (JSON, 可选)</label>
+            <textarea v-model="form.query_dsl" class="form-textarea" rows="4"
+              :class="{ 'has-error': queryDslError }"
+              placeholder="留空则自动根据关键词和过滤字段构建查询"></textarea>
+            <div class="form-hint">填写后将覆盖关键词和过滤字段的自动构建</div>
+            <div v-if="queryDslError" class="form-error">{{ queryDslError }}</div>
           </div>
         </template>
 
@@ -118,20 +149,24 @@
             <label class="form-label">LogQL 查询 *</label>
             <input v-model="form.logql" class="form-input" :placeholder="nsPlaceholder" />
             <div class="form-hint">{{ namespacesArray.length ? '多命名空间模式：只填写管道部分（|= ... |~ ...），系统自动拼接 {namespace="X"}' : 'Loki LogQL 查询语句，可在日志查询页调试后复制过来' }}</div>
+            <div class="chip-row">
+              <button v-for="s in logqlSnippets" :key="s" type="button" class="chip" @click="appendLogqlSnippet(s)">{{ s }}</button>
+            </div>
+            <div class="form-hint">点击片段追加到上方 LogQL 查询末尾</div>
           </div>
           <div class="form-group">
             <label class="form-label">多命名空间（可选）</label>
-            <div class="namespace-tags">
-              <span v-for="(ns, i) in namespacesArray" :key="i" class="ns-tag">
+            <TransitionGroup tag="div" name="tag" class="namespace-tags">
+              <span v-for="ns in namespacesArray" :key="ns" class="ns-tag">
                 {{ ns }}
-                <button type="button" class="ns-tag-remove" @click="removeNamespace(i)">&times;</button>
+                <button type="button" class="ns-tag-remove" @click="removeNamespace(ns)">&times;</button>
               </span>
-              <div class="ns-input-wrap">
+              <div class="ns-input-wrap" key="ns-input-wrap">
                 <input v-model="nsInput" class="form-input ns-input" placeholder="输入命名空间回车添加"
                   @keydown.enter.prevent="addNamespace" />
                 <button v-if="nsInput" type="button" class="btn btn-sm btn-primary" @click="addNamespace" style="margin-left:6px">添加</button>
               </div>
-            </div>
+            </TransitionGroup>
             <div class="form-hint">配置后系统会逐个命名空间查询，按容器聚合告警，降低 Loki 压力</div>
           </div>
           <div class="form-row" v-if="namespacesArray.length">
@@ -164,33 +199,25 @@
           </div>
         </div>
 
-        <!-- 过滤字段 -->
-        <div class="form-group">
-          <label class="form-label">过滤字段 (JSON)</label>
-          <textarea v-model="form.filter_fields" class="form-textarea" rows="3"
-            placeholder='[{"field":"kubernetes.namespace","value":"g32-uat","op":"match"}]'></textarea>
-          <div class="form-hint">op 支持: match(默认), term, wildcard, exists</div>
-        </div>
-
-        <!-- 自定义 DSL -->
-        <div class="form-group">
-          <label class="form-label">自定义查询 DSL (JSON, 可选)</label>
-          <textarea v-model="form.query_dsl" class="form-textarea" rows="4"
-            placeholder="留空则自动根据关键词和过滤字段构建查询"></textarea>
-          <div class="form-hint">填写后将覆盖关键词和过滤字段的自动构建</div>
-        </div>
-
         <!-- 字段提取 -->
-        <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">字段提取</h3>
+        <button type="button" class="form-section form-section-toggle" :class="{ 'is-open': !collapsed.extract }" @click="collapsed.extract = !collapsed.extract">
+          <span class="section-chevron" aria-hidden="true"></span>
+          <span class="section-name">字段提取</span>
+          <span v-if="collapsed.extract && sectionFilled.extract" class="section-filled">已配置</span>
+        </button>
+        <div v-show="!collapsed.extract">
         <div class="form-group">
           <label class="form-label">提取规则 (JSON)</label>
           <textarea v-model="form.extract_fields" class="form-textarea" rows="4"
+            :class="{ 'has-error': extractFieldsError }"
             :placeholder="extractFieldsPlaceholder"></textarea>
           <div class="form-hint">name=变量名, path=ES字段路径(支持嵌套如 kubernetes.namespace), pattern=正则(捕获组1)</div>
+          <div v-if="extractFieldsError" class="form-error">{{ extractFieldsError }}</div>
+        </div>
         </div>
 
         <!-- 消息模板 -->
-        <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">消息模板</h3>
+        <h3 class="form-section">消息模板</h3>
         <div class="form-group">
           <label class="form-label">告警标题</label>
           <input v-model="form.message_title" class="form-input" placeholder="如: G32 resource alarm" />
@@ -204,7 +231,7 @@
 
         <!-- 恢复通知模板 (仅 not_found 模式) -->
         <template v-if="form.alert_mode === 'not_found' && recoveryChecked">
-          <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">恢复通知配置</h3>
+          <h3 class="form-section">恢复通知配置</h3>
           <div class="form-group">
             <label class="form-label">恢复通知标题</label>
             <input v-model="form.recovery_title" class="form-input" placeholder="留空则自动用: 告警标题 - 已恢复" />
@@ -217,7 +244,12 @@
         </template>
 
         <!-- @用户 -->
-        <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">通知配置</h3>
+        <button type="button" class="form-section form-section-toggle" :class="{ 'is-open': !collapsed.notify }" @click="collapsed.notify = !collapsed.notify">
+          <span class="section-chevron" aria-hidden="true"></span>
+          <span class="section-name">通知配置</span>
+          <span v-if="collapsed.notify && sectionFilled.notify" class="section-filled">已配置</span>
+        </button>
+        <div v-show="!collapsed.notify">
         <div class="form-group">
           <label class="form-label">@通知人</label>
           <textarea v-model="form.at_users" class="form-textarea" rows="2"
@@ -230,9 +262,15 @@
             @所有人
           </label>
         </div>
+        </div>
 
         <!-- 分组配置 -->
-        <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">分组配置</h3>
+        <button type="button" class="form-section form-section-toggle" :class="{ 'is-open': !collapsed.group }" @click="collapsed.group = !collapsed.group">
+          <span class="section-chevron" aria-hidden="true"></span>
+          <span class="section-name">分组配置</span>
+          <span v-if="collapsed.group && sectionFilled.group" class="section-filled">已配置</span>
+        </button>
+        <div v-show="!collapsed.group">
         <div class="form-group">
           <label class="form-label">分组字段</label>
           <div class="flex gap-2">
@@ -336,9 +374,15 @@
             <button type="button" class="btn btn-sm btn-outline" @click="addMute">添加屏蔽</button>
           </div>
         </div>
+        </div>
 
         <!-- 去重配置 -->
-        <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">去重配置</h3>
+        <button type="button" class="form-section form-section-toggle" :class="{ 'is-open': !collapsed.dedup }" @click="collapsed.dedup = !collapsed.dedup">
+          <span class="section-chevron" aria-hidden="true"></span>
+          <span class="section-name">去重配置</span>
+          <span v-if="collapsed.dedup && sectionFilled.dedup" class="section-filled">已配置</span>
+        </button>
+        <div v-show="!collapsed.dedup">
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">去重字段</label>
@@ -355,10 +399,11 @@
           <label class="form-label">单次最大告警条数</label>
           <input v-model.number="form.max_alerts" type="number" class="form-input" style="width: 200px;" placeholder="10" />
         </div>
+        </div>
 
         <!-- 字段值路由 (found 模式) -->
         <template v-if="form.alert_mode === 'found'">
-          <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">字段值路由</h3>
+          <h3 class="form-section">字段值路由</h3>
           <div class="form-group">
             <label class="form-label">路由字段</label>
             <input v-model="routeConfig.route_field" class="form-input" style="width: 200px;" placeholder="如: code, level, service" />
@@ -376,8 +421,10 @@
                 <input v-model="route.valuesStr" class="form-input" style="width: 200px;" placeholder="值（逗号分隔）" />
                 <span>→</span>
                 <select v-model.number="route.lark_id" class="form-select" style="width: 200px;">
-                  <option value="0">-- 选择 Lark 群 --</option>
-                  <option v-for="lc in larkConfigs" :key="lc.id" :value="lc.id">{{ lc.name }}</option>
+                  <option value="0">-- 选择通知渠道 --</option>
+                  <option v-for="lc in channels" :key="lc.id" :value="lc.id">
+                    {{ lc.name }} ({{ lc.channel_type === 'telegram' ? 'Telegram' : 'Lark' }})
+                  </option>
                 </select>
                 <input v-model="route.name" class="form-input" style="width: 120px;" placeholder="备注" />
                 <button type="button" class="btn btn-sm btn-outline" style="color: var(--danger);" @click="routeConfig.routes.splice(idx, 1)">&times;</button>
@@ -387,8 +434,10 @@
             <div class="form-group">
               <label class="form-label">其他值发送到</label>
               <select v-model.number="routeConfig.default_lark_id" class="form-select" style="width: 300px;">
-                <option value="0">使用规则默认 Lark 配置</option>
-                <option v-for="lc in larkConfigs" :key="lc.id" :value="lc.id">{{ lc.name }}</option>
+                <option value="0">使用规则默认渠道</option>
+                <option v-for="lc in channels" :key="lc.id" :value="lc.id">
+                  {{ lc.name }} ({{ lc.channel_type === 'telegram' ? 'Telegram' : 'Lark' }})
+                </option>
               </select>
             </div>
           </template>
@@ -396,7 +445,7 @@
 
         <!-- 性能告警 (Loki 性能监控：实时阈值 + 每日报告) -->
         <template v-if="form.data_source_type === 'loki'">
-          <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">性能告警 (Loki)</h3>
+          <h3 class="form-section">性能告警 (Loki)</h3>
           <div class="form-hint" style="margin-bottom: 10px;">
             适用于性能类告警：按关键词查询 Loki，从日志行正则提取 <code>tid/domain/cost_ms</code> 等字段（配置在"字段提取"中），按阈值实时告警并按域名累计日报。
             <br>⚠️ 一条日志只允许有 1 个 <code>http(s)://</code> URL，多/少都会记录错误日志跳过。
@@ -448,10 +497,59 @@
                 placeholder="留空则使用默认模板。可用变量 (separate): {{.domain}} {{.count}} {{.min_ms}} {{.avg_ms}} {{.max_ms}} {{.date}} {{.send_time}}&#10;可用变量 (merged): {{.date}} {{.send_time}} {{range .stats}} .domain .count .min_ms .avg_ms .max_ms {{end}}"></textarea>
             </div>
           </template>
+
+          <!-- 错误栈上下文：日志报错时只有一行栈顶，向后补查同 tid/pid 的后续行 -->
+          <h3 class="form-section">错误栈上下文</h3>
+          <div class="form-group">
+            <label class="form-label">
+              <input type="checkbox" :checked="form.stack_context_enabled === 1" @change="form.stack_context_enabled = $event.target.checked ? 1 : 0" style="margin-right: 6px;" />
+              启用错误栈上下文
+            </label>
+            <div class="form-hint">
+              开启后，命中告警的日志行会向后补查同来源的后续行，拼成 <code>&#123;&#123;.stack&#125;&#125;</code> 注入到消息模板。
+              采集端已经把多行栈合并成一条日志时，不会发额外查询（这是常见情况，也是免费的）。
+            </div>
+          </div>
+          <template v-if="form.stack_context_enabled === 1">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">最多行数</label>
+                <input v-model.number="form.stack_max_lines" type="number" class="form-input" placeholder="30" style="width: 160px;" />
+                <div class="form-hint">硬上限，防止边界正则失效时把整个日志流拖进来</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">头部保留行数</label>
+                <input v-model.number="form.stack_head_lines" type="number" class="form-input" placeholder="12" style="width: 160px;" />
+                <div class="form-hint">超过最多行数时，保留栈的前几行</div>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">尾部保留行数</label>
+                <input v-model.number="form.stack_tail_lines" type="number" class="form-input" placeholder="8" style="width: 160px;" />
+                <div class="form-hint">超过最多行数时，保留栈的后几行</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">时间窗口 (秒)</label>
+                <input v-model.number="form.stack_window_sec" type="number" class="form-input" placeholder="5" style="width: 160px;" />
+                <div class="form-hint">向后取多久范围内的日志作为候选</div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">新日志行边界正则 (可选)</label>
+              <input v-model="form.stack_boundary_pattern" class="form-input" placeholder="留空则用内置默认" />
+              <div class="form-hint">边界正则留空则用内置默认（识别行首的日期/时间/日志级别）</div>
+            </div>
+          </template>
         </template>
 
         <!-- Prometheus 配置 -->
-        <h3 style="margin: 20px 0 12px; font-size: 15px; color: var(--text-secondary);">Prometheus 指标配置</h3>
+        <button type="button" class="form-section form-section-toggle" :class="{ 'is-open': !collapsed.prom }" @click="collapsed.prom = !collapsed.prom">
+          <span class="section-chevron" aria-hidden="true"></span>
+          <span class="section-name">Prometheus 指标配置</span>
+          <span v-if="collapsed.prom && sectionFilled.prom" class="section-filled">已配置</span>
+        </button>
+        <div v-show="!collapsed.prom">
         <div class="form-group">
           <label class="form-label">
             <input type="checkbox" v-model="promEnabled" style="margin-right: 6px;" />
@@ -462,8 +560,9 @@
         <template v-if="promEnabled">
           <div class="form-group">
             <label class="form-label">自定义 Labels (JSON)</label>
-            <input v-model="promLabelsStr" class="form-input" placeholder='{"project":"g32","env":"uat","team":"backend"}' />
+            <input v-model="promLabelsStr" class="form-input" :class="{ 'has-error': promLabelsError }" placeholder='{"project":"g32","env":"uat","team":"backend"}' />
             <div class="form-hint">附加到 alert_container_status 指标上的标签，用于 Grafana 筛选分组</div>
+            <div v-if="promLabelsError" class="form-error">{{ promLabelsError }}</div>
           </div>
           <div class="card" style="padding: 12px; background: #f8fafc; font-size: 12px; margin-top: 8px;">
             <div><strong>指标输出示例：</strong></div>
@@ -481,7 +580,7 @@
             {{ previewing ? '查询中...' : '预览告警结果' }}
           </button>
           <button type="button" class="btn btn-warning" @click="handleTestSend" :disabled="testSending">
-            {{ testSending ? '发送中...' : '测试发送到 Lark' }}
+            {{ testSending ? '发送中...' : '测试发送' }}
           </button>
           <button v-if="isEdit && form.report_enabled === 1" type="button" class="btn btn-outline" @click="handlePreviewReport" :disabled="reportPreviewing">
             {{ reportPreviewing ? '生成中...' : '预览日报' }}
@@ -494,10 +593,12 @@
             {{ submitting ? '保存中...' : (isEdit ? '更新规则' : '创建规则') }}
           </button>
         </div>
+        </div>
       </form>
     </div>
 
     <!-- 日报预览 Modal -->
+    <Transition name="modal">
     <div v-if="reportPreviewData" class="modal-overlay" @click.self="reportPreviewData = null">
       <div class="modal" style="min-width: 600px; max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column;">
         <div class="modal-header" style="position: sticky; top: 0; background: var(--bg-card, #fff); z-index: 10; flex-shrink: 0;">
@@ -515,8 +616,10 @@
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- Preview Modal -->
+    <Transition name="modal">
     <div v-if="previewData" class="modal-overlay" @click.self="previewData = null">
       <div class="modal" style="min-width: 800px; max-width: 95vw; max-height: 90vh; display: flex; flex-direction: column;">
         <div class="modal-header" style="position: sticky; top: 0; background: var(--bg-card, #fff); z-index: 10; flex-shrink: 0;">
@@ -646,13 +749,15 @@
         </div>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, reactive, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
+import { formatTime } from '../utils/datetime'
 import { useToast, useConfirm } from '../stores/ui'
 import { X } from 'lucide-vue-next'
 import IndexSelector from '../components/IndexSelector.vue'
@@ -675,10 +780,43 @@ const route = useRoute()
 const router = useRouter()
 const isEdit = computed(() => !!route.params.id)
 const submitting = ref(false)
+// 通知渠道的说明文字只有在用户真正尝试保存过之后才转为警示态，
+// 否则新建页一打开就是满屏红字，把"说明"演成"报错"。
+const submitAttempted = ref(false)
 
 const esConnections = ref([])
 const lokiConnections = ref([])
-const larkConfigs = ref([])
+const channels = ref([])
+const channelPicker = ref(0)
+
+// Only enabled channels can be picked: the backend rejects a disabled id with
+// a 400, and a rule bound to one dies at run time with "all N bound
+// notification channels are disabled". A channel bound earlier and disabled
+// since still renders as a tag (see channelLabel) so the operator can see it
+// and remove it — it is never dropped from form.channel_ids behind their back.
+const availableChannels = computed(() =>
+  channels.value.filter(c => c.status === 1 && !form.value.channel_ids.includes(c.id))
+)
+
+function channelLabel(id) {
+  const c = channels.value.find(x => x.id === id)
+  if (!c) return `#${id}（已删除）`
+  const type = c.channel_type === 'telegram' ? 'Telegram' : 'Lark'
+  return c.status === 1 ? `${c.name} (${type})` : `${c.name} (${type}·已禁用)`
+}
+
+function addChannel() {
+  const id = channelPicker.value
+  if (id > 0 && !form.value.channel_ids.includes(id)) {
+    form.value.channel_ids.push(id)
+  }
+  channelPicker.value = 0
+}
+
+function removeChannel(id) {
+  form.value.channel_ids = form.value.channel_ids.filter(x => x !== id)
+}
+
 const allProjects = ref([])
 
 const form = ref({
@@ -687,7 +825,7 @@ const form = ref({
   logql: '',
   name: '',
   es_connection_id: 0,
-  lark_config_id: 0,
+  channel_ids: [],
   es_index: '*',
   schedule: '*/5 * * * *',
   time_range: '5m',
@@ -723,7 +861,13 @@ const form = ref({
   report_schedule: '0 1 0 * * *',
   report_mode: 'separate',
   report_title: '',
-  report_template: ''
+  report_template: '',
+  stack_context_enabled: 0,
+  stack_max_lines: 30,
+  stack_head_lines: 12,
+  stack_tail_lines: 8,
+  stack_boundary_pattern: '',
+  stack_window_sec: 5
 })
 
 // Namespace 多选相关
@@ -747,10 +891,8 @@ function addNamespace() {
   if (!arr.includes(ns)) { arr.push(ns); setNamespaces(arr) }
   nsInput.value = ''
 }
-function removeNamespace(i) {
-  const arr = [...namespacesArray.value]
-  arr.splice(i, 1)
-  setNamespaces(arr)
+function removeNamespace(ns) {
+  setNamespaces(namespacesArray.value.filter(x => x !== ns))
 }
 
 // Route config helpers
@@ -842,6 +984,62 @@ const atAllChecked = computed({
   set: (v) => { form.value.at_all = v ? 1 : 0 }
 })
 
+// The advanced sections start closed on a new rule and open themselves when
+// they hold something, so editing never hides configuration that is set. A
+// "已配置" marker on a closed section says there is something inside without
+// making the reader open it to find out.
+//
+// This sits below the refs it reads rather than beside the other UI state: the
+// watch evaluates immediately, so declaring it earlier would touch form before
+// it exists.
+function hasJson(v) {
+  const s = (v || '').trim()
+  return !!s && s !== '[]' && s !== '{}'
+}
+
+const sectionFilled = computed(() => ({
+  extract: hasJson(form.value.extract_fields),
+  notify: atAllChecked.value || hasJson(form.value.at_users),
+  group: !!form.value.group_by || hasJson(form.value.expected_groups),
+  dedup: !!form.value.dedup_field,
+  prom: promEnabled.value,
+}))
+
+const collapsed = reactive({ extract: true, notify: true, group: true, dedup: true, prom: true })
+
+// A rule's own values arrive after the form mounts. Opening happens once, so a
+// section the reader then closes stays closed.
+watch(sectionFilled, filled => {
+  for (const key of Object.keys(collapsed)) {
+    if (filled[key]) collapsed[key] = false
+  }
+}, { once: true })
+
+
+// JSON 校验：解析失败时返回带字符位置的提示，方便定位手写 JSON 里的错误
+function jsonPositionError(str) {
+  if (!str) return null
+  try {
+    JSON.parse(str)
+    return null
+  } catch (e) {
+    const m = /position (\d+)/.exec(e.message)
+    if (m) return `JSON 格式错误：第 ${parseInt(m[1], 10) + 1} 个字符附近`
+    return `JSON 格式错误：${e.message}`
+  }
+}
+
+const filterFieldsError = computed(() => jsonPositionError(form.value.filter_fields))
+const queryDslError = computed(() => jsonPositionError(form.value.query_dsl))
+const extractFieldsError = computed(() => jsonPositionError(form.value.extract_fields))
+const promLabelsError = computed(() => jsonPositionError(promLabelsStr.value))
+
+// Loki LogQL 行过滤片段：点击后追加到 LogQL 输入框末尾（不隐藏改写，所见即所得）
+const logqlSnippets = ['|= "ERROR"', '!= "health"', '|~ "regex"']
+function appendLogqlSnippet(snippet) {
+  form.value.logql = form.value.logql ? `${form.value.logql} ${snippet}` : snippet
+}
+
 const extractFieldsPlaceholder = `[
   {"name":"namespace","path":"kubernetes.namespace","pattern":""},
   {"name":"round","path":"message","pattern":"Round:\\\\s*(\\\\S+)"},
@@ -873,12 +1071,12 @@ async function loadOptions() {
     const [esRes, lokiRes, larkRes, projRes] = await Promise.all([
       api.get('/es-connections'),
       api.get('/loki-connections'),
-      api.get('/lark-configs'),
+      api.get('/notify-channels'),
       api.get('/projects')
     ])
     if (esRes.code === 0) esConnections.value = esRes.data
     if (lokiRes.code === 0) lokiConnections.value = lokiRes.data
-    if (larkRes.code === 0) larkConfigs.value = larkRes.data
+    if (larkRes.code === 0) channels.value = larkRes.data
     if (projRes.code === 0) allProjects.value = projRes.data
   } catch (e) { /* ignore */ }
 }
@@ -894,7 +1092,8 @@ async function loadRule() {
         name: d.name,
         es_connection_id: d.es_connection_id,
         loki_connection_id: d.loki_connection_id || 0,
-        lark_config_id: d.lark_config_id,
+        channel_ids: (d.channel_ids && d.channel_ids.length) ? d.channel_ids
+                     : (d.lark_config_id ? [d.lark_config_id] : []),
         es_index: d.es_index,
         schedule: d.schedule,
         time_range: d.time_range,
@@ -931,7 +1130,13 @@ async function loadRule() {
         report_schedule: d.report_schedule || '0 1 0 * * *',
         report_mode: d.report_mode || 'separate',
         report_title: d.report_title || '',
-        report_template: d.report_template || ''
+        report_template: d.report_template || '',
+        stack_context_enabled: d.stack_context_enabled || 0,
+        stack_max_lines: d.stack_max_lines || 30,
+        stack_head_lines: d.stack_head_lines || 12,
+        stack_tail_lines: d.stack_tail_lines || 8,
+        stack_boundary_pattern: d.stack_boundary_pattern || '',
+        stack_window_sec: d.stack_window_sec || 5
       }
       loadPromConfig(d.prometheus_config)
       loadRouteConfig(d.route_config)
@@ -940,6 +1145,20 @@ async function loadRule() {
 }
 
 async function handleSubmit() {
+  submitAttempted.value = true
+  // JSON 校验：只检查当前数据源下实际可见/生效的字段，命名出错字段而非笼统报错
+  const jsonFieldErrors = []
+  if (form.value.data_source_type === 'es') {
+    if (filterFieldsError.value) jsonFieldErrors.push('过滤字段')
+    if (queryDslError.value) jsonFieldErrors.push('自定义查询 DSL')
+  }
+  if (extractFieldsError.value) jsonFieldErrors.push('提取规则')
+  if (promEnabled.value && promLabelsError.value) jsonFieldErrors.push('自定义 Labels')
+  if (jsonFieldErrors.length) {
+    toast.error(`「${jsonFieldErrors.join('、')}」不是合法的 JSON，请修正后再保存`)
+    return
+  }
+
   syncPromConfig()
   syncRouteConfig()
   // 简单校验：label_filters 不允许写大括号（避免被拼成双括号）
@@ -947,6 +1166,7 @@ async function handleSubmit() {
     toast.error('标签过滤器不要写大括号 {}，只写 label="value" 的部分')
     return
   }
+  if (!form.value.channel_ids.length) { toast.error('请先选择通知渠道'); return }
   submitting.value = true
   try {
     const data = { ...form.value }
@@ -1037,9 +1257,9 @@ async function handleTestSend() {
   const ds = form.value.data_source_type || 'es'
   if (ds === 'es' && !form.value.es_connection_id) { toast.error('请先选择 ES 连接'); return }
   if (ds === 'loki' && !form.value.loki_connection_id) { toast.error('请先选择 Loki 连接'); return }
-  if (!form.value.lark_config_id) { toast.error('请先选择 Lark 配置'); return }
+  if (!form.value.channel_ids.length) { toast.error('请先选择通知渠道'); return }
 
-  const ok = await dialog.confirm({ title: '测试发送', message: '将查询数据源并真实发送一条告警到 Lark，确认？' })
+  const ok = await dialog.confirm({ title: '测试发送', message: '将查询数据源并真实发送一条告警到所选渠道，确认？' })
   if (!ok) return
 
   testSending.value = true
@@ -1140,7 +1360,9 @@ function parseAtNames(atUsersStr) {
   return atUsersStr
 }
 
-// Convert nanosecond timestamps to readable time (UTC+8)
+// Convert nanosecond timestamps in the preview to the platform's display zone.
+// This runs on the rendered message, which is ours to format — never on raw log
+// text, whose timestamps come from another system and stay verbatim.
 function formatRendered(text) {
   if (!text) return text
   return text.replace(/(?<!\d)(\d{16,19})(?!\d)/g, (match) => {
@@ -1148,7 +1370,7 @@ function formatRendered(text) {
     if (match.length >= 16) {
       const ms = Number(match.substring(0, 13))
       if (ms > 1700000000000 && ms < 1900000000000) {
-        return new Date(ms).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+        return formatTime(new Date(ms))
       }
     }
     return match

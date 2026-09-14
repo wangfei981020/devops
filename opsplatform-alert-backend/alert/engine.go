@@ -13,26 +13,29 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/robfig/cron/v3"
 	"opsplatform-alert-backend/database"
 	"opsplatform-alert-backend/es"
-	"opsplatform-alert-backend/lark"
 	lokiclient "opsplatform-alert-backend/loki"
 	"opsplatform-alert-backend/models"
+	"opsplatform-alert-backend/notify"
+	"opsplatform-alert-backend/safego"
+	"opsplatform-alert-backend/timezone"
+
+	"github.com/robfig/cron/v3"
 )
 
 // RouteConfig defines field-value based routing for found mode alerts
 type RouteConfig struct {
-	RouteField   string        `json:"route_field"`   // field name to extract value from (e.g. "code")
-	IgnoreValues []string      `json:"ignore_values"` // values to ignore (no alert)
-	Routes       []RouteRule   `json:"routes"`        // routing rules
-	DefaultLarkID int          `json:"default_lark_id"` // fallback lark config ID (0 = use rule's default)
+	RouteField    string      `json:"route_field"`     // field name to extract value from (e.g. "code")
+	IgnoreValues  []string    `json:"ignore_values"`   // values to ignore (no alert)
+	Routes        []RouteRule `json:"routes"`          // routing rules
+	DefaultLarkID int         `json:"default_lark_id"` // fallback lark config ID (0 = use rule's default)
 }
 
 type RouteRule struct {
-	Values []string `json:"values"` // field values to match
+	Values []string `json:"values"`  // field values to match
 	LarkID int      `json:"lark_id"` // lark config ID to send to
-	Name   string   `json:"name"`   // description (e.g. "严重错误群")
+	Name   string   `json:"name"`    // description (e.g. "严重错误群")
 }
 
 func parseRouteConfig(configJSON string) *RouteConfig {
@@ -133,16 +136,19 @@ const alertStateTTL = 7 * 24 * time.Hour
 type Engine struct {
 	mu          sync.RWMutex
 	cron        *cron.Cron
-	jobs        map[int]cron.EntryID          // ruleID -> cronEntryID
-	reportJobs  map[int]cron.EntryID          // ruleID -> daily report cronEntryID (performance alert)
-	clients     map[int]*es.Client            // esConnectionID -> ES client
-	lokiClients map[int]*lokiclient.Client    // lokiConnectionID -> Loki client
+	jobs        map[int]cron.EntryID       // ruleID -> cronEntryID
+	reportJobs  map[int]cron.EntryID       // ruleID -> daily report cronEntryID (performance alert)
+	clients     map[int]*es.Client         // esConnectionID -> ES client
+	lokiClients map[int]*lokiclient.Client // lokiConnectionID -> Loki client
 	stopping    bool
 }
 
 func NewEngine() *Engine {
 	return &Engine{
-		cron:        cron.New(cron.WithSeconds()),
+		// A rule's schedule is written in the platform's display zone: "0 3 * * *"
+		// means 03:00 where the team is, not 03:00 wherever this container happens
+		// to run. Without a location cron would silently follow the process zone.
+		cron:        cron.New(cron.WithSeconds(), cron.WithLocation(timezone.Location()), cron.WithChain(jobGuards...)),
 		jobs:        make(map[int]cron.EntryID),
 		reportJobs:  make(map[int]cron.EntryID),
 		clients:     make(map[int]*es.Client),
@@ -158,11 +164,19 @@ func (e *Engine) Start() error {
 		return fmt.Errorf("failed to load rules: %w", err)
 	}
 
+	if err := e.startRetentionJob(); err != nil {
+		// Pruning is housekeeping; failing to register it must not stop alerting.
+		log.Printf("[Engine] retention job not registered: %v", err)
+	}
+	if err := e.startMuteReminderJob(); err != nil {
+		log.Printf("[Engine] mute reminder job not registered: %v", err)
+	}
+
 	e.cron.Start()
 	log.Println("[Engine] Alert engine started")
 
 	// Restore container metrics from Redis cache on startup (avoid gap after restart)
-	go e.restoreMetricsFromRedis()
+	safego.Go("restoreMetricsFromRedis", e.restoreMetricsFromRedis)
 
 	return nil
 }
@@ -313,6 +327,51 @@ func (e *Engine) Stop() {
 	log.Println("[Engine] Alert engine stopped")
 }
 
+// RebuildSchedule rebuilds the scheduler against the current display timezone.
+//
+// A cron entry's location is fixed when the scheduler is created, so changing
+// the platform's zone has no effect on already-registered jobs — a rule set to
+// fire at 03:00 would keep firing at 03:00 in the old zone until a restart.
+// Changing the setting therefore has to swap the scheduler outright and
+// re-register every rule against the new location.
+func (e *Engine) RebuildSchedule() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.stopping {
+		return nil
+	}
+
+	// Stop the old scheduler and wait for jobs already running to finish, so a
+	// rule cannot be executing against the old schedule while it is re-added.
+	<-e.cron.Stop().Done()
+
+	e.cron = cron.New(cron.WithSeconds(), cron.WithLocation(timezone.Location()), cron.WithChain(jobGuards...))
+	e.jobs = make(map[int]cron.EntryID)
+	e.reportJobs = make(map[int]cron.EntryID)
+
+	if err := e.loadAllRules(); err != nil {
+		// Start what did register rather than leaving the platform with no
+		// scheduler at all; the rules that failed are reported by loadAllRules.
+		e.cron.Start()
+		return fmt.Errorf("failed to reload rules after timezone change: %w", err)
+	}
+
+	// The scheduler was replaced, so every entry on it was too — the retention
+	// job has to be put back or it would quietly stop running after the first
+	// timezone change.
+	if err := e.startRetentionJob(); err != nil {
+		log.Printf("[Engine] retention job not re-registered: %v", err)
+	}
+	if err := e.startMuteReminderJob(); err != nil {
+		log.Printf("[Engine] mute reminder job not re-registered: %v", err)
+	}
+
+	e.cron.Start()
+	log.Printf("[Engine] Schedule rebuilt for timezone %s", timezone.Name())
+	return nil
+}
+
 // ReloadRule reloads a single rule (add/update/remove)
 func (e *Engine) ReloadRule(ruleID int) error {
 	e.mu.Lock()
@@ -459,12 +518,7 @@ func (e *Engine) loadAllRules() error {
 }
 
 func (e *Engine) addJob(rule *models.AlertRule) error {
-	// Convert 5-field cron to 6-field (add seconds=0)
-	schedule := rule.Schedule
-	fields := strings.Fields(schedule)
-	if len(fields) == 5 {
-		schedule = "0 " + schedule
-	}
+	schedule := NormalizeSchedule(rule.Schedule)
 
 	entryID, err := e.cron.AddFunc(schedule, func() {
 		e.executeRule(rule.ID)
@@ -485,12 +539,18 @@ func (e *Engine) addReportJob(rule *models.AlertRule) error {
 	if schedule == "" {
 		schedule = "0 1 0 * * *"
 	}
-	fields := strings.Fields(schedule)
-	if len(fields) == 5 {
-		schedule = "0 " + schedule
-	}
+	schedule = NormalizeSchedule(schedule)
 	ruleID := rule.ID
+	reportSchedule := schedule
 	entryID, err := e.cron.AddFunc(schedule, func() {
+		// A daily report sent once per replica is the same defect as a
+		// duplicated alert, and more visible — it arrives in the group N times.
+		release, ok := tryLock(reportLockKey(ruleID), lockTTL(reportSchedule))
+		if !ok {
+			log.Printf("[Engine] Rule %d: daily report already being sent elsewhere, skipping", ruleID)
+			return
+		}
+		defer release()
 		sendDailyReport(ruleID)
 	})
 	if err != nil {
@@ -528,6 +588,17 @@ func (e *Engine) executeRule(ruleID int) {
 		return
 	}
 
+	// One run of this rule at a time across the platform: another replica may
+	// hold its own scheduler, and cron will start the next run whether or not
+	// this one has finished. See alert/lock.go — this fails open, so a Redis
+	// outage costs a duplicate alert rather than a missed one.
+	release, ok := tryLock(ruleLockKey(ruleID), lockTTL(rule.Schedule))
+	if !ok {
+		log.Printf("[Engine] Rule %d '%s': previous run still in progress, skipping", rule.ID, rule.Name)
+		return
+	}
+	defer release()
+
 	log.Printf("[Engine] Executing rule %d '%s'", rule.ID, rule.Name)
 
 	// Update last_run_at
@@ -544,16 +615,22 @@ func (e *Engine) executeRule(ruleID int) {
 		alertMode = "found"
 	}
 
-	// Get Lark config
-	larkConfig, err := getLarkConfigByID(rule.LarkConfigID)
+	// Get notification channels (Lark and/or Telegram)
+	channels, err := getChannelsForRule(rule.ID, rule.LarkConfigID)
 	if err != nil {
-		errMsg := fmt.Sprintf("Lark config error: %v", err)
+		errMsg := fmt.Sprintf("Notify channel error: %v", err)
 		log.Printf("[Engine] Rule %d: %s", rule.ID, errMsg)
 		database.DB.Exec("UPDATE alert_rules SET last_error = ? WHERE id = ?", errMsg, rule.ID)
 		return
 	}
 
-	sender := lark.NewSender(*larkConfig)
+	sender, err := notify.NewMulti(channels)
+	if err != nil {
+		errMsg := fmt.Sprintf("Notify channel error: %v", err)
+		log.Printf("[Engine] Rule %d: %s", rule.ID, errMsg)
+		database.DB.Exec("UPDATE alert_rules SET last_error = ? WHERE id = ?", errMsg, rule.ID)
+		return
+	}
 
 	// Parse at_users (supports ["name1","name2"] or [{"name":"x","user_id":"y"}])
 	atUsers := resolveAtUsers(rule.AtUsers)
@@ -600,7 +677,7 @@ func (e *Engine) executeRule(ruleID int) {
 		errMsg := fmt.Sprintf("Query error: %v", err)
 		log.Printf("[Engine] Rule %d: %s", rule.ID, errMsg)
 		database.DB.Exec("UPDATE alert_rules SET last_error = ? WHERE id = ?", errMsg, rule.ID)
-		saveAlertLog(rule, "", "", "failed", errMsg)
+		saveAlertLog(rule, "", "", "failed", errMsg, "")
 		return
 	}
 
@@ -718,20 +795,26 @@ func (e *Engine) executeRule(ruleID int) {
 			// Send alert
 			resp, sErr := sender.SendCard(rule.MessageTitle, lastHitMsg, rule.Severity, atUsers, atAll)
 			if sErr != nil {
-				errMsg := fmt.Sprintf("Lark send error: %v", sErr)
+				errMsg := fmt.Sprintf("notify send error: %v", sErr)
 				database.DB.Exec("UPDATE alert_rules SET last_error = ? WHERE id = ?", errMsg, rule.ID)
-				saveAlertLog(rule, lastHitMsg, string(rawJSON), "failed", errMsg)
+				saveAlertLog(rule, lastHitMsg, string(rawJSON), "failed", errMsg, resp)
 				if Metrics != nil {
 					Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
 					Metrics.RecordSendFailed(ruleIDStr, rule.Name, rule.Severity)
 				}
 			} else {
-				database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
+				note := partialSendNote(resp)
+				if note == "" {
+					database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
+				}
 				database.RDB.Set(ctx, lastAlertKey, time.Now().Format(time.RFC3339), 7*24*time.Hour)
-				saveAlertLog(rule, lastHitMsg, string(rawJSON), "success", "")
+				saveAlertLog(rule, lastHitMsg, string(rawJSON), "success", note, resp)
 				if Metrics != nil {
 					Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
 					Metrics.RecordSendSuccess(ruleIDStr, rule.Name, rule.Severity)
+				}
+				if note != "" {
+					recordPartialSend(rule, ruleIDStr, note)
 				}
 				log.Printf("[Engine] Rule %d: not_found alert sent, resp=%s", rule.ID, resp)
 			}
@@ -761,9 +844,9 @@ func (e *Engine) executeRule(ruleID int) {
 
 				resp, sErr := sender.SendCard(title, message, "recovery", atUsers, atAll)
 				if sErr != nil {
-					saveAlertLog(rule, message, string(rawJSON), "failed", fmt.Sprintf("Recovery send error: %v", sErr))
+					saveAlertLog(rule, message, string(rawJSON), "failed", fmt.Sprintf("Recovery send error: %v", sErr), resp)
 				} else {
-					saveAlertLog(rule, message, string(rawJSON), "success", "")
+					saveAlertLog(rule, message, string(rawJSON), "success", "", resp)
 					log.Printf("[Engine] Rule %d: recovery sent, resp=%s", rule.ID, resp)
 				}
 			} else if prevState == "alerting" {
@@ -786,10 +869,12 @@ func (e *Engine) executeRule(ruleID int) {
 
 	// Parse route config for found mode
 	routeCfg := parseRouteConfig(rule.RouteConfig)
-	// Cache of senders for different lark configs (for routing)
-	senderCache := map[int]*lark.Sender{rule.LarkConfigID: sender}
+	// Cache of senders for routed channels. Routing targets exactly one channel,
+	// overriding the rule's multi-channel default.
+	senderCache := map[int]notify.Notifier{}
 
 	sentCount := 0
+	partialNote := "" // last partial fan-out seen; keeps last_error from being cleared
 	for _, hit := range result.Hits {
 		vars := extractFields(hit, rule.ExtractFields)
 
@@ -813,14 +898,15 @@ func (e *Engine) executeRule(ruleID int) {
 			if larkID > 0 && larkID != rule.LarkConfigID {
 				if cached, ok := senderCache[larkID]; ok {
 					activeSender = cached
-				} else {
-					routeLarkCfg, err := getLarkConfigByID(larkID)
-					if err == nil {
-						activeSender = lark.NewSender(*routeLarkCfg)
-						senderCache[larkID] = activeSender
+				} else if routeCh, err := getChannelByID(larkID); err == nil {
+					if routeSender, err := notify.New(*routeCh); err == nil {
+						activeSender = routeSender
+						senderCache[larkID] = routeSender
 					} else {
-						log.Printf("[Engine] Rule %d: route lark_id=%d not found, using default", rule.ID, larkID)
+						log.Printf("[Engine] Rule %d: route channel_id=%d unusable (%v), using default", rule.ID, larkID, err)
 					}
+				} else {
+					log.Printf("[Engine] Rule %d: route channel_id=%d not found, using default", rule.ID, larkID)
 				}
 			}
 		}
@@ -842,16 +928,29 @@ func (e *Engine) executeRule(ruleID int) {
 			}
 		}
 
+		if rule.StackContextEnabled == 1 {
+			vars["stack"] = e.fetchStackContext(ctx, rule, hit)
+		}
+
 		message := renderTemplate(rule.MessageTemplate, vars)
+
+		// Zero-config path: the operator turned the switch on but never referenced
+		// the variable, so put the stack where it can still be read.
+		if rule.StackContextEnabled == 1 && !strings.Contains(rule.MessageTemplate, "{{.stack}}") {
+			if s, ok := vars["stack"].(string); ok && s != "" {
+				message += "\n```\n" + s + "\n```"
+			}
+		}
+
 		rawJSON, _ := json.Marshal(hit)
 
 		time.Sleep(200 * time.Millisecond)
 		resp, err := activeSender.SendCard(rule.MessageTitle, message, rule.Severity, atUsers, atAll)
 		if err != nil {
-			errMsg := fmt.Sprintf("Lark send error: %v", err)
+			errMsg := fmt.Sprintf("notify send error: %v", err)
 			log.Printf("[Engine] Rule %d: %s", rule.ID, errMsg)
 			database.DB.Exec("UPDATE alert_rules SET last_error = ? WHERE id = ?", errMsg, rule.ID)
-			saveAlertLog(rule, message, string(rawJSON), "failed", errMsg)
+			saveAlertLog(rule, message, string(rawJSON), "failed", errMsg, resp)
 			if Metrics != nil {
 				Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
 				Metrics.RecordSendFailed(ruleIDStr, rule.Name, rule.Severity)
@@ -859,16 +958,23 @@ func (e *Engine) executeRule(ruleID int) {
 			continue
 		}
 
-		saveAlertLog(rule, message, string(rawJSON), "success", "")
+		note := partialSendNote(resp)
+		saveAlertLog(rule, message, string(rawJSON), "success", note, resp)
 		sentCount++
 		if Metrics != nil {
 			Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
 			Metrics.RecordSendSuccess(ruleIDStr, rule.Name, rule.Severity)
 		}
+		if note != "" {
+			partialNote = note
+			recordPartialSend(rule, ruleIDStr, note)
+		}
 		log.Printf("[Engine] Rule %d: alert sent (%d/%d), resp=%s", rule.ID, sentCount, len(result.Hits), resp)
 	}
 
-	if sentCount > 0 {
+	// A partial fan-out must survive here: clearing last_error would hide a
+	// channel that failed on every send behind the channels that succeeded.
+	if sentCount > 0 && partialNote == "" {
 		database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
 	}
 
@@ -886,6 +992,10 @@ func extractFields(hit map[string]interface{}, extractFieldsJSON string) map[str
 
 	// Always add raw fields
 	for k, v := range hit {
+		// Internal plumbing keys are not template variables.
+		if strings.HasPrefix(k, "__") {
+			continue
+		}
 		vars[k] = v
 	}
 
@@ -986,18 +1096,123 @@ func fillEmptyFields(vars map[string]interface{}, hits []map[string]interface{},
 	}
 }
 
+// fetchStackContext returns the matched line together with its continuation
+// lines, ready to drop into a fenced code block.
+//
+// When the collector already merged the stack into one record the line itself
+// carries newlines, and no extra query is needed — which is both the common case
+// and the cheap one. Only a genuinely single-line match triggers a follow-up
+// query, and only for hits that survived dedup, mute and routing.
+func (e *Engine) fetchStackContext(ctx context.Context, rule *models.AlertRule, hit map[string]interface{}) string {
+	line, _ := hit["message"].(string)
+	if line == "" {
+		return ""
+	}
+
+	// Already merged upstream: the whole stack is right here.
+	if strings.Contains(line, "\n") {
+		return e.trimStack(rule, strings.Split(line, "\n"))
+	}
+
+	labels, _ := hit["__stream_labels"].(map[string]string)
+	selector := buildStreamSelector(labels)
+	if selector == "" || rule.LokiConnectionID == 0 {
+		return line
+	}
+
+	tsStr, _ := hit["timestamp"].(string)
+	start, err := time.Parse("2006/01/02 15:04:05", tsStr)
+	if err != nil {
+		log.Printf("[Stack] Rule %d: cannot parse hit timestamp %q: %v", rule.ID, tsStr, err)
+		return line
+	}
+
+	window := rule.StackWindowSec
+	if window <= 0 {
+		window = 5
+	}
+	maxLines := rule.StackMaxLines
+	if maxLines <= 0 {
+		maxLines = 200
+	}
+
+	client, err := e.getLokiClient(rule.LokiConnectionID)
+	if err != nil {
+		log.Printf("[Stack] Rule %d: loki client error: %v", rule.ID, err)
+		return line
+	}
+
+	if !acquireGlobalCtx(ctx) {
+		log.Printf("[Stack] Rule %d: no query slot, sending the matched line alone", rule.ID)
+		return line
+	}
+	defer releaseGlobal()
+
+	result, err := client.QueryRangeDirection(ctx, selector,
+		start, start.Add(time.Duration(window)*time.Second), maxLines+1, "forward")
+	if err != nil {
+		log.Printf("[Stack] Rule %d: context query failed: %v", rule.ID, err)
+		return line
+	}
+
+	lines := make([]string, 0, maxLines+1)
+	for _, h := range result.ToHits() {
+		if s, ok := h["message"].(string); ok {
+			lines = append(lines, s)
+		}
+	}
+	if len(lines) == 0 {
+		return line
+	}
+
+	boundary, err := CompileBoundary(rule.StackBoundaryPattern)
+	if err != nil {
+		log.Printf("[Stack] Rule %d: %v — falling back to the default pattern", rule.ID, err)
+		boundary, _ = CompileBoundary("")
+	}
+	return e.trimStack(rule, CollectStack(lines, boundary, maxLines))
+}
+
+// trimStack applies the rule's head/tail elision and joins the result.
+//
+// The len(lines) > maxLines cap below is the same collection-time safety valve
+// as CollectStack's, applied a second time: it exists here because the
+// already-merged path in fetchStackContext hands trimStack a stack that never
+// went through CollectStack at all (the collector merged it into one record
+// upstream), so this is the only place that guard runs for that path. It is
+// NOT a presentation setting and must stay generous — ordering matters:
+//  1. the cap runs FIRST, as a runaway guard, against the WHOLE collected
+//     stack (never a front-truncated prefix of it);
+//  2. ElideMiddle runs SECOND, as the presentation step, and must see
+//     whatever the cap left standing, including its tail, so the root cause
+//     ("Caused by:") that lives at the bottom of a Java stack survives.
+//
+// A tight cap here would truncate from the front and discard exactly the
+// tail ElideMiddle is supposed to keep — which is the bug this comment exists
+// to prevent from coming back.
+func (e *Engine) trimStack(rule *models.AlertRule, lines []string) string {
+	head := rule.StackHeadLines
+	if head <= 0 {
+		head = 12
+	}
+	tail := rule.StackTailLines
+	if tail <= 0 {
+		tail = 8
+	}
+	maxLines := rule.StackMaxLines
+	if maxLines <= 0 {
+		maxLines = 200
+	}
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+	return strings.Join(ElideMiddle(lines, head, tail), "\n")
+}
+
 // renderTemplate renders a Go template with variables
 func renderTemplate(tmplStr string, vars map[string]interface{}) string {
 	if tmplStr == "" {
-		// Default template: list all vars
-		var sb strings.Builder
-		for k, v := range vars {
-			if k == "_id" || k == "_index" {
-				continue
-			}
-			sb.WriteString(fmt.Sprintf("**%s:** %v\n", k, v))
-		}
-		return sb.String()
+		return RenderVarsDefault(vars)
 	}
 
 	tmpl, err := template.New("alert").Parse(tmplStr)
@@ -1046,6 +1261,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		severity, COALESCE(group_by,''), COALESCE(expected_groups,''), COALESCE(query_concurrency,5), COALESCE(alert_interval,''), dedup_field, dedup_ttl, max_alerts,
 		COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), COALESCE(label_filters,''),
 		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
+		COALESCE(stack_context_enabled,0), COALESCE(stack_max_lines,200), COALESCE(stack_head_lines,12), COALESCE(stack_tail_lines,8), COALESCE(stack_boundary_pattern,''), COALESCE(stack_window_sec,5),
 		status
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType,
@@ -1057,16 +1273,70 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		&rule.Severity, &rule.GroupBy, &rule.ExpectedGroups, &rule.QueryConcurrency, &rule.AlertInterval, &rule.DedupField, &rule.DedupTTL, &rule.MaxAlerts,
 		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.LabelFilters,
 		&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
+		&rule.StackContextEnabled, &rule.StackMaxLines, &rule.StackHeadLines, &rule.StackTailLines, &rule.StackBoundaryPattern, &rule.StackWindowSec,
 		&rule.Status)
 	return &rule, err
 }
 
-func getLarkConfigByID(id int) (*models.LarkConfig, error) {
-	var cfg models.LarkConfig
-	err := database.DB.QueryRow(`SELECT id, name, webhook_url, secret, lark_type, description, status
-		FROM lark_configs WHERE id = ? AND status = 1`, id).Scan(
-		&cfg.ID, &cfg.Name, &cfg.WebhookURL, &cfg.Secret, &cfg.LarkType, &cfg.Description, &cfg.Status)
+// getChannelByID loads one enabled notification channel.
+func getChannelByID(id int) (*models.NotifyChannel, error) {
+	var cfg models.NotifyChannel
+	err := database.DB.QueryRow(`SELECT id, channel_type, name, webhook_url, secret, lark_type,
+		bot_token, chat_id, thread_id, proxy_url, description, status
+		FROM notify_channels WHERE id = ? AND status = 1`, id).Scan(
+		&cfg.ID, &cfg.ChannelType, &cfg.Name, &cfg.WebhookURL, &cfg.Secret, &cfg.LarkType,
+		&cfg.BotToken, &cfg.ChatID, &cfg.ThreadID, &cfg.ProxyURL, &cfg.Description, &cfg.Status)
 	return &cfg, err
+}
+
+// getChannelsForRule returns every enabled channel bound to a rule. It falls
+// back to the legacy alert_rules.lark_config_id only when the rule has no
+// bound rows at all (a rule created before the multi-channel migration), so
+// that an operator who bound channels and then disabled all of them gets a
+// loud error instead of a silent resurrection of the old lark_config_id.
+func getChannelsForRule(ruleID, fallbackChannelID int) ([]models.NotifyChannel, error) {
+	rows, err := database.DB.Query(`SELECT c.id, c.channel_type, c.name, c.webhook_url, c.secret,
+		c.lark_type, c.bot_token, c.chat_id, c.thread_id, c.proxy_url, c.description, c.status
+		FROM alert_rule_channels rc
+		JOIN notify_channels c ON c.id = rc.channel_id
+		WHERE rc.rule_id = ?
+		ORDER BY c.id`, ruleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var bound int
+	var list []models.NotifyChannel
+	for rows.Next() {
+		var c models.NotifyChannel
+		if err := rows.Scan(&c.ID, &c.ChannelType, &c.Name, &c.WebhookURL, &c.Secret,
+			&c.LarkType, &c.BotToken, &c.ChatID, &c.ThreadID, &c.ProxyURL, &c.Description, &c.Status); err != nil {
+			return nil, err
+		}
+		bound++
+		if c.Status == 1 {
+			list = append(list, c)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if bound == 0 && fallbackChannelID > 0 {
+		c, err := getChannelByID(fallbackChannelID)
+		if err != nil {
+			return nil, fmt.Errorf("rule %d: fallback channel %d not found or disabled: %w", ruleID, fallbackChannelID, err)
+		}
+		list = append(list, *c)
+	}
+	if len(list) == 0 {
+		if bound > 0 {
+			return nil, fmt.Errorf("rule %d: all %d bound notification channels are disabled", ruleID, bound)
+		}
+		return nil, fmt.Errorf("rule %d has no enabled notification channel", ruleID)
+	}
+	return list, nil
 }
 
 // queryES queries Elasticsearch and returns hits
@@ -1227,10 +1497,45 @@ func (e *Engine) getESClient(connID int) (*es.Client, error) {
 	return client, nil
 }
 
-func saveAlertLog(rule *models.AlertRule, message, esRaw, status, errMsg string) {
-	_, err := database.DB.Exec(`INSERT INTO alert_logs (rule_id, rule_name, severity, message, es_raw, status, error_msg)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		rule.ID, rule.Name, rule.Severity, message, esRaw, status, errMsg)
+// partialSendNote returns a short summary naming the channels that did not
+// deliver, or "" when the fan-out was a clean success (or not a fan-out at all).
+//
+// MultiSender reports a partial success as a nil error on purpose — the alert
+// did reach someone — but that made the engine clear last_error and count a
+// success, so a Telegram channel failing on every single send was visible
+// nowhere except alert_logs.status. Callers use this to record the failure
+// alongside the success instead.
+func partialSendNote(resp string) string {
+	if notify.StatusFromResponse(resp) != "partial" {
+		return ""
+	}
+	failed := notify.FailedChannels(resp)
+	if len(failed) == 0 {
+		return "部分渠道发送失败"
+	}
+	return "部分渠道发送失败: " + strings.Join(failed, ", ")
+}
+
+// recordPartialSend applies a partial fan-out's consequences: the rule keeps a
+// visible last_error naming the broken channels, and Prometheus sees a send
+// failure in addition to the success the healthy channels earned.
+func recordPartialSend(rule *models.AlertRule, ruleIDStr, note string) {
+	database.DB.Exec("UPDATE alert_rules SET last_error = ? WHERE id = ?", note, rule.ID)
+	if Metrics != nil {
+		Metrics.RecordSendFailed(ruleIDStr, rule.Name, rule.Severity)
+	}
+	log.Printf("[Engine] Rule %d: %s", rule.ID, note)
+}
+
+func saveAlertLog(rule *models.AlertRule, message, esRaw, status, errMsg, resp string) {
+	// A fan-out payload knows better than the caller whether this was a full
+	// success, a partial one, or a total failure.
+	if derived := notify.StatusFromResponse(resp); derived != "" {
+		status = derived
+	}
+	_, err := database.DB.Exec(`INSERT INTO alert_logs (rule_id, rule_name, severity, message, es_raw, status, error_msg, lark_response)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		rule.ID, rule.Name, rule.Severity, message, esRaw, status, errMsg, resp)
 	if err != nil {
 		log.Printf("[Engine] Failed to save alert log: %v", err)
 	}
@@ -1238,7 +1543,7 @@ func saveAlertLog(rule *models.AlertRule, message, esRaw, status, errMsg string)
 
 // executeGroupedRule processes hits grouped by a field, each group handled independently
 func (e *Engine) executeGroupedRule(ctx context.Context, rule *models.AlertRule,
-	result *es.SearchResult, sender *lark.Sender, atUsers []models.AtUser, atAll bool,
+	result *es.SearchResult, sender notify.Notifier, atUsers []models.AtUser, atAll bool,
 	ruleIDStr, alertMode, dataSourceType string) {
 
 	groupField := strings.TrimSpace(rule.GroupBy)
@@ -1268,6 +1573,7 @@ func (e *Engine) executeGroupedRule(ctx context.Context, rule *models.AlertRule,
 
 	// ========== found mode: alert for each group ==========
 	sentCount := 0
+	partialNote := "" // last partial fan-out seen; keeps last_error from being cleared
 	for groupKey, hits := range groups {
 		// Use first hit for rendering
 		firstHit := hits[0]
@@ -1290,7 +1596,20 @@ func (e *Engine) executeGroupedRule(ctx context.Context, rule *models.AlertRule,
 			}
 		}
 
+		if rule.StackContextEnabled == 1 {
+			vars["stack"] = e.fetchStackContext(ctx, rule, firstHit)
+		}
+
 		message := renderTemplate(rule.MessageTemplate, vars)
+
+		// Zero-config path: the operator turned the switch on but never referenced
+		// the variable, so put the stack where it can still be read.
+		if rule.StackContextEnabled == 1 && !strings.Contains(rule.MessageTemplate, "{{.stack}}") {
+			if s, ok := vars["stack"].(string); ok && s != "" {
+				message += "\n```\n" + s + "\n```"
+			}
+		}
+
 		rawJSON, _ := json.Marshal(firstHit)
 
 		title := rule.MessageTitle
@@ -1300,7 +1619,7 @@ func (e *Engine) executeGroupedRule(ctx context.Context, rule *models.AlertRule,
 
 		resp, err := sender.SendCard(title, message, rule.Severity, atUsers, atAll)
 		if err != nil {
-			saveAlertLog(rule, message, string(rawJSON), "failed", fmt.Sprintf("[%s] %v", groupKey, err))
+			saveAlertLog(rule, message, string(rawJSON), "failed", fmt.Sprintf("[%s] %v", groupKey, err), resp)
 			if Metrics != nil {
 				Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
 				Metrics.RecordSendFailed(ruleIDStr, rule.Name, rule.Severity)
@@ -1308,16 +1627,23 @@ func (e *Engine) executeGroupedRule(ctx context.Context, rule *models.AlertRule,
 			continue
 		}
 
-		saveAlertLog(rule, message, string(rawJSON), "success", "")
+		note := partialSendNote(resp)
+		saveAlertLog(rule, message, string(rawJSON), "success", note, resp)
 		sentCount++
 		if Metrics != nil {
 			Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
 			Metrics.RecordSendSuccess(ruleIDStr, rule.Name, rule.Severity)
 		}
+		if note != "" {
+			partialNote = note
+			recordPartialSend(rule, ruleIDStr, note)
+		}
 		log.Printf("[Engine] Rule %d: group '%s' alert sent, resp=%s", rule.ID, groupKey, resp)
 	}
 
-	if sentCount > 0 {
+	// A partial fan-out must survive here: clearing last_error would hide a
+	// channel that failed on every send behind the channels that succeeded.
+	if sentCount > 0 && partialNote == "" {
 		database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
 	}
 }
@@ -1325,7 +1651,7 @@ func (e *Engine) executeGroupedRule(ctx context.Context, rule *models.AlertRule,
 // executeGroupedNotFound handles not_found mode with grouping
 // It discovers known groups from a wider time range, then checks which groups are missing in the current range
 func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertRule,
-	sender *lark.Sender, atUsers []models.AtUser, atAll bool, ruleIDStr string,
+	sender notify.Notifier, atUsers []models.AtUser, atAll bool, ruleIDStr string,
 	currentGroups map[string][]map[string]interface{}, groupField, dataSourceType string) {
 
 	// Step 1: Get target groups (from expected_groups or auto-discover from 3h)
@@ -1363,6 +1689,8 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 	for _, groupKey := range targetGroups {
 		semaphore <- struct{}{} // acquire per-rule slot
 		go func(gk string) {
+			// Started inside a cron job, so cron.Recover does not reach it.
+			defer safego.Recover("group worker")
 			defer func() { <-semaphore }() // release per-rule slot
 
 			// Check if already in currentGroups (from the initial batch query)
@@ -1412,6 +1740,8 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 
 	// Parse prometheus config for container metrics
 	promCfg := ParsePrometheusConfig(rule.PrometheusConfig)
+
+	partialNote := "" // last partial fan-out seen; keeps last_error from being cleared
 
 	// Extract namespace from LogQL or first available hit
 	namespace := ""
@@ -1544,16 +1874,21 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 			time.Sleep(200 * time.Millisecond)
 			resp, sErr := sender.SendCard(title, message, rule.Severity, atUsers, atAll)
 			if sErr != nil {
-				saveAlertLog(rule, message, "", "failed", fmt.Sprintf("[%s] %v", groupKey, sErr))
+				saveAlertLog(rule, message, "", "failed", fmt.Sprintf("[%s] %v", groupKey, sErr), resp)
 				if Metrics != nil {
 					Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
 					Metrics.RecordSendFailed(ruleIDStr, rule.Name, rule.Severity)
 				}
 			} else {
-				saveAlertLog(rule, message, "", "success", "")
+				note := partialSendNote(resp)
+				saveAlertLog(rule, message, "", "success", note, resp)
 				if Metrics != nil {
 					Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
 					Metrics.RecordSendSuccess(ruleIDStr, rule.Name, rule.Severity)
+				}
+				if note != "" {
+					partialNote = note
+					recordPartialSend(rule, ruleIDStr, note)
 				}
 				log.Printf("[Engine] Rule %d: group '%s' not_found alert sent, resp=%s", rule.ID, groupKey, resp)
 			}
@@ -1590,9 +1925,14 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 				time.Sleep(200 * time.Millisecond)
 				resp, sErr := sender.SendCard(title, message, "recovery", atUsers, atAll)
 				if sErr != nil {
-					saveAlertLog(rule, message, string(rawJSON), "failed", fmt.Sprintf("[%s] recovery: %v", groupKey, sErr))
+					saveAlertLog(rule, message, string(rawJSON), "failed", fmt.Sprintf("[%s] recovery: %v", groupKey, sErr), resp)
 				} else {
-					saveAlertLog(rule, message, string(rawJSON), "success", "")
+					note := partialSendNote(resp)
+					saveAlertLog(rule, message, string(rawJSON), "success", note, resp)
+					if note != "" {
+						partialNote = note
+						recordPartialSend(rule, ruleIDStr, note)
+					}
 					log.Printf("[Engine] Rule %d: group '%s' recovery sent, resp=%s", rule.ID, groupKey, resp)
 				}
 			} else if curState == "alerting" {
@@ -1603,7 +1943,11 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 
 	}
 
-	database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
+	// A partial fan-out must survive here: clearing last_error would hide a
+	// channel that failed on every send behind the channels that succeeded.
+	if partialNote == "" {
+		database.DB.Exec("UPDATE alert_rules SET last_error = NULL WHERE id = ?", rule.ID)
+	}
 
 	// Write alerting count to Redis for rule list display
 	alertingCount := 0
@@ -1872,10 +2216,12 @@ func resolveAtUsers(atUsersJSON string) []models.AtUser {
 	if err := json.Unmarshal([]byte(atUsersJSON), &names); err == nil && len(names) > 0 {
 		var result []models.AtUser
 		for _, name := range names {
-			var larkID string
-			err := database.DB.QueryRow("SELECT lark_id FROM alert_contacts WHERE name = ? AND status = 1", name).Scan(&larkID)
-			if err == nil && larkID != "" {
-				result = append(result, models.AtUser{Name: name, UserID: larkID})
+			var larkID, telegramID string
+			err := database.DB.QueryRow(
+				"SELECT lark_id, COALESCE(telegram_id,'') FROM alert_contacts WHERE name = ? AND status = 1",
+				name).Scan(&larkID, &telegramID)
+			if err == nil && (larkID != "" || telegramID != "") {
+				result = append(result, models.AtUser{Name: name, UserID: larkID, TelegramID: telegramID})
 			} else {
 				log.Printf("[Engine] Contact '%s' not found in alert_contacts", name)
 			}
@@ -2024,6 +2370,7 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 		}
 
 		go func(namespace string) {
+			defer safego.Recover("namespace query worker")
 			defer func() { <-sem }()
 
 			selector := fmt.Sprintf(`{namespace="%s"`, namespace)
@@ -2144,7 +2491,7 @@ func getContainerName(hit map[string]interface{}) string {
 // executeNamespacedRule is the engine entry point for cron/manual execution.
 // It calls the shared QueryNamespacedLoki, then sends alerts with dedup/interval control.
 func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRule,
-	namespaces []string, sender *lark.Sender, atUsers []models.AtUser, atAll bool,
+	namespaces []string, sender notify.Notifier, atUsers []models.AtUser, atAll bool,
 	ruleIDStr, alertMode string) {
 
 	results, err := QueryNamespacedLoki(ctx, rule.LokiConnectionID, namespaces,
@@ -2171,7 +2518,7 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 
 	// Get all containers from Loki for each namespace (for found mode metrics)
 	alertingContainers := map[string]map[string]bool{} // namespace -> set of alerting containers
-	allContainers := map[string][]string{}              // namespace -> all containers
+	allContainers := map[string][]string{}             // namespace -> all containers
 	// Collect error codes per container: {ns+container} -> {code -> {msg, count, ignored}}
 	type codeInfo struct {
 		Msg     string
@@ -2287,6 +2634,25 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 			}
 		}
 
+		// Stack context for the namespaced path: r.Message is pre-rendered by
+		// QueryNamespacedLoki/BuildNamespacedAlertMessage, which also serves the
+		// preview and test-send handlers and runs before dedup/mute/interval are
+		// decided here. Rendering {{.stack}} inline in the template would either
+		// mean fetching before those decisions (exactly what we must not do) or
+		// reworking that shared, handler-facing function — out of scope for this
+		// change. So for this path only, the stack is applied post-decision,
+		// using the container's first surviving hit, rather than substituted as
+		// a live template variable during rendering. If the template referenced
+		// {{.stack}}, that render already left the literal "<no value>" sitting
+		// in r.Message (Go's text/template output for a missing map key);
+		// ApplyStackToMessage replaces that token with the real stack. Otherwise
+		// it appends the stack in a fenced block, as before.
+		if rule.StackContextEnabled == 1 && len(r.Hits) > 0 {
+			if stack := e.fetchStackContext(ctx, rule, r.Hits[0]); stack != "" {
+				r.Message = ApplyStackToMessage(r.Message, rule.MessageTemplate, stack)
+			}
+		}
+
 		title := rule.MessageTitle
 		if title == "" {
 			title = rule.Name
@@ -2295,17 +2661,24 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 		resp, err := sender.SendCard(title, r.Message, rule.Severity, atUsers, atAll)
 		if err != nil {
 			lastErr = fmt.Sprintf("[%s/%s] send error: %v", r.Namespace, r.Container, err)
-			saveAlertLog(rule, r.Message, "", "failed", lastErr)
+			saveAlertLog(rule, r.Message, "", "failed", lastErr, resp)
 			if Metrics != nil {
 				Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
 				Metrics.RecordSendFailed(ruleIDStr, rule.Name, rule.Severity)
 			}
 		} else {
 			totalSent++
-			saveAlertLog(rule, r.Message, "", "success", "")
+			note := partialSendNote(resp)
+			saveAlertLog(rule, r.Message, "", "success", note, resp)
 			if Metrics != nil {
 				Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
 				Metrics.RecordSendSuccess(ruleIDStr, rule.Name, rule.Severity)
+			}
+			if note != "" {
+				// Feeding it through lastErr keeps it out of the "clear
+				// last_error" branch below, same as a hard send failure.
+				lastErr = fmt.Sprintf("[%s/%s] %s", r.Namespace, r.Container, note)
+				recordPartialSend(rule, ruleIDStr, note)
 			}
 			log.Printf("[Engine] Rule %d: [%s/%s] alert sent, resp=%s", rule.ID, r.Namespace, r.Container, resp)
 		}
@@ -2465,11 +2838,9 @@ func BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJS
 			}
 
 			if msg := es.GetNestedField(hit, "message"); msg != nil {
-				logLine := fmt.Sprintf("%v", msg)
-				if len(logLine) > 500 {
-					logLine = logLine[:500] + "..."
-				}
-				b.WriteString(fmt.Sprintf("**日志:** %s\n", logLine))
+				b.WriteString("**日志:**\n")
+				b.WriteString(notify.FencedBlock(truncateLogRunes(fmt.Sprintf("%v", msg), maxInlineLogRunes)))
+				b.WriteString("\n")
 			}
 		}
 	}

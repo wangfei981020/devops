@@ -24,8 +24,8 @@
         <router-link v-if="auth.hasMenu('es_projects')" to="/es-projects" class="nav-item" :class="{ active: $route.path === '/es-projects' }">
           <Layers :size="18" /> ES 项目分类
         </router-link>
-        <router-link v-if="auth.hasMenu('lark')" to="/lark-configs" class="nav-item" :class="{ active: $route.path === '/lark-configs' }">
-          <Send :size="18" /> Lark 配置
+        <router-link v-if="auth.hasMenu('lark')" to="/notify-channels" class="nav-item" :class="{ active: $route.path === '/notify-channels' }">
+          <Send :size="18" /> 通知渠道
         </router-link>
         <router-link v-if="auth.hasMenu('logs')" to="/alert-logs" class="nav-item" :class="{ active: $route.path === '/alert-logs' }">
           <FileText :size="18" /> 告警日志
@@ -42,18 +42,19 @@
         <router-link v-if="auth.hasMenu('users')" to="/users" class="nav-item" :class="{ active: $route.path === '/users' }">
           <Users :size="18" /> 账号管理
         </router-link>
+        <router-link v-if="auth.hasMenu('users')" to="/settings" class="nav-item" :class="{ active: $route.path === '/settings' }">
+          <Settings :size="18" /> 平台设置
+        </router-link>
       </nav>
-      <div class="sidebar-footer">
-        <div>{{ auth.user?.username }}</div>
-      </div>
     </aside>
     <div class="main-content">
       <header class="topbar">
-        <div style="font-weight: 600;">{{ pageTitle }}</div>
-        <div class="flex items-center gap-3">
+        <h1 class="topbar-title">{{ pageTitle }}</h1>
+        <div class="topbar-account">
           <span v-if="auth.user?.auth_source === 'portal'" class="portal-badge">SSO</span>
-          <span style="font-weight: 500;">{{ auth.user?.username }}</span>
-          <button class="btn btn-outline btn-sm" @click="handleLogout">
+          <span class="topbar-user">{{ auth.user?.username }}</span>
+          <span class="topbar-divider" aria-hidden="true"></span>
+          <button class="topbar-logout" type="button" @click="handleLogout">
             <LogOut :size="14" /> 退出
           </button>
         </div>
@@ -69,11 +70,13 @@
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import { LayoutDashboard, Bell, Search, Database, Send, FileText, UserPlus, Users, ClipboardList, ShieldOff, LogOut, Layers } from 'lucide-vue-next'
+import { useSettingsStore } from '../stores/settings'
+import { LayoutDashboard, Bell, Search, Database, Send, FileText, UserPlus, Users, ClipboardList, ShieldOff, LogOut, Layers, Settings } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const settings = useSettingsStore()
 
 const pageTitle = computed(() => {
   const map = {
@@ -83,12 +86,13 @@ const pageTitle = computed(() => {
     '/es-connections': 'ES 连接管理',
     '/es-projects': 'ES 项目分类',
     '/loki-connections': 'Loki 连接管理',
-    '/lark-configs': 'Lark 配置',
+    '/notify-channels': '通知渠道',
     '/alert-logs': '告警日志',
     '/mutes': '屏蔽管理',
     '/contacts': '通知人管理',
     '/audit-logs': '操作日志',
-    '/users': '账号管理'
+    '/users': '账号管理',
+    '/settings': '平台设置'
   }
   for (const [path, title] of Object.entries(map)) {
     if (route.path.startsWith(path)) return title
@@ -98,6 +102,9 @@ const pageTitle = computed(() => {
 
 onMounted(() => {
   auth.refreshPermissions()
+  // Every page renders timestamps, so the display timezone is fetched once
+  // here, in the authenticated shell, rather than by each view.
+  settings.load()
 })
 
 async function handleLogout() {
@@ -108,11 +115,12 @@ async function handleLogout() {
 
 <style scoped>
 .portal-badge {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-  padding: 2px 8px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: var(--fs-12);
   font-weight: 600;
   letter-spacing: 0.5px;
 }
