@@ -61,6 +61,19 @@ const (
 	// lower because a preview blocks a person at a screen under a 15s deadline
 	// and three rendered hits already show what the switch does.
 	MaxPreviewContextFetches = 3
+
+	// NotFoundContextAfter caps the forward count on the not_found path.
+	//
+	// That path alerts BECAUSE a container stopped producing logs, so by
+	// definition there is almost nothing after the last line. Honouring a
+	// configured "向后 50" there would make the ladder climb every rung to its
+	// 30-minute ceiling hunting for lines that cannot exist — four queries per
+	// container, all of them empty.
+	//
+	// What matters on this path is the other direction: the last thing the
+	// container did before going silent is usually the answer (pool exhausted,
+	// thread stuck, graceful shutdown), and that sits BEFORE the last line.
+	NotFoundContextAfter = 5
 )
 
 // PreviewContextSkippedNote explains a bare context in a preview. It says the

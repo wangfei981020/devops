@@ -975,6 +975,8 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 		var okList []ContainerResult
 		var alertList []ContainerResult
 
+		nfRule := contextRuleFromReq(&req)
+		nfCtxFetched := 0
 		for _, containerName := range expectedList {
 			log.Printf("[Preview] Checking container: %s", containerName)
 
@@ -1027,9 +1029,28 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 				vars["_group_field"] = groupBy
 				vars["alert_reason"] = "not_found"
 				vars["time_range"] = timeRange
+
+				// Same contexts the engine puts on this path — around the last
+				// line before the container went quiet. Containers with no
+				// history land in the else branch and query nothing.
+				var nfStack, nfLogctx string
+				if nfCtxFetched < alert.MaxPreviewContextFetches &&
+					(req.StackContextEnabled == 1 || req.LogContextEnabled == 1) {
+					nfStack, nfLogctx = alert.FetchNotFoundContexts(ctx, &nfRule, lastHit, handlerLokiClientFunc())
+					if nfStack != "" {
+						vars["stack"] = nfStack
+					}
+					if nfLogctx != "" {
+						vars["logcontext"] = nfLogctx
+					}
+					nfCtxFetched++
+				}
+				rendered := previewRenderTemplate(req.MessageTemplate, vars)
+				rendered += alert.AppendUnreferencedContexts(req.MessageTemplate, nfStack, nfLogctx)
+
 				alertList = append(alertList, ContainerResult{
 					Name: containerName, Status: "alert", Source: hitSource,
-					Hit: lastHit, Rendered: previewRenderTemplate(req.MessageTemplate, vars),
+					Hit: lastHit, Rendered: rendered,
 				})
 			} else {
 				alertList = append(alertList, ContainerResult{
@@ -1388,6 +1409,8 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 			json.Unmarshal([]byte(req.AtUsers), &atUsers)
 		}
 
+		nfSendRule := contextRuleFromReq(&req)
+		nfCtxFetched := 0
 		for _, containerName := range expectedList {
 			// Check this container in timeRange
 			hit := queryContainerLastHit(ctx, dsType, req, groupBy, containerName, timeRange)
@@ -1412,6 +1435,7 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 				groupBy:        containerName,
 			}
 			vars["container"] = containerName
+			var nfStack, nfLogctx string
 			if lastHit != nil {
 				vars = previewExtractFields(lastHit, req.ExtractFields)
 				vars["alert_reason"] = "not_found"
@@ -1419,11 +1443,25 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 				vars["_group_key"] = containerName
 				vars["_group_field"] = groupBy
 				vars["container"] = containerName
+
+				// Same contexts as the engine and the preview on this path.
+				if nfCtxFetched < alert.MaxPreviewContextFetches &&
+					(req.StackContextEnabled == 1 || req.LogContextEnabled == 1) {
+					nfStack, nfLogctx = alert.FetchNotFoundContexts(ctx, &nfSendRule, lastHit, handlerLokiClientFunc())
+					if nfStack != "" {
+						vars["stack"] = nfStack
+					}
+					if nfLogctx != "" {
+						vars["logcontext"] = nfLogctx
+					}
+					nfCtxFetched++
+				}
 			}
 
 			titleRendered := previewRenderTemplate(req.MessageTitle, vars)
 			title := fmt.Sprintf("%s [%s] [测试]", titleRendered, containerName)
 			message := previewRenderTemplate(req.MessageTemplate, vars)
+			message += alert.AppendUnreferencedContexts(req.MessageTemplate, nfStack, nfLogctx)
 
 			severity := req.Severity
 			if severity == "" {

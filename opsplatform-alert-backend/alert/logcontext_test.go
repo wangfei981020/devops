@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	lokiclient "opsplatform-alert-backend/loki"
+	"opsplatform-alert-backend/models"
 )
 
 func TestWindowLadderStopsAtCeiling(t *testing.T) {
@@ -719,5 +722,49 @@ func TestRenderConfigLine(t *testing.T) {
 	// The line leads the block — it frames everything below it.
 	if i, j := strings.Index(out, "📐"), strings.Index(out, "⚠️"); i < 0 || j < 0 || i > j {
 		t.Errorf("config line must precede the truncation notice (%d vs %d):\n%s", i, j, out)
+	}
+}
+
+// TestFetchNotFoundContextsDeclinesWithoutHit: a container with no history at
+// all has nothing to look around, and querying for it would spend Loki calls
+// proving a negative that is already known.
+func TestFetchNotFoundContextsDeclinesWithoutHit(t *testing.T) {
+	rule := &models.AlertRule{LogContextEnabled: 1, StackContextEnabled: 1}
+	called := false
+	getClient := func(int) (*lokiclient.Client, error) {
+		called = true
+		return nil, errors.New("must not be reached")
+	}
+	stack, logctx := FetchNotFoundContexts(context.Background(), rule, nil, getClient)
+	if stack != "" || logctx != "" {
+		t.Errorf("no last hit must yield no context, got %q / %q", stack, logctx)
+	}
+	if called {
+		t.Error("no last hit must not reach Loki at all")
+	}
+}
+
+// TestNotFoundRuleClampsForward: the not_found path alerts BECAUSE the source
+// went quiet, so a configured 向后 50 would make the ladder climb every rung to
+// its ceiling hunting for lines that cannot exist.
+func TestNotFoundRuleClampsForward(t *testing.T) {
+	rule := &models.AlertRule{LogContextBefore: 25, LogContextAfter: 50}
+	got := notFoundRule(rule)
+
+	if got.LogContextAfter != NotFoundContextAfter {
+		t.Errorf("forward = %d, want it clamped to %d", got.LogContextAfter, NotFoundContextAfter)
+	}
+	// Backward is the direction that matters here and must survive untouched.
+	if got.LogContextBefore != 25 {
+		t.Errorf("backward = %d, want 25 — that is the useful direction here", got.LogContextBefore)
+	}
+	// A rule already asking for less than the cap keeps its own figure.
+	small := notFoundRule(&models.AlertRule{LogContextAfter: 2})
+	if small.LogContextAfter != 2 {
+		t.Errorf("a smaller configured value must be kept, got %d", small.LogContextAfter)
+	}
+	// The caller's rule is shared live config and must not be mutated.
+	if rule.LogContextAfter != 50 {
+		t.Errorf("the caller's rule was mutated: LogContextAfter = %d", rule.LogContextAfter)
 	}
 }

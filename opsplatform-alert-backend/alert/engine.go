@@ -787,8 +787,23 @@ func (e *Engine) executeRule(ruleID int) {
 					fillEmptyFields(vars, moreHits, rule.ExtractFields)
 				}
 
+				// Context around the last line before the source went quiet;
+				// see FetchNotFoundContexts for why the forward count is clamped.
+				var nfStack, nfLogctx string
+				if rule.StackContextEnabled == 1 || rule.LogContextEnabled == 1 {
+					nfStack, nfLogctx = FetchNotFoundContexts(ctx, rule, widerHits[0], e.getLokiClient)
+					if nfStack != "" {
+						vars["stack"] = nfStack
+					}
+					if nfLogctx != "" {
+						vars["logcontext"] = nfLogctx
+					}
+				}
+
 				lastHitMsg = renderTemplate(rule.MessageTemplate, vars)
+				lastHitMsg += AppendUnreferencedContexts(rule.MessageTemplate, nfStack, nfLogctx)
 			} else if rule.MessageTemplate != "" {
+				// No hit anywhere in the wider window: nothing to look around.
 				lastHitMsg = renderTemplate(rule.MessageTemplate, vars)
 			}
 
@@ -1398,6 +1413,38 @@ func dropAdjacentHit(lines []string, hitLine, direction string) []string {
 		return lines[:len(lines)-1]
 	}
 	return lines
+}
+
+// notFoundRule returns a copy of the rule with the forward count clamped for
+// the not_found path (see NotFoundContextAfter). The rule is copied rather than
+// mutated because the caller's pointer is the live, shared config.
+func notFoundRule(rule *models.AlertRule) *models.AlertRule {
+	r := *rule
+	if r.LogContextAfter > NotFoundContextAfter {
+		r.LogContextAfter = NotFoundContextAfter
+	}
+	return &r
+}
+
+// FetchNotFoundContexts returns the stack and log context around the last line
+// a silent container produced.
+//
+// Returns empty strings when there is no last line at all — a container with no
+// history has nothing to look around, and querying for it would spend Loki
+// calls to prove a negative that is already known.
+func FetchNotFoundContexts(ctx context.Context, rule *models.AlertRule, lastHit map[string]interface{},
+	getClient func(int) (*lokiclient.Client, error)) (stack, logctx string) {
+
+	if lastHit == nil {
+		return "", ""
+	}
+	if rule.StackContextEnabled == 1 {
+		stack = FetchStackContext(ctx, rule, lastHit, getClient)
+	}
+	if rule.LogContextEnabled == 1 {
+		logctx = FetchLogContext(ctx, notFoundRule(rule), lastHit, getClient)
+	}
+	return stack, logctx
 }
 
 // fetchLogContext / fetchStackContext keep the Engine's own call sites
@@ -2087,6 +2134,7 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 				"container":    groupKey,
 				"namespace":    "",
 			}
+			var nfStack, nfLogctx string
 			lastHit := getLastHit(rule.ID, groupKey)
 			if lastHit == nil {
 				// No cache, try wider query (uses rule.TimeRange)
@@ -2120,8 +2168,23 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 				}
 
 				log.Printf("[Engine] Rule %d: using last hit for group '%s'", rule.ID, groupKey)
+
+				// Context around the last line before the container went quiet.
+				// Containers with no history at all fall outside this branch, so
+				// nothing is queried to prove a negative already known.
+				if rule.StackContextEnabled == 1 || rule.LogContextEnabled == 1 {
+					stack, logctx := FetchNotFoundContexts(ctx, rule, lastHit, e.getLokiClient)
+					if stack != "" {
+						vars["stack"] = stack
+					}
+					if logctx != "" {
+						vars["logcontext"] = logctx
+					}
+					nfStack, nfLogctx = stack, logctx
+				}
 			}
 			message := renderTemplate(rule.MessageTemplate, vars)
+			message += AppendUnreferencedContexts(rule.MessageTemplate, nfStack, nfLogctx)
 			// Render title template too
 			titleTemplate := rule.MessageTitle
 			titleRendered := renderTemplate(titleTemplate, vars)
