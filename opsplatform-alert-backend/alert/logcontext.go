@@ -44,7 +44,20 @@ const (
 	// context, which is the honest trade: an alert without context beats a
 	// delayed alert, and a silent omission beats neither.
 	MaxContextFetchesPerRun = 10
+
+	// MaxPreviewContextFetches is the same cap for an interactive preview, set
+	// lower because a preview blocks a person at a screen under a 15s deadline
+	// and three rendered hits already show what the switch does.
+	MaxPreviewContextFetches = 3
 )
+
+// PreviewContextSkippedNote explains a bare context in a preview. It says the
+// limit is the PREVIEW's, not the rule's, so nobody reads it as "this hit will
+// have no context when it really fires".
+func PreviewContextSkippedNote(cap int) string {
+	return fmt.Sprintf("（预览只为前 %d 条命中行拉取上下文，此条未拉取；真实告警不受此限制，每轮最多 %d 条）",
+		cap, MaxContextFetchesPerRun)
+}
 
 // RenderContextSkipped is what a matched line gets instead of its context once
 // the per-run cap is reached.

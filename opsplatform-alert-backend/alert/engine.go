@@ -1122,7 +1122,10 @@ func fillEmptyFields(vars map[string]interface{}, hits []map[string]interface{},
 // carries newlines, and no extra query is needed — which is both the common case
 // and the cheap one. Only a genuinely single-line match triggers a follow-up
 // query, and only for hits that survived dedup, mute and routing.
-func (e *Engine) fetchStackContext(ctx context.Context, rule *models.AlertRule, hit map[string]interface{}) string {
+// FetchStackContext is the package-level entry point; see FetchLogContext for
+// why the client getter is a parameter.
+func FetchStackContext(ctx context.Context, rule *models.AlertRule, hit map[string]interface{},
+	getClient func(int) (*lokiclient.Client, error)) string {
 	line, _ := hit["message"].(string)
 	if line == "" {
 		return ""
@@ -1130,7 +1133,7 @@ func (e *Engine) fetchStackContext(ctx context.Context, rule *models.AlertRule, 
 
 	// Already merged upstream: the whole stack is right here.
 	if strings.Contains(line, "\n") {
-		return e.trimStack(rule, strings.Split(line, "\n"))
+		return trimStack(rule, strings.Split(line, "\n"))
 	}
 
 	labels, _ := hit["__stream_labels"].(map[string]string)
@@ -1158,7 +1161,7 @@ func (e *Engine) fetchStackContext(ctx context.Context, rule *models.AlertRule, 
 		maxLines = 200
 	}
 
-	client, err := e.getLokiClient(rule.LokiConnectionID)
+	client, err := getClient(rule.LokiConnectionID)
 	if err != nil {
 		log.Printf("[Stack] Rule %d: loki client error: %v", rule.ID, err)
 		return line
@@ -1192,7 +1195,7 @@ func (e *Engine) fetchStackContext(ctx context.Context, rule *models.AlertRule, 
 		log.Printf("[Stack] Rule %d: %v — falling back to the default pattern", rule.ID, err)
 		boundary, _ = CompileBoundary("")
 	}
-	return e.trimStack(rule, CollectStack(lines, boundary, maxLines))
+	return trimStack(rule, CollectStack(lines, boundary, maxLines))
 }
 
 // fetchLogContext returns the matched line together with the whole log records
@@ -1207,7 +1210,13 @@ func (e *Engine) fetchStackContext(ctx context.Context, rule *models.AlertRule, 
 // "backward" from the hit for the preceding lines, "forward" for the following
 // ones. Each walks the escalating window ladder (see WindowLadder) and stops at
 // the first window that satisfies the requested count.
-func (e *Engine) fetchLogContext(ctx context.Context, rule *models.AlertRule, hit map[string]interface{}) string {
+// FetchLogContext is the package-level entry point, taking the Loki client
+// getter as a parameter so callers that hold no Engine — the preview and
+// test-send handlers — can render exactly what a real alert would carry.
+// Showing the operator a preview WITHOUT the context they just switched on
+// makes a working feature look broken, which is what it did.
+func FetchLogContext(ctx context.Context, rule *models.AlertRule, hit map[string]interface{},
+	getClient func(int) (*lokiclient.Client, error)) string {
 	line, _ := hit["message"].(string)
 	if line == "" {
 		return ""
@@ -1235,7 +1244,7 @@ func (e *Engine) fetchLogContext(ctx context.Context, rule *models.AlertRule, hi
 		display = DefaultLogContextDisplayLines
 	}
 
-	client, err := e.getLokiClient(rule.LokiConnectionID)
+	client, err := getClient(rule.LokiConnectionID)
 	if err != nil {
 		log.Printf("[LogContext] Rule %d: loki client error: %v", rule.ID, err)
 		return ""
@@ -1248,8 +1257,8 @@ func (e *Engine) fetchLogContext(ctx context.Context, rule *models.AlertRule, hi
 		HitTime:    hitTime,
 		Selector:   selector,
 	}
-	block.Before, block.WindowBefore, block.FailedBefore = e.climbLadder(ctx, rule, client, selector, hitTime, line, before, maxWindow, "backward")
-	block.After, block.WindowAfter, block.FailedAfter = e.climbLadder(ctx, rule, client, selector, hitTime, line, after, maxWindow, "forward")
+	block.Before, block.WindowBefore, block.FailedBefore = climbLadder(ctx, rule, client, selector, hitTime, line, before, maxWindow, "backward")
+	block.After, block.WindowAfter, block.FailedAfter = climbLadder(ctx, rule, client, selector, hitTime, line, after, maxWindow, "forward")
 
 	return block.Render(display)
 }
@@ -1266,7 +1275,7 @@ func (e *Engine) fetchLogContext(ctx context.Context, rule *models.AlertRule, hi
 // The matched line itself comes back in every one of these queries — the hit's
 // own timestamp is an endpoint of the range — so it is dropped here rather than
 // rendered twice: once as a neighbour and once as the marked hit.
-func (e *Engine) climbLadder(ctx context.Context, rule *models.AlertRule, client *lokiclient.Client,
+func climbLadder(ctx context.Context, rule *models.AlertRule, client *lokiclient.Client,
 	selector string, hitTime time.Time, hitLine string, want, maxWindowSec int, direction string) ([]string, time.Duration, bool) {
 
 	var out []string
@@ -1391,6 +1400,16 @@ func dropAdjacentHit(lines []string, hitLine, direction string) []string {
 	return lines
 }
 
+// fetchLogContext / fetchStackContext keep the Engine's own call sites
+// unchanged; both just supply the Engine's cached Loki client pool.
+func (e *Engine) fetchLogContext(ctx context.Context, rule *models.AlertRule, hit map[string]interface{}) string {
+	return FetchLogContext(ctx, rule, hit, e.getLokiClient)
+}
+
+func (e *Engine) fetchStackContext(ctx context.Context, rule *models.AlertRule, hit map[string]interface{}) string {
+	return FetchStackContext(ctx, rule, hit, e.getLokiClient)
+}
+
 // trimStack applies the rule's head/tail elision and joins the result.
 //
 // The len(lines) > maxLines cap below is the same collection-time safety valve
@@ -1408,7 +1427,7 @@ func dropAdjacentHit(lines []string, hitLine, direction string) []string {
 // A tight cap here would truncate from the front and discard exactly the
 // tail ElideMiddle is supposed to keep — which is the bug this comment exists
 // to prevent from coming back.
-func (e *Engine) trimStack(rule *models.AlertRule, lines []string) string {
+func trimStack(rule *models.AlertRule, lines []string) string {
 	head := rule.StackHeadLines
 	if head <= 0 {
 		head = 12

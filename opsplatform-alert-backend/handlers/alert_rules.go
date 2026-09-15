@@ -1026,6 +1026,24 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 	// "one alert per tid per day" dedup (preview should show all would-alert hits).
 	perfPreview := req.RealtimeEnabled == 1
 
+	// The context fetchers read their knobs off an AlertRule; the preview has
+	// only the unsaved form, so mirror the fields they actually use.
+	previewRule := models.AlertRule{
+		LokiConnectionID:       req.LokiConnectionID,
+		StackContextEnabled:    req.StackContextEnabled,
+		StackMaxLines:          req.StackMaxLines,
+		StackHeadLines:         req.StackHeadLines,
+		StackTailLines:         req.StackTailLines,
+		StackBoundaryPattern:   req.StackBoundaryPattern,
+		StackWindowSec:         req.StackWindowSec,
+		LogContextEnabled:      req.LogContextEnabled,
+		LogContextBefore:       req.LogContextBefore,
+		LogContextAfter:        req.LogContextAfter,
+		LogContextMaxWindowSec: req.LogContextMaxWindowSec,
+		LogContextDisplayLines: req.LogContextDisplayLines,
+	}
+	ctxFetched := 0
+
 	var hits []PreviewHit
 	for _, hit := range rawHits {
 		vars := previewExtractFields(hit, req.ExtractFields)
@@ -1052,7 +1070,46 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 			vars["cost_ms"] = cost
 		}
 
+		// Contexts, exactly as a real alert would carry them. Without this the
+		// preview renders an empty {{.stack}} / {{.logcontext}} and the operator
+		// concludes the switch they just turned on does nothing.
+		//
+		// Only the first few hits pay for it: a preview is interactive and runs
+		// under a 15s deadline, while each hit costs up to two Loki queries per
+		// ladder rung. The rest say why they are bare rather than looking broken.
+		if req.StackContextEnabled == 1 || req.LogContextEnabled == 1 {
+			if ctxFetched < alert.MaxPreviewContextFetches {
+				if req.StackContextEnabled == 1 {
+					vars["stack"] = alert.FetchStackContext(ctx, &previewRule, hit, handlerLokiClientFunc())
+				}
+				if req.LogContextEnabled == 1 {
+					vars["logcontext"] = alert.FetchLogContext(ctx, &previewRule, hit, handlerLokiClientFunc())
+				}
+				ctxFetched++
+			} else {
+				note := alert.PreviewContextSkippedNote(alert.MaxPreviewContextFetches)
+				if req.StackContextEnabled == 1 {
+					vars["stack"] = note
+				}
+				if req.LogContextEnabled == 1 {
+					vars["logcontext"] = note
+				}
+			}
+		}
+
 		rendered := previewRenderTemplate(req.MessageTemplate, vars)
+		// Zero-config path, mirroring the engine: a switch that is on but never
+		// referenced in the template still shows up, appended at the end.
+		if req.StackContextEnabled == 1 && !strings.Contains(req.MessageTemplate, "{{.stack}}") {
+			if v, ok := vars["stack"].(string); ok && v != "" {
+				rendered += "\n" + alert.StackCaption + "\n```\n" + v + "\n```"
+			}
+		}
+		if req.LogContextEnabled == 1 && !strings.Contains(req.MessageTemplate, "{{.logcontext}}") {
+			if v, ok := vars["logcontext"].(string); ok && v != "" {
+				rendered += "\n" + alert.LogContextCaption + "\n```\n" + v + "\n```"
+			}
+		}
 		hits = append(hits, PreviewHit{Raw: hit, Vars: vars, Rendered: rendered})
 	}
 
