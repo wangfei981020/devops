@@ -874,6 +874,9 @@ func (e *Engine) executeRule(ruleID int) {
 	senderCache := map[int]notify.Notifier{}
 
 	sentCount := 0
+	// Contexts fetched so far in THIS run, capped by MaxContextFetchesPerRun:
+	// the extra queries come out of a pool shared with every other rule.
+	ctxFetches := 0
 	partialNote := "" // last partial fan-out seen; keeps last_error from being cleared
 	for _, hit := range result.Hits {
 		vars := extractFields(hit, rule.ExtractFields)
@@ -931,6 +934,14 @@ func (e *Engine) executeRule(ruleID int) {
 		if rule.StackContextEnabled == 1 {
 			vars["stack"] = e.fetchStackContext(ctx, rule, hit)
 		}
+		if rule.LogContextEnabled == 1 {
+			if ctxFetches < MaxContextFetchesPerRun {
+				vars["logcontext"] = e.fetchLogContext(ctx, rule, hit)
+				ctxFetches++
+			} else {
+				vars["logcontext"] = RenderContextSkipped(hit, MaxContextFetchesPerRun)
+			}
+		}
 
 		message := renderTemplate(rule.MessageTemplate, vars)
 
@@ -939,6 +950,14 @@ func (e *Engine) executeRule(ruleID int) {
 		if rule.StackContextEnabled == 1 && !strings.Contains(rule.MessageTemplate, "{{.stack}}") {
 			if s, ok := vars["stack"].(string); ok && s != "" {
 				message += "\n```\n" + s + "\n```"
+			}
+		}
+		// Same zero-config path for the log context, under its own switch: the
+		// two features are independent, and a template may reference one
+		// variable while leaving the other to be appended.
+		if rule.LogContextEnabled == 1 && !strings.Contains(rule.MessageTemplate, "{{.logcontext}}") {
+			if s, ok := vars["logcontext"].(string); ok && s != "" {
+				message += "\n" + LogContextCaption + "\n```\n" + s + "\n```"
 			}
 		}
 
@@ -1120,10 +1139,13 @@ func (e *Engine) fetchStackContext(ctx context.Context, rule *models.AlertRule, 
 		return line
 	}
 
-	tsStr, _ := hit["timestamp"].(string)
-	start, err := time.Parse("2006/01/02 15:04:05", tsStr)
-	if err != nil {
-		log.Printf("[Stack] Rule %d: cannot parse hit timestamp %q: %v", rule.ID, tsStr, err)
+	// The exact instant, not the rendered one: hit["timestamp"] has already been
+	// rewritten into a display string ("2026-09-09 22:04:54 (+08:00 Asia/…)")
+	// by ToHits, which no fixed layout parse can read back and which has lost
+	// sub-second precision anyway.
+	start, ok := hitInstant(hit)
+	if !ok {
+		log.Printf("[Stack] Rule %d: hit carries no usable timestamp, sending the matched line alone", rule.ID)
 		return line
 	}
 
@@ -1171,6 +1193,202 @@ func (e *Engine) fetchStackContext(ctx context.Context, rule *models.AlertRule, 
 		boundary, _ = CompileBoundary("")
 	}
 	return e.trimStack(rule, CollectStack(lines, boundary, maxLines))
+}
+
+// fetchLogContext returns the matched line together with the whole log records
+// around it — N before and M after — ready to drop into a fenced code block.
+//
+// This is a different job from fetchStackContext above, which walks ONE record's
+// continuation lines forward until a boundary. Here boundaries are irrelevant:
+// the neighbours ARE separate records, and they are what explains what the
+// service was doing when it failed.
+//
+// Two queries are needed because Loki cannot return both directions at once:
+// "backward" from the hit for the preceding lines, "forward" for the following
+// ones. Each walks the escalating window ladder (see WindowLadder) and stops at
+// the first window that satisfies the requested count.
+func (e *Engine) fetchLogContext(ctx context.Context, rule *models.AlertRule, hit map[string]interface{}) string {
+	line, _ := hit["message"].(string)
+	if line == "" {
+		return ""
+	}
+	labels, _ := hit["__stream_labels"].(map[string]string)
+	selector := buildStreamSelector(labels)
+	if selector == "" || rule.LokiConnectionID == 0 {
+		return ""
+	}
+
+	hitTime, ok := hitInstant(hit)
+	if !ok {
+		log.Printf("[LogContext] Rule %d: hit carries no usable timestamp, skipping context", rule.ID)
+		return ""
+	}
+
+	before := clampContextLines(rule.LogContextBefore, DefaultLogContextBefore)
+	after := clampContextLines(rule.LogContextAfter, DefaultLogContextAfter)
+	maxWindow := rule.LogContextMaxWindowSec
+	if maxWindow <= 0 {
+		maxWindow = DefaultLogContextMaxWindowSec
+	}
+	display := rule.LogContextDisplayLines
+	if display <= 0 {
+		display = DefaultLogContextDisplayLines
+	}
+
+	client, err := e.getLokiClient(rule.LokiConnectionID)
+	if err != nil {
+		log.Printf("[LogContext] Rule %d: loki client error: %v", rule.ID, err)
+		return ""
+	}
+
+	block := ContextBlock{
+		Hit:        line,
+		WantBefore: before,
+		WantAfter:  after,
+		HitTime:    hitTime,
+		Selector:   selector,
+	}
+	block.Before, block.WindowBefore, block.FailedBefore = e.climbLadder(ctx, rule, client, selector, hitTime, line, before, maxWindow, "backward")
+	block.After, block.WindowAfter, block.FailedAfter = e.climbLadder(ctx, rule, client, selector, hitTime, line, after, maxWindow, "forward")
+
+	return block.Render(display)
+}
+
+// climbLadder walks the escalating window ladder in one direction until it has
+// want lines, and returns them in chronological order along with the window it
+// settled on.
+//
+// Stopping at the first sufficient window is the whole point: a busy container
+// satisfies 25 lines inside the first 30-second window, and never pays for the
+// index lookup a 30-minute range would cost. A quiet stream climbs further, but
+// a quiet stream is cheap to scan precisely because it holds so little.
+//
+// The matched line itself comes back in every one of these queries — the hit's
+// own timestamp is an endpoint of the range — so it is dropped here rather than
+// rendered twice: once as a neighbour and once as the marked hit.
+func (e *Engine) climbLadder(ctx context.Context, rule *models.AlertRule, client *lokiclient.Client,
+	selector string, hitTime time.Time, hitLine string, want, maxWindowSec int, direction string) ([]string, time.Duration, bool) {
+
+	var out []string
+	var used time.Duration
+
+	for _, window := range WindowLadder(maxWindowSec) {
+		used = window
+		start, end := hitTime.Add(-window), hitTime
+		if direction == "forward" {
+			start, end = hitTime, hitTime.Add(window)
+		}
+
+		// One slot over what is needed, in both directions: the matched line
+		// occupies one of them whenever the query happens to return it, and
+		// which query that is can flip (see dropAdjacentHit). Asking for the
+		// extra costs nothing and stops a returned hit from making an otherwise
+		// sufficient window look one line short.
+		result, err := queryWithSlot(ctx, client, selector, start, end, want+1, direction)
+		if err != nil {
+			log.Printf("[LogContext] Rule %d: %s context query failed: %v", rule.ID, direction, err)
+			return out, used, true
+		}
+
+		out = out[:0]
+		for _, h := range result.ToHits() {
+			s, ok := h["message"].(string)
+			if !ok || s == "" {
+				continue
+			}
+			out = append(out, s)
+		}
+		// Loki returns "backward" results newest-first; the renderer wants every
+		// line in reading order, so flip them back.
+		if direction == "backward" {
+			for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+
+		out = dropAdjacentHit(out, hitLine, direction)
+
+		if direction == "forward" {
+			// The lines nearest the hit lead a forward result, so cut the tail.
+			if len(out) >= want {
+				return out[:want], used, false
+			}
+		} else {
+			// After the flip above, a backward result's nearest lines sit at its
+			// TAIL — cutting the head is what keeps them.
+			if len(out) >= want {
+				return out[len(out)-want:], used, false
+			}
+		}
+	}
+	return out, used, false
+}
+
+// clampContextLines keeps a rule's per-direction line count inside what a Loki
+// query will actually accept (see MaxLogContextLines).
+func clampContextLines(v, fallback int) int {
+	if v <= 0 {
+		return fallback
+	}
+	if v > MaxLogContextLines {
+		return MaxLogContextLines
+	}
+	return v
+}
+
+// queryWithSlot runs one context query while holding a global concurrency slot.
+//
+// The slot is released with defer, inside its own function, so a panic anywhere
+// in the client cannot leak it. A leaked slot is permanent — there are only
+// twenty, and the engine has no way to reclaim one — so a panic that would
+// otherwise be contained by safego would instead throttle every rule on the
+// platform, a little more with each occurrence.
+func queryWithSlot(ctx context.Context, client *lokiclient.Client, selector string,
+	start, end time.Time, limit int, direction string) (*lokiclient.QueryResult, error) {
+
+	if !acquireGlobalCtx(ctx) {
+		// acquireGlobalCtx blocks on a saturated semaphore and returns false
+		// ONLY once ctx is done, so this is always the rule's 60s run budget
+		// expiring — never mere contention. It matters which: a deadline leaves
+		// the context genuinely unknown, and reporting that as "the stream had
+		// no more logs" is the false negative this feature exists to avoid.
+		return nil, fmt.Errorf("run deadline reached before the context query could start: %w", ctx.Err())
+	}
+	defer releaseGlobal()
+	return client.QueryRangeDirection(ctx, selector, start, end, limit, direction)
+}
+
+// dropAdjacentHit removes the matched line from a context slice when the query
+// returned it alongside the neighbours.
+//
+// Whether it comes back at all depends on Loki's endpoint semantics — start is
+// inclusive, end exclusive, so a forward query anchored at the hit normally
+// returns it and a backward one normally does not. Relying on that alone is not
+// safe: the anchor instant can be a few nanoseconds off when a hit has been
+// through a JSON round-trip (the preview and test-send handlers do exactly
+// that, and float64 cannot hold a nanosecond epoch exactly), which is enough to
+// flip either case. So the decision is made on the line's own content instead,
+// at the one position the hit could occupy — the end adjacent to it. A blind
+// positional drop would, in the flipped case, delete the single most valuable
+// neighbour: the line immediately before the error.
+//
+// Two identical consecutive lines will cost one of them. That is the accepted
+// trade: showing the matched line twice, once as a neighbour and once as the
+// marked hit, misleads more than dropping a repeat.
+func dropAdjacentHit(lines []string, hitLine, direction string) []string {
+	if len(lines) == 0 || hitLine == "" {
+		return lines
+	}
+	if direction == "forward" {
+		if lines[0] == hitLine {
+			return lines[1:]
+		}
+		return lines
+	}
+	if lines[len(lines)-1] == hitLine {
+		return lines[:len(lines)-1]
+	}
+	return lines
 }
 
 // trimStack applies the rule's head/tail elision and joins the result.
@@ -1262,6 +1480,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), COALESCE(label_filters,''),
 		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
 		COALESCE(stack_context_enabled,0), COALESCE(stack_max_lines,200), COALESCE(stack_head_lines,12), COALESCE(stack_tail_lines,8), COALESCE(stack_boundary_pattern,''), COALESCE(stack_window_sec,5),
+		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,20),
 		status
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType,
@@ -1274,6 +1493,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		&rule.PrometheusConfig, &rule.RouteConfig, &rule.Namespaces, &rule.NamespaceConcurrency, &rule.LabelFilters,
 		&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
 		&rule.StackContextEnabled, &rule.StackMaxLines, &rule.StackHeadLines, &rule.StackTailLines, &rule.StackBoundaryPattern, &rule.StackWindowSec,
+		&rule.LogContextEnabled, &rule.LogContextBefore, &rule.LogContextAfter, &rule.LogContextMaxWindowSec, &rule.LogContextDisplayLines,
 		&rule.Status)
 	return &rule, err
 }
@@ -1573,6 +1793,8 @@ func (e *Engine) executeGroupedRule(ctx context.Context, rule *models.AlertRule,
 
 	// ========== found mode: alert for each group ==========
 	sentCount := 0
+	// Contexts fetched so far in THIS run; see MaxContextFetchesPerRun.
+	groupCtxFetches := 0
 	partialNote := "" // last partial fan-out seen; keeps last_error from being cleared
 	for groupKey, hits := range groups {
 		// Use first hit for rendering
@@ -1599,6 +1821,14 @@ func (e *Engine) executeGroupedRule(ctx context.Context, rule *models.AlertRule,
 		if rule.StackContextEnabled == 1 {
 			vars["stack"] = e.fetchStackContext(ctx, rule, firstHit)
 		}
+		if rule.LogContextEnabled == 1 {
+			if groupCtxFetches < MaxContextFetchesPerRun {
+				vars["logcontext"] = e.fetchLogContext(ctx, rule, firstHit)
+				groupCtxFetches++
+			} else {
+				vars["logcontext"] = RenderContextSkipped(firstHit, MaxContextFetchesPerRun)
+			}
+		}
 
 		message := renderTemplate(rule.MessageTemplate, vars)
 
@@ -1607,6 +1837,14 @@ func (e *Engine) executeGroupedRule(ctx context.Context, rule *models.AlertRule,
 		if rule.StackContextEnabled == 1 && !strings.Contains(rule.MessageTemplate, "{{.stack}}") {
 			if s, ok := vars["stack"].(string); ok && s != "" {
 				message += "\n```\n" + s + "\n```"
+			}
+		}
+		// Same zero-config path for the log context, under its own switch: the
+		// two features are independent, and a template may reference one
+		// variable while leaving the other to be appended.
+		if rule.LogContextEnabled == 1 && !strings.Contains(rule.MessageTemplate, "{{.logcontext}}") {
+			if s, ok := vars["logcontext"].(string); ok && s != "" {
+				message += "\n" + LogContextCaption + "\n```\n" + s + "\n```"
 			}
 		}
 
@@ -2597,6 +2835,8 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 		}
 	}
 
+	// Contexts fetched so far in THIS run; see MaxContextFetchesPerRun.
+	nsCtxFetches := 0
 	for _, r := range results {
 		// Skip results that only have ignored hits (no alerting hits)
 		if len(r.Hits) == 0 {
@@ -2647,10 +2887,25 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 		// in r.Message (Go's text/template output for a missing map key);
 		// ApplyStackToMessage replaces that token with the real stack. Otherwise
 		// it appends the stack in a fenced block, as before.
-		if rule.StackContextEnabled == 1 && len(r.Hits) > 0 {
-			if stack := e.fetchStackContext(ctx, rule, r.Hits[0]); stack != "" {
-				r.Message = ApplyStackToMessage(r.Message, rule.MessageTemplate, stack)
+		// The log context rides this same post-decision path, for the reason
+		// spelled out above, and the two are applied TOGETHER: each leaves the
+		// same anonymous "<no value>" token behind, so filling them one at a
+		// time drops whichever runs first into the other's slot. Only the
+		// template knows which placeholder belongs to which variable.
+		if (rule.StackContextEnabled == 1 || rule.LogContextEnabled == 1) && len(r.Hits) > 0 {
+			var stack, logctx string
+			if rule.StackContextEnabled == 1 {
+				stack = e.fetchStackContext(ctx, rule, r.Hits[0])
 			}
+			if rule.LogContextEnabled == 1 {
+				if nsCtxFetches < MaxContextFetchesPerRun {
+					logctx = e.fetchLogContext(ctx, rule, r.Hits[0])
+					nsCtxFetches++
+				} else {
+					logctx = RenderContextSkipped(r.Hits[0], MaxContextFetchesPerRun)
+				}
+			}
+			r.Message = ApplyContextsToMessage(r.Message, rule.MessageTemplate, stack, logctx)
 		}
 
 		title := rule.MessageTitle

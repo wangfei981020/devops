@@ -541,6 +541,50 @@
               <div class="form-hint">边界正则留空则用内置默认（识别行首的日期/时间/日志级别）</div>
             </div>
           </template>
+
+          <!-- 日志上下文：与错误栈上下文相互独立。栈上下文顺着同一条记录的续行往后走，
+               这里取的是命中行前后的完整日志记录，不看边界正则 -->
+          <h3 class="form-section">日志上下文</h3>
+          <div class="form-group">
+            <label class="form-label">
+              <input type="checkbox" :checked="form.log_context_enabled === 1" @change="form.log_context_enabled = $event.target.checked ? 1 : 0" style="margin-right: 6px;" />
+              启用日志上下文
+            </label>
+            <div class="form-hint">
+              开启后，命中行的前后若干条日志会拼成 <code>&#123;&#123;.logcontext&#125;&#125;</code> 注入到消息模板；
+              模板没引用该变量时自动追加到消息末尾。命中行会用 <code>&gt;&gt;&gt;</code> 和分隔带标出。
+              与上面的「错误栈上下文」互不影响，可同时开启。
+            </div>
+          </div>
+          <template v-if="form.log_context_enabled === 1">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">向前行数</label>
+                <input v-model.number="form.log_context_before" type="number" class="form-input" placeholder="25" style="width: 160px;" />
+                <div class="form-hint">命中行之前取多少条日志</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">向后行数</label>
+                <input v-model.number="form.log_context_after" type="number" class="form-input" placeholder="50" style="width: 160px;" />
+                <div class="form-hint">命中行之后取多少条日志</div>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">时间窗上限 (秒)</label>
+                <input v-model.number="form.log_context_max_window_sec" type="number" class="form-input" placeholder="1800" style="width: 160px;" />
+                <div class="form-hint">
+                  阶梯查询 30秒 → 2分钟 → 10分钟 → 此上限，取够行数立刻停止。
+                  日志量大的服务通常第一档就取满；服务很闲才会往上退。调大只影响闲服务的兜底范围。
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">消息内最多展示行数</label>
+                <input v-model.number="form.log_context_display_lines" type="number" class="form-input" placeholder="20" style="width: 160px;" />
+                <div class="form-hint">超出时保留命中行附近的行，并在消息里注明前后各省略了多少行</div>
+              </div>
+            </div>
+          </template>
         </template>
 
         <!-- Prometheus 配置 -->
@@ -867,7 +911,12 @@ const form = ref({
   stack_head_lines: 12,
   stack_tail_lines: 8,
   stack_boundary_pattern: '',
-  stack_window_sec: 5
+  stack_window_sec: 5,
+  log_context_enabled: 0,
+  log_context_before: 25,
+  log_context_after: 50,
+  log_context_max_window_sec: 1800,
+  log_context_display_lines: 20
 })
 
 // Namespace 多选相关
@@ -1136,7 +1185,12 @@ async function loadRule() {
         stack_head_lines: d.stack_head_lines || 12,
         stack_tail_lines: d.stack_tail_lines || 8,
         stack_boundary_pattern: d.stack_boundary_pattern || '',
-        stack_window_sec: d.stack_window_sec || 5
+        stack_window_sec: d.stack_window_sec || 5,
+        log_context_enabled: d.log_context_enabled || 0,
+        log_context_before: d.log_context_before || 25,
+        log_context_after: d.log_context_after || 50,
+        log_context_max_window_sec: d.log_context_max_window_sec || 1800,
+        log_context_display_lines: d.log_context_display_lines || 20
       }
       loadPromConfig(d.prometheus_config)
       loadRouteConfig(d.route_config)

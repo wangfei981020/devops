@@ -32,18 +32,18 @@ type CreateLokiConnectionReq struct {
 
 // ESConnection ES集群连接配置
 type ESConnection struct {
-	ID          int       `json:"id"`
-	Name        string    `json:"name"`
-	URL         string    `json:"url"`          // 多个地址用逗号分隔
-	Version     string    `json:"version"`      // "7" or "8"
-	Username    string    `json:"username"`
-	Password    string    `json:"password,omitempty"`
+	ID            int       `json:"id"`
+	Name          string    `json:"name"`
+	URL           string    `json:"url"`     // 多个地址用逗号分隔
+	Version       string    `json:"version"` // "7" or "8"
+	Username      string    `json:"username"`
+	Password      string    `json:"password,omitempty"`
 	APIKey        string    `json:"api_key,omitempty"` // ES 8.x
 	SkipTLSVerify bool      `json:"skip_tls_verify"`   // 跳过TLS证书验证
 	Description   string    `json:"description"`
-	Status      int       `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Status        int       `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // LarkConfig Lark/飞书 Webhook 配置
@@ -130,42 +130,42 @@ type AtUser struct {
 
 // AlertRule 告警规则
 type AlertRule struct {
-	ID              int            `json:"id"`
-	Name            string         `json:"name"`
-	DataSourceType  string         `json:"data_source_type"`   // es or loki
-	ESConnectionID  int            `json:"es_connection_id"`
-	LokiConnectionID int           `json:"loki_connection_id"`
-	LarkConfigID    int            `json:"lark_config_id"`
-	ESIndex         string         `json:"es_index"`
-	Schedule        string         `json:"schedule"`
-	TimeRange       string         `json:"time_range"`
-	QueryDSL        string         `json:"query_dsl"`         // 自定义ES查询JSON
-	Keyword         string         `json:"keyword"`           // 简单关键词搜索
-	LogQL           string         `json:"logql"`             // LogQL查询(Loki)
-	FilterFields    string         `json:"filter_fields"`     // JSON string of []FilterField
-	ExtractFields   string         `json:"extract_fields"`    // JSON string of []ExtractField
-	MessageTitle    string         `json:"message_title"`
-	MessageTemplate string         `json:"message_template"`
-	AtUsers         string         `json:"at_users"`          // JSON string of []AtUser
-	AtAll            int            `json:"at_all"`
-	AlertMode        string         `json:"alert_mode"`        // found or not_found
-	RecoveryEnabled  int            `json:"recovery_enabled"`
-	RecoveryTitle    string         `json:"recovery_title"`
-	RecoveryTemplate string         `json:"recovery_template"`
-	Severity         string         `json:"severity"`
-	GroupBy          string         `json:"group_by"`
-	ExpectedGroups   string         `json:"expected_groups"`  // JSON array of expected group names
-	QueryConcurrency int            `json:"query_concurrency"` // per-rule concurrency for group checks
-	AlertInterval    string         `json:"alert_interval"`    // repeat alert interval: once(只告警一次,恢复后再通知)/5m/10m/30m/1h
-	DedupField       string         `json:"dedup_field"`
-	DedupTTL         int            `json:"dedup_ttl"`
-	MaxAlerts        int            `json:"max_alerts"`
-	PrometheusConfig string         `json:"prometheus_config"`
-	RouteConfig      string         `json:"route_config"`       // JSON: field value routing config
-	Namespaces       string         `json:"namespaces"`         // JSON array: ["ns1","ns2"] for multi-namespace Loki queries
-	NamespaceConcurrency int        `json:"namespace_concurrency"` // max concurrent namespace queries (default 3)
-	LabelFilters     string         `json:"label_filters"`      // extra Loki label matchers injected into selector, e.g. `container!~"c1|c2", app="api"` (found mode only)
-	ProjectID        int            `json:"project_id"`
+	ID                   int    `json:"id"`
+	Name                 string `json:"name"`
+	DataSourceType       string `json:"data_source_type"` // es or loki
+	ESConnectionID       int    `json:"es_connection_id"`
+	LokiConnectionID     int    `json:"loki_connection_id"`
+	LarkConfigID         int    `json:"lark_config_id"`
+	ESIndex              string `json:"es_index"`
+	Schedule             string `json:"schedule"`
+	TimeRange            string `json:"time_range"`
+	QueryDSL             string `json:"query_dsl"`      // 自定义ES查询JSON
+	Keyword              string `json:"keyword"`        // 简单关键词搜索
+	LogQL                string `json:"logql"`          // LogQL查询(Loki)
+	FilterFields         string `json:"filter_fields"`  // JSON string of []FilterField
+	ExtractFields        string `json:"extract_fields"` // JSON string of []ExtractField
+	MessageTitle         string `json:"message_title"`
+	MessageTemplate      string `json:"message_template"`
+	AtUsers              string `json:"at_users"` // JSON string of []AtUser
+	AtAll                int    `json:"at_all"`
+	AlertMode            string `json:"alert_mode"` // found or not_found
+	RecoveryEnabled      int    `json:"recovery_enabled"`
+	RecoveryTitle        string `json:"recovery_title"`
+	RecoveryTemplate     string `json:"recovery_template"`
+	Severity             string `json:"severity"`
+	GroupBy              string `json:"group_by"`
+	ExpectedGroups       string `json:"expected_groups"`   // JSON array of expected group names
+	QueryConcurrency     int    `json:"query_concurrency"` // per-rule concurrency for group checks
+	AlertInterval        string `json:"alert_interval"`    // repeat alert interval: once(只告警一次,恢复后再通知)/5m/10m/30m/1h
+	DedupField           string `json:"dedup_field"`
+	DedupTTL             int    `json:"dedup_ttl"`
+	MaxAlerts            int    `json:"max_alerts"`
+	PrometheusConfig     string `json:"prometheus_config"`
+	RouteConfig          string `json:"route_config"`          // JSON: field value routing config
+	Namespaces           string `json:"namespaces"`            // JSON array: ["ns1","ns2"] for multi-namespace Loki queries
+	NamespaceConcurrency int    `json:"namespace_concurrency"` // max concurrent namespace queries (default 3)
+	LabelFilters         string `json:"label_filters"`         // extra Loki label matchers injected into selector, e.g. `container!~"c1|c2", app="api"` (found mode only)
+	ProjectID            int    `json:"project_id"`
 	// Performance alert (Loki only): realtime threshold + daily report
 	RealtimeEnabled int    `json:"realtime_enabled"`
 	ThresholdMs     int    `json:"threshold_ms"`
@@ -181,11 +181,20 @@ type AlertRule struct {
 	StackTailLines       int    `json:"stack_tail_lines"`
 	StackBoundaryPattern string `json:"stack_boundary_pattern"`
 	StackWindowSec       int    `json:"stack_window_sec"`
-	Status          int            `json:"status"`
-	LastRunAt       sql.NullTime   `json:"last_run_at"`
-	LastError       sql.NullString `json:"last_error"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
+	// Log context (Loki only): the neighbouring log lines around a match.
+	// Distinct from the stack context above — that one follows ONE record's
+	// continuation lines forward until a boundary, this one takes N whole
+	// records before and M after, regardless of boundaries.
+	LogContextEnabled      int            `json:"log_context_enabled"`
+	LogContextBefore       int            `json:"log_context_before"`
+	LogContextAfter        int            `json:"log_context_after"`
+	LogContextMaxWindowSec int            `json:"log_context_max_window_sec"`
+	LogContextDisplayLines int            `json:"log_context_display_lines"`
+	Status                 int            `json:"status"`
+	LastRunAt              sql.NullTime   `json:"last_run_at"`
+	LastError              sql.NullString `json:"last_error"`
+	CreatedAt              time.Time      `json:"created_at"`
+	UpdatedAt              time.Time      `json:"updated_at"`
 
 	// Join fields (not in DB)
 	ESConnectionName string `json:"es_connection_name,omitempty"`
@@ -250,37 +259,37 @@ type CreateLarkConfigReq struct {
 }
 
 type CreateAlertRuleReq struct {
-	Name             string `json:"name"`
-	DataSourceType   string `json:"data_source_type"`
-	ESConnectionID   int    `json:"es_connection_id"`
-	LokiConnectionID int    `json:"loki_connection_id"`
-	LarkConfigID     int    `json:"lark_config_id"`
-	ChannelIDs       []int  `json:"channel_ids"` // 多渠道；为空时回退到 [LarkConfigID]
-	ESIndex          string `json:"es_index"`
-	Schedule         string `json:"schedule"`
-	TimeRange        string `json:"time_range"`
-	QueryDSL         string `json:"query_dsl"`
-	Keyword          string `json:"keyword"`
-	LogQL            string `json:"logql"`
-	FilterFields    string `json:"filter_fields"`
-	ExtractFields   string `json:"extract_fields"`
-	MessageTitle    string `json:"message_title"`
-	MessageTemplate string `json:"message_template"`
-	AtUsers         string `json:"at_users"`
-	AtAll            int    `json:"at_all"`
-	AlertMode        string `json:"alert_mode"`
-	RecoveryEnabled  int    `json:"recovery_enabled"`
-	RecoveryTitle    string `json:"recovery_title"`
-	RecoveryTemplate string `json:"recovery_template"`
-	Severity         string `json:"severity"`
-	GroupBy          string `json:"group_by"`
-	ExpectedGroups   string `json:"expected_groups"`
-	QueryConcurrency int    `json:"query_concurrency"`
-	AlertInterval    string `json:"alert_interval"`
-	DedupField       string `json:"dedup_field"`
-	DedupTTL         int    `json:"dedup_ttl"`
-	MaxAlerts        int    `json:"max_alerts"`
-	PrometheusConfig string `json:"prometheus_config"`
+	Name                 string `json:"name"`
+	DataSourceType       string `json:"data_source_type"`
+	ESConnectionID       int    `json:"es_connection_id"`
+	LokiConnectionID     int    `json:"loki_connection_id"`
+	LarkConfigID         int    `json:"lark_config_id"`
+	ChannelIDs           []int  `json:"channel_ids"` // 多渠道；为空时回退到 [LarkConfigID]
+	ESIndex              string `json:"es_index"`
+	Schedule             string `json:"schedule"`
+	TimeRange            string `json:"time_range"`
+	QueryDSL             string `json:"query_dsl"`
+	Keyword              string `json:"keyword"`
+	LogQL                string `json:"logql"`
+	FilterFields         string `json:"filter_fields"`
+	ExtractFields        string `json:"extract_fields"`
+	MessageTitle         string `json:"message_title"`
+	MessageTemplate      string `json:"message_template"`
+	AtUsers              string `json:"at_users"`
+	AtAll                int    `json:"at_all"`
+	AlertMode            string `json:"alert_mode"`
+	RecoveryEnabled      int    `json:"recovery_enabled"`
+	RecoveryTitle        string `json:"recovery_title"`
+	RecoveryTemplate     string `json:"recovery_template"`
+	Severity             string `json:"severity"`
+	GroupBy              string `json:"group_by"`
+	ExpectedGroups       string `json:"expected_groups"`
+	QueryConcurrency     int    `json:"query_concurrency"`
+	AlertInterval        string `json:"alert_interval"`
+	DedupField           string `json:"dedup_field"`
+	DedupTTL             int    `json:"dedup_ttl"`
+	MaxAlerts            int    `json:"max_alerts"`
+	PrometheusConfig     string `json:"prometheus_config"`
 	RouteConfig          string `json:"route_config"`
 	Namespaces           string `json:"namespaces"`
 	NamespaceConcurrency int    `json:"namespace_concurrency"`
@@ -299,6 +308,12 @@ type CreateAlertRuleReq struct {
 	StackTailLines       int    `json:"stack_tail_lines"`
 	StackBoundaryPattern string `json:"stack_boundary_pattern"`
 	StackWindowSec       int    `json:"stack_window_sec"`
+	// Log context: see the AlertRule fields of the same name.
+	LogContextEnabled      int `json:"log_context_enabled"`
+	LogContextBefore       int `json:"log_context_before"`
+	LogContextAfter        int `json:"log_context_after"`
+	LogContextMaxWindowSec int `json:"log_context_max_window_sec"`
+	LogContextDisplayLines int `json:"log_context_display_lines"`
 }
 
 type APIResponse struct {
