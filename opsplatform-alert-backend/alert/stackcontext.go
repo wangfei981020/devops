@@ -126,15 +126,39 @@ func ApplyStackToMessage(message, tmpl, stack string) string {
 // says which is which, so this says it.
 const StackCaption = "错误栈（原文，时间为来源系统时间）："
 
+// nonSelectableLabels are labels Loki attaches to a query RESULT but will not
+// match on in a stream selector.
+//
+// "detected_level" is Loki's own query-time level detection (Loki 3.x): it is
+// present on every stream it returns, yet a selector naming it matches NOTHING.
+// Verified against production: the identical selector returns 500 lines without
+// it and zero lines with it. Feeding a result's labels straight back into a
+// selector — which is exactly what a context query does — therefore produced a
+// query that could never match, and did so silently: an empty result is
+// indistinguishable from "this stream has no other lines".
+//
+// Labels prefixed with "__" are Loki internals (__error__, __error_details__)
+// and are excluded for the same reason.
+var nonSelectableLabels = map[string]bool{
+	"detected_level": true,
+}
+
 // buildStreamSelector turns a hit's stream labels back into a LogQL selector.
-// Labels are sorted so the generated query is stable and cache-friendly.
+// Labels are sorted so the generated query is stable and cache-friendly, and
+// labels Loki will not match on are dropped (see nonSelectableLabels).
 func buildStreamSelector(labels map[string]string) string {
 	if len(labels) == 0 {
 		return ""
 	}
 	keys := make([]string, 0, len(labels))
 	for k := range labels {
+		if nonSelectableLabels[k] || strings.HasPrefix(k, "__") {
+			continue
+		}
 		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return ""
 	}
 	sort.Strings(keys)
 

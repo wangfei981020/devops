@@ -274,6 +274,13 @@ func (r *QueryResult) ToHits() []map[string]interface{} {
 					formatted := timezone.FormatWithZone(time.Unix(0, nsec))
 					hit["@timestamp"] = formatted
 					hit["timestamp"] = formatted
+					// Keep the raw instant alongside the rendered one, for the
+					// same reason __stream_labels keeps the label set: the
+					// rendered form is lossy (second granularity, plus a zone
+					// suffix) and a context query needs the exact nanosecond to
+					// anchor its range. Reparsing the display string cannot
+					// recover it. The "__" prefix keeps it out of templates.
+					hit["__ts_nano"] = nsec
 				} else {
 					hit["@timestamp"] = ts
 				}
