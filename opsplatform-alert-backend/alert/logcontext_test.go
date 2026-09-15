@@ -687,3 +687,37 @@ func TestBuildNamespacedAlertMessageTemplatePlacement(t *testing.T) {
 		t.Errorf("the unreferenced stack must be appended:\n%s", placed)
 	}
 }
+
+// TestRenderConfigLine: the block must state the counts the rule asked for, and
+// flag a mismatch when the display budget cut them back. Without this the
+// operator has no way to tell whether the feature honoured the form.
+func TestRenderConfigLine(t *testing.T) {
+	// Everything fits: state the configured figures, stay quiet about the rest.
+	full := ContextBlock{
+		Before: make([]string, 25), Hit: "hit", After: make([]string, 50),
+		WantBefore: 25, WantAfter: 50,
+	}
+	out := full.Render(200)
+	if !strings.Contains(out, "📐 向前 25 行 / 向后 50 行") {
+		t.Errorf("configured counts missing:\n%s", out)
+	}
+	if strings.Contains(out, "本条实际展示") {
+		t.Errorf("nothing was cut, so no mismatch note belongs here:\n%s", out)
+	}
+
+	// Budget cuts it back: both figures must appear, or the reader concludes
+	// the configuration was ignored.
+	cut := ContextBlock{
+		Before: make([]string, 25), Hit: "hit", After: make([]string, 50),
+		WantBefore: 25, WantAfter: 50,
+	}
+	out = cut.Render(20)
+	if !strings.Contains(out, "📐 向前 25 行 / 向后 50 行（本条实际展示 6 / 13）") {
+		t.Errorf("mismatch line wrong or missing:\n%s", out)
+	}
+
+	// The line leads the block — it frames everything below it.
+	if i, j := strings.Index(out, "📐"), strings.Index(out, "⚠️"); i < 0 || j < 0 || i > j {
+		t.Errorf("config line must precede the truncation notice (%d vs %d):\n%s", i, j, out)
+	}
+}

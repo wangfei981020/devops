@@ -404,6 +404,7 @@ func (b ContextBlock) Render(maxLines int) string {
 	// them" was the one that dropped it. Whatever survives truncation is the
 	// head, so the caveats go there, and the log lines — which the reader can
 	// tell are cut simply by them stopping — take the risk instead.
+	sb.WriteString(b.configLine(len(keptBefore), len(keptAfter)))
 	if notice := b.truncationNotice(hiddenBefore, hiddenAfter, len(keptBefore)+len(keptAfter)+hitLines); notice != "" {
 		sb.WriteString(notice)
 	}
@@ -436,6 +437,24 @@ func (b ContextBlock) Render(maxLines int) string {
 	}
 
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+// configLine opens the block with the counts the rule asked for, and — only
+// when they differ — what this block actually shows.
+//
+// The two are different things and were never both visible: the form's
+// "向前/向后" say how many records to FETCH, while the display budget decides
+// how many survive into the message. An operator who configured 25/50 and saw
+// 6+13 read that as the feature being broken, because nothing on screen tied
+// the two numbers together. Printing the asked-for figure unconditionally is
+// what makes the block answer "did it do what I configured?" at a glance;
+// printing the shown figure only on a mismatch keeps the common case quiet.
+func (b ContextBlock) configLine(shownBefore, shownAfter int) string {
+	want := fmt.Sprintf("📐 向前 %d 行 / 向后 %d 行", b.WantBefore, b.WantAfter)
+	if shownBefore == b.WantBefore && shownAfter == b.WantAfter {
+		return want + "\n"
+	}
+	return fmt.Sprintf("%s（本条实际展示 %d / %d）\n", want, shownBefore, shownAfter)
 }
 
 // truncationNotice states what was cut. It reports the collected total, what is
