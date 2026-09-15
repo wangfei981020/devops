@@ -3066,9 +3066,13 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 // If messageTemplate is set, renders each hit with the user's template.
 // Otherwise uses default 样式1 format.
 // Exported so handlers can use it for preview.
-// appendUnreferencedContexts renders whatever the template did not place
+// AppendUnreferencedContexts renders whatever the template did not place
 // itself, captioned, so a switch that is on is never silently invisible.
-func appendUnreferencedContexts(tmpl, stack, logctx string) string {
+//
+// Exported because the preview and test-send handlers must append by the same
+// rule as the engine: a message that looks one way when tested and another way
+// when it fires is worse than either shape on its own.
+func AppendUnreferencedContexts(tmpl, stack, logctx string) string {
 	var b strings.Builder
 	if stack != "" && !stackVarPattern.MatchString(tmpl) {
 		b.WriteString(StackCaption + "\n" + notify.FencedBlock(stack) + "\n")
@@ -3134,7 +3138,7 @@ func BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJS
 			rendered := renderTemplate(messageTemplate, vars)
 			b.WriteString(rendered)
 			b.WriteString("\n")
-			b.WriteString(appendUnreferencedContexts(messageTemplate, stack, logctx))
+			b.WriteString(AppendUnreferencedContexts(messageTemplate, stack, logctx))
 		} else {
 			// Default style1
 			if extractFieldsJSON != "" {
@@ -3164,7 +3168,7 @@ func BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJS
 				b.WriteString(notify.FencedBlock(truncateLogRunes(fmt.Sprintf("%v", msg), maxInlineLogRunes)))
 				b.WriteString("\n")
 			}
-			b.WriteString(appendUnreferencedContexts("", stack, logctx))
+			b.WriteString(AppendUnreferencedContexts("", stack, logctx))
 		}
 	}
 

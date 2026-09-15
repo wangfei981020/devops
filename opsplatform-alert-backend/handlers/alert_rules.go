@@ -27,6 +27,65 @@ import (
 )
 
 // handlerLokiClientFunc creates a getLokiClient closure for use with QueryNamespacedLoki
+
+// interactiveContextProvider builds the per-hit context provider shared by the
+// preview and test-send handlers.
+//
+// Both are interactive: a person is waiting, and the request carries a 15s
+// deadline while each hit costs up to two Loki queries per ladder rung. So only
+// the first few hits fetch, and the rest say so — naming the PREVIEW's limit,
+// not the rule's, so nobody reads a capped hit as "this will have no context
+// when it really fires".
+//
+// fetched is shared across every send path in one request, so a namespaced
+// test-send that fans out to several containers still pays the cap once.
+func interactiveContextProvider(ctx context.Context, rule *models.AlertRule, fetched *int) alert.HitContextProvider {
+	if rule.StackContextEnabled != 1 && rule.LogContextEnabled != 1 {
+		return nil
+	}
+	return func(hit map[string]interface{}) (string, string) {
+		if *fetched >= alert.MaxPreviewContextFetches {
+			note := alert.PreviewContextSkippedNote(alert.MaxPreviewContextFetches)
+			var stack, logctx string
+			if rule.StackContextEnabled == 1 {
+				stack = note
+			}
+			if rule.LogContextEnabled == 1 {
+				logctx = note
+			}
+			return stack, logctx
+		}
+		*fetched++
+		var stack, logctx string
+		if rule.StackContextEnabled == 1 {
+			stack = alert.FetchStackContext(ctx, rule, hit, handlerLokiClientFunc())
+		}
+		if rule.LogContextEnabled == 1 {
+			logctx = alert.FetchLogContext(ctx, rule, hit, handlerLokiClientFunc())
+		}
+		return stack, logctx
+	}
+}
+
+// contextRuleFromReq mirrors the unsaved form into the fields the context
+// fetchers actually read.
+func contextRuleFromReq(req *models.CreateAlertRuleReq) models.AlertRule {
+	return models.AlertRule{
+		LokiConnectionID:       req.LokiConnectionID,
+		StackContextEnabled:    req.StackContextEnabled,
+		StackMaxLines:          req.StackMaxLines,
+		StackHeadLines:         req.StackHeadLines,
+		StackTailLines:         req.StackTailLines,
+		StackBoundaryPattern:   req.StackBoundaryPattern,
+		StackWindowSec:         req.StackWindowSec,
+		LogContextEnabled:      req.LogContextEnabled,
+		LogContextBefore:       req.LogContextBefore,
+		LogContextAfter:        req.LogContextAfter,
+		LogContextMaxWindowSec: req.LogContextMaxWindowSec,
+		LogContextDisplayLines: req.LogContextDisplayLines,
+	}
+}
+
 func handlerLokiClientFunc() func(int) (*lokiclient.Client, error) {
 	return func(id int) (*lokiclient.Client, error) {
 		conn := getLokiConn(id)
@@ -1026,23 +1085,9 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 	// "one alert per tid per day" dedup (preview should show all would-alert hits).
 	perfPreview := req.RealtimeEnabled == 1
 
-	// The context fetchers read their knobs off an AlertRule; the preview has
-	// only the unsaved form, so mirror the fields they actually use.
-	previewRule := models.AlertRule{
-		LokiConnectionID:       req.LokiConnectionID,
-		StackContextEnabled:    req.StackContextEnabled,
-		StackMaxLines:          req.StackMaxLines,
-		StackHeadLines:         req.StackHeadLines,
-		StackTailLines:         req.StackTailLines,
-		StackBoundaryPattern:   req.StackBoundaryPattern,
-		StackWindowSec:         req.StackWindowSec,
-		LogContextEnabled:      req.LogContextEnabled,
-		LogContextBefore:       req.LogContextBefore,
-		LogContextAfter:        req.LogContextAfter,
-		LogContextMaxWindowSec: req.LogContextMaxWindowSec,
-		LogContextDisplayLines: req.LogContextDisplayLines,
-	}
+	previewRule := contextRuleFromReq(&req)
 	ctxFetched := 0
+	ctxFor := interactiveContextProvider(ctx, &previewRule, &ctxFetched)
 
 	var hits []PreviewHit
 	for _, hit := range rawHits {
@@ -1070,46 +1115,21 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 			vars["cost_ms"] = cost
 		}
 
-		// Contexts, exactly as a real alert would carry them. Without this the
-		// preview renders an empty {{.stack}} / {{.logcontext}} and the operator
-		// concludes the switch they just turned on does nothing.
-		//
-		// Only the first few hits pay for it: a preview is interactive and runs
-		// under a 15s deadline, while each hit costs up to two Loki queries per
-		// ladder rung. The rest say why they are bare rather than looking broken.
-		if req.StackContextEnabled == 1 || req.LogContextEnabled == 1 {
-			if ctxFetched < alert.MaxPreviewContextFetches {
-				if req.StackContextEnabled == 1 {
-					vars["stack"] = alert.FetchStackContext(ctx, &previewRule, hit, handlerLokiClientFunc())
-				}
-				if req.LogContextEnabled == 1 {
-					vars["logcontext"] = alert.FetchLogContext(ctx, &previewRule, hit, handlerLokiClientFunc())
-				}
-				ctxFetched++
-			} else {
-				note := alert.PreviewContextSkippedNote(alert.MaxPreviewContextFetches)
-				if req.StackContextEnabled == 1 {
-					vars["stack"] = note
-				}
-				if req.LogContextEnabled == 1 {
-					vars["logcontext"] = note
-				}
+		// Contexts, by the same rule the engine uses — a preview that renders an
+		// empty {{.logcontext}} makes a working switch look broken.
+		var stack, logctx string
+		if ctxFor != nil {
+			stack, logctx = ctxFor(hit)
+			if stack != "" {
+				vars["stack"] = stack
+			}
+			if logctx != "" {
+				vars["logcontext"] = logctx
 			}
 		}
 
 		rendered := previewRenderTemplate(req.MessageTemplate, vars)
-		// Zero-config path, mirroring the engine: a switch that is on but never
-		// referenced in the template still shows up, appended at the end.
-		if req.StackContextEnabled == 1 && !strings.Contains(req.MessageTemplate, "{{.stack}}") {
-			if v, ok := vars["stack"].(string); ok && v != "" {
-				rendered += "\n" + alert.StackCaption + "\n```\n" + v + "\n```"
-			}
-		}
-		if req.LogContextEnabled == 1 && !strings.Contains(req.MessageTemplate, "{{.logcontext}}") {
-			if v, ok := vars["logcontext"].(string); ok && v != "" {
-				rendered += "\n" + alert.LogContextCaption + "\n```\n" + v + "\n```"
-			}
-		}
+		rendered += alert.AppendUnreferencedContexts(req.MessageTemplate, stack, logctx)
 		hits = append(hits, PreviewHit{Raw: hit, Vars: vars, Rendered: rendered})
 	}
 
@@ -1171,6 +1191,14 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+
+	// Same contexts a real alert would carry, by the same rules — a test send
+	// that renders differently from the real thing tests the wrong message.
+	// The counter is shared by every send path below, so a namespaced fan-out
+	// across containers still pays the interactive cap once.
+	sendRule := contextRuleFromReq(&req)
+	ctxFetched := 0
+	ctxFor := interactiveContextProvider(ctx, &sendRule, &ctxFetched)
 
 	// Query data source
 	timeRange := req.TimeRange
@@ -1241,7 +1269,17 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 				}
 				title = fmt.Sprintf("%s [测试]", title)
 
-				_, sErr := senderObj.SendCard(title, r.Message, severity, atUsers, req.AtAll == 1)
+				msg := r.Message
+				if ctxFor != nil {
+					// QueryNamespacedLoki rendered without context (it also
+					// serves paths where the hits may yet be discarded); with a
+					// provider in hand, re-render so every shown hit carries
+					// its own.
+					msg = alert.BuildNamespacedAlertMessage(r.Namespace, r.Container, severity,
+						req.ExtractFields, req.MessageTemplate, r.Hits, ctxFor)
+				}
+
+				_, sErr := senderObj.SendCard(title, msg, severity, atUsers, req.AtAll == 1)
 				if sErr != nil {
 					log.Printf("[TestSend] Failed to send [%s/%s]: %v", r.Namespace, r.Container, sErr)
 				} else {
@@ -1460,7 +1498,18 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if len(rawHits) > 0 {
 		vars := previewExtractFields(rawHits[0], req.ExtractFields)
+		var stack, logctx string
+		if ctxFor != nil {
+			stack, logctx = ctxFor(rawHits[0])
+			if stack != "" {
+				vars["stack"] = stack
+			}
+			if logctx != "" {
+				vars["logcontext"] = logctx
+			}
+		}
 		message = previewRenderTemplate(req.MessageTemplate, vars)
+		message += alert.AppendUnreferencedContexts(req.MessageTemplate, stack, logctx)
 	}
 
 	// Parse at_users
