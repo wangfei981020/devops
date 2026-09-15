@@ -146,6 +146,16 @@ func (s *Sender) buildCard(title, content string, severity string, atUsers []mod
 	return map[string]interface{}{
 		"msg_type": "interactive",
 		"card": map[string]interface{}{
+			// Wide screen: without it Lark renders the card at its narrow
+			// default, and a fenced log block — which Lark does NOT wrap — spills
+			// into a horizontal scrollbar that has to be dragged line by line.
+			// This platform's own gke-version, ops-alert and confluence senders
+			// have shipped the same field for a long time; the alert platform was
+			// the one that never set it.
+			//
+			// It widens every card this sender produces, not just the ones
+			// carrying log context.
+			"config": map[string]interface{}{"wide_screen_mode": true},
 			"header": map[string]interface{}{
 				"title": map[string]interface{}{
 					"tag":     "plain_text",
