@@ -561,12 +561,12 @@
               <div class="form-group">
                 <label class="form-label">向前行数</label>
                 <input v-model.number="form.log_context_before" type="number" class="form-input" placeholder="25" style="width: 160px;" />
-                <div class="form-hint">命中行之前取多少条日志</div>
+                <div class="form-hint">命中行之前取多少条日志（取数量，不等于显示量）</div>
               </div>
               <div class="form-group">
                 <label class="form-label">向后行数</label>
                 <input v-model.number="form.log_context_after" type="number" class="form-input" placeholder="50" style="width: 160px;" />
-                <div class="form-hint">命中行之后取多少条日志</div>
+                <div class="form-hint">命中行之后取多少条日志（取数量，不等于显示量）。若该服务的异常栈是拆成多行独立日志的，这里会取到大量栈帧——那种情况建议调小本值，改开上面的「错误栈上下文」</div>
               </div>
             </div>
             <div class="form-row">
@@ -579,9 +579,16 @@
                 </div>
               </div>
               <div class="form-group">
-                <label class="form-label">消息内最多展示行数</label>
-                <input v-model.number="form.log_context_display_lines" type="number" class="form-input" placeholder="20" style="width: 160px;" />
-                <div class="form-hint">超出时保留命中行附近的行，并在消息里注明前后各省略了多少行</div>
+                <label class="form-label">每条命中展示行数</label>
+                <input v-model.number="form.log_context_display_lines" type="number" class="form-input" placeholder="30" style="width: 160px;" />
+                <div class="form-hint">
+                  <strong>这是「显示多少」，上面两个是「去 Loki 取多少」——两者不是一回事。</strong>
+                  取回来超出本数值时，保留离命中行最近的行，并注明前后各省略了多少。
+                  按左边比例分配：取 25/50、这里填 30 时，实际显示约向前 9 行 + 命中行 + 向后 19 行。
+                  <br />聚合告警最多展示 3 条命中，<strong>每条各占本额度</strong>。
+                  飞书单条约可容 200 行，填 30 时 3 条共约 90 行，安全；
+                  <strong>Telegram 只有约 28 行</strong>，走 TG 的规则建议填 10 以内。
+                </div>
               </div>
             </div>
           </template>
@@ -916,7 +923,7 @@ const form = ref({
   log_context_before: 25,
   log_context_after: 50,
   log_context_max_window_sec: 1800,
-  log_context_display_lines: 20
+  log_context_display_lines: 30
 })
 
 // Namespace 多选相关
@@ -1190,7 +1197,7 @@ async function loadRule() {
         log_context_before: d.log_context_before || 25,
         log_context_after: d.log_context_after || 50,
         log_context_max_window_sec: d.log_context_max_window_sec || 1800,
-        log_context_display_lines: d.log_context_display_lines || 20
+        log_context_display_lines: d.log_context_display_lines || 30
       }
       loadPromConfig(d.prometheus_config)
       loadRouteConfig(d.route_config)

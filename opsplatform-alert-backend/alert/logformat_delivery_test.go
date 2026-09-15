@@ -18,7 +18,7 @@ func TestEngineFencedLogReachesTelegramAsAPreBlock(t *testing.T) {
 		{"message": "2026-09-09 06:37:36.638 ERROR UserTransferEventListener - {\"code\":\"1351\"}"},
 	}
 	body := notify.NormalizeFencedBlocks(
-		BuildNamespacedAlertMessage("g32-openapi", "atmosphere-client-backend", "S1", "", "", hits),
+		BuildNamespacedAlertMessage("g32-openapi", "atmosphere-client-backend", "S1", "", "", hits, nil),
 	)
 
 	got := telegram.BuildMessage("G32 UAT 错误码告警", body, "S1", nil, false, time.Now())
@@ -45,7 +45,7 @@ func TestEngineFencedLogReachesTelegramAsAPreBlock(t *testing.T) {
 // notifier applies — must leave it untouched rather than rewriting it.
 func TestEngineFencedLogIsAlreadyCanonicalForLark(t *testing.T) {
 	hits := []map[string]interface{}{{"message": "ERROR boom"}}
-	body := BuildNamespacedAlertMessage("ns", "c", "S1", "", "", hits)
+	body := BuildNamespacedAlertMessage("ns", "c", "S1", "", "", hits, nil)
 
 	if got := notify.NormalizeFencedBlocks(body); got != body {
 		t.Errorf("NormalizeFencedBlocks rewrote the engine's own fence:\n%q\nto\n%q", body, got)

@@ -90,7 +90,7 @@ func TestBuildNamespacedAlertMessageFencesTheLogWithoutATemplate(t *testing.T) {
 	hits := []map[string]interface{}{
 		{"message": "2026-09-09 06:37:36.638 ERROR **not bold** boom", "pod": "p-1"},
 	}
-	got := BuildNamespacedAlertMessage("g32-openapi", "atmosphere-client-backend", "S1", "", "", hits)
+	got := BuildNamespacedAlertMessage("g32-openapi", "atmosphere-client-backend", "S1", "", "", hits, nil)
 
 	if !strings.Contains(got, "```\n2026-09-09 06:37:36.638 ERROR **not bold** boom\n```") {
 		t.Errorf("BuildNamespacedAlertMessage() should fence the log line, got %q", got)
@@ -102,7 +102,7 @@ func TestBuildNamespacedAlertMessageFencesTheLogWithoutATemplate(t *testing.T) {
 
 func TestBuildNamespacedAlertMessageTruncatesLongLogsOnRuneBoundaries(t *testing.T) {
 	hits := []map[string]interface{}{{"message": strings.Repeat("日", maxInlineLogRunes+50)}}
-	got := BuildNamespacedAlertMessage("ns", "c", "S1", "", "", hits)
+	got := BuildNamespacedAlertMessage("ns", "c", "S1", "", "", hits, nil)
 
 	if !strings.Contains(got, strings.Repeat("日", maxInlineLogRunes)+"...") {
 		t.Errorf("BuildNamespacedAlertMessage() did not truncate at %d runes, got %q", maxInlineLogRunes, got)

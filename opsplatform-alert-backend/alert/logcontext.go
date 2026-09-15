@@ -17,7 +17,19 @@ const (
 	DefaultLogContextBefore       = 25
 	DefaultLogContextAfter        = 50
 	DefaultLogContextMaxWindowSec = 1800
-	DefaultLogContextDisplayLines = 20
+	// DefaultLogContextDisplayLines is the budget for ONE hit's context block.
+	//
+	// It was 20 when a message carried a single context block; an aggregated
+	// alert shows up to three hits, each with its own, so the figure now
+	// multiplies. 30 per hit is still far inside the channel: measured against
+	// this platform's own log lines (~137 bytes once JSON-escaped), Lark's 30KB
+	// card holds roughly 200 lines, so three hits at 30 spend well under half.
+	//
+	// ⚠️ Telegram is the real ceiling at 4096 RUNES — about 28 lines of the same
+	// logs, i.e. barely one hit's worth. Rules delivering to Telegram should set
+	// this to 10 or lower; the channel truncates rather than failing, and the
+	// notices ride at the top of the block precisely so they survive that cut.
+	DefaultLogContextDisplayLines = 30
 
 	// MaxLogContextLines caps what a rule may ask for per direction.
 	//

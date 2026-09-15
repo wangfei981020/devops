@@ -307,7 +307,7 @@ func autoMigrate() error {
 		{"alert_rules", "log_context_before", "INT DEFAULT 25 COMMENT '日志上下文: 命中行向前取多少行'"},
 		{"alert_rules", "log_context_after", "INT DEFAULT 50 COMMENT '日志上下文: 命中行向后取多少行'"},
 		{"alert_rules", "log_context_max_window_sec", "INT DEFAULT 1800 COMMENT '日志上下文: 阶梯时间窗上限(秒), 阶梯 30s->2m->10m->此上限, 取够即停'"},
-		{"alert_rules", "log_context_display_lines", "INT DEFAULT 20 COMMENT '日志上下文: 消息里最多展示多少行(超出保留命中行附近, 并注明省略数)'"},
+		{"alert_rules", "log_context_display_lines", "INT DEFAULT 30 COMMENT '日志上下文: 每条命中行最多展示多少行(超出保留命中行附近, 并注明省略数)'"},
 		{"users", "auth_source", "VARCHAR(20) DEFAULT 'local' COMMENT '认证来源: local/portal'"},
 		{"users", "portal_token", "TEXT COMMENT '运维平台Portal Token(用于刷新权限)'"},
 		{"alert_contacts", "telegram_id", "VARCHAR(64) DEFAULT '' COMMENT 'Telegram user id（数字），用于 @提醒'"},

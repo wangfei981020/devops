@@ -625,3 +625,65 @@ func TestQueryWithSlotReportsDeadline(t *testing.T) {
 		t.Error("waiting past the deadline must produce an error")
 	}
 }
+
+// TestBuildNamespacedAlertMessagePerHitContext is the regression guard for an
+// aggregated alert that carried ONE context block for three matched lines: it
+// sat at the end, belonged to none of them, and the reader could not tell which
+// line it explained.
+func TestBuildNamespacedAlertMessagePerHitContext(t *testing.T) {
+	hits := []map[string]interface{}{
+		{"message": "ERROR one", "tid": "t1"},
+		{"message": "ERROR two", "tid": "t2"},
+		{"message": "ERROR three", "tid": "t3"},
+	}
+	// Each hit gets a context naming itself, so misattribution is visible.
+	provider := func(hit map[string]interface{}) (string, string) {
+		tid, _ := hit["tid"].(string)
+		return "", "CTX-FOR-" + tid
+	}
+
+	got := BuildNamespacedAlertMessage("ns", "c", "S1", "", "", hits, provider)
+
+	for _, tid := range []string{"t1", "t2", "t3"} {
+		if !strings.Contains(got, "CTX-FOR-"+tid) {
+			t.Errorf("hit %s has no context of its own:\n%s", tid, got)
+		}
+	}
+	// Order is what proves attribution: each context must follow ITS hit and
+	// precede the next one.
+	iOne, iCtx1 := strings.Index(got, "ERROR one"), strings.Index(got, "CTX-FOR-t1")
+	iTwo, iCtx2 := strings.Index(got, "ERROR two"), strings.Index(got, "CTX-FOR-t2")
+	if !(iOne < iCtx1 && iCtx1 < iTwo && iTwo < iCtx2) {
+		t.Errorf("contexts are not interleaved with their hits (%d/%d/%d/%d):\n%s",
+			iOne, iCtx1, iTwo, iCtx2, got)
+	}
+}
+
+// TestBuildNamespacedAlertMessageNilProvider: the shared query path renders
+// before dedup/mute decide anything and must stay free of context work.
+func TestBuildNamespacedAlertMessageNilProvider(t *testing.T) {
+	hits := []map[string]interface{}{{"message": "ERROR one"}}
+	got := BuildNamespacedAlertMessage("ns", "c", "S1", "", "", hits, nil)
+	if strings.Contains(got, LogContextCaption) || strings.Contains(got, StackCaption) {
+		t.Errorf("a nil provider must add no context section:\n%s", got)
+	}
+}
+
+// TestBuildNamespacedAlertMessageTemplatePlacement: a template that names the
+// variable places it itself; only what it left out is appended.
+func TestBuildNamespacedAlertMessageTemplatePlacement(t *testing.T) {
+	hits := []map[string]interface{}{{"message": "boom", "tid": "t1"}}
+	provider := func(map[string]interface{}) (string, string) { return "STACKDATA", "CTXDATA" }
+
+	placed := BuildNamespacedAlertMessage("ns", "c", "S1", "", "上下文：{{.logcontext}}", hits, provider)
+	if !strings.Contains(placed, "上下文：CTXDATA") {
+		t.Errorf("template-placed context was not substituted:\n%s", placed)
+	}
+	if strings.Contains(placed, LogContextCaption) {
+		t.Errorf("a context the template placed must not also be appended:\n%s", placed)
+	}
+	// The stack was never referenced, so it still has to show up.
+	if !strings.Contains(placed, StackCaption) || !strings.Contains(placed, "STACKDATA") {
+		t.Errorf("the unreferenced stack must be appended:\n%s", placed)
+	}
+}

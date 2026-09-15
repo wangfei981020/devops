@@ -1499,7 +1499,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), COALESCE(label_filters,''),
 		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
 		COALESCE(stack_context_enabled,0), COALESCE(stack_max_lines,200), COALESCE(stack_head_lines,12), COALESCE(stack_tail_lines,8), COALESCE(stack_boundary_pattern,''), COALESCE(stack_window_sec,5),
-		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,20),
+		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,30),
 		status
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType,
@@ -2699,7 +2699,11 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 				ignoredHits := ignoredGroups[container]
 				msg := ""
 				if len(alertHits) > 0 {
-					msg = BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJSON, messageTemplate, alertHits)
+					// nil: this runs before dedup/mute/interval, so fetching
+					// context here would spend Loki queries on hits that are
+					// about to be discarded. The sending path re-renders with
+					// a real provider once the decision is made.
+					msg = BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJSON, messageTemplate, alertHits, nil)
 				}
 				allResults = append(allResults, NamespacedContainerResult{
 					Namespace:   namespace,
@@ -2906,25 +2910,28 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 		// in r.Message (Go's text/template output for a missing map key);
 		// ApplyStackToMessage replaces that token with the real stack. Otherwise
 		// it appends the stack in a fenced block, as before.
-		// The log context rides this same post-decision path, for the reason
-		// spelled out above, and the two are applied TOGETHER: each leaves the
-		// same anonymous "<no value>" token behind, so filling them one at a
-		// time drops whichever runs first into the other's slot. Only the
-		// template knows which placeholder belongs to which variable.
+		// Contexts are fetched HERE, after dedup/mute/interval have decided this
+		// container actually alerts, and the message is re-rendered so every
+		// shown hit carries its own — the shared query function above renders
+		// without them precisely so nothing is spent on discarded hits.
 		if (rule.StackContextEnabled == 1 || rule.LogContextEnabled == 1) && len(r.Hits) > 0 {
-			var stack, logctx string
-			if rule.StackContextEnabled == 1 {
-				stack = e.fetchStackContext(ctx, rule, r.Hits[0])
-			}
-			if rule.LogContextEnabled == 1 {
-				if nsCtxFetches < MaxContextFetchesPerRun {
-					logctx = e.fetchLogContext(ctx, rule, r.Hits[0])
-					nsCtxFetches++
-				} else {
-					logctx = RenderContextSkipped(r.Hits[0], MaxContextFetchesPerRun)
+			provider := func(hit map[string]interface{}) (string, string) {
+				var stack, logctx string
+				if rule.StackContextEnabled == 1 {
+					stack = e.fetchStackContext(ctx, rule, hit)
 				}
+				if rule.LogContextEnabled == 1 {
+					if nsCtxFetches < MaxContextFetchesPerRun {
+						logctx = e.fetchLogContext(ctx, rule, hit)
+						nsCtxFetches++
+					} else {
+						logctx = RenderContextSkipped(hit, MaxContextFetchesPerRun)
+					}
+				}
+				return stack, logctx
 			}
-			r.Message = ApplyContextsToMessage(r.Message, rule.MessageTemplate, stack, logctx)
+			r.Message = BuildNamespacedAlertMessage(r.Namespace, r.Container, rule.Severity,
+				rule.ExtractFields, rule.MessageTemplate, r.Hits, provider)
 		}
 
 		title := rule.MessageTitle
@@ -3059,7 +3066,34 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 // If messageTemplate is set, renders each hit with the user's template.
 // Otherwise uses default 样式1 format.
 // Exported so handlers can use it for preview.
-func BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJSON, messageTemplate string, hits []map[string]interface{}) string {
+// appendUnreferencedContexts renders whatever the template did not place
+// itself, captioned, so a switch that is on is never silently invisible.
+func appendUnreferencedContexts(tmpl, stack, logctx string) string {
+	var b strings.Builder
+	if stack != "" && !stackVarPattern.MatchString(tmpl) {
+		b.WriteString(StackCaption + "\n" + notify.FencedBlock(stack) + "\n")
+	}
+	if logctx != "" && !logCtxVarPattern.MatchString(tmpl) {
+		b.WriteString(LogContextCaption + "\n" + notify.FencedBlock(logctx) + "\n")
+	}
+	return b.String()
+}
+
+// HitContextProvider returns one hit's stack and log context. It is passed in
+// rather than fetched here because this builder also renders the preview and
+// test-send paths, and the cron path must not spend Loki queries on hits that
+// dedup, mute or the alert interval are about to discard.
+//
+// nil means "render without context" — the shape every caller had before.
+type HitContextProvider func(hit map[string]interface{}) (stack, logctx string)
+
+// BuildNamespacedAlertMessage renders one container's alert.
+//
+// ctxFor is applied PER HIT: an aggregated message shows several matched lines,
+// and one context block appended to the end of all of them belongs to none of
+// them — the reader cannot tell which line it explains. Each hit carries its
+// own, directly under the fields it belongs to.
+func BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJSON, messageTemplate string, hits []map[string]interface{}, ctxFor HitContextProvider) string {
 	var b strings.Builder
 
 	b.WriteString(fmt.Sprintf("**Namespace:** %s\n", namespace))
@@ -3075,6 +3109,11 @@ func BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJS
 		hit := hits[i]
 		b.WriteString(fmt.Sprintf("\n─── %d/%d ───\n", i+1, showCount))
 
+		var stack, logctx string
+		if ctxFor != nil {
+			stack, logctx = ctxFor(hit)
+		}
+
 		if messageTemplate != "" {
 			// Use user's template
 			vars := extractFields(hit, extractFieldsJSON)
@@ -3084,9 +3123,18 @@ func BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJS
 					vars[k] = v
 				}
 			}
+			// Contexts go in BEFORE rendering, so a template that places them
+			// itself gets them substituted by name rather than appended.
+			if stack != "" {
+				vars["stack"] = stack
+			}
+			if logctx != "" {
+				vars["logcontext"] = logctx
+			}
 			rendered := renderTemplate(messageTemplate, vars)
 			b.WriteString(rendered)
 			b.WriteString("\n")
+			b.WriteString(appendUnreferencedContexts(messageTemplate, stack, logctx))
 		} else {
 			// Default style1
 			if extractFieldsJSON != "" {
@@ -3116,6 +3164,7 @@ func BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJS
 				b.WriteString(notify.FencedBlock(truncateLogRunes(fmt.Sprintf("%v", msg), maxInlineLogRunes)))
 				b.WriteString("\n")
 			}
+			b.WriteString(appendUnreferencedContexts("", stack, logctx))
 		}
 	}
 

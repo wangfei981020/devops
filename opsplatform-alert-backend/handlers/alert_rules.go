@@ -104,7 +104,7 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 		r.severity, COALESCE(r.group_by,''), COALESCE(r.expected_groups,''), COALESCE(r.query_concurrency,5), COALESCE(r.alert_interval,''), r.dedup_field, r.dedup_ttl, r.max_alerts, COALESCE(r.prometheus_config,''), COALESCE(r.route_config,''), COALESCE(r.namespaces,''), COALESCE(r.namespace_concurrency,3), COALESCE(r.label_filters,''), COALESCE(r.project_id,0),
 		COALESCE(r.realtime_enabled,0), COALESCE(r.threshold_ms,0), COALESCE(r.report_enabled,0), COALESCE(r.report_schedule,''), COALESCE(r.report_mode,'separate'), COALESCE(r.report_title,''), COALESCE(r.report_template,''),
 		COALESCE(r.stack_context_enabled,0), COALESCE(r.stack_max_lines,200), COALESCE(r.stack_head_lines,12), COALESCE(r.stack_tail_lines,8), COALESCE(r.stack_boundary_pattern,''), COALESCE(r.stack_window_sec,5),
-		COALESCE(r.log_context_enabled,0), COALESCE(r.log_context_before,25), COALESCE(r.log_context_after,50), COALESCE(r.log_context_max_window_sec,1800), COALESCE(r.log_context_display_lines,20),
+		COALESCE(r.log_context_enabled,0), COALESCE(r.log_context_before,25), COALESCE(r.log_context_after,50), COALESCE(r.log_context_max_window_sec,1800), COALESCE(r.log_context_display_lines,30),
 		r.status, r.last_run_at, r.last_error, r.created_at, r.updated_at,
 		COALESCE(e.name,'(已删除)') as es_name, COALESCE(lk.name,'') as loki_name,
 		COALESCE(l.name,'(已删除)') as lark_name
@@ -299,7 +299,7 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), COALESCE(label_filters,''), COALESCE(project_id,0),
 		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
 		COALESCE(stack_context_enabled,0), COALESCE(stack_max_lines,200), COALESCE(stack_head_lines,12), COALESCE(stack_tail_lines,8), COALESCE(stack_boundary_pattern,''), COALESCE(stack_window_sec,5),
-		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,20),
+		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,30),
 		status, last_run_at, last_error, created_at, updated_at
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType, &rule.ESConnectionID,
@@ -408,7 +408,7 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 		req.LogContextMaxWindowSec = 1800
 	}
 	if req.LogContextDisplayLines == 0 {
-		req.LogContextDisplayLines = 20
+		req.LogContextDisplayLines = 30
 	}
 
 	// Placeholder only: saveRuleChannelsTx picks the real primary channel
@@ -526,7 +526,7 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		req.LogContextMaxWindowSec = 1800
 	}
 	if req.LogContextDisplayLines == 0 {
-		req.LogContextDisplayLines = 20
+		req.LogContextDisplayLines = 30
 	}
 
 	primaryChannel := req.LarkConfigID
@@ -1699,7 +1699,7 @@ func HandleExportAlertRules(w http.ResponseWriter, r *http.Request) {
 		dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), COALESCE(label_filters,''), COALESCE(project_id,0),
 		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
 		COALESCE(stack_context_enabled,0), COALESCE(stack_max_lines,200), COALESCE(stack_head_lines,12), COALESCE(stack_tail_lines,8), COALESCE(stack_boundary_pattern,''), COALESCE(stack_window_sec,5),
-		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,20)
+		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,30)
 		FROM alert_rules WHERE id IN (%s)`, strings.Join(placeholders, ","))
 
 	rows, err := database.DB.Query(query, args...)
@@ -1807,7 +1807,7 @@ func HandleImportAlertRules(w http.ResponseWriter, r *http.Request) {
 			rule.LogContextMaxWindowSec = 1800
 		}
 		if rule.LogContextDisplayLines == 0 {
-			rule.LogContextDisplayLines = 20
+			rule.LogContextDisplayLines = 30
 		}
 
 		id, err := func() (int64, error) {
