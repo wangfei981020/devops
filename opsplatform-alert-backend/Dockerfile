@@ -1,7 +1,7 @@
 # --platform=$BUILDPLATFORM pins the builder to the machine doing the build, so
 # the Go toolchain runs natively and cross-compiles, rather than the whole build
 # stage running under emulation.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./

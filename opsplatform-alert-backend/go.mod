@@ -1,6 +1,6 @@
 module opsplatform-alert-backend
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/elastic/go-elasticsearch/v7 v7.17.10
@@ -11,7 +11,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/robfig/cron/v3 v3.0.1
-	golang.org/x/crypto v0.54.0
+	golang.org/x/crypto v0.56.0
 )
 
 require (
