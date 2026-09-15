@@ -7,7 +7,10 @@ import (
 	"opsplatform-alert-backend/models"
 )
 
-func TestCardCarriesWideScreenMode(t *testing.T) {
+// The card must carry width_mode, not the legacy wide_screen_mode: Lark's
+// current reference documents the former and silently ignores the latter —
+// measured on a real alert, visible width was 64 characters either way.
+func TestCardCarriesWidthMode(t *testing.T) {
 	s := &Sender{config: models.LarkConfig{}}
 	payload := s.buildCard("标题", "正文", "S1", nil, false)
 	b, _ := json.Marshal(payload)
@@ -22,8 +25,11 @@ func TestCardCarriesWideScreenMode(t *testing.T) {
 	if !ok {
 		t.Fatalf("card has no config block:\n%s", b)
 	}
-	if cfg["wide_screen_mode"] != true {
-		t.Errorf("wide_screen_mode is not true: %v", cfg["wide_screen_mode"])
+	if cfg["width_mode"] != "fill" {
+		t.Errorf("width_mode = %v, want \"fill\"", cfg["width_mode"])
+	}
+	if _, legacy := cfg["wide_screen_mode"]; legacy {
+		t.Error("wide_screen_mode is the ignored legacy field; it must not come back")
 	}
 	// The rest of the card must be untouched.
 	if _, ok := card["header"]; !ok {

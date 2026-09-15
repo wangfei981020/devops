@@ -146,16 +146,21 @@ func (s *Sender) buildCard(title, content string, severity string, atUsers []mod
 	return map[string]interface{}{
 		"msg_type": "interactive",
 		"card": map[string]interface{}{
-			// Wide screen: without it Lark renders the card at its narrow
-			// default, and a fenced log block — which Lark does NOT wrap — spills
-			// into a horizontal scrollbar that has to be dragged line by line.
-			// This platform's own gke-version, ops-alert and confluence senders
-			// have shipped the same field for a long time; the alert platform was
-			// the one that never set it.
+			// width_mode "fill" makes the card span the chat window instead of
+			// stopping at the 600px default, which is what a fenced log block
+			// needs: Lark does NOT wrap inside a code block, so anything past the
+			// card's edge can only be reached by dragging a horizontal scrollbar.
 			//
-			// It widens every card this sender produces, not just the ones
+			// NOT wide_screen_mode. That is a legacy field this platform's
+			// gke-version, ops-alert and confluence senders all still pass, and
+			// it is silently ignored — measured on a real alert, the visible
+			// width was 64 characters both before and after setting it. Lark's
+			// current card JSON 1.0 reference documents width_mode (default /
+			// compact / fill) and does not list wide_screen_mode at all.
+			//
+			// This widens every card this sender produces, not only the ones
 			// carrying log context.
-			"config": map[string]interface{}{"wide_screen_mode": true},
+			"config": map[string]interface{}{"width_mode": "fill"},
 			"header": map[string]interface{}{
 				"title": map[string]interface{}{
 					"tag":     "plain_text",
