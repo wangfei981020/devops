@@ -95,8 +95,7 @@ func PreviewContextSkippedNote(cap int) string {
 func RenderContextSkipped(hit map[string]interface{}, cap int) string {
 	note := fmt.Sprintf("（本轮命中行较多，已超过单轮上下文查询上限 %d 条，此条未取上下文）", cap)
 
-	labels, _ := hit["__stream_labels"].(map[string]string)
-	selector := buildStreamSelector(labels)
+	selector := buildStreamSelector(hitStreamLabels(hit))
 	at, ok := hitInstant(hit)
 	if selector == "" || !ok {
 		return note
@@ -197,6 +196,34 @@ const (
 	logCtxBandTop    = "=================== ↓↓↓ 命中行 ↓↓↓ ==================="
 	logCtxBandBottom = "======================================================"
 )
+
+// hitStreamLabels recovers a hit's stream labels.
+//
+// The type has to be probed rather than asserted because a hit reaches this
+// code by two different routes. Straight off a Loki query it is the
+// map[string]string ToHits built. But the engine's not_found path serves the
+// last line from a Redis cache (cacheLastHit → json.Marshal), and a JSON round
+// trip turns that into map[string]interface{} — the plain assertion then yields
+// nil, the selector comes out empty, and the alert silently carries no context.
+//
+// That is exactly what happened in production: preview and test-send query Loki
+// fresh and had context, while the scheduled run read the cache and did not.
+// __ts_nano already had the same treatment for float64; the labels were missed.
+func hitStreamLabels(hit map[string]interface{}) map[string]string {
+	switch v := hit["__stream_labels"].(type) {
+	case map[string]string:
+		return v
+	case map[string]interface{}:
+		out := make(map[string]string, len(v))
+		for k, raw := range v {
+			if sv, ok := raw.(string); ok {
+				out[k] = sv
+			}
+		}
+		return out
+	}
+	return nil
+}
 
 // hitInstant recovers the exact instant a hit was logged at.
 //

@@ -1151,8 +1151,7 @@ func FetchStackContext(ctx context.Context, rule *models.AlertRule, hit map[stri
 		return trimStack(rule, strings.Split(line, "\n"))
 	}
 
-	labels, _ := hit["__stream_labels"].(map[string]string)
-	selector := buildStreamSelector(labels)
+	selector := buildStreamSelector(hitStreamLabels(hit))
 	if selector == "" || rule.LokiConnectionID == 0 {
 		return line
 	}
@@ -1236,8 +1235,7 @@ func FetchLogContext(ctx context.Context, rule *models.AlertRule, hit map[string
 	if line == "" {
 		return ""
 	}
-	labels, _ := hit["__stream_labels"].(map[string]string)
-	selector := buildStreamSelector(labels)
+	selector := buildStreamSelector(hitStreamLabels(hit))
 	if selector == "" || rule.LokiConnectionID == 0 {
 		return ""
 	}

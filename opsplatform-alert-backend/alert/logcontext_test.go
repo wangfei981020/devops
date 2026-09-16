@@ -2,6 +2,7 @@ package alert
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -766,5 +767,55 @@ func TestNotFoundRuleClampsForward(t *testing.T) {
 	// The caller's rule is shared live config and must not be mutated.
 	if rule.LogContextAfter != 50 {
 		t.Errorf("the caller's rule was mutated: LogContextAfter = %d", rule.LogContextAfter)
+	}
+}
+
+// TestHitStreamLabelsSurvivesCacheRoundTrip is the regression guard for a
+// silent production failure: preview and test-send carried context while the
+// scheduled run did not.
+//
+// The cause was the route the hit took. Straight off Loki it holds a
+// map[string]string; the engine's not_found path serves the last line from
+// Redis (cacheLastHit → json.Marshal), and a JSON round trip makes that a
+// map[string]interface{}. The plain type assertion yielded nil, the selector
+// came out empty, and fetchLogContext returned before querying anything.
+func TestHitStreamLabelsSurvivesCacheRoundTrip(t *testing.T) {
+	fresh := map[string]interface{}{
+		"message": "ERROR boom",
+		"__stream_labels": map[string]string{
+			"namespace": "g32-game",
+			"container": "dice6-flash-resource-backend",
+		},
+	}
+
+	direct := buildStreamSelector(hitStreamLabels(fresh))
+	if direct == "" {
+		t.Fatal("a hit straight off Loki must yield a selector")
+	}
+
+	// Exactly what cacheLastHit/getLastHit do to it.
+	b, err := json.Marshal(fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cached map[string]interface{}
+	if err := json.Unmarshal(b, &cached); err != nil {
+		t.Fatal(err)
+	}
+
+	roundTripped := buildStreamSelector(hitStreamLabels(cached))
+	if roundTripped == "" {
+		t.Fatal("a cached hit yields no selector — the scheduled run would carry no context")
+	}
+	// Same stream, so the selector has to be identical: a cached hit must not
+	// quietly widen or narrow the context query.
+	if roundTripped != direct {
+		t.Errorf("selector differs by route:\n  direct = %s\n  cached = %s", direct, roundTripped)
+	}
+
+	// A hit with no labels at all still declines rather than producing "{}",
+	// which would match every stream in the cluster.
+	if s := buildStreamSelector(hitStreamLabels(map[string]interface{}{})); s != "" {
+		t.Errorf("a hit with no labels must yield no selector, got %q", s)
 	}
 }
