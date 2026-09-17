@@ -1441,6 +1441,55 @@ func FetchNotFoundContexts(ctx context.Context, rule *models.AlertRule, lastHit 
 	return stack, logctx
 }
 
+// setAlertingCount records how many containers a run found alerting, together
+// with the instant the judgement was made.
+//
+// The TTL follows the rule's own schedule rather than a fixed ten minutes.
+// Fixed ten minutes only works while a rule runs more often than that: a rule
+// on a longer interval has its count expire BETWEEN runs, and the list's
+// indicator blinks off and back on with nothing having changed. Two intervals
+// gives one missed run of slack, the same reasoning lockTTL uses.
+//
+// The timestamp is written because a status indicator without one cannot be
+// read: an operator seeing it has no way to tell whether the judgement is ten
+// seconds or four minutes old, and a rule firing intermittently looks like it
+// contradicts a preview run seconds later. It is a separate key so the existing
+// integer reader keeps working untouched.
+func setAlertingCount(ctx context.Context, rule *models.AlertRule, count int) {
+	if database.RDB == nil {
+		return
+	}
+	ttl := alertingCountTTL(rule.Schedule)
+	database.RDB.Set(ctx, fmt.Sprintf("alert:alerting_count:%d", rule.ID), count, ttl)
+	database.RDB.Set(ctx, fmt.Sprintf("alert:alerting_at:%d", rule.ID), time.Now().Unix(), ttl)
+}
+
+// alertingCountTTL derives the status lifetime from the rule's interval.
+//
+// The floor keeps a fast rule's status from expiring between two closely spaced
+// runs; the ceiling stops a disabled or very slow rule from showing a judgement
+// that is hours stale as if it were current.
+func alertingCountTTL(schedule string) time.Duration {
+	const (
+		minStatusTTL = 2 * time.Minute
+		maxStatusTTL = 2 * time.Hour
+	)
+	sched, err := ParseSchedule(schedule)
+	if err != nil {
+		return 10 * time.Minute
+	}
+	now := time.Now()
+	first := sched.Next(now)
+	ttl := sched.Next(first).Sub(first) * 2
+	if ttl < minStatusTTL {
+		return minStatusTTL
+	}
+	if ttl > maxStatusTTL {
+		return maxStatusTTL
+	}
+	return ttl
+}
+
 // fetchLogContext / fetchStackContext keep the Engine's own call sites
 // unchanged; both just supply the Engine's cached Loki client pool.
 func (e *Engine) fetchLogContext(ctx context.Context, rule *models.AlertRule, hit map[string]interface{}) string {
@@ -2267,7 +2316,7 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 			alertingCount++
 		}
 	}
-	database.RDB.Set(ctx, fmt.Sprintf("alert:alerting_count:%d", rule.ID), alertingCount, 10*time.Minute)
+	setAlertingCount(ctx, rule, alertingCount)
 }
 
 // discoverGroups auto-discovers groups from 3h data (reduced from 24h to avoid Loki OOM)
@@ -3057,7 +3106,7 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 				database.RDB.Set(ctx, statusKey, int(status), 10*time.Minute)
 			}
 		}
-		database.RDB.Set(ctx, fmt.Sprintf("alert:alerting_count:%d", rule.ID), alertingTotal, 10*time.Minute)
+		setAlertingCount(ctx, rule, alertingTotal)
 
 		// Record error code metrics with status:
 		// count > 0 = alerting, -1 = muted container, -2 = ignored code

@@ -108,10 +108,10 @@
                   <td class="col-id">{{ rule.id }}</td>
                   <td class="col-alert">
                     <span v-if="rule.status !== 1" class="text-secondary">-</span>
-                    <span v-else-if="rule.alerting_count > 0" class="alert-fire" :title="`${rule.alerting_count} 个容器告警中`">
+                    <span v-else-if="rule.alerting_count > 0" class="alert-fire" :title="alertingTitle(rule)">
                       <Flame :size="16" />
                     </span>
-                    <span v-else class="alert-ok"><CheckCircle :size="16" /></span>
+                    <span v-else class="alert-ok" :title="alertingTitle(rule)"><CheckCircle :size="16" /></span>
                   </td>
                   <td class="col-name">
                     <span style="font-weight: 500;">{{ rule.name }}</span>
@@ -304,6 +304,15 @@ import { Plus, Bell, Play, Pencil, FileText, Trash2, Folder, ChevronRight, X, Fl
 const toast = useToast()
 const dialog = useConfirm()
 const router = useRouter()
+
+// 这个图标是「引擎最后一次运行」的结论，不是实时状态。不写清截至时刻，
+// 阵发性告警会看起来和几秒后的预览结果自相矛盾——实际两者相差几分钟。
+function alertingTitle(rule) {
+  const base = rule.alerting_count > 0 ? `${rule.alerting_count} 个容器告警中` : '未告警'
+  return rule.alerting_at
+    ? `${base}\n截至 ${rule.alerting_at}（引擎最后一次运行的结论，非实时）`
+    : base
+}
 
 // Projects
 const projects = ref([])

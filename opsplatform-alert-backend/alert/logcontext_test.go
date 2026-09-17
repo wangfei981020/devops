@@ -870,3 +870,52 @@ func TestAppendUnreferencedContextsStartsItsOwnLine(t *testing.T) {
 		}
 	}
 }
+
+// TestAlertingCountTTLFollowsSchedule: a fixed ten-minute lifetime only works
+// while a rule runs more often than that. On a longer interval the status
+// expires BETWEEN runs and the list's indicator blinks off with nothing having
+// changed — so the lifetime has to outlast one interval.
+func TestAlertingCountTTLFollowsSchedule(t *testing.T) {
+	tests := []struct {
+		name     string
+		schedule string
+		want     time.Duration
+	}{
+		// 5-field forms are normalised to 6; two intervals of slack.
+		{"每 5 分钟", "*/5 * * * *", 10 * time.Minute},
+		{"每小时", "0 * * * *", 2 * time.Hour},
+		// A fast rule still gets the floor, so two closely spaced runs cannot
+		// leave a gap where the status is missing.
+		{"每分钟", "* * * * *", 2 * time.Minute},
+		// A daily rule is capped: a judgement hours stale must not read as current.
+		{"每天", "0 3 * * *", 2 * time.Hour},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := alertingCountTTL(tt.schedule); got != tt.want {
+				t.Errorf("alertingCountTTL(%q) = %v, want %v", tt.schedule, got, tt.want)
+			}
+		})
+	}
+
+	// An unparseable schedule must still yield a usable lifetime rather than
+	// zero, which would make the status vanish the instant it was written.
+	if got := alertingCountTTL("not a cron"); got <= 0 {
+		t.Errorf("a bad schedule must still yield a positive TTL, got %v", got)
+	}
+
+	// Whatever the schedule, the lifetime must exceed one interval — that is
+	// the whole point.
+	for _, sch := range []string{"*/5 * * * *", "0 * * * *", "* * * * *"} {
+		s, err := ParseSchedule(sch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now()
+		first := s.Next(now)
+		interval := s.Next(first).Sub(first)
+		if ttl := alertingCountTTL(sch); ttl <= interval {
+			t.Errorf("%s: TTL %v does not outlast its interval %v — the indicator would blink", sch, ttl, interval)
+		}
+	}
+}

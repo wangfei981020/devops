@@ -624,6 +624,7 @@
             <div style="margin-top: 6px; color: #64748b;">1=正常（搜到日志） 0=告警（搜不到日志）</div>
           </div>
         </template>
+        </div>
 
         <!-- Submit -->
         <div class="modal-footer" style="border-top: none; padding-top: 24px;">
@@ -643,7 +644,6 @@
           <button type="submit" class="btn btn-primary" :disabled="submitting">
             {{ submitting ? '保存中...' : (isEdit ? '更新规则' : '创建规则') }}
           </button>
-        </div>
         </div>
       </form>
     </div>

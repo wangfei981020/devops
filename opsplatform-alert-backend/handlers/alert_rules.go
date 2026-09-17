@@ -24,6 +24,7 @@ import (
 	"opsplatform-alert-backend/models"
 	"opsplatform-alert-backend/notify"
 	"opsplatform-alert-backend/safego"
+	"opsplatform-alert-backend/timezone"
 )
 
 // handlerLokiClientFunc creates a getLokiClient closure for use with QueryNamespacedLoki
@@ -337,6 +338,12 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			item["alerting_count"] = val
 		} else {
 			item["alerting_count"] = 0
+		}
+		// When the judgement was made. A status indicator without it cannot be
+		// read: an intermittent rule looks like it contradicts a preview run
+		// seconds later, when in fact the two are minutes apart.
+		if ts, tErr := database.RDB.Get(ctx, fmt.Sprintf("alert:alerting_at:%v", ruleID)).Int64(); tErr == nil {
+			item["alerting_at"] = timezone.Format(time.Unix(ts, 0))
 		}
 	}
 
