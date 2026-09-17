@@ -56,7 +56,7 @@ spec:
     spec:
       containers:
         - name: alert-backend
-          image: localhost:8070/opsplatform/alert-backend:v119
+          image: localhost:8070/opsplatform/alert-backend:v120
           ports:
             - containerPort: 8080
               name: http

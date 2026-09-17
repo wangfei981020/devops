@@ -1046,7 +1046,7 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 					nfCtxFetched++
 				}
 				rendered := previewRenderTemplate(req.MessageTemplate, vars)
-				rendered += alert.AppendUnreferencedContexts(req.MessageTemplate, nfStack, nfLogctx)
+				rendered = alert.AppendUnreferencedContexts(rendered, req.MessageTemplate, nfStack, nfLogctx)
 
 				alertList = append(alertList, ContainerResult{
 					Name: containerName, Status: "alert", Source: hitSource,
@@ -1150,7 +1150,7 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 		}
 
 		rendered := previewRenderTemplate(req.MessageTemplate, vars)
-		rendered += alert.AppendUnreferencedContexts(req.MessageTemplate, stack, logctx)
+		rendered = alert.AppendUnreferencedContexts(rendered, req.MessageTemplate, stack, logctx)
 		hits = append(hits, PreviewHit{Raw: hit, Vars: vars, Rendered: rendered})
 	}
 
@@ -1461,7 +1461,7 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 			titleRendered := previewRenderTemplate(req.MessageTitle, vars)
 			title := fmt.Sprintf("%s [%s] [测试]", titleRendered, containerName)
 			message := previewRenderTemplate(req.MessageTemplate, vars)
-			message += alert.AppendUnreferencedContexts(req.MessageTemplate, nfStack, nfLogctx)
+			message = alert.AppendUnreferencedContexts(message, req.MessageTemplate, nfStack, nfLogctx)
 
 			severity := req.Severity
 			if severity == "" {
@@ -1547,7 +1547,7 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		message = previewRenderTemplate(req.MessageTemplate, vars)
-		message += alert.AppendUnreferencedContexts(req.MessageTemplate, stack, logctx)
+		message = alert.AppendUnreferencedContexts(message, req.MessageTemplate, stack, logctx)
 	}
 
 	// Parse at_users

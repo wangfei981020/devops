@@ -801,7 +801,7 @@ func (e *Engine) executeRule(ruleID int) {
 				}
 
 				lastHitMsg = renderTemplate(rule.MessageTemplate, vars)
-				lastHitMsg += AppendUnreferencedContexts(rule.MessageTemplate, nfStack, nfLogctx)
+				lastHitMsg = AppendUnreferencedContexts(lastHitMsg, rule.MessageTemplate, nfStack, nfLogctx)
 			} else if rule.MessageTemplate != "" {
 				// No hit anywhere in the wider window: nothing to look around.
 				lastHitMsg = renderTemplate(rule.MessageTemplate, vars)
@@ -962,18 +962,14 @@ func (e *Engine) executeRule(ruleID int) {
 
 		// Zero-config path: the operator turned the switch on but never referenced
 		// the variable, so put the stack where it can still be read.
-		if rule.StackContextEnabled == 1 && !strings.Contains(rule.MessageTemplate, "{{.stack}}") {
-			if s, ok := vars["stack"].(string); ok && s != "" {
-				message += "\n```\n" + s + "\n```"
-			}
-		}
-		// Same zero-config path for the log context, under its own switch: the
-		// two features are independent, and a template may reference one
-		// variable while leaving the other to be appended.
-		if rule.LogContextEnabled == 1 && !strings.Contains(rule.MessageTemplate, "{{.logcontext}}") {
-			if s, ok := vars["logcontext"].(string); ok && s != "" {
-				message += "\n" + LogContextCaption + "\n```\n" + s + "\n```"
-			}
+		// Zero-config path: a switch that is on but never referenced in the
+		// template still shows up. Shared with every other entry point — the
+		// two inline copies this replaced had drifted (one captioned the stack,
+		// the other did not; neither matched what preview rendered).
+		{
+			s, _ := vars["stack"].(string)
+			l, _ := vars["logcontext"].(string)
+			message = AppendUnreferencedContexts(message, rule.MessageTemplate, s, l)
 		}
 
 		rawJSON, _ := json.Marshal(hit)
@@ -1898,18 +1894,14 @@ func (e *Engine) executeGroupedRule(ctx context.Context, rule *models.AlertRule,
 
 		// Zero-config path: the operator turned the switch on but never referenced
 		// the variable, so put the stack where it can still be read.
-		if rule.StackContextEnabled == 1 && !strings.Contains(rule.MessageTemplate, "{{.stack}}") {
-			if s, ok := vars["stack"].(string); ok && s != "" {
-				message += "\n```\n" + s + "\n```"
-			}
-		}
-		// Same zero-config path for the log context, under its own switch: the
-		// two features are independent, and a template may reference one
-		// variable while leaving the other to be appended.
-		if rule.LogContextEnabled == 1 && !strings.Contains(rule.MessageTemplate, "{{.logcontext}}") {
-			if s, ok := vars["logcontext"].(string); ok && s != "" {
-				message += "\n" + LogContextCaption + "\n```\n" + s + "\n```"
-			}
+		// Zero-config path: a switch that is on but never referenced in the
+		// template still shows up. Shared with every other entry point — the
+		// two inline copies this replaced had drifted (one captioned the stack,
+		// the other did not; neither matched what preview rendered).
+		{
+			s, _ := vars["stack"].(string)
+			l, _ := vars["logcontext"].(string)
+			message = AppendUnreferencedContexts(message, rule.MessageTemplate, s, l)
 		}
 
 		rawJSON, _ := json.Marshal(firstHit)
@@ -2182,7 +2174,7 @@ func (e *Engine) executeGroupedNotFound(ctx context.Context, rule *models.AlertR
 				}
 			}
 			message := renderTemplate(rule.MessageTemplate, vars)
-			message += AppendUnreferencedContexts(rule.MessageTemplate, nfStack, nfLogctx)
+			message = AppendUnreferencedContexts(message, rule.MessageTemplate, nfStack, nfLogctx)
 			// Render title template too
 			titleTemplate := rule.MessageTitle
 			titleRendered := renderTemplate(titleTemplate, vars)
@@ -3127,13 +3119,27 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 // If messageTemplate is set, renders each hit with the user's template.
 // Otherwise uses default 样式1 format.
 // Exported so handlers can use it for preview.
-// AppendUnreferencedContexts renders whatever the template did not place
-// itself, captioned, so a switch that is on is never silently invisible.
+// AppendUnreferencedContexts returns message with whatever the template did not
+// place itself appended, captioned, so a switch that is on is never silently
+// invisible.
+//
+// It takes the message rather than returning a bare suffix because the caption
+// MUST begin its own line and only the message can say whether one is needed.
+// Returning a suffix put that burden on every call site, and one of them forgot:
+// the not_found paths rendered "…traceId: d10acc15日志上下文（…）：" glued onto
+// the last line. That is not merely ugly — the fenced block opens on the next
+// line, and Lark only recognises ``` when it starts a line, so a caption that
+// shifts the fence turns every block after it into literal text (see
+// notify.NormalizeFencedBlocks for the same failure from the other direction).
+//
+// Adding the separator here is idempotent: a message already ending in a
+// newline gets none, so callers that build with their own trailing newline do
+// not grow a blank line.
 //
 // Exported because the preview and test-send handlers must append by the same
 // rule as the engine: a message that looks one way when tested and another way
 // when it fires is worse than either shape on its own.
-func AppendUnreferencedContexts(tmpl, stack, logctx string) string {
+func AppendUnreferencedContexts(message, tmpl, stack, logctx string) string {
 	var b strings.Builder
 	if stack != "" && !stackVarPattern.MatchString(tmpl) {
 		b.WriteString(StackCaption + "\n" + notify.FencedBlock(stack) + "\n")
@@ -3141,7 +3147,14 @@ func AppendUnreferencedContexts(tmpl, stack, logctx string) string {
 	if logctx != "" && !logCtxVarPattern.MatchString(tmpl) {
 		b.WriteString(LogContextCaption + "\n" + notify.FencedBlock(logctx) + "\n")
 	}
-	return b.String()
+	if b.Len() == 0 {
+		return message
+	}
+	sep := "\n"
+	if message == "" || strings.HasSuffix(message, "\n") {
+		sep = ""
+	}
+	return message + sep + b.String()
 }
 
 // HitContextProvider returns one hit's stack and log context. It is passed in
@@ -3197,9 +3210,8 @@ func BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJS
 				vars["logcontext"] = logctx
 			}
 			rendered := renderTemplate(messageTemplate, vars)
-			b.WriteString(rendered)
+			b.WriteString(AppendUnreferencedContexts(rendered, messageTemplate, stack, logctx))
 			b.WriteString("\n")
-			b.WriteString(AppendUnreferencedContexts(messageTemplate, stack, logctx))
 		} else {
 			// Default style1
 			if extractFieldsJSON != "" {
@@ -3229,7 +3241,7 @@ func BuildNamespacedAlertMessage(namespace, container, severity, extractFieldsJS
 				b.WriteString(notify.FencedBlock(truncateLogRunes(fmt.Sprintf("%v", msg), maxInlineLogRunes)))
 				b.WriteString("\n")
 			}
-			b.WriteString(AppendUnreferencedContexts("", stack, logctx))
+			b.WriteString(AppendUnreferencedContexts("", "", stack, logctx))
 		}
 	}
 

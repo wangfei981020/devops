@@ -819,3 +819,54 @@ func TestHitStreamLabelsSurvivesCacheRoundTrip(t *testing.T) {
 		t.Errorf("a hit with no labels must yield no selector, got %q", s)
 	}
 }
+
+// TestAppendUnreferencedContextsStartsItsOwnLine is the regression guard for a
+// caption glued onto the end of the previous line:
+// "…traceId: d10acc15日志上下文（时间为来源系统时间）：". Beyond being unreadable,
+// the fenced block opens right after it, and Lark only recognises ``` when it
+// starts a line — a shifted caption can turn every block after it into text.
+func TestAppendUnreferencedContextsStartsItsOwnLine(t *testing.T) {
+	const ctx = "📐 向前 25 行 / 向后 5 行"
+
+	// Message without a trailing newline: the separator has to be supplied.
+	got := AppendUnreferencedContexts("Exception::\n…traceId: d10acc15", "", "", ctx)
+	if strings.Contains(got, "d10acc15"+LogContextCaption) {
+		t.Errorf("caption is glued to the previous line:\n%s", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, LogContextCaption) || line == "```" {
+			continue
+		}
+		if strings.Contains(line, LogContextCaption) {
+			t.Errorf("caption does not start its line: %q", line)
+		}
+	}
+
+	// Idempotent: a message that already ends in a newline must not grow a
+	// blank line — callers that build with their own trailing newline exist.
+	withNL := AppendUnreferencedContexts("Header\n", "", "", ctx)
+	if strings.Contains(withNL, "Header\n\n"+LogContextCaption) {
+		t.Errorf("a trailing newline produced a blank line:\n%q", withNL)
+	}
+	if !strings.Contains(withNL, "Header\n"+LogContextCaption) {
+		t.Errorf("expected exactly one newline before the caption:\n%q", withNL)
+	}
+
+	// Nothing to append leaves the message untouched, newline and all.
+	if same := AppendUnreferencedContexts("Header", "", "", ""); same != "Header" {
+		t.Errorf("nothing to append must not modify the message, got %q", same)
+	}
+
+	// An empty message must not start with a stray newline.
+	if empty := AppendUnreferencedContexts("", "", "", ctx); strings.HasPrefix(empty, "\n") {
+		t.Errorf("an empty message must not gain a leading newline: %q", empty)
+	}
+
+	// A template that placed the variable itself gets nothing appended — the
+	// spaced form counts too, which the replaced inline code missed.
+	for _, tmpl := range []string{"x {{.logcontext}}", "x {{ .logcontext }}"} {
+		if s := AppendUnreferencedContexts("msg", tmpl, "", ctx); s != "msg" {
+			t.Errorf("template %q placed it; nothing may be appended: %q", tmpl, s)
+		}
+	}
+}
