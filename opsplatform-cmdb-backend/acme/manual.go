@@ -29,13 +29,24 @@ func (p *ManualDNSProvider) Present(domain, token, keyAuth string) error {
 		var ready int
 		_ = p.DB.QueryRow(`SELECT dns_ready FROM certificates WHERE ci_id=?`, p.CertCIID).Scan(&ready)
 		if ready == 1 {
-			// 再等 10 秒让 DNS 记录传播
+			// 再等 10 秒让 DNS 记录传播（真正的传播等待在 Timeout() 里，这里只是缓冲）
 			time.Sleep(10 * time.Second)
 			return nil
 		}
 		time.Sleep(5 * time.Second)
 	}
 	return fmt.Errorf("等待手动添加 DNS TXT 记录超时（20 分钟）")
+}
+
+// Timeout 传播等待。
+//
+//	🔴 不实现这个方法的话，lego 会退回**默认的 60 秒**——这正是手动模式
+//	同样报 _acme-challenge NXDOMAIN 的原因：用户点完「继续验证」只缓冲 10 秒，
+//	再给 60 秒探测就通知 CA 了，而 GoDaddy 托管区的负缓存 TTL 是 600 秒。
+//	自动模式有 loggingProvider 兜着，手动模式没有，反而比自动更容易失败。
+//	这里和自动路径用同一组参数，两条路行为一致。
+func (p *ManualDNSProvider) Timeout() (timeout, interval time.Duration) {
+	return dns01PropagationTimeout, dns01PollInterval
 }
 
 func (p *ManualDNSProvider) CleanUp(domain, token, keyAuth string) error {

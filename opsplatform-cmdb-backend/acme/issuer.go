@@ -95,10 +95,38 @@ func (l *loggingProvider) CleanUp(domain, token, keyAuth string) error {
 }
 
 func (l *loggingProvider) Timeout() (timeout, interval time.Duration) {
-	// 强制 5 分钟传播等待 + 每 10s 轮询：GoDaddy 传播慢且各节点不均匀，
-	// Let's Encrypt 正式环境多点验证对传播很敏感，给足时间让 TXT 同步到所有权威节点再让 CA 验证。
-	// 不再沿用底层 provider 的默认(GoDaddy 仅 2 分钟)，避免 _acme-challenge NXDOMAIN。
-	return 5 * time.Minute, 10 * time.Second
+	return dns01PropagationTimeout, dns01PollInterval
+}
+
+// DNS-01 传播等待参数。
+//
+//	⚠️ 这个值必须**大于托管区 SOA 的 minimum（负缓存 TTL）**，否则会出现
+//	「lego 看得到、CA 看不到」的 NXDOMAIN：
+//	  1. 写 TXT 之前有人查过 _acme-challenge.<域名> → 递归解析器缓存下 NXDOMAIN
+//	  2. lego 的传播探测**直连权威服务器**，绕过缓存，立刻就能看到记录 → 放行
+//	  3. CA 走**递归解析器**校验 → 命中还没过期的负缓存 → NXDOMAIN，签发失败
+//
+//	GoDaddy 托管区实测 SOA minimum = 600s，所以这里取 12 分钟留足余量。
+//	（原值 5 分钟 < 600s，eeze-dev.com 2026-09-18 两次失败即此原因。）
+const (
+	dns01PropagationTimeout = 12 * time.Minute
+	dns01PollInterval       = 15 * time.Second
+)
+
+// dns01Opts 是自动/手动两条 DNS-01 路径共用的校验选项。
+//
+//	RecursiveNSsPropagationRequirement 是关键：默认 lego 只要求 TXT 在**权威**
+//	服务器上可见就通知 CA 校验，这正是上面第 2 步放行太早的原因。开启后 lego
+//	还要求递归解析器也能查到，等于把负缓存耗尽这件事纳入等待条件，CA 再去查
+//	就不会扑空。
+//
+//	AddRecursiveNameservers 指定公共 DNS：容器里 /etc/resolv.conf 指向集群
+//	CoreDNS，拿它当"递归解析器"探测没有代表性——要用和 CA 视角接近的公网解析器。
+func dns01Opts() []dns01.ChallengeOption {
+	return []dns01.ChallengeOption{
+		dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}),
+		dns01.RecursiveNSsPropagationRequirement(),
+	}
 }
 
 // Issue 执行一次 ACME 签发。
@@ -121,7 +149,7 @@ func Issue(req IssueRequest) (*IssueResult, error) {
 
 	switch {
 	case req.ChallengeProvider != nil:
-		if err := client.Challenge.SetDNS01Provider(req.ChallengeProvider); err != nil {
+		if err := client.Challenge.SetDNS01Provider(req.ChallengeProvider, dns01Opts()...); err != nil {
 			return nil, err
 		}
 	case req.Challenge == "http-01":
@@ -133,7 +161,7 @@ func Issue(req IssueRequest) (*IssueResult, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := client.Challenge.SetDNS01Provider(&loggingProvider{inner: p}); err != nil {
+		if err := client.Challenge.SetDNS01Provider(&loggingProvider{inner: p}, dns01Opts()...); err != nil {
 			return nil, err
 		}
 	}

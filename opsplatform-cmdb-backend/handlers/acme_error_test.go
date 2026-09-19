@@ -8,14 +8,19 @@ import "testing"
 func TestClassifyAcmeError_生产真实报文(t *testing.T) {
 	cases := []struct {
 		name, cn, challenge, raw string
-		wantCode                 string
-		wantRetryable            bool
+		// resolve 这条用例里主域 NS 的查询结果。NXDOMAIN 报文本身区分不了
+		// 「域名死了」和「校验记录没传播开」，归类要靠实查主域——测试里注入。
+		resolve       resolveState
+		wantCode      string
+		wantRetryable bool
 	}{
 		{
 			name: "域名没有公网解析", cn: "*.g66-uat.com", challenge: "dns-01",
 			raw: "obtain: error: one or more domains had a problem: [*.g66-uat.com] " +
 				"invalid authorization: acme: error: 400 :: urn:ietf:params:acme:error:dns :: " +
 				"DNS problem: NXDOMAIN looking up TXT for _acme-challenge.g66-uat.com",
+			// ⚠️ 同一条报文可能是两种问题，靠实查主域 NS 区分，见 stubResolve。
+			resolve:  resolveNotFound,
 			wantCode: "dns_nxdomain", wantRetryable: false,
 		},
 		{
@@ -33,6 +38,7 @@ func TestClassifyAcmeError_生产真实报文(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			defer stubResolve(c.resolve)()
 			got := classifyAcmeError(c.raw, c.challenge, c.cn)
 			if got == nil {
 				t.Fatal("不该返回 nil")
@@ -107,5 +113,62 @@ func TestClassifyAcmeError_中文乱码时仍能归类(t *testing.T) {
 	got := classifyAcmeError(garbled, "manual-dns", "*.k8s-g32-uat.com")
 	if got.Code != "manual_dns_timeout" {
 		t.Fatalf("中文乱码时应靠英文串 `error presenting token` 归类，实际 %q", got.Code)
+	}
+}
+
+// stubResolve 把主域解析替换成固定结果，返回还原用的函数。
+// 不这么做的话单测就要真连 DNS——慢、还会因为外部域名的状态变化而随机失败。
+func stubResolve(st resolveState) func() {
+	old := apexResolvable
+	apexResolvable = func(string) resolveState { return st }
+	return func() { apexResolvable = old }
+}
+
+// NXDOMAIN 的两种成因必须归到不同结论：主域活着 = 传播问题（该重试），
+// 主域查不到 = 域名没解析（重试没用）。报文一模一样，只有解析结果不同。
+// ⚠️ 这是 2026-09-18 eeze-dev.com 那次误判的回归用例：当时主域解析正常，
+// 却被告知"域名根本不存在、重试无效"，把人引向了完全错误的排查方向。
+func TestClassifyAcmeError_NXDOMAIN按主域解析结果分流(t *testing.T) {
+	raw := "obtain: error: one or more domains had a problem: [*.eeze-dev.com] " +
+		"invalid authorization: acme: error: 400 :: urn:ietf:params:acme:error:dns :: " +
+		"DNS problem: NXDOMAIN looking up TXT for _acme-challenge.eeze-dev.com - " +
+		"check that a DNS record exists for this domain"
+
+	for _, c := range []struct {
+		name          string
+		resolve       resolveState
+		wantCode      string
+		wantRetryable bool
+	}{
+		{"主域解析正常=传播问题", resolveOK, "dns_challenge_not_propagated", true},
+		{"主域查不到=域名没解析", resolveNotFound, "dns_nxdomain", false},
+		{"查不动就别下结论", resolveUnknown, "dns_nxdomain_unknown", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			defer stubResolve(c.resolve)()
+			got := classifyAcmeError(raw, "dns-01", "*.eeze-dev.com")
+			if got.Code != c.wantCode {
+				t.Errorf("code = %q，期望 %q", got.Code, c.wantCode)
+			}
+			if got.Retryable != c.wantRetryable {
+				t.Errorf("retryable = %v，期望 %v", got.Retryable, c.wantRetryable)
+			}
+		})
+	}
+}
+
+// 该查哪个域名，要从报文里 _acme-challenge.<域名> 抠，而不是直接用 cn——
+// cn 可能是 *.x.com 这种通配符写法，拿去查 NS 是查不到的。
+func TestApexFromAcmeError(t *testing.T) {
+	for _, c := range []struct{ name, raw, cn, want string }{
+		{"从报文抠", "DNS problem: NXDOMAIN looking up TXT for _acme-challenge.eeze-dev.com - check that", "*.eeze-dev.com", "eeze-dev.com"},
+		{"报文里没有就退回 cn 并去掉通配符", "some other failure", "*.eeze-qa.com", "eeze-qa.com"},
+		{"报文结尾没有分隔符", "NXDOMAIN looking up TXT for _acme-challenge.a.b.com", "", "a.b.com"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := apexFromAcmeError(c.raw, c.cn); got != c.want {
+				t.Errorf("apexFromAcmeError = %q，期望 %q", got, c.want)
+			}
+		})
 	}
 }

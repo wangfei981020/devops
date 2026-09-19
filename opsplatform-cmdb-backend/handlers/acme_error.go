@@ -1,6 +1,12 @@
 package handlers
 
-import "strings"
+import (
+	"context"
+	"errors"
+	"net"
+	"strings"
+	"time"
+)
 
 // ACME 失败原因归纳。
 //
@@ -63,16 +69,52 @@ func classifyAcmeError(raw, challenge, cn string) *AcmeReason {
 			Retryable: true,
 		}
 
-	// 域名压根没有公网解析。dns-01 要在公网查 _acme-challenge 的 TXT，
-	// 域名本身都 NXDOMAIN 的话，加什么记录都没用。
+	// NXDOMAIN。⚠️ 这里藏着两个处置完全相反的问题，而**报文本身区分不了**：
+	//
+	//	  a) 域名真的没有公网解析（托管区被删/域名过期）→ 重试多少次都没用
+	//	  b) 域名好好的，只是那条 _acme-challenge TXT 当时还没被公网看到
+	//	     → 等一会儿重试就好
+	//
+	//	CA 两种情况给的都是 `NXDOMAIN looking up TXT for _acme-challenge.<域名>`，
+	//	报文里没有任何字段能把 a 和 b 分开——2026-08-05 那批被归成 a 的记录，
+	//	事后查主域其实全都正常解析，说明当时多半是 b 被误判了。
+	//	所以这里**实际去查一次主域的 NS**，用事实来分，而不是猜。
 	case strings.Contains(s, "nxdomain"):
-		return &AcmeReason{
-			Code: "dns_nxdomain", Title: "域名没有公网解析（NXDOMAIN）",
-			Detail: "Let's Encrypt 在公网查 _acme-challenge 的 TXT 记录时，发现这个域名根本不存在。" +
-				"通常是域名已过期/未接入 DNS，或托管区被删了。",
-			Action: "先确认这个域名还在用：查它的 NS 和到期日。若已废弃，把这张证书删掉或标忽略，" +
-				"别让它一直占着失败位；若还要用，先把 DNS 托管配好再签发。",
-			Retryable: false,
+		switch apexResolvable(apexFromAcmeError(raw, cn)) {
+		case resolveOK:
+			return &AcmeReason{
+				Code: "dns_challenge_not_propagated", Title: "校验记录还没传播开（NXDOMAIN）",
+				Detail: "CA 查 `_acme-challenge.<域名>` 的 TXT 时没查到。**主域的 NS 是好的**（已实时核对），" +
+					"所以不是域名没解析，是那条校验记录当时还没在公网生效。\n" +
+					"最常见的成因是**负缓存**：写 TXT 之前只要有人查过这个名字，「不存在」就会被" +
+					"递归解析器按托管区 SOA 的 minimum 缓存住（GoDaddy 实测 600 秒）。" +
+					"签发程序探测时直连权威服务器、绕过缓存，所以它看得到；CA 走递归解析器，" +
+					"命中还没过期的负缓存，就扑空了。",
+				Action: "**等 10 分钟以上再重试**，别连着点——连着重试会撞同一份负缓存，" +
+					"还白白烧掉 Let's Encrypt 的配额（同一组域名每周 5 次重复签发）。\n" +
+					"想先确认，手动查一次：`dig TXT _acme-challenge.<域名> @8.8.8.8`。",
+				Retryable: true,
+			}
+		case resolveNotFound:
+			return &AcmeReason{
+				Code: "dns_nxdomain", Title: "域名没有公网解析（NXDOMAIN）",
+				Detail: "Let's Encrypt 在公网查 _acme-challenge 的 TXT 记录时，发现这个域名根本不存在。" +
+					"已实时核对：**主域的 NS 也查不到**，通常是域名已过期/未接入 DNS，或托管区被删了。",
+				Action: "先确认这个域名还在用：查它的 NS 和到期日。若已废弃，把这张证书删掉或标忽略，" +
+					"别让它一直占着失败位；若还要用，先把 DNS 托管配好再签发。",
+				Retryable: false,
+			}
+		default: // resolveUnknown：查不动，别给结论
+			return &AcmeReason{
+				Code: "dns_nxdomain_unknown", Title: "校验没通过（NXDOMAIN，主域状态未知）",
+				Detail: "CA 查 `_acme-challenge.<域名>` 的 TXT 没查到。这可能是域名真的没解析，" +
+					"也可能只是校验记录还没传播开——**本次核对主域 NS 时没查通**（本机 DNS 不可用或超时），" +
+					"所以无法替你判断是哪一种。这里不猜。",
+				Action: "手动跑一次 `dig NS <域名> @8.8.8.8`：\n" +
+					"　· 查得到 NS → 是传播问题，等 10 分钟以上再重试；\n" +
+					"　· 查不到 NS → 域名没解析，先把 DNS 托管配好，重试没有意义。",
+				Retryable: true,
+			}
 		}
 
 	// 内网域名找公网 CA 签——这个从设计上就不可能成功。
@@ -162,4 +204,89 @@ func isInternalName(cn string) bool {
 		}
 	}
 	return false
+}
+
+// ---------- NXDOMAIN 归因：主域到底解不解析 ----------
+
+// resolveState 主域 NS 的查询结果。三态，不是布尔——「查不动」和「查不到」
+// 是两回事，混成一个会把"我不知道"说成"域名死了"。
+type resolveState int
+
+const (
+	resolveOK       resolveState = iota // 查到 NS，域名活着
+	resolveNotFound                     // 权威答复 NXDOMAIN，域名真没解析
+	resolveUnknown                      // 超时/本机 DNS 不可用，无法判断
+)
+
+// apexResolvable 查主域的 NS。做成变量是为了让单元测试能替换掉，
+// 保持 classifyAcmeError 可测——线上走真实解析，测试里注入固定结果。
+var apexResolvable = lookupApexNS
+
+// publicResolvers 归因用的解析器。
+//
+//	⚠️ 不能用 net.DefaultResolver：
+//	  · 容器里它读 /etc/resolv.conf → 集群 CoreDNS，和 CA 的视角不是一回事；
+//	  · 实测（2026-09-18 本地验收）系统解析器查 LookupNS 很不稳定，同一个域名
+//	    连查两次能一次成功一次超时，假域名也时而 NXDOMAIN 时而超时——
+//	    那会让归类结果随机在「传播问题」和「主域状态未知」之间跳。
+//	所以固定走公网递归解析器，和 acme.dns01Opts() 用的是同一组，口径一致。
+var publicResolvers = []string{"8.8.8.8:53", "1.1.1.1:53"}
+
+func newPublicResolver(server string) *net.Resolver {
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, server)
+		},
+	}
+}
+
+// lookupApexNS 查主域的 NS，判断域名到底还在不在。
+//
+//	多个解析器依次试：**只要有一个查到 NS 就算活着**。
+//	全部明确答 NXDOMAIN 才判定域名没解析——这个判定会把界面上的「重试」置灰，
+//	错判的代价是让人以为没救了，所以宁可退回 Unknown 也不能轻易下这个结论。
+func lookupApexNS(apex string) resolveState {
+	if apex == "" {
+		return resolveUnknown
+	}
+	notFound := 0
+	for _, server := range publicResolvers {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ns, err := newPublicResolver(server).LookupNS(ctx, apex)
+		cancel()
+
+		if err == nil && len(ns) > 0 {
+			return resolveOK
+		}
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			notFound++
+		}
+	}
+	if notFound == len(publicResolvers) {
+		return resolveNotFound
+	}
+	return resolveUnknown
+}
+
+// apexFromAcmeError 取出该查哪个主域。
+//
+//	优先从报文里 `_acme-challenge.<域名>` 抠——那是 CA 实际查的那个名字，
+//	比 cn 可靠（cn 可能是 `*.x.com` 这种通配符写法）。抠不到再退回 cn。
+func apexFromAcmeError(raw, cn string) string {
+	const marker = "_acme-challenge."
+	if i := strings.Index(raw, marker); i >= 0 {
+		rest := raw[i+len(marker):]
+		end := strings.IndexFunc(rest, func(r rune) bool {
+			return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == ',' || r == ';' || r == '"'
+		})
+		if end > 0 {
+			rest = rest[:end]
+		}
+		if d := strings.Trim(rest, ". "); d != "" {
+			return d
+		}
+	}
+	return strings.TrimPrefix(strings.TrimSpace(cn), "*.")
 }
