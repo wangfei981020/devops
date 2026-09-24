@@ -31,6 +31,9 @@ import (
 
 // HandleTAListEnvs GET /api/table-alert/envs
 func HandleTAListEnvs(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
 	envs, err := taListEnvs(false)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "读取环境失败: "+err.Error())
@@ -56,6 +59,9 @@ func taEnvToMap(e TAEnv) map[string]interface{} {
 
 // HandleTACreateEnv POST /api/table-alert/envs
 func HandleTACreateEnv(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermEnvCreate) {
+		return
+	}
 	var e TAEnv
 	if err := json.NewDecoder(r.Body).Decode(&e); err != nil {
 		respondError(w, http.StatusBadRequest, "请求体格式错误")
@@ -91,6 +97,9 @@ func HandleTACreateEnv(w http.ResponseWriter, r *http.Request) {
 
 // HandleTAUpdateEnv PUT /api/table-alert/envs/{id}
 func HandleTAUpdateEnv(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermEnvUpdate) {
+		return
+	}
 	id := mux.Vars(r)["id"]
 	var e TAEnv
 	if err := json.NewDecoder(r.Body).Decode(&e); err != nil {
@@ -132,6 +141,9 @@ func HandleTAUpdateEnv(w http.ResponseWriter, r *http.Request) {
 
 // HandleTADeleteEnv DELETE /api/table-alert/envs/{id}
 func HandleTADeleteEnv(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermEnvDelete) {
+		return
+	}
 	id := mux.Vars(r)["id"]
 	for _, t := range []string{
 		"table_alert_rooms", "table_alert_events", "table_alert_collect_logs",
@@ -153,6 +165,9 @@ func HandleTADeleteEnv(w http.ResponseWriter, r *http.Request) {
 // HandleTATestEnv POST /api/table-alert/envs/{id}/test
 // 用当前（可能未保存的）配置试一次，不写快照、不产生事件，只回显结果给页面。
 func HandleTATestEnv(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermCollect) {
+		return
+	}
 	id := mux.Vars(r)["id"]
 	env, err := taGetEnv(id)
 	if err != nil {
@@ -185,8 +200,8 @@ func HandleTATestEnv(w http.ResponseWriter, r *http.Request) {
 	res, sample, err := taTestFetch(env)
 	if err != nil {
 		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"ok":    false,
-			"error": err.Error(),
+			"ok":     false,
+			"error":  err.Error(),
 			"result": res,
 		})
 		return
@@ -200,6 +215,9 @@ func HandleTATestEnv(w http.ResponseWriter, r *http.Request) {
 
 // HandleTACollectNow POST /api/table-alert/envs/{id}/collect  立即采集一次（真正落库）
 func HandleTACollectNow(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermCollect) {
+		return
+	}
 	id := mux.Vars(r)["id"]
 	env, err := taGetEnv(id)
 	if err != nil {
@@ -249,6 +267,9 @@ func taFillEnvDefaults(e *TAEnv) {
 
 // HandleTAListRooms GET /api/table-alert/rooms
 func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
 	q := r.URL.Query()
 	envID := q.Get("env_id")
 	if envID == "" {
@@ -355,6 +376,9 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 
 // HandleTAStats GET /api/table-alert/stats?env_id=
 func HandleTAStats(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
 	envID := r.URL.Query().Get("env_id")
 	if envID == "" {
 		respondError(w, http.StatusBadRequest, "缺少 env_id")
@@ -379,6 +403,9 @@ func HandleTAStats(w http.ResponseWriter, r *http.Request) {
 
 // HandleTAGetRule GET /api/table-alert/rules?env_id=
 func HandleTAGetRule(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
 	envID := r.URL.Query().Get("env_id")
 	if envID == "" {
 		respondError(w, http.StatusBadRequest, "缺少 env_id")
@@ -400,6 +427,9 @@ func HandleTAGetRule(w http.ResponseWriter, r *http.Request) {
 
 // HandleTASaveRule PUT /api/table-alert/rules
 func HandleTASaveRule(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRuleUpdate) {
+		return
+	}
 	var rule TARule
 	if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
 		respondError(w, http.StatusBadRequest, "请求体格式错误")
@@ -481,6 +511,9 @@ func HandleTASaveRule(w http.ResponseWriter, r *http.Request) {
 
 // HandleTAListBots GET /api/table-alert/bots
 func HandleTAListBots(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
 	rows, err := database.DB.Query(`
 		SELECT id, name, webhook, COALESCE(secret,''), description, enabled
 		FROM table_alert_lark_bots ORDER BY name`)
@@ -510,6 +543,9 @@ func HandleTAListBots(w http.ResponseWriter, r *http.Request) {
 
 // HandleTASaveBot POST /api/table-alert/bots（无 id 新增，有 id 更新）
 func HandleTASaveBot(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermBotManage) {
+		return
+	}
 	var b struct {
 		ID          string `json:"id"`
 		Name        string `json:"name"`
@@ -566,6 +602,9 @@ func HandleTASaveBot(w http.ResponseWriter, r *http.Request) {
 
 // HandleTADeleteBot DELETE /api/table-alert/bots/{id}
 func HandleTADeleteBot(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermBotManage) {
+		return
+	}
 	id := mux.Vars(r)["id"]
 	database.DB.Exec(`DELETE FROM table_alert_rule_bots WHERE bot_id=?`, id)
 	if _, err := database.DB.Exec(`DELETE FROM table_alert_lark_bots WHERE id=?`, id); err != nil {
@@ -577,6 +616,9 @@ func HandleTADeleteBot(w http.ResponseWriter, r *http.Request) {
 
 // HandleTATestBot POST /api/table-alert/bots/{id}/test  往这个群发一条测试卡片
 func HandleTATestBot(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermBotManage) {
+		return
+	}
 	id := mux.Vars(r)["id"]
 	var name, webhook, secret string
 	err := database.DB.QueryRow(`
@@ -631,6 +673,9 @@ func HandleTATestBot(w http.ResponseWriter, r *http.Request) {
 
 // HandleTAListContacts GET /api/table-alert/contacts
 func HandleTAListContacts(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
 	rows, err := database.DB.Query(`
 		SELECT id, name, lark_id, remark FROM table_alert_contacts ORDER BY name`)
 	if err != nil {
@@ -651,6 +696,9 @@ func HandleTAListContacts(w http.ResponseWriter, r *http.Request) {
 
 // HandleTASaveContact POST /api/table-alert/contacts
 func HandleTASaveContact(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermContactManage) {
+		return
+	}
 	var c struct {
 		ID     string `json:"id"`
 		Name   string `json:"name"`
@@ -684,6 +732,9 @@ func HandleTASaveContact(w http.ResponseWriter, r *http.Request) {
 
 // HandleTADeleteContact DELETE /api/table-alert/contacts/{id}
 func HandleTADeleteContact(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermContactManage) {
+		return
+	}
 	if _, err := database.DB.Exec(`DELETE FROM table_alert_contacts WHERE id=?`, mux.Vars(r)["id"]); err != nil {
 		respondError(w, http.StatusInternalServerError, "删除失败: "+err.Error())
 		return
@@ -697,6 +748,9 @@ func HandleTADeleteContact(w http.ResponseWriter, r *http.Request) {
 
 // HandleTAListEvents GET /api/table-alert/events
 func HandleTAListEvents(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
 	q := r.URL.Query()
 	where := []string{"1=1"}
 	args := []interface{}{}
@@ -787,6 +841,9 @@ func HandleTAListEvents(w http.ResponseWriter, r *http.Request) {
 
 // HandleTAAckEvent POST /api/table-alert/events/{id}/ack  人工确认，停止告警并静默
 func HandleTAAckEvent(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermAck) {
+		return
+	}
 	id := mux.Vars(r)["id"]
 	operator := taOperator(r)
 
@@ -822,6 +879,9 @@ func HandleTAAckEvent(w http.ResponseWriter, r *http.Request) {
 
 // HandleTABatchAck POST /api/table-alert/events/ack-batch  批量确认（同一次维护常是整组桌台）
 func HandleTABatchAck(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermAck) {
+		return
+	}
 	var body struct {
 		IDs []string `json:"ids"`
 	}
@@ -858,6 +918,9 @@ func HandleTABatchAck(w http.ResponseWriter, r *http.Request) {
 
 // HandleTAListCollectLogs GET /api/table-alert/collect-logs
 func HandleTAListCollectLogs(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
 	q := r.URL.Query()
 	where := []string{"1=1"}
 	args := []interface{}{}
@@ -935,6 +998,9 @@ func HandleTAListCollectLogs(w http.ResponseWriter, r *http.Request) {
 
 // HandleTAGetRawResponse GET /api/table-alert/collect-logs/{id}/raw  取某次采集的原始响应
 func HandleTAGetRawResponse(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermViewRaw) {
+		return
+	}
 	id := mux.Vars(r)["id"]
 	var raw sql.NullString
 	var envName, startedAt string
@@ -959,6 +1025,9 @@ func HandleTAGetRawResponse(w http.ResponseWriter, r *http.Request) {
 
 // HandleTAListNotifyLogs GET /api/table-alert/notify-logs
 func HandleTAListNotifyLogs(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
 	q := r.URL.Query()
 	where := []string{"1=1"}
 	args := []interface{}{}
@@ -1118,4 +1187,43 @@ func taOperator(r *http.Request) string {
 		return "unknown"
 	}
 	return username
+}
+
+// ---------------------------------------------------------------------------
+// 权限
+//
+// 菜单权限 menu:table_alert 由前端路由守卫与侧边栏控制；
+// 这里是按钮级权限的**服务端强制校验** —— 前端隐藏按钮只是体验，
+// 真正拦住越权调用得靠这一层，否则直接打接口就绕过去了。
+// admin / super_admin 由 UserHasPermission 内部放行。
+// ---------------------------------------------------------------------------
+
+const (
+	taPermRead          = "table_alert:read"
+	taPermEnvCreate     = "table_alert:env_create"
+	taPermEnvUpdate     = "table_alert:env_update"
+	taPermEnvDelete     = "table_alert:env_delete"
+	taPermCollect       = "table_alert:collect"
+	taPermRuleUpdate    = "table_alert:rule_update"
+	taPermBotManage     = "table_alert:bot_manage"
+	taPermContactManage = "table_alert:contact_manage"
+	taPermAck           = "table_alert:ack"
+	taPermViewRaw       = "table_alert:view_raw"
+)
+
+// taRequirePerm 校验按钮权限，不通过时直接写 403 并返回 false
+func taRequirePerm(w http.ResponseWriter, r *http.Request, code string) bool {
+	_, username, role := GetUserFromContext(r)
+	ok, err := UserHasPermission(username, role, code)
+	if err != nil {
+		taErrorf("权限检查失败 username=%s code=%s err=%v", username, code, err)
+		respondError(w, http.StatusInternalServerError, "权限检查失败")
+		return false
+	}
+	if !ok {
+		taInfof("拒绝越权操作：username=%s 缺少权限 %s", username, code)
+		respondError(w, http.StatusForbidden, "权限不足："+code)
+		return false
+	}
+	return true
 }

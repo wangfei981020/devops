@@ -7,6 +7,19 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 const isSuperAdmin = computed(() => authStore.isSuperAdmin())
 
+// 按钮级权限。服务端对同样的权限码有强制校验，这里只是不给看/不给点，
+// 真正拦住越权的是后端 —— 前端隐藏按钮挡不住直接打接口。
+const can = (code) => isSuperAdmin.value || authStore.hasPermission(code)
+const canEnvCreate     = computed(() => can('table_alert:env_create'))
+const canEnvUpdate     = computed(() => can('table_alert:env_update'))
+const canEnvDelete     = computed(() => can('table_alert:env_delete'))
+const canCollect       = computed(() => can('table_alert:collect'))
+const canRuleUpdate    = computed(() => can('table_alert:rule_update'))
+const canBotManage     = computed(() => can('table_alert:bot_manage'))
+const canContactManage = computed(() => can('table_alert:contact_manage'))
+const canAck           = computed(() => can('table_alert:ack'))
+const canViewRaw       = computed(() => can('table_alert:view_raw'))
+
 const activeTab = ref('rooms')   // rooms / envs / alert / logs
 
 // ===================== 环境 =====================
@@ -430,7 +443,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
         <label class="auto-refresh">
           <input type="checkbox" v-model="autoRefresh"> 自动刷新(30s)
         </label>
-        <button class="btn btn-secondary" @click="collectNow" :disabled="!currentEnv?.enabled">🔄 立即采集</button>
+        <button v-if="canCollect" class="btn btn-secondary" @click="collectNow" :disabled="!currentEnv?.enabled">🔄 立即采集</button>
       </div>
     </div>
 
@@ -534,7 +547,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             <td class="dim">{{ r.operator }}</td>
             <td>
               <span v-if="r.event_state === 'acked'" class="acked-label">{{ r.acked_by }} 已确认</span>
-              <button v-else-if="r.maintaining" class="btn-link" @click="ackRoom(r)">确认</button>
+              <button v-else-if="r.maintaining && canAck" class="btn-link" @click="ackRoom(r)">确认</button>
+              <span v-else-if="r.maintaining" class="dim">维护中</span>
               <span v-else>—</span>
             </td>
           </tr>
@@ -551,7 +565,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
     <!-- ================= Tab 环境配置 ================= -->
     <div v-if="activeTab === 'envs'" class="tab-content">
       <div class="action-bar">
-        <button class="btn btn-primary" @click="openCreateEnv">+ 新增环境</button>
+        <button v-if="canEnvCreate" class="btn btn-primary" @click="openCreateEnv">+ 新增环境</button>
         <span class="hint">不同环境的接口地址不一样，各填各的；地址和 token 都不写在代码里。</span>
       </div>
 
@@ -573,8 +587,9 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
               <span v-else class="tag tag-disable">异常</span>
             </td>
             <td>
-              <button class="btn-link" @click="openEditEnv(e)">编辑</button>
-              <button class="btn-link danger" @click="deleteEnv(e)">删除</button>
+              <button v-if="canEnvUpdate" class="btn-link" @click="openEditEnv(e)">编辑</button>
+              <button v-if="canEnvDelete" class="btn-link danger" @click="deleteEnv(e)">删除</button>
+              <span v-if="!canEnvUpdate && !canEnvDelete" class="dim">—</span>
             </td>
           </tr>
         </tbody>
@@ -619,15 +634,17 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
               <span class="bot-name">{{ b.name }}</span>
               <span class="bot-hook mono">{{ b.webhook_masked }}</span>
               <span v-if="!b.enabled" class="tag tag-unknown">已禁用</span>
-              <button class="btn-link" @click.prevent="testBot(b)">发送测试</button>
-              <button class="btn-link" @click.prevent="openEditBot(b)">编辑</button>
-              <button class="btn-link danger" @click.prevent="deleteBot(b)">删除</button>
+              <template v-if="canBotManage">
+                <button class="btn-link" @click.prevent="testBot(b)">发送测试</button>
+                <button class="btn-link" @click.prevent="openEditBot(b)">编辑</button>
+                <button class="btn-link danger" @click.prevent="deleteBot(b)">删除</button>
+              </template>
             </label>
             <div v-if="!bots.length" class="empty-block small">
               还没有配置 Lark 群。点下面「+ 添加 Lark 群」，把机器人 webhook 填进来。
             </div>
           </div>
-          <button class="btn btn-secondary" @click="openCreateBot">+ 添加 Lark 群</button>
+          <button v-if="canBotManage" class="btn btn-secondary" @click="openCreateBot">+ 添加 Lark 群</button>
         </div>
 
         <div class="panel">
@@ -661,7 +678,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <div class="contact-mgr">
             <div class="cm-head">
               <span>通讯录</span>
-              <button class="btn-link" @click="openCreateContact">+ 添加通知人</button>
+              <button v-if="canContactManage" class="btn-link" @click="openCreateContact">+ 添加通知人</button>
             </div>
             <table class="data-table compact">
               <thead><tr><th>姓名</th><th>Lark ID</th><th>备注</th><th>操作</th></tr></thead>
@@ -672,8 +689,11 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
                   <td class="mono small">{{ c.lark_id || '（未填）' }}</td>
                   <td class="dim">{{ c.remark }}</td>
                   <td>
-                    <button class="btn-link" @click="openEditContact(c)">编辑</button>
-                    <button class="btn-link danger" @click="deleteContact(c)">删除</button>
+                    <template v-if="canContactManage">
+                      <button class="btn-link" @click="openEditContact(c)">编辑</button>
+                      <button class="btn-link danger" @click="deleteContact(c)">删除</button>
+                    </template>
+                    <span v-else class="dim">—</span>
                   </td>
                 </tr>
               </tbody>
@@ -693,9 +713,10 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
         </div>
 
         <div class="panel-actions">
-          <button class="btn btn-primary" @click="saveRule" :disabled="ruleSaving">
+          <button v-if="canRuleUpdate" class="btn btn-primary" @click="saveRule" :disabled="ruleSaving">
             {{ ruleSaving ? '保存中…' : '保存并立即生效' }}
           </button>
+          <span v-else class="hint">没有「修改告警规则」权限，当前为只读</span>
         </div>
       </div>
     </div>
@@ -740,7 +761,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
               </td>
               <td class="dim small">{{ l.raw_size ? (l.raw_size / 1024).toFixed(1) + ' KB' : '—' }}</td>
               <td>
-                <button v-if="l.has_raw" class="btn-link" @click="viewRaw(l)">看原始响应</button>
+                <button v-if="l.has_raw && canViewRaw" class="btn-link" @click="viewRaw(l)">看原始响应</button>
+                <span v-else-if="l.has_raw" class="dim" title="需要「查看原始响应」权限">无权查看</span>
                 <span v-else class="dim">未留存</span>
               </td>
             </tr>
@@ -907,7 +929,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           </div>
         </div>
         <div class="modal-foot">
-          <button class="btn btn-secondary" @click="testEnv">测试连接</button>
+          <button v-if="canCollect" class="btn btn-secondary" @click="testEnv">测试连接</button>
           <div class="spacer"></div>
           <button class="btn btn-secondary" @click="envDialog = false">取消</button>
           <button class="btn btn-primary" @click="saveEnv" :disabled="envSaving">

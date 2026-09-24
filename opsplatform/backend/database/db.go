@@ -1866,6 +1866,18 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_table_maint_upload", "table_maintenance:upload", "[桌台维护] 上传附件", "允许上传附件"},
 		{"perm_btn_table_maint_read", "table_maintenance:read", "[桌台维护] 查看记录", "允许查看桌台维护记录"},
 
+		// 桌台维护告警（v782 新菜单）
+		{"perm_btn_table_alert_read", "table_alert:read", "[桌台告警] 查看", "允许查看桌台列表、告警事件与采集日志"},
+		{"perm_btn_table_alert_env_create", "table_alert:env_create", "[桌台告警] 新增环境", "允许新增采集环境"},
+		{"perm_btn_table_alert_env_update", "table_alert:env_update", "[桌台告警] 编辑环境", "允许修改环境的地址、token、采集间隔与解析规则"},
+		{"perm_btn_table_alert_env_delete", "table_alert:env_delete", "[桌台告警] 删除环境", "允许删除环境及其下的快照、事件与日志"},
+		{"perm_btn_table_alert_collect", "table_alert:collect", "[桌台告警] 立即采集/测试连接", "允许手动触发一次采集或测试接口连通性"},
+		{"perm_btn_table_alert_rule_update", "table_alert:rule_update", "[桌台告警] 修改告警规则", "允许修改触发阈值、告警间隔、艾特人与静默设置"},
+		{"perm_btn_table_alert_bot_manage", "table_alert:bot_manage", "[桌台告警] 管理通知群", "允许增删改 Lark 群及发送测试消息"},
+		{"perm_btn_table_alert_contact_manage", "table_alert:contact_manage", "[桌台告警] 管理通知人", "允许增删改通知人及其 Lark ID"},
+		{"perm_btn_table_alert_ack", "table_alert:ack", "[桌台告警] 确认告警", "允许确认告警并使其进入静默"},
+		{"perm_btn_table_alert_view_raw", "table_alert:view_raw", "[桌台告警] 查看原始响应", "允许查看采集到的完整响应体（可能含业务数据，单独授权）"},
+
 		// 响应记录（v738）
 		{"perm_btn_response_create", "response_record:create", "[响应记录] 添加记录", "允许添加响应记录"},
 		{"perm_btn_response_update", "response_record:update", "[响应记录] 编辑记录", "允许编辑响应记录"},
