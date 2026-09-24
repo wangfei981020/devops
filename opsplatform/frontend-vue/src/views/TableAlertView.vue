@@ -530,22 +530,22 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
     <div v-if="activeTab === 'rooms'" class="tab-content">
       <div class="stat-row">
         <div class="stat-card"><div class="sc-num">{{ stats.total }}</div><div class="sc-label">总桌台</div></div>
-        <div class="stat-card maintain"><div class="sc-num">{{ stats.maintaining }}</div><div class="sc-label">🔧 维护中</div></div>
-        <div class="stat-card enable"><div class="sc-num">{{ stats.enable }}</div><div class="sc-label">Enable</div></div>
-        <div class="stat-card disable"><div class="sc-num">{{ stats.disable }}</div><div class="sc-label">Disable</div></div>
+        <div class="stat-card maintain" title="站点状态为维护中的桌台数，也是告警的口径"><div class="sc-num">{{ stats.maintaining }}</div><div class="sc-label">🔧 维护中</div></div>
+        <div class="stat-card enable"><div class="sc-num">{{ stats.enable }}</div><div class="sc-label">Enable（启用）</div></div>
+        <div class="stat-card disable"><div class="sc-num">{{ stats.disable }}</div><div class="sc-label">Disable（停用）</div></div>
         <div class="stat-card alerting"><div class="sc-num">{{ stats.alerting }}</div><div class="sc-label">告警中</div></div>
       </div>
 
       <div class="filter-bar">
         <select v-model="filters.maintaining" @change="applyFilter">
-          <option value="">维护状态：全部</option>
+          <option value="">站点状态：全部</option>
           <option value="1">仅维护中</option>
           <option value="0">仅正常</option>
         </select>
         <select v-model="filters.status" @change="applyFilter">
-          <option value="">启停：全部</option>
-          <option value="Enable">Enable</option>
-          <option value="Disable">Disable</option>
+          <option value="">状态：全部</option>
+          <option value="Enable">Enable（启用）</option>
+          <option value="Disable">Disable（停用）</option>
         </select>
         <input v-model="filters.q" placeholder="桌台号 / 房间号" @keyup.enter="applyFilter">
         <button class="btn btn-primary" @click="applyFilter">搜索</button>
@@ -553,15 +553,17 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       </div>
 
       <p class="hint-line">
-        「启停」和「维护」是两件事：<code>status</code> 是桌台启用/关闭，
-        <code>gameRoomMaintainList</code> 非空才是维护中 —— <strong>只有维护中才会告警</strong>。
+        「状态」和「站点状态」是两件事：<code>status</code> 是桌台启用/停用，
+        <code>gameRoomMaintainList</code> 非空才是站点侧维护中 —— <strong>只有维护中才会告警</strong>。
         维护时长带「估」的表示系统首次采集时它已在维护，开始时间由接口 <code>updateTime</code> 回溯，真实时间可能更早。
       </p>
 
       <table class="data-table">
         <thead>
           <tr>
-            <th>桌台</th><th>房间号</th><th>启停</th><th>维护</th>
+            <th>桌台</th><th>房间号</th>
+            <th title="对应中台后台的「状态」：桌台启用 / 停用">状态</th>
+            <th title="对应中台后台的「站点状态」：该桌台在站点侧是否处于维护">站点状态</th>
             <th>影响站点</th>
             <th title="带「估」字的是回溯估算：系统首次采集时该桌台已在维护，没有观测到跃迁">维护时长</th>
             <th>告警</th><th>操作人</th><th>操作</th>
@@ -951,8 +953,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
               <label>主键</label><input v-model="envForm.f_room_id">
             </div>
             <div class="form-row">
-              <label>启停字段</label><input v-model="envForm.f_status">
-              <label>维护字段</label><input v-model="envForm.f_maintain">
+              <label>状态字段</label><input v-model="envForm.f_status">
+              <label>站点状态字段</label><input v-model="envForm.f_maintain">
             </div>
             <div class="form-row">
               <label>平台</label><input v-model="envForm.f_platform_id">
@@ -965,11 +967,11 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             <legend>「维护中」怎么判定</legend>
             <label class="radio-line">
               <input type="radio" value="list_not_empty" v-model="envForm.maintain_rule">
-              维护字段非空即视为维护中（推荐）
+              站点状态字段非空即视为维护中（推荐）
             </label>
             <label class="radio-line">
               <input type="radio" value="status_equals" v-model="envForm.maintain_rule">
-              启停字段等于
+              状态字段等于
               <input v-model="envForm.maintain_status_value" class="num-wide" placeholder="例如 Maintain">
             </label>
             <p class="field-hint">
