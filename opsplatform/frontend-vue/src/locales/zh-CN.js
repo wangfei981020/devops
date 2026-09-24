@@ -432,6 +432,7 @@ export default {
       tableMaintenance: '桌台维护记录',
       tableHierarchyConfig: '桌台配置',
       tableManagement: '桌台管理',
+      tableAlert: '桌台维护告警',
       apiKeys: 'API Key 管理',
       apiDocs: '接口文档',
       assets: '资产管理',

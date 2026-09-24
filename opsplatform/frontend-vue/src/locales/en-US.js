@@ -432,6 +432,7 @@ export default {
       tableMaintenance: 'Table Maintenance',
       tableHierarchyConfig: 'Table Config',
       tableManagement: 'Table Management',
+      tableAlert: 'Table Maintenance Alert',
       apiKeys: 'API Keys',
       apiDocs: 'API Docs',
       assets: 'Assets',

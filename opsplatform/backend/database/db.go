@@ -1464,6 +1464,11 @@ CREATE TABLE IF NOT EXISTS duty_records (
 		log.Println("[Migration] Expanded api_keys.key_prefix to VARCHAR(16)")
 	}
 
+	// 桌台维护告警（新菜单 table-alert，与老的桌台三兄弟互不影响）
+	if err := InitTableAlertTables(); err != nil {
+		log.Printf("[table-alert] 初始化失败（不影响主服务启动）: %v", err)
+	}
+
 	// 初始化默认角色和权限
 	initDefaultRolesAndPermissions()
 
@@ -1575,6 +1580,7 @@ func initDefaultRolesAndPermissions() {
 		{"perm_menu_table_maintenance", "menu:table_maintenance", "桌台维护记录", "/system/table-maintenance", "perm_menu_system", "", 120},
 		{"perm_menu_table_hierarchy_config", "menu:table_hierarchy_config", "桌台层级配置", "/system/table-hierarchy-config", "perm_menu_system", "", 130},
 		{"perm_menu_table_management", "menu:table_management", "桌台管理", "/system/table-management", "perm_menu_system", "", 135},
+		{"perm_menu_table_alert", "menu:table_alert", "桌台维护告警", "/system/table-alert", "perm_menu_system", "", 137},
 		{"perm_menu_api_keys", "menu:api_keys", "API Key 管理", "/system/api-keys", "perm_menu_system", "", 140},
 
 		// 资源管理

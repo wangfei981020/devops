@@ -451,6 +451,38 @@ func main() {
 	protected.HandleFunc("/k8s/scale", handlers.HandleK8sScaleDeployment).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/k8s/update-image", handlers.HandleK8sUpdateImage).Methods("POST", "OPTIONS")
 
+	// ===== 桌台维护告警（table-alert）=====
+	// 环境配置：地址/token 全由使用者在页面填，代码里不含任何硬编码地址
+	protected.HandleFunc("/table-alert/envs", handlers.HandleTAListEnvs).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/envs", handlers.HandleTACreateEnv).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/table-alert/envs/{id}", handlers.HandleTAUpdateEnv).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/table-alert/envs/{id}", handlers.HandleTADeleteEnv).Methods("DELETE", "OPTIONS")
+	protected.HandleFunc("/table-alert/envs/{id}/test", handlers.HandleTATestEnv).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/table-alert/envs/{id}/collect", handlers.HandleTACollectNow).Methods("POST", "OPTIONS")
+	// 桌台列表与统计
+	protected.HandleFunc("/table-alert/rooms", handlers.HandleTAListRooms).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/stats", handlers.HandleTAStats).Methods("GET", "OPTIONS")
+	// 告警规则
+	protected.HandleFunc("/table-alert/rules", handlers.HandleTAGetRule).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/rules", handlers.HandleTASaveRule).Methods("PUT", "OPTIONS")
+	// Lark 机器人（可配多个群）
+	protected.HandleFunc("/table-alert/bots", handlers.HandleTAListBots).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/bots", handlers.HandleTASaveBot).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/table-alert/bots/{id}", handlers.HandleTADeleteBot).Methods("DELETE", "OPTIONS")
+	protected.HandleFunc("/table-alert/bots/{id}/test", handlers.HandleTATestBot).Methods("POST", "OPTIONS")
+	// 通知人（Lark 艾特）
+	protected.HandleFunc("/table-alert/contacts", handlers.HandleTAListContacts).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/contacts", handlers.HandleTASaveContact).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/table-alert/contacts/{id}", handlers.HandleTADeleteContact).Methods("DELETE", "OPTIONS")
+	// 告警事件与确认
+	protected.HandleFunc("/table-alert/events", handlers.HandleTAListEvents).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/events/ack-batch", handlers.HandleTABatchAck).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/table-alert/events/{id}/ack", handlers.HandleTAAckEvent).Methods("POST", "OPTIONS")
+	// 采集日志 / 通知记录（排查用）
+	protected.HandleFunc("/table-alert/collect-logs", handlers.HandleTAListCollectLogs).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/collect-logs/{id}/raw", handlers.HandleTAGetRawResponse).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/notify-logs", handlers.HandleTAListNotifyLogs).Methods("GET", "OPTIONS")
+
 	// 静态文件 - 从 frontend 目录提供
 	r.PathPrefix("/css/").Handler(http.StripPrefix("/css/", http.FileServer(http.Dir("../frontend/css"))))
 	r.PathPrefix("/js/").Handler(http.StripPrefix("/js/", http.FileServer(http.Dir("../frontend/js"))))
@@ -462,6 +494,9 @@ func main() {
 
 	// 启动桌台管理同步调度器（每天3点执行）
 	go handlers.StartExternalTableScheduler()
+
+	// 启动桌台维护告警的采集器与告警引擎（采集间隔由各环境自己配，默认 60s）
+	handlers.StartTableAlertScheduler()
 
 	// 启动 Prometheus metrics 服务器 (8088)
 	go func() {
