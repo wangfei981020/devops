@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import api from '@/api'
 import { useAppStore, useAuthStore } from '@/stores'
 
@@ -56,6 +56,20 @@ const roomPage = ref(1)
 const roomSize = ref(20)
 const filters = ref({ status: '', maintaining: '', q: '' })
 const loadingRooms = ref(false)
+const roomJump = ref(1)
+const roomPages = computed(() => Math.max(1, Math.ceil(roomsTotal.value / roomSize.value)))
+
+// 跳页输入框只跟随「当前页」变化，不跟随每次加载。
+// 之前写在 loadRooms() 里无条件同步，结果 30s 自动刷新会把用户正在输入的页码冲掉。
+watch(roomPage, v => { roomJump.value = v })
+
+// 跳页：越界直接夹到合法范围，不弹错误打断操作
+function gotoRoomPage() {
+  const n = Math.min(Math.max(1, Number(roomJump.value) || 1), roomPages.value)
+  roomJump.value = n
+  roomPage.value = n
+  loadRooms()
+}
 
 async function loadRooms() {
   if (!currentEnvId.value) { rooms.value = []; roomsTotal.value = 0; return }
@@ -356,7 +370,19 @@ async function deleteContact(c) {
 const logs = ref([])
 const logsTotal = ref(0)
 const logPage = ref(1)
+const logSize = ref(20)
+const logJump = ref(1)
+const logPages = computed(() => Math.max(1, Math.ceil(logsTotal.value / logSize.value)))
 const logFilter = ref({ ok: '', has_change: '' })
+
+watch(logPage, v => { logJump.value = v })
+
+function gotoLogPage() {
+  const n = Math.min(Math.max(1, Number(logJump.value) || 1), logPages.value)
+  logJump.value = n
+  logPage.value = n
+  loadLogs()
+}
 const rawDialog = ref(false)
 const rawContent = ref('')
 const rawMeta = ref({})
@@ -366,7 +392,7 @@ async function loadLogs() {
   try {
     const res = await api.get('/api/table-alert/collect-logs', {
       params: {
-        env_id: currentEnvId.value, page: logPage.value, size: 20,
+        env_id: currentEnvId.value, page: logPage.value, size: logSize.value,
         ...(logFilter.value.ok !== '' ? { ok: logFilter.value.ok } : {}),
         ...(logFilter.value.has_change ? { has_change: 1 } : {})
       }
@@ -521,7 +547,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <option value="Enable">Enable</option>
           <option value="Disable">Disable</option>
         </select>
-        <input v-model="filters.q" placeholder="桌台号 / 房间号 / 平台ID" @keyup.enter="applyFilter">
+        <input v-model="filters.q" placeholder="桌台号 / 房间号" @keyup.enter="applyFilter">
         <button class="btn btn-primary" @click="applyFilter">搜索</button>
         <button class="btn btn-secondary" @click="resetFilter">重置</button>
       </div>
@@ -529,29 +555,26 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       <p class="hint-line">
         「启停」和「维护」是两件事：<code>status</code> 是桌台启用/关闭，
         <code>gameRoomMaintainList</code> 非空才是维护中 —— <strong>只有维护中才会告警</strong>。
-        维护时长带「估」的表示系统首次采集时它已在维护，开始时间由接口 <code>updateTime</code> 回溯，
-        真实时间可能更早；在线人数带「?」表示该桌台维护中、这个数多半已停止更新。
+        维护时长带「估」的表示系统首次采集时它已在维护，开始时间由接口 <code>updateTime</code> 回溯，真实时间可能更早。
       </p>
 
       <table class="data-table">
         <thead>
           <tr>
-            <th>桌台</th><th>房间号</th><th>平台</th><th>启停</th><th>维护</th>
+            <th>桌台</th><th>房间号</th><th>启停</th><th>维护</th>
             <th>影响站点</th>
             <th title="带「估」字的是回溯估算：系统首次采集时该桌台已在维护，没有观测到跃迁">维护时长</th>
-            <th title="接口原样返回；维护中的桌台该字段通常不再更新">在线人数</th>
             <th>告警</th><th>操作人</th><th>操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loadingRooms"><td colspan="11" class="empty">加载中…</td></tr>
-          <tr v-else-if="!rooms.length"><td colspan="11" class="empty">
+          <tr v-if="loadingRooms"><td colspan="9" class="empty">加载中…</td></tr>
+          <tr v-else-if="!rooms.length"><td colspan="9" class="empty">
             暂无数据 —— 如果这个环境刚配好，点右上角「立即采集」拉一次
           </td></tr>
           <tr v-for="r in rooms" :key="r.room_id" :class="{ 'row-maintain': r.maintaining, 'row-acked': r.event_state === 'acked' }">
             <td class="mono strong">{{ r.table_no }}</td>
             <td class="mono">{{ r.room_no }}</td>
-            <td class="mono dim">{{ r.platform_id }}</td>
             <td><span class="tag" :class="statusBadge(r.status).cls">{{ statusBadge(r.status).text }}</span></td>
             <td><span class="tag" :class="maintainBadge(r).cls">{{ maintainBadge(r).text }}</span></td>
             <td>{{ r.maintaining ? r.maintain_site_count + ' 个' : '—' }}</td>
@@ -561,12 +584,6 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
                 <span v-if="r.since_estimated" class="est-mark" :title="durationTip(r)">估</span>
               </template>
               <template v-else>—</template>
-            </td>
-            <td>
-              <span v-if="r.maintaining" class="dim" :title="'接口原样返回 ' + r.online_user_total + '；维护中的桌台该字段通常不再更新，仅供参考'">
-                {{ r.online_user_total }} <span class="stale-mark">?</span>
-              </span>
-              <span v-else>{{ r.online_user_total }}</span>
             </td>
             <td>
               <span v-if="r.alert_count">{{ r.alert_count }} 次</span>
@@ -583,10 +600,24 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
         </tbody>
       </table>
 
-      <div class="pager" v-if="roomsTotal > roomSize">
+      <div class="pager" v-if="roomsTotal">
+        <span class="pg-total">共 {{ roomsTotal }} 条</span>
+        <select v-model.number="roomSize" @change="roomPage = 1; loadRooms()" class="pg-size">
+          <option :value="10">10 条/页</option>
+          <option :value="20">20 条/页</option>
+          <option :value="50">50 条/页</option>
+          <option :value="100">100 条/页</option>
+        </select>
         <button class="btn btn-secondary" :disabled="roomPage <= 1" @click="roomPage--; loadRooms()">上一页</button>
-        <span>第 {{ roomPage }} 页 / 共 {{ Math.ceil(roomsTotal / roomSize) }} 页（{{ roomsTotal }} 条）</span>
-        <button class="btn btn-secondary" :disabled="roomPage >= Math.ceil(roomsTotal / roomSize)" @click="roomPage++; loadRooms()">下一页</button>
+        <span class="pg-cur">第 {{ roomPage }} / {{ roomPages }} 页</span>
+        <button class="btn btn-secondary" :disabled="roomPage >= roomPages" @click="roomPage++; loadRooms()">下一页</button>
+        <span class="pg-jump">
+          跳至
+          <input type="number" min="1" :max="roomPages" v-model.number="roomJump"
+                 @keyup.enter="gotoRoomPage" class="pg-input">
+          页
+          <button class="btn btn-secondary" @click="gotoRoomPage">确定</button>
+        </span>
       </div>
     </div>
 
@@ -810,10 +841,24 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
         </tbody>
       </table>
 
-      <div class="pager" v-if="logsTotal > 20">
+      <div class="pager" v-if="logsTotal">
+        <span class="pg-total">共 {{ logsTotal }} 条</span>
+        <select v-model.number="logSize" @change="logPage = 1; loadLogs()" class="pg-size">
+          <option :value="10">10 条/页</option>
+          <option :value="20">20 条/页</option>
+          <option :value="50">50 条/页</option>
+          <option :value="100">100 条/页</option>
+        </select>
         <button class="btn btn-secondary" :disabled="logPage <= 1" @click="logPage--; loadLogs()">上一页</button>
-        <span>第 {{ logPage }} 页 / 共 {{ Math.ceil(logsTotal / 20) }} 页</span>
-        <button class="btn btn-secondary" :disabled="logPage >= Math.ceil(logsTotal / 20)" @click="logPage++; loadLogs()">下一页</button>
+        <span class="pg-cur">第 {{ logPage }} / {{ logPages }} 页</span>
+        <button class="btn btn-secondary" :disabled="logPage >= logPages" @click="logPage++; loadLogs()">下一页</button>
+        <span class="pg-jump">
+          跳至
+          <input type="number" min="1" :max="logPages" v-model.number="logJump"
+                 @keyup.enter="gotoLogPage" class="pg-input">
+          页
+          <button class="btn btn-secondary" @click="gotoLogPage">确定</button>
+        </span>
       </div>
     </div>
 
@@ -1128,7 +1173,6 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 3px;
   font-size: 10px; background: rgba(245, 158, 11, .18); color: var(--warning); cursor: help;
 }
-.stale-mark { color: var(--text-muted); cursor: help; }
 
 .tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
 .tag-enable { background: rgba(16, 185, 129, .15); color: var(--success); }
@@ -1145,7 +1189,18 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .btn-link { background: none; border: none; color: var(--primary); cursor: pointer; font-size: 13px; padding: 0 6px; }
 .btn-link.danger { color: var(--danger); }
 
-.pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 16px; font-size: 13px; color: var(--text-secondary); }
+.pager {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  margin-top: 16px; font-size: 13px; color: var(--text-secondary); flex-wrap: wrap;
+}
+.pg-total { color: var(--text-muted); }
+.pg-cur { min-width: 92px; text-align: center; color: var(--text-primary); }
+.pg-size, .pg-input {
+  padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border-color);
+  background: var(--bg-input); color: var(--text-primary); font-size: 13px;
+}
+.pg-jump { display: inline-flex; align-items: center; gap: 6px; }
+.pg-input { width: 64px; }
 .action-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .action-bar .hint, .hint { font-size: 12px; color: var(--text-secondary); }
 
