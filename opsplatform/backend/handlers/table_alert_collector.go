@@ -1738,10 +1738,12 @@ func taDiscoverSites(envID string, snaps []taRoomSnapshot) {
 	now := time.Now()
 	newCount := 0
 	for siteID, cnt := range counter {
+		// INSERT IGNORE：已存在就跳过，绝不覆盖名称和关注状态 ——
+		// 人工录入的名字优先，不能被每轮采集冲掉
 		res, err := database.DB.Exec(`
 			INSERT IGNORE INTO table_alert_sites
-			  (id, env_id, site_id, site_name, watched, table_count, first_seen_at, last_seen_at)
-			VALUES (?,?,?,'',0,?,?,?)`,
+			  (id, env_id, site_id, site_name, watched, source, table_count, first_seen_at, last_seen_at)
+			VALUES (?,?,?,'',0,'auto',?,?,?)`,
 			uuid.New().String(), envID, siteID, cnt, now, now)
 		if err != nil {
 			taErrorf("站点 %s 入库失败: %v", siteID, err)

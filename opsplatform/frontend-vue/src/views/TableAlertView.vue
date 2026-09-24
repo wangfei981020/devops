@@ -424,6 +424,49 @@ async function batchWatch(watched) {
   }
 }
 
+// 手动录入站点：开发只开放了 game 入口，站点列表接口不便去调，
+// 所以人工录入是主路径，采集自动发现做兜底。
+const addSitesDialog = ref(false)
+const addSitesSaving = ref(false)
+const addMode = ref('batch')
+const addSitesRaw = ref('')
+const addSitesWatched = ref(false)
+const addSitesResult = ref(null)
+const addSiteForm = ref({ site_id: '', site_name: '', watched: false, remark: '' })
+
+function openAddSites() {
+  addMode.value = 'batch'
+  addSitesRaw.value = ''
+  addSitesWatched.value = false
+  addSitesResult.value = null
+  addSiteForm.value = { site_id: '', site_name: '', watched: false, remark: '' }
+  addSitesDialog.value = true
+}
+
+async function submitAddSites() {
+  const payload = { env_id: currentEnvId.value }
+  if (addMode.value === 'batch') {
+    if (!addSitesRaw.value.trim()) { appStore.showToast('请粘贴站点列表', 'error'); return }
+    payload.raw = addSitesRaw.value
+    payload.watched = addSitesWatched.value
+  } else {
+    if (!addSiteForm.value.site_id.trim()) { appStore.showToast('siteId 不能为空', 'error'); return }
+    Object.assign(payload, addSiteForm.value)
+  }
+  addSitesSaving.value = true
+  try {
+    const res = await api.post('/api/table-alert/sites', payload)
+    addSitesResult.value = res.data
+    addSitesRaw.value = ''
+    addSiteForm.value = { site_id: '', site_name: '', watched: false, remark: '' }
+    loadSites(); loadRooms()
+  } catch (e) {
+    appStore.showToast('导入失败: ' + errText(e), 'error')
+  } finally {
+    addSitesSaving.value = false
+  }
+}
+
 function openEditSite(st) {
   siteForm.value = { ...st }
   siteDialog.value = true
@@ -1126,6 +1169,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           </select>
           <input v-model="siteFilter.q" placeholder="站点名 / siteId" @keyup.enter="loadSites()">
           <button class="btn btn-primary" @click="loadSites()">搜索</button>
+          <button v-if="canRuleUpdate" class="btn btn-primary" @click="openAddSites">+ 手动添加站点</button>
           <button v-if="canRuleUpdate && siteSelection.length" class="btn btn-secondary" @click="batchWatch(true)">
             ★ 关注选中 ({{ siteSelection.length }})
           </button>
@@ -1138,11 +1182,11 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <thead>
             <tr>
               <th style="width:34px"><input type="checkbox" :checked="allSitesChecked" @change="toggleAllSites"></th>
-              <th>关注</th><th>站点名称</th><th>siteId</th><th>出现在</th><th>最近一次</th><th>备注</th><th>操作</th>
+              <th>关注</th><th>站点名称</th><th>siteId</th><th>来源</th><th>出现在</th><th>最近一次</th><th>备注</th><th>操作</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-if="!sites.length"><td colspan="8" class="empty">
+            <tr v-if="!sites.length"><td colspan="9" class="empty">
               还没有发现站点 —— 采集到维护中的桌台后会自动入库
             </td></tr>
             <tr v-for="st in sites" :key="st.id" :class="{ 'row-routine': st.watched }">
@@ -1155,8 +1199,15 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
               </td>
               <td :class="st.site_name ? 'strong' : 'dim'">{{ st.site_name || '(未命名)' }}</td>
               <td class="mono small dim">{{ st.site_id }}</td>
-              <td>{{ st.table_count }} 台</td>
-              <td class="small dim">{{ st.last_seen_at }}</td>
+              <td>
+                <span v-if="st.source === 'manual'" class="tag tag-routine" title="人工录入，名称不会被采集覆盖">手动</span>
+                <span v-else class="tag tag-unknown" title="由采集从维护列表里自动发现">自动</span>
+              </td>
+              <td>
+                <span v-if="st.never_seen" class="dim" title="已录入，但至今没在任何一次维护里出现过">尚未出现</span>
+                <span v-else>{{ st.table_count }} 台</span>
+              </td>
+              <td class="small dim">{{ st.last_seen_at || '—' }}</td>
               <td class="dim small">{{ st.remark }}</td>
               <td>
                 <button v-if="canRuleUpdate" class="btn-link" @click="openEditSite(st)">编辑</button>
@@ -1503,6 +1554,67 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       </div>
     </div>
 
+    <!-- ================= 手动添加站点 ================= -->
+    <div v-if="addSitesDialog" class="modal-mask" @click.self="addSitesDialog = false">
+      <div class="modal wide">
+        <div class="modal-head">
+          <h3>手动添加站点</h3>
+          <button class="close" @click="addSitesDialog = false">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="field-hint">
+            自动发现只能拿到<strong>维护过的桌台涉及的站点</strong>。
+            在这里可以提前把已知站点录进来，不用等它出现在某次维护里。
+            <strong>人工录入优先</strong>：你填的名字不会被后续采集覆盖。
+          </p>
+          <div class="tabs sub-tabs">
+            <button class="tab" :class="{ active: addMode === 'batch' }" @click="addMode = 'batch'">批量粘贴</button>
+            <button class="tab" :class="{ active: addMode === 'single' }" @click="addMode = 'single'">单条添加</button>
+          </div>
+          <template v-if="addMode === 'batch'">
+            <p class="field-hint">
+              每行一个站点，格式 <code>siteId,站点名</code>。
+              逗号、制表符、空格都认；只填 siteId 不填名字也行。
+            </p>
+            <textarea v-model="addSitesRaw" rows="10" class="raw-input" spellcheck="false"
+              placeholder="1156362225550845952,BPUat"></textarea>
+            <div class="form-row">
+              <label class="cb"><input type="checkbox" v-model="addSitesWatched"> 导入后直接标为关注</label>
+            </div>
+          </template>
+          <template v-else>
+            <div class="form-row">
+              <label>siteId *</label>
+              <input v-model="addSiteForm.site_id" class="wide-input" placeholder="如 1156362225550845952">
+            </div>
+            <div class="form-row">
+              <label>站点名称</label>
+              <input v-model="addSiteForm.site_name" class="wide-input" placeholder="如 BPUat">
+            </div>
+            <div class="form-row">
+              <label>备注</label>
+              <input v-model="addSiteForm.remark" class="wide-input">
+            </div>
+            <label class="cb"><input type="checkbox" v-model="addSiteForm.watched"> 关注这个站点</label>
+          </template>
+          <div v-if="addSitesResult" class="test-result ok">
+            <div class="tr-head">✅ 导入完成</div>
+            <div>共 {{ addSitesResult.total }} 条：新增 {{ addSitesResult.added }} 个、更新 {{ addSitesResult.updated }} 个</div>
+            <div class="field-hint" v-if="addSitesResult.updated">
+              更新的是之前被自动发现的站点，已升级为「手动」并用你填的名字。
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <div class="spacer"></div>
+          <button class="btn btn-secondary" @click="addSitesDialog = false">关闭</button>
+          <button class="btn btn-primary" @click="submitAddSites" :disabled="addSitesSaving">
+            {{ addSitesSaving ? '导入中…' : '导入' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- ================= 编辑站点弹窗 ================= -->
     <div v-if="siteDialog" class="modal-mask" @click.self="siteDialog = false">
       <div class="modal">
@@ -1748,6 +1860,14 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .star.on { color: var(--warning); }
 .site-group { margin-bottom: 18px; }
 .sg-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-primary); }
+.sub-tabs { margin-bottom: 12px; border-bottom-width: 1px; }
+.sub-tabs .tab { padding: 6px 14px; font-size: 13px; }
+.raw-input {
+  width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border-color);
+  background: var(--bg-input); color: var(--text-primary);
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.7;
+}
+.raw-input::placeholder { color: var(--text-muted); }
 
 .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-size: 13px; }
 .btn-primary { background: var(--primary); color: #fff; }

@@ -245,6 +245,7 @@ func InitTableAlertTables() error {
 			site_id VARCHAR(64) NOT NULL COMMENT '接口返回的 siteId',
 			site_name VARCHAR(128) NOT NULL DEFAULT '' COMMENT '人工补的中文名，空=未命名',
 			watched TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=关注，只有关注的站点会显示和告警',
+			source VARCHAR(12) NOT NULL DEFAULT 'auto' COMMENT 'auto=采集自动发现 / manual=人工录入；人工录入优先，自动发现不覆盖其名称',
 			table_count INT NOT NULL DEFAULT 0 COMMENT '历史上有多少张桌台的维护涉及过这个站点，用来判断重要程度',
 			remark VARCHAR(500) NOT NULL DEFAULT '',
 			first_seen_at DATETIME NULL,
@@ -340,6 +341,7 @@ func InitTableAlertTables() error {
 		{"table_alert_rules", "alert_scope", "VARCHAR(16) NOT NULL DEFAULT 'all'"},
 		{"table_alert_rules", "list_watched_sites", "TINYINT(1) NOT NULL DEFAULT 1"},
 		{"table_alert_rules", "max_list_sites", "INT NOT NULL DEFAULT 5"},
+		{"table_alert_sites", "source", "VARCHAR(12) NOT NULL DEFAULT 'auto'"},
 	} {
 		var n int
 		DB.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS

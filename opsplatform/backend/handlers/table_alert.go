@@ -1503,10 +1503,10 @@ func HandleTAListSites(w http.ResponseWriter, r *http.Request) {
 	database.DB.QueryRow(`SELECT COUNT(*) FROM table_alert_sites WHERE env_id=? AND watched=1`, envID).Scan(&watched)
 
 	rows, err := database.DB.Query(`
-		SELECT id, site_id, site_name, watched, table_count, remark,
+		SELECT id, site_id, site_name, watched, table_count, remark, source,
 		       DATE_FORMAT(last_seen_at,'%Y-%m-%d %H:%i:%s')
 		FROM table_alert_sites`+whereSQL+`
-		ORDER BY watched DESC, table_count DESC, site_id
+		ORDER BY watched DESC, source = 'manual' DESC, table_count DESC, site_id
 		LIMIT 500`, args...)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "查询失败: "+err.Error())
@@ -1516,16 +1516,19 @@ func HandleTAListSites(w http.ResponseWriter, r *http.Request) {
 
 	items := []map[string]interface{}{}
 	for rows.Next() {
-		var id, siteID, name, remark string
+		var id, siteID, name, remark, source string
 		var isWatched bool
 		var tableCount int
 		var lastSeen sql.NullString
-		if rows.Scan(&id, &siteID, &name, &isWatched, &tableCount, &remark, &lastSeen) != nil {
+		if rows.Scan(&id, &siteID, &name, &isWatched, &tableCount, &remark, &source, &lastSeen) != nil {
 			continue
 		}
 		items = append(items, map[string]interface{}{
 			"id": id, "site_id": siteID, "site_name": name, "watched": isWatched,
-			"table_count": tableCount, "remark": remark, "last_seen_at": lastSeen.String,
+			"table_count": tableCount, "remark": remark, "source": source,
+			"last_seen_at": lastSeen.String,
+			// 人工录入但从未在维护中出现过 —— 提示使用者这个站点目前没有维护记录
+			"never_seen": !lastSeen.Valid,
 		})
 	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -1550,7 +1553,7 @@ func HandleTASaveSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := database.DB.Exec(`
-		UPDATE table_alert_sites SET site_name=?, watched=?, remark=? WHERE id=?`,
+		UPDATE table_alert_sites SET site_name=?, watched=?, remark=?, source='manual' WHERE id=?`,
 		strings.TrimSpace(body.SiteName), body.Watched, body.Remark, id); err != nil {
 		respondError(w, http.StatusInternalServerError, "保存失败: "+err.Error())
 		return
@@ -1648,5 +1651,100 @@ func HandleTARoomSites(w http.ResponseWriter, r *http.Request) {
 		"watched":  watchedList,
 		"others":   otherList,
 		"total":    len(watchedList) + len(otherList),
+	})
+}
+
+// HandleTAAddSites POST /api/table-alert/sites
+// 人工录入站点。支持单条与批量粘贴 —— 开发只开放了 game 入口，
+// 站点列表接口不便去调，所以提供人工录入作为主路径，采集自动发现作为兜底。
+//
+// 优先级：人工录入压过自动发现。已被自动发现的 siteId 再手工录入时，
+// 会升级成 manual 并以填写的名称为准；反过来，自动发现永远不碰已有记录的名称。
+func HandleTAAddSites(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRuleUpdate) {
+		return
+	}
+	var body struct {
+		EnvID   string `json:"env_id"`
+		Raw     string `json:"raw"`     // 批量：每行一条
+		SiteID  string `json:"site_id"` // 单条
+		Name    string `json:"site_name"`
+		Watched bool   `json:"watched"`
+		Remark  string `json:"remark"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respondError(w, http.StatusBadRequest, "请求体格式错误")
+		return
+	}
+	if body.EnvID == "" {
+		respondError(w, http.StatusBadRequest, "缺少 env_id")
+		return
+	}
+
+	type entry struct{ SiteID, Name string }
+	entries := []entry{}
+
+	if strings.TrimSpace(body.Raw) != "" {
+		// 批量：逗号 / 制表符 / 空格都认，方便从后台表格直接复制
+		for _, line := range strings.Split(strings.ReplaceAll(body.Raw, "\r\n", "\n"), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			line = strings.ReplaceAll(line, "\t", ",")
+			var sid, name string
+			if i := strings.IndexAny(line, ",， "); i > 0 {
+				sid = strings.TrimSpace(line[:i])
+				name = strings.TrimSpace(strings.Trim(line[i+1:], ",， "))
+			} else {
+				sid = line
+			}
+			if sid != "" {
+				entries = append(entries, entry{sid, name})
+			}
+		}
+	} else if strings.TrimSpace(body.SiteID) != "" {
+		entries = append(entries, entry{strings.TrimSpace(body.SiteID), strings.TrimSpace(body.Name)})
+	}
+
+	if len(entries) == 0 {
+		respondError(w, http.StatusBadRequest, "没有解析到任何站点，请检查输入格式")
+		return
+	}
+
+	added, updated := 0, 0
+	for _, e := range entries {
+		var existID, existName string
+		err := database.DB.QueryRow(`
+			SELECT id, site_name FROM table_alert_sites WHERE env_id=? AND site_id=?`,
+			body.EnvID, e.SiteID).Scan(&existID, &existName)
+		switch {
+		case err == sql.ErrNoRows:
+			// 全新站点：出现次数为 0，表示它还没在任何维护里出现过
+			if _, err := database.DB.Exec(`
+				INSERT INTO table_alert_sites
+				  (id, env_id, site_id, site_name, watched, source, table_count, remark)
+				VALUES (?,?,?,?,?, 'manual', 0, ?)`,
+				uuid.New().String(), body.EnvID, e.SiteID, e.Name, body.Watched, body.Remark); err == nil {
+				added++
+			}
+		case err == nil:
+			// 已被自动发现过：升级为 manual。名称留空时保留原名，避免把已有的名字抹掉
+			name := e.Name
+			if name == "" {
+				name = existName
+			}
+			if _, err := database.DB.Exec(`
+				UPDATE table_alert_sites SET site_name=?, source='manual' WHERE id=?`,
+				name, existID); err == nil {
+				updated++
+			}
+		}
+	}
+
+	taInfof("%s 人工录入站点：新增 %d 个、更新 %d 个（env=%s）",
+		taOperator(r), added, updated, body.EnvID)
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "已保存", "added": added, "updated": updated, "total": len(entries),
 	})
 }
