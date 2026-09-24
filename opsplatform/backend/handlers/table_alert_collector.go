@@ -508,12 +508,13 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 			oldMaintaining bool
 			oldOperator    string
 			maintainSince  sql.NullTime
+			oldEstimated   bool
 			exists         bool
 		)
 		err := database.DB.QueryRow(`
-			SELECT status, maintaining, operator, maintain_since
+			SELECT status, maintaining, operator, maintain_since, since_estimated
 			FROM table_alert_rooms WHERE env_id = ? AND room_id = ?`,
-			env.ID, s.RoomID).Scan(&oldStatus, &oldMaintaining, &oldOperator, &maintainSince)
+			env.ID, s.RoomID).Scan(&oldStatus, &oldMaintaining, &oldOperator, &maintainSince, &oldEstimated)
 		switch {
 		case err == sql.ErrNoRows:
 			exists = false
@@ -524,14 +525,35 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 			exists = true
 		}
 
-		// 计算 maintain_since：首次观测到维护中的时刻，告警时长以它为准，
-		// 不用接口的 updateTime —— 那个字段任何编辑操作都会刷新，不可靠。
+		// 计算 maintain_since —— 维护时长以它为准，分两种来源：
+		//
+		//   精确：本地观测到「正常 → 维护中」这个跃迁，跃迁时刻就是维护开始。
+		//   估算：首次采集到这张桌台时它**已经在维护**（系统刚上线、或新加的环境），
+		//         这时没有跃迁可观测，用接口的 updateTime 回溯。
+		//
+		// 早先这里一律用 now，结果是：系统上线时已经维护了 5 小时的桌台显示「0 分钟」，
+		// 还要再等一个阈值才告警，严重低估。updateTime 确实会被任何编辑操作刷新、
+		// 不够可靠，但在「首次发现」这个场景下，一个可能偏晚的估算值远好过确定错误的 0。
+		// 估算出来的用 since_estimated 标记，页面上要让人一眼看出哪些时长不精确。
 		var newSince interface{}
+		newEstimated := false
 		switch {
-		case s.Maintaining && (!exists || !oldMaintaining):
+		case s.Maintaining && !exists:
+			// 首次见到就是维护中 —— 回溯
+			if t := taParseRemoteTime(s.UpdateTime); !t.IsZero() && t.Before(now) {
+				newSince = t
+				newEstimated = true
+				taDebugf("env=%s 桌台 %s 首次采集即处于维护，按接口 updateTime 回溯到 %s（估算）",
+					env.Name, s.TableNo, t.Format("2006-01-02 15:04:05"))
+			} else {
+				newSince = now
+			}
+		case s.Maintaining && !oldMaintaining:
+			// 观测到跃迁 —— 精确，且覆盖掉之前可能的估算标记
 			newSince = now
-		case s.Maintaining && exists && maintainSince.Valid:
+		case s.Maintaining && maintainSince.Valid:
 			newSince = maintainSince.Time
+			newEstimated = oldEstimated
 		case s.Maintaining:
 			newSince = now
 		default:
@@ -560,10 +582,11 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 			_, err = database.DB.Exec(`
 				UPDATE table_alert_rooms
 				SET table_no=?, room_no=?, platform_id=?, status=?, maintaining=?, maintain_site_count=?,
-				    online_user_total=?, operator=?, remote_update_time=?, maintain_since=?, last_seen_at=?
+				    online_user_total=?, operator=?, remote_update_time=?, maintain_since=?,
+				    since_estimated=?, last_seen_at=?
 				WHERE env_id=? AND room_id=?`,
 				s.TableNo, s.RoomNo, s.PlatformID, s.Status, s.Maintaining, s.SiteCount,
-				s.OnlineTotal, s.Operator, s.UpdateTime, newSince, now, env.ID, s.RoomID)
+				s.OnlineTotal, s.Operator, s.UpdateTime, newSince, newEstimated, now, env.ID, s.RoomID)
 		} else {
 			if s.Maintaining {
 				changes = append(changes, taChange{
@@ -575,11 +598,11 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 				INSERT INTO table_alert_rooms
 				  (id, env_id, room_id, table_no, room_no, platform_id, status, maintaining,
 				   maintain_site_count, online_user_total, operator, remote_update_time, maintain_since,
-				   first_seen_at, last_seen_at)
-				VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				   since_estimated, first_seen_at, last_seen_at)
+				VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				uuid.New().String(), env.ID, s.RoomID, s.TableNo, s.RoomNo, s.PlatformID,
 				s.Status, s.Maintaining, s.SiteCount, s.OnlineTotal, s.Operator, s.UpdateTime, newSince,
-				now, now)
+				newEstimated, now, now)
 		}
 		if err != nil {
 			taErrorf("env=%s 写入桌台 %s 失败: %v", env.Name, s.TableNo, err)
@@ -587,14 +610,14 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 		}
 
 		// 维护事件：开始 / 结束
-		taSyncEvent(env, s, exists && oldMaintaining)
+		taSyncEvent(env, s, exists && oldMaintaining, newSince, newEstimated)
 	}
 
 	return changes, nil
 }
 
 // taSyncEvent 维护开始时开事件单，维护结束时收单
-func taSyncEvent(env *TAEnv, s taRoomSnapshot, wasMaintaining bool) {
+func taSyncEvent(env *TAEnv, s taRoomSnapshot, wasMaintaining bool, since interface{}, estimated bool) {
 	switch {
 	case s.Maintaining && !wasMaintaining:
 		// 新开一单（先查有没有未结束的，防止重复开）
@@ -608,16 +631,21 @@ func taSyncEvent(env *TAEnv, s taRoomSnapshot, wasMaintaining bool) {
 		_, err := database.DB.Exec(`
 			INSERT INTO table_alert_events
 			  (id, env_id, env_name, room_id, table_no, room_no, platform_id,
-			   maintain_start_at, site_count, operator, state, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?, 'pending',?,?)`,
+			   maintain_start_at, start_estimated, site_count, operator, state, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?, 'pending',?,?)`,
 			uuid.New().String(), env.ID, env.Name, s.RoomID, s.TableNo, s.RoomNo,
-			s.PlatformID, time.Now(), s.SiteCount, s.Operator, time.Now(), time.Now())
+			s.PlatformID, taEventStart(since), estimated, s.SiteCount, s.Operator, time.Now(), time.Now())
 		if err != nil {
 			taErrorf("env=%s 桌台 %s 开事件单失败: %v", env.Name, s.TableNo, err)
 			return
 		}
-		taInfof("env=%s 桌台 %s(%s) 进入维护，已开事件单，影响站点 %d 个，操作人 %s",
-			env.Name, s.TableNo, s.RoomNo, s.SiteCount, s.Operator)
+		startLabel := "实测跃迁"
+		if estimated {
+			startLabel = "按 updateTime 回溯（估算）"
+		}
+		taInfof("env=%s 桌台 %s(%s) 进入维护，已开事件单，开始时间 %s [%s]，影响站点 %d 个，操作人 %s",
+			env.Name, s.TableNo, s.RoomNo,
+			taEventStart(since).Format("2006-01-02 15:04:05"), startLabel, s.SiteCount, s.Operator)
 
 	case !s.Maintaining && wasMaintaining:
 		// 收单 + 恢复通知
@@ -812,18 +840,18 @@ func taScanAndAlert() error {
 			p.EnvName, p.TableNo, p.RoomNo, seq, taHumanDur(dur), escalating, next.Format("15:04:05"))
 
 		go taSendAlert(taAlertPayload{
-			EventID:    p.ID,
-			EnvName:    p.EnvName,
-			TableNo:    p.TableNo,
-			RoomNo:     p.RoomNo,
-			SiteCount:  p.SiteCount,
-			Operator:   p.Operator,
-			StartAt:    p.StartAt,
-			Duration:   dur,
-			Seq:        seq,
-			MaxTimes:   rule.MaxTimes,
-			Escalating: escalating,
-			NextAt:     next,
+			EventID:     p.ID,
+			EnvName:     p.EnvName,
+			TableNo:     p.TableNo,
+			RoomNo:      p.RoomNo,
+			SiteCount:   p.SiteCount,
+			Operator:    p.Operator,
+			StartAt:     p.StartAt,
+			Duration:    dur,
+			Seq:         seq,
+			MaxTimes:    rule.MaxTimes,
+			Escalating:  escalating,
+			NextAt:      next,
 			IntervalMin: nextIv,
 		}, rule)
 	}
@@ -1267,4 +1295,34 @@ func taAcquireLeader(role string, ttlSec int) bool {
 		return false
 	}
 	return holder == me
+}
+
+// taEventStart 把 maintain_since 归一成 time.Time，取不到就用当前时间兜底
+func taEventStart(since interface{}) time.Time {
+	if t, ok := since.(time.Time); ok && !t.IsZero() {
+		return t
+	}
+	return time.Now()
+}
+
+// taParseRemoteTime 解析接口返回的时间字符串。
+// 中台给的是 "2026-09-24T04:53:29.000+00:00" 这种带时区的格式，
+// 解析后统一转到本地时区，避免和 time.Now() 比较时又踩一次时区的坑。
+func taParseRemoteTime(v string) time.Time {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05.000Z0700",
+		"2006-01-02 15:04:05",
+		"2006/01/02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t.In(time.Local)
+		}
+	}
+	return time.Time{}
 }

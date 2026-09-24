@@ -98,7 +98,8 @@ func InitTableAlertTables() error {
 			online_user_total INT NOT NULL DEFAULT 0,
 			operator VARCHAR(128) NOT NULL DEFAULT '',
 			remote_update_time VARCHAR(64) NOT NULL DEFAULT '' COMMENT '接口给的 updateTime，原样存',
-			maintain_since DATETIME NULL COMMENT '本地首次观测到维护中的时刻，告警时长以它为准',
+			maintain_since DATETIME NULL COMMENT '维护开始时间，告警时长以它为准',
+			since_estimated TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=首次采集时该桌台已在维护，开始时间由接口 updateTime 回溯而来，只是估算',
 			first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			UNIQUE KEY uk_ta_room (env_id, room_id),
@@ -175,7 +176,8 @@ func InitTableAlertTables() error {
 			table_no VARCHAR(64) NOT NULL DEFAULT '',
 			room_no VARCHAR(64) NOT NULL DEFAULT '',
 			platform_id VARCHAR(64) NOT NULL DEFAULT '',
-			maintain_start_at DATETIME NOT NULL COMMENT '首次观测到维护中的时刻',
+			maintain_start_at DATETIME NOT NULL COMMENT '维护开始时间',
+			start_estimated TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=开始时间是回溯估算的，非实测跃迁',
 			maintain_end_at DATETIME NULL,
 			site_count INT NOT NULL DEFAULT 0,
 			operator VARCHAR(128) NOT NULL DEFAULT '',
@@ -259,6 +261,23 @@ func InitTableAlertTables() error {
 		if _, err := DB.Exec(s.ddl); err != nil {
 			log.Printf("[table-alert] 建表 %s 失败: %v", s.name, err)
 			return err
+		}
+	}
+
+	// Auto-migrate：给已部署的实例补字段
+	for _, mig := range []struct{ table, col, ddl string }{
+		{"table_alert_rooms", "since_estimated", "TINYINT(1) NOT NULL DEFAULT 0"},
+		{"table_alert_events", "start_estimated", "TINYINT(1) NOT NULL DEFAULT 0"},
+	} {
+		var n int
+		DB.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?`, mig.table, mig.col).Scan(&n)
+		if n == 0 {
+			if _, err := DB.Exec("ALTER TABLE " + mig.table + " ADD COLUMN " + mig.col + " " + mig.ddl); err != nil {
+				log.Printf("[table-alert] 补字段 %s.%s 失败: %v", mig.table, mig.col, err)
+			} else {
+				log.Printf("[table-alert] 已补字段 %s.%s", mig.table, mig.col)
+			}
 		}
 	}
 

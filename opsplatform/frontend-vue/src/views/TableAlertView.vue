@@ -403,6 +403,18 @@ function copyRaw() {
 // ===================== 通用 =====================
 function errText(e) { return e?.response?.data?.error || e?.message || String(e) }
 
+// 维护时长的来源说明：区分实测跃迁与回溯估算，别让人把估算值当精确值用
+function durationTip(r) {
+  if (!r.maintain_since) return ''
+  if (r.since_estimated) {
+    return `维护开始时间 ${r.maintain_since}（估算）\n`
+         + `首次采集到这张桌台时它已经在维护，没有观测到「正常→维护」的跃迁，`
+         + `所以按接口返回的 updateTime 回溯。\n`
+         + `updateTime 会被任何编辑操作刷新，真实维护时间可能更早。`
+  }
+  return `维护开始时间 ${r.maintain_since}（实测）\n采集时观测到「正常→维护」的跃迁，时间准确。`
+}
+
 function maintainBadge(r) {
   return r.maintaining ? { text: '🔧 维护中', cls: 'tag-maintain' } : { text: '正常', cls: 'tag-normal' }
 }
@@ -517,13 +529,18 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       <p class="hint-line">
         「启停」和「维护」是两件事：<code>status</code> 是桌台启用/关闭，
         <code>gameRoomMaintainList</code> 非空才是维护中 —— <strong>只有维护中才会告警</strong>。
+        维护时长带「估」的表示系统首次采集时它已在维护，开始时间由接口 <code>updateTime</code> 回溯，
+        真实时间可能更早；在线人数带「?」表示该桌台维护中、这个数多半已停止更新。
       </p>
 
       <table class="data-table">
         <thead>
           <tr>
             <th>桌台</th><th>房间号</th><th>平台</th><th>启停</th><th>维护</th>
-            <th>影响站点</th><th>维护时长</th><th>在线人数</th><th>告警</th><th>操作人</th><th>操作</th>
+            <th>影响站点</th>
+            <th title="带「估」字的是回溯估算：系统首次采集时该桌台已在维护，没有观测到跃迁">维护时长</th>
+            <th title="接口原样返回；维护中的桌台该字段通常不再更新">在线人数</th>
+            <th>告警</th><th>操作人</th><th>操作</th>
           </tr>
         </thead>
         <tbody>
@@ -538,8 +555,19 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             <td><span class="tag" :class="statusBadge(r.status).cls">{{ statusBadge(r.status).text }}</span></td>
             <td><span class="tag" :class="maintainBadge(r).cls">{{ maintainBadge(r).text }}</span></td>
             <td>{{ r.maintaining ? r.maintain_site_count + ' 个' : '—' }}</td>
-            <td :class="{ 'dur-long': r.duration_min >= 60 }">{{ r.duration_text || '—' }}</td>
-            <td>{{ r.online_user_total }}</td>
+            <td :class="{ 'dur-long': r.duration_min >= 60 }">
+              <template v-if="r.duration_text">
+                <span :title="durationTip(r)">{{ r.since_estimated ? '≈' : '' }}{{ r.duration_text }}</span>
+                <span v-if="r.since_estimated" class="est-mark" :title="durationTip(r)">估</span>
+              </template>
+              <template v-else>—</template>
+            </td>
+            <td>
+              <span v-if="r.maintaining" class="dim" :title="'接口原样返回 ' + r.online_user_total + '；维护中的桌台该字段通常不再更新，仅供参考'">
+                {{ r.online_user_total }} <span class="stale-mark">?</span>
+              </span>
+              <span v-else>{{ r.online_user_total }}</span>
+            </td>
             <td>
               <span v-if="r.alert_count">{{ r.alert_count }} 次</span>
               <span v-else>—</span>
@@ -1096,6 +1124,11 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .dim { color: var(--text-muted); }
 .dur-long { color: var(--danger); font-weight: 600; }
 .acked-label { font-size: 12px; color: var(--success); }
+.est-mark {
+  display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 3px;
+  font-size: 10px; background: rgba(245, 158, 11, .18); color: var(--warning); cursor: help;
+}
+.stale-mark { color: var(--text-muted); cursor: help; }
 
 .tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
 .tag-enable { background: rgba(16, 185, 129, .15); color: var(--success); }

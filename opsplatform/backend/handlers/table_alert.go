@@ -318,7 +318,7 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 		SELECT room_id, table_no, room_no, platform_id, status, maintaining, maintain_site_count,
 		       online_user_total, operator, remote_update_time,
 		       DATE_FORMAT(maintain_since, '%Y-%m-%d %H:%i:%s'),
-		       DATE_FORMAT(last_seen_at, '%Y-%m-%d %H:%i:%s')
+		       DATE_FORMAT(last_seen_at, '%Y-%m-%d %H:%i:%s'), since_estimated
 		FROM table_alert_rooms`+whereSQL+`
 		ORDER BY maintaining DESC, table_no
 		LIMIT ? OFFSET ?`, append(args, size, (page-1)*size)...)
@@ -333,12 +333,12 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var (
 			roomID, tableNo, roomNo, platformID, status, operator, remoteUpd string
-			maintaining                                                      bool
+			maintaining, sinceEstimated                                      bool
 			siteCount, online                                                int
 			since, lastSeen                                                  sql.NullString
 		)
 		if err := rows.Scan(&roomID, &tableNo, &roomNo, &platformID, &status, &maintaining,
-			&siteCount, &online, &operator, &remoteUpd, &since, &lastSeen); err != nil {
+			&siteCount, &online, &operator, &remoteUpd, &since, &lastSeen, &sinceEstimated); err != nil {
 			continue
 		}
 		item := map[string]interface{}{
@@ -347,7 +347,8 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 			"maintain_site_count": siteCount, "online_user_total": online,
 			"operator": operator, "remote_update_time": remoteUpd,
 			"maintain_since": since.String, "last_seen_at": lastSeen.String,
-			"duration_text": "", "duration_min": 0,
+			"since_estimated": sinceEstimated,
+			"duration_text":   "", "duration_min": 0,
 		}
 		if maintaining && since.Valid {
 			if t, err := time.ParseInLocation("2006-01-02 15:04:05", since.String, time.Local); err == nil {
@@ -784,7 +785,7 @@ func HandleTAListEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := database.DB.Query(`
-		SELECT id, env_name, room_id, table_no, room_no, platform_id,
+		SELECT id, env_name, room_id, table_no, room_no, platform_id, start_estimated,
 		       DATE_FORMAT(maintain_start_at,'%Y-%m-%d %H:%i:%s'),
 		       DATE_FORMAT(maintain_end_at,'%Y-%m-%d %H:%i:%s'),
 		       site_count, operator, alert_count,
@@ -807,9 +808,9 @@ func HandleTAListEvents(w http.ResponseWriter, r *http.Request) {
 			startAt                                                                    string
 			endAt, lastAlert, nextAlert, ackedAt                                       sql.NullString
 			siteCount, alertCount                                                      int
-			escalated                                                                  bool
+			escalated, startEstimated                                                  bool
 		)
-		if rows.Scan(&id, &envName, &roomID, &tableNo, &roomNo, &platformID, &startAt, &endAt,
+		if rows.Scan(&id, &envName, &roomID, &tableNo, &roomNo, &platformID, &startEstimated, &startAt, &endAt,
 			&siteCount, &operator, &alertCount, &lastAlert, &nextAlert, &escalated,
 			&state, &ackedBy, &ackedAt) != nil {
 			continue
@@ -827,8 +828,9 @@ func HandleTAListEvents(w http.ResponseWriter, r *http.Request) {
 		items = append(items, map[string]interface{}{
 			"id": id, "env_name": envName, "room_id": roomID, "table_no": tableNo,
 			"room_no": roomNo, "platform_id": platformID,
-			"maintain_start_at": startAt, "maintain_end_at": endAt.String,
-			"duration_text": dur, "site_count": siteCount, "operator": operator,
+			"maintain_start_at": startAt, "start_estimated": startEstimated,
+			"maintain_end_at": endAt.String,
+			"duration_text":   dur, "site_count": siteCount, "operator": operator,
 			"alert_count": alertCount, "last_alert_at": lastAlert.String,
 			"next_alert_at": nextAlert.String, "escalated": escalated,
 			"state": state, "acked_by": ackedBy, "acked_at": ackedAt.String,
