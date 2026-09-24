@@ -554,6 +554,30 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 		case s.Maintaining && maintainSince.Valid:
 			newSince = maintainSince.Time
 			newEstimated = oldEstimated
+			// 存量数据一次性纠正：升级前这里一律用采集时刻，导致冷启动时已在维护的
+			// 桌台开始时间被记成「系统发现它的那一刻」。光改新逻辑救不了这些记录 ——
+			// 它们已经有 maintain_since，会一直走这个分支把错值留着。
+			//
+			// 判据用差值而不是"是否相等"：实测跃迁记下的 since 天然就比 updateTime 晚
+			// 一点（最多晚一个采集周期），而冷启动记的能晚上好几个小时。所以只有差距
+			// 明显超出正常采集延迟时才认定是存量错值。
+			// 纠正后打上 since_estimated，下次就不会再进来，只会发生一次。
+			if !oldEstimated {
+				if t := taParseRemoteTime(s.UpdateTime); !t.IsZero() {
+					tolerance := time.Duration(taDefaultInt(env.IntervalSec, 60)) * time.Second * 3
+					if tolerance < 5*time.Minute {
+						tolerance = 5 * time.Minute
+					}
+					if maintainSince.Time.Sub(t) > tolerance {
+						newSince = t
+						newEstimated = true
+						taInfof("env=%s 桌台 %s 维护开始时间回填：%s → %s（原值是升级前按采集时刻记的，现按接口 updateTime 回溯，只纠正这一次）",
+							env.Name, s.TableNo,
+							maintainSince.Time.Format("2006-01-02 15:04:05"),
+							t.Format("2006-01-02 15:04:05"))
+					}
+				}
+			}
 		case s.Maintaining:
 			newSince = now
 		default:
@@ -672,6 +696,24 @@ func taSyncEvent(env *TAEnv, s taRoomSnapshot, wasMaintaining bool, since interf
 			UPDATE table_alert_events SET site_count=?, operator=?
 			WHERE env_id=? AND room_id=? AND maintain_end_at IS NULL`,
 			s.SiteCount, s.Operator, env.ID, s.RoomID)
+
+		// 快照侧回填了开始时间的话，事件单也要跟着改 —— 告警时长判定读的是
+		// events.maintain_start_at，只改 rooms 的话页面对了、告警阈值还是错的。
+		if estimated {
+			start := taEventStart(since)
+			res, err := database.DB.Exec(`
+				UPDATE table_alert_events
+				SET maintain_start_at=?, start_estimated=1
+				WHERE env_id=? AND room_id=? AND maintain_end_at IS NULL
+				  AND start_estimated=0 AND maintain_start_at > ?`,
+				start, env.ID, s.RoomID, start)
+			if err == nil {
+				if n, _ := res.RowsAffected(); n > 0 {
+					taInfof("env=%s 桌台 %s 事件单开始时间同步回填为 %s",
+						env.Name, s.TableNo, start.Format("2006-01-02 15:04:05"))
+				}
+			}
+		}
 	}
 }
 
