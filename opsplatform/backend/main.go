@@ -478,6 +478,10 @@ func main() {
 	protected.HandleFunc("/table-alert/events", handlers.HandleTAListEvents).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/table-alert/events/ack-batch", handlers.HandleTABatchAck).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/table-alert/events/{id}/ack", handlers.HandleTAAckEvent).Methods("POST", "OPTIONS")
+	// 例行维护窗口
+	protected.HandleFunc("/table-alert/windows", handlers.HandleTAListWindows).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/windows", handlers.HandleTASaveWindow).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/table-alert/windows/{id}", handlers.HandleTADeleteWindow).Methods("DELETE", "OPTIONS")
 	// 采集日志 / 通知记录（排查用）
 	protected.HandleFunc("/table-alert/collect-logs", handlers.HandleTAListCollectLogs).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/table-alert/collect-logs/{id}/raw", handlers.HandleTAGetRawResponse).Methods("GET", "OPTIONS")

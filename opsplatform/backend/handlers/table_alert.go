@@ -357,16 +357,28 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 				item["duration_min"] = int(d.Minutes())
 			}
 		}
-		// 带上告警次数和确认状态
+		// 带上告警次数、确认状态，以及本次维护属不属于例行窗口
 		var alertCount int
-		var state, ackedBy string
+		var state, ackedBy, winName string
+		var winEnd sql.NullTime
 		database.DB.QueryRow(`
-			SELECT alert_count, state, acked_by FROM table_alert_events
+			SELECT alert_count, state, acked_by, window_name, window_end_at
+			FROM table_alert_events
 			WHERE env_id=? AND room_id=? AND maintain_end_at IS NULL
-			ORDER BY maintain_start_at DESC LIMIT 1`, envID, roomID).Scan(&alertCount, &state, &ackedBy)
+			ORDER BY maintain_start_at DESC LIMIT 1`, envID, roomID).
+			Scan(&alertCount, &state, &ackedBy, &winName, &winEnd)
 		item["alert_count"] = alertCount
 		item["event_state"] = state
 		item["acked_by"] = ackedBy
+		item["window_name"] = winName
+		item["window_overrun"] = false
+		if winName != "" && winEnd.Valid {
+			item["window_end_at"] = winEnd.Time.Format("2006-01-02 15:04:05")
+			if now.After(winEnd.Time) {
+				item["window_overrun"] = true
+				item["window_overrun_text"] = taHumanDur(now.Sub(winEnd.Time))
+			}
+		}
 		items = append(items, item)
 	}
 
@@ -1228,4 +1240,201 @@ func taRequirePerm(w http.ResponseWriter, r *http.Request, code string) bool {
 		return false
 	}
 	return true
+}
+
+// ---------------------------------------------------------------------------
+// 例行维护窗口
+// ---------------------------------------------------------------------------
+
+// HandleTAListWindows GET /api/table-alert/windows?env_id=
+func HandleTAListWindows(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
+	envID := r.URL.Query().Get("env_id")
+	if envID == "" {
+		respondError(w, http.StatusBadRequest, "缺少 env_id")
+		return
+	}
+	rows, err := database.DB.Query(`
+		SELECT id, env_id, name, enabled, repeat_type, weekdays, month_days, once_date,
+		       start_time, end_time, COALESCE(table_nos,''), action, overrun_alert, remark
+		FROM table_alert_maint_windows WHERE env_id = ? ORDER BY start_time, name`, envID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "查询失败: "+err.Error())
+		return
+	}
+	defer rows.Close()
+
+	out := []map[string]interface{}{}
+	now := time.Now()
+	for rows.Next() {
+		var win TAMaintWindow
+		if rows.Scan(&win.ID, &win.EnvID, &win.Name, &win.Enabled, &win.RepeatType, &win.Weekdays,
+			&win.MonthDays, &win.OnceDate, &win.StartTime, &win.EndTime, &win.TableNos,
+			&win.Action, &win.OverrunAlert, &win.Remark) != nil {
+			continue
+		}
+		item := map[string]interface{}{
+			"id": win.ID, "env_id": win.EnvID, "name": win.Name, "enabled": win.Enabled,
+			"repeat_type": win.RepeatType, "weekdays": win.Weekdays, "month_days": win.MonthDays,
+			"once_date": win.OnceDate, "start_time": win.StartTime, "end_time": win.EndTime,
+			"table_nos": win.TableNos, "action": win.Action,
+			"overrun_alert": win.OverrunAlert, "remark": win.Remark,
+			"table_count": taCountTableNos(win.TableNos),
+			"rule_text":   taWindowRuleText(&win),
+		}
+		// 当前是否正处于这个窗口内，页面上直接标出来
+		if st, en, ok := taWindowInstance(&win, now); ok && !now.Before(st) && now.Before(en) {
+			item["active_now"] = true
+			item["current_end"] = en.Format("2006-01-02 15:04:05")
+		} else {
+			item["active_now"] = false
+		}
+		out = append(out, item)
+	}
+	respondJSON(w, http.StatusOK, out)
+}
+
+// HandleTASaveWindow POST /api/table-alert/windows（无 id 新增，有 id 更新）
+func HandleTASaveWindow(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRuleUpdate) {
+		return
+	}
+	var win TAMaintWindow
+	if err := json.NewDecoder(r.Body).Decode(&win); err != nil {
+		respondError(w, http.StatusBadRequest, "请求体格式错误")
+		return
+	}
+	if strings.TrimSpace(win.Name) == "" {
+		respondError(w, http.StatusBadRequest, "窗口名称不能为空")
+		return
+	}
+	if win.EnvID == "" {
+		respondError(w, http.StatusBadRequest, "缺少 env_id")
+		return
+	}
+	if _, _, ok := taParseHM(win.StartTime); !ok {
+		respondError(w, http.StatusBadRequest, "开始时间格式应为 HH:MM")
+		return
+	}
+	if _, _, ok := taParseHM(win.EndTime); !ok {
+		respondError(w, http.StatusBadRequest, "结束时间格式应为 HH:MM")
+		return
+	}
+	if strings.TrimSpace(win.TableNos) == "" {
+		respondError(w, http.StatusBadRequest, "请至少指定一张桌台，或填 * 表示全部")
+		return
+	}
+	// 重复规则的必填项要当场拦住，否则窗口永远不会命中，问题很难被发现
+	switch win.RepeatType {
+	case "weekly":
+		if strings.TrimSpace(win.Weekdays) == "" {
+			respondError(w, http.StatusBadRequest, "按周重复时必须选择星期")
+			return
+		}
+	case "monthly":
+		if strings.TrimSpace(win.MonthDays) == "" {
+			respondError(w, http.StatusBadRequest, "按月重复时必须选择日期")
+			return
+		}
+	case "once":
+		if strings.TrimSpace(win.OnceDate) == "" {
+			respondError(w, http.StatusBadRequest, "指定日期不能为空")
+			return
+		}
+	default:
+		win.RepeatType = "daily"
+	}
+	if win.Action != "suppress" {
+		win.Action = "annotate"
+	}
+
+	var err error
+	if win.ID == "" {
+		win.ID = uuid.New().String()
+		_, err = database.DB.Exec(`
+			INSERT INTO table_alert_maint_windows
+			  (id, env_id, name, enabled, repeat_type, weekdays, month_days, once_date,
+			   start_time, end_time, table_nos, action, overrun_alert, remark, created_by)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			win.ID, win.EnvID, win.Name, win.Enabled, win.RepeatType, win.Weekdays,
+			win.MonthDays, win.OnceDate, win.StartTime, win.EndTime, win.TableNos,
+			win.Action, win.OverrunAlert, win.Remark, taOperator(r))
+	} else {
+		_, err = database.DB.Exec(`
+			UPDATE table_alert_maint_windows SET
+			  name=?, enabled=?, repeat_type=?, weekdays=?, month_days=?, once_date=?,
+			  start_time=?, end_time=?, table_nos=?, action=?, overrun_alert=?, remark=?
+			WHERE id=?`,
+			win.Name, win.Enabled, win.RepeatType, win.Weekdays, win.MonthDays, win.OnceDate,
+			win.StartTime, win.EndTime, win.TableNos, win.Action, win.OverrunAlert,
+			win.Remark, win.ID)
+	}
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "保存失败: "+err.Error())
+		return
+	}
+	taInfof("例行维护窗口「%s」已保存：%s，适用 %d 张桌台（操作人 %s）",
+		win.Name, taWindowRuleText(&win), taCountTableNos(win.TableNos), taOperator(r))
+	respondJSON(w, http.StatusOK, map[string]string{"id": win.ID, "message": "已保存"})
+}
+
+// HandleTADeleteWindow DELETE /api/table-alert/windows/{id}
+func HandleTADeleteWindow(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRuleUpdate) {
+		return
+	}
+	id := mux.Vars(r)["id"]
+	if _, err := database.DB.Exec(`DELETE FROM table_alert_maint_windows WHERE id=?`, id); err != nil {
+		respondError(w, http.StatusInternalServerError, "删除失败: "+err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"message": "已删除"})
+}
+
+// taWindowRuleText 把重复规则拼成一句人话，页面和日志共用
+func taWindowRuleText(w *TAMaintWindow) string {
+	span := w.StartTime + "-" + w.EndTime
+	if sh, sm, ok1 := taParseHM(w.StartTime); ok1 {
+		if eh, em, ok2 := taParseHM(w.EndTime); ok2 && (eh*60+em) <= (sh*60+sm) {
+			span += "（次日）"
+		}
+	}
+	switch w.RepeatType {
+	case "weekly":
+		names := map[int]string{1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "日"}
+		var ds []string
+		for _, p := range strings.Split(w.Weekdays, ",") {
+			var n int
+			if _, err := fmt.Sscanf(strings.TrimSpace(p), "%d", &n); err == nil {
+				if nm, ok := names[n]; ok {
+					ds = append(ds, "周"+nm)
+				}
+			}
+		}
+		return strings.Join(ds, "、") + " " + span
+	case "monthly":
+		var ds []string
+		for _, p := range strings.Split(w.MonthDays, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				ds = append(ds, p+"号")
+			}
+		}
+		return "每月 " + strings.Join(ds, "、") + " " + span
+	case "once":
+		return w.OnceDate + " " + span
+	default:
+		return "每天 " + span
+	}
+}
+
+func taCountTableNos(list string) int {
+	n := 0
+	for _, p := range strings.Split(list, ",") {
+		if strings.TrimSpace(p) != "" {
+			n++
+		}
+	}
+	return n
 }

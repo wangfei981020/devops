@@ -652,13 +652,22 @@ func taSyncEvent(env *TAEnv, s taRoomSnapshot, wasMaintaining bool, since interf
 		if cnt > 0 {
 			return
 		}
+		start := taEventStart(since)
+		// 归属判定放在开单时做一次：之后即使维护拖到窗口之外，也还知道它本来属于哪次例行保养
+		var winID, winName string
+		var winEnd interface{}
+		if hit := taMatchWindow(env.ID, s.TableNo, start, time.Now()); hit != nil {
+			winID, winName, winEnd = hit.Window.ID, hit.Window.Name, hit.PlanEnd
+		}
 		_, err := database.DB.Exec(`
 			INSERT INTO table_alert_events
 			  (id, env_id, env_name, room_id, table_no, room_no, platform_id,
-			   maintain_start_at, start_estimated, site_count, operator, state, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?, 'pending',?,?)`,
+			   maintain_start_at, start_estimated, site_count, operator, state,
+			   window_id, window_name, window_end_at, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?, 'pending',?,?,?,?,?)`,
 			uuid.New().String(), env.ID, env.Name, s.RoomID, s.TableNo, s.RoomNo,
-			s.PlatformID, taEventStart(since), estimated, s.SiteCount, s.Operator, time.Now(), time.Now())
+			s.PlatformID, start, estimated, s.SiteCount, s.Operator,
+			winID, winName, winEnd, time.Now(), time.Now())
 		if err != nil {
 			taErrorf("env=%s 桌台 %s 开事件单失败: %v", env.Name, s.TableNo, err)
 			return
@@ -667,9 +676,13 @@ func taSyncEvent(env *TAEnv, s taRoomSnapshot, wasMaintaining bool, since interf
 		if estimated {
 			startLabel = "按 updateTime 回溯（估算）"
 		}
-		taInfof("env=%s 桌台 %s(%s) 进入维护，已开事件单，开始时间 %s [%s]，影响站点 %d 个，操作人 %s",
+		planLabel := "计划外"
+		if winName != "" {
+			planLabel = "例行维护「" + winName + "」"
+		}
+		taInfof("env=%s 桌台 %s(%s) 进入维护，已开事件单，开始时间 %s [%s]，%s，影响站点 %d 个，操作人 %s",
 			env.Name, s.TableNo, s.RoomNo,
-			taEventStart(since).Format("2006-01-02 15:04:05"), startLabel, s.SiteCount, s.Operator)
+			start.Format("2006-01-02 15:04:05"), startLabel, planLabel, s.SiteCount, s.Operator)
 
 	case !s.Maintaining && wasMaintaining:
 		// 收单 + 恢复通知
@@ -782,7 +795,8 @@ func taScanAndAlert() error {
 	rows, err := database.DB.Query(`
 		SELECT e.id, e.env_id, e.env_name, e.room_id, e.table_no, e.room_no,
 		       e.maintain_start_at, e.site_count, e.operator, e.alert_count,
-		       e.next_alert_at, e.state, e.escalated, e.silence_until
+		       e.next_alert_at, e.state, e.escalated, e.silence_until,
+		       e.window_id, e.window_name, e.window_end_at, e.overrun_notified
 		FROM table_alert_events e
 		WHERE e.maintain_end_at IS NULL AND e.state IN ('pending','alerting','acked')`)
 	if err != nil {
@@ -796,13 +810,17 @@ func taScanAndAlert() error {
 		SiteCount, AlertCount                                        int
 		NextAlertAt, SilenceUntil                                    sql.NullTime
 		Escalated                                                    bool
+		WindowID, WindowName                                         string
+		WindowEndAt                                                  sql.NullTime
+		OverrunNotified                                              bool
 	}
 	list := []pending{}
 	for rows.Next() {
 		var p pending
 		if err := rows.Scan(&p.ID, &p.EnvID, &p.EnvName, &p.RoomID, &p.TableNo, &p.RoomNo,
 			&p.StartAt, &p.SiteCount, &p.Operator, &p.AlertCount,
-			&p.NextAlertAt, &p.State, &p.Escalated, &p.SilenceUntil); err != nil {
+			&p.NextAlertAt, &p.State, &p.Escalated, &p.SilenceUntil,
+			&p.WindowID, &p.WindowName, &p.WindowEndAt, &p.OverrunNotified); err != nil {
 			taErrorf("扫描事件失败: %v", err)
 			continue
 		}
@@ -832,6 +850,37 @@ func taScanAndAlert() error {
 			continue
 		}
 
+		// ===== 例行维护窗口 =====
+		// 计划内的保养不该和故障用一样的措辞，否则告警会被当成噪音；
+		// 但「例行维护拖过了窗口还没恢复」恰恰是最该有人去看的情况。
+		inWindow, overrun := false, time.Duration(0)
+		var planEnd time.Time
+		if p.WindowID != "" && p.WindowEndAt.Valid {
+			planEnd = p.WindowEndAt.Time
+			if now.Before(planEnd) {
+				inWindow = true
+			} else {
+				overrun = now.Sub(planEnd)
+			}
+		}
+
+		if inWindow {
+			win := taFindWindow(p.EnvID, p.WindowID)
+			if win != nil && win.Action == "suppress" {
+				taDebugf("env=%s 桌台 %s 处于例行维护「%s」窗口内（计划 %s 结束），按配置静默",
+					p.EnvName, p.TableNo, p.WindowName, planEnd.Format("15:04"))
+				continue
+			}
+		}
+
+		// 超窗后第一次扫到：无论之前告警到第几次，都立刻补一条「已超时」，
+		// 不必等下一个告警间隔 —— 这是状态性质的变化，值得马上说一声。
+		forceOverrun := false
+		if overrun > 0 && !p.OverrunNotified {
+			forceOverrun = true
+			database.DB.Exec(`UPDATE table_alert_events SET overrun_notified=1 WHERE id=?`, p.ID)
+		}
+
 		// 告警次数用完了
 		if p.AlertCount >= rule.MaxTimes && !rule.Escalate {
 			if p.State != "stopped" {
@@ -841,8 +890,8 @@ func taScanAndAlert() error {
 			continue
 		}
 
-		// 还没到下次告警时间
-		if p.NextAlertAt.Valid && now.Before(p.NextAlertAt.Time) {
+		// 还没到下次告警时间（超窗首次提醒例外）
+		if !forceOverrun && p.NextAlertAt.Valid && now.Before(p.NextAlertAt.Time) {
 			continue
 		}
 
@@ -882,6 +931,10 @@ func taScanAndAlert() error {
 			p.EnvName, p.TableNo, p.RoomNo, seq, taHumanDur(dur), escalating, next.Format("15:04:05"))
 
 		go taSendAlert(taAlertPayload{
+			WindowName:  p.WindowName,
+			InWindow:    inWindow,
+			Overrun:     overrun,
+			PlanEnd:     planEnd,
 			EventID:     p.ID,
 			EnvName:     p.EnvName,
 			TableNo:     p.TableNo,
@@ -956,6 +1009,10 @@ func taGetRuleBots(ruleID string) []string {
 
 // taAlertPayload 一次告警所需的全部信息
 type taAlertPayload struct {
+	WindowName  string        // 命中的例行维护窗口名，空=计划外维护
+	InWindow    bool          // 当前仍在例行窗口内
+	Overrun     time.Duration // 已超出窗口多久
+	PlanEnd     time.Time     // 例行窗口的计划结束时间
 	EventID     string
 	EnvName     string
 	TableNo     string
@@ -979,16 +1036,35 @@ func taSendAlert(p taAlertPayload, rule *TARule) {
 	}
 	atIDs = taUniq(atIDs)
 
-	title := fmt.Sprintf("🔧 【%s】桌台维护告警 · 第 %d 次", p.EnvName, p.Seq)
-	color := "orange"
-	if p.Escalating {
+	// 三种口径，措辞要让人一眼分清该不该紧张：
+	//   例行维护窗口内   → 蓝色，只是知会
+	//   例行维护已超时   → 红色，计划内的事拖过了点，最该有人看
+	//   计划外维护       → 橙色/红色，常规告警
+	var title, color, planLine string
+	switch {
+	case p.WindowName != "" && p.InWindow:
+		title = fmt.Sprintf("🗓 【%s】例行维护中 · 第 %d 次", p.EnvName, p.Seq)
+		color = "blue"
+		planLine = fmt.Sprintf("**例行维护**：%s（计划 %s 结束）\n", p.WindowName, p.PlanEnd.Format("01-02 15:04"))
+	case p.WindowName != "" && p.Overrun > 0:
+		title = fmt.Sprintf("⏰ 【%s】例行维护已超时 · 第 %d 次", p.EnvName, p.Seq)
+		color = "red"
+		planLine = fmt.Sprintf("**例行维护**：%s\n**计划结束**：%s，**已超时 %s**\n",
+			p.WindowName, p.PlanEnd.Format("01-02 15:04"), taHumanDur(p.Overrun))
+	case p.Escalating:
 		title = fmt.Sprintf("🚨 【%s】桌台维护告警升级 · 第 %d 次", p.EnvName, p.Seq)
 		color = "red"
+		planLine = "**类型**：计划外维护\n"
+	default:
+		title = fmt.Sprintf("🔧 【%s】桌台维护告警 · 第 %d 次", p.EnvName, p.Seq)
+		color = "orange"
+		planLine = "**类型**：计划外维护\n"
 	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "**桌台**：%s（房间号 %s）\n", p.TableNo, p.RoomNo)
 	fmt.Fprintf(&b, "**状态**：维护中，已持续 **%s**\n", taHumanDur(p.Duration))
+	b.WriteString(planLine)
 	fmt.Fprintf(&b, "**开始时间**：%s\n", p.StartAt.Format("2006-01-02 15:04:05"))
 	if p.SiteCount > 0 {
 		fmt.Fprintf(&b, "**影响站点**：%d 个\n", p.SiteCount)
@@ -997,10 +1073,22 @@ func taSendAlert(p taAlertPayload, rule *TARule) {
 		fmt.Fprintf(&b, "**最后操作人**：%s\n", p.Operator)
 	}
 	fmt.Fprintf(&b, "**下次告警**：%s（每 %d 分钟）\n", p.NextAt.Format("15:04"), p.IntervalMin)
-	b.WriteString("\n请确认该桌台是否需要恢复。")
+	switch {
+	case p.WindowName != "" && p.InWindow:
+		b.WriteString("\n计划内的例行保养，正常情况无需处理；若提前完成可直接确认。")
+	case p.WindowName != "" && p.Overrun > 0:
+		b.WriteString("\n**例行维护已超过计划结束时间仍未恢复，请确认现场情况。**")
+	default:
+		b.WriteString("\n请确认该桌台是否需要恢复。")
+	}
 
 	kind := "alert"
-	if p.Escalating {
+	switch {
+	case p.WindowName != "" && p.InWindow:
+		kind = "routine"
+	case p.WindowName != "" && p.Overrun > 0:
+		kind = "overrun"
+	case p.Escalating:
 		kind = "escalate"
 	}
 	taBroadcast(rule, kind, p.EventID, p.EnvName, p.TableNo, p.Seq, title, b.String(), color, atIDs)
@@ -1367,4 +1455,188 @@ func taParseRemoteTime(v string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// ---------------------------------------------------------------------------
+// 例行维护窗口
+//
+// 桌台有计划内的例行保养。这类维护是预期的，跟故障用同样的措辞报出去，
+// 时间一长就没人认真看告警了。所以要把两者分开：
+//
+//   窗口内     → 标注「例行维护」，或按配置完全静默
+//   超出窗口   → 说明「例行维护已超时」，这才是真正要人去看的情况
+//   没命中窗口 → 计划外维护，照常告警
+//
+// 归属判定用「维护开始时间」落在哪个窗口，而不是当前时间 —— 这样维护拖到
+// 窗口之外时，仍然知道它本来属于哪次例行保养，能报出「超时多久」。
+// ---------------------------------------------------------------------------
+
+// TAMaintWindow 例行维护窗口
+type TAMaintWindow struct {
+	ID           string `json:"id"`
+	EnvID        string `json:"env_id"`
+	Name         string `json:"name"`
+	Enabled      bool   `json:"enabled"`
+	RepeatType   string `json:"repeat_type"`
+	Weekdays     string `json:"weekdays"`
+	MonthDays    string `json:"month_days"`
+	OnceDate     string `json:"once_date"`
+	StartTime    string `json:"start_time"`
+	EndTime      string `json:"end_time"`
+	TableNos     string `json:"table_nos"`
+	Action       string `json:"action"`
+	OverrunAlert bool   `json:"overrun_alert"`
+	Remark       string `json:"remark"`
+}
+
+// taWindowHit 一次维护对例行窗口的命中结果
+type taWindowHit struct {
+	Window   *TAMaintWindow
+	PlanEnd  time.Time // 本次窗口实例的计划结束时间
+	InWindow bool      // 当前时刻仍在窗口内
+	Overrun  time.Duration
+}
+
+// taListWindows 取某环境下启用的全部窗口
+func taListWindows(envID string) []TAMaintWindow {
+	out := []TAMaintWindow{}
+	rows, err := database.DB.Query(`
+		SELECT id, env_id, name, enabled, repeat_type, weekdays, month_days, once_date,
+		       start_time, end_time, COALESCE(table_nos,''), action, overrun_alert, remark
+		FROM table_alert_maint_windows
+		WHERE env_id = ? AND enabled = 1`, envID)
+	if err != nil {
+		taErrorf("读取例行维护窗口失败: %v", err)
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var w TAMaintWindow
+		if rows.Scan(&w.ID, &w.EnvID, &w.Name, &w.Enabled, &w.RepeatType, &w.Weekdays,
+			&w.MonthDays, &w.OnceDate, &w.StartTime, &w.EndTime, &w.TableNos,
+			&w.Action, &w.OverrunAlert, &w.Remark) == nil {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// taWindowCoversTable 该窗口是否管这张桌台。* 表示全部。
+func taWindowCoversTable(w *TAMaintWindow, tableNo string) bool {
+	list := strings.TrimSpace(w.TableNos)
+	if list == "" {
+		return false
+	}
+	for _, item := range strings.Split(list, ",") {
+		item = strings.TrimSpace(item)
+		if item == "*" {
+			return true
+		}
+		if strings.EqualFold(item, tableNo) {
+			return true
+		}
+	}
+	return false
+}
+
+// taWindowInstance 计算某个自然日上这个窗口的 [开始, 结束]。
+// end <= start 视为跨零点，结束时间落到次日。日期不匹配重复规则时返回零值。
+func taWindowInstance(w *TAMaintWindow, day time.Time) (time.Time, time.Time, bool) {
+	sh, sm, ok1 := taParseHM(w.StartTime)
+	eh, em, ok2 := taParseHM(w.EndTime)
+	if !ok1 || !ok2 {
+		return time.Time{}, time.Time{}, false
+	}
+
+	switch w.RepeatType {
+	case "weekly":
+		// time.Weekday: 周日=0，这里按 1=周一 … 7=周日 的习惯来配
+		wd := int(day.Weekday())
+		if wd == 0 {
+			wd = 7
+		}
+		if !taCSVHasInt(w.Weekdays, wd) {
+			return time.Time{}, time.Time{}, false
+		}
+	case "monthly":
+		if !taCSVHasInt(w.MonthDays, day.Day()) {
+			return time.Time{}, time.Time{}, false
+		}
+	case "once":
+		if day.Format("2006-01-02") != strings.TrimSpace(w.OnceDate) {
+			return time.Time{}, time.Time{}, false
+		}
+	}
+	// daily 不额外判断
+
+	start := time.Date(day.Year(), day.Month(), day.Day(), sh, sm, 0, 0, time.Local)
+	end := time.Date(day.Year(), day.Month(), day.Day(), eh, em, 0, 0, time.Local)
+	if !end.After(start) {
+		end = end.AddDate(0, 0, 1) // 跨零点
+	}
+	return start, end, true
+}
+
+// taMatchWindow 判断这次维护属于哪个例行窗口。
+// 以 maintainStart 落在窗口实例内为准；检查前后各一天，覆盖跨零点的情况。
+func taMatchWindow(envID, tableNo string, maintainStart, now time.Time) *taWindowHit {
+	if maintainStart.IsZero() {
+		return nil
+	}
+	for _, w := range taListWindows(envID) {
+		win := w
+		if !taWindowCoversTable(&win, tableNo) {
+			continue
+		}
+		for _, offset := range []int{-1, 0, 1} {
+			day := maintainStart.AddDate(0, 0, offset)
+			start, end, ok := taWindowInstance(&win, day)
+			if !ok {
+				continue
+			}
+			if maintainStart.Before(start) || maintainStart.After(end) {
+				continue
+			}
+			hit := &taWindowHit{Window: &win, PlanEnd: end}
+			if now.Before(end) {
+				hit.InWindow = true
+			} else {
+				hit.Overrun = now.Sub(end)
+			}
+			return hit
+		}
+	}
+	return nil
+}
+
+func taParseHM(v string) (int, int, bool) {
+	var h, m int
+	if _, err := fmt.Sscanf(strings.TrimSpace(v), "%d:%d", &h, &m); err != nil {
+		return 0, 0, false
+	}
+	if h < 0 || h > 23 || m < 0 || m > 59 {
+		return 0, 0, false
+	}
+	return h, m, true
+}
+
+func taCSVHasInt(csv string, n int) bool {
+	for _, p := range strings.Split(csv, ",") {
+		var v int
+		if _, err := fmt.Sscanf(strings.TrimSpace(p), "%d", &v); err == nil && v == n {
+			return true
+		}
+	}
+	return false
+}
+
+// taFindWindow 按 ID 取窗口（判定 action 用）
+func taFindWindow(envID, winID string) *TAMaintWindow {
+	for _, w := range taListWindows(envID) {
+		if w.ID == winID {
+			win := w
+			return &win
+		}
+	}
+	return nil
 }

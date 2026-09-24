@@ -366,6 +366,100 @@ async function deleteContact(c) {
   catch (e) { appStore.showToast('删除失败: ' + errText(e), 'error') }
 }
 
+// ===================== 例行维护窗口 =====================
+const windows = ref([])
+const windowDialog = ref(false)
+const windowSaving = ref(false)
+const windowForm = ref(blankWindow())
+const windowTableMode = ref('list')
+const windowTableInput = ref('')
+const weekdayOptions = [
+  { v: 1, label: '周一' }, { v: 2, label: '周二' }, { v: 3, label: '周三' },
+  { v: 4, label: '周四' }, { v: 5, label: '周五' }, { v: 6, label: '周六' }, { v: 7, label: '周日' }
+]
+
+// 当前维护中的桌台，配置时可以直接点选，省去手敲桌台号
+const maintainingTables = computed(() => rooms.value.filter(r => r.maintaining).map(r => r.table_no))
+
+function blankWindow() {
+  return {
+    id: '', env_id: '', name: '', enabled: true,
+    repeat_type: 'daily', weekdays: '', month_days: '', once_date: '',
+    start_time: '02:00', end_time: '04:00', table_nos: '',
+    action: 'annotate', overrun_alert: true, remark: ''
+  }
+}
+
+async function loadWindows() {
+  if (!currentEnvId.value) { windows.value = []; return }
+  try {
+    const res = await api.get('/api/table-alert/windows', { params: { env_id: currentEnvId.value } })
+    windows.value = res.data || []
+  } catch (e) {
+    appStore.showToast('读取例行维护失败: ' + errText(e), 'error')
+  }
+}
+
+function openCreateWindow() {
+  windowForm.value = blankWindow()
+  windowTableMode.value = 'list'
+  windowTableInput.value = ''
+  windowDialog.value = true
+}
+
+function openEditWindow(w) {
+  windowForm.value = { ...blankWindow(), ...w }
+  windowTableMode.value = w.table_nos === '*' ? 'all' : 'list'
+  windowTableInput.value = w.table_nos === '*' ? '' : (w.table_nos || '')
+  windowDialog.value = true
+}
+
+function hasWeekday(v) {
+  return (windowForm.value.weekdays || '').split(',').map(x => x.trim()).includes(String(v))
+}
+function toggleWeekday(v) {
+  const arr = (windowForm.value.weekdays || '').split(',').map(x => x.trim()).filter(Boolean)
+  const i = arr.indexOf(String(v))
+  if (i >= 0) arr.splice(i, 1); else arr.push(String(v))
+  arr.sort()
+  windowForm.value.weekdays = arr.join(',')
+}
+function addTableNo(t) {
+  const arr = windowTableInput.value.split(',').map(x => x.trim()).filter(Boolean)
+  if (!arr.includes(t)) arr.push(t)
+  windowTableInput.value = arr.join(',')
+}
+
+async function saveWindow() {
+  const f = windowForm.value
+  if (!f.name?.trim()) { appStore.showToast('名称不能为空', 'error'); return }
+  f.env_id = currentEnvId.value
+  f.table_nos = windowTableMode.value === 'all' ? '*' : windowTableInput.value.trim()
+  if (!f.table_nos) { appStore.showToast('请指定适用的桌台', 'error'); return }
+  windowSaving.value = true
+  try {
+    await api.post('/api/table-alert/windows', f)
+    appStore.showToast('已保存', 'success')
+    windowDialog.value = false
+    loadWindows()
+  } catch (e) {
+    appStore.showToast('保存失败: ' + errText(e), 'error')
+  } finally {
+    windowSaving.value = false
+  }
+}
+
+async function deleteWindow(w) {
+  const ok = await appStore.showConfirm({
+    type: 'danger', title: `删除例行维护「${w.name}」`,
+    message: '删除后，这些桌台在该时段的维护会被当作计划外维护正常告警。',
+    okText: '确定删除', cancelText: '取消'
+  })
+  if (!ok) return
+  try { await api.delete(`/api/table-alert/windows/${w.id}`); loadWindows() }
+  catch (e) { appStore.showToast('删除失败: ' + errText(e), 'error') }
+}
+
 // ===================== 采集日志 =====================
 const logs = ref([])
 const logsTotal = ref(0)
@@ -442,7 +536,21 @@ function durationTip(r) {
 }
 
 function maintainBadge(r) {
-  return r.maintaining ? { text: '🔧 维护中', cls: 'tag-maintain' } : { text: '正常', cls: 'tag-normal' }
+  if (!r.maintaining) return { text: '正常', cls: 'tag-normal', tip: '' }
+  // 例行维护和计划外维护要一眼分得开，否则例行保养会把人练到对告警无感
+  if (r.window_name && r.window_overrun) {
+    return {
+      text: '⏰ 例行超时', cls: 'tag-overrun',
+      tip: `例行维护「${r.window_name}」计划 ${r.window_end_at} 结束，已超时 ${r.window_overrun_text}`
+    }
+  }
+  if (r.window_name) {
+    return {
+      text: '🗓 例行维护', cls: 'tag-routine',
+      tip: `例行维护「${r.window_name}」，计划 ${r.window_end_at} 结束`
+    }
+  }
+  return { text: '🔧 维护中', cls: 'tag-maintain', tip: '计划外维护' }
 }
 function statusBadge(s) {
   if (s === 'Enable') return { text: 'Enable', cls: 'tag-enable' }
@@ -456,7 +564,7 @@ const autoRefresh = ref(true)
 async function switchEnv() {
   roomPage.value = 1
   logPage.value = 1
-  await Promise.all([loadRooms(), loadRule(), loadLogs()])
+  await Promise.all([loadRooms(), loadRule(), loadLogs(), loadWindows()])
 }
 
 onMounted(async () => {
@@ -523,6 +631,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       <button class="tab" :class="{ active: activeTab === 'rooms' }" @click="activeTab = 'rooms'">🎰 桌台列表</button>
       <button class="tab" :class="{ active: activeTab === 'envs' }" @click="activeTab = 'envs'">⚙️ 环境配置</button>
       <button class="tab" :class="{ active: activeTab === 'alert' }" @click="activeTab = 'alert'; loadRule()">🔔 告警设置</button>
+      <button class="tab" :class="{ active: activeTab === 'windows' }" @click="activeTab = 'windows'; loadWindows()">🗓 例行维护</button>
       <button class="tab" :class="{ active: activeTab === 'logs' }" @click="activeTab = 'logs'; loadLogs()">📋 采集日志</button>
     </div>
 
@@ -578,7 +687,9 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             <td class="mono strong">{{ r.table_no }}</td>
             <td class="mono">{{ r.room_no }}</td>
             <td><span class="tag" :class="statusBadge(r.status).cls">{{ statusBadge(r.status).text }}</span></td>
-            <td><span class="tag" :class="maintainBadge(r).cls">{{ maintainBadge(r).text }}</span></td>
+            <td>
+              <span class="tag" :class="maintainBadge(r).cls" :title="maintainBadge(r).tip">{{ maintainBadge(r).text }}</span>
+            </td>
             <td>{{ r.maintaining ? r.maintain_site_count + ' 个' : '—' }}</td>
             <td :class="{ 'dur-long': r.duration_min >= 60 }">
               <template v-if="r.duration_text">
@@ -780,6 +891,67 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <span v-else class="hint">没有「修改告警规则」权限，当前为只读</span>
         </div>
       </div>
+    </div>
+
+    <!-- ================= Tab 例行维护 ================= -->
+    <div v-if="activeTab === 'windows'" class="tab-content">
+      <div v-if="!currentEnvId" class="empty-block">请先在上方选择一个环境</div>
+      <template v-else>
+        <div class="action-bar">
+          <button v-if="canRuleUpdate" class="btn btn-primary" @click="openCreateWindow">+ 新增例行维护</button>
+          <span class="hint">
+            一个窗口可以覆盖多张桌台（同一时间一起保养），一张桌台也可以落在不同窗口里。
+          </span>
+        </div>
+
+        <p class="hint-line">
+          维护<strong>开始时间</strong>落在窗口内，就算作这次例行保养 —— 即使拖到窗口之外，
+          也仍然知道它属于哪次计划，能报出「已超时多久」。
+          <strong>超时不恢复才是真正要人去看的情况</strong>，建议保持开启。
+        </p>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>名称</th><th>时间规则</th><th>适用桌台</th><th>窗口内</th><th>超时告警</th><th>状态</th><th>备注</th><th>操作</th></tr>
+          </thead>
+          <tbody>
+            <tr v-if="!windows.length"><td colspan="8" class="empty">
+              还没有配置例行维护窗口。没有窗口时，所有维护都按计划外处理。
+            </td></tr>
+            <tr v-for="w in windows" :key="w.id" :class="{ 'row-routine': w.active_now }">
+              <td class="strong">
+                {{ w.name }}
+                <span v-if="w.active_now" class="tag tag-routine" :title="'当前正处于该窗口，计划 ' + w.current_end + ' 结束'">进行中</span>
+              </td>
+              <td class="mono small">{{ w.rule_text }}</td>
+              <td>
+                <span v-if="w.table_nos === '*'" class="tag tag-unknown">全部桌台</span>
+                <span v-else :title="w.table_nos">{{ w.table_count }} 张</span>
+              </td>
+              <td>
+                <span v-if="w.action === 'suppress'" class="dim">不告警</span>
+                <span v-else>告警并标注例行</span>
+              </td>
+              <td>
+                <span v-if="w.overrun_alert" class="tag tag-enable">开启</span>
+                <span v-else class="tag tag-disable">关闭</span>
+              </td>
+              <td>
+                <span v-if="w.enabled" class="tag tag-enable">启用</span>
+                <span v-else class="tag tag-unknown">停用</span>
+              </td>
+              <td class="dim small">{{ w.remark }}</td>
+              <td>
+                <template v-if="canRuleUpdate">
+                  <button class="btn-link" @click="openEditWindow(w)">编辑</button>
+                  <button class="btn-link danger" @click="deleteWindow(w)">删除</button>
+                </template>
+                <span v-else class="dim">—</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </template>
     </div>
 
     <!-- ================= Tab 采集日志 ================= -->
@@ -1014,6 +1186,109 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       </div>
     </div>
 
+    <!-- ================= 例行维护窗口弹窗 ================= -->
+    <div v-if="windowDialog" class="modal-mask" @click.self="windowDialog = false">
+      <div class="modal wide">
+        <div class="modal-head">
+          <h3>{{ windowForm.id ? '编辑例行维护' : '新增例行维护' }}</h3>
+          <button class="close" @click="windowDialog = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <label>名称 *</label>
+            <input v-model="windowForm.name" class="wide-input" placeholder="如：A厅每日凌晨保养">
+            <label class="cb"><input type="checkbox" v-model="windowForm.enabled"> 启用</label>
+          </div>
+
+          <fieldset>
+            <legend>时间</legend>
+            <div class="form-row">
+              <label>重复</label>
+              <select v-model="windowForm.repeat_type">
+                <option value="daily">每天</option>
+                <option value="weekly">每周</option>
+                <option value="monthly">每月</option>
+                <option value="once">指定日期</option>
+              </select>
+              <label>从</label><input v-model="windowForm.start_time" class="time" placeholder="02:00">
+              <label>到</label><input v-model="windowForm.end_time" class="time" placeholder="04:00">
+            </div>
+            <p class="field-hint">结束时间小于开始时间表示跨零点，例如 23:00 → 01:00。</p>
+
+            <div class="form-row" v-if="windowForm.repeat_type === 'weekly'">
+              <label>星期</label>
+              <label v-for="d in weekdayOptions" :key="d.v" class="chip"
+                     :class="{ on: windowForm.weekdays.includes(String(d.v)) }">
+                <input type="checkbox" :checked="hasWeekday(d.v)" @change="toggleWeekday(d.v)"> {{ d.label }}
+              </label>
+            </div>
+            <div class="form-row" v-if="windowForm.repeat_type === 'monthly'">
+              <label>每月几号</label>
+              <input v-model="windowForm.month_days" class="wide-input" placeholder="如 1,15（逗号分隔）">
+            </div>
+            <div class="form-row" v-if="windowForm.repeat_type === 'once'">
+              <label>日期</label>
+              <input v-model="windowForm.once_date" type="date">
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>适用桌台</legend>
+            <label class="radio-line">
+              <input type="radio" value="all" v-model="windowTableMode"> 该环境全部桌台
+            </label>
+            <label class="radio-line">
+              <input type="radio" value="list" v-model="windowTableMode"> 指定桌台
+            </label>
+            <div v-if="windowTableMode === 'list'">
+              <div class="form-row">
+                <input v-model="windowTableInput" class="wide-input"
+                       placeholder="桌台号，逗号分隔，如 E15,N06,N07">
+              </div>
+              <div class="chip-list" v-if="maintainingTables.length">
+                <span class="hint">当前维护中的，点一下加进去：</span>
+                <button v-for="t in maintainingTables" :key="t" class="chip" @click.prevent="addTableNo(t)">
+                  + {{ t }}
+                </button>
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>告警方式</legend>
+            <label class="radio-line">
+              <input type="radio" value="annotate" v-model="windowForm.action">
+              照常告警，但标明是例行维护（推荐）
+            </label>
+            <label class="radio-line">
+              <input type="radio" value="suppress" v-model="windowForm.action">
+              窗口内完全不告警
+            </label>
+            <label class="line" style="margin-top:8px">
+              <input type="checkbox" v-model="windowForm.overrun_alert">
+              超出窗口仍未恢复时照常告警（强烈建议开启）
+            </label>
+            <p class="field-hint">
+              例行保养本身是预期的，但<strong>拖过计划结束时间还没恢复</strong>说明出了状况 ——
+              这种情况会以「例行维护已超时」的措辞单独报出来，并且不等下一个告警间隔，立刻发一条。
+            </p>
+          </fieldset>
+
+          <div class="form-row">
+            <label>备注</label>
+            <input v-model="windowForm.remark" class="wide-input">
+          </div>
+        </div>
+        <div class="modal-foot">
+          <div class="spacer"></div>
+          <button class="btn btn-secondary" @click="windowDialog = false">取消</button>
+          <button class="btn btn-primary" @click="saveWindow" :disabled="windowSaving">
+            {{ windowSaving ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- ================= Lark 群弹窗 ================= -->
     <div v-if="botDialog" class="modal-mask" @click.self="botDialog = false">
       <div class="modal">
@@ -1182,6 +1457,9 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .tag-maintain { background: rgba(245, 158, 11, .18); color: var(--warning); font-weight: 600; }
 .tag-normal { background: rgba(16, 185, 129, .12); color: var(--success); }
 .tag-unknown { background: var(--bg-hover); color: var(--text-muted); }
+.tag-routine { background: rgba(59, 130, 246, .18); color: var(--primary); font-weight: 600; }
+.tag-overrun { background: rgba(239, 68, 68, .18); color: var(--danger); font-weight: 600; }
+.row-routine { background: rgba(59, 130, 246, .06); }
 
 .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-size: 13px; }
 .btn-primary { background: var(--primary); color: #fff; }

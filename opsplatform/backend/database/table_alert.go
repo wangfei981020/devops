@@ -178,6 +178,10 @@ func InitTableAlertTables() error {
 			platform_id VARCHAR(64) NOT NULL DEFAULT '',
 			maintain_start_at DATETIME NOT NULL COMMENT '维护开始时间',
 			start_estimated TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=开始时间是回溯估算的，非实测跃迁',
+			window_id VARCHAR(36) NOT NULL DEFAULT '' COMMENT '命中的例行维护窗口；空=计划外维护',
+			window_name VARCHAR(128) NOT NULL DEFAULT '',
+			window_end_at DATETIME NULL COMMENT '本次例行窗口的计划结束时间',
+			overrun_notified TINYINT(1) NOT NULL DEFAULT 0 COMMENT '已就超时发过告警，避免重复提醒',
 			maintain_end_at DATETIME NULL,
 			site_count INT NOT NULL DEFAULT 0,
 			operator VARCHAR(128) NOT NULL DEFAULT '',
@@ -224,6 +228,37 @@ func InitTableAlertTables() error {
 			INDEX idx_ta_log_ok (ok)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`},
 
+		// ---------------- 例行维护窗口 ----------------
+		// 桌台有计划内的例行保养，这类维护是预期的，跟故障混在一起报会让人对告警麻木。
+		// 一个窗口可以覆盖多张桌台（同一时间一起保养），一张桌台也可以落在不同窗口里
+		// （不同桌台有各自的保养时间），所以桌台用列表存，判定时做包含匹配。
+		{"table_alert_maint_windows", `
+		CREATE TABLE IF NOT EXISTS table_alert_maint_windows (
+			id VARCHAR(36) PRIMARY KEY,
+			env_id VARCHAR(36) NOT NULL,
+			name VARCHAR(128) NOT NULL COMMENT '窗口名称，如「A厅每日凌晨保养」',
+			enabled TINYINT(1) NOT NULL DEFAULT 1,
+
+			repeat_type VARCHAR(16) NOT NULL DEFAULT 'daily' COMMENT 'daily每天 / weekly每周 / monthly每月 / once指定日期',
+			weekdays VARCHAR(32) NOT NULL DEFAULT '' COMMENT 'weekly 用：1~7 逗号分隔，1=周一',
+			month_days VARCHAR(128) NOT NULL DEFAULT '' COMMENT 'monthly 用：1~31 逗号分隔',
+			once_date VARCHAR(16) NOT NULL DEFAULT '' COMMENT 'once 用：2026-09-25',
+			start_time VARCHAR(8) NOT NULL DEFAULT '02:00' COMMENT 'HH:MM',
+			end_time VARCHAR(8) NOT NULL DEFAULT '04:00' COMMENT 'HH:MM，小于 start_time 表示跨零点',
+
+			table_nos TEXT COMMENT '适用桌台号，逗号分隔；* 表示该环境全部桌台',
+
+			action VARCHAR(16) NOT NULL DEFAULT 'annotate' COMMENT 'annotate=照常告警但标注例行 / suppress=窗口内不告警',
+			overrun_alert TINYINT(1) NOT NULL DEFAULT 1 COMMENT '超出窗口仍未恢复时是否告警（强烈建议开）',
+			remark VARCHAR(500) NOT NULL DEFAULT '',
+
+			created_by VARCHAR(64) NOT NULL DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			INDEX idx_ta_win_env (env_id),
+			INDEX idx_ta_win_enabled (enabled)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`},
+
 		// ---------------- 多副本选主：同一时刻只允许一个实例采集/告警 ----------------
 		// 后端是多副本部署，如果每个副本都跑调度器，会重复请求中台、
 		// 更糟的是同一条告警被重复 @ 到群里。用一行租约做选主。
@@ -268,6 +303,10 @@ func InitTableAlertTables() error {
 	for _, mig := range []struct{ table, col, ddl string }{
 		{"table_alert_rooms", "since_estimated", "TINYINT(1) NOT NULL DEFAULT 0"},
 		{"table_alert_events", "start_estimated", "TINYINT(1) NOT NULL DEFAULT 0"},
+		{"table_alert_events", "window_id", "VARCHAR(36) NOT NULL DEFAULT ''"},
+		{"table_alert_events", "window_name", "VARCHAR(128) NOT NULL DEFAULT ''"},
+		{"table_alert_events", "window_end_at", "DATETIME NULL"},
+		{"table_alert_events", "overrun_notified", "TINYINT(1) NOT NULL DEFAULT 0"},
 	} {
 		var n int
 		DB.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS
