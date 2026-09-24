@@ -478,6 +478,11 @@ func main() {
 	protected.HandleFunc("/table-alert/events", handlers.HandleTAListEvents).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/table-alert/events/ack-batch", handlers.HandleTABatchAck).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/table-alert/events/{id}/ack", handlers.HandleTAAckEvent).Methods("POST", "OPTIONS")
+	// 站点管理（siteId 由采集自动发现，名称与关注状态人工维护）
+	protected.HandleFunc("/table-alert/sites", handlers.HandleTAListSites).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/sites/watch", handlers.HandleTABatchWatchSites).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/table-alert/sites/{id}", handlers.HandleTASaveSite).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/table-alert/rooms/{room_id}/sites", handlers.HandleTARoomSites).Methods("GET", "OPTIONS")
 	// 例行维护窗口
 	protected.HandleFunc("/table-alert/windows", handlers.HandleTAListWindows).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/table-alert/windows", handlers.HandleTASaveWindow).Methods("POST", "OPTIONS")

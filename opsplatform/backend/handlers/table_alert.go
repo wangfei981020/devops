@@ -318,7 +318,8 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 		SELECT room_id, table_no, room_no, platform_id, status, maintaining, maintain_site_count,
 		       online_user_total, operator, remote_update_time,
 		       DATE_FORMAT(maintain_since, '%Y-%m-%d %H:%i:%s'),
-		       DATE_FORMAT(last_seen_at, '%Y-%m-%d %H:%i:%s'), since_estimated
+		       DATE_FORMAT(last_seen_at, '%Y-%m-%d %H:%i:%s'), since_estimated,
+		       COALESCE(maintain_site_ids,'')
 		FROM table_alert_rooms`+whereSQL+`
 		ORDER BY maintaining DESC, table_no
 		LIMIT ? OFFSET ?`, append(args, size, (page-1)*size)...)
@@ -330,15 +331,18 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 
 	items := []map[string]interface{}{}
 	now := time.Now()
+	watchedMap := taWatchedSites(envID) // 循环外取一次，别每行都查库
 	for rows.Next() {
 		var (
 			roomID, tableNo, roomNo, platformID, status, operator, remoteUpd string
 			maintaining, sinceEstimated                                      bool
 			siteCount, online                                                int
 			since, lastSeen                                                  sql.NullString
+			siteIDsRaw                                                       string
 		)
 		if err := rows.Scan(&roomID, &tableNo, &roomNo, &platformID, &status, &maintaining,
-			&siteCount, &online, &operator, &remoteUpd, &since, &lastSeen, &sinceEstimated); err != nil {
+			&siteCount, &online, &operator, &remoteUpd, &since, &lastSeen, &sinceEstimated,
+			&siteIDsRaw); err != nil {
 			continue
 		}
 		item := map[string]interface{}{
@@ -356,6 +360,15 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 				item["duration_text"] = taHumanDur(d)
 				item["duration_min"] = int(d.Minutes())
 			}
+		}
+		// 列表上只展示关注的站点，全部站点放详情 ——
+		// 27 个雪花 ID 平铺在列里没人看得下去
+		item["watched_sites"] = []string{}
+		item["watched_site_count"] = 0
+		if maintaining && siteIDsRaw != "" {
+			names := taPickWatched(strings.Split(siteIDsRaw, ","), watchedMap)
+			item["watched_sites"] = names
+			item["watched_site_count"] = len(names)
 		}
 		// 带上告警次数、确认状态，以及本次维护属不属于例行窗口
 		var alertCount int
@@ -431,7 +444,9 @@ func HandleTAGetRule(w http.ResponseWriter, r *http.Request) {
 			EnvID: envID, Enabled: true, ThresholdMin: 10, IntervalMin: 10,
 			MaxTimes: 6, Escalate: true, EscalateIntervalMin: 30, NotifyOnRecover: true,
 			ReatEveryTime: true, SilenceAfterAckMin: 30,
-			QuietStart: "03:00", QuietEnd: "08:00", BotIDs: []string{},
+			QuietStart: "03:00", QuietEnd: "08:00",
+			AlertScope: "all", ListWatchedSites: true, MaxListSites: 5,
+			BotIDs: []string{},
 		})
 		return
 	}
@@ -472,6 +487,12 @@ func HandleTASaveRule(w http.ResponseWriter, r *http.Request) {
 	if rule.MaxTimes < 1 {
 		rule.MaxTimes = 1
 	}
+	if rule.AlertScope != "watched" {
+		rule.AlertScope = "all"
+	}
+	if rule.MaxListSites < 1 {
+		rule.MaxListSites = 5
+	}
 
 	var existID string
 	err := database.DB.QueryRow(`SELECT id FROM table_alert_rules WHERE env_id=?`, rule.EnvID).Scan(&existID)
@@ -481,23 +502,27 @@ func HandleTASaveRule(w http.ResponseWriter, r *http.Request) {
 			INSERT INTO table_alert_rules
 			  (id, env_id, enabled, threshold_min, interval_min, max_times, escalate,
 			   escalate_interval_min, notify_on_recover, at_lark_ids, escalate_at_lark_ids,
-			   reat_every_time, silence_after_ack_min, quiet_enabled, quiet_start, quiet_end)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			   reat_every_time, silence_after_ack_min, quiet_enabled, quiet_start, quiet_end,
+			   alert_scope, list_watched_sites, max_list_sites)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			existID, rule.EnvID, rule.Enabled, rule.ThresholdMin, rule.IntervalMin, rule.MaxTimes,
 			rule.Escalate, rule.EscalateIntervalMin, rule.NotifyOnRecover, rule.AtLarkIDs,
 			rule.EscalateAtLarkIDs, rule.ReatEveryTime, rule.SilenceAfterAckMin,
-			rule.QuietEnabled, rule.QuietStart, rule.QuietEnd)
+			rule.QuietEnabled, rule.QuietStart, rule.QuietEnd,
+			rule.AlertScope, rule.ListWatchedSites, rule.MaxListSites)
 	} else if err == nil {
 		_, err = database.DB.Exec(`
 			UPDATE table_alert_rules SET
 			  enabled=?, threshold_min=?, interval_min=?, max_times=?, escalate=?,
 			  escalate_interval_min=?, notify_on_recover=?, at_lark_ids=?, escalate_at_lark_ids=?,
-			  reat_every_time=?, silence_after_ack_min=?, quiet_enabled=?, quiet_start=?, quiet_end=?
+			  reat_every_time=?, silence_after_ack_min=?, quiet_enabled=?, quiet_start=?, quiet_end=?,
+			  alert_scope=?, list_watched_sites=?, max_list_sites=?
 			WHERE id=?`,
 			rule.Enabled, rule.ThresholdMin, rule.IntervalMin, rule.MaxTimes, rule.Escalate,
 			rule.EscalateIntervalMin, rule.NotifyOnRecover, rule.AtLarkIDs, rule.EscalateAtLarkIDs,
 			rule.ReatEveryTime, rule.SilenceAfterAckMin, rule.QuietEnabled,
-			rule.QuietStart, rule.QuietEnd, existID)
+			rule.QuietStart, rule.QuietEnd,
+			rule.AlertScope, rule.ListWatchedSites, rule.MaxListSites, existID)
 	}
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "保存失败: "+err.Error())
@@ -1437,4 +1462,191 @@ func taCountTableNos(list string) int {
 		}
 	}
 	return n
+}
+
+// ---------------------------------------------------------------------------
+// 站点管理
+// ---------------------------------------------------------------------------
+
+// HandleTAListSites GET /api/table-alert/sites?env_id=&watched=&named=&q=
+func HandleTAListSites(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
+	q := r.URL.Query()
+	envID := q.Get("env_id")
+	if envID == "" {
+		respondError(w, http.StatusBadRequest, "缺少 env_id")
+		return
+	}
+
+	where := []string{"env_id = ?"}
+	args := []interface{}{envID}
+	if q.Get("watched") == "1" {
+		where = append(where, "watched = 1")
+	}
+	switch q.Get("named") {
+	case "0":
+		where = append(where, "site_name = ''")
+	case "1":
+		where = append(where, "site_name <> ''")
+	}
+	if kw := strings.TrimSpace(q.Get("q")); kw != "" {
+		where = append(where, "(site_id LIKE ? OR site_name LIKE ?)")
+		args = append(args, "%"+kw+"%", "%"+kw+"%")
+	}
+	whereSQL := " WHERE " + strings.Join(where, " AND ")
+
+	var total, named, watched int
+	database.DB.QueryRow(`SELECT COUNT(*) FROM table_alert_sites WHERE env_id=?`, envID).Scan(&total)
+	database.DB.QueryRow(`SELECT COUNT(*) FROM table_alert_sites WHERE env_id=? AND site_name<>''`, envID).Scan(&named)
+	database.DB.QueryRow(`SELECT COUNT(*) FROM table_alert_sites WHERE env_id=? AND watched=1`, envID).Scan(&watched)
+
+	rows, err := database.DB.Query(`
+		SELECT id, site_id, site_name, watched, table_count, remark,
+		       DATE_FORMAT(last_seen_at,'%Y-%m-%d %H:%i:%s')
+		FROM table_alert_sites`+whereSQL+`
+		ORDER BY watched DESC, table_count DESC, site_id
+		LIMIT 500`, args...)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "查询失败: "+err.Error())
+		return
+	}
+	defer rows.Close()
+
+	items := []map[string]interface{}{}
+	for rows.Next() {
+		var id, siteID, name, remark string
+		var isWatched bool
+		var tableCount int
+		var lastSeen sql.NullString
+		if rows.Scan(&id, &siteID, &name, &isWatched, &tableCount, &remark, &lastSeen) != nil {
+			continue
+		}
+		items = append(items, map[string]interface{}{
+			"id": id, "site_id": siteID, "site_name": name, "watched": isWatched,
+			"table_count": tableCount, "remark": remark, "last_seen_at": lastSeen.String,
+		})
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"items": items,
+		"stats": map[string]int{"total": total, "named": named, "watched": watched},
+	})
+}
+
+// HandleTASaveSite PUT /api/table-alert/sites/{id}  改名 / 设关注
+func HandleTASaveSite(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRuleUpdate) {
+		return
+	}
+	id := mux.Vars(r)["id"]
+	var body struct {
+		SiteName string `json:"site_name"`
+		Watched  bool   `json:"watched"`
+		Remark   string `json:"remark"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respondError(w, http.StatusBadRequest, "请求体格式错误")
+		return
+	}
+	if _, err := database.DB.Exec(`
+		UPDATE table_alert_sites SET site_name=?, watched=?, remark=? WHERE id=?`,
+		strings.TrimSpace(body.SiteName), body.Watched, body.Remark, id); err != nil {
+		respondError(w, http.StatusInternalServerError, "保存失败: "+err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"message": "已保存"})
+}
+
+// HandleTABatchWatchSites POST /api/table-alert/sites/watch  批量设/取消关注
+func HandleTABatchWatchSites(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRuleUpdate) {
+		return
+	}
+	var body struct {
+		IDs     []string `json:"ids"`
+		Watched bool     `json:"watched"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.IDs) == 0 {
+		respondError(w, http.StatusBadRequest, "请选择站点")
+		return
+	}
+	n := 0
+	for _, id := range body.IDs {
+		if _, err := database.DB.Exec(`UPDATE table_alert_sites SET watched=? WHERE id=?`,
+			body.Watched, id); err == nil {
+			n++
+		}
+	}
+	taInfof("%s 批量%s %d 个站点", taOperator(r), map[bool]string{true: "关注", false: "取消关注"}[body.Watched], n)
+	respondJSON(w, http.StatusOK, map[string]interface{}{"message": "已保存", "count": n})
+}
+
+// HandleTARoomSites GET /api/table-alert/rooms/{room_id}/sites?env_id=
+// 桌台详情：列出这次维护涉及的**全部**站点，关注的排在前面并标记
+func HandleTARoomSites(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
+	roomID := mux.Vars(r)["room_id"]
+	envID := r.URL.Query().Get("env_id")
+	if envID == "" {
+		respondError(w, http.StatusBadRequest, "缺少 env_id")
+		return
+	}
+
+	var siteIDsRaw, tableNo string
+	err := database.DB.QueryRow(`
+		SELECT COALESCE(maintain_site_ids,''), table_no FROM table_alert_rooms
+		WHERE env_id=? AND room_id=?`, envID, roomID).Scan(&siteIDsRaw, &tableNo)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "桌台不存在")
+		return
+	}
+
+	// 一次取出这些 siteId 的名称与关注状态，别在循环里查库
+	known := map[string]struct {
+		Name    string
+		Watched bool
+	}{}
+	rows, err := database.DB.Query(`
+		SELECT site_id, site_name, watched FROM table_alert_sites WHERE env_id=?`, envID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var sid, name string
+			var watched bool
+			if rows.Scan(&sid, &name, &watched) == nil {
+				known[sid] = struct {
+					Name    string
+					Watched bool
+				}{name, watched}
+			}
+		}
+	}
+
+	watchedList := []map[string]interface{}{}
+	otherList := []map[string]interface{}{}
+	for _, sid := range strings.Split(siteIDsRaw, ",") {
+		sid = strings.TrimSpace(sid)
+		if sid == "" {
+			continue
+		}
+		info := known[sid]
+		row := map[string]interface{}{
+			"site_id": sid, "site_name": info.Name, "watched": info.Watched,
+		}
+		if info.Watched {
+			watchedList = append(watchedList, row)
+		} else {
+			otherList = append(otherList, row)
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"table_no": tableNo,
+		"watched":  watchedList,
+		"others":   otherList,
+		"total":    len(watchedList) + len(otherList),
+	})
 }

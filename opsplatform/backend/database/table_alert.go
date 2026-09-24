@@ -95,6 +95,7 @@ func InitTableAlertTables() error {
 			status VARCHAR(32) NOT NULL DEFAULT '' COMMENT 'Enable / Disable，启停，与维护无关',
 			maintaining TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否维护中',
 			maintain_site_count INT NOT NULL DEFAULT 0 COMMENT '维护影响的站点数',
+			maintain_site_ids TEXT COMMENT '受影响的 siteId 列表，逗号分隔',
 			online_user_total INT NOT NULL DEFAULT 0,
 			operator VARCHAR(128) NOT NULL DEFAULT '',
 			remote_update_time VARCHAR(64) NOT NULL DEFAULT '' COMMENT '接口给的 updateTime，原样存',
@@ -153,6 +154,9 @@ func InitTableAlertTables() error {
 			quiet_enabled TINYINT(1) NOT NULL DEFAULT 0,
 			quiet_start VARCHAR(8) NOT NULL DEFAULT '03:00',
 			quiet_end VARCHAR(8) NOT NULL DEFAULT '08:00',
+			alert_scope VARCHAR(16) NOT NULL DEFAULT 'all' COMMENT 'all=桌台维护就告警 / watched=维护涉及关注站点才告警',
+			list_watched_sites TINYINT(1) NOT NULL DEFAULT 1 COMMENT '告警内容里列出受影响的关注站点',
+			max_list_sites INT NOT NULL DEFAULT 5 COMMENT '最多列几个站点名，超出显示「等 N 个」',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			UNIQUE KEY uk_ta_rule_env (env_id)
@@ -182,6 +186,8 @@ func InitTableAlertTables() error {
 			window_name VARCHAR(128) NOT NULL DEFAULT '',
 			window_end_at DATETIME NULL COMMENT '本次例行窗口的计划结束时间',
 			overrun_notified TINYINT(1) NOT NULL DEFAULT 0 COMMENT '已就超时发过告警，避免重复提醒',
+			site_ids TEXT COMMENT '本次维护涉及的全部 siteId，逗号分隔',
+			watched_site_count INT NOT NULL DEFAULT 0 COMMENT '其中属于关注站点的个数；为 0 时按「仅关注」策略不告警',
 			maintain_end_at DATETIME NULL,
 			site_count INT NOT NULL DEFAULT 0,
 			operator VARCHAR(128) NOT NULL DEFAULT '',
@@ -226,6 +232,27 @@ func InitTableAlertTables() error {
 			INDEX idx_ta_log_env (env_id),
 			INDEX idx_ta_log_started (started_at),
 			INDEX idx_ta_log_ok (ok)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`},
+
+		// ---------------- 站点字典 ----------------
+		// 接口只给 siteId（雪花 ID），不给名称，直接把一串数字列在页面上等于没列。
+		// 所以 siteId 由采集自动发现入库，名称和「是否关注」由人补 ——
+		// 只需要给关心的那几个起名打星，其余可以一直躺着不管。
+		{"table_alert_sites", `
+		CREATE TABLE IF NOT EXISTS table_alert_sites (
+			id VARCHAR(36) PRIMARY KEY,
+			env_id VARCHAR(36) NOT NULL,
+			site_id VARCHAR(64) NOT NULL COMMENT '接口返回的 siteId',
+			site_name VARCHAR(128) NOT NULL DEFAULT '' COMMENT '人工补的中文名，空=未命名',
+			watched TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=关注，只有关注的站点会显示和告警',
+			table_count INT NOT NULL DEFAULT 0 COMMENT '历史上有多少张桌台的维护涉及过这个站点，用来判断重要程度',
+			remark VARCHAR(500) NOT NULL DEFAULT '',
+			first_seen_at DATETIME NULL,
+			last_seen_at DATETIME NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uk_ta_site (env_id, site_id),
+			INDEX idx_ta_site_watched (env_id, watched)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`},
 
 		// ---------------- 例行维护窗口 ----------------
@@ -307,6 +334,12 @@ func InitTableAlertTables() error {
 		{"table_alert_events", "window_name", "VARCHAR(128) NOT NULL DEFAULT ''"},
 		{"table_alert_events", "window_end_at", "DATETIME NULL"},
 		{"table_alert_events", "overrun_notified", "TINYINT(1) NOT NULL DEFAULT 0"},
+		{"table_alert_events", "site_ids", "TEXT"},
+		{"table_alert_events", "watched_site_count", "INT NOT NULL DEFAULT 0"},
+		{"table_alert_rooms", "maintain_site_ids", "TEXT"},
+		{"table_alert_rules", "alert_scope", "VARCHAR(16) NOT NULL DEFAULT 'all'"},
+		{"table_alert_rules", "list_watched_sites", "TINYINT(1) NOT NULL DEFAULT 1"},
+		{"table_alert_rules", "max_list_sites", "INT NOT NULL DEFAULT 5"},
 	} {
 		var n int
 		DB.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS

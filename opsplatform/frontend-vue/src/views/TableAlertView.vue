@@ -366,6 +366,109 @@ async function deleteContact(c) {
   catch (e) { appStore.showToast('删除失败: ' + errText(e), 'error') }
 }
 
+// ===================== 站点 =====================
+const sites = ref([])
+const siteStats = ref({ total: 0, named: 0, watched: 0 })
+const siteFilter = ref({ watched: '', named: '', q: '' })
+const siteSelection = ref([])
+const siteDialog = ref(false)
+const siteForm = ref({ id: '', site_id: '', site_name: '', watched: false, remark: '' })
+const roomSitesDialog = ref(false)
+const roomSites = ref({ table_no: '', watched: [], others: [], total: 0 })
+
+const allSitesChecked = computed(() => sites.value.length > 0 && siteSelection.value.length === sites.value.length)
+
+async function loadSites() {
+  if (!currentEnvId.value) { sites.value = []; return }
+  try {
+    const res = await api.get('/api/table-alert/sites', {
+      params: {
+        env_id: currentEnvId.value,
+        ...(siteFilter.value.watched ? { watched: siteFilter.value.watched } : {}),
+        ...(siteFilter.value.named !== '' ? { named: siteFilter.value.named } : {}),
+        ...(siteFilter.value.q ? { q: siteFilter.value.q } : {})
+      }
+    })
+    sites.value = res.data?.items || []
+    siteStats.value = res.data?.stats || siteStats.value
+    siteSelection.value = []
+  } catch (e) {
+    appStore.showToast('读取站点失败: ' + errText(e), 'error')
+  }
+}
+
+function toggleAllSites(e) {
+  siteSelection.value = e.target.checked ? sites.value.map(x => x.id) : []
+}
+
+async function toggleWatch(st) {
+  try {
+    await api.put(`/api/table-alert/sites/${st.id}`, {
+      site_name: st.site_name, watched: !st.watched, remark: st.remark
+    })
+    st.watched = !st.watched
+    siteStats.value.watched += st.watched ? 1 : -1
+    loadRooms()   // 关注变了，桌台列表的影响站点跟着变
+  } catch (e) {
+    appStore.showToast('保存失败: ' + errText(e), 'error')
+  }
+}
+
+async function batchWatch(watched) {
+  try {
+    const res = await api.post('/api/table-alert/sites/watch', { ids: siteSelection.value, watched })
+    appStore.showToast(`已${watched ? '关注' : '取消关注'} ${res.data?.count || 0} 个站点`, 'success')
+    loadSites(); loadRooms()
+  } catch (e) {
+    appStore.showToast('操作失败: ' + errText(e), 'error')
+  }
+}
+
+function openEditSite(st) {
+  siteForm.value = { ...st }
+  siteDialog.value = true
+}
+
+async function saveSite() {
+  try {
+    await api.put(`/api/table-alert/sites/${siteForm.value.id}`, {
+      site_name: siteForm.value.site_name,
+      watched: siteForm.value.watched,
+      remark: siteForm.value.remark
+    })
+    appStore.showToast('已保存', 'success')
+    siteDialog.value = false
+    loadSites(); loadRooms()
+  } catch (e) {
+    appStore.showToast('保存失败: ' + errText(e), 'error')
+  }
+}
+
+// 桌台详情：列出全部站点，关注的在前
+async function openRoomSites(r) {
+  try {
+    const res = await api.get(`/api/table-alert/rooms/${r.room_id}/sites`, {
+      params: { env_id: currentEnvId.value }
+    })
+    roomSites.value = {
+      table_no: res.data?.table_no || r.table_no,
+      watched: res.data?.watched || [],
+      others: res.data?.others || [],
+      total: res.data?.total || 0
+    }
+    roomSitesDialog.value = true
+  } catch (e) {
+    appStore.showToast('读取站点失败: ' + errText(e), 'error')
+  }
+}
+
+// 列表里只显示前几个，剩下的收成「等 N 个」，避免一行被站点名撞爆
+function joinSites(names, max = 3) {
+  if (!names || !names.length) return ''
+  if (names.length <= max) return names.join('\u3001')
+  return names.slice(0, max).join('\u3001') + ` \u7b49 ${names.length} \u4e2a`
+}
+
 // ===================== 例行维护窗口 =====================
 const windows = ref([])
 const windowDialog = ref(false)
@@ -564,7 +667,7 @@ const autoRefresh = ref(true)
 async function switchEnv() {
   roomPage.value = 1
   logPage.value = 1
-  await Promise.all([loadRooms(), loadRule(), loadLogs(), loadWindows()])
+  await Promise.all([loadRooms(), loadRule(), loadLogs(), loadWindows(), loadSites()])
 }
 
 onMounted(async () => {
@@ -632,6 +735,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       <button class="tab" :class="{ active: activeTab === 'envs' }" @click="activeTab = 'envs'">⚙️ 环境配置</button>
       <button class="tab" :class="{ active: activeTab === 'alert' }" @click="activeTab = 'alert'; loadRule()">🔔 告警设置</button>
       <button class="tab" :class="{ active: activeTab === 'windows' }" @click="activeTab = 'windows'; loadWindows()">🗓 例行维护</button>
+      <button class="tab" :class="{ active: activeTab === 'sites' }" @click="activeTab = 'sites'; loadSites()">🏢 站点管理</button>
       <button class="tab" :class="{ active: activeTab === 'logs' }" @click="activeTab = 'logs'; loadLogs()">📋 采集日志</button>
     </div>
 
@@ -690,7 +794,21 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             <td>
               <span class="tag" :class="maintainBadge(r).cls" :title="maintainBadge(r).tip">{{ maintainBadge(r).text }}</span>
             </td>
-            <td>{{ r.maintaining ? r.maintain_site_count + ' 个' : '—' }}</td>
+              <td>
+                <template v-if="!r.maintaining">—</template>
+                <template v-else-if="r.watched_site_count">
+                  <button class="btn-link site-link" @click="openRoomSites(r)"
+                          :title="'共 ' + r.maintain_site_count + ' 个站点受影响，点击查看全部'">
+                    {{ joinSites(r.watched_sites) }}
+                  </button>
+                </template>
+                <template v-else>
+                  <button class="btn-link dim site-link" @click="openRoomSites(r)"
+                          :title="'共 ' + r.maintain_site_count + ' 个站点受影响，但没有一个是关注的；点击查看全部'">
+                    无关注站点
+                  </button>
+                </template>
+              </td>
             <td :class="{ 'dur-long': r.duration_min >= 60 }">
               <template v-if="r.duration_text">
                 <span :title="durationTip(r)">{{ r.since_estimated ? '≈' : '' }}{{ r.duration_text }}</span>
@@ -795,6 +913,32 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             <label><input type="radio" :value="false" v-model="rule.escalate"> 停止告警</label>
           </div>
           <label class="line"><input type="checkbox" v-model="rule.notify_on_recover"> 桌台恢复正常时发一条恢复通知</label>
+                </div>
+
+        <div class="panel">
+          <h3>告警范围（按站点过滤）</h3>
+          <label class="radio-line">
+            <input type="radio" value="all" v-model="rule.alert_scope">
+            全部站点 —— 只要桌台维护就告警
+          </label>
+          <label class="radio-line">
+            <input type="radio" value="watched" v-model="rule.alert_scope">
+            仅关注站点 —— 维护涉及的站点里有关注的才告警
+          </label>
+          <p class="field-hint">
+            已关注 <strong>{{ siteStats.watched }}</strong> 个站点。
+            <button class="btn-link" @click="activeTab = 'sites'; loadSites()">去站点管理</button><br>
+            选了「仅关注站点」后，没碰到关注站点的维护<strong>页面上照样看得到</strong>，
+            只是不发 Lark、不计入「告警中」—— 信息不丢，只是不吵人。
+            <span v-if="rule.alert_scope === 'watched' && !siteStats.watched" class="err-msg">
+              ⚠ 当前一个关注站点都没有，这会导致<strong>所有告警都不发</strong>。
+            </span>
+          </p>
+          <label class="line">
+            <input type="checkbox" v-model="rule.list_watched_sites">
+            告警内容里列出受影响的关注站点，最多显示
+            <input type="number" v-model.number="rule.max_list_sites" min="1" class="num"> 个
+          </label>
         </div>
 
         <div class="panel">
@@ -946,6 +1090,76 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
                   <button class="btn-link" @click="openEditWindow(w)">编辑</button>
                   <button class="btn-link danger" @click="deleteWindow(w)">删除</button>
                 </template>
+                <span v-else class="dim">—</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </template>
+    </div>
+
+    <!-- ================= Tab 站点管理 ================= -->
+    <div v-if="activeTab === 'sites'" class="tab-content">
+      <div v-if="!currentEnvId" class="empty-block">请先在上方选择一个环境</div>
+      <template v-else>
+        <div class="stat-row">
+          <div class="stat-card"><div class="sc-num">{{ siteStats.total }}</div><div class="sc-label">已发现站点</div></div>
+          <div class="stat-card"><div class="sc-num">{{ siteStats.named }}</div><div class="sc-label">已命名</div></div>
+          <div class="stat-card maintain"><div class="sc-num">{{ siteStats.watched }}</div><div class="sc-label">★ 关注中</div></div>
+        </div>
+
+        <p class="hint-line">
+          站点由采集<strong>自动发现</strong>，接口只给 siteId 不给名称，所以名字需要你补。
+          只需给关心的那几个起名、打★，其余可以一直“未命名”放着。
+          <strong>“出现在 N 台”</strong>指有多少张桌台的维护涉及过它，可据此判断重不重要。
+        </p>
+
+        <div class="filter-bar">
+          <select v-model="siteFilter.watched" @change="loadSites()">
+            <option value="">关注：全部</option>
+            <option value="1">只看关注</option>
+          </select>
+          <select v-model="siteFilter.named" @change="loadSites()">
+            <option value="">命名：全部</option>
+            <option value="1">已命名</option>
+            <option value="0">未命名</option>
+          </select>
+          <input v-model="siteFilter.q" placeholder="站点名 / siteId" @keyup.enter="loadSites()">
+          <button class="btn btn-primary" @click="loadSites()">搜索</button>
+          <button v-if="canRuleUpdate && siteSelection.length" class="btn btn-secondary" @click="batchWatch(true)">
+            ★ 关注选中 ({{ siteSelection.length }})
+          </button>
+          <button v-if="canRuleUpdate && siteSelection.length" class="btn btn-secondary" @click="batchWatch(false)">
+            取消关注
+          </button>
+        </div>
+
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:34px"><input type="checkbox" :checked="allSitesChecked" @change="toggleAllSites"></th>
+              <th>关注</th><th>站点名称</th><th>siteId</th><th>出现在</th><th>最近一次</th><th>备注</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!sites.length"><td colspan="8" class="empty">
+              还没有发现站点 —— 采集到维护中的桌台后会自动入库
+            </td></tr>
+            <tr v-for="st in sites" :key="st.id" :class="{ 'row-routine': st.watched }">
+              <td><input type="checkbox" :value="st.id" v-model="siteSelection"></td>
+              <td>
+                <button class="btn-link star" :class="{ on: st.watched }"
+                        :disabled="!canRuleUpdate" @click="toggleWatch(st)">
+                  {{ st.watched ? '★' : '☆' }}
+                </button>
+              </td>
+              <td :class="st.site_name ? 'strong' : 'dim'">{{ st.site_name || '(未命名)' }}</td>
+              <td class="mono small dim">{{ st.site_id }}</td>
+              <td>{{ st.table_count }} 台</td>
+              <td class="small dim">{{ st.last_seen_at }}</td>
+              <td class="dim small">{{ st.remark }}</td>
+              <td>
+                <button v-if="canRuleUpdate" class="btn-link" @click="openEditSite(st)">编辑</button>
                 <span v-else class="dim">—</span>
               </td>
             </tr>
@@ -1289,6 +1503,75 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       </div>
     </div>
 
+    <!-- ================= 编辑站点弹窗 ================= -->
+    <div v-if="siteDialog" class="modal-mask" @click.self="siteDialog = false">
+      <div class="modal">
+        <div class="modal-head">
+          <h3>编辑站点</h3>
+          <button class="close" @click="siteDialog = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-row"><label>siteId</label><span class="mono small dim">{{ siteForm.site_id }}</span></div>
+          <div class="form-row">
+            <label>站点名称</label>
+            <input v-model="siteForm.site_name" class="wide-input" placeholder="如：泰坦体育">
+          </div>
+          <label class="cb"><input type="checkbox" v-model="siteForm.watched"> 关注这个站点</label>
+          <p class="field-hint">
+            只有关注的站点会显示在桌台列表的「影响站点」里；
+            告警范围选了「仅关注站点」时，只有它们受影响才发 Lark。
+          </p>
+          <div class="form-row"><label>备注</label><input v-model="siteForm.remark" class="wide-input"></div>
+        </div>
+        <div class="modal-foot">
+          <div class="spacer"></div>
+          <button class="btn btn-secondary" @click="siteDialog = false">取消</button>
+          <button class="btn btn-primary" @click="saveSite">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 桌台站点详情 ================= -->
+    <div v-if="roomSitesDialog" class="modal-mask" @click.self="roomSitesDialog = false">
+      <div class="modal wide">
+        <div class="modal-head">
+          <h3>桌台 {{ roomSites.table_no }} 受影响站点（共 {{ roomSites.total }} 个）</h3>
+          <button class="close" @click="roomSitesDialog = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="site-group">
+            <div class="sg-title">★ 关注的（{{ roomSites.watched.length }}）</div>
+            <div v-if="!roomSites.watched.length" class="empty-block small">
+              这次维护没有涉及任何关注的站点。
+              告警范围选了「仅关注站点」的话，它不会发 Lark。
+            </div>
+            <div v-else class="chip-list">
+              <span v-for="x in roomSites.watched" :key="x.site_id" class="chip on" :title="x.site_id">
+                {{ x.site_name || x.site_id }}
+              </span>
+            </div>
+          </div>
+
+          <div class="site-group">
+            <div class="sg-title">其余站点（{{ roomSites.others.length }}）</div>
+            <p class="field-hint">未关注的站点不会出现在列表里，也不会触发告警。要关注去「站点管理」打★。</p>
+            <div class="chip-list">
+              <span v-for="x in roomSites.others" :key="x.site_id" class="chip" :title="x.site_id">
+                {{ x.site_name || x.site_id }}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-secondary" @click="activeTab = 'sites'; roomSitesDialog = false; loadSites()">
+            去站点管理
+          </button>
+          <div class="spacer"></div>
+          <button class="btn btn-secondary" @click="roomSitesDialog = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ================= Lark 群弹窗 ================= -->
     <div v-if="botDialog" class="modal-mask" @click.self="botDialog = false">
       <div class="modal">
@@ -1460,6 +1743,11 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .tag-routine { background: rgba(59, 130, 246, .18); color: var(--primary); font-weight: 600; }
 .tag-overrun { background: rgba(239, 68, 68, .18); color: var(--danger); font-weight: 600; }
 .row-routine { background: rgba(59, 130, 246, .06); }
+.site-link { text-align: left; padding: 0; }
+.star { font-size: 16px; padding: 0 4px; color: var(--text-muted); }
+.star.on { color: var(--warning); }
+.site-group { margin-bottom: 18px; }
+.sg-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-primary); }
 
 .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-size: 13px; }
 .btn-primary { background: var(--primary); color: #fff; }

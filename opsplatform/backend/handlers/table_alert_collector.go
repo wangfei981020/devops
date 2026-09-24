@@ -117,6 +117,7 @@ type taRoomSnapshot struct {
 	Status      string
 	Maintaining bool
 	SiteCount   int
+	SiteIDs     []string // 受影响的 siteId，顺序保持接口返回的样子
 	OnlineTotal int
 	Operator    string
 	UpdateTime  string
@@ -327,6 +328,9 @@ func TACollectOnce(env *TAEnv) (*TACollectResult, error) {
 	taInfof("env=%s 维护中 %d 台 / Enable %d / Disable %d",
 		env.Name, res.MaintainCnt, res.EnableCount, res.DisableCount)
 
+	// 站点自动发现：先于快照落库，保证事件单算关注数时字典已是最新
+	taDiscoverSites(env.ID, snaps)
+
 	// 比对 + 落库
 	changes, err := taApplySnapshots(env, snaps)
 	if err != nil {
@@ -487,6 +491,20 @@ func taParseRooms(env *TAEnv, raw []byte) ([]taRoomSnapshot, int, error) {
 			if lst, ok := mv.([]interface{}); ok && len(lst) > 0 {
 				s.Maintaining = true
 				s.SiteCount = len(lst)
+				// 元素形如 {"siteId":"...","source":"Central"}，把 siteId 抽出来。
+				// 兼容元素直接就是字符串的情况。
+				for _, it := range lst {
+					switch e := it.(type) {
+					case map[string]interface{}:
+						if v := taToStr(e["siteId"]); v != "" {
+							s.SiteIDs = append(s.SiteIDs, v)
+						}
+					case string:
+						if e != "" {
+							s.SiteIDs = append(s.SiteIDs, e)
+						}
+					}
+				}
 			}
 		}
 
@@ -606,11 +624,12 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 			_, err = database.DB.Exec(`
 				UPDATE table_alert_rooms
 				SET table_no=?, room_no=?, platform_id=?, status=?, maintaining=?, maintain_site_count=?,
-				    online_user_total=?, operator=?, remote_update_time=?, maintain_since=?,
-				    since_estimated=?, last_seen_at=?
+				    maintain_site_ids=?, online_user_total=?, operator=?, remote_update_time=?,
+				    maintain_since=?, since_estimated=?, last_seen_at=?
 				WHERE env_id=? AND room_id=?`,
 				s.TableNo, s.RoomNo, s.PlatformID, s.Status, s.Maintaining, s.SiteCount,
-				s.OnlineTotal, s.Operator, s.UpdateTime, newSince, newEstimated, now, env.ID, s.RoomID)
+				strings.Join(s.SiteIDs, ","), s.OnlineTotal, s.Operator, s.UpdateTime,
+				newSince, newEstimated, now, env.ID, s.RoomID)
 		} else {
 			if s.Maintaining {
 				changes = append(changes, taChange{
@@ -621,12 +640,12 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 			_, err = database.DB.Exec(`
 				INSERT INTO table_alert_rooms
 				  (id, env_id, room_id, table_no, room_no, platform_id, status, maintaining,
-				   maintain_site_count, online_user_total, operator, remote_update_time, maintain_since,
-				   since_estimated, first_seen_at, last_seen_at)
-				VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				   maintain_site_count, maintain_site_ids, online_user_total, operator,
+				   remote_update_time, maintain_since, since_estimated, first_seen_at, last_seen_at)
+				VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				uuid.New().String(), env.ID, s.RoomID, s.TableNo, s.RoomNo, s.PlatformID,
-				s.Status, s.Maintaining, s.SiteCount, s.OnlineTotal, s.Operator, s.UpdateTime, newSince,
-				newEstimated, now, now)
+				s.Status, s.Maintaining, s.SiteCount, strings.Join(s.SiteIDs, ","),
+				s.OnlineTotal, s.Operator, s.UpdateTime, newSince, newEstimated, now, now)
 		}
 		if err != nil {
 			taErrorf("env=%s 写入桌台 %s 失败: %v", env.Name, s.TableNo, err)
@@ -659,14 +678,16 @@ func taSyncEvent(env *TAEnv, s taRoomSnapshot, wasMaintaining bool, since interf
 		if hit := taMatchWindow(env.ID, s.TableNo, start, time.Now()); hit != nil {
 			winID, winName, winEnd = hit.Window.ID, hit.Window.Name, hit.PlanEnd
 		}
+		watchedNames := taPickWatched(s.SiteIDs, taWatchedSites(env.ID))
 		_, err := database.DB.Exec(`
 			INSERT INTO table_alert_events
 			  (id, env_id, env_name, room_id, table_no, room_no, platform_id,
-			   maintain_start_at, start_estimated, site_count, operator, state,
-			   window_id, window_name, window_end_at, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?, 'pending',?,?,?,?,?)`,
+			   maintain_start_at, start_estimated, site_count, site_ids, watched_site_count,
+			   operator, state, window_id, window_name, window_end_at, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending',?,?,?,?,?)`,
 			uuid.New().String(), env.ID, env.Name, s.RoomID, s.TableNo, s.RoomNo,
-			s.PlatformID, start, estimated, s.SiteCount, s.Operator,
+			s.PlatformID, start, estimated, s.SiteCount, strings.Join(s.SiteIDs, ","),
+			len(watchedNames), s.Operator,
 			winID, winName, winEnd, time.Now(), time.Now())
 		if err != nil {
 			taErrorf("env=%s 桌台 %s 开事件单失败: %v", env.Name, s.TableNo, err)
@@ -705,10 +726,13 @@ func taSyncEvent(env *TAEnv, s taRoomSnapshot, wasMaintaining bool, since interf
 
 	case s.Maintaining && wasMaintaining:
 		// 维护中，刷新站点数（部分站点解除时数组会变短，只记录不改变告警状态）
+		// 部分站点解除维护时数组会变短，关注站点数要跟着重算 ——
+		// 关注的那几个都恢复了，就不该再继续吵人
+		watchedNow := taPickWatched(s.SiteIDs, taWatchedSites(env.ID))
 		database.DB.Exec(`
-			UPDATE table_alert_events SET site_count=?, operator=?
+			UPDATE table_alert_events SET site_count=?, site_ids=?, watched_site_count=?, operator=?
 			WHERE env_id=? AND room_id=? AND maintain_end_at IS NULL`,
-			s.SiteCount, s.Operator, env.ID, s.RoomID)
+			s.SiteCount, strings.Join(s.SiteIDs, ","), len(watchedNow), s.Operator, env.ID, s.RoomID)
 
 		// 快照侧回填了开始时间的话，事件单也要跟着改 —— 告警时长判定读的是
 		// events.maintain_start_at，只改 rooms 的话页面对了、告警阈值还是错的。
@@ -796,7 +820,8 @@ func taScanAndAlert() error {
 		SELECT e.id, e.env_id, e.env_name, e.room_id, e.table_no, e.room_no,
 		       e.maintain_start_at, e.site_count, e.operator, e.alert_count,
 		       e.next_alert_at, e.state, e.escalated, e.silence_until,
-		       e.window_id, e.window_name, e.window_end_at, e.overrun_notified
+		       e.window_id, e.window_name, e.window_end_at, e.overrun_notified,
+		       COALESCE(e.site_ids,''), e.watched_site_count
 		FROM table_alert_events e
 		WHERE e.maintain_end_at IS NULL AND e.state IN ('pending','alerting','acked')`)
 	if err != nil {
@@ -813,6 +838,8 @@ func taScanAndAlert() error {
 		WindowID, WindowName                                         string
 		WindowEndAt                                                  sql.NullTime
 		OverrunNotified                                              bool
+		SiteIDs                                                      string
+		WatchedSiteCount                                             int
 	}
 	list := []pending{}
 	for rows.Next() {
@@ -820,7 +847,8 @@ func taScanAndAlert() error {
 		if err := rows.Scan(&p.ID, &p.EnvID, &p.EnvName, &p.RoomID, &p.TableNo, &p.RoomNo,
 			&p.StartAt, &p.SiteCount, &p.Operator, &p.AlertCount,
 			&p.NextAlertAt, &p.State, &p.Escalated, &p.SilenceUntil,
-			&p.WindowID, &p.WindowName, &p.WindowEndAt, &p.OverrunNotified); err != nil {
+			&p.WindowID, &p.WindowName, &p.WindowEndAt, &p.OverrunNotified,
+			&p.SiteIDs, &p.WatchedSiteCount); err != nil {
 			taErrorf("扫描事件失败: %v", err)
 			continue
 		}
@@ -848,6 +876,22 @@ func taScanAndAlert() error {
 		dur := now.Sub(p.StartAt)
 		if dur < time.Duration(rule.ThresholdMin)*time.Minute {
 			continue
+		}
+
+		// ===== 告警范围：只告警关注站点 =====
+		// 一张桌台可能对几十个站点维护，但只有少数几个是真正关心的。
+		// 选了 watched 之后，没碰到关注站点的维护在页面上照样看得到，
+		// 只是不发 Lark、不计入告警中 —— 信息不丢，只是不吵人。
+		watchedNames := []string{}
+		if rule.AlertScope == "watched" {
+			watchedNames = taPickWatched(strings.Split(p.SiteIDs, ","), taWatchedSites(p.EnvID))
+			if len(watchedNames) == 0 {
+				taDebugf("env=%s 桌台 %s 维护未涉及关注站点，按「仅关注站点」策略跳过告警",
+					p.EnvName, p.TableNo)
+				continue
+			}
+		} else if rule.ListWatchedSites {
+			watchedNames = taPickWatched(strings.Split(p.SiteIDs, ","), taWatchedSites(p.EnvID))
 		}
 
 		// ===== 例行维护窗口 =====
@@ -931,23 +975,27 @@ func taScanAndAlert() error {
 			p.EnvName, p.TableNo, p.RoomNo, seq, taHumanDur(dur), escalating, next.Format("15:04:05"))
 
 		go taSendAlert(taAlertPayload{
-			WindowName:  p.WindowName,
-			InWindow:    inWindow,
-			Overrun:     overrun,
-			PlanEnd:     planEnd,
-			EventID:     p.ID,
-			EnvName:     p.EnvName,
-			TableNo:     p.TableNo,
-			RoomNo:      p.RoomNo,
-			SiteCount:   p.SiteCount,
-			Operator:    p.Operator,
-			StartAt:     p.StartAt,
-			Duration:    dur,
-			Seq:         seq,
-			MaxTimes:    rule.MaxTimes,
-			Escalating:  escalating,
-			NextAt:      next,
-			IntervalMin: nextIv,
+			WatchedSites: watchedNames,
+			TotalSites:   p.SiteCount,
+			ListSites:    rule.ListWatchedSites,
+			MaxListSites: rule.MaxListSites,
+			WindowName:   p.WindowName,
+			InWindow:     inWindow,
+			Overrun:      overrun,
+			PlanEnd:      planEnd,
+			EventID:      p.ID,
+			EnvName:      p.EnvName,
+			TableNo:      p.TableNo,
+			RoomNo:       p.RoomNo,
+			SiteCount:    p.SiteCount,
+			Operator:     p.Operator,
+			StartAt:      p.StartAt,
+			Duration:     dur,
+			Seq:          seq,
+			MaxTimes:     rule.MaxTimes,
+			Escalating:   escalating,
+			NextAt:       next,
+			IntervalMin:  nextIv,
 		}, rule)
 	}
 	return nil
@@ -971,6 +1019,9 @@ type TARule struct {
 	QuietEnabled        bool     `json:"quiet_enabled"`
 	QuietStart          string   `json:"quiet_start"`
 	QuietEnd            string   `json:"quiet_end"`
+	AlertScope          string   `json:"alert_scope"`
+	ListWatchedSites    bool     `json:"list_watched_sites"`
+	MaxListSites        int      `json:"max_list_sites"`
 	BotIDs              []string `json:"bot_ids"`
 }
 
@@ -979,11 +1030,13 @@ func taGetRule(envID string) (*TARule, error) {
 	err := database.DB.QueryRow(`
 		SELECT id, env_id, enabled, threshold_min, interval_min, max_times, escalate,
 		       escalate_interval_min, notify_on_recover, at_lark_ids, escalate_at_lark_ids,
-		       reat_every_time, silence_after_ack_min, quiet_enabled, quiet_start, quiet_end
+		       reat_every_time, silence_after_ack_min, quiet_enabled, quiet_start, quiet_end,
+		       alert_scope, list_watched_sites, max_list_sites
 		FROM table_alert_rules WHERE env_id=?`, envID).Scan(
 		&r.ID, &r.EnvID, &r.Enabled, &r.ThresholdMin, &r.IntervalMin, &r.MaxTimes, &r.Escalate,
 		&r.EscalateIntervalMin, &r.NotifyOnRecover, &r.AtLarkIDs, &r.EscalateAtLarkIDs,
-		&r.ReatEveryTime, &r.SilenceAfterAckMin, &r.QuietEnabled, &r.QuietStart, &r.QuietEnd)
+		&r.ReatEveryTime, &r.SilenceAfterAckMin, &r.QuietEnabled, &r.QuietStart, &r.QuietEnd,
+		&r.AlertScope, &r.ListWatchedSites, &r.MaxListSites)
 	if err != nil {
 		return nil, err
 	}
@@ -1009,23 +1062,27 @@ func taGetRuleBots(ruleID string) []string {
 
 // taAlertPayload 一次告警所需的全部信息
 type taAlertPayload struct {
-	WindowName  string        // 命中的例行维护窗口名，空=计划外维护
-	InWindow    bool          // 当前仍在例行窗口内
-	Overrun     time.Duration // 已超出窗口多久
-	PlanEnd     time.Time     // 例行窗口的计划结束时间
-	EventID     string
-	EnvName     string
-	TableNo     string
-	RoomNo      string
-	SiteCount   int
-	Operator    string
-	StartAt     time.Time
-	Duration    time.Duration
-	Seq         int
-	MaxTimes    int
-	Escalating  bool
-	NextAt      time.Time
-	IntervalMin int
+	WatchedSites []string // 受影响的关注站点名
+	TotalSites   int      // 受影响站点总数
+	ListSites    bool     // 是否在卡片里列出站点名
+	MaxListSites int
+	WindowName   string        // 命中的例行维护窗口名，空=计划外维护
+	InWindow     bool          // 当前仍在例行窗口内
+	Overrun      time.Duration // 已超出窗口多久
+	PlanEnd      time.Time     // 例行窗口的计划结束时间
+	EventID      string
+	EnvName      string
+	TableNo      string
+	RoomNo       string
+	SiteCount    int
+	Operator     string
+	StartAt      time.Time
+	Duration     time.Duration
+	Seq          int
+	MaxTimes     int
+	Escalating   bool
+	NextAt       time.Time
+	IntervalMin  int
 }
 
 // taSendAlert 发 Lark 告警，支持多个群
@@ -1066,8 +1123,14 @@ func taSendAlert(p taAlertPayload, rule *TARule) {
 	fmt.Fprintf(&b, "**状态**：维护中，已持续 **%s**\n", taHumanDur(p.Duration))
 	b.WriteString(planLine)
 	fmt.Fprintf(&b, "**开始时间**：%s\n", p.StartAt.Format("2006-01-02 15:04:05"))
-	if p.SiteCount > 0 {
-		fmt.Fprintf(&b, "**影响站点**：%d 个\n", p.SiteCount)
+	// 站点：优先说清楚「哪些关注的站点受影响」，总数放在后面作参考
+	if p.ListSites && len(p.WatchedSites) > 0 {
+		fmt.Fprintf(&b, "**影响关注站点**：%s\n", taJoinSites(p.WatchedSites, p.MaxListSites))
+		if p.TotalSites > 0 {
+			fmt.Fprintf(&b, "**影响站点总数**：%d 个（其中关注 %d 个）\n", p.TotalSites, len(p.WatchedSites))
+		}
+	} else if p.TotalSites > 0 {
+		fmt.Fprintf(&b, "**影响站点**：%d 个\n", p.TotalSites)
 	}
 	if p.Operator != "" {
 		fmt.Fprintf(&b, "**最后操作人**：%s\n", p.Operator)
@@ -1639,4 +1702,115 @@ func taFindWindow(envID, winID string) *TAMaintWindow {
 		}
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// 站点字典
+//
+// 接口只给 siteId，不给名称。要在页面上显示「泰坦体育」而不是一串雪花 ID，
+// 就得有个对应关系。手工导入几十上百个 ID 不现实，所以：
+//   采集时遇到没见过的 siteId 自动入库（名称留空、默认不关注），
+//   使用者只需要给关心的那几个起名 + 打星，其余一直躺着也不碍事。
+// ---------------------------------------------------------------------------
+
+// taDiscoverSites 把这一轮采集见到的 siteId 落库，并刷新出现次数。
+// 用 INSERT IGNORE + 批量，避免 140 张桌台 × 几十个站点打出上千条单发 SQL。
+func taDiscoverSites(envID string, snaps []taRoomSnapshot) {
+	// siteID -> 本轮涉及的桌台数
+	counter := map[string]int{}
+	for _, s := range snaps {
+		if !s.Maintaining {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, id := range s.SiteIDs {
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			counter[id]++
+		}
+	}
+	if len(counter) == 0 {
+		return
+	}
+
+	now := time.Now()
+	newCount := 0
+	for siteID, cnt := range counter {
+		res, err := database.DB.Exec(`
+			INSERT IGNORE INTO table_alert_sites
+			  (id, env_id, site_id, site_name, watched, table_count, first_seen_at, last_seen_at)
+			VALUES (?,?,?,'',0,?,?,?)`,
+			uuid.New().String(), envID, siteID, cnt, now, now)
+		if err != nil {
+			taErrorf("站点 %s 入库失败: %v", siteID, err)
+			continue
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			newCount++
+			continue
+		}
+		// 已存在：只刷新出现次数和最近时间，不动名称和关注标记
+		database.DB.Exec(`
+			UPDATE table_alert_sites SET table_count = ?, last_seen_at = ?
+			WHERE env_id = ? AND site_id = ?`, cnt, now, envID, siteID)
+	}
+	if newCount > 0 {
+		taInfof("env=%s 新发现 %d 个站点（待命名），本轮共涉及 %d 个站点",
+			envID, newCount, len(counter))
+	}
+}
+
+// taWatchedSites 取某环境下关注的站点，返回 siteID -> 名称
+func taWatchedSites(envID string) map[string]string {
+	out := map[string]string{}
+	rows, err := database.DB.Query(`
+		SELECT site_id, site_name FROM table_alert_sites
+		WHERE env_id = ? AND watched = 1`, envID)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, name string
+		if rows.Scan(&id, &name) == nil {
+			if name == "" {
+				name = id // 关注了却没起名，退而显示 ID，总比空白强
+			}
+			out[id] = name
+		}
+	}
+	return out
+}
+
+// taPickWatched 从受影响站点里挑出关注的，返回名称列表（保持接口返回的顺序）
+func taPickWatched(siteIDs []string, watched map[string]string) []string {
+	if len(watched) == 0 {
+		return nil
+	}
+	out := []string{}
+	seen := map[string]bool{}
+	for _, id := range siteIDs {
+		if name, ok := watched[id]; ok && !seen[id] {
+			seen[id] = true
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// taJoinSites 把站点名拼成一行，超过 max 个就收尾成「等 N 个」，
+// 免得卡片被几十个站点名刷屏。
+func taJoinSites(names []string, max int) string {
+	if len(names) == 0 {
+		return ""
+	}
+	if max <= 0 {
+		max = 5
+	}
+	if len(names) <= max {
+		return strings.Join(names, "、")
+	}
+	return strings.Join(names[:max], "、") + fmt.Sprintf(" 等 %d 个", len(names))
 }
