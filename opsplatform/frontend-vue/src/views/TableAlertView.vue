@@ -54,7 +54,7 @@ const rooms = ref([])
 const roomsTotal = ref(0)
 const roomPage = ref(1)
 const roomSize = ref(20)
-const filters = ref({ status: '', maintaining: '', q: '' })
+const filters = ref({ status: '', maintaining: '', q: '', routine: '' })
 const loadingRooms = ref(false)
 const roomJump = ref(1)
 const roomPages = computed(() => Math.max(1, Math.ceil(roomsTotal.value / roomSize.value)))
@@ -97,8 +97,16 @@ async function loadRooms() {
   }
 }
 
+// 例行维护的归属是在服务端内存里算的，没进 SQL，
+// 所以这一项在当前页内过滤，不参与分页统计
+const displayRooms = computed(() => {
+  if (filters.value.routine === '') return rooms.value
+  const want = filters.value.routine === '1'
+  return rooms.value.filter(r => (!!(r.routine_windows && r.routine_windows.length)) === want)
+})
+
 function applyFilter() { roomPage.value = 1; loadRooms() }
-function resetFilter() { filters.value = { status: '', maintaining: '', q: '' }; applyFilter() }
+function resetFilter() { filters.value = { status: '', maintaining: '', q: '', routine: '' }; applyFilter() }
 
 async function collectNow() {
   if (!currentEnvId.value) return
@@ -525,11 +533,6 @@ const weekdayOptions = [
 ]
 
 // 当前维护中的桌台，配置时可以直接点选，省去手敲桌台号
-// 快捷选择用房间号：一个桌台可能有多个房间（N13 下有 N013、N013-2），
-// 它们各自独立维护，配置要能精确到房间
-const maintainingRooms = computed(() =>
-  rooms.value.filter(r => r.maintaining && r.room_no)
-             .map(r => ({ roomNo: r.room_no, tableNo: r.table_no })))
 
 function blankWindow() {
   return {
@@ -554,6 +557,8 @@ function openCreateWindow() {
   windowForm.value = blankWindow()
   windowTableMode.value = 'list'
   windowTableInput.value = ''
+  roomPickerQuery.value = ''
+  loadAllRooms()
   windowDialog.value = true
 }
 
@@ -561,8 +566,48 @@ function openEditWindow(w) {
   windowForm.value = { ...blankWindow(), ...w }
   windowTableMode.value = w.table_nos === '*' ? 'all' : 'list'
   windowTableInput.value = w.table_nos === '*' ? '' : (w.table_nos || '')
+  roomPickerQuery.value = ''
+  loadAllRooms()
   windowDialog.value = true
 }
+
+// 窗口配置用的房间选择器：列出该环境所有启用的房间，搜索勾选，
+// 不用手敲房间号 —— 手敲容易敲错，错了窗口永远不会命中，而且很难发现。
+const allRooms = ref([])
+const roomPickerQuery = ref('')
+
+const pickedRooms = computed(() =>
+  windowTableInput.value.split(',').map(x => x.trim()).filter(Boolean))
+
+const filteredPickerRooms = computed(() => {
+  const kw = roomPickerQuery.value.trim().toLowerCase()
+  if (!kw) return allRooms.value
+  return allRooms.value.filter(r =>
+    (r.room_no || '').toLowerCase().includes(kw) ||
+    (r.table_no || '').toLowerCase().includes(kw))
+})
+
+async function loadAllRooms() {
+  if (!currentEnvId.value) { allRooms.value = []; return }
+  try {
+    // 只要启用的：停用的房间配了也不会维护，列出来只会干扰
+    const res = await api.get('/api/table-alert/rooms', {
+      params: { env_id: currentEnvId.value, status: 'Enable', page: 1, size: 500 }
+    })
+    allRooms.value = res.data?.items || []
+  } catch (e) {
+    appStore.showToast('读取房间列表失败: ' + errText(e), 'error')
+  }
+}
+
+function toggleRoomPick(roomNo) {
+  const arr = [...pickedRooms.value]
+  const i = arr.indexOf(roomNo)
+  if (i >= 0) arr.splice(i, 1); else arr.push(roomNo)
+  windowTableInput.value = arr.join(',')
+}
+
+function clearPickedRooms() { windowTableInput.value = '' }
 
 function hasWeekday(v) {
   return (windowForm.value.weekdays || '').split(',').map(x => x.trim()).includes(String(v))
@@ -574,12 +619,6 @@ function toggleWeekday(v) {
   arr.sort()
   windowForm.value.weekdays = arr.join(',')
 }
-function addRoomNo(t) {
-  const arr = windowTableInput.value.split(',').map(x => x.trim()).filter(Boolean)
-  if (!arr.includes(t)) arr.push(t)
-  windowTableInput.value = arr.join(',')
-}
-
 async function saveWindow() {
   const f = windowForm.value
   if (!f.name?.trim()) { appStore.showToast('名称不能为空', 'error'); return }
@@ -802,6 +841,11 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <option value="1">仅维护中</option>
           <option value="0">仅正常</option>
         </select>
+        <select v-model="filters.routine" @change="applyFilter">
+          <option value="">例行维护：全部</option>
+          <option value="1">已配例行维护</option>
+          <option value="0">未配例行维护</option>
+        </select>
         <select v-model="filters.status" @change="applyFilter">
           <option value="">状态：全部</option>
           <option value="Enable">Enable（启用）</option>
@@ -826,15 +870,16 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             <th title="对应中台后台的「站点状态」：该桌台在站点侧是否处于维护">站点状态</th>
             <th>影响站点</th>
             <th title="带「估」字的是回溯估算：系统首次采集时该桌台已在维护，没有观测到跃迁">维护时长</th>
+            <th title="该房间配了哪些例行保养安排（不是此刻是否在维护）">例行维护</th>
             <th>告警</th><th>操作人</th><th>操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loadingRooms"><td colspan="9" class="empty">加载中…</td></tr>
-          <tr v-else-if="!rooms.length"><td colspan="9" class="empty">
+          <tr v-if="loadingRooms"><td colspan="10" class="empty">加载中…</td></tr>
+          <tr v-else-if="!displayRooms.length"><td colspan="10" class="empty">
             暂无数据 —— 如果这个环境刚配好，点右上角「立即采集」拉一次
           </td></tr>
-          <tr v-for="r in rooms" :key="r.room_id" :class="{ 'row-maintain': r.maintaining, 'row-acked': r.event_state === 'acked' }">
+          <tr v-for="r in displayRooms" :key="r.room_id" :class="{ 'row-maintain': r.maintaining, 'row-acked': r.event_state === 'acked' }">
             <td class="mono strong">{{ r.table_no }}</td>
             <td class="mono">{{ r.room_no }}</td>
             <td><span class="tag" :class="statusBadge(r.status).cls">{{ statusBadge(r.status).text }}</span></td>
@@ -862,6 +907,13 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
                 <span v-if="r.since_estimated" class="est-mark" :title="durationTip(r)">估</span>
               </template>
               <template v-else>—</template>
+            </td>
+            <td>
+              <template v-if="r.routine_windows && r.routine_windows.length">
+                <span v-for="(w, i) in r.routine_windows" :key="i" class="tag tag-routine routine-chip"
+                      :title="w.name + '：' + w.rule_text">{{ w.rule_text }}</span>
+              </template>
+              <span v-else class="dim">无</span>
             </td>
             <td>
               <span v-if="r.alert_count">{{ r.alert_count }} 次</span>
@@ -1519,12 +1571,32 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
                 它们各自独立维护。<br>
                 也可以填<strong>桌台号</strong>（如 N13），表示该桌台下的<strong>全部房间</strong>，省得一个个列。
               </p>
-              <div class="chip-list" v-if="maintainingRooms.length">
-                <span class="hint">当前维护中的房间，点一下加进去：</span>
-                <button v-for="r in maintainingRooms" :key="r.roomNo" class="chip"
-                        :title="'桌台 ' + r.tableNo" @click.prevent="addRoomNo(r.roomNo)">
-                  + {{ r.roomNo }}
-                </button>
+              <div class="room-picker">
+                <div class="rp-head">
+                  <input v-model="roomPickerQuery" class="rp-search"
+                         placeholder="搜房间号 / 桌台号" @keydown.enter.prevent>
+                  <span class="hint">
+                    已选 <strong>{{ pickedRooms.length }}</strong> 个
+                    · 共 {{ filteredPickerRooms.length }} 个启用房间
+                  </span>
+                  <button v-if="pickedRooms.length" class="btn-link danger" @click.prevent="clearPickedRooms">清空</button>
+                </div>
+                <div class="rp-list">
+                  <button v-for="r in filteredPickerRooms" :key="r.room_id"
+                          class="chip rp-item" :class="{ on: pickedRooms.includes(r.room_no) }"
+                          :title="'桌台 ' + r.table_no + (r.maintaining ? '（当前维护中）' : '')"
+                          @click.prevent="toggleRoomPick(r.room_no)">
+                    {{ r.room_no }}
+                    <span class="rp-table">{{ r.table_no }}</span>
+                    <span v-if="r.maintaining" class="rp-dot" title="当前维护中">●</span>
+                  </button>
+                  <div v-if="!filteredPickerRooms.length" class="hint" style="padding:10px">
+                    <template v-if="!allRooms.length">
+                      还没采集到房间 —— 先去「环境配置」填好地址并采集一次，或直接在上方手填房间号。
+                    </template>
+                    <template v-else>没有匹配的房间</template>
+                  </div>
+                </div>
               </div>
             </div>
           </fieldset>
@@ -1878,6 +1950,23 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.7;
 }
 .raw-input::placeholder { color: var(--text-muted); }
+.room-picker { border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; margin-top: 8px; }
+.rp-head {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  background: var(--bg-hover); border-bottom: 1px solid var(--border-color);
+}
+.rp-search {
+  flex: 0 0 200px; padding: 5px 9px; border-radius: 6px;
+  border: 1px solid var(--border-color); background: var(--bg-input);
+  color: var(--text-primary); font-size: 13px;
+}
+.rp-search::placeholder { color: var(--text-muted); }
+.rp-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; max-height: 210px; overflow-y: auto; }
+.rp-item { display: inline-flex; align-items: center; gap: 6px; }
+.rp-table { font-size: 11px; color: var(--text-muted); }
+.rp-item.on .rp-table { color: var(--primary); }
+.rp-dot { color: var(--warning); font-size: 9px; }
+.routine-chip { margin-right: 4px; font-weight: 500; }
 
 .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-size: 13px; }
 .btn-primary { background: var(--primary); color: #fff; }

@@ -332,6 +332,7 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]interface{}{}
 	now := time.Now()
 	watchedMap := taWatchedSites(envID) // 循环外取一次，别每行都查库
+	allWindows := taListWindows(envID)  // 同理，窗口数量很少，一次取完在内存里匹配
 	for rows.Next() {
 		var (
 			roomID, tableNo, roomNo, platformID, status, operator, remoteUpd string
@@ -361,6 +362,19 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 				item["duration_min"] = int(d.Minutes())
 			}
 		}
+		// 这个房间挂了哪些例行维护 —— 不是「此刻是否在窗口内」，而是「配了哪些保养安排」，
+		// 便于一眼看出哪些桌台有例行维护、什么时间，不用翻到例行维护页去对。
+		wins := []map[string]string{}
+		for i := range allWindows {
+			if taWindowCoversRoom(&allWindows[i], roomNo, tableNo) {
+				wins = append(wins, map[string]string{
+					"name":      allWindows[i].Name,
+					"rule_text": taWindowRuleText(&allWindows[i]),
+				})
+			}
+		}
+		item["routine_windows"] = wins
+
 		// 列表上只展示关注的站点，全部站点放详情 ——
 		// 27 个雪花 ID 平铺在列里没人看得下去
 		item["watched_sites"] = []string{}
