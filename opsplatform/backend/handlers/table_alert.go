@@ -424,16 +424,23 @@ func HandleTAStats(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "缺少 env_id")
 		return
 	}
-	var total, enable, disable, maintaining, alerting int
+	var total, enable, disable, maintaining, maintainingEnabled, alerting int
 	database.DB.QueryRow(`SELECT COUNT(*) FROM table_alert_rooms WHERE env_id=?`, envID).Scan(&total)
 	database.DB.QueryRow(`SELECT COUNT(*) FROM table_alert_rooms WHERE env_id=? AND status='Enable'`, envID).Scan(&enable)
 	database.DB.QueryRow(`SELECT COUNT(*) FROM table_alert_rooms WHERE env_id=? AND status='Disable'`, envID).Scan(&disable)
 	database.DB.QueryRow(`SELECT COUNT(*) FROM table_alert_rooms WHERE env_id=? AND maintaining=1`, envID).Scan(&maintaining)
+	// 停用桌台的维护不告警，所以卡片要把「真正要盯的那部分」单独拎出来，
+	// 否则「维护中 19」和「告警中 3」对不上，看的人会以为漏报了
+	database.DB.QueryRow(`
+		SELECT COUNT(*) FROM table_alert_rooms
+		WHERE env_id=? AND maintaining=1 AND status='Enable'`, envID).Scan(&maintainingEnabled)
 	database.DB.QueryRow(`SELECT COUNT(*) FROM table_alert_events WHERE env_id=? AND state='alerting' AND maintain_end_at IS NULL`, envID).Scan(&alerting)
 
 	respondJSON(w, http.StatusOK, map[string]int{
 		"total": total, "enable": enable, "disable": disable,
-		"maintaining": maintaining, "alerting": alerting,
+		"maintaining": maintaining, "maintaining_enabled": maintainingEnabled,
+		"maintaining_disabled": maintaining - maintainingEnabled,
+		"alerting":             alerting,
 	})
 }
 
@@ -460,6 +467,7 @@ func HandleTAGetRule(w http.ResponseWriter, r *http.Request) {
 			ReatEveryTime: true, SilenceAfterAckMin: 30,
 			QuietStart: "03:00", QuietEnd: "08:00",
 			AlertScope: "all", ListWatchedSites: true, MaxListSites: 5,
+			AlertTableScope: "enabled", AlertOnDisable: false,
 			BotIDs: []string{},
 		})
 		return
@@ -507,6 +515,9 @@ func HandleTASaveRule(w http.ResponseWriter, r *http.Request) {
 	if rule.MaxListSites < 1 {
 		rule.MaxListSites = 5
 	}
+	if rule.AlertTableScope != "all" {
+		rule.AlertTableScope = "enabled"
+	}
 
 	var existID string
 	err := database.DB.QueryRow(`SELECT id FROM table_alert_rules WHERE env_id=?`, rule.EnvID).Scan(&existID)
@@ -517,26 +528,30 @@ func HandleTASaveRule(w http.ResponseWriter, r *http.Request) {
 			  (id, env_id, enabled, threshold_min, interval_min, max_times, escalate,
 			   escalate_interval_min, notify_on_recover, at_lark_ids, escalate_at_lark_ids,
 			   reat_every_time, silence_after_ack_min, quiet_enabled, quiet_start, quiet_end,
-			   alert_scope, list_watched_sites, max_list_sites)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			   alert_scope, list_watched_sites, max_list_sites,
+			   alert_table_scope, alert_on_disable)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			existID, rule.EnvID, rule.Enabled, rule.ThresholdMin, rule.IntervalMin, rule.MaxTimes,
 			rule.Escalate, rule.EscalateIntervalMin, rule.NotifyOnRecover, rule.AtLarkIDs,
 			rule.EscalateAtLarkIDs, rule.ReatEveryTime, rule.SilenceAfterAckMin,
 			rule.QuietEnabled, rule.QuietStart, rule.QuietEnd,
-			rule.AlertScope, rule.ListWatchedSites, rule.MaxListSites)
+			rule.AlertScope, rule.ListWatchedSites, rule.MaxListSites,
+			rule.AlertTableScope, rule.AlertOnDisable)
 	} else if err == nil {
 		_, err = database.DB.Exec(`
 			UPDATE table_alert_rules SET
 			  enabled=?, threshold_min=?, interval_min=?, max_times=?, escalate=?,
 			  escalate_interval_min=?, notify_on_recover=?, at_lark_ids=?, escalate_at_lark_ids=?,
 			  reat_every_time=?, silence_after_ack_min=?, quiet_enabled=?, quiet_start=?, quiet_end=?,
-			  alert_scope=?, list_watched_sites=?, max_list_sites=?
+			  alert_scope=?, list_watched_sites=?, max_list_sites=?,
+			  alert_table_scope=?, alert_on_disable=?
 			WHERE id=?`,
 			rule.Enabled, rule.ThresholdMin, rule.IntervalMin, rule.MaxTimes, rule.Escalate,
 			rule.EscalateIntervalMin, rule.NotifyOnRecover, rule.AtLarkIDs, rule.EscalateAtLarkIDs,
 			rule.ReatEveryTime, rule.SilenceAfterAckMin, rule.QuietEnabled,
 			rule.QuietStart, rule.QuietEnd,
-			rule.AlertScope, rule.ListWatchedSites, rule.MaxListSites, existID)
+			rule.AlertScope, rule.ListWatchedSites, rule.MaxListSites,
+			rule.AlertTableScope, rule.AlertOnDisable, existID)
 	}
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "保存失败: "+err.Error())

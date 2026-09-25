@@ -155,6 +155,8 @@ func InitTableAlertTables() error {
 			quiet_start VARCHAR(8) NOT NULL DEFAULT '03:00',
 			quiet_end VARCHAR(8) NOT NULL DEFAULT '08:00',
 			alert_scope VARCHAR(16) NOT NULL DEFAULT 'all' COMMENT 'all=桌台维护就告警 / watched=维护涉及关注站点才告警',
+			alert_table_scope VARCHAR(16) NOT NULL DEFAULT 'enabled' COMMENT 'enabled=只告警启用中的桌台（停用的维护与否没有业务影响）/ all=不论启停都告警',
+			alert_on_disable TINYINT(1) NOT NULL DEFAULT 0 COMMENT '桌台从启用变为停用时发一条提醒 —— 防止有人靠停用让告警消失，误操作也能被发现',
 			list_watched_sites TINYINT(1) NOT NULL DEFAULT 1 COMMENT '告警内容里列出受影响的关注站点',
 			max_list_sites INT NOT NULL DEFAULT 5 COMMENT '最多列几个站点名，超出显示「等 N 个」',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -341,6 +343,8 @@ func InitTableAlertTables() error {
 		{"table_alert_rules", "alert_scope", "VARCHAR(16) NOT NULL DEFAULT 'all'"},
 		{"table_alert_rules", "list_watched_sites", "TINYINT(1) NOT NULL DEFAULT 1"},
 		{"table_alert_rules", "max_list_sites", "INT NOT NULL DEFAULT 5"},
+		{"table_alert_rules", "alert_table_scope", "VARCHAR(16) NOT NULL DEFAULT 'enabled'"},
+		{"table_alert_rules", "alert_on_disable", "TINYINT(1) NOT NULL DEFAULT 0"},
 		{"table_alert_sites", "source", "VARCHAR(12) NOT NULL DEFAULT 'auto'"},
 	} {
 		var n int

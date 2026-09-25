@@ -620,6 +620,13 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 					TableNo: s.TableNo, RoomNo: s.RoomNo, Field: "启停状态",
 					From: oldStatus, To: s.Status,
 				})
+				// 启用 → 停用：单独提醒一次。
+				// 「仅告警启用中的桌台」会让停用桌台的维护告警消失，如果停用本身
+				// 是误操作，问题就被这条策略掩盖了 —— 所以这里补一条，让它浮出来。
+				// 停用是瞬时事件，发一次即可，不进事件单、不重复告警。
+				if strings.EqualFold(oldStatus, "Enable") && strings.EqualFold(s.Status, "Disable") {
+					go taNotifyDisabled(env, s)
+				}
 			}
 			if oldOperator != s.Operator && s.Operator != "" {
 				changes = append(changes, taChange{
@@ -827,8 +834,10 @@ func taScanAndAlert() error {
 		       e.maintain_start_at, e.site_count, e.operator, e.alert_count,
 		       e.next_alert_at, e.state, e.escalated, e.silence_until,
 		       e.window_id, e.window_name, e.window_end_at, e.overrun_notified,
-		       COALESCE(e.site_ids,''), e.watched_site_count
+		       COALESCE(e.site_ids,''), e.watched_site_count,
+		       COALESCE(r.status,'')
 		FROM table_alert_events e
+		LEFT JOIN table_alert_rooms r ON r.env_id = e.env_id AND r.room_id = e.room_id
 		WHERE e.maintain_end_at IS NULL AND e.state IN ('pending','alerting','acked')`)
 	if err != nil {
 		return err
@@ -846,6 +855,7 @@ func taScanAndAlert() error {
 		OverrunNotified                                              bool
 		SiteIDs                                                      string
 		WatchedSiteCount                                             int
+		RoomStatus                                                   string
 	}
 	list := []pending{}
 	for rows.Next() {
@@ -854,7 +864,7 @@ func taScanAndAlert() error {
 			&p.StartAt, &p.SiteCount, &p.Operator, &p.AlertCount,
 			&p.NextAlertAt, &p.State, &p.Escalated, &p.SilenceUntil,
 			&p.WindowID, &p.WindowName, &p.WindowEndAt, &p.OverrunNotified,
-			&p.SiteIDs, &p.WatchedSiteCount); err != nil {
+			&p.SiteIDs, &p.WatchedSiteCount, &p.RoomStatus); err != nil {
 			taErrorf("扫描事件失败: %v", err)
 			continue
 		}
@@ -881,6 +891,16 @@ func taScanAndAlert() error {
 		// 维护时长还没到阈值
 		dur := now.Sub(p.StartAt)
 		if dur < time.Duration(rule.ThresholdMin)*time.Minute {
+			continue
+		}
+
+		// ===== 桌台启停：停用的桌台维护与否没有业务影响 =====
+		// 它已经不对外服务了，再报「维护中」纯属噪音。
+		// 但停用本身可能是误操作，那由 alert_on_disable 单独覆盖，不在这里混为一谈。
+		if rule.AlertTableScope != "all" && p.RoomStatus != "" &&
+			!strings.EqualFold(p.RoomStatus, "Enable") {
+			taDebugf("env=%s 桌台 %s(%s) 当前为 %s，按「仅启用中的桌台」策略跳过告警",
+				p.EnvName, p.TableNo, p.RoomNo, p.RoomStatus)
 			continue
 		}
 
@@ -1026,6 +1046,8 @@ type TARule struct {
 	QuietStart          string   `json:"quiet_start"`
 	QuietEnd            string   `json:"quiet_end"`
 	AlertScope          string   `json:"alert_scope"`
+	AlertTableScope     string   `json:"alert_table_scope"`
+	AlertOnDisable      bool     `json:"alert_on_disable"`
 	ListWatchedSites    bool     `json:"list_watched_sites"`
 	MaxListSites        int      `json:"max_list_sites"`
 	BotIDs              []string `json:"bot_ids"`
@@ -1037,12 +1059,14 @@ func taGetRule(envID string) (*TARule, error) {
 		SELECT id, env_id, enabled, threshold_min, interval_min, max_times, escalate,
 		       escalate_interval_min, notify_on_recover, at_lark_ids, escalate_at_lark_ids,
 		       reat_every_time, silence_after_ack_min, quiet_enabled, quiet_start, quiet_end,
-		       alert_scope, list_watched_sites, max_list_sites
+		       alert_scope, list_watched_sites, max_list_sites,
+		       alert_table_scope, alert_on_disable
 		FROM table_alert_rules WHERE env_id=?`, envID).Scan(
 		&r.ID, &r.EnvID, &r.Enabled, &r.ThresholdMin, &r.IntervalMin, &r.MaxTimes, &r.Escalate,
 		&r.EscalateIntervalMin, &r.NotifyOnRecover, &r.AtLarkIDs, &r.EscalateAtLarkIDs,
 		&r.ReatEveryTime, &r.SilenceAfterAckMin, &r.QuietEnabled, &r.QuietStart, &r.QuietEnd,
-		&r.AlertScope, &r.ListWatchedSites, &r.MaxListSites)
+		&r.AlertScope, &r.ListWatchedSites, &r.MaxListSites,
+		&r.AlertTableScope, &r.AlertOnDisable)
 	if err != nil {
 		return nil, err
 	}
@@ -1834,4 +1858,35 @@ func taJoinSites(names []string, max int) string {
 		return strings.Join(names, "、")
 	}
 	return strings.Join(names[:max], "、") + fmt.Sprintf(" 等 %d 个", len(names))
+}
+
+// taNotifyDisabled 桌台被停用时的一次性提醒。
+//
+// 存在的理由：告警范围默认只看启用中的桌台，停用后维护告警就不再发了。
+// 如果这个停用是误操作（或者有人为了让告警安静下来而停用），
+// 问题会被悄无声息地掩盖。这条提醒就是那道保险。
+func taNotifyDisabled(env *TAEnv, s taRoomSnapshot) {
+	rule, err := taGetRule(env.ID)
+	if err != nil || !rule.Enabled || !rule.AlertOnDisable {
+		return
+	}
+
+	title := fmt.Sprintf("⚠️ 【%s】桌台已被停用", env.Name)
+	var b strings.Builder
+	fmt.Fprintf(&b, "**桌台**：%s（房间号 %s）\n", s.TableNo, s.RoomNo)
+	fmt.Fprintf(&b, "**状态**：启用 → **停用**\n")
+	if s.Operator != "" {
+		fmt.Fprintf(&b, "**操作人**：%s\n", s.Operator)
+	}
+	fmt.Fprintf(&b, "**发现时间**：%s\n", time.Now().Format("2006-01-02 15:04:05"))
+	if s.Maintaining {
+		fmt.Fprintf(&b, "**注意**：该桌台当前仍处于维护中，停用后维护告警将不再发送。\n")
+	}
+	b.WriteString("\n若非计划内下线，请确认是否为误操作。")
+
+	taInfof("env=%s 桌台 %s(%s) 由启用变为停用，发送提醒（操作人 %s）",
+		env.Name, s.TableNo, s.RoomNo, s.Operator)
+
+	taBroadcast(rule, "disabled", "", env.Name, s.TableNo, 0,
+		title, b.String(), "orange", taSplitIDs(rule.AtLarkIDs))
 }

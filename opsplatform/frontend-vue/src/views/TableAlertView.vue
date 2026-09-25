@@ -829,7 +829,14 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
     <div v-if="activeTab === 'rooms'" class="tab-content">
       <div class="stat-row">
         <div class="stat-card"><div class="sc-num">{{ stats.total }}</div><div class="sc-label">总桌台</div></div>
-        <div class="stat-card maintain" title="站点状态为维护中的桌台数，也是告警的口径"><div class="sc-num">{{ stats.maintaining }}</div><div class="sc-label">🔧 维护中</div></div>
+        <div class="stat-card maintain" title="只统计「启用中且维护中」的桌台 —— 停用桌台的维护不告警，不计在内">
+          <div class="sc-num">{{ stats.maintaining_enabled ?? stats.maintaining }}</div>
+          <div class="sc-label">🔧 维护中（启用）</div>
+          <div v-if="stats.maintaining_disabled" class="sc-sub"
+               title="这些桌台已停用，维护与否没有业务影响，默认不告警">
+            另有 {{ stats.maintaining_disabled }} 台停用中维护
+          </div>
+        </div>
         <div class="stat-card enable"><div class="sc-num">{{ stats.enable }}</div><div class="sc-label">Enable（启用）</div></div>
         <div class="stat-card disable"><div class="sc-num">{{ stats.disable }}</div><div class="sc-label">Disable（停用）</div></div>
         <div class="stat-card alerting"><div class="sc-num">{{ stats.alerting }}</div><div class="sc-label">告警中</div></div>
@@ -1013,6 +1020,27 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           </div>
           <label class="line"><input type="checkbox" v-model="rule.notify_on_recover"> 桌台恢复正常时发一条恢复通知</label>
                 </div>
+
+        <div class="panel">
+          <h3>告警范围（按桌台启停）</h3>
+          <label class="radio-line">
+            <input type="radio" value="enabled" v-model="rule.alert_table_scope">
+            仅启用中的桌台（推荐）—— 停用的桌台维护与否没有业务影响
+          </label>
+          <label class="radio-line">
+            <input type="radio" value="all" v-model="rule.alert_table_scope">
+            全部桌台 —— 不论启停，只要维护就告警
+          </label>
+          <label class="line" style="margin-top:8px">
+            <input type="checkbox" v-model="rule.alert_on_disable">
+            桌台被停用时发一条提醒
+          </label>
+          <p class="field-hint">
+            选了「仅启用中」之后，桌台一停用它的维护告警就不再发了。
+            如果这个停用本身是<strong>误操作</strong>，问题就被这条策略掩盖了 ——
+            把上面那个开关打开，启用→停用的变化会单独提醒一次（只发一次，不重复告警）。
+          </p>
+        </div>
 
         <div class="panel">
           <h3>告警范围（按站点过滤）</h3>
@@ -1967,6 +1995,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .rp-item.on .rp-table { color: var(--primary); }
 .rp-dot { color: var(--warning); font-size: 9px; }
 .routine-chip { margin-right: 4px; font-weight: 500; }
+.sc-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; cursor: help; }
 
 .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-size: 13px; }
 .btn-primary { background: var(--primary); color: #fff; }
