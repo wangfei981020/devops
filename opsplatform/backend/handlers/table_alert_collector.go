@@ -475,8 +475,14 @@ func taParseRooms(env *TAEnv, raw []byte) ([]taRoomSnapshot, int, error) {
 			UpdateTime:  taToStr(m[taDefaultStr(env.FUpdateTime, "updateTime")]),
 		}
 		if s.RoomID == "" {
-			// 没有主键就用桌台号兜底，否则没法去重
-			s.RoomID = s.TableNo
+			// 没有主键时的兜底顺序：房间号优先于桌台号。
+			// 一个桌台可能有多个房间（N13 下有 N013 和 N013-2），
+			// 用桌台号兜底会把它们撞成同一条记录，房间号才是真正唯一的那个。
+			if s.RoomNo != "" {
+				s.RoomID = s.RoomNo
+			} else {
+				s.RoomID = s.TableNo
+			}
 		}
 
 		// ===== 维护判定 =====
@@ -675,7 +681,7 @@ func taSyncEvent(env *TAEnv, s taRoomSnapshot, wasMaintaining bool, since interf
 		// 归属判定放在开单时做一次：之后即使维护拖到窗口之外，也还知道它本来属于哪次例行保养
 		var winID, winName string
 		var winEnd interface{}
-		if hit := taMatchWindow(env.ID, s.TableNo, start, time.Now()); hit != nil {
+		if hit := taMatchWindow(env.ID, s.RoomNo, s.TableNo, start, time.Now()); hit != nil {
 			winID, winName, winEnd = hit.Window.ID, hit.Window.Name, hit.PlanEnd
 		}
 		watchedNames := taPickWatched(s.SiteIDs, taWatchedSites(env.ID))
@@ -1584,18 +1590,31 @@ func taListWindows(envID string) []TAMaintWindow {
 	return out
 }
 
-// taWindowCoversTable 该窗口是否管这张桌台。* 表示全部。
-func taWindowCoversTable(w *TAMaintWindow, tableNo string) bool {
+// taWindowCoversRoom 判断这个窗口管不管这个房间。
+//
+// 以**房间号**为准：一个桌台可能有多个房间（N13 下有 N013 和 N013-2），
+// 它们各自独立维护，配置要能精确到房间，否则维护 N013-2 会把 N013 也算成例行。
+//
+// 同时兼容填桌台号：填 N13 表示该桌台下的所有房间，省得一个个列。
+// `*` 表示全部。
+func taWindowCoversRoom(w *TAMaintWindow, roomNo, tableNo string) bool {
 	list := strings.TrimSpace(w.TableNos)
 	if list == "" {
 		return false
 	}
 	for _, item := range strings.Split(list, ",") {
 		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
 		if item == "*" {
 			return true
 		}
-		if strings.EqualFold(item, tableNo) {
+		// 房间号精确匹配优先；桌台号匹配作为「该桌台全部房间」的批量写法
+		if roomNo != "" && strings.EqualFold(item, roomNo) {
+			return true
+		}
+		if tableNo != "" && strings.EqualFold(item, tableNo) {
 			return true
 		}
 	}
@@ -1642,13 +1661,13 @@ func taWindowInstance(w *TAMaintWindow, day time.Time) (time.Time, time.Time, bo
 
 // taMatchWindow 判断这次维护属于哪个例行窗口。
 // 以 maintainStart 落在窗口实例内为准；检查前后各一天，覆盖跨零点的情况。
-func taMatchWindow(envID, tableNo string, maintainStart, now time.Time) *taWindowHit {
+func taMatchWindow(envID, roomNo, tableNo string, maintainStart, now time.Time) *taWindowHit {
 	if maintainStart.IsZero() {
 		return nil
 	}
 	for _, w := range taListWindows(envID) {
 		win := w
-		if !taWindowCoversTable(&win, tableNo) {
+		if !taWindowCoversRoom(&win, roomNo, tableNo) {
 			continue
 		}
 		for _, offset := range []int{-1, 0, 1} {

@@ -525,7 +525,11 @@ const weekdayOptions = [
 ]
 
 // 当前维护中的桌台，配置时可以直接点选，省去手敲桌台号
-const maintainingTables = computed(() => rooms.value.filter(r => r.maintaining).map(r => r.table_no))
+// 快捷选择用房间号：一个桌台可能有多个房间（N13 下有 N013、N013-2），
+// 它们各自独立维护，配置要能精确到房间
+const maintainingRooms = computed(() =>
+  rooms.value.filter(r => r.maintaining && r.room_no)
+             .map(r => ({ roomNo: r.room_no, tableNo: r.table_no })))
 
 function blankWindow() {
   return {
@@ -570,7 +574,7 @@ function toggleWeekday(v) {
   arr.sort()
   windowForm.value.weekdays = arr.join(',')
 }
-function addTableNo(t) {
+function addRoomNo(t) {
   const arr = windowTableInput.value.split(',').map(x => x.trim()).filter(Boolean)
   if (!arr.includes(t)) arr.push(t)
   windowTableInput.value = arr.join(',')
@@ -581,7 +585,7 @@ async function saveWindow() {
   if (!f.name?.trim()) { appStore.showToast('名称不能为空', 'error'); return }
   f.env_id = currentEnvId.value
   f.table_nos = windowTableMode.value === 'all' ? '*' : windowTableInput.value.trim()
-  if (!f.table_nos) { appStore.showToast('请指定适用的桌台', 'error'); return }
+  if (!f.table_nos) { appStore.showToast('请指定适用的房间', 'error'); return }
   windowSaving.value = true
   try {
     await api.post('/api/table-alert/windows', f)
@@ -1087,7 +1091,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
         <div class="action-bar">
           <button v-if="canRuleUpdate" class="btn btn-primary" @click="openCreateWindow">+ 新增例行维护</button>
           <span class="hint">
-            一个窗口可以覆盖多张桌台（同一时间一起保养），一张桌台也可以落在不同窗口里。
+  一个窗口可以覆盖多个房间（同一时间一起保养）。以<strong>房间号</strong>为准，一个桌台可能有多个房间。
           </span>
         </div>
 
@@ -1099,7 +1103,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 
         <table class="data-table">
           <thead>
-            <tr><th>名称</th><th>时间规则</th><th>适用桌台</th><th>窗口内</th><th>超时告警</th><th>状态</th><th>备注</th><th>操作</th></tr>
+            <tr><th>名称</th><th>时间规则</th><th>适用房间</th><th>窗口内</th><th>超时告警</th><th>状态</th><th>备注</th><th>操作</th></tr>
           </thead>
           <tbody>
             <tr v-if="!windows.length"><td colspan="8" class="empty">
@@ -1112,8 +1116,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
               </td>
               <td class="mono small">{{ w.rule_text }}</td>
               <td>
-                <span v-if="w.table_nos === '*'" class="tag tag-unknown">全部桌台</span>
-                <span v-else :title="w.table_nos">{{ w.table_count }} 张</span>
+                <span v-if="w.table_nos === '*'" class="tag tag-unknown">全部房间</span>
+                <span v-else :title="w.table_nos">{{ w.table_count }} 项</span>
               </td>
               <td>
                 <span v-if="w.action === 'suppress'" class="dim">不告警</span>
@@ -1498,22 +1502,28 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           </fieldset>
 
           <fieldset>
-            <legend>适用桌台</legend>
+            <legend>适用房间</legend>
             <label class="radio-line">
-              <input type="radio" value="all" v-model="windowTableMode"> 该环境全部桌台
+              <input type="radio" value="all" v-model="windowTableMode"> 该环境全部房间
             </label>
             <label class="radio-line">
-              <input type="radio" value="list" v-model="windowTableMode"> 指定桌台
+              <input type="radio" value="list" v-model="windowTableMode"> 指定房间
             </label>
             <div v-if="windowTableMode === 'list'">
               <div class="form-row">
                 <input v-model="windowTableInput" class="wide-input"
-                       placeholder="桌台号，逗号分隔，如 E15,N06,N07">
+                       placeholder="房间号，逗号分隔，如 N013-2,E015">
               </div>
-              <div class="chip-list" v-if="maintainingTables.length">
-                <span class="hint">当前维护中的，点一下加进去：</span>
-                <button v-for="t in maintainingTables" :key="t" class="chip" @click.prevent="addTableNo(t)">
-                  + {{ t }}
+              <p class="field-hint">
+                以<strong>房间号</strong>为准 —— 一个桌台可能有多个房间（如 N13 下有 N013 和 N013-2），
+                它们各自独立维护。<br>
+                也可以填<strong>桌台号</strong>（如 N13），表示该桌台下的<strong>全部房间</strong>，省得一个个列。
+              </p>
+              <div class="chip-list" v-if="maintainingRooms.length">
+                <span class="hint">当前维护中的房间，点一下加进去：</span>
+                <button v-for="r in maintainingRooms" :key="r.roomNo" class="chip"
+                        :title="'桌台 ' + r.tableNo" @click.prevent="addRoomNo(r.roomNo)">
+                  + {{ r.roomNo }}
                 </button>
               </div>
             </div>
