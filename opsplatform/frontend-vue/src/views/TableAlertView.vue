@@ -108,6 +108,11 @@ const displayRooms = computed(() => {
 
 // 在用标记：系统分不清一张停用的桌台是刚被误停还是压根没上线，
 // 这个信息只有人知道。标了在用，维护和停用都算不可用、都告警。
+// 采集间隔可以直接填任意秒数，这几个只是常用值的快捷入口
+const intervalPresets = [
+  { v: 30, t: '30秒' }, { v: 60, t: '1分钟' }, { v: 120, t: '2分钟' }, { v: 300, t: '5分钟' },
+]
+
 const roomSelection = ref([])
 const allRoomsChecked = computed(() =>
   displayRooms.value.length > 0 && roomSelection.value.length === displayRooms.value.length)
@@ -1515,13 +1520,19 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             <legend>采集间隔</legend>
             <div class="form-row">
               <label>每</label>
-              <select v-model.number="envForm.interval_sec">
-                <option :value="30">30 秒</option>
-                <option :value="60">60 秒（推荐）</option>
-                <option :value="120">2 分钟</option>
-                <option :value="300">5 分钟</option>
-              </select>
-              <label>采集一次</label>
+              <input type="number" v-model.number="envForm.interval_sec"
+                     min="10" max="3600" step="5" class="num-input"
+                     title="10 ~ 3600 秒；改完保存即刻生效，不用重启服务">
+              <label>秒采集一次</label>
+              <span class="preset-group">
+                <button type="button" class="btn-link" v-for="p in intervalPresets" :key="p.v"
+                        :class="{ on: envForm.interval_sec === p.v }"
+                        @click="envForm.interval_sec = p.v">{{ p.t }}</button>
+              </span>
+            </div>
+            <div class="inline-hint">
+              范围 10 ~ 3600 秒，推荐 60。保存后立刻生效 —— 调度器每 5 秒重读一次各环境的间隔，不用重启。
+              实际精度 ±5 秒（填 5 的倍数最准），间隔越短中台压力越大；注意告警间隔不能比采集间隔还短。
             </div>
             <label class="cb"><input type="checkbox" v-model="envForm.log_raw_response"> 记录原始响应（调试期建议打开，稳定后关掉省空间）</label>
           </fieldset>
@@ -2103,6 +2114,13 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .num-wide { width: 140px; }
 .time { width: 80px; }
 .inline-hint { font-size: 12px; color: var(--text-muted); }
+.num-input {
+  width: 92px; padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--border-color); background: var(--bg-input); color: var(--text-primary);
+}
+.preset-group { display: inline-flex; gap: 2px; margin-left: 10px; }
+.preset-group .btn-link { color: var(--text-secondary); }
+.preset-group .btn-link.on { color: var(--primary); font-weight: 600; }
 .panel-actions { display: flex; justify-content: flex-end; }
 
 .bot-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }

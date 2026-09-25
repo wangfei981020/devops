@@ -256,9 +256,17 @@ func taFillEnvDefaults(e *TAEnv) {
 	e.FUpdateTime = taDefaultStr(e.FUpdateTime, "updateTime")
 	e.FOnlineTotal = taDefaultStr(e.FOnlineTotal, "onlineUserTotal")
 	e.MaintainRule = taDefaultStr(e.MaintainRule, "list_not_empty")
-	// 采集间隔下限 10 秒，防止误填 1 秒把中台打爆
-	if e.IntervalSec < 10 {
-		e.IntervalSec = 60
+	// 采集间隔可以填任意秒数，但要卡在 [10, 3600] 内：
+	// 下限防止误填 1 秒把中台打爆，上限防止填成 86400 之后几乎等于不采。
+	// 越界时**贴着边界收**并打日志，而不是一律弹回 60 —— 填 5 秒的人想要的是「尽量快」，
+	// 悄悄给他改成 60 秒（慢 12 倍）比给 10 秒更让人意外，而且页面上看不出来被改过。
+	switch {
+	case e.IntervalSec < 10:
+		taInfof("环境 %s 采集间隔 %ds 低于下限，按 10s 处理", e.Name, e.IntervalSec)
+		e.IntervalSec = 10
+	case e.IntervalSec > 3600:
+		taInfof("环境 %s 采集间隔 %ds 超过上限，按 3600s 处理", e.Name, e.IntervalSec)
+		e.IntervalSec = 3600
 	}
 }
 

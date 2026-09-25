@@ -188,9 +188,16 @@ var (
 	taCollectMu     sync.Mutex // 同一时刻只允许一个环境在采集，避免并发打爆中台
 )
 
+// taSchedulerTick 是调度器扫描环境表的节奏，同时决定了采集间隔的精度。
+//
+// 这个值直接决定「填进去的间隔」和「实际跑出来的间隔」差多少：扫描是离散的，
+// 只能在 tick 上开采，所以配 45s、tick 10s 时会被顶到 50s —— 页面上写 45、
+// 日志里跑 50，对不上。取 5s 再配合下面的半拍容差，常用值（5 的倍数）都能落准。
+const taSchedulerTick = 5 * time.Second
+
 // StartTableAlertScheduler 启动采集调度器。
-// 每 10 秒扫一次环境表，到点的环境就采集一次 —— 这样页面上改了 interval_sec 立刻生效，
-// 不需要重启服务。
+// 每 taSchedulerTick 扫一次环境表，到点的环境就采集一次 —— 这样页面上改了
+// interval_sec 立刻生效，不需要重启服务。
 func StartTableAlertScheduler() {
 	taSchedulerOnce.Do(func() {
 		go taSchedulerLoop()
@@ -199,11 +206,11 @@ func StartTableAlertScheduler() {
 }
 
 func taSchedulerLoop() {
-	taInfof("采集调度器已启动（每 10s 检查一次到期环境）")
+	taInfof("采集调度器已启动（每 %s 检查一次到期环境）", taSchedulerTick)
 	// 启动后等一会儿再跑，避开服务刚起来时的初始化
 	time.Sleep(15 * time.Second)
 
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(taSchedulerTick)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -251,7 +258,11 @@ func taShouldCollect(env TAEnv) bool {
 	if iv < 10 {
 		iv = 10
 	}
-	return time.Since(last) >= time.Duration(iv)*time.Second
+	// 留半拍容差：只能在 tick 上开采，用「够了才采」会让所有不是 tick 整数倍的间隔
+	// 一律往后顶一整拍（配 45s 实际跑 50s）。提前半拍判定，误差就从「最多晚一拍」
+	// 变成「前后半拍」，填什么值都不至于系统性偏慢。
+	due := time.Duration(iv)*time.Second - taSchedulerTick/2
+	return time.Since(last) >= due
 }
 
 // ---------------------------------------------------------------------------
