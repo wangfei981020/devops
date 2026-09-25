@@ -567,6 +567,13 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 	changes := []taChange{}
 	now := time.Now()
 
+	// 告警范围里「全部桌台 —— 不论启停，只要维护就告警」这个选项，语义上盖过在用标记。
+	// 取一次就够，别每台桌台查一遍库。
+	alertAllTables := false
+	if rule, err := taGetRule(env.ID); err == nil && rule.AlertTableScope == "all" {
+		alertAllTables = true
+	}
+
 	for _, s := range snaps {
 		var (
 			oldStatus      string
@@ -733,18 +740,37 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 		}
 
 		// 维护事件：开始 / 结束
-		taSyncEvent(env, s, unavailNow, reasonNow, newInService, newSince, newEstimated)
+		taSyncEvent(env, s, unavailNow, reasonNow, newInService || alertAllTables, newSince, newEstimated)
 	}
 
 	return changes, nil
 }
 
 // taSyncEvent 按当前状态对账事件单：该开的开、该收的收。
+// inScope = 这台桌台在不在告警范围里：人工标了「在用」，或者规则选了「全部桌台」。
+// 后者是告警设置里的老选项（不论启停只要维护就告警），语义上盖过在用标记 ——
+// 早先这里只认 in_service，等于把那个选项架空了：选了「全部桌台」也照样不开单、不告警。
 func taSyncEvent(env *TAEnv, s taRoomSnapshot, unavailNow bool, reason string,
-	inService bool, since interface{}, estimated bool) {
-	// 非在用的桌台不开单：它没在对外服务，维护也好停用也罢都不构成问题。
+	inScope bool, since interface{}, estimated bool) {
+	// 不在范围内的桌台不开单：它没在对外服务，维护也好停用也罢都不构成问题。
 	// 人工把它标成在用之后，下一轮就会正常开单。
-	if !inService {
+	if !inScope {
+		// 但如果它身上还挂着一张没结的单（多半是改标记之前、或更早的版本开的），
+		// 必须在这里收掉。光 return 会留下僵尸单：告警循环因为 in_service=0 跳过它、
+		// 一条都不发，可「告警中」的统计是直接数 state='alerting' 的事件、不过 in_service，
+		// 于是页面上出现「不可用（在用）0」和「告警中 19」并排摆着自相矛盾。
+		var evID string
+		err := database.DB.QueryRow(`
+			SELECT id FROM table_alert_events
+			WHERE env_id=? AND room_id=? AND maintain_end_at IS NULL
+			ORDER BY maintain_start_at DESC LIMIT 1`, env.ID, s.RoomID).Scan(&evID)
+		if err == nil {
+			database.DB.Exec(`
+				UPDATE table_alert_events SET maintain_end_at=?, state='stopped' WHERE id=?`,
+				time.Now(), evID)
+			taInfof("env=%s 桌台 %s(%s) 不在告警范围内（未标记为在用），已停掉它的事件单（不发恢复通知）",
+				env.Name, s.TableNo, s.RoomNo)
+		}
 		return
 	}
 
