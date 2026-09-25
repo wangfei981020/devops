@@ -693,12 +693,15 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 					TableNo: s.TableNo, RoomNo: s.RoomNo, Field: "维护状态",
 					From: taMaintainLabel(oldMaintaining), To: taMaintainLabel(s.Maintaining),
 				})
+				taLogChange(env, s, "maintain",
+					taMaintainLabel(oldMaintaining), taMaintainLabel(s.Maintaining), "collect", s.Operator)
 			}
 			if oldStatus != s.Status {
 				changes = append(changes, taChange{
 					TableNo: s.TableNo, RoomNo: s.RoomNo, Field: "启停状态",
 					From: oldStatus, To: s.Status,
 				})
+				taLogChange(env, s, "status", oldStatus, s.Status, "collect", s.Operator)
 			}
 			if oldOperator != s.Operator && s.Operator != "" {
 				changes = append(changes, taChange{
@@ -744,6 +747,29 @@ func taApplySnapshots(env *TAEnv, snaps []taRoomSnapshot) ([]taChange, error) {
 	}
 
 	return changes, nil
+}
+
+// taInServiceLabel 把在用标记翻成人看的字，流水和日志里共用一套说法
+func taInServiceLabel(v bool) string {
+	if v {
+		return "在用"
+	}
+	return "非在用"
+}
+
+// taLogChange 记一条变更流水。
+// source=collect 时 operator 记接口给的操作人，source=manual 时记登录人。
+// 失败只打日志不影响主流程 —— 流水是给人查的，不该因为它写不进去就把采集搞挂。
+func taLogChange(env *TAEnv, s taRoomSnapshot, kind, from, to, source, operator string) {
+	_, err := database.DB.Exec(`
+		INSERT INTO table_alert_changes
+		  (id, env_id, env_name, room_id, table_no, room_no, kind, from_val, to_val, source, operator, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		uuid.New().String(), env.ID, env.Name, s.RoomID, s.TableNo, s.RoomNo,
+		kind, from, to, source, operator, time.Now())
+	if err != nil {
+		taErrorf("env=%s 桌台 %s 写变更流水失败: %v", env.Name, s.TableNo, err)
+	}
 }
 
 // taSyncEvent 按当前状态对账事件单：该开的开、该收的收。
@@ -1137,28 +1163,33 @@ func taScanAndAlert() error {
 
 // TARule 告警规则
 type TARule struct {
-	ID                  string   `json:"id"`
-	EnvID               string   `json:"env_id"`
-	Enabled             bool     `json:"enabled"`
-	ThresholdMin        int      `json:"threshold_min"`
-	IntervalMin         int      `json:"interval_min"`
-	MaxTimes            int      `json:"max_times"`
-	Escalate            bool     `json:"escalate"`
-	EscalateIntervalMin int      `json:"escalate_interval_min"`
-	NotifyOnRecover     bool     `json:"notify_on_recover"`
-	AtLarkIDs           string   `json:"at_lark_ids"`
-	EscalateAtLarkIDs   string   `json:"escalate_at_lark_ids"`
-	ReatEveryTime       bool     `json:"reat_every_time"`
-	SilenceAfterAckMin  int      `json:"silence_after_ack_min"`
-	QuietEnabled        bool     `json:"quiet_enabled"`
-	QuietStart          string   `json:"quiet_start"`
-	QuietEnd            string   `json:"quiet_end"`
-	AlertScope          string   `json:"alert_scope"`
-	AlertTableScope     string   `json:"alert_table_scope"`
-	AlertOnDisable      bool     `json:"alert_on_disable"`
-	ListWatchedSites    bool     `json:"list_watched_sites"`
-	MaxListSites        int      `json:"max_list_sites"`
-	BotIDs              []string `json:"bot_ids"`
+	ID                  string `json:"id"`
+	EnvID               string `json:"env_id"`
+	Enabled             bool   `json:"enabled"`
+	ThresholdMin        int    `json:"threshold_min"`
+	IntervalMin         int    `json:"interval_min"`
+	MaxTimes            int    `json:"max_times"`
+	Escalate            bool   `json:"escalate"`
+	EscalateIntervalMin int    `json:"escalate_interval_min"`
+	NotifyOnRecover     bool   `json:"notify_on_recover"`
+	AtLarkIDs           string `json:"at_lark_ids"`
+	EscalateAtLarkIDs   string `json:"escalate_at_lark_ids"`
+	ReatEveryTime       bool   `json:"reat_every_time"`
+	SilenceAfterAckMin  int    `json:"silence_after_ack_min"`
+	QuietEnabled        bool   `json:"quiet_enabled"`
+	QuietStart          string `json:"quiet_start"`
+	QuietEnd            string `json:"quiet_end"`
+	AlertScope          string `json:"alert_scope"`
+	AlertTableScope     string `json:"alert_table_scope"`
+	// 复核：非在用的桌台维护挂了很久，得有人看一眼是真下线还是漏标了。
+	// 确认过的不再进复核列表，免得每天提醒同一批。
+	ReviewEnabled    bool     `json:"review_enabled"`
+	ReviewDays       int      `json:"review_days"`
+	ReviewNotify     bool     `json:"review_notify"`
+	AlertOnDisable   bool     `json:"alert_on_disable"`
+	ListWatchedSites bool     `json:"list_watched_sites"`
+	MaxListSites     int      `json:"max_list_sites"`
+	BotIDs           []string `json:"bot_ids"`
 }
 
 func taGetRule(envID string) (*TARule, error) {
@@ -1168,13 +1199,15 @@ func taGetRule(envID string) (*TARule, error) {
 		       escalate_interval_min, notify_on_recover, at_lark_ids, escalate_at_lark_ids,
 		       reat_every_time, silence_after_ack_min, quiet_enabled, quiet_start, quiet_end,
 		       alert_scope, list_watched_sites, max_list_sites,
-		       alert_table_scope, alert_on_disable
+		       alert_table_scope, alert_on_disable,
+		       review_enabled, review_days, review_notify
 		FROM table_alert_rules WHERE env_id=?`, envID).Scan(
 		&r.ID, &r.EnvID, &r.Enabled, &r.ThresholdMin, &r.IntervalMin, &r.MaxTimes, &r.Escalate,
 		&r.EscalateIntervalMin, &r.NotifyOnRecover, &r.AtLarkIDs, &r.EscalateAtLarkIDs,
 		&r.ReatEveryTime, &r.SilenceAfterAckMin, &r.QuietEnabled, &r.QuietStart, &r.QuietEnd,
 		&r.AlertScope, &r.ListWatchedSites, &r.MaxListSites,
-		&r.AlertTableScope, &r.AlertOnDisable)
+		&r.AlertTableScope, &r.AlertOnDisable,
+		&r.ReviewEnabled, &r.ReviewDays, &r.ReviewNotify)
 	if err != nil {
 		return nil, err
 	}

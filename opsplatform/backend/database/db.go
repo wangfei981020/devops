@@ -1877,6 +1877,12 @@ func initDefaultRolesAndPermissions() {
 		{"perm_btn_table_alert_contact_manage", "table_alert:contact_manage", "[桌台告警] 管理通知人", "允许增删改通知人及其 Lark ID"},
 		{"perm_btn_table_alert_ack", "table_alert:ack", "[桌台告警] 确认告警", "允许确认告警并使其进入静默"},
 		{"perm_btn_table_alert_view_raw", "table_alert:view_raw", "[桌台告警] 查看原始响应", "允许查看采集到的完整响应体（可能含业务数据，单独授权）"},
+		// 这四件事原先全挤在 table_alert:rule_update 里，按钮权限页上看不见、也没法单独授权。
+		// 拆出来之后，凡是已经有 rule_update 的角色会自动补上这四个，避免拆分把人挡在门外。
+		{"perm_btn_table_alert_window_manage", "table_alert:window_manage", "[桌台告警] 例行维护设置", "允许新增、修改、删除例行维护时间窗"},
+		{"perm_btn_table_alert_site_manage", "table_alert:site_manage", "[桌台告警] 站点管理", "允许手工添加站点、改名、设置关注站点"},
+		{"perm_btn_table_alert_in_service", "table_alert:in_service", "[桌台告警] 标记在用/非在用", "允许标记桌台是否在对外服务 —— 在用桌台被停用或维护都会告警"},
+		{"perm_btn_table_alert_offline_confirm", "table_alert:offline_confirm", "[桌台告警] 确认下线", "允许确认某台桌台确实是下线状态，确认后不再进入复核提醒"},
 
 		// 响应记录（v738）
 		{"perm_btn_response_create", "response_record:create", "[响应记录] 添加记录", "允许添加响应记录"},
@@ -2022,6 +2028,26 @@ func initDefaultRolesAndPermissions() {
 			DB.Exec(`INSERT IGNORE INTO role_permissions (id, role_id, permission_id) VALUES (?, 'role_super_admin', ?)`,
 				"rp_super_admin_"+permID, permID)
 		}
+	}
+
+	// 例行维护 / 站点管理 / 在用标记 / 确认下线原先都挤在 table_alert:rule_update 里。
+	// 现在拆成独立权限码，但凡是已经授过 rule_update 的角色，都要自动补上这四个 ——
+	// 否则一次升级就把原本有权限的人默默挡在门外，而且从页面上完全看不出来为什么。
+	for _, code := range []string{
+		"table_alert:window_manage", "table_alert:site_manage",
+		"table_alert:in_service", "table_alert:offline_confirm",
+	} {
+		var newID string
+		DB.QueryRow("SELECT id FROM permissions WHERE code = ?", code).Scan(&newID)
+		if newID == "" {
+			continue
+		}
+		DB.Exec(`
+			INSERT IGNORE INTO role_permissions (id, role_id, permission_id)
+			SELECT CONCAT('rp_', rp.role_id, '_', ?), rp.role_id, ?
+			FROM role_permissions rp
+			JOIN permissions p ON p.id = rp.permission_id
+			WHERE p.code = 'table_alert:rule_update'`, newID, newID)
 	}
 
 	// 为管理员分配系统管理相关权限

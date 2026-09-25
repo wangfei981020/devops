@@ -484,6 +484,9 @@ func main() {
 	protected.HandleFunc("/table-alert/sites/watch", handlers.HandleTABatchWatchSites).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/table-alert/sites/{id}", handlers.HandleTASaveSite).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/table-alert/rooms/in-service", handlers.HandleTASetInService).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/table-alert/rooms/offline-confirm", handlers.HandleTAConfirmOffline).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/table-alert/review", handlers.HandleTAReviewList).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/changes", handlers.HandleTAChanges).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/table-alert/rooms/{room_id}/sites", handlers.HandleTARoomSites).Methods("GET", "OPTIONS")
 	// 例行维护窗口
 	protected.HandleFunc("/table-alert/windows", handlers.HandleTAListWindows).Methods("GET", "OPTIONS")

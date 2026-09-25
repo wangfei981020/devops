@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"log"
 )
 
@@ -352,6 +353,14 @@ func InitTableAlertTables() error {
 		{"table_alert_rooms", "in_service_manual", "TINYINT(1) NOT NULL DEFAULT 0"},
 		{"table_alert_events", "reason", "VARCHAR(16) NOT NULL DEFAULT 'maintain'"},
 		{"table_alert_sites", "source", "VARCHAR(12) NOT NULL DEFAULT 'auto'"},
+		// 非在用桌台长期挂着维护，得有人复核一次：要么捞回在用，要么确认它就是下线了。
+		// 确认过的不再进复核列表，免得每天提醒同一批。
+		{"table_alert_rooms", "offline_confirmed", "TINYINT(1) NOT NULL DEFAULT 0"},
+		{"table_alert_rooms", "offline_confirmed_by", "VARCHAR(64) NOT NULL DEFAULT ''"},
+		{"table_alert_rooms", "offline_confirmed_at", "DATETIME NULL"},
+		{"table_alert_rules", "review_enabled", "TINYINT(1) NOT NULL DEFAULT 1"},
+		{"table_alert_rules", "review_days", "INT NOT NULL DEFAULT 3"},
+		{"table_alert_rules", "review_notify", "TINYINT(1) NOT NULL DEFAULT 0"},
 	} {
 		var n int
 		DB.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS
@@ -363,6 +372,28 @@ func InitTableAlertTables() error {
 				log.Printf("[table-alert] 已补字段 %s.%s", mig.table, mig.col)
 			}
 		}
+	}
+
+	// 变更流水：上游把桌台启停了、有人改了在用标记、有人确认了下线，都记一条。
+	// 出事之后要能直接答「谁、什么时候、改了什么」，不用回头去翻上游后台。
+	if _, err := DB.Exec(`
+		CREATE TABLE IF NOT EXISTS table_alert_changes (
+			id VARCHAR(64) PRIMARY KEY,
+			env_id VARCHAR(64) NOT NULL,
+			env_name VARCHAR(32) NOT NULL DEFAULT '',
+			room_id VARCHAR(64) NOT NULL DEFAULT '',
+			table_no VARCHAR(64) NOT NULL DEFAULT '',
+			room_no VARCHAR(64) NOT NULL DEFAULT '',
+			kind VARCHAR(24) NOT NULL COMMENT 'status=上游启停 / maintain=上游维护 / in_service=在用标记 / offline_confirm=确认下线',
+			from_val VARCHAR(64) NOT NULL DEFAULT '',
+			to_val VARCHAR(64) NOT NULL DEFAULT '',
+			source VARCHAR(12) NOT NULL DEFAULT 'collect' COMMENT 'collect=采集发现 / manual=页面操作',
+			operator VARCHAR(128) NOT NULL DEFAULT '' COMMENT '采集来源记接口给的 operator，页面操作记登录人',
+			created_at DATETIME NOT NULL,
+			INDEX idx_env_room (env_id, room_id, created_at),
+			INDEX idx_env_time (env_id, created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='桌台状态与标记的变更流水'`); err != nil {
+		return fmt.Errorf("建表 table_alert_changes 失败: %w", err)
 	}
 
 	// 选主用的两行，缺了就补

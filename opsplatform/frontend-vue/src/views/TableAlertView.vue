@@ -54,7 +54,9 @@ const rooms = ref([])
 const roomsTotal = ref(0)
 const roomPage = ref(1)
 const roomSize = ref(20)
-const filters = ref({ status: '', maintaining: '', q: '', routine: '', in_service: '' })
+// in_service 默认 '1'：页签默认停在「在用」，筛选条件必须跟页签一致，
+// 否则首屏列的是全部桌台、页签却高亮在「在用」上，对不上。
+const filters = ref({ status: '', maintaining: '', q: '', routine: '', in_service: '1' })
 const loadingRooms = ref(false)
 const roomJump = ref(1)
 const roomPages = computed(() => Math.max(1, Math.ceil(roomsTotal.value / roomSize.value)))
@@ -108,6 +110,67 @@ const displayRooms = computed(() => {
 
 // 在用标记：系统分不清一张停用的桌台是刚被误停还是压根没上线，
 // 这个信息只有人知道。标了在用，维护和停用都算不可用、都告警。
+// 桌台列表页签：默认停在「在用」—— 要盯的就是这一组，非在用的随时能翻。
+// 它只是 filters.in_service 的一层外壳，翻页签＝换筛选条件，后端不用改。
+const roomTab = ref('in')
+
+function switchRoomTab(t) {
+  roomTab.value = t
+  filters.value.in_service = t === 'in' ? '1' : (t === 'off' ? '0' : '')
+  applyFilter()
+}
+
+// ===== 待复核 =====
+// 非在用、维护挂了很久、又没人确认过确实是下线的。
+// 防的是和「在用桌台被误停」相反的方向：本该在用的被标成非在用，一直没人发现。
+const reviewOpen = ref(false)
+const reviewList = ref([])
+const reviewDays = ref(3)
+const reviewSel = ref([])
+
+async function openReview() {
+  reviewOpen.value = true
+  reviewSel.value = []
+  try {
+    const res = await api.get('/api/table-alert/review', { params: { env_id: currentEnvId.value } })
+    reviewList.value = res.data?.items || []
+    reviewDays.value = res.data?.review_days || 3
+  } catch (e) {
+    appStore.showToast('加载待复核失败: ' + errText(e), 'error')
+  }
+}
+
+// 确认下线：和「标为非在用」是两件事 —— 非在用只是不告警，
+// 确认下线是明确说「这是有意为之，别再提醒我」，确认完就不再进复核列表。
+async function confirmOffline(ids) {
+  if (!ids.length) return
+  try {
+    const res = await api.post('/api/table-alert/rooms/offline-confirm', {
+      env_id: currentEnvId.value, room_ids: ids, confirm: true
+    })
+    appStore.showToast(`已确认 ${res.data?.count || 0} 台下线`, 'success')
+    await openReview()
+    loadRooms()
+  } catch (e) {
+    appStore.showToast('操作失败: ' + errText(e), 'error')
+  }
+}
+
+// 从复核列表直接捞回在用 —— 这才是复核真正想抓的那种情况
+async function reviewMarkInService(ids) {
+  if (!ids.length) return
+  try {
+    const res = await api.post('/api/table-alert/rooms/in-service', {
+      env_id: currentEnvId.value, room_ids: ids, in_service: true
+    })
+    appStore.showToast(`已将 ${res.data?.count || 0} 台标为在用，下一轮采集起开始告警`, 'success')
+    await openReview()
+    loadRooms()
+  } catch (e) {
+    appStore.showToast('操作失败: ' + errText(e), 'error')
+  }
+}
+
 // 采集间隔可以直接填任意秒数，这几个只是常用值的快捷入口
 const intervalPresets = [
   { v: 30, t: '30秒' }, { v: 60, t: '1分钟' }, { v: 120, t: '2分钟' }, { v: 300, t: '5分钟' },
@@ -148,7 +211,12 @@ async function batchInService(v) {
 }
 
 function applyFilter() { roomPage.value = 1; roomSelection.value = []; loadRooms() }
-function resetFilter() { filters.value = { status: '', maintaining: '', q: '', routine: '', in_service: '' }; applyFilter() }
+function resetFilter() {
+  // 重置回当前页签的口径，而不是一律清空 —— 在「在用」页签上点重置却列出全部，是反直觉的
+  const keep = roomTab.value === 'in' ? '1' : (roomTab.value === 'off' ? '0' : '')
+  filters.value = { status: '', maintaining: '', q: '', routine: '', in_service: keep }
+  applyFilter()
+}
 
 async function collectNow() {
   if (!currentEnvId.value) return
@@ -877,18 +945,82 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 
     <!-- ================= Tab 桌台列表 ================= -->
     <div v-if="activeTab === 'rooms'" class="tab-content">
+      <!-- 在用清单没人确认过的话，一直挂着提示。
+           在用标记是按启停自动猜的，猜错了就会漏报，这事必须让人看见。 -->
+      <div v-if="(stats.unconfirmed ?? 0) > 0" class="banner warn">
+        <span>
+          ⚠️ <b>在用清单未确认</b> —— {{ stats.unconfirmed }} 台的在用状态是系统按启停自动推断的，还没人工确认过。
+          推断错了的桌台不会告警。
+        </span>
+        <button class="btn btn-primary" @click="switchRoomTab('off')">去确认</button>
+      </div>
+
+      <!-- 非在用里挂着长期维护的，提醒复核一次。防的是「本该在用却被标成非在用、一直没人发现」 -->
+      <div v-if="(stats.review ?? 0) > 0" class="banner info">
+        <span>
+          🔎 <b>{{ stats.review }} 台</b>非在用桌台已维护超过 {{ stats.review_days ?? 3 }} 天，建议复核一次：
+          是真的下线了，还是本该在用？
+        </span>
+        <button class="btn btn-secondary" @click="openReview()">查看待复核</button>
+      </div>
+
+      <!-- 统计按「在用 / 非在用」分成两组。
+           只报一个「不可用（在用）」会把非在用那侧维护中的桌台吞掉，看的人以为数字漏了。 -->
       <div class="stat-row">
         <div class="stat-card"><div class="sc-num">{{ stats.total }}</div><div class="sc-label">总桌台</div></div>
-        <div class="stat-card maintain" title="在用桌台里处于不可用状态的（维护中 或 被停用）—— 这才是会告警的范围">
-          <div class="sc-num">{{ stats.unavailable ?? 0 }}</div>
-          <div class="sc-label">⚠️ 不可用（在用）</div>
-          <div class="sc-sub" title="只有标记为「在用」的桌台才会告警">
-            在用 {{ stats.in_service ?? 0 }} 台 · 维护中共 {{ stats.maintaining }} 台
+
+        <div class="stat-group primary" title="标记为在用的桌台 —— 这是唯一会告警的范围">
+          <div class="grp-title">在用 {{ stats.in_service ?? 0 }} 台 · 要盯的</div>
+          <div class="grp-body">
+            <div class="grp-main" :class="{ bad: (stats.unavailable ?? 0) > 0 }">
+              <div class="sc-num">{{ stats.unavailable ?? 0 }}</div>
+              <div class="sc-label">⚠️ 不可用</div>
+            </div>
+            <div class="grp-split">
+              <div class="grp-item">维护中 <b>{{ stats.unavail_maintain ?? 0 }}</b></div>
+              <div class="grp-item" :class="{ bad: (stats.unavail_disabled ?? 0) > 0 }"
+                   title="在用却被停用 —— 多半是本该点维护，点成了停用">
+                被停用 <b>{{ stats.unavail_disabled ?? 0 }}</b> ⛔
+              </div>
+            </div>
           </div>
         </div>
-        <div class="stat-card enable"><div class="sc-num">{{ stats.enable }}</div><div class="sc-label">Enable（启用）</div></div>
-        <div class="stat-card disable"><div class="sc-num">{{ stats.disable }}</div><div class="sc-label">Disable（停用）</div></div>
+
+        <div class="stat-group muted" title="没标在用的桌台，怎么折腾都不告警，仅供复核">
+          <div class="grp-title">非在用 {{ stats.off_service ?? 0 }} 台 · 不告警</div>
+          <div class="grp-body">
+            <div class="grp-main">
+              <div class="sc-num">{{ stats.off_maintaining ?? 0 }}</div>
+              <div class="sc-label">维护中</div>
+            </div>
+            <div class="grp-split">
+              <div class="grp-item" :class="{ bad: (stats.review ?? 0) > 0 }">
+                超 {{ stats.review_days ?? 3 }} 天 <b>{{ stats.review ?? 0 }}</b>
+              </div>
+              <div class="grp-item">这些不告警</div>
+            </div>
+          </div>
+        </div>
+
         <div class="stat-card alerting"><div class="sc-num">{{ stats.alerting }}</div><div class="sc-label">告警中</div></div>
+      </div>
+
+      <!-- 页签：默认停在「在用」，非在用随时能翻 -->
+      <div class="room-tabs">
+        <button class="rt" :class="{ on: roomTab === 'in' }" @click="switchRoomTab('in')">
+          在用 ({{ stats.in_service ?? 0 }})
+        </button>
+        <button class="rt" :class="{ on: roomTab === 'off' }" @click="switchRoomTab('off')">
+          非在用 ({{ stats.off_service ?? 0 }})
+        </button>
+        <button class="rt" :class="{ on: roomTab === 'all' }" @click="switchRoomTab('all')">
+          全部 ({{ stats.total }})
+        </button>
+      </div>
+
+      <div v-if="roomTab === 'off'" class="banner info sm">
+        这 {{ stats.off_service ?? 0 }} 台不会告警。其中 {{ stats.off_maintaining ?? 0 }} 台正在维护、{{ stats.review ?? 0 }} 台已超过 {{ stats.review_days ?? 3 }} 天。
+        如果有本该对外服务的桌台在这里，勾选后「标为在用」。
       </div>
 
       <div class="filter-bar">
@@ -896,11 +1028,6 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <option value="">站点状态：全部</option>
           <option value="1">仅维护中</option>
           <option value="0">仅正常</option>
-        </select>
-        <select v-model="filters.in_service" @change="applyFilter">
-          <option value="">在用：全部</option>
-          <option value="1">仅在用</option>
-          <option value="0">仅非在用</option>
         </select>
         <select v-model="filters.routine" @change="applyFilter">
           <option value="">例行维护：全部</option>
@@ -1027,6 +1154,63 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       </div>
     </div>
 
+    <!-- ================= 待复核弹窗 ================= -->
+    <div v-if="reviewOpen" class="modal-mask" @click.self="reviewOpen = false">
+      <div class="modal wide">
+        <div class="modal-head">
+          <h3>待复核 —— 非在用但长期维护</h3>
+          <button class="close" @click="reviewOpen = false">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="field-hint">
+            这些桌台没标在用（所以不告警），但维护已经挂了超过 {{ reviewDays }} 天。
+            要么它真的下线了 —— 点「确认下线」，以后不再提醒；
+            要么它本该对外服务 —— 点「标为在用」，下一轮起开始告警。
+          </p>
+          <div v-if="!reviewList.length" class="empty-block">没有待复核的桌台</div>
+          <template v-else>
+            <div class="action-bar" v-if="reviewSel.length">
+              已选 {{ reviewSel.length }} 台
+              <button class="btn btn-primary" @click="reviewMarkInService(reviewSel)">✔ 标为在用</button>
+              <button class="btn btn-secondary" @click="confirmOffline(reviewSel)">确认下线</button>
+            </div>
+            <table class="data-table compact">
+              <thead>
+                <tr>
+                  <th style="width:36px">
+                    <input type="checkbox"
+                           :checked="reviewSel.length === reviewList.length && reviewList.length > 0"
+                           @change="reviewSel = $event.target.checked ? reviewList.map(x => x.room_id) : []">
+                  </th>
+                  <th>桌台</th><th>房间号</th><th>状态</th><th>已维护</th><th>最后操作人</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="x in reviewList" :key="x.room_id">
+                  <td><input type="checkbox" :value="x.room_id" v-model="reviewSel"></td>
+                  <td><b>{{ x.table_no }}</b></td>
+                  <td>{{ x.room_no }}</td>
+                  <td><span class="tag" :class="x.status === 'Enable' ? 'tag-enable' : 'tag-disable'">{{ x.status }}</span></td>
+                  <td class="dur-long">
+                    {{ x.duration_text }}
+                    <span v-if="x.since_estimated" class="est-mark" title="系统首次采集时它已在维护，开始时间由接口 updateTime 回溯">估</span>
+                  </td>
+                  <td class="dim">{{ x.operator || '—' }}</td>
+                  <td>
+                    <button class="btn-link" @click="reviewMarkInService([x.room_id])">标为在用</button>
+                    <button class="btn-link" @click="confirmOffline([x.room_id])">确认下线</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-secondary" @click="reviewOpen = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ================= Tab 环境配置 ================= -->
     <div v-if="activeTab === 'envs'" class="tab-content">
       <div class="action-bar">
@@ -1104,6 +1288,24 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             <input type="checkbox" v-model="rule.alert_on_disable">
             桌台被停用时发一条提醒
           </label>
+          <hr class="rule-sep">
+          <h4 class="sub-h">复核提醒</h4>
+          <label class="line">
+            <input type="checkbox" v-model="rule.review_enabled">
+            非在用的桌台维护超过
+            <input type="number" v-model.number="rule.review_days" min="1" max="90" class="num-input narrow">
+            天时，在页面上提醒复核
+          </label>
+          <label class="line">
+            <input type="checkbox" v-model="rule.review_notify" :disabled="!rule.review_enabled">
+            同时发一条 Lark 提醒（不勾选就只在页面上提示，不打扰群）
+          </label>
+          <p class="field-hint">
+            防的是和「在用桌台被误停」相反的方向：本该对外服务的桌台被标成非在用，
+            一直挂着维护没人发现，永远不会告警。
+            复核时点「确认下线」之后这台就不再提醒了 —— 确认过是有意下线的，就没必要一直问。
+          </p>
+
           <p class="field-hint">
             选了「仅启用中」之后，桌台一停用它的维护告警就不再发了。
             如果这个停用本身是<strong>误操作</strong>，问题就被这条策略掩盖了 ——
@@ -2104,6 +2306,9 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   background: var(--bg-card); color: var(--text-primary);
 }
 .panel h3 { margin: 0 0 12px; font-size: 15px; color: var(--text-primary); }
+.rule-sep { border: none; border-top: 1px solid var(--border-color); margin: 14px 0 10px; }
+.sub-h { margin: 0 0 8px; font-size: 13px; color: var(--text-primary); }
+.num-input.narrow { width: 64px; margin: 0 4px; }
 .panel .line { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; font-size: 13px; color: var(--text-primary); }
 .panel .line label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-primary); }
 .num, .num-wide, .num-select, .time {
@@ -2114,6 +2319,41 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .num-wide { width: 140px; }
 .time { width: 80px; }
 .inline-hint { font-size: 12px; color: var(--text-muted); }
+
+/* 顶部提示条：未确认清单 / 待复核 */
+.banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-radius: 8px; margin-bottom: 12px;
+  font-size: 13px; color: var(--text-primary); border: 1px solid var(--border-color);
+  background: var(--bg-hover);
+}
+.banner.warn { border-color: var(--warning); }
+.banner.info { border-color: var(--primary); }
+.banner.sm { font-size: 12px; color: var(--text-secondary); margin: 10px 0; display: block; }
+
+/* 统计按在用 / 非在用分成两组 */
+.stat-group {
+  flex: 2; min-width: 260px; padding: 12px 16px;
+  border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-card);
+}
+.stat-group.primary { border-width: 2px; }
+.stat-group.muted { background: var(--bg-hover); }
+.grp-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
+.grp-body { display: flex; align-items: center; gap: 18px; }
+.grp-main { text-align: center; min-width: 78px; }
+.grp-main.bad .sc-num { color: var(--danger); }
+.grp-main .sc-label { font-size: 12px; color: var(--text-secondary); }
+.grp-split { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.grp-item b { color: var(--text-primary); }
+.grp-item.bad, .grp-item.bad b { color: var(--danger); }
+
+/* 桌台列表页签：在用 / 非在用 / 全部 */
+.room-tabs { display: flex; gap: 6px; margin: 14px 0 4px; }
+.rt {
+  padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-secondary);
+}
+.rt.on { border-color: var(--primary); color: var(--primary); font-weight: 600; }
 .num-input {
   width: 92px; padding: 6px 8px; border-radius: 6px;
   border: 1px solid var(--border-color); background: var(--bg-input); color: var(--text-primary);
