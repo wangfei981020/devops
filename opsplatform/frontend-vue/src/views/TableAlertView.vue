@@ -54,7 +54,7 @@ const rooms = ref([])
 const roomsTotal = ref(0)
 const roomPage = ref(1)
 const roomSize = ref(20)
-const filters = ref({ status: '', maintaining: '', q: '', routine: '' })
+const filters = ref({ status: '', maintaining: '', q: '', routine: '', in_service: '' })
 const loadingRooms = ref(false)
 const roomJump = ref(1)
 const roomPages = computed(() => Math.max(1, Math.ceil(roomsTotal.value / roomSize.value)))
@@ -81,7 +81,8 @@ async function loadRooms() {
       size: roomSize.value,
       ...(filters.value.status ? { status: filters.value.status } : {}),
       ...(filters.value.maintaining !== '' ? { maintaining: filters.value.maintaining } : {}),
-      ...(filters.value.q ? { q: filters.value.q } : {})
+      ...(filters.value.q ? { q: filters.value.q } : {}),
+      ...(filters.value.in_service !== '' ? { in_service: filters.value.in_service } : {})
     }
     const [r1, r2] = await Promise.all([
       api.get('/api/table-alert/rooms', { params }),
@@ -105,8 +106,44 @@ const displayRooms = computed(() => {
   return rooms.value.filter(r => (!!(r.routine_windows && r.routine_windows.length)) === want)
 })
 
-function applyFilter() { roomPage.value = 1; loadRooms() }
-function resetFilter() { filters.value = { status: '', maintaining: '', q: '', routine: '' }; applyFilter() }
+// 在用标记：系统分不清一张停用的桌台是刚被误停还是压根没上线，
+// 这个信息只有人知道。标了在用，维护和停用都算不可用、都告警。
+const roomSelection = ref([])
+const allRoomsChecked = computed(() =>
+  displayRooms.value.length > 0 && roomSelection.value.length === displayRooms.value.length)
+
+function toggleAllRooms(e) {
+  roomSelection.value = e.target.checked ? displayRooms.value.map(r => r.room_id) : []
+}
+
+async function toggleInService(r) {
+  try {
+    await api.post('/api/table-alert/rooms/in-service', {
+      env_id: currentEnvId.value, room_ids: [r.room_id], in_service: !r.in_service
+    })
+    r.in_service = !r.in_service
+    r.in_service_manual = true
+    loadRooms()
+  } catch (e) {
+    appStore.showToast('保存失败: ' + errText(e), 'error')
+  }
+}
+
+async function batchInService(v) {
+  try {
+    const res = await api.post('/api/table-alert/rooms/in-service', {
+      env_id: currentEnvId.value, room_ids: roomSelection.value, in_service: v
+    })
+    appStore.showToast(`已将 ${res.data?.count || 0} 个桌台标为${v ? '在用' : '非在用'}`, 'success')
+    roomSelection.value = []
+    loadRooms()
+  } catch (e) {
+    appStore.showToast('操作失败: ' + errText(e), 'error')
+  }
+}
+
+function applyFilter() { roomPage.value = 1; roomSelection.value = []; loadRooms() }
+function resetFilter() { filters.value = { status: '', maintaining: '', q: '', routine: '', in_service: '' }; applyFilter() }
 
 async function collectNow() {
   if (!currentEnvId.value) return
@@ -725,6 +762,14 @@ function durationTip(r) {
 }
 
 function maintainBadge(r) {
+  // 在用桌台被停用，往往是误操作（想点维护点成了停用），比维护更该立刻看
+  if (r.in_service && r.status !== 'Enable') {
+    return {
+      text: r.maintaining ? '⛔ 停用+维护' : '⛔ 已停用',
+      cls: 'tag-overrun',
+      tip: '该桌台标记为在用，却处于停用状态 —— 请确认是否误操作'
+    }
+  }
   if (!r.maintaining) return { text: '正常', cls: 'tag-normal', tip: '' }
   // 例行维护和计划外维护要一眼分得开，否则例行保养会把人练到对告警无感
   if (r.window_name && r.window_overrun) {
@@ -829,12 +874,11 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
     <div v-if="activeTab === 'rooms'" class="tab-content">
       <div class="stat-row">
         <div class="stat-card"><div class="sc-num">{{ stats.total }}</div><div class="sc-label">总桌台</div></div>
-        <div class="stat-card maintain" title="只统计「启用中且维护中」的桌台 —— 停用桌台的维护不告警，不计在内">
-          <div class="sc-num">{{ stats.maintaining_enabled ?? stats.maintaining }}</div>
-          <div class="sc-label">🔧 维护中（启用）</div>
-          <div v-if="stats.maintaining_disabled" class="sc-sub"
-               title="这些桌台已停用，维护与否没有业务影响，默认不告警">
-            另有 {{ stats.maintaining_disabled }} 台停用中维护
+        <div class="stat-card maintain" title="在用桌台里处于不可用状态的（维护中 或 被停用）—— 这才是会告警的范围">
+          <div class="sc-num">{{ stats.unavailable ?? 0 }}</div>
+          <div class="sc-label">⚠️ 不可用（在用）</div>
+          <div class="sc-sub" title="只有标记为「在用」的桌台才会告警">
+            在用 {{ stats.in_service ?? 0 }} 台 · 维护中共 {{ stats.maintaining }} 台
           </div>
         </div>
         <div class="stat-card enable"><div class="sc-num">{{ stats.enable }}</div><div class="sc-label">Enable（启用）</div></div>
@@ -847,6 +891,11 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <option value="">站点状态：全部</option>
           <option value="1">仅维护中</option>
           <option value="0">仅正常</option>
+        </select>
+        <select v-model="filters.in_service" @change="applyFilter">
+          <option value="">在用：全部</option>
+          <option value="1">仅在用</option>
+          <option value="0">仅非在用</option>
         </select>
         <select v-model="filters.routine" @change="applyFilter">
           <option value="">例行维护：全部</option>
@@ -861,6 +910,10 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
         <input v-model="filters.q" placeholder="桌台号 / 房间号" @keyup.enter="applyFilter">
         <button class="btn btn-primary" @click="applyFilter">搜索</button>
         <button class="btn btn-secondary" @click="resetFilter">重置</button>
+        <template v-if="canRuleUpdate && roomSelection.length">
+          <button class="btn btn-secondary" @click="batchInService(true)">✔ 标为在用 ({{ roomSelection.length }})</button>
+          <button class="btn btn-secondary" @click="batchInService(false)">标为非在用</button>
+        </template>
       </div>
 
       <p class="hint-line">
@@ -872,6 +925,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       <table class="data-table">
         <thead>
           <tr>
+            <th style="width:34px"><input type="checkbox" :checked="allRoomsChecked" @change="toggleAllRooms"></th>
+            <th title="人工标记：在用的桌台不论维护还是停用都会告警；非在用的怎么折腾都不打扰">在用</th>
             <th>桌台</th><th>房间号</th>
             <th title="对应中台后台的「状态」：桌台启用 / 停用">状态</th>
             <th title="对应中台后台的「站点状态」：该桌台在站点侧是否处于维护">站点状态</th>
@@ -882,11 +937,20 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loadingRooms"><td colspan="10" class="empty">加载中…</td></tr>
-          <tr v-else-if="!displayRooms.length"><td colspan="10" class="empty">
+          <tr v-if="loadingRooms"><td colspan="12" class="empty">加载中…</td></tr>
+          <tr v-else-if="!displayRooms.length"><td colspan="12" class="empty">
             暂无数据 —— 如果这个环境刚配好，点右上角「立即采集」拉一次
           </td></tr>
           <tr v-for="r in displayRooms" :key="r.room_id" :class="{ 'row-maintain': r.maintaining, 'row-acked': r.event_state === 'acked' }">
+            <td><input type="checkbox" :value="r.room_id" v-model="roomSelection"></td>
+            <td>
+              <button class="btn-link svc-toggle" :class="{ on: r.in_service }"
+                      :disabled="!canRuleUpdate"
+                      :title="(r.in_service ? '在用 —— 维护或停用都会告警' : '非在用 —— 不告警') + (r.in_service_manual ? '（人工标记）' : '（按启停自动初始化）')"
+                      @click="toggleInService(r)">
+                {{ r.in_service ? '✔' : '—' }}
+              </button>
+            </td>
             <td class="mono strong">{{ r.table_no }}</td>
             <td class="mono">{{ r.room_no }}</td>
             <td><span class="tag" :class="statusBadge(r.status).cls">{{ statusBadge(r.status).text }}</span></td>
@@ -1996,6 +2060,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .rp-dot { color: var(--warning); font-size: 9px; }
 .routine-chip { margin-right: 4px; font-weight: 500; }
 .sc-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; cursor: help; }
+.svc-toggle { font-size: 14px; color: var(--text-muted); padding: 0 6px; }
+.svc-toggle.on { color: var(--success); font-weight: 700; }
 
 .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-size: 13px; }
 .btn-primary { background: var(--primary); color: #fff; }

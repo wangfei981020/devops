@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"opsplatform/database"
@@ -284,6 +285,12 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 		where = append(where, "status = ?")
 		args = append(args, s)
 	}
+	switch q.Get("in_service") {
+	case "1":
+		where = append(where, "in_service = 1")
+	case "0":
+		where = append(where, "in_service = 0")
+	}
 	switch q.Get("maintaining") {
 	case "1":
 		where = append(where, "maintaining = 1")
@@ -319,7 +326,7 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 		       online_user_total, operator, remote_update_time,
 		       DATE_FORMAT(maintain_since, '%Y-%m-%d %H:%i:%s'),
 		       DATE_FORMAT(last_seen_at, '%Y-%m-%d %H:%i:%s'), since_estimated,
-		       COALESCE(maintain_site_ids,'')
+		       COALESCE(maintain_site_ids,''), in_service, in_service_manual
 		FROM table_alert_rooms`+whereSQL+`
 		ORDER BY maintaining DESC, table_no
 		LIMIT ? OFFSET ?`, append(args, size, (page-1)*size)...)
@@ -340,10 +347,11 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 			siteCount, online                                                int
 			since, lastSeen                                                  sql.NullString
 			siteIDsRaw                                                       string
+			inService, inServiceManual                                       bool
 		)
 		if err := rows.Scan(&roomID, &tableNo, &roomNo, &platformID, &status, &maintaining,
 			&siteCount, &online, &operator, &remoteUpd, &since, &lastSeen, &sinceEstimated,
-			&siteIDsRaw); err != nil {
+			&siteIDsRaw, &inService, &inServiceManual); err != nil {
 			continue
 		}
 		item := map[string]interface{}{
@@ -353,7 +361,8 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 			"operator": operator, "remote_update_time": remoteUpd,
 			"maintain_since": since.String, "last_seen_at": lastSeen.String,
 			"since_estimated": sinceEstimated,
-			"duration_text":   "", "duration_min": 0,
+			"in_service":      inService, "in_service_manual": inServiceManual,
+			"duration_text": "", "duration_min": 0,
 		}
 		if maintaining && since.Valid {
 			if t, err := time.ParseInLocation("2006-01-02 15:04:05", since.String, time.Local); err == nil {
@@ -406,11 +415,43 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 				item["window_overrun_text"] = taHumanDur(now.Sub(winEnd.Time))
 			}
 		}
+		taCheckRoomItemKeys(item)
 		items = append(items, item)
 	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"items": items, "total": total, "page": page, "size": size,
+	})
+}
+
+// taRoomItemKeys 是桌台列表每一行**必须**带给前端的字段。
+//
+// 这里存在的理由：这个接口已经栽过三次同一个跟头 —— 字段在 SELECT 里加了、
+// 也 Scan 进变量了，就是忘了写进返回的 map。编译能过、接口 200、日志干净，
+// 前端却永远读到 undefined，表现成「这一列全是空的」，得肉眼比对数据库才发现。
+// map 天生没有「漏了一个 key」这种错误，所以只能自己补一道。
+var taRoomItemKeys = []string{
+	"room_id", "table_no", "room_no", "status", "maintaining",
+	"in_service", "in_service_manual",
+	"maintain_since", "since_estimated", "duration_text", "duration_min",
+	"watched_sites", "watched_site_count", "routine_windows",
+	"alert_count", "event_state",
+}
+
+var taKeyCheckOnce sync.Once
+
+// taCheckRoomItemKeys 只在进程内查一次：缺字段就打 ERROR，不影响响应。
+func taCheckRoomItemKeys(item map[string]interface{}) {
+	taKeyCheckOnce.Do(func() {
+		missing := []string{}
+		for _, k := range taRoomItemKeys {
+			if _, ok := item[k]; !ok {
+				missing = append(missing, k)
+			}
+		}
+		if len(missing) > 0 {
+			taErrorf("桌台列表返回缺字段 %v —— 前端这几列会是空的，检查 item map 是否漏写", missing)
+		}
 	})
 }
 
@@ -434,6 +475,12 @@ func HandleTAStats(w http.ResponseWriter, r *http.Request) {
 	database.DB.QueryRow(`
 		SELECT COUNT(*) FROM table_alert_rooms
 		WHERE env_id=? AND maintaining=1 AND status='Enable'`, envID).Scan(&maintainingEnabled)
+	// 在用口径：这才是真正会告警的范围
+	var inService, unavailable int
+	database.DB.QueryRow(`SELECT COUNT(*) FROM table_alert_rooms WHERE env_id=? AND in_service=1`, envID).Scan(&inService)
+	database.DB.QueryRow(`
+		SELECT COUNT(*) FROM table_alert_rooms
+		WHERE env_id=? AND in_service=1 AND (maintaining=1 OR status<>'Enable')`, envID).Scan(&unavailable)
 	database.DB.QueryRow(`SELECT COUNT(*) FROM table_alert_events WHERE env_id=? AND state='alerting' AND maintain_end_at IS NULL`, envID).Scan(&alerting)
 
 	respondJSON(w, http.StatusOK, map[string]int{
@@ -441,6 +488,8 @@ func HandleTAStats(w http.ResponseWriter, r *http.Request) {
 		"maintaining": maintaining, "maintaining_enabled": maintainingEnabled,
 		"maintaining_disabled": maintaining - maintainingEnabled,
 		"alerting":             alerting,
+		"in_service":           inService,
+		"unavailable":          unavailable,
 	})
 }
 
@@ -1776,4 +1825,70 @@ func HandleTAAddSites(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"message": "已保存", "added": added, "updated": updated, "total": len(entries),
 	})
+}
+
+// HandleTASetInService POST /api/table-alert/rooms/in-service
+// 人工标记桌台「在用 / 非在用」。
+//
+// 系统分不清一张停用的桌台是刚被误停还是压根没上线 —— 这个信息只有人知道。
+// 标了在用，不论维护还是停用都算不可用、都会告警；没标的怎么折腾都不打扰。
+// 标记后置 in_service_manual，采集不再按 status 自动覆盖。
+func HandleTASetInService(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRuleUpdate) {
+		return
+	}
+	var body struct {
+		EnvID     string   `json:"env_id"`
+		RoomIDs   []string `json:"room_ids"`
+		InService bool     `json:"in_service"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respondError(w, http.StatusBadRequest, "请求体格式错误")
+		return
+	}
+	if body.EnvID == "" || len(body.RoomIDs) == 0 {
+		respondError(w, http.StatusBadRequest, "请选择桌台")
+		return
+	}
+
+	// 先确认这些桌台在该环境下真的存在。
+	// 不能只看 UPDATE 的 RowsAffected —— 值没变化时 MySQL 返回 0 行，
+	// 「本来就是这个值」和「env_id 传错、一行都没匹配上」会长得一模一样，
+	// 于是传错环境也回一句「已保存」，页面上毫无异样。
+	matched := 0
+	for _, rid := range body.RoomIDs {
+		var c int
+		if err := database.DB.QueryRow(`
+			SELECT COUNT(*) FROM table_alert_rooms WHERE env_id=? AND room_id=?`,
+			body.EnvID, rid).Scan(&c); err == nil {
+			matched += c
+		}
+	}
+	if matched == 0 {
+		taErrorf("标记在用失败：env=%s 下找不到指定桌台 %v", body.EnvID, body.RoomIDs)
+		respondError(w, http.StatusNotFound, "在该环境下找不到指定桌台，请确认环境是否选对")
+		return
+	}
+
+	n := 0
+	for _, rid := range body.RoomIDs {
+		res, err := database.DB.Exec(`
+			UPDATE table_alert_rooms SET in_service=?, in_service_manual=1
+			WHERE env_id=? AND room_id=?`, body.InService, body.EnvID, rid)
+		if err != nil {
+			taErrorf("标记在用失败 room=%s: %v", rid, err)
+			continue
+		}
+		if c, _ := res.RowsAffected(); c > 0 {
+			n++
+		}
+	}
+
+	label := "非在用"
+	if body.InService {
+		label = "在用"
+	}
+	taInfof("%s 将 %d 个桌台标记为「%s」（env=%s，匹配 %d 台，其中 %d 台值有变化）",
+		taOperator(r), matched, label, body.EnvID, matched, n)
+	respondJSON(w, http.StatusOK, map[string]interface{}{"message": "已保存", "count": matched})
 }

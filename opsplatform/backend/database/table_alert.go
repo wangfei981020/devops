@@ -99,6 +99,8 @@ func InitTableAlertTables() error {
 			online_user_total INT NOT NULL DEFAULT 0,
 			operator VARCHAR(128) NOT NULL DEFAULT '',
 			remote_update_time VARCHAR(64) NOT NULL DEFAULT '' COMMENT '接口给的 updateTime，原样存',
+			in_service TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=在用（对外服务中）。在用桌台不论维护还是停用都算不可用、都要告警；非在用的怎么折腾都不告警',
+			in_service_manual TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=人工设过，采集不再按 status 自动覆盖',
 			maintain_since DATETIME NULL COMMENT '维护开始时间，告警时长以它为准',
 			since_estimated TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=首次采集时该桌台已在维护，开始时间由接口 updateTime 回溯而来，只是估算',
 			first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -182,7 +184,8 @@ func InitTableAlertTables() error {
 			table_no VARCHAR(64) NOT NULL DEFAULT '',
 			room_no VARCHAR(64) NOT NULL DEFAULT '',
 			platform_id VARCHAR(64) NOT NULL DEFAULT '',
-			maintain_start_at DATETIME NOT NULL COMMENT '维护开始时间',
+			reason VARCHAR(16) NOT NULL DEFAULT 'maintain' COMMENT '不可用原因：maintain=维护中 / disabled=被停用 / both=停用且维护中',
+			maintain_start_at DATETIME NOT NULL COMMENT '不可用开始时间',
 			start_estimated TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=开始时间是回溯估算的，非实测跃迁',
 			window_id VARCHAR(36) NOT NULL DEFAULT '' COMMENT '命中的例行维护窗口；空=计划外维护',
 			window_name VARCHAR(128) NOT NULL DEFAULT '',
@@ -345,6 +348,9 @@ func InitTableAlertTables() error {
 		{"table_alert_rules", "max_list_sites", "INT NOT NULL DEFAULT 5"},
 		{"table_alert_rules", "alert_table_scope", "VARCHAR(16) NOT NULL DEFAULT 'enabled'"},
 		{"table_alert_rules", "alert_on_disable", "TINYINT(1) NOT NULL DEFAULT 0"},
+		{"table_alert_rooms", "in_service", "TINYINT(1) NOT NULL DEFAULT 0"},
+		{"table_alert_rooms", "in_service_manual", "TINYINT(1) NOT NULL DEFAULT 0"},
+		{"table_alert_events", "reason", "VARCHAR(16) NOT NULL DEFAULT 'maintain'"},
 		{"table_alert_sites", "source", "VARCHAR(12) NOT NULL DEFAULT 'auto'"},
 	} {
 		var n int
