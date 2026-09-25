@@ -464,6 +464,104 @@ func taCheckRoomItemKeys(item map[string]interface{}) {
 	})
 }
 
+// HandleTAConfirmList POST /api/table-alert/rooms/confirm
+//
+// 「原样确认」整组桌台的在用推断 —— 只把 in_service_manual 置 1，**不改 in_service 的值**。
+//
+// 和批量「标为在用/非在用」是两件事：那个是改结论，这个是认可系统已有的结论。
+// 首次接入时 60 多台全是按启停自动猜的，逐台勾选要翻好几页，实际没人会去点；
+// 所以这里按范围整组确认，不依赖前端选了哪些行。
+func HandleTAConfirmList(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermInService) {
+		return
+	}
+	var body struct {
+		EnvID string `json:"env_id"`
+		Scope string `json:"scope"` // in=仅在用 / off=仅非在用 / all=全部
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respondError(w, http.StatusBadRequest, "请求体格式错误")
+		return
+	}
+	if body.EnvID == "" {
+		respondError(w, http.StatusBadRequest, "缺少 env_id")
+		return
+	}
+
+	where := "env_id=? AND in_service_manual=0"
+	args := []interface{}{body.EnvID}
+	label := "全部"
+	switch body.Scope {
+	case "in":
+		where += " AND in_service=1"
+		label = "在用"
+	case "off":
+		where += " AND in_service=0"
+		label = "非在用"
+	case "all", "":
+	default:
+		respondError(w, http.StatusBadRequest, "scope 只能是 in / off / all")
+		return
+	}
+
+	// 先把待确认的捞出来 —— 确认这件事要留痕到每一台，
+	// 否则事后发现某台标错了，查不到是谁在什么时候认可了这个推断。
+	rows, err := database.DB.Query(`
+		SELECT room_id, table_no, room_no, in_service FROM table_alert_rooms WHERE `+where, args...)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "查询失败: "+err.Error())
+		return
+	}
+	type row struct {
+		roomID, tableNo, roomNo string
+		inService               bool
+	}
+	list := []row{}
+	for rows.Next() {
+		var x row
+		if err := rows.Scan(&x.roomID, &x.tableNo, &x.roomNo, &x.inService); err == nil {
+			list = append(list, x)
+		}
+	}
+	rows.Close()
+
+	if len(list) == 0 {
+		respondJSON(w, http.StatusOK, map[string]interface{}{"message": "没有待确认的桌台", "count": 0})
+		return
+	}
+
+	res, err := database.DB.Exec(`UPDATE table_alert_rooms SET in_service_manual=1 WHERE `+where, args...)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "保存失败: "+err.Error())
+		return
+	}
+	n, _ := res.RowsAffected()
+
+	// 流水一次性批量插，别在循环里逐条 INSERT —— 首次确认可能有几十上百台
+	op := taOperator(r)
+	env, _ := taGetEnv(body.EnvID)
+	if env != nil && len(list) > 0 {
+		sqlStr := `INSERT INTO table_alert_changes
+			(id, env_id, env_name, room_id, table_no, room_no, kind, from_val, to_val, source, operator, created_at) VALUES `
+		vals := []string{}
+		params := []interface{}{}
+		now := time.Now()
+		for _, x := range list {
+			vals = append(vals, "(?,?,?,?,?,?,?,?,?,?,?,?)")
+			params = append(params, uuid.New().String(), env.ID, env.Name, x.roomID, x.tableNo, x.roomNo,
+				"confirm", "系统推断", "人工确认为"+taInServiceLabel(x.inService), "manual", op, now)
+		}
+		if _, err := database.DB.Exec(sqlStr+strings.Join(vals, ","), params...); err != nil {
+			taErrorf("写确认流水失败: %v", err)
+		}
+	}
+
+	taInfof("%s 原样确认了 %d 台桌台的在用推断（env=%s，范围=%s）", op, n, body.EnvID, label)
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "已确认", "count": n, "scope": label,
+	})
+}
+
 // HandleTAReviewList GET /api/table-alert/review?env_id=
 //
 // 复核列表：非在用、维护挂了超过 N 天、又没人确认过它确实是下线的。
@@ -687,10 +785,17 @@ func HandleTAStats(w http.ResponseWriter, r *http.Request) {
 
 	// 还没人工确认过的：在用标记是按启停自动猜的，猜错了就会漏报。
 	// 只要还有没确认的，页面上就一直挂提示，直到有人过一遍。
-	var unconfirmed int
+	var unconfirmed, unconfirmedIn, unconfirmedOff int
 	database.DB.QueryRow(`
 		SELECT COUNT(*) FROM table_alert_rooms
 		WHERE env_id=? AND in_service_manual=0`, envID).Scan(&unconfirmed)
+	// 分组给出来，确认对话框要能分别说「在用这 30 台」「非在用这 35 台」
+	database.DB.QueryRow(`
+		SELECT COUNT(*) FROM table_alert_rooms
+		WHERE env_id=? AND in_service_manual=0 AND in_service=1`, envID).Scan(&unconfirmedIn)
+	database.DB.QueryRow(`
+		SELECT COUNT(*) FROM table_alert_rooms
+		WHERE env_id=? AND in_service_manual=0 AND in_service=0`, envID).Scan(&unconfirmedOff)
 
 	// 待复核：非在用、维护挂了很久、又没人确认过它确实是下线的
 	reviewDays := 3
@@ -720,9 +825,11 @@ func HandleTAStats(w http.ResponseWriter, r *http.Request) {
 		"off_service":     offService,
 		"off_maintaining": offMaintaining,
 		// 待办
-		"unconfirmed": unconfirmed,
-		"review":      review,
-		"review_days": reviewDays,
+		"unconfirmed":     unconfirmed,
+		"unconfirmed_in":  unconfirmedIn,
+		"unconfirmed_off": unconfirmedOff,
+		"review":          review,
+		"review_days":     reviewDays,
 	})
 }
 

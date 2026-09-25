@@ -485,6 +485,7 @@ func main() {
 	protected.HandleFunc("/table-alert/sites/{id}", handlers.HandleTASaveSite).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/table-alert/rooms/in-service", handlers.HandleTASetInService).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/table-alert/rooms/offline-confirm", handlers.HandleTAConfirmOffline).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/table-alert/rooms/confirm", handlers.HandleTAConfirmList).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/table-alert/review", handlers.HandleTAReviewList).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/table-alert/changes", handlers.HandleTAChanges).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/table-alert/rooms/{room_id}/sites", handlers.HandleTARoomSites).Methods("GET", "OPTIONS")

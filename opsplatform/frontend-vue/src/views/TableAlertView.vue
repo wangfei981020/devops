@@ -15,6 +15,11 @@ const canEnvUpdate     = computed(() => can('table_alert:env_update'))
 const canEnvDelete     = computed(() => can('table_alert:env_delete'))
 const canCollect       = computed(() => can('table_alert:collect'))
 const canRuleUpdate    = computed(() => can('table_alert:rule_update'))
+// 这四件事以前都借用 rule_update，现在各自独立授权
+const canWindowManage  = computed(() => can('table_alert:window_manage'))
+const canSiteManage    = computed(() => can('table_alert:site_manage'))
+const canInService     = computed(() => can('table_alert:in_service'))
+const canOfflineConfirm = computed(() => can('table_alert:offline_confirm'))
 const canBotManage     = computed(() => can('table_alert:bot_manage'))
 const canContactManage = computed(() => can('table_alert:contact_manage'))
 const canAck           = computed(() => can('table_alert:ack'))
@@ -118,6 +123,28 @@ function switchRoomTab(t) {
   roomTab.value = t
   filters.value.in_service = t === 'in' ? '1' : (t === 'off' ? '0' : '')
   applyFilter()
+}
+
+// ===== 批量确认在用清单 =====
+// 首次接入时几十上百台全是按启停自动猜的，逐台勾选要翻好几页，实际没人会去点。
+// 这里按「范围」整组确认，不依赖前端勾了哪些行 —— 只置「已人工确认」，不改在用标记本身。
+const confirmOpen = ref(false)
+const confirming = ref(false)
+
+async function confirmList(scope) {
+  confirming.value = true
+  try {
+    const res = await api.post('/api/table-alert/rooms/confirm', {
+      env_id: currentEnvId.value, scope
+    })
+    appStore.showToast(`已确认 ${res.data?.count || 0} 台（${res.data?.scope || ''}）`, 'success')
+    await loadRooms()
+    if ((stats.value.unconfirmed ?? 0) === 0) confirmOpen.value = false
+  } catch (e) {
+    appStore.showToast('确认失败: ' + errText(e), 'error')
+  } finally {
+    confirming.value = false
+  }
 }
 
 // ===== 待复核 =====
@@ -952,7 +979,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           ⚠️ <b>在用清单未确认</b> —— {{ stats.unconfirmed }} 台的在用状态是系统按启停自动推断的，还没人工确认过。
           推断错了的桌台不会告警。
         </span>
-        <button class="btn btn-primary" @click="switchRoomTab('off')">去确认</button>
+        <button v-if="canInService" class="btn btn-primary" @click="confirmOpen = true">批量确认</button>
+        <button class="btn btn-secondary" @click="switchRoomTab('off')">先看看非在用的</button>
       </div>
 
       <!-- 非在用里挂着长期维护的，提醒复核一次。防的是「本该在用却被标成非在用、一直没人发现」 -->
@@ -1042,7 +1070,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
         <input v-model="filters.q" placeholder="桌台号 / 房间号" @keyup.enter="applyFilter">
         <button class="btn btn-primary" @click="applyFilter">搜索</button>
         <button class="btn btn-secondary" @click="resetFilter">重置</button>
-        <template v-if="canRuleUpdate && roomSelection.length">
+        <template v-if="canInService && roomSelection.length">
           <button class="btn btn-secondary" @click="batchInService(true)">✔ 标为在用 ({{ roomSelection.length }})</button>
           <button class="btn btn-secondary" @click="batchInService(false)">标为非在用</button>
         </template>
@@ -1077,7 +1105,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             <td><input type="checkbox" :value="r.room_id" v-model="roomSelection"></td>
             <td>
               <button class="btn-link svc-toggle" :class="{ on: r.in_service }"
-                      :disabled="!canRuleUpdate"
+                      :disabled="!canInService"
                       :title="(r.in_service ? '在用 —— 维护或停用都会告警' : '非在用 —— 不告警') + (r.in_service_manual ? '（人工标记）' : '（按启停自动初始化）')"
                       @click="toggleInService(r)">
                 {{ r.in_service ? '✔' : '—' }}
@@ -1151,6 +1179,56 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           页
           <button class="btn btn-secondary" @click="gotoRoomPage">确定</button>
         </span>
+      </div>
+    </div>
+
+    <!-- ================= 批量确认在用清单 ================= -->
+    <div v-if="confirmOpen" class="modal-mask" @click.self="confirmOpen = false">
+      <div class="modal">
+        <div class="modal-head">
+          <h3>确认在用清单</h3>
+          <button class="close" @click="confirmOpen = false">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="field-hint">
+            系统按启停自动推断了在用状态：启用的当作「在用」，停用的当作「非在用」。
+            确认＝认可这个推断，<b>不会改动任何桌台的标记</b>；确认之后采集也不会再自动调整它们。
+          </p>
+
+          <div class="cfm-row">
+            <div class="cfm-info">
+              <b>在用 {{ stats.unconfirmed_in ?? 0 }} 台</b>
+              <span class="dim">推断自「启用」—— 这些会告警</span>
+            </div>
+            <button class="btn btn-primary" :disabled="!(stats.unconfirmed_in > 0) || confirming"
+                    @click="confirmList('in')">确认这 {{ stats.unconfirmed_in ?? 0 }} 台</button>
+          </div>
+
+          <div class="cfm-row">
+            <div class="cfm-info">
+              <b>非在用 {{ stats.unconfirmed_off ?? 0 }} 台</b>
+              <span class="dim">推断自「停用」—— 这些<b>不会告警</b></span>
+              <span v-if="(stats.off_maintaining ?? 0) > 0" class="warn-line">
+                ⚠️ 其中 {{ stats.off_maintaining }} 台正在维护。确认前最好先看一眼：
+                如果有本该对外服务的桌台在里面，它被确认成非在用之后就永远不会告警了。
+              </span>
+            </div>
+            <div class="cfm-btns">
+              <button class="btn btn-secondary" @click="confirmOpen = false; switchRoomTab('off')">先去看看</button>
+              <button class="btn btn-primary" :disabled="!(stats.unconfirmed_off > 0) || confirming"
+                      @click="confirmList('off')">确认这 {{ stats.unconfirmed_off ?? 0 }} 台</button>
+            </div>
+          </div>
+
+          <div class="cfm-row all">
+            <div class="cfm-info"><b>全部 {{ stats.unconfirmed ?? 0 }} 台</b><span class="dim">两组一起确认</span></div>
+            <button class="btn btn-secondary" :disabled="!(stats.unconfirmed > 0) || confirming"
+                    @click="confirmList('all')">全部确认</button>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-secondary" @click="confirmOpen = false">关闭</button>
+        </div>
       </div>
     </div>
 
@@ -1440,7 +1518,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       <div v-if="!currentEnvId" class="empty-block">请先在上方选择一个环境</div>
       <template v-else>
         <div class="action-bar">
-          <button v-if="canRuleUpdate" class="btn btn-primary" @click="openCreateWindow">+ 新增例行维护</button>
+          <button v-if="canWindowManage" class="btn btn-primary" @click="openCreateWindow">+ 新增例行维护</button>
           <span class="hint">
   一个窗口可以覆盖多个房间（同一时间一起保养）。以<strong>房间号</strong>为准，一个桌台可能有多个房间。
           </span>
@@ -1484,7 +1562,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
               </td>
               <td class="dim small">{{ w.remark }}</td>
               <td>
-                <template v-if="canRuleUpdate">
+                <template v-if="canWindowManage">
                   <button class="btn-link" @click="openEditWindow(w)">编辑</button>
                   <button class="btn-link danger" @click="deleteWindow(w)">删除</button>
                 </template>
@@ -1524,11 +1602,11 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           </select>
           <input v-model="siteFilter.q" placeholder="站点名 / siteId" @keyup.enter="loadSites()">
           <button class="btn btn-primary" @click="loadSites()">搜索</button>
-          <button v-if="canRuleUpdate" class="btn btn-primary" @click="openAddSites">+ 手动添加站点</button>
-          <button v-if="canRuleUpdate && siteSelection.length" class="btn btn-secondary" @click="batchWatch(true)">
+          <button v-if="canSiteManage" class="btn btn-primary" @click="openAddSites">+ 手动添加站点</button>
+          <button v-if="canSiteManage && siteSelection.length" class="btn btn-secondary" @click="batchWatch(true)">
             ★ 关注选中 ({{ siteSelection.length }})
           </button>
-          <button v-if="canRuleUpdate && siteSelection.length" class="btn btn-secondary" @click="batchWatch(false)">
+          <button v-if="canSiteManage && siteSelection.length" class="btn btn-secondary" @click="batchWatch(false)">
             取消关注
           </button>
         </div>
@@ -1548,7 +1626,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
               <td><input type="checkbox" :value="st.id" v-model="siteSelection"></td>
               <td>
                 <button class="btn-link star" :class="{ on: st.watched }"
-                        :disabled="!canRuleUpdate" @click="toggleWatch(st)">
+                        :disabled="!canInService" @click="toggleWatch(st)">
                   {{ st.watched ? '★' : '☆' }}
                 </button>
               </td>
@@ -1565,7 +1643,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
               <td class="small dim">{{ st.last_seen_at || '—' }}</td>
               <td class="dim small">{{ st.remark }}</td>
               <td>
-                <button v-if="canRuleUpdate" class="btn-link" @click="openEditSite(st)">编辑</button>
+                <button v-if="canSiteManage" class="btn-link" @click="openEditSite(st)">编辑</button>
                 <span v-else class="dim">—</span>
               </td>
             </tr>
@@ -2354,6 +2432,17 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-secondary);
 }
 .rt.on { border-color: var(--primary); color: var(--primary); font-weight: 600; }
+
+/* 批量确认对话框 */
+.cfm-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 12px 0; border-bottom: 1px solid var(--border-color);
+}
+.cfm-row.all { border-bottom: none; }
+.cfm-info { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text-primary); }
+.cfm-info .dim { font-size: 12px; color: var(--text-muted); }
+.cfm-btns { display: flex; gap: 6px; flex-shrink: 0; }
+.warn-line { font-size: 12px; color: var(--warning); max-width: 380px; line-height: 1.5; }
 .num-input {
   width: 92px; padding: 6px 8px; border-radius: 6px;
   border: 1px solid var(--border-color); background: var(--bg-input); color: var(--text-primary);
