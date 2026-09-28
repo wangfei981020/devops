@@ -98,7 +98,7 @@
             <div class="text-secondary">规则:</div><div>{{ detailLog.rule_name }} (ID: {{ detailLog.rule_id }})</div>
             <div class="text-secondary">级别:</div><div><span class="badge" :class="severityClass(detailLog.severity)">{{ severityLabel(detailLog.severity) }}</span></div>
             <div class="text-secondary">状态:</div><div><span class="badge" :class="statusClass(detailLog.status)">{{ statusLabel(detailLog.status) }}</span></div>
-            <div class="text-secondary">时间:</div><div>{{ detailLog.created_at }}</div>
+            <div class="text-secondary">时间:</div><div>{{ formatTime(detailLog.created_at) }}</div>
           </div>
 
           <div class="form-group mt-4">

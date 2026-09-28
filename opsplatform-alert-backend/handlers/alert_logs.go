@@ -56,8 +56,18 @@ func HandleListAlertLogs(w http.ResponseWriter, r *http.Request) {
 	database.DB.QueryRow(countQuery, args...).Scan(&total)
 
 	// Query
+	//
+	// created_at is handed over as the instant it is, never pre-shifted. This
+	// column used to be wrapped in CONVERT_TZ(created_at, '+00:00', '+08:00'),
+	// left over from before the platform had a display timezone: the session is
+	// pinned to +00:00 and the driver labels rows UTC (see database.InitMySQL),
+	// so that call turned a correct UTC instant into a Beijing wall clock still
+	// wearing a "Z", and the frontend's formatTime then added the eight hours a
+	// second time — an alert that fired at 11:20 listed as 19:20. Which zone a
+	// person reads is decided in one place, utils/datetime.js, from the
+	// configured display timezone.
 	query := `SELECT id, rule_id, rule_name, severity, message, COALESCE(es_raw,''),
-		COALESCE(lark_response,''), status, COALESCE(error_msg,''), CONVERT_TZ(created_at, '+00:00', '+08:00')
+		COALESCE(lark_response,''), status, COALESCE(error_msg,''), created_at
 		FROM alert_logs WHERE 1=1`
 
 	queryArgs := []interface{}{}

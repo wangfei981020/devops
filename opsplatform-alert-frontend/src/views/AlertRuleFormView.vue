@@ -252,9 +252,8 @@
         <div v-show="!collapsed.notify">
         <div class="form-group">
           <label class="form-label">@通知人</label>
-          <textarea v-model="form.at_users" class="form-textarea" rows="2"
-            placeholder='["Bruce","Cesar"]'></textarea>
-          <div class="form-hint">填写姓名数组，如 ["Bruce","Cesar"]。姓名需在"通知人管理"页面先添加对应的 Lark ID</div>
+          <ContactSelector v-model="form.at_users" />
+          <div class="form-hint">名单来自「通知人管理」，搜索选择即可</div>
         </div>
         <div class="form-group">
           <label class="form-label">
@@ -812,6 +811,7 @@ import { formatTime } from '../utils/datetime'
 import { useToast, useConfirm } from '../stores/ui'
 import { X } from 'lucide-vue-next'
 import IndexSelector from '../components/IndexSelector.vue'
+import ContactSelector from '../components/ContactSelector.vue'
 
 const toast = useToast()
 const dialog = useConfirm()
