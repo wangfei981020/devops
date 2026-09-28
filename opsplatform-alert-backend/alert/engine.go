@@ -2685,10 +2685,35 @@ type NamespacedContainerResult struct {
 	Message     string                   `json:"message"` // 渲染好的样式1消息
 }
 
+// NamespacedQuery records what one namespace was actually asked, and what came
+// back.
+//
+// In namespace mode the rule stores only the pipeline half of the query — the
+// `|= "ERROR"` a person types — and the stream selector is assembled here, once
+// per namespace. Reporting the pipeline back as "the query" told whoever was
+// looking at a preview almost nothing: an empty result reads the same whether
+// the service logged no errors or the selector matched no stream at all, and
+// the label filter that would explain the difference was never shown.
+//
+// LineCount is what Loki returned, before the route filter drops ignored
+// codes. That is the number that says whether the selector found anything,
+// which is the question an empty preview raises.
+type NamespacedQuery struct {
+	Namespace string `json:"namespace"`
+	LogQL     string `json:"logql"`
+	LineCount int    `json:"line_count"`
+	Error     string `json:"error,omitempty"`
+}
+
 // QueryNamespacedLoki is the shared function for all 4 paths (preview, test-send, manual run, cron).
 // It queries Loki per namespace, groups by container, builds aggregated messages.
 // Exported so handlers package can call it.
-func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []string, pipeline, timeRange, extractFieldsJSON, severity, messageTemplate, routeConfigJSON string, maxAlerts, concurrency int, labelFilters string, getLokiClient func(int) (*lokiclient.Client, error)) ([]NamespacedContainerResult, error) {
+//
+// The second return value is one entry per namespace, in the order given, each
+// holding the query that namespace actually ran. Callers that only need the
+// results may discard it; the preview shows it, because a query nobody can see
+// is a query nobody can debug.
+func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []string, pipeline, timeRange, extractFieldsJSON, severity, messageTemplate, routeConfigJSON string, maxAlerts, concurrency int, labelFilters string, getLokiClient func(int) (*lokiclient.Client, error)) ([]NamespacedContainerResult, []NamespacedQuery, error) {
 	if concurrency <= 0 {
 		concurrency = 3
 	}
@@ -2710,7 +2735,7 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 
 	client, err := getLokiClient(lokiConnID)
 	if err != nil {
-		return nil, fmt.Errorf("Loki client error: %w", err)
+		return nil, nil, fmt.Errorf("Loki client error: %w", err)
 	}
 
 	sem := make(chan struct{}, concurrency)
@@ -2718,17 +2743,22 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 	var allResults []NamespacedContainerResult
 	var lastErr error
 
+	// Indexed by the caller's namespace order rather than appended as the
+	// workers finish, so the same rule reports its queries in the same order
+	// every time. Each worker owns one element, so the writes need no lock.
+	queries := make([]NamespacedQuery, len(namespaces))
+
 	pipelineTrimmed := strings.TrimSpace(pipeline)
 	extraLabels := strings.TrimSpace(labelFilters)
 
-	for _, ns := range namespaces {
+	for i, ns := range namespaces {
 		select {
 		case <-ctx.Done():
-			return allResults, ctx.Err()
+			return allResults, queries, ctx.Err()
 		case sem <- struct{}{}:
 		}
 
-		go func(namespace string) {
+		go func(idx int, namespace string) {
 			defer safego.Recover("namespace query worker")
 			defer func() { <-sem }()
 
@@ -2738,12 +2768,17 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 			}
 			selector += "}"
 			logql := selector + " " + pipelineTrimmed
+			// Recorded before the query runs, so a failure still reports what
+			// was attempted — that is exactly the case where seeing the query
+			// matters most.
+			queries[idx] = NamespacedQuery{Namespace: namespace, LogQL: logql}
 			now := time.Now()
 			start := now.Add(-duration)
 
 			result, err := client.QueryRange(ctx, logql, start, now, maxAlerts)
 			if err != nil {
 				log.Printf("[Namespaced] namespace '%s' query error: %v", namespace, err)
+				queries[idx].Error = err.Error()
 				mu.Lock()
 				lastErr = fmt.Errorf("namespace %s: %w", namespace, err)
 				mu.Unlock()
@@ -2751,6 +2786,7 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 			}
 
 			hits := result.ToHits()
+			queries[idx].LineCount = len(hits)
 			if len(hits) == 0 {
 				log.Printf("[Namespaced] namespace '%s' no hits", namespace)
 				return
@@ -2817,7 +2853,7 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 				})
 			}
 			mu.Unlock()
-		}(ns)
+		}(i, ns)
 	}
 
 	// Wait for all goroutines
@@ -2826,9 +2862,11 @@ func QueryNamespacedLoki(ctx context.Context, lokiConnID int, namespaces []strin
 	}
 
 	if lastErr != nil && len(allResults) == 0 {
-		return nil, lastErr
+		// The queries go back even on failure: "which query failed, and what
+		// did it say" is the whole question at that point.
+		return nil, queries, lastErr
 	}
-	return allResults, nil
+	return allResults, queries, nil
 }
 
 // GetLokiClientFunc returns a closure that handlers can use to get Loki clients via the engine
@@ -2857,9 +2895,14 @@ func (e *Engine) executeNamespacedRule(ctx context.Context, rule *models.AlertRu
 	namespaces []string, sender notify.Notifier, atUsers []models.AtUser, atAll bool,
 	ruleIDStr, alertMode string) {
 
-	results, err := QueryNamespacedLoki(ctx, rule.LokiConnectionID, namespaces,
+	results, queries, err := QueryNamespacedLoki(ctx, rule.LokiConnectionID, namespaces,
 		rule.LogQL, rule.TimeRange, rule.ExtractFields, rule.Severity, rule.MessageTemplate, rule.RouteConfig,
 		rule.MaxAlerts, rule.NamespaceConcurrency, rule.LabelFilters, e.GetLokiClientFunc())
+	for _, q := range queries {
+		// The scheduled path has no screen to show these on, so they go to the
+		// log: a rule that silently matches nothing is diagnosed from here.
+		log.Printf("[Namespaced] rule %d ns=%s lines=%d query=%s", rule.ID, q.Namespace, q.LineCount, q.LogQL)
+	}
 	if err != nil {
 		errMsg := fmt.Sprintf("Namespaced query error: %v", err)
 		log.Printf("[Engine] Rule %d: %s", rule.ID, errMsg)

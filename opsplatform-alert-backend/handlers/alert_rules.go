@@ -27,6 +27,31 @@ import (
 	"opsplatform-alert-backend/timezone"
 )
 
+// formatNamespacedQueries renders the queries a namespace-mode run actually
+// issued, one per namespace, for the preview's "查看查询语句" panel.
+//
+// The statement goes on its own line so it can be copied straight into the log
+// explorer; the annotation sits on the line below it, commented, so copying a
+// block does not drag prose into the query box. The line count is the point of
+// the whole panel: an empty preview is either "no errors were logged" or "this
+// selector matched no stream at all", and those need opposite responses.
+func formatNamespacedQueries(queries []alert.NamespacedQuery) string {
+	var b strings.Builder
+	for i, q := range queries {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(q.LogQL)
+		b.WriteString("\n")
+		if q.Error != "" {
+			fmt.Fprintf(&b, "# %s → 查询失败: %s\n", q.Namespace, q.Error)
+			continue
+		}
+		fmt.Fprintf(&b, "# %s → 返回 %d 行\n", q.Namespace, q.LineCount)
+	}
+	return b.String()
+}
+
 // handlerLokiClientFunc creates a getLokiClient closure for use with QueryNamespacedLoki
 
 // interactiveContextProvider builds the per-hit context provider shared by the
@@ -879,7 +904,7 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 
 		if len(namespaces) > 0 {
 			// Namespace mode: use shared function to query, then flatten to old format
-			results, err := alert.QueryNamespacedLoki(ctx, req.LokiConnectionID, namespaces,
+			results, queries, err := alert.QueryNamespacedLoki(ctx, req.LokiConnectionID, namespaces,
 				req.LogQL, timeRange, req.ExtractFields, req.Severity, req.MessageTemplate, req.RouteConfig,
 				maxAlerts, req.NamespaceConcurrency, req.LabelFilters, handlerLokiClientFunc())
 			if err != nil {
@@ -892,7 +917,7 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 				rawHits = append(rawHits, r.Hits...)
 			}
 			total = int64(len(rawHits))
-			queryStr = req.LogQL
+			queryStr = formatNamespacedQueries(queries)
 			sourceDetail = "Loki (多命名空间)"
 			// Fall through to normal hit rendering below
 		} else {
@@ -1261,7 +1286,7 @@ func HandleTestSendAlertRule(w http.ResponseWriter, r *http.Request) {
 
 		if len(namespaces) > 0 {
 			// Namespace mode: use shared function, send all aggregated alerts
-			results, qErr := alert.QueryNamespacedLoki(ctx, req.LokiConnectionID, namespaces,
+			results, _, qErr := alert.QueryNamespacedLoki(ctx, req.LokiConnectionID, namespaces,
 				req.LogQL, timeRange, req.ExtractFields, req.Severity, req.MessageTemplate, req.RouteConfig,
 				maxAlerts, req.NamespaceConcurrency, req.LabelFilters, handlerLokiClientFunc())
 			if qErr != nil {

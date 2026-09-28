@@ -3,6 +3,18 @@
     <div class="card">
       <div class="card-header">
         <div class="flex items-center gap-2" style="flex-wrap: wrap;">
+          <!-- One control for both levels: top-level entries are the project,
+               the indented ones under each are its environments. -->
+          <select v-model="filters.project_id" class="form-select" style="width: 170px;" @change="onProjectChange">
+            <option value="">全部项目/环境</option>
+            <option v-for="p in projects" :key="p.id" :value="p.id">
+              {{ p.parent_id > 0 ? '　└ ' : '' }}{{ p.name }}
+            </option>
+          </select>
+          <select v-model="filters.rule_id" class="form-select" style="width: 200px;" @change="page = 1; loadLogs()">
+            <option value="">全部规则</option>
+            <option v-for="r in ruleOptions" :key="r.id" :value="r.id">{{ r.name }}</option>
+          </select>
           <select v-model="filters.status" class="form-select" style="width: 120px;" @change="page = 1; loadLogs()">
             <option value="">全部状态</option>
             <option value="success">成功</option>
@@ -20,10 +32,6 @@
             <span class="text-secondary">至</span>
             <input type="date" v-model="filters.end_date" class="form-input" style="width: 150px;" @change="page = 1; loadLogs()" />
           </div>
-          <span v-if="filters.rule_id" class="badge badge-info">
-            规则 ID: {{ filters.rule_id }}
-            <button class="btn-icon" style="display: inline; padding: 0 4px;" @click="filters.rule_id = ''; loadLogs()">x</button>
-          </span>
           <button v-if="hasFilters" class="btn btn-sm btn-outline" @click="clearFilters">清除筛选</button>
         </div>
         <button class="btn btn-danger btn-sm" @click="showCleanModal = true; cleanPreviewCount = null">清理日志</button>
@@ -222,13 +230,47 @@ const limit = ref(20)
 const total = ref(0)
 const detailLog = ref(null)
 
+// The project tree and the rule list serve both the filter bar and the cleanup
+// dialog, so they are loaded once for the page rather than per consumer.
+const projects = ref([])
+const rules = ref([])
+
 const filters = ref({
+  project_id: '',
   status: '',
   severity: '',
-  rule_id: route.query.rule_id || '',
+  // Numeric, so it matches the option values bound from rule ids — a string
+  // from the query string would leave the dropdown showing "全部规则" while the
+  // filter was in fact applied.
+  rule_id: route.query.rule_id ? Number(route.query.rule_id) : '',
   start_date: '',
   end_date: ''
 })
+
+// Rules belonging to a project node, matching how the backend reads the same
+// id: a top-level project covers the rules filed directly under it AND those
+// under its environments. Comparing project_id for equality instead would show
+// an empty rule list for every top-level project, since rules are filed against
+// the environment underneath it.
+function rulesInProject(projectId) {
+  const pid = Number(projectId)
+  if (!pid) return rules.value
+  const childIds = projects.value.filter(p => p.parent_id === pid).map(p => p.id)
+  const wanted = new Set([pid, ...childIds])
+  return rules.value.filter(r => wanted.has(r.project_id))
+}
+
+const ruleOptions = computed(() => rulesInProject(filters.value.project_id))
+
+// Picking a project that does not contain the currently selected rule would
+// otherwise leave a filter in effect that no longer appears in the dropdown.
+function onProjectChange() {
+  if (filters.value.rule_id && !ruleOptions.value.some(r => String(r.id) === String(filters.value.rule_id))) {
+    filters.value.rule_id = ''
+  }
+  page.value = 1
+  loadLogs()
+}
 
 async function muteFromLog(log, event) {
   const duration = event.target.value
@@ -272,11 +314,11 @@ async function muteFromLog(log, event) {
 }
 
 const hasFilters = computed(() => {
-  return filters.value.status || filters.value.severity || filters.value.rule_id || filters.value.start_date || filters.value.end_date
+  return filters.value.project_id || filters.value.status || filters.value.severity || filters.value.rule_id || filters.value.start_date || filters.value.end_date
 })
 
 function clearFilters() {
-  filters.value = { status: '', severity: '', rule_id: '', start_date: '', end_date: '' }
+  filters.value = { project_id: '', status: '', severity: '', rule_id: '', start_date: '', end_date: '' }
   page.value = 1
   loadLogs()
 }
@@ -285,6 +327,7 @@ async function loadLogs() {
   loading.value = true
   try {
     const params = { page: page.value, limit: limit.value }
+    if (filters.value.project_id) params.project_id = filters.value.project_id
     if (filters.value.status) params.status = filters.value.status
     if (filters.value.severity) params.severity = filters.value.severity
     if (filters.value.rule_id) params.rule_id = filters.value.rule_id
@@ -307,23 +350,18 @@ function showDetail(log) {
 const showCleanModal = ref(false)
 const cleanLoading = ref(false)
 const cleanPreviewCount = ref(null)
-const cleanProjects = ref([])
-const cleanRules = ref([])
 const cleanForm = ref({ project_id: 0, rule_id: 0, start_date: '', end_date: '', status: '' })
 
-const cleanRuleOptions = computed(() => {
-  if (!cleanForm.value.project_id) return cleanRules.value
-  return cleanRules.value.filter(r => r.project_id === cleanForm.value.project_id)
-})
+const cleanRuleOptions = computed(() => rulesInProject(cleanForm.value.project_id))
 
-async function loadCleanOptions() {
+async function loadFilterOptions() {
   try {
     const [projRes, ruleRes] = await Promise.all([
       api.get('/projects'),
       api.get('/alert-rules', { params: { limit: 500 } })
     ])
-    if (projRes.code === 0) cleanProjects.value = projRes.data
-    if (ruleRes.code === 0) cleanRules.value = ruleRes.data.map(r => ({ id: r.id, name: r.name, project_id: r.project_id }))
+    if (projRes.code === 0) projects.value = projRes.data
+    if (ruleRes.code === 0) rules.value = ruleRes.data.map(r => ({ id: r.id, name: r.name, project_id: r.project_id }))
   } catch (e) { /* ignore */ }
 }
 
@@ -369,6 +407,6 @@ function sendResults(raw) {
 
 onMounted(() => {
   loadLogs()
-  loadCleanOptions()
+  loadFilterOptions()
 })
 </script>

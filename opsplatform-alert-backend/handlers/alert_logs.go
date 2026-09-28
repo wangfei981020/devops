@@ -5,18 +5,98 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"opsplatform-alert-backend/database"
+	"opsplatform-alert-backend/timezone"
 )
+
+// alertLogFilters turns the query string into one set of SQL conditions.
+//
+// The count and the page query have to agree: when they were assembled
+// separately, side by side, a filter added to one and missed in the other gave
+// a list of five rows claiming to be page one of nine hundred. Building them
+// once removes that whole class of bug.
+//
+// Dates are the other trap. The picker hands over a calendar day as the person
+// reading the page understands it, and created_at is a UTC instant, so the day
+// has to be anchored in the display timezone before it becomes a bound. Passing
+// the bare string let MySQL read it as UTC — asking for 9-28 in Beijing quietly
+// searched 08:00 on the 28th through 08:00 on the 29th.
+func alertLogFilters(r *http.Request) (string, []interface{}) {
+	where := []string{"1=1"}
+	args := []interface{}{}
+	q := r.URL.Query()
+
+	if v := q.Get("rule_id"); v != "" {
+		if rid, err := strconv.Atoi(v); err == nil {
+			where = append(where, "rule_id = ?")
+			args = append(args, rid)
+		}
+	}
+	if v := q.Get("status"); v != "" {
+		where = append(where, "status = ?")
+		args = append(args, v)
+	}
+	if v := q.Get("severity"); v != "" {
+		where = append(where, "severity = ?")
+		args = append(args, v)
+	}
+	// One parameter serves both levels of the project tree: a top-level id
+	// matches its own rules and every rule under its environments, a child id
+	// matches only itself. The alternative — separate project and environment
+	// parameters — would need the two kept consistent by every caller.
+	if v := q.Get("project_id"); v != "" {
+		if pid, err := strconv.Atoi(v); err == nil && pid > 0 {
+			where = append(where, `rule_id IN (SELECT id FROM alert_rules WHERE project_id IN
+				(SELECT id FROM alert_projects WHERE id = ? OR parent_id = ?))`)
+			args = append(args, pid, pid)
+		}
+	}
+
+	if t, ok := dayStart(q.Get("start_date")); ok {
+		where = append(where, "created_at >= ?")
+		args = append(args, t)
+	}
+	if t, ok := dayEnd(q.Get("end_date")); ok {
+		where = append(where, "created_at <= ?")
+		args = append(args, t)
+	}
+
+	return strings.Join(where, " AND "), args
+}
+
+// dayStart and dayEnd turn a picked calendar day into an instant bound.
+//
+// The day means the day in the display timezone — that is the calendar the
+// person clicking the picker is reading. Handing MySQL the bare "2026-09-28
+// 00:00:00" made it a UTC bound instead, shifting the whole window by the
+// offset. Listing the wrong rows is confusing; the log cleaner runs the same
+// two bounds through a DELETE, where the shift silently removes eight hours of
+// the wrong data, so both callers go through here.
+func dayStart(date string) (time.Time, bool) {
+	return parseDayBound(date, " 00:00:00")
+}
+
+func dayEnd(date string) (time.Time, bool) {
+	return parseDayBound(date, " 23:59:59")
+}
+
+func parseDayBound(date, clock string) (time.Time, bool) {
+	if date == "" {
+		return time.Time{}, false
+	}
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", date+clock, timezone.Location())
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
 
 func HandleListAlertLogs(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	ruleID := r.URL.Query().Get("rule_id")
-	status := r.URL.Query().Get("status")
-	severity := r.URL.Query().Get("severity")
-	startDate := r.URL.Query().Get("start_date")
-	endDate := r.URL.Query().Get("end_date")
 
 	if page <= 0 {
 		page = 1
@@ -26,34 +106,10 @@ func HandleListAlertLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := (page - 1) * limit
 
-	// Count
-	countQuery := "SELECT COUNT(*) FROM alert_logs WHERE 1=1"
-	args := []interface{}{}
-
-	if ruleID != "" {
-		countQuery += " AND rule_id = ?"
-		rid, _ := strconv.Atoi(ruleID)
-		args = append(args, rid)
-	}
-	if status != "" {
-		countQuery += " AND status = ?"
-		args = append(args, status)
-	}
-	if severity != "" {
-		countQuery += " AND severity = ?"
-		args = append(args, severity)
-	}
-	if startDate != "" {
-		countQuery += " AND created_at >= ?"
-		args = append(args, startDate+" 00:00:00")
-	}
-	if endDate != "" {
-		countQuery += " AND created_at <= ?"
-		args = append(args, endDate+" 23:59:59")
-	}
+	where, args := alertLogFilters(r)
 
 	var total int64
-	database.DB.QueryRow(countQuery, args...).Scan(&total)
+	database.DB.QueryRow("SELECT COUNT(*) FROM alert_logs WHERE "+where, args...).Scan(&total)
 
 	// Query
 	//
@@ -68,33 +124,9 @@ func HandleListAlertLogs(w http.ResponseWriter, r *http.Request) {
 	// configured display timezone.
 	query := `SELECT id, rule_id, rule_name, severity, message, COALESCE(es_raw,''),
 		COALESCE(lark_response,''), status, COALESCE(error_msg,''), created_at
-		FROM alert_logs WHERE 1=1`
+		FROM alert_logs WHERE ` + where + ` ORDER BY id DESC LIMIT ? OFFSET ?`
 
-	queryArgs := []interface{}{}
-	if ruleID != "" {
-		query += " AND rule_id = ?"
-		rid, _ := strconv.Atoi(ruleID)
-		queryArgs = append(queryArgs, rid)
-	}
-	if status != "" {
-		query += " AND status = ?"
-		queryArgs = append(queryArgs, status)
-	}
-	if severity != "" {
-		query += " AND severity = ?"
-		queryArgs = append(queryArgs, severity)
-	}
-	if startDate != "" {
-		query += " AND created_at >= ?"
-		queryArgs = append(queryArgs, startDate+" 00:00:00")
-	}
-	if endDate != "" {
-		query += " AND created_at <= ?"
-		queryArgs = append(queryArgs, endDate+" 23:59:59")
-	}
-
-	query += " ORDER BY id DESC LIMIT ? OFFSET ?"
-	queryArgs = append(queryArgs, limit, offset)
+	queryArgs := append(append([]interface{}{}, args...), limit, offset)
 
 	rows, err := database.DB.Query(query, queryArgs...)
 	if err != nil {
@@ -180,13 +212,13 @@ func HandleCleanAlertLogs(w http.ResponseWriter, r *http.Request) {
 		where += " AND rule_id = ?"
 		args = append(args, req.RuleID)
 	}
-	if req.StartDate != "" {
+	if t, ok := dayStart(req.StartDate); ok {
 		where += " AND created_at >= ?"
-		args = append(args, req.StartDate+" 00:00:00")
+		args = append(args, t)
 	}
-	if req.EndDate != "" {
+	if t, ok := dayEnd(req.EndDate); ok {
 		where += " AND created_at <= ?"
-		args = append(args, req.EndDate+" 23:59:59")
+		args = append(args, t)
 	}
 	if req.Status != "" {
 		where += " AND status = ?"
