@@ -840,6 +840,13 @@ async function viewRaw(log) {
   }
 }
 
+// 房间 id 有 19 位，手选容易漏字符，给个按钮直接复制
+function copyRoomID(id) {
+  navigator.clipboard?.writeText(String(id))
+    .then(() => appStore.showToast('已复制房间 ID', 'success'))
+    .catch(() => appStore.showToast('复制失败，请手动选中', 'error'))
+}
+
 function copyRaw() {
   navigator.clipboard?.writeText(rawContent.value)
     .then(() => appStore.showToast('已复制到剪贴板', 'success'))
@@ -1088,6 +1095,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             <th style="width:34px"><input type="checkbox" :checked="allRoomsChecked" @change="toggleAllRooms"></th>
             <th title="人工标记：在用的桌台不论维护还是停用都会告警；非在用的怎么折腾都不打扰">在用</th>
             <th>桌台</th><th>房间号</th>
+            <th title="接口返回的房间 id，日志里的 gameRoomId 就是它。日志告警按这个值定位房间">房间 ID</th>
             <th title="对应中台后台的「状态」：桌台启用 / 停用">状态</th>
             <th title="对应中台后台的「站点状态」：该桌台在站点侧是否处于维护">站点状态</th>
             <th>影响站点</th>
@@ -1097,8 +1105,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loadingRooms"><td colspan="12" class="empty">加载中…</td></tr>
-          <tr v-else-if="!displayRooms.length"><td colspan="12" class="empty">
+          <tr v-if="loadingRooms"><td colspan="13" class="empty">加载中…</td></tr>
+          <tr v-else-if="!displayRooms.length"><td colspan="13" class="empty">
             暂无数据 —— 如果这个环境刚配好，点右上角「立即采集」拉一次
           </td></tr>
           <tr v-for="r in displayRooms" :key="r.room_id" :class="{ 'row-maintain': r.maintaining, 'row-acked': r.event_state === 'acked' }">
@@ -1113,6 +1121,10 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             </td>
             <td class="mono strong">{{ r.table_no }}</td>
             <td class="mono">{{ r.room_no }}</td>
+            <td class="mono room-id">
+              <span>{{ r.room_id }}</span>
+              <button class="copy-room-id" title="复制房间 ID" @click.stop="copyRoomID(r.room_id)">⧉</button>
+            </td>
             <td><span class="tag" :class="statusBadge(r.status).cls">{{ statusBadge(r.status).text }}</span></td>
             <td>
               <span class="tag" :class="maintainBadge(r).cls" :title="maintainBadge(r).tip">{{ maintainBadge(r).text }}</span>
@@ -2301,6 +2313,17 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .row-acked { opacity: .6; }
 .row-fail { background: rgba(239, 68, 68, .08); }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+/* 房间 id 有 5 位的也有 19 位的，等宽字体让长短一眼可辨。
+   不换行、不省略：省略号版本还得点开才能看全，而这一列存在的意义就是拿去用。 */
+.room-id { white-space: nowrap; }
+.room-id > span { user-select: all; }
+.copy-room-id {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted, #94a3b8); font-size: 12px;
+  padding: 0 2px; margin-left: 4px; line-height: 1;
+}
+.copy-room-id:hover { color: var(--primary); }
 .small { font-size: 12px; }
 .strong { font-weight: 600; color: var(--text-primary); }
 .dim { color: var(--text-muted); }

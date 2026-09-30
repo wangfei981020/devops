@@ -115,6 +115,27 @@ var apiKeyRouteMap = []struct {
 	{"table_maintenance", "POST", regexp.MustCompile(`^/api/storage/upload$`), "upload", false},
 	{"table_maintenance", "POST", regexp.MustCompile(`^/api/storage/presign/batch$`), "read", false},
 	{"table_maintenance", "GET", regexp.MustCompile(`^/api/storage/presign$`), "read", false},
+
+	// 桌台字典：日志告警平台靠它把日志里的 room_id / site_id 翻成房间号和站点名。
+	// 只开这三个只读口子——发出去的 Key 读不到环境配置里的 token，也动不了
+	// 维护状态、机器人和通知人。
+	{"table_alert", "GET", regexp.MustCompile(`^/api/table-alert/dict$`), "read", false},
+	{"table_alert", "GET", regexp.MustCompile(`^/api/table-alert/dict/version$`), "read", false},
+	{"table_alert", "GET", regexp.MustCompile(`^/api/table-alert/sites$`), "read", false},
+}
+
+// domainNeedsTableScope 判断某个业务域要不要限定到具体的表。
+//
+// 判据直接取自路由表本身：只要这个域下有带 tableID 的路由，就说明它的访问要按表
+// 限定；一条都没有（比如 table_alert 全是不带表的只读接口）就不需要。这样以后新增
+// 域时不用回来改这里，也不会出现「路由表说不需要、校验却硬要」的不一致。
+func domainNeedsTableScope(domain string) bool {
+	for _, rt := range apiKeyRouteMap {
+		if rt.Domain == domain && rt.HasTableID {
+			return true
+		}
+	}
+	return false
 }
 
 // matchAPIKeyRoute 返回：是否匹配、所需权限后缀、路径中的 tableID（可能为空）
@@ -359,7 +380,10 @@ func HandleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "至少勾选一个权限", http.StatusBadRequest)
 		return
 	}
-	if len(req.AllowedTableIDs) == 0 {
+	// allowed_table_ids 是自定义表那套东西，只有 table_maintenance 用得上：它的路由
+	// 带 tableID，中间件会逐个核对。别的域的路由不带 tableID（HasTableID=false），
+	// 这个字段对它们没有意义，硬要求勾一张表会让这些域的 key 根本建不出来。
+	if domainNeedsTableScope(req.Domain) && len(req.AllowedTableIDs) == 0 {
 		sendError(w, "必须至少勾选一张允许访问的表", http.StatusBadRequest)
 		return
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1591,7 +1592,7 @@ func taTestFetch(env *TAEnv) (*TACollectResult, []map[string]interface{}, error)
 
 	if resp.StatusCode >= 400 {
 		res.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, taTruncate(string(raw), 300))
-		return res, nil, fmt.Errorf(res.Error)
+		return res, nil, errors.New(res.Error)
 	}
 
 	snaps, total, err := taParseRooms(env, raw)
@@ -1688,6 +1689,15 @@ const (
 
 // taRequirePerm 校验按钮权限，不通过时直接写 403 并返回 false
 func taRequirePerm(w http.ResponseWriter, r *http.Request, code string) bool {
+	// API Key 走的是另一套授权，到这里已经校验完了：APIKeyOrJWTMiddleware 先按
+	// apiKeyRouteMap 的白名单匹配路由，再核对 domain:scope。它没有、也不该有对应
+	// 的用户账号，继续往下查用户权限表只会「查无此人」然后被 403 挡掉。
+	//
+	// 这不是放宽权限：白名单本身就是范围限制——没在 apiKeyRouteMap 里列出来的
+	// 接口，API Key 连中间件都过不去，根本走不到这一行。
+	if r.Context().Value(ctxAPIKeyID) != nil {
+		return true
+	}
 	_, username, role := GetUserFromContext(r)
 	ok, err := UserHasPermission(username, role, code)
 	if err != nil {
@@ -2262,4 +2272,172 @@ func HandleTASetInService(w http.ResponseWriter, r *http.Request) {
 	taInfof("%s 将 %d 个桌台标记为「%s」（env=%s，匹配 %d 台，其中 %d 台值有变化）",
 		op, matched, label, body.EnvID, matched, n)
 	respondJSON(w, http.StatusOK, map[string]interface{}{"message": "已保存", "count": matched})
+}
+
+// ============================================================================
+// 桌台字典 —— 给外部系统（日志告警）用的只读出口
+//
+// 日志里只有 room_id / site_id 这种裸 id，告警消息要显示成房间号和站点名，就得
+// 有一份名单。这份名单的权威源是采集接口，已经在这里了，所以开一个只读出口给
+// 外部系统拉，而不是让它自己再维护一套——两套必然漂移。
+//
+// 配套的 dict/version 是省流量用的：调用方每轮先拉指纹，一样就用自己的缓存。
+// 指纹怎么算、为什么不含在线人数，见 taRecalcDictVersion。
+// ============================================================================
+
+// taDictEnv 是字典端点用到的环境信息，比 TAEnv 轻得多。
+type taDictEnv struct {
+	ID        string
+	Name      string
+	Version   string
+	CollectAt sql.NullTime
+	CollectOK bool
+}
+
+// taResolveDictEnv 按 env（环境名，如 PROD）或 env_id（uuid）定位环境。
+//
+// 支持按名字是专门给外部系统留的：对方配置里写 PROD 比写一串 uuid 好维护得多，
+// 而且换个部署 uuid 会变、名字不会。
+func taResolveDictEnv(r *http.Request) (*taDictEnv, error) {
+	q := r.URL.Query()
+	name := strings.TrimSpace(q.Get("env"))
+	id := strings.TrimSpace(q.Get("env_id"))
+	if name == "" && id == "" {
+		return nil, fmt.Errorf("缺少 env 或 env_id")
+	}
+
+	const sel = `SELECT id, name, COALESCE(dict_version,''), last_collect_at, last_collect_ok
+		FROM table_alert_envs WHERE `
+	var e taDictEnv
+	var err error
+	if id != "" {
+		err = database.DB.QueryRow(sel+`id=?`, id).Scan(&e.ID, &e.Name, &e.Version, &e.CollectAt, &e.CollectOK)
+	} else {
+		err = database.DB.QueryRow(sel+`name=?`, name).Scan(&e.ID, &e.Name, &e.Version, &e.CollectAt, &e.CollectOK)
+	}
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("环境不存在")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+// taDictTime 输出带时区偏移的 RFC3339。
+//
+// 不用 DATE_FORMAT 拼裸字符串：那种串不带时区，调用方只能猜该按哪个时区解释，
+// 猜错就是整整八小时的偏差，而且不会报错。
+func taDictTime(t sql.NullTime) interface{} {
+	if !t.Valid {
+		return nil
+	}
+	return t.Time.Format(time.RFC3339)
+}
+
+// HandleTADictVersion GET /api/table-alert/dict/version?env=PROD
+//
+// 只回指纹和采集状态，几十字节。调用方每轮拉一次，和自己缓存的一样就不必再拉
+// 全量——这正是整套缓存省下开销的地方，所以别顺手往这里加字段。
+func HandleTADictVersion(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
+	e, err := taResolveDictEnv(r)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"env":          e.Name,
+		"version":      e.Version,
+		"collected_at": taDictTime(e.CollectAt),
+		"collect_ok":   e.CollectOK,
+	})
+}
+
+// HandleTADict GET /api/table-alert/dict?env=PROD
+//
+// 桌台与站点的完整名单，不分页。调用方用它把日志里的 room_id / site_id 翻成
+// 房间号和站点名。
+//
+// 只给「名单」字段。维护时长、在线人数、操作人这些运行态不进来——它们属于运维
+// 平台自己的页面，混进字典只会让调用方缓存一堆每分钟都在变的东西。
+//
+// ⚠️ 桌台按 last_seen_at 过滤（见 taDictGraceSec）：采集只 upsert 从不删行，
+// 不过滤的话接口里早已消失的桌台会被调用方一直当成「该有日志」，一直误报。
+// 过滤基准取最后一次成功采集的时刻，所以采集挂了名单是冻住而不是清空。
+//
+// in_service=0 的桌台照样返回，带标记由调用方自己决定过不过滤：留着它以后才能
+// 做「非在用桌台却仍有流量」这类反向检查，在这里滤掉就永远没机会了。
+func HandleTADict(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermRead) {
+		return
+	}
+	e, err := taResolveDictEnv(r)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// 从没成功采集过时基准取零值，过滤条件恒真——此时表里本来也没有数据，
+	// collect_ok=false 已经把真实状况告诉调用方了。
+	var since time.Time
+	if e.CollectAt.Valid {
+		since = e.CollectAt.Time.Add(-taDictGraceSec * time.Second)
+	}
+
+	rooms := []map[string]interface{}{}
+	rows, err := database.DB.Query(`
+		SELECT room_id, room_no, table_no, in_service, status
+		FROM table_alert_rooms
+		WHERE env_id=? AND last_seen_at >= ?
+		ORDER BY room_id`, e.ID, since)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "查询桌台失败: "+err.Error())
+		return
+	}
+	for rows.Next() {
+		var roomID, roomNo, tableNo, status string
+		var inService bool
+		if rows.Scan(&roomID, &roomNo, &tableNo, &inService, &status) != nil {
+			continue
+		}
+		rooms = append(rooms, map[string]interface{}{
+			"room_id": roomID, "room_no": roomNo, "table_no": tableNo,
+			"in_service": inService, "status": status,
+		})
+	}
+	rows.Close()
+
+	sites := []map[string]interface{}{}
+	srows, err := database.DB.Query(`
+		SELECT site_id, COALESCE(site_name,''), watched
+		FROM table_alert_sites WHERE env_id=? ORDER BY site_id`, e.ID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "查询站点失败: "+err.Error())
+		return
+	}
+	for srows.Next() {
+		var siteID, siteName string
+		var watched bool
+		if srows.Scan(&siteID, &siteName, &watched) != nil {
+			continue
+		}
+		sites = append(sites, map[string]interface{}{
+			"site_id": siteID, "site_name": siteName, "watched": watched,
+		})
+	}
+	srows.Close()
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"env":          e.Name,
+		"version":      e.Version,
+		"collected_at": taDictTime(e.CollectAt),
+		"collect_ok":   e.CollectOK,
+		"room_count":   len(rooms),
+		"site_count":   len(sites),
+		"rooms":        rooms,
+		"sites":        sites,
+	})
 }

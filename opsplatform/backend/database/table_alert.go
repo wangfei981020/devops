@@ -361,6 +361,12 @@ func InitTableAlertTables() error {
 		{"table_alert_rules", "review_enabled", "TINYINT(1) NOT NULL DEFAULT 1"},
 		{"table_alert_rules", "review_days", "INT NOT NULL DEFAULT 3"},
 		{"table_alert_rules", "review_notify", "TINYINT(1) NOT NULL DEFAULT 0"},
+		// 字典指纹：外部系统（日志告警）靠它判断「桌台名单有没有变」，变了才拉全量。
+		// 只由 room_id/room_no/table_no/in_service/status 和站点名单算出来，
+		// 不含在线人数、维护中这类每次采集都在变的字段——算进去的话指纹每分钟一变，
+		// 对方的缓存就等于没有。
+		{"table_alert_envs", "dict_version", "VARCHAR(32) NOT NULL DEFAULT ''"},
+		{"table_alert_envs", "dict_version_at", "DATETIME NULL"},
 	} {
 		var n int
 		DB.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS

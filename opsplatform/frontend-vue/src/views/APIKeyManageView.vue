@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import api from '@/api'
 import { useAppStore, useAuthStore } from '@/stores'
 
@@ -22,6 +22,11 @@ const DOMAIN_SCOPES = {
     { suffix: 'update', label: '编辑记录' },
     { suffix: 'delete', label: '删除记录' },
     { suffix: 'upload', label: '上传附件' }
+  ],
+  // 桌台字典：发给日志告警平台，让它把日志里的 room_id / site_id 翻成
+  // 房间号和站点名。只有只读一项——这个域下的三个接口全是 GET。
+  table_alert: [
+    { suffix: 'read', label: '读取桌台/站点字典' }
   ]
   // 以后加 duty / schedule 域的 scope 就在这里扩
 }
@@ -42,6 +47,19 @@ const form = ref({
 })
 
 const availableScopes = computed(() => DOMAIN_SCOPES[form.value.domain] || [])
+
+// allowed_table_ids 是自定义表那套东西，只有 table_maintenance 用得上。
+// 别的域下既不显示这个选择器，也不能拿「至少勾一张表」去卡住提交——
+// 那会让这些域的 key 根本建不出来。
+const needsTablePicker = computed(() => form.value.domain === 'table_maintenance')
+
+// 权限码是「域:后缀」，换了域旧的勾选就不再合法。不清空的话会把
+// table_maintenance:read 之类带进一个 table_alert 的 key 里，
+// 中间件校验时永远对不上，表现为「权限不足」而看不出原因。
+watch(() => form.value.domain, () => {
+  form.value.scopes = []
+  if (!needsTablePicker.value) form.value.allowed_table_ids = []
+})
 
 onMounted(() => {
   loadKeys()
@@ -122,7 +140,7 @@ function computeExpiresAt() {
 async function saveKey() {
   if (!form.value.name.trim()) { appStore.showToast('请填写名称', 'error'); return }
   if (form.value.scopes.length === 0) { appStore.showToast('至少勾选一个权限', 'error'); return }
-  if (form.value.allowed_table_ids.length === 0) { appStore.showToast('必须至少勾选一张允许访问的表', 'error'); return }
+  if (needsTablePicker.value && form.value.allowed_table_ids.length === 0) { appStore.showToast('必须至少勾选一张允许访问的表', 'error'); return }
 
   const expires_at = computeExpiresAt()
 
@@ -302,6 +320,7 @@ function expiryState(k) {
             <label>业务域 <span class="required">*</span></label>
             <select v-model="form.domain" :disabled="!!editingKey">
               <option value="table_maintenance">桌台维护记录 (table_maintenance)</option>
+              <option value="table_alert">桌台字典·只读 (table_alert)</option>
             </select>
             <small v-if="editingKey" class="hint">业务域创建后不可更改</small>
           </div>
@@ -314,7 +333,7 @@ function expiryState(k) {
               </label>
             </div>
           </div>
-          <div class="form-row">
+          <div class="form-row" v-if="needsTablePicker">
             <label>限定表格 <span class="required">*</span></label>
             <div class="table-picker">
               <label v-for="t in tables" :key="t.id" class="check-item with-copy">

@@ -3,9 +3,12 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -339,7 +342,7 @@ func TACollectOnce(env *TAEnv) (*TACollectResult, error) {
 		taErrorf("env=%s %s", env.Name, res.Error)
 		// 非 2xx 一律把响应体留全量，方便事后查
 		taFinishCollect(env, res, started, string(raw))
-		return res, fmt.Errorf(res.Error)
+		return res, errors.New(res.Error)
 	}
 
 	snaps, total, err := taParseRooms(env, raw)
@@ -934,6 +937,95 @@ func taFinishCollect(env *TAEnv, res *TACollectResult, started time.Time, rawToS
 	if err != nil {
 		taErrorf("env=%s 写采集日志失败: %v", env.Name, err)
 	}
+
+	// 采集失败时名单没有更新，指纹也就不该变——让外部系统继续用它手上那份缓存。
+	if res.OK {
+		taRecalcDictVersion(env, started)
+	}
+}
+
+// taDictGraceSec 是字典名单的「还算数」宽限期（秒）。
+//
+// 采集只 upsert、从不删行，接口里消失的桌台会一直躺在 table_alert_rooms 里，
+// 所以字典必须按 last_seen_at 过滤，否则下线的桌台会被外部系统一直监控、一直误报。
+//
+// 🔴 过滤基准是「本次采集时刻」而不是 NOW()。用 NOW() 的话采集一挂，几分钟后
+// 字典就整个空了，外部系统会以为所有桌台同时下线——那比给一份稍旧的名单危险得多。
+// 采集停了，基准就停在最后一次成功的时刻，名单原样冻住。
+const taDictGraceSec = 300
+
+// taRecalcDictVersion 重算并落库某个环境的字典指纹。
+//
+// 指纹是给外部系统（日志告警）用的：对方每轮先拉一次 version，和自己缓存的一样
+// 就直接用缓存，不一样才拉全量名单。所以只有「名单本身」变了指纹才该变——桌台
+// 增减、房间号或桌号改名、在用/启停状态翻转、站点改名或关注状态变化。
+//
+// 🔴 在线人数、是否维护中这类字段一律不参与计算。它们每次采集都在动，算进指纹
+// 就是每分钟换一个值，对方的缓存永远命中不了，等于每轮都拉全量，缓存白做。
+//
+// 不改 TAEnv 结构、自己查一次旧值，是为了不牵动 taListEnvs 那一串 SELECT/Scan；
+// 每 60 秒一次单行查询，这点开销换改动面收窄是划算的。
+func taRecalcDictVersion(env *TAEnv, collectedAt time.Time) {
+	since := collectedAt.Add(-taDictGraceSec * time.Second)
+	h := sha256.New()
+
+	rows, err := database.DB.Query(`
+		SELECT room_id, room_no, table_no, in_service, status
+		FROM table_alert_rooms
+		WHERE env_id=? AND last_seen_at >= ?
+		ORDER BY room_id`, env.ID, since)
+	if err != nil {
+		taErrorf("env=%s 算字典指纹失败（桌台）: %v", env.Name, err)
+		return
+	}
+	for rows.Next() {
+		var roomID, roomNo, tableNo, status string
+		var inService bool
+		if rows.Scan(&roomID, &roomNo, &tableNo, &inService, &status) != nil {
+			continue
+		}
+		fmt.Fprintf(h, "r|%s|%s|%s|%t|%s\n", roomID, roomNo, tableNo, inService, status)
+	}
+	rows.Close()
+
+	// 站点一起算进来。站点改个名字、或者关注状态变了，桌台名单一个字没动，但外部
+	// 系统显示的站点名就该跟着变；不纳入的话它会一直用旧名字，而且不会有任何提示。
+	// 站点不按 last_seen_at 过滤：它是人工命名和关注的，一段时间没出现在维护记录里
+	// 不代表它没了。
+	srows, err := database.DB.Query(`
+		SELECT site_id, site_name, watched FROM table_alert_sites
+		WHERE env_id=? ORDER BY site_id`, env.ID)
+	if err != nil {
+		taErrorf("env=%s 算字典指纹失败（站点）: %v", env.Name, err)
+		return
+	}
+	for srows.Next() {
+		var siteID, siteName string
+		var watched bool
+		if srows.Scan(&siteID, &siteName, &watched) != nil {
+			continue
+		}
+		fmt.Fprintf(h, "s|%s|%s|%t\n", siteID, siteName, watched)
+	}
+	srows.Close()
+
+	version := hex.EncodeToString(h.Sum(nil))[:16]
+
+	var old string
+	database.DB.QueryRow(`SELECT COALESCE(dict_version,'') FROM table_alert_envs WHERE id=?`, env.ID).Scan(&old)
+	if version == old {
+		// 没变就不写库，dict_version_at 因此停在「上次真正变化」那一刻，
+		// 而不是每分钟被刷新一次——那个时间戳要能回答「名单上次动是什么时候」。
+		return
+	}
+
+	if _, err := database.DB.Exec(
+		`UPDATE table_alert_envs SET dict_version=?, dict_version_at=? WHERE id=?`,
+		version, time.Now(), env.ID); err != nil {
+		taErrorf("env=%s 写字典指纹失败: %v", env.Name, err)
+		return
+	}
+	taInfof("env=%s 字典指纹 %s → %s", env.Name, old, version)
 }
 
 // ---------------------------------------------------------------------------

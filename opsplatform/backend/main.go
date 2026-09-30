@@ -461,6 +461,11 @@ func main() {
 	protected.HandleFunc("/table-alert/envs/{id}/collect", handlers.HandleTACollectNow).Methods("POST", "OPTIONS")
 	// 桌台列表与统计
 	protected.HandleFunc("/table-alert/rooms", handlers.HandleTAListRooms).Methods("GET", "OPTIONS")
+
+	// 桌台字典：给外部系统（日志告警）把 room_id / site_id 翻成房间号和站点名用。
+	// version 是配套的省流量出口，调用方每轮先拉它、一样就用自己的缓存。
+	protected.HandleFunc("/table-alert/dict", handlers.HandleTADict).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/dict/version", handlers.HandleTADictVersion).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/table-alert/stats", handlers.HandleTAStats).Methods("GET", "OPTIONS")
 	// 告警规则
 	protected.HandleFunc("/table-alert/rules", handlers.HandleTAGetRule).Methods("GET", "OPTIONS")
