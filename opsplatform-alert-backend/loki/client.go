@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -374,6 +375,102 @@ func (c *Client) QueryInstant(ctx context.Context, logql string, at time.Time) (
 			continue
 		}
 		out = append(out, VectorSample{Labels: r.Metric, Value: v})
+	}
+	return out, nil
+}
+
+// MatrixSeries is one series from a range metric query: its label set and the
+// value at each step. Timestamps are dropped deliberately — every caller here
+// asks "how does this series behave across the window", not "what happened at
+// 03:00".
+type MatrixSeries struct {
+	Labels map[string]string
+	Values []float64
+}
+
+// QueryMatrix runs a metric query across a window and returns one series per
+// label combination, with one value per step.
+//
+// 🔴 Absent buckets are not returned. Loki emits no point for a step whose
+// range matched nothing, so a series with 166 points over a 168-hour window had
+// two silent hours — and those are exactly the hours worth knowing about. A
+// caller computing a minimum MUST compare len(Values) against the number of
+// steps it asked for and treat the shortfall as zeros; taking min() over the
+// returned points alone reports the minimum of the hours that had traffic,
+// which is the opposite of the question.
+//
+// Step must be given explicitly: Loki picks a default that varies with the
+// window, and a baseline whose bucket width silently changed with the range
+// would make thresholds meaningless.
+func (c *Client) QueryMatrix(ctx context.Context, logql string, start, end time.Time, step time.Duration) ([]MatrixSeries, error) {
+	if step <= 0 {
+		return nil, errors.New("step 必须为正 —— 交给 Loki 选默认值会让桶宽随窗口变化，阈值就失去意义了")
+	}
+	params := url.Values{}
+	params.Set("query", logql)
+	params.Set("start", fmt.Sprintf("%d", start.UnixNano()))
+	params.Set("end", fmt.Sprintf("%d", end.UnixNano()))
+	params.Set("step", fmt.Sprintf("%ds", int(step.Seconds())))
+
+	reqURL := fmt.Sprintf("%s/loki/api/v1/query_range?%s", c.baseURL, params.Encode())
+	log.Printf("[Loki] Matrix: step=%s %s", step, reqURL)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("Loki query error: %d %s", resp.StatusCode, string(body))
+	}
+
+	var parsed struct {
+		Data struct {
+			ResultType string `json:"resultType"`
+			Result     []struct {
+				Metric map[string]string `json:"metric"`
+				Values [][]interface{}   `json:"values"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("解析 Loki 响应失败: %w", err)
+	}
+	if parsed.Data.ResultType != "matrix" && parsed.Data.ResultType != "" {
+		return nil, fmt.Errorf("期望区间聚合查询(matrix)，实际返回 %s —— 查询语句要形如 sum by (...) (count_over_time(... [1h]))", parsed.Data.ResultType)
+	}
+
+	out := make([]MatrixSeries, 0, len(parsed.Data.Result))
+	for _, r := range parsed.Data.Result {
+		vals := make([]float64, 0, len(r.Values))
+		for _, pair := range r.Values {
+			if len(pair) < 2 {
+				continue
+			}
+			s, ok := pair[1].(string)
+			if !ok {
+				continue
+			}
+			// 解析失败的点跳过而不当成 0：0 在这里是有意义的答案（"这小时没人加入房间"），
+			// 不能用解析失败去伪造它。
+			v, err := strconv.ParseFloat(s, 64)
+			if err != nil {
+				continue
+			}
+			vals = append(vals, v)
+		}
+		out = append(out, MatrixSeries{Labels: r.Metric, Values: vals})
 	}
 	return out, nil
 }

@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +60,17 @@ type hbDim struct {
 	Key    string            // 稳定排序后的组合键，用于比对
 	Labels map[string]string // site_id → …, room_id → …
 	Count  float64
+	// MinHourly 是基线窗口里「最冷那一小时」的条数，只有基线才有（当前窗口不需要）。
+	//
+	// 它比 Count 准，因为 Count 会被高峰时段撑起来。实测房间 1013 在 24h 里有 130+
+	// 条，看总数像个正常房间，但其中有两个整小时一条都没有——那两小时用 5 分钟窗口
+	// 去监控，必然误报。
+	MinHourly float64
+	// ActiveHours / ExpectHours：基线窗口里有日志的小时数 与 应有的小时数。
+	// 两者不等就说明存在完全空窗的小时，而 Loki 不会为空窗返回任何点，
+	// 所以只能靠这两个数的差额发现它们。
+	ActiveHours int
+	ExpectHours int
 }
 
 // heartbeatDimNames pulls the dimension names out of the extraction pattern.
@@ -165,6 +178,124 @@ func queryHeartbeatDims(ctx context.Context, rule *models.AlertRule, dims []stri
 	return out, q, nil
 }
 
+// heartbeatBaselineStep 是基线的分桶宽度。
+//
+// 一小时既是业务上「这个房间空了多久算不正常」的自然单位，也让 7d 窗口只有 168
+// 个点——足够细到能看出空窗，又不至于让响应大到要分页。
+const heartbeatBaselineStep = time.Hour
+
+// queryHeartbeatHourly 用一次区间聚合同时得到每个组合的总次数和最冷小时次数。
+//
+// 这里从 instant 查询换成了 step=1h 的区间查询，换来两样东西：
+//
+//  1. min_hourly。LogQL 不支持 PromQL 那种子查询，
+//     `min_over_time(sum by (...) (...)[7d:1h])` 会被直接拒掉
+//     （parse error: unexpected SUM），所以逐小时序列只能拉回来在 Go 里取最小值。
+//  2. 顺带绕开了 `[7d]` 一次性聚合的超时——分桶后每个子查询只覆盖一小时，
+//     而扫描的日志总量不变（各桶互不重叠）。
+//
+// 🔴 空窗的小时在响应里是整段缺失的，不是值为 0 的点。对返回的点取 min 算出来的是
+// 「有流量的那些小时里的最小值」，恰好问反了。所以这里拿点数和期望桶数比，缺多少
+// 就说明有多少个整小时是零。
+func queryHeartbeatHourly(ctx context.Context, rule *models.AlertRule, dims []string, rng string,
+	getClient LokiClientFunc) (map[string]hbDim, string, error) {
+
+	q, err := buildHeartbeatQuery(rule.LogQL, rule.DimPattern, dims, "1h")
+	if err != nil {
+		return nil, "", err
+	}
+	client, err := getClient(rule.LokiConnectionID)
+	if err != nil {
+		return nil, q, err
+	}
+	dur, err := parseRangeDuration(rng)
+	if err != nil {
+		return nil, q, err
+	}
+
+	// 对齐到整点：不对齐的话最后一个桶只覆盖不足一小时，次数天然偏低，
+	// 会让几乎每个组合的 min_hourly 都被那个残桶拉到很小。
+	end := time.Now().Truncate(heartbeatBaselineStep)
+	start := end.Add(-dur)
+
+	series, err := client.QueryMatrix(ctx, q, start, end, heartbeatBaselineStep)
+	if err != nil {
+		return nil, q, err
+	}
+	return summarizeHourly(series, dims, expectedBuckets(dur, heartbeatBaselineStep)), q, nil
+}
+
+// expectedBuckets 是「这个窗口应该有多少个整桶」。
+//
+// 取 floor 而不是 floor+1 是刻意的，虽然 Loki 两端都给点、铺满窗口的序列实际会有
+// floor+1 个。留这一个点的余量是因为两个方向的代价不对称：少算一个桶只会漏判一个
+// 空窗小时；多算一个桶会让铺满整个窗口的组合全部被判成「有空窗」，于是所有房间
+// 一起静默掉出监控范围——没有任何告警，也没有任何报错。
+func expectedBuckets(window, step time.Duration) int {
+	if step <= 0 || window < step {
+		return 0
+	}
+	return int(window / step)
+}
+
+// summarizeHourly 把逐小时序列折成每个组合的总次数与最冷小时次数。
+//
+// expect 是这个窗口应该有多少个整小时。它取 floor(窗口/步长) 而不是 +1：Loki 两端
+// 都会给点，铺满窗口的序列实际点数通常是 floor+1，这里故意留一个点的余量。方向是
+// 刻意选的——宁可漏判一个空窗小时，也不能因为端点算差一个就把铺满整个窗口的组合
+// 误判成「有空窗」，那会让所有房间一起静默掉出监控范围。
+func summarizeHourly(series []lokiclient.MatrixSeries, dims []string, expect int) map[string]hbDim {
+	out := make(map[string]hbDim, len(series))
+	for _, sr := range series {
+		// 没有任何维度标签的那条是「正则没提取出来」的合计，不是一个组合。
+		empty := true
+		for _, d := range dims {
+			if sr.Labels[d] != "" {
+				empty = false
+				break
+			}
+		}
+		if empty {
+			continue
+		}
+		total := 0.0
+		minHourly := math.Inf(1)
+		for _, v := range sr.Values {
+			total += v
+			if v < minHourly {
+				minHourly = v
+			}
+		}
+		// 🔴 缺的桶就是零。Loki 不为空窗返回点，所以只有拿点数和期望桶数比才能
+		// 发现它们；对返回的点取 min 得到的是「有流量的那些小时里的最小值」。
+		if len(sr.Values) < expect || math.IsInf(minHourly, 1) {
+			minHourly = 0
+		}
+		k := dimKey(sr.Labels, dims)
+		out[k] = hbDim{
+			Key: k, Labels: sr.Labels, Count: total,
+			MinHourly: minHourly, ActiveHours: len(sr.Values), ExpectHours: expect,
+		}
+	}
+	return out
+}
+
+// parseRangeDuration 认 LogQL 的窗口写法，其中 d 是 time.ParseDuration 不认的。
+func parseRangeDuration(rng string) (time.Duration, error) {
+	if strings.HasSuffix(rng, "d") {
+		n, err := strconv.Atoi(strings.TrimSuffix(rng, "d"))
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("基线窗口 %q 无法解析", rng)
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+	d, err := time.ParseDuration(rng)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("基线窗口 %q 无法解析", rng)
+	}
+	return d, nil
+}
+
 func heartbeatBaselineKey(ruleID int) string {
 	return fmt.Sprintf("alert:hb:baseline:%d", ruleID)
 }
@@ -182,11 +313,8 @@ func heartbeatBaseline(ctx context.Context, rule *models.AlertRule, dims []strin
 		}
 	}
 
-	rng := rule.BaselineRange
-	if rng == "" {
-		rng = "7d"
-	}
-	baseline, q, err := queryHeartbeatDims(ctx, rule, dims, rng, getClient)
+	rng := baselineRangeOf(rule)
+	baseline, q, err := queryHeartbeatHourly(ctx, rule, dims, rng, getClient)
 	if err != nil {
 		return nil, false, fmt.Errorf("基线查询失败(%s): %w", rng, err)
 	}
@@ -213,6 +341,13 @@ type HeartbeatEntry struct {
 	Baseline float64
 	SiteID   string
 	RoomID   string
+	// MinHourly / ActiveHours / ExpectHours 来自基线，用来解释这个组合为什么被
+	// 纳入或排除。预览必须显示它们：否则「为什么这个房间不在监控里」只能靠猜。
+	MinHourly   float64
+	ActiveHours int
+	ExpectHours int
+	// WhyWatching 在「观察中」列表里说明差在哪一项（总次数还是最冷小时）。
+	WhyWatching string
 }
 
 // executeHeartbeat is the whole mode: two queries, a set difference, one card.
@@ -222,13 +357,18 @@ type HeartbeatEntry struct {
 // 会告警、实际不告」或者反过来的情况，而那种不一致比没有预览更糟——人会照着预览
 // 去调阈值。
 type HeartbeatResult struct {
-	Dims              []string
-	CurrentQuery      string
-	BaselineQuery     string
-	Baseline          map[string]hbDim
-	Current           map[string]hbDim
-	Missing           []HeartbeatEntry // 基线有、当前窗口没有，且通过了低频与字典过滤
-	Alive             []HeartbeatEntry // 当前窗口有活动的，预览要列出来当对照
+	Dims          []string
+	CurrentQuery  string
+	BaselineQuery string
+	Baseline      map[string]hbDim
+	Current       map[string]hbDim
+	Missing       []HeartbeatEntry // 基线有、当前窗口没有，且通过了低频与字典过滤
+	Alive         []HeartbeatEntry // 当前窗口有活动的，预览要列出来当对照
+	// Watching 是在监控范围内（站点已关注、房间在用）但基线还不够判定的组合。
+	//
+	// 以前这批只有一个计数，于是新上线的房间是「静默不监控」——字典里有、告警里
+	// 永远不出现，没有任何地方提醒你。列出来之后至少能看到它在攒基线，以及还差多少。
+	Watching          []HeartbeatEntry
 	SkippedLowTraffic int
 	SkippedByDict     int
 	Dict              *Dict
@@ -264,7 +404,10 @@ func EvaluateHeartbeat(ctx context.Context, rule *models.AlertRule, getClient Lo
 	if err != nil {
 		return nil, err
 	}
-	baseQuery, _ := buildHeartbeatQuery(rule.LogQL, rule.DimPattern, dims, baselineRangeOf(rule))
+	// 基线现在是 step=1h 的区间查询，展示出来的语句必须是真正执行的那条（窗口 1h），
+	// 不能写成 baselineRangeOf(rule)——那是区间的总跨度，不是分桶宽度。照着错的语句
+	// 去 Loki 里手动验证会得到完全不同的数字。
+	baseQuery, _ := buildHeartbeatQuery(rule.LogQL, rule.DimPattern, dims, "1h")
 
 	// 字典是可选的：没有它照样告警，只是消息里显示原始 id。名字丢了是可读性问题，
 	// 不告警是监控问题。
@@ -283,10 +426,12 @@ func EvaluateHeartbeat(ctx context.Context, rule *models.AlertRule, getClient Lo
 		Baseline: baseline, Current: current, Dict: dict, BaselineCached: cached,
 		BaselineRange: baselineRangeOf(rule),
 	}
-	classifyHeartbeat(res, float64(rule.BaselineMinHits))
+	classifyHeartbeat(res, float64(rule.BaselineMinHits), float64(rule.BaselineMinHourly))
 
 	sort.Slice(res.Missing, func(i, j int) bool { return res.Missing[i].Baseline > res.Missing[j].Baseline })
 	sort.Slice(res.Alive, func(i, j int) bool { return res.Alive[i].Baseline > res.Alive[j].Baseline })
+	// 观察中按「最接近达标」排前面：调阈值时先看的就是差一点的那几个。
+	sort.Slice(res.Watching, func(i, j int) bool { return res.Watching[i].Baseline > res.Watching[j].Baseline })
 	return res, nil
 }
 
@@ -430,7 +575,22 @@ func (e *Engine) renderHeartbeat(rule *models.AlertRule, dict *Dict, missing []H
 				fmt.Fprintf(&b, "**%s:** %s\n", k, v)
 			}
 		}
-		fmt.Fprintf(&b, "**基线:** %s 内 %.0f 次\n", baselineRangeOf(rule), m.Baseline)
+		// 基线行同时给总次数和最冷小时：光看总次数判断不了"这个房间平时是不是本来
+		// 就会安静一阵"，而那正是决定要不要立刻去现场的依据。
+		if m.ExpectHours > 0 {
+			// 铺满窗口时不显示分数：期望桶数刻意留了一个桶的余量，铺满的序列实际点数
+			// 会比期望多一个，照原样显示就成了「25/24 小时有活动」——数字没错，但读起来
+			// 像个 bug，而这张卡片是给正在处理故障的人看的。
+			if m.ActiveHours >= m.ExpectHours {
+				fmt.Fprintf(&b, "**基线:** %s 内 %.0f 次，最冷一小时 %.0f 次（每小时都有活动）\n",
+					baselineRangeOf(rule), m.Baseline, m.MinHourly)
+			} else {
+				fmt.Fprintf(&b, "**基线:** %s 内 %.0f 次，最冷一小时 %.0f 次（%d 个整小时没有日志）\n",
+					baselineRangeOf(rule), m.Baseline, m.MinHourly, m.ExpectHours-m.ActiveHours)
+			}
+		} else {
+			fmt.Fprintf(&b, "**基线:** %s 内 %.0f 次\n", baselineRangeOf(rule), m.Baseline)
+		}
 	}
 	if len(missing) > len(shown) {
 		fmt.Fprintf(&b, "\n…另有 %d 个未列出，完整名单见告警详情\n", len(missing)-len(shown))
@@ -492,11 +652,14 @@ func heartbeatInterval(s string) time.Duration {
 // 活跃的直接收下，过滤就只作用在「可能告警的」那一批，当前有活动的整批绕过白
 // 名单——预览于是既显示「站点未关注 0」，又在活跃列表里列出没登记的站点。两个
 // 数字自相矛盾，却都是"真的"。这种错误只有把顺序本身钉进测试才拦得住。
-func classifyHeartbeat(res *HeartbeatResult, minHits float64) {
+func classifyHeartbeat(res *HeartbeatResult, minHits, minHourly float64) {
 	for k, b := range res.Baseline {
 		roomID := b.Labels["room_id"]
 		siteID := b.Labels["site_id"]
-		entry := HeartbeatEntry{Key: k, Labels: b.Labels, Baseline: b.Count, SiteID: siteID, RoomID: roomID}
+		entry := HeartbeatEntry{
+			Key: k, Labels: b.Labels, Baseline: b.Count, SiteID: siteID, RoomID: roomID,
+			MinHourly: b.MinHourly, ActiveHours: b.ActiveHours, ExpectHours: b.ExpectHours,
+		}
 
 		// ① 先划定监控范围 —— 站点白名单 + 房间在用
 		if res.Dict != nil {
@@ -515,8 +678,26 @@ func classifyHeartbeat(res *HeartbeatResult, minHits float64) {
 			}
 		}
 
-		// ② 再按基线次数筛掉判不了的低频组合
-		if minHits > 0 && b.Count < minHits {
+		// ② 再筛掉基线还判不了的组合，两个判据都不满足才算够。
+		//
+		// 这批不是「不用管」，而是「还判不了」：新上线的房间、刚放量的站点都落在这里。
+		// 所以它们进 Watching 被列出来，而不是只记一个计数——静默不监控和监控一样
+		// 都是一个状态，区别只在有没有人知道。
+		switch {
+		case minHits > 0 && b.Count < minHits:
+			entry.WhyWatching = fmt.Sprintf("基线总次数 %.0f < %.0f", b.Count, minHits)
+		case minHourly > 0 && b.MinHourly < minHourly:
+			// 最冷小时判据。b.MinHourly==0 意味着基线里存在完全空窗的整小时，
+			// 这种组合用几分钟的窗口去监控一定会误报。
+			if b.MinHourly == 0 && b.ExpectHours > 0 {
+				entry.WhyWatching = fmt.Sprintf("基线里有 %d 个整小时没有日志（%d/%d 小时有活动）",
+					b.ExpectHours-b.ActiveHours, b.ActiveHours, b.ExpectHours)
+			} else {
+				entry.WhyWatching = fmt.Sprintf("最冷一小时 %.0f 次 < %.0f", b.MinHourly, minHourly)
+			}
+		}
+		if entry.WhyWatching != "" {
+			res.Watching = append(res.Watching, entry)
 			res.SkippedLowTraffic++
 			continue
 		}

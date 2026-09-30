@@ -190,6 +190,16 @@
                   用「15 分钟没日志」去判必然误报
                 </div>
               </div>
+              <div class="form-group">
+                <label class="form-label">最冷一小时最少次数</label>
+                <input v-model.number="form.baseline_min_hourly" type="number" class="form-input" min="0" />
+                <div class="form-hint">
+                  比上面那个准：<b>总次数会被高峰时段撑起来</b>。实测有房间一天 130 多条、总数看着正常，
+                  却有整整两个小时一条都没有 —— 用 5 分钟窗口监控它，那两小时必然误报。
+                  这一项看的是基线里<b>最安静那一小时</b>有多少条。
+                  <br>填 <code>0</code> 表示不启用；想先看效果就先预览，不达标的会列在「观察中」里。
+                </div>
+              </div>
             </div>
             <div class="form-group">
               <label class="form-label">字典源（可选）</label>
@@ -797,7 +807,7 @@
             <span class="text-sm text-secondary">
               基线 <b>{{ previewData.baseline_size }}</b> 个组合
               －<b>{{ previewData.skipped_by_dict }}</b> 站点未关注/房间非在用
-              －<b>{{ previewData.skipped_low_traffic }}</b> 低频（基线次数 &lt; {{ form.baseline_min_hits }}）
+              －<b>{{ previewData.watching_count ?? previewData.skipped_low_traffic }}</b> 观察中（基线还判不了）
               ＝ 实际监控 <b>{{ previewData.monitored }}</b> 个，
               其中 <b>{{ previewData.alive_count }}</b> 有活动、<b>{{ previewData.missing_count }}</b> 异常
               <template v-if="previewData.dict_version">
@@ -812,12 +822,15 @@
               ⚠ 异常 —— {{ previewData.time_range }} 内无活动，会告警
             </h4>
             <table style="width: 100%; font-size: 13px;">
-              <thead><tr><th>站点</th><th>房间</th><th>基线次数</th><th>room_id</th></tr></thead>
+              <thead><tr><th>站点</th><th>房间</th><th>基线次数</th><th>最冷一小时</th><th>room_id</th></tr></thead>
               <tbody>
                 <tr v-for="m in previewData.missing" :key="m.site_id + '|' + m.room_id">
                   <td>{{ m.site }}</td>
                   <td style="font-weight: 500;">{{ m.room }}</td>
                   <td>{{ previewData.baseline_range }} 内 {{ m.baseline }} 次</td>
+                  <!-- 最冷一小时是判断"要不要现在就去现场"的依据：平时最少也有几十条的房间
+                       突然没动静，和平时最冷只有 1 条的房间没动静，紧迫程度完全不同。 -->
+                  <td>{{ m.min_hourly }} 次<span v-if="gapHours(m)" class="text-sm" style="color: var(--warning, #b45309);"> ({{ gapHours(m) }}h 空窗)</span></td>
                   <td class="text-sm text-secondary" style="font-family: ui-monospace, monospace;">{{ m.room_id }}</td>
                 </tr>
               </tbody>
@@ -832,12 +845,35 @@
               查看监控范围内有活动的 {{ previewData.alive.length }} 个组合
             </summary>
             <table style="width: 100%; font-size: 13px; margin-top: 8px;">
-              <thead><tr><th>站点</th><th>房间</th><th>基线次数</th></tr></thead>
+              <thead><tr><th>站点</th><th>房间</th><th>基线次数</th><th>最冷一小时</th></tr></thead>
               <tbody>
                 <tr v-for="m in previewData.alive" :key="m.site_id + '|' + m.room_id">
                   <td>{{ m.site }}</td>
                   <td>{{ m.room }}</td>
                   <td>{{ previewData.baseline_range }} 内 {{ m.baseline }} 次</td>
+                  <td>{{ m.min_hourly }} 次<span v-if="gapHours(m)" class="text-sm" style="color: var(--warning, #b45309);"> ({{ gapHours(m) }}h 空窗)</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </details>
+
+          <!-- 观察中：在监控范围内（站点已关注、房间在用）但基线还判不了的组合。
+               以前这批只有一个计数，于是新上线的房间是「静默不监控」—— 字典里有、
+               告警里永远不出现，没有任何地方提醒你。展开能看到它差在哪一项，
+               以及把阈值降到多少就能把它纳进来。 -->
+          <details v-if="(previewData.watching || []).length" style="margin-bottom: 12px;">
+            <summary class="text-sm" style="cursor: pointer; color: var(--warning, #b45309);">
+              观察中 {{ previewData.watching.length }} 个 —— 在监控范围内，但基线还判不了，<b>不会告警</b>
+            </summary>
+            <table style="width: 100%; font-size: 13px; margin-top: 8px;">
+              <thead><tr><th>站点</th><th>房间</th><th>基线次数</th><th>最冷一小时</th><th>差在哪</th></tr></thead>
+              <tbody>
+                <tr v-for="m in previewData.watching" :key="m.site_id + '|' + m.room_id">
+                  <td>{{ m.site }}</td>
+                  <td>{{ m.room }}</td>
+                  <td>{{ m.baseline }} 次</td>
+                  <td>{{ m.min_hourly }} 次<span v-if="gapHours(m)" class="text-sm" style="color: var(--warning, #b45309);"> ({{ gapHours(m) }}h 空窗)</span></td>
+                  <td class="text-sm text-secondary">{{ m.why }}</td>
                 </tr>
               </tbody>
             </table>
@@ -1031,6 +1067,7 @@ const form = ref({
   dim_pattern: '',
   baseline_range: '7d',
   baseline_min_hits: 1000,
+  baseline_min_hourly: 0,
   dict_source_id: 0,
   recovery_enabled: 0,
   recovery_title: '',
@@ -1312,6 +1349,7 @@ async function loadRule() {
         dim_pattern: d.dim_pattern || '',
         baseline_range: d.baseline_range || '7d',
         baseline_min_hits: d.baseline_min_hits ?? 1000,
+        baseline_min_hourly: d.baseline_min_hourly ?? 0,
         dict_source_id: d.dict_source_id || 0,
         recovery_enabled: d.recovery_enabled || 0,
         recovery_title: d.recovery_title || '',
@@ -1558,6 +1596,14 @@ async function handleSendReport() {
     toast.error('发送日报失败: ' + (e.response?.data?.message || e.message))
   }
   reportSending.value = false
+}
+
+// gapHours 是基线里完全没有日志的整小时数。
+// 期望桶数刻意留了一个桶的余量，铺满窗口的序列点数会比期望多一个，所以这里取
+// 差值并夹到 0 —— 直接显示 active/expect 会出现「25/24h」这种读起来像 bug 的分数。
+function gapHours(m) {
+  if (!m || !m.expect_hours) return 0
+  return Math.max(0, m.expect_hours - (m.active_hours || 0))
 }
 
 function parseAtNames(atUsersStr) {

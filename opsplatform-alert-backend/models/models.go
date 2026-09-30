@@ -175,6 +175,11 @@ type AlertRule struct {
 	DimPattern      string `json:"dim_pattern"`       // 维度提取正则，命名组即维度名
 	BaselineRange   string `json:"baseline_range"`    // 基线窗口，如 7d
 	BaselineMinHits int    `json:"baseline_min_hits"` // 基线内低于这个次数视为低频，不纳入监控
+	// BaselineMinHourly 是「最冷那一小时」的门槛，比总次数准得多。
+	//
+	// 总次数会被高峰时段撑起来：实测房间 1013 在 24h 窗口里有 130+ 次，却有整整两个
+	// 小时一条日志都没有——用 5 分钟窗口监控它，那两小时里必然误报。0 表示不启用。
+	BaselineMinHourly int `json:"baseline_min_hourly"`
 	// Performance alert (Loki only): realtime threshold + daily report
 	RealtimeEnabled int    `json:"realtime_enabled"`
 	ThresholdMs     int    `json:"threshold_ms"`
@@ -309,6 +314,7 @@ type CreateAlertRuleReq struct {
 	DimPattern           string `json:"dim_pattern"`
 	BaselineRange        string `json:"baseline_range"`
 	BaselineMinHits      int    `json:"baseline_min_hits"`
+	BaselineMinHourly    int    `json:"baseline_min_hourly"`
 	RealtimeEnabled      int    `json:"realtime_enabled"`
 	ThresholdMs          int    `json:"threshold_ms"`
 	ReportEnabled        int    `json:"report_enabled"`

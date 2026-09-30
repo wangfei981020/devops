@@ -352,6 +352,7 @@ func autoMigrate() error {
 		{"alert_rules", "dim_pattern", "TEXT COMMENT '维度提取正则，命名组即维度名，如 (?P<site_id>\\\\d+)'"},
 		{"alert_rules", "baseline_range", "VARCHAR(20) DEFAULT '7d' COMMENT '基线窗口，从中发现「本该有日志」的维度组合'"},
 		{"alert_rules", "baseline_min_hits", "INT DEFAULT 1000 COMMENT '基线窗口内至少出现这么多次才纳入监控，低于此数视为低频、不告警'"},
+		{"alert_rules", "baseline_min_hourly", "INT DEFAULT 0 COMMENT '基线里最冷那一小时也要有这么多次才纳入监控；0=不启用此判据'"},
 	}
 
 	// Ensure alert_projects table exists

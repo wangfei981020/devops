@@ -55,10 +55,14 @@
                   <span class="badge badge-success">正常</span>
                   <div class="text-sm text-secondary">{{ formatTime(item.last_sync_at) }}</div>
                 </template>
+                <template v-else-if="!item.last_sync_at">
+                  <span class="badge badge-secondary">未同步</span>
+                  <div class="text-sm text-secondary">首次同步会在规则执行时发生，也可以点右边「同步」</div>
+                </template>
                 <template v-else>
                   <span class="badge badge-danger">失败</span>
                   <div class="text-sm" style="color: var(--danger);" :title="item.last_sync_error">
-                    {{ truncate(item.last_sync_error, 40) || '尚未同步' }}
+                    {{ truncate(item.last_sync_error, 40) }}
                   </div>
                 </template>
               </td>
@@ -71,6 +75,10 @@
               </td>
               <td>
                 <div class="actions">
+                  <button class="btn btn-sm btn-outline" :disabled="syncing === item.id"
+                          title="立刻拉一次名单并刷新缓存" @click="syncNow(item)">
+                    {{ syncing === item.id ? '同步中…' : '同步' }}
+                  </button>
                   <button class="btn btn-sm btn-outline" @click="editItem(item)"><Pencil :size="14" /></button>
                   <button class="btn btn-sm btn-danger" @click="deleteItem(item)"><Trash2 :size="14" /></button>
                 </div>
@@ -182,6 +190,7 @@ const hasKey = ref(false)
 const submitting = ref(false)
 const testing = ref(false)
 const testResult = ref(null)
+const syncing = ref(0)
 
 const form = ref({ name: '', base_url: '', api_key: '', env: 'PROD', refresh_sec: 600, description: '' })
 
@@ -238,6 +247,24 @@ async function deleteItem(item) {
     if (res.code === 0) loadList()
     else toast.error(res.message)
   } catch (e) { toast.error(e.response?.data?.message || '删除失败') }
+}
+
+// 立刻同步：和「测试连接」不同，这个会真的更新缓存、指纹和同步状态。
+// 没有它，首次同步只在某条规则跑起来时才发生，在那之前列表一直显示「未同步」，
+// 紧挨着一个刚配好且测试通过的数据源——读起来像配置失败。
+async function syncNow(item) {
+  syncing.value = item.id
+  try {
+    const res = await api.post(`/dict-sources/${item.id}/sync`)
+    if (res.code === 0) {
+      const d = res.data || {}
+      toast.success(`已同步：${d.room_count} 房间（在用 ${d.in_service}）· ${d.site_count} 站点（关注 ${d.watched}）`)
+      loadList()
+    } else {
+      toast.error(res.message)
+    }
+  } catch (e) { toast.error(e.response?.data?.message || '同步失败') }
+  syncing.value = 0
 }
 
 async function testConnection() {

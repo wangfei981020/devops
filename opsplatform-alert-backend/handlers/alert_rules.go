@@ -190,7 +190,7 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 		COALESCE(r.realtime_enabled,0), COALESCE(r.threshold_ms,0), COALESCE(r.report_enabled,0), COALESCE(r.report_schedule,''), COALESCE(r.report_mode,'separate'), COALESCE(r.report_title,''), COALESCE(r.report_template,''),
 		COALESCE(r.stack_context_enabled,0), COALESCE(r.stack_max_lines,200), COALESCE(r.stack_head_lines,12), COALESCE(r.stack_tail_lines,8), COALESCE(r.stack_boundary_pattern,''), COALESCE(r.stack_window_sec,5),
 		COALESCE(r.log_context_enabled,0), COALESCE(r.log_context_before,25), COALESCE(r.log_context_after,50), COALESCE(r.log_context_max_window_sec,1800), COALESCE(r.log_context_display_lines,30),
-		COALESCE(r.dict_source_id,0), COALESCE(r.dim_pattern,''), COALESCE(r.baseline_range,'7d'), COALESCE(r.baseline_min_hits,1000),
+		COALESCE(r.dict_source_id,0), COALESCE(r.dim_pattern,''), COALESCE(r.baseline_range,'7d'), COALESCE(r.baseline_min_hits,1000), COALESCE(r.baseline_min_hourly,0),
 		r.status, r.last_run_at, r.last_error, r.created_at, r.updated_at,
 		COALESCE(e.name,'(已删除)') as es_name, COALESCE(lk.name,'') as loki_name,
 		COALESCE(l.name,'(已删除)') as lark_name
@@ -246,7 +246,7 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
 			&rule.StackContextEnabled, &rule.StackMaxLines, &rule.StackHeadLines, &rule.StackTailLines, &rule.StackBoundaryPattern, &rule.StackWindowSec,
 			&rule.LogContextEnabled, &rule.LogContextBefore, &rule.LogContextAfter, &rule.LogContextMaxWindowSec, &rule.LogContextDisplayLines,
-			&rule.DictSourceID, &rule.DimPattern, &rule.BaselineRange, &rule.BaselineMinHits,
+			&rule.DictSourceID, &rule.DimPattern, &rule.BaselineRange, &rule.BaselineMinHits, &rule.BaselineMinHourly,
 			&rule.Status, &rule.LastRunAt, &rule.LastError,
 			&rule.CreatedAt, &rule.UpdatedAt, &esName, &lokiName, &larkName)
 		if err != nil {
@@ -348,6 +348,7 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			"dim_pattern":                rule.DimPattern,
 			"baseline_range":             rule.BaselineRange,
 			"baseline_min_hits":          rule.BaselineMinHits,
+			"baseline_min_hourly":        rule.BaselineMinHourly,
 			"status":                     rule.Status,
 			"created_at":                 rule.CreatedAt,
 			"updated_at":                 rule.UpdatedAt,
@@ -414,7 +415,7 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
 		COALESCE(stack_context_enabled,0), COALESCE(stack_max_lines,200), COALESCE(stack_head_lines,12), COALESCE(stack_tail_lines,8), COALESCE(stack_boundary_pattern,''), COALESCE(stack_window_sec,5),
 		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,30),
-		COALESCE(dict_source_id,0), COALESCE(dim_pattern,''), COALESCE(baseline_range,'7d'), COALESCE(baseline_min_hits,1000),
+		COALESCE(dict_source_id,0), COALESCE(dim_pattern,''), COALESCE(baseline_range,'7d'), COALESCE(baseline_min_hits,1000), COALESCE(baseline_min_hourly,0),
 		status, last_run_at, last_error, created_at, updated_at
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType, &rule.ESConnectionID,
@@ -428,7 +429,7 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
 		&rule.StackContextEnabled, &rule.StackMaxLines, &rule.StackHeadLines, &rule.StackTailLines, &rule.StackBoundaryPattern, &rule.StackWindowSec,
 		&rule.LogContextEnabled, &rule.LogContextBefore, &rule.LogContextAfter, &rule.LogContextMaxWindowSec, &rule.LogContextDisplayLines,
-		&rule.DictSourceID, &rule.DimPattern, &rule.BaselineRange, &rule.BaselineMinHits,
+		&rule.DictSourceID, &rule.DimPattern, &rule.BaselineRange, &rule.BaselineMinHits, &rule.BaselineMinHourly,
 		&rule.Status, &rule.LastRunAt, &rule.LastError,
 		&rule.CreatedAt, &rule.UpdatedAt)
 	if err != nil {
@@ -555,8 +556,8 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 		severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, route_config, namespaces, namespace_concurrency, label_filters, project_id,
 		realtime_enabled, threshold_ms, report_enabled, report_schedule, report_mode, report_title, report_template,
 		stack_context_enabled, stack_max_lines, stack_head_lines, stack_tail_lines, stack_boundary_pattern, stack_window_sec, log_context_enabled, log_context_before, log_context_after, log_context_max_window_sec, log_context_display_lines,
-		dict_source_id, dim_pattern, baseline_range, baseline_min_hits, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		dict_source_id, dim_pattern, baseline_range, baseline_min_hits, baseline_min_hourly, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, primaryChannel,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
 		req.FilterFields, req.ExtractFields, req.MessageTitle,
@@ -565,7 +566,7 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.AlertInterval, req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.Namespaces, req.NamespaceConcurrency, req.LabelFilters, req.ProjectID,
 		req.RealtimeEnabled, req.ThresholdMs, req.ReportEnabled, req.ReportSchedule, req.ReportMode, req.ReportTitle, req.ReportTemplate,
 		req.StackContextEnabled, req.StackMaxLines, req.StackHeadLines, req.StackTailLines, req.StackBoundaryPattern, req.StackWindowSec, req.LogContextEnabled, req.LogContextBefore, req.LogContextAfter, req.LogContextMaxWindowSec, req.LogContextDisplayLines,
-		req.DictSourceID, req.DimPattern, req.BaselineRange, req.BaselineMinHits)
+		req.DictSourceID, req.DimPattern, req.BaselineRange, req.BaselineMinHits, req.BaselineMinHourly)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "创建失败: "+err.Error())
 		return
@@ -688,7 +689,7 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		severity=?, group_by=?, expected_groups=?, query_concurrency=?, alert_interval=?, dedup_field=?, dedup_ttl=?, max_alerts=?, prometheus_config=?, route_config=?, namespaces=?, namespace_concurrency=?, label_filters=?, project_id=?,
 		realtime_enabled=?, threshold_ms=?, report_enabled=?, report_schedule=?, report_mode=?, report_title=?, report_template=?,
 		stack_context_enabled=?, stack_max_lines=?, stack_head_lines=?, stack_tail_lines=?, stack_boundary_pattern=?, stack_window_sec=?, log_context_enabled=?, log_context_before=?, log_context_after=?, log_context_max_window_sec=?, log_context_display_lines=?,
-		dict_source_id=?, dim_pattern=?, baseline_range=?, baseline_min_hits=?
+		dict_source_id=?, dim_pattern=?, baseline_range=?, baseline_min_hits=?, baseline_min_hourly=?
 		WHERE id=?`,
 		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, primaryChannel,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
@@ -699,7 +700,7 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.Namespaces, req.NamespaceConcurrency, req.LabelFilters, req.ProjectID,
 		req.RealtimeEnabled, req.ThresholdMs, req.ReportEnabled, req.ReportSchedule, req.ReportMode, req.ReportTitle, req.ReportTemplate,
 		req.StackContextEnabled, req.StackMaxLines, req.StackHeadLines, req.StackTailLines, req.StackBoundaryPattern, req.StackWindowSec, req.LogContextEnabled, req.LogContextBefore, req.LogContextAfter, req.LogContextMaxWindowSec, req.LogContextDisplayLines,
-		req.DictSourceID, req.DimPattern, req.BaselineRange, req.BaselineMinHits,
+		req.DictSourceID, req.DimPattern, req.BaselineRange, req.BaselineMinHits, req.BaselineMinHourly,
 		id)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "更新失败: "+err.Error())
@@ -1855,7 +1856,7 @@ func HandleExportAlertRules(w http.ResponseWriter, r *http.Request) {
 		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
 		COALESCE(stack_context_enabled,0), COALESCE(stack_max_lines,200), COALESCE(stack_head_lines,12), COALESCE(stack_tail_lines,8), COALESCE(stack_boundary_pattern,''), COALESCE(stack_window_sec,5),
 		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,30),
-		COALESCE(dict_source_id,0), COALESCE(dim_pattern,''), COALESCE(baseline_range,'7d'), COALESCE(baseline_min_hits,1000)
+		COALESCE(dict_source_id,0), COALESCE(dim_pattern,''), COALESCE(baseline_range,'7d'), COALESCE(baseline_min_hits,1000), COALESCE(baseline_min_hourly,0)
 		FROM alert_rules WHERE id IN (%s)`, strings.Join(placeholders, ","))
 
 	rows, err := database.DB.Query(query, args...)
@@ -1881,7 +1882,7 @@ func HandleExportAlertRules(w http.ResponseWriter, r *http.Request) {
 			&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
 			&rule.StackContextEnabled, &rule.StackMaxLines, &rule.StackHeadLines, &rule.StackTailLines, &rule.StackBoundaryPattern, &rule.StackWindowSec,
 			&rule.LogContextEnabled, &rule.LogContextBefore, &rule.LogContextAfter, &rule.LogContextMaxWindowSec, &rule.LogContextDisplayLines,
-			&rule.DictSourceID, &rule.DimPattern, &rule.BaselineRange, &rule.BaselineMinHits)
+			&rule.DictSourceID, &rule.DimPattern, &rule.BaselineRange, &rule.BaselineMinHits, &rule.BaselineMinHourly)
 		// Import reads channel_ids, so export has to write it: without this a
 		// Lark+Telegram rule silently degrades to a single channel on the
 		// round trip through lark_config_id.
@@ -1983,8 +1984,8 @@ func HandleImportAlertRules(w http.ResponseWriter, r *http.Request) {
 				severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, route_config, namespaces, namespace_concurrency, label_filters, project_id,
 				realtime_enabled, threshold_ms, report_enabled, report_schedule, report_mode, report_title, report_template,
 				stack_context_enabled, stack_max_lines, stack_head_lines, stack_tail_lines, stack_boundary_pattern, stack_window_sec, log_context_enabled, log_context_before, log_context_after, log_context_max_window_sec, log_context_display_lines,
-				dict_source_id, dim_pattern, baseline_range, baseline_min_hits, status)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+				dict_source_id, dim_pattern, baseline_range, baseline_min_hits, baseline_min_hourly, status)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 				rule.Name, rule.DataSourceType, rule.ESConnectionID, rule.LokiConnectionID, rule.LarkConfigID,
 				rule.ESIndex, rule.Schedule, rule.TimeRange, rule.QueryDSL, rule.Keyword, rule.LogQL,
 				rule.FilterFields, rule.ExtractFields, rule.MessageTitle,
@@ -1993,7 +1994,7 @@ func HandleImportAlertRules(w http.ResponseWriter, r *http.Request) {
 				rule.Severity, rule.GroupBy, rule.ExpectedGroups, rule.QueryConcurrency, rule.AlertInterval, rule.DedupField, rule.DedupTTL, rule.MaxAlerts, rule.PrometheusConfig, rule.RouteConfig, rule.Namespaces, rule.NamespaceConcurrency, rule.LabelFilters, rule.ProjectID,
 				rule.RealtimeEnabled, rule.ThresholdMs, rule.ReportEnabled, rule.ReportSchedule, rule.ReportMode, rule.ReportTitle, rule.ReportTemplate,
 				rule.StackContextEnabled, rule.StackMaxLines, rule.StackHeadLines, rule.StackTailLines, rule.StackBoundaryPattern, rule.StackWindowSec, rule.LogContextEnabled, rule.LogContextBefore, rule.LogContextAfter, rule.LogContextMaxWindowSec, rule.LogContextDisplayLines,
-				rule.DictSourceID, rule.DimPattern, rule.BaselineRange, rule.BaselineMinHits)
+				rule.DictSourceID, rule.DimPattern, rule.BaselineRange, rule.BaselineMinHits, rule.BaselineMinHourly)
 			if err != nil {
 				return 0, err
 			}
@@ -2170,11 +2171,17 @@ func loadRuleChannelIDs(ruleID int) []int {
 
 // heartbeatRow 是预览里的一行：名字给人看，id 留着让人能回到 Loki 和运维平台核对。
 type heartbeatRow struct {
-	Site     string  `json:"site"`
-	Room     string  `json:"room"`
-	SiteID   string  `json:"site_id"`
-	RoomID   string  `json:"room_id"`
-	Baseline float64 `json:"baseline"`
+	// MinHourly / ActiveHours / ExpectHours 是「为什么纳入或排除」的依据。
+	// 不给出来的话，调阈值只能靠反复试。
+	MinHourly   float64 `json:"min_hourly"`
+	ActiveHours int     `json:"active_hours"`
+	ExpectHours int     `json:"expect_hours"`
+	Why         string  `json:"why,omitempty"`
+	Site        string  `json:"site"`
+	Room        string  `json:"room"`
+	SiteID      string  `json:"site_id"`
+	RoomID      string  `json:"room_id"`
+	Baseline    float64 `json:"baseline"`
 }
 
 // handleHeartbeatPreview 用和告警完全相同的判定跑一次，但不发送、不写状态。
@@ -2187,15 +2194,16 @@ func handleHeartbeatPreview(w http.ResponseWriter, r *http.Request, req *models.
 	defer cancel()
 
 	rule := &models.AlertRule{
-		ID:               0,
-		Name:             req.Name,
-		LokiConnectionID: req.LokiConnectionID,
-		LogQL:            req.LogQL,
-		TimeRange:        req.TimeRange,
-		DimPattern:       req.DimPattern,
-		BaselineRange:    req.BaselineRange,
-		BaselineMinHits:  req.BaselineMinHits,
-		DictSourceID:     req.DictSourceID,
+		ID:                0,
+		Name:              req.Name,
+		LokiConnectionID:  req.LokiConnectionID,
+		LogQL:             req.LogQL,
+		TimeRange:         req.TimeRange,
+		DimPattern:        req.DimPattern,
+		BaselineRange:     req.BaselineRange,
+		BaselineMinHits:   req.BaselineMinHits,
+		BaselineMinHourly: req.BaselineMinHourly,
+		DictSourceID:      req.DictSourceID,
 	}
 	if rule.TimeRange == "" {
 		rule.TimeRange = "5m"
@@ -2218,6 +2226,8 @@ func handleHeartbeatPreview(w http.ResponseWriter, r *http.Request, req *models.
 			out = append(out, heartbeatRow{
 				Site: res.Dict.SiteLabel(m.SiteID), Room: res.Dict.RoomLabel(m.RoomID),
 				SiteID: m.SiteID, RoomID: m.RoomID, Baseline: m.Baseline,
+				MinHourly: m.MinHourly, ActiveHours: m.ActiveHours, ExpectHours: m.ExpectHours,
+				Why: m.WhyWatching,
 			})
 		}
 		return out
@@ -2232,12 +2242,18 @@ func handleHeartbeatPreview(w http.ResponseWriter, r *http.Request, req *models.
 		"missing_count":       len(res.Missing),
 		"skipped_low_traffic": res.SkippedLowTraffic,
 		"skipped_by_dict":     res.SkippedByDict,
-		"dims":                res.Dims,
-		"time_range":          rule.TimeRange,
-		"baseline_range":      res.BaselineRange,
-		"missing":             toRows(res.Missing, 50),
-		"alive":               toRows(res.Alive, 50),
-		"query": fmt.Sprintf("%s\n# 当前窗口 %s → 活跃 %d 个组合\n\n%s\n# 基线 %s → %d 个组合",
+		// 观察中：在监控范围内但基线还判不了的组合。以前这批只有一个计数，
+		// 于是新上线的房间是「静默不监控」，没有任何地方会提醒你。
+		"watching_count": len(res.Watching),
+		"watching":       toRows(res.Watching, 50),
+		"dims":           res.Dims,
+		"time_range":     rule.TimeRange,
+		"baseline_range": res.BaselineRange,
+		"missing":        toRows(res.Missing, 50),
+		"alive":          toRows(res.Alive, 50),
+		// 基线那条语句的窗口是 1h、按 1h 步长跑区间查询：照着它去 Loki 手动核对
+		// 才能得到同样的数字。写成基线总跨度会差出一个数量级。
+		"query": fmt.Sprintf("%s\n# 当前窗口 %s → 活跃 %d 个组合\n\n%s\n# 基线：上面这条按 step=1h 在 %s 区间上跑 → %d 个组合，逐小时序列用来算最冷一小时",
 			res.CurrentQuery, rule.TimeRange, len(res.Current),
 			res.BaselineQuery, res.BaselineRange, len(res.Baseline)),
 	}
