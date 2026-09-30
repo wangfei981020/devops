@@ -186,6 +186,15 @@ func main() {
 	admin.HandleFunc("/settings", handlers.HandleUpdateSettings).Methods("PUT")
 
 	// Alert Contacts
+	// 外部字典源：把日志里的裸 id 翻成房间号 / 站点名。地址和 API Key 都在这里配，
+	// 不走环境变量——轮换一次 Key 不该需要改 Secret 再重启。
+	protected.HandleFunc("/dict-sources", handlers.HandleListDictSources).Methods("GET")
+	protected.HandleFunc("/dict-sources", handlers.HandleCreateDictSource).Methods("POST")
+	protected.HandleFunc("/dict-sources/test", handlers.HandleTestDictSource).Methods("POST")
+	protected.HandleFunc("/dict-sources/{id}", handlers.HandleUpdateDictSource).Methods("PUT")
+	protected.HandleFunc("/dict-sources/{id}", handlers.HandleDeleteDictSource).Methods("DELETE")
+	protected.HandleFunc("/dict-sources/{id}/test", handlers.HandleTestDictSource).Methods("POST")
+
 	protected.HandleFunc("/alert-contacts", handlers.HandleListContacts).Methods("GET")
 	protected.HandleFunc("/alert-contacts", handlers.HandleCreateContact).Methods("POST")
 	protected.HandleFunc("/alert-contacts/batch", handlers.HandleBatchCreateContacts).Methods("POST")

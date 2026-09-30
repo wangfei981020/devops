@@ -245,6 +245,34 @@ func createTables() error {
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			INDEX idx_enabled_sort (enabled, sort_order)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+		// 外部字典源：把日志里的裸 id 翻成人能读的名字。
+		//
+		// 日志只给得出 gameRoomId / siteId 这种 id，告警消息要显示成房间号和站点名，
+		// 名字的权威源在运维平台（它按分钟采业务接口）。与其在这里再维护一份必然
+		// 漂移的副本，不如每次去拉，并用对方给的 version 决定要不要真拉。
+		//
+		// 地址和 api_key 都存在这里而不是环境变量：换个地址或轮换一次 Key 不该
+		// 需要改 Secret 再重启 Pod。
+		`CREATE TABLE IF NOT EXISTS dict_sources (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			name VARCHAR(100) NOT NULL COMMENT '数据源名称',
+			base_url VARCHAR(500) NOT NULL COMMENT '服务地址，同集群可直接写 http://opsplatform-backend:8080',
+			api_key VARCHAR(255) NOT NULL DEFAULT '' COMMENT '调用方 API Key，走 X-API-Key 头',
+			env VARCHAR(64) NOT NULL DEFAULT '' COMMENT '对方的环境名，如 PROD / UAT',
+			refresh_sec INT NOT NULL DEFAULT 600 COMMENT '最小刷新间隔(秒)，两次 version 探测之间至少隔这么久',
+			status TINYINT NOT NULL DEFAULT 1 COMMENT '1=启用 0=禁用',
+			description VARCHAR(500) NOT NULL DEFAULT '',
+			last_sync_at TIMESTAMP NULL COMMENT '最近一次成功同步时刻',
+			last_sync_ok TINYINT NOT NULL DEFAULT 0,
+			last_sync_error VARCHAR(500) NOT NULL DEFAULT '',
+			last_version VARCHAR(64) NOT NULL DEFAULT '' COMMENT '对方给的名单指纹，用来判断要不要拉全量',
+			room_count INT NOT NULL DEFAULT 0,
+			site_count INT NOT NULL DEFAULT 0,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uk_dict_source_name (name)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	}
 
 	for _, t := range tables {
@@ -319,6 +347,11 @@ func autoMigrate() error {
 		// with a conditional update so a Redis outage cannot turn one report
 		// into one per replica.
 		{"alert_rules", "last_report_day", "VARCHAR(8) DEFAULT '' COMMENT '最近已发送日报的日期(YYYYMMDD)，用于跨副本去重'"},
+		// 心跳告警：按维度聚合，靠外部字典把维度值翻成人能读的名字。
+		{"alert_rules", "dict_source_id", "INT DEFAULT 0 COMMENT '外部字典源ID，0=不翻译，告警里直接显示原始 id'"},
+		{"alert_rules", "dim_pattern", "TEXT COMMENT '维度提取正则，命名组即维度名，如 (?P<site_id>\\\\d+)'"},
+		{"alert_rules", "baseline_range", "VARCHAR(20) DEFAULT '7d' COMMENT '基线窗口，从中发现「本该有日志」的维度组合'"},
+		{"alert_rules", "baseline_min_hits", "INT DEFAULT 1000 COMMENT '基线窗口内至少出现这么多次才纳入监控，低于此数视为低频、不告警'"},
 	}
 
 	// Ensure alert_projects table exists

@@ -290,3 +290,90 @@ func (r *QueryResult) ToHits() []map[string]interface{} {
 	}
 	return hits
 }
+
+// VectorSample is one series returned by an instant metric query: the label set
+// that identifies it, and its value at that instant.
+type VectorSample struct {
+	Labels map[string]string
+	Value  float64
+}
+
+// QueryInstant runs a metric query at a single point in time.
+//
+// Aggregations such as `sum by (site_id, room_id) (count_over_time(... [15m]))`
+// belong here rather than in QueryRange. query_range would return one sample per
+// step across the whole window — dozens of points per series, of which we only
+// ever read the total — and it makes the caller responsible for picking the
+// right step, which is how the "last sample is 12 minutes stale" blind spot
+// creeps in. An instant query evaluates the range once and answers exactly the
+// question being asked.
+//
+// The value comes back as a string in Loki's JSON and is parsed here; a series
+// whose value will not parse is skipped rather than silently counted as zero,
+// because zero is a meaningful answer in this context ("nobody joined") and
+// must not be faked.
+func (c *Client) QueryInstant(ctx context.Context, logql string, at time.Time) ([]VectorSample, error) {
+	params := url.Values{}
+	params.Set("query", logql)
+	if !at.IsZero() {
+		params.Set("time", fmt.Sprintf("%d", at.UnixNano()))
+	}
+
+	reqURL := fmt.Sprintf("%s/loki/api/v1/query?%s", c.baseURL, params.Encode())
+	log.Printf("[Loki] Instant: %s", reqURL)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("Loki query error: %d %s", resp.StatusCode, string(body))
+	}
+
+	var parsed struct {
+		Data struct {
+			ResultType string `json:"resultType"`
+			Result     []struct {
+				Metric map[string]string `json:"metric"`
+				Value  []interface{}     `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("解析 Loki 响应失败: %w", err)
+	}
+	if parsed.Data.ResultType != "vector" && parsed.Data.ResultType != "" {
+		// A log query sent here by mistake returns "streams"; saying so beats
+		// returning an empty vector that reads as "no data".
+		return nil, fmt.Errorf("期望聚合查询(vector)，实际返回 %s —— 查询语句要形如 sum by (...) (count_over_time(... [5m]))", parsed.Data.ResultType)
+	}
+
+	out := make([]VectorSample, 0, len(parsed.Data.Result))
+	for _, r := range parsed.Data.Result {
+		if len(r.Value) < 2 {
+			continue
+		}
+		s, ok := r.Value[1].(string)
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			continue
+		}
+		out = append(out, VectorSample{Labels: r.Metric, Value: v})
+	}
+	return out, nil
+}

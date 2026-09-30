@@ -244,6 +244,7 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
 			&rule.StackContextEnabled, &rule.StackMaxLines, &rule.StackHeadLines, &rule.StackTailLines, &rule.StackBoundaryPattern, &rule.StackWindowSec,
 			&rule.LogContextEnabled, &rule.LogContextBefore, &rule.LogContextAfter, &rule.LogContextMaxWindowSec, &rule.LogContextDisplayLines,
+			&rule.DictSourceID, &rule.DimPattern, &rule.BaselineRange, &rule.BaselineMinHits,
 			&rule.Status, &rule.LastRunAt, &rule.LastError,
 			&rule.CreatedAt, &rule.UpdatedAt, &esName, &lokiName, &larkName)
 		if err != nil {
@@ -331,6 +332,10 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			"log_context_after":          rule.LogContextAfter,
 			"log_context_max_window_sec": rule.LogContextMaxWindowSec,
 			"log_context_display_lines":  rule.LogContextDisplayLines,
+			"dict_source_id":             rule.DictSourceID,
+			"dim_pattern":                rule.DimPattern,
+			"baseline_range":             rule.BaselineRange,
+			"baseline_min_hits":          rule.BaselineMinHits,
 			"status":                     rule.Status,
 			"created_at":                 rule.CreatedAt,
 			"updated_at":                 rule.UpdatedAt,
@@ -391,6 +396,7 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
 		COALESCE(stack_context_enabled,0), COALESCE(stack_max_lines,200), COALESCE(stack_head_lines,12), COALESCE(stack_tail_lines,8), COALESCE(stack_boundary_pattern,''), COALESCE(stack_window_sec,5),
 		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,30),
+		COALESCE(dict_source_id,0), COALESCE(dim_pattern,''), COALESCE(baseline_range,'7d'), COALESCE(baseline_min_hits,1000),
 		status, last_run_at, last_error, created_at, updated_at
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType, &rule.ESConnectionID,
@@ -404,6 +410,7 @@ func HandleGetAlertRule(w http.ResponseWriter, r *http.Request) {
 		&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
 		&rule.StackContextEnabled, &rule.StackMaxLines, &rule.StackHeadLines, &rule.StackTailLines, &rule.StackBoundaryPattern, &rule.StackWindowSec,
 		&rule.LogContextEnabled, &rule.LogContextBefore, &rule.LogContextAfter, &rule.LogContextMaxWindowSec, &rule.LogContextDisplayLines,
+		&rule.DictSourceID, &rule.DimPattern, &rule.BaselineRange, &rule.BaselineMinHits,
 		&rule.Status, &rule.LastRunAt, &rule.LastError,
 		&rule.CreatedAt, &rule.UpdatedAt)
 	if err != nil {
@@ -529,8 +536,9 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 		alert_mode, recovery_enabled, recovery_title, recovery_template,
 		severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, route_config, namespaces, namespace_concurrency, label_filters, project_id,
 		realtime_enabled, threshold_ms, report_enabled, report_schedule, report_mode, report_title, report_template,
-		stack_context_enabled, stack_max_lines, stack_head_lines, stack_tail_lines, stack_boundary_pattern, stack_window_sec, log_context_enabled, log_context_before, log_context_after, log_context_max_window_sec, log_context_display_lines, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		stack_context_enabled, stack_max_lines, stack_head_lines, stack_tail_lines, stack_boundary_pattern, stack_window_sec, log_context_enabled, log_context_before, log_context_after, log_context_max_window_sec, log_context_display_lines,
+		dict_source_id, dim_pattern, baseline_range, baseline_min_hits, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, primaryChannel,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
 		req.FilterFields, req.ExtractFields, req.MessageTitle,
@@ -538,7 +546,8 @@ func HandleCreateAlertRule(w http.ResponseWriter, r *http.Request) {
 		req.AlertMode, req.RecoveryEnabled, req.RecoveryTitle, req.RecoveryTemplate,
 		req.Severity, req.GroupBy, req.ExpectedGroups, req.QueryConcurrency, req.AlertInterval, req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.Namespaces, req.NamespaceConcurrency, req.LabelFilters, req.ProjectID,
 		req.RealtimeEnabled, req.ThresholdMs, req.ReportEnabled, req.ReportSchedule, req.ReportMode, req.ReportTitle, req.ReportTemplate,
-		req.StackContextEnabled, req.StackMaxLines, req.StackHeadLines, req.StackTailLines, req.StackBoundaryPattern, req.StackWindowSec, req.LogContextEnabled, req.LogContextBefore, req.LogContextAfter, req.LogContextMaxWindowSec, req.LogContextDisplayLines)
+		req.StackContextEnabled, req.StackMaxLines, req.StackHeadLines, req.StackTailLines, req.StackBoundaryPattern, req.StackWindowSec, req.LogContextEnabled, req.LogContextBefore, req.LogContextAfter, req.LogContextMaxWindowSec, req.LogContextDisplayLines,
+		req.DictSourceID, req.DimPattern, req.BaselineRange, req.BaselineMinHits)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "创建失败: "+err.Error())
 		return
@@ -660,7 +669,8 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		alert_mode=?, recovery_enabled=?, recovery_title=?, recovery_template=?,
 		severity=?, group_by=?, expected_groups=?, query_concurrency=?, alert_interval=?, dedup_field=?, dedup_ttl=?, max_alerts=?, prometheus_config=?, route_config=?, namespaces=?, namespace_concurrency=?, label_filters=?, project_id=?,
 		realtime_enabled=?, threshold_ms=?, report_enabled=?, report_schedule=?, report_mode=?, report_title=?, report_template=?,
-		stack_context_enabled=?, stack_max_lines=?, stack_head_lines=?, stack_tail_lines=?, stack_boundary_pattern=?, stack_window_sec=?, log_context_enabled=?, log_context_before=?, log_context_after=?, log_context_max_window_sec=?, log_context_display_lines=?
+		stack_context_enabled=?, stack_max_lines=?, stack_head_lines=?, stack_tail_lines=?, stack_boundary_pattern=?, stack_window_sec=?, log_context_enabled=?, log_context_before=?, log_context_after=?, log_context_max_window_sec=?, log_context_display_lines=?,
+		dict_source_id=?, dim_pattern=?, baseline_range=?, baseline_min_hits=?
 		WHERE id=?`,
 		req.Name, req.DataSourceType, req.ESConnectionID, req.LokiConnectionID, primaryChannel,
 		req.ESIndex, req.Schedule, req.TimeRange, req.QueryDSL, req.Keyword, req.LogQL,
@@ -671,6 +681,7 @@ func HandleUpdateAlertRule(w http.ResponseWriter, r *http.Request) {
 		req.DedupField, req.DedupTTL, req.MaxAlerts, req.PrometheusConfig, req.RouteConfig, req.Namespaces, req.NamespaceConcurrency, req.LabelFilters, req.ProjectID,
 		req.RealtimeEnabled, req.ThresholdMs, req.ReportEnabled, req.ReportSchedule, req.ReportMode, req.ReportTitle, req.ReportTemplate,
 		req.StackContextEnabled, req.StackMaxLines, req.StackHeadLines, req.StackTailLines, req.StackBoundaryPattern, req.StackWindowSec, req.LogContextEnabled, req.LogContextBefore, req.LogContextAfter, req.LogContextMaxWindowSec, req.LogContextDisplayLines,
+		req.DictSourceID, req.DimPattern, req.BaselineRange, req.BaselineMinHits,
 		id)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "更新失败: "+err.Error())
@@ -1818,7 +1829,8 @@ func HandleExportAlertRules(w http.ResponseWriter, r *http.Request) {
 		dedup_field, dedup_ttl, max_alerts, COALESCE(prometheus_config,''), COALESCE(route_config,''), COALESCE(namespaces,''), COALESCE(namespace_concurrency,3), COALESCE(label_filters,''), COALESCE(project_id,0),
 		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
 		COALESCE(stack_context_enabled,0), COALESCE(stack_max_lines,200), COALESCE(stack_head_lines,12), COALESCE(stack_tail_lines,8), COALESCE(stack_boundary_pattern,''), COALESCE(stack_window_sec,5),
-		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,30)
+		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,30),
+		COALESCE(dict_source_id,0), COALESCE(dim_pattern,''), COALESCE(baseline_range,'7d'), COALESCE(baseline_min_hits,1000)
 		FROM alert_rules WHERE id IN (%s)`, strings.Join(placeholders, ","))
 
 	rows, err := database.DB.Query(query, args...)
@@ -1843,7 +1855,8 @@ func HandleExportAlertRules(w http.ResponseWriter, r *http.Request) {
 			&rule.Namespaces, &rule.NamespaceConcurrency, &rule.LabelFilters, &rule.ProjectID,
 			&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
 			&rule.StackContextEnabled, &rule.StackMaxLines, &rule.StackHeadLines, &rule.StackTailLines, &rule.StackBoundaryPattern, &rule.StackWindowSec,
-			&rule.LogContextEnabled, &rule.LogContextBefore, &rule.LogContextAfter, &rule.LogContextMaxWindowSec, &rule.LogContextDisplayLines)
+			&rule.LogContextEnabled, &rule.LogContextBefore, &rule.LogContextAfter, &rule.LogContextMaxWindowSec, &rule.LogContextDisplayLines,
+			&rule.DictSourceID, &rule.DimPattern, &rule.BaselineRange, &rule.BaselineMinHits)
 		// Import reads channel_ids, so export has to write it: without this a
 		// Lark+Telegram rule silently degrades to a single channel on the
 		// round trip through lark_config_id.
@@ -1944,8 +1957,9 @@ func HandleImportAlertRules(w http.ResponseWriter, r *http.Request) {
 				alert_mode, recovery_enabled, recovery_title, recovery_template,
 				severity, group_by, expected_groups, query_concurrency, alert_interval, dedup_field, dedup_ttl, max_alerts, prometheus_config, route_config, namespaces, namespace_concurrency, label_filters, project_id,
 				realtime_enabled, threshold_ms, report_enabled, report_schedule, report_mode, report_title, report_template,
-				stack_context_enabled, stack_max_lines, stack_head_lines, stack_tail_lines, stack_boundary_pattern, stack_window_sec, log_context_enabled, log_context_before, log_context_after, log_context_max_window_sec, log_context_display_lines, status)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+				stack_context_enabled, stack_max_lines, stack_head_lines, stack_tail_lines, stack_boundary_pattern, stack_window_sec, log_context_enabled, log_context_before, log_context_after, log_context_max_window_sec, log_context_display_lines,
+				dict_source_id, dim_pattern, baseline_range, baseline_min_hits, status)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 				rule.Name, rule.DataSourceType, rule.ESConnectionID, rule.LokiConnectionID, rule.LarkConfigID,
 				rule.ESIndex, rule.Schedule, rule.TimeRange, rule.QueryDSL, rule.Keyword, rule.LogQL,
 				rule.FilterFields, rule.ExtractFields, rule.MessageTitle,
@@ -1953,7 +1967,8 @@ func HandleImportAlertRules(w http.ResponseWriter, r *http.Request) {
 				rule.AlertMode, rule.RecoveryEnabled, rule.RecoveryTitle, rule.RecoveryTemplate,
 				rule.Severity, rule.GroupBy, rule.ExpectedGroups, rule.QueryConcurrency, rule.AlertInterval, rule.DedupField, rule.DedupTTL, rule.MaxAlerts, rule.PrometheusConfig, rule.RouteConfig, rule.Namespaces, rule.NamespaceConcurrency, rule.LabelFilters, rule.ProjectID,
 				rule.RealtimeEnabled, rule.ThresholdMs, rule.ReportEnabled, rule.ReportSchedule, rule.ReportMode, rule.ReportTitle, rule.ReportTemplate,
-				rule.StackContextEnabled, rule.StackMaxLines, rule.StackHeadLines, rule.StackTailLines, rule.StackBoundaryPattern, rule.StackWindowSec, rule.LogContextEnabled, rule.LogContextBefore, rule.LogContextAfter, rule.LogContextMaxWindowSec, rule.LogContextDisplayLines)
+				rule.StackContextEnabled, rule.StackMaxLines, rule.StackHeadLines, rule.StackTailLines, rule.StackBoundaryPattern, rule.StackWindowSec, rule.LogContextEnabled, rule.LogContextBefore, rule.LogContextAfter, rule.LogContextMaxWindowSec, rule.LogContextDisplayLines,
+				rule.DictSourceID, rule.DimPattern, rule.BaselineRange, rule.BaselineMinHits)
 			if err != nil {
 				return 0, err
 			}

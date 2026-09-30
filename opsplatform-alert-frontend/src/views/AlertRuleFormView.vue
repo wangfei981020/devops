@@ -39,11 +39,20 @@
             <select v-model="form.alert_mode" class="form-select">
               <option value="found">搜到关键词 → 告警</option>
               <option value="not_found">搜不到关键词 → 告警</option>
+              <option value="heartbeat">业务心跳（按维度聚合）</option>
             </select>
             <div class="form-hint">
               <template v-if="form.alert_mode === 'found'">ES 搜到匹配日志时触发告警（默认）</template>
-              <template v-else>指定时间内搜不到匹配日志时触发告警，搜到后发送恢复通知</template>
+              <template v-else-if="form.alert_mode === 'not_found'">指定时间内搜不到匹配日志时触发告警，搜到后发送恢复通知</template>
+              <template v-else>从日志里提取维度（如站点+房间），基线里有、当前窗口没有的就告警。只查一次 Loki，组合再多也不变</template>
             </div>
+          </div>
+          <div class="form-group" v-if="form.alert_mode === 'heartbeat'">
+            <label class="form-label">
+              <input type="checkbox" v-model="recoveryChecked" style="margin-right: 6px;" />
+              启用恢复通知
+            </label>
+            <div class="form-hint">全部组合都恢复活动时发一条</div>
           </div>
           <div class="form-group" v-if="form.alert_mode === 'not_found'">
             <label class="form-label">
@@ -154,6 +163,49 @@
             </div>
             <div class="form-hint">点击片段追加到上方 LogQL 查询末尾</div>
           </div>
+
+          <!-- 业务心跳专属：维度提取 + 基线 + 字典 -->
+          <template v-if="form.alert_mode === 'heartbeat'">
+            <div class="form-group">
+              <label class="form-label">维度提取正则 *</label>
+              <input v-model="form.dim_pattern" class="form-input"
+                     placeholder="加入房间,siteId:\s*(?P&lt;site_id&gt;\d+).*?gameRoomId:\s*(?P&lt;room_id&gt;\d+)" />
+              <div class="form-hint">
+                <b>命名组就是聚合维度</b>，如 <code>(?P&lt;room_id&gt;\d+)</code> 表示按 room_id 聚合。
+                这里不用把反斜杠写两遍。上面的 LogQL 要填完整的
+                <code>{'{'}container="x"{'}'} |= "关键词"</code>，不能只填管道部分。
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">基线窗口</label>
+                <input v-model="form.baseline_range" class="form-input" placeholder="7d" />
+                <div class="form-hint">从这段历史里找出「本该有日志」的组合。结果缓存 1 小时，不会每轮都查</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">基线最少次数</label>
+                <input v-model.number="form.baseline_min_hits" type="number" class="form-input" min="0" />
+                <div class="form-hint">
+                  基线窗口内低于这个次数视为低频，不纳入监控 —— 本来几小时才来一个人的房间，
+                  用「15 分钟没日志」去判必然误报
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">字典源（可选）</label>
+              <select v-model.number="form.dict_source_id" class="form-select">
+                <option :value="0">不翻译，告警里显示原始 id</option>
+                <option v-for="d in dictSources" :key="d.id" :value="d.id">
+                  {{ d.name }}（{{ d.env }}）{{ d.last_sync_ok ? '' : ' · ⚠ 最近同步失败' }}
+                </option>
+              </select>
+              <div class="form-hint">
+                把 room_id / site_id 翻成房间号和站点名，并按运维平台的「在用 / 关注」过滤。
+                字典拿不到时仍会照常告警，只是显示原始 id。
+              </div>
+            </div>
+          </template>
+
           <div class="form-group">
             <label class="form-label">多命名空间（可选）</label>
             <TransitionGroup tag="div" name="tag" class="namespace-tags">
@@ -889,6 +941,10 @@ const form = ref({
   at_users: '',
   at_all: 0,
   alert_mode: 'found',
+  dim_pattern: '',
+  baseline_range: '7d',
+  baseline_min_hits: 1000,
+  dict_source_id: 0,
   recovery_enabled: 0,
   recovery_title: '',
   recovery_template: '',
@@ -1091,6 +1147,7 @@ const extractFieldsError = computed(() => jsonPositionError(form.value.extract_f
 const promLabelsError = computed(() => jsonPositionError(promLabelsStr.value))
 
 // Loki LogQL 行过滤片段：点击后追加到 LogQL 输入框末尾（不隐藏改写，所见即所得）
+const dictSources = ref([])
 const logqlSnippets = ['|= "ERROR"', '!= "health"', '|~ "regex"']
 function appendLogqlSnippet(snippet) {
   form.value.logql = form.value.logql ? `${form.value.logql} ${snippet}` : snippet
@@ -1124,16 +1181,18 @@ const cronHint = computed(() => cronToHuman(form.value.schedule))
 
 async function loadOptions() {
   try {
-    const [esRes, lokiRes, larkRes, projRes] = await Promise.all([
+    const [esRes, lokiRes, larkRes, projRes, dictRes] = await Promise.all([
       api.get('/es-connections'),
       api.get('/loki-connections'),
       api.get('/notify-channels'),
-      api.get('/projects')
+      api.get('/projects'),
+      api.get('/dict-sources')
     ])
     if (esRes.code === 0) esConnections.value = esRes.data
     if (lokiRes.code === 0) lokiConnections.value = lokiRes.data
     if (larkRes.code === 0) channels.value = larkRes.data
     if (projRes.code === 0) allProjects.value = projRes.data
+    if (dictRes.code === 0) dictSources.value = (dictRes.data || []).filter(d => d.status === 1)
   } catch (e) { /* ignore */ }
 }
 
@@ -1163,6 +1222,10 @@ async function loadRule() {
         at_users: d.at_users || '',
         at_all: d.at_all,
         alert_mode: d.alert_mode || 'found',
+        dim_pattern: d.dim_pattern || '',
+        baseline_range: d.baseline_range || '7d',
+        baseline_min_hits: d.baseline_min_hits ?? 1000,
+        dict_source_id: d.dict_source_id || 0,
         recovery_enabled: d.recovery_enabled || 0,
         recovery_title: d.recovery_title || '',
         recovery_template: d.recovery_template || '',

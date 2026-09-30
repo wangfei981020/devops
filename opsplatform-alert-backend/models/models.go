@@ -148,7 +148,7 @@ type AlertRule struct {
 	MessageTemplate      string `json:"message_template"`
 	AtUsers              string `json:"at_users"` // JSON string of []AtUser
 	AtAll                int    `json:"at_all"`
-	AlertMode            string `json:"alert_mode"` // found or not_found
+	AlertMode            string `json:"alert_mode"` // found / not_found / heartbeat
 	RecoveryEnabled      int    `json:"recovery_enabled"`
 	RecoveryTitle        string `json:"recovery_title"`
 	RecoveryTemplate     string `json:"recovery_template"`
@@ -166,6 +166,15 @@ type AlertRule struct {
 	NamespaceConcurrency int    `json:"namespace_concurrency"` // max concurrent namespace queries (default 3)
 	LabelFilters         string `json:"label_filters"`         // extra Loki label matchers injected into selector, e.g. `container!~"c1|c2", app="api"` (found mode only)
 	ProjectID            int    `json:"project_id"`
+	// Heartbeat mode: aggregate by dimensions pulled out of the log line, then
+	// alert on the combinations that a baseline says should be there and the
+	// current window says are not. One Loki query regardless of how many
+	// combinations exist — checking them one by one does not survive contact
+	// with a hundred sites times a hundred rooms.
+	DictSourceID    int    `json:"dict_source_id"`    // 0 = 不翻译，告警里直接显示原始 id
+	DimPattern      string `json:"dim_pattern"`       // 维度提取正则，命名组即维度名
+	BaselineRange   string `json:"baseline_range"`    // 基线窗口，如 7d
+	BaselineMinHits int    `json:"baseline_min_hits"` // 基线内低于这个次数视为低频，不纳入监控
 	// Performance alert (Loki only): realtime threshold + daily report
 	RealtimeEnabled int    `json:"realtime_enabled"`
 	ThresholdMs     int    `json:"threshold_ms"`
@@ -295,6 +304,11 @@ type CreateAlertRuleReq struct {
 	NamespaceConcurrency int    `json:"namespace_concurrency"`
 	LabelFilters         string `json:"label_filters"`
 	ProjectID            int    `json:"project_id"`
+	// 心跳告警：维度提取 + 基线 + 字典翻译
+	DictSourceID         int    `json:"dict_source_id"`
+	DimPattern           string `json:"dim_pattern"`
+	BaselineRange        string `json:"baseline_range"`
+	BaselineMinHits      int    `json:"baseline_min_hits"`
 	RealtimeEnabled      int    `json:"realtime_enabled"`
 	ThresholdMs          int    `json:"threshold_ms"`
 	ReportEnabled        int    `json:"report_enabled"`

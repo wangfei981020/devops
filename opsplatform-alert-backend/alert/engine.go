@@ -637,6 +637,25 @@ func (e *Engine) executeRule(ruleID int) {
 	atAll := rule.AtAll == 1
 	ruleIDStr := fmt.Sprintf("%d", rule.ID)
 
+	// ========== Heartbeat: aggregate by dimensions, alert on what went quiet ==========
+	//
+	// Placed ahead of every other branch because this mode does its own querying
+	// and shares none of the plumbing below — falling through would run the
+	// ordinary hit query first and throw the result away.
+	if alertMode == "heartbeat" {
+		if dataSourceType != "loki" {
+			errMsg := "心跳告警目前只支持 Loki 数据源"
+			log.Printf("[Engine] Rule %d: %s", rule.ID, errMsg)
+			database.DB.Exec("UPDATE alert_rules SET last_error = ? WHERE id = ?", errMsg, rule.ID)
+			return
+		}
+		e.executeHeartbeat(ctx, rule, sender, atUsers, atAll, ruleIDStr)
+		if Metrics != nil {
+			Metrics.RecordRuleRun(ruleIDStr, rule.Name, rule.Severity, 0, time.Since(startTime).Seconds())
+		}
+		return
+	}
+
 	// ========== Multi-namespace mode: loop through namespaces with concurrency control ==========
 	if dataSourceType == "loki" && rule.Namespaces != "" {
 		var namespaces []string
@@ -1590,6 +1609,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		COALESCE(realtime_enabled,0), COALESCE(threshold_ms,0), COALESCE(report_enabled,0), COALESCE(report_schedule,''), COALESCE(report_mode,'separate'), COALESCE(report_title,''), COALESCE(report_template,''),
 		COALESCE(stack_context_enabled,0), COALESCE(stack_max_lines,200), COALESCE(stack_head_lines,12), COALESCE(stack_tail_lines,8), COALESCE(stack_boundary_pattern,''), COALESCE(stack_window_sec,5),
 		COALESCE(log_context_enabled,0), COALESCE(log_context_before,25), COALESCE(log_context_after,50), COALESCE(log_context_max_window_sec,1800), COALESCE(log_context_display_lines,30),
+		COALESCE(dict_source_id,0), COALESCE(dim_pattern,''), COALESCE(baseline_range,'7d'), COALESCE(baseline_min_hits,1000),
 		status
 		FROM alert_rules WHERE id = ?`, id).Scan(
 		&rule.ID, &rule.Name, &rule.DataSourceType,
@@ -1603,6 +1623,7 @@ func getRuleByID(id int) (*models.AlertRule, error) {
 		&rule.RealtimeEnabled, &rule.ThresholdMs, &rule.ReportEnabled, &rule.ReportSchedule, &rule.ReportMode, &rule.ReportTitle, &rule.ReportTemplate,
 		&rule.StackContextEnabled, &rule.StackMaxLines, &rule.StackHeadLines, &rule.StackTailLines, &rule.StackBoundaryPattern, &rule.StackWindowSec,
 		&rule.LogContextEnabled, &rule.LogContextBefore, &rule.LogContextAfter, &rule.LogContextMaxWindowSec, &rule.LogContextDisplayLines,
+		&rule.DictSourceID, &rule.DimPattern, &rule.BaselineRange, &rule.BaselineMinHits,
 		&rule.Status)
 	return &rule, err
 }

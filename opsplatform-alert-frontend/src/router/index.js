@@ -15,6 +15,7 @@ const routes = [
       { path: 'es-explore', name: 'ESExplore', component: () => import('../views/ESExploreView.vue'), meta: { menuKey: 'explore' } },
       { path: 'es-connections', name: 'ESConnections', component: () => import('../views/ESConnectionsView.vue'), meta: { menuKey: 'connections' } },
       { path: 'loki-connections', name: 'LokiConnections', component: () => import('../views/LokiConnectionsView.vue'), meta: { menuKey: 'connections' } },
+      { path: 'dict-sources', name: 'DictSources', component: () => import('../views/DictSourcesView.vue'), meta: { menuKey: 'connections' } },
       { path: 'es-projects', name: 'ESProjects', component: () => import('../views/ESProjectsView.vue'), meta: { menuKey: 'es_projects' } },
       { path: 'notify-channels', name: 'NotifyChannels', component: () => import('../views/NotifyChannelsView.vue'), meta: { menuKey: 'lark' } },
       { path: 'lark-configs', redirect: '/notify-channels' },

@@ -21,6 +21,9 @@
         <router-link v-if="auth.hasMenu('connections')" to="/loki-connections" class="nav-item" :class="{ active: $route.path === '/loki-connections' }">
           <Database :size="18" /> Loki 连接
         </router-link>
+        <router-link v-if="auth.hasMenu('connections')" to="/dict-sources" class="nav-item" :class="{ active: $route.path === '/dict-sources' }">
+          <BookOpen :size="18" /> 外部字典源
+        </router-link>
         <router-link v-if="auth.hasMenu('es_projects')" to="/es-projects" class="nav-item" :class="{ active: $route.path === '/es-projects' }">
           <Layers :size="18" /> ES 项目分类
         </router-link>
@@ -71,7 +74,7 @@ import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useSettingsStore } from '../stores/settings'
-import { LayoutDashboard, Bell, Search, Database, Send, FileText, UserPlus, Users, ClipboardList, ShieldOff, LogOut, Layers, Settings } from 'lucide-vue-next'
+import { LayoutDashboard, Bell, Search, Database, Send, FileText, UserPlus, Users, ClipboardList, ShieldOff, LogOut, Layers, Settings, BookOpen } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
@@ -86,6 +89,7 @@ const pageTitle = computed(() => {
     '/es-connections': 'ES 连接管理',
     '/es-projects': 'ES 项目分类',
     '/loki-connections': 'Loki 连接管理',
+    '/dict-sources': '外部字典源',
     '/notify-channels': '通知渠道',
     '/alert-logs': '告警日志',
     '/mutes': '屏蔽管理',
