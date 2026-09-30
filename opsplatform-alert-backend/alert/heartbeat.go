@@ -238,6 +238,13 @@ type HeartbeatResult struct {
 	BaselineRange string
 }
 
+// Monitored 是真正被监控的组合数：基线里过了站点白名单、房间在用、基线次数三道
+// 门槛的那些。它等于 活跃 + 异常。
+//
+// 单看基线总数会高估监控范围——基线里有大量被过滤掉的组合，把它当成「在监控 72 个」
+// 会让人以为覆盖面比实际大得多。
+func (r *HeartbeatResult) Monitored() int { return len(r.Alive) + len(r.Missing) }
+
 // EvaluateHeartbeat 跑完两次聚合并算出差集，不发送、不写任何状态。
 //
 // useBaselineCache=false 时强制重算基线：预览里改了查询或维度正则后，缓存里那份
@@ -276,53 +283,7 @@ func EvaluateHeartbeat(ctx context.Context, rule *models.AlertRule, getClient Lo
 		Baseline: baseline, Current: current, Dict: dict, BaselineCached: cached,
 		BaselineRange: baselineRangeOf(rule),
 	}
-	minHits := float64(rule.BaselineMinHits)
-
-	for k, b := range baseline {
-		roomID := b.Labels["room_id"]
-		siteID := b.Labels["site_id"]
-		entry := HeartbeatEntry{Key: k, Labels: b.Labels, Baseline: b.Count, SiteID: siteID, RoomID: roomID}
-
-		if _, alive := current[k]; alive {
-			res.Alive = append(res.Alive, entry)
-			continue
-		}
-		// 太低频，判不了：一周才来几个人的房间本来就大部分时间是空的，
-		// 拿它告警只会教会大家忽略这个群。
-		if minHits > 0 && b.Count < minHits {
-			res.SkippedLowTraffic++
-			continue
-		}
-
-		// 运维平台已经维护了「哪些房间在用」和「哪些站点要关注」，跟着它走，
-		// 而不是在这里再维护一份迟早对不上的清单。
-		//
-		// 站点是白名单：只有打了星的才监控。日志里有大量没人登记过的站点带来的
-		// 零散流量——本部署实测，4 个这样的站点占了 72 个组合里的 31 个，而七天
-		// 加起来才 182 次。写成黑名单（「字典里有且没打星才排除」）会让它们整批
-		// 漏进来，因为它们压根进不了字典。
-		//
-		// 房间反过来，也是故意的：字典里没有的房间多半是刚开、还没被采集到，
-		// 排除它等于让一个真实房间悄悄失去监控。只有字典认识、且标了非在用的
-		// 房间才跳过。
-		if dict != nil {
-			if siteID != "" {
-				st, ok := dict.Sites[siteID]
-				if !ok || !st.Watched {
-					res.SkippedByDict++
-					continue
-				}
-			}
-			if roomID != "" {
-				if rm, ok := dict.Rooms[roomID]; ok && !rm.InService {
-					res.SkippedByDict++
-					continue
-				}
-			}
-		}
-
-		res.Missing = append(res.Missing, entry)
-	}
+	classifyHeartbeat(res, float64(rule.BaselineMinHits))
 
 	sort.Slice(res.Missing, func(i, j int) bool { return res.Missing[i].Baseline > res.Missing[j].Baseline })
 	sort.Slice(res.Alive, func(i, j int) bool { return res.Alive[i].Baseline > res.Alive[j].Baseline })
@@ -343,8 +304,9 @@ func (e *Engine) executeHeartbeat(ctx context.Context, rule *models.AlertRule,
 	baseline, current, curQuery := res.Baseline, res.Current, res.CurrentQuery
 	dict := res.Dict
 
-	log.Printf("[Heartbeat] rule %d: 基线 %d 组合 / 当前活跃 %d / 异常 %d（低频跳过 %d，字典过滤 %d）query=%s",
-		rule.ID, len(baseline), len(current), len(missing), res.SkippedLowTraffic, res.SkippedByDict, curQuery)
+	log.Printf("[Heartbeat] rule %d: 基线 %d → 实际监控 %d（站点/房间过滤 %d，低频跳过 %d）| 活跃 %d / 异常 %d | Loki 当前返回 %d 个组合 | query=%s",
+		rule.ID, len(baseline), res.Monitored(), res.SkippedByDict, res.SkippedLowTraffic,
+		len(res.Alive), len(missing), len(current), curQuery)
 	for _, m := range missing {
 		// id 不进告警消息，但必须留在日志里：排查时要靠它回到运维平台和 Loki。
 		log.Printf("[Heartbeat] rule %d MISSING site_id=%s room_id=%s baseline=%.0f",
@@ -522,4 +484,48 @@ func heartbeatInterval(s string) time.Duration {
 		return d
 	}
 	return 0
+}
+
+// classifyHeartbeat 把基线里的每个组合分成三类：被过滤掉的、有活动的、异常的。
+//
+// 抽成不碰 Loki 的纯函数，是因为这里的顺序曾经写错过，而错法很隐蔽：先判活跃、
+// 活跃的直接收下，过滤就只作用在「可能告警的」那一批，当前有活动的整批绕过白
+// 名单——预览于是既显示「站点未关注 0」，又在活跃列表里列出没登记的站点。两个
+// 数字自相矛盾，却都是"真的"。这种错误只有把顺序本身钉进测试才拦得住。
+func classifyHeartbeat(res *HeartbeatResult, minHits float64) {
+	for k, b := range res.Baseline {
+		roomID := b.Labels["room_id"]
+		siteID := b.Labels["site_id"]
+		entry := HeartbeatEntry{Key: k, Labels: b.Labels, Baseline: b.Count, SiteID: siteID, RoomID: roomID}
+
+		// ① 先划定监控范围 —— 站点白名单 + 房间在用
+		if res.Dict != nil {
+			if siteID != "" {
+				st, ok := res.Dict.Sites[siteID]
+				if !ok || !st.Watched {
+					res.SkippedByDict++
+					continue
+				}
+			}
+			if roomID != "" {
+				if rm, ok := res.Dict.Rooms[roomID]; ok && !rm.InService {
+					res.SkippedByDict++
+					continue
+				}
+			}
+		}
+
+		// ② 再按基线次数筛掉判不了的低频组合
+		if minHits > 0 && b.Count < minHits {
+			res.SkippedLowTraffic++
+			continue
+		}
+
+		// ③ 到这里才是真正被监控的，分活跃与异常
+		if _, alive := res.Current[k]; alive {
+			res.Alive = append(res.Alive, entry)
+			continue
+		}
+		res.Missing = append(res.Missing, entry)
+	}
 }

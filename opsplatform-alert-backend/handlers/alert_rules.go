@@ -2226,6 +2226,8 @@ func handleHeartbeatPreview(w http.ResponseWriter, r *http.Request, req *models.
 	resp := map[string]interface{}{
 		"mode":                "heartbeat",
 		"baseline_size":       len(res.Baseline),
+		"monitored":           res.Monitored(),
+		"alive_count":         len(res.Alive),
 		"current_size":        len(res.Current),
 		"missing_count":       len(res.Missing),
 		"skipped_low_traffic": res.SkippedLowTraffic,
