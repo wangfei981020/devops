@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opsplatform-alert-backend/database"
+	lokiclient "opsplatform-alert-backend/loki"
 	"opsplatform-alert-backend/models"
 	"opsplatform-alert-backend/notify"
 	"opsplatform-alert-backend/timezone"
@@ -122,13 +123,18 @@ func dimKey(labels map[string]string, dims []string) string {
 	return strings.Join(parts, "|")
 }
 
+// LokiClientFunc 按连接 id 取一个 Loki 客户端。引擎和 handlers 各有自己的取法，
+// 心跳的判定逻辑因此不绑死在 Engine 上——预览要复用同一套判定，而不是照着再写
+// 一遍；写两遍的结果一定是预览说会告警、实际不告，或者反过来。
+type LokiClientFunc func(int) (*lokiclient.Client, error)
+
 // queryHeartbeatDims runs one aggregation and returns the combinations it found.
-func (e *Engine) queryHeartbeatDims(ctx context.Context, rule *models.AlertRule, dims []string, rng string) (map[string]hbDim, string, error) {
+func queryHeartbeatDims(ctx context.Context, rule *models.AlertRule, dims []string, rng string, getClient LokiClientFunc) (map[string]hbDim, string, error) {
 	q, err := buildHeartbeatQuery(rule.LogQL, rule.DimPattern, dims, rng)
 	if err != nil {
 		return nil, "", err
 	}
-	client, err := e.getLokiClient(rule.LokiConnectionID)
+	client, err := getClient(rule.LokiConnectionID)
 	if err != nil {
 		return nil, q, err
 	}
@@ -165,12 +171,14 @@ func heartbeatBaselineKey(ruleID int) string {
 
 // heartbeatBaseline returns the set of combinations that should have traffic,
 // recomputing it at most once per heartbeatBaselineTTL.
-func (e *Engine) heartbeatBaseline(ctx context.Context, rule *models.AlertRule, dims []string) (map[string]hbDim, error) {
+func heartbeatBaseline(ctx context.Context, rule *models.AlertRule, dims []string, getClient LokiClientFunc, useCache bool) (map[string]hbDim, bool, error) {
 	key := heartbeatBaselineKey(rule.ID)
-	if raw, err := database.RDB.Get(ctx, key).Result(); err == nil && raw != "" {
-		var cached map[string]hbDim
-		if json.Unmarshal([]byte(raw), &cached) == nil && len(cached) > 0 {
-			return cached, nil
+	if useCache {
+		if raw, err := database.RDB.Get(ctx, key).Result(); err == nil && raw != "" {
+			var cached map[string]hbDim
+			if json.Unmarshal([]byte(raw), &cached) == nil && len(cached) > 0 {
+				return cached, true, nil
+			}
 		}
 	}
 
@@ -178,16 +186,16 @@ func (e *Engine) heartbeatBaseline(ctx context.Context, rule *models.AlertRule, 
 	if rng == "" {
 		rng = "7d"
 	}
-	baseline, q, err := e.queryHeartbeatDims(ctx, rule, dims, rng)
+	baseline, q, err := queryHeartbeatDims(ctx, rule, dims, rng, getClient)
 	if err != nil {
-		return nil, fmt.Errorf("基线查询失败(%s): %w", rng, err)
+		return nil, false, fmt.Errorf("基线查询失败(%s): %w", rng, err)
 	}
 	log.Printf("[Heartbeat] rule %d: 基线窗口 %s 得到 %d 个组合, query=%s", rule.ID, rng, len(baseline), q)
 
 	if b, err := json.Marshal(baseline); err == nil {
 		database.RDB.Set(ctx, key, b, heartbeatBaselineTTL)
 	}
-	return baseline, nil
+	return baseline, false, nil
 }
 
 // InvalidateHeartbeatBaseline drops a rule's cached baseline, so an edit to the
@@ -197,8 +205,9 @@ func InvalidateHeartbeatBaseline(ctx context.Context, ruleID int) {
 	database.RDB.Del(ctx, heartbeatBaselineKey(ruleID))
 }
 
-// hbMissing is one combination that should be producing logs and is not.
-type hbMissing struct {
+// HeartbeatEntry 是一个维度组合及其基线次数。判定结果里的「异常」和「正常」
+// 两个列表都用它——预览要把两边都摆出来，只给异常的话没法判断阈值卡得合不合适。
+type HeartbeatEntry struct {
 	Key      string
 	Labels   map[string]string
 	Baseline float64
@@ -207,89 +216,135 @@ type hbMissing struct {
 }
 
 // executeHeartbeat is the whole mode: two queries, a set difference, one card.
-func (e *Engine) executeHeartbeat(ctx context.Context, rule *models.AlertRule,
-	sender notify.Notifier, atUsers []models.AtUser, atAll bool, ruleIDStr string) {
+// HeartbeatResult 是一次心跳判定的完整结果。
+//
+// 发送路径和预览共用这一个函数：预览若照着判定逻辑再写一遍，迟早会出现「预览说
+// 会告警、实际不告」或者反过来的情况，而那种不一致比没有预览更糟——人会照着预览
+// 去调阈值。
+type HeartbeatResult struct {
+	Dims              []string
+	CurrentQuery      string
+	BaselineQuery     string
+	Baseline          map[string]hbDim
+	Current           map[string]hbDim
+	Missing           []HeartbeatEntry // 基线有、当前窗口没有，且通过了低频与字典过滤
+	Alive             []HeartbeatEntry // 当前窗口有活动的，预览要列出来当对照
+	SkippedLowTraffic int
+	SkippedByDict     int
+	Dict              *Dict
+	BaselineCached    bool
+	// BaselineRange 是实际生效的窗口（规则留空时是默认的 7d），让调用方不必
+	// 自己再推一遍默认值——推错了显示出来的数字会和实际查询对不上。
+	BaselineRange string
+}
 
+// EvaluateHeartbeat 跑完两次聚合并算出差集，不发送、不写任何状态。
+//
+// useBaselineCache=false 时强制重算基线：预览里改了查询或维度正则后，缓存里那份
+// 是按旧配置算的，拿它对照会给出误导的结果。
+func EvaluateHeartbeat(ctx context.Context, rule *models.AlertRule, getClient LokiClientFunc, useBaselineCache bool) (*HeartbeatResult, error) {
 	dims, err := heartbeatDimNames(rule.DimPattern)
 	if err != nil {
-		log.Printf("[Heartbeat] rule %d: %v", rule.ID, err)
-		database.DB.Exec("UPDATE alert_rules SET last_error=? WHERE id=?", err.Error(), rule.ID)
-		return
+		return nil, err
 	}
 
-	current, curQuery, err := e.queryHeartbeatDims(ctx, rule, dims, rule.TimeRange)
+	current, curQuery, err := queryHeartbeatDims(ctx, rule, dims, rule.TimeRange, getClient)
 	if err != nil {
-		log.Printf("[Heartbeat] rule %d: 当前窗口查询失败: %v", rule.ID, err)
-		database.DB.Exec("UPDATE alert_rules SET last_error=? WHERE id=?", err.Error(), rule.ID)
-		return
+		return nil, fmt.Errorf("当前窗口查询失败: %w", err)
 	}
 
-	baseline, err := e.heartbeatBaseline(ctx, rule, dims)
+	baseline, cached, err := heartbeatBaseline(ctx, rule, dims, getClient, useBaselineCache)
 	if err != nil {
-		log.Printf("[Heartbeat] rule %d: %v", rule.ID, err)
-		database.DB.Exec("UPDATE alert_rules SET last_error=? WHERE id=?", err.Error(), rule.ID)
-		return
+		return nil, err
 	}
+	baseQuery, _ := buildHeartbeatQuery(rule.LogQL, rule.DimPattern, dims, baselineRangeOf(rule))
 
-	// The dictionary is optional: without one the alert still fires, just with
-	// raw ids in it. Losing the names is a readability problem; not alerting is
-	// a monitoring problem.
+	// 字典是可选的：没有它照样告警，只是消息里显示原始 id。名字丢了是可读性问题，
+	// 不告警是监控问题。
 	var dict *Dict
 	if rule.DictSourceID > 0 {
 		d, dErr := GetDict(ctx, rule.DictSourceID)
 		if dErr != nil {
-			log.Printf("[Heartbeat] rule %d: 字典不可用，本轮用原始 id 告警: %v", rule.ID, dErr)
+			log.Printf("[Heartbeat] rule %d: 字典不可用，本轮用原始 id: %v", rule.ID, dErr)
 		} else {
 			dict = d
 		}
 	}
 
+	res := &HeartbeatResult{
+		Dims: dims, CurrentQuery: curQuery, BaselineQuery: baseQuery,
+		Baseline: baseline, Current: current, Dict: dict, BaselineCached: cached,
+		BaselineRange: baselineRangeOf(rule),
+	}
 	minHits := float64(rule.BaselineMinHits)
-	var missing []hbMissing
-	var skippedLowTraffic, skippedByDict int
 
 	for k, b := range baseline {
-		if _, alive := current[k]; alive {
-			continue
-		}
-		// Too rare to judge: a room that sees a handful of visits a week is
-		// quiet most of the time by nature, and alerting on it produces noise
-		// that teaches people to ignore the channel.
-		if minHits > 0 && b.Count < minHits {
-			skippedLowTraffic++
-			continue
-		}
-
 		roomID := b.Labels["room_id"]
 		siteID := b.Labels["site_id"]
+		entry := HeartbeatEntry{Key: k, Labels: b.Labels, Baseline: b.Count, SiteID: siteID, RoomID: roomID}
 
-		// The ops platform already curates which rooms are in service and which
-		// sites matter. Following its answer keeps one source of truth instead
-		// of a second list here that drifts from it.
+		if _, alive := current[k]; alive {
+			res.Alive = append(res.Alive, entry)
+			continue
+		}
+		// 太低频，判不了：一周才来几个人的房间本来就大部分时间是空的，
+		// 拿它告警只会教会大家忽略这个群。
+		if minHits > 0 && b.Count < minHits {
+			res.SkippedLowTraffic++
+			continue
+		}
+
+		// 运维平台已经维护了「哪些房间在用」和「哪些站点要关注」，跟着它走，
+		// 而不是在这里再维护一份迟早对不上的清单。
+		//
+		// 站点是白名单：只有打了星的才监控。日志里有大量没人登记过的站点带来的
+		// 零散流量——本部署实测，4 个这样的站点占了 72 个组合里的 31 个，而七天
+		// 加起来才 182 次。写成黑名单（「字典里有且没打星才排除」）会让它们整批
+		// 漏进来，因为它们压根进不了字典。
+		//
+		// 房间反过来，也是故意的：字典里没有的房间多半是刚开、还没被采集到，
+		// 排除它等于让一个真实房间悄悄失去监控。只有字典认识、且标了非在用的
+		// 房间才跳过。
 		if dict != nil {
-			if roomID != "" {
-				if r, ok := dict.Rooms[roomID]; ok && !r.InService {
-					skippedByDict++
+			if siteID != "" {
+				st, ok := dict.Sites[siteID]
+				if !ok || !st.Watched {
+					res.SkippedByDict++
 					continue
 				}
 			}
-			if siteID != "" {
-				if s, ok := dict.Sites[siteID]; ok && !s.Watched {
-					skippedByDict++
+			if roomID != "" {
+				if rm, ok := dict.Rooms[roomID]; ok && !rm.InService {
+					res.SkippedByDict++
 					continue
 				}
 			}
 		}
 
-		missing = append(missing, hbMissing{
-			Key: k, Labels: b.Labels, Baseline: b.Count, SiteID: siteID, RoomID: roomID,
-		})
+		res.Missing = append(res.Missing, entry)
 	}
 
-	sort.Slice(missing, func(i, j int) bool { return missing[i].Baseline > missing[j].Baseline })
+	sort.Slice(res.Missing, func(i, j int) bool { return res.Missing[i].Baseline > res.Missing[j].Baseline })
+	sort.Slice(res.Alive, func(i, j int) bool { return res.Alive[i].Baseline > res.Alive[j].Baseline })
+	return res, nil
+}
+
+// executeHeartbeat 是告警路径：判定交给 EvaluateHeartbeat，这里只负责节流和发送。
+func (e *Engine) executeHeartbeat(ctx context.Context, rule *models.AlertRule,
+	sender notify.Notifier, atUsers []models.AtUser, atAll bool, ruleIDStr string) {
+
+	res, err := EvaluateHeartbeat(ctx, rule, e.getLokiClient, true)
+	if err != nil {
+		log.Printf("[Heartbeat] rule %d: %v", rule.ID, err)
+		database.DB.Exec("UPDATE alert_rules SET last_error=? WHERE id=?", err.Error(), rule.ID)
+		return
+	}
+	missing := res.Missing
+	baseline, current, curQuery := res.Baseline, res.Current, res.CurrentQuery
+	dict := res.Dict
 
 	log.Printf("[Heartbeat] rule %d: 基线 %d 组合 / 当前活跃 %d / 异常 %d（低频跳过 %d，字典过滤 %d）query=%s",
-		rule.ID, len(baseline), len(current), len(missing), skippedLowTraffic, skippedByDict, curQuery)
+		rule.ID, len(baseline), len(current), len(missing), res.SkippedLowTraffic, res.SkippedByDict, curQuery)
 	for _, m := range missing {
 		// id 不进告警消息，但必须留在日志里：排查时要靠它回到运维平台和 Loki。
 		log.Printf("[Heartbeat] rule %d MISSING site_id=%s room_id=%s baseline=%.0f",
@@ -366,7 +421,7 @@ func dictVersionOf(d *Dict) string {
 
 // heartbeatSignature identifies a set of missing combinations, so a repeat of
 // the same outage can be told apart from a new one.
-func heartbeatSignature(missing []hbMissing) string {
+func heartbeatSignature(missing []HeartbeatEntry) string {
 	keys := make([]string, 0, len(missing))
 	for _, m := range missing {
 		keys = append(keys, m.Key)
@@ -379,7 +434,7 @@ func heartbeatSignature(missing []hbMissing) string {
 // renderHeartbeat writes the card. Names only — the ids live in the log and in
 // the alert record, because a nineteen-digit number in a chat message costs a
 // line of space and tells the reader nothing they can act on.
-func (e *Engine) renderHeartbeat(rule *models.AlertRule, dict *Dict, missing []hbMissing, baselineSize, currentSize int) (string, string) {
+func (e *Engine) renderHeartbeat(rule *models.AlertRule, dict *Dict, missing []HeartbeatEntry, baselineSize, currentSize int) (string, string) {
 	title := rule.MessageTitle
 	if title == "" {
 		title = rule.Name

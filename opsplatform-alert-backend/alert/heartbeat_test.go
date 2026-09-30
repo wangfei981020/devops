@@ -94,12 +94,12 @@ func TestDimKeyIsOrderIndependent(t *testing.T) {
 // (so a reshuffled result does not re-alert) but catch membership changes (so a
 // newly quiet room gets through the interval immediately).
 func TestHeartbeatSignatureTracksMembershipNotOrder(t *testing.T) {
-	m1 := []hbMissing{{Key: "a"}, {Key: "b"}}
-	m2 := []hbMissing{{Key: "b"}, {Key: "a"}}
+	m1 := []HeartbeatEntry{{Key: "a"}, {Key: "b"}}
+	m2 := []HeartbeatEntry{{Key: "b"}, {Key: "a"}}
 	if heartbeatSignature(m1) != heartbeatSignature(m2) {
 		t.Error("顺序不同但成员相同，签名应当一致，否则每轮都会被当成新故障重复告警")
 	}
-	m3 := []hbMissing{{Key: "a"}, {Key: "b"}, {Key: "c"}}
+	m3 := []HeartbeatEntry{{Key: "a"}, {Key: "b"}, {Key: "c"}}
 	if heartbeatSignature(m1) == heartbeatSignature(m3) {
 		t.Error("多了一个异常组合，签名必须变化，否则新故障会被告警间隔压住")
 	}

@@ -878,6 +878,13 @@ func HandlePreviewAlertRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 心跳模式的判定和其余两种完全不同，走自己的预览：下面那套「搜到几条日志」
+	// 对它不仅没意义，而且是反的——命中的行恰恰代表那些房间是活着的、不会告警。
+	if req.AlertMode == "heartbeat" {
+		handleHeartbeatPreview(w, r, &req)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
@@ -2159,4 +2166,84 @@ func loadRuleChannelIDs(ruleID int) []int {
 		}
 	}
 	return ids
+}
+
+// heartbeatRow 是预览里的一行：名字给人看，id 留着让人能回到 Loki 和运维平台核对。
+type heartbeatRow struct {
+	Site     string  `json:"site"`
+	Room     string  `json:"room"`
+	SiteID   string  `json:"site_id"`
+	RoomID   string  `json:"room_id"`
+	Baseline float64 `json:"baseline"`
+}
+
+// handleHeartbeatPreview 用和告警完全相同的判定跑一次，但不发送、不写状态。
+//
+// 它存在的理由很实际：心跳模式的两个关键参数（时间窗、基线最少次数）只能靠看
+// 真实数据来定，而没有预览就只能改一次配置等一轮，一轮五分钟。
+func handleHeartbeatPreview(w http.ResponseWriter, r *http.Request, req *models.CreateAlertRuleReq) {
+	// 比常规预览给得宽：基线窗口跨天，重算时 Loki 要扫的数据量大得多。
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	rule := &models.AlertRule{
+		ID:               0,
+		Name:             req.Name,
+		LokiConnectionID: req.LokiConnectionID,
+		LogQL:            req.LogQL,
+		TimeRange:        req.TimeRange,
+		DimPattern:       req.DimPattern,
+		BaselineRange:    req.BaselineRange,
+		BaselineMinHits:  req.BaselineMinHits,
+		DictSourceID:     req.DictSourceID,
+	}
+	if rule.TimeRange == "" {
+		rule.TimeRange = "5m"
+	}
+
+	// 预览一律重算基线，不吃缓存：改了查询或维度正则之后，缓存里那份是按旧配置
+	// 算出来的，拿它对照会给出看着合理、实则错误的结果 —— 而人正要照着它调参数。
+	res, err := alert.EvaluateHeartbeat(ctx, rule, handlerLokiClientFunc(), false)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "预览失败: "+err.Error())
+		return
+	}
+
+	toRows := func(list []alert.HeartbeatEntry, limit int) []heartbeatRow {
+		out := []heartbeatRow{}
+		for i, m := range list {
+			if limit > 0 && i >= limit {
+				break
+			}
+			out = append(out, heartbeatRow{
+				Site: res.Dict.SiteLabel(m.SiteID), Room: res.Dict.RoomLabel(m.RoomID),
+				SiteID: m.SiteID, RoomID: m.RoomID, Baseline: m.Baseline,
+			})
+		}
+		return out
+	}
+
+	resp := map[string]interface{}{
+		"mode":                "heartbeat",
+		"baseline_size":       len(res.Baseline),
+		"current_size":        len(res.Current),
+		"missing_count":       len(res.Missing),
+		"skipped_low_traffic": res.SkippedLowTraffic,
+		"skipped_by_dict":     res.SkippedByDict,
+		"dims":                res.Dims,
+		"time_range":          rule.TimeRange,
+		"baseline_range":      res.BaselineRange,
+		"missing":             toRows(res.Missing, 50),
+		"alive":               toRows(res.Alive, 50),
+		"query": fmt.Sprintf("%s\n# 当前窗口 %s → 活跃 %d 个组合\n\n%s\n# 基线 %s → %d 个组合",
+			res.CurrentQuery, rule.TimeRange, len(res.Current),
+			res.BaselineQuery, res.BaselineRange, len(res.Baseline)),
+	}
+	if res.Dict != nil {
+		resp["dict_version"] = res.Dict.Version
+		resp["dict_stale"] = res.Dict.Stale
+		resp["dict_rooms"] = len(res.Dict.Rooms)
+		resp["dict_sites"] = len(res.Dict.Sites)
+	}
+	jsonSuccess(w, resp)
 }

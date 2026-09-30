@@ -732,7 +732,7 @@
         <div style="overflow-y: auto; flex: 1; padding: 0 4px;">
 
         <!-- Stats -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+        <div v-if="previewData.mode !== 'heartbeat'" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px;">
           <div class="stat-card" style="padding: 12px;">
             <div class="label">数据源</div>
             <div style="font-weight: 600;">{{ previewData.source_name }}</div>
@@ -759,6 +759,91 @@
           </div>
         </div>
 
+        <!-- ========== 业务心跳预览 ==========
+             心跳判定的是「基线有、当前窗口没有」，和 found 模式的「搜到几条」是两回事，
+             所以这里从统计到列表都另起一套。异常和正常两边都列：只看异常没法判断
+             阈值卡得合不合适。 -->
+        <template v-if="previewData.mode === 'heartbeat'">
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+            <div class="stat-card" style="padding: 12px;">
+              <div class="label">数据源</div>
+              <div style="font-weight: 600;">业务心跳</div>
+              <div class="text-sm text-secondary" style="margin-top: 2px;">
+                维度: {{ (previewData.dims || []).join(' × ') }}
+              </div>
+            </div>
+            <div class="stat-card" style="padding: 12px;">
+              <div class="label">监控范围</div>
+              <div style="font-weight: 600; font-size: 20px;">{{ previewData.baseline_size }} 组合</div>
+              <div class="text-sm text-secondary" style="margin-top: 2px;">
+                基线 {{ previewData.baseline_range }} · 当前窗口 {{ previewData.time_range }}
+              </div>
+            </div>
+            <div class="stat-card" style="padding: 12px;">
+              <div class="label">异常（会告警）</div>
+              <div style="font-weight: 600; font-size: 20px;"
+                   :style="{ color: previewData.missing_count > 0 ? 'var(--danger)' : 'var(--success)' }">
+                {{ previewData.missing_count }}
+              </div>
+              <div class="text-sm text-secondary" style="margin-top: 2px;">
+                当前活跃 {{ previewData.current_size }}
+              </div>
+            </div>
+          </div>
+
+          <!-- 被排除的数量要单独说清楚：调阈值时最该看的就是这两个数，
+               「异常 0」既可能是一切正常，也可能是全被过滤掉了。 -->
+          <div class="card" style="padding: 8px 12px; margin-bottom: 12px;">
+            <span class="text-sm text-secondary">
+              基线 {{ previewData.baseline_size }} 个组合中：
+              <b>{{ previewData.missing_count }}</b> 异常 ·
+              <b>{{ previewData.current_size }}</b> 当前有活动 ·
+              <b>{{ previewData.skipped_low_traffic }}</b> 低频跳过（基线次数 &lt; 阈值）·
+              <b>{{ previewData.skipped_by_dict }}</b> 站点未关注 / 房间非在用
+              <template v-if="previewData.dict_version">
+                <br>字典 {{ previewData.dict_rooms }} 房间 / {{ previewData.dict_sites }} 站点
+                <span v-if="previewData.dict_stale" style="color: var(--danger);">· ⚠ 名称可能过期</span>
+              </template>
+            </span>
+          </div>
+
+          <div v-if="previewData.missing_count > 0" style="margin-bottom: 12px;">
+            <h4 style="margin-bottom: 8px; color: var(--danger);">
+              ⚠ 异常 —— {{ previewData.time_range }} 内无活动，会告警
+            </h4>
+            <table style="width: 100%; font-size: 13px;">
+              <thead><tr><th>站点</th><th>房间</th><th>基线次数</th><th>room_id</th></tr></thead>
+              <tbody>
+                <tr v-for="m in previewData.missing" :key="m.site_id + '|' + m.room_id">
+                  <td>{{ m.site }}</td>
+                  <td style="font-weight: 500;">{{ m.room }}</td>
+                  <td>{{ previewData.baseline_range }} 内 {{ m.baseline }} 次</td>
+                  <td class="text-sm text-secondary" style="font-family: ui-monospace, monospace;">{{ m.room_id }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else class="card" style="padding: 12px; margin-bottom: 12px; background: #f0fdf4; border-color: #bbf7d0;">
+            <span style="color: var(--success); font-weight: 600;">正常（无异常组合，不会告警）</span>
+          </div>
+
+          <details v-if="(previewData.alive || []).length" style="margin-bottom: 12px;">
+            <summary class="text-sm text-secondary" style="cursor: pointer;">
+              查看当前有活动的 {{ previewData.alive.length }} 个组合
+            </summary>
+            <table style="width: 100%; font-size: 13px; margin-top: 8px;">
+              <thead><tr><th>站点</th><th>房间</th><th>基线次数</th></tr></thead>
+              <tbody>
+                <tr v-for="m in previewData.alive" :key="m.site_id + '|' + m.room_id">
+                  <td>{{ m.site }}</td>
+                  <td>{{ m.room }}</td>
+                  <td>{{ previewData.baseline_range }} 内 {{ m.baseline }} 次</td>
+                </tr>
+              </tbody>
+            </table>
+          </details>
+        </template>
+
         <!-- @人信息 -->
         <div v-if="form.at_users" class="card" style="padding: 8px 12px; margin-bottom: 12px; background: #eff6ff; border-color: #bfdbfe;">
           <span class="text-sm" style="color: #1e40af;">
@@ -768,7 +853,7 @@
         </div>
 
         <!-- ========== not_found grouped preview ========== -->
-        <template v-if="previewData.ok_list || previewData.alert_list">
+        <template v-if="previewData.mode !== 'heartbeat' && (previewData.ok_list || previewData.alert_list)">
 
           <!-- Alert containers -->
           <div v-if="previewData.alert_list && previewData.alert_list.length > 0">
@@ -811,7 +896,9 @@
         </template>
 
         <!-- ========== Default preview (found mode / no grouping) ========== -->
-        <template v-else>
+        <!-- 心跳模式要排除掉：它走上面自己那套，落到这里会显示「将触发 N 条告警」，
+             而那个 N 恰恰是活跃组合数——意思正好反了。 -->
+        <template v-else-if="previewData.mode !== 'heartbeat'">
           <!-- Alert mode hint -->
           <div v-if="form.alert_mode === 'not_found'" class="card" style="padding: 12px; margin-bottom: 12px;"
             :style="{ background: previewData.hit_count === 0 ? '#fef2f2' : '#ecfdf5', borderColor: previewData.hit_count === 0 ? '#fecaca' : '#a7f3d0' }">
