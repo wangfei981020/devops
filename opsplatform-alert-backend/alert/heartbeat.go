@@ -336,18 +336,18 @@ func InvalidateHeartbeatBaseline(ctx context.Context, ruleID int) {
 // HeartbeatEntry 是一个维度组合及其基线次数。判定结果里的「异常」和「正常」
 // 两个列表都用它——预览要把两边都摆出来，只给异常的话没法判断阈值卡得合不合适。
 type HeartbeatEntry struct {
-	Key      string
-	Labels   map[string]string
-	Baseline float64
-	SiteID   string
-	RoomID   string
-	// MinHourly / ActiveHours / ExpectHours 来自基线，用来解释这个组合为什么被
-	// 纳入或排除。预览必须显示它们：否则「为什么这个房间不在监控里」只能靠猜。
-	MinHourly   float64
-	ActiveHours int
-	ExpectHours int
-	// WhyWatching 在「观察中」列表里说明差在哪一项（总次数还是最冷小时）。
-	WhyWatching string
+	Key    string
+	Labels map[string]string
+	SiteID string
+	RoomID string
+	// Source 是这条对应关系的来源：auto=日志扫出来的，manual=人工补的。
+	// 人工补的组合从来没有过日志，第一次告警时要能分辨「真出问题了」还是
+	// 「这条关系本来就配错了」。
+	Source string
+	// Hits 是运维平台记录的扫描命中数，用来判断这个组合平时活不活跃。
+	Hits int64
+	// MaintainWhy 说明被维护抑制的原因，空表示没被抑制。
+	MaintainWhy string
 }
 
 // executeHeartbeat is the whole mode: two queries, a set difference, one card.
@@ -357,41 +357,54 @@ type HeartbeatEntry struct {
 // 会告警、实际不告」或者反过来的情况，而那种不一致比没有预览更糟——人会照着预览
 // 去调阈值。
 type HeartbeatResult struct {
-	Dims          []string
-	CurrentQuery  string
-	BaselineQuery string
-	Baseline      map[string]hbDim
-	Current       map[string]hbDim
-	Missing       []HeartbeatEntry // 基线有、当前窗口没有，且通过了低频与字典过滤
-	Alive         []HeartbeatEntry // 当前窗口有活动的，预览要列出来当对照
-	// Watching 是在监控范围内（站点已关注、房间在用）但基线还不够判定的组合。
+	Dims         []string
+	CurrentQuery string
+	Current      map[string]hbDim
+	TimeRange    string
+
+	// Scope 是本轮的监控范围全集 = 关系表 ∩ 已关注站点 ∩ 在用桌台。
 	//
-	// 以前这批只有一个计数，于是新上线的房间是「静默不监控」——字典里有、告警里
-	// 永远不出现，没有任何地方提醒你。列出来之后至少能看到它在攒基线，以及还差多少。
-	Watching          []HeartbeatEntry
-	SkippedLowTraffic int
-	SkippedByDict     int
-	Dict              *Dict
-	BaselineCached    bool
-	// BaselineRange 是实际生效的窗口（规则留空时是默认的 7d），让调用方不必
-	// 自己再推一遍默认值——推错了显示出来的数字会和实际查询对不上。
-	BaselineRange string
+	// 它来自运维平台，不来自 Loki。这个方向很重要：用「日志里出现过什么」来决定
+	// 监控谁，就永远发现不了一张整周没有日志的在用桌台——而那恰恰是最该告警的情况。
+	Scope       []HeartbeatEntry
+	Missing     []HeartbeatEntry // 范围内、本窗口无活动 → 告警
+	Alive       []HeartbeatEntry // 范围内、本窗口有活动
+	Maintaining []HeartbeatEntry // 范围内、但维护中，本轮不判定
+
+	// OutOfScope 是本窗口有日志、却不在监控范围里的组合。
+	//
+	// 这是对应关系表的体检：日志证明这个组合真实存在，范围里却没有它，说明站点没
+	// 关注、桌台标成了非在用、或者关系表缺了一条。不摆出来的话，一张漏配的桌台会
+	// 永远安静地不被监控，而且没有任何迹象。
+	OutOfScope []HeartbeatEntry
+
+	// 范围推导的分解，预览要把加减法原样摆出来
+	PairTotal        int
+	SkipNotWatched   int
+	SkipNotInService int
+	SkipUnknown      int // 关系指向了字典里已经没有的桌台或站点
+
+	Dict *Dict
 }
 
-// Monitored 是真正被监控的组合数：基线里过了站点白名单、房间在用、基线次数三道
-// 门槛的那些。它等于 活跃 + 异常。
+// Monitored 是本轮真正判定了的组合数 = 活跃 + 异常。
 //
-// 单看基线总数会高估监控范围——基线里有大量被过滤掉的组合，把它当成「在监控 72 个」
-// 会让人以为覆盖面比实际大得多。
+// 不含维护中的：它们在范围内，但这一轮不判定。把它们算进来会让人以为覆盖面比实际
+// 大。范围总数看 len(Scope)。
 func (r *HeartbeatResult) Monitored() int { return len(r.Alive) + len(r.Missing) }
 
-// EvaluateHeartbeat 跑完两次聚合并算出差集，不发送、不写任何状态。
+// EvaluateHeartbeat 跑一次判定，不发送、不写任何状态。
 //
-// useBaselineCache=false 时强制重算基线：预览里改了查询或维度正则后，缓存里那份
-// 是按旧配置算的，拿它对照会给出误导的结果。
-func EvaluateHeartbeat(ctx context.Context, rule *models.AlertRule, getClient LokiClientFunc, useBaselineCache bool) (*HeartbeatResult, error) {
+// 只有一次 Loki 查询：本窗口有活动的组合。监控范围来自字典，不需要再问 Loki
+// 「平时有哪些组合」——那个问题的答案里没有已经死了一周的桌台。
+//
+// 参数 useBaselineCache 保留是为了不动调用方签名；现在没有基线，它不起作用。
+func EvaluateHeartbeat(ctx context.Context, rule *models.AlertRule, getClient LokiClientFunc, _ bool) (*HeartbeatResult, error) {
 	dims, err := heartbeatDimNames(rule.DimPattern)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkHeartbeatDims(dims); err != nil {
 		return nil, err
 	}
 
@@ -400,39 +413,59 @@ func EvaluateHeartbeat(ctx context.Context, rule *models.AlertRule, getClient Lo
 		return nil, fmt.Errorf("当前窗口查询失败: %w", err)
 	}
 
-	baseline, cached, err := heartbeatBaseline(ctx, rule, dims, getClient, useBaselineCache)
-	if err != nil {
-		return nil, err
+	// 字典在这里已经不是可选的了：它就是监控范围。拿不到就没有范围，这一轮什么
+	// 都判不了——报错比「静默地一个都不告警」好，后者看起来和「一切正常」一样。
+	if rule.DictSourceID <= 0 {
+		return nil, fmt.Errorf("心跳模式必须配置字典源：监控范围来自运维平台的「站点 × 桌台」对应关系")
 	}
-	// 基线现在是 step=1h 的区间查询，展示出来的语句必须是真正执行的那条（窗口 1h），
-	// 不能写成 baselineRangeOf(rule)——那是区间的总跨度，不是分桶宽度。照着错的语句
-	// 去 Loki 里手动验证会得到完全不同的数字。
-	baseQuery, _ := buildHeartbeatQuery(rule.LogQL, rule.DimPattern, dims, "1h")
-
-	// 字典是可选的：没有它照样告警，只是消息里显示原始 id。名字丢了是可读性问题，
-	// 不告警是监控问题。
-	var dict *Dict
-	if rule.DictSourceID > 0 {
-		d, dErr := GetDict(ctx, rule.DictSourceID)
-		if dErr != nil {
-			log.Printf("[Heartbeat] rule %d: 字典不可用，本轮用原始 id: %v", rule.ID, dErr)
-		} else {
-			dict = d
-		}
+	dict, err := GetDict(ctx, rule.DictSourceID)
+	if err != nil {
+		return nil, fmt.Errorf("字典不可用，无法确定监控范围: %w", err)
 	}
 
 	res := &HeartbeatResult{
-		Dims: dims, CurrentQuery: curQuery, BaselineQuery: baseQuery,
-		Baseline: baseline, Current: current, Dict: dict, BaselineCached: cached,
-		BaselineRange: baselineRangeOf(rule),
+		Dims: dims, CurrentQuery: curQuery, Current: current,
+		TimeRange: rule.TimeRange, Dict: dict,
 	}
-	classifyHeartbeat(res, float64(rule.BaselineMinHits), float64(rule.BaselineMinHourly))
+	classifyHeartbeat(res, time.Now())
 
-	sort.Slice(res.Missing, func(i, j int) bool { return res.Missing[i].Baseline > res.Missing[j].Baseline })
-	sort.Slice(res.Alive, func(i, j int) bool { return res.Alive[i].Baseline > res.Alive[j].Baseline })
-	// 观察中按「最接近达标」排前面：调阈值时先看的就是差一点的那几个。
-	sort.Slice(res.Watching, func(i, j int) bool { return res.Watching[i].Baseline > res.Watching[j].Baseline })
+	byName := func(a, b HeartbeatEntry) bool {
+		if a.SiteID != b.SiteID {
+			return dict.SiteLabel(a.SiteID) < dict.SiteLabel(b.SiteID)
+		}
+		return dict.RoomLabel(a.RoomID) < dict.RoomLabel(b.RoomID)
+	}
+	sort.Slice(res.Missing, func(i, j int) bool { return byName(res.Missing[i], res.Missing[j]) })
+	sort.Slice(res.Alive, func(i, j int) bool { return byName(res.Alive[i], res.Alive[j]) })
+	sort.Slice(res.Maintaining, func(i, j int) bool { return byName(res.Maintaining[i], res.Maintaining[j]) })
+	sort.Slice(res.OutOfScope, func(i, j int) bool { return byName(res.OutOfScope[i], res.OutOfScope[j]) })
 	return res, nil
+}
+
+// checkHeartbeatDims 确认维度就是 site_id 和 room_id。
+//
+// 监控范围现在由「站点 × 桌台」的对应关系张成，维度名对不上就没法把范围里的组合
+// 和 Loki 返回的标签对起来。不拦的话表现是范围里每个组合都「没有活动」——
+// 一轮告警几十条，而根因只是正则里的组名拼错了。
+func checkHeartbeatDims(dims []string) error {
+	want := map[string]bool{"site_id": true, "room_id": true}
+	for _, d := range dims {
+		if !want[d] {
+			return fmt.Errorf("心跳模式的维度只能是 site_id 和 room_id，正则里出现了 %q —— "+
+				"监控范围来自运维平台的「站点 × 桌台」关系，维度名对不上就无法匹配", d)
+		}
+		delete(want, d)
+	}
+	if len(want) > 0 {
+		missing := make([]string, 0, len(want))
+		for k := range want {
+			missing = append(missing, k)
+		}
+		sort.Strings(missing)
+		return fmt.Errorf("维度提取正则缺少命名组: %s —— 形如 (?P<site_id>\\d+) 和 (?P<room_id>\\d+)",
+			strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // executeHeartbeat 是告警路径：判定交给 EvaluateHeartbeat，这里只负责节流和发送。
@@ -445,60 +478,106 @@ func (e *Engine) executeHeartbeat(ctx context.Context, rule *models.AlertRule,
 		database.DB.Exec("UPDATE alert_rules SET last_error=? WHERE id=?", err.Error(), rule.ID)
 		return
 	}
-	missing := res.Missing
-	baseline, current, curQuery := res.Baseline, res.Current, res.CurrentQuery
 	dict := res.Dict
 
-	log.Printf("[Heartbeat] rule %d: 基线 %d → 实际监控 %d（站点/房间过滤 %d，低频跳过 %d）| 活跃 %d / 异常 %d | Loki 当前返回 %d 个组合 | query=%s",
-		rule.ID, len(baseline), res.Monitored(), res.SkippedByDict, res.SkippedLowTraffic,
-		len(res.Alive), len(missing), len(current), curQuery)
-	for _, m := range missing {
-		// id 不进告警消息，但必须留在日志里：排查时要靠它回到运维平台和 Loki。
-		log.Printf("[Heartbeat] rule %d MISSING site_id=%s room_id=%s baseline=%.0f",
-			rule.ID, m.SiteID, m.RoomID, m.Baseline)
+	log.Printf("[Heartbeat] rule %d: 关系 %d － 站点未关注 %d － 桌台非在用 %d － 已失效 %d ＝ 范围 %d"+
+		"（维护中 %d 不判定）| 活跃 %d / 异常 %d | 范围外有活动 %d | query=%s",
+		rule.ID, res.PairTotal, res.SkipNotWatched, res.SkipNotInService, res.SkipUnknown,
+		len(res.Scope), len(res.Maintaining), len(res.Alive), len(res.Missing),
+		len(res.OutOfScope), res.CurrentQuery)
+
+	// id 不进告警消息，但必须留在日志里：排查时要靠它回到运维平台和 Loki。
+	for _, m := range res.Missing {
+		log.Printf("[Heartbeat] rule %d MISSING site_id=%s room_id=%s source=%s hits=%d",
+			rule.ID, m.SiteID, m.RoomID, m.Source, m.Hits)
+	}
+	for _, m := range res.Maintaining {
+		log.Printf("[Heartbeat] rule %d SUPPRESSED site_id=%s room_id=%s reason=%s",
+			rule.ID, m.SiteID, m.RoomID, m.MaintainWhy)
+	}
+	// 范围外有活动 = 关系表漏了一条。它不会告警，所以日志是唯一的线索。
+	for _, m := range res.OutOfScope {
+		log.Printf("[Heartbeat] rule %d OUT_OF_SCOPE site_id=%s room_id=%s —— "+
+			"日志里有活动但不在监控范围，检查运维平台的站点×桌台关系",
+			rule.ID, m.SiteID, m.RoomID)
 	}
 
-	stateKey := fmt.Sprintf("alert:hb:state:%d", rule.ID)
-	if len(missing) == 0 {
-		if prev, _ := database.RDB.Get(ctx, stateKey).Result(); prev != "" && rule.RecoveryEnabled == 1 {
-			e.sendHeartbeatRecovery(ctx, rule, sender, atUsers, atAll, ruleIDStr, len(baseline))
+	if len(res.Scope) == 0 {
+		msg := "监控范围是空的：运维平台里没有「已关注站点 × 在用桌台」的对应关系"
+		log.Printf("[Heartbeat] rule %d: %s", rule.ID, msg)
+		database.DB.Exec("UPDATE alert_rules SET last_error=? WHERE id=?", msg, rule.ID)
+		return
+	}
+	database.DB.Exec("UPDATE alert_rules SET last_error='' WHERE id=?", rule.ID)
+
+	// ── 单组合节流 ──
+	//
+	// 以前按「整个异常集合」算一个签名做节流。范围从几十个扩到全部在用桌台之后
+	// 这个做法会失效：夜里组合频繁进出集合，签名每轮都在变，等于没有节流；而且
+	// 一个组合恢复会让其余所有组合重新发一遍。
+	//
+	// 现在每个组合各记各的「上次告过」，互不影响。
+	interval := heartbeatInterval(rule.AlertInterval)
+	once := rule.AlertInterval == AlertIntervalOnce
+	var due []HeartbeatEntry
+	nowStr := time.Now().Format(time.RFC3339)
+	for _, m := range res.Missing {
+		k := heartbeatComboKey(rule.ID, m.Key)
+		last, _ := database.RDB.Get(ctx, k).Result()
+		if last == "" {
+			due = append(due, m)
+			continue
 		}
-		database.RDB.Del(ctx, stateKey)
+		if once {
+			continue
+		}
+		if interval > 0 {
+			if t, pErr := time.Parse(time.RFC3339, last); pErr == nil && time.Since(t) < interval {
+				continue
+			}
+		}
+		due = append(due, m)
+	}
+
+	// 恢复通知：上一轮告过、这一轮有活动了的组合
+	var recovered []HeartbeatEntry
+	for _, a := range res.Alive {
+		k := heartbeatComboKey(rule.ID, a.Key)
+		if v, _ := database.RDB.Get(ctx, k).Result(); v != "" {
+			recovered = append(recovered, a)
+			database.RDB.Del(ctx, k)
+		}
+	}
+	// 维护中的组合也要清掉告警状态：维护结束后它如果还是没活动，应当作为一条
+	// 新告警重新发出来，而不是被「上次告过」压住。
+	for _, m := range res.Maintaining {
+		database.RDB.Del(ctx, heartbeatComboKey(rule.ID, m.Key))
+	}
+
+	if len(recovered) > 0 && rule.RecoveryEnabled == 1 {
+		e.sendHeartbeatRecovery(ctx, rule, sender, atUsers, atAll, ruleIDStr, recovered, len(res.Scope))
+	}
+	if len(due) == 0 {
+		if len(res.Missing) > 0 {
+			log.Printf("[Heartbeat] rule %d: %d 个异常组合都在告警间隔内，本轮不发",
+				rule.ID, len(res.Missing))
+		}
 		return
 	}
 
-	// The alert interval must not silence a NEW outage. Keying the throttle on
-	// the exact set of missing combinations means a repeat of the same problem
-	// waits, while one more room going quiet gets through immediately.
-	sig := heartbeatSignature(missing)
-	if prev, _ := database.RDB.Get(ctx, stateKey).Result(); prev == sig {
-		if rule.AlertInterval == AlertIntervalOnce {
-			log.Printf("[Heartbeat] rule %d: 异常集合未变且设为只告警一次，跳过", rule.ID)
-			return
-		}
-		if interval := heartbeatInterval(rule.AlertInterval); interval > 0 {
-			lastKey := stateKey + ":last"
-			if lastStr, _ := database.RDB.Get(ctx, lastKey).Result(); lastStr != "" {
-				if last, pErr := time.Parse(time.RFC3339, lastStr); pErr == nil && time.Since(last) < interval {
-					log.Printf("[Heartbeat] rule %d: 异常集合未变且未到告警间隔，跳过", rule.ID)
-					return
-				}
-			}
-		}
-	}
-
-	title, message := e.renderHeartbeat(rule, dict, missing, len(baseline), len(current))
+	title, message := e.renderHeartbeat(rule, res, due)
 	resp, sErr := sender.SendCard(title, message, rule.Severity, atUsers, atAll)
 
-	// The ids stay out of the card but go into the log record, so the detail
-	// page can answer "which room was that" without anyone opening a terminal.
 	raw, _ := json.Marshal(map[string]interface{}{
-		"missing":       missing,
-		"baseline_size": len(baseline),
-		"current_size":  len(current),
-		"query":         curQuery,
-		"dict_version":  dictVersionOf(dict),
-		"dict_stale":    dict != nil && dict.Stale,
+		"missing":      due,
+		"missing_all":  len(res.Missing),
+		"scope_size":   len(res.Scope),
+		"maintaining":  res.Maintaining,
+		"out_of_scope": res.OutOfScope,
+		"current_size": len(res.Current),
+		"query":        res.CurrentQuery,
+		"dict_version": dictVersionOf(dict),
+		"dict_stale":   dict != nil && dict.Stale,
 	})
 
 	if sErr != nil {
@@ -514,9 +593,18 @@ func (e *Engine) executeHeartbeat(ctx context.Context, rule *models.AlertRule,
 		Metrics.RecordAlertFired(ruleIDStr, rule.Name, rule.Severity)
 		Metrics.RecordSendSuccess(ruleIDStr, rule.Name, rule.Severity)
 	}
-	database.RDB.Set(ctx, stateKey, sig, 7*24*time.Hour)
-	database.RDB.Set(ctx, stateKey+":last", time.Now().Format(time.RFC3339), 7*24*time.Hour)
-	log.Printf("[Heartbeat] rule %d: 已发送，异常 %d 个", rule.ID, len(missing))
+	// 发送成功后才记「告过」：发失败还记上的话，这个组合会被间隔压住，
+	// 下一轮不再重试，故障就此无声。
+	for _, m := range due {
+		database.RDB.Set(ctx, heartbeatComboKey(rule.ID, m.Key), nowStr, 7*24*time.Hour)
+	}
+	log.Printf("[Heartbeat] rule %d: 已发送 %d 个异常组合（异常总数 %d，其余在间隔内）",
+		rule.ID, len(due), len(res.Missing))
+}
+
+// heartbeatComboKey 是单个组合的节流键。带规则 id，避免两条规则监控同一组合时互相压制。
+func heartbeatComboKey(ruleID int, comboKey string) string {
+	return fmt.Sprintf("alert:hb:combo:%d:%s", ruleID, comboKey)
 }
 
 func dictVersionOf(d *Dict) string {
@@ -538,62 +626,53 @@ func heartbeatSignature(missing []HeartbeatEntry) string {
 	return hex.EncodeToString(h[:])[:16]
 }
 
-// renderHeartbeat writes the card. Names only — the ids live in the log and in
-// the alert record, because a nineteen-digit number in a chat message costs a
-// line of space and tells the reader nothing they can act on.
-func (e *Engine) renderHeartbeat(rule *models.AlertRule, dict *Dict, missing []HeartbeatEntry, baselineSize, currentSize int) (string, string) {
+// renderHeartbeat 渲染告警卡片。
+//
+// 卡片里只出现名字，id 留在日志和告警详情里 —— 收告警的人要的是「BPreal 的 D059
+// 没人了」，不是一串雪花 ID。
+func (e *Engine) renderHeartbeat(rule *models.AlertRule, res *HeartbeatResult,
+	due []HeartbeatEntry) (string, string) {
+
+	dict := res.Dict
 	title := rule.MessageTitle
 	if title == "" {
 		title = rule.Name
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "**级别:** %s | **%s 内无活动:** %d / %d\n",
-		rule.Severity, rule.TimeRange, len(missing), baselineSize)
+	fmt.Fprintf(&b, "**级别:** %s | **%s 内无活动:** %d / %d 个监控组合\n",
+		rule.Severity, rule.TimeRange, len(res.Missing), len(res.Scope))
+	if len(due) < len(res.Missing) {
+		fmt.Fprintf(&b, "**本次列出:** %d 个（其余在告警间隔内，已告过）\n", len(due))
+	}
+	if len(res.Maintaining) > 0 {
+		fmt.Fprintf(&b, "**维护中不判定:** %d 个\n", len(res.Maintaining))
+	}
 
 	if dict != nil && dict.Stale {
-		fmt.Fprintf(&b, "**⚠ 名称可能过期:** 字典最后同步于 %s（%s）\n",
+		fmt.Fprintf(&b, "**⚠ 名单可能过期:** 字典最后同步于 %s（%s）\n",
 			timezone.Format(dict.SyncedAt), truncateForLog(dict.StaleWhy, 80))
 	}
 
-	shown := missing
+	shown := due
 	if len(shown) > heartbeatMaxListed {
 		shown = shown[:heartbeatMaxListed]
 	}
 	for i, m := range shown {
-		fmt.Fprintf(&b, "\n—— %d/%d ——\n", i+1, len(missing))
-		if m.SiteID != "" {
-			fmt.Fprintf(&b, "**站点:** %s\n", dict.SiteLabel(m.SiteID))
-		}
-		if m.RoomID != "" {
-			fmt.Fprintf(&b, "**房间:** %s\n", dict.RoomLabel(m.RoomID))
-		}
-		// Dimensions other than the two known ones still get printed; a rule
-		// watching something else entirely should not produce a blank card.
-		for k, v := range m.Labels {
-			if k != "site_id" && k != "room_id" {
-				fmt.Fprintf(&b, "**%s:** %s\n", k, v)
-			}
-		}
-		// 基线行同时给总次数和最冷小时：光看总次数判断不了"这个房间平时是不是本来
-		// 就会安静一阵"，而那正是决定要不要立刻去现场的依据。
-		if m.ExpectHours > 0 {
-			// 铺满窗口时不显示分数：期望桶数刻意留了一个桶的余量，铺满的序列实际点数
-			// 会比期望多一个，照原样显示就成了「25/24 小时有活动」——数字没错，但读起来
-			// 像个 bug，而这张卡片是给正在处理故障的人看的。
-			if m.ActiveHours >= m.ExpectHours {
-				fmt.Fprintf(&b, "**基线:** %s 内 %.0f 次，最冷一小时 %.0f 次（每小时都有活动）\n",
-					baselineRangeOf(rule), m.Baseline, m.MinHourly)
-			} else {
-				fmt.Fprintf(&b, "**基线:** %s 内 %.0f 次，最冷一小时 %.0f 次（%d 个整小时没有日志）\n",
-					baselineRangeOf(rule), m.Baseline, m.MinHourly, m.ExpectHours-m.ActiveHours)
-			}
-		} else {
-			fmt.Fprintf(&b, "**基线:** %s 内 %.0f 次\n", baselineRangeOf(rule), m.Baseline)
+		fmt.Fprintf(&b, "\n—— %d/%d ——\n", i+1, len(due))
+		fmt.Fprintf(&b, "**站点:** %s\n", dict.SiteLabel(m.SiteID))
+		fmt.Fprintf(&b, "**桌台:** %s\n", dict.RoomLabel(m.RoomID))
+		// 人工补的关系从来没有过日志，第一次告警时要能分辨「真出问题了」还是
+		// 「这条关系本来就配错了」。
+		if m.Source == "manual" && m.Hits == 0 {
+			fmt.Fprintf(&b, "**注意:** 这条对应关系是人工录入的，日志里从未出现过 —— "+
+				"也可能是关系配错了\n")
+		} else if m.Hits > 0 {
+			fmt.Fprintf(&b, "**平时活跃度:** 扫描窗口内 %d 条\n", m.Hits)
 		}
 	}
-	if len(missing) > len(shown) {
-		fmt.Fprintf(&b, "\n…另有 %d 个未列出，完整名单见告警详情\n", len(missing)-len(shown))
+	if len(due) > len(shown) {
+		fmt.Fprintf(&b, "\n…另有 %d 个未列出，完整名单见告警详情\n", len(due)-len(shown))
 	}
 	return title, b.String()
 }
@@ -605,15 +684,34 @@ func baselineRangeOf(rule *models.AlertRule) string {
 	return rule.BaselineRange
 }
 
+// sendHeartbeatRecovery 只报本轮真正恢复的那些组合。
+//
+// 以前是「异常集合清空了」才发一条「全部恢复」。范围扩大之后这个时刻几乎不会出现
+// （夜里总有桌台是空的），于是恢复通知等于永远不发。按组合报就没有这个问题：
+// 哪张桌台回来了就说哪张。
 func (e *Engine) sendHeartbeatRecovery(ctx context.Context, rule *models.AlertRule,
-	sender notify.Notifier, atUsers []models.AtUser, atAll bool, ruleIDStr string, baselineSize int) {
+	sender notify.Notifier, atUsers []models.AtUser, atAll bool, ruleIDStr string,
+	recovered []HeartbeatEntry, scopeSize int) {
 
+	dict, _ := GetDict(ctx, rule.DictSourceID)
 	title := rule.RecoveryTitle
 	if title == "" {
 		title = rule.MessageTitle + " - 已恢复"
 	}
-	msg := fmt.Sprintf("**级别:** %s | 全部 %d 个组合在 %s 内都有活动\n",
-		rule.Severity, baselineSize, rule.TimeRange)
+	var b strings.Builder
+	fmt.Fprintf(&b, "**级别:** %s | %d 个组合在 %s 内恢复活动（监控范围 %d）\n",
+		rule.Severity, len(recovered), rule.TimeRange, scopeSize)
+	shown := recovered
+	if len(shown) > heartbeatMaxListed {
+		shown = shown[:heartbeatMaxListed]
+	}
+	for _, m := range shown {
+		fmt.Fprintf(&b, "\n**%s** / %s\n", dict.SiteLabel(m.SiteID), dict.RoomLabel(m.RoomID))
+	}
+	if len(recovered) > len(shown) {
+		fmt.Fprintf(&b, "\n…另有 %d 个未列出\n", len(recovered)-len(shown))
+	}
+	msg := b.String()
 	resp, err := sender.SendCard(title, msg, rule.Severity, atUsers, atAll)
 	if err != nil {
 		saveAlertLog(rule, msg, "", "failed", err.Error(), resp)
@@ -646,67 +744,155 @@ func heartbeatInterval(s string) time.Duration {
 	return 0
 }
 
-// classifyHeartbeat 把基线里的每个组合分成三类：被过滤掉的、有活动的、异常的。
+// classifyHeartbeat 把监控范围里的每个组合分成三类：维护中的、有活动的、异常的。
 //
-// 抽成不碰 Loki 的纯函数，是因为这里的顺序曾经写错过，而错法很隐蔽：先判活跃、
-// 活跃的直接收下，过滤就只作用在「可能告警的」那一批，当前有活动的整批绕过白
-// 名单——预览于是既显示「站点未关注 0」，又在活跃列表里列出没登记的站点。两个
-// 数字自相矛盾，却都是"真的"。这种错误只有把顺序本身钉进测试才拦得住。
-func classifyHeartbeat(res *HeartbeatResult, minHits, minHourly float64) {
-	for k, b := range res.Baseline {
-		roomID := b.Labels["room_id"]
-		siteID := b.Labels["site_id"]
-		entry := HeartbeatEntry{
-			Key: k, Labels: b.Labels, Baseline: b.Count, SiteID: siteID, RoomID: roomID,
-			MinHourly: b.MinHourly, ActiveHours: b.ActiveHours, ExpectHours: b.ExpectHours,
+// 🔴 范围来自字典的对应关系表，不来自 Loki。
+//
+// 之前的实现反过来：先用 Loki 基线扫出「出现过的组合」，再拿字典去做减法。那样
+// 一张整周没有日志的在用桌台根本进不了基线，于是永远不会告警——而它恰恰是最该
+// 告警的情况（桌台已经死了一周）。日志只能证明「出现过的组合存在」，证明不了
+// 「没出现的组合不存在」。
+//
+// 抽成不碰 Loki 的纯函数，是因为这里的顺序和边界曾经写错过，而错法都很隐蔽。
+func classifyHeartbeat(res *HeartbeatResult, now time.Time) {
+	d := res.Dict
+	if d == nil {
+		// 没有字典就没有监控范围。这不是「监控全部」，而是「什么都判不了」——
+		// 本窗口有活动的组合全部记成范围外，让调用方看到范围是空的并说明原因。
+		for k, c := range res.Current {
+			res.OutOfScope = append(res.OutOfScope, entryFromCurrent(k, c))
 		}
+		return
+	}
 
-		// ① 先划定监控范围 —— 站点白名单 + 房间在用
-		if res.Dict != nil {
-			if siteID != "" {
-				st, ok := res.Dict.Sites[siteID]
-				if !ok || !st.Watched {
-					res.SkippedByDict++
-					continue
-				}
-			}
-			if roomID != "" {
-				if rm, ok := res.Dict.Rooms[roomID]; ok && !rm.InService {
-					res.SkippedByDict++
-					continue
-				}
-			}
-		}
+	res.PairTotal = len(d.Pairs)
+	inScope := make(map[string]bool, len(d.Pairs))
 
-		// ② 再筛掉基线还判不了的组合，两个判据都不满足才算够。
-		//
-		// 这批不是「不用管」，而是「还判不了」：新上线的房间、刚放量的站点都落在这里。
-		// 所以它们进 Watching 被列出来，而不是只记一个计数——静默不监控和监控一样
-		// 都是一个状态，区别只在有没有人知道。
-		switch {
-		case minHits > 0 && b.Count < minHits:
-			entry.WhyWatching = fmt.Sprintf("基线总次数 %.0f < %.0f", b.Count, minHits)
-		case minHourly > 0 && b.MinHourly < minHourly:
-			// 最冷小时判据。b.MinHourly==0 意味着基线里存在完全空窗的整小时，
-			// 这种组合用几分钟的窗口去监控一定会误报。
-			if b.MinHourly == 0 && b.ExpectHours > 0 {
-				entry.WhyWatching = fmt.Sprintf("基线里有 %d 个整小时没有日志（%d/%d 小时有活动）",
-					b.ExpectHours-b.ActiveHours, b.ActiveHours, b.ExpectHours)
-			} else {
-				entry.WhyWatching = fmt.Sprintf("最冷一小时 %.0f 次 < %.0f", b.MinHourly, minHourly)
-			}
+	for _, pr := range d.Pairs {
+		site, siteOK := d.Sites[pr.SiteID]
+		room, roomOK := d.Rooms[pr.RoomID]
+
+		// 关系指向了字典里已经没有的桌台或站点：桌台下架、站点删掉，而关系没跟着清。
+		// 单独计数而不是混进「未关注」，否则运维平台那边不知道该去清哪一类。
+		if !siteOK || !roomOK {
+			res.SkipUnknown++
+			continue
 		}
-		if entry.WhyWatching != "" {
-			res.Watching = append(res.Watching, entry)
-			res.SkippedLowTraffic++
+		if !site.Watched {
+			res.SkipNotWatched++
+			continue
+		}
+		if !room.InService {
+			res.SkipNotInService++
 			continue
 		}
 
-		// ③ 到这里才是真正被监控的，分活跃与异常
-		if _, alive := res.Current[k]; alive {
+		labels := map[string]string{"site_id": pr.SiteID, "room_id": pr.RoomID}
+		key := dimKey(labels, res.Dims)
+		entry := HeartbeatEntry{
+			Key: key, Labels: labels, SiteID: pr.SiteID, RoomID: pr.RoomID,
+			Source: pr.Source, Hits: pr.Hits,
+		}
+		res.Scope = append(res.Scope, entry)
+		inScope[key] = true
+
+		// 维护抑制先于活动判定：维护中的桌台没有日志是预期的，拿它去告警只会让人
+		// 对告警麻木，而那正是真故障被忽略的原因。
+		if why := maintainReason(d, room, pr.SiteID, now); why != "" {
+			entry.MaintainWhy = why
+			res.Maintaining = append(res.Maintaining, entry)
+			continue
+		}
+
+		if _, alive := res.Current[key]; alive {
 			res.Alive = append(res.Alive, entry)
 			continue
 		}
 		res.Missing = append(res.Missing, entry)
 	}
+
+	// 本窗口有日志、却不在范围里的组合 —— 关系表的体检项
+	for k, c := range res.Current {
+		if !inScope[k] {
+			res.OutOfScope = append(res.OutOfScope, entryFromCurrent(k, c))
+		}
+	}
+}
+
+func entryFromCurrent(key string, c hbDim) HeartbeatEntry {
+	return HeartbeatEntry{
+		Key: key, Labels: c.Labels,
+		SiteID: c.Labels["site_id"], RoomID: c.Labels["room_id"],
+	}
+}
+
+// maintainReason 返回这个 (站点 × 桌台) 组合此刻被维护抑制的原因，空表示不抑制。
+//
+// 两个来源，都要看：
+//  1. 中台实时标记 —— gameRoomMaintainList 给的是「这张桌台在哪些站点维护中」，
+//     所以能精确到「A 站点维护、B 站点照常」，不必整张桌台一刀切。
+//  2. 例行维护窗口 —— 运维平台配置的计划内保养。只有 action=suppress 才抑制；
+//     annotate 的意思是「照常告警但标注出来」，把它也抑制掉就违背了配置意图。
+func maintainReason(d *Dict, room DictRoom, siteID string, now time.Time) string {
+	if room.Maintaining {
+		if len(room.MaintainSites) == 0 {
+			// 维护判定规则配成 status_equals 时拿不到站点列表，只能整台抑制
+			return "中台标记维护中（未给出站点范围，整台抑制）"
+		}
+		for _, s := range room.MaintainSites {
+			if s == siteID {
+				return "中台标记维护中"
+			}
+		}
+		// 这张桌台在别的站点维护，与本站点无关 —— 不抑制，继续往下判
+	}
+	if w := ActiveMaintWindow(d, room.RoomNo, room.TableNo, now); w != nil && w.Action == "suppress" {
+		return "例行维护窗口「" + w.Name + "」"
+	}
+	return ""
+}
+
+// ScanHeartbeatPair 是扫出来的一个候选组合。
+type ScanHeartbeatPair struct {
+	RoomID string `json:"room_id"`
+	SiteID string `json:"site_id"`
+	Hits   int64  `json:"hits"`
+}
+
+// ScanHeartbeatPairs 扫出这段时间里出现过的全部「站点 × 桌台」组合。
+//
+// 用来给运维平台的对应关系表灌初始数据。这是 Loki 唯一还参与「范围」这件事的
+// 地方，而且是一次性的：日志能证明存在，不能证明不存在，所以结果只增不删。
+func ScanHeartbeatPairs(ctx context.Context, rule *models.AlertRule,
+	getClient LokiClientFunc) ([]ScanHeartbeatPair, string, error) {
+
+	dims, err := heartbeatDimNames(rule.DimPattern)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := checkHeartbeatDims(dims); err != nil {
+		return nil, "", err
+	}
+	found, q, err := queryHeartbeatDims(ctx, rule, dims, rule.TimeRange, getClient)
+	if err != nil {
+		return nil, q, err
+	}
+
+	out := make([]ScanHeartbeatPair, 0, len(found))
+	for _, d := range found {
+		site, room := d.Labels["site_id"], d.Labels["room_id"]
+		if site == "" || room == "" {
+			// 两个维度缺一个就不是一个组合。灌进关系表会变成一条永远匹配不上的
+			// 关系，然后每轮都告警。
+			continue
+		}
+		out = append(out, ScanHeartbeatPair{RoomID: room, SiteID: site, Hits: int64(d.Count)})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SiteID != out[j].SiteID {
+			return out[i].SiteID < out[j].SiteID
+		}
+		return out[i].RoomID < out[j].RoomID
+	})
+	return out, q, nil
 }

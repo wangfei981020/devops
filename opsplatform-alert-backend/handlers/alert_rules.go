@@ -2171,46 +2171,33 @@ func loadRuleChannelIDs(ruleID int) []int {
 
 // heartbeatRow 是预览里的一行：名字给人看，id 留着让人能回到 Loki 和运维平台核对。
 type heartbeatRow struct {
-	// MinHourly / ActiveHours / ExpectHours 是「为什么纳入或排除」的依据。
-	// 不给出来的话，调阈值只能靠反复试。
-	MinHourly   float64 `json:"min_hourly"`
-	ActiveHours int     `json:"active_hours"`
-	ExpectHours int     `json:"expect_hours"`
-	Why         string  `json:"why,omitempty"`
-	Site        string  `json:"site"`
-	Room        string  `json:"room"`
-	SiteID      string  `json:"site_id"`
-	RoomID      string  `json:"room_id"`
-	Baseline    float64 `json:"baseline"`
+	Site     string `json:"site"`
+	Room     string `json:"room"`
+	SiteID   string `json:"site_id"`
+	RoomID   string `json:"room_id"`
+	Source   string `json:"source,omitempty"`
+	Hits     int64  `json:"hits,omitempty"`
+	Maintain string `json:"maintain_why,omitempty"`
 }
 
 // handleHeartbeatPreview 用和告警完全相同的判定跑一次，但不发送、不写状态。
-//
-// 它存在的理由很实际：心跳模式的两个关键参数（时间窗、基线最少次数）只能靠看
-// 真实数据来定，而没有预览就只能改一次配置等一轮，一轮五分钟。
 func handleHeartbeatPreview(w http.ResponseWriter, r *http.Request, req *models.CreateAlertRuleReq) {
-	// 比常规预览给得宽：基线窗口跨天，重算时 Loki 要扫的数据量大得多。
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
 	rule := &models.AlertRule{
-		ID:                0,
-		Name:              req.Name,
-		LokiConnectionID:  req.LokiConnectionID,
-		LogQL:             req.LogQL,
-		TimeRange:         req.TimeRange,
-		DimPattern:        req.DimPattern,
-		BaselineRange:     req.BaselineRange,
-		BaselineMinHits:   req.BaselineMinHits,
-		BaselineMinHourly: req.BaselineMinHourly,
-		DictSourceID:      req.DictSourceID,
+		ID:               0,
+		Name:             req.Name,
+		LokiConnectionID: req.LokiConnectionID,
+		LogQL:            req.LogQL,
+		TimeRange:        req.TimeRange,
+		DimPattern:       req.DimPattern,
+		DictSourceID:     req.DictSourceID,
 	}
 	if rule.TimeRange == "" {
 		rule.TimeRange = "5m"
 	}
 
-	// 预览一律重算基线，不吃缓存：改了查询或维度正则之后，缓存里那份是按旧配置
-	// 算出来的，拿它对照会给出看着合理、实则错误的结果 —— 而人正要照着它调参数。
 	res, err := alert.EvaluateHeartbeat(ctx, rule, handlerLokiClientFunc(), false)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "预览失败: "+err.Error())
@@ -2225,43 +2212,48 @@ func handleHeartbeatPreview(w http.ResponseWriter, r *http.Request, req *models.
 			}
 			out = append(out, heartbeatRow{
 				Site: res.Dict.SiteLabel(m.SiteID), Room: res.Dict.RoomLabel(m.RoomID),
-				SiteID: m.SiteID, RoomID: m.RoomID, Baseline: m.Baseline,
-				MinHourly: m.MinHourly, ActiveHours: m.ActiveHours, ExpectHours: m.ExpectHours,
-				Why: m.WhyWatching,
+				SiteID: m.SiteID, RoomID: m.RoomID,
+				Source: m.Source, Hits: m.Hits, Maintain: m.MaintainWhy,
 			})
 		}
 		return out
 	}
 
 	resp := map[string]interface{}{
-		"mode":                "heartbeat",
-		"baseline_size":       len(res.Baseline),
+		"mode":       "heartbeat",
+		"time_range": rule.TimeRange,
+		"dims":       res.Dims,
+
+		// 范围推导链：每个数字都能对上，加减法自洽。看到「异常 0」时要能分辨
+		// 是一切正常，还是范围本身就被过滤空了。
+		"pair_total":          res.PairTotal,
+		"skip_not_watched":    res.SkipNotWatched,
+		"skip_not_in_service": res.SkipNotInService,
+		"skip_unknown":        res.SkipUnknown,
+		"scope_size":          len(res.Scope),
+		"maintaining_count":   len(res.Maintaining),
 		"monitored":           res.Monitored(),
 		"alive_count":         len(res.Alive),
-		"current_size":        len(res.Current),
 		"missing_count":       len(res.Missing),
-		"skipped_low_traffic": res.SkippedLowTraffic,
-		"skipped_by_dict":     res.SkippedByDict,
-		// 观察中：在监控范围内但基线还判不了的组合。以前这批只有一个计数，
-		// 于是新上线的房间是「静默不监控」，没有任何地方会提醒你。
-		"watching_count": len(res.Watching),
-		"watching":       toRows(res.Watching, 50),
-		"dims":           res.Dims,
-		"time_range":     rule.TimeRange,
-		"baseline_range": res.BaselineRange,
-		"missing":        toRows(res.Missing, 50),
-		"alive":          toRows(res.Alive, 50),
-		// 基线那条语句的窗口是 1h、按 1h 步长跑区间查询：照着它去 Loki 手动核对
-		// 才能得到同样的数字。写成基线总跨度会差出一个数量级。
-		"query": fmt.Sprintf("%s\n# 当前窗口 %s → 活跃 %d 个组合\n\n%s\n# 基线：上面这条按 step=1h 在 %s 区间上跑 → %d 个组合，逐小时序列用来算最冷一小时",
-			res.CurrentQuery, rule.TimeRange, len(res.Current),
-			res.BaselineQuery, res.BaselineRange, len(res.Baseline)),
+		"out_of_scope_count":  len(res.OutOfScope),
+		"current_size":        len(res.Current),
+
+		"missing":      toRows(res.Missing, 100),
+		"alive":        toRows(res.Alive, 100),
+		"maintaining":  toRows(res.Maintaining, 100),
+		"out_of_scope": toRows(res.OutOfScope, 100),
+
+		"query": fmt.Sprintf("%s\n# 窗口 %s → Loki 返回 %d 个有活动的组合；"+
+			"监控范围来自运维平台的对应关系，不由这条语句决定",
+			res.CurrentQuery, rule.TimeRange, len(res.Current)),
 	}
 	if res.Dict != nil {
 		resp["dict_version"] = res.Dict.Version
 		resp["dict_stale"] = res.Dict.Stale
 		resp["dict_rooms"] = len(res.Dict.Rooms)
 		resp["dict_sites"] = len(res.Dict.Sites)
+		resp["dict_windows"] = len(res.Dict.Windows)
+		resp["dict_tz"] = res.Dict.TZName
 	}
 	jsonSuccess(w, resp)
 }

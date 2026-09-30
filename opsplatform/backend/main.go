@@ -494,6 +494,13 @@ func main() {
 	protected.HandleFunc("/table-alert/review", handlers.HandleTAReviewList).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/table-alert/changes", handlers.HandleTAChanges).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/table-alert/rooms/{room_id}/sites", handlers.HandleTARoomSites).Methods("GET", "OPTIONS")
+
+	// 站点 × 桌台 对应关系：心跳告警的监控范围就是这张表（交叉关注站点与在用桌台）
+	protected.HandleFunc("/table-alert/room-site-map", handlers.HandleTAListRoomSiteMap).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/room-site-map", handlers.HandleTAAddRoomSiteMap).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/table-alert/room-site-map/import", handlers.HandleTAImportRoomSiteMap).Methods("POST", "OPTIONS")
+	protected.HandleFunc("/table-alert/room-site-map/{id}", handlers.HandleTAToggleRoomSiteMap).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/table-alert/room-site-map/{id}", handlers.HandleTADeleteRoomSiteMap).Methods("DELETE", "OPTIONS")
 	// 例行维护窗口
 	protected.HandleFunc("/table-alert/windows", handlers.HandleTAListWindows).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/table-alert/windows", handlers.HandleTASaveWindow).Methods("POST", "OPTIONS")

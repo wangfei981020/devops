@@ -4,8 +4,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	lokiclient "opsplatform-alert-backend/loki"
 )
 
 // The dimensions are the named capture groups, and nothing else. Getting this
@@ -128,50 +126,46 @@ func TestHeartbeatIntervalHandlesForms(t *testing.T) {
 	}
 }
 
-// hbFixture 造一份贴近真实的判定输入：两个打星站点 + 一个没登记的站点。
+// hbFixture 造一份贴近真实的判定输入。
 //
-// 「没登记的站点」是这里的重点。生产上实测有 4 个这样的站点，它们从没进过字典，
-// 却贡献了 72 个组合里的 31 个。
+// 监控范围来自字典的对应关系表，所以这里的重点是各种「关系在、但不该监控」的情形：
+// 站点没关注、桌台非在用、关系指向了已经不存在的对象。
 func hbFixture() *HeartbeatResult {
 	dict := &Dict{
+		TZName: "UTC",
 		Sites: map[string]DictSite{
 			"S_BP": {SiteID: "S_BP", SiteName: "BPreal", Watched: true},
 			"S_CP": {SiteID: "S_CP", SiteName: "C88Real", Watched: true},
-			"S_NO": {SiteID: "S_NO", SiteName: "", Watched: false}, // 字典里有、没打星
+			"S_NO": {SiteID: "S_NO", SiteName: "", Watched: false}, // 字典里有、没关注
 		},
 		Rooms: map[string]DictRoom{
-			"R1": {RoomID: "R1", RoomNo: "C001", InService: true},
-			"R2": {RoomID: "R2", RoomNo: "C002", InService: true},
-			"R9": {RoomID: "R9", RoomNo: "D060", InService: false}, // 非在用
+			"R1": {RoomID: "R1", RoomNo: "C001", TableNo: "C01", InService: true},
+			"R2": {RoomID: "R2", RoomNo: "C002", TableNo: "C02", InService: true},
+			"R9": {RoomID: "R9", RoomNo: "D060", TableNo: "D60", InService: false}, // 非在用
+		},
+		Pairs: []DictPair{
+			{SiteID: "S_BP", RoomID: "R1", Source: "auto", Hits: 800},
+			{SiteID: "S_BP", RoomID: "R2", Source: "auto", Hits: 300},
+			{SiteID: "S_CP", RoomID: "R1", Source: "auto", Hits: 900},
+			{SiteID: "S_BP", RoomID: "R9", Source: "auto", Hits: 500}, // 桌台非在用 → 出局
+			{SiteID: "S_NO", RoomID: "R1", Source: "auto", Hits: 400}, // 站点没关注 → 出局
+			{SiteID: "S_GONE", RoomID: "R1", Source: "manual"},        // 站点已不存在 → 出局
+			{SiteID: "S_BP", RoomID: "R_GONE", Source: "manual"},      // 桌台已不存在 → 出局
 		},
 	}
-	mk := func(site, room string, n float64) (string, hbDim) {
-		k := site + "|" + room
-		return k, hbDim{Key: k, Labels: map[string]string{"site_id": site, "room_id": room}, Count: n}
+	dims := []string{"site_id", "room_id"}
+	mk := func(site, room string) (string, hbDim) {
+		lb := map[string]string{"site_id": site, "room_id": room}
+		k := dimKey(lb, dims)
+		return k, hbDim{Key: k, Labels: lb, Count: 1}
 	}
-	base := map[string]hbDim{}
-	for _, e := range []struct {
-		s, r string
-		n    float64
-	}{
-		{"S_BP", "R1", 8000}, // 打星站点 + 在用房间 + 高频 → 监控
-		{"S_BP", "R2", 3000}, // 同上
-		{"S_CP", "R1", 9000}, // 同上
-		{"S_BP", "R9", 5000}, // 房间非在用 → 排除
-		{"S_NO", "R1", 4000}, // 站点没打星 → 排除
-		{"S_XX", "R1", 6000}, // 站点压根不在字典里 → 必须排除
-		{"S_BP", "R1x", 10},  // 低频 → 排除
-	} {
-		k, d := mk(e.s, e.r, e.n)
-		base[k] = d
-	}
-	// 当前窗口：只有 BP/R1 和 CP/R1 有活动；另外故意让两个「本该被排除」的组合
-	// 也有活动，验证它们不会混进 Alive 列表。
+	// 当前窗口：BP/R1 和 CP/R1 有活动；另外 S_XX/R1 有活动但压根不在关系表里
 	cur := map[string]hbDim{}
-	for _, k := range []string{"S_BP|R1", "S_CP|R1", "S_XX|R1", "S_BP|R9"} {
-		cur[k] = base[k]
+	for _, e := range [][2]string{{"S_BP", "R1"}, {"S_CP", "R1"}, {"S_XX", "R1"}} {
+		k, d := mk(e[0], e[1])
+		cur[k] = d
 	}
-	return &HeartbeatResult{Baseline: base, Current: cur, Dict: dict}
+	return &HeartbeatResult{Dims: dims, Current: cur, Dict: dict, TimeRange: "10m"}
 }
 
 func hbNames(list []HeartbeatEntry) map[string]bool {
@@ -182,230 +176,175 @@ func hbNames(list []HeartbeatEntry) map[string]bool {
 	return out
 }
 
-// 🔴 没登记的站点一个都不许出现 —— 不管它当前有没有活动。
+// 🔴 监控范围来自对应关系表，不来自日志。
 //
-// 这条是用户在生产预览里逮到的：活跃列表里赫然列着一个未命名站点，而同一屏上
-// 「站点未关注」显示 0。根因是过滤只作用在「可能告警的」那批，活跃的整批绕过。
-func TestClassifyExcludesUnknownSiteEvenWhenActive(t *testing.T) {
+// 这是整件事的核心：之前用 Loki 基线扫出「出现过的组合」来决定监控谁，一张整周
+// 没有日志的在用桌台根本进不了基线，于是永远不告警——而它恰恰是最该告警的。
+// 这条钉住「关系表里有、日志里一次都没出现过」的组合必须出现在异常列表里。
+func TestScopeComesFromDictNotFromLogs(t *testing.T) {
 	res := hbFixture()
-	classifyHeartbeat(res, 500, 0)
+	classifyHeartbeat(res, time.Now())
 
-	alive, missing := hbNames(res.Alive), hbNames(res.Missing)
-	for _, bad := range []string{"S_XX|R1", "S_NO|R1", "S_BP|R9"} {
-		if alive[bad] {
-			t.Errorf("%s 不该出现在「有活动」列表里 —— 它不在监控范围内", bad)
-		}
-		if missing[bad] {
-			t.Errorf("%s 不该出现在「异常」列表里 —— 它不在监控范围内", bad)
-		}
+	missing := hbNames(res.Missing)
+	if !missing["S_BP|R2"] {
+		t.Error("S_BP|R2 在关系表里、是关注站点的在用桌台、本窗口没有活动 —— 必须告警。" +
+			"漏掉它说明范围又变成「日志里出现过什么」了")
 	}
-	// S_XX|R1 当前是有活动的，如果过滤顺序写反，它会落进 Alive
-	if len(res.Alive) != 2 {
-		t.Errorf("监控范围内有活动的应当是 2 个(BP/R1, CP/R1)，实际 %d: %v", len(res.Alive), alive)
+	if len(res.Scope) != 3 {
+		t.Errorf("监控范围应当是 3 个(BP/R1, BP/R2, CP/R1)，实际 %d", len(res.Scope))
 	}
 }
 
-// 统计数字必须自洽：实际监控 = 活跃 + 异常，且 基线 = 监控 + 两类排除。
-// 对不上的话，预览上那行「基线 72 － 31 － 5 ＝ 36」就是假的。
-func TestClassifyCountsAddUp(t *testing.T) {
+// 不该监控的三类各自计数，别混成一个数：运维平台那边要据此知道该去清哪一类。
+func TestScopeExclusionsAreCountedSeparately(t *testing.T) {
 	res := hbFixture()
-	classifyHeartbeat(res, 500, 0)
+	classifyHeartbeat(res, time.Now())
 
-	if got, want := res.Monitored(), len(res.Alive)+len(res.Missing); got != want {
-		t.Errorf("实际监控 %d ≠ 活跃 %d + 异常 %d", got, len(res.Alive), len(res.Missing))
+	if res.SkipNotWatched != 1 {
+		t.Errorf("站点未关注应为 1(S_NO)，实际 %d", res.SkipNotWatched)
 	}
-	total := res.Monitored() + res.SkippedByDict + res.SkippedLowTraffic
-	if total != len(res.Baseline) {
-		t.Errorf("监控 %d + 站点房间过滤 %d + 低频 %d = %d，与基线 %d 对不上",
-			res.Monitored(), res.SkippedByDict, res.SkippedLowTraffic, total, len(res.Baseline))
+	if res.SkipNotInService != 1 {
+		t.Errorf("桌台非在用应为 1(R9)，实际 %d", res.SkipNotInService)
+	}
+	if res.SkipUnknown != 2 {
+		t.Errorf("指向已失效对象的应为 2(S_GONE, R_GONE)，实际 %d", res.SkipUnknown)
+	}
+	// 加减法必须自洽，否则预览上那行链条是假的
+	total := len(res.Scope) + res.SkipNotWatched + res.SkipNotInService + res.SkipUnknown
+	if total != res.PairTotal {
+		t.Errorf("范围 %d + 未关注 %d + 非在用 %d + 已失效 %d = %d，与关系总数 %d 对不上",
+			len(res.Scope), res.SkipNotWatched, res.SkipNotInService, res.SkipUnknown,
+			total, res.PairTotal)
 	}
 }
 
-// 没配字典时不能把所有组合都当成"未知站点"排除掉 —— 那会让规则一声不响地
-// 什么都不监控。没有字典就是没有过滤依据，全部纳入，只是显示原始 id。
-func TestClassifyWithoutDictMonitorsEverything(t *testing.T) {
+// 日志里有活动、却不在监控范围里的组合要单独列出来。
+//
+// 它是关系表的体检项：日志证明这个组合真实存在，范围里却没有它。不摆出来的话，
+// 一张漏配的桌台会永远安静地不被监控，而且没有任何迹象。
+func TestOutOfScopeSurfacesMissingRelations(t *testing.T) {
+	res := hbFixture()
+	classifyHeartbeat(res, time.Now())
+
+	oos := hbNames(res.OutOfScope)
+	if !oos["S_XX|R1"] {
+		t.Error("S_XX|R1 本窗口有日志但不在关系表里，应当出现在「范围外」列表里")
+	}
+	if oos["S_BP|R1"] {
+		t.Error("S_BP|R1 在监控范围内，不该出现在「范围外」")
+	}
+}
+
+// 没有字典就没有监控范围。这不是「监控全部」——静默地什么都不判定，
+// 看起来和「一切正常」完全一样。
+func TestClassifyWithoutDictMonitorsNothing(t *testing.T) {
 	res := hbFixture()
 	res.Dict = nil
-	classifyHeartbeat(res, 500, 0)
+	classifyHeartbeat(res, time.Now())
 
-	if res.SkippedByDict != 0 {
-		t.Errorf("没有字典时不该有「站点/房间」过滤，实际 %d", res.SkippedByDict)
+	if len(res.Scope) != 0 || len(res.Missing) != 0 || len(res.Alive) != 0 {
+		t.Errorf("没有字典时不该判定任何组合，实际 范围%d 异常%d 活跃%d",
+			len(res.Scope), len(res.Missing), len(res.Alive))
 	}
-	if res.Monitored() != len(res.Baseline)-res.SkippedLowTraffic {
-		t.Errorf("没有字典时除低频外应当全部纳入，实际监控 %d / 基线 %d（低频 %d）",
-			res.Monitored(), len(res.Baseline), res.SkippedLowTraffic)
-	}
-}
-
-// ─────────────────────────── 最冷小时判据 ───────────────────────────
-
-func ms(labels map[string]string, vals ...float64) lokiclient.MatrixSeries {
-	return lokiclient.MatrixSeries{Labels: labels, Values: vals}
-}
-
-func rep(v float64, n int) []float64 {
-	out := make([]float64, n)
-	for i := range out {
-		out[i] = v
-	}
-	return out
-}
-
-// 🔴 空窗的整小时在 Loki 响应里是整段缺失的，不是值为 0 的点。
-//
-// 这条用的是生产上真实抓到的形状：24h/step=1h 的窗口里，房间 1001 返回 25 个点，
-// 房间 1013 只返回 23 个点——少的那两个就是两个一条日志都没有的整小时。对返回的点
-// 取 min 会给出 1（它最小的那个有流量的小时），完全看不出空窗；只有拿点数和期望桶
-// 数比才能发现。这个判据整件事就是为了这个差别存在的。
-func TestMinHourlyCountsAbsentBucketsAsZero(t *testing.T) {
-	dims := []string{"site_id", "room_id"}
-	const expect = 24 // 24h 窗口、1h 步长
-
-	full := map[string]string{"site_id": "S1", "room_id": "1001"}
-	// 1013 的真实数据：23 个点，最小值 1，总数 132
-	gappy := map[string]string{"site_id": "S1", "room_id": "1013"}
-	real1013 := []float64{3, 9, 2, 2, 7, 7, 4, 8, 4, 11, 15, 5, 2, 2, 5, 4, 3, 2, 1, 4, 6, 8, 8}
-
-	got := summarizeHourly([]lokiclient.MatrixSeries{
-		ms(full, rep(42, 25)...),
-		ms(gappy, real1013...),
-	}, dims, expect)
-
-	a := got[dimKey(full, dims)]
-	if a.MinHourly != 42 {
-		t.Errorf("铺满窗口的组合最冷小时应为 42，实际 %.0f", a.MinHourly)
-	}
-	b := got[dimKey(gappy, dims)]
-	if b.MinHourly != 0 {
-		t.Errorf("有空窗小时的组合最冷小时必须是 0，实际 %.0f —— 对返回的点取 min 会得到 1，"+
-			"那是「有流量的小时里的最小值」，恰好问反了", b.MinHourly)
-	}
-	if b.Count != 122 {
-		t.Errorf("总次数应为 122（这就是为什么光看总数会以为它正常），实际 %.0f", b.Count)
-	}
-	if b.ActiveHours != 23 || b.ExpectHours != 24 {
-		t.Errorf("应记录 23/24 小时有活动以便解释原因，实际 %d/%d", b.ActiveHours, b.ExpectHours)
+	if len(res.OutOfScope) != len(res.Current) {
+		t.Errorf("没有字典时有活动的组合应当全部记为范围外，实际 %d / %d",
+			len(res.OutOfScope), len(res.Current))
 	}
 }
 
-// 期望桶数刻意留一个点的余量。方向错了的后果不对称：把铺满窗口的组合误判成「有空窗」
-// 会让所有房间一起静默掉出监控范围，比漏判一个空窗小时严重得多。
-func TestMinHourlyToleratesEndpointOffByOne(t *testing.T) {
-	dims := []string{"room_id"}
-	lb := map[string]string{"room_id": "R1"}
-	for _, n := range []int{24, 25} { // floor(24h/1h) 与 Loki 实际给的 floor+1
-		got := summarizeHourly([]lokiclient.MatrixSeries{ms(lb, rep(7, n)...)}, dims, 24)
-		if v := got[dimKey(lb, dims)].MinHourly; v != 7 {
-			t.Errorf("%d 个点（期望 24）应视为铺满窗口，最冷小时 7，实际 %.0f", n, v)
-		}
-	}
-}
+// ─────────────────────────── 维护抑制 ───────────────────────────
 
-// 一个点都没有的组合不能因为 min 的初值是 +Inf 而算出个巨大的最冷小时数——
-// 那会让它反过来通过判据，成为唯一一个既无流量又被监控的组合。
-func TestMinHourlyOfEmptySeriesIsZero(t *testing.T) {
-	dims := []string{"room_id"}
-	lb := map[string]string{"room_id": "R1"}
-	got := summarizeHourly([]lokiclient.MatrixSeries{ms(lb)}, dims, 24)
-	if v := got[dimKey(lb, dims)].MinHourly; v != 0 {
-		t.Errorf("空序列的最冷小时应为 0，实际 %.0f", v)
-	}
-}
-
-func TestParseRangeDuration(t *testing.T) {
-	// d 是 LogQL 认、time.ParseDuration 不认的单位；漏了它 7d 这个默认值会直接报错
-	if d, err := parseRangeDuration("7d"); err != nil || d.Hours() != 168 {
-		t.Errorf("7d 应为 168 小时，实际 %v (err=%v)", d, err)
-	}
-	if d, err := parseRangeDuration("24h"); err != nil || d.Hours() != 24 {
-		t.Errorf("24h 解析错误: %v %v", d, err)
-	}
-	for _, bad := range []string{"", "7", "0d", "-3h", "abc"} {
-		if _, err := parseRangeDuration(bad); err == nil {
-			t.Errorf("%q 应当报错", bad)
-		}
-	}
-}
-
-// ─────────────────────────── 观察中 ───────────────────────────
-
-// 房间 1013 那种情况：总次数够、最冷小时是 0。它既不该告警，也不该悄悄消失——
-// 要进「观察中」并说明差在哪，否则「为什么这个房间不在监控里」只能靠猜。
-func TestClassifyMinHourlyMovesGappyRoomToWatching(t *testing.T) {
+// 中台给的是「这张桌台在哪些站点维护中」，所以抑制要精确到组合：
+// 同一张桌台在 A 站点维护时，B 站点照常监控。一刀切会让 B 站点真出问题时没人知道。
+func TestMaintenanceSuppressionIsPerSitePair(t *testing.T) {
 	res := hbFixture()
-	// 让 BP/R2 成为 1013 那种形状：总数 3000 够，但有 2 个整小时空窗
-	k := "S_BP|R2"
-	d := res.Baseline[k]
-	d.MinHourly, d.ActiveHours, d.ExpectHours = 0, 22, 24
-	res.Baseline[k] = d
+	rm := res.Dict.Rooms["R2"]
+	rm.Maintaining = true
+	rm.MaintainSites = []string{"S_BP"} // 只在 BP 维护
+	res.Dict.Rooms["R2"] = rm
+	// 让 CP 也用 R2，好验证它不受影响
+	res.Dict.Pairs = append(res.Dict.Pairs, DictPair{SiteID: "S_CP", RoomID: "R2", Source: "auto"})
 
-	classifyHeartbeat(res, 500, 5)
+	classifyHeartbeat(res, time.Now())
 
-	if hbNames(res.Missing)[k] || hbNames(res.Alive)[k] {
-		t.Errorf("%s 最冷小时为 0，不该进监控（会误报），实际进了 Missing/Alive", k)
+	if !hbNames(res.Maintaining)["S_BP|R2"] {
+		t.Error("S_BP|R2 正在维护，应当被抑制")
 	}
-	var found *HeartbeatEntry
-	for i := range res.Watching {
-		if res.Watching[i].Key == k {
-			found = &res.Watching[i]
+	if hbNames(res.Missing)["S_BP|R2"] {
+		t.Error("维护中的组合不该进异常列表 —— 维护期间没有日志是预期的")
+	}
+	if !hbNames(res.Missing)["S_CP|R2"] {
+		t.Error("R2 只在 BP 站点维护，CP 站点应当照常监控并告警 —— " +
+			"整台一刀切会让 CP 真出问题时没人知道")
+	}
+}
+
+// 拿不到站点范围时（维护判定配成 status_equals）只能整台抑制。
+// 这时候宁可漏报也不能误报——维护中的桌台没日志是必然的。
+func TestMaintenanceWithoutSiteListSuppressesWholeTable(t *testing.T) {
+	res := hbFixture()
+	rm := res.Dict.Rooms["R2"]
+	rm.Maintaining = true
+	rm.MaintainSites = nil
+	res.Dict.Rooms["R2"] = rm
+
+	classifyHeartbeat(res, time.Now())
+	if !hbNames(res.Maintaining)["S_BP|R2"] {
+		t.Error("没给出站点范围时应当整台抑制")
+	}
+}
+
+// action=annotate 的意思是「照常告警但标注出来」。把它也抑制掉就违背了配置意图——
+// 而配置的人以为自己只是加了个标签。
+func TestAnnotateWindowDoesNotSuppress(t *testing.T) {
+	res := hbFixture()
+	res.Dict.Windows = []DictWindow{{
+		Name: "标注型窗口", RepeatType: "daily",
+		StartTime: "00:00", EndTime: "23:59", TableNos: "*", Action: "annotate",
+	}}
+	classifyHeartbeat(res, time.Now())
+
+	if len(res.Maintaining) != 0 {
+		t.Errorf("action=annotate 不该抑制，实际抑制了 %d 个", len(res.Maintaining))
+	}
+	if !hbNames(res.Missing)["S_BP|R2"] {
+		t.Error("annotate 窗口内仍应照常告警")
+	}
+}
+
+// suppress 窗口内不告警。
+func TestSuppressWindowSuppresses(t *testing.T) {
+	res := hbFixture()
+	res.Dict.Windows = []DictWindow{{
+		Name: "凌晨保养", RepeatType: "daily",
+		StartTime: "00:00", EndTime: "23:59", TableNos: "*", Action: "suppress",
+	}}
+	classifyHeartbeat(res, time.Now())
+
+	if len(res.Missing) != 0 {
+		t.Errorf("suppress 窗口内不该有异常告警，实际 %d 个", len(res.Missing))
+	}
+	if len(res.Maintaining) == 0 {
+		t.Error("被窗口抑制的组合要列进 Maintaining，「为什么这张桌台没告警」必须能当场回答")
+	}
+}
+
+// ─────────────────────────── 维度校验 ───────────────────────────
+
+// 维度名对不上时要当场报错。不拦的话表现是范围里每个组合都「没有活动」——
+// 一轮几十条告警，而根因只是正则里的组名拼错了。
+func TestCheckHeartbeatDims(t *testing.T) {
+	if err := checkHeartbeatDims([]string{"site_id", "room_id"}); err != nil {
+		t.Errorf("正确的维度不该报错: %v", err)
+	}
+	for _, bad := range [][]string{
+		{"site_id"},           // 缺 room_id
+		{"room_id"},           // 缺 site_id
+		{"site_id", "roomid"}, // 拼错
+		{"site_id", "room_id", "extra"},
+	} {
+		if err := checkHeartbeatDims(bad); err == nil {
+			t.Errorf("%v 应当报错", bad)
 		}
-	}
-	if found == nil {
-		t.Fatalf("%s 应当出现在「观察中」列表里，而不是只记一个计数就消失", k)
-	}
-	if !strings.Contains(found.WhyWatching, "2 个整小时") {
-		t.Errorf("原因要说清空窗了几个整小时，实际 %q", found.WhyWatching)
-	}
-}
-
-// 关掉 min_hourly（填 0）时行为必须和以前完全一样，否则升级会让在跑的规则
-// 突然少监控一批房间——而且是静默的。
-func TestClassifyMinHourlyDisabledKeepsOldBehaviour(t *testing.T) {
-	res := hbFixture()
-	k := "S_BP|R2"
-	d := res.Baseline[k]
-	d.MinHourly, d.ActiveHours, d.ExpectHours = 0, 22, 24
-	res.Baseline[k] = d
-
-	classifyHeartbeat(res, 500, 0) // 0 = 不启用
-
-	if !hbNames(res.Missing)[k] && !hbNames(res.Alive)[k] {
-		t.Errorf("minHourly=0 表示不启用该判据，%s 应当照旧纳入监控", k)
-	}
-}
-
-// 「观察中」必须计入对账式：基线 = 监控 + 站点房间过滤 + 观察中。
-// 预览上那行加减法要是对不上，用它调阈值就是在调一个假的数。
-func TestWatchingCountsAddUp(t *testing.T) {
-	res := hbFixture()
-	classifyHeartbeat(res, 500, 0)
-
-	if len(res.Watching) != res.SkippedLowTraffic {
-		t.Errorf("观察中列表 %d 与计数 %d 不一致", len(res.Watching), res.SkippedLowTraffic)
-	}
-	total := res.Monitored() + res.SkippedByDict + len(res.Watching)
-	if total != len(res.Baseline) {
-		t.Errorf("监控 %d + 过滤 %d + 观察中 %d = %d，与基线 %d 对不上",
-			res.Monitored(), res.SkippedByDict, len(res.Watching), total, len(res.Baseline))
-	}
-}
-
-// 期望桶数取 floor 而不是 floor+1。这条单独测，是因为变异测试暴露了它原本没有被
-// 覆盖：给 summarizeHourly 直接喂 expect 的测试拦不住调用方把这个数算错，而算大
-// 一个的后果是所有房间静默掉出监控范围。
-func TestExpectedBucketsLeavesOneBucketOfSlack(t *testing.T) {
-	if n := expectedBuckets(24*time.Hour, time.Hour); n != 24 {
-		t.Errorf("24h/1h 应为 24（不是 25）—— 算大一个会让铺满窗口的组合全被判成有空窗，实际 %d", n)
-	}
-	if n := expectedBuckets(7*24*time.Hour, time.Hour); n != 168 {
-		t.Errorf("7d/1h 应为 168，实际 %d", n)
-	}
-	// 窗口比步长还小、或步长非法时返回 0，等于「不做空窗判定」——
-	// 这比返回一个凭空的桶数安全。
-	if n := expectedBuckets(30*time.Minute, time.Hour); n != 0 {
-		t.Errorf("窗口小于一个步长时应为 0，实际 %d", n)
-	}
-	if n := expectedBuckets(24*time.Hour, 0); n != 0 {
-		t.Errorf("步长非法时应为 0，实际 %d", n)
 	}
 }

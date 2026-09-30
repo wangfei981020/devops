@@ -262,6 +262,34 @@ func InitTableAlertTables() error {
 			INDEX idx_ta_site_watched (env_id, watched)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`},
 
+		// ---------------- 站点 × 桌台 对应关系 ----------------
+		// 中台接口给不了这层关系：桌台对象上只有 gameRoomMaintainList，而它只在
+		// 维护时才非空；siteStatus 实测恒为 null。所以关系只能在这边维护。
+		//
+		// 一张桌台可以被多个站点使用，所以是多对多，一行一个组合。
+		// source=auto 的行由日志扫描灌入——日志里出现过就证明这个组合真实存在，
+		// 因此默认即为已确认；人工要做的只是「补日志里没出现过的」和「删已下线的」。
+		{"table_alert_room_sites", `
+		CREATE TABLE IF NOT EXISTS table_alert_room_sites (
+			id VARCHAR(36) PRIMARY KEY,
+			env_id VARCHAR(36) NOT NULL,
+			room_id VARCHAR(64) NOT NULL,
+			site_id VARCHAR(64) NOT NULL,
+			source VARCHAR(12) NOT NULL DEFAULT 'auto' COMMENT 'auto=日志扫描发现 / manual=人工录入；人工的不会被扫描覆盖或删除',
+			enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '0=人工排除，不纳入心跳监控范围',
+			hits BIGINT NOT NULL DEFAULT 0 COMMENT '扫描窗口内的日志条数，给人判断这个组合活不活跃',
+			scan_range VARCHAR(16) NOT NULL DEFAULT '' COMMENT '这个命中数是多长的窗口扫出来的',
+			remark VARCHAR(500) NOT NULL DEFAULT '',
+			created_by VARCHAR(64) NOT NULL DEFAULT '',
+			first_seen_at DATETIME NULL,
+			last_seen_at DATETIME NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uk_ta_room_site (env_id, room_id, site_id),
+			INDEX idx_ta_rs_site (env_id, site_id),
+			INDEX idx_ta_rs_enabled (env_id, enabled)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`},
+
 		// ---------------- 例行维护窗口 ----------------
 		// 桌台有计划内的例行保养，这类维护是预期的，跟故障混在一起报会让人对告警麻木。
 		// 一个窗口可以覆盖多张桌台（同一时间一起保养），一张桌台也可以落在不同窗口里
@@ -361,10 +389,15 @@ func InitTableAlertTables() error {
 		{"table_alert_rules", "review_enabled", "TINYINT(1) NOT NULL DEFAULT 1"},
 		{"table_alert_rules", "review_days", "INT NOT NULL DEFAULT 3"},
 		{"table_alert_rules", "review_notify", "TINYINT(1) NOT NULL DEFAULT 0"},
-		// 字典指纹：外部系统（日志告警）靠它判断「桌台名单有没有变」，变了才拉全量。
-		// 只由 room_id/room_no/table_no/in_service/status 和站点名单算出来，
-		// 不含在线人数、维护中这类每次采集都在变的字段——算进去的话指纹每分钟一变，
-		// 对方的缓存就等于没有。
+		// 字典指纹：外部系统（日志告警）靠它判断「名单有没有变」，变了才拉全量。
+		//
+		// 算进去的：桌台名单、站点名单、站点×桌台对应关系、维护中状态、例行维护窗口。
+		// 不算进去的：在线人数——它每分钟都在抖，算进去指纹就每分钟一变，对方的缓存
+		// 等于没有。
+		//
+		// 维护中状态原本被排除在外（理由同在线人数），但它现在是告警依据：维护中的
+		// 组合不该告警。排除它就意味着对方拿缓存里过期的维护状态去判断该不该告警。
+		// 而它只在维护真正开始/结束时才变——那正是该刷新的时刻。
 		{"table_alert_envs", "dict_version", "VARCHAR(32) NOT NULL DEFAULT ''"},
 		{"table_alert_envs", "dict_version_at", "DATETIME NULL"},
 	} {

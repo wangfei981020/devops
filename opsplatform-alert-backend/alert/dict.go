@@ -54,6 +54,42 @@ type DictRoom struct {
 	TableNo   string `json:"table_no"`
 	InService bool   `json:"in_service"`
 	Status    string `json:"status"`
+	// Maintaining / MaintainSites 来自中台的 gameRoomMaintainList。
+	//
+	// 它给的是「这张桌台在哪些站点维护中」，粒度和心跳告警的 (站点 × 桌台) 维度
+	// 正好一致 —— 所以抑制能精确到「A 站点维护、B 站点照常」，不必整张桌台一刀切。
+	Maintaining   bool     `json:"maintaining"`
+	MaintainSites []string `json:"maintain_site_ids"`
+}
+
+// DictPair 是一个「站点 × 桌台」组合，心跳告警的监控范围就是它们。
+//
+// 这层关系只能由运维平台维护：中台的桌台接口给不了它（桌台对象上只有维护时才非空
+// 的 gameRoomMaintainList，siteStatus 恒为 null）。也不能从日志反推——日志只能证明
+// 「出现过的组合存在」，证明不了「没出现的组合不存在」，而一张整周没有日志的在用
+// 桌台恰恰是最该告警的那个。
+type DictPair struct {
+	RoomID string `json:"room_id"`
+	SiteID string `json:"site_id"`
+	Source string `json:"source"`
+	Hits   int64  `json:"hits"`
+}
+
+// DictWindow 是一条例行维护窗口的定义，按原样带过来在本地判定。
+//
+// 运维平台不替我们算「现在是否处于窗口内」：字典带缓存，算好的布尔值会在缓存里
+// 停留到下次刷新，窗口边界就会偏出去十几分钟。定义本身极少变动，正好走缓存。
+type DictWindow struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	RepeatType string `json:"repeat_type"` // daily / weekly / monthly / once
+	Weekdays   string `json:"weekdays"`    // 1~7 逗号分隔，1=周一
+	MonthDays  string `json:"month_days"`
+	OnceDate   string `json:"once_date"`
+	StartTime  string `json:"start_time"` // HH:MM
+	EndTime    string `json:"end_time"`   // HH:MM，小于 start 表示跨零点
+	TableNos   string `json:"table_nos"`  // 逗号分隔的房间号/桌台号，* = 全部
+	Action     string `json:"action"`     // suppress=窗口内不告警 / annotate=照常告警但标注
 }
 
 // DictSite is one site. Watched mirrors the star in the ops platform's site
@@ -67,14 +103,21 @@ type DictSite struct {
 
 // dictPayload is the wire shape of GET /api/table-alert/dict.
 type dictPayload struct {
-	Env         string     `json:"env"`
-	Version     string     `json:"version"`
-	CollectedAt string     `json:"collected_at"`
-	CollectOK   bool       `json:"collect_ok"`
-	RoomCount   int        `json:"room_count"`
-	SiteCount   int        `json:"site_count"`
-	Rooms       []DictRoom `json:"rooms"`
-	Sites       []DictSite `json:"sites"`
+	Env         string       `json:"env"`
+	Version     string       `json:"version"`
+	CollectedAt string       `json:"collected_at"`
+	CollectOK   bool         `json:"collect_ok"`
+	RoomCount   int          `json:"room_count"`
+	SiteCount   int          `json:"site_count"`
+	Rooms       []DictRoom   `json:"rooms"`
+	Sites       []DictSite   `json:"sites"`
+	Pairs       []DictPair   `json:"pairs"`
+	Windows     []DictWindow `json:"maint_windows"`
+	// TZName / TZOffsetSec 是运维平台那边的时区。维护窗口里的 02:00 是那边的墙上
+	// 时间，判定却发生在这边 —— 按本地时区去解释可能整整偏出八小时，而且不报错，
+	// 只表现成抑制窗口错位。
+	TZName      string `json:"tz_name"`
+	TZOffsetSec int    `json:"tz_offset_sec"`
 }
 
 // dictVersionPayload is the wire shape of GET .../dict/version — deliberately
@@ -96,6 +139,10 @@ type Dict struct {
 	CollectOK   bool                `json:"collect_ok"`
 	Rooms       map[string]DictRoom `json:"rooms"`
 	Sites       map[string]DictSite `json:"sites"`
+	Pairs       []DictPair          `json:"pairs"`
+	Windows     []DictWindow        `json:"maint_windows"`
+	TZName      string              `json:"tz_name"`
+	TZOffsetSec int                 `json:"tz_offset_sec"`
 	SyncedAt    time.Time           `json:"synced_at"`
 
 	// Stale means this snapshot came from cache after a failed refresh. Callers
@@ -324,6 +371,10 @@ func GetDict(ctx context.Context, sourceID int) (*Dict, error) {
 	for _, s := range p.Sites {
 		d.Sites[s.SiteID] = s
 	}
+	d.Pairs = p.Pairs
+	d.Windows = p.Windows
+	d.TZName = p.TZName
+	d.TZOffsetSec = p.TZOffsetSec
 
 	// An empty roster from a source that says its own collection failed is not
 	// a real "everything went away" — writing it over a good cache would wipe
@@ -334,8 +385,8 @@ func GetDict(ctx context.Context, sourceID int) (*Dict, error) {
 
 	saveDictCache(ctx, d)
 	recordDictSync(src.ID, true, "", d)
-	log.Printf("[Dict] source=%d(%s) 已同步 version=%s rooms=%d sites=%d",
-		src.ID, src.Name, d.Version, len(d.Rooms), len(d.Sites))
+	log.Printf("[Dict] source=%d(%s) 已同步 version=%s rooms=%d sites=%d pairs=%d windows=%d tz=%s",
+		src.ID, src.Name, d.Version, len(d.Rooms), len(d.Sites), len(d.Pairs), len(d.Windows), d.TZName)
 	return d, nil
 }
 

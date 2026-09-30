@@ -2389,7 +2389,8 @@ func HandleTADict(w http.ResponseWriter, r *http.Request) {
 
 	rooms := []map[string]interface{}{}
 	rows, err := database.DB.Query(`
-		SELECT room_id, room_no, table_no, in_service, status
+		SELECT room_id, room_no, table_no, in_service, status,
+		       maintaining, COALESCE(maintain_site_ids,'')
 		FROM table_alert_rooms
 		WHERE env_id=? AND last_seen_at >= ?
 		ORDER BY room_id`, e.ID, since)
@@ -2398,14 +2399,25 @@ func HandleTADict(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for rows.Next() {
-		var roomID, roomNo, tableNo, status string
-		var inService bool
-		if rows.Scan(&roomID, &roomNo, &tableNo, &inService, &status) != nil {
+		var roomID, roomNo, tableNo, status, maintainSites string
+		var inService, maintaining bool
+		if rows.Scan(&roomID, &roomNo, &tableNo, &inService, &status,
+			&maintaining, &maintainSites) != nil {
 			continue
+		}
+		// maintain_site_ids 是「这张桌台在哪些站点维护中」——粒度和心跳告警的
+		// (站点 × 桌台) 维度正好一致，所以抑制能精确到「A 站点维护、B 站点照常」，
+		// 不用整张桌台一刀切。
+		ms := []string{}
+		for _, v := range strings.Split(maintainSites, ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				ms = append(ms, v)
+			}
 		}
 		rooms = append(rooms, map[string]interface{}{
 			"room_id": roomID, "room_no": roomNo, "table_no": tableNo,
 			"in_service": inService, "status": status,
+			"maintaining": maintaining, "maintain_site_ids": ms,
 		})
 	}
 	rows.Close()
@@ -2430,14 +2442,74 @@ func HandleTADict(w http.ResponseWriter, r *http.Request) {
 	}
 	srows.Close()
 
+	// 站点 × 桌台 对应关系。这是监控范围的来源：调用方不该再用「日志里出现过什么」
+	// 去推断监控谁——那样一张整周没有日志的在用桌台会永远不被发现，而那恰恰是最该
+	// 告警的情况。
+	pairs := []map[string]interface{}{}
+	prows, err := database.DB.Query(`
+		SELECT room_id, site_id, source, hits FROM table_alert_room_sites
+		WHERE env_id=? AND enabled=1 ORDER BY site_id, room_id`, e.ID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "查询对应关系失败: "+err.Error())
+		return
+	}
+	for prows.Next() {
+		var roomID, siteID, source string
+		var hits int64
+		if prows.Scan(&roomID, &siteID, &source, &hits) != nil {
+			continue
+		}
+		pairs = append(pairs, map[string]interface{}{
+			"room_id": roomID, "site_id": siteID, "source": source, "hits": hits,
+		})
+	}
+	prows.Close()
+
+	// 例行维护窗口按定义原样给出去，由调用方在本地按当前时间判定。
+	//
+	// 不在这里算「现在是否处于窗口内」：字典是带缓存的，算好的布尔值会在缓存里停留
+	// 到下次刷新，窗口边界就会偏出去十几分钟。定义本身极少变动，正好适合走缓存。
+	windows := []map[string]interface{}{}
+	wrows, err := database.DB.Query(`
+		SELECT id, name, enabled, repeat_type, weekdays, month_days, once_date,
+		       start_time, end_time, COALESCE(table_nos,''), action
+		FROM table_alert_maint_windows WHERE env_id=? AND enabled=1 ORDER BY start_time, name`, e.ID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "查询维护窗口失败: "+err.Error())
+		return
+	}
+	for wrows.Next() {
+		var id, name, rt, wd, md, od, st, et, tn, act string
+		var en bool
+		if wrows.Scan(&id, &name, &en, &rt, &wd, &md, &od, &st, &et, &tn, &act) != nil {
+			continue
+		}
+		windows = append(windows, map[string]interface{}{
+			"id": id, "name": name, "repeat_type": rt, "weekdays": wd,
+			"month_days": md, "once_date": od, "start_time": st, "end_time": et,
+			"table_nos": tn, "action": act,
+		})
+	}
+	wrows.Close()
+
+	// 🔴 窗口里的 02:00 是本地墙上时间，判定发生在调用方那边。
+	// 调用方如果按自己的时区去解释，"凌晨两点保养"可能整整偏出八小时——而且不会
+	// 报错，只会表现成抑制窗口错位。所以把这边的时区一起给出去。
+	zone, offset := time.Now().Zone()
+
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"env":          e.Name,
-		"version":      e.Version,
-		"collected_at": taDictTime(e.CollectAt),
-		"collect_ok":   e.CollectOK,
-		"room_count":   len(rooms),
-		"site_count":   len(sites),
-		"rooms":        rooms,
-		"sites":        sites,
+		"env":           e.Name,
+		"version":       e.Version,
+		"collected_at":  taDictTime(e.CollectAt),
+		"collect_ok":    e.CollectOK,
+		"room_count":    len(rooms),
+		"site_count":    len(sites),
+		"pair_count":    len(pairs),
+		"rooms":         rooms,
+		"sites":         sites,
+		"pairs":         pairs,
+		"maint_windows": windows,
+		"tz_name":       zone,
+		"tz_offset_sec": offset,
 	})
 }

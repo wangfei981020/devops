@@ -143,6 +143,8 @@ func main() {
 	protected.HandleFunc("/alert-rules/{id}/preview-report", handlers.HandlePreviewReport).Methods("POST")
 	protected.HandleFunc("/alert-rules/{id}/send-report", handlers.HandleSendReport).Methods("POST")
 	protected.HandleFunc("/alert-rules/preview", handlers.HandlePreviewAlertRule).Methods("POST")
+	// 扫出「站点 × 桌台」候选关系，导到运维平台去定心跳告警的监控范围
+	protected.HandleFunc("/alert-rules/scan-pairs", handlers.HandleHeartbeatScanPairs).Methods("POST")
 	protected.HandleFunc("/alert-rules/test-send", handlers.HandleTestSendAlertRule).Methods("POST")
 	protected.HandleFunc("/alert-rules/export", handlers.HandleExportAlertRules).Methods("POST")
 	protected.HandleFunc("/alert-rules/import", handlers.HandleImportAlertRules).Methods("POST")

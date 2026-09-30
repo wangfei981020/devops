@@ -523,6 +523,107 @@ const roomSites = ref({ table_no: '', watched: [], others: [], total: 0 })
 
 const allSitesChecked = computed(() => sites.value.length > 0 && siteSelection.value.length === sites.value.length)
 
+// ============ 站点 × 桌台 对应关系 ============
+// 这张表决定心跳告警监控哪些组合。它不能从日志推断出来：日志只能证明「出现过的
+// 组合存在」，证明不了「没出现的组合不存在」——而一张整周没有日志的在用桌台，
+// 恰恰是最该告警的那个。
+const roomSiteMap = ref([])
+const rsTotal = ref(0)
+const rsInScope = ref(0)
+const rsFilter = ref({ watched: '1', inService: '1' })
+const rsImportDialog = ref(false)
+const rsImportText = ref('')
+const rsImportMsg = ref('')
+const rsImportErr = ref(false)
+const rsImporting = ref(false)
+const rsAddDialog = ref(false)
+const rsAddForm = ref({ room_id: '', site_ids: [], remark: '' })
+
+async function loadRoomSiteMap() {
+  if (!currentEnvId.value) { roomSiteMap.value = []; return }
+  try {
+    const res = await api.get('/api/table-alert/room-site-map', {
+      params: {
+        env_id: currentEnvId.value,
+        ...(rsFilter.value.watched ? { watched_only: 1 } : {}),
+        ...(rsFilter.value.inService ? { in_service_only: 1 } : {})
+      }
+    })
+    roomSiteMap.value = res.data?.list || []
+    rsTotal.value = res.data?.total || 0
+    rsInScope.value = res.data?.in_scope || 0
+  } catch (e) {
+    roomSiteMap.value = []
+  }
+  // 手动补一条要用到桌台和站点名单
+  if (!rooms.value.length) loadRooms()
+  if (!sites.value.length) loadSites()
+}
+
+async function doImportRoomSites() {
+  rsImportMsg.value = ''; rsImportErr.value = false
+  let payload
+  try {
+    payload = JSON.parse(rsImportText.value)
+  } catch (e) {
+    rsImportErr.value = true
+    rsImportMsg.value = '不是合法的 JSON：' + e.message
+    return
+  }
+  if (!payload || !Array.isArray(payload.pairs) || !payload.pairs.length) {
+    rsImportErr.value = true
+    rsImportMsg.value = '里面没有 pairs 数组 —— 确认复制的是「导出站点×桌台候选」的完整内容'
+    return
+  }
+  rsImporting.value = true
+  try {
+    const res = await api.post('/api/table-alert/room-site-map/import', {
+      env_id: currentEnvId.value,
+      scan_range: payload.scan_range || '',
+      pairs: payload.pairs
+    })
+    const d = res.data || {}
+    rsImportMsg.value = `新增 ${d.added} 条，更新 ${d.updated} 条` + (d.skipped ? `，跳过 ${d.skipped} 条` : '')
+    rsImportText.value = ''
+    loadRoomSiteMap()
+  } catch (e) {
+    rsImportErr.value = true
+    rsImportMsg.value = e.response?.data?.message || '导入失败'
+  }
+  rsImporting.value = false
+}
+
+async function doAddRoomSites() {
+  if (!rsAddForm.value.room_id || !rsAddForm.value.site_ids.length) return
+  try {
+    await api.post('/api/table-alert/room-site-map', {
+      env_id: currentEnvId.value,
+      room_id: rsAddForm.value.room_id,
+      site_ids: rsAddForm.value.site_ids,
+      remark: rsAddForm.value.remark
+    })
+    rsAddDialog.value = false
+    rsAddForm.value = { room_id: '', site_ids: [], remark: '' }
+    loadRoomSiteMap()
+  } catch (e) { /* 失败时保留弹窗，让人能改了重试 */ }
+}
+
+// 排除而不是删除：删掉之后下一轮导入又会把它加回来，人的判断就白做了
+async function toggleRoomSite(m) {
+  try {
+    await api.put(`/api/table-alert/room-site-map/${m.id}`, { enabled: !m.enabled, remark: m.remark || '' })
+    loadRoomSiteMap()
+  } catch (e) { /* ignore */ }
+}
+
+async function deleteRoomSite(m) {
+  if (!confirm(`删除「${m.site_name || m.site_id} × ${m.room_no || m.room_id}」？\n如果只是暂时不监控，用「排除」更合适——删掉后下次导入会自动加回来。`)) return
+  try {
+    await api.delete(`/api/table-alert/room-site-map/${m.id}`)
+    loadRoomSiteMap()
+  } catch (e) { /* ignore */ }
+}
+
 async function loadSites() {
   if (!currentEnvId.value) { sites.value = []; return }
   try {
@@ -974,6 +1075,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       <button class="tab" :class="{ active: activeTab === 'alert' }" @click="activeTab = 'alert'; loadRule()">🔔 告警设置</button>
       <button class="tab" :class="{ active: activeTab === 'windows' }" @click="activeTab = 'windows'; loadWindows()">🗓 例行维护</button>
       <button class="tab" :class="{ active: activeTab === 'sites' }" @click="activeTab = 'sites'; loadSites()">🏢 站点管理</button>
+      <button class="tab" :class="{ active: activeTab === 'roomsites' }" @click="activeTab = 'roomsites'; loadRoomSiteMap()">🔗 站点×桌台</button>
       <button class="tab" :class="{ active: activeTab === 'logs' }" @click="activeTab = 'logs'; loadLogs()">📋 采集日志</button>
     </div>
 
@@ -1662,6 +1764,135 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           </tbody>
         </table>
       </template>
+    </div>
+
+    <!-- ================= Tab 站点 × 桌台 ================= -->
+    <div v-if="activeTab === 'roomsites'" class="tab-content">
+      <div v-if="!currentEnvId" class="empty-block">请先在上方选择一个环境</div>
+      <template v-else>
+        <div class="stat-row">
+          <div class="stat-card"><div class="sc-num">{{ rsTotal }}</div><div class="sc-label">对应关系条数</div></div>
+          <div class="stat-card maintain"><div class="sc-num">{{ rsInScope }}</div><div class="sc-label">心跳监控范围</div></div>
+        </div>
+
+        <p class="hint-line">
+          中台接口<strong>给不了</strong>这层关系 —— 桌台对象上只有 <code>gameRoomMaintainList</code>，
+          而它只在维护时才非空，<code>siteStatus</code> 实测恒为 null。所以只能在这里维护。
+          <br>这张表直接决定<strong>心跳告警监控哪些组合</strong>：监控范围 =
+          本表启用的关系 ∩ ★关注站点 ∩ 在用桌台。一张在用桌台如果不在这里，它安静多久都不会有人知道。
+          <br>「自动」是日志告警平台扫出来的 —— 日志里出现过就证明这个组合真实存在，所以导入即生效。
+          你要做的只有两件：<strong>补</strong>日志里没出现过的，<strong>排除</strong>已经不用的。
+        </p>
+
+        <div class="filter-bar">
+          <select v-model="rsFilter.watched" @change="loadRoomSiteMap()">
+            <option value="1">只看关注站点</option>
+            <option value="">全部站点</option>
+          </select>
+          <select v-model="rsFilter.inService" @change="loadRoomSiteMap()">
+            <option value="1">只看在用桌台</option>
+            <option value="">全部桌台</option>
+          </select>
+          <button class="btn btn-primary" @click="loadRoomSiteMap()">刷新</button>
+          <button v-if="canSiteManage" class="btn btn-primary" @click="rsImportDialog = true">导入候选</button>
+          <button v-if="canSiteManage" class="btn btn-secondary" @click="rsAddDialog = true">+ 手动补一条</button>
+        </div>
+
+        <table class="data-table">
+          <thead>
+            <tr><th>站点</th><th>桌台</th><th>room_id</th><th>来源</th><th>命中数</th><th>纳入监控</th><th>备注</th><th>操作</th></tr>
+          </thead>
+          <tbody>
+            <tr v-if="!roomSiteMap.length"><td colspan="8" class="empty">
+              还没有任何对应关系 —— 先去日志告警平台的心跳规则预览里导出候选，再点上面「导入候选」
+            </td></tr>
+            <tr v-for="m in roomSiteMap" :key="m.id" :class="{ 'row-routine': m.watched && m.in_service && m.enabled }">
+              <td :class="m.watched ? 'strong' : 'dim'">
+                {{ m.site_name || '(未命名)' }}<span v-if="m.watched" class="star on"> ★</span>
+              </td>
+              <td>
+                {{ m.room_no || m.room_id }}
+                <span v-if="!m.in_service" class="tag tag-unknown" title="桌台不在用，不会被监控">非在用</span>
+              </td>
+              <td class="mono small dim">{{ m.room_id }}</td>
+              <td>
+                <span v-if="m.source === 'manual'" class="tag tag-routine" title="人工录入，扫描不会覆盖">手动</span>
+                <span v-else class="tag tag-unknown" title="日志扫描发现">自动</span>
+              </td>
+              <td class="small dim">
+                <span v-if="m.hits">{{ m.hits }} 条<span v-if="m.scan_range"> / {{ m.scan_range }}</span></span>
+                <span v-else title="扫描窗口里没有日志——不代表关系不存在，可能就是这段时间没人玩">—</span>
+              </td>
+              <td>
+                <span v-if="!m.enabled" class="tag tag-unknown">已排除</span>
+                <span v-else-if="m.watched && m.in_service" class="tag tag-routine">是</span>
+                <span v-else class="dim" :title="!m.watched ? '站点未关注' : '桌台非在用'">否</span>
+              </td>
+              <td class="dim small">{{ m.remark }}</td>
+              <td>
+                <button v-if="canSiteManage" class="btn-link" @click="toggleRoomSite(m)">
+                  {{ m.enabled ? '排除' : '恢复' }}
+                </button>
+                <button v-if="canSiteManage" class="btn-link danger" @click="deleteRoomSite(m)">删除</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </template>
+    </div>
+
+    <!-- 导入候选 -->
+    <div v-if="rsImportDialog" class="modal-mask" @click.self="rsImportDialog = false">
+      <div class="modal">
+        <h3>导入候选对应关系</h3>
+        <p class="hint-line">
+          在日志告警平台打开心跳规则 → 预览 → 点「导出站点×桌台候选」，把内容整段贴进来。
+          <br><strong>只增不删</strong>：扫描窗口里没出现的组合可能只是这段时间没人玩，
+          按缺席去删关系会把最该告警的那批桌台从监控范围里抹掉。
+        </p>
+        <textarea v-model="rsImportText" rows="10" class="mono"
+                  placeholder='{"scan_range":"7d","pairs":[{"room_id":"1006","site_id":"1129...","hits":356}]}'></textarea>
+        <div v-if="rsImportMsg" class="hint-line" :class="{ danger: rsImportErr }">{{ rsImportMsg }}</div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" @click="rsImportDialog = false">取消</button>
+          <button class="btn btn-primary" :disabled="rsImporting" @click="doImportRoomSites">
+            {{ rsImporting ? '导入中…' : '导入' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 手动补一条 -->
+    <div v-if="rsAddDialog" class="modal-mask" @click.self="rsAddDialog = false">
+      <div class="modal">
+        <h3>手动补一条对应关系</h3>
+        <p class="hint-line">
+          用于日志里从没出现过的组合 —— 比如一张刚上线、或者已经安静很久的在用桌台。
+          这类组合扫描发现不了，而它们恰恰是最该被监控的。
+        </p>
+        <div class="form-row">
+          <label>桌台</label>
+          <select v-model="rsAddForm.room_id">
+            <option value="">请选择</option>
+            <option v-for="rm in rooms" :key="rm.room_id" :value="rm.room_id">
+              {{ rm.room_no || rm.room_id }}{{ rm.in_service ? '' : '（非在用）' }}
+            </option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>站点</label>
+          <select v-model="rsAddForm.site_ids" multiple size="6">
+            <option v-for="st in sites" :key="st.site_id" :value="st.site_id">
+              {{ st.watched ? '★ ' : '' }}{{ st.site_name || '(未命名) ' + st.site_id }}
+            </option>
+          </select>
+        </div>
+        <div class="form-row"><label>备注</label><input v-model="rsAddForm.remark" placeholder="选填"></div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" @click="rsAddDialog = false">取消</button>
+          <button class="btn btn-primary" @click="doAddRoomSites">保存</button>
+        </div>
+      </div>
     </div>
 
     <!-- ================= Tab 采集日志 ================= -->

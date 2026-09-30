@@ -1009,6 +1009,62 @@ func taRecalcDictVersion(env *TAEnv, collectedAt time.Time) {
 	}
 	srows.Close()
 
+	// 站点 × 桌台 对应关系：它直接决定心跳告警监控哪些组合，改了必须让对方立刻重拉。
+	prows, err := database.DB.Query(`
+		SELECT room_id, site_id, enabled FROM table_alert_room_sites
+		WHERE env_id=? ORDER BY room_id, site_id`, env.ID)
+	if err != nil {
+		taErrorf("env=%s 算字典指纹失败（对应关系）: %v", env.Name, err)
+		return
+	}
+	for prows.Next() {
+		var roomID, siteID string
+		var enabled bool
+		if prows.Scan(&roomID, &siteID, &enabled) != nil {
+			continue
+		}
+		fmt.Fprintf(h, "p|%s|%s|%t\n", roomID, siteID, enabled)
+	}
+	prows.Close()
+
+	// 维护中状态：和在线人数不同，它只在维护真正开始/结束时才变，而那正是对方
+	// 该重新判断「这个组合现在该不该告警」的时刻。
+	mrows, err := database.DB.Query(`
+		SELECT room_id, maintaining, COALESCE(maintain_site_ids,'')
+		FROM table_alert_rooms WHERE env_id=? AND last_seen_at >= ? ORDER BY room_id`, env.ID, since)
+	if err != nil {
+		taErrorf("env=%s 算字典指纹失败（维护状态）: %v", env.Name, err)
+		return
+	}
+	for mrows.Next() {
+		var roomID, sites string
+		var maintaining bool
+		if mrows.Scan(&roomID, &maintaining, &sites) != nil {
+			continue
+		}
+		fmt.Fprintf(h, "m|%s|%t|%s\n", roomID, maintaining, sites)
+	}
+	mrows.Close()
+
+	// 例行维护窗口：窗口定义变了，对方本地的抑制判断就该跟着变。
+	wrows, err := database.DB.Query(`
+		SELECT id, enabled, repeat_type, weekdays, month_days, once_date,
+		       start_time, end_time, COALESCE(table_nos,''), action
+		FROM table_alert_maint_windows WHERE env_id=? ORDER BY id`, env.ID)
+	if err != nil {
+		taErrorf("env=%s 算字典指纹失败（维护窗口）: %v", env.Name, err)
+		return
+	}
+	for wrows.Next() {
+		var id, rt, wd, md, od, st, et, tn, act string
+		var en bool
+		if wrows.Scan(&id, &en, &rt, &wd, &md, &od, &st, &et, &tn, &act) != nil {
+			continue
+		}
+		fmt.Fprintf(h, "w|%s|%t|%s|%s|%s|%s|%s|%s|%s|%s\n", id, en, rt, wd, md, od, st, et, tn, act)
+	}
+	wrows.Close()
+
 	version := hex.EncodeToString(h.Sum(nil))[:16]
 
 	var old string

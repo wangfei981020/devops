@@ -177,41 +177,30 @@
               </div>
             </div>
             <div class="form-row">
-              <div class="form-group">
-                <label class="form-label">基线窗口</label>
-                <input v-model="form.baseline_range" class="form-input" placeholder="7d" />
-                <div class="form-hint">从这段历史里找出「本该有日志」的组合。结果缓存 1 小时，不会每轮都查</div>
-              </div>
-              <div class="form-group">
-                <label class="form-label">基线最少次数</label>
-                <input v-model.number="form.baseline_min_hits" type="number" class="form-input" min="0" />
-                <div class="form-hint">
-                  基线窗口内低于这个次数视为低频，不纳入监控 —— 本来几小时才来一个人的房间，
-                  用「15 分钟没日志」去判必然误报
-                </div>
-              </div>
-              <div class="form-group">
-                <label class="form-label">最冷一小时最少次数</label>
-                <input v-model.number="form.baseline_min_hourly" type="number" class="form-input" min="0" />
-                <div class="form-hint">
-                  比上面那个准：<b>总次数会被高峰时段撑起来</b>。实测有房间一天 130 多条、总数看着正常，
-                  却有整整两个小时一条都没有 —— 用 5 分钟窗口监控它，那两小时必然误报。
-                  这一项看的是基线里<b>最安静那一小时</b>有多少条。
-                  <br>填 <code>0</code> 表示不启用；想先看效果就先预览，不达标的会列在「观察中」里。
+              <div class="form-group" style="grid-column: 1 / -1;">
+                <div class="card" style="padding: 10px 12px; background: #eff6ff; border-color: #bfdbfe;">
+                  <div class="text-sm" style="color: #1e40af;">
+                    <b>监控范围来自运维平台</b>，不由日志决定 ——
+                    「站点 × 桌台」对应关系 ∩ ★关注站点 ∩ 在用桌台。
+                    <br>所以这里没有流量门槛：<b>在用就监控</b>。一张整周没有日志的在用桌台，
+                    正是最该告警的那个，用日志去推断范围永远发现不了它。
+                    <br>维护中的组合本轮不判定 —— 中台实时标记精确到「A 站点维护、B 站点照常」，
+                    例行维护窗口按运维平台的配置和时区判定。
+                  </div>
                 </div>
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label">字典源（可选）</label>
+              <label class="form-label">字典源 *</label>
               <select v-model.number="form.dict_source_id" class="form-select">
-                <option :value="0">不翻译，告警里显示原始 id</option>
+                <option :value="0">请选择（心跳模式必填）</option>
                 <option v-for="d in dictSources" :key="d.id" :value="d.id">
                   {{ d.name }}（{{ d.env }}）{{ d.last_sync_ok ? '' : ' · ⚠ 最近同步失败' }}
                 </option>
               </select>
               <div class="form-hint">
-                把 room_id / site_id 翻成房间号和站点名，并按运维平台的「在用 / 关注」过滤。
-                字典拿不到时仍会照常告警，只是显示原始 id。
+                心跳模式下字典<b>就是监控范围本身</b> —— 站点×桌台对应关系、关注状态、在用标记、
+                维护窗口全部从这里来。所以它不是可选项：拿不到字典就没有范围，这一轮什么都判不了。
               </div>
             </div>
           </template>
@@ -776,17 +765,10 @@
         <template v-if="previewData.mode === 'heartbeat'">
           <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px;">
             <div class="stat-card" style="padding: 12px;">
-              <div class="label">数据源</div>
-              <div style="font-weight: 600;">业务心跳</div>
+              <div class="label">监控范围</div>
+              <div style="font-weight: 600; font-size: 20px;">{{ previewData.scope_size }} 组合</div>
               <div class="text-sm text-secondary" style="margin-top: 2px;">
-                维度: {{ (previewData.dims || []).join(' × ') }}
-              </div>
-            </div>
-            <div class="stat-card" style="padding: 12px;">
-              <div class="label">实际监控</div>
-              <div style="font-weight: 600; font-size: 20px;">{{ previewData.monitored }} 组合</div>
-              <div class="text-sm text-secondary" style="margin-top: 2px;">
-                基线 {{ previewData.baseline_range }} 共 {{ previewData.baseline_size }} 个 · 窗口 {{ previewData.time_range }}
+                来自运维平台的站点×桌台关系 · 窗口 {{ previewData.time_range }}
               </div>
             </div>
             <div class="stat-card" style="padding: 12px;">
@@ -796,25 +778,55 @@
                 {{ previewData.missing_count }}
               </div>
               <div class="text-sm text-secondary" style="margin-top: 2px;">
-                监控范围内活跃 {{ previewData.alive_count }}
+                范围内有活动 {{ previewData.alive_count }}
+              </div>
+            </div>
+            <div class="stat-card" style="padding: 12px;">
+              <div class="label">维护中（不判定）</div>
+              <div style="font-weight: 600; font-size: 20px;">{{ previewData.maintaining_count }}</div>
+              <div class="text-sm text-secondary" style="margin-top: 2px;">
+                中台标记 + 例行窗口{{ previewData.dict_tz ? '（时区 ' + previewData.dict_tz + '）' : '' }}
               </div>
             </div>
           </div>
 
-          <!-- 被排除的数量要单独说清楚：调阈值时最该看的就是这两个数，
-               「异常 0」既可能是一切正常，也可能是全被过滤掉了。 -->
+          <!-- 范围推导链要原样摆出来：看到「异常 0」时必须能分辨是一切正常，
+               还是范围本身就被过滤空了。每个数字都对得上。 -->
           <div class="card" style="padding: 8px 12px; margin-bottom: 12px;">
             <span class="text-sm text-secondary">
-              基线 <b>{{ previewData.baseline_size }}</b> 个组合
-              －<b>{{ previewData.skipped_by_dict }}</b> 站点未关注/房间非在用
-              －<b>{{ previewData.watching_count ?? previewData.skipped_low_traffic }}</b> 观察中（基线还判不了）
-              ＝ 实际监控 <b>{{ previewData.monitored }}</b> 个，
-              其中 <b>{{ previewData.alive_count }}</b> 有活动、<b>{{ previewData.missing_count }}</b> 异常
+              对应关系 <b>{{ previewData.pair_total }}</b> 条
+              －<b>{{ previewData.skip_not_watched }}</b> 站点未关注
+              －<b>{{ previewData.skip_not_in_service }}</b> 桌台非在用
+              <template v-if="previewData.skip_unknown">－<b>{{ previewData.skip_unknown }}</b> 关系已失效</template>
+              ＝ 监控范围 <b>{{ previewData.scope_size }}</b> 个
+              （其中 <b>{{ previewData.maintaining_count }}</b> 维护中不判定，
+              <b>{{ previewData.alive_count }}</b> 有活动、<b>{{ previewData.missing_count }}</b> 异常）
               <template v-if="previewData.dict_version">
-                <br>字典 {{ previewData.dict_rooms }} 房间 / {{ previewData.dict_sites }} 站点
-                <span v-if="previewData.dict_stale" style="color: var(--danger);">· ⚠ 名称可能过期</span>
+                <br>字典 {{ previewData.dict_rooms }} 桌台 / {{ previewData.dict_sites }} 站点
+                / {{ previewData.dict_windows }} 个维护窗口
+                <span v-if="previewData.dict_stale" style="color: var(--danger);">· ⚠ 名单可能过期</span>
               </template>
             </span>
+          </div>
+
+          <!-- 范围外有活动：关系表的体检项。不摆出来的话，一张漏配的桌台会永远
+               安静地不被监控，而且没有任何迹象。 -->
+          <div v-if="previewData.out_of_scope_count > 0" class="card"
+               style="padding: 8px 12px; margin-bottom: 12px; background: #fffbeb; border-color: #fde68a;">
+            <span class="text-sm" style="color: #92400e;">
+              ⚠ 有 <b>{{ previewData.out_of_scope_count }}</b> 个组合本窗口<b>有日志、却不在监控范围里</b>。
+              日志证明它们真实存在 —— 去运维平台检查：站点没关注？桌台标成非在用？还是对应关系缺了一条？
+            </span>
+            <table style="width: 100%; font-size: 13px; margin-top: 8px;">
+              <thead><tr><th>站点</th><th>桌台</th><th>site_id</th><th>room_id</th></tr></thead>
+              <tbody>
+                <tr v-for="m in previewData.out_of_scope" :key="'o' + m.site_id + m.room_id">
+                  <td>{{ m.site }}</td><td>{{ m.room }}</td>
+                  <td class="text-sm text-secondary" style="font-family: ui-monospace, monospace;">{{ m.site_id }}</td>
+                  <td class="text-sm text-secondary" style="font-family: ui-monospace, monospace;">{{ m.room_id }}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
           <div v-if="previewData.missing_count > 0" style="margin-bottom: 12px;">
@@ -822,62 +834,78 @@
               ⚠ 异常 —— {{ previewData.time_range }} 内无活动，会告警
             </h4>
             <table style="width: 100%; font-size: 13px;">
-              <thead><tr><th>站点</th><th>房间</th><th>基线次数</th><th>最冷一小时</th><th>room_id</th></tr></thead>
+              <thead><tr><th>站点</th><th>桌台</th><th>关系来源</th><th>平时活跃度</th><th>room_id</th></tr></thead>
               <tbody>
                 <tr v-for="m in previewData.missing" :key="m.site_id + '|' + m.room_id">
                   <td>{{ m.site }}</td>
                   <td style="font-weight: 500;">{{ m.room }}</td>
-                  <td>{{ previewData.baseline_range }} 内 {{ m.baseline }} 次</td>
-                  <!-- 最冷一小时是判断"要不要现在就去现场"的依据：平时最少也有几十条的房间
-                       突然没动静，和平时最冷只有 1 条的房间没动静，紧迫程度完全不同。 -->
-                  <td>{{ m.min_hourly }} 次<span v-if="gapHours(m)" class="text-sm" style="color: var(--warning, #b45309);"> ({{ gapHours(m) }}h 空窗)</span></td>
+                  <td>
+                    <span v-if="m.source === 'manual'" class="badge badge-warning" title="人工录入">手动</span>
+                    <span v-else class="badge badge-secondary">自动</span>
+                  </td>
+                  <!-- 人工补的关系如果日志里从没出现过，第一次告警时要能分辨
+                       「真出问题了」还是「这条关系本来就配错了」 -->
+                  <td class="text-sm">
+                    <span v-if="m.hits">扫描窗口内 {{ m.hits }} 条</span>
+                    <span v-else style="color: var(--danger);">日志里从未出现过</span>
+                  </td>
                   <td class="text-sm text-secondary" style="font-family: ui-monospace, monospace;">{{ m.room_id }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
           <div v-else class="card" style="padding: 12px; margin-bottom: 12px; background: #f0fdf4; border-color: #bbf7d0;">
-            <span style="color: var(--success); font-weight: 600;">正常（无异常组合，不会告警）</span>
+            <span style="color: var(--success); font-weight: 600;">正常（监控范围内没有异常组合，不会告警）</span>
           </div>
+
+          <details v-if="(previewData.maintaining || []).length" style="margin-bottom: 12px;">
+            <summary class="text-sm" style="cursor: pointer; color: #b45309;">
+              维护中 {{ previewData.maintaining.length }} 个 —— 本轮不判定，<b>不会告警</b>
+            </summary>
+            <table style="width: 100%; font-size: 13px; margin-top: 8px;">
+              <thead><tr><th>站点</th><th>桌台</th><th>抑制原因</th></tr></thead>
+              <tbody>
+                <tr v-for="m in previewData.maintaining" :key="'m' + m.site_id + m.room_id">
+                  <td>{{ m.site }}</td><td>{{ m.room }}</td>
+                  <td class="text-sm text-secondary">{{ m.maintain_why }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </details>
 
           <details v-if="(previewData.alive || []).length" style="margin-bottom: 12px;">
             <summary class="text-sm text-secondary" style="cursor: pointer;">
               查看监控范围内有活动的 {{ previewData.alive.length }} 个组合
             </summary>
             <table style="width: 100%; font-size: 13px; margin-top: 8px;">
-              <thead><tr><th>站点</th><th>房间</th><th>基线次数</th><th>最冷一小时</th></tr></thead>
+              <thead><tr><th>站点</th><th>桌台</th><th>平时活跃度</th></tr></thead>
               <tbody>
-                <tr v-for="m in previewData.alive" :key="m.site_id + '|' + m.room_id">
-                  <td>{{ m.site }}</td>
-                  <td>{{ m.room }}</td>
-                  <td>{{ previewData.baseline_range }} 内 {{ m.baseline }} 次</td>
-                  <td>{{ m.min_hourly }} 次<span v-if="gapHours(m)" class="text-sm" style="color: var(--warning, #b45309);"> ({{ gapHours(m) }}h 空窗)</span></td>
+                <tr v-for="m in previewData.alive" :key="'a' + m.site_id + m.room_id">
+                  <td>{{ m.site }}</td><td>{{ m.room }}</td>
+                  <td class="text-sm text-secondary">{{ m.hits ? m.hits + ' 条' : '—' }}</td>
                 </tr>
               </tbody>
             </table>
           </details>
 
-          <!-- 观察中：在监控范围内（站点已关注、房间在用）但基线还判不了的组合。
-               以前这批只有一个计数，于是新上线的房间是「静默不监控」—— 字典里有、
-               告警里永远不出现，没有任何地方提醒你。展开能看到它差在哪一项，
-               以及把阈值降到多少就能把它纳进来。 -->
-          <details v-if="(previewData.watching || []).length" style="margin-bottom: 12px;">
-            <summary class="text-sm" style="cursor: pointer; color: var(--warning, #b45309);">
-              观察中 {{ previewData.watching.length }} 个 —— 在监控范围内，但基线还判不了，<b>不会告警</b>
-            </summary>
-            <table style="width: 100%; font-size: 13px; margin-top: 8px;">
-              <thead><tr><th>站点</th><th>房间</th><th>基线次数</th><th>最冷一小时</th><th>差在哪</th></tr></thead>
-              <tbody>
-                <tr v-for="m in previewData.watching" :key="m.site_id + '|' + m.room_id">
-                  <td>{{ m.site }}</td>
-                  <td>{{ m.room }}</td>
-                  <td>{{ m.baseline }} 次</td>
-                  <td>{{ m.min_hourly }} 次<span v-if="gapHours(m)" class="text-sm" style="color: var(--warning, #b45309);"> ({{ gapHours(m) }}h 空窗)</span></td>
-                  <td class="text-sm text-secondary">{{ m.why }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </details>
+          <!-- 候选关系导出：运维平台需要这层关系才能定范围，而中台接口给不了。
+               这边有 Loki，能扫出「哪个站点在哪张桌台上出现过」。 -->
+          <div class="card" style="padding: 10px 12px; margin-bottom: 12px;">
+            <div class="text-sm text-secondary" style="margin-bottom: 6px;">
+              运维平台的对应关系还缺东西？在这里扫一份候选，贴到运维平台「站点×桌台 → 导入候选」。
+              <b>只增不删</b> —— 日志能证明组合存在，证明不了它不存在。
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <input v-model="scanRange" class="form-input" style="width: 100px;" placeholder="7d" />
+              <button type="button" class="btn btn-outline btn-sm" :disabled="scanning" @click="scanPairs">
+                {{ scanning ? '扫描中…' : '扫描站点×桌台候选' }}
+              </button>
+              <span v-if="scanMsg" class="text-sm text-secondary">{{ scanMsg }}</span>
+            </div>
+            <textarea v-if="scanPayload" :value="scanPayload" readonly rows="6"
+                      class="form-input" style="margin-top: 8px; font-family: ui-monospace, monospace; font-size: 12px;"
+                      @click="$event.target.select()"></textarea>
+          </div>
         </template>
 
         <!-- @人信息 -->
@@ -992,6 +1020,10 @@ const toast = useToast()
 const dialog = useConfirm()
 const previewing = ref(false)
 const previewData = ref(null)
+const scanRange = ref('7d')
+const scanning = ref(false)
+const scanMsg = ref('')
+const scanPayload = ref('')
 const testSending = ref(false)
 const reportPreviewing = ref(false)
 const reportSending = ref(false)
@@ -1531,6 +1563,29 @@ async function handleTestSend() {
     toast.error('测试发送失败: ' + (e.response?.data?.message || e.message))
   }
   testSending.value = false
+}
+
+// 扫出「站点 × 桌台」候选关系。这是 Loki 唯一还参与「范围」这件事的地方，
+// 而且是一次性的：结果拿去给运维平台建关系表，之后范围就由那边说了算。
+async function scanPairs() {
+  scanning.value = true; scanMsg.value = ''; scanPayload.value = ''
+  try {
+    const res = await api.post('/alert-rules/scan-pairs', {
+      loki_connection_id: form.value.loki_connection_id,
+      logql: form.value.logql,
+      dim_pattern: form.value.dim_pattern,
+      scan_range: scanRange.value || '7d'
+    })
+    if (res.code === 0) {
+      scanMsg.value = res.data.hint
+      scanPayload.value = JSON.stringify(res.data.payload)
+    } else {
+      scanMsg.value = res.message
+    }
+  } catch (e) {
+    scanMsg.value = e.response?.data?.message || '扫描失败'
+  }
+  scanning.value = false
 }
 
 async function handlePreview() {
