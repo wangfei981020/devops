@@ -531,15 +531,31 @@ const useSitesDialog = ref(false)
 const useSitesRoom = ref({})
 const useSitesPick = ref([])
 const useSitesSaving = ref(false)
+const useSitesBatch = ref(false)     // 批量模式：对选中的多张桌台一起设置
+const useSitesMode = ref('add')      // add=追加 / replace=覆盖
+const usQuery = ref('')
+const usShowOthers = ref(false)
 const rsImportDialog = ref(false)
 const rsImportText = ref('')
 const rsImportMsg = ref('')
 const rsImportErr = ref(false)
 const rsImporting = ref(false)
 
-// 勾选框里关注的站点排前面：一屏十几个站点，真正要勾的就那两个
-const sortedSitesForPick = computed(() =>
-  [...sites.value].sort((a, b) => (b.watched ? 1 : 0) - (a.watched ? 1 : 0))
+// 站点分两拨：打★的影响心跳监控范围，其余的不影响。
+// 生产上 27 个站点里 25 个是未命名未关注的，混在一起会把真正要勾的那两个淹掉。
+function usMatch(st) {
+  const q = usQuery.value.trim().toLowerCase()
+  if (!q) return true
+  return (st.site_name || '').toLowerCase().includes(q) || st.site_id.toLowerCase().includes(q)
+}
+const usWatchedList = computed(() => sites.value.filter(st => st.watched && usMatch(st)))
+const usOtherList = computed(() => sites.value.filter(st => !st.watched && usMatch(st)))
+
+// 勾选结果直接换算成结论：会不会被心跳监控。
+// 不给结论的话，人要自己记住「只有★的算数」这条规则再对着列表推一遍。
+const usWatchedPicked = computed(() =>
+  sites.value.filter(st => st.watched && useSitesPick.value.includes(st.site_id))
+    .map(st => st.site_name || st.site_id.slice(0, 8))
 )
 
 function useSiteNames(r) {
@@ -554,8 +570,27 @@ function useSiteMeta(siteID) {
 
 async function openUseSites(r) {
   if (!canSiteManage.value) return
+  useSitesBatch.value = false
   useSitesRoom.value = r
   useSitesPick.value = (r.use_sites || []).filter(u => u.enabled).map(u => u.site_id)
+  usQuery.value = ''
+  usShowOthers.value = false
+  if (!sites.value.length) await loadSites()
+  useSitesDialog.value = true
+}
+
+// 批量：109 张在用桌台一张张点开勾是不可能完成的，那意味着对应关系永远配不全，
+// 心跳告警也就永远覆盖不到该覆盖的桌台。
+async function openBatchUseSites() {
+  if (!canSiteManage.value || !roomSelection.value.length) return
+  useSitesBatch.value = true
+  useSitesRoom.value = {}
+  useSitesMode.value = 'add'
+  // 追加模式下默认空选：批量最常见的动作是「给这批都加上 BPUat」，
+  // 预填某一张的现有选择会让人以为那是这批的共同状态。
+  useSitesPick.value = []
+  usQuery.value = ''
+  usShowOthers.value = false
   if (!sites.value.length) await loadSites()
   useSitesDialog.value = true
 }
@@ -563,10 +598,20 @@ async function openUseSites(r) {
 async function saveUseSites() {
   useSitesSaving.value = true
   try {
-    await api.put(`/api/table-alert/rooms/${useSitesRoom.value.room_id}/use-sites`, {
-      env_id: currentEnvId.value,
-      site_ids: useSitesPick.value
-    })
+    if (useSitesBatch.value) {
+      await api.post('/api/table-alert/rooms/use-sites/batch', {
+        env_id: currentEnvId.value,
+        room_ids: roomSelection.value,
+        site_ids: useSitesPick.value,
+        mode: useSitesMode.value
+      })
+      roomSelection.value = []
+    } else {
+      await api.put(`/api/table-alert/rooms/${useSitesRoom.value.room_id}/use-sites`, {
+        env_id: currentEnvId.value,
+        site_ids: useSitesPick.value
+      })
+    }
     useSitesDialog.value = false
     loadRooms()
   } catch (e) { /* 失败时保留弹窗，让人能改了重试 */ }
@@ -1164,6 +1209,9 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <button class="btn btn-secondary" @click="batchInService(true)">✔ 标为在用 ({{ roomSelection.length }})</button>
           <button class="btn btn-secondary" @click="batchInService(false)">标为非在用</button>
         </template>
+        <button v-if="canSiteManage && roomSelection.length" class="btn btn-secondary" @click="openBatchUseSites">
+          设置使用站点 ({{ roomSelection.length }})
+        </button>
         <button v-if="canSiteManage" class="btn btn-secondary" @click="rsImportDialog = true"
                 title="把日志告警平台扫出来的站点×桌台候选一次灌进来，省得一张张勾">
           导入站点×桌台候选
@@ -1769,38 +1817,77 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       </template>
     </div>
 
-    <!-- 使用站点：在桌台列表上直接勾。单开一页的话，要回答「这张在用桌台有没有
-         被心跳监控」就得来回对照两个表，而那个问题每天都要问。 -->
+    <!-- 使用站点。
+         设计上最关键的一点：只有★关注的站点影响心跳监控范围，没打星的勾了也不影响。
+         生产上 27 个站点里 25 个是未命名未关注的，平铺出来会把真正要勾的那两个淹掉，
+         所以关注站点单独一区常驻，其余折叠。 -->
     <div v-if="useSitesDialog" class="modal-mask" @click.self="useSitesDialog = false">
-      <div class="modal">
-        <h3>桌台 {{ useSitesRoom.table_no }}（{{ useSitesRoom.room_no }}）在哪些站点使用</h3>
-        <p class="hint-line">
-          中台接口给不了这层关系 —— 桌台对象上只有 <code>gameRoomMaintainList</code>，
-          而它只在维护时才非空。所以只能在这里维护。
-          <br><strong>心跳告警的监控范围 = 这里勾的站点里「★关注」的那些 × 桌台在用</strong>。
-          没勾任何关注站点的在用桌台，安静多久都不会有人知道。
-        </p>
-        <div class="use-site-list">
-          <label v-for="st in sortedSitesForPick" :key="st.site_id" class="use-site-row">
-            <input type="checkbox" :value="st.site_id" v-model="useSitesPick">
-            <span :class="st.watched ? 'strong' : 'dim'">
-              {{ st.watched ? '★ ' : '☆ ' }}{{ st.site_name || '(未命名)' }}
-            </span>
-            <span class="mono small dim">{{ st.site_id }}</span>
-            <span v-if="useSiteMeta(st.site_id)" class="small dim">
-              {{ useSiteMeta(st.site_id).source === 'manual' ? '人工' : '日志发现' }}
-              <template v-if="useSiteMeta(st.site_id).hits">· {{ useSiteMeta(st.site_id).hits }} 条</template>
-            </span>
-          </label>
+      <div class="modal us-modal">
+        <div class="us-head">
+          <h3 v-if="useSitesBatch">批量设置使用站点 · 已选 {{ roomSelection.length }} 张桌台</h3>
+          <h3 v-else>{{ useSitesRoom.table_no }}<span class="dim"> / {{ useSitesRoom.room_no }}</span> 在哪些站点使用</h3>
+          <button class="us-x" @click="useSitesDialog = false">×</button>
         </div>
-        <p class="hint-line">
-          取消勾选不会删除记录，只是不纳入监控 —— 删掉的话下次导入候选又会加回来，你的判断就白做了。
-        </p>
-        <div class="modal-actions">
-          <button class="btn btn-secondary" @click="useSitesDialog = false">取消</button>
-          <button class="btn btn-primary" :disabled="useSitesSaving" @click="saveUseSites">
-            {{ useSitesSaving ? '保存中…' : '保存' }}
-          </button>
+
+        <!-- 直接给结论，而不是让人对着规则自己推 -->
+        <div class="us-verdict" :class="usWatchedPicked.length ? 'ok' : 'warn'">
+          <template v-if="usWatchedPicked.length">
+            ✓ {{ useSitesBatch ? '这 ' + roomSelection.length + ' 张桌台都会被心跳监控' : '会被心跳监控' }}
+            —— 关注站点 <b>{{ usWatchedPicked.join('、') }}</b>
+            <template v-if="useSitesBatch && useSitesMode === 'add'">（原有站点保留）</template>
+          </template>
+          <template v-else>
+            ⚠ 不会被心跳监控 —— 没有勾任何<b>★关注</b>的站点，{{ useSitesBatch ? '这些桌台' : '这张桌台' }}安静多久都不会有人知道
+          </template>
+        </div>
+
+        <div class="us-search">
+          <input v-model="usQuery" placeholder="搜站点名或 siteId" />
+          <span class="dim small">已勾 {{ useSitesPick.length }}</span>
+        </div>
+
+        <div class="us-body">
+          <!-- 关注站点：唯一影响监控范围的那批，常驻 -->
+          <div class="us-sec-title">★ 关注站点 —— 只有这些影响监控范围</div>
+          <label v-for="st in usWatchedList" :key="st.site_id" class="us-row">
+            <input type="checkbox" :value="st.site_id" v-model="useSitesPick" />
+            <span class="us-name strong">{{ st.site_name || '(未命名)' }}</span>
+            <span v-if="useSiteMeta(st.site_id)" class="us-meta">
+              {{ useSiteMeta(st.site_id).source === 'manual' ? '人工' : '日志发现' }}<template
+                v-if="useSiteMeta(st.site_id).hits">· {{ useSiteMeta(st.site_id).hits }} 条</template>
+            </span>
+            <span class="us-id" :title="st.site_id">{{ st.site_id }}</span>
+          </label>
+          <div v-if="!usWatchedList.length" class="us-empty">
+            没有匹配的关注站点。站点要先在「站点管理」里打★才会影响监控范围。
+          </div>
+
+          <!-- 其余的折叠：勾了也不影响心跳，放出来只会淹没上面那几行 -->
+          <div class="us-sec-title us-collapse" @click="usShowOthers = !usShowOthers">
+            <span>{{ usShowOthers ? '▾' : '▸' }} 其他站点（{{ usOtherList.length }}）—— 未打★，勾了不影响心跳监控</span>
+          </div>
+          <template v-if="usShowOthers">
+            <label v-for="st in usOtherList" :key="st.site_id" class="us-row dim">
+              <input type="checkbox" :value="st.site_id" v-model="useSitesPick" />
+              <span class="us-name">{{ st.site_name || '(未命名)' }}</span>
+              <span class="us-id" :title="st.site_id">{{ st.site_id }}</span>
+            </label>
+          </template>
+        </div>
+
+        <div v-if="useSitesBatch" class="us-mode">
+          <label><input type="radio" value="add" v-model="useSitesMode" /> 追加 —— 各桌台原有的站点保留</label>
+          <label><input type="radio" value="replace" v-model="useSitesMode" /> 覆盖 —— 这批桌台变成完全一样</label>
+        </div>
+
+        <div class="us-foot">
+          <span class="dim small">取消勾选不会删除记录，只是不纳入监控 —— 删掉的话下次导入候选又会加回来。</span>
+          <div>
+            <button class="btn btn-secondary" @click="useSitesDialog = false">取消</button>
+            <button class="btn btn-primary" :disabled="useSitesSaving" @click="saveUseSites">
+              {{ useSitesSaving ? '保存中…' : '保存' }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -2395,10 +2482,52 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 </template>
 
 <style scoped>
-.use-site-list { max-height: 320px; overflow-y: auto; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; padding: 4px; }
-.use-site-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; cursor: pointer; border-radius: 4px; }
-.use-site-row:hover { background: #f8fafc; }
-.use-site-row .mono { margin-left: auto; }
+.us-modal { width: 560px; max-width: 92vw; padding: 0; }
+.us-head { display: flex; align-items: center; justify-content: space-between;
+           padding: 14px 16px 10px; border-bottom: 1px solid var(--border-color); }
+.us-head h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.us-x { border: 0; background: none; font-size: 20px; line-height: 1; color: var(--text-muted); cursor: pointer; }
+.us-x:hover { color: var(--text-primary); }
+
+/* 结论条：勾选的直接后果。不给结论的话，人要自己记住「只有★的算数」再对着列表推一遍 */
+.us-verdict { margin: 10px 16px; padding: 8px 10px; border-radius: 6px; font-size: 13px; line-height: 1.5; }
+.us-verdict.ok { background: color-mix(in srgb, var(--success) 12%, transparent);
+                 color: var(--success); border: 1px solid color-mix(in srgb, var(--success) 35%, transparent); }
+.us-verdict.warn { background: color-mix(in srgb, var(--warning) 12%, transparent);
+                   color: var(--warning); border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent); }
+
+.us-search { display: flex; align-items: center; gap: 10px; padding: 0 16px 8px; }
+.us-search input { flex: 1; padding: 6px 10px; border: 1px solid var(--border-color);
+                   border-radius: 6px; font-size: 13px;
+                   background: var(--bg-input); color: var(--text-primary); }
+
+.us-body { max-height: 46vh; overflow-y: auto; padding: 0 8px; }
+/* 分组标题吸顶，所以必须带不透明背景——否则滚动时下面的行会透上来。
+   用主题变量而不是写死白色：平台有深色主题，硬编码会在深色下变成一条白带。 */
+.us-sec-title { font-size: 12px; color: var(--text-muted); padding: 8px 8px 4px;
+                position: sticky; top: 0; background: var(--bg-card); z-index: 1; }
+.us-collapse { cursor: pointer; border-top: 1px solid var(--border-color); margin-top: 6px; }
+.us-collapse:hover { color: var(--text-secondary); }
+.us-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px;
+          border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text-primary); }
+.us-row:hover { background: var(--bg-hover); }
+.us-row.dim { color: var(--text-secondary); }
+.us-name { flex: 0 0 auto; }
+.us-meta { font-size: 11px; color: var(--text-muted); }
+/* siteId 是雪花 ID，比站点名长得多。压小、推到最右、允许截断——
+   它是核对用的，不该比名字还显眼。 */
+.us-id { margin-left: auto; font-family: ui-monospace, monospace; font-size: 11px;
+         color: var(--text-muted); opacity: .7;
+         max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.us-empty { padding: 10px; font-size: 12px; color: var(--text-muted); }
+
+.us-mode { display: flex; gap: 16px; padding: 8px 16px; border-top: 1px solid var(--border-color);
+           font-size: 13px; color: var(--text-secondary); }
+.us-mode label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.us-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+           padding: 10px 16px 14px; border-top: 1px solid var(--border-color); }
+.us-foot .small { max-width: 300px; line-height: 1.4; color: var(--text-muted); }
+.us-foot > div { display: flex; gap: 8px; flex-shrink: 0; }
 /* 主题变量用项目统一的那套：--bg-card / --bg-hover / --bg-input / --text-primary /
    --text-secondary / --text-muted / --border-color / --primary。
    容器必须显式声明 color，否则深色主题下会继承出深色文字，在深底上看不见。 */

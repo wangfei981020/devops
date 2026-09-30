@@ -287,3 +287,78 @@ func HandleTASetRoomSites(w http.ResponseWriter, r *http.Request) {
 	taRefreshDictAfterMapChange(req.EnvID)
 	respondJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "count": len(want)})
 }
+
+// HandleTABatchSetRoomSites POST /api/table-alert/rooms/use-sites/batch
+//
+// 批量给多张桌台设置使用站点。
+//
+// 没有这个的话,109 张在用桌台要开 109 次弹窗——那不是"有点麻烦",是根本没人会去用,
+// 于是对应关系永远配不全,心跳告警永远覆盖不到该覆盖的桌台。
+//
+// mode 两种语义,默认 add:
+//
+//	add     —— 并集。给一批桌台都加上某个站点,不动它们各自已有的其他站点。
+//	replace —— 覆盖。整批桌台的使用站点变成完全一样。危险但有用:刚导完候选发现
+//	           某批桌台配错了,一次改回来。
+func HandleTABatchSetRoomSites(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermSiteManage) {
+		return
+	}
+	var req struct {
+		EnvID   string   `json:"env_id"`
+		RoomIDs []string `json:"room_ids"`
+		SiteIDs []string `json:"site_ids"`
+		Mode    string   `json:"mode"`
+	}
+	if json.NewDecoder(r.Body).Decode(&req) != nil || req.EnvID == "" || len(req.RoomIDs) == 0 {
+		respondError(w, http.StatusBadRequest, "env_id 和 room_ids 不能为空")
+		return
+	}
+	if req.Mode == "" {
+		req.Mode = "add"
+	}
+	// replace 且站点为空 = 把这批桌台全部移出监控范围。这是合法操作(比如整批下线),
+	// 但不能是手滑的结果,所以要求显式传 mode=replace 才允许。
+	if len(req.SiteIDs) == 0 && req.Mode != "replace" {
+		respondError(w, http.StatusBadRequest, "没有选择站点。若要清空这批桌台的使用站点，请用 mode=replace")
+		return
+	}
+
+	now := time.Now()
+	op := taOperator(r)
+	changed := 0
+	for _, roomID := range req.RoomIDs {
+		if roomID = strings.TrimSpace(roomID); roomID == "" {
+			continue
+		}
+		for _, sid := range req.SiteIDs {
+			if sid = strings.TrimSpace(sid); sid == "" {
+				continue
+			}
+			database.DB.Exec(`INSERT INTO table_alert_room_sites
+				(id, env_id, room_id, site_id, source, enabled, created_by, first_seen_at, last_seen_at)
+				VALUES (?,?,?,?, 'manual', 1, ?, ?, ?)
+				ON DUPLICATE KEY UPDATE enabled=1`,
+				uuid.NewString(), req.EnvID, roomID, sid, op, now, now)
+		}
+		if req.Mode == "replace" {
+			// 没选中的置 enabled=0 而不是删行,和单行保存保持一致:
+			// 删掉的话下次导入候选又会加回来,人的判断就白做了。
+			args := []interface{}{req.EnvID, roomID}
+			q := `UPDATE table_alert_room_sites SET enabled=0 WHERE env_id=? AND room_id=?`
+			if len(req.SiteIDs) > 0 {
+				q += ` AND site_id NOT IN (?` + strings.Repeat(",?", len(req.SiteIDs)-1) + `)`
+				for _, sid := range req.SiteIDs {
+					args = append(args, sid)
+				}
+			}
+			database.DB.Exec(q, args...)
+		}
+		changed++
+	}
+
+	taRefreshDictAfterMapChange(req.EnvID)
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"ok": true, "rooms": changed, "sites": len(req.SiteIDs), "mode": req.Mode,
+	})
+}

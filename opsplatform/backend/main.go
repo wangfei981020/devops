@@ -498,6 +498,7 @@ func main() {
 	// 站点 × 桌台 对应关系：心跳告警的监控范围就是这张表（交叉关注站点与在用桌台）。
 	// 日常维护直接在桌台列表每行上勾选，走 use-sites；下面几个是批量导入和排障用的。
 	protected.HandleFunc("/table-alert/rooms/{room_id}/use-sites", handlers.HandleTASetRoomSites).Methods("PUT", "OPTIONS")
+	protected.HandleFunc("/table-alert/rooms/use-sites/batch", handlers.HandleTABatchSetRoomSites).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/table-alert/room-site-map", handlers.HandleTAListRoomSiteMap).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/table-alert/room-site-map/import", handlers.HandleTAImportRoomSiteMap).Methods("POST", "OPTIONS")
 	// 例行维护窗口
