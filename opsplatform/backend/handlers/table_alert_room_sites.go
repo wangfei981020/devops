@@ -107,101 +107,6 @@ func HandleTAListRoomSiteMap(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type taRoomSiteSaveReq struct {
-	EnvID   string   `json:"env_id"`
-	RoomID  string   `json:"room_id"`
-	SiteIDs []string `json:"site_ids"`
-	Remark  string   `json:"remark"`
-}
-
-// HandleTAAddRoomSiteMap POST /api/table-alert/room-site-map
-// 人工补关系：日志里从没出现过的组合只能靠这个加进来。
-func HandleTAAddRoomSiteMap(w http.ResponseWriter, r *http.Request) {
-	if !taRequirePerm(w, r, taPermSiteManage) {
-		return
-	}
-	var req taRoomSiteSaveReq
-	if json.NewDecoder(r.Body).Decode(&req) != nil {
-		respondError(w, http.StatusBadRequest, "无效的请求")
-		return
-	}
-	if req.EnvID == "" || req.RoomID == "" || len(req.SiteIDs) == 0 {
-		respondError(w, http.StatusBadRequest, "env_id / room_id / site_ids 不能为空")
-		return
-	}
-	now := time.Now()
-	op := taOperator(r)
-	added := 0
-	for _, sid := range req.SiteIDs {
-		if sid = strings.TrimSpace(sid); sid == "" {
-			continue
-		}
-		// source 固定写 manual：人工加的关系不能被后续扫描覆盖或降级，
-		// 否则"日志里没有所以删掉"会把人刚补上的那条抹掉。
-		res, err := database.DB.Exec(`
-			INSERT INTO table_alert_room_sites
-			  (id, env_id, room_id, site_id, source, enabled, remark, created_by, first_seen_at, last_seen_at)
-			VALUES (?,?,?,?, 'manual', 1, ?, ?, ?, ?)
-			ON DUPLICATE KEY UPDATE
-			  source='manual', enabled=1, remark=VALUES(remark), last_seen_at=VALUES(last_seen_at)`,
-			uuid.NewString(), req.EnvID, req.RoomID, sid, req.Remark, op, now, now)
-		if err == nil {
-			if n, _ := res.RowsAffected(); n > 0 {
-				added++
-			}
-		}
-	}
-	taRefreshDictAfterMapChange(req.EnvID)
-	respondJSON(w, http.StatusOK, map[string]interface{}{"added": added})
-}
-
-// HandleTAToggleRoomSiteMap PUT /api/table-alert/room-site-map/{id}
-// 排除而不是删除：删掉之后下一轮扫描又会把它加回来，人的判断就丢了。
-func HandleTAToggleRoomSiteMap(w http.ResponseWriter, r *http.Request) {
-	if !taRequirePerm(w, r, taPermSiteManage) {
-		return
-	}
-	id := mux.Vars(r)["id"]
-	var req struct {
-		Enabled *bool  `json:"enabled"`
-		Remark  string `json:"remark"`
-	}
-	if json.NewDecoder(r.Body).Decode(&req) != nil {
-		respondError(w, http.StatusBadRequest, "无效的请求")
-		return
-	}
-	enabled := true
-	if req.Enabled != nil {
-		enabled = *req.Enabled
-	}
-	var envID string
-	database.DB.QueryRow(`SELECT env_id FROM table_alert_room_sites WHERE id=?`, id).Scan(&envID)
-	if _, err := database.DB.Exec(`
-		UPDATE table_alert_room_sites SET enabled=?, remark=? WHERE id=?`,
-		enabled, req.Remark, id); err != nil {
-		respondError(w, http.StatusInternalServerError, "保存失败: "+err.Error())
-		return
-	}
-	taRefreshDictAfterMapChange(envID)
-	respondJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
-}
-
-// HandleTADeleteRoomSiteMap DELETE /api/table-alert/room-site-map/{id}
-func HandleTADeleteRoomSiteMap(w http.ResponseWriter, r *http.Request) {
-	if !taRequirePerm(w, r, taPermSiteManage) {
-		return
-	}
-	id := mux.Vars(r)["id"]
-	var envID string
-	database.DB.QueryRow(`SELECT env_id FROM table_alert_room_sites WHERE id=?`, id).Scan(&envID)
-	if _, err := database.DB.Exec(`DELETE FROM table_alert_room_sites WHERE id=?`, id); err != nil {
-		respondError(w, http.StatusInternalServerError, "删除失败: "+err.Error())
-		return
-	}
-	taRefreshDictAfterMapChange(envID)
-	respondJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
-}
-
 type taRoomSiteImportReq struct {
 	EnvID     string `json:"env_id"`
 	ScanRange string `json:"scan_range"`
@@ -281,4 +186,104 @@ func taRefreshDictAfterMapChange(envID string) {
 		return
 	}
 	taRecalcDictVersion(env, time.Now())
+}
+
+// taLoadRoomSiteMap 一次取出整个环境的对应关系，按 room_id 分组。
+//
+// 给桌台列表用：那页一屏三十行，每行查一次库就是三十次往返。关系表整体也就几十
+// 上百行，一次取完在内存里分组反而更快。
+func taLoadRoomSiteMap(envID string) map[string][]map[string]interface{} {
+	out := map[string][]map[string]interface{}{}
+	rows, err := database.DB.Query(`
+		SELECT rs.room_id, rs.site_id, COALESCE(s.site_name,''), COALESCE(s.watched,0),
+		       rs.source, rs.enabled, rs.hits
+		FROM table_alert_room_sites rs
+		LEFT JOIN table_alert_sites s ON s.env_id=rs.env_id AND s.site_id=rs.site_id
+		WHERE rs.env_id=?
+		ORDER BY COALESCE(s.watched,0) DESC, s.site_name, rs.site_id`, envID)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var roomID, siteID, siteName, source string
+		var watched, enabled bool
+		var hits int64
+		if rows.Scan(&roomID, &siteID, &siteName, &watched, &source, &enabled, &hits) != nil {
+			continue
+		}
+		out[roomID] = append(out[roomID], map[string]interface{}{
+			"site_id": siteID, "site_name": siteName, "watched": watched,
+			"source": source, "enabled": enabled, "hits": hits,
+		})
+	}
+	return out
+}
+
+// HandleTASetRoomSites PUT /api/table-alert/rooms/{room_id}/use-sites
+//
+// 整行覆盖某张桌台的使用站点：在桌台列表上直接勾选，比逐条增删自然得多。
+//
+// 自动发现的关系在这里被取消勾选时保留行、只置 enabled=0，而不是删掉——删掉的话
+// 下次导入候选又会把它加回来，人的判断就白做了。
+func HandleTASetRoomSites(w http.ResponseWriter, r *http.Request) {
+	if !taRequirePerm(w, r, taPermSiteManage) {
+		return
+	}
+	roomID := mux.Vars(r)["room_id"]
+	var req struct {
+		EnvID   string   `json:"env_id"`
+		SiteIDs []string `json:"site_ids"`
+	}
+	if json.NewDecoder(r.Body).Decode(&req) != nil || req.EnvID == "" {
+		respondError(w, http.StatusBadRequest, "无效的请求")
+		return
+	}
+
+	want := map[string]bool{}
+	for _, v := range req.SiteIDs {
+		if v = strings.TrimSpace(v); v != "" {
+			want[v] = true
+		}
+	}
+
+	// 先看现有的，才能区分「新增」「重新启用」「取消勾选」三种动作
+	existing := map[string]bool{} // site_id → enabled
+	rows, err := database.DB.Query(
+		`SELECT site_id, enabled FROM table_alert_room_sites WHERE env_id=? AND room_id=?`,
+		req.EnvID, roomID)
+	if err == nil {
+		for rows.Next() {
+			var sid string
+			var en bool
+			if rows.Scan(&sid, &en) == nil {
+				existing[sid] = en
+			}
+		}
+		rows.Close()
+	}
+
+	now := time.Now()
+	op := taOperator(r)
+	for sid := range want {
+		if _, ok := existing[sid]; ok {
+			database.DB.Exec(`UPDATE table_alert_room_sites SET enabled=1
+				WHERE env_id=? AND room_id=? AND site_id=?`, req.EnvID, roomID, sid)
+			continue
+		}
+		database.DB.Exec(`INSERT INTO table_alert_room_sites
+			(id, env_id, room_id, site_id, source, enabled, created_by, first_seen_at, last_seen_at)
+			VALUES (?,?,?,?, 'manual', 1, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE enabled=1`,
+			uuid.NewString(), req.EnvID, roomID, sid, op, now, now)
+	}
+	for sid := range existing {
+		if !want[sid] {
+			database.DB.Exec(`UPDATE table_alert_room_sites SET enabled=0
+				WHERE env_id=? AND room_id=? AND site_id=?`, req.EnvID, roomID, sid)
+		}
+	}
+
+	taRefreshDictAfterMapChange(req.EnvID)
+	respondJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "count": len(want)})
 }

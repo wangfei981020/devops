@@ -347,8 +347,9 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 
 	items := []map[string]interface{}{}
 	now := time.Now()
-	watchedMap := taWatchedSites(envID) // 循环外取一次，别每行都查库
-	allWindows := taListWindows(envID)  // 同理，窗口数量很少，一次取完在内存里匹配
+	watchedMap := taWatchedSites(envID)  // 循环外取一次，别每行都查库
+	allWindows := taListWindows(envID)   // 同理，窗口数量很少，一次取完在内存里匹配
+	useSites := taLoadRoomSiteMap(envID) // 站点×桌台对应关系，同样一次取完
 	for rows.Next() {
 		var (
 			roomID, tableNo, roomNo, platformID, status, operator, remoteUpd string
@@ -403,6 +404,28 @@ func HandleTAListRooms(w http.ResponseWriter, r *http.Request) {
 			item["watched_sites"] = names
 			item["watched_site_count"] = len(names)
 		}
+		// 「使用站点」—— 哪些站点在用这张桌台。这是心跳告警监控范围的来源，
+		// 所以它必须长在桌台列表上：单开一页的话，要回答「这张在用桌台有没有被
+		// 监控」就得来回对照两个表。
+		//
+		// 和隔壁「影响站点」是两件事：那个是维护此刻影响到哪些站点（来自中台的
+		// gameRoomMaintainList），这个是平时哪些站点在用它（运维平台自己维护）。
+		us := useSites[roomID]
+		if us == nil {
+			us = []map[string]interface{}{}
+		}
+		item["use_sites"] = us
+		// 被心跳监控 = 在用 + 至少有一个已关注站点在用它。列表上直接给结论，
+		// 免得人对着两列自己推。
+		monitored := 0
+		for _, u := range us {
+			if u["watched"] == true && u["enabled"] == true {
+				monitored++
+			}
+		}
+		item["heartbeat_site_count"] = monitored
+		item["heartbeat_monitored"] = inService && monitored > 0
+
 		// 带上告警次数、确认状态，以及本次维护属不属于例行窗口
 		var alertCount int
 		var state, ackedBy, winName string
