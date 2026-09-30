@@ -190,6 +190,7 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 		COALESCE(r.realtime_enabled,0), COALESCE(r.threshold_ms,0), COALESCE(r.report_enabled,0), COALESCE(r.report_schedule,''), COALESCE(r.report_mode,'separate'), COALESCE(r.report_title,''), COALESCE(r.report_template,''),
 		COALESCE(r.stack_context_enabled,0), COALESCE(r.stack_max_lines,200), COALESCE(r.stack_head_lines,12), COALESCE(r.stack_tail_lines,8), COALESCE(r.stack_boundary_pattern,''), COALESCE(r.stack_window_sec,5),
 		COALESCE(r.log_context_enabled,0), COALESCE(r.log_context_before,25), COALESCE(r.log_context_after,50), COALESCE(r.log_context_max_window_sec,1800), COALESCE(r.log_context_display_lines,30),
+		COALESCE(r.dict_source_id,0), COALESCE(r.dim_pattern,''), COALESCE(r.baseline_range,'7d'), COALESCE(r.baseline_min_hits,1000),
 		r.status, r.last_run_at, r.last_error, r.created_at, r.updated_at,
 		COALESCE(e.name,'(已删除)') as es_name, COALESCE(lk.name,'') as loki_name,
 		COALESCE(l.name,'(已删除)') as lark_name
@@ -230,6 +231,7 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	var list []map[string]interface{}
+	scanFailed := 0
 	for rows.Next() {
 		var rule models.AlertRule
 		var esName, lokiName, larkName string
@@ -248,6 +250,16 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 			&rule.Status, &rule.LastRunAt, &rule.LastError,
 			&rule.CreatedAt, &rule.UpdatedAt, &esName, &lokiName, &larkName)
 		if err != nil {
+			// 🔴 别把这个错误吞掉。Scan 失败几乎只有一个成因：SELECT 的列和这里的
+			// 目标数量对不上——加字段时漏改一边就会这样。静默 continue 的后果是
+			// 列表整个空掉、而总数照常显示 N 条，看起来像「规则丢了」，可真正的
+			// 原因一个字都不会出现在任何地方。2026-09-30 就这样上过一次生产。
+			//
+			// 只打第一条：列数不匹配时每一行都会失败，全打出来就是刷屏。
+			scanFailed++
+			if scanFailed == 1 {
+				log.Printf("[AlertRules] 列表扫描失败，这些规则不会出现在列表里（同类错误不再重复打印）: %v", err)
+			}
 			continue
 		}
 
@@ -353,6 +365,12 @@ func HandleListAlertRules(w http.ResponseWriter, r *http.Request) {
 		}
 
 		list = append(list, item)
+	}
+	// 总数是另一条 COUNT 查出来的，不受扫描失败影响。两边对不上时页面会显示
+	// 「共 N 条」却一行都没有，那是最容易被当成「数据没了」的表象，所以这里
+	// 必须把差额说出来。
+	if scanFailed > 0 {
+		log.Printf("[AlertRules] 本页有 %d 条规则因扫描失败未返回，页面上会表现为「共 N 条但列表为空」", scanFailed)
 	}
 	if list == nil {
 		list = []map[string]interface{}{}

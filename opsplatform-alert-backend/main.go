@@ -194,6 +194,7 @@ func main() {
 	protected.HandleFunc("/dict-sources/{id}", handlers.HandleUpdateDictSource).Methods("PUT")
 	protected.HandleFunc("/dict-sources/{id}", handlers.HandleDeleteDictSource).Methods("DELETE")
 	protected.HandleFunc("/dict-sources/{id}/test", handlers.HandleTestDictSource).Methods("POST")
+	protected.HandleFunc("/dict-sources/{id}/sync", handlers.HandleSyncDictSource).Methods("POST")
 
 	protected.HandleFunc("/alert-contacts", handlers.HandleListContacts).Methods("GET")
 	protected.HandleFunc("/alert-contacts", handlers.HandleCreateContact).Methods("POST")

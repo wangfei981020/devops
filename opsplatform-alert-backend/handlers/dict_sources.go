@@ -245,3 +245,56 @@ func HandleTestDictSource(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonSuccess(w, info)
 }
+
+// HandleSyncDictSource forces a real fetch right now, cache and all.
+//
+// Distinct from 测试连接, which only probes with the form's current values and
+// deliberately writes nothing: a probe should not be able to change the state
+// of a saved source. This one is the saved source actually going out, so it
+// updates the cache, the fingerprint and the last-sync record.
+//
+// It exists because without it the first real sync only happens when some rule
+// runs, and until then the list shows "尚未同步" next to a source that was just
+// configured correctly — which reads as a failure.
+func HandleSyncDictSource(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.Atoi(mux.Vars(r)["id"])
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	// Drop the cache first so this really goes out to the source. Otherwise a
+	// manual sync inside the refresh window would return the cached copy and
+	// report success without having talked to anything — the opposite of what
+	// somebody clicking "立即同步" is asking for.
+	alert.InvalidateDictCache(ctx, id)
+
+	d, err := alert.GetDict(ctx, id)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "同步失败: "+err.Error())
+		return
+	}
+
+	inService := 0
+	for _, r := range d.Rooms {
+		if r.InService {
+			inService++
+		}
+	}
+	watched := 0
+	for _, s := range d.Sites {
+		if s.Watched {
+			watched++
+		}
+	}
+	jsonSuccess(w, map[string]interface{}{
+		"version":      d.Version,
+		"collected_at": d.CollectedAt,
+		"collect_ok":   d.CollectOK,
+		"room_count":   len(d.Rooms),
+		"site_count":   len(d.Sites),
+		"in_service":   inService,
+		"watched":      watched,
+		"stale":        d.Stale,
+		"stale_why":    d.StaleWhy,
+	})
+}
