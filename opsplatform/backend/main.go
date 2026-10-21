@@ -477,6 +477,8 @@ func main() {
 	protected.HandleFunc("/table-alert/bots/{id}/test", handlers.HandleTATestBot).Methods("POST", "OPTIONS")
 	// 通知人（Lark 艾特）
 	protected.HandleFunc("/table-alert/contacts", handlers.HandleTAListContacts).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/teams-settings", handlers.HandleTAGetTeamsSettings).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/table-alert/teams-settings", handlers.HandleTASaveTeamsSettings).Methods("PUT", "OPTIONS")
 	protected.HandleFunc("/table-alert/contacts", handlers.HandleTASaveContact).Methods("POST", "OPTIONS")
 	protected.HandleFunc("/table-alert/contacts/{id}", handlers.HandleTADeleteContact).Methods("DELETE", "OPTIONS")
 	// 告警事件与确认

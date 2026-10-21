@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -1007,7 +1006,7 @@ func HandleTAListBots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := database.DB.Query(`
-		SELECT id, name, webhook, COALESCE(secret,''), description, enabled
+		SELECT id, name, webhook, COALESCE(secret,''), description, enabled, COALESCE(kind,'lark')
 		FROM table_alert_lark_bots ORDER BY name`)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "查询失败: "+err.Error())
@@ -1017,13 +1016,13 @@ func HandleTAListBots(w http.ResponseWriter, r *http.Request) {
 
 	out := []map[string]interface{}{}
 	for rows.Next() {
-		var id, name, webhook, secret, desc string
+		var id, name, webhook, secret, desc, kind string
 		var enabled bool
-		if rows.Scan(&id, &name, &webhook, &secret, &desc, &enabled) != nil {
+		if rows.Scan(&id, &name, &webhook, &secret, &desc, &enabled, &kind) != nil {
 			continue
 		}
 		out = append(out, map[string]interface{}{
-			"id": id, "name": name, "description": desc, "enabled": enabled,
+			"id": id, "name": name, "description": desc, "enabled": enabled, "kind": kind,
 			// webhook 含密钥，只回显掩码
 			"webhook_masked": taMaskWebhook(webhook),
 			"has_webhook":    webhook != "",
@@ -1045,6 +1044,7 @@ func HandleTASaveBot(w http.ResponseWriter, r *http.Request) {
 		Secret      string `json:"secret"`
 		Description string `json:"description"`
 		Enabled     bool   `json:"enabled"`
+		Kind        string `json:"kind"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 		respondError(w, http.StatusBadRequest, "请求体格式错误")
@@ -1056,20 +1056,42 @@ func HandleTASaveBot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if b.ID == "" {
+		if b.Kind == "" {
+			b.Kind = taBotKindLark
+		}
 		if strings.TrimSpace(b.Webhook) == "" {
 			respondError(w, http.StatusBadRequest, "webhook 不能为空")
 			return
 		}
+		hook, err := taCheckBotWebhook(b.Kind, b.Webhook)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if b.Kind == taBotKindTeams {
+			b.Secret = "" // Teams 工作流没有签名密钥，凭据就是地址里的 sig
+		}
 		id := uuid.New().String()
-		_, err := database.DB.Exec(`
-			INSERT INTO table_alert_lark_bots (id, name, webhook, secret, description, enabled)
-			VALUES (?,?,?,?,?,?)`, id, b.Name, b.Webhook, b.Secret, b.Description, b.Enabled)
+		_, err = database.DB.Exec(`
+			INSERT INTO table_alert_lark_bots (id, name, webhook, secret, description, enabled, kind)
+			VALUES (?,?,?,?,?,?,?)`, id, b.Name, hook, b.Secret, b.Description, b.Enabled, b.Kind)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "创建失败: "+err.Error())
 			return
 		}
-		taInfof("Lark 群「%s」已添加（操作人 %s）", b.Name, taOperator(r))
+		taInfof("%s 群「%s」已添加（操作人 %s）", taBotKindLabel(b.Kind), b.Name, taOperator(r))
 		respondJSON(w, http.StatusOK, map[string]string{"id": id})
+		return
+	}
+
+	// 类型以库里的为准，不允许改：Lark 改成 Teams 时旧的 Lark webhook 和签名会被当成 Teams 地址
+	var storedKind string
+	if err := database.DB.QueryRow(`SELECT COALESCE(kind,'lark') FROM table_alert_lark_bots WHERE id=?`, b.ID).Scan(&storedKind); err != nil {
+		respondError(w, http.StatusNotFound, "通知群不存在")
+		return
+	}
+	if b.Kind != "" && b.Kind != storedKind {
+		respondError(w, http.StatusBadRequest, "已保存的群不允许改类型，请新建")
 		return
 	}
 
@@ -1077,10 +1099,15 @@ func HandleTASaveBot(w http.ResponseWriter, r *http.Request) {
 	set := "name=?, description=?, enabled=?"
 	args := []interface{}{b.Name, b.Description, b.Enabled}
 	if strings.TrimSpace(b.Webhook) != "" {
+		hook, err := taCheckBotWebhook(storedKind, b.Webhook)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		set += ", webhook=?"
-		args = append(args, b.Webhook)
+		args = append(args, hook)
 	}
-	if strings.TrimSpace(b.Secret) != "" {
+	if strings.TrimSpace(b.Secret) != "" && storedKind != taBotKindTeams {
 		set += ", secret=?"
 		args = append(args, b.Secret)
 	}
@@ -1112,10 +1139,10 @@ func HandleTATestBot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := mux.Vars(r)["id"]
-	var name, webhook, secret string
+	var name, webhook, secret, kind string
 	err := database.DB.QueryRow(`
-		SELECT name, webhook, COALESCE(secret,'') FROM table_alert_lark_bots WHERE id=?`,
-		id).Scan(&name, &webhook, &secret)
+		SELECT name, webhook, COALESCE(secret,''), COALESCE(kind,'lark') FROM table_alert_lark_bots WHERE id=?`,
+		id).Scan(&name, &webhook, &secret, &kind)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "机器人不存在")
 		return
@@ -1141,22 +1168,26 @@ func HandleTATestBot(w http.ResponseWriter, r *http.Request) {
 	taInfof("向群「%s」发送测试消息（操作人 %s，艾特 %d 人）", name, operator, len(atIDs))
 
 	// 测试不重试，失败立刻把原因回给页面
-	sendErr := services.SendLarkCard(context.Background(), webhook, secret,
-		title, msg, "blue", "", "", atIDs...)
+	_, sendErr := taSendToBot(kind, name, webhook, secret, title, msg, "blue", "", "", atIDs, false)
 
 	database.DB.Exec(`
 		INSERT INTO table_alert_notify_logs
-		  (id, event_id, env_name, table_no, bot_id, bot_name, kind, seq, at_lark_ids, title, body, ok, error_msg, sent_at)
-		VALUES (?,'','','',?,?,'test',0,?,?,?,?,?,?)`,
+		  (id, event_id, env_name, table_no, bot_id, bot_name, kind, seq, at_lark_ids, title, body, ok, error_msg, sent_at, channel_kind)
+		VALUES (?,'','','',?,?,'test',0,?,?,?,?,?,?,?)`,
 		uuid.New().String(), id, name, strings.Join(atIDs, ","), title, msg,
-		sendErr == nil, taErrText(sendErr), time.Now())
+		sendErr == nil, taErrText(sendErr), time.Now(), kind)
 
 	if sendErr != nil {
 		taErrorf("群「%s」测试发送失败: %v", name, sendErr)
 		respondJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "error": sendErr.Error()})
 		return
 	}
-	respondJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "message": "已发送，请到群里确认"})
+	okMsg := "已发送，请到群里确认"
+	if kind == taBotKindTeams {
+		// 202 只代表工作流收下了，卡片之后由 Power Automate 发出
+		okMsg = "Teams 已接收，请到群里确认是否收到卡片"
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "message": okMsg})
 }
 
 // ---------------------------------------------------------------------------
@@ -1169,19 +1200,25 @@ func HandleTAListContacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := database.DB.Query(`
-		SELECT id, name, lark_id, remark FROM table_alert_contacts ORDER BY name`)
+		SELECT id, name, lark_id, remark, COALESCE(teams_id,'') FROM table_alert_contacts ORDER BY name`)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "查询失败: "+err.Error())
 		return
 	}
 	defer rows.Close()
-	out := []map[string]string{}
+	domain := taTeamsDomain()
+	out := []map[string]interface{}{}
 	for rows.Next() {
-		var id, name, larkID, remark string
-		if rows.Scan(&id, &name, &larkID, &remark) != nil {
+		var id, name, larkID, remark, teamsID string
+		if rows.Scan(&id, &name, &larkID, &remark, &teamsID) != nil {
 			continue
 		}
-		out = append(out, map[string]string{"id": id, "name": name, "lark_id": larkID, "remark": remark})
+		// Teams 卡片实际会 @ 的账号：填写的、推导的（灰显）、或者没有
+		account, derived := services.TeamsAccountFor(name, teamsID, domain)
+		out = append(out, map[string]interface{}{
+			"id": id, "name": name, "lark_id": larkID, "remark": remark,
+			"teams_id": teamsID, "teams_account": account, "teams_derived": derived,
+		})
 	}
 	respondJSON(w, http.StatusOK, out)
 }
@@ -1192,10 +1229,11 @@ func HandleTASaveContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var c struct {
-		ID     string `json:"id"`
-		Name   string `json:"name"`
-		LarkID string `json:"lark_id"`
-		Remark string `json:"remark"`
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		LarkID  string `json:"lark_id"`
+		Remark  string `json:"remark"`
+		TeamsID string `json:"teams_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 		respondError(w, http.StatusBadRequest, "请求体格式错误")
@@ -1205,15 +1243,20 @@ func HandleTASaveContact(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "姓名不能为空")
 		return
 	}
+	c.TeamsID = services.NormalizeTeamsAccount(c.TeamsID)
+	if c.TeamsID != "" && !services.ValidTeamsAccount(c.TeamsID) {
+		respondError(w, http.StatusBadRequest, "Teams 账号应为登录邮箱，如 alice@example.com")
+		return
+	}
 	var err error
 	if c.ID == "" {
 		_, err = database.DB.Exec(`
-			INSERT INTO table_alert_contacts (id, name, lark_id, remark) VALUES (?,?,?,?)`,
-			uuid.New().String(), c.Name, c.LarkID, c.Remark)
+			INSERT INTO table_alert_contacts (id, name, lark_id, remark, teams_id) VALUES (?,?,?,?,?)`,
+			uuid.New().String(), c.Name, c.LarkID, c.Remark, c.TeamsID)
 	} else {
 		_, err = database.DB.Exec(`
-			UPDATE table_alert_contacts SET name=?, lark_id=?, remark=? WHERE id=?`,
-			c.Name, c.LarkID, c.Remark, c.ID)
+			UPDATE table_alert_contacts SET name=?, lark_id=?, remark=?, teams_id=? WHERE id=?`,
+			c.Name, c.LarkID, c.Remark, c.TeamsID, c.ID)
 	}
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "保存失败: "+err.Error())
@@ -1548,7 +1591,8 @@ func HandleTAListNotifyLogs(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := database.DB.Query(`
 		SELECT id, event_id, env_name, table_no, bot_name, kind, seq, at_lark_ids,
-		       title, ok, COALESCE(error_msg,''), DATE_FORMAT(sent_at,'%Y-%m-%d %H:%i:%s')
+		       title, ok, COALESCE(error_msg,''), DATE_FORMAT(sent_at,'%Y-%m-%d %H:%i:%s'),
+		       COALESCE(channel_kind,'lark')
 		FROM table_alert_notify_logs`+whereSQL+`
 		ORDER BY sent_at DESC LIMIT ? OFFSET ?`, append(args, size, (page-1)*size)...)
 	if err != nil {
@@ -1559,17 +1603,19 @@ func HandleTAListNotifyLogs(w http.ResponseWriter, r *http.Request) {
 
 	items := []map[string]interface{}{}
 	for rows.Next() {
-		var id, eventID, envName, tableNo, botName, kind, atIDs, title, errMsg, sentAt string
+		var id, eventID, envName, tableNo, botName, kind, atIDs, title, errMsg, sentAt, channelKind string
 		var seq int
 		var ok bool
 		if rows.Scan(&id, &eventID, &envName, &tableNo, &botName, &kind, &seq,
-			&atIDs, &title, &ok, &errMsg, &sentAt) != nil {
+			&atIDs, &title, &ok, &errMsg, &sentAt, &channelKind) != nil {
 			continue
 		}
 		items = append(items, map[string]interface{}{
 			"id": id, "event_id": eventID, "env_name": envName, "table_no": tableNo,
 			"bot_name": botName, "kind": kind, "seq": seq, "at_lark_ids": atIDs,
 			"title": title, "ok": ok, "error_msg": errMsg, "sent_at": sentAt,
+			// teams 的 ok 只代表工作流收下了（202），页面上写「已提交」，不写「已送达」
+			"channel_kind": channelKind,
 		})
 	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{

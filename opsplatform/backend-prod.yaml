@@ -63,7 +63,7 @@ spec:
         - name: regcred
       containers:
         - name: backend
-          image: marks26/opsplatform-backend:v802
+          image: marks26/opsplatform-backend:v809
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

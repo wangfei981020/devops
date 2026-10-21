@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
@@ -19,7 +18,6 @@ import (
 	"time"
 
 	"opsplatform/database"
-	"opsplatform/services"
 
 	"github.com/google/uuid"
 )
@@ -1507,7 +1505,7 @@ func taBroadcast(rule *TARule, kind, eventID, envName, tableNo string, seq int,
 	title, body, color string, atIDs []string) {
 
 	if len(rule.BotIDs) == 0 {
-		taErrorf("env=%s 桌台 %s 告警未发送：规则没有绑定任何 Lark 机器人", envName, tableNo)
+		taErrorf("env=%s 桌台 %s 告警未发送：规则没有绑定任何通知群", envName, tableNo)
 		return
 	}
 
@@ -1517,11 +1515,11 @@ func taBroadcast(rule *TARule, kind, eventID, envName, tableNo string, seq int,
 	}
 
 	for _, botID := range rule.BotIDs {
-		var name, webhook, secret string
+		var name, webhook, secret, botKind string
 		var enabled bool
 		err := database.DB.QueryRow(`
-			SELECT name, webhook, secret, enabled FROM table_alert_lark_bots WHERE id=?`,
-			botID).Scan(&name, &webhook, &secret, &enabled)
+			SELECT name, webhook, secret, enabled, COALESCE(kind,'lark') FROM table_alert_lark_bots WHERE id=?`,
+			botID).Scan(&name, &webhook, &secret, &enabled, &botKind)
 		if err != nil {
 			taErrorf("读取机器人 %s 失败: %v", botID, err)
 			continue
@@ -1534,14 +1532,15 @@ func taBroadcast(rule *TARule, kind, eventID, envName, tableNo string, seq int,
 		taDebugf("env=%s 向群「%s」发送 %s 通知（桌台 %s，第 %d 次，艾特 %d 人）",
 			envName, name, kind, tableNo, seq, len(atIDs))
 
-		err = services.SendLarkCardWithRetry(context.Background(),
-			webhook, secret, title, body, color, "查看详情", linkURL, atIDs...)
+		_, err = taSendToBot(botKind, name, webhook, secret, title, body, color, "查看详情", linkURL, atIDs, true)
 
 		ok := err == nil
 		errMsg := ""
 		if err != nil {
 			errMsg = err.Error()
 			taErrorf("env=%s 群「%s」发送失败: %v", envName, name, err)
+		} else if botKind == taBotKindTeams {
+			taInfof("env=%s Teams 群「%s」已提交（桌台 %s，第 %d 次；卡片由工作流发出）", envName, name, tableNo, seq)
 		} else {
 			taInfof("env=%s 群「%s」发送成功（桌台 %s，第 %d 次）", envName, name, tableNo, seq)
 		}
@@ -1549,10 +1548,10 @@ func taBroadcast(rule *TARule, kind, eventID, envName, tableNo string, seq int,
 		database.DB.Exec(`
 			INSERT INTO table_alert_notify_logs
 			  (id, event_id, env_name, table_no, bot_id, bot_name, kind, seq,
-			   at_lark_ids, title, body, ok, error_msg, sent_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			   at_lark_ids, title, body, ok, error_msg, sent_at, channel_kind)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			uuid.New().String(), eventID, envName, tableNo, botID, name, kind, seq,
-			strings.Join(atIDs, ","), title, body, ok, errMsg, time.Now())
+			strings.Join(atIDs, ","), title, body, ok, errMsg, time.Now(), botKind)
 	}
 }
 

@@ -445,20 +445,20 @@ async function loadContacts() {
 }
 
 const botDialog = ref(false)
-const botForm = ref({ id: '', name: '', webhook: '', secret: '', description: '', enabled: true })
+const botForm = ref({ id: '', name: '', kind: 'lark', webhook: '', secret: '', description: '', enabled: true })
 
 function openCreateBot() {
-  botForm.value = { id: '', name: '', webhook: '', secret: '', description: '', enabled: true }
+  botForm.value = { id: '', name: '', kind: 'lark', webhook: '', secret: '', description: '', enabled: true }
   botDialog.value = true
 }
 function openEditBot(b) {
-  botForm.value = { id: b.id, name: b.name, webhook: '', secret: '', description: b.description, enabled: b.enabled }
+  botForm.value = { id: b.id, name: b.name, kind: b.kind || 'lark', webhook: '', secret: '', description: b.description, enabled: b.enabled }
   botDialog.value = true
 }
 async function saveBot() {
   if (!botForm.value.name?.trim()) { appStore.showToast('群名称不能为空', 'error'); return }
   if (!botForm.value.id && !botForm.value.webhook?.trim()) {
-    appStore.showToast('请填写 Lark 机器人 webhook', 'error'); return
+    appStore.showToast(botForm.value.kind === 'teams' ? '请填写 Teams 工作流地址' : '请填写 Lark 机器人 webhook', 'error'); return
   }
   try {
     await api.post('/api/table-alert/bots', botForm.value)
@@ -484,7 +484,8 @@ async function testBot(b) {
     const res = await api.post(`/api/table-alert/bots/${b.id}/test`, {
       at_lark_ids: (rule.value?.at_lark_ids || '')
     })
-    if (res.data?.ok) appStore.showToast('已发送，请到群里确认', 'success')
+    // Teams 回 202 只代表工作流收下了，提示语以后端为准
+    if (res.data?.ok) appStore.showToast(res.data?.message || '已发送，请到群里确认', 'success')
     else appStore.showToast('发送失败: ' + (res.data?.error || '未知错误'), 'error')
   } catch (e) {
     appStore.showToast('发送失败: ' + errText(e), 'error')
@@ -492,11 +493,40 @@ async function testBot(b) {
 }
 
 const contactDialog = ref(false)
-const contactForm = ref({ id: '', name: '', lark_id: '', remark: '' })
-function openCreateContact() { contactForm.value = { id: '', name: '', lark_id: '', remark: '' }; contactDialog.value = true }
-function openEditContact(c) { contactForm.value = { ...c }; contactDialog.value = true }
+const contactForm = ref({ id: '', name: '', lark_id: '', teams_id: '', remark: '' })
+function openCreateContact() { contactForm.value = { id: '', name: '', lark_id: '', teams_id: '', remark: '' }; contactDialog.value = true }
+function openEditContact(c) {
+  contactForm.value = { id: c.id, name: c.name, lark_id: c.lark_id, teams_id: c.teams_id || '', remark: c.remark }
+  contactDialog.value = true
+}
+// 编辑时的默认 Teams 账号提示，规则与后端 TeamsAccountFor 一致
+const contactDefaultTeams = computed(() => {
+  const local = (contactForm.value.name || '').trim().toLowerCase()
+  return teamsDomain.value && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(local) ? `${local}@${teamsDomain.value}` : ''
+})
+
+// Teams 账号默认后缀（系统参数 table_alert_teams_domain）
+const teamsDomain = ref('')
+const teamsDomainInput = ref('')
+async function loadTeamsSettings() {
+  try {
+    const res = await api.get('/api/table-alert/teams-settings')
+    teamsDomain.value = res.data?.mention_domain || ''
+    teamsDomainInput.value = teamsDomain.value
+  } catch (e) { /* 静默 */ }
+}
+async function saveTeamsDomain() {
+  try {
+    await api.put('/api/table-alert/teams-settings', { mention_domain: teamsDomainInput.value })
+    appStore.showToast('已保存', 'success')
+    await loadTeamsSettings()
+    loadContacts()
+  } catch (e) { appStore.showToast('保存失败: ' + errText(e), 'error') }
+}
+
 async function saveContact() {
   if (!contactForm.value.name?.trim()) { appStore.showToast('姓名不能为空', 'error'); return }
+  contactForm.value.teams_id = (contactForm.value.teams_id || '').trim().toLowerCase()
   try {
     await api.post('/api/table-alert/contacts', contactForm.value)
     appStore.showToast('已保存', 'success')
@@ -1038,7 +1068,7 @@ async function switchEnv() {
 
 onMounted(async () => {
   await loadEnvs()
-  await Promise.all([loadBots(), loadContacts()])
+  await Promise.all([loadBots(), loadContacts(), loadTeamsSettings()])
   await switchEnv()
   timer = setInterval(() => {
     if (!autoRefresh.value) return
@@ -1583,11 +1613,12 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
         </div>
 
         <div class="panel">
-          <h3>发送到哪些群（Lark）</h3>
-          <p class="hint">可以同时发多个群，勾选即可。</p>
+          <h3>发送到哪些群（Lark / Teams）</h3>
+          <p class="hint">可以同时发多个群，勾选即可。Teams 群的 @ 按通知人的 Teams 账号提醒。</p>
           <div class="bot-list">
             <label v-for="b in bots" :key="b.id" class="bot-item" :class="{ checked: rule.bot_ids.includes(b.id) }">
               <input type="checkbox" :checked="rule.bot_ids.includes(b.id)" @change="toggleBot(b.id)">
+              <span class="tag" :class="b.kind === 'teams' ? 'tag-routine' : 'tag-unknown'">{{ b.kind === 'teams' ? 'Teams' : 'Lark' }}</span>
               <span class="bot-name">{{ b.name }}</span>
               <span class="bot-hook mono">{{ b.webhook_masked }}</span>
               <span v-if="!b.enabled" class="tag tag-unknown">已禁用</span>
@@ -1598,10 +1629,10 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
               </template>
             </label>
             <div v-if="!bots.length" class="empty-block small">
-              还没有配置 Lark 群。点下面「+ 添加 Lark 群」，把机器人 webhook 填进来。
+              还没有配置通知群。点下面「+ 添加通知群」，填 Lark 机器人 webhook 或 Teams 工作流地址。
             </div>
           </div>
-          <button v-if="canBotManage" class="btn btn-secondary" @click="openCreateBot">+ 添加 Lark 群</button>
+          <button v-if="canBotManage" class="btn btn-secondary" @click="openCreateBot">+ 添加通知群</button>
         </div>
 
         <div class="panel">
@@ -1633,17 +1664,31 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <label class="line"><input type="checkbox" v-model="rule.reat_every_time"> 未确认时每次告警都重新艾特，已确认则停止</label>
 
           <div class="contact-mgr">
+            <div class="line teams-domain">
+              Teams 账号默认后缀
+              <input v-model="teamsDomainInput" class="mono" placeholder="example.com" :disabled="!canContactManage">
+              <button v-if="canContactManage" class="btn-link" :disabled="teamsDomainInput.trim().replace(/^@/, '').toLowerCase() === teamsDomain"
+                      @click="saveTeamsDomain">保存</button>
+              <span class="inline-hint">通知人没填 Teams 账号时按「姓名小写@后缀」@；Teams 群里名字蓝色/红色=提醒到了，黑色=账号不对</span>
+            </div>
             <div class="cm-head">
               <span>通讯录</span>
               <button v-if="canContactManage" class="btn-link" @click="openCreateContact">+ 添加通知人</button>
             </div>
             <table class="data-table compact">
-              <thead><tr><th>姓名</th><th>Lark ID</th><th>备注</th><th>操作</th></tr></thead>
+              <thead><tr><th>姓名</th><th>Lark ID</th><th>Teams 账号</th><th>备注</th><th>操作</th></tr></thead>
               <tbody>
-                <tr v-if="!contacts.length"><td colspan="4" class="empty">暂无</td></tr>
+                <tr v-if="!contacts.length"><td colspan="5" class="empty">暂无</td></tr>
                 <tr v-for="c in contacts" :key="c.id">
                   <td>{{ c.name }}</td>
                   <td class="mono small">{{ c.lark_id || '（未填）' }}</td>
+                  <td class="mono small">
+                    <span v-if="c.teams_account" :class="{ dim: c.teams_derived }"
+                          :title="c.teams_derived ? '未填写，按「姓名小写@默认后缀」推导' : '已填写'">
+                      {{ c.teams_account }}<span v-if="c.teams_derived">（默认）</span>
+                    </span>
+                    <span v-else style="color: var(--warning);" title="姓名含空格或中文，或没配默认后缀">⚠ 需单独填写</span>
+                  </td>
                   <td class="dim">{{ c.remark }}</td>
                   <td>
                     <template v-if="canContactManage">
@@ -2415,17 +2460,29 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
     <div v-if="botDialog" class="modal-mask" @click.self="botDialog = false">
       <div class="modal">
         <div class="modal-head">
-          <h3>{{ botForm.id ? '编辑 Lark 群' : '添加 Lark 群' }}</h3>
+          <h3>{{ botForm.id ? '编辑通知群' : '添加通知群' }}</h3>
           <button class="close" @click="botDialog = false">×</button>
         </div>
         <div class="modal-body">
-          <div class="form-row"><label>群名称 *</label><input v-model="botForm.name" placeholder="便于识别，如 G32业务运维群"></div>
+          <div class="form-row">
+            <label>类型</label>
+            <select v-model="botForm.kind" :disabled="!!botForm.id">
+              <option value="lark">Lark 机器人</option>
+              <option value="teams">Microsoft Teams</option>
+            </select>
+            <span v-if="botForm.id" class="inline-hint">已保存的群不能改类型</span>
+          </div>
+          <div class="form-row"><label>群名称 *</label><input v-model="botForm.name" :placeholder="botForm.kind === 'teams' ? '与 Teams 群名一致，如 G32-PROD告警群' : '便于识别，如 G32业务运维群'"></div>
           <div class="form-row">
             <label>Webhook {{ botForm.id ? '' : '*' }}</label>
             <input v-model="botForm.webhook" class="wide-input"
-                   :placeholder="botForm.id ? '已配置，留空表示不修改' : 'Lark 群机器人的 webhook 地址'">
+                   :placeholder="botForm.id ? '已配置，留空表示不修改' : (botForm.kind === 'teams' ? 'Teams 工作流的 HTTP POST 地址（含 ? 后面的 sig）' : 'Lark 群机器人的 webhook 地址')">
           </div>
-          <div class="form-row">
+          <p v-if="botForm.kind === 'teams'" class="field-hint">
+            在 Teams 群里 →「…」→「工作流」→「将 Webhook 警报发送到聊天」创建，复制完整地址。地址本身就是凭据，不要外传。
+            保存后点「发送测试」，提示「Teams 已接收」后到群里确认收到卡片。
+          </p>
+          <div v-if="botForm.kind !== 'teams'" class="form-row">
             <label>签名密钥</label>
             <input v-model="botForm.secret" type="password"
                    :placeholder="botForm.id ? '留空表示不修改' : '群机器人开了签名校验才需要填'">
@@ -2451,6 +2508,16 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
         <div class="modal-body">
           <div class="form-row"><label>姓名 *</label><input v-model="contactForm.name"></div>
           <div class="form-row"><label>Lark ID</label><input v-model="contactForm.lark_id" class="wide-input" placeholder="open_id 或 user_id，用于艾特"></div>
+          <div class="form-row">
+            <label>Teams 账号</label>
+            <input v-model="contactForm.teams_id" class="wide-input" autocomplete="off" spellcheck="false"
+                   :placeholder="contactDefaultTeams || '公司邮箱，如 alice@example.com'">
+          </div>
+          <p class="field-hint">
+            <template v-if="contactDefaultTeams">留空则默认为 <code>{{ contactDefaultTeams }}</code>；</template>
+            <template v-else>姓名含空格或中文时没有默认值，要在 Teams 里 @ 就必须填写；</template>
+            用户名和姓名不一样时在这里填。规则里勾选艾特人仍按 Lark ID 勾选，Teams 群自动换成这里的账号。
+          </p>
           <div class="form-row"><label>备注</label><input v-model="contactForm.remark"></div>
         </div>
         <div class="modal-foot">
@@ -2482,6 +2549,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 </template>
 
 <style scoped>
+.teams-domain { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.teams-domain input { width: 160px; }
 .us-modal { width: 560px; max-width: 92vw; padding: 0; }
 .us-head { display: flex; align-items: center; justify-content: space-between;
            padding: 14px 16px 10px; border-bottom: 1px solid var(--border-color); }

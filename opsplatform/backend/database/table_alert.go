@@ -400,6 +400,11 @@ func InitTableAlertTables() error {
 		// 而它只在维护真正开始/结束时才变——那正是该刷新的时刻。
 		{"table_alert_envs", "dict_version", "VARCHAR(32) NOT NULL DEFAULT ''"},
 		{"table_alert_envs", "dict_version_at", "DATETIME NULL"},
+		// Teams：通知群可以是 Lark 机器人或 Teams 工作流；通知人可填 Teams 账号用于 @；
+		// 发送记录分渠道 —— Teams 的成功只代表工作流收下了（202），和 Lark 的「已送达」不是一回事。
+		{"table_alert_lark_bots", "kind", "VARCHAR(16) NOT NULL DEFAULT 'lark' COMMENT 'lark=Lark 机器人 / teams=Teams 工作流'"},
+		{"table_alert_contacts", "teams_id", "VARCHAR(254) NOT NULL DEFAULT '' COMMENT 'Teams 登录账号（公司邮箱，小写）；空=按 姓名小写@默认后缀 推导'"},
+		{"table_alert_notify_logs", "channel_kind", "VARCHAR(16) NOT NULL DEFAULT 'lark'"},
 	} {
 		var n int
 		DB.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS
