@@ -92,6 +92,9 @@ export const listContacts = () => http.get('/contacts')
 export const createContact = (data) => http.post('/contacts', data)
 export const updateContact = (id, data) => http.put(`/contacts/${id}`, data)
 export const deleteContact = (id) => http.delete(`/contacts/${id}`)
+// Teams 账号默认后缀（通知人没填 Teams 账号时按「姓名小写@后缀」@）
+export const getTeamsSettings = () => http.get('/teams-settings')
+export const saveTeamsSettings = (data) => http.put('/teams-settings', data)
 
 // Lark Bots
 export const listLarkBots = () => http.get('/lark-bots')

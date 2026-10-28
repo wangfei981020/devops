@@ -784,21 +784,61 @@ func collectFailedApps(results []models.ArgocdAppResult) []string {
 
 // --- Lark notify ---
 
-// resolveLarkTarget 解析出 webhook + 明文 secret
-// 只有两级：1) p.LarkBotID → lark_bot 表  2) 遗留字段 p.LarkWebhook/Secret（历史）
-// 全局默认回落已移除——必须在项目环境里显式选 Lark 机器人才会发通知。
-func resolveLarkTarget(p *models.ProjectEnv) (webhook, secret string) {
+// notifyTarget 通知渠道解析结果：飞书、Teams 各自为空 = 这边不发。
+type notifyTarget struct {
+	LarkWebhook, LarkSecret string
+	Teams                   string
+}
+
+func (t notifyTarget) empty() bool { return t.LarkWebhook == "" && t.Teams == "" }
+
+// resolveNotifyTarget 解析出飞书 webhook + 明文 secret、Teams 地址
+// 只有两级：1) p.LarkBotID → lark_bot 表（通知渠道）  2) 遗留字段 p.LarkWebhook/Secret（历史，只有飞书）
+// 全局默认回落已移除——必须在项目环境里显式选通知渠道才会发通知。
+func resolveNotifyTarget(p *models.ProjectEnv) notifyTarget {
 	if p.LarkBotID != nil && *p.LarkBotID > 0 {
 		if bot, err := LoadLarkBotDecrypted(*p.LarkBotID); err == nil {
-			return bot.Webhook, bot.Secret
+			return notifyTarget{LarkWebhook: bot.Webhook, LarkSecret: bot.Secret, Teams: bot.TeamsWebhook}
 		}
 	}
 	if p.LarkWebhook != "" {
-		webhook = p.LarkWebhook
-		secret, _ = crypto.Decrypt(p.LarkSecret)
-		return
+		secret, _ := crypto.Decrypt(p.LarkSecret)
+		return notifyTarget{LarkWebhook: p.LarkWebhook, LarkSecret: secret}
 	}
-	return "", ""
+	return notifyTarget{}
+}
+
+// sendNotifyCard 往渠道配了的飞书、Teams 各发一张卡（各自带重试，飞书 40s、Teams 90s 预算）。
+// 两边互不影响，任一边失败都返回 error，调用方据此把 lark_notify 记 failed。
+// Teams 卡片沿用飞书的 body（里面的 <at id> 由 services 层去掉），mentionLarkIDs 按通知人换成 Teams @；
+// larkAtIDs 只给飞书（SendLarkCard 插到正文顶部，K8s 的卡片 @ 已写在 body 里不用传）。
+func sendNotifyCard(t notifyTarget, title, body, color, linkLabel, linkURL string, mentionLarkIDs []string, larkAtIDs ...string) error {
+	var errs []string
+	if t.LarkWebhook != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		err := services.SendLarkCardWithRetry(ctx, t.LarkWebhook, t.LarkSecret, title, body, color, linkLabel, linkURL, larkAtIDs...)
+		cancel()
+		if err != nil {
+			errs = append(errs, "lark: "+err.Error())
+		}
+	}
+	if t.Teams != "" {
+		mentions := teamsMentions(mentionLarkIDs)
+		if len(mentions) > 0 {
+			// Teams 不回告账号存不存在：有人说没被提醒到时，靠这一行对照用的是哪个账号
+			log.Printf("[teams] %s %s", title, services.TeamsMentionLog(mentions))
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		err := services.SendTeamsCardWithRetry(ctx, t.Teams, title, body, color, linkLabel, linkURL, mentions)
+		cancel()
+		if err != nil {
+			errs = append(errs, "teams: "+err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // deployDetailURL 构造 Lark 卡片"查看发布详情"按钮的 URL。
@@ -834,16 +874,16 @@ func larkColorForStatus(status string) (color, title string) {
 //	照常一张。所有卡都 @ 操作人，方便 cesar 这种业务负责人在 lark 群里被定位。
 func sendUpdateImageNotify(p *models.ProjectEnv, depID int64, operator, opLabel string,
 	tempAt []string, modules map[string]services.Module, res *services.UpdateImageResult) {
-	webhook, secret := resolveLarkTarget(p)
-	if webhook == "" {
-		log.Printf("lark skip: dep=%d no webhook configured (project_env=%s)", depID, p.Name)
+	target := resolveNotifyTarget(p)
+	if target.empty() {
+		log.Printf("lark skip: dep=%d no notify channel configured (project_env=%s)", depID, p.Name)
 		_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, "skipped", depID)
 		return
 	}
 	// 艾特 = 操作人 + 项目参数固定的 + 本次临时选的，去重
 	atIDs := mergeAtIDs(operator, p.AtLarkIDs, tempAt)
 	successes, skippeds, faileds := buildUpdateNotifyItems(modules, res)
-	sendCardSets(p, depID, operator, opLabel, atIDs, webhook, secret, res.GitCommitURL,
+	sendCardSets(p, depID, operator, opLabel, atIDs, target, res.GitCommitURL,
 		successes, skippeds, faileds)
 }
 
@@ -854,16 +894,16 @@ func mergeAtIDs(operator, fixedRaw string, tempAt []string) []string {
 
 func sendRestartNotify(p *models.ProjectEnv, depID int64, operator string,
 	modules map[string]services.Module, res *services.RestartResult) {
-	webhook, secret := resolveLarkTarget(p)
-	if webhook == "" {
-		log.Printf("lark skip: dep=%d no webhook configured (project_env=%s)", depID, p.Name)
+	target := resolveNotifyTarget(p)
+	if target.empty() {
+		log.Printf("lark skip: dep=%d no notify channel configured (project_env=%s)", depID, p.Name)
 		_, _ = database.DB.Exec(`UPDATE deployment SET lark_notify=? WHERE id=?`, "skipped", depID)
 		return
 	}
 	// 重启：艾特 操作人 + 环境固定的（无临时选入口）
 	atIDs := mergeAtIDs(operator, p.AtLarkIDs, nil)
 	successes, faileds := buildRestartNotifyItems(modules, res)
-	sendCardSets(p, depID, operator, "重启", atIDs, webhook, secret, "",
+	sendCardSets(p, depID, operator, "重启", atIDs, target, "",
 		successes, nil, faileds)
 }
 
@@ -872,7 +912,7 @@ func sendRestartNotify(p *models.ProjectEnv, depID int64, operator string,
 //   - 只有一组非空 → 发 1 张该类型卡
 //   - 多组非空 → 拆开发多张（先成功，后跳过，最后失败）
 func sendCardSets(p *models.ProjectEnv, depID int64, operator, opLabel string, atIDs []string,
-	webhook, secret, gitCommitURL string,
+	target notifyTarget, gitCommitURL string,
 	successes, skippeds, faileds []deployNotifyItem) {
 	type setEntry struct {
 		kind  string
@@ -904,11 +944,8 @@ func sendCardSets(p *models.ProjectEnv, depID int64, operator, opLabel string, a
 	anyFail := false
 	for _, s := range sets {
 		title, color, body := buildDeployNotifyBody(opLabel, operator, atIDs, s.kind, p.Name, p.EnvType, s.items)
-		// 用带重试版：3 次 attempt，每次 10s + 1s/2s 退避，外层留 40s 总预算
-		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-		err := services.SendLarkCardWithRetry(ctx, webhook, secret, title, body, color, linkLabel, linkURL)
-		cancel()
-		if err != nil {
+		// 带重试版：飞书 3 次 attempt（40s 预算），Teams 3 次（90s 预算，429 按 Retry-After 等）
+		if err := sendNotifyCard(target, title, body, color, linkLabel, linkURL, atIDs); err != nil {
 			log.Printf("lark send failed: dep=%d kind=%s err=%v", depID, s.kind, err)
 			anyFail = true
 		}

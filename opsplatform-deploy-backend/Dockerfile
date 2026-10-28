@@ -1,5 +1,6 @@
 # ---- builder ----
-FROM golang:1.25-alpine AS builder
+# golang 1.26.10+ 修 stdlib 的 net/http、crypto 等 14 个 CVE（1.25 无修复）；x/crypto v0.58 要求 go 1.26
+FROM golang:1.26-alpine AS builder
 WORKDIR /src
 ENV GOPROXY=https://goproxy.cn,direct
 COPY go.mod go.sum ./

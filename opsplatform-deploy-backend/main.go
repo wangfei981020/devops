@@ -89,6 +89,7 @@ func main() {
 	protected.HandleFunc("/project-envs", handlers.HandleListProjectEnvs).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/project-envs/{id}", handlers.HandleGetProjectEnv).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/contacts", handlers.HandleListContacts).Methods("GET", "OPTIONS")
+	protected.HandleFunc("/teams-settings", handlers.HandleGetTeamsSettings).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/lark-bots", handlers.HandleListLarkBots).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/argocd-instances", handlers.HandleListArgocdInstances).Methods("GET", "OPTIONS")
 	protected.HandleFunc("/gitlab-repos", handlers.HandleListGitlabRepos).Methods("GET", "OPTIONS")
@@ -198,6 +199,7 @@ func main() {
 	mc.HandleFunc("/contacts", handlers.HandleCreateContact).Methods("POST", "OPTIONS")
 	mc.HandleFunc("/contacts/{id}", handlers.HandleUpdateContact).Methods("PUT", "OPTIONS")
 	mc.HandleFunc("/contacts/{id}", handlers.HandleDeleteContact).Methods("DELETE", "OPTIONS")
+	mc.HandleFunc("/teams-settings", handlers.HandleSaveTeamsSettings).Methods("PUT", "OPTIONS")
 
 	// ⑤ manage_lark_bots — Lark 机器人 CRUD
 	ml := protected.PathPrefix("").Subrouter()

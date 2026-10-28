@@ -710,10 +710,8 @@ func sendVmLarkNotify(depID int64, status, errMsg string, duration int, req vmDe
 	// 逐张发送，整体成功才记 'success'，任何 1 张失败记 'failed'
 	anyFail := false
 	for _, c := range cards {
-		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-		err := services.SendLarkCardWithRetry(ctx, bot.Webhook, bot.Secret, c.title, c.body, c.color, linkLabel, linkURL, atID)
-		cancel()
-		if err != nil {
+		target := notifyTarget{LarkWebhook: bot.Webhook, LarkSecret: bot.Secret, Teams: bot.TeamsWebhook}
+		if err := sendNotifyCard(target, c.title, c.body, c.color, linkLabel, linkURL, []string{atID}, atID); err != nil {
 			log.Printf("[vm-lark] dep=%d send card %q failed (after retries): %v", depID, c.title, err)
 			anyFail = true
 		}

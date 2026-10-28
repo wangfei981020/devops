@@ -247,8 +247,8 @@ func sendOrchNotify(p *models.ProjectEnv, operator string, tempAtLarkIDs []strin
 	if len(successes) == 0 && len(faileds) == 0 {
 		return
 	}
-	webhook, secret := resolveLarkTarget(p)
-	if webhook == "" {
+	target := resolveNotifyTarget(p)
+	if target.empty() {
 		return
 	}
 	// 艾特 = 操作人 + 项目参数固定的 + 本次临时选的，去重
@@ -262,11 +262,9 @@ func sendOrchNotify(p *models.ProjectEnv, operator string, tempAtLarkIDs []strin
 			return
 		}
 		title, color, body := buildDeployNotifyBody("新增模块", operator, atIDs, kind, p.Name, p.EnvType, items)
-		c, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-		if err := services.SendLarkCardWithRetry(c, webhook, secret, title, body, color, linkLabel, linkURL); err != nil {
+		if err := sendNotifyCard(target, title, body, color, linkLabel, linkURL, atIDs); err != nil {
 			log.Printf("orch lark send failed: env=%s kind=%s err=%v", p.Name, kind, err)
 		}
-		cancel()
 	}
 	send("success", successes)
 	send("fail", faileds)

@@ -148,9 +148,9 @@ const ACTION_LABELS = {
   'gitlab_repo.update':       '修改 GitLab 仓库',
   'gitlab_repo.delete':       '删除 GitLab 仓库',
   // Lark
-  'lark_bot.create':          '创建 Lark 机器人',
-  'lark_bot.update':          '修改 Lark 机器人',
-  'lark_bot.delete':          '删除 Lark 机器人',
+  'lark_bot.create':          '创建通知渠道',
+  'lark_bot.update':          '修改通知渠道',
+  'lark_bot.delete':          '删除通知渠道',
   // 通知人
   'contact.create':           '创建通知人',
   'contact.update':           '修改通知人',
@@ -179,7 +179,7 @@ const TARGET_TYPE_LABELS = {
   project_env:     '项目环境',
   argocd_instance: 'ArgoCD 实例',
   gitlab_repo:     'GitLab 仓库',
-  lark_bot:        'Lark 机器人',
+  lark_bot:        '通知渠道',
   contact:         '通知人',
   global_config:   '全局配置',
   deployment:      '发布记录',

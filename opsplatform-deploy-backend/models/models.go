@@ -76,12 +76,17 @@ type Account struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// Contact 通知人（Lark 艾特专用）
+// Contact 通知人（Lark 艾特；发 Teams 时按 Lark ID 反查，@ Teams 账号）
 type Contact struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	LarkID    string    `json:"lark_id"`
-	Remark    string    `json:"remark"`
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	LarkID string `json:"lark_id"`
+	// TeamsID 填写的 Teams 账号；空 = 按「姓名小写@默认后缀」推导
+	TeamsID string `json:"teams_id"`
+	// TeamsAccount / TeamsDerived 列表接口算出来的：Teams 卡片实际会 @ 的账号、是不是推导的
+	TeamsAccount string    `json:"teams_account"`
+	TeamsDerived bool      `json:"teams_derived"`
+	Remark       string    `json:"remark"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -97,12 +102,15 @@ type GitlabRepo struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
-// LarkBot Lark 机器人
+// LarkBot 通知渠道（页面上叫「通知渠道」，表名沿用 lark_bot）：飞书 + Teams，至少配一个
 type LarkBot struct {
 	ID          int64     `json:"id"`
 	Name        string    `json:"name"`
 	Webhook     string    `json:"webhook"`
 	Secret      string    `json:"secret,omitempty"`
+	// TeamsWebhook 只在后端内部用（解密后的地址），接口一律不返回；列表只给 TeamsConfigured
+	TeamsWebhook    string    `json:"-"`
+	TeamsConfigured bool      `json:"teams_configured"`
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`

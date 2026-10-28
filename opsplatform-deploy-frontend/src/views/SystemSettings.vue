@@ -18,7 +18,7 @@
       <div v-if="tab === 'overview'" class="section">
         <div class="sec-head">
           <div class="sec-title">配置总览</div>
-          <div class="sec-desc">点卡片进入对应配置 · 新部署建议按「全局凭证 → GitLab 仓库 → ArgoCD 实例 → Lark 机器人」顺序配</div>
+          <div class="sec-desc">点卡片进入对应配置 · 新部署建议按「全局凭证 → GitLab 仓库 → ArgoCD 实例 → 通知渠道」顺序配</div>
         </div>
         <div class="sec-body">
           <div class="ov-group">
@@ -66,8 +66,8 @@
               <div class="ov-card" @click="tab='larkbots'">
                 <div class="ov-icon" style="background:#ecfdf5;color:#059669"><el-icon><ChatLineRound /></el-icon></div>
                 <div class="ov-main">
-                  <div class="ov-title">Lark 机器人</div>
-                  <div class="ov-desc">多 webhook 管理 + 测试</div>
+                  <div class="ov-title">通知渠道</div>
+                  <div class="ov-desc">飞书 + Teams · 管理 + 测试</div>
                 </div>
                 <div class="ov-right">
                   <span :class="['ov-badge', ovStatus.larkbots.kind]">{{ ovStatus.larkbots.text }}</span>
@@ -356,13 +356,13 @@
         </div>
       </div>
 
-      <!-- 通知人：Lark 艾特专用 -->
+      <!-- 通知人：Lark 艾特；发 Teams 时按 Lark ID 反查，@ Teams 账号 -->
       <div v-if="tab === 'contacts'" class="section">
         <div class="sec-head">
           <div class="sec-title-row">
             <div>
               <div class="sec-title">通知人</div>
-              <div class="sec-desc">发布后根据操作人名字匹配 Lark ID · 艾特用</div>
+              <div class="sec-desc">发布后根据操作人名字匹配 Lark ID · 艾特用 · Teams 渠道按这里的 Teams 账号 @</div>
             </div>
             <button v-if="authStore.isAdmin || authStore.hasButton('manage_contacts')" class="add-btn" @click="openContactCreate">
               <el-icon><Plus /></el-icon>新增通知人
@@ -370,11 +370,20 @@
           </div>
         </div>
         <div class="sec-body">
+          <div class="teams-domain">
+            Teams 账号默认后缀
+            <el-input v-model="teamsDomainInput" class="mono" size="small" style="width:160px" placeholder="example.com"
+              :disabled="!(authStore.isAdmin || authStore.hasButton('manage_contacts'))" />
+            <el-button v-if="authStore.isAdmin || authStore.hasButton('manage_contacts')" size="small"
+              :disabled="teamsDomainInput.trim().replace(/^@/, '').toLowerCase() === teamsDomain" @click="saveTeamsDomain">保存</el-button>
+            <span class="inline-hint">通知人没填 Teams 账号时按「姓名小写@后缀」@；Teams 群里名字蓝色/红色=提醒到了，黑色=账号不对</span>
+          </div>
           <table class="tbl">
             <thead>
               <tr>
                 <th style="width:200px">名称</th>
                 <th>Lark ID</th>
+                <th>Teams 账号</th>
                 <th>备注</th>
                 <th style="width:120px">操作</th>
               </tr>
@@ -383,6 +392,13 @@
               <tr v-for="c in pagedContacts" :key="c.id">
                 <td class="mono"><b>{{ c.name }}</b></td>
                 <td class="mono">{{ c.lark_id || '—' }}</td>
+                <td class="mono">
+                  <span v-if="c.teams_account" :class="{ dim: c.teams_derived }"
+                    :title="c.teams_derived ? '未填写，按「姓名小写@默认后缀」推导' : '已填写'">
+                    {{ c.teams_account }}<span v-if="c.teams_derived">（默认）</span>
+                  </span>
+                  <span v-else style="color:var(--warning)" title="姓名含空格或中文，或没配默认后缀">⚠ 需单独填写</span>
+                </td>
                 <td>{{ c.remark || '—' }}</td>
                 <td>
                   <button v-if="authStore.isAdmin || authStore.hasButton('manage_contacts')" class="act" @click="openContactEdit(c)">编辑</button>
@@ -390,7 +406,7 @@
                 </td>
               </tr>
               <tr v-if="!contacts.length">
-                <td colspan="4" class="empty-row">还没有通知人，点右上「+ 新增通知人」添加</td>
+                <td colspan="5" class="empty-row">还没有通知人，点右上「+ 新增通知人」添加</td>
               </tr>
             </tbody>
           </table>
@@ -402,16 +418,16 @@
         </div>
       </div>
 
-      <!-- Lark 机器人：多 webhook -->
+      <!-- 通知渠道：飞书 + Teams（表名沿用 lark_bot） -->
       <div v-if="tab === 'larkbots'" class="section">
         <div class="sec-head">
           <div class="sec-title-row">
             <div>
-              <div class="sec-title">Lark 机器人</div>
-              <div class="sec-desc">全局可配置多个 webhook · 项目环境只需选一个</div>
+              <div class="sec-title">通知渠道</div>
+              <div class="sec-desc">每个渠道可配飞书和 Teams（至少一个）· 项目环境选一个渠道，发布完两边都发</div>
             </div>
             <button v-if="authStore.isAdmin || authStore.hasButton('manage_lark_bots')" class="add-btn" @click="openBotCreate">
-              <el-icon><Plus /></el-icon>新增机器人
+              <el-icon><Plus /></el-icon>新增渠道
             </button>
           </div>
         </div>
@@ -420,7 +436,8 @@
             <thead>
               <tr>
                 <th style="width:160px">名称</th>
-                <th>Webhook</th>
+                <th>飞书 Webhook</th>
+                <th style="width:90px">Teams</th>
                 <th>描述</th>
                 <th style="width:180px">操作</th>
               </tr>
@@ -428,7 +445,8 @@
             <tbody>
               <tr v-for="b in larkBots" :key="b.id">
                 <td class="mono"><b>{{ b.name }}</b></td>
-                <td class="mono webhook-cell">{{ b.webhook }}</td>
+                <td class="mono webhook-cell">{{ b.webhook || '—' }}</td>
+                <td>{{ b.teams_configured ? '✓ 已配置' : '—' }}</td>
                 <td>{{ b.description || '—' }}</td>
                 <td>
                   <button class="act" @click="onTestBot(b)">测试</button>
@@ -437,7 +455,7 @@
                 </td>
               </tr>
               <tr v-if="!larkBots.length">
-                <td colspan="4" class="empty-row">还没有 Lark 机器人，点右上「+ 新增机器人」添加</td>
+                <td colspan="5" class="empty-row">还没有通知渠道，点右上「+ 新增渠道」添加</td>
               </tr>
             </tbody>
           </table>
@@ -782,6 +800,15 @@
         <el-form-item label="Lark ID">
           <el-input v-model="contactDlg.form.lark_id" class="mono" placeholder="ou_xxxxxxxxxxxxxxxxxxxx" />
         </el-form-item>
+        <el-form-item label="Teams 账号">
+          <el-input v-model="contactDlg.form.teams_id" class="mono" autocomplete="off" spellcheck="false"
+            :placeholder="contactDefaultTeams || '公司邮箱，如 alice@example.com'" />
+          <div class="field-hint">
+            <template v-if="contactDefaultTeams">留空则默认为 <code>{{ contactDefaultTeams }}</code>；</template>
+            <template v-else>姓名含空格或中文时没有默认值，要在 Teams 里 @ 就必须填写；</template>
+            用户名和姓名不一样时在这里填。艾特人仍按 Lark ID 选，Teams 渠道自动换成这里的账号。
+          </div>
+        </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="contactDlg.form.remark" type="textarea" :rows="2" />
         </el-form-item>
@@ -819,24 +846,33 @@
       </template>
     </el-dialog>
 
-    <!-- Lark 机器人弹窗 -->
-    <el-dialog v-model="botDlg.vis" :title="botDlg.isEdit ? '编辑 Lark 机器人' : '新增 Lark 机器人'" width="560px" :close-on-click-modal="false" :close-on-press-escape="false">
+    <!-- 通知渠道弹窗 -->
+    <el-dialog v-model="botDlg.vis" :title="botDlg.isEdit ? '编辑通知渠道' : '新增通知渠道'" width="560px" :close-on-click-modal="false" :close-on-press-escape="false">
       <el-form :model="botDlg.form" label-width="100px" label-position="top" size="default">
         <el-form-item label="名称 *">
           <el-input v-model="botDlg.form.name" :disabled="botDlg.isEdit" class="mono" placeholder="如: uat-deploy" />
         </el-form-item>
-        <el-form-item label="Webhook *">
-          <el-input v-model="botDlg.form.webhook" class="mono" placeholder="https://open.larksuite.com/open-apis/bot/v2/hook/..." />
+        <el-form-item label="描述">
+          <el-input v-model="botDlg.form.description" />
+        </el-form-item>
+        <el-divider content-position="left">飞书</el-divider>
+        <el-form-item label="Webhook">
+          <el-input v-model="botDlg.form.webhook" class="mono" placeholder="https://open.larksuite.com/open-apis/bot/v2/hook/...（留空 = 不发飞书）" />
         </el-form-item>
         <el-form-item :label="botDlg.isEdit ? 'Secret（留空不更新）' : 'Secret'">
           <el-input v-model="botDlg.form.secret" type="password" show-password placeholder="机器人开启签名校验才需要" />
         </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="botDlg.form.description" />
+        <el-button size="small" @click="onTestBotInDialog" :loading="testing.botDlg">测试飞书</el-button>
+        <el-divider content-position="left">Teams</el-divider>
+        <el-form-item label="工作流地址">
+          <el-input v-model="botDlg.form.teams_webhook" type="password" show-password class="mono" :disabled="botDlg.form.teams_clear"
+            :placeholder="botDlg.isEdit && botDlg.teamsConfigured ? '已配置 · 留空保持不变' : 'https://xxx.environment.api.powerplatform.com/powerautomate/...（留空 = 不发 Teams）'" />
+          <div class="field-hint">在 Teams 群里 →「…」→「工作流」→「将 Webhook 警报发送到聊天」创建，复制完整地址（含 ? 后面的 sig）。地址本身就是凭据，不要外传</div>
+          <el-checkbox v-if="botDlg.isEdit && botDlg.teamsConfigured" v-model="botDlg.form.teams_clear">清除 Teams（不再发 Teams）</el-checkbox>
         </el-form-item>
+        <el-button size="small" @click="onTestTeamsInDialog" :loading="testing.teamsDlg" :disabled="botDlg.form.teams_clear">测试 Teams</el-button>
       </el-form>
       <template #footer>
-        <el-button @click="onTestBotInDialog" :loading="testing.botDlg">测试发送</el-button>
         <el-button @click="botDlg.vis = false">取消</el-button>
         <el-button type="primary" @click="onSaveBot">保存</el-button>
       </template>
@@ -910,7 +946,7 @@ import {
   getGlobalConfig, updateGlobalConfig, testGitlab, testMinIO, testHarbor,
   previewHistoryCleanup, runHistoryCleanup, listProjectEnvs,
   listUsers, createUser, updateUser, toggleUser, resetUserPassword, deleteUser,
-  listContacts, createContact, updateContact, deleteContact,
+  listContacts, createContact, updateContact, deleteContact, getTeamsSettings, saveTeamsSettings,
   listLarkBots, createLarkBot, updateLarkBot, deleteLarkBot, testLarkBot,
   listArgocdInstances, createArgocdInstance, updateArgocdInstance, deleteArgocdInstance, testArgocdInstance,
   listDeployAgents, createDeployAgent, updateDeployAgent, deleteDeployAgent, testDeployAgent,
@@ -941,7 +977,7 @@ const tabs = [
   { v: 'argocd', label: 'ArgoCD 实例' },
   { v: 'agents', label: 'VM Agent · 版本接口' },
   { v: 'harbor', label: 'Harbor 镜像仓库' },
-  { v: 'larkbots', label: 'Lark 机器人' },
+  { v: 'larkbots', label: '通知渠道' },
   { v: 'accounts', label: '账号管理' },
   { v: 'contacts', label: '通知人' },
   { v: 'poll', label: '同步策略' },
@@ -986,7 +1022,7 @@ const gitlabRepos = ref([])
 const deployAgents = ref([])
 const loading = reactive({ cred: false })
 const saving = reactive({ cred: false })
-const testing = reactive({ git: false, argoDlg: false, botDlg: false, minio: false, harbor: false, agentDlg: false })
+const testing = reactive({ git: false, argoDlg: false, botDlg: false, teamsDlg: false, minio: false, harbor: false, agentDlg: false })
 
 function fmt(s) { return s ? dayjs(s).format('YYYY-MM-DD HH:mm') : '' }
 
@@ -1224,21 +1260,46 @@ async function onResetPwd(u) {
 const contactDlg = reactive({
   vis: false, isEdit: false, editingID: null,
   mode: 'single', // 'single' | 'batch'，仅新增时可切换
-  form: { name: '', lark_id: '', remark: '' },
+  form: { name: '', lark_id: '', teams_id: '', remark: '' },
   batchText: '',
 })
-async function loadContacts() { contacts.value = (await listContacts()) || []; contactsPage.value = 1 }
+async function loadContacts() {
+  contacts.value = (await listContacts()) || []; contactsPage.value = 1
+  await loadTeamsSettings()
+}
+// Teams 账号默认后缀（global_config.teams_mention_domain）
+const teamsDomain = ref('')
+const teamsDomainInput = ref('')
+async function loadTeamsSettings() {
+  try {
+    const res = await getTeamsSettings()
+    teamsDomain.value = res?.mention_domain || ''
+    teamsDomainInput.value = teamsDomain.value
+  } catch (_) {}
+}
+async function saveTeamsDomain() {
+  try {
+    await saveTeamsSettings({ mention_domain: teamsDomainInput.value })
+    ElMessage.success('已保存')
+    await loadContacts()
+  } catch (_) {}
+}
+// 编辑时的默认 Teams 账号提示，规则与后端 TeamsAccountFor 一致
+const contactDefaultTeams = computed(() => {
+  const local = (contactDlg.form.name || '').trim().toLowerCase()
+  return teamsDomain.value && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(local) ? `${local}@${teamsDomain.value}` : ''
+})
 function openContactCreate() {
   contactDlg.isEdit = false; contactDlg.editingID = null
   contactDlg.mode = 'single'
-  Object.assign(contactDlg.form, { name: '', lark_id: '', remark: '' })
+  Object.assign(contactDlg.form, { name: '', lark_id: '', teams_id: '', remark: '' })
   contactDlg.batchText = ''
   contactDlg.vis = true
 }
 function openContactEdit(c) {
   contactDlg.isEdit = true; contactDlg.editingID = c.id
   contactDlg.mode = 'single'
-  Object.assign(contactDlg.form, { name: c.name, lark_id: c.lark_id, remark: c.remark })
+  Object.assign(contactDlg.form, { name: c.name, lark_id: c.lark_id, teams_id: c.teams_id || '', remark: c.remark })
   contactDlg.vis = true
 }
 
@@ -1266,6 +1327,7 @@ const batchParsed = computed(() => {
 })
 
 async function onSaveContact() {
+  contactDlg.form.teams_id = (contactDlg.form.teams_id || '').trim().toLowerCase()
   // 编辑：单条更新
   if (contactDlg.isEdit) {
     await updateContact(contactDlg.editingID, contactDlg.form)
@@ -1326,24 +1388,31 @@ async function onDeleteContact(c) {
   await loadContacts()
 }
 
-// === Lark 机器人 ===
-const botDlg = reactive({ vis: false, isEdit: false, editingID: null, form: { name: '', webhook: '', secret: '', description: '' } })
+// === 通知渠道（飞书 + Teams，后端表名沿用 lark_bot） ===
+const emptyBotForm = () => ({ name: '', webhook: '', secret: '', description: '', teams_webhook: '', teams_clear: false })
+const botDlg = reactive({ vis: false, isEdit: false, editingID: null, teamsConfigured: false, form: emptyBotForm() })
 async function loadBots() { larkBots.value = (await listLarkBots()) || [] }
 function openBotCreate() {
-  botDlg.isEdit = false; botDlg.editingID = null
-  Object.assign(botDlg.form, { name: '', webhook: '', secret: '', description: '' })
+  botDlg.isEdit = false; botDlg.editingID = null; botDlg.teamsConfigured = false
+  Object.assign(botDlg.form, emptyBotForm())
   botDlg.vis = true
 }
 function openBotEdit(b) {
-  botDlg.isEdit = true; botDlg.editingID = b.id
-  Object.assign(botDlg.form, { name: b.name, webhook: b.webhook, secret: '', description: b.description || '' })
+  botDlg.isEdit = true; botDlg.editingID = b.id; botDlg.teamsConfigured = !!b.teams_configured
+  // Teams 地址后端不回传：编辑时输入框留空 = 保持不变
+  Object.assign(botDlg.form, { ...emptyBotForm(), name: b.name, webhook: b.webhook, description: b.description || '' })
   botDlg.vis = true
 }
 async function onSaveBot() {
   if (!botDlg.isEdit && !botDlg.form.name.trim()) { ElMessage.warning('名称必填'); return }
-  if (!botDlg.form.webhook.trim()) { ElMessage.warning('Webhook 必填'); return }
-  const payload = { ...botDlg.form }
+  const f = botDlg.form
+  const teamsAfter = f.teams_clear ? false : (!!f.teams_webhook.trim() || (botDlg.isEdit && botDlg.teamsConfigured))
+  if (!f.webhook.trim() && !teamsAfter) { ElMessage.warning('飞书 Webhook 和 Teams 地址至少填一个'); return }
+  const { teams_clear, teams_webhook, ...payload } = f
   if (botDlg.isEdit && !payload.secret) delete payload.secret
+  // teams_webhook：不传 = 保持；'' = 清除；有值 = 设置
+  if (teams_clear) payload.teams_webhook = ''
+  else if (teams_webhook.trim()) payload.teams_webhook = teams_webhook.trim()
   if (botDlg.isEdit) await updateLarkBot(botDlg.editingID, payload)
   else await createLarkBot(payload)
   ElMessage.success('已保存')
@@ -1351,21 +1420,35 @@ async function onSaveBot() {
   await loadBots()
 }
 async function onDeleteBot(b) {
-  try { await ElMessageBox.confirm(`确认删除 Lark 机器人「${b.name}」？被项目环境引用时会失败。`, '删除确认', { type: 'warning', closeOnClickModal: false, closeOnPressEscape: false }) }
+  try { await ElMessageBox.confirm(`确认删除通知渠道「${b.name}」？被项目环境引用时会失败。`, '删除确认', { type: 'warning', closeOnClickModal: false, closeOnPressEscape: false }) }
   catch { return }
   await deleteLarkBot(b.id)
   ElMessage.success('已删除')
   await loadBots()
 }
+// 列表「测试」：渠道配了哪边就测哪边
 async function onTestBot(b) {
+  const sent = []
   try {
-    await testLarkBot({ id: b.id })
-    ElMessage.success(`已发送测试消息到「${b.name}」`)
+    if (b.webhook) { await testLarkBot({ id: b.id }); sent.push('飞书') }
+    if (b.teams_configured) { await testLarkBot({ id: b.id, channel: 'teams' }); sent.push('Teams') }
+    if (sent.length) ElMessage.success(`已发送测试消息到「${b.name}」的 ${sent.join(' 和 ')}`)
   } catch (_) {}
 }
-// 弹窗里「测试发送」：用当前 form 值，未保存也能测
+// 弹窗里「测试 Teams」：填了地址就测填的，没填（编辑时保持不变）就测库里的
+async function onTestTeamsInDialog() {
+  const body = { channel: 'teams', teams_webhook: botDlg.form.teams_webhook.trim() }
+  if (!body.teams_webhook && !(botDlg.isEdit && botDlg.teamsConfigured)) { ElMessage.warning('Teams 地址必填'); return }
+  if (botDlg.isEdit && botDlg.editingID) body.id = botDlg.editingID
+  testing.teamsDlg = true
+  try {
+    await testLarkBot(body)
+    ElMessage.success('测试消息已发送，请查看 Teams')
+  } catch (_) {} finally { testing.teamsDlg = false }
+}
+// 弹窗里「测试飞书」：用当前 form 值，未保存也能测
 async function onTestBotInDialog() {
-  if (!botDlg.form.webhook) { ElMessage.warning('Webhook 必填'); return }
+  if (!botDlg.form.webhook) { ElMessage.warning('飞书 Webhook 必填'); return }
   testing.botDlg = true
   try {
     const body = {
@@ -1463,7 +1546,7 @@ const ovStatus = computed(() => ({
   cred: gc.gitlab_url && gc.gitlab_user ? { kind: 'ok', text: '已配置' } : { kind: 'miss', text: '未配置' },
   accounts: users.value.length ? { kind: 'count', text: `${users.value.length} 个用户` } : { kind: 'miss', text: '未配置' },
   contacts: contacts.value.length ? { kind: 'count', text: `${contacts.value.length} 个通知人` } : { kind: 'miss', text: '未配置' },
-  larkbots: larkBots.value.length ? { kind: 'count', text: `${larkBots.value.length} 个机器人` } : { kind: 'miss', text: '未配置' },
+  larkbots: larkBots.value.length ? { kind: 'count', text: `${larkBots.value.length} 个渠道` } : { kind: 'miss', text: '未配置' },
   gitlabrepos: gitlabRepos.value.length ? { kind: 'count', text: `${gitlabRepos.value.length} 个仓库` } : { kind: 'miss', text: '未配置' },
   argocd: argoInstances.value.length ? { kind: 'count', text: `${argoInstances.value.length} 个实例` } : { kind: 'miss', text: '未配置' },
   agents: deployAgents.value.length
@@ -1618,6 +1701,12 @@ onMounted(loadOverview)
   font-size: 11.5px;
 }
 .batch-hint b { color: var(--text); font-family: var(--mono); font-weight: 700; }
+/* 通知人 · Teams（照运维平台桌台告警） */
+.teams-domain { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; color: var(--text-2); }
+.teams-domain .inline-hint { font-size: 12px; color: var(--text-3); }
+.dim { color: var(--text-3); }
+.field-hint { margin-top: 4px; font-size: 12px; color: var(--text-3); line-height: 1.6; }
+.field-hint code { font-family: var(--mono); background: var(--bg-hover); padding: 1px 6px; border-radius: 3px; color: var(--text); }
 .batch-errors {
   margin-top: 6px; padding: 8px 12px;
   background: #fef2f2; border: 1px solid #fecaca; border-radius: 4px;

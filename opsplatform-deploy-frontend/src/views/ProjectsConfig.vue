@@ -294,13 +294,13 @@
 
         <div class="sec-lbl">通知</div>
         <div class="field">
-          <label>Lark 机器人 <span class="hint">从系统设置里选 · 不选则走全局默认</span></label>
+          <label>通知渠道 <span class="hint">从系统设置里选 · 飞书 / Teams 按渠道配置发送</span></label>
           <select v-model="envForm.lark_bot_id" class="inp">
             <option :value="null">— 未选（使用全局默认）—</option>
-            <option v-for="b in larkBots" :key="b.id" :value="b.id">{{ b.name }}{{ b.description ? ' · ' + b.description : '' }}</option>
+            <option v-for="b in larkBots" :key="b.id" :value="b.id">{{ b.name }}{{ b.description ? ' · ' + b.description : '' }}（{{ [b.webhook && '飞书', b.teams_configured && 'Teams'].filter(Boolean).join(' + ') }}）</option>
           </select>
           <div v-if="!larkBots.length" class="hint-text" style="color:var(--warning);margin-top:4px">
-            还没有 Lark 机器人，去「系统设置 → Lark 机器人」添加
+            还没有通知渠道，去「系统设置 → 通知渠道」添加
           </div>
         </div>
       </div>
@@ -377,13 +377,13 @@
 
         <div class="sec-lbl">通知</div>
         <div class="field">
-          <label>Lark 机器人 <span class="hint">可选 · 选了发布完会发卡片通知（带 3 次重试）</span></label>
+          <label>通知渠道 <span class="hint">可选 · 选了发布完会发卡片通知（飞书 / Teams，带 3 次重试）</span></label>
           <select v-model="vmEnvForm.lark_bot_id" class="inp">
             <option :value="null">— 不发通知 —</option>
-            <option v-for="b in larkBots" :key="b.id" :value="b.id">{{ b.name }}{{ b.description ? ' · ' + b.description : '' }}</option>
+            <option v-for="b in larkBots" :key="b.id" :value="b.id">{{ b.name }}{{ b.description ? ' · ' + b.description : '' }}（{{ [b.webhook && '飞书', b.teams_configured && 'Teams'].filter(Boolean).join(' + ') }}）</option>
           </select>
           <div v-if="!larkBots.length" class="hint-text" style="color:var(--warning);margin-top:4px">
-            还没有 Lark 机器人，去「系统设置 → Lark 机器人」添加
+            还没有通知渠道，去「系统设置 → 通知渠道」添加
           </div>
         </div>
       </div>
