@@ -225,3 +225,15 @@ export async function loadMaintenanceWindows() {
     return []
   }
 }
+
+// 按所选日期范围得出报告里的时间称谓（本周/本月/当日/本期），避免文案写死「本周」
+export function periodLabel(start, end) {
+  if (!start || !end) return '本期'
+  if (start === end) return '当日'
+  const s = new Date(start + 'T00:00:00')
+  const e = new Date(end + 'T00:00:00')
+  const days = Math.round((e - s) / 86400000)
+  if (s.getDate() === 1 && s.getFullYear() === e.getFullYear() && s.getMonth() === e.getMonth()) return '本月'
+  if (s.getDay() === 1 && days >= 0 && days <= 6) return '本周'
+  return '本期'
+}

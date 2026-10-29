@@ -235,6 +235,7 @@
           </div>
           <div class="task-lark">
             发送到: <span class="lark-tag" v-for="id in parseLarkIDs(t.lark_conn_ids)" :key="id">{{ getLarkName(id) }}</span>
+            <span class="lark-tag teams-tag" v-for="k in (taskTeams[t.id] || [])" :key="'teams-' + k">Teams · {{ getTeamsName(k) }}</span>
           </div>
           <div v-if="t.last_run_at" class="task-last-run">
             上次执行: {{ t.last_run_at }} <span :class="['status-badge', t.last_status === 'success' ? 'ok' : 'fail']">{{ t.last_status }}</span>
@@ -351,6 +352,16 @@
           </label>
         </div>
         <div v-if="!larkConns.length" class="field-desc">请先在「服务连接」中添加飞书机器人</div>
+
+        <h4 style="margin:12px 0 8px">发送到 Teams 群</h4>
+        <div v-if="teamsEnabled" class="lark-select">
+          <label v-for="g in teamsGroups" :key="g.key" class="lark-check">
+            <input type="checkbox" :value="g.key" v-model="editingTask.teams_groups" />
+            {{ g.name }}
+          </label>
+        </div>
+        <div v-if="teamsEnabled && !teamsGroups.length" class="field-desc">Teams 通知网关里还没有授权给本服务的群，请联系运维登记</div>
+        <div v-if="!teamsEnabled" class="field-desc">{{ teamsHint }}</div>
 
         <div class="field checkbox-field" style="margin-top:12px">
           <label><input type="checkbox" v-model="editingTask.enabled" /> 创建后立即启用</label>
@@ -640,9 +651,14 @@ const previewData = ref([])
 const previewLoading = ref(false)
 const previewError = ref('')
 const fullImg = ref(null)
+// Teams 群（经 Teams 通知网关发送）：可选群列表 + 每个任务已选的群
+const teamsEnabled = ref(false)
+const teamsHint = ref('未接入 Teams 通知网关')
+const teamsGroups = ref([])
+const taskTeams = ref({})
 const editingTask = ref({
   name: '', grafana_conn_id: 0, dashboards: [{ uid: '', title: '', panels: [] }],
-  variables: {}, lark_conn_ids: [], cron_expr: '0 * * * *', time_range: '1h',
+  variables: {}, lark_conn_ids: [], teams_groups: [], cron_expr: '0 * * * *', time_range: '1h',
   width: 1000, height: 500, theme: 'light', sort_order: 0, enabled: true
 })
 
@@ -700,6 +716,7 @@ async function loadTabData() {
       const res = await api.get('/api/screenshot-tasks')
       screenshotTasks.value = res.data.data || []
     } catch (e) { /* ignore */ }
+    loadTeams()
     // 同时加载连接列表（需要 Grafana 和 Lark 连接）
     if (!connections.value.length) {
       try {
@@ -830,6 +847,29 @@ function parseLarkIDs(val) {
   if (Array.isArray(val)) return val
   try { return JSON.parse(val) || [] } catch { return [] }
 }
+async function loadTeams() {
+  try {
+    const res = await api.get('/api/teams/groups')
+    const d = res.data.data || {}
+    teamsEnabled.value = !!d.enabled
+    teamsGroups.value = d.groups || []
+    if (!d.enabled) teamsHint.value = '未接入 Teams 通知网关'
+  } catch (e) {
+    teamsEnabled.value = false
+    teamsHint.value = e.response?.data?.error || 'Teams 通知网关不可用'
+  }
+  const entries = await Promise.all(screenshotTasks.value.map(async t => {
+    try {
+      const res = await api.get(`/api/screenshot-tasks/${t.id}/teams-groups`)
+      return [t.id, res.data.data || []]
+    } catch { return [t.id, []] }
+  }))
+  taskTeams.value = Object.fromEntries(entries)
+}
+function getTeamsName(key) {
+  const g = teamsGroups.value.find(g => g.key === key)
+  return g ? g.name : key
+}
 function getLarkName(id) {
   const c = larkConns.value.find(c => c.id === id)
   return c ? c.name : `ID:${id}`
@@ -845,7 +885,7 @@ function openAddTask() {
   editingTask.value = {
     name: '', grafana_conn_id: grafanaConns.value[0]?.id || 0,
     dashboards: [{ uid: '', title: '', panels: [] }],
-    variables: {}, lark_conn_ids: larkConns.value.map(c => c.id),
+    variables: {}, lark_conn_ids: larkConns.value.map(c => c.id), teams_groups: [],
     cron_expr: '0 * * * *', time_range: '1h',
     width: 1000, height: 500, theme: 'light', sort_order: 0, enabled: true
   }
@@ -864,6 +904,7 @@ function openEditTask(t) {
     dashboards: parseDashboards(t.dashboards),
     variables: typeof t.variables === 'string' ? JSON.parse(t.variables || '{}') : (t.variables || {}),
     lark_conn_ids: parseLarkIDs(t.lark_conn_ids),
+    teams_groups: [...(taskTeams.value[t.id] || [])],
     cron_expr: t.cron_expr,
     time_range: t.time_range,
     width: t.width,
@@ -902,11 +943,23 @@ function onDashboardSelect(dash) {
 async function saveTask() {
   savingTask.value = true
   try {
-    const data = { ...editingTask.value }
+    const { teams_groups, ...data } = editingTask.value
+    let taskId = data.id
     if (data.id) {
       await api.put(`/api/screenshot-tasks/${data.id}`, data)
     } else {
-      await api.post('/api/screenshot-tasks', data)
+      const res = await api.post('/api/screenshot-tasks', data)
+      taskId = res.data.data?.id
+    }
+    if (teamsEnabled.value && taskId) {
+      try {
+        await api.put(`/api/screenshot-tasks/${taskId}/teams-groups`, { groups: teams_groups || [] })
+      } catch (e) {
+        toast('任务已保存，但 Teams 群保存失败：' + (e.response?.data?.error || e.message), 'error')
+        showTaskModal.value = false
+        loadTabData()
+        return
+      }
     }
     toast('保存成功', 'success')
     showTaskModal.value = false
@@ -1105,6 +1158,7 @@ h3 { font-size: 16px; margin-bottom: 16px; }
   background: rgba(51,112,255,0.1); color: #5B8DEF; padding: 2px 8px;
   border-radius: 4px; font-size: 12px; margin-left: 4px;
 }
+.teams-tag { background: #ebe9fb; color: #464eb8; }
 .task-last-run { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
 .status-badge { padding: 1px 6px; border-radius: 4px; font-size: 11px; margin-left: 6px; }
 .status-badge.ok { background: rgba(16,185,129,0.15); color: var(--success); }

@@ -204,7 +204,7 @@
     <!-- 统计摘要 -->
     <div class="card summary-card" v-if="fetchDone">
       <p class="summary-text">
-        本周告警 <strong>{{ totalAlerts }}</strong> 条，有效告警 <strong>{{ filteredAlerts.length }}</strong> 条，处理完成率
+        {{ period }}告警 <strong>{{ totalAlerts }}</strong> 条，有效告警 <strong>{{ filteredAlerts.length }}</strong> 条，处理完成率
         <strong :class="completionRate >= 100 ? 'rate-ok' : 'rate-warn'">{{ completionRate.toFixed(0) }}%</strong>
       </p>
     </div>
@@ -360,7 +360,7 @@
         <h3>报告预览</h3>
       </div>
       <div class="preview-content">
-        <p class="summary-text">- 本周告警 {{ totalAlerts }} 条，有效告警 {{ filteredAlerts.length }} 条，处理完成率 {{ completionRate.toFixed(0) }}%。</p>
+        <p class="summary-text">- {{ period }}告警 {{ totalAlerts }} 条，有效告警 {{ filteredAlerts.length }} 条，处理完成率 {{ completionRate.toFixed(0) }}%。</p>
         <table class="preview-table">
           <thead>
             <tr>
@@ -389,7 +389,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import api from '@/api'
-import { processAlertsLocal as processAlertsComposable } from '@/composables/useAlertStats'
+import { processAlertsLocal as processAlertsComposable, periodLabel } from '@/composables/useAlertStats'
 
 // N9E 连接
 const n9eConnections = ref([])
@@ -399,6 +399,7 @@ const selectedConnId = ref('')
 const startDate = ref('')
 const endDate = ref('')
 const activeQuick = ref('')
+const period = computed(() => periodLabel(startDate.value, endDate.value))
 const quickDates = [
   { label: '今天', days: 0 },
   { label: '近7天', days: 7 },

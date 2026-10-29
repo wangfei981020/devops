@@ -19,12 +19,22 @@
 
       <div class="date-section">
         <div class="filter-row">
-          <div class="date-field" style="max-width:180px">
+          <div class="date-field" style="max-width:220px">
             <label>项目筛选</label>
-            <select class="input" v-model="filterProject">
-              <option value="">全部项目</option>
-              <option v-for="p in projectList" :key="p" :value="p">{{ p }}</option>
-            </select>
+            <div class="proj-ms" ref="projMsRef">
+              <button type="button" class="input proj-ms-trigger" @click="projMsOpen = !projMsOpen">
+                <span class="proj-ms-text">{{ filterProjects.length ? filterProjects.join('、') : '全部项目' }}</span>
+                <span class="proj-ms-arrow">▾</span>
+              </button>
+              <div v-if="projMsOpen" class="proj-ms-panel">
+                <label class="proj-ms-opt">
+                  <input type="checkbox" :checked="!filterProjects.length" @change="filterProjects = []" /> 全部项目
+                </label>
+                <label v-for="p in projectList" :key="p" class="proj-ms-opt">
+                  <input type="checkbox" :value="p" v-model="filterProjects" /> {{ p }}
+                </label>
+              </div>
+            </div>
           </div>
           <div class="date-field" style="max-width:180px" v-if="jiraFaultProjectList.length">
             <label>Jira 故障项目</label>
@@ -130,7 +140,7 @@
     <!-- 统计摘要 -->
     <div class="card summary-card" v-if="upgradeRows.length || changeRows.length || faultRows.length">
       <p class="summary-text" v-if="faultRows.length">故障统计：{{ faultSummaryText }}，累计影响时长 {{ faultTotalDuration }} 分钟。共处理故障 <strong>{{ faultRows.length }}</strong> 起。</p>
-      <p class="summary-text">本周共执行 <strong>{{ upgradeRows.length }}</strong> 次升级，<strong>{{ changeRows.length }}</strong> 次变更单处理，{{ allApproved ? '全部通过审批。' : '部分未通过审批。' }}</p>
+      <p class="summary-text">{{ period }}共执行 <strong>{{ upgradeRows.length }}</strong> 次升级，<strong>{{ changeRows.length }}</strong> 次变更单处理，{{ allApproved ? '全部通过审批。' : '部分未通过审批。' }}</p>
     </div>
 
     <!-- 故障管理 -->
@@ -286,7 +296,7 @@
       </div>
 
       <p v-if="alertSummary" class="summary-text" style="padding:8px 0">
-        本周告警 <strong>{{ alertSummary.total }}</strong> 条，有效告警 <strong>{{ alertRows.length }}</strong> 条，处理完成率
+        {{ period }}告警 <strong>{{ alertSummary.total }}</strong> 条，有效告警 <strong>{{ alertRows.length }}</strong> 条，处理完成率
         <strong>{{ alertCompletionRate }}%</strong>
       </p>
 
@@ -451,7 +461,7 @@
           <table>
             <thead>
               <tr>
-                <th style="min-width:260px">本周进展</th>
+                <th style="min-width:260px">{{ period }}进展</th>
                 <th style="min-width:120px">完成度</th>
                 <th style="min-width:260px">备注</th>
                 <th style="width:50px"></th>
@@ -503,11 +513,11 @@
           <h3 class="section-title">一、项目稳定性保障（目标：99.9%）</h3>
           <h4 style="margin:8px 0;font-size:14px">1. 可用性与故障情况</h4>
           <template v-if="faultRows.length">
-            <p class="summary-text">－ 本周整体可用性：{{ availability }}%（目标 {{ SLO_TARGET }}%）。</p>
+            <p class="summary-text">－ {{ period }}整体可用性：{{ availability }}%（目标 {{ SLO_TARGET }}%）。</p>
             <p class="summary-text">－ 故障统计：{{ faultSummaryText }}，累计影响时长 {{ faultTotalDuration }} 分钟。</p>
             <p class="summary-text">－ 共处理故障 <strong>{{ faultRows.length }}</strong> 起，平均响应时间 {{ faultAvgResponse }}，平均恢复时间 {{ faultAvgRecovery }}，<strong :style="{ color: sloMet ? 'var(--success)' : 'var(--danger)' }">{{ sloMet ? '满足' : '未满足' }} SLO</strong>。</p>
           </template>
-          <p v-else class="summary-text">－ 本周无故障，可用性 100%，满足 SLO。</p>
+          <p v-else class="summary-text">－ {{ period }}无故障，可用性 100%，满足 SLO。</p>
 
           <table class="preview-table" v-if="faultRows.length">
             <thead><tr><th>故障项目</th><th>故障标题</th><th>级别</th><th>故障影响</th><th>开始时间</th><th>发现时间</th><th>解决时间</th><th>时长</th><th>原因</th><th>归属</th><th>发现方式</th></tr></thead>
@@ -519,7 +529,7 @@
           </table>
 
           <h4 style="margin:16px 0 8px;font-size:14px">2. 升级上线与生产变更质量管控</h4>
-          <p class="summary-text">－ 本周共执行 <strong>{{ upgradeRows.length }}</strong> 次升级，<strong>{{ changeRows.length }}</strong> 次变更单处理，{{ allApproved ? '全部通过审批。' : '部分未通过审批。' }}</p>
+          <p class="summary-text">－ {{ period }}共执行 <strong>{{ upgradeRows.length }}</strong> 次升级，<strong>{{ changeRows.length }}</strong> 次变更单处理，{{ allApproved ? '全部通过审批。' : '部分未通过审批。' }}</p>
           <table class="preview-table" v-if="upgradeRows.length">
             <thead><tr><th>项目</th><th>升级分类</th><th>升级内容</th><th>升级方式</th><th>升级单</th><th>升级状态</th></tr></thead>
             <tbody>
@@ -543,7 +553,7 @@
 
           <template v-if="includeAlerts">
           <h3 class="section-title">监控告警处理</h3>
-          <p class="summary-text">- 本周告警 <strong>{{ alertSummary?.total || 0 }}</strong> 条，有效告警 <strong>{{ alertRows.length }}</strong> 条，处理完成率 <strong>{{ alertCompletionRate }}%</strong>。</p>
+          <p class="summary-text">- {{ period }}告警 <strong>{{ alertSummary?.total || 0 }}</strong> 条，有效告警 <strong>{{ alertRows.length }}</strong> 条，处理完成率 <strong>{{ alertCompletionRate }}%</strong>。</p>
           <table class="preview-table" v-if="alertRows.length">
             <thead><tr><th>告警</th><th>影响</th><th>处理人</th><th>处理状态</th><th>备注</th></tr></thead>
             <tbody>
@@ -611,7 +621,7 @@
           <template v-for="(rows, project) in issueRows" :key="'preview-' + project">
             <h4 style="margin:10px 0 6px;font-size:14px">- {{ project }}：</h4>
             <table class="preview-table" v-if="rows.length">
-              <thead><tr><th>本周进展</th><th>完成度</th><th>备注</th></tr></thead>
+              <thead><tr><th>{{ period }}进展</th><th>完成度</th><th>备注</th></tr></thead>
               <tbody>
                 <tr v-for="(row, i) in rows" :key="i">
                   <td>{{ row.progress || '无' }}</td><td>{{ row.completion || '无' }}</td><td>{{ row.remark || '无' }}</td>
@@ -627,12 +637,12 @@
 </template>
 
 <script setup>
-import { ref, computed, inject, onMounted, watch } from 'vue'
+import { ref, computed, inject, onMounted, onBeforeUnmount, watch } from 'vue'
 import { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, ImageRun, WidthType, AlignmentType, BorderStyle } from 'docx'
 import { saveAs } from 'file-saver'
 import api from '@/api'
 import { useAuthStore } from '@/stores/auth'
-import { processAlertsLocal, fetchAndProcessAlerts, loadMaintenanceWindows } from '@/composables/useAlertStats'
+import { processAlertsLocal, fetchAndProcessAlerts, loadMaintenanceWindows, periodLabel } from '@/composables/useAlertStats'
 
 const authStore = useAuthStore()
 const canExport = computed(() => authStore.hasPermission('confluence:export_report'))
@@ -714,6 +724,7 @@ const today = new Date().toISOString().split('T')[0]
 const startDate = ref(today)
 const endDate = ref(today)
 const activeQuick = ref('今天')
+const period = computed(() => periodLabel(startDate.value, endDate.value))
 
 const quickDates = [
   { label: '今天', days: 0 },
@@ -743,7 +754,21 @@ function applyQuickDate(q) {
 }
 
 // Data
-const filterProject = ref('')
+// 项目筛选（多选，空 = 全部项目）
+const filterProjects = ref([])
+const projMsOpen = ref(false)
+const projMsRef = ref(null)
+function closeProjMs(e) {
+  if (projMsOpen.value && projMsRef.value && !projMsRef.value.contains(e.target)) projMsOpen.value = false
+}
+onMounted(() => document.addEventListener('click', closeProjMs))
+onBeforeUnmount(() => document.removeEventListener('click', closeProjMs))
+// name 是否属于选中的项目之一（不区分大小写的包含匹配，与原单选逻辑一致）；未选 = 全部通过
+function matchesProject(name) {
+  if (!filterProjects.value.length) return true
+  const n = (name || '').toLowerCase()
+  return filterProjects.value.some(p => n.includes(p.toLowerCase()))
+}
 const filterJiraProject = ref('')
 const filterJiraChangeProject = ref('')
 
@@ -767,8 +792,7 @@ const issueRows = ref({})  // { projectName: [{ progress, completion, remark }] 
 
 // 初始化问题处理行（按选中的项目）
 function initIssueRows() {
-  const selected = filterProject.value
-  const projects = selected ? [selected] : projectList.value
+  const projects = filterProjects.value.length ? [...filterProjects.value] : projectList.value
   if (!projects.length) { issueRows.value = {}; return }
   const current = issueRows.value
   const newRows = {}
@@ -800,11 +824,13 @@ const includeAlerts = ref(true) // 是否统计夜莺告警，默认勾选
 const n9eBusiGroups = ref([])  // 所有夜莺业务组
 const selectedBusiGroups = ref([])  // 选中的业务组 ID 列表
 
-// 只显示"业务运维组-PROD"系列的业务组
+// 只显示生产业务组：业务运维组 / 基础架构组 下的 PROD 系列
+// （2026-10 夜莺重新划分后 G32 挂在「基础架构组/PROD/G32」，其余项目在「业务运维组/PROD」）
+const PROD_PARENTS = ['业务运维组', '基础架构组']
 const visibleBusiGroups = computed(() => {
   return n9eBusiGroups.value.filter(g => {
     const name = g.name || ''
-    return name.includes('业务运维组') && name.includes('PROD')
+    return PROD_PARENTS.some(p => name.includes(p)) && name.includes('PROD')
   })
 })
 
@@ -818,16 +844,15 @@ async function loadN9eBusiGroups() {
 }
 
 function autoSelectBusiGroups() {
-  if (!filterProject.value) {
+  if (!filterProjects.value.length) {
     selectedBusiGroups.value = []
     return
   }
-  const upper = filterProject.value.toUpperCase()
-  // 只在"业务运维组-PROD"系列中匹配
+  // 只在上面的生产业务组中匹配，任一选中项目命中即选上
+  const res = filterProjects.value.map(p => new RegExp(`[-/_ ]${p.toUpperCase()}(?:[-/_ ]|$)`))
   const matched = visibleBusiGroups.value.filter(g => {
     const name = (g.name || '').toUpperCase()
-    const re = new RegExp(`[-/_ ]${upper}(?:[-/_ ]|$)`)
-    return re.test(name)
+    return res.some(re => re.test(name))
   })
   selectedBusiGroups.value = matched.map(g => g.id)
 }
@@ -904,7 +929,7 @@ function recalcAlerts() {
 
 function addTempMW() {
   tempMWs.value.push({
-    project: filterProject.value || '',
+    project: filterProjects.value.length === 1 ? filterProjects.value[0] : '',
     environment: 'PROD',
     maintenance_type: '临时维护',
     start_time: '',
@@ -963,22 +988,22 @@ async function loadScreenshotTasks() {
 }
 
 // 项目筛选变化时，自动选中匹配的截图任务（如 G01 → G01 PROD）
-watch(filterProject, (proj) => {
-  if (!proj || !screenshotTasks.value.length) {
+watch(filterProjects, (projs) => {
+  if (!projs.length || !screenshotTasks.value.length) {
     selectedTaskIds.value = []
     return
   }
   const matched = screenshotTasks.value.filter(t =>
-    t.name.toUpperCase().startsWith(proj.toUpperCase())
+    projs.some(p => t.name.toUpperCase().startsWith(p.toUpperCase()))
   )
   selectedTaskIds.value = matched.map(t => t.id)
-})
+}, { deep: true })
 
 // 项目筛选变化时初始化问题处理行
-watch([filterProject, projectList], () => initIssueRows())
+watch([filterProjects, projectList], () => initIssueRows(), { deep: true })
 
 // 项目筛选变化时自动匹配业务组
-watch(filterProject, () => autoSelectBusiGroups())
+watch(filterProjects, () => autoSelectBusiGroups(), { deep: true })
 
 // 将多个面板图片按 gridPos 拼成一张完整 Dashboard 图
 async function stitchPanelsToImage(panels, panelInfos, dashWidth = 1920) {
@@ -1347,7 +1372,7 @@ async function fetchAndParse() {
     }
 
     // Auto-set report title
-    const projLabel = filterProject.value ? ` [${filterProject.value}]` : ''
+    const projLabel = filterProjects.value.length ? ` [${filterProjects.value.join('、')}]` : ''
     if (startDate.value === endDate.value) {
       reportTitle.value = `${startDate.value} 运维日报${projLabel}`
     } else {
@@ -1370,8 +1395,8 @@ async function fetchAndParse() {
         continue
       }
       // 过滤：项目筛选
-      if (filterProject.value && result.projectName) {
-        if (!result.projectName.toLowerCase().includes(filterProject.value.toLowerCase())) {
+      if (filterProjects.value.length && result.projectName) {
+        if (!matchesProject(result.projectName)) {
           skipped++
           continue
         }
@@ -1472,11 +1497,9 @@ async function fetchJiraFaults() {
         discoverMethod: fields.customfield_10937?.value || '',
       })
     }
-    // 按项目筛选过滤（filterProject 对应 customfield_11140 故障项目）
-    if (filterProject.value) {
-      faultRows.value = faultRows.value.filter(r =>
-        !r.faultProject || r.faultProject.toLowerCase().includes(filterProject.value.toLowerCase())
-      )
+    // 按项目筛选过滤（filterProjects 对应 customfield_11140 故障项目）
+    if (filterProjects.value.length) {
+      faultRows.value = faultRows.value.filter(r => !r.faultProject || matchesProject(r.faultProject))
     }
   } catch (e) {
     console.error('Jira fault fetch failed:', e)
@@ -1555,7 +1578,7 @@ async function fetchJiraChanges() {
       const changeMethod = getFieldValue(cfChangeMethod) || '-'
 
       // 按项目筛选过滤
-      if (filterProject.value && bizProject && !bizProject.toLowerCase().includes(filterProject.value.toLowerCase())) {
+      if (filterProjects.value.length && bizProject && !matchesProject(bizProject)) {
         continue
       }
 
@@ -1946,11 +1969,11 @@ async function exportWord() {
 
     // 故障统计文字
     if (faultRows.value.length) {
-      children.push(new Paragraph({ spacing: { before: 50, after: 50 }, children: [new TextRun({ text: `－ 本周整体可用性：${availability.value}%（目标 ${SLO_TARGET}%）。`, size: 22, font: '微软雅黑' })] }))
+      children.push(new Paragraph({ spacing: { before: 50, after: 50 }, children: [new TextRun({ text: `－ ${period.value}整体可用性：${availability.value}%（目标 ${SLO_TARGET}%）。`, size: 22, font: '微软雅黑' })] }))
       children.push(new Paragraph({ spacing: { before: 50, after: 50 }, children: [new TextRun({ text: `－ 故障统计：${faultSummaryText.value}，累计影响时长 ${faultTotalDuration.value} 分钟。`, size: 22, font: '微软雅黑' })] }))
       children.push(new Paragraph({ spacing: { before: 50, after: 100 }, children: [new TextRun({ text: `－ 共处理故障 ${faultRows.value.length} 起，平均响应时间 ${faultAvgResponse.value}，平均恢复时间 ${faultAvgRecovery.value}，${sloMet.value ? '满足' : '未满足'} SLO。`, size: 22, font: '微软雅黑' })] }))
     } else {
-      children.push(new Paragraph({ spacing: { before: 50, after: 100 }, children: [new TextRun({ text: '－ 本周无故障，可用性 100%，满足 SLO。', size: 22, font: '微软雅黑' })] }))
+      children.push(new Paragraph({ spacing: { before: 50, after: 100 }, children: [new TextRun({ text: `－ ${period.value}无故障，可用性 100%，满足 SLO。`, size: 22, font: '微软雅黑' })] }))
     }
 
     // 故障表格
@@ -1962,7 +1985,7 @@ async function exportWord() {
 
     // 2. 升级上线与生产变更质量管控
     children.push(new Paragraph({ spacing: { before: 300, after: 100 }, children: [new TextRun({ text: '2. 升级上线与生产变更质量管控', size: 22, bold: true, font: '微软雅黑' })] }))
-    children.push(new Paragraph({ spacing: { before: 50, after: 100 }, children: [new TextRun({ text: `－ 本周共执行 ${upgradeRows.value.length} 次升级，${changeRows.value.length} 次变更单处理，${allApproved.value ? '全部通过审批。' : '部分未通过审批。'}`, size: 22, font: '微软雅黑' })] }))
+    children.push(new Paragraph({ spacing: { before: 50, after: 100 }, children: [new TextRun({ text: `－ ${period.value}共执行 ${upgradeRows.value.length} 次升级，${changeRows.value.length} 次变更单处理，${allApproved.value ? '全部通过审批。' : '部分未通过审批。'}`, size: 22, font: '微软雅黑' })] }))
     const uH = new TableRow({ children: [cell('项目', { bold: true, width: 1200 }), cell('升级分类', { bold: true, width: 1600 }), cell('升级内容', { bold: true, width: 3200 }), cell('升级方式', { bold: true, width: 1200 }), cell('升级单', { bold: true, width: 1200 }), cell('升级状态', { bold: true, width: 1200 })] })
     const uR = upgradeRows.value.length
       ? upgradeRows.value.map(r => new TableRow({ children: [cell(r.project, { width: 1200 }), cell(r.category, { width: 1600 }), cell(r.content, { width: 3200 }), cell(r.method, { width: 1200 }), cell(r.ticket, { width: 1200 }), cell(r.status, { width: 1200 })] }))
@@ -1981,7 +2004,7 @@ async function exportWord() {
     if (includeAlerts.value && (alertRows.value.length || alertSummary.value)) {
       children.push(new Paragraph({ spacing: { before: 400, after: 150 }, children: [new TextRun({ text: '监控告警处理', size: 26, bold: true, font: '微软雅黑' })] }))
       const totalAlerts = alertSummary.value?.total || 0
-      children.push(new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: `- 本周告警 ${totalAlerts} 条，有效告警 ${alertRows.value.length} 条，处理完成率 ${alertCompletionRate.value}%。`, size: 22, font: '微软雅黑' })] }))
+      children.push(new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: `- ${period.value}告警 ${totalAlerts} 条，有效告警 ${alertRows.value.length} 条，处理完成率 ${alertCompletionRate.value}%。`, size: 22, font: '微软雅黑' })] }))
       const aH = new TableRow({ children: [cell('告警', { bold: true, width: 2800 }), cell('影响', { bold: true, width: 1500 }), cell('处理人', { bold: true, width: 1200 }), cell('处理状态', { bold: true, width: 1200 }), cell('备注', { bold: true, width: 3100 })] })
       const aR = alertRows.value.length
         ? alertRows.value.map(a => new TableRow({ children: [cell(a.rule_name, { width: 2800 }), cell(a.impact || '无影响', { width: 1500 }), cell(a.handler || '', { width: 1200 }), cell(a.status || '已处理', { width: 1200 }), cell(a.note || '', { width: 3100 })] }))
@@ -2057,7 +2080,7 @@ async function exportWord() {
     children.push(new Paragraph({ spacing: { before: 400, after: 100 }, children: [new TextRun({ text: '四、问题处理（目标：100%）', size: 24, bold: true, font: '微软雅黑' })] }))
     for (const [project, rows] of Object.entries(issueRows.value)) {
       children.push(new Paragraph({ spacing: { before: 150, after: 80 }, children: [new TextRun({ text: `- ${project}：`, size: 22, bold: true, font: '微软雅黑' })] }))
-      const iH = new TableRow({ children: [cell('本周进展', { bold: true, width: 4000 }), cell('完成度', { bold: true, width: 1800 }), cell('备注', { bold: true, width: 4000 })] })
+      const iH = new TableRow({ children: [cell(`${period.value}进展`, { bold: true, width: 4000 }), cell('完成度', { bold: true, width: 1800 }), cell('备注', { bold: true, width: 4000 })] })
       const iR = rows.length
         ? rows.map(r => new TableRow({ children: [cell(r.progress || '无', { width: 4000 }), cell(r.completion || '无', { width: 1800 }), cell(r.remark || '无', { width: 4000 })] }))
         : [new TableRow({ children: [cell('无'), cell('无'), cell('无')] })]
@@ -2093,6 +2116,13 @@ async function exportWord() {
 .quick-dates { display: flex; gap: 6px; flex-wrap: wrap; }
 .date-range { display: flex; align-items: flex-end; gap: 10px; }
 .date-field { flex: 1; }
+.proj-ms { position: relative; }
+.proj-ms-trigger { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; cursor: pointer; }
+.proj-ms-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-ms-arrow { flex: none; opacity: .7; }
+.proj-ms-panel { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0; max-height: 280px; overflow: auto; padding: 6px 0; background: var(--bg-secondary, #1e293b); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+.proj-ms-opt { display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; }
+.proj-ms-opt:hover { background: var(--bg-hover); }
 .date-field label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
 .date-sep { color: var(--text-muted); padding-bottom: 8px; }
 
